@@ -204,4 +204,9 @@ pub const MIGRATIONS: &[Migration] = &[
         sql: include_str!("20260507180353_chat_sessions_cli_invocation.sql"),
         legacy_version: None,
     },
+    Migration {
+        id: "20260508142050_drop_legacy_workspace_session_columns",
+        sql: include_str!("20260508142050_drop_legacy_workspace_session_columns.sql"),
+        legacy_version: None,
+    },
 ];

@@ -222,7 +222,35 @@ async fn fork_after_worktree(
     copy_history(db, &source_ws.id, &new_ws.id, checkpoint)?;
 
     let session_resumed = if let Some(src_wt) = source_ws.worktree_path.as_deref() {
-        copy_claude_session(db, &source_ws.id, &new_ws.id, src_wt, &actual_path)?
+        // The source's Claude CLI session id lives on the SOURCE chat
+        // session — the one this checkpoint was taken in — not on the
+        // workspace. Likewise the destination is the new workspace's
+        // default chat session, the same one `copy_history` populated.
+        let new_chat_session_id = db
+            .default_session_id_for_workspace(&new_ws.id)?
+            .ok_or_else(|| {
+                ForkError::InconsistentHistory(format!(
+                    "new workspace {} has no default session",
+                    new_ws.id
+                ))
+            })?;
+        let Some(projects_dir) = claude_projects_dir() else {
+            // No discoverable home directory — graceful skip, same as a
+            // missing transcript file. Fork still succeeds with a fresh
+            // Claude session.
+            return Ok(ForkOutcome {
+                workspace: new_ws,
+                session_resumed: false,
+            });
+        };
+        copy_claude_session(
+            db,
+            &checkpoint.chat_session_id,
+            &new_chat_session_id,
+            src_wt,
+            &actual_path,
+            &projects_dir,
+        )?
     } else {
         false
     };
@@ -400,26 +428,36 @@ fn copy_history(
 /// project directory to the new workspace's project directory, so the
 /// forked workspace can `--resume` from the same session history.
 ///
+/// Operates at the chat-session granularity: the source id is the chat
+/// session the chosen checkpoint was taken in, and the destination is the
+/// new workspace's default chat session (the one `copy_history` already
+/// populated). Pre-multi-session refactor this code worked at workspace
+/// granularity by reading `workspaces.session_id`; that column became dead
+/// when chat sessions arrived (20260422000000_chat_sessions), and the
+/// missed migration here is what made every fork start a fresh Claude
+/// session — see `test_fork_resumes_claude_session` for the regression pin.
+///
 /// Returns `true` if the transcript was found and copied (session id is
-/// persisted for the new workspace). Returns `false` if there was no
+/// persisted for the new chat session). Returns `false` if there was no
 /// session to resume — in that case the new workspace simply starts a
 /// fresh Claude session on its first turn, which is the intended graceful
 /// degradation rather than an error.
 fn copy_claude_session(
     db: &Database,
-    source_ws_id: &str,
-    new_ws_id: &str,
+    source_chat_session_id: &str,
+    new_chat_session_id: &str,
     source_worktree: &str,
     new_worktree: &str,
+    projects_dir: &Path,
 ) -> Result<bool, ForkError> {
-    let Some((session_id, turn_count)) = db.get_agent_session(source_ws_id)? else {
+    let Some(source_session) = db.get_chat_session(source_chat_session_id)? else {
         return Ok(false);
     };
+    let Some(session_id) = source_session.session_id else {
+        return Ok(false);
+    };
+    let turn_count = source_session.turn_count;
 
-    let Some(home) = dirs::home_dir() else {
-        return Ok(false);
-    };
-    let projects_dir = home.join(".claude").join("projects");
     let src_file = projects_dir
         .join(claude_project_slug(source_worktree))
         .join(format!("{session_id}.jsonl"));
@@ -431,17 +469,28 @@ fn copy_claude_session(
     let dest_file = dest_dir.join(format!("{session_id}.jsonl"));
     std::fs::copy(&src_file, &dest_file)?;
 
-    db.save_agent_session(new_ws_id, &session_id, turn_count)?;
+    db.save_chat_session_state(new_chat_session_id, &session_id, turn_count)?;
     Ok(true)
+}
+
+/// Resolve `~/.claude/projects` for the current user. Split out so tests can
+/// substitute a temp directory by calling [`copy_claude_session`] with an
+/// arbitrary projects dir.
+fn claude_projects_dir() -> Option<PathBuf> {
+    Some(dirs::home_dir()?.join(".claude").join("projects"))
 }
 
 /// Convert an absolute filesystem path to Claude CLI's project slug
 /// convention (used as the directory name under `~/.claude/projects/`).
 ///
-/// Claude CLI replaces path separators with `-` to form the slug. Handle
-/// both `/` and `\` so Windows paths produce the correct slug.
+/// Claude CLI replaces both path separators (`/`, `\`) AND `.` with `-`
+/// when building the slug, so a worktree under `~/.claudette/...`
+/// produces a directory like `-Users-...--claudette-...` (note the double
+/// dash from `/.`). Missing the `.` — as this function did originally —
+/// silently routes the JSONL copy at a non-existent directory and turns
+/// every fork into a fresh Claude session.
 fn claude_project_slug(path: &str) -> String {
-    path.replace(['/', '\\'], "-")
+    path.replace(['/', '\\', '.'], "-")
 }
 
 #[cfg(test)]
@@ -681,6 +730,263 @@ mod tests {
         assert_eq!(
             claude_project_slug("/Users/alice/projects/foo"),
             "-Users-alice-projects-foo"
+        );
+    }
+
+    #[test]
+    fn claude_project_slug_replaces_dots() {
+        // Regression pin for the second-order bug discovered during
+        // post-fix UAT: Claude CLI's slug replaces `.` with `-` too,
+        // which Claudette worktrees (under `~/.claudette/...`) hit
+        // unconditionally because of the leading dot in `.claudette`.
+        // Previously slugged to `-Users-alice-.claudette-...` which
+        // did not match the on-disk dir Claude CLI actually created.
+        assert_eq!(
+            claude_project_slug("/Users/alice/.claudette/workspaces/repo/ws"),
+            "-Users-alice--claudette-workspaces-repo-ws"
+        );
+        // Multiple dots collapse independently — `.local/.config/file`
+        // becomes `-local--config-file`. Mirrors Claude CLI behaviour
+        // observed on real `~/.claude/projects/` directory listings.
+        assert_eq!(
+            claude_project_slug("/.local/.config/file"),
+            "--local--config-file"
+        );
+    }
+
+    // --- copy_claude_session regression pins ---
+    //
+    // These cover the multi-session migration regression: prior to the fix,
+    // `copy_claude_session` read `workspaces.session_id` (a column that became
+    // permanently NULL when the multi-session refactor moved live state to
+    // `chat_sessions`). Every fork therefore returned `session_resumed: false`
+    // and the new workspace started a fresh Claude CLI session — losing the
+    // parent's conversational context. The bug looked like "the fork button
+    // is broken" because the user's next prompt to the fork came back with
+    // "I don't have context from a previous session".
+
+    /// Build a fake `~/.claude/projects/<slug>/<sid>.jsonl` so
+    /// `copy_claude_session` has something to copy. Returns the temp `home`
+    /// dir so the caller can keep it alive (TempDir cleans on drop).
+    fn write_fake_jsonl(
+        projects_dir: &Path,
+        worktree: &str,
+        session_id: &str,
+        body: &str,
+    ) -> std::path::PathBuf {
+        let dir = projects_dir.join(claude_project_slug(worktree));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(format!("{session_id}.jsonl"));
+        std::fs::write(&path, body).unwrap();
+        path
+    }
+
+    #[test]
+    fn copy_claude_session_copies_jsonl_and_persists_per_chat_session_state() {
+        let db = Database::open_in_memory().unwrap();
+        db.insert_repository(&make_repo("r1")).unwrap();
+        db.insert_workspace(&make_workspace("w-src", "r1", "src"))
+            .unwrap();
+        db.insert_workspace(&make_workspace("w-fork", "r1", "src-fork"))
+            .unwrap();
+
+        // Source's chat session carries the live Claude CLI sid + turn count.
+        // Post multi-session refactor THIS is the source of truth — not
+        // `workspaces.session_id`, which is gone.
+        let src_sid = db
+            .default_session_id_for_workspace("w-src")
+            .unwrap()
+            .unwrap();
+        let dst_sid = db
+            .default_session_id_for_workspace("w-fork")
+            .unwrap()
+            .unwrap();
+        db.save_chat_session_state(&src_sid, "claude-sid-XYZ", 7)
+            .unwrap();
+
+        let projects = tempfile::tempdir().unwrap();
+        let src_wt = "/tmp/wt/src";
+        let new_wt = "/tmp/wt/src-fork";
+        write_fake_jsonl(projects.path(), src_wt, "claude-sid-XYZ", "{\"hi\":1}\n");
+
+        let resumed =
+            copy_claude_session(&db, &src_sid, &dst_sid, src_wt, new_wt, projects.path()).unwrap();
+        assert!(
+            resumed,
+            "expected session_resumed=true when source has a sid + jsonl"
+        );
+
+        // JSONL physically copied into the new worktree's project dir under
+        // the SAME session id (Claude CLI keys files by sid; resume reads it).
+        let copied = projects
+            .path()
+            .join(claude_project_slug(new_wt))
+            .join("claude-sid-XYZ.jsonl");
+        assert!(
+            copied.exists(),
+            "fork's jsonl missing at {}",
+            copied.display()
+        );
+        assert_eq!(std::fs::read_to_string(&copied).unwrap(), "{\"hi\":1}\n");
+
+        // The destination chat session inherits the parent's sid + turn count
+        // so the next agent run hits `claude --resume` with the right id.
+        let dst_session = db.get_chat_session(&dst_sid).unwrap().unwrap();
+        assert_eq!(dst_session.session_id.as_deref(), Some("claude-sid-XYZ"));
+        assert_eq!(dst_session.turn_count, 7);
+    }
+
+    #[test]
+    fn copy_claude_session_skips_when_source_has_no_session() {
+        // Graceful-degradation pin: a fork from a workspace that hasn't yet
+        // started a Claude session must still succeed — it just starts fresh.
+        let db = Database::open_in_memory().unwrap();
+        db.insert_repository(&make_repo("r1")).unwrap();
+        db.insert_workspace(&make_workspace("w-src", "r1", "src"))
+            .unwrap();
+        db.insert_workspace(&make_workspace("w-fork", "r1", "src-fork"))
+            .unwrap();
+        let src_sid = db
+            .default_session_id_for_workspace("w-src")
+            .unwrap()
+            .unwrap();
+        let dst_sid = db
+            .default_session_id_for_workspace("w-fork")
+            .unwrap()
+            .unwrap();
+        // No save_chat_session_state — source is fresh.
+
+        let projects = tempfile::tempdir().unwrap();
+        let resumed = copy_claude_session(
+            &db,
+            &src_sid,
+            &dst_sid,
+            "/tmp/wt/src",
+            "/tmp/wt/src-fork",
+            projects.path(),
+        )
+        .unwrap();
+        assert!(!resumed);
+        let dst_session = db.get_chat_session(&dst_sid).unwrap().unwrap();
+        assert!(dst_session.session_id.is_none());
+        assert_eq!(dst_session.turn_count, 0);
+    }
+
+    #[test]
+    fn copy_claude_session_handles_dot_dir_paths() {
+        // Regression pin: Claudette stores every worktree under
+        // `~/.claudette/...`. Pre-fix, the slug function only replaced
+        // path separators — so the `.` in `.claudette` survived and the
+        // computed source/dest paths missed the on-disk directory Claude
+        // CLI actually wrote, returning `Ok(false)` even when the
+        // transcript existed. End-to-end UAT caught this; that's exactly
+        // the path this test exercises.
+        let db = Database::open_in_memory().unwrap();
+        db.insert_repository(&make_repo("r1")).unwrap();
+        db.insert_workspace(&make_workspace("w-src", "r1", "src"))
+            .unwrap();
+        db.insert_workspace(&make_workspace("w-fork", "r1", "src-fork"))
+            .unwrap();
+        let src_sid = db
+            .default_session_id_for_workspace("w-src")
+            .unwrap()
+            .unwrap();
+        let dst_sid = db
+            .default_session_id_for_workspace("w-fork")
+            .unwrap()
+            .unwrap();
+        db.save_chat_session_state(&src_sid, "claude-sid-DOTS", 4)
+            .unwrap();
+
+        let projects = tempfile::tempdir().unwrap();
+        let src_wt = "/Users/alice/.claudette/workspaces/repo/src";
+        let new_wt = "/Users/alice/.claudette/workspaces/repo/src-fork";
+        write_fake_jsonl(projects.path(), src_wt, "claude-sid-DOTS", "X");
+
+        let resumed =
+            copy_claude_session(&db, &src_sid, &dst_sid, src_wt, new_wt, projects.path()).unwrap();
+        assert!(
+            resumed,
+            "fork must resume sessions for .claudette-style paths — slug must replace '.'"
+        );
+        let copied = projects
+            .path()
+            .join(claude_project_slug(new_wt))
+            .join("claude-sid-DOTS.jsonl");
+        assert!(copied.exists());
+        // The slug must have collapsed `/.claudette` → `--claudette`,
+        // matching Claude CLI's on-disk layout.
+        assert!(
+            copied
+                .to_string_lossy()
+                .contains("-Users-alice--claudette-workspaces-repo-src-fork"),
+            "slug missing `--claudette` collapse: {}",
+            copied.display()
+        );
+    }
+
+    #[test]
+    fn copy_claude_session_skips_when_jsonl_missing() {
+        // Regression pin: the source has a sid persisted in chat_sessions
+        // but the on-disk transcript was never written (e.g. the Claude
+        // process crashed before flushing). Don't error — start fresh.
+        let db = Database::open_in_memory().unwrap();
+        db.insert_repository(&make_repo("r1")).unwrap();
+        db.insert_workspace(&make_workspace("w-src", "r1", "src"))
+            .unwrap();
+        db.insert_workspace(&make_workspace("w-fork", "r1", "src-fork"))
+            .unwrap();
+        let src_sid = db
+            .default_session_id_for_workspace("w-src")
+            .unwrap()
+            .unwrap();
+        let dst_sid = db
+            .default_session_id_for_workspace("w-fork")
+            .unwrap()
+            .unwrap();
+        db.save_chat_session_state(&src_sid, "claude-sid-orphan", 2)
+            .unwrap();
+
+        let projects = tempfile::tempdir().unwrap();
+        // Note: no write_fake_jsonl — file is absent.
+        let resumed = copy_claude_session(
+            &db,
+            &src_sid,
+            &dst_sid,
+            "/tmp/wt/src",
+            "/tmp/wt/src-fork",
+            projects.path(),
+        )
+        .unwrap();
+        assert!(!resumed);
+        // Destination must NOT have inherited the orphan sid — the next
+        // turn would otherwise try (and fail) to --resume a phantom session.
+        let dst_session = db.get_chat_session(&dst_sid).unwrap().unwrap();
+        assert!(dst_session.session_id.is_none());
+    }
+
+    #[test]
+    fn workspaces_table_no_longer_carries_session_columns() {
+        // Schema-level pin: 20260508142050 dropped `session_id` and
+        // `turn_count` from `workspaces`. If a future migration accidentally
+        // re-adds them (or reverts the drop), this assertion catches it
+        // before the dead state can re-grow callers.
+        let db = Database::open_in_memory().unwrap();
+        let cols: Vec<String> = db
+            .conn()
+            .prepare("PRAGMA table_info(workspaces)")
+            .unwrap()
+            .query_map([], |row| row.get::<_, String>(1))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert!(
+            !cols.iter().any(|c| c == "session_id"),
+            "workspaces.session_id must stay dropped — live state lives on chat_sessions; cols={cols:?}"
+        );
+        assert!(
+            !cols.iter().any(|c| c == "turn_count"),
+            "workspaces.turn_count must stay dropped — live state lives on chat_sessions; cols={cols:?}"
         );
     }
 }

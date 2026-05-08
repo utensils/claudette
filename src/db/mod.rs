@@ -662,7 +662,12 @@ mod tests {
         let db = Database::open_in_memory().unwrap();
 
         // Rewind: drop chat_sessions structures and remove the migration
-        // tracking row so re-running migrations will re-apply it.
+        // tracking row so re-running migrations will re-apply it. We also
+        // re-add the legacy `workspaces.session_id` / `workspaces.turn_count`
+        // columns (dropped by 20260508142050) and clear that migration's
+        // bookkeeping so its second run drops them again — this test
+        // specifically exercises the original chat_sessions backfill, which
+        // depends on the legacy columns being present at run time.
         db.execute_batch(
             "PRAGMA foreign_keys=OFF;
              DROP INDEX IF EXISTS idx_chat_messages_chat_session;
@@ -672,7 +677,10 @@ mod tests {
              ALTER TABLE chat_messages DROP COLUMN chat_session_id;
              ALTER TABLE conversation_checkpoints DROP COLUMN chat_session_id;
              DROP TABLE chat_sessions;
+             ALTER TABLE workspaces ADD COLUMN session_id TEXT;
+             ALTER TABLE workspaces ADD COLUMN turn_count INTEGER NOT NULL DEFAULT 0;
              DELETE FROM schema_migrations WHERE id = '20260422000000_chat_sessions';
+             DELETE FROM schema_migrations WHERE id = '20260508142050_drop_legacy_workspace_session_columns';
              PRAGMA foreign_keys=ON;",
         )
         .unwrap();
