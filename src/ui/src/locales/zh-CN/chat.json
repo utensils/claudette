@@ -113,6 +113,12 @@
   "code_block_copied": "已复制",
   "attachment_close_lightbox": "关闭图片预览",
 
+  "cli_invocation_expand": "显示完整 claude 命令",
+  "cli_invocation_collapse": "隐藏 claude 命令",
+  "cli_invocation_copy": "复制 claude 命令",
+  "cli_invocation_copied": "已复制",
+  "cli_invocation_prompt_label": "提示",
+
   "mcp_unknown_error": "未知",
 
   "diff_loading": "加载差异...",

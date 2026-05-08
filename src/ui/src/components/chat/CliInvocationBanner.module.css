@@ -1,19 +1,198 @@
 .banner {
-  margin: 8px 0 12px 0;
+  margin: 6px 0 14px 0;
+  border: 1px solid var(--divider);
+  background: var(--sidebar-bg);
+  border-radius: var(--radius-lg);
   font-size: var(--fs-sm);
+  overflow: hidden;
+  transition:
+    border-color 120ms ease,
+    background-color 120ms ease;
 }
 
-.codeBlock {
+.banner:hover {
+  border-color: rgba(var(--accent-primary-rgb), 0.35);
+}
+
+.expanded {
+  border-color: rgba(var(--accent-primary-rgb), 0.35);
+  background: var(--chat-input-bg);
+}
+
+/* ── Header (always visible — collapsed pill) ── */
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 10px 8px 8px;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  color: var(--text-muted);
+  font-family: inherit;
+  font-size: var(--fs-sm);
+  text-align: left;
+}
+
+.header:focus-visible {
+  outline: 2px solid var(--accent-primary);
+  outline-offset: -2px;
+  border-radius: var(--radius-lg);
+}
+
+.chevron {
+  flex-shrink: 0;
+  color: var(--text-dim);
+  transition: transform 140ms ease;
+}
+
+.chevronOpen {
+  transform: rotate(90deg);
+  color: var(--accent-primary);
+}
+
+.binaryIcon {
+  flex-shrink: 0;
+  color: var(--accent-primary);
+}
+
+.summary {
+  font-family: var(--font-mono);
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+.spacer {
+  flex: 1;
+}
+
+.copyButton {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  transition:
+    background-color 120ms ease,
+    color 120ms ease;
+}
+
+.copyButton:hover {
+  background: var(--hover-bg);
+  color: var(--text-primary);
+}
+
+/* ── Expanded body ── */
+
+.body {
+  padding: 4px 12px 12px 30px;
+  border-top: 1px dashed var(--divider);
+  font-family: var(--font-mono);
+  /* Match existing design language: fade in expanded content rather than
+     a hard pop. Keeps the banner feeling like a single surface. */
+  animation: cliBannerReveal 140ms ease-out;
+}
+
+@keyframes cliBannerReveal {
+  from {
+    opacity: 0;
+    transform: translateY(-2px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.binaryRow {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 8px 0 6px;
+  border-bottom: 1px dashed var(--divider);
+  margin-bottom: 6px;
+}
+
+.binaryName {
+  color: var(--accent-primary);
+  font-weight: 500;
+}
+
+.binaryPath {
+  color: var(--text-faint);
+  font-size: var(--fs-xs);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+.flagList {
+  list-style: none;
+  padding: 0;
   margin: 0;
-  padding: 8px 12px;
-  background: var(--sidebar-bg);
-  border: 1px solid var(--sidebar-border);
-  border-radius: var(--radius-md);
-  overflow-x: auto;
+  display: grid;
+  /* `auto` for the flag name column lets all rows align on the value
+     column so values form a clean vertical band even with varying flag
+     name lengths. minmax(0, 1fr) lets long values truncate instead of
+     overflowing the card. */
+  grid-template-columns: max-content minmax(0, 1fr);
+  column-gap: 18px;
+  row-gap: 2px;
+}
+
+.flagRow {
+  display: contents;
+}
+
+.flagRow > .flagName,
+.flagRow > .flagValue,
+.flagRow > .positionalLabel {
+  padding: 2px 0;
+}
+
+.flagName {
+  color: var(--accent-primary);
   white-space: nowrap;
 }
 
-.code {
-  font-family: var(--font-mono);
+.flagValue {
   color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+.flagValueRedacted {
+  color: var(--text-faint);
+  font-style: italic;
+}
+
+/* Empty value cell for boolean flags. Renders nothing visually but reserves
+   the grid column so flags after a boolean stay aligned. */
+.flagValueEmpty::before {
+  content: "";
+}
+
+.flagRowPositional > .positionalLabel {
+  color: var(--text-dim);
+  font-style: italic;
+  white-space: nowrap;
+}
+
+.flagRowPositional > .flagValue {
+  color: var(--text-muted);
+  font-style: italic;
 }

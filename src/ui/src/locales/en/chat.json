@@ -116,6 +116,12 @@
   "message_copied": "Copied",
   "attachment_close_lightbox": "Close image preview",
 
+  "cli_invocation_expand": "Show full claude command",
+  "cli_invocation_collapse": "Hide claude command",
+  "cli_invocation_copy": "Copy claude command",
+  "cli_invocation_copied": "Copied",
+  "cli_invocation_prompt_label": "prompt",
+
   "mcp_unknown_error": "unknown",
 
   "diff_loading": "Loading diff...",

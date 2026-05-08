@@ -1220,7 +1220,10 @@ export function ChatPanel() {
         )}
         <ScrollContext.Provider value={scrollContextValue}>
         <div className={styles.messages} ref={messagesContainerRef}>
-          <CliInvocationBanner invocation={cliInvocation} />
+          <CliInvocationBanner
+            invocation={cliInvocation}
+            sessionId={activeChatSessionRecord?.id}
+          />
           {messages.length === 0 && !hasStreaming ? (
             <div className={styles.empty}>
               Send a message to start a conversation
