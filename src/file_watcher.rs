@@ -287,8 +287,21 @@ impl FileWatcher {
 
         let mut watcher = self.watcher.lock().unwrap();
         for path in &to_remove {
-            let _ = watcher.unwatch(path);
-            self.state.lock().unwrap().os_watched.remove(path);
+            // Re-check that nobody else picked the path up between the
+            // state-lock release and now. `watch_workspace_files` is
+            // fire-and-forget from the frontend, so a second `register`
+            // call could land on a tauri worker thread and add a
+            // subscriber for the same path while we're holding only
+            // the watcher lock. If we unconditionally `unwatch` here,
+            // that concurrent registration ends up with a subscriber
+            // recorded but no live OS watch, missing events until the
+            // *next* register pass retries via the os_watched diff.
+            // Mirrors the same defense in `unregister_workspace`.
+            let still_needed = self.state.lock().unwrap().subscribers.contains_key(path);
+            if !still_needed {
+                let _ = watcher.unwatch(path);
+                self.state.lock().unwrap().os_watched.remove(path);
+            }
         }
         for path in &to_try_watch {
             match watcher.watch(path, RecursiveMode::NonRecursive) {
