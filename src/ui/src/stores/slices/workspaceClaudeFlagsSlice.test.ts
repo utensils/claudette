@@ -184,3 +184,36 @@ describe("loadWorkspaceClaudeFlags idempotency (B2)", () => {
     spy.mockRestore();
   });
 });
+
+describe("invalidateClaudeFlagsForRepo (F1)", () => {
+  beforeEach(() => {
+    useAppStore.setState({
+      claudeFlagsByWorkspace: {},
+      workspaces: [
+        { id: "wsA", repository_id: "r1", name: "wsA", branch: "b", worktree_path: "/a", agent_status: "Idle", sort_order: 0 } as never,
+        { id: "wsB", repository_id: "r1", name: "wsB", branch: "b", worktree_path: "/b", agent_status: "Idle", sort_order: 1 } as never,
+        { id: "wsC", repository_id: "r2", name: "wsC", branch: "b", worktree_path: "/c", agent_status: "Idle", sort_order: 2 } as never,
+      ],
+    });
+  });
+
+  it("removes only entries for workspaces in the affected repo", () => {
+    const ready = {
+      defs: [],
+      globalState: {},
+      repoState: {},
+      resolved: [],
+      status: "ready" as const,
+    };
+    useAppStore.setState({
+      claudeFlagsByWorkspace: { wsA: ready, wsB: ready, wsC: ready },
+    });
+
+    useAppStore.getState().invalidateClaudeFlagsForRepo("r1");
+
+    const after = useAppStore.getState().claudeFlagsByWorkspace;
+    expect(after.wsA).toBeUndefined();
+    expect(after.wsB).toBeUndefined();
+    expect(after.wsC).toBeDefined(); // different repo — keep
+  });
+});

@@ -35,6 +35,9 @@ export function ClaudeFlagsSettings({
   const invalidateAllWorkspaceClaudeFlags = useAppStore(
     (s) => s.invalidateAllWorkspaceClaudeFlags,
   );
+  const invalidateClaudeFlagsForRepo = useAppStore(
+    (s) => s.invalidateClaudeFlagsForRepo,
+  );
 
   const [defsError, setDefsError] = useState<string | null>(null);
   const [defsLoading, setDefsLoading] = useState(false);
@@ -117,13 +120,23 @@ export function ClaudeFlagsSettings({
           next,
           current?.value ? current.value : null,
         );
-        invalidateAllWorkspaceClaudeFlags();
+        if (scope.kind === "repo") {
+          invalidateClaudeFlagsForRepo(scope.repoId);
+        } else {
+          invalidateAllWorkspaceClaudeFlags();
+        }
         await loadState();
       } catch (e) {
         setStateError(String(e));
       }
     },
-    [state, scope, loadState, invalidateAllWorkspaceClaudeFlags],
+    [
+      state,
+      scope,
+      loadState,
+      invalidateAllWorkspaceClaudeFlags,
+      invalidateClaudeFlagsForRepo,
+    ],
   );
 
   const handleValueChange = useCallback(
@@ -136,13 +149,23 @@ export function ClaudeFlagsSettings({
           current?.enabled ?? false,
           next === "" ? null : next,
         );
-        invalidateAllWorkspaceClaudeFlags();
+        if (scope.kind === "repo") {
+          invalidateClaudeFlagsForRepo(scope.repoId);
+        } else {
+          invalidateAllWorkspaceClaudeFlags();
+        }
         await loadState();
       } catch (e) {
         setStateError(String(e));
       }
     },
-    [state, scope, loadState, invalidateAllWorkspaceClaudeFlags],
+    [
+      state,
+      scope,
+      loadState,
+      invalidateAllWorkspaceClaudeFlags,
+      invalidateClaudeFlagsForRepo,
+    ],
   );
 
   const handleToggleOverride = useCallback(
@@ -162,13 +185,23 @@ export function ClaudeFlagsSettings({
         } else {
           await clearClaudeFlagRepoOverride(scope.repoId, def.name);
         }
-        invalidateAllWorkspaceClaudeFlags();
+        if (scope.kind === "repo") {
+          invalidateClaudeFlagsForRepo(scope.repoId);
+        } else {
+          invalidateAllWorkspaceClaudeFlags();
+        }
         await loadState();
       } catch (e) {
         setStateError(String(e));
       }
     },
-    [scope, state, loadState, invalidateAllWorkspaceClaudeFlags],
+    [
+      scope,
+      state,
+      loadState,
+      invalidateAllWorkspaceClaudeFlags,
+      invalidateClaudeFlagsForRepo,
+    ],
   );
 
   return (

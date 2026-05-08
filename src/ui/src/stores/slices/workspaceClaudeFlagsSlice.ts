@@ -31,6 +31,7 @@ export interface WorkspaceClaudeFlagsSlice {
     repoId: string | null,
   ) => Promise<void>;
   invalidateWorkspaceClaudeFlags: (workspaceId: string) => void;
+  invalidateClaudeFlagsForRepo: (repoId: string) => void;
   invalidateAllWorkspaceClaudeFlags: () => void;
 }
 
@@ -117,6 +118,20 @@ export const createWorkspaceClaudeFlagsSlice: StateCreator<
     if (!(workspaceId in current)) return;
     const next = { ...current };
     delete next[workspaceId];
+    set({ claudeFlagsByWorkspace: next });
+  },
+
+  invalidateClaudeFlagsForRepo: (repoId) => {
+    const wsList = get().workspaces;
+    const target = new Set(
+      wsList.filter((w) => w.repository_id === repoId).map((w) => w.id),
+    );
+    if (target.size === 0) return;
+    const current = get().claudeFlagsByWorkspace;
+    const next: Record<string, WorkspaceFlagsState> = {};
+    for (const [wsId, st] of Object.entries(current)) {
+      if (!target.has(wsId)) next[wsId] = st;
+    }
     set({ claudeFlagsByWorkspace: next });
   },
 
