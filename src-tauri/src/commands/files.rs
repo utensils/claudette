@@ -1678,6 +1678,16 @@ pub fn setup_file_watcher(app: AppHandle) {
 /// Silently no-ops if the watcher failed to construct at startup or if
 /// the workspace has no worktree (it's a remote workspace, or its
 /// worktree was deleted out from under us).
+///
+/// `paths` is filtered server-side: any entry that's absolute, contains
+/// `..`, or otherwise escapes the worktree is dropped before reaching
+/// the watcher. Reads (`read_workspace_file_for_viewer`) already enforce
+/// this on their side, but the watcher does its own `canonicalize` +
+/// `notify::Watcher::watch` and could otherwise burn OS watch quota on
+/// paths the frontend has no business asking us to monitor — even if a
+/// rogue payload couldn't read them back through the matching read
+/// command. The filter mirrors `normalize_relative_path` so the same
+/// rules govern reads and watches.
 #[tauri::command]
 pub async fn watch_workspace_files(
     workspace_id: String,
@@ -1692,11 +1702,15 @@ pub async fn watch_workspace_files(
         // for those today.
         Err(_) => return Ok(()),
     };
+    let safe_paths: Vec<String> = paths
+        .into_iter()
+        .filter(|p| normalize_relative_path(p).is_ok())
+        .collect();
     let watcher_guard = state.file_watcher.read().await;
     let Some(watcher) = watcher_guard.as_ref() else {
         return Ok(());
     };
-    watcher.register(&workspace_id, Path::new(&worktree_path), &paths);
+    watcher.register(&workspace_id, Path::new(&worktree_path), &safe_paths);
     Ok(())
 }
 

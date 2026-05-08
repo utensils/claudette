@@ -216,7 +216,10 @@ impl FileWatcher {
                 .remove(workspace_id)
                 .unwrap_or_default();
             let desired_keys: HashSet<Key> = desired.keys().cloned().collect();
-            let stale_keys = prior_keys.difference(&desired_keys).cloned().collect::<Vec<_>>();
+            let stale_keys = prior_keys
+                .difference(&desired_keys)
+                .cloned()
+                .collect::<Vec<_>>();
 
             // Drop stale subscriber entries.
             let mut paths_freed: Vec<PathBuf> = Vec::new();
@@ -232,8 +235,27 @@ impl FileWatcher {
                 }
             }
 
-            // Add new subscribers; record the workspace's full set.
+            // Add new subscribers; record the workspace's full set. If
+            // a key was already registered against a *different*
+            // canonical path (e.g. canonicalize fell back to the raw
+            // path on the first register because the file didn't exist,
+            // and now resolves to its real location through a symlink),
+            // we have to drop the key from the old path's subscriber
+            // set first — otherwise that entry leaks: subsequent
+            // events on the old path still fire the callback, and
+            // `unregister_workspace` walks `key_paths` (which only
+            // holds the new path) so it can't reach the orphan.
             for (key, path) in &desired {
+                if let Some(prior_path) = state.key_paths.get(key).cloned()
+                    && prior_path != *path
+                    && let Some(subs) = state.subscribers.get_mut(&prior_path)
+                {
+                    subs.remove(key);
+                    if subs.is_empty() {
+                        state.subscribers.remove(&prior_path);
+                        paths_freed.push(prior_path);
+                    }
+                }
                 state
                     .subscribers
                     .entry(path.clone())
@@ -530,5 +552,54 @@ mod tests {
         // can install the watch.
         watcher.register("ws-1", tmp.path(), &["never-created.ts".to_string()]);
         assert_eq!(watcher.registered_key_count(), 1);
+    }
+
+    #[test]
+    fn re_register_after_canonical_path_shifts_drops_old_subscriber() {
+        // Regression for the Copilot finding on `register`: when the
+        // first registration happens before the file exists, the
+        // canonical fallback is the raw worktree-relative path.
+        // Creating the file later (via a real or simulated symlink
+        // shift) causes `canonicalize` to resolve to a different
+        // absolute path on re-register. Without the prior-path cleanup,
+        // the old fallback path stays in `subscribers` and the
+        // workspace-wide `unregister_workspace` walk can't find it.
+        let tmp = tempfile::tempdir().unwrap();
+        let real_dir = tmp.path().join("real");
+        std::fs::create_dir(&real_dir).unwrap();
+        let real_file = real_dir.join("foo.ts");
+        std::fs::write(&real_file, "x").unwrap();
+
+        // Register against a relative path that doesn't exist yet —
+        // canonicalize_or_keep falls back to the raw worktree-join.
+        let watcher = FileWatcher::new(Arc::new(|_, _| {})).unwrap();
+        watcher.register("ws-1", tmp.path(), &["foo.ts".to_string()]);
+        assert_eq!(watcher.watched_path_count(), 1);
+
+        // Now make the relative path resolve to a different canonical
+        // path: place a symlink at `tmp/foo.ts` → `real/foo.ts`. On
+        // re-register, the canonical path shifts. The old path entry
+        // must be released so unregister can see it.
+        #[cfg(unix)]
+        {
+            let symlink = tmp.path().join("foo.ts");
+            std::os::unix::fs::symlink(&real_file, &symlink).unwrap();
+            watcher.register("ws-1", tmp.path(), &["foo.ts".to_string()]);
+
+            // Still exactly one subscriber path — the old fallback
+            // entry was released, the new canonical entry took its
+            // place. Without the fix this would be 2.
+            assert_eq!(
+                watcher.watched_path_count(),
+                1,
+                "expected the prior canonical path to be released",
+            );
+
+            // unregister_workspace must clear the live subscriber. If
+            // the leak were present, the orphan would survive.
+            watcher.unregister_workspace("ws-1");
+            assert_eq!(watcher.watched_path_count(), 0);
+            assert_eq!(watcher.registered_key_count(), 0);
+        }
     }
 }

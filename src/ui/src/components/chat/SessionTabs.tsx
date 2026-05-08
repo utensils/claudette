@@ -59,10 +59,12 @@ import styles from "./SessionTabs.module.css";
 
 type NavDirection = "prev" | "next" | "first" | "last";
 
-// `NavEntry`, `sessionNavKey`, `diffNavKey`, `fileNavKey`, and
-// `buildWorkspaceTabNavEntries` are imported from `./sessionTabsLogic` so
-// the cycle-tabs hotkey and this component agree on the unified order
-// without each rebuilding it from scratch.
+// `NavEntry` and `buildWorkspaceTabNavEntries` are imported from
+// `./sessionTabsLogic` so the cycle-tabs hotkey and this component
+// agree on the unified order without each rebuilding it from scratch.
+// The per-kind key factories (`sessionNavKey` / `diffNavKey` /
+// `fileNavKey`) live in the same module and are only consumed there —
+// SessionTabs reads `entry.key` off the built nav entries.
 
 interface Props {
   workspaceId: string;
@@ -1050,13 +1052,23 @@ function FileTab({
           {externallyChanged && (
             // Click-to-reload affordance — re-reads disk and applies via
             // `reloadFileBufferFromDisk`, which drops the in-flight
-            // dirty buffer in exchange for the new disk content. Stops
-            // propagation so the click doesn't also activate the tab.
+            // dirty buffer in exchange for the new disk content. Pointer
+            // and keyboard events both stop propagation so the parent
+            // tab doesn't steal them: `onClick` covers mouse + native
+            // button-activation, `onKeyDown` blocks Enter / Space from
+            // bubbling up to the parent's keyboard handler (which
+            // calls `preventDefault()` on those keys, which would
+            // otherwise suppress the button's own activation).
             <button
               type="button"
               className={styles.externalDot}
               title={t("file_external_change_reload_tooltip")}
               aria-label={t("file_external_change_reload_aria")}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.stopPropagation();
+                }
+              }}
               onClick={(e) => {
                 e.stopPropagation();
                 void readWorkspaceFileForViewer(workspaceId, path)
