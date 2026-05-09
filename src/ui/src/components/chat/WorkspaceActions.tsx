@@ -152,7 +152,7 @@ export function WorkspaceActions({
   const primaryTitle = primaryApp
     ? t("workspace_actions_open_in", { app: primaryApp.name })
     : t("workspace_actions_no_apps");
-  const menuDisabled = unavailable || (apps.length === 0 && !worktreePath);
+  const menuDisabled = unavailable;
 
   return (
     <div className={styles.container} ref={containerRef}>
