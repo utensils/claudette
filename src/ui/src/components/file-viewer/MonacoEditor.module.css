@@ -18,6 +18,22 @@
   width: 100%;
 }
 
+/* Monaco's slider is colored via the theme's `scrollbarSlider.background`
+ * token (see monacoTheme.ts) but Monaco's theme schema has no
+ * `borderRadius` for the slider — it ships rectangular. xterm and the
+ * chat OverlayScrollbar both round the thumb with `var(--radius-sm)`,
+ * so we round Monaco's here for visual parity across the three
+ * surfaces. The `:global(.scrollbar > .slider)` selector targets the
+ * pair Monaco renders internally; `!important` is required because
+ * Monaco re-applies its own inline width/height/transform on every
+ * scroll tick, and CSS modules don't reach inside the editor without
+ * `:global`. Targeting the `.scrollbar` parent additionally rounds the
+ * track corners so the thumb sits flush with the rail at scroll
+ * extremes. */
+.host :global(.monaco-scrollable-element > .scrollbar > .slider) {
+  border-radius: var(--radius-sm) !important;
+}
+
 /* Git gutter — colored bars in Monaco's line-numbers gutter. Decorations
    are applied via `linesDecorationsClassName`; Monaco renders the class
    on a thin strip immediately right of the line numbers. */

@@ -22,44 +22,29 @@
   flex: 1;
   overflow-y: auto;
   overscroll-behavior-y: none;
-  /* Reserve the scrollbar lane unconditionally so message growth that
-   * crosses the overflow threshold doesn't reflow the column under the
-   * cursor. Combined with the right-edge inset below this gives xterm /
-   * Monaco / chat the same visual gap from the panel's right wall. */
-  scrollbar-gutter: stable;
+  /* Right gap matches xterm's `inset: 8px` and Monaco's host
+   * `margin-right: var(--scrollbar-edge-inset)`. The custom slider
+   * (rendered by `<OverlayScrollbar />`) lives inside this 8px lane. */
   margin-right: var(--scrollbar-edge-inset);
   padding: 20px 28px;
   display: flex;
   flex-direction: column;
   gap: 2px;
   contain: layout style;
-  /* Override the global `* { scrollbar-width: thin }` so WebKit honors the
-   * `::-webkit-scrollbar` width below. With `thin`, macOS WKWebView falls
-   * back to the OS overlay scrollbar — which renders at a fixed device
-   * pixel width and does NOT scale with browser zoom, so chat would drift
-   * out of sync with xterm's xterm.js slider and Monaco's custom slider as
-   * the user zooms in or out. `auto` lets our explicit pixel width win and
-   * scales uniformly with the rest of the UI. */
-  scrollbar-width: auto;
-  scrollbar-color: var(--scrollbar-thumb) transparent;
+  /* Hide the host's native scrollbar — `<OverlayScrollbar />` draws a
+   * pixel-sized DOM slider that matches xterm.js / Monaco. macOS
+   * WKWebView ignores `::-webkit-scrollbar` widths when the system uses
+   * overlay scrollbars, and overlay scrollbars don't scale with browser
+   * zoom, so the custom slider is the only way to keep all three
+   * surfaces consistent. */
+  scrollbar-width: none;
+  -ms-overflow-style: none;
 }
 
 .messages::-webkit-scrollbar {
-  width: var(--scrollbar-size);
-  height: var(--scrollbar-size);
-}
-
-.messages::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-.messages::-webkit-scrollbar-thumb {
-  background: var(--scrollbar-thumb);
-  border-radius: var(--radius-sm);
-}
-
-.messages::-webkit-scrollbar-thumb:hover {
-  background: var(--scrollbar-thumb-hover);
+  display: none;
+  width: 0;
+  height: 0;
 }
 
 .empty {
