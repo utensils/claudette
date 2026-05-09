@@ -158,6 +158,10 @@ export function addRepository(path: string): Promise<Repository> {
   return invoke("add_repository", { path });
 }
 
+export function initRepository(parentPath: string, name: string): Promise<Repository> {
+  return invoke("init_repository", { parentPath, name });
+}
+
 export function updateRepositorySettings(
   id: string,
   name: string,

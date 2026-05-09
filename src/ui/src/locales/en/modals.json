@@ -5,10 +5,18 @@
   "delete_workspace_confirm": "Delete",
 
   "add_repo_title": "Add repository",
+  "add_repo_tab_open": "Open existing",
+  "add_repo_tab_create": "Create new",
   "add_repo_path_label": "Repository path",
   "add_repo_path_placeholder": "/path/to/repository",
   "add_repo_adding": "Adding...",
   "add_repo_confirm": "Add",
+  "add_repo_create_location_label": "Location",
+  "add_repo_create_location_placeholder": "/path/to/parent/directory",
+  "add_repo_create_name_label": "Project name",
+  "add_repo_create_name_placeholder": "my-project",
+  "add_repo_creating": "Creating...",
+  "add_repo_create_confirm": "Create",
 
   "add_remote_title": "Add remote server",
   "add_remote_conn_label": "Connection string",
