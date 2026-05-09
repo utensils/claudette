@@ -35,16 +35,20 @@ function preferredPrimaryApp(apps: DetectedApp[]): DetectedApp | null {
   return null;
 }
 
-function categoryIcon(category: AppCategory) {
+// Render the icon directly rather than returning the lucide component
+// constructor — `react-hooks/static-components` rejects assigning a
+// component to a local variable inside render, since it can't see that
+// the value is module-stable. Returning JSX here sidesteps that.
+function renderCategoryIcon(category: AppCategory) {
   switch (category) {
     case "editor":
-      return Code2;
+      return <Code2 size={14} strokeWidth={2.2} />;
     case "file_manager":
-      return FolderOpen;
+      return <FolderOpen size={14} strokeWidth={2.2} />;
     case "terminal":
-      return Terminal;
+      return <Terminal size={14} strokeWidth={2.2} />;
     case "ide":
-      return MonitorCog;
+      return <MonitorCog size={14} strokeWidth={2.2} />;
   }
 }
 
@@ -60,13 +64,12 @@ function AppIcon({ app }: { app: DetectedApp }) {
     );
   }
 
-  const Icon = categoryIcon(app.category);
   return (
     <span
       className={`${styles.appIconFallback} ${styles[`appIcon_${app.category}`]}`}
       aria-hidden="true"
     >
-      <Icon size={14} strokeWidth={2.2} />
+      {renderCategoryIcon(app.category)}
     </span>
   );
 }
