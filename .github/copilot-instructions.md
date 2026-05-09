@@ -21,3 +21,5 @@ Always run `cd src/ui && bunx tsc -b` after TypeScript changes. Vitest uses esbu
 Never edit, rename, or delete released SQL migrations under `src/migrations/*.sql`. Add a new forward migration and register it in `src/migrations/mod.rs`.
 
 Use `bun`, not npm. Keep TypeScript strict and avoid `any`. Keep Rust cross-platform with explicit `#[cfg(...)]` gates for OS-specific code.
+
+Always update user-facing docs in the same PR as the feature change. New or changed user-visible behavior — settings, commands, CLI flags, keyboard shortcuts, environment variables, file locations, plugin manifests, notification triggers — needs a matching update under `site/src/content/docs/`. Per-feature deep-dives go in `site/src/content/docs/features/<topic>.mdx` (register new pages in `site/astro.config.mjs`); every Settings panel control belongs in the matching `## <Section>` table in `site/src/content/docs/features/settings.mdx`. If a change is intentionally undocumented, say so in the PR description.

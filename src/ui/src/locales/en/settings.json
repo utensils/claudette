@@ -196,7 +196,6 @@
 
   "nav_diagnostics": "Diagnostics",
   "diagnostics_title": "Diagnostics",
-  "diagnostics_description": "Claudette writes daily-rotated structured logs to disk so user-reported bugs can be reconstructed from the file alone. The defaults are tuned for normal use; turn the dials below up when investigating a specific issue.",
   "diagnostics_log_level_label": "Log level",
   "diagnostics_log_level_description": "Filter applied to the file log when RUST_LOG is unset. Restart Claudette for changes to take effect.",
   "diagnostics_log_level_locked_by_rust_log": "RUST_LOG is set in this process's environment and overrides the saved level. Unset it (or restart Claudette from a new shell) to re-enable this control.",

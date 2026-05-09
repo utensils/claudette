@@ -30,10 +30,10 @@ const LOG_LEVELS = [
   { value: "trace", label: "trace" },
 ] as const;
 
-// Tuple of `[value, label]` pairs. We inline the translated label
-// where the select renders so i18next's typed-key checker can
-// resolve each `t(...)` call statically — pulling the key through a
-// generic-string variable defeats that.
+// Frontend verbosity values are inlined in the JSX below rather than
+// pulled from a const list — i18next's typed-key checker can only
+// resolve `t(...)` calls when the key is a string literal at the
+// call site.
 
 export function DiagnosticsSettings() {
   const { t } = useTranslation("settings");
@@ -111,9 +111,6 @@ export function DiagnosticsSettings() {
   return (
     <div>
       <h2 className={styles.sectionTitle}>{t("diagnostics_title")}</h2>
-      <p className={`${styles.fieldHint} ${styles.fieldHintSpacedWide}`}>
-        {t("diagnostics_description")}
-      </p>
 
       {error && <div className={styles.error}>{error}</div>}
 
@@ -188,24 +185,31 @@ export function DiagnosticsSettings() {
           </div>
         </div>
         <div className={styles.settingControl}>
-          <button
-            className={styles.iconBtn}
-            onClick={openLogDir}
-            disabled={!settings?.log_dir}
-          >
-            <Folder size={14} />
-            {t("diagnostics_open_log_dir")}
-          </button>
-          <button
-            className={styles.iconBtn}
-            onClick={copyLogPath}
-            disabled={!settings?.log_dir}
-          >
-            <Copy size={14} />
-            {copied
-              ? t("diagnostics_copy_log_path_copied")
-              : t("diagnostics_copy_log_path")}
-          </button>
+          {/* Two iconBtns side-by-side need the project's standard
+           * `inlineControl` flex+gap wrapper — same pattern Cli /
+           * AgentBackends settings use when a row has multiple
+           * adjacent buttons. Without it the two buttons sit flush
+           * against each other. */}
+          <div className={styles.inlineControl}>
+            <button
+              className={styles.iconBtn}
+              onClick={openLogDir}
+              disabled={!settings?.log_dir}
+            >
+              <Folder size={14} />
+              {t("diagnostics_open_log_dir")}
+            </button>
+            <button
+              className={styles.iconBtn}
+              onClick={copyLogPath}
+              disabled={!settings?.log_dir}
+            >
+              <Copy size={14} />
+              {copied
+                ? t("diagnostics_copy_log_path_copied")
+                : t("diagnostics_copy_log_path")}
+            </button>
+          </div>
         </div>
       </div>
     </div>
