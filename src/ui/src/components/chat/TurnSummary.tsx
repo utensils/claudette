@@ -83,6 +83,7 @@ export function TurnSummary({
         activity={act}
         searchQuery={searchQuery}
         worktreePath={worktreePath}
+        inline={inline}
       />
     ) : (
       <div key={act.toolUseId} className={styles.toolActivity}>

@@ -573,6 +573,11 @@
   border-radius: 6px;
 }
 
+.agentToolGroupInline {
+  border: none;
+  border-radius: 0;
+}
+
 .agentToolGroupHeader {
   display: flex;
   align-items: center;
@@ -581,10 +586,18 @@
   min-width: 0;
 }
 
+.agentToolGroupInline .agentToolGroupHeader {
+  padding: 2px 8px;
+}
+
 .agentToolCallList {
   display: grid;
   gap: 2px;
   padding: 0 8px 6px 24px;
+}
+
+.agentToolGroupInline .agentToolCallList {
+  padding: 0 8px 2px 24px;
 }
 
 .agentToolCall {
