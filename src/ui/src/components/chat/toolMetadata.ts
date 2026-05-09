@@ -183,14 +183,12 @@ const FIELD_NAME_HEURISTICS: ReadonlyArray<[field: string, lang: string | null]>
   ["pattern", null],
 ];
 
-const MAX_SUMMARY_LENGTH = 120;
-
 /** Resolved tool-display payload — what the renderer needs to draw a
  *  row's summary plus optionally an expanded code block. */
 export interface ResolvedToolDisplay {
-  /** Single-line summary, truncated to `MAX_SUMMARY_LENGTH`. May be
-   *  empty if the input contained no string-valued fields and no
-   *  registry entry pointed at one. */
+  /** Summary text for the tool-call row. May be empty if the input
+   *  contained no string-valued fields and no registry entry pointed
+   *  at one. */
   summary: string;
   /** Shiki language id when the summary's source field carries
    *  highlightable code. `null` → render as plain text. */
@@ -257,7 +255,7 @@ export function resolveToolSummary(
   const fallback = longestStringField(record);
   if (fallback) {
     return {
-      summary: truncate(fallback, MAX_SUMMARY_LENGTH),
+      summary: fallback,
       lang: null,
       fullContent: fallback,
     };
@@ -287,14 +285,14 @@ function displayFromField(
       .map((v) => (typeof v === "string" ? v : safeStringify(v)))
       .join(", ");
     return {
-      summary: truncate(joined, MAX_SUMMARY_LENGTH),
+      summary: joined,
       lang,
       fullContent: joined,
     };
   }
   if (typeof raw === "string") {
     return {
-      summary: truncate(raw, MAX_SUMMARY_LENGTH),
+      summary: raw,
       lang,
       fullContent: raw,
     };
@@ -307,7 +305,7 @@ function displayFromField(
   // Object value: stringify it so the user gets some signal.
   const stringified = safeStringify(raw);
   return {
-    summary: truncate(stringified, MAX_SUMMARY_LENGTH),
+    summary: stringified,
     lang: lang === "sql" ? null : lang, // SQL highlighting on JSON looks wrong
     fullContent: stringified,
   };
@@ -328,10 +326,4 @@ function safeStringify(value: unknown): string {
   } catch {
     return String(value);
   }
-}
-
-function truncate(value: string, max: number): string {
-  if (value.length <= max) return value;
-  if (max <= 3) return value.slice(0, max);
-  return `${value.slice(0, max - 1)}…`;
 }

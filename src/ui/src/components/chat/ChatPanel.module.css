@@ -669,6 +669,7 @@
 .inlineEditSummary {
   display: inline-flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 6px;
   min-width: 0;
   color: var(--text-faint);
@@ -687,10 +688,11 @@
 }
 
 .inlineEditPath {
+  flex: 1 1 0;
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow: visible;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
   color: var(--accent-primary);
 }
 
@@ -805,7 +807,7 @@
 
 .toolHeader {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 6px;
   width: 100%;
   padding: 4px 10px;
@@ -840,9 +842,10 @@
 .toolSummary {
   color: var(--text-faint);
   font-family: var(--font-mono);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  flex: 1 1 0;
+  overflow: visible;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
   min-width: 0;
   font-size: 11px;
 }
@@ -855,6 +858,7 @@
 .agentToolProgress {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 8px;
   padding: 0 8px 4px 8px;
   color: var(--text-faint);
@@ -878,7 +882,7 @@
 
 .agentToolGroupHeader {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 0;
   padding: 6px 8px 2px 8px;
   min-width: 0;
@@ -902,7 +906,7 @@
   display: flex;
   min-width: 0;
   gap: 8px;
-  align-items: center;
+  align-items: flex-start;
   color: var(--text-faint);
   font-family: var(--font-mono);
   font-size: 11px;
@@ -913,11 +917,12 @@
 }
 
 .agentToolCallSummary {
+  flex: 1 1 0;
   min-width: 0;
   color: var(--text-faint);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow: visible;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
 }
 
 .agentToolCallSummary::before {

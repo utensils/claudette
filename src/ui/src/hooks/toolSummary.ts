@@ -23,24 +23,15 @@ export function extractToolSummary(
     switch (toolName) {
       case "Grep":
         return input.pattern
-          ? truncate(
-              `${input.pattern}${input.path ? ` in ${input.path}` : ""}`,
-              80,
-            )
+          ? `${input.pattern}${input.path ? ` in ${input.path}` : ""}`
           : "";
       case "SendMessage":
         return input.to
-          ? truncate(
-              `to ${input.to}${input.summary ? `: ${input.summary}` : ""}`,
-              80,
-            )
+          ? `to ${input.to}${input.summary ? `: ${input.summary}` : ""}`
           : "";
       case "Skill":
         return input.skill
-          ? truncate(
-              `${input.skill}${input.args ? ` ${input.args}` : ""}`,
-              80,
-            )
+          ? `${input.skill}${input.args ? ` ${input.args}` : ""}`
           : "";
       case "TaskUpdate":
         return input.status ? `#${input.id ?? "?"} → ${input.status}` : "";
@@ -53,7 +44,7 @@ export function extractToolSummary(
       case "CronDelete":
         return input.id ?? input.name ?? "";
       case "RemoteTrigger":
-        return truncate(input.name ?? input.prompt ?? "", 80);
+        return input.name ?? input.prompt ?? "";
       case "LSP":
         return input.action ?? "";
     }
@@ -61,15 +52,8 @@ export function extractToolSummary(
     return "";
   }
   // Default path: registry → tool-name heuristics → field-name
-  // heuristics → longest string. The registry caps its summary at
-  // 120 chars; trim to 80 here for the inline row-summary surface.
-  return truncate(resolveToolSummary(toolName, inputJson).summary, 80);
-}
-
-function truncate(s: string, max: number): string {
-  if (s.length <= max) return s;
-  if (max <= 3) return s.slice(0, max);
-  return s.slice(0, max - 3) + "...";
+  // heuristics → longest string.
+  return resolveToolSummary(toolName, inputJson).summary;
 }
 
 /** Strip the workspace root prefix from a summary string, leaving a relative path.

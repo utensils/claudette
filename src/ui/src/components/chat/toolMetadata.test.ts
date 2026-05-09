@@ -126,16 +126,13 @@ describe("resolveToolSummary", () => {
       expect(result).toEqual({ summary: "", lang: null, fullContent: "" });
     });
 
-    it("truncates long content with an ellipsis", () => {
+    it("preserves long content in the row summary", () => {
       const longSql = "SELECT " + "x, ".repeat(100) + "y FROM t";
       const result = resolveToolSummary(
         "mcp__postgres__query",
         JSON.stringify({ sql: longSql }),
       );
-      expect(result.summary.length).toBeLessThanOrEqual(120);
-      expect(result.summary.endsWith("…")).toBe(true);
-      // fullContent retains the untruncated value for the
-      // expand-to-detail view that this scaffolds.
+      expect(result.summary).toBe(longSql);
       expect(result.fullContent).toBe(longSql);
     });
 

@@ -1,5 +1,24 @@
 import { describe, it, expect } from "vitest";
-import { relativizePath } from "./toolSummary";
+import { extractToolSummary, relativizePath } from "./toolSummary";
+
+describe("extractToolSummary", () => {
+  it("preserves long built-in tool summaries instead of pre-truncating them", () => {
+    const longPath =
+      "/Users/me/project/src/components/chat/ToolActivitiesSection.with.a.very.long.name.test.tsx";
+    expect(
+      extractToolSummary(
+        "Grep",
+        JSON.stringify({ pattern: "agentToolCallSummary", path: longPath }),
+      ),
+    ).toBe(`agentToolCallSummary in ${longPath}`);
+  });
+
+  it("preserves long registry summaries instead of applying an inline cap", () => {
+    const command =
+      "tail -5 /Users/me/.claude/projects/-Users-jamesbrink-claudette-workspaces/example/logs/session-output.log 2>&1";
+    expect(extractToolSummary("Bash", JSON.stringify({ command }))).toBe(command);
+  });
+});
 
 describe("relativizePath", () => {
   it("returns the original text when root is null/undefined/empty", () => {

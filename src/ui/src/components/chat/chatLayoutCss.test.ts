@@ -45,6 +45,16 @@ describe("ChatPanel.module.css invariants", () => {
     // half is caught.
     expect(body).toMatch(/overflow:\s*hidden\s*;/);
   });
+
+  it("tool-call summaries wrap instead of ellipsizing the command or path", () => {
+    const css = readCss("ChatPanel.module.css");
+    for (const selector of [".toolSummary", ".agentToolCallSummary", ".inlineEditPath"]) {
+      const body = ruleBody(css, selector);
+      expect(body).not.toMatch(/text-overflow:\s*ellipsis\s*;/);
+      expect(body).toMatch(/white-space:\s*pre-wrap\s*;/);
+      expect(body).toMatch(/overflow-wrap:\s*anywhere\s*;/);
+    }
+  });
 });
 
 describe("ThinkingBlock.module.css invariants", () => {
