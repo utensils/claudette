@@ -1659,7 +1659,11 @@ pub fn setup_file_watcher(app: AppHandle) {
     })) {
         Ok(w) => Arc::new(w),
         Err(err) => {
-            eprintln!("[file-watcher] failed to start: {err} — realtime buffer refresh disabled");
+            tracing::warn!(
+                target: "claudette::file-watcher",
+                error = %err,
+                "failed to start — realtime buffer refresh disabled"
+            );
             return;
         }
     };

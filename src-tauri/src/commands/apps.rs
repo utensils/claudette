@@ -65,9 +65,19 @@ fn load_apps_config_from(path: &Path) -> AppsConfig {
         match std::fs::read_to_string(path) {
             Ok(content) => match serde_json::from_str::<AppsConfig>(&content) {
                 Ok(config) => return config,
-                Err(e) => eprintln!("[apps] Failed to parse {}: {e}", path.display()),
+                Err(e) => tracing::warn!(
+                    target: "claudette::apps",
+                    path = %path.display(),
+                    error = %e,
+                    "failed to parse apps config"
+                ),
             },
-            Err(e) => eprintln!("[apps] Failed to read {}: {e}", path.display()),
+            Err(e) => tracing::warn!(
+                target: "claudette::apps",
+                path = %path.display(),
+                error = %e,
+                "failed to read apps config"
+            ),
         }
     } else {
         // Write the default file for the user to discover and customize.
@@ -75,9 +85,11 @@ fn load_apps_config_from(path: &Path) -> AppsConfig {
             let _ = std::fs::create_dir_all(parent);
         }
         if let Err(e) = std::fs::write(path, DEFAULT_APPS_JSON) {
-            eprintln!(
-                "[apps] Failed to write default config to {}: {e}",
-                path.display()
+            tracing::warn!(
+                target: "claudette::apps",
+                path = %path.display(),
+                error = %e,
+                "failed to write default apps config"
             );
         }
     }

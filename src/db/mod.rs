@@ -174,9 +174,11 @@ impl Database {
                     // applied so the runner doesn't wedge the app on every
                     // subsequent boot.
                     drop(tx);
-                    eprintln!(
-                        "[migrations] {} skipped: schema object already present ({e}); marking applied",
-                        m.id,
+                    tracing::warn!(
+                        target: "claudette::db",
+                        migration_id = m.id,
+                        error = %e,
+                        "migration skipped: schema object already present; marking applied"
                     );
                     let tx = conn.unchecked_transaction()?;
                     tx.execute(

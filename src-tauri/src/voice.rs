@@ -1335,7 +1335,7 @@ impl AudioRecorder for CpalAudioRecorder {
                     },
                     move |err| {
                         *stream_error.lock() = Some(err.to_string());
-                        eprintln!("voice input stream error: {err}");
+                        tracing::warn!(target: "claudette::voice", error = %err, "input stream error");
                     },
                     None,
                 )

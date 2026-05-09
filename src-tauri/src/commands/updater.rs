@@ -32,7 +32,7 @@ fn endpoint_for(channel: &str) -> &'static str {
         "stable" => STABLE_URL,
         "nightly" => NIGHTLY_URL,
         other => {
-            eprintln!("[updater] Unknown channel {other:?}, falling back to stable");
+            tracing::warn!(target: "claudette::updater", channel = %other, "unknown channel — falling back to stable");
             STABLE_URL
         }
     }
@@ -111,8 +111,10 @@ async fn discover_nightly_endpoints() -> Vec<Url> {
     {
         Ok(r) => r,
         Err(e) => {
-            eprintln!(
-                "[updater] Nightly discovery request failed: {e}; falling back to static URL"
+            tracing::warn!(
+                target: "claudette::updater",
+                error = %e,
+                "nightly discovery request failed — falling back to static URL"
             );
             return Vec::new();
         }
@@ -120,15 +122,21 @@ async fn discover_nightly_endpoints() -> Vec<Url> {
 
     let status = resp.status();
     if !status.is_success() {
-        eprintln!("[updater] Nightly discovery returned HTTP {status}; falling back to static URL");
+        tracing::warn!(
+            target: "claudette::updater",
+            status = %status,
+            "nightly discovery returned non-success HTTP status — falling back to static URL"
+        );
         return Vec::new();
     }
 
     let body = match resp.text().await {
         Ok(b) => b,
         Err(e) => {
-            eprintln!(
-                "[updater] Nightly discovery body read failed: {e}; falling back to static URL"
+            tracing::warn!(
+                target: "claudette::updater",
+                error = %e,
+                "nightly discovery body read failed — falling back to static URL"
             );
             return Vec::new();
         }
@@ -209,9 +217,10 @@ pub async fn check_for_updates_with_channel(
         Ok(u) => u,
         Err(e) => match classify_check_error(e) {
             Ok(()) => {
-                eprintln!(
-                    "[updater] Release manifest unavailable for channel {channel:?}; \
-                     treating as no update available"
+                tracing::info!(
+                    target: "claudette::updater",
+                    channel = %channel,
+                    "release manifest unavailable — treating as no update available"
                 );
                 None
             }

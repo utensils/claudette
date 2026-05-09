@@ -315,7 +315,12 @@ impl FileWatcher {
                     // create that hasn't landed yet). Other errors
                     // (permission denied, OS watch limit) are louder.
                     if !is_path_not_found(&err) {
-                        eprintln!("[file-watcher] failed to watch {}: {err}", path.display());
+                        tracing::warn!(
+                            target: "claudette::file-watcher",
+                            path = %path.display(),
+                            error = %err,
+                            "failed to watch path"
+                        );
                     }
                 }
             }

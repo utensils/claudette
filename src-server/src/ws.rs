@@ -136,12 +136,12 @@ pub async fn handle_tls_connection(
     let ws_stream = match tokio_tungstenite::accept_async(tls_stream).await {
         Ok(ws) => ws,
         Err(e) => {
-            eprintln!("[ws] WebSocket handshake failed from {addr}: {e}");
+            tracing::warn!(target: "claudette::ws", peer = %addr, error = %e, "WebSocket handshake failed");
             return;
         }
     };
 
-    println!("[ws] New connection from {addr}");
+    tracing::info!(target: "claudette::ws", peer = %addr, "new connection");
 
     let (write, mut read) = ws_stream.split();
     let writer = std::sync::Arc::new(tokio::sync::Mutex::new(write));
@@ -251,20 +251,23 @@ pub async fn handle_tls_connection(
     }
 
     if !authenticated {
-        eprintln!(
-            "[ws] Auth failed after {max_attempts} attempts from {addr}, dropping connection"
+        tracing::warn!(
+            target: "claudette::ws",
+            peer = %addr,
+            attempts = max_attempts,
+            "auth failed, dropping connection"
         );
         return;
     }
 
-    println!("[ws] Authenticated connection from {addr}");
+    tracing::info!(target: "claudette::ws", peer = %addr, "authenticated connection");
 
     // Phase 2: Command loop.
     while let Some(msg_result) = read.next().await {
         let text = match msg_result {
             Ok(Message::Text(text)) => text,
             Ok(Message::Close(_)) => {
-                println!("[ws] Connection closed from {addr}");
+                tracing::info!(target: "claudette::ws", peer = %addr, "connection closed");
                 break;
             }
             Ok(Message::Ping(data)) => {
@@ -273,7 +276,7 @@ pub async fn handle_tls_connection(
                 continue;
             }
             Err(e) => {
-                eprintln!("[ws] Error from {addr}: {e}");
+                tracing::warn!(target: "claudette::ws", peer = %addr, error = %e, "connection error");
                 break;
             }
             _ => continue,

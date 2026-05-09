@@ -262,7 +262,7 @@ impl Drop for LocalServerState {
         // (e.g. crash, external kill). If so, skip the PID-based cleanup to
         // avoid signaling a recycled PID that now belongs to another process.
         if let Ok(Some(_status)) = self.child.try_wait() {
-            eprintln!("[cleanup] Server process already exited");
+            tracing::info!(target: "claudette::cleanup", "server process already exited");
             return;
         }
         // Best-effort tokio-level kill (may fail if runtime is gone). On
@@ -298,9 +298,14 @@ pub fn kill_process_sync(pid: u32) {
     if ret != 0 {
         let err = std::io::Error::last_os_error();
         if err.raw_os_error() == Some(libc::ESRCH) {
-            eprintln!("[cleanup] Server process {pid} already exited");
+            tracing::info!(target: "claudette::cleanup", pid, "server process already exited");
         } else {
-            eprintln!("[cleanup] Failed to send SIGTERM to server process {pid}: {err}");
+            tracing::warn!(
+                target: "claudette::cleanup",
+                pid,
+                error = %err,
+                "failed to send SIGTERM to server process"
+            );
         }
         return;
     }
@@ -312,14 +317,14 @@ pub fn kill_process_sync(pid: u32) {
         let mut status: libc::c_int = 0;
         let ret = unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) };
         if ret == pid {
-            eprintln!("[cleanup] Stopped local claudette-server (pid {pid})");
+            tracing::info!(target: "claudette::cleanup", pid, "stopped local claudette-server");
             return;
         }
         if ret == -1 {
             let err = std::io::Error::last_os_error();
             if err.raw_os_error() == Some(libc::ECHILD) {
                 // No such child — already reaped.
-                eprintln!("[cleanup] Stopped local claudette-server (pid {pid})");
+                tracing::info!(target: "claudette::cleanup", pid, "stopped local claudette-server");
                 return;
             }
             // EINTR or other transient error — retry.
@@ -340,20 +345,23 @@ pub fn kill_process_sync(pid: u32) {
         // SAFETY: waitpid with WNOHANG is a standard POSIX call.
         let ret = unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) };
         if ret == pid {
-            eprintln!("[cleanup] Force-killed local claudette-server (pid {pid})");
+            tracing::warn!(target: "claudette::cleanup", pid, "force-killed local claudette-server");
             return;
         }
         if ret == -1 {
             let err = std::io::Error::last_os_error();
             match err.raw_os_error() {
                 Some(libc::ECHILD) => {
-                    eprintln!("[cleanup] Force-killed local claudette-server (pid {pid})");
+                    tracing::warn!(target: "claudette::cleanup", pid, "force-killed local claudette-server");
                     return;
                 }
                 Some(libc::EINTR) => {} // Retry.
                 _ => {
-                    eprintln!(
-                        "[cleanup] Sent SIGKILL to claudette-server (pid {pid}) but could not reap: {err}"
+                    tracing::warn!(
+                        target: "claudette::cleanup",
+                        pid,
+                        error = %err,
+                        "sent SIGKILL to claudette-server but could not reap"
                     );
                     return;
                 }
@@ -361,8 +369,10 @@ pub fn kill_process_sync(pid: u32) {
         }
         std::thread::sleep(Duration::from_millis(10));
     }
-    eprintln!(
-        "[cleanup] Sent SIGKILL to claudette-server (pid {pid}) but timed out waiting to reap"
+    tracing::warn!(
+        target: "claudette::cleanup",
+        pid,
+        "sent SIGKILL to claudette-server but timed out waiting to reap"
     );
 }
 

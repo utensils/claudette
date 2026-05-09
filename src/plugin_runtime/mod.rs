@@ -189,9 +189,11 @@ impl PluginRegistry {
         let entries = match std::fs::read_dir(plugin_dir) {
             Ok(entries) => entries,
             Err(e) => {
-                eprintln!(
-                    "[plugin] Failed to read plugin directory {}: {e}",
-                    plugin_dir.display()
+                tracing::warn!(
+                    target: "claudette::plugin",
+                    plugin_dir = %plugin_dir.display(),
+                    error = %e,
+                    "failed to read plugin directory"
                 );
                 return Self {
                     plugins,
@@ -211,7 +213,11 @@ impl PluginRegistry {
             let manifest_path = path.join("plugin.json");
             if !manifest_path.exists() {
                 let name = path.file_name().unwrap_or_default().to_string_lossy();
-                eprintln!("[plugin] Skipping '{name}': missing plugin.json");
+                tracing::warn!(
+                    target: "claudette::plugin",
+                    plugin_name = %name,
+                    "skipping plugin: missing plugin.json"
+                );
                 continue;
             }
 
@@ -223,7 +229,12 @@ impl PluginRegistry {
                 Ok(manifest) => {
                     let init_path = path.join("init.lua");
                     if requires_init_lua(manifest.kind) && !init_path.exists() {
-                        eprintln!("[plugin] Skipping '{}': missing init.lua", manifest.name);
+                        tracing::warn!(
+                            target: "claudette::plugin",
+                            plugin_name = %manifest.name,
+                            kind = ?manifest.kind,
+                            "skipping plugin: missing init.lua"
+                        );
                         continue;
                     }
                     let cli_available = check_clis_available(&manifest.required_clis);
@@ -241,7 +252,12 @@ impl PluginRegistry {
                     );
                 }
                 Err(e) => {
-                    eprintln!("[plugin] {e}");
+                    tracing::warn!(
+                        target: "claudette::plugin",
+                        manifest_path = %manifest_path.display(),
+                        error = %e,
+                        "failed to parse plugin manifest"
+                    );
                 }
             }
         }
@@ -567,8 +583,10 @@ fn resolve_trust(name: &str, dir: &Path) -> PluginTrust {
                 // None — narrow race window where the file
                 // disappeared between checks. Fail closed: treat as
                 // community with empty grants.
-                eprintln!(
-                    "[plugin] {name}: .install_meta.json vanished during discovery — failing closed"
+                tracing::warn!(
+                    target: "claudette::plugin",
+                    plugin_name = %name,
+                    ".install_meta.json vanished during discovery — failing closed"
                 );
                 return PluginTrust::Community {
                     granted: Vec::new(),
@@ -578,8 +596,11 @@ fn resolve_trust(name: &str, dir: &Path) -> PluginTrust {
                 // Corrupt / truncated / partially-written meta file.
                 // Fail closed rather than silently allowing the
                 // manifest's full required_clis through.
-                eprintln!(
-                    "[plugin] {name}: failed to read .install_meta.json ({e}) — failing closed"
+                tracing::warn!(
+                    target: "claudette::plugin",
+                    plugin_name = %name,
+                    error = %e,
+                    "failed to read .install_meta.json — failing closed"
                 );
                 return PluginTrust::Community {
                     granted: Vec::new(),

@@ -219,9 +219,12 @@ pub(crate) async fn deny_drained_permissions(
             "message": reason,
         });
         if let Err(e) = ps.send_control_response(&pending.request_id, deny).await {
-            eprintln!(
-                "[chat] Failed to deny pending {} on cleanup: {e}",
-                pending.tool_name
+            tracing::warn!(
+                target: "claudette::chat",
+                tool_name = %pending.tool_name,
+                request_id = %pending.request_id,
+                error = %e,
+                "failed to deny pending tool on cleanup"
             );
         }
     }

@@ -174,7 +174,12 @@ impl IpcServer {
         if let Some(ref path) = socket_file_path {
             use std::os::unix::fs::PermissionsExt;
             if let Err(e) = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)) {
-                eprintln!("[ipc] chmod 0600 {} failed: {e}", path.display());
+                tracing::warn!(
+                    target: "claudette::ipc",
+                    path = %path.display(),
+                    error = %e,
+                    "chmod 0600 failed"
+                );
             }
         }
 

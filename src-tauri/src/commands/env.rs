@@ -484,7 +484,11 @@ pub fn setup_env_watcher(app: AppHandle) {
     })) {
         Ok(w) => Arc::new(w),
         Err(err) => {
-            eprintln!("[env-watcher] failed to start: {err} — reactive invalidation disabled");
+            tracing::warn!(
+                target: "claudette::env-watcher",
+                error = %err,
+                "failed to start — reactive invalidation disabled"
+            );
             return;
         }
     };

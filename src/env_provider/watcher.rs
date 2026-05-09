@@ -294,7 +294,12 @@ impl EnvWatcher {
                     // retries via the `os_watched` diff. Louder errors
                     // (permission denied, inotify limit) still print.
                     if !is_path_not_found(&err) {
-                        eprintln!("[env-watcher] failed to watch {}: {err}", path.display());
+                        tracing::warn!(
+                            target: "claudette::env-watcher",
+                            path = %path.display(),
+                            error = %err,
+                            "failed to watch path"
+                        );
                     }
                 }
             }

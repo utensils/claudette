@@ -266,7 +266,7 @@ fn main() {
         rt.block_on(async {
             if let Err(e) = claudette_server::run(claudette_server::ServerOptions::default()).await
             {
-                eprintln!("Server error: {e}");
+                tracing::error!(target: "claudette::startup", error = %e, "embedded claudette-server exited with error");
                 std::process::exit(1);
             }
         });
@@ -282,7 +282,7 @@ fn main() {
         let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
         rt.block_on(async {
             if let Err(e) = claudette::agent_mcp::server::run_stdio().await {
-                eprintln!("agent-mcp error: {e}");
+                tracing::error!(target: "claudette::startup", error = %e, "agent-mcp child exited with error");
                 std::process::exit(1);
             }
         });
@@ -296,7 +296,7 @@ fn main() {
         let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
         rt.block_on(async {
             if let Err(e) = claudette::agent_mcp::hook::run_stdin().await {
-                eprintln!("agent-hook error: {e}");
+                tracing::error!(target: "claudette::startup", error = %e, "agent-hook child exited with error");
                 std::process::exit(1);
             }
         });
@@ -458,7 +458,7 @@ fn main() {
                 // anchor formatting (which embeds the release date).
                 let url = format!("{}{}", HELP_RELEASE_URL_BASE, env!("CARGO_PKG_VERSION"));
                 if let Err(e) = commands::shell::opener::open(&url) {
-                    eprintln!("[help] Failed to open changelog URL: {e}");
+                    tracing::warn!(target: "claudette::ui", url = %url, error = %e, "failed to open changelog URL");
                 }
             } else if event.id().as_ref() == "help-open-docs" {
                 // Deep-link into the Getting Started page so all three
@@ -467,14 +467,14 @@ fn main() {
                 // the URL is `HELP_DOCS_URL` (mirrored in TS at
                 // `src/ui/src/helpUrls.ts`).
                 if let Err(e) = commands::shell::opener::open(HELP_DOCS_URL) {
-                    eprintln!("[help] Failed to open docs URL: {e}");
+                    tracing::warn!(target: "claudette::ui", url = HELP_DOCS_URL, error = %e, "failed to open docs URL");
                 }
             } else if event.id().as_ref() == "help-report-issue" {
                 // GitHub issue tracker. Mirrors Aethon's "Report an
                 // Issue…" item — gives users a one-click path to file a
                 // bug report.
                 if let Err(e) = commands::shell::opener::open(HELP_ISSUES_URL) {
-                    eprintln!("[help] Failed to open issues URL: {e}");
+                    tracing::warn!(target: "claudette::ui", url = HELP_ISSUES_URL, error = %e, "failed to open issues URL");
                 }
             } else if event.id().as_ref() == "zoom-in" {
                 let _ = app.emit("zoom-in", ());
@@ -527,7 +527,7 @@ fn main() {
         .setup(move |app| {
             // Start mDNS browser to discover nearby claudette-server instances.
             if let Err(e) = mdns::start_mdns_browser(app.handle(), saved_fingerprints) {
-                eprintln!("[mdns] Failed to start browser: {e}");
+                tracing::warn!(target: "claudette::mdns", error = %e, "failed to start browser");
             }
 
             // Discover `claude --help` flags BEFORE the first turn can fire,
@@ -550,7 +550,7 @@ fn main() {
                         *guard = state::ClaudeFlagDiscovery::Ok(defs);
                     }
                     Err(msg) => {
-                        eprintln!("[claude-flags] discovery failed: {msg}");
+                        tracing::warn!(target: "claudette::startup", error = %msg, "claude-flags discovery failed");
                         let mut guard = flag_defs_handle.write().await;
                         *guard = state::ClaudeFlagDiscovery::Err(msg);
                     }
@@ -706,7 +706,7 @@ fn main() {
 
             // Set up the system tray icon (respects tray_enabled setting).
             if let Err(e) = tray::setup_tray(app.handle()) {
-                eprintln!("[tray] Failed to setup tray: {e}");
+                tracing::warn!(target: "claudette::tray", error = %e, "failed to setup tray");
             }
 
             // Start background SCM polling for PR status and CI checks.
@@ -745,10 +745,11 @@ fn main() {
                         };
                         match app_info::AppInfoFile::write(&info) {
                             Ok(file) => {
-                                eprintln!(
-                                    "[ipc] listening on {} (discovery: {})",
-                                    server.socket,
-                                    app_info::app_info_path().display(),
+                                tracing::info!(
+                                    target: "claudette::ipc",
+                                    socket = %server.socket,
+                                    discovery = %app_info::app_info_path().display(),
+                                    "listening"
                                 );
                                 ipc_app.manage(IpcGuard {
                                     _server: server,
@@ -756,12 +757,12 @@ fn main() {
                                 });
                             }
                             Err(e) => {
-                                eprintln!("[ipc] failed to write app.json: {e}");
+                                tracing::warn!(target: "claudette::ipc", error = %e, "failed to write app.json");
                             }
                         }
                     }
                     Err(e) => {
-                        eprintln!("[ipc] failed to start: {e}");
+                        tracing::warn!(target: "claudette::ipc", error = %e, "failed to start");
                     }
                 }
             });

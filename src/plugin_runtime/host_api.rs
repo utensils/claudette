@@ -134,12 +134,22 @@ fn register_host_api(lua: &Lua, ctx: HostContext) -> LuaResult<()> {
         })?,
     )?;
 
-    // host.log(level, msg)
+    // host.log(level, msg) — plugins can emit at any level; we map the
+    // level string to the matching `tracing` macro and stamp the
+    // plugin name into structured fields so a single
+    // `RUST_LOG=claudette::plugin=trace` filter captures every plugin.
     let plugin_name = ctx.plugin_name.clone();
     host.set(
         "log",
         lua.create_function(move |_, (level, msg): (String, String)| {
-            eprintln!("[plugin:{plugin_name}] [{level}] {msg}");
+            let lvl = level.to_ascii_lowercase();
+            match lvl.as_str() {
+                "error" => tracing::error!(target: "claudette::plugin", plugin = %plugin_name, "{}", msg),
+                "warn" | "warning" => tracing::warn!(target: "claudette::plugin", plugin = %plugin_name, "{}", msg),
+                "debug" => tracing::debug!(target: "claudette::plugin", plugin = %plugin_name, "{}", msg),
+                "trace" => tracing::trace!(target: "claudette::plugin", plugin = %plugin_name, "{}", msg),
+                _ => tracing::info!(target: "claudette::plugin", plugin = %plugin_name, level = %lvl, "{}", msg),
+            }
             Ok(())
         })?,
     )?;

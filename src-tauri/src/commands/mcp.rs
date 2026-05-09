@@ -153,7 +153,12 @@ pub async fn ensure_and_validate_mcps(
     let existing = db
         .list_repository_mcp_servers(&repo_id)
         .unwrap_or_else(|e| {
-            eprintln!("[mcp] Failed to load existing MCP servers for {repo_id}: {e}");
+            tracing::warn!(
+                target: "claudette::mcp",
+                repo_id = %repo_id,
+                error = %e,
+                "failed to load existing MCP servers"
+            );
             Vec::new()
         });
     let existing_by_name: std::collections::HashMap<String, &RepositoryMcpServer> =
@@ -190,13 +195,23 @@ pub async fn ensure_and_validate_mcps(
 
     // Always replace — even with an empty vec — so removed servers are dropped.
     if let Err(e) = db.replace_repository_mcp_servers(&repo_id, &rows) {
-        eprintln!("[mcp] Failed to persist MCP servers for {repo_id}: {e}");
+        tracing::warn!(
+            target: "claudette::mcp",
+            repo_id = %repo_id,
+            error = %e,
+            "failed to persist MCP servers"
+        );
     }
 
     let saved = db
         .list_repository_mcp_servers(&repo_id)
         .unwrap_or_else(|e| {
-            eprintln!("[mcp] Failed to reload MCP servers for {repo_id}: {e}");
+            tracing::warn!(
+                target: "claudette::mcp",
+                repo_id = %repo_id,
+                error = %e,
+                "failed to reload MCP servers"
+            );
             Vec::new()
         });
 
@@ -262,7 +277,13 @@ pub async fn set_mcp_server_enabled(
         if let Err(e) =
             claudette::mcp::set_server_disabled_in_config(repo_path, &server_name, !enabled)
         {
-            eprintln!("[mcp] Failed to update ~/.claude.json: {e}");
+            tracing::warn!(
+                target: "claudette::mcp",
+                repo_id = %repo_id,
+                server_name = %server_name,
+                error = %e,
+                "failed to update ~/.claude.json"
+            );
         }
     }
 

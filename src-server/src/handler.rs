@@ -578,10 +578,12 @@ async fn handle_send_chat_message(
     // continues with `is_resume = false` and re-runs the session-init
     // branch (`run_turn` is called below with the fresh state).
     if session.turn_count > 0 && session.session_resolved_env != resolved_env.vars {
-        eprintln!(
-            "[handler] env-provider output changed ({} vars before, {} after) — resetting session for {workspace_id}",
-            session.session_resolved_env.len(),
-            resolved_env.vars.len(),
+        tracing::info!(
+            target: "claudette::ws",
+            workspace_id = %workspace_id,
+            vars_before = session.session_resolved_env.len(),
+            vars_after = resolved_env.vars.len(),
+            "env-provider output changed — resetting session"
         );
         session.session_id = uuid::Uuid::new_v4().to_string();
         session.turn_count = 0;
@@ -627,7 +629,11 @@ async fn handle_send_chat_message(
         extra_claude_flags,
     };
     if backend_id.as_deref().is_some_and(|id| id != "anthropic") {
-        eprintln!("[handler] alternate backends are not supported over remote transport yet");
+        tracing::warn!(
+            target: "claudette::ws",
+            backend_id = backend_id.as_deref(),
+            "alternate backends are not supported over remote transport yet"
+        );
     }
 
     let turn_handle = agent::run_turn(
@@ -693,7 +699,7 @@ async fn handle_send_chat_message(
                 && let Err(e) =
                     db.set_chat_session_cli_invocation(&chat_session_id_for_stream, line)
             {
-                eprintln!("[server] persist cli_invocation failed: {e}");
+                tracing::warn!(target: "claudette::ws", error = %e, "persist cli_invocation failed");
             }
 
             if let AgentEvent::ProcessExited(code) = &event
@@ -1283,13 +1289,18 @@ fn resolve_extra_claude_flags(
             match claudette::claude_flags_store::resolve_for_repo(db, defs, Some(repo_id)) {
                 Ok(v) => v,
                 Err(e) => {
-                    eprintln!("[handler] failed to resolve claude flags for repo {repo_id}: {e}");
+                    tracing::warn!(
+                        target: "claudette::ws",
+                        repo_id = %repo_id,
+                        error = %e,
+                        "failed to resolve claude flags"
+                    );
                     Vec::new()
                 }
             }
         }
         Err(msg) => {
-            eprintln!("[handler] claude flag discovery failed: {msg}");
+            tracing::warn!(target: "claudette::ws", error = %msg, "claude flag discovery failed");
             Vec::new()
         }
     }

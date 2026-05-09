@@ -503,7 +503,12 @@ pub async fn fetch_remote(repo_path: &str, remote_override: Option<&str>) -> Res
                 None => return Ok(()),
             },
             Err(e) => {
-                eprintln!("[git] failed to list remotes: {e}");
+                tracing::warn!(
+                    target: "claudette::git",
+                    repo_path = %repo_path,
+                    error = %e,
+                    "failed to list remotes"
+                );
                 return Ok(());
             }
         },
@@ -520,7 +525,13 @@ pub async fn fetch_remote(repo_path: &str, remote_override: Option<&str>) -> Res
     {
         Ok(c) => c,
         Err(e) => {
-            eprintln!("[git] failed to spawn fetch {remote}: {e}");
+            tracing::warn!(
+                target: "claudette::git",
+                repo_path = %repo_path,
+                remote = %remote,
+                error = %e,
+                "failed to spawn fetch"
+            );
             return Ok(());
         }
     };
@@ -528,15 +539,33 @@ pub async fn fetch_remote(repo_path: &str, remote_override: Option<&str>) -> Res
     match tokio::time::timeout(std::time::Duration::from_secs(15), child.wait()).await {
         Ok(Ok(status)) if status.success() => Ok(()),
         Ok(Ok(status)) => {
-            eprintln!("[git] fetch {remote} exited with {status} (continuing with local refs)");
+            tracing::warn!(
+                target: "claudette::git",
+                repo_path = %repo_path,
+                remote = %remote,
+                status = %status,
+                "fetch exited with non-success status — continuing with local refs"
+            );
             Ok(())
         }
         Ok(Err(e)) => {
-            eprintln!("[git] fetch {remote} failed (continuing with local refs): {e}");
+            tracing::warn!(
+                target: "claudette::git",
+                repo_path = %repo_path,
+                remote = %remote,
+                error = %e,
+                "fetch failed — continuing with local refs"
+            );
             Ok(())
         }
         Err(_) => {
-            eprintln!("[git] fetch {remote} timed out after 15s (continuing with local refs)");
+            tracing::warn!(
+                target: "claudette::git",
+                repo_path = %repo_path,
+                remote = %remote,
+                timeout_secs = 15,
+                "fetch timed out — continuing with local refs"
+            );
             Ok(())
         }
     }

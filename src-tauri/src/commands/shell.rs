@@ -123,7 +123,12 @@ pub async fn open_url(url: String) -> Result<(), String> {
     }
     tauri::async_runtime::spawn(async move {
         if let Err(e) = opener::open(&url) {
-            eprintln!("Failed to open URL in system browser: {e}");
+            tracing::warn!(
+                target: "claudette::ui",
+                url = %url,
+                error = %e,
+                "failed to open URL in system browser"
+            );
         }
     });
     Ok(())
