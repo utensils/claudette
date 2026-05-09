@@ -6,6 +6,7 @@ describe("shouldSteerQueuedTopOnImmediateSend", () => {
     expect(
       shouldSteerQueuedTopOnImmediateSend({
         isRunning: true,
+        isRemote: false,
         hasQueuedMessages: true,
         hasComposerPayload: false,
       }),
@@ -16,6 +17,7 @@ describe("shouldSteerQueuedTopOnImmediateSend", () => {
     expect(
       shouldSteerQueuedTopOnImmediateSend({
         isRunning: true,
+        isRemote: false,
         hasQueuedMessages: true,
         hasComposerPayload: true,
       }),
@@ -26,6 +28,7 @@ describe("shouldSteerQueuedTopOnImmediateSend", () => {
     expect(
       shouldSteerQueuedTopOnImmediateSend({
         isRunning: false,
+        isRemote: false,
         hasQueuedMessages: true,
         hasComposerPayload: false,
       }),
@@ -33,7 +36,19 @@ describe("shouldSteerQueuedTopOnImmediateSend", () => {
     expect(
       shouldSteerQueuedTopOnImmediateSend({
         isRunning: true,
+        isRemote: false,
         hasQueuedMessages: false,
+        hasComposerPayload: false,
+      }),
+    ).toBe(false);
+  });
+
+  it("does not steer queued messages from remote workspaces", () => {
+    expect(
+      shouldSteerQueuedTopOnImmediateSend({
+        isRunning: true,
+        isRemote: true,
+        hasQueuedMessages: true,
         hasComposerPayload: false,
       }),
     ).toBe(false);

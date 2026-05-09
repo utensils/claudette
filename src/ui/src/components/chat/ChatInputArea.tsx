@@ -68,12 +68,14 @@ export function shouldSteerQueuedTopOnImmediateSend({
   isRunning,
   hasQueuedMessages,
   hasComposerPayload,
+  isRemote,
 }: {
   isRunning: boolean;
   hasQueuedMessages: boolean;
   hasComposerPayload: boolean;
+  isRemote: boolean;
 }): boolean {
-  return isRunning && hasQueuedMessages && !hasComposerPayload;
+  return isRunning && !isRemote && hasQueuedMessages && !hasComposerPayload;
 }
 
 /** Rebuild a `PendingAttachment[]` for a session from the slice's
@@ -908,6 +910,7 @@ export function ChatInputArea({
     }
     if (shouldSteerQueuedTopOnImmediateSend({
       isRunning,
+      isRemote,
       hasQueuedMessages,
       hasComposerPayload: !!chatInput.trim() || pendingAttachments.length > 0,
     }) && onSteerQueuedTop) {

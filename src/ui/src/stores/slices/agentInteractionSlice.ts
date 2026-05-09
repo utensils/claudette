@@ -43,8 +43,18 @@ export interface QueuedMessage {
   attachments?: AttachmentInput[];
 }
 
+let queuedMessageFallbackCounter = 0;
+
 function createQueuedMessageId(): string {
-  return globalThis.crypto?.randomUUID?.() ?? `queued-${Date.now()}-${Math.random()}`;
+  const crypto = globalThis.crypto;
+  if (crypto?.randomUUID) return crypto.randomUUID();
+  if (crypto?.getRandomValues) {
+    const values = new Uint32Array(4);
+    crypto.getRandomValues(values);
+    return `queued-${Array.from(values, (value) => value.toString(36)).join("-")}`;
+  }
+  queuedMessageFallbackCounter += 1;
+  return `queued-${Date.now()}-${queuedMessageFallbackCounter}`;
 }
 
 export interface AgentInteractionSlice {

@@ -1382,7 +1382,8 @@ export function ChatPanel() {
             <button
               className={styles.queuedClearAll}
               onClick={() => clearQueuedMessage(activeSessionId)}
-              title={t("cancel_queued")}
+              title={t("clear_queue")}
+              aria-label={t("clear_queue")}
             >
               {t("clear_queue")}
             </button>
@@ -1399,20 +1400,22 @@ export function ChatPanel() {
                     <CornerDownRight size={14} />
                   </span>
                   <span className={styles.queuedContent}>{content || fallback}</span>
-                  <button
-                    className={styles.queuedSteer}
-                    onClick={() => handleSteerQueuedMessage(message.id)}
-                    disabled={isSteeringQueued || !isRunning}
-                    title={t("steer_queued")}
-                    aria-label={t("steer_queued")}
-                  >
-                    {isSteeringQueued ? (
-                      <LoaderCircle size={14} className={styles.queuedSteerSpinner} />
-                    ) : (
-                      <SendHorizontal size={14} />
-                    )}
-                    <span>{t("steer_queued_short")}</span>
-                  </button>
+                  {!ws?.remote_connection_id && (
+                    <button
+                      className={styles.queuedSteer}
+                      onClick={() => handleSteerQueuedMessage(message.id)}
+                      disabled={isSteeringQueued || !isRunning}
+                      title={t("steer_queued")}
+                      aria-label={t("steer_queued")}
+                    >
+                      {isSteeringQueued ? (
+                        <LoaderCircle size={14} className={styles.queuedSteerSpinner} />
+                      ) : (
+                        <SendHorizontal size={14} />
+                      )}
+                      <span>{t("steer_queued_short")}</span>
+                    </button>
+                  )}
                   <button
                     className={styles.queuedCancel}
                     onClick={() => removeQueuedMessage(activeSessionId, message.id)}
