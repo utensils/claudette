@@ -225,8 +225,31 @@ jobs:
       # The `publish` job below now constructs `latest.json` once from each
       # platform's `.sig` files (which are uploaded by tauri-action with
       # unique names, no race), eliminating the conflict surface entirely.
-      - name: Build and upload desktop app (non-Windows)
+      # The bundle step is duplicated up to 3x to absorb transient
+      # Apple-notarization flakes. Run #25608625502 (macos-aarch64) failed
+      # at the very last hop with `NSURLErrorDomain Code=-1009
+      # "The Internet connection appears to be offline"` while polling
+      # https://appstoreconnect.apple.com/notary/v2/submissions/<uuid>?
+      # — even though `NSURLErrorNWPathKey=satisfied` reported the
+      # runner network as fine. That's a transient hiccup against
+      # Apple's notary service, not a code or config problem, so we
+      # retry the whole bundle. tauri-action is a JS action and can't
+      # be wrapped by `nick-fields/retry`; duplicated steps with
+      # `continue-on-error` + `outcome` checks is the native pattern.
+      #
+      # Retries are macOS-only because that's the documented failure
+      # mode. Linux failures here (rare) are usually `gh release
+      # upload` 422 conflicts, which retrying does not fix.
+      #
+      # Compile artifacts survive between attempts, so retries skip
+      # straight to bundle → codesign → notarize → upload (~1–2 min
+      # each). If the first attempt got past notarization and started
+      # uploading, a retry could trip on duplicate assets — accepted
+      # cost; the common flake is pre-upload.
+      - name: Build and upload desktop app (non-Windows) — attempt 1
+        id: bundle1
         if: ${{ !startsWith(matrix.platform, 'windows') }}
+        continue-on-error: ${{ runner.os == 'macOS' }}
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -238,6 +261,50 @@ jobs:
           APPLE_ID: ${{ runner.os == 'macOS' && secrets.APPLE_ID || '' }}
           APPLE_PASSWORD: ${{ runner.os == 'macOS' && secrets.APPLE_PASSWORD || '' }}
           APPLE_TEAM_ID: ${{ runner.os == 'macOS' && secrets.APPLE_TEAM_ID || '' }}
+        with:
+          tagName: nightly-staging
+          releaseName: "Nightly ${{ needs.compute-version.outputs.version }}"
+          releaseDraft: true
+          prerelease: true
+          includeUpdaterJson: false
+          args: --target ${{ matrix.rust-target }} --bundles ${{ matrix.bundles }}
+
+      - name: Build and upload desktop app (non-Windows) — attempt 2 (macOS retry)
+        id: bundle2
+        if: ${{ runner.os == 'macOS' && steps.bundle1.outcome == 'failure' }}
+        continue-on-error: true
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        with:
+          tagName: nightly-staging
+          releaseName: "Nightly ${{ needs.compute-version.outputs.version }}"
+          releaseDraft: true
+          prerelease: true
+          includeUpdaterJson: false
+          args: --target ${{ matrix.rust-target }} --bundles ${{ matrix.bundles }}
+
+      - name: Build and upload desktop app (non-Windows) — attempt 3 (macOS final)
+        if: ${{ runner.os == 'macOS' && steps.bundle1.outcome == 'failure' && steps.bundle2.outcome == 'failure' }}
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         with:
           tagName: nightly-staging
           releaseName: "Nightly ${{ needs.compute-version.outputs.version }}"
