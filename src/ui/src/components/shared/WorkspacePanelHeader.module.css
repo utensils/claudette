@@ -24,10 +24,22 @@
   app-region: drag;
 }
 
+.headerLeft * {
+  -webkit-app-region: drag;
+  app-region: drag;
+}
+
 .headerRight {
   display: flex;
   align-items: center;
   gap: 8px;
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+}
+
+.headerRight * {
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
 }
 
 .branchInfo {
