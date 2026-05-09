@@ -1,6 +1,7 @@
 import { memo, useContext, useEffect, useRef, useState } from "react";
 import { ChevronDown, ChevronUp, FilePenLine, Pencil } from "lucide-react";
 import { relativizePath } from "../../hooks/toolSummary";
+import { bootstrapGrammarRegistry } from "../../utils/grammarRegistry";
 import { getCachedHighlight, highlightCode } from "../../utils/highlight";
 import { languageForFile } from "../../utils/languageForFile";
 import { HighlightedPlainText } from "./HighlightedPlainText";
@@ -72,6 +73,17 @@ export function TurnEditSummaryCard({
   const [expandedFile, setExpandedFile] = useState<string | null>(null);
   const [previewByFile, setPreviewByFile] = useState<Record<string, PreviewState>>({});
   const [cacheVersion, setCacheVersion] = useState(0);
+  // Plugin grammars register at startup; re-render once they're ready so
+  // `languageForFile` resolves plugin-contributed extensions correctly.
+  // Mirrors the same pattern used in DiffViewer.tsx.
+  const [grammarsReady, setGrammarsReady] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    void bootstrapGrammarRegistry().then(() => {
+      if (!cancelled) setGrammarsReady(true);
+    });
+    return () => { cancelled = true; };
+  }, []);
   // In-flight tracker so rapid clicks before state commits can't fan
   // out duplicate `onLoadPreview` calls. A ref (not state) so the
   // check is synchronous — React Strict-Mode-safe and not re-run by
@@ -105,7 +117,10 @@ export function TurnEditSummaryCard({
     return () => {
       cancelled = true;
     };
-  }, [expandedFile, previewByFile, summary.files]);
+  // grammarsReady isn't used directly but its presence in the dep array
+  // causes the prewarm to re-run once plugin grammars finish loading.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [expandedFile, previewByFile, summary.files, grammarsReady]);
 
   const toggleFile = (file: EditFileStat) => {
     const isOpening = expandedFile !== file.filePath;
