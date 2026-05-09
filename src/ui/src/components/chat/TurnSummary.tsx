@@ -12,6 +12,11 @@ import {
 } from "./agentToolCallRendering";
 import { AgentToolCallGroup } from "./AgentToolCallGroup";
 import { isAgentActivity } from "./toolActivityGroups";
+import { InlineEditSummary, TurnEditSummaryCard } from "./EditChangeSummary";
+import {
+  summarizeToolActivityEdit,
+  summarizeTurnEdits,
+} from "./editActivitySummary";
 
 /**
  * Render a single completed turn summary (collapsible tool call list).
@@ -62,6 +67,7 @@ export function TurnSummary({
   const hasRollback = !!onRollback;
   const shouldShowFooter =
     showFooter && (hasElapsed || hasTokens || hasCopy || hasFork || hasRollback);
+  const editSummary = showFooter ? summarizeTurnEdits(turn.activities) : null;
 
   // Force-expand if the query matches in any activity summary or the
   // resolved tool-summary fallback. Without this, marks would land in
@@ -76,22 +82,35 @@ export function TurnSummary({
       activityMatchesSearch(activity, searchQuery, worktreePath),
     );
   const isExpanded = inline || !collapsed || queryHasMatch;
-  const renderedActivities = visibleActivities.map((act: ToolActivity) =>
-    isAgentActivity(act) ? (
-      <AgentToolCallGroup
-        key={act.toolUseId}
-        activity={act}
-        searchQuery={searchQuery}
-        worktreePath={worktreePath}
-        inline={inline}
-      />
-    ) : (
+  const renderedActivities = visibleActivities.map((act: ToolActivity) => {
+    if (isAgentActivity(act)) {
+      return (
+        <AgentToolCallGroup
+          key={act.toolUseId}
+          activity={act}
+          searchQuery={searchQuery}
+          worktreePath={worktreePath}
+          inline={inline}
+        />
+      );
+    }
+
+    const editSummaryForActivity = summarizeToolActivityEdit(act);
+    return (
       <div key={act.toolUseId} className={styles.toolActivity}>
         <div className={styles.toolHeader}>
-          <span className={styles.toolName} style={{ color: toolColor(act.toolName) }}>
-            {act.toolName}
-          </span>
-          {activitySummaryText(act) && (
+          {editSummaryForActivity ? (
+            <InlineEditSummary
+              summary={editSummaryForActivity}
+              searchQuery={searchQuery}
+              worktreePath={worktreePath}
+            />
+          ) : (
+            <span className={styles.toolName} style={{ color: toolColor(act.toolName) }}>
+              {act.toolName}
+            </span>
+          )}
+          {!editSummaryForActivity && activitySummaryText(act) && (
             <span className={styles.toolSummary}>
               <HighlightedPlainText
                 text={relativizePath(activitySummaryText(act), worktreePath)}
@@ -101,8 +120,8 @@ export function TurnSummary({
           )}
         </div>
       </div>
-    ),
-  );
+    );
+  });
 
   return (
     <div className={styles.turnSummaryWrapper}>
@@ -141,6 +160,13 @@ export function TurnSummary({
         <TaskProgressBar
           completedCount={taskProgress.completedCount}
           totalCount={taskProgress.totalCount}
+        />
+      )}
+      {editSummary && (
+        <TurnEditSummaryCard
+          summary={editSummary}
+          searchQuery={searchQuery}
+          worktreePath={worktreePath}
         />
       )}
       {shouldShowFooter && (

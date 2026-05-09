@@ -461,6 +461,102 @@
   outline-offset: 1px;
 }
 
+.turnEditSummary {
+  border: 1px solid var(--divider);
+  border-radius: 6px;
+  margin: 4px 0;
+  overflow: hidden;
+  background: var(--chat-input-bg);
+}
+
+.turnEditSummaryHeader {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--divider);
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.turnEditSummaryTitle {
+  min-width: 0;
+}
+
+.turnEditFileList {
+  display: flex;
+  flex-direction: column;
+}
+
+.turnEditFileRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 7px 10px;
+  border-top: 1px solid var(--divider);
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.turnEditFileRow:first-child {
+  border-top: none;
+}
+
+.turnEditFilePath {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.inlineEditSummary {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  color: var(--text-faint);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.inlineEditIcon {
+  flex: 0 0 auto;
+  color: var(--text-faint);
+}
+
+.inlineEditVerb {
+  flex: 0 0 auto;
+  color: var(--text-dim);
+}
+
+.inlineEditPath {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--accent-primary);
+}
+
+.changeStats {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  flex: 0 0 auto;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.changeStatsAdded {
+  color: var(--diff-added-text);
+}
+
+.changeStatsRemoved {
+  color: var(--diff-removed-text);
+}
+
 .taskProgressBar {
   display: flex;
   align-items: center;

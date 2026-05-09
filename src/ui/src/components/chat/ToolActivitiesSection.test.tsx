@@ -7,8 +7,8 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { CompletedTurn, ToolActivity } from "../../stores/useAppStore";
 import { AgentToolCallGroup } from "./AgentToolCallGroup";
 import styles from "./ChatPanel.module.css";
-import { TurnSummary } from "./TurnSummary";
 import { ToolActivitiesSection } from "./ToolActivitiesSection";
+import { TurnSummary } from "./TurnSummary";
 
 const mountedRoots: Root[] = [];
 const mountedContainers: HTMLElement[] = [];
@@ -97,6 +97,36 @@ describe("AgentToolCallGroup", () => {
       container.querySelector(`.${styles.agentToolGroupInline}`),
     ).toBeTruthy();
     expect(container.querySelector(`.${styles.agentToolGroup}`)).toBeNull();
+  });
+
+  it("renders nested edit calls as editing rows with churn stats", async () => {
+    const container = await render(
+      <AgentToolCallGroup
+        activity={activity("Agent", {
+          agentToolCalls: [
+            {
+              toolUseId: "edit-1",
+              toolName: "Edit",
+              agentId: "agent-1",
+              input: {
+                file_path: "/repo/src/app.ts",
+                old_string: "one\ntwo",
+                new_string: "one\nthree\nfour",
+              },
+              status: "completed",
+              startedAt: "2026-05-08T00:00:00.000Z",
+            },
+          ],
+        })}
+        searchQuery=""
+        worktreePath="/repo"
+      />,
+    );
+
+    expect(container.textContent).toContain("Editing");
+    expect(container.textContent).toContain("src/app.ts");
+    expect(container.textContent).toContain("+3");
+    expect(container.textContent).toContain("-2");
   });
 });
 
@@ -401,6 +431,38 @@ describe("ToolActivitiesSection", () => {
     expect(headerAfter.getAttribute("aria-expanded")).toBe("false");
     expect(container.textContent).toContain("3 tool calls");
     expect(container.textContent).not.toContain("Edit");
+  });
+
+  it("renders completed-turn edit summary card", async () => {
+    const editActivity = activity("Edit", {
+      inputJson: JSON.stringify({
+        file_path: "/repo/src/app.ts",
+        old_string: "old",
+        new_string: "new\nnext",
+      }),
+    });
+
+    const container = await render(
+      <TurnSummary
+        turn={{
+          id: "turn-1",
+          activities: [editActivity],
+          messageCount: 1,
+          collapsed: false,
+          afterMessageIndex: 1,
+        }}
+        collapsed={false}
+        onToggle={() => {}}
+        assistantText=""
+        searchQuery=""
+        worktreePath="/repo"
+      />,
+    );
+
+    expect(container.textContent).toContain("1 file changed");
+    expect(container.textContent).toContain("src/app.ts");
+    expect(container.textContent).toContain("+2");
+    expect(container.textContent).toContain("-1");
   });
 });
 

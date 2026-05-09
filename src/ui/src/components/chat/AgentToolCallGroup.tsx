@@ -7,6 +7,8 @@ import {
   activitySummaryText,
   agentToolCallSummary,
 } from "./agentToolCallRendering";
+import { InlineEditSummary } from "./EditChangeSummary";
+import { summarizeAgentToolCallEdit } from "./editActivitySummary";
 
 export function AgentToolCallGroup({
   activity,
@@ -61,15 +63,24 @@ export function AgentToolCallGroup({
       <div className={styles.agentToolCallList}>
         {calls.map((call) => {
           const callSummary = agentToolCallSummary(call);
+          const editSummary = summarizeAgentToolCallEdit(call);
           return (
             <div key={call.toolUseId} className={styles.agentToolCall}>
-              <span
-                className={styles.agentToolCallName}
-                style={{ color: toolColor(call.toolName) }}
-              >
-                {call.toolName}
-              </span>
-              {callSummary && (
+              {editSummary ? (
+                <InlineEditSummary
+                  summary={editSummary}
+                  searchQuery={searchQuery}
+                  worktreePath={worktreePath}
+                />
+              ) : (
+                <span
+                  className={styles.agentToolCallName}
+                  style={{ color: toolColor(call.toolName) }}
+                >
+                  {call.toolName}
+                </span>
+              )}
+              {!editSummary && callSummary && (
                 <span className={styles.agentToolCallSummary}>
                   <HighlightedPlainText
                     text={relativizePath(callSummary, worktreePath)}

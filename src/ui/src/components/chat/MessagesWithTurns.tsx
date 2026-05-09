@@ -42,6 +42,8 @@ import styles from "./ChatPanel.module.css";
 import { TurnSummary } from "./TurnSummary";
 import { ToolActivitiesSection } from "./ToolActivitiesSection";
 import { TurnFooter } from "./TurnFooter";
+import { TurnEditSummaryCard } from "./EditChangeSummary";
+import { summarizeTurnEdits } from "./editActivitySummary";
 import { PdfThumbnail } from "./PdfThumbnail";
 import { MessageCopyButton } from "./MessageCopyButton";
 import { groupToolActivitiesForDisplay } from "./toolActivityGroups";
@@ -594,18 +596,29 @@ export const MessagesWithTurns = memo(function MessagesWithTurns({
             />
           );
         })}
-        {footerEntries.map(({ turn }) => (
-          <TurnFooter
-            key={`${turn.id}:${position}:footer`}
-            durationMs={turn.durationMs}
-            inputTokens={turn.inputTokens}
-            outputTokens={turn.outputTokens}
-            assistantText={assistantTextByTurnId.get(turn.id) || undefined}
-            onFork={onForkTurn ? () => onForkTurn(turn.id) : undefined}
-            onRollback={buildOnRollback(turn.id)}
-            className={styles.messageTurnFooter}
-          />
-        ))}
+        {footerEntries.map(({ turn }) => {
+          const editSummary = summarizeTurnEdits(turn.activities);
+          return (
+            <React.Fragment key={`${turn.id}:${position}:footer`}>
+              {editSummary && (
+                <TurnEditSummaryCard
+                  summary={editSummary}
+                  searchQuery={searchQuery}
+                  worktreePath={worktreePath}
+                />
+              )}
+              <TurnFooter
+                durationMs={turn.durationMs}
+                inputTokens={turn.inputTokens}
+                outputTokens={turn.outputTokens}
+                assistantText={assistantTextByTurnId.get(turn.id) || undefined}
+                onFork={onForkTurn ? () => onForkTurn(turn.id) : undefined}
+                onRollback={buildOnRollback(turn.id)}
+                className={styles.messageTurnFooter}
+              />
+            </React.Fragment>
+          );
+        })}
       </>
     );
   };
