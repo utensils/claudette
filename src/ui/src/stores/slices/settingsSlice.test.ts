@@ -1,6 +1,24 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { useAppStore } from "../useAppStore";
 
+describe("settingsSlice appearance defaults", () => {
+  beforeEach(() => {
+    useAppStore.setState({ extendedToolCallOutput: false });
+  });
+
+  it("keeps extended tool call output disabled by default", () => {
+    expect(useAppStore.getState().extendedToolCallOutput).toBe(false);
+  });
+
+  it("toggles extended tool call output explicitly", () => {
+    useAppStore.getState().setExtendedToolCallOutput(true);
+    expect(useAppStore.getState().extendedToolCallOutput).toBe(true);
+
+    useAppStore.getState().setExtendedToolCallOutput(false);
+    expect(useAppStore.getState().extendedToolCallOutput).toBe(false);
+  });
+});
+
 describe("settingsSlice alternative backend gates", () => {
   beforeEach(() => {
     useAppStore.setState({

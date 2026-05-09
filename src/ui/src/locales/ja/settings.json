@@ -71,6 +71,8 @@
   "appearance_show_running_commands_desc": "各ワークスペースのターミナルで実行中のフォアグラウンドプロセスを折りたたみ可能なリストとして表示します。既定ではオフです。",
   "appearance_group_tool_calls": "隣接するツール呼び出しをグループ化",
   "appearance_group_tool_calls_desc": "隣接する通常のツール呼び出しを要約ブロックに折りたたみます。オフにすると、各トップレベルのツール呼び出し、Agent 呼び出し、思考ブロックをインライン表示します。",
+  "appearance_extended_tool_call_output": "ツール呼び出しの詳細出力",
+  "appearance_extended_tool_call_output_desc": "ツール呼び出し行の下に、展開可能でコピー可能な入力詳細を追加します。既定ではオフです。",
   "appearance_interface_font": "インターフェースのフォント",
   "appearance_interface_font_desc": "UI テキストのフォント。テーマが既定値を設定する場合があります。",
   "appearance_custom_interface_font": "カスタムインターフェースフォント",

@@ -33,8 +33,8 @@ export function activitySummaryText(activity: ToolActivity): string {
 export function agentToolCallSummary(call: AgentToolCall): string {
   const inputSummary = extractToolSummary(call.toolName, safeJson(call.input));
   if (inputSummary) return inputSummary;
-  if (call.error) return truncate(call.error, 100);
-  return truncate(valuePreview(call.input ?? call.response), 100);
+  if (call.error) return call.error;
+  return valuePreview(call.input ?? call.response);
 }
 
 function safeJson(value: unknown): string {
@@ -53,9 +53,4 @@ function valuePreview(value: unknown): string {
   } catch {
     return String(value);
   }
-}
-
-function truncate(value: string, max: number): string {
-  if (value.length <= max) return value;
-  return `${value.slice(0, max - 3)}...`;
 }

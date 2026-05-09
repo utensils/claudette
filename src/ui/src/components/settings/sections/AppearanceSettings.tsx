@@ -35,6 +35,8 @@ export function AppearanceSettings() {
   const setShowSidebarRunningCommands = useAppStore((s) => s.setShowSidebarRunningCommands);
   const toolDisplayMode = useAppStore((s) => s.toolDisplayMode);
   const setToolDisplayMode = useAppStore((s) => s.setToolDisplayMode);
+  const extendedToolCallOutput = useAppStore((s) => s.extendedToolCallOutput);
+  const setExtendedToolCallOutput = useAppStore((s) => s.setExtendedToolCallOutput);
 
   const isFollowSystem = themeMode === "system";
 
@@ -428,6 +430,37 @@ export function AppearanceSettings() {
                 await setAppSetting("tool_display_mode", next);
               } catch (e) {
                 setToolDisplayMode(previous);
+                setError(String(e));
+              }
+            }}
+          >
+            <div className={styles.toggleKnob} />
+          </button>
+        </div>
+      </div>
+
+      <div className={styles.settingRow}>
+        <div className={styles.settingInfo}>
+          <div className={styles.settingLabel}>{t("appearance_extended_tool_call_output")}</div>
+          <div className={styles.settingDescription}>
+            {t("appearance_extended_tool_call_output_desc")}
+          </div>
+        </div>
+        <div className={styles.settingControl}>
+          <button
+            className={styles.toggle}
+            role="switch"
+            aria-checked={extendedToolCallOutput}
+            aria-label={t("appearance_extended_tool_call_output")}
+            data-checked={extendedToolCallOutput}
+            onClick={async () => {
+              const next = !extendedToolCallOutput;
+              setExtendedToolCallOutput(next);
+              try {
+                setError(null);
+                await setAppSetting("extended_tool_call_output", next ? "true" : "false");
+              } catch (e) {
+                setExtendedToolCallOutput(!next);
                 setError(String(e));
               }
             }}

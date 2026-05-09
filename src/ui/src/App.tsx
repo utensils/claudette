@@ -56,6 +56,7 @@ function App() {
   const setClaudetteTerminalEnabled = useAppStore((s) => s.setClaudetteTerminalEnabled);
   const setShowSidebarRunningCommands = useAppStore((s) => s.setShowSidebarRunningCommands);
   const setToolDisplayMode = useAppStore((s) => s.setToolDisplayMode);
+  const setExtendedToolCallOutput = useAppStore((s) => s.setExtendedToolCallOutput);
   const setPluginManagementEnabled = useAppStore((s) => s.setPluginManagementEnabled);
   const setClaudeRemoteControlEnabled = useAppStore(
     (s) => s.setClaudeRemoteControlEnabled,
@@ -263,6 +264,9 @@ function App() {
       .then((val) => {
         if (val === "inline" || val === "grouped") setToolDisplayMode(val);
       })
+      .catch(() => {});
+    getAppSetting("extended_tool_call_output")
+      .then((val) => { if (val === "true") setExtendedToolCallOutput(true); })
       .catch(() => {});
     getAppSetting("plugin_management_enabled")
       .then((val) => { if (val === "true") setPluginManagementEnabled(true); })
@@ -689,7 +693,7 @@ function App() {
       unlistenChatTurnStarted.then((fn) => fn());
       unlistenMissingCli.then((fn) => fn());
     };
-  }, [setRepositories, setWorkspaces, setWorktreeBaseDir, setDefaultTerminalAppId, setDefaultBranches, setTerminalFontSize, setLastMessages, setRemoteConnections, setDiscoveredServers, setLocalServerRunning, setLocalServerConnectionString, setCurrentThemeId, setThemeMode, setThemeDark, setThemeLight, setUiFontSize, setFontFamilySans, setFontFamilyMono, setSystemFonts, setDetectedApps, setUsageInsightsEnabled, setClaudetteTerminalEnabled, setShowSidebarRunningCommands, setToolDisplayMode, setPluginManagementEnabled, setClaudeRemoteControlEnabled, setCommunityRegistryEnabled, setAlternativeBackendsAvailable, setAlternativeBackendsEnabled, setAgentBackends, setDefaultAgentBackendId, setEditorGitGutterBase, setEditorMinimapEnabled, setDisable1mContext, setAppVersion, setVoiceToggleHotkey, setVoiceHoldHotkey, setKeybindings, setManualWorkspaceOrderByRepo]);
+  }, [setRepositories, setWorkspaces, setWorktreeBaseDir, setDefaultTerminalAppId, setDefaultBranches, setTerminalFontSize, setLastMessages, setRemoteConnections, setDiscoveredServers, setLocalServerRunning, setLocalServerConnectionString, setCurrentThemeId, setThemeMode, setThemeDark, setThemeLight, setUiFontSize, setFontFamilySans, setFontFamilyMono, setSystemFonts, setDetectedApps, setUsageInsightsEnabled, setClaudetteTerminalEnabled, setShowSidebarRunningCommands, setToolDisplayMode, setExtendedToolCallOutput, setPluginManagementEnabled, setClaudeRemoteControlEnabled, setCommunityRegistryEnabled, setAlternativeBackendsAvailable, setAlternativeBackendsEnabled, setAgentBackends, setDefaultAgentBackendId, setEditorGitGutterBase, setEditorMinimapEnabled, setDisable1mContext, setAppVersion, setVoiceToggleHotkey, setVoiceHoldHotkey, setKeybindings, setManualWorkspaceOrderByRepo]);
 
   // Listen for OS light/dark changes and switch theme when mode is "system".
   useEffect(() => {

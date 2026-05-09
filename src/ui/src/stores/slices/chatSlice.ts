@@ -220,6 +220,8 @@ export interface ChatSlice {
     groupKey: string,
     collapsed: boolean,
   ) => void;
+  expandedToolUseIds: Record<string, true>;
+  toggleToolUseExpanded: (toolUseId: string) => void;
   pendingAttachmentsBySession: Record<string, StoredAttachment[]>;
   setPendingAttachmentsForSession: (
     sessionId: string,
@@ -635,6 +637,21 @@ export const createChatSlice: StateCreator<AppState, [], [], ChatSlice> = (
         collapsedToolGroupsBySession: {
           ...s.collapsedToolGroupsBySession,
           [sessionId]: { ...wsGroups, [groupKey]: collapsed },
+        },
+      };
+    }),
+  expandedToolUseIds: {},
+  toggleToolUseExpanded: (toolUseId) =>
+    set((s) => {
+      if (s.expandedToolUseIds[toolUseId]) {
+        const next = { ...s.expandedToolUseIds };
+        delete next[toolUseId];
+        return { expandedToolUseIds: next };
+      }
+      return {
+        expandedToolUseIds: {
+          ...s.expandedToolUseIds,
+          [toolUseId]: true,
         },
       };
     }),

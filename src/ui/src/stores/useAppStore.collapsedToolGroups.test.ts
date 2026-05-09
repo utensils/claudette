@@ -6,7 +6,10 @@ const SESSION_B = "session-b";
 
 describe("collapsedToolGroupsBySession", () => {
   beforeEach(() => {
-    useAppStore.setState({ collapsedToolGroupsBySession: {} });
+    useAppStore.setState({
+      collapsedToolGroupsBySession: {},
+      expandedToolUseIds: {},
+    });
   });
 
   it("starts empty for a fresh session", () => {
@@ -69,5 +72,28 @@ describe("collapsedToolGroupsBySession", () => {
     expect(
       useAppStore.getState().collapsedToolGroupsBySession[SESSION_A]?.g1,
     ).toBe(false);
+  });
+});
+
+describe("expandedToolUseIds", () => {
+  beforeEach(() => {
+    useAppStore.setState({ expandedToolUseIds: {} });
+  });
+
+  it("toggles a tool use id on and off", () => {
+    useAppStore.getState().toggleToolUseExpanded("tool-1");
+    expect(useAppStore.getState().expandedToolUseIds["tool-1"]).toBe(true);
+
+    useAppStore.getState().toggleToolUseExpanded("tool-1");
+    expect(useAppStore.getState().expandedToolUseIds["tool-1"]).toBeUndefined();
+  });
+
+  it("keeps different tool use ids independent", () => {
+    useAppStore.getState().toggleToolUseExpanded("tool-1");
+    useAppStore.getState().toggleToolUseExpanded("tool-2");
+    useAppStore.getState().toggleToolUseExpanded("tool-1");
+
+    expect(useAppStore.getState().expandedToolUseIds["tool-1"]).toBeUndefined();
+    expect(useAppStore.getState().expandedToolUseIds["tool-2"]).toBe(true);
   });
 });

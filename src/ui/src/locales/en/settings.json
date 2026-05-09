@@ -91,6 +91,8 @@
   "appearance_show_running_commands_desc": "Display a collapsible list of foreground processes running in each workspace's terminals. Off by default.",
   "appearance_group_tool_calls": "Group adjacent tool calls",
   "appearance_group_tool_calls_desc": "Collapse adjacent regular tool calls into summary blocks. Turn off to show every top-level tool call, Agent call, and thinking block inline.",
+  "appearance_extended_tool_call_output": "Extended tool call output",
+  "appearance_extended_tool_call_output_desc": "Add expandable, copyable input details under tool call rows. Off by default.",
   "appearance_interface_font": "Interface font",
   "appearance_interface_font_desc": "Font for UI text. Themes may set a default.",
   "appearance_custom_interface_font": "Custom interface font",

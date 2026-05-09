@@ -47,6 +47,12 @@ Set defaults in `Settings > Models`:
 - **Default thinking** — enable/disable for new sessions
 - **Show thinking blocks** — show/hide by default
 
+## Tool Call Details
+
+When `Settings > Appearance > Extended tool call output` is enabled, tool-call rows in the chat timeline include an expand chevron for inspecting the exact input the agent sent to that tool. Code-like inputs such as SQL queries, JavaScript browser evaluations, shell commands, and JSON payloads render in a syntax-highlighted block; plain inputs such as file paths render as monospace text.
+
+The expanded state sticks to each tool call while the chat panel re-renders, so you can keep a long query or command open while later tool activity streams in.
+
 ## Fast Mode
 
 Fast mode prioritizes speed over depth. When enabled, the agent uses quicker, more concise responses.
