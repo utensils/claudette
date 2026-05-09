@@ -29,6 +29,8 @@ import {
   type NavEntry,
   splitUnifiedTabOrder,
 } from "./sessionTabsLogic";
+import { ask } from "@tauri-apps/plugin-dialog";
+import { chatCloseConfirmKind } from "../../hotkeys/contextActions";
 import { SessionStatusIcon, type SessionStatusKind } from "../shared/SessionStatusIcon";
 import { DangerousFlagBadge } from "./DangerousFlagBadge";
 import { hasDangerousFlag } from "../../stores/slices/workspaceClaudeFlagsSlice";
@@ -58,6 +60,19 @@ import type {
 import styles from "./SessionTabs.module.css";
 
 type NavDirection = "prev" | "next" | "first" | "last";
+
+/** Tauri's native confirm dialog. Used everywhere the close-tab UI
+ *  asks the user to confirm — `window.confirm()` is a silent no-op
+ *  in Tauri 2 webviews and was the cause of the "Cmd+W kills running
+ *  sessions without prompting" regression. */
+async function askToClose(message: string): Promise<boolean> {
+  return ask(message, {
+    title: "Close session",
+    kind: "warning",
+    okLabel: "Close",
+    cancelLabel: "Cancel",
+  });
+}
 
 // `NavEntry` and `buildWorkspaceTabNavEntries` are imported from
 // `./sessionTabsLogic` so the cycle-tabs hotkey and this component
@@ -241,11 +256,24 @@ export function SessionTabs({ workspaceId }: Props) {
   );
 
   const handleArchive = async (session: ChatSession) => {
-    if (session.agent_status === "Running") {
-      const ok = window.confirm(
-        t("session_running_confirm_close", { name: session.name }),
-      );
-      if (!ok) return;
+    // The shared `chatCloseConfirmKind` helper is also used by the
+    // global Cmd+W path in `hotkeys/contextActions.ts`, so the rules
+    // ("running" / "active" / "last" → confirm) stay in lockstep
+    // between the close button and the keystroke. Each kind maps to
+    // its own translated string so the message matches the trigger.
+    const kind = chatCloseConfirmKind({
+      session,
+      activeSessions,
+      isActiveSession: session.id === selectedSessionId,
+    });
+    if (kind !== "none") {
+      const message =
+        kind === "running"
+          ? t("session_running_confirm_close", { name: session.name })
+          : kind === "active"
+            ? t("session_active_confirm_close", { name: session.name })
+            : t("session_last_confirm_close", { name: session.name });
+      if (!(await askToClose(message))) return;
     }
     await archiveSessionImmediate(session);
   };
@@ -403,24 +431,74 @@ export function SessionTabs({ workspaceId }: Props) {
   // Close a list of tabs (sessions, diffs, and/or files) sequentially. Sessions
   // get archived through the same backend command as the close button; diffs
   // and files drop from the local store (file tabs route through the
-  // dirty-confirm modal). If any sessions are still running we confirm once
-  // for the whole batch instead of once per tab.
+  // dirty-confirm modal).
+  //
+  // Confirmation rules mirror the per-tab close path's
+  // `chatCloseConfirmKind` (running / active / last / none) but
+  // aggregate across the batch so the user sees one prompt — not one
+  // per tab — when bulk-closing. Priority order:
+  //
+  //   1. Any running session in the batch → "running" prompt (kept
+  //      verbatim; the multi-running plural string already exists).
+  //   2. Batch contains the currently-selected session → "active"
+  //      prompt (NEW; previously only the single-tab path guarded
+  //      this case, leaving Cmd+Shift+W "close all" able to silently
+  //      yank the visible chat).
+  //   3. Batch closes every Active session in the workspace → "last"
+  //      prompt (NEW; the auto-create path runs and the visible
+  //      history archives away).
   const closeEntries = useCallback(
     async (entries: NavEntry[]) => {
       if (entries.length === 0) return;
       const sessionEntries = entries.flatMap((e) =>
         e.kind === "session" ? [e] : [],
       );
-      const runningSessions = sessionEntries
+      const sessionsBeingClosed = sessionEntries
         .map((e) => activeSessions.find((s) => s.id === e.sessionId))
-        .filter((s): s is ChatSession => !!s && s.agent_status === "Running");
+        .filter((s): s is ChatSession => !!s);
+      const runningSessions = sessionsBeingClosed.filter(
+        (s) => s.agent_status === "Running",
+      );
+      const closingActive = sessionsBeingClosed.some(
+        (s) => s.id === selectedSessionId,
+      );
+      const remainingActiveAfterBatch =
+        activeSessions.length - sessionsBeingClosed.length;
+
       if (runningSessions.length > 0) {
         const message =
           runningSessions.length === 1
             ? t("session_running_confirm_close", { name: runningSessions[0].name })
             : t("session_running_confirm_close_multi", { count: runningSessions.length });
-        if (!window.confirm(message)) return;
+        if (!(await askToClose(message))) return;
+      } else if (closingActive) {
+        const active = sessionsBeingClosed.find(
+          (s) => s.id === selectedSessionId,
+        );
+        if (
+          active &&
+          !(await askToClose(
+            t("session_active_confirm_close", { name: active.name }),
+          ))
+        )
+          return;
+      } else if (
+        sessionsBeingClosed.length > 0 &&
+        remainingActiveAfterBatch <= 0
+      ) {
+        // Batch wipes out every Active session — surface the last-one
+        // prompt against any of them (pick the first; user can still
+        // cancel the whole batch).
+        const last = sessionsBeingClosed[0];
+        if (
+          last &&
+          !(await askToClose(
+            t("session_last_confirm_close", { name: last.name }),
+          ))
+        )
+          return;
       }
+
       // File tabs: collect first, close clean ones immediately, route
       // dirty ones through a single batched confirm. Sessions and diffs
       // close inline as before.
@@ -437,7 +515,15 @@ export function SessionTabs({ workspaceId }: Props) {
       }
       requestCloseFileTabsBatch(filePaths);
     },
-    [activeSessions, archiveSessionImmediate, closeDiffTab, requestCloseFileTabsBatch, t, workspaceId],
+    [
+      activeSessions,
+      archiveSessionImmediate,
+      closeDiffTab,
+      requestCloseFileTabsBatch,
+      selectedSessionId,
+      t,
+      workspaceId,
+    ],
   );
 
   const navigateTabs = useCallback(

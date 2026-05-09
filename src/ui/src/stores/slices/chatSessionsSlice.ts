@@ -91,10 +91,13 @@ export const createChatSessionsSlice: StateCreator<
       }
       const nextDrafts = { ...s.chatDrafts };
       delete nextDrafts[sessionId];
+      const nextAttachments = { ...s.pendingAttachmentsBySession };
+      delete nextAttachments[sessionId];
       return {
         sessionsByWorkspace: next,
         selectedSessionIdByWorkspaceId: nextSelected,
         chatDrafts: nextDrafts,
+        pendingAttachmentsBySession: nextAttachments,
       };
     }),
   selectSession: (workspaceId, sessionId) =>

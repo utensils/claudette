@@ -88,6 +88,8 @@
   "session_close_diff": "Fechar diff",
   "session_running_confirm_close": "Esta sessão ainda está em execução. Parar e fechar \"{{name}}\"?",
   "session_running_confirm_close_multi": "{{count}} sessões ainda estão em execução. Parar e fechá-las?",
+  "session_active_confirm_close": "Fechar a sessão ativa \"{{name}}\"?",
+  "session_last_confirm_close": "Fechar a única sessão restante \"{{name}}\"? Uma nova sessão será criada no lugar dela; a sessão fechada será arquivada.",
 
   "tab_close": "Fechar",
   "tab_close_others": "Fechar outras",

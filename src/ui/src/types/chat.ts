@@ -110,3 +110,20 @@ export interface PendingAttachment {
   size_bytes: number;
   text_content: string | null;
 }
+
+/** Slice-stored shape: same as `PendingAttachment` minus `preview_url`,
+ * which is a transient blob URL regenerated on each component mount.
+ * Storing the blob URL would survive a remount but the underlying Blob
+ * is GC'd once the component drops its reference, leaving a dead URL —
+ * regenerating from `data_base64` is the only safe pattern. The slice
+ * is the source of truth so attachments survive when ChatPanel is
+ * unmounted (e.g. when the user opens a file or diff and chat is
+ * conditionally rendered out from `AppLayout`). */
+export interface StoredAttachment {
+  id: string;
+  filename: string;
+  media_type: string;
+  data_base64: string;
+  size_bytes: number;
+  text_content: string | null;
+}

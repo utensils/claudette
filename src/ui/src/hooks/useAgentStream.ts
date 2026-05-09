@@ -886,6 +886,31 @@ export function useAgentStream() {
     };
   }, [updateWorkspace]);
 
+  // Listen for session-renamed events. The backend emits this from
+  // `try_generate_session_name` after Haiku produces a short label
+  // for the first user prompt — the same flow that renames the
+  // workspace. Without this listener the chat tab kept its `New chat`
+  // placeholder until the user switched workspaces and came back, at
+  // which point `SessionTabs`' mount effect re-fetched the session
+  // list and the renamed value finally surfaced. Mirroring the
+  // workspace-renamed handler closes that gap so the tab updates
+  // live.
+  useEffect(() => {
+    let active = true;
+    const unlisten = listen<{
+      session_id: string;
+      name: string;
+    }>("session-renamed", (event) => {
+      if (!active) return;
+      const { session_id, name } = event.payload;
+      updateChatSession(session_id, { name });
+    });
+    return () => {
+      active = false;
+      unlisten.then((fn) => fn());
+    };
+  }, [updateChatSession]);
+
   // Listen for backend-authored system messages that the chat command
   // inserts into the DB out-of-band (currently: env-provider trust
   // warnings emitted before agent spawn). The DB insert keeps the

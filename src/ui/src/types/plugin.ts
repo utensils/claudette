@@ -22,7 +22,7 @@ export interface PullRequest {
 
 export interface CiCheck {
   name: string;
-  status: "pending" | "success" | "failure" | "cancelled";
+  status: "pending" | "success" | "failure" | "cancelled" | "skipped";
   url: string | null;
   started_at: string | null;
 }

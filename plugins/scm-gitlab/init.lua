@@ -90,12 +90,26 @@ function M.merge_pull_request(args)
 end
 
 -- Normalize GitLab job status to canonical CiCheckStatus values.
--- GitLab returns: created, pending, running, success, failed, canceled, skipped, manual.
+-- GitLab returns: created, pending, running, success, failed, canceled,
+-- skipped, manual. Map them onto the five canonical CiCheckStatus
+-- variants Rust consumes:
+--   success                 → "success"
+--   failed                  → "failure"
+--   canceled                → "cancelled"  (note GitLab's "canceled" — single l)
+--   skipped, manual         → "skipped"   (didn't run by design / awaiting manual trigger)
+--   created, pending, running → "pending" (in-flight or queued)
+-- "manual" is grouped with "skipped" because to the user a job that
+-- requires manual triggering and hasn't been triggered behaves
+-- identically to a skipped job — it isn't running, it isn't failing,
+-- and it carries no signal until someone acts. Without this, both
+-- "skipped" and "manual" fell through to "pending" and the UI rendered
+-- merged-PR jobs as "Running".
 local function normalize_job_status(status)
     local s = string.lower(status or "")
     if s == "success" then return "success" end
     if s == "failed" then return "failure" end
     if s == "canceled" then return "cancelled" end
+    if s == "skipped" or s == "manual" then return "skipped" end
     return "pending"
 end
 

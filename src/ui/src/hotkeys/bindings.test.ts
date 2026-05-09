@@ -149,25 +149,40 @@ describe("resolveHotkeyAction with conflict updates", () => {
     expect(resolveHotkeyAction(event, "global", {}, "mac")).toBeNull();
   });
 
-  it("resolves close file tab with platform mod in file-viewer scope", () => {
+  it("resolves close-tab with platform mod in global scope", () => {
+    // Pre-rename, this binding lived in `file-viewer` scope and only
+    // fired when focus was inside the file viewer. The `global.close-tab`
+    // action moves the dispatch out so chat / diff close also work, and
+    // a SQL migration carries existing user overrides forward.
     expect(
       resolveHotkeyAction(
         macKey({ key: "w", metaKey: true }),
+        "global",
+        {},
+        "mac",
+      ),
+    ).toBe("global.close-tab");
+    expect(
+      resolveHotkeyAction(
+        macKey({ key: "w", ctrlKey: true }),
+        "global",
+        {},
+        "linux",
+      ),
+    ).toBe("global.close-tab");
+  });
+
+  it("doesn't shadow the file-viewer-scoped undo action with the new global close-tab", () => {
+    // Sanity: undo (mod+z) lives in file-viewer scope and the new
+    // global.close-tab (mod+w) shouldn't accidentally claim it.
+    expect(
+      resolveHotkeyAction(
+        macKey({ key: "z", metaKey: true }),
         "file-viewer",
         {},
         "mac",
       ),
-    ).toBe("file-viewer.close-file-tab");
-    expect(
-      resolveHotkeyAction(
-        macKey({ key: "w", ctrlKey: true }),
-        "file-viewer",
-        {},
-        "linux",
-      ),
-    ).toBe("file-viewer.close-file-tab");
-    expect(resolveHotkeyAction(macKey({ key: "w", metaKey: true }), "global", {}, "mac"))
-      .toBeNull();
+    ).toBe("file-viewer.undo-file-operation");
   });
 });
 
@@ -195,6 +210,51 @@ describe("global.show-keyboard-shortcuts default binding", () => {
         "linux",
       ),
     ).toBe("global.show-keyboard-shortcuts");
+  });
+});
+
+describe("global.new-tab default binding", () => {
+  // Locks Cmd/Ctrl+T as the context-aware "new tab" shortcut. Pre-#???
+  // this binding lived as a raw `window.addEventListener("keydown")` in
+  // ChatToolbar/ComposerToolbar that toggled thinking mode — see the
+  // CHANGELOG entry / PR description for the rationale on the rebind.
+  // The terminal scope keeps its own `terminal.new-tab` on the same key
+  // so typing Cmd+T inside a terminal pane still creates a terminal tab.
+  it("resolves Cmd+T on macOS to global.new-tab", () => {
+    expect(
+      resolveHotkeyAction(
+        macKey({ key: "t", metaKey: true }),
+        "global",
+        {},
+        "mac",
+      ),
+    ).toBe("global.new-tab");
+  });
+
+  it("resolves Ctrl+T on Linux/Windows to global.new-tab", () => {
+    expect(
+      resolveHotkeyAction(
+        macKey({ key: "t", ctrlKey: true }),
+        "global",
+        {},
+        "linux",
+      ),
+    ).toBe("global.new-tab");
+  });
+
+  it("does not collide with terminal.new-tab in terminal scope on macOS", () => {
+    // Both global.new-tab and terminal.new-tab default to mod+t on
+    // macOS by design — the dispatcher routes by scope, not by the key
+    // alone. Inside a terminal pane the resolver is called with scope
+    // "terminal" and the terminal action wins.
+    expect(
+      resolveHotkeyAction(
+        macKey({ key: "t", metaKey: true }),
+        "terminal",
+        {},
+        "mac",
+      ),
+    ).toBe("terminal.new-tab");
   });
 });
 

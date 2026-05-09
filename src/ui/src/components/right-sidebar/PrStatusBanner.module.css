@@ -274,6 +274,14 @@
   animation: spin 1s linear infinite;
 }
 
+/* Skipped: deliberately not run. Match `checkIconCancelled`'s muted tone
+   (both are "didn't complete normally"), but no fill so the slash glyph
+   reads as informational rather than a soft-fail. */
+.checkIconSkipped {
+  color: var(--text-dim);
+  justify-self: center;
+}
+
 @keyframes spin {
   to { transform: rotate(360deg); }
 }

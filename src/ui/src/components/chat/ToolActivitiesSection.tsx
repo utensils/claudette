@@ -16,6 +16,7 @@ import {
   groupHasRunningActivity,
   groupToolActivitiesForDisplay,
 } from "./toolActivityGroups";
+import { collapsedToolGroupKey } from "./collapsedToolGroupKey";
 
 /**
  * Current tool activities section — subscribes to toolActivities for this workspace.
@@ -68,8 +69,15 @@ export const ToolActivitiesSection = memo(function ToolActivitiesSection({
             />
           ))
         ) : (
+          // Key by the first activity's toolUseId so the component
+          // instance survives across renders that append more
+          // activities to the same direct-tools run. Without this, the
+          // group key (which embeds every member's toolUseId) changes
+          // every time a new tool is added and React would unmount the
+          // child — losing the user's manual expand/collapse choice.
           <GroupedToolActivityRows
-            key={group.key}
+            key={`grouped:${group.activities[0]?.toolUseId ?? group.key}`}
+            sessionId={sessionId}
             label={group.label}
             activities={group.activities}
             searchQuery={searchQuery}
@@ -82,26 +90,70 @@ export const ToolActivitiesSection = memo(function ToolActivitiesSection({
 });
 
 function GroupedToolActivityRows({
+  sessionId,
   label,
   activities,
   searchQuery,
   worktreePath,
 }: {
+  sessionId: string;
   label: string;
   activities: readonly ToolActivity[];
   searchQuery: string;
   worktreePath?: string | null;
 }) {
+  // The user override lives in the shared slice (not local
+  // `useState`) so the expand choice survives the running→completed
+  // transition: when the agent's turn ends, this live group is
+  // unmounted and its activities are rendered through `TurnSummary`
+  // by `MessagesWithTurns` — which reads the same slice key. Without
+  // this unification, expanding a running group only to have it
+  // silently collapse the moment the turn finished was a frequent
+  // dogfooding complaint.
+  const groupKey = collapsedToolGroupKey(activities);
+  const userOverride = useAppStore((s) =>
+    groupKey ? s.collapsedToolGroupsBySession[sessionId]?.[groupKey] : undefined,
+  );
+  const setCollapsedToolGroup = useAppStore((s) => s.setCollapsedToolGroup);
+
   const queryHasMatch =
     !!searchQuery &&
     activities.some((activity) =>
       activityMatchesSearch(activity, searchQuery, worktreePath),
     );
-  const isExpanded = groupHasRunningActivity(activities, true) || queryHasMatch;
+  // Search matches always force the group open — otherwise marks would
+  // land in detached DOM (collapsed branch never renders) and the
+  // search bar's hit counter would tick up but nothing visible would
+  // change. This wins over `userOverride === true` (user explicitly
+  // collapsed) on purpose: the user typed a query expecting matches,
+  // and surprise-hidden hits regress chat search. The slice's
+  // `collapsed: true` value semantically matches `userOverride` from
+  // the previous local-state version (true → collapsed).
+  const defaultCollapsed = !groupHasRunningActivity(activities, true);
+  const collapsed = userOverride ?? defaultCollapsed;
+  const isExpanded = queryHasMatch || !collapsed;
+  const toggle = () => {
+    if (!groupKey) return;
+    setCollapsedToolGroup(sessionId, groupKey, !collapsed);
+  };
 
   return (
     <div className={styles.turnSummary}>
-      <div className={styles.turnHeader}>
+      <div
+        className={styles.turnHeader}
+        role="button"
+        tabIndex={0}
+        aria-expanded={isExpanded}
+        aria-label={`${isExpanded ? "Collapse" : "Expand"} ${label}`}
+        onClick={toggle}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            toggle();
+          }
+        }}
+      >
+        <span className={styles.toolChevron}>{isExpanded ? "⌄" : "›"}</span>
         <span className={styles.turnLabel}>{label}</span>
       </div>
       {isExpanded && (

@@ -24,11 +24,21 @@ function M.list_pull_requests(args)
     for _, item in ipairs(data) do
         local ci = nil
         if item.statusCheckRollup and #item.statusCheckRollup > 0 then
+            -- "SKIPPED" / "NEUTRAL" conclusions don't break "all pass":
+            -- they're informational (workflow `if:` was false, action
+            -- early-returned). Without this, a merged PR whose only
+            -- non-success check was SKIPPED rolled up to "pending" and
+            -- the PR card showed a phantom Running spinner.
             local all_pass = true
             local any_fail = false
             for _, check in ipairs(item.statusCheckRollup) do
                 if check.conclusion == "FAILURE" then any_fail = true end
-                if check.conclusion ~= "SUCCESS" then all_pass = false end
+                if check.conclusion ~= "SUCCESS"
+                    and check.conclusion ~= "SKIPPED"
+                    and check.conclusion ~= "NEUTRAL"
+                then
+                    all_pass = false
+                end
             end
             if any_fail then ci = "failure"
             elseif all_pass then ci = "success"
@@ -56,11 +66,19 @@ function M.get_pull_request(args)
     })
     local ci = nil
     if data.statusCheckRollup and #data.statusCheckRollup > 0 then
+        -- Mirrors the rollup in M.list_pull_requests above; see the
+        -- comment there for why SKIPPED/NEUTRAL conclusions don't break
+        -- "all pass".
         local all_pass = true
         local any_fail = false
         for _, check in ipairs(data.statusCheckRollup) do
             if check.conclusion == "FAILURE" then any_fail = true end
-            if check.conclusion ~= "SUCCESS" then all_pass = false end
+            if check.conclusion ~= "SUCCESS"
+                and check.conclusion ~= "SKIPPED"
+                and check.conclusion ~= "NEUTRAL"
+            then
+                all_pass = false
+            end
         end
         if any_fail then ci = "failure"
         elseif all_pass then ci = "success"
@@ -122,12 +140,28 @@ function M.merge_pull_request(args)
 end
 
 -- Normalize GitHub check state to canonical CiCheckStatus values.
--- gh returns: SUCCESS, FAILURE, PENDING, CANCELLED, ERROR, EXPECTED, STALE, etc.
+-- gh's `pr checks` reports check-run conclusions; values seen in the
+-- wild include SUCCESS, FAILURE, PENDING, CANCELLED, ERROR, EXPECTED,
+-- STALE, SKIPPED, NEUTRAL, ACTION_REQUIRED, TIMED_OUT.
+--
+-- Mapping onto Rust's CiCheckStatus enum:
+--   SUCCESS                          → "success"
+--   FAILURE / ERROR / TIMED_OUT      → "failure"
+--   CANCELLED                        → "cancelled"
+--   SKIPPED / NEUTRAL                → "skipped"  (didn't actually run / no-op result)
+--   PENDING / EXPECTED / STALE / etc → "pending" (in-flight or queued)
+--
+-- NEUTRAL is grouped with SKIPPED because GitHub uses it for actions
+-- that ran but produced no signal (e.g. a workflow that early-returns
+-- on a path filter mismatch); to the reviewer that's "didn't run", not
+-- "passed". Previously both SKIPPED and NEUTRAL fell through to
+-- "pending", so merged PRs displayed phantom "Running" checks.
 local function normalize_check_status(state)
     local s = string.upper(state or "")
     if s == "SUCCESS" then return "success" end
-    if s == "FAILURE" or s == "ERROR" then return "failure" end
+    if s == "FAILURE" or s == "ERROR" or s == "TIMED_OUT" then return "failure" end
     if s == "CANCELLED" or s == "CANCELED" then return "cancelled" end
+    if s == "SKIPPED" or s == "NEUTRAL" then return "skipped" end
     return "pending"
 end
 
