@@ -35,6 +35,7 @@ import { ContextMenu, type ContextMenuItem } from "../shared/ContextMenu";
 import { useTabDragReorder } from "../../hooks/useTabDragReorder";
 import { TabDragGhost } from "../shared/TabDragGhost";
 import { getHotkeyLabel, tooltipAttributes, tooltipWithHotkey } from "../../hotkeys/display";
+import { isMacHotkeyPlatform } from "../../hotkeys/platform";
 import type { HotkeyActionId } from "../../hotkeys/actions";
 import {
   isManualWorkspaceOrder,
@@ -125,7 +126,7 @@ export const Sidebar = memo(function Sidebar() {
   );
   const metaKeyHeld = useAppStore((s) => s.metaKeyHeld);
   const keybindings = useAppStore((s) => s.keybindings);
-  const isMac = navigator.platform.startsWith("Mac");
+  const isMac = isMacHotkeyPlatform();
   const { t } = useTranslation("sidebar");
 
   // Filter dropdown state
