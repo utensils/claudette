@@ -466,7 +466,7 @@ describe("ToolActivitiesSection", () => {
     expect(container.textContent).not.toContain("old");
 
     const row = container.querySelector(
-      "button[aria-expanded]",
+      `button.${styles.turnEditFileRow}`,
     ) as HTMLButtonElement;
     expect(row).toBeTruthy();
     expect(row.getAttribute("aria-expanded")).toBe("false");
@@ -525,7 +525,7 @@ describe("ToolActivitiesSection", () => {
     expect(container.textContent).toContain("-2");
 
     const row = container.querySelector(
-      "button[aria-expanded]",
+      `button.${styles.turnEditFileRow}`,
     ) as HTMLButtonElement;
     expect(row).toBeTruthy();
 

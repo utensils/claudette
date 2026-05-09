@@ -831,6 +831,40 @@
   transition: transform var(--transition-fast);
 }
 
+.toolDetailsToggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  margin: -1px 0;
+  padding: 0;
+  color: var(--text-faint);
+  background: transparent;
+  border: 0;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.toolDetailsToggle:hover {
+  color: var(--text-dim);
+  background: var(--hover-bg-subtle);
+}
+
+.toolDetailsToggle:focus-visible {
+  outline: 2px solid var(--accent-primary);
+  outline-offset: 1px;
+}
+
+.toolDetailsToggle svg {
+  transition: transform var(--transition-fast);
+}
+
+.toolDetailsToggleExpanded svg {
+  transform: rotate(90deg);
+}
+
 .toolName {
   font-weight: 500;
   color: var(--text-muted);
@@ -853,6 +887,33 @@
 .toolSummary::before {
   content: "  ";
   color: var(--text-faint);
+}
+
+.toolDetailsCode {
+  max-height: 320px;
+  margin: 0;
+  padding: 10px 12px 12px 32px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  color: var(--text-dim);
+  background: var(--chat-input-bg);
+  border-top: 1px solid var(--divider);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  position: relative;
+}
+
+.toolDetailsCode code {
+  display: block;
+  min-width: 0;
+  color: inherit;
+  background: transparent;
+  font: inherit;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .agentToolProgress {

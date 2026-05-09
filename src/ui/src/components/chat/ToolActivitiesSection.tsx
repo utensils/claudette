@@ -2,23 +2,16 @@ import { memo } from "react";
 import { useAppStore } from "../../stores/useAppStore";
 import type { ToolActivity } from "../../stores/useAppStore";
 import type { ToolDisplayMode } from "../../stores/slices/settingsSlice";
-import { relativizePath } from "../../hooks/toolSummary";
-import { HighlightedPlainText } from "./HighlightedPlainText";
 import styles from "./ChatPanel.module.css";
-import { toolColor } from "./chatHelpers";
 import { EMPTY_ACTIVITIES } from "./chatConstants";
-import {
-  activityMatchesSearch,
-  activitySummaryText,
-} from "./agentToolCallRendering";
+import { activityMatchesSearch } from "./agentToolCallRendering";
 import { AgentToolCallGroup } from "./AgentToolCallGroup";
+import { ToolActivityRow } from "./ToolActivityRow";
 import {
   groupHasRunningActivity,
   groupToolActivitiesForDisplay,
 } from "./toolActivityGroups";
 import { collapsedToolGroupKey } from "./collapsedToolGroupKey";
-import { InlineEditSummary } from "./EditChangeSummary";
-import { summarizeToolActivityEdit } from "./editActivitySummary";
 
 /**
  * Current tool activities section — subscribes to toolActivities for this workspace.
@@ -171,46 +164,6 @@ function GroupedToolActivityRows({
           ))}
         </div>
       )}
-    </div>
-  );
-}
-
-function ToolActivityRow({
-  activity,
-  searchQuery,
-  worktreePath,
-}: {
-  activity: ToolActivity;
-  searchQuery: string;
-  worktreePath?: string | null;
-}) {
-  const editSummary = summarizeToolActivityEdit(activity);
-  return (
-    <div className={styles.toolActivity}>
-      <div className={styles.toolHeader}>
-        {editSummary ? (
-          <InlineEditSummary
-            summary={editSummary}
-            searchQuery={searchQuery}
-            worktreePath={worktreePath}
-          />
-        ) : (
-          <span
-            className={styles.toolName}
-            style={{ color: toolColor(activity.toolName) }}
-          >
-            {activity.toolName}
-          </span>
-        )}
-        {!editSummary && activitySummaryText(activity) && (
-          <span className={styles.toolSummary}>
-            <HighlightedPlainText
-              text={relativizePath(activitySummaryText(activity), worktreePath)}
-              query={searchQuery}
-            />
-          </span>
-        )}
-      </div>
     </div>
   );
 }

@@ -1,23 +1,17 @@
 import { useMemo } from "react";
 import type { CompletedTurn, ToolActivity } from "../../stores/useAppStore";
 import type { TaskTrackerResult } from "../../hooks/useTaskTracker";
-import { relativizePath } from "../../hooks/toolSummary";
-import { HighlightedPlainText } from "./HighlightedPlainText";
 import styles from "./ChatPanel.module.css";
-import { toolColor } from "./chatHelpers";
 import { TurnFooter } from "./TurnFooter";
 import { TaskProgressBar } from "./TaskProgressBar";
-import {
-  activityMatchesSearch,
-  activitySummaryText,
-} from "./agentToolCallRendering";
+import { activityMatchesSearch } from "./agentToolCallRendering";
 import { AgentToolCallGroup } from "./AgentToolCallGroup";
+import { ToolActivityRow } from "./ToolActivityRow";
 import { isAgentActivity } from "./toolActivityGroups";
-import { InlineEditSummary, TurnEditSummaryCard } from "./EditChangeSummary";
+import { TurnEditSummaryCard } from "./EditChangeSummary";
 import {
   type EditPreviewLine,
   type EditSummary,
-  summarizeToolActivityEdit,
   summarizeTurnEdits,
 } from "./editActivitySummary";
 
@@ -118,31 +112,13 @@ export function TurnSummary({
       );
     }
 
-    const editSummaryForActivity = summarizeToolActivityEdit(act);
     return (
-      <div key={act.toolUseId} className={styles.toolActivity}>
-        <div className={styles.toolHeader}>
-          {editSummaryForActivity ? (
-            <InlineEditSummary
-              summary={editSummaryForActivity}
-              searchQuery={searchQuery}
-              worktreePath={worktreePath}
-            />
-          ) : (
-            <span className={styles.toolName} style={{ color: toolColor(act.toolName) }}>
-              {act.toolName}
-            </span>
-          )}
-          {!editSummaryForActivity && activitySummaryText(act) && (
-            <span className={styles.toolSummary}>
-              <HighlightedPlainText
-                text={relativizePath(activitySummaryText(act), worktreePath)}
-                query={searchQuery}
-              />
-            </span>
-          )}
-        </div>
-      </div>
+      <ToolActivityRow
+        key={act.toolUseId}
+        activity={act}
+        searchQuery={searchQuery}
+        worktreePath={worktreePath}
+      />
     );
   });
 

@@ -55,6 +55,14 @@ describe("ChatPanel.module.css invariants", () => {
       expect(body).toMatch(/overflow-wrap:\s*anywhere\s*;/);
     }
   });
+
+  it("expanded tool details wrap long code lines instead of horizontal scrolling", () => {
+    const css = readCss("ChatPanel.module.css");
+    const body = ruleBody(css, ".toolDetailsCode");
+    expect(body).toMatch(/overflow-x:\s*hidden\s*;/);
+    expect(body).toMatch(/white-space:\s*pre-wrap\s*;/);
+    expect(body).toMatch(/overflow-wrap:\s*anywhere\s*;/);
+  });
 });
 
 describe("ThinkingBlock.module.css invariants", () => {
