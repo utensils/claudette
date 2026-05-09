@@ -5,7 +5,7 @@ vi.mock("@tauri-apps/api/core", () => ({
   invoke: (cmd: string, args?: unknown) => invokeMock(cmd, args),
 }));
 
-import { forkWorkspaceAtCheckpoint } from "./tauri";
+import { forkWorkspaceAtCheckpoint, prepareWorkspaceEnvironment } from "./tauri";
 
 describe("forkWorkspaceAtCheckpoint", () => {
   beforeEach(() => {
@@ -55,5 +55,21 @@ describe("forkWorkspaceAtCheckpoint", () => {
     await expect(
       forkWorkspaceAtCheckpoint("ws-src", "cp-missing"),
     ).rejects.toThrow("Checkpoint not found");
+  });
+});
+
+describe("prepareWorkspaceEnvironment", () => {
+  beforeEach(() => {
+    invokeMock.mockReset();
+  });
+
+  it("warms env providers for an existing workspace before subprocess use", async () => {
+    invokeMock.mockResolvedValueOnce(undefined);
+
+    await prepareWorkspaceEnvironment("ws-old");
+
+    expect(invokeMock).toHaveBeenCalledWith("prepare_workspace_environment", {
+      workspaceId: "ws-old",
+    });
   });
 });

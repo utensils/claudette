@@ -190,6 +190,33 @@ pub async fn get_env_sources(
     Ok(sources)
 }
 
+/// Resolve env-providers for a workspace without returning diagnostic details.
+/// Used on workspace selection to warm direnv/mise/dotenv/nix-devshell before
+/// the user can start a fresh agent process or terminal PTY.
+#[tauri::command]
+pub async fn prepare_workspace_environment(
+    workspace_id: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let target = EnvTarget::Workspace { workspace_id };
+    let (worktree, ws_info, repo_id) = resolve_target(&state, &target).await?;
+    let disabled = {
+        let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
+        load_disabled_providers(&db, &repo_id)
+    };
+    let registry = state.plugins.read().await;
+    let resolved = claudette::env_provider::resolve_with_registry(
+        &registry,
+        &state.env_cache,
+        Path::new(&worktree),
+        &ws_info,
+        &disabled,
+    )
+    .await;
+    register_resolved_with_watcher(&state, Path::new(&worktree), &resolved.sources).await;
+    Ok(())
+}
+
 /// Toggle whether an env-provider plugin runs for the target's repo.
 /// The toggle is persisted per-repo, so the change applies to every
 /// worktree under that repo. This evicts the cache for the repo's

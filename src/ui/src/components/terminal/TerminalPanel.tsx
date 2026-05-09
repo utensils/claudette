@@ -101,6 +101,15 @@ function encodeTerminalCommand(command: string): number[] {
   return Array.from(terminalInputEncoder.encode(withReturn));
 }
 
+async function waitForWorkspaceEnvironment(workspaceId: string) {
+  for (let attempt = 0; attempt < 300; attempt += 1) {
+    const status =
+      useAppStore.getState().workspaceEnvironment[workspaceId]?.status;
+    if (status !== "preparing") return;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+}
+
 // Per-leaf xterm + PTY handle. The container is a detached <div> that we
 // appendChild into whichever target div the pane tree currently emits for
 // this leafId — that's the trick that keeps xterm alive across splits.
@@ -347,6 +356,11 @@ function forwardPtyResize(
  */
 export const TerminalPanel = memo(function TerminalPanel() {
   const selectedWorkspaceId = useAppStore((s) => s.selectedWorkspaceId);
+  const workspaceEnvironmentPreparing = useAppStore((s) =>
+    s.selectedWorkspaceId
+      ? s.workspaceEnvironment[s.selectedWorkspaceId]?.status === "preparing"
+      : false,
+  );
   const workspaces = useAppStore((s) => s.workspaces);
   const terminalTabs = useAppStore((s) => s.terminalTabs);
   const pendingTerminalCommands = useAppStore((s) => s.pendingTerminalCommands);
@@ -463,6 +477,7 @@ export const TerminalPanel = memo(function TerminalPanel() {
   const handleCreateTab = useCallback(async () => {
     const wsId = selectedWorkspaceIdRef.current;
     if (!wsId) return;
+    if (useAppStore.getState().workspaceEnvironment[wsId]?.status === "preparing") return;
     try {
       const tab = await createTerminalTab(wsId);
       addTerminalTab(wsId, tab);
@@ -498,6 +513,7 @@ export const TerminalPanel = memo(function TerminalPanel() {
 
   const dispatchTerminalCommand = useCallback(
     async (queued: { id: string; workspaceId: string; command: string }) => {
+      await waitForWorkspaceEnvironment(queued.workspaceId);
       let tabs = useAppStore.getState().terminalTabs[queued.workspaceId] ?? null;
       if (!tabs) {
         tabs = await listTerminalTabs(queued.workspaceId);
@@ -613,6 +629,7 @@ export const TerminalPanel = memo(function TerminalPanel() {
   // Load tabs on workspace + panel-visibility change.
   useEffect(() => {
     if (!selectedWorkspaceId || !terminalPanelVisible) return;
+    if (workspaceEnvironmentPreparing) return;
     const wsId = selectedWorkspaceId;
     listTerminalTabs(wsId).then(async (t) => {
       if (claudetteTerminalEnabled && selectedSessionId) {
@@ -655,6 +672,7 @@ export const TerminalPanel = memo(function TerminalPanel() {
     selectedSessionId,
     claudetteTerminalEnabled,
     terminalPanelVisible,
+    workspaceEnvironmentPreparing,
     setTerminalTabs,
     setActiveTerminalTab,
     addTerminalTab,
@@ -928,6 +946,7 @@ export const TerminalPanel = memo(function TerminalPanel() {
             ? state.repositories.find((r) => r.id === currentWs.repository_id)
             : undefined;
           const defaults = state.defaultBranches;
+          await waitForWorkspaceEnvironment(spec.workspaceId);
           const ptyId = await spawnPty(
             spec.worktreePath,
             currentWs?.name ?? "",
@@ -1564,6 +1583,7 @@ export const TerminalPanel = memo(function TerminalPanel() {
         <button
           className={styles.addTab}
           onClick={handleCreateTab}
+          disabled={workspaceEnvironmentPreparing}
           aria-label="New terminal tab"
           {...tooltipAttributes("New terminal tab", "terminal.new-tab", keybindings, hotkeyIsMac, "bottom")}
         >

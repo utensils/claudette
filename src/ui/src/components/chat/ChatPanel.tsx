@@ -80,6 +80,11 @@ const EMPTY_QUEUED_MESSAGES: QueuedMessage[] = [];
 export function ChatPanel() {
   const { t } = useTranslation("chat");
   const selectedWorkspaceId = useAppStore((s) => s.selectedWorkspaceId);
+  const workspaceEnvironmentPreparing = useAppStore((s) =>
+    s.selectedWorkspaceId
+      ? s.workspaceEnvironment[s.selectedWorkspaceId]?.status === "preparing"
+      : false,
+  );
   const activeSessionId = useAppStore((s) =>
     s.selectedWorkspaceId
       ? s.selectedSessionIdByWorkspaceId[s.selectedWorkspaceId] ?? null
@@ -1449,6 +1454,7 @@ export function ChatPanel() {
         onRunShellCommand={handleRunShellCommand}
         onStop={handleStop}
         isRunning={isRunning}
+        workspaceEnvironmentPreparing={workspaceEnvironmentPreparing}
         isRemote={!!ws?.remote_connection_id}
         hasQueuedMessages={queuedMessages.length > 0}
         selectedWorkspaceId={selectedWorkspaceId!}

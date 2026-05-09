@@ -21,7 +21,11 @@ function makeWorkspace(overrides: Partial<Workspace> = {}): Workspace {
 
 describe("workspacesSlice.addWorkspace", () => {
   beforeEach(() => {
-    useAppStore.setState({ workspaces: [], selectedWorkspaceId: null });
+    useAppStore.setState({
+      workspaces: [],
+      selectedWorkspaceId: null,
+      workspaceEnvironment: {},
+    });
   });
 
   it("appends a workspace when the id is new", () => {
@@ -127,5 +131,20 @@ describe("workspacesSlice.addWorkspace", () => {
     useAppStore.getState().addWorkspace(makeWorkspace({ id: "ws-2", name: "other" }));
     const result = useAppStore.getState().workspaces;
     expect(result.map((w) => w.id)).toEqual(["ws-1", "ws-2"]);
+  });
+
+  it("tracks workspace environment preparation status", () => {
+    useAppStore.getState().setWorkspaceEnvironment("ws-1", "preparing");
+    expect(useAppStore.getState().workspaceEnvironment["ws-1"]).toEqual({
+      status: "preparing",
+    });
+
+    useAppStore
+      .getState()
+      .setWorkspaceEnvironment("ws-1", "error", "direnv failed");
+    expect(useAppStore.getState().workspaceEnvironment["ws-1"]).toEqual({
+      status: "error",
+      error: "direnv failed",
+    });
   });
 });

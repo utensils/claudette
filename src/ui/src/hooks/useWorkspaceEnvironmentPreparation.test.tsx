@@ -1,0 +1,110 @@
+// @vitest-environment happy-dom
+
+import { act } from "react";
+import { createRoot, type Root } from "react-dom/client";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { Workspace } from "../types/workspace";
+import { useAppStore } from "../stores/useAppStore";
+
+const serviceMocks = vi.hoisted(() => ({
+  prepareWorkspaceEnvironment: vi.fn(),
+}));
+
+vi.mock("../services/tauri", () => serviceMocks);
+
+import { useWorkspaceEnvironmentPreparation } from "./useWorkspaceEnvironmentPreparation";
+
+function makeWorkspace(overrides: Partial<Workspace> = {}): Workspace {
+  return {
+    id: "ws-1",
+    repository_id: "repo-1",
+    name: "feature",
+    branch_name: "james/feature",
+    worktree_path: "/tmp/feature",
+    status: "Active",
+    agent_status: "Idle",
+    status_line: "",
+    created_at: "1700000000",
+    sort_order: 0,
+    remote_connection_id: null,
+    ...overrides,
+  };
+}
+
+function Harness() {
+  useWorkspaceEnvironmentPreparation();
+  return null;
+}
+
+let root: Root | null = null;
+let container: HTMLDivElement | null = null;
+
+async function renderHarness() {
+  container = document.createElement("div");
+  document.body.appendChild(container);
+  root = createRoot(container);
+  await act(async () => {
+    root!.render(<Harness />);
+  });
+}
+
+describe("useWorkspaceEnvironmentPreparation", () => {
+  beforeEach(() => {
+    document.body.innerHTML = "";
+    serviceMocks.prepareWorkspaceEnvironment.mockReset();
+    serviceMocks.prepareWorkspaceEnvironment.mockResolvedValue(undefined);
+    useAppStore.setState({
+      selectedWorkspaceId: null,
+      workspaces: [],
+      workspaceEnvironment: {},
+      toasts: [],
+    });
+  });
+
+  afterEach(async () => {
+    if (root) {
+      await act(async () => {
+        root!.unmount();
+      });
+    }
+    root = null;
+    container?.remove();
+    container = null;
+  });
+
+  it("prepares env providers when an existing local workspace is selected", async () => {
+    useAppStore.setState({
+      selectedWorkspaceId: "ws-1",
+      workspaces: [makeWorkspace()],
+    });
+
+    await renderHarness();
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(serviceMocks.prepareWorkspaceEnvironment).toHaveBeenCalledWith("ws-1");
+    expect(useAppStore.getState().workspaceEnvironment["ws-1"]).toEqual({
+      status: "ready",
+    });
+  });
+
+  it("does not run local env providers for remote workspaces", async () => {
+    useAppStore.setState({
+      selectedWorkspaceId: "ws-remote",
+      workspaces: [
+        makeWorkspace({
+          id: "ws-remote",
+          remote_connection_id: "remote-1",
+        }),
+      ],
+    });
+
+    await renderHarness();
+
+    expect(serviceMocks.prepareWorkspaceEnvironment).not.toHaveBeenCalled();
+    expect(useAppStore.getState().workspaceEnvironment["ws-remote"]).toEqual({
+      status: "ready",
+    });
+  });
+});
