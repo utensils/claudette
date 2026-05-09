@@ -19,6 +19,7 @@
  * exercise every routing branch without touching the real backend.
  */
 
+import { ask } from "@tauri-apps/plugin-dialog";
 import {
   archiveChatSession as archiveChatSessionService,
   createChatSession as createChatSessionService,
@@ -32,16 +33,25 @@ export interface ContextActionDeps {
   createChatSession: typeof createChatSessionService;
   /** Override the archive backend call. */
   archiveChatSession: typeof archiveChatSessionService;
-  /** Synchronous yes/no prompt. The default uses `window.confirm` —
-   *  tests pass a stub that returns the predetermined answer. */
-  confirm: (message: string) => boolean;
+  /** Async yes/no prompt. The default routes through Tauri's
+   *  `@tauri-apps/plugin-dialog`'s `ask()` so a real native dialog
+   *  appears — `window.confirm()` in Tauri 2 webviews is a silent
+   *  no-op that returns immediately and the user never sees the
+   *  prompt. Tests pass a stub that resolves to the predetermined
+   *  answer (and can synchronize on the resolution). */
+  confirm: (message: string) => Promise<boolean>;
 }
 
 const DEFAULT_DEPS: ContextActionDeps = {
   createChatSession: createChatSessionService,
   archiveChatSession: archiveChatSessionService,
   confirm: (message) =>
-    typeof window !== "undefined" ? window.confirm(message) : true,
+    ask(message, {
+      title: "Close session",
+      kind: "warning",
+      okLabel: "Close",
+      cancelLabel: "Cancel",
+    }),
 };
 
 function resolveDeps(overrides?: Partial<ContextActionDeps>): ContextActionDeps {
@@ -202,12 +212,36 @@ export function executeCloseTab(overrides?: Partial<ContextActionDeps>): void {
     activeSessions: sessions,
     isActiveSession: true,
   });
-  if (kind !== "none") {
-    const message = formatChatCloseFallbackPrompt(kind, session.name);
-    if (!deps.confirm(message)) return;
-  }
 
+  // The whole flow is async because Tauri's native ask() returns a
+  // Promise — sync `window.confirm` is a no-op in the webview, which
+  // is why earlier dogfooding reported Cmd+W killing running sessions
+  // without any prompt at all.
   void (async () => {
+    if (kind !== "none") {
+      const message = formatChatCloseFallbackPrompt(kind, session.name);
+      let ok: boolean;
+      try {
+        ok = await deps.confirm(message);
+      } catch (err) {
+        console.error("[hotkey] confirm dialog failed:", err);
+        return;
+      }
+      if (!ok) return;
+    }
+
+    // Re-read the store because the user may have switched sessions
+    // while the modal was up. If the active session changed mid-flight
+    // we drop the action — closing a session the user is no longer
+    // viewing would be the surprise we set out to prevent.
+    const stillActive = useAppStore.getState();
+    if (
+      stillActive.selectedWorkspaceId !== wsId ||
+      stillActive.selectedSessionIdByWorkspaceId[wsId] !== sessionId
+    ) {
+      return;
+    }
+
     try {
       const autoCreated = await deps.archiveChatSession(sessionId);
       const post = useAppStore.getState();

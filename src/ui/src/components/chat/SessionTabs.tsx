@@ -29,7 +29,21 @@ import {
   type NavEntry,
   splitUnifiedTabOrder,
 } from "./sessionTabsLogic";
+import { ask } from "@tauri-apps/plugin-dialog";
 import { chatCloseConfirmKind } from "../../hotkeys/contextActions";
+
+/** Tauri's native confirm dialog. Used everywhere the close-tab UI
+ *  asks the user to confirm — `window.confirm()` is a silent no-op
+ *  in Tauri 2 webviews and was the cause of the "Cmd+W kills running
+ *  sessions without prompting" regression. */
+async function askToClose(message: string): Promise<boolean> {
+  return ask(message, {
+    title: "Close session",
+    kind: "warning",
+    okLabel: "Close",
+    cancelLabel: "Cancel",
+  });
+}
 import { SessionStatusIcon, type SessionStatusKind } from "../shared/SessionStatusIcon";
 import { DangerousFlagBadge } from "./DangerousFlagBadge";
 import { hasDangerousFlag } from "../../stores/slices/workspaceClaudeFlagsSlice";
@@ -259,7 +273,7 @@ export function SessionTabs({ workspaceId }: Props) {
           : kind === "active"
             ? t("session_active_confirm_close", { name: session.name })
             : t("session_last_confirm_close", { name: session.name });
-      if (!window.confirm(message)) return;
+      if (!(await askToClose(message))) return;
     }
     await archiveSessionImmediate(session);
   };
@@ -456,14 +470,16 @@ export function SessionTabs({ workspaceId }: Props) {
           runningSessions.length === 1
             ? t("session_running_confirm_close", { name: runningSessions[0].name })
             : t("session_running_confirm_close_multi", { count: runningSessions.length });
-        if (!window.confirm(message)) return;
+        if (!(await askToClose(message))) return;
       } else if (closingActive) {
         const active = sessionsBeingClosed.find(
           (s) => s.id === selectedSessionId,
         );
         if (
           active &&
-          !window.confirm(t("session_active_confirm_close", { name: active.name }))
+          !(await askToClose(
+            t("session_active_confirm_close", { name: active.name }),
+          ))
         )
           return;
       } else if (
@@ -476,7 +492,9 @@ export function SessionTabs({ workspaceId }: Props) {
         const last = sessionsBeingClosed[0];
         if (
           last &&
-          !window.confirm(t("session_last_confirm_close", { name: last.name }))
+          !(await askToClose(
+            t("session_last_confirm_close", { name: last.name }),
+          ))
         )
           return;
       }

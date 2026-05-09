@@ -252,10 +252,12 @@ describe("executeCloseTab", () => {
       sessionsByWorkspace: { [WS]: [session, makeSession("b")] },
       selectedSessionIdByWorkspaceId: { [WS]: "a" },
     });
-    const confirm = vi.fn().mockReturnValue(true);
+    const confirm = vi.fn().mockResolvedValue(true);
     const archiveChatSession = vi.fn().mockResolvedValue(null);
 
     executeCloseTab({ confirm, archiveChatSession });
+    await new Promise((r) => setTimeout(r, 0));
+    // Two ticks: one for the confirm await, one for the archive await.
     await new Promise((r) => setTimeout(r, 0));
 
     // The hotkey path always targets the active session so the
@@ -272,10 +274,11 @@ describe("executeCloseTab", () => {
       sessionsByWorkspace: { [WS]: [session, makeSession("b")] },
       selectedSessionIdByWorkspaceId: { [WS]: "a" },
     });
-    const confirm = vi.fn().mockReturnValue(false);
+    const confirm = vi.fn().mockResolvedValue(false);
     const archiveChatSession = vi.fn();
 
     executeCloseTab({ confirm, archiveChatSession });
+    await new Promise((r) => setTimeout(r, 0));
     await new Promise((r) => setTimeout(r, 0));
 
     expect(confirm).toHaveBeenCalledTimes(1);
@@ -284,16 +287,45 @@ describe("executeCloseTab", () => {
     expect(useAppStore.getState().sessionsByWorkspace[WS]?.length).toBe(2);
   });
 
+  it("chat context: prompts and archives a Running session", async () => {
+    // Regression for the user-reported "Cmd+W kills running sessions
+    // without prompting" — previously synchronous `window.confirm()`
+    // returned immediately in the Tauri webview so the dialog never
+    // surfaced and the archive ran unchecked. The async-confirm
+    // contract here is the same shape Tauri's `ask()` produces.
+    const session = makeSession("a", { agent_status: "Running" });
+    useAppStore.setState({
+      sessionsByWorkspace: { [WS]: [session] },
+      selectedSessionIdByWorkspaceId: { [WS]: "a" },
+    });
+    const confirm = vi.fn().mockResolvedValue(false);
+    const archiveChatSession = vi.fn();
+
+    executeCloseTab({ confirm, archiveChatSession });
+    await new Promise((r) => setTimeout(r, 0));
+    await new Promise((r) => setTimeout(r, 0));
+
+    // Confirm fires for a running session and a "no" answer aborts
+    // the archive — the running agent is left alive.
+    expect(confirm).toHaveBeenCalledTimes(1);
+    expect(archiveChatSession).not.toHaveBeenCalled();
+    // The session is still there.
+    expect(
+      useAppStore.getState().sessionsByWorkspace[WS]?.[0]?.id,
+    ).toBe("a");
+  });
+
   it("chat context: archives a running session when the user confirms", async () => {
     const session = makeSession("a", { agent_status: "Running" });
     useAppStore.setState({
       sessionsByWorkspace: { [WS]: [session] },
       selectedSessionIdByWorkspaceId: { [WS]: "a" },
     });
-    const confirm = vi.fn().mockReturnValue(true);
+    const confirm = vi.fn().mockResolvedValue(true);
     const archiveChatSession = vi.fn().mockResolvedValue(null);
 
     executeCloseTab({ confirm, archiveChatSession });
+    await new Promise((r) => setTimeout(r, 0));
     await new Promise((r) => setTimeout(r, 0));
 
     expect(confirm).toHaveBeenCalledTimes(1);
@@ -307,10 +339,11 @@ describe("executeCloseTab", () => {
       selectedSessionIdByWorkspaceId: { [WS]: "a" },
     });
     const replacement = makeSession("auto-1");
-    const confirm = vi.fn().mockReturnValue(true);
+    const confirm = vi.fn().mockResolvedValue(true);
     const archiveChatSession = vi.fn().mockResolvedValue(replacement);
 
     executeCloseTab({ confirm, archiveChatSession });
+    await new Promise((r) => setTimeout(r, 0));
     await new Promise((r) => setTimeout(r, 0));
 
     const post = useAppStore.getState();
