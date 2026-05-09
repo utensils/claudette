@@ -6,10 +6,11 @@
 //!    Replaces the existing scattered `eprintln!` output with
 //!    timestamped, leveled, PID-stamped lines.
 //! 2. **rolling file (compact, structured)** — daily-rotated logs at
-//!    `~/.claudette/logs/claudette-<YYYY-MM-DD>.log`, written via
-//!    `tracing-appender::non_blocking` so the runtime never blocks on
-//!    disk I/O. A startup sweep deletes files older than [`RETAIN_DAYS`]
-//!    so we don't grow unbounded.
+//!    `~/.claudette/logs/claudette.<YYYY-MM-DD>.log` (the
+//!    `tracing-appender` filename layout is `<prefix>.<date>.<suffix>`),
+//!    written via `tracing-appender::non_blocking` so the runtime
+//!    never blocks on disk I/O. A startup sweep deletes files older
+//!    than [`RETAIN_DAYS`] so we don't grow unbounded.
 //!
 //! ## Multiple instances
 //!
@@ -314,7 +315,7 @@ fn log_startup_banner(log_dir: &Path) {
         "release"
     };
     tracing::info!(
-        target: "startup",
+        target: "claudette::startup",
         pid,
         version,
         profile,
@@ -341,12 +342,17 @@ fn sweep_old_logs(dir: &Path, retain_days: u64) {
         let Some(name) = path.file_name().and_then(|s| s.to_str()) else {
             continue;
         };
-        // Only consider our own rolled files. The rolling appender
-        // writes `<prefix>.<suffix>.<YYYY-MM-DD>` so a simple
-        // starts-with check is enough — and means we never touch
-        // anything else a user (or another tool) might have parked in
-        // the same directory.
-        if !name.starts_with(LOG_FILE_PREFIX) {
+        // Only consider files that match our rolled-log shape.
+        // `tracing-appender` writes `<prefix>.<YYYY-MM-DD>.<suffix>`
+        // (e.g. `claudette.2026-05-08.log`); a previous iteration of
+        // this code matched only the prefix and could have nuked a
+        // user's `claudette-notes.txt` parked in the same dir. We
+        // require the prefix-with-dot AND the trailing `.log` AND a
+        // 10-character `YYYY-MM-DD` chunk in between so the match is
+        // both narrow and stable across our two known historical
+        // shapes (`<prefix>.<date>.<suffix>` and
+        // `<prefix>.<suffix>.<date>` from older test fixtures).
+        if !is_rolled_log_filename(name) {
             continue;
         }
         let Ok(meta) = entry.metadata() else { continue };
@@ -361,6 +367,48 @@ fn sweep_old_logs(dir: &Path, retain_days: u64) {
     }
 }
 
+/// True iff `name` looks like one of our rolled log files. Tightened
+/// from a bare `starts_with(LOG_FILE_PREFIX)` so unrelated files like
+/// `claudette-notes.txt` (or anything else a user parked in the log
+/// dir) are never targeted by the retention sweep. Matches both the
+/// current `<prefix>.<YYYY-MM-DD>.log` layout and the legacy
+/// `<prefix>.log.<YYYY-MM-DD>` shape from older builds, so existing
+/// directories don't suddenly grow stale files after upgrade.
+fn is_rolled_log_filename(name: &str) -> bool {
+    // Common gate: must start with `<prefix>.` (extra dot rejects
+    // names like `claudette-notes.txt`).
+    let Some(rest) = name.strip_prefix(&format!("{LOG_FILE_PREFIX}.")) else {
+        return false;
+    };
+    // Current layout: `<prefix>.<YYYY-MM-DD>.log`. Strip the trailing
+    // suffix; what remains must be a 10-char date.
+    if let Some(date) = rest.strip_suffix(".log") {
+        return is_iso_date(date);
+    }
+    // Legacy layout from earlier test fixtures: `<prefix>.log.<YYYY-MM-DD>`.
+    // Keep accepting it so the sweep still cleans up old files.
+    if let Some(date) = rest.strip_prefix("log.") {
+        return is_iso_date(date);
+    }
+    false
+}
+
+/// Strict YYYY-MM-DD shape check. We don't validate calendar
+/// correctness — `2026-13-99` is fine — because the appender's own
+/// output is always real, and a same-shape user file in the dir
+/// would still be a false positive worth logging if found old.
+fn is_iso_date(s: &str) -> bool {
+    let bytes = s.as_bytes();
+    if bytes.len() != 10 {
+        return false;
+    }
+    bytes[4] == b'-'
+        && bytes[7] == b'-'
+        && bytes[..4].iter().all(|c| c.is_ascii_digit())
+        && bytes[5..7].iter().all(|c| c.is_ascii_digit())
+        && bytes[8..].iter().all(|c| c.is_ascii_digit())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -368,33 +416,75 @@ mod tests {
     use tempfile::tempdir;
 
     /// A retain_days of 0 means "anything older than now is fair
-    /// game" — the sleep below gives the freshly-written file a
-    /// non-zero age so the cutoff comparison removes it
+    /// game" — the sleep below gives the freshly-written files a
+    /// non-zero age so the cutoff comparison removes them
     /// deterministically without us having to mock the clock.
+    ///
+    /// Covers both the current `<prefix>.<date>.<suffix>` layout
+    /// (`tracing-appender`'s real output) and the legacy
+    /// `<prefix>.<suffix>.<date>` shape from earlier builds, since
+    /// users upgrading may still have files in either form.
     #[test]
-    fn sweep_old_logs_removes_matching_prefix_when_retain_is_zero() {
+    fn sweep_old_logs_removes_rolled_files_when_retain_is_zero() {
         let dir = tempdir().unwrap();
-        let target = dir.path().join("claudette.log.2025-01-01");
+        let current_layout = dir.path().join("claudette.2025-01-01.log");
+        let legacy_layout = dir.path().join("claudette.log.2025-01-01");
         let unrelated = dir.path().join("user-notes.txt");
-        fs::write(&target, b"old").unwrap();
+        fs::write(&current_layout, b"old").unwrap();
+        fs::write(&legacy_layout, b"old").unwrap();
         fs::write(&unrelated, b"unrelated").unwrap();
         std::thread::sleep(Duration::from_millis(50));
 
         sweep_old_logs(dir.path(), 0);
 
-        assert!(!target.exists(), "matching file must be swept");
+        assert!(
+            !current_layout.exists(),
+            "current-layout files must be swept"
+        );
+        assert!(!legacy_layout.exists(), "legacy-layout files must be swept");
         assert!(unrelated.exists(), "non-claudette files must be left alone");
     }
 
     #[test]
     fn sweep_old_logs_keeps_files_within_retention() {
         let dir = tempdir().unwrap();
-        let recent = dir.path().join("claudette.log.2026-05-08");
+        let recent = dir.path().join("claudette.2026-05-08.log");
         fs::write(&recent, b"recent").unwrap();
 
         sweep_old_logs(dir.path(), 14);
 
         assert!(recent.exists(), "files inside the retention window stay");
+    }
+
+    /// Regression: prefix-only matching used to allow
+    /// `claudette-notes.txt` (or anything else a user parked in the
+    /// log dir) to be deleted by the retention sweep. The tightened
+    /// `is_rolled_log_filename` check now requires the prefix-with-dot,
+    /// the trailing `.log`, and a real-shaped date — verify the
+    /// false positives can't get through anymore.
+    #[test]
+    fn sweep_old_logs_ignores_prefix_overlap_files() {
+        let dir = tempdir().unwrap();
+        let near_misses = [
+            "claudette-notes.txt",      // dash, not dot, after prefix
+            "claudette.notes.log",      // looks like ours but no date
+            "claudette.2026-05-08.bak", // wrong suffix
+            "claudettelog.2026-05-08",  // missing dot after prefix
+            "claudette.YYYY-MM-DD.log", // date placeholder, not real
+        ];
+        for name in near_misses {
+            fs::write(dir.path().join(name), b"x").unwrap();
+        }
+        std::thread::sleep(Duration::from_millis(50));
+
+        sweep_old_logs(dir.path(), 0);
+
+        for name in near_misses {
+            assert!(
+                dir.path().join(name).exists(),
+                "non-rolled-log file {name:?} must survive the sweep"
+            );
+        }
     }
 
     /// The Settings UI writes one of these strings into

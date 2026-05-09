@@ -178,7 +178,8 @@ impl PersistentSession {
                         // sessions in a multi-instance dev run can be
                         // demuxed in the log file.
                         tracing::warn!(
-                            target: "agent::persistent",
+                            target: "claudette::agent",
+                            subsystem = "persistent",
                             pid = reader_pid,
                             error = %e,
                             line = %line,
@@ -197,7 +198,8 @@ impl PersistentSession {
             while let Ok(Some(line)) = lines.next_line().await {
                 if !line.trim().is_empty() {
                     tracing::warn!(
-                        target: "agent::persistent",
+                        target: "claudette::agent",
+                        subsystem = "persistent",
                         pid = stderr_pid,
                         line = %line,
                         "claude stderr"
@@ -305,7 +307,8 @@ impl PersistentSession {
                         // Logging at WARN with the count makes this
                         // diagnosable from the log file alone.
                         tracing::warn!(
-                            target: "agent::persistent",
+                            target: "claudette::agent",
+                            subsystem = "persistent",
                             dropped_events = n,
                             "broadcast lag — per-turn receiver missed events"
                         );

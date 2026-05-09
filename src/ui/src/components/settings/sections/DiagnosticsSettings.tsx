@@ -106,7 +106,19 @@ export function DiagnosticsSettings() {
   };
 
   const currentLevel = settings?.log_level ?? "";
-  const currentVerbosity = (settings?.frontend_verbosity as FrontendLogVerbosity | null) ?? "errors";
+  // Validate the persisted verbosity against the known set rather than
+  // blind-casting from `string | null`. If the DB ever holds an
+  // unrecognized value (manual edit, bad migration, future schema
+  // change), the `<select>` would otherwise receive an invalid `value`
+  // and the next `onChange` would round-trip the unknown string back
+  // to the backend. Mirrors the same guard `main.tsx` uses when
+  // priming the bridge from `get_diagnostics_settings`.
+  const currentVerbosity: FrontendLogVerbosity =
+    settings?.frontend_verbosity === "errors"
+    || settings?.frontend_verbosity === "warnings"
+    || settings?.frontend_verbosity === "all"
+      ? settings.frontend_verbosity
+      : "errors";
 
   return (
     <div>

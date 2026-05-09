@@ -15,13 +15,16 @@
 //   3. `installFrontendLogBridge` is idempotent. Calling it twice is a
 //      no-op (matters for hot-reload during dev).
 //
-// Note on `console.*` mirroring: we intentionally do NOT replace
-// `console.error` / `console.warn` themselves. Instead we install
-// `window` listeners that fire AFTER the original console method, so
-// the devtools console still shows the message exactly as written —
-// plus a forwarded copy lands in the daily log file. Replacing the
-// methods would interfere with React's StrictMode warnings, which
-// rely on `console.error` having a known signature.
+// Note on `console.*` mirroring: we DO replace `console.error` /
+// `.warn` / `.info` / `.log` (browsers don't expose them as events
+// otherwise) but our patch always invokes the original method first
+// inside a try/catch, then fans out to the Rust forwarder. That
+// preserves the exact devtools output — including React's
+// StrictMode `console.error` calls, which look at the original
+// signature. The console patches install once on the first
+// `installFrontendLogBridge` call and respect a mutable verbosity
+// gate; changing the user's verbosity in Settings rebinds the gate
+// without re-patching.
 
 import { invoke } from "@tauri-apps/api/core";
 
@@ -250,16 +253,27 @@ export function setFrontendLogVerbosity(level: FrontendLogVerbosity): void {
 /// AND, when `enabled()` returns true, also forward to the Rust log.
 /// We keep references to the originals via closure capture so a later
 /// patch (e.g. dev tooling) can stack on top without breaking us.
+/// Narrow indexable view of the four console methods we mirror. Lets
+/// us read the original method off `console` and write a wrapper back
+/// without an `any` cast — the lib.dom `Console` type uses
+/// overload-heavy signatures that don't survive `Console[K]` access,
+/// but the only contract we need from these methods is "consumes
+/// arbitrary args, returns nothing".
+type ConsoleMethodName = "error" | "warn" | "info" | "log";
+type MirroredConsole = Record<ConsoleMethodName, (...args: unknown[]) => void>;
+
 function patchConsoleMethod(
-  method: "error" | "warn" | "info" | "log",
+  method: ConsoleMethodName,
   frontendTarget: string,
   level: FrontendLogLevel,
   enabled: () => boolean,
 ): void {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const original = (console as any)[method] as (...args: unknown[]) => void;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  (console as any)[method] = (...args: unknown[]) => {
+  // Cast through `unknown` (eslint allows it without a disable, and
+  // the runtime shape of these four methods is exactly the wrapper
+  // contract above).
+  const target = console as unknown as MirroredConsole;
+  const original = target[method];
+  target[method] = (...args: unknown[]) => {
     try {
       original.apply(console, args);
     } catch {

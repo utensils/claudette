@@ -1461,7 +1461,7 @@ pub async fn send_chat_message(
         && let Some(old_pid) = session.active_pid.take()
     {
         tracing::info!(
-            target: "chat",
+            target: "claudette::chat",
             workspace_id = %workspace_id,
             chat_session_id = %chat_session_id,
             stale_pid = old_pid,
@@ -1514,7 +1514,7 @@ pub async fn send_chat_message(
     // disabled and the next turn lands here without the deferral.
     if session.mcp_config_dirty && should_defer_persistent_restart(session) {
         tracing::info!(
-            target: "chat",
+            target: "claudette::chat",
             workspace_id = %workspace_id,
             chat_session_id = %chat_session_id,
             reason = "background_tasks_running",
@@ -1527,7 +1527,7 @@ pub async fn send_chat_message(
         )
     {
         tracing::info!(
-            target: "chat",
+            target: "claudette::chat",
             workspace_id = %workspace_id,
             chat_session_id = %chat_session_id,
             reason = "remote_control_active",
@@ -1535,7 +1535,7 @@ pub async fn send_chat_message(
         );
     } else if session.mcp_config_dirty {
         tracing::info!(
-            target: "chat",
+            target: "claudette::chat",
             workspace_id = %workspace_id,
             chat_session_id = %chat_session_id,
             "MCP config dirty — tearing down persistent session"
@@ -1695,7 +1695,7 @@ pub async fn send_chat_message(
         )
     {
         tracing::info!(
-            target: "chat",
+            target: "claudette::chat",
             workspace_id = %workspace_id,
             chat_session_id = %chat_session_id,
             reason = "background_tasks_running",
@@ -1725,7 +1725,7 @@ pub async fn send_chat_message(
         // alive across local turns. The flags-drift state remains so the
         // teardown happens after Remote Control is disabled.
         tracing::info!(
-            target: "chat",
+            target: "claudette::chat",
             workspace_id = %workspace_id,
             chat_session_id = %chat_session_id,
             reason = "remote_control_active",
@@ -1749,7 +1749,7 @@ pub async fn send_chat_message(
         )
     {
         tracing::info!(
-            target: "chat",
+            target: "claudette::chat",
             workspace_id = %workspace_id,
             chat_session_id = %chat_session_id,
             plan_mode_drifted = session.session_plan_mode != agent_settings.plan_mode,
@@ -2016,7 +2016,7 @@ pub async fn send_chat_message(
                 // Persistent session died — drop lock before async spawn to
                 // avoid blocking other workspaces during process startup.
                 tracing::warn!(
-                    target: "chat",
+                    target: "claudette::chat",
                     workspace_id = %workspace_id,
                     chat_session_id = %chat_session_id,
                     pid = reuse_pid,
@@ -2086,7 +2086,7 @@ pub async fn send_chat_message(
                     Ok(ps) => (ps, spawn_sid.clone()),
                     Err(e2) if is_resume => {
                         tracing::warn!(
-                            target: "chat",
+                            target: "claudette::chat",
                             workspace_id = %workspace_id,
                             chat_session_id = %chat_session_id,
                             error = %e2,
@@ -2208,7 +2208,7 @@ pub async fn send_chat_message(
             Err(e) if is_resume => {
                 // Resume failed (stale/corrupt session) — start fresh instead.
                 tracing::warn!(
-                    target: "chat",
+                    target: "claudette::chat",
                     workspace_id = %workspace_id,
                     chat_session_id = %chat_session_id,
                     error = %e,

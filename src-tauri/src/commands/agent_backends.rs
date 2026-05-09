@@ -111,7 +111,7 @@ impl BackendGateway {
             // one process — the cardinality matters for diagnosing
             // whether a leak rides on the shared surface.
             tracing::debug!(
-                target: "agent-backend-gateway",
+                target: "claudette::backend",
                 backend_id = %config.id,
                 model = ?model,
                 base_url = %existing.base_url,
@@ -122,7 +122,7 @@ impl BackendGateway {
 
         if let Some(existing) = self.servers.write().await.remove(&config.id) {
             tracing::info!(
-                target: "agent-backend-gateway",
+                target: "claudette::backend",
                 backend_id = %config.id,
                 model = ?model,
                 "config drift — tearing down old gateway"
@@ -1026,7 +1026,7 @@ async fn run_gateway(
         .map(|a| a.to_string())
         .unwrap_or_else(|_| "<unknown>".to_string());
     tracing::info!(
-        target: "agent-backend-gateway",
+        target: "claudette::backend",
         backend_id = %config.id,
         backend_label = %config.label,
         addr = %local_addr,
@@ -1036,7 +1036,7 @@ async fn run_gateway(
         tokio::select! {
             _ = cancel.notified() => {
                 tracing::info!(
-                    target: "agent-backend-gateway",
+                    target: "claudette::backend",
                     backend_id = %config.id,
                     addr = %local_addr,
                     "gateway shutting down"
@@ -1058,7 +1058,7 @@ async fn run_gateway(
                         // postmortem can tie a failure to the specific
                         // Claude CLI process that hit the gateway.
                         tracing::warn!(
-                            target: "agent-backend-gateway",
+                            target: "claudette::backend",
                             backend_id = %backend_id,
                             peer = %peer,
                             error = %err,

@@ -97,7 +97,7 @@ fn warn_if_concurrent_dev_instance(db_path: &Path) {
 
     for (pid, cwd) in &peers {
         tracing::warn!(
-            target: "startup",
+            target: "claudette::startup",
             our_pid,
             peer_pid = pid,
             peer_cwd = %cwd,
@@ -324,7 +324,7 @@ fn main() {
     // and worktree base each PID was holding is the first question
     // when investigating cross-session contamination.
     tracing::info!(
-        target: "startup",
+        target: "claudette::startup",
         pid = std::process::id(),
         data_dir = %data_dir.display(),
         db_path = %db_path.display(),
@@ -384,11 +384,11 @@ fn main() {
     let _ = std::fs::create_dir_all(&plugin_dir);
     let seed_warnings = claudette::plugin_runtime::seed::seed_bundled_plugins(&plugin_dir);
     for warning in &seed_warnings {
-        tracing::warn!(target: "plugin", "{warning}");
+        tracing::warn!(target: "claudette::plugin", "{warning}");
     }
     let plugins = claudette::plugin_runtime::PluginRegistry::discover(&plugin_dir);
     tracing::info!(
-        target: "plugin",
+        target: "claudette::plugin",
         count = plugins.plugins.len(),
         plugins = %plugins
             .plugins
