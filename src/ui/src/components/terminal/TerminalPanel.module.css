@@ -205,6 +205,30 @@
   position: relative;
 }
 
+.termContainer :global(.xterm .xterm-viewport) {
+  background-color: var(--terminal-bg) !important;
+  scrollbar-color: var(--scrollbar-thumb) transparent !important;
+  scrollbar-width: thin !important;
+}
+
+.termContainer :global(.xterm .xterm-viewport::-webkit-scrollbar) {
+  width: var(--scrollbar-size) !important;
+  height: var(--scrollbar-size) !important;
+}
+
+.termContainer :global(.xterm .xterm-viewport::-webkit-scrollbar-track) {
+  background: transparent !important;
+}
+
+.termContainer :global(.xterm .xterm-viewport::-webkit-scrollbar-thumb) {
+  background: var(--scrollbar-thumb) !important;
+  border-radius: var(--radius-sm) !important;
+}
+
+.termContainer :global(.xterm .xterm-viewport::-webkit-scrollbar-thumb:hover) {
+  background: var(--scrollbar-thumb-hover) !important;
+}
+
 .spawnError {
   position: absolute;
   top: 12px;

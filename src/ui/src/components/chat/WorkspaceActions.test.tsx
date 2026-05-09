@@ -84,9 +84,11 @@ describe("WorkspaceActions", () => {
     const primaryButton = container.querySelector(
       'button[aria-label="workspace_actions_open_in:VS Code"]',
     );
-    const image = primaryButton?.querySelector("img");
+    const image = primaryButton?.querySelector("[aria-hidden='true']");
     expect(image).not.toBeNull();
-    expect(image?.getAttribute("src")).toBe("data:image/png;base64,abc123");
+    expect((image as HTMLElement | null)?.style.backgroundImage).toBe(
+      'url("data:image/png;base64,abc123")',
+    );
     expect(primaryButton?.querySelector("svg")).toBeNull();
   });
 

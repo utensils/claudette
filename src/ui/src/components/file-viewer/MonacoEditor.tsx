@@ -181,6 +181,10 @@ export const MonacoEditor = memo(function MonacoEditor({
           wordWrap: "on",
           lineNumbers: "on",
           scrollBeyondLastLine: false,
+          scrollbar: {
+            verticalScrollbarSize: 8,
+            horizontalScrollbarSize: 8,
+          },
           // Disable the bracket-guides / sticky scroll noise; we want a
           // clean editor surface that matches the surrounding UI density.
           renderWhitespace: "selection",

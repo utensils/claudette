@@ -55,10 +55,9 @@ function renderCategoryIcon(category: AppCategory) {
 export function AppIcon({ app }: { app: DetectedApp }) {
   if (app.icon_data_url) {
     return (
-      <img
+      <span
         className={styles.appIconImage}
-        src={app.icon_data_url}
-        alt=""
+        style={{ backgroundImage: `url(${app.icon_data_url})` }}
         aria-hidden="true"
       />
     );

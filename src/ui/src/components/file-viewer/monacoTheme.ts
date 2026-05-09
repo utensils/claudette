@@ -56,6 +56,8 @@ export function applyMonacoTheme(monaco: typeof MonacoType): void {
   const accentBg  = cssColorToHex(cs.getPropertyValue("--accent-bg").trim()        || (isDark ? "#1a1a1a" : "#f5f5f5"));
   const selected  = cssColorToHex(cs.getPropertyValue("--selected-bg").trim()      || (isDark ? "#3a2820" : "#f0e8e0"));
   const hovered   = cssColorToHex(cs.getPropertyValue("--hover-bg").trim()         || (isDark ? "#242220" : "#f5f5f5"));
+  const scrollbarThumb = cssColorToHex(cs.getPropertyValue("--scrollbar-thumb").trim() || (isDark ? "#242220" : "#f5f5f5"));
+  const scrollbarThumbHover = cssColorToHex(cs.getPropertyValue("--scrollbar-thumb-hover").trim() || (isDark ? "#e0785040" : "#c45a3540"));
   const divider   = cssColorToHex(cs.getPropertyValue("--divider").trim()          || (isDark ? "#3d3832" : "#e0e0e0"));
   const widgetBg  = cssColorToHex(cs.getPropertyValue("--sidebar-bg").trim()       || (isDark ? "#26221f" : "#f5f5f5"));
   const addedBg   = cssColorToHex(cs.getPropertyValue("--diff-added-bg").trim()    || (isDark ? "#1a3a20" : "#e8f5e9"));
@@ -145,9 +147,9 @@ export function applyMonacoTheme(monaco: typeof MonacoType): void {
 
       // Scrollbars
       "scrollbar.shadow":                       transparent,
-      "scrollbarSlider.background":             withAlpha(dim, "40"),
-      "scrollbarSlider.hoverBackground":        withAlpha(dim, "70"),
-      "scrollbarSlider.activeBackground":       withAlpha(accent, "70"),
+      "scrollbarSlider.background":             scrollbarThumb,
+      "scrollbarSlider.hoverBackground":        scrollbarThumbHover,
+      "scrollbarSlider.activeBackground":       scrollbarThumbHover,
 
       // Diff editor
       "diffEditor.insertedTextBackground":      addedBg,
