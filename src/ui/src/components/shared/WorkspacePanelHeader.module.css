@@ -20,13 +20,13 @@
   min-width: 0;
   user-select: none;
   -webkit-user-select: none;
-  -webkit-app-region: drag;
-  app-region: drag;
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
 }
 
 .headerLeft * {
-  -webkit-app-region: drag;
-  app-region: drag;
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
 }
 
 .headerRight {
