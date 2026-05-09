@@ -465,6 +465,14 @@
   border: 1px solid var(--divider);
   border-radius: 6px;
   margin: 4px 0;
+  /* The messages list is `display: flex; flex-direction: column;
+   * overflow: auto`. Per the flex spec, a flex item whose own
+   * `overflow` is not `visible` gets `min-height: 0` implicitly —
+   * the `overflow: hidden` we set for the rounded corners would
+   * collapse this card to its border height (~2px) and hide the file
+   * list entirely. Pin `flex-shrink: 0` so the card always lays out
+   * at its intrinsic content height. */
+  flex-shrink: 0;
   overflow: hidden;
   background: var(--chat-input-bg);
 }
