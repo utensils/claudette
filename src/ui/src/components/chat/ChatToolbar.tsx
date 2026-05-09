@@ -10,17 +10,14 @@ import { applySelectedModel } from "./applySelectedModel";
 import { applyPlanModeMountDefault } from "./applyPlanModeMountDefault";
 import { ContextMeter } from "./ContextMeter";
 import { useSelectedModelEntry } from "./useSelectedModelEntry";
+import { getHotkeyLabel, tooltipAttributes } from "../../hotkeys/display";
+import { isMacHotkeyPlatform } from "../../hotkeys/platform";
 import styles from "./ChatToolbar.module.css";
 
 interface ChatToolbarProps {
   sessionId: string;
   disabled: boolean;
 }
-
-// `isMac` / the matching `mod` glyph were used by an inline `<kbd>` badge
-// for the (now-removed) Cmd+T thinking-mode hotkey. The remaining
-// `<kbd>⇧Tab</kbd>` plan-mode badge below uses literal characters and
-// no platform check — so this whole block was unused after the rebind.
 
 export function ChatToolbar({ sessionId, disabled }: ChatToolbarProps) {
   const selectedModel = useAppStore((s) => s.selectedModel[sessionId] ?? "opus");
@@ -43,6 +40,7 @@ export function ChatToolbar({ sessionId, disabled }: ChatToolbarProps) {
   const clearAgentQuestion = useAppStore((s) => s.clearAgentQuestion);
   const clearPlanApproval = useAppStore((s) => s.clearPlanApproval);
   const metaKeyHeld = useAppStore((s) => s.metaKeyHeld);
+  const keybindings = useAppStore((s) => s.keybindings);
   const { t } = useTranslation("chat");
 
   const [loaded, setLoaded] = useState(false);
@@ -161,6 +159,8 @@ export function ChatToolbar({ sessionId, disabled }: ChatToolbarProps) {
   const isExtraUsage = currentModel?.extraUsage ?? false;
   const effortLabel =
     EFFORT_LEVELS.find((l) => l.id === effortLevel)?.label ?? effortLevel;
+  const isMac = isMacHotkeyPlatform();
+  const planShortcut = getHotkeyLabel("global.toggle-plan-mode", keybindings, isMac);
 
   if (!loaded) return null;
 
@@ -227,12 +227,19 @@ export function ChatToolbar({ sessionId, disabled }: ChatToolbarProps) {
         className={`${styles.chip} ${planMode ? styles.chipActive : ""}`}
         onClick={togglePlan}
         disabled={disabled}
-        title={planMode ? t("plan_mode_disable") : t("plan_mode_enable")}
+        {...tooltipAttributes(
+          planMode ? t("plan_mode_disable") : t("plan_mode_enable"),
+          "global.toggle-plan-mode",
+          keybindings,
+          isMac,
+        )}
         aria-pressed={planMode}
       >
         <BookOpen size={14} />
         <span className={styles.chipLabel}>{t("plan_chip")}</span>
-        <kbd className={`shortcut-badge ${metaKeyHeld ? "shortcut-badge-visible" : ""}`} aria-hidden="true">⇧Tab</kbd>
+        {planShortcut && (
+          <kbd className={`shortcut-badge ${metaKeyHeld ? "shortcut-badge-visible" : ""}`} aria-hidden="true">{planShortcut}</kbd>
+        )}
       </button>
 
       <button

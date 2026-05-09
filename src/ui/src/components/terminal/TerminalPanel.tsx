@@ -21,6 +21,8 @@ import {
 } from "@tauri-apps/plugin-clipboard-manager";
 import { useAppStore } from "../../stores/useAppStore";
 import { getTerminalTheme } from "../../utils/theme";
+import { getHotkeyLabel, tooltipAttributes } from "../../hotkeys/display";
+import { isMacHotkeyPlatform } from "../../hotkeys/platform";
 import {
   createTerminalTab,
   deleteTerminalTab,
@@ -366,6 +368,7 @@ export const TerminalPanel = memo(function TerminalPanel() {
   const ensurePaneTree = useAppStore((s) => s.ensurePaneTree);
   const splitPane = useAppStore((s) => s.splitPane);
   const closePane = useAppStore((s) => s.closePane);
+  const keybindings = useAppStore((s) => s.keybindings);
   const setActivePane = useAppStore((s) => s.setActivePane);
   const setPaneSizes = useAppStore((s) => s.setPaneSizes);
   const setPanePtyId = useAppStore((s) => s.setPanePtyId);
@@ -376,6 +379,7 @@ export const TerminalPanel = memo(function TerminalPanel() {
       ? (s.selectedSessionIdByWorkspaceId[s.selectedWorkspaceId] ?? null)
       : null,
   );
+  const hotkeyIsMac = isMacHotkeyPlatform();
   const fontFamilyMono = useAppStore((s) => s.fontFamilyMono);
   const currentThemeId = useAppStore((s) => s.currentThemeId);
   const uiFontSize = useAppStore((s) => s.uiFontSize);
@@ -977,7 +981,7 @@ export const TerminalPanel = memo(function TerminalPanel() {
 
       return inst;
     },
-    [setPanePtyId, setPaneSpawnError, terminalFontSize, terminalTabs],
+    [setContextMenu, setPanePtyId, setPaneSpawnError, terminalFontSize, terminalTabs],
   );
 
   const destroyInstance = useCallback((leafId: string) => {
@@ -1241,7 +1245,7 @@ export const TerminalPanel = memo(function TerminalPanel() {
       }
     }
     setContextMenu(null);
-  }, [contextMenu]);
+  }, [contextMenu, setContextMenu]);
 
   const handleCopyContextTerminal = useCallback(() => {
     if (!contextMenu?.leafId) return;
@@ -1252,7 +1256,7 @@ export const TerminalPanel = memo(function TerminalPanel() {
       .then(() => { inst.term.clearSelection(); })
       .catch(() => {});
     setContextMenu(null);
-  }, [contextMenu]);
+  }, [contextMenu, setContextMenu]);
 
   const handlePasteContextTerminal = useCallback(() => {
     if (!contextMenu?.leafId) return;
@@ -1262,21 +1266,35 @@ export const TerminalPanel = memo(function TerminalPanel() {
       .then((text) => { if (text) inst.term.paste(text); })
       .catch(() => {});
     setContextMenu(null);
-  }, [contextMenu]);
+  }, [contextMenu, setContextMenu]);
 
   const terminalContextMenuItems = useMemo<AttachmentContextMenuItem[]>(() => {
     const items: AttachmentContextMenuItem[] = [];
+    const copyShortcut =
+      getHotkeyLabel("terminal.copy-selection", keybindings, hotkeyIsMac) ?? undefined;
+    const pasteShortcut =
+      getHotkeyLabel("terminal.paste", keybindings, hotkeyIsMac) ?? undefined;
     if (contextMenu?.hasSelection) {
-      items.push({ label: "Copy", onSelect: handleCopyContextTerminal });
+      items.push({
+        label: "Copy",
+        shortcut: copyShortcut,
+        onSelect: handleCopyContextTerminal,
+      });
     }
     if (contextMenu?.leafId) {
-      items.push({ label: "Paste", onSelect: handlePasteContextTerminal });
+      items.push({
+        label: "Paste",
+        shortcut: pasteShortcut,
+        onSelect: handlePasteContextTerminal,
+      });
     }
     items.push({ label: "Clear terminal", onSelect: handleClearContextTerminal });
     return items;
   }, [
     contextMenu?.hasSelection,
     contextMenu?.leafId,
+    keybindings,
+    hotkeyIsMac,
     handleCopyContextTerminal,
     handlePasteContextTerminal,
     handleClearContextTerminal,
@@ -1293,7 +1311,7 @@ export const TerminalPanel = memo(function TerminalPanel() {
         tabId: tab.id,
       });
     },
-    [selectedWorkspaceId, setActiveTerminalTab],
+    [selectedWorkspaceId, setActiveTerminalTab, setContextMenu],
   );
 
   const handleTabPointerDown = useCallback(
@@ -1543,11 +1561,21 @@ export const TerminalPanel = memo(function TerminalPanel() {
           </div>
           );
         })}
-        <button className={styles.addTab} onClick={handleCreateTab}>
+        <button
+          className={styles.addTab}
+          onClick={handleCreateTab}
+          aria-label="New terminal tab"
+          {...tooltipAttributes("New terminal tab", "terminal.new-tab", keybindings, hotkeyIsMac, "bottom")}
+        >
           +
         </button>
         <div className={styles.spacer} />
-        <button className={styles.hideBtn} onClick={toggleTerminalPanel}>
+        <button
+          className={styles.hideBtn}
+          onClick={toggleTerminalPanel}
+          aria-label="Hide terminal"
+          {...tooltipAttributes("Hide terminal", "terminal.toggle-panel", keybindings, hotkeyIsMac, "bottom")}
+        >
           −
         </button>
       </div>

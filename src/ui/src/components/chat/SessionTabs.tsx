@@ -31,6 +31,8 @@ import {
 } from "./sessionTabsLogic";
 import { ask } from "@tauri-apps/plugin-dialog";
 import { chatCloseConfirmKind } from "../../hotkeys/contextActions";
+import { tooltipAttributes, tooltipWithHotkey } from "../../hotkeys/display";
+import { isMacHotkeyPlatform } from "../../hotkeys/platform";
 import { SessionStatusIcon, type SessionStatusKind } from "../shared/SessionStatusIcon";
 import { DangerousFlagBadge } from "./DangerousFlagBadge";
 import { hasDangerousFlag } from "../../stores/slices/workspaceClaudeFlagsSlice";
@@ -131,6 +133,8 @@ export function SessionTabs({ workspaceId }: Props) {
   const selectFileTab = useAppStore((s) => s.selectFileTab);
   const closeFileTab = useAppStore((s) => s.closeFileTab);
   const clearActiveFileTab = useAppStore((s) => s.clearActiveFileTab);
+  const keybindings = useAppStore((s) => s.keybindings);
+  const isMac = isMacHotkeyPlatform();
 
   // Clearing the active file tab is what makes the chat/diff tab visually
   // "win" — `AppLayout` prioritizes the file viewer whenever a workspace
@@ -400,7 +404,7 @@ export function SessionTabs({ workspaceId }: Props) {
         closeFileTab(workspaceId, path);
       }
     },
-    [workspaceId, closeFileTab],
+    [workspaceId, closeFileTab, setPendingClosePaths],
   );
 
   // Bulk variant: separate clean from dirty file paths, close clean ones
@@ -425,7 +429,7 @@ export function SessionTabs({ workspaceId }: Props) {
       }
       return true;
     },
-    [workspaceId, closeFileTab],
+    [workspaceId, closeFileTab, setPendingClosePaths],
   );
 
   // Close a list of tabs (sessions, diffs, and/or files) sequentially. Sessions
@@ -563,7 +567,7 @@ export function SessionTabs({ workspaceId }: Props) {
     (entryKey: string, x: number, y: number) => {
       setContextMenu({ entryKey, x, y });
     },
-    [],
+    [setContextMenu],
   );
 
   // Helper to activate a nav entry (session, diff, or file tab).
@@ -758,14 +762,13 @@ export function SessionTabs({ workspaceId }: Props) {
         type="button"
         className={styles.addBtn}
         onClick={handleCreate}
-        title={t("session_new")}
+        {...tooltipAttributes(t("session_new"), "global.new-tab", keybindings, isMac, "bottom")}
         aria-label={t("session_new")}
         aria-busy={creating}
         disabled={creating}
       >
         <Plus size={14} />
       </button>
-      {/* eslint-disable-next-line react-hooks/refs -- contextMenu is React state; this is a compiler false positive around memoized menu actions. */}
       {contextMenu && contextMenuItems && contextMenuEntry?.kind === "file" && (
         <FilePathContextMenu
           workspaceId={workspaceId}
@@ -781,7 +784,6 @@ export function SessionTabs({ workspaceId }: Props) {
           onClose={() => setContextMenu(null)}
         />
       )}
-      {/* eslint-disable-next-line react-hooks/refs -- contextMenu is React state; this is a compiler false positive around memoized menu actions. */}
       {contextMenu && contextMenuItems && contextMenuEntry?.kind !== "file" && (
         <AttachmentContextMenu
           x={contextMenu.x}
@@ -867,6 +869,11 @@ function SessionTab({
   const loadWorkspaceClaudeFlags = useAppStore(
     (s) => s.loadWorkspaceClaudeFlags,
   );
+  const keybindings = useAppStore((s) => s.keybindings);
+  const isMac = isMacHotkeyPlatform();
+  const closeTitle = isActive
+    ? tooltipWithHotkey(t("session_close"), "global.close-tab", keybindings, isMac)
+    : t("session_close");
 
   useEffect(() => {
     if (editing) {
@@ -995,7 +1002,8 @@ function SessionTab({
           e.stopPropagation();
           onClose();
         }}
-        title={t("session_close")}
+        data-tooltip={closeTitle}
+        data-tooltip-placement="bottom"
         aria-label={t("session_close")}
       >
         <X size={12} />
@@ -1038,6 +1046,11 @@ function FileTab({
   drag,
 }: FileTabProps) {
   const { t } = useTranslation("chat");
+  const keybindings = useAppStore((s) => s.keybindings);
+  const isMac = isMacHotkeyPlatform();
+  const closeTitle = isActive
+    ? tooltipWithHotkey(t("session_close_file"), "global.close-tab", keybindings, isMac)
+    : t("session_close_file");
   // Subscribe only to dirty state for this tab's buffer. Reading the whole
   // buffer would re-render the tab on every keystroke; reading just dirty
   // means we re-render only when it crosses the saved/unsaved boundary.
@@ -1195,7 +1208,8 @@ function FileTab({
           e.stopPropagation();
           onClose();
         }}
-        title={t("session_close_file")}
+        data-tooltip={closeTitle}
+        data-tooltip-placement="bottom"
         aria-label={t("session_close_file")}
       >
         <X size={12} />
@@ -1226,6 +1240,11 @@ function DiffTab({
   drag,
 }: DiffTabProps) {
   const { t } = useTranslation("chat");
+  const keybindings = useAppStore((s) => s.keybindings);
+  const isMac = isMacHotkeyPlatform();
+  const closeTitle = isActive
+    ? tooltipWithHotkey(t("session_close_diff"), "global.close-tab", keybindings, isMac)
+    : t("session_close_diff");
   // Show just the basename in the tab; the full path goes in the tooltip
   // (mirrors how editors label file tabs). `path.split("/").pop()` is fine
   // because diff paths come from git and use forward slashes on every
@@ -1289,7 +1308,8 @@ function DiffTab({
           e.stopPropagation();
           onClose();
         }}
-        title={t("session_close_diff")}
+        data-tooltip={closeTitle}
+        data-tooltip-placement="bottom"
         aria-label={t("session_close_diff")}
       >
         <X size={12} />

@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { CircleDollarSign, Sparkles, BookOpen } from "lucide-react";
 import { useAppStore } from "../../../stores/useAppStore";
 import { getAppSetting } from "../../../services/tauri";
+import { tooltipAttributes } from "../../../hotkeys/display";
+import { isMacHotkeyPlatform } from "../../../hotkeys/platform";
 import { ModelSelector, is1mContextModel, get1mFallback } from "../ModelSelector";
 import { buildModelRegistry } from "../modelRegistry";
 import { isFastSupported, isEffortSupported, isXhighEffortAllowed, isMaxEffortAllowed } from "../modelCapabilities";
@@ -35,6 +37,7 @@ export function ComposerToolbar({
   const modelSelectorOpen = useAppStore((s) => s.modelSelectorOpen);
   const alternativeBackendsEnabled = useAppStore((s) => s.alternativeBackendsEnabled);
   const agentBackends = useAppStore((s) => s.agentBackends);
+  const keybindings = useAppStore((s) => s.keybindings);
   const setSelectedModel = useAppStore((s) => s.setSelectedModel);
   const setFastMode = useAppStore((s) => s.setFastMode);
   const setThinkingEnabled = useAppStore((s) => s.setThinkingEnabled);
@@ -146,6 +149,7 @@ export function ComposerToolbar({
     ? `${currentModel.providerLabel} / ${currentModel.label}`
     : currentModel?.label ?? selectedModel;
   const isExtraUsage = currentModel?.extraUsage ?? false;
+  const isMac = isMacHotkeyPlatform();
 
   if (!loaded) return null;
 
@@ -178,7 +182,12 @@ export function ComposerToolbar({
         active={planMode}
         onClick={togglePlan}
         disabled={disabled}
-        title={`${planMode ? "Disable" : "Enable"} plan mode`}
+        {...tooltipAttributes(
+          `${planMode ? "Disable" : "Enable"} plan mode`,
+          "global.toggle-plan-mode",
+          keybindings,
+          isMac,
+        )}
         ariaPressed={planMode}
       />
 

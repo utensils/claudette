@@ -62,6 +62,8 @@ import { AgentQuestionCard } from "./AgentQuestionCard";
 import { PlanApprovalCard } from "./PlanApprovalCard";
 import { ScrollToBottomPill } from "./ScrollToBottomPill";
 import { useStickyScroll } from "../../hooks/useStickyScroll";
+import { tooltipWithHotkey } from "../../hotkeys/display";
+import { isMacHotkeyPlatform } from "../../hotkeys/platform";
 import styles from "./ChatPanel.module.css";
 import { shouldDisable1mContext, formatElapsedSeconds } from "./chatHelpers";
 import { ScrollContext } from "./ScrollContext";
@@ -100,12 +102,20 @@ export function ChatPanel() {
   const usageInsightsEnabled = useAppStore((s) => s.usageInsightsEnabled);
   const openSettings = useAppStore((s) => s.openSettings);
   const appVersion = useAppStore((s) => s.appVersion);
+  const keybindings = useAppStore((s) => s.keybindings);
   const slashCommandsByWorkspace = useAppStore((s) => s.slashCommandsByWorkspace);
   const setSlashCommandsCache = useAppStore((s) => s.setSlashCommands);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const processingRef = useRef<HTMLDivElement>(null);
   const [error, setError] = useState<string | null>(null);
   const [isSteeringQueued, setIsSteeringQueued] = useState(false);
+  const isMac = isMacHotkeyPlatform();
+  const steerQueuedTooltip = tooltipWithHotkey(
+    t("steer_queued"),
+    "chat.steer-immediate",
+    keybindings,
+    isMac,
+  );
 
   // Cmd/Ctrl+F search bar state. `searchQuery` flows down to message
   // renderers as the highlight trigger; an empty string short-circuits the
@@ -1406,7 +1416,7 @@ export function ChatPanel() {
                       className={styles.queuedSteer}
                       onClick={() => handleSteerQueuedMessage(message.id)}
                       disabled={isSteeringQueued || !isRunning}
-                      title={t("steer_queued")}
+                      data-tooltip={steerQueuedTooltip}
                       aria-label={t("steer_queued")}
                     >
                       {isSteeringQueued ? (

@@ -1,0 +1,16 @@
+.tooltip {
+  position: fixed;
+  z-index: 10000;
+  max-width: min(280px, calc(100vw - 16px));
+  padding: 6px 8px;
+  border: 1px solid var(--divider);
+  border-radius: var(--radius-md);
+  background: var(--chat-input-bg);
+  color: var(--text-primary);
+  box-shadow: var(--shadow-md);
+  font-size: var(--fs-sm);
+  line-height: 1.2;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  pointer-events: none;
+}

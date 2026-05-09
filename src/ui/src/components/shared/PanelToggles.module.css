@@ -14,7 +14,7 @@
   display: flex;
   align-items: center;
   position: relative;
-  overflow: hidden;
+  overflow: visible;
   transition: color var(--transition-fast), background var(--transition-fast);
 }
 

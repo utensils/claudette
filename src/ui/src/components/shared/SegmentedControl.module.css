@@ -2,7 +2,7 @@
   display: inline-flex;
   border: 1px solid var(--divider);
   border-radius: 6px;
-  overflow: hidden;
+  overflow: visible;
   background: var(--surface-subtle, transparent);
 }
 
@@ -30,8 +30,7 @@
   color: var(--text-primary);
 }
 
-/* `aria-disabled` (not native `disabled`) so the browser still fires
-   hover/focus events and the explanatory `title` tooltip can appear. */
+/* `aria-disabled` keeps hover/focus events available for AppTooltip. */
 .buttonDisabled {
   opacity: 0.5;
   cursor: not-allowed;

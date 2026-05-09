@@ -21,6 +21,7 @@
   "new_workspace": "Novo workspace",
   "settings": "Configurações",
   "help_menu_trigger": "Ajuda e recursos",
+  "jump_to_project": "Ir para o projeto {{number}}",
   "relink": "Reconectar",
   "remove": "Remover",
   "add_repository": "Adicionar repositório",

@@ -24,6 +24,9 @@ import {
   File,
 } from "lucide-react";
 import type { ThemeDefinition } from "../../types/theme";
+import { getHotkeyLabel } from "../../hotkeys/display";
+import type { KeybindingMap } from "../../hotkeys/bindings";
+import { isMacHotkeyPlatform } from "../../hotkeys/platform";
 import { MODELS } from "../chat/ModelSelector";
 import type { Model } from "../chat/modelRegistry";
 import { isFastSupported, isEffortSupported, isXhighEffortAllowed, isMaxEffortAllowed } from "../chat/modelCapabilities";
@@ -80,6 +83,7 @@ export interface CommandContext {
   zoomOut: () => void;
   resetZoom: () => void;
   close: () => void;
+  keybindings: KeybindingMap;
 
   // Theme
   themes: ThemeDefinition[];
@@ -215,10 +219,9 @@ export function buildFileCommands(
 
 export function buildCommands(ctx: CommandContext): Command[] {
   const cmds: Command[] = [];
-  const isMac = ((navigator as unknown as Record<string, unknown>).userAgentData as { platform?: string } | undefined)
-    ?.platform?.toLowerCase().startsWith("mac")
-    ?? navigator.platform.startsWith("Mac");
-  const mod = isMac ? "Cmd" : "Ctrl";
+  const isMac = isMacHotkeyPlatform();
+  const shortcut = (actionId: Parameters<typeof getHotkeyLabel>[0]) =>
+    getHotkeyLabel(actionId, ctx.keybindings, isMac) ?? undefined;
 
   // -- UI --
   cmds.push({
@@ -226,7 +229,7 @@ export function buildCommands(ctx: CommandContext): Command[] {
     name: "Toggle Sidebar",
     category: "ui",
     icon: PanelLeft,
-    shortcut: `${mod}+B`,
+    shortcut: shortcut("global.toggle-sidebar"),
     keywords: ["panel", "left", "hide", "show"],
     execute: () => { ctx.toggleSidebar(); ctx.close(); },
   });
@@ -235,7 +238,7 @@ export function buildCommands(ctx: CommandContext): Command[] {
     name: "Toggle Terminal",
     category: "ui",
     icon: Terminal,
-    shortcut: `${mod}+\``,
+    shortcut: shortcut("global.toggle-terminal-panel"),
     keywords: ["shell", "console", "pty"],
     execute: () => { ctx.toggleTerminalPanel(); ctx.close(); },
   });
@@ -244,7 +247,7 @@ export function buildCommands(ctx: CommandContext): Command[] {
     name: "Toggle Changes Panel",
     category: "ui",
     icon: GitCompare,
-    shortcut: `${mod}+D`,
+    shortcut: shortcut("global.toggle-right-sidebar"),
     keywords: ["diff", "files", "right sidebar"],
     execute: () => { ctx.toggleRightSidebar(); ctx.close(); },
   });
@@ -254,7 +257,7 @@ export function buildCommands(ctx: CommandContext): Command[] {
     description: "Increase UI font size",
     category: "ui",
     icon: ZoomIn,
-    shortcut: `${mod}+=`,
+    shortcut: shortcut("global.increase-ui-font"),
     keywords: ["zoom", "larger", "bigger", "font", "size"],
     execute: () => { ctx.zoomIn(); ctx.close(); },
   });
@@ -264,7 +267,7 @@ export function buildCommands(ctx: CommandContext): Command[] {
     description: "Decrease UI font size",
     category: "ui",
     icon: ZoomOut,
-    shortcut: `${mod}+-`,
+    shortcut: shortcut("global.decrease-ui-font"),
     keywords: ["zoom", "smaller", "font", "size"],
     execute: () => { ctx.zoomOut(); ctx.close(); },
   });
@@ -287,7 +290,6 @@ export function buildCommands(ctx: CommandContext): Command[] {
       name: `${ctx.thinkingEnabled ? "Disable" : "Enable"} Thinking Mode`,
       category: "agent",
       icon: Brain,
-      shortcut: `${mod}+T`,
       keywords: ["think", "reasoning", "extended"],
       execute: () => {
         const next = !ctx.thinkingEnabled;
@@ -301,6 +303,7 @@ export function buildCommands(ctx: CommandContext): Command[] {
       name: `${ctx.planMode ? "Disable" : "Enable"} Plan Mode`,
       category: "agent",
       icon: BookOpen,
+      shortcut: shortcut("global.toggle-plan-mode"),
       keywords: ["planning", "architect"],
       execute: () => { ctx.setPlanMode(sessId, !ctx.planMode); ctx.close(); },
     });
@@ -399,7 +402,7 @@ export function buildCommands(ctx: CommandContext): Command[] {
       description: "Browse and open a workspace file",
       category: "navigation",
       icon: FolderOpen,
-      shortcut: `${mod}+O`,
+      shortcut: shortcut("global.open-command-palette-file-mode"),
       keywords: ["file", "open", "browse", "search", "viewer", "editor"],
       execute: () => { ctx.enterFileMode(); },
     });
@@ -409,7 +412,7 @@ export function buildCommands(ctx: CommandContext): Command[] {
     name: "Switch Workspace",
     category: "navigation",
     icon: Layers,
-    shortcut: `${mod}+K`,
+    shortcut: shortcut("global.toggle-fuzzy-finder"),
     keywords: ["find", "search", "fuzzy"],
     execute: () => { ctx.close(); ctx.toggleFuzzyFinder(); },
   });
@@ -420,6 +423,7 @@ export function buildCommands(ctx: CommandContext): Command[] {
     name: "Open Settings",
     category: "settings",
     icon: Settings,
+    shortcut: shortcut("global.open-settings"),
     keywords: ["preferences", "config", "options"],
     execute: () => { ctx.openSettings(); ctx.close(); },
   });

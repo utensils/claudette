@@ -25,6 +25,7 @@ function makeContext(overrides: Partial<CommandContext> = {}): CommandContext {
     zoomOut: vi.fn(),
     resetZoom: vi.fn(),
     close: vi.fn(),
+    keybindings: {},
     themes: [],
     applyThemeById: vi.fn(),
     enterThemeMode: vi.fn(),
@@ -109,9 +110,20 @@ describe("buildCommands — zoom commands", () => {
   it("zoom commands have shortcut labels", () => {
     const zoomIn = cmds.find((c) => c.id === "zoom-in");
     const zoomOut = cmds.find((c) => c.id === "zoom-out");
-    // Should contain either Cmd or Ctrl depending on platform
-    expect(zoomIn!.shortcut).toMatch(/\+=/);
-    expect(zoomOut!.shortcut).toMatch(/\+-/);
+    expect(zoomIn!.shortcut).toContain("=");
+    expect(zoomOut!.shortcut).toContain("-");
+  });
+
+  it("uses customized shortcut labels", () => {
+    const testCtx = makeContext({
+      keybindings: {
+        "global.toggle-sidebar": "mod+shift+b",
+        "global.toggle-terminal-panel": null,
+      },
+    });
+    const testCmds = buildCommands(testCtx);
+    expect(testCmds.find((c) => c.id === "toggle-sidebar")!.shortcut).toBe("⌘⇧B");
+    expect(testCmds.find((c) => c.id === "toggle-terminal")!.shortcut).toBeUndefined();
   });
 });
 

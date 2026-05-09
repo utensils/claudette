@@ -98,6 +98,7 @@ export function CommandPalette() {
   const clearAgentQuestion = useAppStore((s) => s.clearAgentQuestion);
   const clearPlanApproval = useAppStore((s) => s.clearPlanApproval);
   const openFileTab = useAppStore((s) => s.openFileTab);
+  const keybindings = useAppStore((s) => s.keybindings);
   const commandPaletteInitialMode = useAppStore((s) => s.commandPaletteInitialMode);
   const clearCommandPaletteInitialMode = useAppStore((s) => s.clearCommandPaletteInitialMode);
 
@@ -302,6 +303,7 @@ export function CommandPalette() {
         zoomOut: () => adjustUiFontSize(-1),
         resetZoom: () => resetUiFontSize(),
         close,
+        keybindings,
         themes,
         applyThemeById,
         enterThemeMode,
@@ -329,7 +331,7 @@ export function CommandPalette() {
         updateWorkspace: (id: string, updates: Record<string, unknown>) => updateWorkspace(id, updates),
       }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [themes, selectedWorkspaceId, selectedSessionId, currentRepoId, thinkingEnabled, planMode, fastMode, effortLevel, selectedModel, enterThemeMode, enterFileMode, applyThemeById, handleCreateWorkspace],
+    [themes, selectedWorkspaceId, selectedSessionId, currentRepoId, thinkingEnabled, planMode, fastMode, effortLevel, selectedModel, keybindings, enterThemeMode, enterFileMode, applyThemeById, handleCreateWorkspace],
   );
 
   // Build sub-menu command lists
