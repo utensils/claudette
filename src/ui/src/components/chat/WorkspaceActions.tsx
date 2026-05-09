@@ -52,7 +52,7 @@ function renderCategoryIcon(category: AppCategory) {
   }
 }
 
-function AppIcon({ app }: { app: DetectedApp }) {
+export function AppIcon({ app }: { app: DetectedApp }) {
   if (app.icon_data_url) {
     return (
       <img

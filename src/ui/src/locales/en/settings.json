@@ -68,6 +68,12 @@
   "general_update_check_failed": "Update check failed. Please try again later.",
   "attribution": "Claudette is not affiliated with Anthropic. Claude® and Claude Code® are trademarks of Anthropic, PBC.",
 
+  "workspace_apps_default_terminal": "Default terminal",
+  "workspace_apps_default_terminal_desc": "Used by Open in Terminal from workspace menus.",
+  "workspace_apps_terminal_auto": "Auto",
+  "workspace_apps_terminal_auto_desc": "Use the first detected terminal app.",
+  "workspace_apps_no_terminals": "No terminal apps detected.",
+
   "appearance_title": "Appearance",
   "appearance_follow_system": "Follow system",
   "appearance_follow_system_desc": "Automatically switch themes based on your OS setting",
