@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
@@ -41,11 +41,23 @@ export function DiagnosticsSettings() {
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
   const [copied, setCopied] = useState(false);
+  // Pending "Copied!" hide-timer. Held in a ref so we can clear it on
+  // unmount (or on a second click that re-arms the timer) without
+  // letting the previous setTimeout flip `copied` on a torn-down tree.
+  const copiedTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
     invoke<DiagnosticsSettingsPayload>("get_diagnostics_settings")
       .then(setSettings)
       .catch((e) => setError(String(e)));
+    // On unmount, cancel any in-flight `Copied!` reset so React
+    // doesn't see a `setCopied(false)` on a stale component.
+    return () => {
+      if (copiedTimerRef.current !== null) {
+        window.clearTimeout(copiedTimerRef.current);
+        copiedTimerRef.current = null;
+      }
+    };
   }, []);
 
   const updateLogLevel = async (value: string) => {
@@ -99,7 +111,16 @@ export function DiagnosticsSettings() {
     try {
       await writeText(settings.log_dir);
       setCopied(true);
-      window.setTimeout(() => setCopied(false), 1500);
+      // Clear any prior pending reset so a rapid second click extends
+      // the affordance instead of two timers racing. The cleanup in
+      // the boot effect cancels whatever survives an unmount.
+      if (copiedTimerRef.current !== null) {
+        window.clearTimeout(copiedTimerRef.current);
+      }
+      copiedTimerRef.current = window.setTimeout(() => {
+        copiedTimerRef.current = null;
+        setCopied(false);
+      }, 1500);
     } catch (e) {
       setError(String(e));
     }

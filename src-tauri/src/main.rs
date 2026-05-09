@@ -96,17 +96,25 @@ fn warn_if_concurrent_dev_instance(db_path: &Path) {
     }
 
     for (pid, cwd) in &peers {
+        // We can only confirm the peer is a live Claudette dev process
+        // (matched by discovery file + alive PID) — the discovery JSON
+        // doesn't currently include a DB path, so whether it's the
+        // *same* DB as ours is inferred, not verified. By default both
+        // launches resolve `dirs::data_dir()/claudette/claudette.db`,
+        // so the inference is right in the common case; the wording
+        // hedges so the warning stays accurate if a future dev launch
+        // ever isolates `CLAUDETTE_DATA_DIR` per-instance.
         tracing::warn!(
             target: "claudette::startup",
             our_pid,
             peer_pid = pid,
             peer_cwd = %cwd,
-            db_path = %db_path.display(),
-            "another Claudette dev instance is alive against the same DB \
-             — concurrent SQLite writers can cross-pollute chat_messages \
-             rows and corrupt resumed Claude CLI transcripts; consider \
-             setting CLAUDETTE_LOG_DIR (and a per-instance data dir) \
-             before continuing"
+            our_db_path = %db_path.display(),
+            "another Claudette dev instance is alive — if it's running \
+             against the same DB (the default unless CLAUDETTE_DATA_DIR \
+             is overridden), concurrent SQLite writers can cross-pollute \
+             chat_messages rows and corrupt resumed Claude CLI transcripts; \
+             consider setting a per-instance data dir before continuing"
         );
     }
 }
@@ -133,9 +141,13 @@ fn is_pid_alive(_pid: u32) -> bool {
     // Windows has its own ergonomics for liveness probing
     // (`OpenProcess` + `GetExitCodeProcess`). The dev-launcher
     // discovery file is currently only written on macOS/Linux by
-    // `scripts/dev.sh`, so a true cross-platform implementation can
-    // follow when the launcher gains a Windows analog.
-    true
+    // `scripts/dev.sh`, so until the launcher gains a Windows
+    // analog populated discovery files won't appear here. Return
+    // `false` so any stray stale file (e.g. from a copied home
+    // directory) doesn't trigger a "another dev instance is alive"
+    // warning for a PID that isn't actually running. A real
+    // Windows probe can replace this when the launcher does.
+    false
 }
 
 /// Install a panic hook that emits the panic through `tracing` (so it

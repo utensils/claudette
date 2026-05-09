@@ -137,7 +137,14 @@ function formatConsoleArgs(args: unknown[]): { message: string; stack?: string }
     }
     if (typeof arg === "string") return arg;
     try {
-      return JSON.stringify(arg);
+      // `JSON.stringify` returns `undefined` (not a string) for
+      // bare `undefined`, function values, and symbols. Fall through
+      // to `String(arg)` in that case so the resulting `parts.join(" ")`
+      // still has something to show — otherwise these args become
+      // empty segments and the whole event can be dropped by the
+      // `if (!message && !stack) return` guard at the call site.
+      const json = JSON.stringify(arg);
+      return typeof json === "string" ? json : String(arg);
     } catch {
       return String(arg);
     }
@@ -188,7 +195,13 @@ function installEarlyListeners(): void {
       message = reason;
     } else {
       try {
-        message = JSON.stringify(reason);
+        // Same trap as `formatConsoleArgs`: `JSON.stringify` returns
+        // `undefined` for bare `undefined`, functions, and symbols.
+        // A non-string `message` would fail Tauri serde validation
+        // and the rejection would be lost — coerce to `String(reason)`
+        // when stringify can't produce a string.
+        const json = JSON.stringify(reason);
+        message = typeof json === "string" ? json : String(reason);
       } catch {
         message = String(reason);
       }
