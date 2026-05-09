@@ -489,27 +489,121 @@
   flex-direction: column;
 }
 
+.turnEditFile {
+  border-top: 1px solid var(--divider);
+}
+
+.turnEditFile:first-child {
+  border-top: none;
+}
+
 .turnEditFileRow {
   display: flex;
   align-items: center;
   gap: 8px;
+  width: 100%;
   min-width: 0;
   padding: 7px 10px;
-  border-top: 1px solid var(--divider);
+  border: none;
+  background: transparent;
   color: var(--text-dim);
   font-family: var(--font-mono);
   font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--transition-fast), color var(--transition-fast);
 }
 
-.turnEditFileRow:first-child {
-  border-top: none;
+.turnEditFileRow:hover:not(:disabled) {
+  background: var(--hover-bg-subtle);
+  color: var(--text-primary);
+}
+
+.turnEditFileRow:disabled {
+  cursor: default;
+  opacity: 1;
 }
 
 .turnEditFilePath {
   min-width: 0;
+  flex: 1;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.turnEditFileChevron {
+  display: inline-flex;
+  flex: 0 0 auto;
+  color: var(--text-faint);
+}
+
+.turnEditDiffPreview {
+  overflow: hidden;
+  border-top: 1px solid var(--divider);
+  background: var(--chat-bg);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.55;
+  animation: editDiffReveal 0.16s ease-out;
+}
+
+.turnEditDiffState {
+  border-top: 1px solid var(--divider);
+  padding: 8px 10px;
+  background: var(--chat-bg);
+  color: var(--text-faint);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  animation: editDiffReveal 0.16s ease-out;
+}
+
+.turnEditDiffLine {
+  display: grid;
+  grid-template-columns: 44px 44px 18px minmax(0, 1fr);
+  min-height: 22px;
+  color: var(--text-dim);
+}
+
+.turnEditDiffLineAdded {
+  background: var(--diff-added-bg);
+}
+
+.turnEditDiffLineRemoved {
+  background: var(--diff-removed-bg);
+}
+
+.turnEditDiffLineNumber {
+  padding-right: 8px;
+  text-align: right;
+  color: var(--diff-line-number);
+  user-select: none;
+  border-right: 1px solid var(--divider);
+}
+
+.turnEditDiffPrefix {
+  text-align: center;
+  color: var(--text-faint);
+}
+
+.turnEditDiffLineAdded .turnEditDiffPrefix {
+  color: var(--diff-added-text);
+  font-weight: 600;
+}
+
+.turnEditDiffLineRemoved .turnEditDiffPrefix {
+  color: var(--diff-removed-text);
+  font-weight: 600;
+}
+
+.turnEditDiffContent {
+  min-width: 0;
+  padding-left: 4px;
+  overflow: hidden;
+  color: var(--text-primary);
+  font: inherit;
+  text-overflow: ellipsis;
+  white-space: pre;
 }
 
 .inlineEditSummary {
@@ -549,12 +643,60 @@
   font-variant-numeric: tabular-nums;
 }
 
+.changeStatsValue {
+  display: inline-block;
+  animation-duration: 0.24s;
+  animation-timing-function: ease-out;
+  animation-fill-mode: both;
+}
+
+.changeStatsValueUp {
+  animation-name: changeStatRise;
+}
+
+.changeStatsValueDown {
+  animation-name: changeStatDrop;
+}
+
 .changeStatsAdded {
   color: var(--diff-added-text);
 }
 
 .changeStatsRemoved {
   color: var(--diff-removed-text);
+}
+
+@keyframes changeStatRise {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes changeStatDrop {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes editDiffReveal {
+  from {
+    opacity: 0;
+    transform: translateY(-3px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 .taskProgressBar {

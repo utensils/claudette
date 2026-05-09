@@ -463,6 +463,78 @@ describe("ToolActivitiesSection", () => {
     expect(container.textContent).toContain("src/app.ts");
     expect(container.textContent).toContain("+2");
     expect(container.textContent).toContain("-1");
+    expect(container.textContent).not.toContain("old");
+
+    const row = container.querySelector(
+      "button[aria-expanded]",
+    ) as HTMLButtonElement;
+    expect(row).toBeTruthy();
+    expect(row.getAttribute("aria-expanded")).toBe("false");
+
+    await act(async () => {
+      row.click();
+    });
+
+    expect(row.getAttribute("aria-expanded")).toBe("true");
+    expect(container.textContent).toContain("old");
+    expect(container.textContent).toContain("new");
+    expect(container.textContent).toContain("next");
+  });
+
+  it("renders completed-turn workspace diff fallback when activities have no edit payload", async () => {
+    const container = await render(
+      <TurnSummary
+        turn={{
+          id: "turn-1",
+          activities: [],
+          messageCount: 1,
+          collapsed: false,
+          afterMessageIndex: 1,
+        }}
+        collapsed={false}
+        onToggle={() => {}}
+        assistantText=""
+        searchQuery=""
+        worktreePath="/repo"
+        editSummaryOverride={{
+          added: 9,
+          removed: 2,
+          files: [
+            {
+              filePath: "/repo/src/app.ts",
+              added: 9,
+              removed: 2,
+              previewLines: [],
+            },
+          ],
+        }}
+        onLoadEditPreview={async () => [
+          {
+            type: "added",
+            oldLineNumber: null,
+            newLineNumber: 12,
+            content: "const next = true;",
+          },
+        ]}
+      />,
+    );
+
+    expect(container.textContent).toContain("1 file changed");
+    expect(container.textContent).toContain("src/app.ts");
+    expect(container.textContent).toContain("+9");
+    expect(container.textContent).toContain("-2");
+
+    const row = container.querySelector(
+      "button[aria-expanded]",
+    ) as HTMLButtonElement;
+    expect(row).toBeTruthy();
+
+    await act(async () => {
+      row.click();
+    });
+
+    expect(row.getAttribute("aria-expanded")).toBe("true");
+    expect(container.textContent).toContain("const next = true;");
   });
 });
 

@@ -1,3 +1,4 @@
+import { useMemo } from "react";
 import type { CompletedTurn, ToolActivity } from "../../stores/useAppStore";
 import type { TaskTrackerResult } from "../../hooks/useTaskTracker";
 import { relativizePath } from "../../hooks/toolSummary";
@@ -14,6 +15,8 @@ import { AgentToolCallGroup } from "./AgentToolCallGroup";
 import { isAgentActivity } from "./toolActivityGroups";
 import { InlineEditSummary, TurnEditSummaryCard } from "./EditChangeSummary";
 import {
+  type EditPreviewLine,
+  type EditSummary,
   summarizeToolActivityEdit,
   summarizeTurnEdits,
 } from "./editActivitySummary";
@@ -35,6 +38,8 @@ export function TurnSummary({
   worktreePath,
   label,
   inline = false,
+  editSummaryOverride,
+  onLoadEditPreview,
 }: {
   turn: CompletedTurn;
   activities?: ToolActivity[];
@@ -57,6 +62,8 @@ export function TurnSummary({
   worktreePath?: string | null;
   label?: string;
   inline?: boolean;
+  editSummaryOverride?: EditSummary | null;
+  onLoadEditPreview?: (filePath: string) => Promise<EditPreviewLine[]>;
 }) {
   const visibleActivities = activities ?? turn.activities;
   const hasElapsed = typeof turn.durationMs === "number" && turn.durationMs > 0;
@@ -67,7 +74,13 @@ export function TurnSummary({
   const hasRollback = !!onRollback;
   const shouldShowFooter =
     showFooter && (hasElapsed || hasTokens || hasCopy || hasFork || hasRollback);
-  const editSummary = showFooter ? summarizeTurnEdits(turn.activities) : null;
+  const activityEditSummary = useMemo(
+    () => (showFooter ? summarizeTurnEdits(turn.activities) : null),
+    [showFooter, turn.activities],
+  );
+  const editSummary = showFooter
+    ? editSummaryOverride ?? activityEditSummary
+    : null;
 
   // Force-expand if the query matches in any activity summary or the
   // resolved tool-summary fallback. Without this, marks would land in
@@ -167,6 +180,7 @@ export function TurnSummary({
           summary={editSummary}
           searchQuery={searchQuery}
           worktreePath={worktreePath}
+          onLoadPreview={onLoadEditPreview}
         />
       )}
       {shouldShowFooter && (

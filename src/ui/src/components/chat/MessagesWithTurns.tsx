@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next";
 import { useAppStore } from "../../stores/useAppStore";
 import type { ToolDisplayMode } from "../../stores/slices/settingsSlice";
 import type { CompletedTurn, ToolActivity } from "../../stores/useAppStore";
-import { loadAttachmentData } from "../../services/tauri";
+import { loadAttachmentData, loadFileDiff } from "../../services/tauri";
 import type { ChatMessage, ChatAttachment } from "../../types/chat";
 import { roleClassKey, shouldRenderAsMarkdown } from "./messageRendering";
 import { HighlightedMessageMarkdown } from "./HighlightedMessageMarkdown";
@@ -43,7 +43,11 @@ import { TurnSummary } from "./TurnSummary";
 import { ToolActivitiesSection } from "./ToolActivitiesSection";
 import { TurnFooter } from "./TurnFooter";
 import { TurnEditSummaryCard } from "./EditChangeSummary";
-import { summarizeTurnEdits } from "./editActivitySummary";
+import {
+  previewLinesFromFileDiff,
+  summarizeDiffFiles,
+  summarizeTurnEdits,
+} from "./editActivitySummary";
 import { PdfThumbnail } from "./PdfThumbnail";
 import { MessageCopyButton } from "./MessageCopyButton";
 import { groupToolActivitiesForDisplay } from "./toolActivityGroups";
@@ -145,6 +149,8 @@ export const MessagesWithTurns = memo(function MessagesWithTurns({
   const worktreePath = useAppStore(
     (s) => s.workspaces.find((w) => w.id === workspaceId)?.worktree_path,
   );
+  const diffFiles = useAppStore((s) => s.diffFiles);
+  const diffMergeBase = useAppStore((s) => s.diffMergeBase);
   const liveToolActivities = useAppStore(
     (s) => s.toolActivities[sessionId] ?? EMPTY_ACTIVITIES,
   );
@@ -419,6 +425,28 @@ export const MessagesWithTurns = memo(function MessagesWithTurns({
     return map;
   }, [completedTurns, findTriggeringUserIdx, messages, globalOffset]);
 
+  const editSummaryByTurnId = useMemo(() => {
+    const map = new Map<string, ReturnType<typeof summarizeTurnEdits>>();
+    for (const turn of completedTurns) {
+      map.set(turn.id, summarizeTurnEdits(turn.activities));
+    }
+    return map;
+  }, [completedTurns]);
+  const workspaceDiffSummary = useMemo(
+    () => summarizeDiffFiles(diffFiles),
+    [diffFiles],
+  );
+  const latestCompletedTurnId =
+    completedTurns[completedTurns.length - 1]?.id ?? null;
+  const loadWorkspaceDiffPreview = useCallback(
+    async (filePath: string) => {
+      if (!worktreePath || !diffMergeBase) return [];
+      const diff = await loadFileDiff(worktreePath, diffMergeBase, filePath);
+      return previewLinesFromFileDiff(diff);
+    },
+    [diffMergeBase, worktreePath],
+  );
+
   // Per-turn rollback data, keyed by turn.id. Completed turns are only
   // persisted for tool-using turns, so the triggering user is the nearest
   // user message before the completed turn boundary.
@@ -533,6 +561,9 @@ export const MessagesWithTurns = memo(function MessagesWithTurns({
     return (
       <>
         {groupEntries.map(({ turn, globalIdx, activities, label, showFooter }) => {
+          const isLatestCompletedTurn = turn.id === latestCompletedTurnId;
+          const fallbackEditSummary =
+            showFooter && isLatestCompletedTurn ? workspaceDiffSummary : null;
           // A single turn can produce multiple display groups when
           // chronologically-interleaved messages split its activities;
           // each group needs its own collapse state so clicking one
@@ -593,11 +624,20 @@ export const MessagesWithTurns = memo(function MessagesWithTurns({
               onRollback={showFooter ? buildOnRollback(turn.id) : undefined}
               searchQuery={searchQuery}
               worktreePath={worktreePath}
+              editSummaryOverride={fallbackEditSummary}
+              onLoadEditPreview={
+                fallbackEditSummary ? loadWorkspaceDiffPreview : undefined
+              }
             />
           );
         })}
         {footerEntries.map(({ turn }) => {
-          const editSummary = summarizeTurnEdits(turn.activities);
+          const isLatestCompletedTurn = turn.id === latestCompletedTurnId;
+          const workspaceSummary = isLatestCompletedTurn
+            ? workspaceDiffSummary
+            : null;
+          const editSummary =
+            workspaceSummary ?? editSummaryByTurnId.get(turn.id) ?? null;
           return (
             <React.Fragment key={`${turn.id}:${position}:footer`}>
               {editSummary && (
@@ -605,6 +645,9 @@ export const MessagesWithTurns = memo(function MessagesWithTurns({
                   summary={editSummary}
                   searchQuery={searchQuery}
                   worktreePath={worktreePath}
+                  onLoadPreview={
+                    workspaceSummary ? loadWorkspaceDiffPreview : undefined
+                  }
                 />
               )}
               <TurnFooter
