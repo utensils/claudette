@@ -460,6 +460,13 @@ describe("ToolActivitiesSection", () => {
     );
 
     expect(container.textContent).toContain("1 file changed");
+
+    // File list is collapsed by default — expand it first.
+    const summaryHeader = container.querySelector(
+      `button.${styles.turnEditSummaryHeader}`,
+    ) as HTMLButtonElement;
+    await act(async () => { summaryHeader.click(); });
+
     expect(container.textContent).toContain("src/app.ts");
     expect(container.textContent).toContain("+2");
     expect(container.textContent).toContain("-1");
@@ -520,6 +527,13 @@ describe("ToolActivitiesSection", () => {
     );
 
     expect(container.textContent).toContain("1 file changed");
+
+    // File list is collapsed by default — expand it first.
+    const summaryHeader = container.querySelector(
+      `button.${styles.turnEditSummaryHeader}`,
+    ) as HTMLButtonElement;
+    await act(async () => { summaryHeader.click(); });
+
     expect(container.textContent).toContain("src/app.ts");
     expect(container.textContent).toContain("+9");
     expect(container.textContent).toContain("-2");
