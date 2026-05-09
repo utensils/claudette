@@ -985,15 +985,14 @@ select:disabled {
   box-shadow: 0 0 0 2px rgba(var(--accent-primary-rgb), 0.5);
 }
 
-/* Scrollbars — use the OS overlay scrollbars on macOS; keep a compact custom
-   gutter on Windows/Linux where always-visible bars are more common. */
-html:not([data-platform="mac"]) *::-webkit-scrollbar { width: 8px; height: 8px; }
-html:not([data-platform="mac"]) *::-webkit-scrollbar-track { background: transparent; }
-html:not([data-platform="mac"]) *::-webkit-scrollbar-thumb {
+/* Scrollbars — thin, dim by default, accent on hover */
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
   background: var(--hover-bg);
   border-radius: var(--radius-sm);
 }
-html:not([data-platform="mac"]) *::-webkit-scrollbar-thumb:hover {
+::-webkit-scrollbar-thumb:hover {
   background: rgba(var(--accent-primary-rgb), 0.25);
 }
 

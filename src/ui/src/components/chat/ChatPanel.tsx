@@ -64,6 +64,7 @@ import { ScrollToBottomPill } from "./ScrollToBottomPill";
 import { useStickyScroll } from "../../hooks/useStickyScroll";
 import { tooltipWithHotkey } from "../../hotkeys/display";
 import { isMacHotkeyPlatform } from "../../hotkeys/platform";
+import { usePreventScrollBounce } from "../../hooks/usePreventScrollBounce";
 import styles from "./ChatPanel.module.css";
 import { shouldDisable1mContext, formatElapsedSeconds } from "./chatHelpers";
 import { ScrollContext } from "./ScrollContext";
@@ -292,6 +293,7 @@ export function ChatPanel() {
   // Sticky scroll: auto-follow when at bottom, stop when user scrolls up.
   const { isAtBottom, scrollToBottom, handleContentChanged } =
     useStickyScroll(messagesContainerRef);
+  usePreventScrollBounce(messagesContainerRef);
 
   // Memoize context value to avoid re-rendering StreamingMessage on every parent render.
   const scrollContextValue = useMemo(
