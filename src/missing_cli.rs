@@ -163,22 +163,41 @@ pub fn guidance_for(tool: &str) -> MissingCli {
 }
 
 fn claude_options() -> Vec<InstallOption> {
-    let mut opts = vec![InstallOption::cmd(
-        "Install with npm",
-        "npm install -g @anthropic-ai/claude-code",
-    )];
     if cfg!(target_os = "windows") {
-        opts.push(InstallOption::link(
-            "Official installer",
-            "https://claude.com/product/claude-code",
-        ));
+        vec![
+            InstallOption::cmd(
+                "Install with PowerShell (recommended)",
+                "irm https://claude.ai/install.ps1 | iex",
+            ),
+            InstallOption::cmd(
+                "Install with CMD",
+                "curl -fsSL https://claude.ai/install.cmd -o install.cmd && install.cmd && del install.cmd",
+            ),
+            InstallOption::cmd(
+                "Install with npm",
+                "npm install -g @anthropic-ai/claude-code",
+            ),
+            InstallOption::link(
+                "Installation guide",
+                "https://code.claude.com/docs/en/setup",
+            ),
+        ]
     } else {
-        opts.push(InstallOption::link(
-            "Installation guide",
-            "https://docs.claude.com/en/docs/claude-code/setup",
-        ));
+        vec![
+            InstallOption::cmd(
+                "Install (recommended)",
+                "curl -fsSL https://claude.ai/install.sh | bash",
+            ),
+            InstallOption::cmd(
+                "Install with npm",
+                "npm install -g @anthropic-ai/claude-code",
+            ),
+            InstallOption::link(
+                "Installation guide",
+                "https://code.claude.com/docs/en/setup",
+            ),
+        ]
     }
-    opts
 }
 
 fn git_options() -> Vec<InstallOption> {
