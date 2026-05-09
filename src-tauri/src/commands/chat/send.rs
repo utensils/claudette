@@ -1228,6 +1228,19 @@ pub async fn steer_queued_chat_message(
 
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
+#[tracing::instrument(
+    target = "claudette::chat",
+    skip(content, mentioned_files, attachments, app, state),
+    fields(
+        chat_session_id = %session_id,
+        message_id = message_id.as_deref(),
+        permission_level = permission_level.as_deref(),
+        plan_mode = plan_mode.unwrap_or(false),
+        backend_id = backend_id.as_deref(),
+        // Filled in once we resolve the chat_session row below.
+        workspace_id = tracing::field::Empty,
+    ),
+)]
 pub async fn send_chat_message(
     session_id: String,
     message_id: Option<String>,
@@ -1258,6 +1271,11 @@ pub async fn send_chat_message(
         .as_deref()
         .is_some_and(|sid| !sid.trim().is_empty());
     let workspace_id = chat_session.workspace_id.clone();
+    // Now that we know which workspace this turn belongs to, stamp it
+    // into the enclosing span so every nested event (DB write, MCP
+    // supervision, broadcast emit) inherits both `chat_session_id` and
+    // `workspace_id` without re-passing them through helpers.
+    tracing::Span::current().record("workspace_id", workspace_id.as_str());
     let _is_first_session = chat_session.sort_order == 0;
     let session_name_already_edited = chat_session.name_edited;
 

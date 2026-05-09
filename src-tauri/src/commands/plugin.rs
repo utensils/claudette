@@ -57,6 +57,11 @@ pub async fn list_plugin_marketplaces(
 }
 
 #[tauri::command]
+#[tracing::instrument(
+    target = "claudette::plugin",
+    skip(app, state),
+    fields(target = %target, scope = ?scope, repo_id = repo_id.as_deref()),
+)]
 pub async fn install_plugin(
     target: String,
     scope: PluginScope,
@@ -77,6 +82,16 @@ pub async fn install_plugin(
 }
 
 #[tauri::command]
+#[tracing::instrument(
+    target = "claudette::plugin",
+    skip(app, state),
+    fields(
+        plugin_id = %plugin_id,
+        scope = ?scope,
+        keep_data = keep_data.unwrap_or(false),
+        repo_id = repo_id.as_deref(),
+    ),
+)]
 pub async fn uninstall_plugin(
     plugin_id: String,
     scope: PluginScope,

@@ -29,6 +29,11 @@ pub struct CreateWorkspaceResult {
 }
 
 #[tauri::command]
+#[tracing::instrument(
+    target = "claudette::workspace",
+    skip(app, state),
+    fields(repo_id = %repo_id, workspace_name = %name, skip_setup = skip_setup.unwrap_or(false)),
+)]
 pub async fn create_workspace(
     repo_id: String,
     name: String,
@@ -129,6 +134,11 @@ pub struct ForkWorkspaceResult {
 }
 
 #[tauri::command]
+#[tracing::instrument(
+    target = "claudette::workspace",
+    skip(app, state),
+    fields(workspace_id = %workspace_id, checkpoint_id = %checkpoint_id),
+)]
 pub async fn fork_workspace_at_checkpoint(
     workspace_id: String,
     checkpoint_id: String,
@@ -244,6 +254,11 @@ async fn resolve_env_for_workspace(
 }
 
 #[tauri::command]
+#[tracing::instrument(
+    target = "claudette::workspace",
+    skip(app, state, supervisor),
+    fields(workspace_id = %id, skip_archive_script = skip_archive_script.unwrap_or(false)),
+)]
 pub async fn archive_workspace(
     id: String,
     skip_archive_script: Option<bool>,
@@ -463,6 +478,11 @@ pub(crate) async fn archive_workspace_inner(
 }
 
 #[tauri::command]
+#[tracing::instrument(
+    target = "claudette::workspace",
+    skip(app, state),
+    fields(workspace_id = %id),
+)]
 pub async fn restore_workspace(
     id: String,
     app: AppHandle,
@@ -499,6 +519,11 @@ pub async fn restore_workspace(
 }
 
 #[tauri::command]
+#[tracing::instrument(
+    target = "claudette::workspace",
+    skip(app, state, supervisor),
+    fields(workspace_id = %id),
+)]
 pub async fn delete_workspace(
     id: String,
     app: AppHandle,
@@ -576,6 +601,11 @@ pub async fn delete_workspace(
 }
 
 #[tauri::command]
+#[tracing::instrument(
+    target = "claudette::workspace",
+    skip(app, state),
+    fields(workspace_id = %id, new_name = %new_name),
+)]
 pub async fn rename_workspace(
     id: String,
     new_name: String,

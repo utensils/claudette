@@ -55,6 +55,18 @@ impl PersistentSession {
     /// argument. Turns are sent via [`send_turn`] which writes `SDKUserMessage`
     /// lines to stdin.
     #[allow(clippy::too_many_arguments)]
+    #[tracing::instrument(
+        level = "debug",
+        target = "claudette::agent",
+        skip_all,
+        fields(
+            working_dir = %working_dir.display(),
+            session_id = %session_id,
+            is_resume,
+            allowed_tools_count = allowed_tools.len(),
+            has_custom_instructions = custom_instructions.is_some(),
+        ),
+    )]
     pub async fn start(
         working_dir: &Path,
         session_id: &str,

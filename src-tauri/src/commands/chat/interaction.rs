@@ -7,6 +7,11 @@ use claudette::agent::PersistentSession;
 use crate::state::{AgentSessionState, AppState, PendingPermission};
 
 #[tauri::command]
+#[tracing::instrument(
+    target = "claudette::chat",
+    skip(app, state),
+    fields(chat_session_id = %session_id),
+)]
 pub async fn clear_attention(
     session_id: String,
     app: tauri::AppHandle,
@@ -34,6 +39,11 @@ pub async fn clear_attention(
 /// original tool input as `updatedInput`. The CLI then runs the tool's
 /// `call(updatedInput)` which produces the real tool_result.
 #[tauri::command]
+#[tracing::instrument(
+    target = "claudette::chat",
+    skip(answers, annotations, state),
+    fields(chat_session_id = %session_id, tool_use_id = %tool_use_id),
+)]
 pub async fn submit_agent_answer(
     session_id: String,
     tool_use_id: String,
@@ -106,6 +116,11 @@ pub async fn submit_agent_answer(
 /// `call()` will save the plan and emit the real tool_result).
 /// `approved=false` → deny with the given reason (or a sensible default).
 #[tauri::command]
+#[tracing::instrument(
+    target = "claudette::chat",
+    skip(reason, state),
+    fields(chat_session_id = %session_id, tool_use_id = %tool_use_id, approved),
+)]
 pub async fn submit_plan_approval(
     session_id: String,
     tool_use_id: String,

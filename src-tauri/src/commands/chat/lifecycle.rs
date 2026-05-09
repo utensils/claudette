@@ -42,6 +42,11 @@ fn take_stop_snapshot(session: &mut AgentSessionState) -> StopSnapshot {
 }
 
 #[tauri::command]
+#[tracing::instrument(
+    target = "claudette::chat",
+    skip(app, state),
+    fields(chat_session_id = %session_id),
+)]
 pub async fn stop_agent(
     session_id: String,
     app: AppHandle,
@@ -105,6 +110,11 @@ pub async fn stop_agent(
 }
 
 #[tauri::command]
+#[tracing::instrument(
+    target = "claudette::chat",
+    skip(app, state),
+    fields(chat_session_id = %session_id),
+)]
 pub async fn reset_agent_session(
     session_id: String,
     app: AppHandle,

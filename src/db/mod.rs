@@ -36,6 +36,13 @@ pub struct Database {
 }
 
 impl Database {
+    /// Open (or create) the SQLite database at `path` and run any
+    /// pending migrations. Wrapped in a `claudette::db` span at TRACE
+    /// because Tauri commands open a fresh `Connection` per call —
+    /// at INFO/DEBUG this would dominate the file log. Migrations get
+    /// their own DEBUG span ([`Database::migrate`]) since they only
+    /// fire on first call.
+    #[tracing::instrument(level = "trace", target = "claudette::db", skip_all, fields(path = %path.display()))]
     pub fn open(path: &Path) -> Result<Self, rusqlite::Error> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).map_err(|e| {
@@ -73,6 +80,12 @@ impl Database {
         self.migrate()
     }
 
+    #[tracing::instrument(
+        level = "debug",
+        target = "claudette::db",
+        skip_all,
+        fields(migration_count = MIGRATIONS.len()),
+    )]
     fn migrate(&self) -> Result<(), rusqlite::Error> {
         self.bootstrap_and_backfill(MIGRATIONS)?;
         Self::run_migrations(&self.conn, MIGRATIONS)?;

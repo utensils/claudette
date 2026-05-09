@@ -160,6 +160,12 @@ pub fn resolve_workspace_merge_base(
 }
 
 /// List all changed files between merge base and current working tree.
+#[tracing::instrument(
+    level = "debug",
+    target = "claudette::diff",
+    skip_all,
+    fields(worktree_path = %worktree_path, merge_base = %merge_base),
+)]
 pub async fn changed_files(
     worktree_path: &str,
     merge_base: &str,
@@ -579,6 +585,12 @@ fn parse_name_status_line(line: &str) -> Option<DiffFile> {
 }
 
 /// Get the unified diff for a specific file.
+#[tracing::instrument(
+    level = "trace",
+    target = "claudette::diff",
+    skip_all,
+    fields(worktree_path = %worktree_path, file_path = %file_path, merge_base = %merge_base),
+)]
 pub async fn file_diff(
     worktree_path: &str,
     merge_base: &str,
@@ -900,6 +912,18 @@ pub async fn commits_in_range(
 }
 
 /// Parse unified diff output into structured data.
+///
+/// Synchronous — for huge diffs (e.g. binary proto reformats) the
+/// line iteration is CPU-bound and runs on whichever thread the
+/// caller is on. Spanning at TRACE means we get duration data when
+/// looking for "why is the diff panel slow on commit X" without
+/// drowning the file log on the common case.
+#[tracing::instrument(
+    level = "trace",
+    target = "claudette::diff",
+    skip_all,
+    fields(path = %path, raw_bytes = raw.len()),
+)]
 pub fn parse_unified_diff(raw: &str, path: &str) -> FileDiff {
     if raw.contains("Binary files") && raw.contains("differ") {
         return FileDiff {
