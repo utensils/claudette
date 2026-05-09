@@ -23,6 +23,50 @@
   display: flex;
   align-items: center;
   gap: 8px;
+  min-width: 0; /* let .headerPath ellipsize when the toolbar is tight */
+}
+
+.headerPath {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--text-faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.repoIcon {
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.backButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  margin-right: 4px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  color: var(--text-muted);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition:
+    background var(--transition-fast),
+    color var(--transition-fast),
+    border-color var(--transition-fast);
+}
+
+.backButton:hover {
+  background: var(--hover-bg);
+  border-color: var(--divider);
+  color: var(--text-primary);
 }
 
 .headerCount {
@@ -215,48 +259,9 @@
   font-style: italic;
 }
 
-/* Empty state */
-.empty {
-  height: 100%;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  color: var(--text-muted);
-  gap: 12px;
-}
-
-.emptyIcon {
-  color: var(--accent-primary);
-  opacity: 0.4;
-  margin-bottom: 4px;
-}
+/* Empty-state styling moved to WelcomeEmptyState.module.css. The macOS
+   toolbar tint stays here because the toolbar lives in this module. */
 
 :where([data-platform="mac"]) .toolbar {
   background: color-mix(in srgb, var(--chat-header-bg) 88%, transparent);
-}
-
-.emptyTitle {
-  font-size: 16px;
-  font-weight: 600;
-  color: var(--text-primary);
-}
-
-.hint {
-  color: var(--text-dim);
-  font-size: 13px;
-  max-width: 320px;
-  text-align: center;
-  line-height: 1.5;
-}
-
-.hintKey {
-  display: inline-block;
-  background: var(--hover-bg);
-  border: 1px solid var(--divider);
-  border-radius: 4px;
-  padding: 1px 6px;
-  font-size: 11px;
-  font-family: var(--font-mono);
-  color: var(--text-muted);
 }

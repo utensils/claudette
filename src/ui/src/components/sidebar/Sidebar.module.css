@@ -214,6 +214,14 @@
   background: var(--hover-bg);
 }
 
+/* Highlight when the project-scoped view is active for this repo. The
+   selectedBg color matches the workspace-row selection so both selection
+   types read as the same affordance. */
+.repoHeaderSelected,
+.repoHeaderSelected:hover {
+  background: var(--selected-bg);
+}
+
 .chevron {
   font-size: 10px;
   color: var(--text-dim);

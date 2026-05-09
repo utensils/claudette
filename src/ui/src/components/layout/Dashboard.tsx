@@ -1,5 +1,5 @@
-import { memo, useMemo, useEffect, useState } from "react";
-import { GitBranch, Layers, Globe, ChevronDown, ChevronRight } from "lucide-react";
+import { memo, useCallback, useMemo, useEffect, useState } from "react";
+import { GitBranch, Globe, ChevronDown, ChevronRight, ArrowLeft } from "lucide-react";
 import { useAppStore } from "../../stores/useAppStore";
 import type { AgentStatus } from "../../types/workspace";
 import { isAgentBusy } from "../../utils/agentStatus";
@@ -8,6 +8,8 @@ import { PanelToggles } from "../shared/PanelToggles";
 import { StatsStrip, AnalyticsSection, MicroStats } from "../metrics";
 import { SessionStatusIcon, type SessionStatusKind } from "../shared/SessionStatusIcon";
 import { formatElapsedSeconds } from "../chat/chatHelpers";
+import { WelcomeEmptyState } from "./WelcomeEmptyState";
+import { useCreateWorkspace } from "../../hooks/useCreateWorkspace";
 import styles from "./Dashboard.module.css";
 
 /** Strip markdown syntax for a clean one-line preview. */
@@ -178,6 +180,10 @@ export function Dashboard() {
   const planApprovals = useAppStore((s) => s.planApprovals);
   const unreadCompletions = useAppStore((s) => s.unreadCompletions);
   const sessionsByWorkspace = useAppStore((s) => s.sessionsByWorkspace);
+  const openModal = useAppStore((s) => s.openModal);
+  const addToast = useAppStore((s) => s.addToast);
+  const selectedRepositoryId = useAppStore((s) => s.selectedRepositoryId);
+  const selectRepository = useAppStore((s) => s.selectRepository);
 
   const fetchDashboardMetrics = useAppStore((s) => s.fetchDashboardMetrics);
   const fetchAnalyticsMetrics = useAppStore((s) => s.fetchAnalyticsMetrics);
@@ -251,6 +257,130 @@ export function Dashboard() {
     return rows;
   }, [activeWorkspaces, agentQuestions, planApprovals, unreadCompletions, lastMessages, sessionsByWorkspace]);
 
+  // Repo IDs ranked by most-recent activity (last message anywhere in any workspace
+  // for that repo). Drives which project the welcome screen highlights as the
+  // suggested target for the primary CTA.
+  const recentRepoIds = useMemo(() => {
+    const lastUsedByRepo = new Map<string, string>();
+    for (const ws of workspaces) {
+      const ts = lastMessages[ws.id]?.created_at ?? ws.created_at;
+      const cur = lastUsedByRepo.get(ws.repository_id);
+      if (!cur || ts > cur) lastUsedByRepo.set(ws.repository_id, ts);
+    }
+    return [...lastUsedByRepo.entries()]
+      .sort((a, b) => b[1].localeCompare(a[1]))
+      .map(([repoId]) => repoId);
+  }, [workspaces, lastMessages]);
+
+  const localRepositories = useMemo(
+    () => repositories.filter((r) => !r.remote_connection_id),
+    [repositories],
+  );
+
+  const { create: createWorkspaceForRepo, creating } = useCreateWorkspace();
+
+  const handleCreateForRepo = useCallback(
+    async (repoId: string) => {
+      try {
+        await createWorkspaceForRepo(repoId);
+      } catch (e) {
+        addToast(`Failed to create workspace: ${e instanceof Error ? e.message : String(e)}`);
+      }
+    },
+    [createWorkspaceForRepo, addToast],
+  );
+
+  const handleAddRepository = useCallback(() => {
+    openModal("addRepo");
+  }, [openModal]);
+
+  // Project-scoped view: a single repo "selected" (via Cmd+N or repo-header
+  // click) replaces the global Dashboard with that project's slice.
+  const scopedRepo = useMemo(
+    () => (selectedRepositoryId ? repoMap.get(selectedRepositoryId) ?? null : null),
+    [selectedRepositoryId, repoMap],
+  );
+
+  const scopedWorkspaceRows = useMemo(
+    () => (scopedRepo
+      ? sortedWorkspaces.filter(({ ws }) => ws.repository_id === scopedRepo.id)
+      : []),
+    [sortedWorkspaces, scopedRepo],
+  );
+
+  if (scopedRepo) {
+    const scopedRunning = scopedWorkspaceRows.filter(
+      ({ ws }) => isAgentBusy(ws.agent_status),
+    ).length;
+    return (
+      <div className={styles.dashboard}>
+        <div className={styles.toolbar} data-tauri-drag-region>
+          <button
+            type="button"
+            className={styles.backButton}
+            onClick={() => selectRepository(null)}
+            title="Back to Dashboard"
+            aria-label="Back to Dashboard"
+          >
+            <ArrowLeft size={14} />
+          </button>
+          <div className={styles.header}>
+            {scopedRepo.icon && (
+              <RepoIcon icon={scopedRepo.icon} size={12} className={styles.repoIcon} />
+            )}
+            <span>{scopedRepo.name}</span>
+            <span className={styles.headerPath}>{scopedRepo.path}</span>
+          </div>
+          <PanelToggles />
+        </div>
+        <div className={styles.scrollBody}>
+          <WelcomeEmptyState
+            repositories={[scopedRepo]}
+            recentRepoIds={[scopedRepo.id]}
+            onCreateWorkspace={handleCreateForRepo}
+            onAddRepository={handleAddRepository}
+            creating={creating}
+          />
+          {scopedWorkspaceRows.length > 0 && (
+            <div className={styles.workspacesSection}>
+              <button
+                type="button"
+                className={styles.workspacesHeader}
+                onClick={() => setWorkspacesOpen((v) => !v)}
+                aria-expanded={workspacesOpen}
+              >
+                {workspacesOpen ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+                <span className={styles.workspacesTitle}>Workspaces</span>
+                {scopedRunning > 0 && (
+                  <span className={styles.headerCount}>
+                    {scopedRunning} running
+                  </span>
+                )}
+              </button>
+              {workspacesOpen && (
+                <div className={styles.grid}>
+                  {scopedWorkspaceRows.map(({ ws, badge }, i) => (
+                    <WorkspaceCard
+                      key={ws.id}
+                      ws={ws}
+                      repo={scopedRepo}
+                      baseBranch={defaultBranches[scopedRepo.id]}
+                      lastMsg={lastMessages[ws.id]}
+                      remoteName={ws.remote_connection_id ? remoteNameMap.get(ws.remote_connection_id) : undefined}
+                      badge={badge}
+                      onClick={selectWorkspace}
+                      index={i}
+                    />
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
   if (activeWorkspaces.length === 0) {
     return (
       <div className={styles.dashboard}>
@@ -261,14 +391,13 @@ export function Dashboard() {
         <div className={styles.scrollBody}>
           <StatsStrip />
           <AnalyticsSection />
-          <div className={styles.empty}>
-            <Layers size={40} className={styles.emptyIcon} />
-            <span className={styles.emptyTitle}>No active workspaces</span>
-            <p className={styles.hint}>
-              Create a workspace from a repository in the sidebar, or press{" "}
-              <kbd className={styles.hintKey}>+</kbd> next to a repo name.
-            </p>
-          </div>
+          <WelcomeEmptyState
+            repositories={localRepositories}
+            recentRepoIds={recentRepoIds}
+            onCreateWorkspace={handleCreateForRepo}
+            onAddRepository={handleAddRepository}
+            creating={creating}
+          />
         </div>
       </div>
     );

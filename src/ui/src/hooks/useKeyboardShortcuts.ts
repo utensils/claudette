@@ -123,7 +123,16 @@ export function useKeyboardShortcuts() {
           const ws = currentState.workspaces.find(
             (w) => w.repository_id === repo.id && w.status === "Active",
           );
-          if (ws) currentState.selectWorkspace(ws.id);
+          if (ws) {
+            // Backwards-compat path: when the project has at least one
+            // active workspace, Cmd+N still lands directly on it.
+            currentState.selectWorkspace(ws.id);
+          } else {
+            // Otherwise the shortcut now opens the project-scoped view —
+            // previously it was a no-op for empty projects, which made
+            // the shortcut feel broken right after adding a repo.
+            currentState.selectRepository(repo.id);
+          }
         }
         return;
       }

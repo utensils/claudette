@@ -1,0 +1,261 @@
+/* Welcome card shown on the Dashboard when there are no active workspaces.
+   Mirrors the layout density of WorkspaceCard so dashboard → welcome → dashboard
+   transitions don't shuffle the surrounding chrome. */
+
+.welcome {
+  flex: 1;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 32px 20px 48px;
+  min-height: 0;
+}
+
+.card {
+  width: 100%;
+  max-width: 540px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  background: var(--hover-bg-subtle);
+  border: 1px solid var(--divider);
+  border-radius: 12px;
+  padding: 28px 32px;
+  box-shadow: var(--shadow-md);
+}
+
+.title {
+  margin: 0;
+  font-size: 22px;
+  font-weight: 600;
+  color: var(--text-primary);
+  letter-spacing: -0.01em;
+}
+
+.subtitle {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+
+/* Tappable chip showing the suggested project. Same color treatment as the
+   chat input container so it reads as the focal target. */
+.activeProject {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  background: rgba(var(--accent-primary-rgb), 0.08);
+  border: 1px solid rgba(var(--accent-primary-rgb), 0.25);
+  border-radius: 8px;
+  cursor: pointer;
+  text-align: left;
+  font-family: inherit;
+  color: var(--text-primary);
+  transition:
+    background var(--transition-fast),
+    border-color var(--transition-fast);
+}
+
+.activeProject:hover:not(:disabled) {
+  background: rgba(var(--accent-primary-rgb), 0.14);
+  border-color: rgba(var(--accent-primary-rgb), 0.4);
+}
+
+.activeProject:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.activeProjectIcon {
+  color: var(--accent-primary);
+  flex-shrink: 0;
+}
+
+.activeProjectName {
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--accent-primary);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.activeProjectPath {
+  flex: 1;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Action row */
+.actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.primary,
+.secondary {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 16px;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  border-radius: 6px;
+  cursor: pointer;
+  transition:
+    background var(--transition-fast),
+    border-color var(--transition-fast),
+    color var(--transition-fast);
+}
+
+.primary {
+  background: var(--accent-primary);
+  color: var(--app-bg);
+  border: 1px solid var(--accent-primary);
+}
+
+.primary:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+
+.primary:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.secondary {
+  background: transparent;
+  color: var(--text-primary);
+  border: 1px solid var(--divider);
+}
+
+.secondary:hover {
+  background: var(--hover-bg);
+  border-color: var(--text-faint);
+}
+
+/* Section dividers */
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--divider);
+}
+
+.sectionLabel {
+  margin: 0;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+/* Project list */
+.projectList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.projectRow {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  cursor: pointer;
+  text-align: left;
+  font-family: inherit;
+  color: var(--text-primary);
+  transition:
+    background var(--transition-fast),
+    border-color var(--transition-fast);
+}
+
+.projectRow:hover:not(:disabled) {
+  background: var(--hover-bg);
+  border-color: var(--divider);
+}
+
+.projectRow:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.projectRowIcon {
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.projectRowName {
+  font-weight: 500;
+  font-size: 13px;
+}
+
+.projectRowPath {
+  flex: 1;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.projectRowMissing {
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--status-stopped);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+/* Tips */
+.tips {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.tips li {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-dim);
+}
+
+.tipIcon {
+  color: var(--text-faint);
+  flex-shrink: 0;
+  margin-top: 3px;
+}
+
+.kbd {
+  display: inline-block;
+  padding: 1px 6px;
+  background: var(--hover-bg);
+  border: 1px solid var(--divider);
+  border-radius: 4px;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  color: var(--text-muted);
+}

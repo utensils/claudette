@@ -91,6 +91,8 @@ export const Sidebar = memo(function Sidebar() {
   const workspaces = useAppStore((s) => s.workspaces);
   const selectedWorkspaceId = useAppStore((s) => s.selectedWorkspaceId);
   const selectWorkspace = useAppStore((s) => s.selectWorkspace);
+  const selectedRepositoryId = useAppStore((s) => s.selectedRepositoryId);
+  const selectRepository = useAppStore((s) => s.selectRepository);
   const sidebarGroupBy = useAppStore((s) => s.sidebarGroupBy);
   const setSidebarGroupBy = useAppStore((s) => s.setSidebarGroupBy);
   const sidebarRepoFilter = useAppStore((s) => s.sidebarRepoFilter);
@@ -1168,10 +1170,19 @@ export const Sidebar = memo(function Sidebar() {
                 <div className={styles.dropIndicator} />
               )}
               <div
-                className={styles.repoHeader}
+                className={`${styles.repoHeader} ${selectedRepositoryId === repo.id && !selectedWorkspaceId ? styles.repoHeaderSelected : ""}`}
                 data-tooltip={jumpTooltip}
                 data-tooltip-placement="bottom"
-                onClick={() => { if (!didDragRef.current) toggleRepoCollapsed(repo.id); }}
+                onClick={() => {
+                  if (didDragRef.current) return;
+                  // The header does double duty: toggle the workspace
+                  // collapse (existing behaviour) AND surface a project-
+                  // scoped view in the main pane. Selecting the repo
+                  // also clears any open workspace via the store, so the
+                  // welcome card swaps in immediately.
+                  toggleRepoCollapsed(repo.id);
+                  selectRepository(repo.id);
+                }}
                 onContextMenu={(e) => {
                   e.preventDefault();
                   e.stopPropagation();
