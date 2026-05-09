@@ -1,4 +1,4 @@
-import type { CSSProperties } from "react";
+import { type CSSProperties, forwardRef } from "react";
 import { useAppStore } from "../../../stores/useAppStore";
 import { computeMeterState } from "../contextMeterLogic";
 import { formatTokens } from "../formatTokens";
@@ -13,7 +13,8 @@ interface SegmentedMeterProps {
   onClick: () => void;
 }
 
-export function SegmentedMeter({ sessionId, onClick }: SegmentedMeterProps) {
+export const SegmentedMeter = forwardRef<HTMLButtonElement, SegmentedMeterProps>(
+function SegmentedMeter({ sessionId, onClick }, ref) {
   const usage = useAppStore((s) => s.latestTurnUsage[sessionId]);
 
   const model = useSelectedModelEntry(sessionId);
@@ -31,6 +32,7 @@ export function SegmentedMeter({ sessionId, onClick }: SegmentedMeterProps) {
 
   return (
     <button
+      ref={ref}
       type="button"
       className={`${styles.meter} ${urgent ? styles.meterUrgent : ""}`}
       onClick={onClick}
@@ -84,4 +86,4 @@ export function SegmentedMeter({ sessionId, onClick }: SegmentedMeterProps) {
       </span>
     </button>
   );
-}
+});

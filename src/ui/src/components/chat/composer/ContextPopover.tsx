@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { type RefObject, useEffect, useRef } from "react";
 import { useAppStore } from "../../../stores/useAppStore";
 import { computeMeterState } from "../contextMeterLogic";
 import { formatTokens } from "../formatTokens";
@@ -12,6 +12,7 @@ interface ContextPopoverProps {
   onClose: () => void;
   onCompact: () => void;
   onClear: () => void;
+  triggerRef?: RefObject<HTMLElement | null>;
 }
 
 const SEGMENTS = [
@@ -26,7 +27,7 @@ const SEGMENT_COLORS = [
   "var(--accent-dim)",
 ];
 
-export function ContextPopover({ sessionId, onClose, onCompact, onClear }: ContextPopoverProps) {
+export function ContextPopover({ sessionId, onClose, onCompact, onClear, triggerRef }: ContextPopoverProps) {
   const popoverRef = useRef<HTMLDivElement>(null);
   const usage = useAppStore((s) => s.latestTurnUsage[sessionId]);
 
@@ -46,13 +47,15 @@ export function ContextPopover({ sessionId, onClose, onCompact, onClear }: Conte
 
   useEffect(() => {
     function handleClick(e: MouseEvent) {
-      if (popoverRef.current && !popoverRef.current.contains(e.target as Node)) {
+      const target = e.target as Node;
+      if (triggerRef?.current?.contains(target)) return;
+      if (popoverRef.current && !popoverRef.current.contains(target)) {
         onClose();
       }
     }
     document.addEventListener("mousedown", handleClick);
     return () => document.removeEventListener("mousedown", handleClick);
-  }, [onClose]);
+  }, [onClose, triggerRef]);
 
   if (!state) return null;
 
