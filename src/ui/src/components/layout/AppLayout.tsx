@@ -22,6 +22,7 @@ import { useKeyboardShortcuts } from "../../hooks/useKeyboardShortcuts";
 import { useBranchRefresh } from "../../hooks/useBranchRefresh";
 import { useAutoUpdater } from "../../hooks/useAutoUpdater";
 import { useWorkspaceFileWatcher } from "../../hooks/useWorkspaceFileWatcher";
+import { useWorkspaceEnvironmentPreparation } from "../../hooks/useWorkspaceEnvironmentPreparation";
 import styles from "./AppLayout.module.css";
 
 export function AppLayout() {
@@ -46,6 +47,7 @@ export function AppLayout() {
   useBranchRefresh();
   useAutoUpdater();
   useWorkspaceFileWatcher();
+  useWorkspaceEnvironmentPreparation();
 
 
   // Main-pane priority: an explicitly opened file from the Files tree

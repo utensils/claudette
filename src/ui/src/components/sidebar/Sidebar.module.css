@@ -224,11 +224,19 @@
 
 .repoName {
   flex: 1;
+  min-width: 0;
   font-size: 13px;
   font-weight: 600;
   display: flex;
   align-items: center;
   gap: 6px;
+}
+
+.repoTitle {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .iconBtn {
@@ -243,9 +251,11 @@
   display: flex;
   align-items: center;
   border-radius: 4px;
+  flex-shrink: 0;
 }
 
 .repoHeader:hover .iconBtn,
+.repoHeader:focus-within .iconBtn,
 .wsItem:hover .iconBtn {
   opacity: 1;
 }

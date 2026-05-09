@@ -166,6 +166,7 @@ export function ChatInputArea({
   onRunShellCommand,
   onStop,
   isRunning,
+  workspaceEnvironmentPreparing,
   isRemote,
   hasQueuedMessages,
   selectedWorkspaceId,
@@ -197,6 +198,7 @@ export function ChatInputArea({
   onRunShellCommand: (command: string) => void | Promise<void>;
   onStop: () => void | Promise<void>;
   isRunning: boolean;
+  workspaceEnvironmentPreparing: boolean;
   isRemote: boolean;
   hasQueuedMessages: boolean;
   selectedWorkspaceId: string;
@@ -909,6 +911,7 @@ export function ChatInputArea({
   };
 
   const handleSend = () => {
+    if (workspaceEnvironmentPreparing) return;
     if (composerMode === "shell") {
       const command = normalizeShellCommand(chatInput);
       if (!command) return;
@@ -925,6 +928,7 @@ export function ChatInputArea({
   };
 
   const handleSendSteer = () => {
+    if (workspaceEnvironmentPreparing) return;
     if (!onSendSteer) return;
     // Steering only makes sense during a running turn — a regular send
     // path handles the idle case, and the agent has nothing to steer
@@ -1282,7 +1286,9 @@ export function ChatInputArea({
           onKeyDown={handleKeyDown}
           onPaste={handlePaste}
           placeholder={
-            composerMode === "shell"
+            workspaceEnvironmentPreparing
+              ? t("composer_placeholder_preparing_env")
+              : composerMode === "shell"
               ? t("composer_placeholder_shell")
               : isRunning
                 ? t("composer_placeholder_queued")
@@ -1297,6 +1303,7 @@ export function ChatInputArea({
               className={`${styles.attachBtn} ${attachMenuOpen ? styles.attachBtnActive : ""}`}
               onClick={() => setAttachMenuOpen((v) => !v)}
               title={t("add_files_connectors")}
+              disabled={workspaceEnvironmentPreparing}
             >
               <Plus size={16} />
             </button>
@@ -1316,7 +1323,7 @@ export function ChatInputArea({
             sessionId={sessionId}
             workspaceId={selectedWorkspaceId}
             repoId={repoId ?? null}
-            disabled={isRunning}
+            disabled={isRunning || workspaceEnvironmentPreparing}
             isRemote={isRemote}
           />
         </div>
@@ -1391,7 +1398,7 @@ export function ChatInputArea({
                 voice.cancel();
               else void voice.start();
             }}
-            disabled={isRunning}
+            disabled={isRunning || workspaceEnvironmentPreparing}
             data-tooltip={voiceButtonTooltip}
             aria-label={voiceButtonLabel}
           >
@@ -1406,7 +1413,10 @@ export function ChatInputArea({
           <button
             className={`${styles.sendBtn} ${isRunning ? styles.sendBtnStop : ""}`}
             onClick={isRunning ? onStop : handleSend}
-            disabled={!isRunning && !chatInput.trim() && pendingAttachments.length === 0}
+            disabled={
+              workspaceEnvironmentPreparing ||
+              (!isRunning && !chatInput.trim() && pendingAttachments.length === 0)
+            }
             data-tooltip={sendButtonTooltip}
             aria-label={sendButtonLabel}
           >

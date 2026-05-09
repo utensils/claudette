@@ -22,6 +22,7 @@
   "remove_attachment": "Quitar",
   "composer_placeholder_idle": "Envía un mensaje...",
   "composer_placeholder_queued": "Escribe para encolar un mensaje...",
+  "composer_placeholder_preparing_env": "Preparando el entorno del espacio de trabajo...",
   "composer_placeholder_shell": "Ejecuta un comando shell...",
   "shell_mode_label": "Shell",
   "voice_input": "Entrada de voz",

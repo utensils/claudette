@@ -1049,6 +1049,7 @@ fn main() {
             // Env-provider diagnostic UI
             commands::env::get_env_sources,
             commands::env::get_env_target_worktree,
+            commands::env::prepare_workspace_environment,
             commands::env::reload_env,
             commands::env::set_env_provider_enabled,
             commands::env::run_env_trust,
