@@ -827,6 +827,7 @@ fn main() {
             commands::data::load_initial_data,
             // Repository
             commands::repository::add_repository,
+            commands::repository::init_repository,
             commands::repository::update_repository_settings,
             commands::repository::relink_repository,
             commands::repository::remove_repository,
