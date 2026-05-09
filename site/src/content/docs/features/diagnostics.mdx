@@ -7,7 +7,7 @@ Claudette writes structured, daily-rotated logs to disk so user-reported bugs ca
 
 ## Where logs live
 
-The default log directory is `~/.claudette/logs/` (sibling to `~/.claudette/workspaces` and `~/.claudette/plugins`). Files are named `claudette.log.<YYYY-MM-DD>` and rotate daily. A startup retention sweep deletes anything older than 14 days so the directory never grows unbounded.
+The default log directory is `~/.claudette/logs/` (sibling to `~/.claudette/workspaces` and `~/.claudette/plugins`). Files are named `claudette.<YYYY-MM-DD>.log` (the `tracing-appender` layout is `<prefix>.<date>.<suffix>`) and rotate daily. A startup retention sweep deletes anything older than 14 days so the directory never grows unbounded.
 
 You can override the location with the `CLAUDETTE_LOG_DIR` environment variable — handy when running multiple dev instances side-by-side and you want each one's logs in its own folder.
 
@@ -98,7 +98,7 @@ For machine-parseable output set `CLAUDETTE_LOG_FORMAT=json` before launching �
 CLAUDETTE_LOG_FORMAT=json cargo tauri dev
 # Later:
 jq 'select(.target=="claudette::chat" and .level=="ERROR")' \
-  ~/.claudette/logs/claudette.log.2026-05-08
+  ~/.claudette/logs/claudette.2026-05-08.log
 ```
 
 ## Multiple dev instances
@@ -113,7 +113,7 @@ On startup, Claudette also scans `${TMPDIR}/claudette-dev/*.json` (the discovery
 
 1. Reproduce the issue.
 2. **Settings → Diagnostics → Copy path** to grab the log directory.
-3. Open the most recent `claudette.log.<DATE>` — that's your timeline.
+3. Open the most recent `claudette.<DATE>.log` — that's your timeline.
 4. If you want fuller detail, switch the **Log level** to `debug`, restart Claudette, reproduce, and the file log will include span timings + every command's entry/exit fields.
 5. Attach the relevant log file to the GitHub issue along with the reproduction steps.
 

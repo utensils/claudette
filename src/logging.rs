@@ -23,8 +23,10 @@
 //!
 //! ## Filtering
 //!
-//! Defaults to `info,claudette=debug,claudette_tauri=debug`. Override
-//! with the standard `RUST_LOG` env var (e.g.
+//! Defaults to
+//! `info,claudette=debug,claudette_tauri=debug,claudette_server=debug`
+//! (see [`DEFAULT_FILTER`]). Override with the standard `RUST_LOG` env
+//! var (e.g.
 //! `RUST_LOG=claudette::commands::chat=trace`). For users who don't
 //! want to set env vars, [`init`] also accepts an optional persisted
 //! override that maps to `EnvFilter` — Settings → Diagnostics writes

@@ -82,7 +82,7 @@ When the workspace is checked out on the base branch itself, "Workspace branch b
 
 | Setting | Description | Default |
 |---------|-------------|---------|
-| Log level | File-log filter applied when `RUST_LOG` is unset. Restart required for changes to take effect. | `default` (`info,claudette=debug`) |
+| Log level | File-log filter applied when `RUST_LOG` is unset. Restart required for changes to take effect. | `default` (`info,claudette=debug,claudette_tauri=debug,claudette_server=debug`) |
 | Frontend log verbosity | How much of the React side's `console.*` output is mirrored into the daily log. Live — no restart needed. | Errors only |
 | Reveal in file manager | Opens `~/.claudette/logs/` in the host file manager. | — |
 | Copy path | Copies the log directory path to the clipboard. | — |
