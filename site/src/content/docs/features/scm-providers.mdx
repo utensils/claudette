@@ -74,7 +74,8 @@ Bundled env-providers:
 
 Toggle individual providers in **Settings > Plugins**. Each plugin's manifest declares any user-configurable settings — for example, `env-direnv` exposes `auto_allow` to skip the per-path `direnv allow` safeguard if you'd rather trust your own `.envrc` files automatically.
 
+When Claudette creates a new workspace, it resolves env-providers before the workspace appears as ready. That first warmup primes tools like `direnv` for the worktree, then setup scripts, terminal tabs, agent subprocesses, and MCP servers inherit the same merged environment.
+
 The merged environment is computed once per worktree and reused across processes; if you change `.envrc` or `mise.toml`, terminate the running agent or terminal tab and Claudette picks up the new env on the next spawn.
 
 Drop your own env-provider into `~/.claudette/plugins/<name>/` (one `plugin.json` + one `init.lua`) and Claudette discovers it at startup.
-

@@ -7,7 +7,7 @@
   "filter_all_repos": "All repos",
   "filter_show_archived": "Show archived",
   "clear_repo_filter": "Clear repo filter",
-  "creating_workspace": "Creating workspace…",
+  "creating_workspace": "Preparing workspace environment…",
   "share_active_title": "Sharing — click to view connection string",
   "share_inactive_title": "Share this machine",
   "nearby_section": "Nearby",

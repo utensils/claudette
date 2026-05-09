@@ -1187,7 +1187,7 @@ export const Sidebar = memo(function Sidebar() {
                 </span>
                 <span className={styles.repoName}>
                   {repo.icon && <RepoIcon icon={repo.icon} className={styles.repoIcon} />}
-                  {repo.name}
+                  <span className={styles.repoTitle}>{repo.name}</span>
                   {runningCount > 0 && (
                     <span className={styles.runningBadge}>{runningCount}</span>
                   )}
@@ -1598,7 +1598,7 @@ function RemoteConnectionGroup({
           }`}
         />
         <span className={`${styles.repoName} ${styles.sectionLabel}`}>
-          {conn.name}
+          <span className={styles.repoTitle}>{conn.name}</span>
         </span>
         {!isActive && !isConnecting && (
           <button
@@ -1643,7 +1643,7 @@ function RemoteConnectionGroup({
                   {repo.icon && (
                     <RepoIcon icon={repo.icon} className={styles.repoIcon} />
                   )}
-                  {repo.name}
+                  <span className={styles.repoTitle}>{repo.name}</span>
                   {runningCount > 0 && (
                     <span className={styles.runningBadge}>{runningCount}</span>
                   )}
