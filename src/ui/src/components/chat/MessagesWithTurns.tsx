@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next";
 import { useAppStore } from "../../stores/useAppStore";
 import type { ToolDisplayMode } from "../../stores/slices/settingsSlice";
 import type { CompletedTurn, ToolActivity } from "../../stores/useAppStore";
-import { loadAttachmentData, loadFileDiff } from "../../services/tauri";
+import { loadAttachmentData } from "../../services/tauri";
 import type { ChatMessage, ChatAttachment } from "../../types/chat";
 import { roleClassKey, shouldRenderAsMarkdown } from "./messageRendering";
 import { HighlightedMessageMarkdown } from "./HighlightedMessageMarkdown";
@@ -45,8 +45,6 @@ import { ToolActivitiesSection } from "./ToolActivitiesSection";
 import { TurnFooter } from "./TurnFooter";
 import { TurnEditSummaryCard } from "./EditChangeSummary";
 import {
-  previewLinesFromFileDiff,
-  summarizeDiffFiles,
   summarizeTurnEdits,
 } from "./editActivitySummary";
 import { PdfThumbnail } from "./PdfThumbnail";
@@ -150,8 +148,6 @@ export const MessagesWithTurns = memo(function MessagesWithTurns({
   const worktreePath = useAppStore(
     (s) => s.workspaces.find((w) => w.id === workspaceId)?.worktree_path,
   );
-  const diffFiles = useAppStore((s) => s.diffFiles);
-  const diffMergeBase = useAppStore((s) => s.diffMergeBase);
   const liveToolActivities = useAppStore(
     (s) => s.toolActivities[sessionId] ?? EMPTY_ACTIVITIES,
   );
@@ -433,20 +429,6 @@ export const MessagesWithTurns = memo(function MessagesWithTurns({
     }
     return map;
   }, [completedTurns]);
-  const workspaceDiffSummary = useMemo(
-    () => summarizeDiffFiles(diffFiles),
-    [diffFiles],
-  );
-  const latestCompletedTurnId =
-    completedTurns[completedTurns.length - 1]?.id ?? null;
-  const loadWorkspaceDiffPreview = useCallback(
-    async (filePath: string) => {
-      if (!worktreePath || !diffMergeBase) return [];
-      const diff = await loadFileDiff(worktreePath, diffMergeBase, filePath);
-      return previewLinesFromFileDiff(diff);
-    },
-    [diffMergeBase, worktreePath],
-  );
   const openFileTab = useAppStore((s) => s.openFileTab);
   // Open the file in the Monaco editor tab (not the diff viewer).
   // Activity-derived edits use absolute paths (the agent's full path
@@ -580,16 +562,6 @@ export const MessagesWithTurns = memo(function MessagesWithTurns({
     return (
       <>
         {groupEntries.map(({ turn, globalIdx, activities, label, showFooter }) => {
-          const isLatestCompletedTurn = turn.id === latestCompletedTurnId;
-          // The card prefers per-turn activity-derived edits ("files
-          // THIS turn touched"). Workspace-diff summary is offered as a
-          // rescue only on the latest turn — `TurnSummary` uses it only
-          // when the activity parser couldn't recognize any edits
-          // (Bash heredoc, MCP write tool, etc.). Older turns get no
-          // rescue: their workspace-diff entry would include later
-          // turns' churn, which would mislead.
-          const fallbackEditSummary =
-            showFooter && isLatestCompletedTurn ? workspaceDiffSummary : null;
           // A single turn can produce multiple display groups when
           // chronologically-interleaved messages split its activities;
           // each group needs its own collapse state so clicking one
@@ -650,35 +622,19 @@ export const MessagesWithTurns = memo(function MessagesWithTurns({
               onRollback={showFooter ? buildOnRollback(turn.id) : undefined}
               searchQuery={searchQuery}
               worktreePath={worktreePath}
-              editSummaryFallback={fallbackEditSummary}
-              onLoadEditPreview={
-                showFooter && isLatestCompletedTurn
-                  ? loadWorkspaceDiffPreview
-                  : undefined
-              }
               onOpenEditFile={showFooter ? openFileInMonaco : undefined}
             />
           );
         })}
         {footerEntries.map(({ turn }) => {
-          const isLatestCompletedTurn = turn.id === latestCompletedTurnId;
-          // Same precedence as the group-entries path above: turn-scoped
-          // activity edits win; workspace diff only rescues the latest
-          // turn when activities can't be parsed into edit churn.
           const turnActivitySummary = editSummaryByTurnId.get(turn.id) ?? null;
-          const editSummary =
-            turnActivitySummary ??
-            (isLatestCompletedTurn ? workspaceDiffSummary : null);
           return (
             <React.Fragment key={`${turn.id}:${position}:footer`}>
-              {editSummary && (
+              {turnActivitySummary && (
                 <TurnEditSummaryCard
-                  summary={editSummary}
+                  summary={turnActivitySummary}
                   searchQuery={searchQuery}
                   worktreePath={worktreePath}
-                  onLoadPreview={
-                    isLatestCompletedTurn ? loadWorkspaceDiffPreview : undefined
-                  }
                   onOpenFile={openFileInMonaco}
                 />
               )}
