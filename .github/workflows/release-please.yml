@@ -156,8 +156,14 @@ jobs:
         run: scripts/stage-cli-sidecar.sh ${{ matrix.rust-target }}
 
       # ---- macOS + Linux: tauri-action drives the bundled build ------------
-      - name: Build and upload desktop app (non-Windows)
+      # macOS bundles get up to 3 attempts to absorb transient
+      # Apple-notarization flakes (NSURLErrorDomain -1009 polling
+      # appstoreconnect.apple.com — see nightly.yml for the full
+      # rationale and the run that motivated this). Linux runs once.
+      - name: Build and upload desktop app (non-Windows) — attempt 1
+        id: bundle1
         if: ${{ !startsWith(matrix.platform, 'windows') }}
+        continue-on-error: ${{ runner.os == 'macOS' }}
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -169,6 +175,46 @@ jobs:
           APPLE_ID: ${{ runner.os == 'macOS' && secrets.APPLE_ID || '' }}
           APPLE_PASSWORD: ${{ runner.os == 'macOS' && secrets.APPLE_PASSWORD || '' }}
           APPLE_TEAM_ID: ${{ runner.os == 'macOS' && secrets.APPLE_TEAM_ID || '' }}
+        with:
+          tagName: ${{ needs.resolve-tag.outputs.tag }}
+          releaseName: ${{ needs.resolve-tag.outputs.tag }}
+          releaseDraft: true
+          args: --target ${{ matrix.rust-target }} --bundles ${{ matrix.bundles }}
+
+      - name: Build and upload desktop app (non-Windows) — attempt 2 (macOS retry)
+        id: bundle2
+        if: ${{ runner.os == 'macOS' && steps.bundle1.outcome == 'failure' }}
+        continue-on-error: true
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        with:
+          tagName: ${{ needs.resolve-tag.outputs.tag }}
+          releaseName: ${{ needs.resolve-tag.outputs.tag }}
+          releaseDraft: true
+          args: --target ${{ matrix.rust-target }} --bundles ${{ matrix.bundles }}
+
+      - name: Build and upload desktop app (non-Windows) — attempt 3 (macOS final)
+        if: ${{ runner.os == 'macOS' && steps.bundle1.outcome == 'failure' && steps.bundle2.outcome == 'failure' }}
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         with:
           tagName: ${{ needs.resolve-tag.outputs.tag }}
           releaseName: ${{ needs.resolve-tag.outputs.tag }}
