@@ -1,10 +1,6 @@
 import { useEffect } from "react";
 import { useAppStore } from "../stores/useAppStore";
-import {
-  createChatSession,
-  sendRemoteCommand,
-  stopAgent,
-} from "../services/tauri";
+import { sendRemoteCommand, stopAgent } from "../services/tauri";
 import { isAgentBusy } from "../utils/agentStatus";
 import {
   focusActiveTerminal,
@@ -13,6 +9,7 @@ import {
 } from "../utils/focusTargets";
 import { adjustUiFontSize } from "../utils/fontSettings";
 import { resolveHotkeyAction } from "../hotkeys/bindings";
+import { executeCloseTab, executeNewTab } from "../hotkeys/contextActions";
 import type { HotkeyActionId } from "../hotkeys/actions";
 
 export function useKeyboardShortcuts() {
@@ -199,44 +196,20 @@ export function useKeyboardShortcuts() {
             // Esc closes it via the global.dismiss-or-stop branch above.
             openModal("keyboard-shortcuts");
             return;
-          case "global.new-tab": {
-            // Context-aware "new tab":
-            //  - File context (an `activeFileTabByWorkspace` entry exists
-            //    for the current workspace): trigger the FilesPanel's
-            //    inline "create new file at root" flow. We also unhide
-            //    the right sidebar and switch it to the Files tab so the
-            //    inline editor is actually visible — the panel owns the
-            //    editor's lifecycle so we just deliver the open-it
-            //    signal via `requestNewFileAtRoot`.
-            //  - Otherwise (chat or diff): create a new chat session in
-            //    the current workspace and switch to it. Mirrors the
-            //    SessionTabs "+ new session" button so the result is
-            //    indistinguishable from clicking it.
-            if (!selectedWorkspaceId) return;
-            const store = useAppStore.getState();
-            const activeFile =
-              store.activeFileTabByWorkspace[selectedWorkspaceId] ?? null;
-            if (activeFile) {
-              if (!store.rightSidebarVisible) store.toggleRightSidebar();
-              if (store.rightSidebarTab !== "files") {
-                store.setRightSidebarTab("files");
-              }
-              store.requestNewFileAtRoot(selectedWorkspaceId);
-              return;
-            }
-            void (async () => {
-              try {
-                const session = await createChatSession(selectedWorkspaceId);
-                const post = useAppStore.getState();
-                if (post.selectedWorkspaceId !== selectedWorkspaceId) return;
-                post.addChatSession(session);
-                post.selectSession(selectedWorkspaceId, session.id);
-              } catch (err) {
-                console.error("[hotkey] global.new-tab failed:", err);
-              }
-            })();
+          case "global.new-tab":
+            // Routing logic lives in `hotkeys/contextActions.ts` so the
+            // Monaco-side overrides (which bypass this listener via
+            // `editor.addCommand`) and the keyboard hook share a
+            // single implementation. See that module for the
+            // file/diff/chat dispatch table.
+            executeNewTab();
             return;
-          }
+          case "global.close-tab":
+            // Same shared module. Includes the dirty-aware close path
+            // (via `requestCloseFileTabNonceByWorkspace`) and the
+            // chat-close confirmation rules.
+            executeCloseTab();
+            return;
           default:
             return;
         }

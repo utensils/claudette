@@ -88,6 +88,8 @@
   "session_close_diff": "差分を閉じる",
   "session_running_confirm_close": "このセッションは実行中です。「{{name}}」を停止して閉じますか？",
   "session_running_confirm_close_multi": "{{count}} 件のセッションが実行中です。停止して閉じますか？",
+  "session_active_confirm_close": "Close the active session \"{{name}}\"?",
+  "session_last_confirm_close": "Close the only remaining session \"{{name}}\"? A fresh session will replace it; the closed one will be archived.",
 
   "tab_close": "閉じる",
   "tab_close_others": "他を閉じる",

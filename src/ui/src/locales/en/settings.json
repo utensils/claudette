@@ -252,7 +252,7 @@
   "keyboard_action_terminal_focus_pane_down": "Focus pane down",
   "keyboard_action_terminal_copy_selection": "Copy terminal selection",
   "keyboard_action_terminal_paste": "Paste into terminal",
-  "keyboard_action_file_close_tab": "Close file tab",
+  "keyboard_action_close_tab": "Close active tab (file, diff, or chat session)",
   "keyboard_action_file_undo_operation": "Undo file operation",
   "keyboard_action_file_toggle_markdown_preview": "Toggle Markdown preview",
   "keyboard_action_voice_toggle": "Toggle voice input",

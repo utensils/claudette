@@ -144,6 +144,14 @@ export interface FileTreeSlice {
    *  into the store because the panel owns the inline editor's
    *  lifecycle (cancel, error toast, focus-back-to-tree). */
   requestNewFileNonceByWorkspace: Record<string, number>;
+  /** Monotonic per-workspace signal asking the mounted `FileViewer` to
+   *  close its active file tab — going through `requestCloseFileTab`
+   *  (its local function), so the dirty-buffer discard prompt still
+   *  fires. Bumped by the `global.close-tab` keyboard action when the
+   *  active right-pane surface is a file. Same pattern as
+   *  `requestNewFileNonceByWorkspace` above; the slice is just the
+   *  message bus, the FileViewer owns the modal lifecycle. */
+  requestCloseFileTabNonceByWorkspace: Record<string, number>;
 
   /** Per-workspace ordered list of open file-tab paths. Tabs are rendered
    *  in this order in the tab strip. */
@@ -174,6 +182,10 @@ export interface FileTreeSlice {
    *  tab and unhides it; this just delivers the open-the-inline-editor
    *  signal to the mounted panel. No-op when the panel isn't mounted. */
   requestNewFileAtRoot: (workspaceId: string) => void;
+  /** Ask the mounted `FileViewer` for `workspaceId` to close its active
+   *  file tab through its dirty-aware close path. No-op when no
+   *  `FileViewer` is mounted (e.g. the user is in chat). */
+  requestCloseActiveFileTab: (workspaceId: string) => void;
 
   // Tab management
   /** Replace the entire ordered list of file tabs for a workspace. Used by
@@ -302,6 +314,7 @@ export const createFileTreeSlice: StateCreator<AppState, [], [], FileTreeSlice> 
   allFilesSelectedPathByWorkspace: {},
   fileTreeRefreshNonceByWorkspace: {},
   requestNewFileNonceByWorkspace: {},
+  requestCloseFileTabNonceByWorkspace: {},
   fileTabsByWorkspace: {},
   activeFileTabByWorkspace: {},
   fileBuffers: {},
@@ -352,6 +365,14 @@ export const createFileTreeSlice: StateCreator<AppState, [], [], FileTreeSlice> 
       requestNewFileNonceByWorkspace: {
         ...s.requestNewFileNonceByWorkspace,
         [workspaceId]: (s.requestNewFileNonceByWorkspace[workspaceId] ?? 0) + 1,
+      },
+    })),
+  requestCloseActiveFileTab: (workspaceId) =>
+    set((s) => ({
+      requestCloseFileTabNonceByWorkspace: {
+        ...s.requestCloseFileTabNonceByWorkspace,
+        [workspaceId]:
+          (s.requestCloseFileTabNonceByWorkspace[workspaceId] ?? 0) + 1,
       },
     })),
 

@@ -214,4 +214,9 @@ pub const MIGRATIONS: &[Migration] = &[
         sql: include_str!("20260508181215_rename_cycle_workspace_keybindings.sql"),
         legacy_version: None,
     },
+    Migration {
+        id: "20260509000540_rename_close_file_tab_keybinding",
+        sql: include_str!("20260509000540_rename_close_file_tab_keybinding.sql"),
+        legacy_version: None,
+    },
 ];

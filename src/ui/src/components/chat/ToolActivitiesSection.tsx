@@ -100,7 +100,7 @@ function GroupedToolActivityRows({
 }) {
   // User-override expand state. `null` means "follow the default": the
   // group auto-expands while a member is running and auto-collapses
-  // once everything has finished — matching the post-#696 default.
+  // once everything has finished — matching the post-PR-696 default.
   // A click overrides the default to `true`/`false` for the rest of
   // this group's lifetime, so the user can drill into a finished group
   // or hide a noisy still-running one. The override persists across

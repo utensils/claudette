@@ -149,25 +149,40 @@ describe("resolveHotkeyAction with conflict updates", () => {
     expect(resolveHotkeyAction(event, "global", {}, "mac")).toBeNull();
   });
 
-  it("resolves close file tab with platform mod in file-viewer scope", () => {
+  it("resolves close-tab with platform mod in global scope", () => {
+    // Pre-rename, this binding lived in `file-viewer` scope and only
+    // fired when focus was inside the file viewer. The `global.close-tab`
+    // action moves the dispatch out so chat / diff close also work, and
+    // a SQL migration carries existing user overrides forward.
     expect(
       resolveHotkeyAction(
         macKey({ key: "w", metaKey: true }),
+        "global",
+        {},
+        "mac",
+      ),
+    ).toBe("global.close-tab");
+    expect(
+      resolveHotkeyAction(
+        macKey({ key: "w", ctrlKey: true }),
+        "global",
+        {},
+        "linux",
+      ),
+    ).toBe("global.close-tab");
+  });
+
+  it("doesn't shadow the file-viewer-scoped undo action with the new global close-tab", () => {
+    // Sanity: undo (mod+z) lives in file-viewer scope and the new
+    // global.close-tab (mod+w) shouldn't accidentally claim it.
+    expect(
+      resolveHotkeyAction(
+        macKey({ key: "z", metaKey: true }),
         "file-viewer",
         {},
         "mac",
       ),
-    ).toBe("file-viewer.close-file-tab");
-    expect(
-      resolveHotkeyAction(
-        macKey({ key: "w", ctrlKey: true }),
-        "file-viewer",
-        {},
-        "linux",
-      ),
-    ).toBe("file-viewer.close-file-tab");
-    expect(resolveHotkeyAction(macKey({ key: "w", metaKey: true }), "global", {}, "mac"))
-      .toBeNull();
+    ).toBe("file-viewer.undo-file-operation");
   });
 });
 

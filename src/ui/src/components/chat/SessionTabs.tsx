@@ -29,6 +29,7 @@ import {
   type NavEntry,
   splitUnifiedTabOrder,
 } from "./sessionTabsLogic";
+import { chatCloseConfirmKind } from "../../hotkeys/contextActions";
 import { SessionStatusIcon, type SessionStatusKind } from "../shared/SessionStatusIcon";
 import { DangerousFlagBadge } from "./DangerousFlagBadge";
 import { hasDangerousFlag } from "../../stores/slices/workspaceClaudeFlagsSlice";
@@ -241,11 +242,24 @@ export function SessionTabs({ workspaceId }: Props) {
   );
 
   const handleArchive = async (session: ChatSession) => {
-    if (session.agent_status === "Running") {
-      const ok = window.confirm(
-        t("session_running_confirm_close", { name: session.name }),
-      );
-      if (!ok) return;
+    // The shared `chatCloseConfirmKind` helper is also used by the
+    // global Cmd+W path in `hotkeys/contextActions.ts`, so the rules
+    // ("running" / "active" / "last" → confirm) stay in lockstep
+    // between the close button and the keystroke. Each kind maps to
+    // its own translated string so the message matches the trigger.
+    const kind = chatCloseConfirmKind({
+      session,
+      activeSessions,
+      isActiveSession: session.id === selectedSessionId,
+    });
+    if (kind !== "none") {
+      const message =
+        kind === "running"
+          ? t("session_running_confirm_close", { name: session.name })
+          : kind === "active"
+            ? t("session_active_confirm_close", { name: session.name })
+            : t("session_last_confirm_close", { name: session.name });
+      if (!window.confirm(message)) return;
     }
     await archiveSessionImmediate(session);
   };

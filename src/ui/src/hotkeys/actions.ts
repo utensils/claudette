@@ -339,10 +339,23 @@ export const HOTKEY_ACTIONS = [
     rebindable: true,
   },
   {
-    id: "file-viewer.close-file-tab",
-    scope: "file-viewer",
-    category: "keyboard_category_editor",
-    description: "keyboard_action_file_close_tab",
+    // Cmd/Ctrl+W: context-aware "close tab".
+    //  - File active in the right pane → routes through the FileViewer's
+    //    dirty-aware close path (preserves the existing discard-changes
+    //    confirmation modal).
+    //  - Diff active → closes the diff tab.
+    //  - Chat active → archives the active chat session, gated by the
+    //    shared confirm rules in `chatCloseConfirmMessage` (running
+    //    sessions, the active session, and the last remaining session
+    //    all prompt before close).
+    //
+    // Replaces the prior `file-viewer.close-file-tab` action; the
+    // `20260508T_rename_close_file_tab_keybinding.sql` migration carries
+    // any user-customised binding forward.
+    id: "global.close-tab",
+    scope: "global",
+    category: "keyboard_category_navigation",
+    description: "keyboard_action_close_tab",
     defaultBinding: allPlatforms("mod+w"),
     match: "key",
     rebindable: true,

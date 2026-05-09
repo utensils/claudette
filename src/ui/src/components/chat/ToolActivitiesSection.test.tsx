@@ -111,7 +111,7 @@ describe("ToolActivitiesSection", () => {
   });
 
   it("renders a chevron + clickable header on grouped running activities", async () => {
-    // Pin the chevron decoration that PR #696 dropped. Without it,
+    // Pin the chevron decoration that PR 696 dropped. Without it,
     // users had no affordance for expanding/collapsing the live tool
     // group while the agent was running.
     const container = await render(
@@ -167,7 +167,7 @@ describe("ToolActivitiesSection", () => {
   });
 
   it("lets the user expand a finished group via header click", async () => {
-    // Default for a finished group is collapsed (matches post-#696
+    // Default for a finished group is collapsed (matches post-PR-696
     // default). The user-click override should re-open it.
     const container = await render(
       <ToolActivitiesSection

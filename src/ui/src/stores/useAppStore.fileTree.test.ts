@@ -211,6 +211,38 @@ describe("file path store updates", () => {
   });
 });
 
+describe("requestCloseActiveFileTab", () => {
+  beforeEach(() => {
+    useAppStore.setState({ requestCloseFileTabNonceByWorkspace: {} });
+  });
+
+  it("bumps a per-workspace nonce so FileViewer can detect the request", () => {
+    expect(
+      useAppStore.getState().requestCloseFileTabNonceByWorkspace[WS],
+    ).toBeUndefined();
+
+    useAppStore.getState().requestCloseActiveFileTab(WS);
+    expect(
+      useAppStore.getState().requestCloseFileTabNonceByWorkspace[WS],
+    ).toBe(1);
+
+    useAppStore.getState().requestCloseActiveFileTab(WS);
+    expect(
+      useAppStore.getState().requestCloseFileTabNonceByWorkspace[WS],
+    ).toBe(2);
+  });
+
+  it("scopes the nonce per workspace", () => {
+    useAppStore.getState().requestCloseActiveFileTab("workspace-a");
+    useAppStore.getState().requestCloseActiveFileTab("workspace-a");
+    useAppStore.getState().requestCloseActiveFileTab("workspace-b");
+
+    const state = useAppStore.getState();
+    expect(state.requestCloseFileTabNonceByWorkspace["workspace-a"]).toBe(2);
+    expect(state.requestCloseFileTabNonceByWorkspace["workspace-b"]).toBe(1);
+  });
+});
+
 describe("requestNewFileAtRoot", () => {
   beforeEach(() => {
     useAppStore.setState({ requestNewFileNonceByWorkspace: {} });
