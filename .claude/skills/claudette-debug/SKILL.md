@@ -33,6 +33,14 @@ The server listens on port **19432 by default**, but the devshell `dev` helper a
 
 **Do NOT launch the installed app.** Never run `osascript -e 'tell application "Claudette" to activate'`, `open -a Claudette`, or double-click `/Applications/Claudette.app`. The debug TCP server only exists in dev builds (gated by `#[cfg(debug_assertions)]`); the installed release build has no debug server and eval calls against it will fail or silently target the wrong process. If the dev build is not already running, ask the user to start `dev` — do not start it yourself and do not fall back to the installed app.
 
+### Windows
+
+The skill works on Windows via Git Bash (the `bash` shipped with Git for Windows / `MINGW64`). Invoke the same `scripts/*.sh` scripts; they detect MSYS via `uname -s` and dispatch to PowerShell-only paths where needed (e.g. `debug-screenshot.sh` → `debug-screenshot.ps1` for `System.Drawing`-based captures).
+
+The dev entry point is `scripts/dev.ps1` (or the `dev` PowerShell profile function it ships with). It mirrors `dev.sh`'s discovery file at `$env:TEMP\claudette-dev\<pid>.json`, which Git Bash sees as `/tmp/claudette-dev/*.json` — so `debug-eval.sh`'s auto-discovery just works. `dev.ps1` runs the Tauri binary with `--no-default-features --features devtools,server,alternative-backends` (no `voice`, no `tauri/custom-protocol`) and binds Vite to `127.0.0.1` rather than `::1` — both are required to keep WebView2 happy and `__CLAUDETTE_INVOKE__` set; if you change either, the debug eval server will hang.
+
+**Do NOT launch the MSI/NSIS-installed Claudette release** for the same reason as macOS: no debug server, so eval calls fail or silently target a different process. If the dev build is not running, ask the user to run `dev` from PowerShell.
+
 ## Port discovery
 
 With the devshell `dev` helper, each dev instance probes for a free Vite port (starting at 1420) and a free debug port (starting at 19432), then writes `${TMPDIR:-/tmp}/claudette-dev/<pid>.json` with fields `{pid, debug_port, vite_port, cwd, branch, started_at}`. The file is removed on clean exit.
@@ -226,18 +234,33 @@ ${CLAUDE_SKILL_DIR}/scripts/debug-eval.sh <<'JS'
 const s = window.__CLAUDETTE_STORE__.getState();
 const wsId = s.selectedWorkspaceId;
 if (!wsId) return 'ERROR: no workspace selected';
+// After the multi-session refactor, send_chat_message is keyed on
+// chat_session_id, not workspace_id. Resolve the active session from
+// `selectedSessionIdByWorkspaceId` (set by the sidebar when a workspace
+// becomes active). If absent, the first session in `sessionsByWorkspace`
+// is the safe fallback — every workspace has at least one default session.
+const sessionId = s.selectedSessionIdByWorkspaceId?.[wsId]
+  ?? s.sessionsByWorkspace?.[wsId]?.[0]?.id;
+if (!sessionId) return 'ERROR: no chat session for workspace';
 const ws = s.workspaces.find(w => w.id === wsId);
 if (ws?.agent_status === 'Running') return 'ERROR: agent already running';
 s.updateWorkspace(wsId, { agent_status: 'Running' });
 s.clearUnreadCompletion(wsId);
 await window.__CLAUDETTE_INVOKE__('send_chat_message', {
-  workspaceId: wsId,
+  sessionId,
+  messageId: null,
   content: `MESSAGE_TEXT_HERE`,
+  mentionedFiles: null,
   permissionLevel: null,
   model: null,
   fastMode: null,
   thinkingEnabled: null,
   planMode: null,
+  effort: null,
+  chromeEnabled: null,
+  disable1mContext: null,
+  backendId: null,
+  attachments: null,
 });
 return 'Sent to ' + ws.name;
 JS

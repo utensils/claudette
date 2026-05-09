@@ -5,6 +5,11 @@
 # macOS:         screencapture -x (silent full-screen)
 # Linux/Wayland: grim
 # Linux/X11:     import -window root (ImageMagick) or scrot
+# Windows:       PowerShell + System.Drawing (no extra deps).
+#                Detected by `uname -s` matching MINGW/MSYS/CYGWIN —
+#                this script only runs from Git Bash / MSYS shells on
+#                Windows; native PowerShell users invoke debug-screenshot.ps1
+#                directly.
 #
 # Prints the output file path to stdout so Claude can Read the image.
 set -euo pipefail
@@ -47,6 +52,25 @@ case "$(uname -s)" in
         exit 1
       fi
     fi
+    ;;
+  MINGW*|MSYS*|CYGWIN*)
+    # Translate the MSYS path (`/c/Users/...`) to a native Windows path
+    # (`C:\Users\...`) before handing it to PowerShell — PowerShell's
+    # File.SaveAs treats `/c/...` as a relative path and fails. cygpath
+    # is bundled with Git for Windows / MSYS / Cygwin.
+    if command -v cygpath >/dev/null 2>&1; then
+      WINPATH=$(cygpath -w "$OUTFILE")
+    else
+      WINPATH="$OUTFILE"
+    fi
+    SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+    if command -v cygpath >/dev/null 2>&1; then
+      PS1_PATH=$(cygpath -w "${SCRIPT_DIR}/debug-screenshot.ps1")
+    else
+      PS1_PATH="${SCRIPT_DIR}/debug-screenshot.ps1"
+    fi
+    powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass \
+        -File "$PS1_PATH" --output "$WINPATH" >/dev/null
     ;;
   *)
     echo "ERROR: unsupported platform $(uname -s)" >&2
