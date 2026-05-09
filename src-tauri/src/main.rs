@@ -225,23 +225,74 @@ fn main() {
     // so rustls cannot auto-detect — we must pick one explicitly.
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
 
-    // Initialize tracing as early as possible — before plugin discovery
-    // and DB open so their `tracing::info!`/`warn!` events land in the
-    // log file. The handle is held for the whole `main` so the
-    // non-blocking file appender's worker thread flushes pending writes
-    // on process exit. Errors here are non-fatal: stderr-only logging
-    // still covers us.
+    // Subsidiary entry points run as short-lived child processes
+    // (Claude CLI's stdio MCP grandchild, command hooks, the embedded
+    // claudette-server). They need `tracing::*` events for their
+    // own error paths, but NOT the GUI's heavy init: opening the
+    // SQLite DB to read `diagnostics.log_level`, creating the rolling
+    // file appender at `~/.claudette/logs/`, and walking the
+    // retention sweep would all be wasted work for processes that
+    // exit in milliseconds, and N children writing to the same
+    // daily file would contend on the appender's internal lock.
     //
-    // The subsidiary entry points below (`--server`, `--agent-mcp`,
-    // `--agent-hook`) intentionally skip this so they don't fight the
-    // GUI process for the same daily log file. They run as short-lived
-    // children whose stderr is captured by the parent anyway.
+    // We dispatch them FIRST and pin them to a stderr-only
+    // subscriber so their `tracing::error!`s still reach the
+    // parent's captured stderr. The parent's daily file log
+    // covers the GUI side; child diagnostics show up in the
+    // parent's stderr capture and / or the agent's transcript.
+    let args: Vec<String> = std::env::args().collect();
+    let child_mode = args.iter().find_map(|a| match a.as_str() {
+        #[cfg(feature = "server")]
+        "--server" => Some("--server"),
+        "--agent-mcp" => Some("--agent-mcp"),
+        "--agent-hook" => Some("--agent-hook"),
+        _ => None,
+    });
+    if let Some(mode) = child_mode {
+        let _log_handle = claudette::logging::init_stderr_only();
+        let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
+        match mode {
+            #[cfg(feature = "server")]
+            "--server" => rt.block_on(async {
+                if let Err(e) =
+                    claudette_server::run(claudette_server::ServerOptions::default()).await
+                {
+                    tracing::error!(target: "claudette::startup", error = %e, "embedded claudette-server exited with error");
+                    std::process::exit(1);
+                }
+            }),
+            "--agent-mcp" => rt.block_on(async {
+                if let Err(e) = claudette::agent_mcp::server::run_stdio().await {
+                    tracing::error!(target: "claudette::startup", error = %e, "agent-mcp child exited with error");
+                    std::process::exit(1);
+                }
+            }),
+            "--agent-hook" => rt.block_on(async {
+                if let Err(e) = claudette::agent_mcp::hook::run_stdin().await {
+                    tracing::error!(target: "claudette::startup", error = %e, "agent-hook child exited with error");
+                    std::process::exit(1);
+                }
+            }),
+            _ => unreachable!("child_mode is one of the matched arms"),
+        }
+        return;
+    }
+
+    // GUI path. Heavy init runs only here, after we've ruled out the
+    // subsidiary entry points above.
     //
-    // We resolve the DB path once here (instead of waiting for the GUI
-    // path that does it later) so the persisted `diagnostics.log_level`
-    // override can be threaded into `init_with_override` before the
-    // subscriber is built. Cheap call: `dirs::data_dir()` is a syscall
-    // pair on macOS / a registry read on Windows.
+    // Tracing is brought up before plugin discovery and DB open so
+    // their `tracing::info!`/`warn!` events land in the log file. The
+    // handle is held for the whole `main` so the non-blocking file
+    // appender's worker thread flushes pending writes on process
+    // exit. Errors here are non-fatal: stderr-only logging still
+    // covers us.
+    //
+    // Resolving the DB path once up-front lets us thread the
+    // persisted `diagnostics.log_level` override into
+    // `init_with_override` before the subscriber is built. Cheap
+    // call: `dirs::data_dir()` is a syscall pair on macOS / a
+    // registry read on Windows.
     let early_data_dir = dirs::data_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join("claudette");
@@ -256,52 +307,6 @@ fn main() {
     // run still see the standard stderr panic banner. The webview-side
     // counterpart of this hook lives in `src/ui/src/utils/log.ts`.
     install_tracing_panic_hook();
-
-    // When spawned with `--server`, run the embedded claudette-server
-    // instead of the GUI. This enables single-binary distribution while
-    // keeping process isolation (server crash doesn't crash the app).
-    #[cfg(feature = "server")]
-    if std::env::args().any(|a| a == "--server") {
-        let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
-        rt.block_on(async {
-            if let Err(e) = claudette_server::run(claudette_server::ServerOptions::default()).await
-            {
-                tracing::error!(target: "claudette::startup", error = %e, "embedded claudette-server exited with error");
-                std::process::exit(1);
-            }
-        });
-        return;
-    }
-
-    // When spawned with `--agent-mcp`, run the in-process MCP server over
-    // stdio. The Tauri parent injects this into `--mcp-config` for the Claude
-    // CLI, which spawns this binary as a stdio child. The grandchild forwards
-    // tool invocations back to the parent over a token-authed local socket
-    // (see `claudette::agent_mcp`).
-    if std::env::args().any(|a| a == "--agent-mcp") {
-        let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
-        rt.block_on(async {
-            if let Err(e) = claudette::agent_mcp::server::run_stdio().await {
-                tracing::error!(target: "claudette::startup", error = %e, "agent-mcp child exited with error");
-                std::process::exit(1);
-            }
-        });
-        return;
-    }
-
-    // Claude Code command hooks run as short-lived child processes. Forward
-    // their JSON stdin to the parent bridge so nested subagent tool activity
-    // can be displayed in the chat timeline.
-    if std::env::args().any(|a| a == "--agent-hook") {
-        let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
-        rt.block_on(async {
-            if let Err(e) = claudette::agent_mcp::hook::run_stdin().await {
-                tracing::error!(target: "claudette::startup", error = %e, "agent-hook child exited with error");
-                std::process::exit(1);
-            }
-        });
-        return;
-    }
 
     // Windows only: if the WebView2 Runtime is missing, Tauri's webview
     // initialization would fail with a generic system error dialog and exit.

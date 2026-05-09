@@ -49,7 +49,22 @@ interface FrontendLogPayload {
 // takes effect without rebinding listeners.
 let currentVerbosity: FrontendLogVerbosity = "errors";
 
-let installed = false;
+// Two install phases:
+//   - Phase 1 (auto on module load below): `window.error` and
+//     `unhandledrejection` listeners. ES module imports evaluate
+//     BEFORE any top-level statement in `main.tsx`, so an
+//     `installFrontendLogBridge()` call there can't catch a crash
+//     thrown by `./i18n` / `App` / grammar / Shiki bootstrap. We
+//     fire these listeners as a side effect of importing `log.ts`
+//     so just `import "./utils/log"` first in `main.tsx` arms them
+//     before the rest of the import graph resolves.
+//   - Phase 2 (explicit `installFrontendLogBridge()` call): console
+//     mirroring, keyed by user verbosity. Console patches are
+//     deferred until the user has loaded so we don't intercept
+//     React StrictMode warnings firing inside one of the imports
+//     above.
+let earlyListenersInstalled = false;
+let consolePatched = false;
 
 /// Forward a log line to the Rust subscriber. Failures are swallowed —
 /// if the Tauri bridge is gone (e.g. during teardown), we cannot
@@ -127,25 +142,14 @@ function formatConsoleArgs(args: unknown[]): { message: string; stack?: string }
   return { message: parts.join(" "), stack };
 }
 
-/// Install the global browser-error → backend bridge.
-///
-/// Hooked sources, all under `claudette::frontend`:
-/// - `window` `error` events       → `unhandled-error`
-/// - `window` `unhandledrejection` → `unhandled-rejection`
-/// - `console.error` (always)      → `console-error`
-/// - `console.warn`  (verbosity ≥ warnings) → `console-warn`
-/// - `console.log/info` (verbosity = all)  → `console-log` / `console-info`
-///
-/// `ErrorBoundary.componentDidCatch` calls `log.error` directly — it
-/// already runs after a React render error, so wiring it here would
-/// be a duplicate.
-export function installFrontendLogBridge(initial: FrontendLogVerbosity = "errors"): void {
-  if (installed) {
-    setFrontendLogVerbosity(initial);
-    return;
-  }
-  installed = true;
-  currentVerbosity = initial;
+/// Install `window.error` + `unhandledrejection` listeners. Called
+/// automatically below as a module-load side effect so it runs
+/// before any other module in `main.tsx`'s import graph evaluates —
+/// crashes inside i18n / grammar / Shiki / App import-time setup
+/// land in the daily log instead of the devtools console.
+function installEarlyListeners(): void {
+  if (earlyListenersInstalled) return;
+  earlyListenersInstalled = true;
 
   // Window error events — uncaught synchronous throws.
   window.addEventListener("error", (event) => {
@@ -195,6 +199,27 @@ export function installFrontendLogBridge(initial: FrontendLogVerbosity = "errors
       fields,
     });
   });
+}
+
+/// Wire console mirroring per verbosity. Idempotent: console patches
+/// install once; later calls just rebind verbosity.
+///
+/// Sources mirrored, all under `claudette::frontend`:
+/// - `console.error` (always)               → `console-error`
+/// - `console.warn`  (verbosity ≥ warnings) → `console-warn`
+/// - `console.log/info` (verbosity = all)   → `console-log` / `console-info`
+///
+/// `ErrorBoundary.componentDidCatch` calls `log.error` directly — it
+/// already runs after a React render error, so wiring it here would
+/// be a duplicate.
+export function installFrontendLogBridge(initial: FrontendLogVerbosity = "errors"): void {
+  // Defensive: if some caller manages to invoke this before module
+  // load fully runs (vitest hot-reload edge case), the early
+  // listeners still need to exist.
+  installEarlyListeners();
+  currentVerbosity = initial;
+  if (consolePatched) return;
+  consolePatched = true;
 
   // Console mirrors. We patch the real console methods (rather than
   // adding listeners — there are no events) but always call the
@@ -208,6 +233,12 @@ export function installFrontendLogBridge(initial: FrontendLogVerbosity = "errors
   patchConsoleMethod("info", "console-info", "info", () => currentVerbosity === "all");
   patchConsoleMethod("log", "console-log", "info", () => currentVerbosity === "all");
 }
+
+// Side-effect on import: arm the listeners as soon as this module
+// loads. `main.tsx` imports `./utils/log` before its other modules
+// for exactly this reason — see the comment block at the top of
+// this file.
+installEarlyListeners();
 
 /// Update the live verbosity. Used by the Diagnostics settings panel
 /// after `set_frontend_verbosity` has persisted the change.

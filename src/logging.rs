@@ -114,6 +114,46 @@ pub fn init() -> Option<LogHandle> {
     init_with_override(None)
 }
 
+/// Initialize a **stderr-only** subscriber — no log directory, no
+/// retention sweep, no rolling file. Intended for short-lived child
+/// processes (`claudette-app --server`, `--agent-mcp`, `--agent-hook`)
+/// where the parent already captures stderr and writing to the same
+/// daily file from N children would just contend on the appender's
+/// internal lock and bloat the log with dispatch noise.
+///
+/// Honors `RUST_LOG` first, then falls back to [`DEFAULT_FILTER`].
+/// Subsequent calls return `None` so the GUI path's heavier
+/// subscriber wins if both are reachable in the same process.
+///
+/// Returns a [`LogHandle`] for symmetry with [`init`] / [`init_with_override`];
+/// the handle has no file guard to drop, and its `log_dir` is the
+/// resolved-but-uncreated path so callers can still surface "where
+/// would logs go" if they want to.
+pub fn init_stderr_only() -> Option<LogHandle> {
+    let log_dir = resolve_log_dir();
+    let env_filter =
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(DEFAULT_FILTER));
+    let stderr_layer = fmt::layer()
+        .with_target(true)
+        .with_thread_ids(false)
+        .with_thread_names(false)
+        .with_level(true)
+        .with_writer(std::io::stderr);
+    if tracing_subscriber::registry()
+        .with(env_filter)
+        .with(stderr_layer)
+        .try_init()
+        .is_err()
+    {
+        return None;
+    }
+    let _ = LOG_HANDLE.set(log_dir.clone());
+    Some(LogHandle {
+        _file_guard: None,
+        log_dir,
+    })
+}
+
 /// Initialize the global tracing subscriber. Must be called exactly
 /// once, as early in `main` as practical (before the first
 /// `tracing::*!` macro fires). Subsequent calls return `None` and leave

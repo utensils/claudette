@@ -11,6 +11,19 @@ if ((window as unknown as { __claudetteHijackBlocked?: boolean }).__claudetteHij
   throw new Error("Claudette hijack guard refused to mount React.");
 }
 
+// Frontend → backend log bridge — imported FIRST so the module's
+// load-time side effect arms `window.error` and `unhandledrejection`
+// listeners before any other module in this file's import graph
+// evaluates. ES module static imports run before top-level
+// statements, so a crash inside `./i18n` / `App` / grammar / Shiki
+// bootstrap would otherwise happen before any explicit
+// `installFrontendLogBridge()` call here could register handlers.
+// See the comment block at the top of `./utils/log.ts`.
+import {
+  installFrontendLogBridge,
+  setFrontendLogVerbosity,
+  type FrontendLogVerbosity,
+} from "./utils/log";
 import "./i18n";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
@@ -18,22 +31,13 @@ import { invoke } from "@tauri-apps/api/core";
 import { ErrorBoundary } from "./components/layout/ErrorBoundary";
 import { prewarmHighlighter } from "./utils/highlight";
 import { bootstrapGrammarRegistry } from "./utils/grammarRegistry";
-import {
-  installFrontendLogBridge,
-  setFrontendLogVerbosity,
-  type FrontendLogVerbosity,
-} from "./utils/log";
 import App from "./App.tsx";
 
-// Install the frontend → backend log bridge BEFORE React mounts so a
-// crash inside any module's import-time side effects (i18n, grammar
-// bootstrap) lands in the daily log file under `claudette::frontend`
-// instead of evaporating into the devtools console.
-//
-// Default verbosity is `errors` (matches the Settings default). The
-// async fetch below upgrades it once `get_diagnostics_settings`
-// returns the user's persisted choice — which is fine because nothing
-// in the boot path emits at warn/info that we'd want to mirror.
+// Phase 2 of the log bridge: console mirroring. The early listeners
+// were already armed at `./utils/log` import time above; this call
+// only wires `console.{error,warn,info,log}` interception (gated by
+// the user's verbosity setting). Default verbosity is `errors` to
+// match the Settings UI default.
 installFrontendLogBridge("errors");
 void invoke<{ frontend_verbosity: string | null }>("get_diagnostics_settings")
   .then((settings) => {
