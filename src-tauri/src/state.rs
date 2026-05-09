@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use claudette::agent::PersistentSession;
 use tokio::sync::{RwLock, Semaphore};
@@ -411,6 +411,54 @@ impl ScmCache {
     }
 }
 
+/// Cached `git merge-base <base_branch> HEAD` lookup for a single workspace.
+///
+/// Note `base_branch` is intentionally NOT part of the entry. If the user
+/// changes the repo's base branch in Settings, a stale entry can serve the
+/// previous-branch SHA for up to one TTL window, after which the natural
+/// expiration recomputes against the new branch. We accept that 10s
+/// transient over the alternative — a synchronous DB read on every cache
+/// hit just to detect a near-zero-frequency config change.
+pub struct MergeBaseCacheEntry {
+    pub sha: String,
+    pub worktree_path: String,
+    pub fetched_at: Instant,
+}
+
+/// Short-TTL cache for `git merge-base` lookups, keyed by `workspace_id`.
+///
+/// Exists because `merge-base` is by far the slowest piece of
+/// `load_diff_files`: on a huge repo whose `origin/<base>` has drifted
+/// far from `HEAD` (e.g. a `nixpkgs` fork whose master is 60k+ commits
+/// behind upstream after a fast-forward of `upstream/master`), each call
+/// can take 4–6 seconds. The right-sidebar Changes tab and the file
+/// viewer's git gutter both call it on a polling cadence whether anything
+/// moved or not, so without a cache every tick spawns a `git` process even
+/// though the answer is the same.
+///
+/// The frontend dedup guards against pile-up within a single panel; this
+/// cache cuts the baseline cost so even the unguarded one-shot callers
+/// (workspace selection, post-stop refresh, file viewer gutter) stop
+/// paying full price when the answer hasn't moved. TTL is intentionally
+/// short — `merge-base` only changes when HEAD or `origin/<base>` move,
+/// both of which are user-initiated git ops, so a 10s window is invisible
+/// in practice while still bounding staleness after a manual `git fetch`.
+pub struct MergeBaseCache {
+    pub entries: RwLock<HashMap<String, MergeBaseCacheEntry>>,
+}
+
+impl MergeBaseCache {
+    pub fn new() -> Self {
+        Self {
+            entries: RwLock::new(HashMap::new()),
+        }
+    }
+}
+
+/// TTL for `MergeBaseCache` entries. See `MergeBaseCache` doc comment for
+/// the full rationale on why this is short.
+pub const MERGE_BASE_CACHE_TTL: Duration = Duration::from_secs(10);
+
 /// Application-wide managed state, shared across all Tauri commands.
 pub struct AppState {
     pub db_path: PathBuf,
@@ -471,6 +519,9 @@ pub struct AppState {
     pub file_watcher: RwLock<Option<Arc<FileWatcher>>>,
     /// Cached PR/CI status data keyed by (repo_id, branch_name).
     pub scm_cache: ScmCache,
+    /// Short-TTL cache for `git merge-base <base_branch> HEAD`, keyed by
+    /// workspace_id. See `MergeBaseCache` doc comment for the full rationale.
+    pub merge_base_cache: MergeBaseCache,
     /// Limits concurrent SCM CLI invocations.
     pub scm_semaphore: Arc<Semaphore>,
     /// Pending updater handle from the most recent `check_for_updates_with_channel`
@@ -516,6 +567,7 @@ impl AppState {
             env_watcher: RwLock::new(None),
             file_watcher: RwLock::new(None),
             scm_cache: ScmCache::new(),
+            merge_base_cache: MergeBaseCache::new(),
             scm_semaphore: Arc::new(Semaphore::new(4)),
             pending_update: tokio::sync::Mutex::new(None),
             cesp_playback: Mutex::new(claudette::cesp::SoundPlaybackState::new()),
