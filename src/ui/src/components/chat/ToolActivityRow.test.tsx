@@ -177,4 +177,51 @@ describe("ToolActivityRow", () => {
     expect(container.querySelector("pre")?.textContent).toContain('"pattern"');
     expect(container.innerHTML).toContain('data-highlight-lang="json"');
   });
+
+  it("renders edit details with real multiline strings instead of JSON escapes", async () => {
+    const input = {
+      file_path: "/repo/src/types.rs",
+      old_string: "impl Cost {\n    fn label(&self) -> &str {\n        \"Sonnet\"\n    }\n}",
+      new_string:
+        "impl Cost {\n    fn label(&self) -> &str {\n        self.tier_label\n    }\n}",
+    };
+    const container = await render(
+      <ToolActivityRow
+        activity={activity("Edit", {
+          inputJson: JSON.stringify(input),
+        })}
+        searchQuery=""
+      />,
+    );
+
+    await act(async () => {
+      (container.querySelector("button") as HTMLButtonElement).click();
+      await Promise.resolve();
+    });
+
+    const text = container.querySelector("pre")?.textContent ?? "";
+    expect(highlightCalls).toEqual([
+      {
+        code:
+          'file_path: "/repo/src/types.rs"\n' +
+          "old_string: |-\n" +
+          "  impl Cost {\n" +
+          "      fn label(&self) -> &str {\n" +
+          '          "Sonnet"\n' +
+          "      }\n" +
+          "  }\n" +
+          "new_string: |-\n" +
+          "  impl Cost {\n" +
+          "      fn label(&self) -> &str {\n" +
+          "          self.tier_label\n" +
+          "      }\n" +
+          "  }",
+        lang: "yaml",
+      },
+    ]);
+    expect(text).toContain("old_string: |-");
+    expect(text).toContain("new_string: |-");
+    expect(text).toContain("self.tier_label");
+    expect(text).not.toContain("\\n");
+  });
 });
