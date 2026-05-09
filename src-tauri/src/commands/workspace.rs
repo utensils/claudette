@@ -12,6 +12,11 @@ use claudette::model::{AgentStatus, ChatMessage, ChatRole, Workspace, WorkspaceS
 use claudette::names::NameGenerator;
 use claudette::ops::workspace::{self as ops_workspace, CreateParams, SetupResult};
 use claudette::ops::{NoopHooks, NotificationEvent, OpsHooks, WorkspaceChangeKind};
+// Only the linux + macOS workspace-opener branches below call
+// `.no_console_window()`; on Windows every call site is `#[cfg]`-ed
+// away, so the trait import is unused. Match the import's gate to the
+// call sites' so Windows -Dwarnings builds stay clean.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 use claudette::process::CommandWindowExt as _;
 
 use crate::commands::apps::{self, DEFAULT_TERMINAL_APP_SETTING_KEY};

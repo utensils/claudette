@@ -1,5 +1,8 @@
 use std::path::{Path, PathBuf};
 
+// `data_url_from_bytes` (the only consumer of these symbols) is now
+// gated to macOS, so the import has to follow.
+#[cfg(target_os = "macos")]
 use base64::{Engine as _, engine::general_purpose};
 use serde::{Deserialize, Serialize};
 use tauri::State;
@@ -215,6 +218,11 @@ fn find_mac_app(app_name: &str) -> Option<PathBuf> {
         .filter(|path| path.exists())
 }
 
+// Only `mac_icon_from_app_bundle` (gated `#[cfg(target_os = "macos")]`)
+// uses these helpers — they synthesize data URLs from the icon bytes
+// extracted via PlistBuddy/sips. Match the gate so non-macOS builds
+// don't trip `dead_code` under -Dwarnings.
+#[cfg(target_os = "macos")]
 fn data_url_from_bytes(media_type: &str, bytes: &[u8]) -> String {
     format!(
         "data:{media_type};base64,{}",
@@ -222,6 +230,7 @@ fn data_url_from_bytes(media_type: &str, bytes: &[u8]) -> String {
     )
 }
 
+#[cfg(target_os = "macos")]
 fn image_data_url_from_file(path: &Path) -> Option<String> {
     let ext = path
         .extension()
