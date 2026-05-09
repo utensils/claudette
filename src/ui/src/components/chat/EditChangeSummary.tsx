@@ -190,6 +190,9 @@ function DiffPreviewLine({ line }: { line: EditPreviewLine }) {
       : line.type === "removed"
         ? styles.turnEditDiffLineRemoved
         : "";
+  // No `+`/`-` prefix — the row's background color + line-number
+  // gutter already convey added/removed. Matches Codex chat and the
+  // GitHub PR view.
   return (
     <div className={`${styles.turnEditDiffLine} ${lineClass}`}>
       <span className={styles.turnEditDiffLineNumber}>
@@ -197,9 +200,6 @@ function DiffPreviewLine({ line }: { line: EditPreviewLine }) {
       </span>
       <span className={styles.turnEditDiffLineNumber}>
         {line.newLineNumber ?? ""}
-      </span>
-      <span className={styles.turnEditDiffPrefix}>
-        {line.type === "added" ? "+" : line.type === "removed" ? "-" : " "}
       </span>
       <code className={styles.turnEditDiffContent}>{line.content || " "}</code>
     </div>

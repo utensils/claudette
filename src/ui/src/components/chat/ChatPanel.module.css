@@ -568,7 +568,11 @@
 
 .turnEditDiffLine {
   display: grid;
-  grid-template-columns: 44px 44px 18px minmax(0, 1fr);
+  /* No +/- prefix column — the row background and line-number gutter
+   * already encode added/removed. Matches Codex chat and the GitHub
+   * PR view. Compact 40px gutters keep four-digit line numbers
+   * legible without dominating the row. */
+  grid-template-columns: 40px 40px minmax(0, 1fr);
   min-height: 22px;
   color: var(--text-dim);
 }
@@ -589,24 +593,9 @@
   border-right: 1px solid var(--divider);
 }
 
-.turnEditDiffPrefix {
-  text-align: center;
-  color: var(--text-faint);
-}
-
-.turnEditDiffLineAdded .turnEditDiffPrefix {
-  color: var(--diff-added-text);
-  font-weight: 600;
-}
-
-.turnEditDiffLineRemoved .turnEditDiffPrefix {
-  color: var(--diff-removed-text);
-  font-weight: 600;
-}
-
 .turnEditDiffContent {
   min-width: 0;
-  padding-left: 4px;
+  padding-left: 8px;
   overflow: hidden;
   color: var(--text-primary);
   font: inherit;
