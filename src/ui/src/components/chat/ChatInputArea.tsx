@@ -64,6 +64,18 @@ function normalizeShellCommand(value: string): string {
   return trimmed.startsWith("!") ? trimmed.slice(1).trimStart() : trimmed;
 }
 
+export function shouldSteerQueuedTopOnImmediateSend({
+  isRunning,
+  hasQueuedMessages,
+  hasComposerPayload,
+}: {
+  isRunning: boolean;
+  hasQueuedMessages: boolean;
+  hasComposerPayload: boolean;
+}): boolean {
+  return isRunning && hasQueuedMessages && !hasComposerPayload;
+}
+
 /** Rebuild a `PendingAttachment[]` for a session from the slice's
  * `StoredAttachment[]`. Image preview blob URLs are regenerated from
  * `data_base64` (the underlying Blob is GC'd once the previous mount
@@ -146,10 +158,12 @@ function fileToBase64(file: Blob): Promise<string> {
 export function ChatInputArea({
   onSend,
   onSendSteer,
+  onSteerQueuedTop,
   onRunShellCommand,
   onStop,
   isRunning,
   isRemote,
+  hasQueuedMessages,
   selectedWorkspaceId,
   sessionId,
   repoId,
@@ -174,10 +188,13 @@ export function ChatInputArea({
     mentionedFiles?: Set<string>,
     attachments?: AttachmentInput[],
   ) => void | Promise<void>;
+  /** Steer the first queued message without consuming the current composer. */
+  onSteerQueuedTop?: () => void | Promise<void>;
   onRunShellCommand: (command: string) => void | Promise<void>;
   onStop: () => void | Promise<void>;
   isRunning: boolean;
   isRemote: boolean;
+  hasQueuedMessages: boolean;
   selectedWorkspaceId: string;
   sessionId: string;
   repoId: string | undefined;
@@ -887,6 +904,14 @@ export function ChatInputArea({
     // an idle session doesn't double-send.
     if (!isRunning) {
       handleSend();
+      return;
+    }
+    if (shouldSteerQueuedTopOnImmediateSend({
+      isRunning,
+      hasQueuedMessages,
+      hasComposerPayload: !!chatInput.trim() || pendingAttachments.length > 0,
+    }) && onSteerQueuedTop) {
+      void onSteerQueuedTop();
       return;
     }
     // Mid-turn steering isn't supported over the remote transport yet

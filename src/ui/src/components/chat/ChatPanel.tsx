@@ -843,6 +843,12 @@ export function ChatPanel() {
     }
   };
 
+  const handleSteerQueuedTop = () => {
+    const firstQueuedMessage = queuedMessages[0];
+    if (!firstQueuedMessage) return;
+    void handleSteerQueuedMessage(firstQueuedMessage.id);
+  };
+
   const handleRunShellCommand = async (command: string) => {
     if (!selectedWorkspaceId) return;
     if (ws?.remote_connection_id) {
@@ -1425,10 +1431,12 @@ export function ChatPanel() {
       <ChatInputArea
         onSend={handleSend}
         onSendSteer={handleSendSteer}
+        onSteerQueuedTop={handleSteerQueuedTop}
         onRunShellCommand={handleRunShellCommand}
         onStop={handleStop}
         isRunning={isRunning}
         isRemote={!!ws?.remote_connection_id}
+        hasQueuedMessages={queuedMessages.length > 0}
         selectedWorkspaceId={selectedWorkspaceId!}
         sessionId={activeSessionId!}
         repoId={repo?.id}
