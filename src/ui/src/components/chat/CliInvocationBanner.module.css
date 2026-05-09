@@ -73,9 +73,17 @@
 .summary {
   font-family: var(--font-mono);
   color: var(--text-primary);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  /* Wrap rather than ellipsize: the summary line is the only header
+     affordance the user sees while collapsed, so truncating it (the
+     prior `nowrap` + `text-overflow: ellipsis` combo) hid the
+     "claude · N flags" count when the chat panel narrowed or the
+     UI zoom was bumped — and the user couldn't tell the banner had
+     content past what was visible. Letting it wrap means the header
+     grows to fit instead of vanishing. `overflow-wrap: anywhere`
+     keeps long redacted flag values (URLs, paths) from overflowing
+     the panel horizontally. */
+  white-space: normal;
+  overflow-wrap: anywhere;
   min-width: 0;
 }
 

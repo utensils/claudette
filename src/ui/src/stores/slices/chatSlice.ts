@@ -197,6 +197,29 @@ export interface ChatSlice {
    *  because blob URLs are tied to the lifetime of the underlying Blob,
    *  which is GC'd on component unmount; the composer regenerates
    *  preview URLs from `data_base64` on mount. */
+  /** Per-group user override of the collapsed/expanded state for tool
+   *  activity groups inside a completed turn. Keyed first by chat
+   *  session id, then by a stable per-group key (built in
+   *  `MessagesWithTurns` from `${turn.id}:${first activity toolUseId}`).
+   *
+   *  Lives separately from `CompletedTurn.collapsed` because a single
+   *  turn can be split into multiple chronological display groups
+   *  (the user inserted messages between tool calls, etc.); without
+   *  per-group state, clicking one chevron flipped the shared
+   *  `turn.collapsed` and every sibling group toggled in lockstep.
+   *  Unset entries fall back to `turn.collapsed`, so existing
+   *  persisted-turn behavior is preserved on first interaction. */
+  collapsedToolGroupsBySession: Record<string, Record<string, boolean>>;
+  /** Set the explicit collapse override for a single group. The caller
+   *  knows the current effective value (computed from the slice plus
+   *  `turn.collapsed` fallback) so it passes the desired new boolean
+   *  rather than asking the slice to toggle relative to a default it
+   *  can't see. */
+  setCollapsedToolGroup: (
+    sessionId: string,
+    groupKey: string,
+    collapsed: boolean,
+  ) => void;
   pendingAttachmentsBySession: Record<string, StoredAttachment[]>;
   setPendingAttachmentsForSession: (
     sessionId: string,
@@ -602,6 +625,18 @@ export const createChatSlice: StateCreator<AppState, [], [], ChatSlice> = (
       const next = { ...s.chatDrafts };
       delete next[sessionId];
       return { chatDrafts: next };
+    }),
+  collapsedToolGroupsBySession: {},
+  setCollapsedToolGroup: (sessionId, groupKey, collapsed) =>
+    set((s) => {
+      const wsGroups = s.collapsedToolGroupsBySession[sessionId] ?? {};
+      if (wsGroups[groupKey] === collapsed) return s;
+      return {
+        collapsedToolGroupsBySession: {
+          ...s.collapsedToolGroupsBySession,
+          [sessionId]: { ...wsGroups, [groupKey]: collapsed },
+        },
+      };
     }),
   pendingAttachmentsBySession: {},
   setPendingAttachmentsForSession: (sessionId, attachments) =>

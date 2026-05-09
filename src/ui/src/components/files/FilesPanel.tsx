@@ -136,14 +136,25 @@ export function FilesPanel() {
   }, [isRunning, selectedWorkspaceId, loadFiles]);
 
   // React to the `requestNewFileAtRoot` nonce: open the inline create
-  // editor at the workspace root. The first effect run (nonce === 0) is
-  // skipped on purpose so opening a workspace doesn't auto-trigger the
-  // create flow.
-  const lastSeenNewFileNonce = useRef(newFileNonce);
+  // editor at the workspace root.
+  //
+  // The handled-nonce ref is keyed by workspace and seeded at 0 so a
+  // bump that landed *before* this panel mounted (e.g. Cmd+T fired
+  // while the right sidebar was on Tasks/Changes — the global handler
+  // bumps the nonce and switches the tab in the same tick, but
+  // FilesPanel only mounts after React commits the tab switch) is
+  // still consumed when we mount. A per-instance ref initialized from
+  // the current nonce would miss those mounts entirely. The Map keys
+  // by workspace so switching to a workspace whose nonce is currently
+  // lower than another workspace's last-seen value can't suppress
+  // valid bumps either.
+  const handledNewFileNonces = useRef<Map<string, number>>(new Map());
   useEffect(() => {
-    if (newFileNonce === lastSeenNewFileNonce.current) return;
-    lastSeenNewFileNonce.current = newFileNonce;
     if (!selectedWorkspaceId) return;
+    if (newFileNonce === 0) return;
+    const handled = handledNewFileNonces.current.get(selectedWorkspaceId) ?? 0;
+    if (newFileNonce === handled) return;
+    handledNewFileNonces.current.set(selectedWorkspaceId, newFileNonce);
     setCreatingParentPath("");
     refocusExplorer();
   }, [newFileNonce, selectedWorkspaceId, refocusExplorer]);

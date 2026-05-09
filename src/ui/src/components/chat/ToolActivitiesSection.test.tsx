@@ -199,6 +199,60 @@ describe("ToolActivitiesSection", () => {
     expect(container.textContent).toContain("Read");
   });
 
+  it("force-expands a user-collapsed group when a search match lands inside", async () => {
+    // Regression: prior to this fix, a user-collapsed group with
+    // `userOverride === false` won the precedence check and the
+    // search-match-driven expand never fired — search would tick up
+    // its hit counter but the matching activity was hidden.
+    //
+    // Setup: a *running* group (defaults to expanded), user clicks
+    // once to collapse it. Then a search query that matches the
+    // group's content must override the user's collapse and
+    // re-expand.
+    const runningActivity = activity("Bash", {
+      resultText: "",
+      summary: "secret-token-payload",
+    });
+    const container = await render(
+      <ToolActivitiesSection
+        sessionId="session-1"
+        toolDisplayMode="grouped"
+        searchQuery=""
+        activities={[runningActivity]}
+      />,
+    );
+    const header = container.querySelector(
+      '[role="button"][aria-expanded]',
+    ) as HTMLElement;
+    expect(header).toBeTruthy();
+    // Sanity: running groups default to expanded.
+    expect(header.getAttribute("aria-expanded")).toBe("true");
+    // User explicitly collapses the running group.
+    await act(async () => {
+      header.click();
+    });
+    expect(header.getAttribute("aria-expanded")).toBe("false");
+
+    await act(async () => {
+      mountedRoots[0].render(
+        <ToolActivitiesSection
+          sessionId="session-1"
+          toolDisplayMode="grouped"
+          searchQuery="secret-token"
+          activities={[runningActivity]}
+        />,
+      );
+    });
+
+    const headerAfter = container.querySelector(
+      '[role="button"][aria-expanded]',
+    ) as HTMLElement;
+    // Search match wins: the user-collapsed override is overridden in
+    // turn so the matching activity is visible.
+    expect(headerAfter.getAttribute("aria-expanded")).toBe("true");
+    expect(container.textContent).toContain("Bash");
+  });
+
   it("preserves the user override across appended tool activities", async () => {
     // Two tools running, user collapses; a third tool joins the same
     // direct-tools run. The component is keyed by the first activity's

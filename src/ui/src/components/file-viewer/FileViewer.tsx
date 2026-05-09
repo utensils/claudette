@@ -360,18 +360,23 @@ function FileViewerInner({ workspaceId, path, t }: FileViewerInnerProps) {
   // dirty-aware close path. The global handler bumps the per-workspace
   // nonce; the FileViewer reacts by running the same `requestCloseFileTab`
   // its own close button uses, so the unsaved-changes prompt fires
-  // identically whether the user clicks × or hits the keystroke. The
-  // first-render value is treated as the baseline (no auto-close on
-  // mount).
+  // identically whether the user clicks × or hits the keystroke.
+  //
+  // Handled-nonce tracking matches the FilesPanel pattern: a Map
+  // keyed by workspace, seeded at 0 so a bump that arrived while
+  // this viewer was mounting (rare but possible if `Cmd+W` fired
+  // mid-route to a fresh file tab) is still consumed.
   const closeFileTabNonce = useAppStore(
     (s) => s.requestCloseFileTabNonceByWorkspace[workspaceId] ?? 0,
   );
-  const lastSeenCloseNonce = useRef(closeFileTabNonce);
+  const handledCloseNonces = useRef<Map<string, number>>(new Map());
   useEffect(() => {
-    if (closeFileTabNonce === lastSeenCloseNonce.current) return;
-    lastSeenCloseNonce.current = closeFileTabNonce;
+    if (closeFileTabNonce === 0) return;
+    const handled = handledCloseNonces.current.get(workspaceId) ?? 0;
+    if (closeFileTabNonce === handled) return;
+    handledCloseNonces.current.set(workspaceId, closeFileTabNonce);
     requestCloseFileTab();
-  }, [closeFileTabNonce, requestCloseFileTab]);
+  }, [closeFileTabNonce, requestCloseFileTab, workspaceId]);
 
   const previewShortcutHint = formatBinding(
     getEffectiveBindingById(

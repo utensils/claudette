@@ -113,9 +113,14 @@ function GroupedToolActivityRows({
     activities.some((activity) =>
       activityMatchesSearch(activity, searchQuery, worktreePath),
     );
-  const defaultExpanded =
-    groupHasRunningActivity(activities, true) || queryHasMatch;
-  const isExpanded = userOverride ?? defaultExpanded;
+  // Search matches always force the group open — otherwise marks would
+  // land in detached DOM (collapsed branch never renders) and the
+  // search bar's hit counter would tick up but nothing visible would
+  // change. This wins over `userOverride === false` (a user-collapsed
+  // group) on purpose: the user typed a query expecting matches, and
+  // surprise-hidden hits regress chat search.
+  const defaultExpanded = groupHasRunningActivity(activities, true);
+  const isExpanded = queryHasMatch || (userOverride ?? defaultExpanded);
   const toggle = () => setUserOverride(!isExpanded);
 
   return (

@@ -1107,7 +1107,17 @@ export function ChatInputArea({
         <div className={styles.attachmentStrip}>
           {pendingAttachments.map((att) => (
             <div key={att.id} className={styles.attachmentThumb} title={att.filename}>
-              {isTextFile(att.media_type) ? (
+              {isTextFile(att.media_type) || !att.preview_url ? (
+                // No preview URL: text files (always show filename
+                // chip) AND non-image attachments rehydrated from the
+                // slice without their thumbnail (PDFs lose their
+                // first-page render on composer remount because the
+                // underlying Blob is GC'd; the slice only stores
+                // `data_base64`, not the transient thumbnail URL).
+                // Without this fallback the row rendered as a broken
+                // <img> after a remount even though the attachment
+                // would still send correctly. The badge layout is
+                // identical in both cases — file icon + name + size.
                 <div className={styles.textFileBadge}>
                   <FileText size={16} />
                   <span className={styles.textFileName}>{att.filename}</span>
