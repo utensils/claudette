@@ -159,65 +159,112 @@ if (Test-Path -LiteralPath '{0}') {{
 $cleanupAction = [ScriptBlock]::Create($cleanupBody)
 Register-EngineEvent -SourceIdentifier PowerShell.Exiting -Action $cleanupAction | Out-Null
 
-# 6) Build frontend + run the Tauri binary in release mode.
+# 6) Start Vite + run the Tauri binary in debug mode.
 #
-# This deliberately diverges from dev.sh — Windows ARM64 has two
-# independent issues that block the standard "vite dev + cargo run"
-# flow that dev.sh uses on Linux/macOS:
+# Why this differs from dev.sh:
 #
-#   (a) `cargo tauri dev` always merges the package's [features].default
-#       into the resulting `cargo run` invocation, even when -f is
-#       passed. tauri-cli 2.11.1 has no --no-default-features flag.
-#       That drags in `voice`, which pulls `candle-*` → `gemm-f16`,
-#       whose ARMv8.2 inline asm (`fmla v0.8h, ..., fmul v0.8h, ...`)
-#       requires `fullfp16` — a target feature not enabled by the
-#       default `aarch64-pc-windows-msvc` baseline. Debug profile hits
-#       the asm path and fails with `instruction requires: fullfp16`;
-#       release profile happens to optimize it away.
+#   * dev.sh uses `cargo tauri dev`, which on Windows is unusable here:
+#     tauri-cli 2.11.1 always merges the package's [features].default
+#     into the resulting `cargo run` invocation, even when -f is passed.
+#     That drags in `voice` → `candle-*` → `gemm-f16`, whose ARMv8.2
+#     inline asm (`fmla v0.8h, ..., fmul v0.8h, ...`) requires the
+#     `fullfp16` target feature that aarch64-pc-windows-msvc's
+#     baseline does not enable. Debug profile compile fails with
+#     `instruction requires: fullfp16`. We bypass tauri-cli by driving
+#     `bun run dev` + `cargo run` ourselves.
 #
-#   (b) The Tauri 2 + Windows ARM64 + debug-build webview path returns
-#       `WebView2 error HRESULT 0x80070057 ("The parameter is incorrect.")`
-#       at `CreateCoreWebView2Controller` — the binary stays alive but
-#       no msedgewebview2 children spawn, leaving an empty window.
-#       Reproducible with bare `cargo run -p claudette-tauri --no-default-features
-#       --features devtools,server,alternative-backends`, so it isn't
-#       caused by anything dev.ps1 sets. Release-built binaries on the
-#       same machine create the webview cleanly (verified via the
-#       smoke-tested `target/release/claudette-app.exe`).
+#   * Vite must bind on `127.0.0.1` (IPv4), not its default `localhost`
+#     which on Windows resolves to `::1` (IPv6). WebView2 navigates to
+#     `http://localhost:14253`, IPv4 first by default. If Vite is on
+#     `::1` only, controller creation fails with HRESULT 0x80070057
+#     ("The parameter is incorrect.") and the binary stays alive with
+#     an empty window. Passing `-- --host 127.0.0.1` to Vite forces
+#     the v4 bind and the webview connects cleanly.
 #
-# Workaround: skip `cargo tauri dev` AND skip Vite. Build the frontend
-# once with `bun run build` (so the embedded `frontendDist` from
-# tauri.conf.json is up-to-date) and run the Tauri binary in release
-# mode (`--release`). cfg(debug_assertions) is then off, so Tauri loads
-# from the embedded dist instead of devUrl — sidestepping the dev URL
-# webview-init bug. Cost: no frontend hot-reload (rerun `dev` after
-# editing `src/ui/`), and no `/claudette-debug` TCP eval server (it's
-# gated `#[cfg(debug_assertions)]`).
+#   * `tauri/custom-protocol` is intentionally NOT enabled. With it
+#     on, Tauri's build.rs sets `cfg(dev) = false`, the binary loads
+#     embedded HTML instead of devUrl, AND `import.meta.env.DEV` in
+#     the frontend is false — which leaves `window.__CLAUDETTE_INVOKE__`
+#     unset, breaking the `/claudette-debug` TCP eval server. We want
+#     hot-reload AND the eval server, so we keep Vite + dev URL.
 #
-# Users who want true hot-reload + voice on Windows once these issues
-# are resolved upstream can set `$env:CLAUDETTE_DEV_USE_DEBUG = '1'`
-# and `$env:CARGO_TAURI_FEATURES` and re-enable the dev-URL/Vite path
-# in this script (currently elided).
+# The Tauri binary is launched via `cargo run -p claudette-tauri
+# --no-default-features --features devtools,server,alternative-backends`
+# (no `--release`, no custom-protocol, no voice). With Vite already up
+# at 127.0.0.1:14253, the webview connects on first paint, the bundle
+# loads with `import.meta.env.DEV = true`, `__CLAUDETTE_INVOKE__` gets
+# set, and `/claudette-debug` works.
 $features = if ($env:CARGO_TAURI_FEATURES) { $env:CARGO_TAURI_FEATURES }
             else { 'devtools,server,alternative-backends' }
 
 Write-Host "▸ Features:         $features"
-Write-Host "▸ Profile:          release  (debug profile's WebView2 init is broken on this target)"
-Write-Host "▸ Building frontend (cd src/ui; bun run build)"
+Write-Host "▸ Starting Vite     (cd src/ui; bun run dev -- --host 127.0.0.1)"
 
-Push-Location (Join-Path $repoRoot 'src\ui')
-try {
-    & bun install
-    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-    & bun run build
-    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-} finally {
-    Pop-Location
+# Vite needs --host 127.0.0.1 to force an IPv4 bind. Default on Windows
+# is `::1` (IPv6) which WebView2 cannot reach via `http://localhost:...`
+# without a corresponding A record — see comment block above.
+$viteLog = Join-Path $repoRoot '.claude-tmp\vite-out.log'
+New-Item -ItemType Directory -Force -Path (Split-Path $viteLog) | Out-Null
+$viteProc = Start-Process bun `
+    -ArgumentList @('run', 'dev', '--', '--host', '127.0.0.1') `
+    -WorkingDirectory (Join-Path $repoRoot 'src\ui') `
+    -RedirectStandardOutput $viteLog `
+    -RedirectStandardError "$viteLog.err" `
+    -PassThru -WindowStyle Hidden
+
+Write-Host "▸ Vite pid:         $($viteProc.Id)  (log: $viteLog)"
+
+# Tear down Vite when this script exits — orphan node processes hold
+# the port and break the next `dev`. Build the cleanup body via -f-style
+# string concatenation so $viteId expands once at registration; the
+# `$_` is backtick-escaped so it stays as ForEach-Object's pipeline
+# variable inside the resulting ScriptBlock.
+$viteId = $viteProc.Id
+$cleanupCmd = "Stop-Process -Id $viteId -Force -ErrorAction SilentlyContinue; " +
+              "Get-CimInstance Win32_Process -Filter `"ParentProcessId = $viteId`" -ErrorAction SilentlyContinue | " +
+              "ForEach-Object { Stop-Process -Id `$_.ProcessId -Force -ErrorAction SilentlyContinue }"
+Register-EngineEvent -SourceIdentifier PowerShell.Exiting `
+    -Action ([ScriptBlock]::Create($cleanupCmd)) | Out-Null
+
+# Wait until Vite is actually listening on the port. Use
+# GetActiveTcpListeners so we see both IPv4 and IPv6 listeners — see
+# the analogous comment on Find-FreePort above for why a TcpClient
+# probe to 127.0.0.1 isn't sufficient.
+Write-Host "▸ Waiting for Vite to bind localhost:$vitePort"
+$deadline = (Get-Date).AddSeconds(60)
+$ready = $false
+$globalProps = [System.Net.NetworkInformation.IPGlobalProperties]::GetIPGlobalProperties()
+while ((Get-Date) -lt $deadline) {
+    $listeners = $globalProps.GetActiveTcpListeners()
+    foreach ($listener in $listeners) {
+        if ($listener.Port -eq $vitePort) {
+            $ready = $true
+            break
+        }
+    }
+    if ($ready) { break }
+    if ($viteProc.HasExited) {
+        Write-Error "Vite exited prematurely (code $($viteProc.ExitCode)). See $viteLog"
+        exit 1
+    }
+    Start-Sleep -Milliseconds 250
 }
+if (-not $ready) {
+    Write-Error "Vite did not bind localhost:$vitePort within 60s. See $viteLog"
+    Stop-Process -Id $viteProc.Id -Force -ErrorAction SilentlyContinue
+    exit 1
+}
+Write-Host "▸ Vite ready"
 
-Write-Host "▸ Frontend built    -> src/ui/dist"
-Write-Host "▸ Launching claudette-app (release; first build is slow, incremental builds are fast)"
+Write-Host "▸ Launching claudette-app (debug; first build is slow, incremental builds are fast)"
 Write-Host ""
 
-& cargo run -p claudette-tauri --release --no-default-features --features $features
-exit $LASTEXITCODE
+& cargo run -p claudette-tauri --no-default-features --features $features
+$cargoExit = $LASTEXITCODE
+
+# Best-effort cleanup so the next `dev` doesn't hit "Port 14253 in use".
+Get-CimInstance Win32_Process -Filter "ParentProcessId = $($viteProc.Id)" -ErrorAction SilentlyContinue |
+    ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+Stop-Process -Id $viteProc.Id -Force -ErrorAction SilentlyContinue
+
+exit $cargoExit
