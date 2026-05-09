@@ -9,6 +9,7 @@ import { roleClassKey, shouldRenderAsMarkdown } from "./messageRendering";
 import { HighlightedMessageMarkdown } from "./HighlightedMessageMarkdown";
 import { HighlightedPlainText } from "./HighlightedPlainText";
 import { ThinkingBlock } from "./ThinkingBlock";
+import { collapsedToolGroupKey } from "./collapsedToolGroupKey";
 import { CompactionDivider } from "./CompactionDivider";
 import { SyntheticContinuationMessage } from "./SyntheticContinuationMessage";
 import { MessageAttachment, isTextDataMediaType } from "./MessageAttachment";
@@ -534,12 +535,27 @@ export const MessagesWithTurns = memo(function MessagesWithTurns({
           // chronologically-interleaved messages split its activities;
           // each group needs its own collapse state so clicking one
           // chevron doesn't drag every sibling group's expansion with
-          // it. The first activity's `toolUseId` makes a stable
-          // per-group key (it doesn't change as more activities
-          // accumulate inside the same group). When no override has
-          // been set yet, fall back to `turn.collapsed` so the
-          // turn-level persisted state still seeds the initial view.
-          const groupKey = `${turn.id}:${activities[0]?.toolUseId ?? "empty"}`;
+          // it.
+          //
+          // The key intentionally drops `turn.id` and matches the live
+          // `GroupedToolActivityRows` key format — see
+          // `collapsedToolGroupKey` for the rationale: the same
+          // activity moves from `toolActivities[sessionId]` into
+          // `completedTurns[sessionId][N].activities` when the turn
+          // ends, but its `toolUseId` is preserved verbatim. Sharing
+          // the key across both surfaces means a user-toggled
+          // expand/collapse choice made while running survives the
+          // turn-end transition.
+          //
+          // When no override has been set yet, fall back to
+          // `turn.collapsed` so the turn-level persisted state still
+          // seeds the initial view of replayed-from-DB completed turns.
+          const groupKey =
+            collapsedToolGroupKey(activities) ??
+            // Synthetic fallback for the (impossible-in-practice)
+            // empty-activities case — keep keys session-unique without
+            // accidentally colliding with a real tool group.
+            `tools:__empty__:${turn.id}`;
           const userOverride = collapsedToolGroups?.[groupKey];
           const collapsed = userOverride ?? turn.collapsed;
           // Single-group turns also flip the legacy `turn.collapsed`

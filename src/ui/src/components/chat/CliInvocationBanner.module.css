@@ -4,6 +4,13 @@
   background: var(--sidebar-bg);
   border-radius: var(--radius-lg);
   font-size: var(--fs-sm);
+  /* The banner sits inside `.messages` (a `flex-direction: column`
+     scroll container). Without an explicit `flex-shrink: 0` the
+     banner could be vertically squeezed by sibling pressure when
+     content briefly exceeded the viewport — collapsing the chip down
+     to its border. The block must always reserve space for its
+     content. */
+  flex-shrink: 0;
   overflow: hidden;
   transition:
     border-color 120ms ease,
@@ -23,12 +30,21 @@
 
 /* Non-interactive flex container with two sibling buttons (toggle + copy)
    so we don't nest <button> elements — see CliInvocationBanner.tsx for
-   the rationale. */
+   the rationale.
+
+   `min-height` floor: with the chip's children able to shrink (the
+   summary uses `min-width: 0` to let the toggle wrap rather than
+   overflow), the header could collapse to almost-zero height under
+   awkward layout conditions. The 32px floor matches the toggle's
+   intrinsic height (chevron + icon at 14px each + padding) so the
+   chip is always comfortably tappable and visually present even at
+   high zoom. */
 .header {
   display: flex;
   align-items: center;
   gap: 4px;
   width: 100%;
+  min-height: 32px;
   padding: 4px 6px 4px 4px;
 }
 

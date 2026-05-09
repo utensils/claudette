@@ -253,6 +253,47 @@ describe("ToolActivitiesSection", () => {
     expect(container.textContent).toContain("Bash");
   });
 
+  it("persists collapse state via the chatSlice so it survives running→completed transition", async () => {
+    // The unified slice key (`tools:${first toolUseId}`) is shared
+    // with `MessagesWithTurns`'s `TurnSummary` rendering, so a user's
+    // explicit collapse on a running group remains in effect when the
+    // turn ends and the same activities migrate into a CompletedTurn.
+    // Pin the write-through here; the read path is covered by the
+    // useAppStore.collapsedToolGroups.test.ts slice tests.
+    const { useAppStore } = await import("../../stores/useAppStore");
+    useAppStore.setState({ collapsedToolGroupsBySession: {} });
+
+    const runningActivities = [
+      activity("Bash", { toolUseId: "stable-1", resultText: "" }),
+    ];
+    const container = await render(
+      <ToolActivitiesSection
+        sessionId="session-xform"
+        toolDisplayMode="grouped"
+        searchQuery=""
+        activities={runningActivities}
+      />,
+    );
+    const header = container.querySelector(
+      '[role="button"][aria-expanded]',
+    ) as HTMLElement;
+    expect(header.getAttribute("aria-expanded")).toBe("true");
+
+    await act(async () => {
+      header.click();
+    });
+
+    expect(header.getAttribute("aria-expanded")).toBe("false");
+    // The slice now holds the user's explicit collapse for this
+    // group's stable key — `MessagesWithTurns` will pick this up after
+    // the turn ends because it computes the same key.
+    expect(
+      useAppStore.getState().collapsedToolGroupsBySession["session-xform"]?.[
+        "tools:stable-1"
+      ],
+    ).toBe(true);
+  });
+
   it("preserves the user override across appended tool activities", async () => {
     // Two tools running, user collapses; a third tool joins the same
     // direct-tools run. The component is keyed by the first activity's
