@@ -40,6 +40,7 @@ export function TurnSummary({
   inline = false,
   editSummaryFallback,
   onLoadEditPreview,
+  onOpenEditFile,
 }: {
   turn: CompletedTurn;
   activities?: ToolActivity[];
@@ -69,6 +70,9 @@ export function TurnSummary({
    *  scoped to what THIS turn touched, not the cumulative worktree diff. */
   editSummaryFallback?: EditSummary | null;
   onLoadEditPreview?: (filePath: string) => Promise<EditPreviewLine[]>;
+  /** Open a file's diff in the workspace diff panel (Monaco). Wired
+   *  by `MessagesWithTurns` to `openDiffTab(workspaceId, filePath)`. */
+  onOpenEditFile?: (filePath: string) => void;
 }) {
   const visibleActivities = activities ?? turn.activities;
   const hasElapsed = typeof turn.durationMs === "number" && turn.durationMs > 0;
@@ -186,6 +190,7 @@ export function TurnSummary({
           searchQuery={searchQuery}
           worktreePath={worktreePath}
           onLoadPreview={onLoadEditPreview}
+          onOpenFile={onOpenEditFile}
         />
       )}
       {shouldShowFooter && (

@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { ChevronDown, ChevronUp, Pencil } from "lucide-react";
+import { ChevronDown, ChevronUp, Pencil, SquareArrowOutUpRight } from "lucide-react";
 import { relativizePath } from "../../hooks/toolSummary";
 import { HighlightedPlainText } from "./HighlightedPlainText";
 import type { EditFileStat, EditPreviewLine, EditSummary } from "./editActivitySummary";
@@ -42,11 +42,17 @@ export function TurnEditSummaryCard({
   searchQuery,
   worktreePath,
   onLoadPreview,
+  onOpenFile,
 }: {
   summary: EditSummary;
   searchQuery: string;
   worktreePath?: string | null;
   onLoadPreview?: (filePath: string) => Promise<EditPreviewLine[]>;
+  /** Open the file's diff in the workspace's diff panel (Monaco).
+   *  Wired from `MessagesWithTurns` to `openDiffTab(workspaceId, ...)`.
+   *  Undefined hides the popout button (e.g. when the workspace is
+   *  unknown or the file isn't in the worktree diff). */
+  onOpenFile?: (filePath: string) => void;
 }) {
   const [expandedFile, setExpandedFile] = useState<string | null>(null);
   const [previewByFile, setPreviewByFile] = useState<Record<string, PreviewState>>({});
@@ -93,26 +99,58 @@ export function TurnEditSummaryCard({
           const canExpand = file.previewLines.length > 0 || !!onLoadPreview;
           return (
             <div key={file.filePath} className={styles.turnEditFile}>
-              <button
-                type="button"
-                className={styles.turnEditFileRow}
-                aria-expanded={expanded}
-                disabled={!canExpand}
-                onClick={() => toggleFile(file)}
-              >
-                <span className={styles.turnEditFilePath}>
-                  <HighlightedPlainText
-                    text={relativizePath(file.filePath, worktreePath)}
-                    query={searchQuery}
-                  />
-                </span>
-                <ChangeStats added={file.added} removed={file.removed} />
-                {canExpand && (
-                  <span className={styles.turnEditFileChevron} aria-hidden="true">
-                    {expanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+              <div className={styles.turnEditFileRowWrap}>
+                <button
+                  type="button"
+                  className={styles.turnEditFileRow}
+                  aria-expanded={expanded}
+                  disabled={!canExpand}
+                  onClick={() => toggleFile(file)}
+                >
+                  <span className={styles.turnEditFilePath}>
+                    <HighlightedPlainText
+                      text={relativizePath(file.filePath, worktreePath)}
+                      query={searchQuery}
+                    />
                   </span>
-                )}
-              </button>
+                  <ChangeStats added={file.added} removed={file.removed} />
+                </button>
+                {/* Action cluster: popout (open diff in Monaco panel) +
+                 * chevron (expand inline preview). Kept as siblings of
+                 * the row button so the popout click doesn't toggle
+                 * expansion — distinct intents, distinct buttons.
+                 * Mirrors the Codex / GitHub PR file-row affordance. */}
+                <div className={styles.turnEditFileActions}>
+                  {onOpenFile && (
+                    <button
+                      type="button"
+                      className={styles.turnEditFileActionBtn}
+                      title="Open in editor"
+                      aria-label={`Open ${file.filePath} in editor`}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onOpenFile(file.filePath);
+                      }}
+                    >
+                      <SquareArrowOutUpRight size={13} />
+                    </button>
+                  )}
+                  {canExpand && (
+                    <button
+                      type="button"
+                      className={styles.turnEditFileActionBtn}
+                      aria-label={expanded ? "Collapse preview" : "Expand preview"}
+                      aria-expanded={expanded}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        toggleFile(file);
+                      }}
+                    >
+                      {expanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+                    </button>
+                  )}
+                </div>
+              </div>
               {expanded && (
                 <InlineDiffPreview
                   lines={previewLines}

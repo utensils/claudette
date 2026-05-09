@@ -446,6 +446,21 @@ export const MessagesWithTurns = memo(function MessagesWithTurns({
     },
     [diffMergeBase, worktreePath],
   );
+  const openFileTab = useAppStore((s) => s.openFileTab);
+  // Open the file in the Monaco editor tab (not the diff viewer).
+  // Activity-derived edits use absolute paths (the agent's full path
+  // including the worktree prefix); the file-tab store keys by repo-
+  // relative path, so strip the worktree prefix when present.
+  const openFileInMonaco = useCallback(
+    (filePath: string) => {
+      const rel =
+        worktreePath && filePath.startsWith(worktreePath + "/")
+          ? filePath.slice(worktreePath.length + 1)
+          : filePath;
+      openFileTab(workspaceId, rel);
+    },
+    [openFileTab, workspaceId, worktreePath],
+  );
 
   // Per-turn rollback data, keyed by turn.id. Completed turns are only
   // persisted for tool-using turns, so the triggering user is the nearest
@@ -637,6 +652,7 @@ export const MessagesWithTurns = memo(function MessagesWithTurns({
                   ? loadWorkspaceDiffPreview
                   : undefined
               }
+              onOpenEditFile={showFooter ? openFileInMonaco : undefined}
             />
           );
         })}
@@ -659,6 +675,7 @@ export const MessagesWithTurns = memo(function MessagesWithTurns({
                   onLoadPreview={
                     isLatestCompletedTurn ? loadWorkspaceDiffPreview : undefined
                   }
+                  onOpenFile={openFileInMonaco}
                 />
               )}
               <TurnFooter
