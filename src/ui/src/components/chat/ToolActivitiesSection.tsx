@@ -58,6 +58,7 @@ export const ToolActivitiesSection = memo(function ToolActivitiesSection({
             activity={group.activities[0]}
             searchQuery={searchQuery}
             worktreePath={worktreePath}
+            inline={toolDisplayMode === "inline"}
           />
         ) : toolDisplayMode === "inline" ? (
           group.activities.map((act) => (

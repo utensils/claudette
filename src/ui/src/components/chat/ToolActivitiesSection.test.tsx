@@ -4,8 +4,10 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, describe, expect, it } from "vitest";
 
-import type { ToolActivity } from "../../stores/useAppStore";
+import type { CompletedTurn, ToolActivity } from "../../stores/useAppStore";
 import { AgentToolCallGroup } from "./AgentToolCallGroup";
+import styles from "./ChatPanel.module.css";
+import { TurnSummary } from "./TurnSummary";
 import { ToolActivitiesSection } from "./ToolActivitiesSection";
 
 const mountedRoots: Root[] = [];
@@ -23,6 +25,16 @@ function activity(
     collapsed: true,
     summary: "",
     ...overrides,
+  };
+}
+
+function completedTurn(activities: ToolActivity[]): CompletedTurn {
+  return {
+    id: "turn-1",
+    activities,
+    messageCount: 1,
+    collapsed: true,
+    afterMessageIndex: 2,
   };
 }
 
@@ -71,9 +83,58 @@ describe("AgentToolCallGroup", () => {
     expect(summary).toBeTruthy();
     expect(summary?.getAttribute("style")).toBeNull();
   });
+
+  it("uses the unbordered inline variant when grouping is disabled", async () => {
+    const container = await render(
+      <AgentToolCallGroup
+        activity={activity("Agent", { agentDescription: "Audit UI" })}
+        searchQuery=""
+        inline
+      />,
+    );
+
+    expect(
+      container.querySelector(`.${styles.agentToolGroupInline}`),
+    ).toBeTruthy();
+    expect(container.querySelector(`.${styles.agentToolGroup}`)).toBeNull();
+  });
 });
 
 describe("ToolActivitiesSection", () => {
+  it("renders inline Agent calls without a collapsible summary block", async () => {
+    const container = await render(
+      <ToolActivitiesSection
+        sessionId="session-1"
+        toolDisplayMode="inline"
+        searchQuery=""
+        activities={[
+          activity("Agent", {
+            agentDescription: "Audit UI",
+            agentToolUseCount: 2,
+            agentLastToolName: "Read",
+            agentToolCalls: [
+              {
+                toolUseId: "nested-1",
+                toolName: "Read",
+                agentId: "agent-1",
+                status: "completed",
+                startedAt: "2026-05-08T00:00:00Z",
+              },
+            ],
+          }),
+        ]}
+      />,
+    );
+
+    expect(container.querySelector('[role="button"][aria-expanded]')).toBeNull();
+    expect(
+      container.querySelector(`.${styles.agentToolGroupInline}`),
+    ).toBeTruthy();
+    expect(container.querySelector(`.${styles.agentToolGroup}`)).toBeNull();
+    expect(container.textContent).toContain("Agent");
+    expect(container.textContent).toContain("Read");
+  });
+
   it("expands grouped live calls while running and collapses when the group is done", async () => {
     const container = await render(
       <ToolActivitiesSection
@@ -340,5 +401,41 @@ describe("ToolActivitiesSection", () => {
     expect(headerAfter.getAttribute("aria-expanded")).toBe("false");
     expect(container.textContent).toContain("3 tool calls");
     expect(container.textContent).not.toContain("Edit");
+  });
+});
+
+describe("TurnSummary", () => {
+  it("renders completed inline Agent calls without the summary card chrome", async () => {
+    const agent = activity("Agent", {
+      agentDescription: "Review changes",
+      agentToolCalls: [
+        {
+          toolUseId: "nested-1",
+          toolName: "Bash",
+          agentId: "agent-1",
+          status: "completed",
+          startedAt: "2026-05-08T00:00:00Z",
+        },
+      ],
+    });
+
+    const container = await render(
+      <TurnSummary
+        turn={completedTurn([agent])}
+        collapsed
+        onToggle={() => {}}
+        assistantText=""
+        searchQuery=""
+        inline
+      />,
+    );
+
+    expect(container.querySelector('[role="button"][aria-expanded]')).toBeNull();
+    expect(
+      container.querySelector(`.${styles.agentToolGroupInline}`),
+    ).toBeTruthy();
+    expect(container.querySelector(`.${styles.agentToolGroup}`)).toBeNull();
+    expect(container.textContent).toContain("Agent");
+    expect(container.textContent).toContain("Bash");
   });
 });
