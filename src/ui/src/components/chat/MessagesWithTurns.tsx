@@ -697,7 +697,12 @@ export const MessagesWithTurns = memo(function MessagesWithTurns({
                   />
                 )}
                 {msg.role === "Assistant" && msg.thinking && showThinkingBlocks && (
-                  <ThinkingBlock content={msg.thinking} isStreaming={false} searchQuery={searchQuery} />
+                  <ThinkingBlock
+                    content={msg.thinking}
+                    isStreaming={false}
+                    inline={toolDisplayMode === "inline"}
+                    searchQuery={searchQuery}
+                  />
                 )}
                 <div className={styles.content}>
                   {attachmentsByMessage.has(msg.id) && (

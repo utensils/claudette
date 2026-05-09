@@ -9,25 +9,54 @@ interface ThinkingBlockProps {
   content: string;
   isStreaming: boolean;
   enableTypewriter?: boolean;
+  inline?: boolean;
   /** Active chat-search query. When non-empty and the query matches inside
    *  this block's content, the block force-expands so matches aren't
    *  hidden behind the collapsed header. */
   searchQuery?: string;
 }
 
-export function ThinkingBlock({ content, isStreaming, enableTypewriter, searchQuery }: ThinkingBlockProps) {
+export function ThinkingBlock({
+  content,
+  isStreaming,
+  enableTypewriter,
+  inline = false,
+  searchQuery,
+}: ThinkingBlockProps) {
   const [expanded, setExpanded] = useState(false);
+  const label = isStreaming ? "Thinking…" : "Thinking";
+  const queryMatches =
+    !!searchQuery && content.toLowerCase().includes(searchQuery.toLowerCase());
+  const isExpanded = inline || expanded || queryMatches;
   const { displayed, showCaret } = useTypewriter(content, isStreaming, {
-    enabled: enableTypewriter && expanded,
+    enabled: enableTypewriter && isExpanded,
   });
 
   if (!content) return null;
 
-  const label = isStreaming ? "Thinking…" : "Thinking";
-  const queryMatches =
-    !!searchQuery && content.toLowerCase().includes(searchQuery.toLowerCase());
-  const isExpanded = expanded || queryMatches;
   const visibleContent = enableTypewriter ? displayed : content;
+  const contentNode = (
+    <div className={inline ? `${styles.content} ${styles.contentInline}` : styles.content}>
+      {searchQuery ? (
+        <HighlightedPlainText text={visibleContent} query={searchQuery} />
+      ) : (
+        visibleContent
+      )}
+      {showCaret && <span className={caretStyles.caret} aria-hidden="true" />}
+    </div>
+  );
+
+  if (inline) {
+    return (
+      <div className={`${styles.container} ${styles.containerInline}`}>
+        <div className={`${styles.header} ${styles.headerInline}`}>
+          <Brain size={14} />
+          <span className={styles.label}>{label}</span>
+        </div>
+        {contentNode}
+      </div>
+    );
+  }
 
   return (
     <div className={styles.container}>
@@ -42,16 +71,7 @@ export function ThinkingBlock({ content, isStreaming, enableTypewriter, searchQu
         <Brain size={14} />
         <span className={styles.label}>{label}</span>
       </button>
-      {isExpanded && (
-        <div className={styles.content}>
-          {searchQuery ? (
-            <HighlightedPlainText text={visibleContent} query={searchQuery} />
-          ) : (
-            visibleContent
-          )}
-          {showCaret && <span className={caretStyles.caret} aria-hidden="true" />}
-        </div>
-      )}
+      {isExpanded && contentNode}
     </div>
   );
 }

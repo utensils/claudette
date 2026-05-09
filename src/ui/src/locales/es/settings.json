@@ -65,7 +65,7 @@
   "appearance_show_running_commands": "Mostrar comandos en ejecución en la barra lateral",
   "appearance_show_running_commands_desc": "Muestra una lista plegable de los procesos en primer plano que se ejecutan en los terminales de cada espacio de trabajo. Desactivado por defecto.",
   "appearance_group_tool_calls": "Agrupar llamadas adyacentes",
-  "appearance_group_tool_calls_desc": "Contrae llamadas normales adyacentes en bloques de resumen. Desactívalo para mostrar cada llamada principal de herramienta y Agent en línea.",
+  "appearance_group_tool_calls_desc": "Contrae llamadas normales adyacentes en bloques de resumen. Desactívalo para mostrar cada llamada principal de herramienta, llamada de Agent y bloque de pensamiento en línea.",
   "appearance_interface_font": "Fuente de la interfaz",
   "appearance_interface_font_desc": "Fuente para el texto de la interfaz. Los temas pueden establecer una predeterminada.",
   "appearance_custom_interface_font": "Fuente de interfaz personalizada",

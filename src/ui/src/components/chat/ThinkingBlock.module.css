@@ -10,6 +10,15 @@
   border-color: var(--text-faint);
 }
 
+.containerInline {
+  border: none;
+  border-radius: 0;
+}
+
+.containerInline:hover {
+  border-color: transparent;
+}
+
 .header {
   display: flex;
   align-items: center;
@@ -27,6 +36,15 @@
 
 .header:hover {
   background: var(--hover-bg-subtle);
+}
+
+.headerInline {
+  padding: 2px 8px;
+  cursor: default;
+}
+
+.headerInline:hover {
+  background: transparent;
 }
 
 .chevron {
@@ -61,4 +79,10 @@
   background: var(--chat-input-bg);
   font-style: italic;
   opacity: 0.85;
+}
+
+.contentInline {
+  padding: 2px 8px 4px 28px;
+  border-top: none;
+  background: transparent;
 }

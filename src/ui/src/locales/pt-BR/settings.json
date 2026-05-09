@@ -65,7 +65,7 @@
   "appearance_show_running_commands": "Mostrar comandos em execução na barra lateral",
   "appearance_show_running_commands_desc": "Exibe uma lista recolhível dos processos em primeiro plano executando nos terminais de cada workspace. Desativado por padrão.",
   "appearance_group_tool_calls": "Agrupar chamadas adjacentes",
-  "appearance_group_tool_calls_desc": "Recolhe chamadas regulares adjacentes em blocos de resumo. Desative para mostrar cada chamada principal de ferramenta e Agent em linha.",
+  "appearance_group_tool_calls_desc": "Recolhe chamadas regulares adjacentes em blocos de resumo. Desative para mostrar cada chamada principal de ferramenta, chamada de Agent e bloco de pensamento em linha.",
   "appearance_interface_font": "Fonte da interface",
   "appearance_interface_font_desc": "Fonte para o texto da interface. Os temas podem definir um padrão.",
   "appearance_custom_interface_font": "Fonte de interface personalizada",

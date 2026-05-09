@@ -9,10 +9,12 @@ import { ThinkingBlock } from "./ThinkingBlock";
 export const StreamingThinkingBlock = memo(function StreamingThinkingBlock({
   sessionId,
   isStreaming,
+  inline = false,
   searchQuery,
 }: {
   sessionId: string;
   isStreaming: boolean;
+  inline?: boolean;
   searchQuery: string;
 }) {
   const thinking = useAppStore((s) => s.streamingThinking[sessionId] || "");
@@ -22,6 +24,7 @@ export const StreamingThinkingBlock = memo(function StreamingThinkingBlock({
       content={thinking}
       isStreaming={isStreaming}
       enableTypewriter
+      inline={inline}
       searchQuery={searchQuery}
     />
   );

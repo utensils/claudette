@@ -1281,6 +1281,7 @@ export function ChatPanel() {
                       <StreamingThinkingBlock
                         sessionId={activeSessionId}
                         isStreaming={isRunning ?? false}
+                        inline={toolDisplayMode === "inline"}
                         searchQuery={searchQuery}
                       />
                     ) : null
