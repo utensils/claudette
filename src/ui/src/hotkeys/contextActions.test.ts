@@ -268,6 +268,25 @@ describe("executeCloseTab", () => {
     expect(archiveChatSession).toHaveBeenCalledWith("a");
   });
 
+  it("chat context: after Cmd+W closes a session, selects the tab to its left", async () => {
+    useAppStore.setState({
+      sessionsByWorkspace: {
+        [WS]: [makeSession("a"), makeSession("b"), makeSession("c")],
+      },
+      selectedSessionIdByWorkspaceId: { [WS]: "c" },
+    });
+    const confirm = vi.fn().mockResolvedValue(true);
+    const archiveChatSession = vi.fn().mockResolvedValue(null);
+
+    executeCloseTab({ confirm, archiveChatSession });
+    await new Promise((r) => setTimeout(r, 0));
+    await new Promise((r) => setTimeout(r, 0));
+
+    const post = useAppStore.getState();
+    expect(post.sessionsByWorkspace[WS]?.map((s) => s.id)).toEqual(["a", "b"]);
+    expect(post.selectedSessionIdByWorkspaceId[WS]).toBe("b");
+  });
+
   it("chat context: cancelled confirm leaves state untouched", async () => {
     const session = makeSession("a");
     useAppStore.setState({

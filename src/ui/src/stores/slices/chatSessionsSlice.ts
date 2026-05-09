@@ -75,13 +75,18 @@ export const createChatSessionsSlice: StateCreator<
       const nextSelected = { ...s.selectedSessionIdByWorkspaceId };
       for (const [wsId, sessions] of Object.entries(next)) {
         if (sessions.some((x) => x.id === sessionId)) {
+          const activeSessions = sessions.filter((x) => x.status === "Active");
+          const activeIdx = activeSessions.findIndex((x) => x.id === sessionId);
           next[wsId] = sessions.filter((x) => x.id !== sessionId);
           if (nextSelected[wsId] === sessionId) {
-            const firstActive = next[wsId].find(
-              (x) => x.status === "Active",
-            );
-            if (firstActive) {
-              nextSelected[wsId] = firstActive.id;
+            const adjacentActive =
+              activeIdx > 0
+                ? activeSessions[activeIdx - 1]
+                : activeIdx === 0
+                  ? activeSessions[1]
+                  : next[wsId].find((x) => x.status === "Active");
+            if (adjacentActive) {
+              nextSelected[wsId] = adjacentActive.id;
             } else {
               delete nextSelected[wsId];
             }
