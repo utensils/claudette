@@ -118,17 +118,59 @@ describe("streamingThinking (per-workspace)", () => {
   });
 });
 
-describe("commitAssistantStream (per-session)", () => {
-  beforeEach(() => {
-    useAppStore.setState({ streamingContent: {}, streamingThinking: {} });
+describe("commitAssistantTurn (per-session)", () => {
+  const makeMessage = (overrides?: Partial<Omit<ChatMessage, "thinking">>): Omit<ChatMessage, "thinking"> => ({
+    id: "msg-1",
+    workspace_id: WS_ID,
+    chat_session_id: WS_ID,
+    role: "Assistant",
+    content: "hello world",
+    cost_usd: null,
+    duration_ms: null,
+    created_at: "2026-01-01T00:00:00.000Z",
+    input_tokens: null,
+    output_tokens: null,
+    cache_read_tokens: null,
+    cache_creation_tokens: null,
+    ...overrides,
   });
 
-  it("clears streamingContent and streamingThinking in one update", () => {
+  beforeEach(() => {
+    useAppStore.setState({
+      chatMessages: {},
+      streamingContent: {},
+      streamingThinking: {},
+    });
+  });
+
+  it("adds the message and clears streaming state in a single store update", () => {
     useAppStore.getState().appendStreamingContent(WS_ID, "hello world");
     useAppStore.getState().appendStreamingThinking(WS_ID, "hm...");
-    useAppStore.getState().commitAssistantStream(WS_ID);
+
+    let notifyCount = 0;
+    const unsub = useAppStore.subscribe(() => { notifyCount++; });
+    useAppStore.getState().commitAssistantTurn(WS_ID, makeMessage());
+    unsub();
+
+    expect(notifyCount).toBe(1);
     expect(useAppStore.getState().streamingContent[WS_ID]).toBe("");
     expect(useAppStore.getState().streamingThinking[WS_ID]).toBe("");
+    const messages = useAppStore.getState().chatMessages[WS_ID];
+    expect(messages).toHaveLength(1);
+    expect(messages[0].content).toBe("hello world");
+  });
+
+  it("captures streamingThinking as the message thinking field", () => {
+    useAppStore.getState().appendStreamingThinking(WS_ID, "deep thought");
+    useAppStore.getState().commitAssistantTurn(WS_ID, makeMessage());
+    const msg = useAppStore.getState().chatMessages[WS_ID][0];
+    expect(msg.thinking).toBe("deep thought");
+  });
+
+  it("sets thinking to null when no streamingThinking was accumulated", () => {
+    useAppStore.getState().commitAssistantTurn(WS_ID, makeMessage());
+    const msg = useAppStore.getState().chatMessages[WS_ID][0];
+    expect(msg.thinking).toBeNull();
   });
 
   it("is isolated per session — other sessions are unaffected", () => {
@@ -136,17 +178,11 @@ describe("commitAssistantStream (per-session)", () => {
     useAppStore.getState().appendStreamingThinking("ws-a", "think-a");
     useAppStore.getState().appendStreamingContent("ws-b", "beta");
     useAppStore.getState().appendStreamingThinking("ws-b", "think-b");
-    useAppStore.getState().commitAssistantStream("ws-a");
+    useAppStore.getState().commitAssistantTurn("ws-a", makeMessage({ workspace_id: "ws-a", chat_session_id: "ws-a" }));
     expect(useAppStore.getState().streamingContent["ws-a"]).toBe("");
     expect(useAppStore.getState().streamingThinking["ws-a"]).toBe("");
     expect(useAppStore.getState().streamingContent["ws-b"]).toBe("beta");
     expect(useAppStore.getState().streamingThinking["ws-b"]).toBe("think-b");
-  });
-
-  it("is a no-op when called with no prior state", () => {
-    useAppStore.getState().commitAssistantStream(WS_ID);
-    expect(useAppStore.getState().streamingContent[WS_ID]).toBe("");
-    expect(useAppStore.getState().streamingThinking[WS_ID]).toBe("");
   });
 });
 

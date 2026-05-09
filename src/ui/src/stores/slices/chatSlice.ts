@@ -143,11 +143,16 @@ export interface ChatSlice {
   ) => void;
   setStreamingContent: (sessionId: string, content: string) => void;
   appendStreamingContent: (sessionId: string, text: string) => void;
-  /** Atomic end-of-turn handoff: clears both `streamingContent` and
-   *  `streamingThinking` in a single store update so `StreamingMessage` and
-   *  `StreamingThinkingBlock` unmount in the same render the just-added
-   *  completed message becomes visible. */
-  commitAssistantStream: (sessionId: string) => void;
+  /** Atomic end-of-turn handoff: appends the completed assistant message and
+   *  clears both `streamingContent` and `streamingThinking` in a single store
+   *  update. `thinking` is captured from `streamingThinking` inside the
+   *  `set()` callback, so all three operations are guaranteed to be consistent
+   *  and to notify subscribers exactly once. */
+  commitAssistantTurn: (
+    sessionId: string,
+    message: Omit<ChatMessage, "thinking">,
+    options?: { persisted?: boolean },
+  ) => void;
   appendStreamingThinking: (sessionId: string, text: string) => void;
   clearStreamingThinking: (sessionId: string) => void;
   setShowThinkingBlocks: (sessionId: string, show: boolean) => void;
@@ -362,11 +367,35 @@ export const createChatSlice: StateCreator<AppState, [], [], ChatSlice> = (
         [sessionId]: (s.streamingContent[sessionId] || "") + text,
       },
     })),
-  commitAssistantStream: (sessionId) =>
-    set((s) => ({
-      streamingContent: { ...s.streamingContent, [sessionId]: "" },
-      streamingThinking: { ...s.streamingThinking, [sessionId]: "" },
-    })),
+  commitAssistantTurn: (sessionId, message, options) =>
+    set((s) => {
+      const pagination = s.chatPagination[sessionId];
+      const persisted = options?.persisted ?? true;
+      const fullMessage: ChatMessage = {
+        ...message,
+        thinking: s.streamingThinking[sessionId] || null,
+      };
+      return {
+        chatMessages: {
+          ...s.chatMessages,
+          [sessionId]: [...(s.chatMessages[sessionId] || []), fullMessage],
+        },
+        lastMessages: { ...s.lastMessages, [sessionId]: fullMessage },
+        ...(pagination && persisted
+          ? {
+              chatPagination: {
+                ...s.chatPagination,
+                [sessionId]: {
+                  ...pagination,
+                  totalCount: pagination.totalCount + 1,
+                },
+              },
+            }
+          : {}),
+        streamingContent: { ...s.streamingContent, [sessionId]: "" },
+        streamingThinking: { ...s.streamingThinking, [sessionId]: "" },
+      };
+    }),
   appendStreamingThinking: (sessionId, text) =>
     set((s) => ({
       streamingThinking: {

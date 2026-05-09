@@ -45,7 +45,7 @@ interface AgentHookEventPayload {
 export function useAgentStream() {
   const appendStreamingContent = useAppStore((s) => s.appendStreamingContent);
   const setStreamingContent = useAppStore((s) => s.setStreamingContent);
-  const commitAssistantStream = useAppStore((s) => s.commitAssistantStream);
+  const commitAssistantTurn = useAppStore((s) => s.commitAssistantTurn);
   const appendStreamingThinking = useAppStore((s) => s.appendStreamingThinking);
   const clearStreamingThinking = useAppStore((s) => s.clearStreamingThinking);
   const addChatMessage = useAppStore((s) => s.addChatMessage);
@@ -488,7 +488,7 @@ export function useAgentStream() {
                 textLength: text.length,
                 turnMessageCount: turnMessageCountRef.current[sessionId],
               });
-              addChatMessage(sessionId, {
+              commitAssistantTurn(sessionId, {
                 id: crypto.randomUUID(),
                 workspace_id: wsId,
                 chat_session_id: sessionId,
@@ -497,14 +497,11 @@ export function useAgentStream() {
                 cost_usd: null,
                 duration_ms: null,
                 created_at: new Date().toISOString(),
-                thinking:
-                  useAppStore.getState().streamingThinking[sessionId] || null,
                 input_tokens: null,
                 output_tokens: null,
                 cache_read_tokens: null,
                 cache_creation_tokens: null,
               });
-              commitAssistantStream(sessionId);
               break;
             }
             setStreamingContent(sessionId, "");
@@ -580,7 +577,7 @@ export function useAgentStream() {
     appendStreamingThinking,
     clearStreamingThinking,
     addChatMessage,
-    commitAssistantStream,
+    commitAssistantTurn,
     addToolActivity,
     updateToolActivity,
     appendToolActivityInput,
