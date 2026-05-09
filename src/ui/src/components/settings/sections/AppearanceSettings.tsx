@@ -13,19 +13,6 @@ import type { ThemeDefinition } from "../../../types/theme";
 import { FontSelect } from "../FontSelect";
 import styles from "../Settings.module.css";
 
-export function ToolGroupingDescription({
-  description,
-}: {
-  description: string;
-}) {
-  return (
-    <>
-      {description} (
-      <span className={styles.settingDescriptionBadge}>Brink</span> Mode)
-    </>
-  );
-}
-
 export function AppearanceSettings() {
   const { t } = useTranslation("settings");
   const setCurrentThemeId = useAppStore((s) => s.setCurrentThemeId);
@@ -422,9 +409,7 @@ export function AppearanceSettings() {
         <div className={styles.settingInfo}>
           <div className={styles.settingLabel}>{t("appearance_group_tool_calls")}</div>
           <div className={styles.settingDescription}>
-            <ToolGroupingDescription
-              description={t("appearance_group_tool_calls_desc")}
-            />
+            {t("appearance_group_tool_calls_desc")}
           </div>
         </div>
         <div className={styles.settingControl}>

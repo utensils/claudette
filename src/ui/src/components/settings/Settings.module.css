@@ -171,18 +171,6 @@
   margin-top: 4px;
 }
 
-.settingDescriptionBadge {
-  display: inline-block;
-  padding: 1px 6px;
-  border-radius: 3px;
-  background: var(--accent-bg);
-  color: var(--accent-primary);
-  font-size: 10px;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-}
-
 .settingControl {
   flex-shrink: 0;
 }
