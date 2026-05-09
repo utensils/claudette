@@ -14,7 +14,6 @@
   background: var(--chat-header-bg);
   border-bottom: 1px solid var(--divider);
   box-shadow: var(--shadow-sm);
-  animation: fadeIn 0.15s ease;
 }
 
 .bannerReady,

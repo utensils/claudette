@@ -224,7 +224,6 @@
   justify-content: center;
   color: var(--text-muted);
   gap: 12px;
-  animation: fadeIn 0.4s ease;
 }
 
 .emptyIcon {

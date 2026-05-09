@@ -14,7 +14,6 @@
   font-weight: 500;
   cursor: pointer;
   box-shadow: var(--shadow-md);
-  animation: fadeInUp 0.15s ease both;
   transition: background var(--transition-fast), border-color var(--transition-fast);
 }
 

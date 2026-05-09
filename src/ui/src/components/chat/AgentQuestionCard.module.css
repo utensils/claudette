@@ -7,7 +7,6 @@
   padding: var(--space-4) var(--space-5);
   margin: var(--space-3) 0;
   box-shadow: var(--shadow-md);
-  animation: fadeInUp 0.2s ease both;
 }
 
 .label {

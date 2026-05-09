@@ -58,7 +58,6 @@
   color: var(--status-stopped);
   white-space: pre-wrap;
   word-break: break-word;
-  animation: fadeInUp 0.15s ease;
 }
 
 /* --- Block-based message layout ---
@@ -69,7 +68,6 @@
 
 .message {
   max-width: 100%;
-  animation: fadeInUp 0.15s ease both;
 }
 
 /* User messages — compact input blocks */
@@ -259,7 +257,6 @@
   gap: 10px;
   padding: 10px 12px;
   font-size: 13px;
-  animation: fadeIn 0.2s ease;
   background: rgba(var(--accent-primary-rgb), 0.03);
   border-radius: 8px;
   border: 1px solid rgba(var(--accent-primary-rgb), 0.06);
