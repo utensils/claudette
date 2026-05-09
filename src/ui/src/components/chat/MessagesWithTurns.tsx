@@ -136,12 +136,6 @@ export const MessagesWithTurns = memo(function MessagesWithTurns({
   const showThinkingBlocks = useAppStore(
     (s) => s.showThinkingBlocks[sessionId] === true,
   );
-  // While the typewriter is finishing the drain after streamingContent cleared,
-  // hide the just-added completed assistant message — StreamingMessage renders
-  // it in-place, so showing both would duplicate the text.
-  const pendingMessageId = useAppStore(
-    (s) => s.pendingTypewriter[sessionId]?.messageId ?? null,
-  );
   const chatAttachments = useAppStore(
     (s) => s.chatAttachments[sessionId] ?? EMPTY_ATTACHMENTS,
   );
@@ -669,14 +663,8 @@ export const MessagesWithTurns = memo(function MessagesWithTurns({
     );
   };
 
-  const pendingMessageInWindow = useMemo(
-    () => !!pendingMessageId && messages.some((msg) => msg.id === pendingMessageId),
-    [messages, pendingMessageId],
-  );
-
   const renderStreamingTail = (position: number) => {
     if (
-      pendingMessageInWindow ||
       position !== globalOffset + messages.length ||
       (!streamingThinkingNode && !streamingMessageNode)
     ) {
@@ -696,7 +684,7 @@ export const MessagesWithTurns = memo(function MessagesWithTurns({
         // Sentinel dispatch for System messages — must precede the generic
         // message bubble so compaction/synthetic-summary messages render
         // as their own dedicated components.
-        if (msg.role === "System" && msg.id !== pendingMessageId) {
+        if (msg.role === "System") {
           const compaction = parseCompactionSentinel(msg.content);
           if (compaction) {
             return (
@@ -729,90 +717,53 @@ export const MessagesWithTurns = memo(function MessagesWithTurns({
           <React.Fragment key={msg.id}>
             {renderTurns(globalOffset + idx)}
             {renderLiveToolActivity(globalOffset + idx)}
-            {msg.id === pendingMessageId ? streamingMessageNode : (
-              <div className={`${styles.message} ${styles[roleClassKey(msg.role, msg.content)]}`}>
-                {msg.role === "User" && (
-                  <div className={styles.roleLabel}>{t("you_label")}</div>
-                )}
-                {msg.role === "User" && msg.content.length > 0 && (
-                  <MessageCopyButton
-                    text={msg.content}
-                    className={styles.userMessageCopyButton}
-                  />
-                )}
-                {msg.role === "Assistant" && msg.thinking && showThinkingBlocks && (
-                  <ThinkingBlock
-                    content={msg.thinking}
-                    isStreaming={false}
-                    inline={toolDisplayMode === "inline"}
-                    searchQuery={searchQuery}
-                  />
-                )}
-                <div className={styles.content}>
-                  {attachmentsByMessage.has(msg.id) && (
-                    <div className={styles.messageImages}>
-                      {attachmentsByMessage.get(msg.id)!.map((att) => {
-                        if (att.media_type === "application/pdf") {
-                          return (
-                            <PdfThumbnail
-                              key={att.id}
-                              dataBase64={att.data_base64 || undefined}
-                              attachmentId={att.id}
-                              filename={att.filename}
-                              className={styles.messageImage}
-                              onClick={() => {
-                                (async () => {
-                                  // Persisted attachments strip data_base64 on first
-                                  // load to avoid IPC bloat — fetch on demand.
-                                  let b64 = att.data_base64;
-                                  if (!b64) {
-                                    b64 = await loadAttachmentData(att.id);
-                                  }
-                                  await openAttachmentWithDefaultApp({
-                                    filename: att.filename,
-                                    media_type: att.media_type,
-                                    data_base64: b64,
-                                  });
-                                })().catch((err) =>
-                                  console.error("Failed to open PDF:", err),
-                                );
-                              }}
-                              onContextMenu={(e) =>
-                                onAttachmentContextMenu?.(
-                                  e,
-                                  {
-                                    filename: att.filename,
-                                    media_type: att.media_type,
-                                    data_base64: att.data_base64,
-                                  },
-                                  att.id,
-                                )
-                              }
-                            />
-                          );
-                        }
-                        if (isTextDataMediaType(att.media_type)) {
-                          return (
-                            <MessageAttachment
-                              key={att.id}
-                              attachment={att}
-                              handlers={{ onContextMenu: onAttachmentContextMenu }}
-                            />
-                          );
-                        }
+            <div className={`${styles.message} ${styles[roleClassKey(msg.role, msg.content)]}`}>
+              {msg.role === "User" && (
+                <div className={styles.roleLabel}>{t("you_label")}</div>
+              )}
+              {msg.role === "User" && msg.content.length > 0 && (
+                <MessageCopyButton
+                  text={msg.content}
+                  className={styles.userMessageCopyButton}
+                />
+              )}
+              {msg.role === "Assistant" && msg.thinking && showThinkingBlocks && (
+                <ThinkingBlock
+                  content={msg.thinking}
+                  isStreaming={false}
+                  inline={toolDisplayMode === "inline"}
+                  searchQuery={searchQuery}
+                />
+              )}
+              <div className={styles.content}>
+                {attachmentsByMessage.has(msg.id) && (
+                  <div className={styles.messageImages}>
+                    {attachmentsByMessage.get(msg.id)!.map((att) => {
+                      if (att.media_type === "application/pdf") {
                         return (
-                          <img
+                          <PdfThumbnail
                             key={att.id}
-                            src={`data:${att.media_type};base64,${att.data_base64}`}
-                            alt={att.filename}
+                            dataBase64={att.data_base64 || undefined}
+                            attachmentId={att.id}
+                            filename={att.filename}
                             className={styles.messageImage}
-                            onClick={(e) =>
-                              onAttachmentClick?.(e, {
-                                filename: att.filename,
-                                media_type: att.media_type,
-                                data_base64: att.data_base64,
-                              })
-                            }
+                            onClick={() => {
+                              (async () => {
+                                // Persisted attachments strip data_base64 on first
+                                // load to avoid IPC bloat — fetch on demand.
+                                let b64 = att.data_base64;
+                                if (!b64) {
+                                  b64 = await loadAttachmentData(att.id);
+                                }
+                                await openAttachmentWithDefaultApp({
+                                  filename: att.filename,
+                                  media_type: att.media_type,
+                                  data_base64: b64,
+                                });
+                              })().catch((err) =>
+                                console.error("Failed to open PDF:", err),
+                              );
+                            }}
                             onContextMenu={(e) =>
                               onAttachmentContextMenu?.(
                                 e,
@@ -826,33 +777,68 @@ export const MessagesWithTurns = memo(function MessagesWithTurns({
                             }
                           />
                         );
-                      })}
-                    </div>
-                  )}
-                  {shouldRenderAsMarkdown(msg.role) ? (
-                    // Assistant + System: run through Markdown so plan-mode dumps,
-                    // setup-script output, and other multi-line system notes
-                    // preserve headings, lists, and code blocks instead of
-                    // collapsing newlines into a single paragraph.
-                    <HighlightedMessageMarkdown content={msg.content} query={searchQuery} />
-                  ) : searchQuery ? (
-                    // While the search bar is open, render user messages as plain
-                    // highlighted text so matches inside them get marked. The
-                    // ultrathink rainbow animation is suppressed in this mode —
-                    // searchability wins over the easter egg.
-                    <HighlightedPlainText text={msg.content} query={searchQuery} />
-                  ) : (
-                    renderUltrathinkText(msg.content, {
-                      animated: false,
-                      styles: {
-                        ultrathinkChar: styles.ultrathinkChar,
-                        ultrathinkCharAnimated: styles.ultrathinkCharAnimated,
-                      },
-                    })
-                  )}
-                </div>
+                      }
+                      if (isTextDataMediaType(att.media_type)) {
+                        return (
+                          <MessageAttachment
+                            key={att.id}
+                            attachment={att}
+                            handlers={{ onContextMenu: onAttachmentContextMenu }}
+                          />
+                        );
+                      }
+                      return (
+                        <img
+                          key={att.id}
+                          src={`data:${att.media_type};base64,${att.data_base64}`}
+                          alt={att.filename}
+                          className={styles.messageImage}
+                          onClick={(e) =>
+                            onAttachmentClick?.(e, {
+                              filename: att.filename,
+                              media_type: att.media_type,
+                              data_base64: att.data_base64,
+                            })
+                          }
+                          onContextMenu={(e) =>
+                            onAttachmentContextMenu?.(
+                              e,
+                              {
+                                filename: att.filename,
+                                media_type: att.media_type,
+                                data_base64: att.data_base64,
+                              },
+                              att.id,
+                            )
+                          }
+                        />
+                      );
+                    })}
+                  </div>
+                )}
+                {shouldRenderAsMarkdown(msg.role) ? (
+                  // Assistant + System: run through Markdown so plan-mode dumps,
+                  // setup-script output, and other multi-line system notes
+                  // preserve headings, lists, and code blocks instead of
+                  // collapsing newlines into a single paragraph.
+                  <HighlightedMessageMarkdown content={msg.content} query={searchQuery} />
+                ) : searchQuery ? (
+                  // While the search bar is open, render user messages as plain
+                  // highlighted text so matches inside them get marked. The
+                  // ultrathink rainbow animation is suppressed in this mode —
+                  // searchability wins over the easter egg.
+                  <HighlightedPlainText text={msg.content} query={searchQuery} />
+                ) : (
+                  renderUltrathinkText(msg.content, {
+                    animated: false,
+                    styles: {
+                      ultrathinkChar: styles.ultrathinkChar,
+                      ultrathinkCharAnimated: styles.ultrathinkCharAnimated,
+                    },
+                  })
+                )}
               </div>
-            )}
+            </div>
             {renderPlainTurnFooter(idx + 1)}
           </React.Fragment>
         );

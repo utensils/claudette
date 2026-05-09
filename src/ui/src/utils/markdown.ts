@@ -235,7 +235,7 @@ interface HighlightedCodeProps {
 /**
  * Delay (ms) before dispatching a streaming code block to the worker. Only
  * blocks whose source text is stable for at least this long get highlighted
- * mid-stream. The actively-streaming (last) block changes per typewriter tick,
+ * mid-stream. The actively-streaming (last) block changes with every chunk,
  * so its debounce timer keeps resetting and no wasted work hits the worker;
  * earlier blocks (closing-fence already written) become stable and highlight.
  */

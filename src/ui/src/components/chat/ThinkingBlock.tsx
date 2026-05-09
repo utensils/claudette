@@ -1,14 +1,11 @@
 import { useState } from "react";
 import { Brain } from "lucide-react";
-import { useTypewriter } from "../../hooks/useTypewriter";
 import { HighlightedPlainText } from "./HighlightedPlainText";
 import styles from "./ThinkingBlock.module.css";
-import caretStyles from "./caret.module.css";
 
 interface ThinkingBlockProps {
   content: string;
   isStreaming: boolean;
-  enableTypewriter?: boolean;
   inline?: boolean;
   /** Active chat-search query. When non-empty and the query matches inside
    *  this block's content, the block force-expands so matches aren't
@@ -19,30 +16,24 @@ interface ThinkingBlockProps {
 export function ThinkingBlock({
   content,
   isStreaming,
-  enableTypewriter,
   inline = false,
   searchQuery,
 }: ThinkingBlockProps) {
   const [expanded, setExpanded] = useState(false);
+
+  if (!content) return null;
+
   const label = isStreaming ? "Thinking…" : "Thinking";
   const queryMatches =
     !!searchQuery && content.toLowerCase().includes(searchQuery.toLowerCase());
   const isExpanded = inline || expanded || queryMatches;
-  const { displayed, showCaret } = useTypewriter(content, isStreaming, {
-    enabled: !!enableTypewriter && isExpanded,
-  });
-
-  if (!content) return null;
-
-  const visibleContent = enableTypewriter ? displayed : content;
   const contentNode = (
     <div className={inline ? `${styles.content} ${styles.contentInline}` : styles.content}>
       {searchQuery ? (
-        <HighlightedPlainText text={visibleContent} query={searchQuery} />
+        <HighlightedPlainText text={content} query={searchQuery} />
       ) : (
-        visibleContent
+        content
       )}
-      {showCaret && <span className={caretStyles.caret} aria-hidden="true" />}
     </div>
   );
 

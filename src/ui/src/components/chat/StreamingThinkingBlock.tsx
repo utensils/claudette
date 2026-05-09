@@ -23,7 +23,6 @@ export const StreamingThinkingBlock = memo(function StreamingThinkingBlock({
     <ThinkingBlock
       content={thinking}
       isStreaming={isStreaming}
-      enableTypewriter
       inline={inline}
       searchQuery={searchQuery}
     />

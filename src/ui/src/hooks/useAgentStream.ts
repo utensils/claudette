@@ -45,7 +45,7 @@ interface AgentHookEventPayload {
 export function useAgentStream() {
   const appendStreamingContent = useAppStore((s) => s.appendStreamingContent);
   const setStreamingContent = useAppStore((s) => s.setStreamingContent);
-  const setPendingTypewriter = useAppStore((s) => s.setPendingTypewriter);
+  const commitAssistantStream = useAppStore((s) => s.commitAssistantStream);
   const appendStreamingThinking = useAppStore((s) => s.appendStreamingThinking);
   const clearStreamingThinking = useAppStore((s) => s.clearStreamingThinking);
   const addChatMessage = useAppStore((s) => s.addChatMessage);
@@ -488,14 +488,8 @@ export function useAgentStream() {
                 textLength: text.length,
                 turnMessageCount: turnMessageCountRef.current[sessionId],
               });
-              const messageId = crypto.randomUUID();
-              // Latch the final text for the typewriter so StreamingMessage
-              // can keep draining after streamingContent clears. The matching
-              // messageId tells MessagesWithTurns to hide the just-added
-              // completed message until drain finishes.
-              setPendingTypewriter(sessionId, messageId, text);
               addChatMessage(sessionId, {
-                id: messageId,
+                id: crypto.randomUUID(),
                 workspace_id: wsId,
                 chat_session_id: sessionId,
                 role: "Assistant",
@@ -510,11 +504,8 @@ export function useAgentStream() {
                 cache_read_tokens: null,
                 cache_creation_tokens: null,
               });
-              // streamingThinking is NOT cleared here — StreamingThinkingBlock
-              // needs to keep rendering through the typewriter drain so the
-              // block doesn't vanish between streamingContent clearing and the
-              // completed message unhiding. It's cleared atomically with
-              // pendingTypewriter at drain-complete via finishTypewriterDrain.
+              commitAssistantStream(sessionId);
+              break;
             }
             setStreamingContent(sessionId, "");
             break;
@@ -589,7 +580,7 @@ export function useAgentStream() {
     appendStreamingThinking,
     clearStreamingThinking,
     addChatMessage,
-    setPendingTypewriter,
+    commitAssistantStream,
     addToolActivity,
     updateToolActivity,
     appendToolActivityInput,

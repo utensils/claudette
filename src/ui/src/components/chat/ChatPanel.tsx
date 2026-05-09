@@ -221,9 +221,6 @@ export function ChatPanel() {
   const hasStreaming = useAppStore(
     (s) => !!(activeSessionId && s.streamingContent[activeSessionId])
   );
-  const hasPendingTypewriter = useAppStore(
-    (s) => !!(activeSessionId && s.pendingTypewriter[activeSessionId])
-  );
   const hasThinking = useAppStore(
     (s) => !!(activeSessionId && s.streamingThinking[activeSessionId])
   );
@@ -245,7 +242,6 @@ export function ChatPanel() {
     (s) => (activeSessionId ? s.agentQuestions[activeSessionId] ?? null : null)
   );
   const clearAgentQuestion = useAppStore((s) => s.clearAgentQuestion);
-  const finishTypewriterDrainTop = useAppStore((s) => s.finishTypewriterDrain);
   const pendingPlan = useAppStore(
     (s) => (activeSessionId ? s.planApprovals[activeSessionId] ?? null : null)
   );
@@ -1134,13 +1130,9 @@ export function ChatPanel() {
     }
 
     // Clear any pending agent question or plan approval — the user is sending
-    // a new message (answer from a card or manual override). Also release any
-    // stuck typewriter drain from the previous turn so the completed message
-    // doesn't stay hidden behind pendingTypewriter across turns (the
-    // drain-complete effect cannot fire while isStreaming flips back to true).
+    // a new message (answer from a card or manual override).
     clearAgentQuestion(sessionId);
     clearPlanApproval(sessionId);
-    finishTypewriterDrainTop(sessionId);
 
     setError(null);
 
@@ -1313,7 +1305,7 @@ export function ChatPanel() {
                     ) : null
                   }
                   streamingMessageNode={
-                    hasStreaming || hasPendingTypewriter ? (
+                    hasStreaming ? (
                       <StreamingMessage
                         sessionId={activeSessionId}
                         isStreaming={isRunning ?? false}

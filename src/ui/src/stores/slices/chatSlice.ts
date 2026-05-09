@@ -92,7 +92,6 @@ export interface ChatSlice {
   addChatAttachments: (sessionId: string, attachments: ChatAttachment[]) => void;
   streamingContent: Record<string, string>;
   streamingThinking: Record<string, string>;
-  pendingTypewriter: Record<string, { messageId: string; text: string } | null>;
   showThinkingBlocks: Record<string, boolean>;
   toolActivities: Record<string, ToolActivity[]>;
   completedTurns: Record<string, CompletedTurn[]>;
@@ -144,12 +143,11 @@ export interface ChatSlice {
   ) => void;
   setStreamingContent: (sessionId: string, content: string) => void;
   appendStreamingContent: (sessionId: string, text: string) => void;
-  setPendingTypewriter: (sessionId: string, messageId: string, text: string) => void;
-  /** Atomic drain-end handoff: clears both `pendingTypewriter` and
-   *  `streamingThinking` in a single store update so the streaming thinking
-   *  block and the draining assistant text hand off to the completed message
-   *  in the same render, without a gap or a 1-frame duplicate. */
-  finishTypewriterDrain: (sessionId: string) => void;
+  /** Atomic end-of-turn handoff: clears both `streamingContent` and
+   *  `streamingThinking` in a single store update so `StreamingMessage` and
+   *  `StreamingThinkingBlock` unmount in the same render the just-added
+   *  completed message becomes visible. */
+  commitAssistantStream: (sessionId: string) => void;
   appendStreamingThinking: (sessionId: string, text: string) => void;
   clearStreamingThinking: (sessionId: string) => void;
   setShowThinkingBlocks: (sessionId: string, show: boolean) => void;
@@ -284,7 +282,6 @@ export const createChatSlice: StateCreator<AppState, [], [], ChatSlice> = (
     }),
   streamingContent: {},
   streamingThinking: {},
-  pendingTypewriter: {},
   showThinkingBlocks: {},
   toolActivities: {},
   completedTurns: {},
@@ -365,16 +362,9 @@ export const createChatSlice: StateCreator<AppState, [], [], ChatSlice> = (
         [sessionId]: (s.streamingContent[sessionId] || "") + text,
       },
     })),
-  setPendingTypewriter: (sessionId, messageId, text) =>
+  commitAssistantStream: (sessionId) =>
     set((s) => ({
-      pendingTypewriter: {
-        ...s.pendingTypewriter,
-        [sessionId]: { messageId, text },
-      },
-    })),
-  finishTypewriterDrain: (sessionId) =>
-    set((s) => ({
-      pendingTypewriter: { ...s.pendingTypewriter, [sessionId]: null },
+      streamingContent: { ...s.streamingContent, [sessionId]: "" },
       streamingThinking: { ...s.streamingThinking, [sessionId]: "" },
     })),
   appendStreamingThinking: (sessionId, text) =>
