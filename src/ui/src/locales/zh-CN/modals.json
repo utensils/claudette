@@ -5,10 +5,18 @@
   "delete_workspace_confirm": "删除",
 
   "add_repo_title": "添加仓库",
+  "add_repo_tab_open": "打开现有",
+  "add_repo_tab_create": "新建项目",
   "add_repo_path_label": "仓库路径",
   "add_repo_path_placeholder": "/path/to/repository",
   "add_repo_adding": "正在添加...",
   "add_repo_confirm": "添加",
+  "add_repo_create_location_label": "位置",
+  "add_repo_create_location_placeholder": "/parent/directory",
+  "add_repo_create_name_label": "项目名称",
+  "add_repo_create_name_placeholder": "my-project",
+  "add_repo_creating": "正在创建...",
+  "add_repo_create_confirm": "创建",
 
   "add_remote_title": "添加远程服务器",
   "add_remote_conn_label": "连接字符串",

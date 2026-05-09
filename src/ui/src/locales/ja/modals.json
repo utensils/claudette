@@ -5,10 +5,18 @@
   "delete_workspace_confirm": "削除",
 
   "add_repo_title": "リポジトリを追加",
+  "add_repo_tab_open": "既存を開く",
+  "add_repo_tab_create": "新規作成",
   "add_repo_path_label": "リポジトリのパス",
   "add_repo_path_placeholder": "/path/to/repository",
   "add_repo_adding": "追加中...",
   "add_repo_confirm": "追加",
+  "add_repo_create_location_label": "場所",
+  "add_repo_create_location_placeholder": "/parent/directory",
+  "add_repo_create_name_label": "プロジェクト名",
+  "add_repo_create_name_placeholder": "my-project",
+  "add_repo_creating": "作成中...",
+  "add_repo_create_confirm": "作成",
 
   "add_remote_title": "リモートサーバーを追加",
   "add_remote_conn_label": "接続文字列",

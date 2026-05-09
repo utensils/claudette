@@ -1,0 +1,31 @@
+.tabs {
+  display: flex;
+  gap: 2px;
+  margin-bottom: 16px;
+  background: var(--chat-input-bg);
+  border: 1px solid var(--divider);
+  border-radius: 6px;
+  padding: 3px;
+}
+
+.tab,
+.tabActive {
+  flex: 1;
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  padding: 5px 12px;
+  font-size: 13px;
+  cursor: pointer;
+  color: var(--text-muted);
+  transition: background 0.1s, color 0.1s;
+}
+
+.tab:hover {
+  color: var(--text-primary);
+}
+
+.tabActive {
+  background: var(--selected-bg);
+  color: var(--text-primary);
+}
