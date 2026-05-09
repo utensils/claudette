@@ -138,6 +138,56 @@ fn is_pid_alive(_pid: u32) -> bool {
     true
 }
 
+/// Install a panic hook that emits the panic through `tracing` (so it
+/// lands in the daily log file) and then delegates to the previously
+/// registered hook (the default `Backtrace::capture` + stderr banner).
+/// One hook covers every `tokio::spawn` and `std::thread::spawn` task —
+/// `set_hook` is process-global.
+///
+/// Captured fields:
+/// - `panic`     — the panic payload (`PanicHookInfo::payload()`).
+/// - `location`  — `file:line:col` so postmortems start on the right line.
+/// - `thread`    — `Thread::current().name().unwrap_or("unnamed")`.
+/// - `backtrace` — `std::backtrace::Backtrace::force_capture()`. We
+///   force here because the panic-hook contract is "this is the one
+///   chance to record a useful trace"; the per-process `RUST_BACKTRACE`
+///   env var only governs the *default* hook's printout.
+fn install_tracing_panic_hook() {
+    let prev = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let payload = if let Some(s) = info.payload().downcast_ref::<&str>() {
+            (*s).to_string()
+        } else if let Some(s) = info.payload().downcast_ref::<String>() {
+            s.clone()
+        } else {
+            "<non-string panic payload>".to_string()
+        };
+        let location = info
+            .location()
+            .map(|l| format!("{}:{}:{}", l.file(), l.line(), l.column()))
+            .unwrap_or_else(|| "<unknown>".to_string());
+        let thread = std::thread::current()
+            .name()
+            .unwrap_or("unnamed")
+            .to_string();
+        let backtrace = std::backtrace::Backtrace::force_capture();
+
+        tracing::error!(
+            target: "claudette::panic",
+            panic = %payload,
+            location = %location,
+            thread = %thread,
+            backtrace = %backtrace,
+            "thread panicked"
+        );
+
+        // Delegate to the default hook last so its stderr banner
+        // shows up *after* our structured event, keeping the file
+        // log's ordering intuitive (event then trailer).
+        prev(info);
+    }));
+}
+
 #[cfg(target_os = "macos")]
 use tauri::Emitter;
 use tauri::Manager;
@@ -186,7 +236,26 @@ fn main() {
     // `--agent-hook`) intentionally skip this so they don't fight the
     // GUI process for the same daily log file. They run as short-lived
     // children whose stderr is captured by the parent anyway.
-    let _log_handle = claudette::logging::init();
+    //
+    // We resolve the DB path once here (instead of waiting for the GUI
+    // path that does it later) so the persisted `diagnostics.log_level`
+    // override can be threaded into `init_with_override` before the
+    // subscriber is built. Cheap call: `dirs::data_dir()` is a syscall
+    // pair on macOS / a registry read on Windows.
+    let early_data_dir = dirs::data_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("claudette");
+    let early_db_path = early_data_dir.join("claudette.db");
+    let persisted_log_level = commands::diagnostics::read_persisted_log_level(&early_db_path);
+    let _log_handle = claudette::logging::init_with_override(persisted_log_level.as_deref());
+
+    // Panic hook — run after the subscriber is installed so the event
+    // lands in the rolling log file (and the existing daily one).
+    // We delegate to whatever hook was previously registered (the
+    // default in our case) so terminals attached to a `cargo tauri dev`
+    // run still see the standard stderr panic banner. The webview-side
+    // counterpart of this hook lives in `src/ui/src/utils/log.ts`.
+    install_tracing_panic_hook();
 
     // When spawned with `--server`, run the embedded claudette-server
     // instead of the GUI. This enables single-binary distribution while
@@ -240,11 +309,10 @@ fn main() {
     // a download link instead. No-op on macOS/Linux.
     webview2_check::ensure_installed();
 
-    // Determine database and worktree paths.
-    let data_dir = dirs::data_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("claudette");
-    let db_path = data_dir.join("claudette.db");
+    // Determine database and worktree paths. Reuse the values resolved
+    // above for the persisted-log-level read so the two never drift.
+    let data_dir = early_data_dir;
+    let db_path = early_db_path;
 
     // Stamp the resolved primary paths so a multi-instance dev session
     // can be reconstructed from the log file alone — knowing which DB
@@ -872,6 +940,14 @@ fn main() {
             commands::settings::play_notification_sound,
             commands::settings::run_notification_command,
             commands::settings::get_git_username,
+            // Diagnostics — frontend log bridge, log dir surface,
+            // persisted log-level override.
+            commands::diagnostics::log_from_frontend,
+            commands::diagnostics::get_log_dir,
+            commands::diagnostics::open_log_dir,
+            commands::diagnostics::get_diagnostics_settings,
+            commands::diagnostics::set_log_level,
+            commands::diagnostics::set_frontend_verbosity,
             commands::agent_backends::list_agent_backends,
             commands::agent_backends::save_agent_backend,
             commands::agent_backends::delete_agent_backend,

@@ -14,10 +14,38 @@ if ((window as unknown as { __claudetteHijackBlocked?: boolean }).__claudetteHij
 import "./i18n";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
+import { invoke } from "@tauri-apps/api/core";
 import { ErrorBoundary } from "./components/layout/ErrorBoundary";
 import { prewarmHighlighter } from "./utils/highlight";
 import { bootstrapGrammarRegistry } from "./utils/grammarRegistry";
+import {
+  installFrontendLogBridge,
+  setFrontendLogVerbosity,
+  type FrontendLogVerbosity,
+} from "./utils/log";
 import App from "./App.tsx";
+
+// Install the frontend → backend log bridge BEFORE React mounts so a
+// crash inside any module's import-time side effects (i18n, grammar
+// bootstrap) lands in the daily log file under `claudette::frontend`
+// instead of evaporating into the devtools console.
+//
+// Default verbosity is `errors` (matches the Settings default). The
+// async fetch below upgrades it once `get_diagnostics_settings`
+// returns the user's persisted choice — which is fine because nothing
+// in the boot path emits at warn/info that we'd want to mirror.
+installFrontendLogBridge("errors");
+void invoke<{ frontend_verbosity: string | null }>("get_diagnostics_settings")
+  .then((settings) => {
+    const v = settings.frontend_verbosity;
+    if (v === "errors" || v === "warnings" || v === "all") {
+      setFrontendLogVerbosity(v as FrontendLogVerbosity);
+    }
+  })
+  .catch(() => {
+    // Backend command not yet registered (e.g. tests) — keep the
+    // default. Failing to read this setting is never user-visible.
+  });
 
 // Spawn the syntax-highlight worker and kick off Shiki/WASM init in parallel
 // with React mount, so the first code block on the first workspace doesn't

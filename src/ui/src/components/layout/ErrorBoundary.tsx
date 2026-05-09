@@ -1,5 +1,6 @@
 import { Component } from "react";
 import type { ErrorInfo, ReactNode } from "react";
+import { log } from "../../utils/log";
 import styles from "./ErrorBoundary.module.css";
 
 interface Props {
@@ -21,7 +22,19 @@ export class ErrorBoundary extends Component<Props, State> {
   }
 
   componentDidCatch(error: Error, info: ErrorInfo) {
+    // Keep the original devtools-friendly console line — devs running
+    // a dev build have come to expect this exact prefix when a render
+    // crash hits — and ALSO forward the same payload through the
+    // structured log bridge so it lands in the daily log file under
+    // `claudette::frontend`. The bridge is a no-op until `installed`,
+    // so calling it during a pre-install render error is harmless.
     console.error("React error boundary caught:", error, info.componentStack);
+    log.error(
+      "error-boundary",
+      error.message || "React render error",
+      { component_stack: info.componentStack ?? undefined },
+      error.stack,
+    );
   }
 
   render() {

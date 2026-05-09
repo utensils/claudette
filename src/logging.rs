@@ -24,7 +24,11 @@
 //!
 //! Defaults to `info,claudette=debug,claudette_tauri=debug`. Override
 //! with the standard `RUST_LOG` env var (e.g.
-//! `RUST_LOG=claudette::commands::chat=trace`).
+//! `RUST_LOG=claudette::commands::chat=trace`). For users who don't
+//! want to set env vars, [`init`] also accepts an optional persisted
+//! override that maps to `EnvFilter` — Settings → Diagnostics writes
+//! `app_settings["diagnostics.log_level"]`, the GUI reads it on startup
+//! and threads it into this fallback when `RUST_LOG` is unset.
 //!
 //! ## JSON output
 //!
@@ -32,6 +36,32 @@
 //! useful when grep / jq is more convenient than tailing the pretty
 //! file. Defaults to compact (one line per event with a tab-separated
 //! "key=value" tail of structured fields).
+//!
+//! ## Target conventions
+//!
+//! Every event uses a target of the form `claudette::<domain>` so a
+//! single `RUST_LOG=claudette::chat=trace` filter targets one
+//! cross-cutting concern without grepping. Established domains:
+//!
+//! - `claudette::startup`  — process boot, paths, multi-instance warning
+//! - `claudette::panic`    — panic hook output
+//! - `claudette::chat`     — turn lifecycle, persistent session reuse
+//! - `claudette::agent`    — claude CLI subprocess events
+//! - `claudette::backend`  — alt-provider gateway listeners
+//! - `claudette::mcp`      — MCP supervisor and registration
+//! - `claudette::plugin`   — Lua plugin runtime + Claude-Code marketplace
+//! - `claudette::git`      — git CLI shellouts
+//! - `claudette::scm`      — PR / CI provider plugin invocations
+//! - `claudette::pty`      — portable-pty spawn / exit
+//! - `claudette::voice`    — Whisper / Speech.framework
+//! - `claudette::ws`       — claudette-server WebSocket
+//! - `claudette::ipc`      — local CLI ↔ GUI socket
+//! - `claudette::remote`   — remote-control commands
+//! - `claudette::ui`       — theme / settings persistence
+//! - `claudette::frontend` — events forwarded from the React webview
+//!
+//! Use these targets verbatim; new domains are added here first so the
+//! convention stays one filterable axis.
 
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
@@ -77,16 +107,31 @@ impl LogHandle {
 
 static LOG_HANDLE: OnceLock<PathBuf> = OnceLock::new();
 
+/// Initialize the global tracing subscriber with the default fallback
+/// filter (or whatever `RUST_LOG` provides). Equivalent to
+/// `init_with_override(None)`.
+pub fn init() -> Option<LogHandle> {
+    init_with_override(None)
+}
+
 /// Initialize the global tracing subscriber. Must be called exactly
 /// once, as early in `main` as practical (before the first
 /// `tracing::*!` macro fires). Subsequent calls return `None` and leave
 /// the existing subscriber intact — safe to call from tests via the
 /// helper guard, but `main` should hold onto the returned handle.
 ///
+/// `runtime_override` is parsed as an `EnvFilter` directive (e.g.
+/// `info`, `debug`, `claudette::chat=trace,info`). It is used **only**
+/// when `RUST_LOG` is unset, so an explicit env var still wins. The GUI
+/// reads `app_settings["diagnostics.log_level"]` and passes it through
+/// here so users who don't want to set env vars can change verbosity
+/// from Settings → Diagnostics.
+///
 /// Errors here are logged to stderr only and downgrade gracefully:
 /// if the file appender can't be created, stderr-only logging still
-/// works.
-pub fn init() -> Option<LogHandle> {
+/// works; if `runtime_override` fails to parse we fall back to
+/// [`DEFAULT_FILTER`] rather than aborting startup.
+pub fn init_with_override(runtime_override: Option<&str>) -> Option<LogHandle> {
     let log_dir = resolve_log_dir();
     if let Err(e) = std::fs::create_dir_all(&log_dir) {
         eprintln!(
@@ -97,8 +142,25 @@ pub fn init() -> Option<LogHandle> {
 
     sweep_old_logs(&log_dir, RETAIN_DAYS);
 
-    let env_filter =
-        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(DEFAULT_FILTER));
+    // RUST_LOG > runtime override > built-in default. We try each in
+    // order, and on parse failure of the runtime override fall through
+    // to the default with a stderr note (the subscriber isn't installed
+    // yet, so we can't `tracing::warn!`).
+    let env_filter = match EnvFilter::try_from_default_env() {
+        Ok(f) => f,
+        Err(_) => match runtime_override.and_then(|s| {
+            let trimmed = s.trim();
+            (!trimmed.is_empty()).then_some(trimmed)
+        }) {
+            Some(directive) => EnvFilter::try_new(directive).unwrap_or_else(|e| {
+                eprintln!(
+                    "[logging] invalid runtime override {directive:?}: {e} — using default filter"
+                );
+                EnvFilter::new(DEFAULT_FILTER)
+            }),
+            None => EnvFilter::new(DEFAULT_FILTER),
+        },
+    };
 
     let stderr_layer = fmt::layer()
         .with_target(true)
@@ -293,6 +355,29 @@ mod tests {
         sweep_old_logs(dir.path(), 14);
 
         assert!(recent.exists(), "files inside the retention window stay");
+    }
+
+    /// The Settings UI writes one of these strings into
+    /// `app_settings["diagnostics.log_level"]` and we thread it into
+    /// `init_with_override`. Verify each parses as a real `EnvFilter`
+    /// directive so a typo in the Settings select can't silently brick
+    /// the subscriber. We can't easily install a global subscriber
+    /// from a test (it's process-wide and other tests may have set it),
+    /// so we exercise the parsing path directly — the same call
+    /// `init_with_override` makes when `RUST_LOG` is unset.
+    #[test]
+    fn supported_log_level_directives_parse() {
+        for ok in [
+            "info",
+            "debug",
+            "trace",
+            "warn",
+            "error",
+            "claudette::chat=trace",
+            DEFAULT_FILTER,
+        ] {
+            assert!(EnvFilter::try_new(ok).is_ok(), "expected {ok:?} to parse");
+        }
     }
 
     /// Validate the env override path. We guard the env mutation so

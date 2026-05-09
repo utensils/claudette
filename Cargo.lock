@@ -888,6 +888,7 @@ dependencies = [
  "serde_json",
  "serde_yaml",
  "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -915,6 +916,7 @@ dependencies = [
  "tokio-rustls",
  "tokio-tungstenite",
  "toml 0.8.2",
+ "tracing",
  "uuid",
 ]
 

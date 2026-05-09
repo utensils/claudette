@@ -1,0 +1,213 @@
+import { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
+import { invoke } from "@tauri-apps/api/core";
+import { writeText } from "@tauri-apps/plugin-clipboard-manager";
+import { Folder, Copy } from "lucide-react";
+import {
+  setFrontendLogVerbosity,
+  type FrontendLogVerbosity,
+} from "../../../utils/log";
+import styles from "../Settings.module.css";
+
+// Mirrors the Rust `DiagnosticsSettings` struct in
+// src-tauri/src/commands/diagnostics.rs. Optional strings stay
+// `null`-able so the panel can render the "(default)" affordance.
+interface DiagnosticsSettingsPayload {
+  log_level: string | null;
+  frontend_verbosity: string | null;
+  log_dir: string | null;
+  rust_log_active: boolean;
+}
+
+// EnvFilter directives the select offers. Anything more exotic (e.g.
+// per-target overrides) belongs in the RUST_LOG path — the select is
+// for users who don't want to know what an EnvFilter is.
+const LOG_LEVELS = [
+  { value: "", label: "default" },
+  { value: "warn", label: "warn" },
+  { value: "info", label: "info" },
+  { value: "debug", label: "debug" },
+  { value: "trace", label: "trace" },
+] as const;
+
+// Tuple of `[value, label]` pairs. We inline the translated label
+// where the select renders so i18next's typed-key checker can
+// resolve each `t(...)` call statically — pulling the key through a
+// generic-string variable defeats that.
+
+export function DiagnosticsSettings() {
+  const { t } = useTranslation("settings");
+  const [settings, setSettings] = useState<DiagnosticsSettingsPayload | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [pending, setPending] = useState(false);
+  const [copied, setCopied] = useState(false);
+
+  useEffect(() => {
+    invoke<DiagnosticsSettingsPayload>("get_diagnostics_settings")
+      .then(setSettings)
+      .catch((e) => setError(String(e)));
+  }, []);
+
+  const updateLogLevel = async (value: string) => {
+    if (pending) return;
+    const previous = settings;
+    setSettings((prev) => (prev ? { ...prev, log_level: value || null } : prev));
+    setPending(true);
+    setError(null);
+    try {
+      await invoke("set_log_level", { level: value });
+    } catch (e) {
+      setSettings(previous);
+      setError(String(e));
+    } finally {
+      setPending(false);
+    }
+  };
+
+  const updateFrontendVerbosity = async (value: FrontendLogVerbosity) => {
+    if (pending) return;
+    const previous = settings;
+    setSettings((prev) =>
+      prev ? { ...prev, frontend_verbosity: value } : prev,
+    );
+    setPending(true);
+    setError(null);
+    try {
+      await invoke("set_frontend_verbosity", { verbosity: value });
+      // Apply the change live — no restart needed for the bridge,
+      // unlike the EnvFilter override above.
+      setFrontendLogVerbosity(value);
+    } catch (e) {
+      setSettings(previous);
+      setError(String(e));
+    } finally {
+      setPending(false);
+    }
+  };
+
+  const openLogDir = async () => {
+    setError(null);
+    try {
+      await invoke("open_log_dir");
+    } catch (e) {
+      setError(String(e));
+    }
+  };
+
+  const copyLogPath = async () => {
+    if (!settings?.log_dir) return;
+    try {
+      await writeText(settings.log_dir);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1500);
+    } catch (e) {
+      setError(String(e));
+    }
+  };
+
+  const currentLevel = settings?.log_level ?? "";
+  const currentVerbosity = (settings?.frontend_verbosity as FrontendLogVerbosity | null) ?? "errors";
+
+  return (
+    <div>
+      <h2 className={styles.sectionTitle}>{t("diagnostics_title")}</h2>
+      <p className={`${styles.fieldHint} ${styles.fieldHintSpacedWide}`}>
+        {t("diagnostics_description")}
+      </p>
+
+      {error && <div className={styles.error}>{error}</div>}
+
+      {/* Log level — restart required */}
+      <div className={styles.settingRow}>
+        <div className={styles.settingInfo}>
+          <div className={styles.settingLabel}>
+            {t("diagnostics_log_level_label")}
+          </div>
+          <div className={styles.settingDescription}>
+            {settings?.rust_log_active
+              ? t("diagnostics_log_level_locked_by_rust_log")
+              : t("diagnostics_log_level_description")}
+          </div>
+        </div>
+        <div className={styles.settingControl}>
+          <select
+            value={currentLevel}
+            onChange={(e) => void updateLogLevel(e.target.value)}
+            disabled={pending || settings?.rust_log_active === true}
+            className={styles.select}
+          >
+            {LOG_LEVELS.map((opt) => (
+              <option key={opt.value || "default"} value={opt.value}>
+                {opt.label}
+              </option>
+            ))}
+          </select>
+        </div>
+      </div>
+
+      {/* Frontend bridge verbosity — live, no restart */}
+      <div className={styles.settingRow}>
+        <div className={styles.settingInfo}>
+          <div className={styles.settingLabel}>
+            {t("diagnostics_frontend_verbosity_label")}
+          </div>
+          <div className={styles.settingDescription}>
+            {t("diagnostics_frontend_verbosity_description")}
+          </div>
+        </div>
+        <div className={styles.settingControl}>
+          <select
+            value={currentVerbosity}
+            onChange={(e) =>
+              void updateFrontendVerbosity(e.target.value as FrontendLogVerbosity)
+            }
+            disabled={pending}
+            className={styles.select}
+          >
+            <option value="errors">
+              {t("diagnostics_frontend_verbosity_errors")}
+            </option>
+            <option value="warnings">
+              {t("diagnostics_frontend_verbosity_warnings")}
+            </option>
+            <option value="all">
+              {t("diagnostics_frontend_verbosity_all")}
+            </option>
+          </select>
+        </div>
+      </div>
+
+      {/* Log path actions */}
+      <div className={styles.settingRow}>
+        <div className={styles.settingInfo}>
+          <div className={styles.settingLabel}>
+            {t("diagnostics_log_dir_label")}
+          </div>
+          <div className={styles.settingDescription}>
+            {settings?.log_dir ?? t("diagnostics_log_dir_unavailable")}
+          </div>
+        </div>
+        <div className={styles.settingControl}>
+          <button
+            className={styles.iconBtn}
+            onClick={openLogDir}
+            disabled={!settings?.log_dir}
+          >
+            <Folder size={14} />
+            {t("diagnostics_open_log_dir")}
+          </button>
+          <button
+            className={styles.iconBtn}
+            onClick={copyLogPath}
+            disabled={!settings?.log_dir}
+          >
+            <Copy size={14} />
+            {copied
+              ? t("diagnostics_copy_log_path_copied")
+              : t("diagnostics_copy_log_path")}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}

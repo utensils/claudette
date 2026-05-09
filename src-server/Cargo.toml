@@ -35,6 +35,12 @@ clap = { version = "4", features = ["derive"] }
 futures-util = "0.3"
 gethostname = "1"
 hex = "0.4"
+# Structured logging. We re-emit through the Rust `tracing` registry
+# so when the server is embedded inside the Tauri binary (the default
+# `server` feature path), every event lands in the same daily log
+# file as the GUI side. Standalone `claudette-server` runs install
+# their own subscriber via `claudette::logging::init` in `main.rs`.
+tracing = "0.1"
 
 [dev-dependencies]
 tempfile = "3"
