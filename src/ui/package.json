@@ -8,7 +8,7 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
-    "lint:css": "bash scripts/check-css-tokens.sh",
+    "lint:css": "node scripts/check-css-tokens.mjs && node scripts/check-font-mono.mjs",
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest"
