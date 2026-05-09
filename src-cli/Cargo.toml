@@ -22,6 +22,13 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serde_yaml = "0.9"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-util", "net"] }
+# Structured logging. The CLI binary itself prefers human-readable
+# stdout/stderr output (tables, version banners, JSON), so events emitted
+# from `claudette` library calls go through this registry — and surface
+# only when a downstream binary (the GUI, or a test harness) installs
+# `claudette::logging::init`. The CLI does not install its own subscriber
+# yet; that's a deliberate non-goal.
+tracing = "0.1"
 
 [target.'cfg(unix)'.dependencies]
 # `kill(pid, 0)` to detect stale discovery files.

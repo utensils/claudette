@@ -18,6 +18,15 @@ This file is the source of truth for project conventions. Several companion conf
 
 When you change architecture, commands, code-style, regression rules, or god-file lists in this CLAUDE.md, scan the Copilot files for the same statement and update both. Drift here causes Copilot's PR reviews to flag (or miss) issues that don't match what we tell humans.
 
+## Documentation discipline
+
+**Always update the user-facing docs in the same PR as the feature change.** Adding, removing, or changing user-visible behavior — settings, commands, CLI flags, keyboard shortcuts, environment variables, file locations, plugin manifests, notification triggers — requires a matching docs change. The docs site lives at `site/src/content/docs/` (Astro Starlight). Two surfaces matter:
+
+- `site/src/content/docs/features/<topic>.mdx` — the per-feature deep-dive page. New cross-cutting feature → new page. Existing feature gained a knob → update the page. Register new pages in the sidebar nav at `site/astro.config.mjs` so they're reachable.
+- `site/src/content/docs/features/settings.mdx` — the flat settings reference table. Every Settings panel control belongs in this file's matching `## <Section>` table; add the row when you add the control.
+
+If a change is intentionally undocumented (debug-only flag, internal env var nobody outside the repo should touch), call that out in the PR description so the omission is reviewed, not assumed. CI does not enforce this — the discipline does.
+
 ## Build & test commands
 
 ```bash

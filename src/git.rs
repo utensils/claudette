@@ -305,6 +305,12 @@ fn validate_revision(revision: &str) -> Result<(), GitError> {
 /// Returns [`GitError::NotAGitRepo`] / [`GitError::CommandFailed`] when the
 /// directory is not a git worktree, when the revision fails the allow-list,
 /// or when an underlying git command fails.
+#[tracing::instrument(
+    level = "trace",
+    target = "claudette::git",
+    skip_all,
+    fields(worktree_path = %worktree_path, file_path = %file_path, revision = %revision),
+)]
 pub async fn read_blob_at_revision(
     worktree_path: &str,
     file_path: &str,
@@ -482,6 +488,12 @@ pub async fn default_branch(
 /// Resolves the first configured remote and runs `git fetch` with a 15-second
 /// timeout. Failures are logged but never propagated — callers can proceed with
 /// potentially stale refs when the network is unavailable.
+#[tracing::instrument(
+    level = "debug",
+    target = "claudette::git",
+    skip_all,
+    fields(repo_path = %repo_path, remote = remote_override),
+)]
 pub async fn fetch_remote(repo_path: &str, remote_override: Option<&str>) -> Result<(), GitError> {
     let remote = match remote_override {
         Some(r) => r.to_string(),
@@ -491,7 +503,12 @@ pub async fn fetch_remote(repo_path: &str, remote_override: Option<&str>) -> Res
                 None => return Ok(()),
             },
             Err(e) => {
-                eprintln!("[git] failed to list remotes: {e}");
+                tracing::warn!(
+                    target: "claudette::git",
+                    repo_path = %repo_path,
+                    error = %e,
+                    "failed to list remotes"
+                );
                 return Ok(());
             }
         },
@@ -508,7 +525,13 @@ pub async fn fetch_remote(repo_path: &str, remote_override: Option<&str>) -> Res
     {
         Ok(c) => c,
         Err(e) => {
-            eprintln!("[git] failed to spawn fetch {remote}: {e}");
+            tracing::warn!(
+                target: "claudette::git",
+                repo_path = %repo_path,
+                remote = %remote,
+                error = %e,
+                "failed to spawn fetch"
+            );
             return Ok(());
         }
     };
@@ -516,20 +539,50 @@ pub async fn fetch_remote(repo_path: &str, remote_override: Option<&str>) -> Res
     match tokio::time::timeout(std::time::Duration::from_secs(15), child.wait()).await {
         Ok(Ok(status)) if status.success() => Ok(()),
         Ok(Ok(status)) => {
-            eprintln!("[git] fetch {remote} exited with {status} (continuing with local refs)");
+            tracing::warn!(
+                target: "claudette::git",
+                repo_path = %repo_path,
+                remote = %remote,
+                status = %status,
+                "fetch exited with non-success status — continuing with local refs"
+            );
             Ok(())
         }
         Ok(Err(e)) => {
-            eprintln!("[git] fetch {remote} failed (continuing with local refs): {e}");
+            tracing::warn!(
+                target: "claudette::git",
+                repo_path = %repo_path,
+                remote = %remote,
+                error = %e,
+                "fetch failed — continuing with local refs"
+            );
             Ok(())
         }
         Err(_) => {
-            eprintln!("[git] fetch {remote} timed out after 15s (continuing with local refs)");
+            tracing::warn!(
+                target: "claudette::git",
+                repo_path = %repo_path,
+                remote = %remote,
+                timeout_secs = 15,
+                "fetch timed out — continuing with local refs"
+            );
             Ok(())
         }
     }
 }
 
+#[tracing::instrument(
+    level = "debug",
+    target = "claudette::git",
+    skip_all,
+    fields(
+        repo_path = %repo_path,
+        branch = %branch_name,
+        worktree_path = %worktree_path,
+        base_branch_override = base_branch_override,
+        remote_override = remote_override,
+    ),
+)]
 pub async fn create_worktree(
     repo_path: &str,
     branch_name: &str,
@@ -659,6 +712,12 @@ pub async fn remove_worktree(
 }
 
 #[allow(dead_code)]
+#[tracing::instrument(
+    level = "trace",
+    target = "claudette::git",
+    skip_all,
+    fields(repo_path = %repo_path),
+)]
 pub async fn list_branches(repo_path: &str) -> Result<Vec<String>, GitError> {
     let output = run_git(repo_path, &["branch", "--format=%(refname:short)"]).await?;
     Ok(output.lines().map(|l| l.to_string()).collect())

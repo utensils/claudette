@@ -345,7 +345,7 @@ pub async fn list_user_themes() -> Result<Vec<ThemeDefinition>, String> {
             let entry = match entry {
                 Ok(e) => e,
                 Err(e) => {
-                    eprintln!("[themes] Skipping unreadable directory entry: {e}");
+                    tracing::warn!(target: "claudette::ui", error = %e, "skipping unreadable theme directory entry");
                     continue;
                 }
             };
@@ -357,16 +357,22 @@ pub async fn list_user_themes() -> Result<Vec<ThemeDefinition>, String> {
 
             match std::fs::metadata(&path) {
                 Ok(meta) if meta.len() > MAX_THEME_FILE_BYTES => {
-                    eprintln!(
-                        "[themes] Skipping {}: file too large ({} bytes)",
-                        path.display(),
-                        meta.len()
+                    tracing::warn!(
+                        target: "claudette::ui",
+                        path = %path.display(),
+                        bytes = meta.len(),
+                        "skipping theme file: too large"
                     );
                     continue;
                 }
                 Ok(_) => {}
                 Err(e) => {
-                    eprintln!("[themes] Skipping {}: {e}", path.display());
+                    tracing::warn!(
+                        target: "claudette::ui",
+                        path = %path.display(),
+                        error = %e,
+                        "skipping theme file: metadata failed"
+                    );
                     continue;
                 }
             }
@@ -374,14 +380,24 @@ pub async fn list_user_themes() -> Result<Vec<ThemeDefinition>, String> {
             let content = match std::fs::read_to_string(&path) {
                 Ok(c) => c,
                 Err(e) => {
-                    eprintln!("[themes] Skipping {}: {e}", path.display());
+                    tracing::warn!(
+                        target: "claudette::ui",
+                        path = %path.display(),
+                        error = %e,
+                        "skipping theme file: read failed"
+                    );
                     continue;
                 }
             };
 
             match serde_json::from_str::<ThemeDefinition>(&content) {
                 Ok(theme) => themes.push(theme),
-                Err(e) => eprintln!("[themes] Skipping {}: {e}", path.display()),
+                Err(e) => tracing::warn!(
+                    target: "claudette::ui",
+                    path = %path.display(),
+                    error = %e,
+                    "skipping theme file: parse failed"
+                ),
             }
         }
 

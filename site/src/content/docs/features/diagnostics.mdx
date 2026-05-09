@@ -1,0 +1,120 @@
+---
+title: Diagnostics & Logging
+description: Where Claudette writes its logs, how to change verbosity, and how to capture frontend errors for bug reports.
+---
+
+Claudette writes structured, daily-rotated logs to disk so user-reported bugs can be reconstructed from the file alone — without needing the user to reproduce while the app is attached to a debugger. The pipeline is on by default in every build.
+
+## Where logs live
+
+The default log directory is `~/.claudette/logs/` (sibling to `~/.claudette/workspaces` and `~/.claudette/plugins`). Files are named `claudette.<YYYY-MM-DD>.log` (the `tracing-appender` layout is `<prefix>.<date>.<suffix>`) and rotate daily. A startup retention sweep deletes anything older than 14 days so the directory never grows unbounded.
+
+You can override the location with the `CLAUDETTE_LOG_DIR` environment variable — handy when running multiple dev instances side-by-side and you want each one's logs in its own folder.
+
+Every log line carries the process PID, so even when two Claudette instances share the same daily file you can demux by `grep pid=NNN`.
+
+## Settings → Diagnostics
+
+The Diagnostics section in Settings (between **Editor** and **Git**) gives you three controls without ever needing to touch an environment variable.
+
+### Log level
+
+Restart-required filter applied to the file log when `RUST_LOG` is unset. Choose:
+
+| Level | Captures |
+|-------|----------|
+| `default` | `info` overall plus `debug` for Claudette's own crates — the shipping default |
+| `warn` | warnings and errors only |
+| `info` | startup, shutdown, every Tauri command lifecycle event |
+| `debug` | the above plus span timings for slow ops (DB migrations, git fetches, diff parsing, agent spawns) |
+| `trace` | maximum detail; not recommended for normal use |
+
+If `RUST_LOG` is set in the process's environment, this select is locked and a banner explains why — `RUST_LOG` always wins so the env var workflow is preserved.
+
+### Frontend log verbosity
+
+How much of the React side's `console.*` output is mirrored into the daily log. Takes effect immediately, no restart needed.
+
+| Verbosity | Mirrored sources |
+|-----------|------------------|
+| **Errors only** *(default)* | uncaught browser errors, promise rejections, React error-boundary catches, `console.error` |
+| **Errors + warnings** | the above plus `console.warn` |
+| **Everything** | the above plus `console.log` and `console.info` |
+
+Browser-side uncaught errors and unhandled promise rejections are always captured, regardless of verbosity — only the explicit `console.*` calls are gated. React's StrictMode warnings are forwarded under "Errors + warnings" if you need to see them in the file log.
+
+### Open Logs Folder / Copy path
+
+Two buttons. The first reveals the log directory in your file manager (Finder on macOS, the system handler on Linux/Windows). The second copies the path to your clipboard — useful for pasting into a bug report.
+
+## Filtering verbosity by domain
+
+When investigating a specific subsystem, use a per-domain `RUST_LOG` filter rather than turning every domain up to `trace`. Every event in Claudette is emitted under a `claudette::<domain>` target:
+
+```bash
+# Only chat lifecycle events
+RUST_LOG=claudette::chat=trace cargo tauri dev
+
+# Chat plus MCP supervision
+RUST_LOG=claudette::chat=trace,claudette::mcp=debug cargo tauri dev
+
+# Everything from the React webview
+RUST_LOG=claudette::frontend=trace cargo tauri dev
+```
+
+Established domains:
+
+| Target | Covers |
+|--------|--------|
+| `claudette::startup` | process boot, paths, multi-instance warning |
+| `claudette::panic` | Rust panic hook output (with backtrace) |
+| `claudette::chat` | turn lifecycle, persistent session reuse / respawn |
+| `claudette::agent` | Claude CLI subprocess events |
+| `claudette::backend` | alternative-provider gateway |
+| `claudette::mcp` | MCP supervisor and server registration |
+| `claudette::plugin` | Lua plugin runtime + Claude-Code marketplace |
+| `claudette::git` | git CLI shellouts |
+| `claudette::diff` | diff parsing |
+| `claudette::scm` | PR / CI provider plugin invocations |
+| `claudette::pty` | terminal spawn / exit |
+| `claudette::voice` | Whisper / Speech.framework |
+| `claudette::ws` | WebSocket server (remote workspaces) |
+| `claudette::ipc` | local CLI ↔ GUI socket |
+| `claudette::remote` | remote-control commands |
+| `claudette::ui` | theme load, settings persistence |
+| `claudette::frontend` | events forwarded from the React webview |
+
+## File format
+
+Logs default to a compact text format (one event per line, with a tab-separated key=value tail of structured fields):
+
+```
+2026-05-08T17:32:14.123Z  INFO  claudette::chat  send_chat_message{chat_session_id=4f… workspace_id=ws-abc…}: turn dispatched
+```
+
+For machine-parseable output set `CLAUDETTE_LOG_FORMAT=json` before launching — every event becomes a JSON line, which is friendlier to `jq` post-mortems:
+
+```bash
+CLAUDETTE_LOG_FORMAT=json cargo tauri dev
+# Later:
+jq 'select(.target=="claudette::chat" and .level=="ERROR")' \
+  ~/.claudette/logs/claudette.2026-05-08.log
+```
+
+## Multiple dev instances
+
+Claudette has no single-instance lock — running `./scripts/dev.sh` twice gives you two independent processes against the same SQLite database. Logs from both instances **interleave into the same daily file** by default, demuxable via the `pid=NNN` field on every line.
+
+If you'd rather isolate them, set `CLAUDETTE_LOG_DIR` to a per-instance path before launching. The dev launcher leaves this up to you so you can choose interleaved-in-one-file or separate-files based on what you're investigating.
+
+On startup, Claudette also scans `${TMPDIR}/claudette-dev/*.json` (the discovery files `scripts/dev.sh` writes) and emits a `WARN` if another live PID is already running against the same DB path. The warning fires once at boot and explains exactly why it can corrupt persisted state — useful when an old instance lingers and you didn't notice.
+
+## Filing a bug report
+
+1. Reproduce the issue.
+2. **Settings → Diagnostics → Copy path** to grab the log directory.
+3. Open the most recent `claudette.<DATE>.log` — that's your timeline.
+4. If you want fuller detail, switch the **Log level** to `debug`, restart Claudette, reproduce, and the file log will include span timings + every command's entry/exit fields.
+5. Attach the relevant log file to the GitHub issue along with the reproduction steps.
+
+The frontend-bridge default catches React render crashes and uncaught browser errors automatically, so the file log usually has enough context to triage even if you can't reproduce on demand.

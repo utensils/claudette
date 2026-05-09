@@ -538,12 +538,12 @@ async fn seed_scm_cache_from_db(db_path: &std::path::Path, cache: &crate::state:
         Ok(db) => match db.load_all_scm_status_cache() {
             Ok(rows) => rows,
             Err(e) => {
-                eprintln!("[scm] Failed to load SCM cache from DB on seed: {e}");
+                tracing::warn!(target: "claudette::scm", error = %e, "failed to load SCM cache from DB on seed");
                 return;
             }
         },
         Err(e) => {
-            eprintln!("[scm] Failed to open DB for SCM cache seed: {e}");
+            tracing::warn!(target: "claudette::scm", error = %e, "failed to open DB for SCM cache seed");
             return;
         }
     };
@@ -626,14 +626,16 @@ async fn persist_scm_cache(
                 error,
                 fetched_at: String::new(),
             }) {
-                eprintln!(
-                    "[scm] Failed to persist SCM cache for workspace {}: {e}",
-                    key.workspace_id
+                tracing::warn!(
+                    target: "claudette::scm",
+                    workspace_id = %key.workspace_id,
+                    error = %e,
+                    "failed to persist SCM cache"
                 );
             }
         }
         Err(e) => {
-            eprintln!("[scm] Failed to open DB for SCM cache persistence: {e}");
+            tracing::warn!(target: "claudette::scm", error = %e, "failed to open DB for SCM cache persistence");
         }
     }
 }
@@ -889,7 +891,7 @@ pub fn start_scm_polling(app_handle: tauri::AppHandle) {
                             .as_ref()
                             .is_some_and(|pr| pr.state == claudette::scm::types::PrState::Merged)
                     {
-                        eprintln!("[scm] PR merged for workspace {ws_id} — auto-archiving");
+                        tracing::info!(target: "claudette::scm", workspace_id = %ws_id, "PR merged — auto-archiving workspace");
                         let pr_number = detail.pull_request.as_ref().map(|pr| pr.number);
                         auto_archive_workspace(&handle, &app_state, &ws_id, pr_number).await;
                     }
@@ -934,7 +936,7 @@ async fn auto_archive_workspace(
         let db = match Database::open(&app_state.db_path) {
             Ok(db) => db,
             Err(e) => {
-                eprintln!("[scm] Failed to open DB for auto-archive: {e}");
+                tracing::warn!(target: "claudette::scm", error = %e, "failed to open DB for auto-archive");
                 return;
             }
         };
@@ -1043,7 +1045,12 @@ async fn auto_archive_workspace(
         .unwrap_or(false);
 
     if !mutation_ok {
-        eprintln!("[scm] DB mutation failed while auto-archiving workspace '{ws_name}' ({ws_id})");
+        tracing::warn!(
+            target: "claudette::scm",
+            workspace_id = %ws_id,
+            workspace_name = %ws_name,
+            "DB mutation failed while auto-archiving workspace"
+        );
         return;
     }
 
@@ -1090,7 +1097,13 @@ async fn auto_archive_workspace(
         payload["pr_number"] = serde_json::json!(num);
     }
     let _ = handle.emit("workspace-auto-archived", payload);
-    eprintln!("[scm] Auto-{verb} workspace '{ws_name}' ({ws_id})");
+    tracing::info!(
+        target: "claudette::scm",
+        workspace_id = %ws_id,
+        workspace_name = %ws_name,
+        action = %verb,
+        "auto-archived workspace"
+    );
 }
 
 #[cfg(test)]

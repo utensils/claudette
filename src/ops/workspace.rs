@@ -264,7 +264,12 @@ pub async fn resolve_and_run_setup(
             }
         }
         Err(parse_err) => {
-            eprintln!("[setup] {parse_err}");
+            tracing::warn!(
+                target: "claudette::workspace",
+                phase = "setup",
+                error = %parse_err,
+                "failed to parse repo setup script"
+            );
             if let Some(fallback) = settings_script {
                 (fallback.to_string(), "settings")
             } else {
@@ -436,7 +441,12 @@ pub async fn resolve_and_run_archive(
             }
         }
         Err(parse_err) => {
-            eprintln!("[archive] {parse_err}");
+            tracing::warn!(
+                target: "claudette::workspace",
+                phase = "archive",
+                error = %parse_err,
+                "failed to parse repo archive script"
+            );
             if let Some(fallback) = settings_script {
                 (fallback.to_string(), "settings")
             } else {

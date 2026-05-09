@@ -22,6 +22,9 @@ const NotificationsSettings = lazy(() =>
 const EditorSettings = lazy(() =>
   import("./sections/EditorSettings").then((m) => ({ default: m.EditorSettings })),
 );
+const DiagnosticsSettings = lazy(() =>
+  import("./sections/DiagnosticsSettings").then((m) => ({ default: m.DiagnosticsSettings })),
+);
 const GitSettings = lazy(() =>
   import("./sections/GitSettings").then((m) => ({ default: m.GitSettings })),
 );
@@ -82,6 +85,7 @@ function SectionContent({ section }: { section: string | null }) {
   if (section === "appearance") return <AppearanceSettings />;
   if (section === "notifications") return <NotificationsSettings />;
   if (section === "editor") return <EditorSettings />;
+  if (section === "diagnostics") return <DiagnosticsSettings />;
   if (section === "git") return <GitSettings />;
   if (section === "keyboard") return <KeyboardSettings />;
   if (section === "cli") return <CliSettings />;

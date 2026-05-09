@@ -328,9 +328,11 @@ pub async fn create_turn_checkpoint(args: CheckpointArgs<'_>) -> Option<Conversa
     let has_files = match snapshot::save_snapshot(db_path, &checkpoint.id, worktree_path).await {
         Ok(count) => count > 0,
         Err(e) => {
-            eprintln!(
-                "[chat] Snapshot failed for {workspace_id}: {e} \
-                 — checkpoint recorded without file restore capability"
+            tracing::warn!(
+                target: "claudette::chat",
+                workspace_id = %workspace_id,
+                error = %e,
+                "snapshot failed — checkpoint recorded without file restore capability"
             );
             false
         }

@@ -45,6 +45,17 @@ tempfile = "3"
 # on Windows. One async API for both, used by `agent_mcp::bridge` to talk to
 # the Claudette-hosted MCP grandchild that the Claude CLI spawns over stdio.
 interprocess = { version = "2", features = ["tokio"] }
+# Structured, span-aware logging. We use `tracing` macros across the
+# library and binary crates and configure the subscriber from
+# `claudette::logging::init` (called once from src-tauri/src/main.rs).
+# `tracing-subscriber` provides the layered filter + format pipeline;
+# `tracing-appender` adds non-blocking, daily-rotated file output that
+# `claudette::logging` pairs with a startup retention sweep so old log
+# files are reaped without an external cron.
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json", "registry"] }
+tracing-appender = "0.2"
+chrono = "0.4"
 
 [target.'cfg(windows)'.dependencies]
 # Read fresh PATH from HKCU + HKLM Environment registry keys so we pick up

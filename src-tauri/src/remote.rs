@@ -66,7 +66,7 @@ impl RemoteConnectionManager {
             while let Ok(event) = event_rx.recv().await {
                 let _ = app.emit(&event.event, &event.payload);
             }
-            eprintln!("[remote] Event stream ended for connection {connection_id}");
+            tracing::info!(target: "claudette::remote", connection_id = %connection_id, "event stream ended");
         });
 
         let conn = RemoteConnection {

@@ -101,7 +101,7 @@ pub fn restore_main_window(app: &tauri::App) {
             if let Some(db) = db.as_ref()
                 && let Err(err) = seed_default_maximized_state(db, &window)
             {
-                eprintln!("[window-state] failed to seed default window state: {err}");
+                tracing::warn!(target: "claudette::ui", error = %err, "failed to seed default window state");
             }
             let _ = window.maximize();
         }
@@ -127,7 +127,7 @@ pub fn schedule_main_window_save(window: Window) {
             return;
         }
         if let Err(err) = save_window_state(&window) {
-            eprintln!("[window-state] failed to save main window state: {err}");
+            tracing::warn!(target: "claudette::ui", error = %err, "failed to save main window state");
         }
     });
 }
@@ -141,7 +141,7 @@ pub fn save_main_window_now(window: &Window) {
     }
     SAVE_GENERATION.fetch_add(1, Ordering::Relaxed);
     if let Err(err) = save_window_state(window) {
-        eprintln!("[window-state] failed to save main window state: {err}");
+        tracing::warn!(target: "claudette::ui", error = %err, "failed to save main window state");
     }
 }
 
@@ -150,7 +150,7 @@ fn save_after_restore_settles(window: WebviewWindow) {
         tokio::time::sleep(Duration::from_millis(RESTORE_SETTLE_SAVE_MS)).await;
         SAVE_GENERATION.fetch_add(1, Ordering::Relaxed);
         if let Err(err) = save_window_state(&window) {
-            eprintln!("[window-state] failed to save settled main window state: {err}");
+            tracing::warn!(target: "claudette::ui", error = %err, "failed to save settled main window state");
         }
     });
 }

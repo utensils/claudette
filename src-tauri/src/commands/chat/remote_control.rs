@@ -178,7 +178,7 @@ pub async fn set_claude_remote_control(
         if let Err(err) =
             claudette::agent::persist_claude_custom_title(&worktree_path, &session_id, &title)
         {
-            eprintln!("[remote-control] failed to pin Claude session title: {err}");
+            tracing::warn!(target: "claudette::remote", error = %err, "failed to pin Claude session title");
         }
         emit_remote_control_status(&app, &workspace_id, &chat_session_id, &state).await;
     }
@@ -444,7 +444,11 @@ async fn ensure_persistent_session_for_remote_control(
         claudette::global_prompt::compose_system_prompt(instructions.as_deref(), nudge);
     let level = launch_options.permission_level.as_deref().unwrap_or("full");
     if !matches!(level, "readonly" | "standard" | "full") {
-        eprintln!("[remote-control] Unknown permission level {level:?}, falling back to readonly");
+        tracing::warn!(
+            target: "claudette::remote",
+            level = %level,
+            "unknown permission level — falling back to readonly"
+        );
     }
     let allowed_tools = tools_for_level(level);
     let (resolved_backend_id, resolved_model) = {
@@ -473,16 +477,18 @@ async fn ensure_persistent_session_for_remote_control(
                 ) {
                     Ok(v) => v,
                     Err(e) => {
-                        eprintln!(
-                            "[remote-control] failed to resolve claude flags for repo {}: {e}",
-                            workspace.repository_id
+                        tracing::warn!(
+                            target: "claudette::remote",
+                            repo_id = %workspace.repository_id,
+                            error = %e,
+                            "failed to resolve claude flags"
                         );
                         Vec::new()
                     }
                 }
             }
             crate::state::ClaudeFlagDiscovery::Err(msg) => {
-                eprintln!("[remote-control] claude flag discovery failed: {msg}");
+                tracing::warn!(target: "claudette::remote", error = %msg, "claude flag discovery failed");
                 Vec::new()
             }
             crate::state::ClaudeFlagDiscovery::Loading => Vec::new(),
@@ -659,7 +665,7 @@ pub(super) fn reenable_remote_control_after_respawn(
         if let Err(err) =
             claudette::agent::persist_claude_custom_title(&worktree_path, &session_id, &title)
         {
-            eprintln!("[remote-control] failed to pin Claude session title: {err}");
+            tracing::warn!(target: "claudette::remote", error = %err, "failed to pin Claude session title");
         }
 
         match ps.set_remote_control(true).await {

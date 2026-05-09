@@ -38,6 +38,16 @@ fn configure_pty_env(cmd: &mut CommandBuilder) {
 
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
+#[tracing::instrument(
+    target = "claudette::pty",
+    skip(app, state),
+    fields(
+        workspace_id = %workspace_id,
+        workspace_name = %workspace_name,
+        branch = %branch_name,
+        pty_id = tracing::field::Empty,
+    ),
+)]
 pub async fn spawn_pty(
     working_dir: String,
     workspace_name: String,
@@ -160,6 +170,7 @@ pub async fn spawn_pty(
     drop(pair.slave);
 
     let pty_id = state.next_pty_id();
+    tracing::Span::current().record("pty_id", pty_id);
 
     // Take reader and writer from the master.
     let mut reader = pair

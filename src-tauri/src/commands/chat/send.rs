@@ -273,7 +273,7 @@ fn mirror_background_task_output(source: std::path::PathBuf, destination: std::p
                             &destination,
                             &terminal_text(&String::from_utf8_lossy(&buf[..n])),
                         ) {
-                            eprintln!("[chat] failed to mirror background output: {err}");
+                            tracing::warn!(target: "claudette::chat", error = %err, "failed to mirror background output");
                         }
                     }
                     Err(_) => break,
@@ -608,7 +608,12 @@ fn schedule_background_task_wake(
         {
             Ok(handle) => handle,
             Err(err) => {
-                eprintln!("[chat] failed to deliver background task notification: {err}");
+                tracing::warn!(
+                    target: "claudette::chat",
+                    chat_session_id = %chat_session_id,
+                    error = %err,
+                    "failed to deliver background task notification"
+                );
                 let mut agents = app_state.agents.write().await;
                 if let Some(session) = agents.get_mut(&chat_session_id) {
                     session.background_wake_active = false;
@@ -1118,10 +1123,22 @@ fn cleanup_failed_steer_persistence(
     cause: &str,
 ) {
     if let Err(e) = db.delete_chat_message(message_id) {
-        eprintln!("[chat] failed to clean up steered user message after {cause}: {e}");
+        tracing::warn!(
+            target: "claudette::chat",
+            message_id,
+            cause,
+            error = %e,
+            "failed to clean up steered user message"
+        );
     }
     if let Err(e) = db.delete_checkpoint(checkpoint_id) {
-        eprintln!("[chat] failed to clean up pre-steer checkpoint after {cause}: {e}");
+        tracing::warn!(
+            target: "claudette::chat",
+            checkpoint_id,
+            cause,
+            error = %e,
+            "failed to clean up pre-steer checkpoint"
+        );
     }
 }
 
@@ -1228,6 +1245,19 @@ pub async fn steer_queued_chat_message(
 
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
+#[tracing::instrument(
+    target = "claudette::chat",
+    skip(content, mentioned_files, attachments, app, state),
+    fields(
+        chat_session_id = %session_id,
+        message_id = message_id.as_deref(),
+        permission_level = permission_level.as_deref(),
+        plan_mode = plan_mode.unwrap_or(false),
+        backend_id = backend_id.as_deref(),
+        // Filled in once we resolve the chat_session row below.
+        workspace_id = tracing::field::Empty,
+    ),
+)]
 pub async fn send_chat_message(
     session_id: String,
     message_id: Option<String>,
@@ -1258,6 +1288,11 @@ pub async fn send_chat_message(
         .as_deref()
         .is_some_and(|sid| !sid.trim().is_empty());
     let workspace_id = chat_session.workspace_id.clone();
+    // Now that we know which workspace this turn belongs to, stamp it
+    // into the enclosing span so every nested event (DB write, MCP
+    // supervision, broadcast emit) inherits both `chat_session_id` and
+    // `workspace_id` without re-passing them through helpers.
+    tracing::Span::current().record("workspace_id", workspace_id.as_str());
     let _is_first_session = chat_session.sort_order == 0;
     let session_name_already_edited = chat_session.name_edited;
 
@@ -1289,7 +1324,11 @@ pub async fn send_chat_message(
     // Resolve allowed tools from permission level.
     let level = permission_level.as_deref().unwrap_or("full");
     if !matches!(level, "readonly" | "standard" | "full") {
-        eprintln!("[chat] Unknown permission level {level:?}, falling back to readonly");
+        tracing::warn!(
+            target: "claudette::chat",
+            level = %level,
+            "unknown permission level — falling back to readonly"
+        );
     }
     let allowed_tools = tools_for_level(level);
 
@@ -1305,9 +1344,11 @@ pub async fn send_chat_message(
     let db_rows = db
         .list_repository_mcp_servers(&ws.repository_id)
         .map_err(|e| {
-            eprintln!(
-                "[chat] Failed to load MCP servers for {}: {e}",
-                ws.repository_id
+            tracing::warn!(
+                target: "claudette::chat",
+                repo_id = %ws.repository_id,
+                error = %e,
+                "failed to load MCP servers"
             );
             e.to_string()
         })?;
@@ -1419,7 +1460,13 @@ pub async fn send_chat_message(
     if session.persistent_session.is_none()
         && let Some(old_pid) = session.active_pid.take()
     {
-        eprintln!("[chat] Stopping stale process {old_pid} before new turn");
+        tracing::info!(
+            target: "claudette::chat",
+            workspace_id = %workspace_id,
+            chat_session_id = %chat_session_id,
+            stale_pid = old_pid,
+            "stopping stale process before new turn"
+        );
         drop(agents); // release lock while waiting
         if let Some((ref ps, drained)) = to_deny_new_turn {
             deny_drained_permissions(drained, ps, "User sent a new message instead of answering.")
@@ -1466,8 +1513,12 @@ pub async fn send_chat_message(
     // The dirty flag stays set so the change applies once Remote Control is
     // disabled and the next turn lands here without the deferral.
     if session.mcp_config_dirty && should_defer_persistent_restart(session) {
-        eprintln!(
-            "[chat] MCP config dirty, but background tasks are running — deferring persistent session restart for {workspace_id}"
+        tracing::info!(
+            target: "claudette::chat",
+            workspace_id = %workspace_id,
+            chat_session_id = %chat_session_id,
+            reason = "background_tasks_running",
+            "MCP config dirty — deferring persistent session restart"
         );
     } else if session.mcp_config_dirty
         && remote_control_should_defer_drift_teardown_for_turn(
@@ -1475,11 +1526,20 @@ pub async fn send_chat_message(
             &session.claude_remote_control,
         )
     {
-        eprintln!(
-            "[chat] MCP config dirty, but Claude Remote Control is active — deferring persistent session restart for {workspace_id}"
+        tracing::info!(
+            target: "claudette::chat",
+            workspace_id = %workspace_id,
+            chat_session_id = %chat_session_id,
+            reason = "remote_control_active",
+            "MCP config dirty — deferring persistent session restart"
         );
     } else if session.mcp_config_dirty {
-        eprintln!("[chat] MCP config dirty — tearing down persistent session for {workspace_id}");
+        tracing::info!(
+            target: "claudette::chat",
+            workspace_id = %workspace_id,
+            chat_session_id = %chat_session_id,
+            "MCP config dirty — tearing down persistent session"
+        );
         let to_deny_mcp = drain_pending_permissions(session);
         let stale_pid = session.persistent_session.as_ref().map(|ps| ps.pid());
         session.persistent_session = None;
@@ -1557,16 +1617,18 @@ pub async fn send_chat_message(
                 ) {
                     Ok(v) => v,
                     Err(e) => {
-                        eprintln!(
-                            "[chat] failed to resolve claude flags for repo {}: {e}",
-                            ws.repository_id
+                        tracing::warn!(
+                            target: "claudette::chat",
+                            repo_id = %ws.repository_id,
+                            error = %e,
+                            "failed to resolve claude flags"
                         );
                         Vec::new()
                     }
                 }
             }
             crate::state::ClaudeFlagDiscovery::Err(msg) => {
-                eprintln!("[chat] claude flag discovery failed: {msg}");
+                tracing::warn!(target: "claudette::chat", error = %msg, "claude flag discovery failed");
                 Vec::new()
             }
             crate::state::ClaudeFlagDiscovery::Loading => Vec::new(),
@@ -1632,8 +1694,12 @@ pub async fn send_chat_message(
             },
         )
     {
-        eprintln!(
-            "[chat] session flags drifted, but background tasks are running — deferring persistent session restart for {workspace_id}"
+        tracing::info!(
+            target: "claudette::chat",
+            workspace_id = %workspace_id,
+            chat_session_id = %chat_session_id,
+            reason = "background_tasks_running",
+            "session flags drifted — deferring persistent session restart"
         );
     } else if remote_control_should_defer_drift_teardown_for_turn(
         remote_control_feature_enabled,
@@ -1658,8 +1724,12 @@ pub async fn send_chat_message(
         // Same trade-off as the MCP-dirty branch above: keep the bridge
         // alive across local turns. The flags-drift state remains so the
         // teardown happens after Remote Control is disabled.
-        eprintln!(
-            "[chat] session flags drifted, but Claude Remote Control is active — deferring persistent session restart for {workspace_id}"
+        tracing::info!(
+            target: "claudette::chat",
+            workspace_id = %workspace_id,
+            chat_session_id = %chat_session_id,
+            reason = "remote_control_active",
+            "session flags drifted — deferring persistent session restart"
         );
     } else if session.persistent_session.is_some()
         && persistent_session_flags_drifted(
@@ -1678,15 +1748,16 @@ pub async fn send_chat_message(
             },
         )
     {
-        eprintln!(
-            "[chat] session flags drifted (plan_mode {} -> {}, allowed_tools changed: {}, exited_plan: {}, disable_1m_context {} -> {}, backend_hash changed: {}) — tearing down persistent session for {workspace_id}",
-            session.session_plan_mode,
-            agent_settings.plan_mode,
-            session.session_allowed_tools != allowed_tools,
-            session.session_exited_plan,
-            session.session_disable_1m_context,
-            agent_settings.disable_1m_context,
-            session.session_backend_hash != agent_settings.backend_runtime.hash,
+        tracing::info!(
+            target: "claudette::chat",
+            workspace_id = %workspace_id,
+            chat_session_id = %chat_session_id,
+            plan_mode_drifted = session.session_plan_mode != agent_settings.plan_mode,
+            allowed_tools_changed = session.session_allowed_tools != allowed_tools,
+            exited_plan = session.session_exited_plan,
+            disable_1m_context_drifted = session.session_disable_1m_context != agent_settings.disable_1m_context,
+            backend_hash_changed = session.session_backend_hash != agent_settings.backend_runtime.hash,
+            "session flags drifted — tearing down persistent session"
         );
         // Resolve any pending permission requests against the doomed process
         // before we kill it, so the next turn doesn't carry stale tool_use_ids.
@@ -1785,8 +1856,10 @@ pub async fn send_chat_message(
     // turns, so the check costs nothing in the common case.
     if should_defer_persistent_restart(session) && session.session_resolved_env != resolved_env.vars
     {
-        eprintln!(
-            "[chat] env-provider output changed, but background tasks are running — deferring persistent session restart for {workspace_id}"
+        tracing::info!(
+            target: "claudette::chat",
+            workspace_id = %workspace_id,
+            "env-provider output changed but background tasks are running — deferring persistent session restart"
         );
     } else if remote_control_should_defer_drift_teardown_for_turn(
         remote_control_feature_enabled,
@@ -1801,16 +1874,20 @@ pub async fn send_chat_message(
         // identical exports). Deferring keeps the bridge identity stable
         // across alternating local/remote turns; real env changes apply
         // on the next disable→enable cycle.
-        eprintln!(
-            "[chat] env-provider output changed, but Claude Remote Control is active — deferring persistent session restart for {workspace_id}"
+        tracing::info!(
+            target: "claudette::chat",
+            workspace_id = %workspace_id,
+            "env-provider output changed but Claude Remote Control is active — deferring persistent session restart"
         );
     } else if session.persistent_session.is_some()
         && session.session_resolved_env != resolved_env.vars
     {
-        eprintln!(
-            "[chat] env-provider output changed ({} vars before, {} after) — tearing down persistent session for {workspace_id}",
-            session.session_resolved_env.len(),
-            resolved_env.vars.len(),
+        tracing::info!(
+            target: "claudette::chat",
+            workspace_id = %workspace_id,
+            vars_before = session.session_resolved_env.len(),
+            vars_after = resolved_env.vars.len(),
+            "env-provider output changed — tearing down persistent session",
         );
         let to_deny_env = drain_pending_permissions(session);
         let stale_pid = session.persistent_session.as_ref().map(|ps| ps.pid());
@@ -1871,7 +1948,7 @@ pub async fn send_chat_message(
         };
         if let Err(err) = db.insert_chat_message(&warning) {
             // Logging-only: a missing warning shouldn't block the turn.
-            eprintln!("[chat] failed to post env-trust warning: {err}");
+            tracing::warn!(target: "claudette::chat", error = %err, "failed to post env-trust warning");
         } else {
             session.posted_env_trust_warning = true;
             // Emit so the open chat panel can render the warning
@@ -1938,7 +2015,14 @@ pub async fn send_chat_message(
             Err(e) => {
                 // Persistent session died — drop lock before async spawn to
                 // avoid blocking other workspaces during process startup.
-                eprintln!("[chat] Persistent session failed, respawning: {e}");
+                tracing::warn!(
+                    target: "claudette::chat",
+                    workspace_id = %workspace_id,
+                    chat_session_id = %chat_session_id,
+                    pid = reuse_pid,
+                    error = %e,
+                    "persistent session failed — respawning"
+                );
                 if session.active_pid == Some(reuse_pid) {
                     session.active_pid = None;
                 }
@@ -2001,7 +2085,13 @@ pub async fn send_chat_message(
                 {
                     Ok(ps) => (ps, spawn_sid.clone()),
                     Err(e2) if is_resume => {
-                        eprintln!("[chat] --resume respawn failed ({e2}), starting fresh");
+                        tracing::warn!(
+                            target: "claudette::chat",
+                            workspace_id = %workspace_id,
+                            chat_session_id = %chat_session_id,
+                            error = %e2,
+                            "--resume respawn failed — starting fresh"
+                        );
                         let fresh = uuid::Uuid::new_v4().to_string();
                         let ps = start_persistent(
                             worktree_path.clone(),
@@ -2117,7 +2207,13 @@ pub async fn send_chat_message(
             Ok(ps) => (ps, sid),
             Err(e) if is_resume => {
                 // Resume failed (stale/corrupt session) — start fresh instead.
-                eprintln!("[chat] --resume failed ({e}), starting fresh session");
+                tracing::warn!(
+                    target: "claudette::chat",
+                    workspace_id = %workspace_id,
+                    chat_session_id = %chat_session_id,
+                    error = %e,
+                    "--resume failed — starting fresh session"
+                );
                 let fresh_sid = uuid::Uuid::new_v4().to_string();
                 let ps = start_persistent(
                     worktree_path.clone(),
@@ -2261,7 +2357,12 @@ pub async fn send_chat_message(
         match db.claim_branch_auto_rename(&workspace_id) {
             Ok(claimed) => claimed,
             Err(e) => {
-                eprintln!("[chat] claim_branch_auto_rename failed for {workspace_id}: {e}");
+                tracing::warn!(
+                    target: "claudette::chat",
+                    workspace_id = %workspace_id,
+                    error = %e,
+                    "claim_branch_auto_rename failed"
+                );
                 false
             }
         }
@@ -2480,13 +2581,13 @@ pub async fn send_chat_message(
                 let path = agent_bash_output_path(&chat_session_id_for_stream);
                 if !had_running_background_tasks && let Err(err) = truncate_agent_bash_output(&path)
                 {
-                    eprintln!("[chat] failed to reset agent bash output: {err}");
+                    tracing::warn!(target: "claudette::chat", error = %err, "failed to reset agent bash output");
                 }
                 let echo = command
                     .map(|cmd| format!("\r\n$ {}\r\n", terminal_text(cmd)))
                     .unwrap_or_else(|| "\r\n$ Bash\r\n".to_string());
                 if let Err(err) = append_agent_bash_output(&path, &echo) {
-                    eprintln!("[chat] failed to write agent bash output: {err}");
+                    tracing::warn!(target: "claudette::chat", error = %err, "failed to write agent bash output");
                 }
                 if get_or_create_agent_shell_terminal_tab(
                     &db_path,
@@ -2672,8 +2773,11 @@ pub async fn send_chat_message(
                             input,
                         );
                         if let Err(e) = ps.send_control_response(request_id, response).await {
-                            eprintln!(
-                                "[chat] Failed to respond to control_request for {tool_name}: {e}"
+                            tracing::warn!(
+                                target: "claudette::chat",
+                                tool_name = %tool_name,
+                                error = %e,
+                                "failed to respond to control_request"
                             );
                         }
                     }
@@ -2819,8 +2923,10 @@ pub async fn send_chat_message(
                                             &path,
                                             &format!("{text}{suffix}"),
                                         ) {
-                                            eprintln!(
-                                                "[chat] failed to append agent bash output: {err}"
+                                            tracing::warn!(
+                                                target: "claudette::chat",
+                                                error = %err,
+                                                "failed to append agent bash output"
                                             );
                                         }
                                         if let Ok(db) = Database::open(&db_path) {

@@ -103,9 +103,11 @@ pub async fn voice_start_recording(
         .start_recording(&state.db_path, &provider_id, Some(app.clone()))
         .await?;
     let total_ms = t0.elapsed().as_millis();
-    eprintln!(
-        "[voice] start latency total_ms={total_ms}ms stream_open_ms={}ms",
-        latency.stream_open_ms
+    tracing::debug!(
+        target: "claudette::voice",
+        total_ms = total_ms as u64,
+        stream_open_ms = latency.stream_open_ms,
+        "start recording latency"
     );
     #[cfg(debug_assertions)]
     {

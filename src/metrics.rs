@@ -90,14 +90,22 @@ pub async fn capture_session_commits(
             ) {
                 Ok(()) => count,
                 Err(e) => {
-                    eprintln!("[metrics] insert_agent_commits_batch failed: {e}");
+                    tracing::warn!(
+                        target: "claudette::metrics",
+                        error = %e,
+                        "insert_agent_commits_batch failed"
+                    );
                     0
                 }
             }
         }
         Ok(_) => 0,
         Err(e) => {
-            eprintln!("[metrics] commits_since failed: {e}");
+            tracing::warn!(
+                target: "claudette::metrics",
+                error = %e,
+                "commits_since failed"
+            );
             0
         }
     }

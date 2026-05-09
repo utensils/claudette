@@ -27,7 +27,12 @@ pub fn handle_err(app: &AppHandle, err: &str) -> Option<String> {
 
 fn emit(app: &AppHandle, guidance: &MissingCli) {
     if let Err(e) = app.emit(MISSING_DEPENDENCY_EVENT, guidance) {
-        eprintln!("[missing-cli] failed to emit {MISSING_DEPENDENCY_EVENT}: {e}");
+        tracing::warn!(
+            target: "claudette::missing-cli",
+            event = MISSING_DEPENDENCY_EVENT,
+            error = %e,
+            "failed to emit missing-cli event"
+        );
     }
 }
 

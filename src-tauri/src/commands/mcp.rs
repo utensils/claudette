@@ -10,6 +10,11 @@ use crate::state::AppState;
 
 /// Detect non-portable MCP servers for a repository.
 #[tauri::command]
+#[tracing::instrument(
+    target = "claudette::mcp",
+    skip(state),
+    fields(repo_id = %repo_id),
+)]
 pub async fn detect_mcp_servers(
     repo_id: String,
     state: State<'_, AppState>,
@@ -33,6 +38,11 @@ pub async fn detect_mcp_servers(
 ///
 /// Respects `~/.claude.json` `disabledMcpServers` for initial enabled state.
 #[tauri::command]
+#[tracing::instrument(
+    target = "claudette::mcp",
+    skip(servers, state),
+    fields(repo_id = %repo_id, server_count = servers.len()),
+)]
 pub async fn save_repository_mcps(
     repo_id: String,
     servers: Vec<McpServer>,
@@ -113,6 +123,11 @@ pub async fn get_mcp_status(
 /// Called when a workspace is selected or the connectors menu opens. Returns
 /// the validated status snapshot with connected/failed states.
 #[tauri::command]
+#[tracing::instrument(
+    target = "claudette::mcp",
+    skip(state, supervisor),
+    fields(repo_id = %repo_id),
+)]
 pub async fn ensure_and_validate_mcps(
     repo_id: String,
     state: State<'_, AppState>,
@@ -138,7 +153,12 @@ pub async fn ensure_and_validate_mcps(
     let existing = db
         .list_repository_mcp_servers(&repo_id)
         .unwrap_or_else(|e| {
-            eprintln!("[mcp] Failed to load existing MCP servers for {repo_id}: {e}");
+            tracing::warn!(
+                target: "claudette::mcp",
+                repo_id = %repo_id,
+                error = %e,
+                "failed to load existing MCP servers"
+            );
             Vec::new()
         });
     let existing_by_name: std::collections::HashMap<String, &RepositoryMcpServer> =
@@ -175,13 +195,23 @@ pub async fn ensure_and_validate_mcps(
 
     // Always replace — even with an empty vec — so removed servers are dropped.
     if let Err(e) = db.replace_repository_mcp_servers(&repo_id, &rows) {
-        eprintln!("[mcp] Failed to persist MCP servers for {repo_id}: {e}");
+        tracing::warn!(
+            target: "claudette::mcp",
+            repo_id = %repo_id,
+            error = %e,
+            "failed to persist MCP servers"
+        );
     }
 
     let saved = db
         .list_repository_mcp_servers(&repo_id)
         .unwrap_or_else(|e| {
-            eprintln!("[mcp] Failed to reload MCP servers for {repo_id}: {e}");
+            tracing::warn!(
+                target: "claudette::mcp",
+                repo_id = %repo_id,
+                error = %e,
+                "failed to reload MCP servers"
+            );
             Vec::new()
         });
 
@@ -205,6 +235,11 @@ pub async fn ensure_and_validate_mcps(
 
 /// Manually reconnect a specific MCP server.
 #[tauri::command]
+#[tracing::instrument(
+    target = "claudette::mcp",
+    skip(supervisor),
+    fields(repo_id = %repo_id, server_name = %server_name),
+)]
 pub async fn reconnect_mcp_server(
     repo_id: String,
     server_name: String,
@@ -242,7 +277,13 @@ pub async fn set_mcp_server_enabled(
         if let Err(e) =
             claudette::mcp::set_server_disabled_in_config(repo_path, &server_name, !enabled)
         {
-            eprintln!("[mcp] Failed to update ~/.claude.json: {e}");
+            tracing::warn!(
+                target: "claudette::mcp",
+                repo_id = %repo_id,
+                server_name = %server_name,
+                error = %e,
+                "failed to update ~/.claude.json"
+            );
         }
     }
 

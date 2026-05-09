@@ -23,7 +23,7 @@ mod voice;
 mod webview2_check;
 mod window_state;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// RAII holder for the running IPC server + its discovery file. Tauri's
 /// managed-state container drops both on shutdown, ensuring the socket
@@ -38,6 +38,166 @@ struct IpcGuard {
 /// in this file), so we just delegate.
 fn chrono_iso_now() -> String {
     chrono::Utc::now().to_rfc3339()
+}
+
+/// Best-effort warning when another live Claudette dev instance is
+/// likely running against the same database. We do **not** block the
+/// second launch — multi-instance dev is a supported workflow — but
+/// two processes against the same SQLite file is the most plausible
+/// origin of cross-session message bleed-through (insert paths race
+/// on `chat_messages.chat_session_id`, transcript JSONLs in
+/// `~/.claude/projects/<encoded-cwd>/<sid>.jsonl` interleave). Surfacing
+/// the collision in the log lets postmortems start with "two PIDs were
+/// alive at the same time" rather than guessing.
+///
+/// `scripts/dev.sh` drops `${TMPDIR}/claudette-dev/<pid>.json` when it
+/// launches; we scan that directory, cross-reference with the live
+/// process table, and emit a `tracing::warn!` if any other live PID is
+/// found. Stale files from crashed dev runs are ignored (PID not
+/// alive). Release builds without `dev.sh` simply find an empty
+/// directory and log nothing.
+fn warn_if_concurrent_dev_instance(db_path: &Path) {
+    use std::fs;
+
+    let dir = std::env::temp_dir().join("claudette-dev");
+    let Ok(entries) = fs::read_dir(&dir) else {
+        return;
+    };
+    let our_pid = std::process::id();
+    let mut peers: Vec<(u32, String)> = Vec::new();
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|s| s.to_str()) != Some("json") {
+            continue;
+        }
+        let Ok(raw) = fs::read_to_string(&path) else {
+            continue;
+        };
+        let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&raw) else {
+            continue;
+        };
+        let Some(pid) = parsed.get("pid").and_then(|v| v.as_u64()) else {
+            continue;
+        };
+        let pid = pid as u32;
+        if pid == our_pid {
+            continue;
+        }
+        if !is_pid_alive(pid) {
+            continue;
+        }
+        let cwd = parsed
+            .get("cwd")
+            .and_then(|v| v.as_str())
+            .unwrap_or("(unknown)")
+            .to_string();
+        peers.push((pid, cwd));
+    }
+
+    for (pid, cwd) in &peers {
+        // We can only confirm the peer is a live Claudette dev process
+        // (matched by discovery file + alive PID) — the discovery JSON
+        // doesn't currently include a DB path, so whether it's the
+        // *same* DB as ours is inferred, not verified. By default both
+        // launches resolve `dirs::data_dir()/claudette/claudette.db`,
+        // so the inference is right in the common case; the wording
+        // hedges so the warning stays accurate if a future dev launch
+        // ever isolates `CLAUDETTE_DATA_DIR` per-instance.
+        tracing::warn!(
+            target: "claudette::startup",
+            our_pid,
+            peer_pid = pid,
+            peer_cwd = %cwd,
+            our_db_path = %db_path.display(),
+            "another Claudette dev instance is alive — if it's running \
+             against the same DB (the default unless CLAUDETTE_DATA_DIR \
+             is overridden), concurrent SQLite writers can cross-pollute \
+             chat_messages rows and corrupt resumed Claude CLI transcripts; \
+             consider setting a per-instance data dir before continuing"
+        );
+    }
+}
+
+#[cfg(unix)]
+fn is_pid_alive(pid: u32) -> bool {
+    // `kill(pid, 0)` is the standard "is this PID alive?" probe — it
+    // performs the permission check without sending a signal. EPERM
+    // means the process exists but we're not allowed to signal it
+    // (still alive); only ESRCH means it's gone.
+    let r = unsafe { libc::kill(pid as libc::pid_t, 0) };
+    if r == 0 {
+        return true;
+    }
+    // Read errno via `std::io::Error::last_os_error` rather than
+    // platform-specific `__error` / `__errno_location` symbols — keeps
+    // the helper portable across macOS and Linux without a second
+    // cfg-split.
+    std::io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH)
+}
+
+#[cfg(not(unix))]
+fn is_pid_alive(_pid: u32) -> bool {
+    // Windows has its own ergonomics for liveness probing
+    // (`OpenProcess` + `GetExitCodeProcess`). The dev-launcher
+    // discovery file is currently only written on macOS/Linux by
+    // `scripts/dev.sh`, so until the launcher gains a Windows
+    // analog populated discovery files won't appear here. Return
+    // `false` so any stray stale file (e.g. from a copied home
+    // directory) doesn't trigger a "another dev instance is alive"
+    // warning for a PID that isn't actually running. A real
+    // Windows probe can replace this when the launcher does.
+    false
+}
+
+/// Install a panic hook that emits the panic through `tracing` (so it
+/// lands in the daily log file) and then delegates to the previously
+/// registered hook (the default `Backtrace::capture` + stderr banner).
+/// One hook covers every `tokio::spawn` and `std::thread::spawn` task —
+/// `set_hook` is process-global.
+///
+/// Captured fields:
+/// - `panic`     — the panic payload (`PanicHookInfo::payload()`).
+/// - `location`  — `file:line:col` so postmortems start on the right line.
+/// - `thread`    — `Thread::current().name().unwrap_or("unnamed")`.
+/// - `backtrace` — `std::backtrace::Backtrace::force_capture()`. We
+///   force here because the panic-hook contract is "this is the one
+///   chance to record a useful trace"; the per-process `RUST_BACKTRACE`
+///   env var only governs the *default* hook's printout.
+fn install_tracing_panic_hook() {
+    let prev = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let payload = if let Some(s) = info.payload().downcast_ref::<&str>() {
+            (*s).to_string()
+        } else if let Some(s) = info.payload().downcast_ref::<String>() {
+            s.clone()
+        } else {
+            "<non-string panic payload>".to_string()
+        };
+        let location = info
+            .location()
+            .map(|l| format!("{}:{}:{}", l.file(), l.line(), l.column()))
+            .unwrap_or_else(|| "<unknown>".to_string());
+        let thread = std::thread::current()
+            .name()
+            .unwrap_or("unnamed")
+            .to_string();
+        let backtrace = std::backtrace::Backtrace::force_capture();
+
+        tracing::error!(
+            target: "claudette::panic",
+            panic = %payload,
+            location = %location,
+            thread = %thread,
+            backtrace = %backtrace,
+            "thread panicked"
+        );
+
+        // Delegate to the default hook last so its stderr banner
+        // shows up *after* our structured event, keeping the file
+        // log's ordering intuitive (event then trailer).
+        prev(info);
+    }));
 }
 
 #[cfg(target_os = "macos")]
@@ -77,51 +237,88 @@ fn main() {
     // so rustls cannot auto-detect — we must pick one explicitly.
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
 
-    // When spawned with `--server`, run the embedded claudette-server
-    // instead of the GUI. This enables single-binary distribution while
-    // keeping process isolation (server crash doesn't crash the app).
-    #[cfg(feature = "server")]
-    if std::env::args().any(|a| a == "--server") {
+    // Subsidiary entry points run as short-lived child processes
+    // (Claude CLI's stdio MCP grandchild, command hooks, the embedded
+    // claudette-server). They need `tracing::*` events for their
+    // own error paths, but NOT the GUI's heavy init: opening the
+    // SQLite DB to read `diagnostics.log_level`, creating the rolling
+    // file appender at `~/.claudette/logs/`, and walking the
+    // retention sweep would all be wasted work for processes that
+    // exit in milliseconds, and N children writing to the same
+    // daily file would contend on the appender's internal lock.
+    //
+    // We dispatch them FIRST and pin them to a stderr-only
+    // subscriber so their `tracing::error!`s still reach the
+    // parent's captured stderr. The parent's daily file log
+    // covers the GUI side; child diagnostics show up in the
+    // parent's stderr capture and / or the agent's transcript.
+    let args: Vec<String> = std::env::args().collect();
+    let child_mode = args.iter().find_map(|a| match a.as_str() {
+        #[cfg(feature = "server")]
+        "--server" => Some("--server"),
+        "--agent-mcp" => Some("--agent-mcp"),
+        "--agent-hook" => Some("--agent-hook"),
+        _ => None,
+    });
+    if let Some(mode) = child_mode {
+        let _log_handle = claudette::logging::init_stderr_only();
         let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
-        rt.block_on(async {
-            if let Err(e) = claudette_server::run(claudette_server::ServerOptions::default()).await
-            {
-                eprintln!("Server error: {e}");
-                std::process::exit(1);
-            }
-        });
+        match mode {
+            #[cfg(feature = "server")]
+            "--server" => rt.block_on(async {
+                if let Err(e) =
+                    claudette_server::run(claudette_server::ServerOptions::default()).await
+                {
+                    tracing::error!(target: "claudette::startup", error = %e, "embedded claudette-server exited with error");
+                    std::process::exit(1);
+                }
+            }),
+            "--agent-mcp" => rt.block_on(async {
+                if let Err(e) = claudette::agent_mcp::server::run_stdio().await {
+                    tracing::error!(target: "claudette::startup", error = %e, "agent-mcp child exited with error");
+                    std::process::exit(1);
+                }
+            }),
+            "--agent-hook" => rt.block_on(async {
+                if let Err(e) = claudette::agent_mcp::hook::run_stdin().await {
+                    tracing::error!(target: "claudette::startup", error = %e, "agent-hook child exited with error");
+                    std::process::exit(1);
+                }
+            }),
+            _ => unreachable!("child_mode is one of the matched arms"),
+        }
         return;
     }
 
-    // When spawned with `--agent-mcp`, run the in-process MCP server over
-    // stdio. The Tauri parent injects this into `--mcp-config` for the Claude
-    // CLI, which spawns this binary as a stdio child. The grandchild forwards
-    // tool invocations back to the parent over a token-authed local socket
-    // (see `claudette::agent_mcp`).
-    if std::env::args().any(|a| a == "--agent-mcp") {
-        let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
-        rt.block_on(async {
-            if let Err(e) = claudette::agent_mcp::server::run_stdio().await {
-                eprintln!("agent-mcp error: {e}");
-                std::process::exit(1);
-            }
-        });
-        return;
-    }
+    // GUI path. Heavy init runs only here, after we've ruled out the
+    // subsidiary entry points above.
+    //
+    // Tracing is brought up before plugin discovery and DB open so
+    // their `tracing::info!`/`warn!` events land in the log file. The
+    // handle is held for the whole `main` so the non-blocking file
+    // appender's worker thread flushes pending writes on process
+    // exit. Errors here are non-fatal: stderr-only logging still
+    // covers us.
+    //
+    // Resolving the DB path once up-front lets us thread the
+    // persisted `diagnostics.log_level` override into
+    // `init_with_override` before the subscriber is built. Cheap
+    // call: `dirs::data_dir()` is a syscall pair on macOS / a
+    // registry read on Windows.
+    let early_data_dir = dirs::data_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("claudette");
+    let early_db_path = early_data_dir.join("claudette.db");
+    let persisted_log_level = commands::diagnostics::read_persisted_log_level(&early_db_path);
+    let _log_handle = claudette::logging::init_with_override(persisted_log_level.as_deref());
 
-    // Claude Code command hooks run as short-lived child processes. Forward
-    // their JSON stdin to the parent bridge so nested subagent tool activity
-    // can be displayed in the chat timeline.
-    if std::env::args().any(|a| a == "--agent-hook") {
-        let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
-        rt.block_on(async {
-            if let Err(e) = claudette::agent_mcp::hook::run_stdin().await {
-                eprintln!("agent-hook error: {e}");
-                std::process::exit(1);
-            }
-        });
-        return;
-    }
+    // Panic hook — run after the subscriber is installed so the event
+    // lands in the rolling log file (and the existing daily one).
+    // We delegate to whatever hook was previously registered (the
+    // default in our case) so terminals attached to a `cargo tauri dev`
+    // run still see the standard stderr panic banner. The webview-side
+    // counterpart of this hook lives in `src/ui/src/utils/log.ts`.
+    install_tracing_panic_hook();
 
     // Windows only: if the WebView2 Runtime is missing, Tauri's webview
     // initialization would fail with a generic system error dialog and exit.
@@ -129,11 +326,31 @@ fn main() {
     // a download link instead. No-op on macOS/Linux.
     webview2_check::ensure_installed();
 
-    // Determine database and worktree paths.
-    let data_dir = dirs::data_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("claudette");
-    let db_path = data_dir.join("claudette.db");
+    // Determine database and worktree paths. Reuse the values resolved
+    // above for the persisted-log-level read so the two never drift.
+    let data_dir = early_data_dir;
+    let db_path = early_db_path;
+
+    // Stamp the resolved primary paths so a multi-instance dev session
+    // can be reconstructed from the log file alone — knowing which DB
+    // and worktree base each PID was holding is the first question
+    // when investigating cross-session contamination.
+    tracing::info!(
+        target: "claudette::startup",
+        pid = std::process::id(),
+        data_dir = %data_dir.display(),
+        db_path = %db_path.display(),
+        "claudette paths resolved"
+    );
+
+    // Heuristic warning when another live Claudette dev process appears
+    // to be running against this same DB path. Tauri's GUI build does
+    // not enforce single-instance (multi-instance is intentional for
+    // dev work), but two processes against the same SQLite file is the
+    // most plausible source of cross-session message bleed-through.
+    // The dev launcher (`scripts/dev.sh`) drops a discovery file at
+    // `${TMPDIR}/claudette-dev/<pid>.json` we can scan here.
+    warn_if_concurrent_dev_instance(&db_path);
 
     // Ensure DB exists and migrations are applied. Stamp the install date on
     // first-ever startup so lifetime stats ("days using Claudette") have an
@@ -179,18 +396,19 @@ fn main() {
     let _ = std::fs::create_dir_all(&plugin_dir);
     let seed_warnings = claudette::plugin_runtime::seed::seed_bundled_plugins(&plugin_dir);
     for warning in &seed_warnings {
-        eprintln!("[plugin] {warning}");
+        tracing::warn!(target: "claudette::plugin", "{warning}");
     }
     let plugins = claudette::plugin_runtime::PluginRegistry::discover(&plugin_dir);
-    eprintln!(
-        "[plugin] Discovered {} plugin(s): {}",
-        plugins.plugins.len(),
-        plugins
+    tracing::info!(
+        target: "claudette::plugin",
+        count = plugins.plugins.len(),
+        plugins = %plugins
             .plugins
             .keys()
             .cloned()
             .collect::<Vec<_>>()
-            .join(", ")
+            .join(", "),
+        "plugins discovered"
     );
 
     // Hydrate the registry's in-memory state (globally disabled plugins,
@@ -257,7 +475,7 @@ fn main() {
                 // anchor formatting (which embeds the release date).
                 let url = format!("{}{}", HELP_RELEASE_URL_BASE, env!("CARGO_PKG_VERSION"));
                 if let Err(e) = commands::shell::opener::open(&url) {
-                    eprintln!("[help] Failed to open changelog URL: {e}");
+                    tracing::warn!(target: "claudette::ui", url = %url, error = %e, "failed to open changelog URL");
                 }
             } else if event.id().as_ref() == "help-open-docs" {
                 // Deep-link into the Getting Started page so all three
@@ -266,14 +484,14 @@ fn main() {
                 // the URL is `HELP_DOCS_URL` (mirrored in TS at
                 // `src/ui/src/helpUrls.ts`).
                 if let Err(e) = commands::shell::opener::open(HELP_DOCS_URL) {
-                    eprintln!("[help] Failed to open docs URL: {e}");
+                    tracing::warn!(target: "claudette::ui", url = HELP_DOCS_URL, error = %e, "failed to open docs URL");
                 }
             } else if event.id().as_ref() == "help-report-issue" {
                 // GitHub issue tracker. Mirrors Aethon's "Report an
                 // Issue…" item — gives users a one-click path to file a
                 // bug report.
                 if let Err(e) = commands::shell::opener::open(HELP_ISSUES_URL) {
-                    eprintln!("[help] Failed to open issues URL: {e}");
+                    tracing::warn!(target: "claudette::ui", url = HELP_ISSUES_URL, error = %e, "failed to open issues URL");
                 }
             } else if event.id().as_ref() == "zoom-in" {
                 let _ = app.emit("zoom-in", ());
@@ -326,7 +544,7 @@ fn main() {
         .setup(move |app| {
             // Start mDNS browser to discover nearby claudette-server instances.
             if let Err(e) = mdns::start_mdns_browser(app.handle(), saved_fingerprints) {
-                eprintln!("[mdns] Failed to start browser: {e}");
+                tracing::warn!(target: "claudette::mdns", error = %e, "failed to start browser");
             }
 
             // Discover `claude --help` flags BEFORE the first turn can fire,
@@ -349,7 +567,7 @@ fn main() {
                         *guard = state::ClaudeFlagDiscovery::Ok(defs);
                     }
                     Err(msg) => {
-                        eprintln!("[claude-flags] discovery failed: {msg}");
+                        tracing::warn!(target: "claudette::startup", error = %msg, "claude-flags discovery failed");
                         let mut guard = flag_defs_handle.write().await;
                         *guard = state::ClaudeFlagDiscovery::Err(msg);
                     }
@@ -505,7 +723,7 @@ fn main() {
 
             // Set up the system tray icon (respects tray_enabled setting).
             if let Err(e) = tray::setup_tray(app.handle()) {
-                eprintln!("[tray] Failed to setup tray: {e}");
+                tracing::warn!(target: "claudette::tray", error = %e, "failed to setup tray");
             }
 
             // Start background SCM polling for PR status and CI checks.
@@ -544,10 +762,11 @@ fn main() {
                         };
                         match app_info::AppInfoFile::write(&info) {
                             Ok(file) => {
-                                eprintln!(
-                                    "[ipc] listening on {} (discovery: {})",
-                                    server.socket,
-                                    app_info::app_info_path().display(),
+                                tracing::info!(
+                                    target: "claudette::ipc",
+                                    socket = %server.socket,
+                                    discovery = %app_info::app_info_path().display(),
+                                    "listening"
                                 );
                                 ipc_app.manage(IpcGuard {
                                     _server: server,
@@ -555,12 +774,12 @@ fn main() {
                                 });
                             }
                             Err(e) => {
-                                eprintln!("[ipc] failed to write app.json: {e}");
+                                tracing::warn!(target: "claudette::ipc", error = %e, "failed to write app.json");
                             }
                         }
                     }
                     Err(e) => {
-                        eprintln!("[ipc] failed to start: {e}");
+                        tracing::warn!(target: "claudette::ipc", error = %e, "failed to start");
                     }
                 }
             });
@@ -739,6 +958,14 @@ fn main() {
             commands::settings::play_notification_sound,
             commands::settings::run_notification_command,
             commands::settings::get_git_username,
+            // Diagnostics — frontend log bridge, log dir surface,
+            // persisted log-level override.
+            commands::diagnostics::log_from_frontend,
+            commands::diagnostics::get_log_dir,
+            commands::diagnostics::open_log_dir,
+            commands::diagnostics::get_diagnostics_settings,
+            commands::diagnostics::set_log_level,
+            commands::diagnostics::set_frontend_verbosity,
             commands::agent_backends::list_agent_backends,
             commands::agent_backends::save_agent_backend,
             commands::agent_backends::delete_agent_backend,

@@ -29,6 +29,11 @@ pub struct CreateWorkspaceResult {
 }
 
 #[tauri::command]
+#[tracing::instrument(
+    target = "claudette::workspace",
+    skip(app, state),
+    fields(repo_id = %repo_id, workspace_name = %name, skip_setup = skip_setup.unwrap_or(false)),
+)]
 pub async fn create_workspace(
     repo_id: String,
     name: String,
@@ -129,6 +134,11 @@ pub struct ForkWorkspaceResult {
 }
 
 #[tauri::command]
+#[tracing::instrument(
+    target = "claudette::workspace",
+    skip(app, state),
+    fields(workspace_id = %workspace_id, checkpoint_id = %checkpoint_id),
+)]
 pub async fn fork_workspace_at_checkpoint(
     workspace_id: String,
     checkpoint_id: String,
@@ -244,6 +254,11 @@ async fn resolve_env_for_workspace(
 }
 
 #[tauri::command]
+#[tracing::instrument(
+    target = "claudette::workspace",
+    skip(app, state, supervisor),
+    fields(workspace_id = %id, skip_archive_script = skip_archive_script.unwrap_or(false)),
+)]
 pub async fn archive_workspace(
     id: String,
     skip_archive_script: Option<bool>,
@@ -408,7 +423,12 @@ pub(crate) async fn archive_workspace_inner(
                             cache_creation_tokens: None,
                         };
                         if let Err(err) = db.insert_chat_message(&msg) {
-                            eprintln!("[archive] failed to post archive script result: {err}");
+                            tracing::warn!(
+                                target: "claudette::workspace",
+                                phase = "archive",
+                                error = %err,
+                                "failed to post archive script result to chat"
+                            );
                         } else {
                             let _ = app.emit("chat-system-message", &msg);
                         }
@@ -463,6 +483,11 @@ pub(crate) async fn archive_workspace_inner(
 }
 
 #[tauri::command]
+#[tracing::instrument(
+    target = "claudette::workspace",
+    skip(app, state),
+    fields(workspace_id = %id),
+)]
 pub async fn restore_workspace(
     id: String,
     app: AppHandle,
@@ -499,6 +524,11 @@ pub async fn restore_workspace(
 }
 
 #[tauri::command]
+#[tracing::instrument(
+    target = "claudette::workspace",
+    skip(app, state, supervisor),
+    fields(workspace_id = %id),
+)]
 pub async fn delete_workspace(
     id: String,
     app: AppHandle,
@@ -576,6 +606,11 @@ pub async fn delete_workspace(
 }
 
 #[tauri::command]
+#[tracing::instrument(
+    target = "claudette::workspace",
+    skip(app, state),
+    fields(workspace_id = %id, new_name = %new_name),
+)]
 pub async fn rename_workspace(
     id: String,
     new_name: String,
@@ -862,9 +897,12 @@ pub async fn import_worktrees(
     // silently leaving the workspace eligible for rename.
     for ws in &created {
         if let Err(e) = db.claim_branch_auto_rename(&ws.id) {
-            eprintln!(
-                "[import] claim_branch_auto_rename failed for {} ({}): {e}",
-                ws.name, ws.id
+            tracing::warn!(
+                target: "claudette::workspace",
+                workspace_id = %ws.id,
+                workspace_name = %ws.name,
+                error = %e,
+                "claim_branch_auto_rename failed during import"
             );
         }
     }
@@ -876,7 +914,7 @@ pub async fn import_worktrees(
 
 #[tauri::command]
 pub async fn open_workspace_in_terminal(worktree_path: String) -> Result<(), String> {
-    eprintln!("Opening terminal for path: {worktree_path}");
+    tracing::info!(target: "claudette::workspace", worktree_path = %worktree_path, "opening terminal for workspace");
 
     #[cfg(target_os = "linux")]
     {
@@ -909,11 +947,21 @@ pub async fn open_workspace_in_terminal(worktree_path: String) -> Result<(), Str
 
             match cmd.spawn() {
                 Ok(_) => {
-                    eprintln!("Successfully launched {terminal} with args: {args:?}");
+                    tracing::info!(
+                        target: "claudette::workspace",
+                        terminal = %terminal,
+                        args = ?args,
+                        "successfully launched terminal"
+                    );
                     return Ok(());
                 }
                 Err(e) => {
-                    eprintln!("Failed to launch {terminal}: {e}");
+                    tracing::warn!(
+                        target: "claudette::workspace",
+                        terminal = %terminal,
+                        error = %e,
+                        "failed to launch terminal"
+                    );
                     errors.push(format!("{terminal}: {e}"));
                 }
             }

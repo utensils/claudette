@@ -115,11 +115,11 @@ pub fn start_debug_server(app: AppHandle) {
     tauri::async_runtime::spawn(async move {
         let listener = match tokio::net::TcpListener::bind(("127.0.0.1", port)).await {
             Ok(l) => {
-                eprintln!("[debug] Eval server listening on 127.0.0.1:{port}");
+                tracing::info!(target: "claudette::debug", port, "eval server listening on 127.0.0.1");
                 l
             }
             Err(e) => {
-                eprintln!("[debug] Failed to start eval server on port {port}: {e}");
+                tracing::warn!(target: "claudette::debug", port, error = %e, "failed to start eval server");
                 return;
             }
         };
@@ -128,7 +128,7 @@ pub fn start_debug_server(app: AppHandle) {
             let (mut stream, _addr) = match listener.accept().await {
                 Ok(conn) => conn,
                 Err(e) => {
-                    eprintln!("[debug] Accept failed: {e}");
+                    tracing::warn!(target: "claudette::debug", error = %e, "accept failed");
                     continue;
                 }
             };
@@ -143,7 +143,7 @@ pub fn start_debug_server(app: AppHandle) {
                 let mut buf = Vec::with_capacity(4096);
                 // Cap input at 1 MB to prevent accidental runaway allocations.
                 if let Err(e) = (&mut stream).take(1024 * 1024).read_to_end(&mut buf).await {
-                    eprintln!("[debug] Read failed: {e}");
+                    tracing::warn!(target: "claudette::debug", error = %e, "read failed");
                     return;
                 }
 

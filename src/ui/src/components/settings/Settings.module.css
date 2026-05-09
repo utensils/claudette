@@ -357,6 +357,11 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  /* Small gap between an inline icon and the label text. JSX children
+   * have no whitespace between them by default, so without this the
+   * icon's SVG sits flush against the first letter of the label.
+   * Buttons that have no icon get a no-op gap (nothing to space). */
+  gap: 6px;
   background: var(--selected-bg);
   border: 1px solid var(--divider);
   color: var(--text-primary);

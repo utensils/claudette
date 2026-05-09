@@ -116,18 +116,19 @@ pub async fn run(options: ServerOptions) -> Result<(), Box<dyn std::error::Error
         .join("plugins");
     let _ = std::fs::create_dir_all(&plugin_dir);
     for warning in claudette::plugin_runtime::seed::seed_bundled_plugins(&plugin_dir) {
-        eprintln!("[plugin] {warning}");
+        tracing::warn!(target: "claudette::plugin", "{}", warning);
     }
     let plugins = claudette::plugin_runtime::PluginRegistry::discover(&plugin_dir);
-    eprintln!(
-        "[plugin] Discovered {} plugin(s): {}",
-        plugins.plugins.len(),
-        plugins
+    tracing::info!(
+        target: "claudette::plugin",
+        count = plugins.plugins.len(),
+        plugins = %plugins
             .plugins
             .keys()
             .cloned()
             .collect::<Vec<_>>()
-            .join(", ")
+            .join(", "),
+        "plugins discovered"
     );
 
     // Hydrate global enable/disable + per-plugin setting overrides from
@@ -202,7 +203,12 @@ pub async fn run(options: ServerOptions) -> Result<(), Box<dyn std::error::Error
                         .await;
                 }
                 Err(e) => {
-                    eprintln!("[tls] handshake failed from {peer_addr}: {e}");
+                    tracing::warn!(
+                        target: "claudette::ws",
+                        peer = %peer_addr,
+                        error = %e,
+                        "TLS handshake failed"
+                    );
                 }
             }
         });

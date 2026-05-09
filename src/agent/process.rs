@@ -187,7 +187,12 @@ pub async fn run_turn(
                     }
                 }
                 Err(e) => {
-                    eprintln!("Failed to parse stream event: {e}\nLine: {line}");
+                    tracing::warn!(
+                        target: "claudette::agent",
+                        error = %e,
+                        line = %line,
+                        "failed to parse stream-json line"
+                    );
                 }
             }
         }
@@ -199,7 +204,7 @@ pub async fn run_turn(
         let mut lines = reader.lines();
         while let Ok(Some(line)) = lines.next_line().await {
             if !line.trim().is_empty() {
-                eprintln!("[agent stderr] {line}");
+                tracing::warn!(target: "claudette::agent", line = %line, "claude stderr");
             }
         }
     });

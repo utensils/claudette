@@ -11,13 +11,45 @@ if ((window as unknown as { __claudetteHijackBlocked?: boolean }).__claudetteHij
   throw new Error("Claudette hijack guard refused to mount React.");
 }
 
+// Frontend → backend log bridge — imported FIRST so the module's
+// load-time side effect arms `window.error` and `unhandledrejection`
+// listeners before any other module in this file's import graph
+// evaluates. ES module static imports run before top-level
+// statements, so a crash inside `./i18n` / `App` / grammar / Shiki
+// bootstrap would otherwise happen before any explicit
+// `installFrontendLogBridge()` call here could register handlers.
+// See the comment block at the top of `./utils/log.ts`.
+import {
+  installFrontendLogBridge,
+  setFrontendLogVerbosity,
+  type FrontendLogVerbosity,
+} from "./utils/log";
 import "./i18n";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
+import { invoke } from "@tauri-apps/api/core";
 import { ErrorBoundary } from "./components/layout/ErrorBoundary";
 import { prewarmHighlighter } from "./utils/highlight";
 import { bootstrapGrammarRegistry } from "./utils/grammarRegistry";
 import App from "./App.tsx";
+
+// Phase 2 of the log bridge: console mirroring. The early listeners
+// were already armed at `./utils/log` import time above; this call
+// only wires `console.{error,warn,info,log}` interception (gated by
+// the user's verbosity setting). Default verbosity is `errors` to
+// match the Settings UI default.
+installFrontendLogBridge("errors");
+void invoke<{ frontend_verbosity: string | null }>("get_diagnostics_settings")
+  .then((settings) => {
+    const v = settings.frontend_verbosity;
+    if (v === "errors" || v === "warnings" || v === "all") {
+      setFrontendLogVerbosity(v as FrontendLogVerbosity);
+    }
+  })
+  .catch(() => {
+    // Backend command not yet registered (e.g. tests) — keep the
+    // default. Failing to read this setting is never user-visible.
+  });
 
 // Spawn the syntax-highlight worker and kick off Shiki/WASM init in parallel
 // with React mount, so the first code block on the first workspace doesn't
