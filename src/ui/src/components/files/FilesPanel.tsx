@@ -28,6 +28,17 @@ export function FilesPanel() {
       ? (s.fileTreeRefreshNonceByWorkspace[selectedWorkspaceId] ?? 0)
       : 0,
   );
+  // Bumped when a global hotkey (Cmd/Ctrl+T while a file is the active
+  // workspace tab) requests "new file at workspace root" — the panel is
+  // the inline-editor owner so the request lands here, not in the
+  // hotkey handler. We only react when a file tab is actually active so
+  // a Cmd+T pressed in chat context (which never bumps this nonce) can't
+  // accidentally drop the user into a "create file" flow.
+  const newFileNonce = useAppStore((s) =>
+    selectedWorkspaceId
+      ? (s.requestNewFileNonceByWorkspace[selectedWorkspaceId] ?? 0)
+      : 0,
+  );
   const openFileTab = useAppStore((s) => s.openFileTab);
   const openDiffTab = useAppStore((s) => s.openDiffTab);
   const setDiffSelectedCommitHash = useAppStore((s) => s.setDiffSelectedCommitHash);
@@ -123,6 +134,30 @@ export function FilesPanel() {
     }, IDLE_REFRESH_INTERVAL_MS);
     return () => clearInterval(interval);
   }, [isRunning, selectedWorkspaceId, loadFiles]);
+
+  // React to the `requestNewFileAtRoot` nonce: open the inline create
+  // editor at the workspace root.
+  //
+  // The handled-nonce ref is keyed by workspace and seeded at 0 so a
+  // bump that landed *before* this panel mounted (e.g. Cmd+T fired
+  // while the right sidebar was on Tasks/Changes — the global handler
+  // bumps the nonce and switches the tab in the same tick, but
+  // FilesPanel only mounts after React commits the tab switch) is
+  // still consumed when we mount. A per-instance ref initialized from
+  // the current nonce would miss those mounts entirely. The Map keys
+  // by workspace so switching to a workspace whose nonce is currently
+  // lower than another workspace's last-seen value can't suppress
+  // valid bumps either.
+  const handledNewFileNonces = useRef<Map<string, number>>(new Map());
+  useEffect(() => {
+    if (!selectedWorkspaceId) return;
+    if (newFileNonce === 0) return;
+    const handled = handledNewFileNonces.current.get(selectedWorkspaceId) ?? 0;
+    if (newFileNonce === handled) return;
+    handledNewFileNonces.current.set(selectedWorkspaceId, newFileNonce);
+    setCreatingParentPath("");
+    refocusExplorer();
+  }, [newFileNonce, selectedWorkspaceId, refocusExplorer]);
 
   const handleActivateFile = useCallback(
     (path: string) => {

@@ -4,6 +4,7 @@ import "./monacoSetup";
 import { applyMonacoTheme, initMonacoThemeSync } from "./monacoTheme";
 import { DEFAULT_MONO_STACK } from "../../styles/fonts";
 import { useAppStore } from "../../stores/useAppStore";
+import { executeCloseTab, executeNewTab } from "../../hotkeys/contextActions";
 import {
   useGitGutter,
   type DecorationsCollection,
@@ -134,6 +135,25 @@ export const MonacoEditor = memo(function MonacoEditor({
     editor.addCommand(
       monacoInstance.KeyMod.CtrlCmd | monacoInstance.KeyCode.KeyS,
       () => onSaveRef.current?.(),
+    );
+    // Override Monaco's defaults for Cmd/Ctrl+T (`gotoSymbolFromKeyboard`)
+    // and Cmd/Ctrl+W so the workspace-level new-tab / close-tab actions
+    // win when focus is inside the editor. Without these overrides the
+    // window-level keydown listener never sees the keystroke — Monaco
+    // consumes it inside its own keybinding service and we silently
+    // diverge from the rest of the app.
+    //
+    // We deliberately call into the same `executeNewTab` / `executeCloseTab`
+    // helpers used by the global keyboard hook so the routing logic
+    // (file → inline-create / chat → archive-with-confirm) lives in
+    // exactly one place.
+    editor.addCommand(
+      monacoInstance.KeyMod.CtrlCmd | monacoInstance.KeyCode.KeyT,
+      () => executeNewTab(),
+    );
+    editor.addCommand(
+      monacoInstance.KeyMod.CtrlCmd | monacoInstance.KeyCode.KeyW,
+      () => executeCloseTab(),
     );
   };
 

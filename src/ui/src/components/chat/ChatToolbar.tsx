@@ -17,8 +17,10 @@ interface ChatToolbarProps {
   disabled: boolean;
 }
 
-const isMac = typeof navigator !== "undefined" && navigator.platform.startsWith("Mac");
-const mod = isMac ? "⌘" : "Ctrl+";
+// `isMac` / the matching `mod` glyph were used by an inline `<kbd>` badge
+// for the (now-removed) Cmd+T thinking-mode hotkey. The remaining
+// `<kbd>⇧Tab</kbd>` plan-mode badge below uses literal characters and
+// no platform check — so this whole block was unused after the rebind.
 
 export function ChatToolbar({ sessionId, disabled }: ChatToolbarProps) {
   const selectedModel = useAppStore((s) => s.selectedModel[sessionId] ?? "opus");
@@ -146,17 +148,11 @@ export function ChatToolbar({ sessionId, disabled }: ChatToolbarProps) {
     clearPlanApproval(sessionId);
   }, [sessionId, chromeEnabled, setChromeEnabled, clearAgentQuestion, clearPlanApproval]);
 
-  // Keyboard shortcuts.
-  useEffect(() => {
-    function handleKey(e: KeyboardEvent) {
-      if (e.metaKey && e.key === "t") {
-        e.preventDefault();
-        if (!disabled) toggleThinking();
-      }
-    }
-    window.addEventListener("keydown", handleKey);
-    return () => window.removeEventListener("keydown", handleKey);
-  }, [disabled, toggleThinking]);
+  // The Cmd/Ctrl+T thinking-mode hotkey lived here as a raw
+  // `window.addEventListener("keydown")` listener. It's been removed —
+  // Cmd+T is now the registered `global.new-tab` action (see
+  // `useKeyboardShortcuts`), and thinking remains toggleable via the
+  // chip click + the command palette ("Toggle thinking").
 
   const currentModel = useSelectedModelEntry(sessionId);
   const modelLabel = currentModel?.providerLabel
@@ -204,7 +200,6 @@ export function ChatToolbar({ sessionId, disabled }: ChatToolbarProps) {
       >
         <Brain size={14} />
         <span className={styles.chipLabel}>{t("thinking_chip")}</span>
-        <kbd className={`shortcut-badge ${metaKeyHeld ? "shortcut-badge-visible" : ""}`} aria-hidden="true">{mod}T</kbd>
       </button>
 
       <button

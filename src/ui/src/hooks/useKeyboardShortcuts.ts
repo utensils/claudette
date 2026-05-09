@@ -1,6 +1,6 @@
 import { useEffect } from "react";
 import { useAppStore } from "../stores/useAppStore";
-import { stopAgent, sendRemoteCommand } from "../services/tauri";
+import { sendRemoteCommand, stopAgent } from "../services/tauri";
 import { isAgentBusy } from "../utils/agentStatus";
 import {
   focusActiveTerminal,
@@ -9,6 +9,7 @@ import {
 } from "../utils/focusTargets";
 import { adjustUiFontSize } from "../utils/fontSettings";
 import { resolveHotkeyAction } from "../hotkeys/bindings";
+import { executeCloseTab, executeNewTab } from "../hotkeys/contextActions";
 import type { HotkeyActionId } from "../hotkeys/actions";
 
 export function useKeyboardShortcuts() {
@@ -194,6 +195,20 @@ export function useKeyboardShortcuts() {
             // Idempotent when already open: openModal sets the same id.
             // Esc closes it via the global.dismiss-or-stop branch above.
             openModal("keyboard-shortcuts");
+            return;
+          case "global.new-tab":
+            // Routing logic lives in `hotkeys/contextActions.ts` so the
+            // Monaco-side overrides (which bypass this listener via
+            // `editor.addCommand`) and the keyboard hook share a
+            // single implementation. See that module for the
+            // file/diff/chat dispatch table.
+            executeNewTab();
+            return;
+          case "global.close-tab":
+            // Same shared module. Includes the dirty-aware close path
+            // (via `requestCloseFileTabNonceByWorkspace`) and the
+            // chat-close confirmation rules.
+            executeCloseTab();
             return;
           default:
             return;

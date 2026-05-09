@@ -89,6 +89,8 @@
   "session_close_file": "Close file",
   "session_running_confirm_close": "This session is still running. Stop and close \"{{name}}\"?",
   "session_running_confirm_close_multi": "{{count}} sessions are still running. Stop and close them?",
+  "session_active_confirm_close": "Close the active session \"{{name}}\"?",
+  "session_last_confirm_close": "Close the only remaining session \"{{name}}\"? A fresh session will replace it; the closed one will be archived.",
 
   "tab_close": "Close",
   "tab_close_others": "Close Others",

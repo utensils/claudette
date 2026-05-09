@@ -321,17 +321,16 @@ function FileViewerInner({ workspaceId, path, t }: FileViewerInnerProps) {
     return () => window.removeEventListener("keydown", handler);
   }, [showMarkdownToggle, togglePreview]);
 
+  // Undo file operations (rename / delete / create) is the only
+  // file-viewer-scope hotkey left here — close-tab moved to a global
+  // action that routes through `requestCloseFileTabNonceByWorkspace`
+  // below, so a single Cmd+W binding handles file / diff / chat.
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (e.repeat) return;
       const state = useAppStore.getState();
       const action = resolveHotkeyAction(e, "file-viewer", state.keybindings);
-      if (
-        action !== "file-viewer.undo-file-operation" &&
-        action !== "file-viewer.close-file-tab"
-      ) {
-        return;
-      }
+      if (action !== "file-viewer.undo-file-operation") return;
       if (
         state.settingsOpen ||
         state.activeModal ||
@@ -344,22 +343,40 @@ function FileViewerInner({ workspaceId, path, t }: FileViewerInnerProps) {
       if (!el || !viewerRef.current?.contains(el)) return;
       const tag = el.tagName?.toLowerCase();
       const inMonaco = !!el.closest(".monaco-editor");
-      if (action === "file-viewer.undo-file-operation" && inMonaco) return;
-      if ((tag === "input" || tag === "textarea" || el.isContentEditable) && !inMonaco) {
+      // Inside Monaco, Ctrl/Cmd+Z is an editor command (text undo) — let
+      // Monaco handle it instead of triggering filesystem undo.
+      if (inMonaco) return;
+      if (tag === "input" || tag === "textarea" || el.isContentEditable) {
         return;
       }
-      // File-tab close is a viewer-level command; it intentionally wins while
-      // focus is inside Monaco so mod+w behaves like the tab strip shortcut.
       e.preventDefault();
-      if (action === "file-viewer.undo-file-operation") {
-        void undoLastFilePathOperation();
-      } else {
-        requestCloseFileTab();
-      }
+      void undoLastFilePathOperation();
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [requestCloseFileTab, undoLastFilePathOperation]);
+  }, [undoLastFilePathOperation]);
+
+  // Bridge between the global Cmd+W handler and this viewer's
+  // dirty-aware close path. The global handler bumps the per-workspace
+  // nonce; the FileViewer reacts by running the same `requestCloseFileTab`
+  // its own close button uses, so the unsaved-changes prompt fires
+  // identically whether the user clicks × or hits the keystroke.
+  //
+  // Handled-nonce tracking matches the FilesPanel pattern: a Map
+  // keyed by workspace, seeded at 0 so a bump that arrived while
+  // this viewer was mounting (rare but possible if `Cmd+W` fired
+  // mid-route to a fresh file tab) is still consumed.
+  const closeFileTabNonce = useAppStore(
+    (s) => s.requestCloseFileTabNonceByWorkspace[workspaceId] ?? 0,
+  );
+  const handledCloseNonces = useRef<Map<string, number>>(new Map());
+  useEffect(() => {
+    if (closeFileTabNonce === 0) return;
+    const handled = handledCloseNonces.current.get(workspaceId) ?? 0;
+    if (closeFileTabNonce === handled) return;
+    handledCloseNonces.current.set(workspaceId, closeFileTabNonce);
+    requestCloseFileTab();
+  }, [closeFileTabNonce, requestCloseFileTab, workspaceId]);
 
   const previewShortcutHint = formatBinding(
     getEffectiveBindingById(

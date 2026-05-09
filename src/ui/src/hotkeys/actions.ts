@@ -185,6 +185,32 @@ export const HOTKEY_ACTIONS = [
     suppressUnderOverlay: false,
   },
   {
+    // Cmd/Ctrl+T: context-aware "new tab".
+    //  - When the workspace's right pane is showing a file (an
+    //    `activeFileTabByWorkspace` entry exists), this triggers the
+    //    inline "create new file" flow at the workspace root in the
+    //    Files panel — matches editor muscle memory for "new tab".
+    //  - Otherwise (chat or diff is showing), it creates a new chat
+    //    session in the current workspace.
+    //
+    // `terminal.new-tab` is independently scoped to `terminal` and still
+    // owns mod+t when the user is typing inside a terminal pane, so this
+    // doesn't fight terminal tab creation. Previously Cmd+T was wired
+    // through a raw `window.addEventListener("keydown")` in
+    // `ChatToolbar`/`ComposerToolbar` to toggle thinking mode; that
+    // bypass-the-keybinding-system shortcut is removed in favor of this
+    // registered action so users can rebind it from Keyboard Settings.
+    id: "global.new-tab",
+    scope: "global",
+    category: "keyboard_category_navigation",
+    description: "keyboard_action_new_tab",
+    defaultBinding: allPlatforms("mod+t"),
+    match: "key",
+    rebindable: true,
+    suppressUnderOverlay: true,
+    suppressInInteractive: false,
+  },
+  {
     id: "global.toggle-plan-mode",
     scope: "global",
     category: "keyboard_category_navigation",
@@ -313,10 +339,23 @@ export const HOTKEY_ACTIONS = [
     rebindable: true,
   },
   {
-    id: "file-viewer.close-file-tab",
-    scope: "file-viewer",
-    category: "keyboard_category_editor",
-    description: "keyboard_action_file_close_tab",
+    // Cmd/Ctrl+W: context-aware "close tab".
+    //  - File active in the right pane → routes through the FileViewer's
+    //    dirty-aware close path (preserves the existing discard-changes
+    //    confirmation modal).
+    //  - Diff active → closes the diff tab.
+    //  - Chat active → archives the active chat session, gated by the
+    //    shared confirm rules in `chatCloseConfirmMessage` (running
+    //    sessions, the active session, and the last remaining session
+    //    all prompt before close).
+    //
+    // Replaces the prior `file-viewer.close-file-tab` action; the
+    // `20260509000540_rename_close_file_tab_keybinding.sql` migration
+    // carries any user-customised binding forward.
+    id: "global.close-tab",
+    scope: "global",
+    category: "keyboard_category_navigation",
+    description: "keyboard_action_close_tab",
     defaultBinding: allPlatforms("mod+w"),
     match: "key",
     rebindable: true,

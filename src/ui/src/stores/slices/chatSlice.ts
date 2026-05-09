@@ -1,5 +1,6 @@
 import type { StateCreator } from "zustand";
 import type { ChatMessage, ChatAttachment, ChatPaginationState } from "../../types";
+import type { StoredAttachment } from "../../types/chat";
 import { debugChat } from "../../utils/chatDebug";
 import type { CompactionEvent } from "../../utils/compactionSentinel";
 import type { AppState } from "../useAppStore";
@@ -186,6 +187,50 @@ export interface ChatSlice {
   chatDrafts: Record<string, string>;
   setChatDraft: (sessionId: string, draft: string) => void;
   clearChatDraft: (sessionId: string) => void;
+  /** Per-session in-flight attachments staged in the composer before
+   *  the message is sent. Stored here (not in `ChatInputArea`'s
+   *  `useState`) so attachments survive any composer remount —
+   *  including the unmount that happens when `<ChatPanel>` is
+   *  conditionally rendered out of `AppLayout` after the user opens a
+   *  file or diff (see comment at AppLayout.tsx:130-140). The
+   *  `preview_url` field is intentionally absent from `StoredAttachment`
+   *  because blob URLs are tied to the lifetime of the underlying Blob,
+   *  which is GC'd on component unmount; the composer regenerates
+   *  preview URLs from `data_base64` on mount. */
+  /** Per-group user override of the collapsed/expanded state for tool
+   *  activity groups inside a completed turn. Keyed first by chat
+   *  session id, then by a stable per-group key (built in
+   *  `MessagesWithTurns` from `${turn.id}:${first activity toolUseId}`).
+   *
+   *  Lives separately from `CompletedTurn.collapsed` because a single
+   *  turn can be split into multiple chronological display groups
+   *  (the user inserted messages between tool calls, etc.); without
+   *  per-group state, clicking one chevron flipped the shared
+   *  `turn.collapsed` and every sibling group toggled in lockstep.
+   *  Unset entries fall back to `turn.collapsed`, so existing
+   *  persisted-turn behavior is preserved on first interaction. */
+  collapsedToolGroupsBySession: Record<string, Record<string, boolean>>;
+  /** Set the explicit collapse override for a single group. The caller
+   *  knows the current effective value (computed from the slice plus
+   *  `turn.collapsed` fallback) so it passes the desired new boolean
+   *  rather than asking the slice to toggle relative to a default it
+   *  can't see. */
+  setCollapsedToolGroup: (
+    sessionId: string,
+    groupKey: string,
+    collapsed: boolean,
+  ) => void;
+  pendingAttachmentsBySession: Record<string, StoredAttachment[]>;
+  setPendingAttachmentsForSession: (
+    sessionId: string,
+    attachments: StoredAttachment[],
+  ) => void;
+  addPendingAttachment: (
+    sessionId: string,
+    attachment: StoredAttachment,
+  ) => void;
+  removePendingAttachment: (sessionId: string, attachmentId: string) => void;
+  clearPendingAttachments: (sessionId: string) => void;
   lastMessages: Record<string, ChatMessage>;
   setLastMessages: (msgs: Record<string, ChatMessage>) => void;
 }
@@ -580,6 +625,58 @@ export const createChatSlice: StateCreator<AppState, [], [], ChatSlice> = (
       const next = { ...s.chatDrafts };
       delete next[sessionId];
       return { chatDrafts: next };
+    }),
+  collapsedToolGroupsBySession: {},
+  setCollapsedToolGroup: (sessionId, groupKey, collapsed) =>
+    set((s) => {
+      const wsGroups = s.collapsedToolGroupsBySession[sessionId] ?? {};
+      if (wsGroups[groupKey] === collapsed) return s;
+      return {
+        collapsedToolGroupsBySession: {
+          ...s.collapsedToolGroupsBySession,
+          [sessionId]: { ...wsGroups, [groupKey]: collapsed },
+        },
+      };
+    }),
+  pendingAttachmentsBySession: {},
+  setPendingAttachmentsForSession: (sessionId, attachments) =>
+    set((s) => ({
+      pendingAttachmentsBySession: {
+        ...s.pendingAttachmentsBySession,
+        [sessionId]: attachments,
+      },
+    })),
+  addPendingAttachment: (sessionId, attachment) =>
+    set((s) => {
+      const existing = s.pendingAttachmentsBySession[sessionId] ?? [];
+      // Functional add so concurrent paste/drop events serialize cleanly
+      // even when the caller reads a stale local copy of the list.
+      return {
+        pendingAttachmentsBySession: {
+          ...s.pendingAttachmentsBySession,
+          [sessionId]: [...existing, attachment],
+        },
+      };
+    }),
+  removePendingAttachment: (sessionId, attachmentId) =>
+    set((s) => {
+      const existing = s.pendingAttachmentsBySession[sessionId];
+      if (!existing) return s;
+      const filtered = existing.filter((a) => a.id !== attachmentId);
+      if (filtered.length === existing.length) return s;
+      return {
+        pendingAttachmentsBySession: {
+          ...s.pendingAttachmentsBySession,
+          [sessionId]: filtered,
+        },
+      };
+    }),
+  clearPendingAttachments: (sessionId) =>
+    set((s) => {
+      if (!(sessionId in s.pendingAttachmentsBySession)) return s;
+      const next = { ...s.pendingAttachmentsBySession };
+      delete next[sessionId];
+      return { pendingAttachmentsBySession: next };
     }),
   lastMessages: {},
   setLastMessages: (msgs) => set({ lastMessages: msgs }),

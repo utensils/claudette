@@ -88,6 +88,8 @@
   "session_close_diff": "关闭差异视图",
   "session_running_confirm_close": "此会话仍在运行中。停止并关闭 “{{name}}” 吗？",
   "session_running_confirm_close_multi": "{{count}} 个会话仍在运行中。停止并关闭它们吗？",
+  "session_active_confirm_close": "关闭当前活动的会话 “{{name}}” 吗？",
+  "session_last_confirm_close": "关闭仅剩的会话 “{{name}}” 吗？将创建一个新会话替代它；被关闭的会话会被归档。",
 
   "tab_close": "关闭",
   "tab_close_others": "关闭其他",

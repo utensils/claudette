@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { CircleDollarSign, Sparkles, BookOpen } from "lucide-react";
 import { useAppStore } from "../../../stores/useAppStore";
-import { getAppSetting, setAppSetting } from "../../../services/tauri";
+import { getAppSetting } from "../../../services/tauri";
 import { ModelSelector, is1mContextModel, get1mFallback } from "../ModelSelector";
 import { buildModelRegistry } from "../modelRegistry";
 import { isFastSupported, isEffortSupported, isXhighEffortAllowed, isMaxEffortAllowed } from "../modelCapabilities";
@@ -31,7 +31,6 @@ export function ComposerToolbar({
   const selectedModel = useAppStore((s) => s.selectedModel[sessionId] ?? "opus");
   const selectedProvider = useAppStore((s) => s.selectedModelProvider[sessionId] ?? "anthropic");
   const disable1mContext = useAppStore((s) => s.disable1mContext);
-  const thinkingEnabled = useAppStore((s) => s.thinkingEnabled[sessionId] ?? false);
   const planMode = useAppStore((s) => s.planMode[sessionId] ?? false);
   const modelSelectorOpen = useAppStore((s) => s.modelSelectorOpen);
   const alternativeBackendsEnabled = useAppStore((s) => s.alternativeBackendsEnabled);
@@ -119,26 +118,15 @@ export function ComposerToolbar({
     [sessionId, selectedModel, selectedProvider, setModelSelectorOpen],
   );
 
-  const toggleThinking = useCallback(async () => {
-    const next = !thinkingEnabled;
-    setThinkingEnabled(sessionId, next);
-    await setAppSetting(`thinking_enabled:${sessionId}`, String(next));
-  }, [sessionId, thinkingEnabled, setThinkingEnabled]);
-
   const togglePlan = useCallback(() => {
     setPlanMode(sessionId, !planMode);
   }, [sessionId, planMode, setPlanMode]);
 
-  useEffect(() => {
-    function handleKey(e: KeyboardEvent) {
-      if (e.metaKey && e.key === "t") {
-        e.preventDefault();
-        if (!disabled) toggleThinking();
-      }
-    }
-    window.addEventListener("keydown", handleKey);
-    return () => window.removeEventListener("keydown", handleKey);
-  }, [disabled, toggleThinking]);
+  // The Cmd/Ctrl+T thinking-mode hotkey lived here as a raw
+  // `window.addEventListener("keydown")` listener. It's been removed —
+  // Cmd+T is now the registered `global.new-tab` action (see
+  // `useKeyboardShortcuts`), and thinking remains toggleable via the
+  // ReasoningPill click + the command palette ("Toggle thinking").
 
   useEffect(() => {
     if (!loaded || !disable1mContext) return;

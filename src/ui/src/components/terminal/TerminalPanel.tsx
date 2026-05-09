@@ -14,6 +14,7 @@ import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { listen } from "@tauri-apps/api/event";
+import { ask } from "@tauri-apps/plugin-dialog";
 import {
   writeText as clipboardWriteText,
   readText as clipboardReadText,
@@ -581,8 +582,11 @@ export const TerminalPanel = memo(function TerminalPanel() {
   const handleStopAgentTask = useCallback(async (tab: TerminalTab) => {
     if (!tab.agent_chat_session_id || !tab.agent_task_id) return;
     const label = tab.task_summary?.trim() || tab.title || tab.agent_task_id;
-    const ok = window.confirm(
+    // Tauri 2 webviews silently no-op `window.confirm()` — use the
+    // plugin-dialog's `ask()` so the user actually sees the prompt.
+    const ok = await ask(
       `Stop background task "${label}"?\n\nThis will terminate the running command.`,
+      { title: "Stop task", kind: "warning", okLabel: "Stop", cancelLabel: "Cancel" },
     );
     if (!ok) return;
     try {

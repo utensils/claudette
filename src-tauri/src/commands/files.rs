@@ -15,6 +15,17 @@ use claudette::process::CommandWindowExt as _;
 
 const MAX_FILES: usize = 10_000;
 
+/// Per-top-level-directory cap on ignored entries.
+///
+/// Without a cap, a single noisy ignored tree (e.g. `.direnv/`, `.codex/`,
+/// `tmp/cache/`) can fill `MAX_FILES` alphabetically before any tracked
+/// file is emitted — `git ls-files` returns paths in collated order and
+/// `.`-prefixed names sort before `A-z`. Bucketing by top-level directory
+/// keeps every ignored tree below a fair-share cap so tracked content
+/// always wins. Root-level ignored files (no `/` in path) share their own
+/// bucket under the same cap.
+const MAX_IGNORED_FILES_PER_TOP_DIR: usize = 200;
+
 /// Top-level directory names that are always excluded from file listings,
 /// regardless of `.gitignore`, to avoid overwhelming the panel with
 /// dependency/build trees.
@@ -34,6 +45,16 @@ fn is_high_volume_path(path: &str) -> bool {
     SKIP_DIR_PREFIXES
         .iter()
         .any(|prefix| path.starts_with(prefix))
+}
+
+/// Return the top-level bucket key for a path: the segment before the
+/// first `/`, including the trailing slash (e.g. `.direnv/`), or the
+/// empty string for paths with no separator (root-level files).
+fn top_level_bucket(path: &str) -> &str {
+    match path.find('/') {
+        Some(idx) => &path[..=idx],
+        None => "",
+    }
 }
 
 #[derive(Clone, Serialize)]
@@ -123,36 +144,164 @@ pub async fn list_workspace_files(
     collect_workspace_file_entries(worktree_path).await
 }
 
-/// Stream `git ls-files --cached --others -z` from `worktree_path`, stopping
-/// after `MAX_FILES` accepted entries and skipping high-volume directory trees.
+/// Stream `git ls-files` from `worktree_path` in two passes:
+///
+/// 1. **Tracked + untracked-not-ignored** via `--cached --others
+///    --exclude-standard -z`. Capped at `MAX_FILES`. These are the files
+///    the user is most likely to care about; they always win.
+/// 2. **Ignored only** via `--others --ignored --exclude-standard -z`. Each
+///    top-level directory bucket (e.g. `.direnv/`, `tmp/`, root) is capped
+///    at `MAX_IGNORED_FILES_PER_TOP_DIR` so a single noisy ignored tree
+///    can't starve pass 1 alphabetically — `.`-prefixed names sort before
+///    `A-z` so without a per-bucket cap a huge `.direnv/` would consume
+///    the cap before any tracked file is emitted (this was the regression
+///    in #694).
+///
 /// Uses NUL-delimited output (`-z`) so filenames with newlines or special
 /// characters are handled correctly without git's path quoting.
 async fn collect_workspace_file_entries(worktree_path: &str) -> Result<Vec<FileEntry>, String> {
-    use tokio::io::{AsyncBufReadExt, BufReader};
-
-    let mut child = Command::new(claudette::git::resolve_git_path_blocking())
-        .no_console_window()
-        .args(["-C", worktree_path])
-        .args(["ls-files", "--cached", "--others", "-z"])
-        .stdout(std::process::Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("Failed to spawn git ls-files: {e}"))?;
-
     let file_tree_status = claudette::diff::file_tree_git_status_with_suppressed(worktree_path)
         .await
         .map_err(|e| format!("Failed to load git status: {e}"))?;
     let git_status = file_tree_status.statuses;
     let suppressed_paths = file_tree_status.suppressed_paths;
 
+    let mut dirs = std::collections::BTreeSet::new();
+    let mut seen_files = std::collections::BTreeSet::new();
+    let mut entries: Vec<FileEntry> = Vec::new();
+
+    // Pass 1: tracked + untracked-not-ignored. Annotate with git status.
+    stream_ls_files(
+        worktree_path,
+        &[
+            "ls-files",
+            "--cached",
+            "--others",
+            "--exclude-standard",
+            "-z",
+        ],
+        &mut |path| {
+            if entries.len() >= MAX_FILES {
+                return StreamCallback::Stop;
+            }
+            if suppressed_paths.contains(path) || is_high_volume_path(path) {
+                return StreamCallback::Skip;
+            }
+            let status = git_status.get(path);
+            record_file_entry(
+                path,
+                status.map(|s| s.status.clone()),
+                status.map(|s| s.layer),
+                &mut entries,
+                &mut seen_files,
+                &mut dirs,
+            );
+            StreamCallback::Keep
+        },
+    )
+    .await?;
+
+    // `git status` may surface paths that `git ls-files --cached --others
+    // --exclude-standard` doesn't (e.g. unstaged deletions), so fold them
+    // in before pass 2.
+    for (path, status) in &git_status {
+        if entries.len() >= MAX_FILES || seen_files.contains(path) || is_high_volume_path(path) {
+            continue;
+        }
+        record_file_entry(
+            path,
+            Some(status.status.clone()),
+            Some(status.layer),
+            &mut entries,
+            &mut seen_files,
+            &mut dirs,
+        );
+    }
+
+    // Pass 2: ignored entries with per-top-level-dir fair-share cap.
+    let mut ignored_per_bucket: std::collections::HashMap<String, usize> =
+        std::collections::HashMap::new();
+    stream_ls_files(
+        worktree_path,
+        &[
+            "ls-files",
+            "--others",
+            "--ignored",
+            "--exclude-standard",
+            "-z",
+        ],
+        &mut |path| {
+            if entries.len() >= MAX_FILES {
+                return StreamCallback::Stop;
+            }
+            if seen_files.contains(path)
+                || suppressed_paths.contains(path)
+                || is_high_volume_path(path)
+            {
+                return StreamCallback::Skip;
+            }
+            let bucket = top_level_bucket(path).to_string();
+            let count = ignored_per_bucket.entry(bucket).or_insert(0);
+            if *count >= MAX_IGNORED_FILES_PER_TOP_DIR {
+                return StreamCallback::Skip;
+            }
+            *count += 1;
+            // Ignored entries get no git status badge — neither tracked
+            // nor in `git status`'s untracked set.
+            record_file_entry(path, None, None, &mut entries, &mut seen_files, &mut dirs);
+            StreamCallback::Keep
+        },
+    )
+    .await?;
+
+    let dir_entries: Vec<FileEntry> = dirs
+        .into_iter()
+        .map(|path| FileEntry {
+            path,
+            is_directory: true,
+            git_status: None,
+            git_layer: None,
+        })
+        .collect();
+    entries.splice(0..0, dir_entries);
+
+    Ok(entries)
+}
+
+/// Outcome the streaming callback returns for each emitted path.
+#[derive(Clone, Copy)]
+enum StreamCallback {
+    /// Path was accepted into the result set.
+    Keep,
+    /// Path was filtered out; keep streaming the next entry.
+    Skip,
+    /// Caller-imposed cap reached; stop reading and kill the child.
+    Stop,
+}
+
+/// Spawn `git <args>` against `worktree_path` and feed each NUL-delimited
+/// path to `on_path`. Returns when git exits or the callback returns
+/// `Stop` (in which case the child is killed).
+async fn stream_ls_files(
+    worktree_path: &str,
+    args: &[&str],
+    on_path: &mut (dyn FnMut(&str) -> StreamCallback + Send),
+) -> Result<(), String> {
+    use tokio::io::{AsyncBufReadExt, BufReader};
+
+    let mut child = Command::new(claudette::git::resolve_git_path_blocking())
+        .no_console_window()
+        .args(["-C", worktree_path])
+        .args(args)
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("Failed to spawn git ls-files: {e}"))?;
+
     let stdout = child
         .stdout
         .take()
         .ok_or("Failed to capture git ls-files stdout")?;
     let mut reader = BufReader::new(stdout);
-
-    let mut dirs = std::collections::BTreeSet::new();
-    let mut seen_files = std::collections::BTreeSet::new();
-    let mut entries: Vec<FileEntry> = Vec::new();
     let mut buf = Vec::new();
 
     loop {
@@ -170,69 +319,47 @@ async fn collect_workspace_file_entries(worktree_path: &str) -> Result<Vec<FileE
         if buf.is_empty() {
             continue;
         }
-        let line = match std::str::from_utf8(&buf) {
+        let path = match std::str::from_utf8(&buf) {
             Ok(s) => s,
             Err(_) => continue,
         };
-
-        if suppressed_paths.contains(line) || is_high_volume_path(line) {
-            continue;
+        match on_path(path) {
+            StreamCallback::Keep | StreamCallback::Skip => {}
+            StreamCallback::Stop => {
+                let _ = child.kill().await;
+                break;
+            }
         }
-
-        if entries.len() >= MAX_FILES {
-            let _ = child.kill().await;
-            break;
-        }
-
-        let status = git_status.get(line);
-        seen_files.insert(line.to_string());
-        let mut pos = 0;
-        while let Some(slash) = line[pos..].find('/') {
-            let dir_end = pos + slash;
-            dirs.insert(line[..=dir_end].to_string());
-            pos = dir_end + 1;
-        }
-        entries.push(FileEntry {
-            path: line.to_string(),
-            is_directory: false,
-            git_status: status.map(|s| s.status.clone()),
-            git_layer: status.map(|s| s.layer),
-        });
     }
 
     let _ = child.wait().await;
+    Ok(())
+}
 
-    for (path, status) in &git_status {
-        if entries.len() >= MAX_FILES || seen_files.contains(path) || is_high_volume_path(path) {
-            continue;
-        }
-        let mut pos = 0;
-        while let Some(slash) = path[pos..].find('/') {
-            let dir_end = pos + slash;
-            dirs.insert(path[..=dir_end].to_string());
-            pos = dir_end + 1;
-        }
-        seen_files.insert(path.clone());
-        entries.push(FileEntry {
-            path: path.clone(),
-            is_directory: false,
-            git_status: Some(status.status.clone()),
-            git_layer: Some(status.layer),
-        });
+/// Insert a file entry plus all of its parent directories into the
+/// accumulator structures. Centralized so the two passes stay consistent
+/// in how they extract the directory tree.
+fn record_file_entry(
+    path: &str,
+    git_status: Option<FileStatus>,
+    git_layer: Option<GitFileLayer>,
+    entries: &mut Vec<FileEntry>,
+    seen_files: &mut std::collections::BTreeSet<String>,
+    dirs: &mut std::collections::BTreeSet<String>,
+) {
+    seen_files.insert(path.to_string());
+    let mut pos = 0;
+    while let Some(slash) = path[pos..].find('/') {
+        let dir_end = pos + slash;
+        dirs.insert(path[..=dir_end].to_string());
+        pos = dir_end + 1;
     }
-
-    let dir_entries: Vec<FileEntry> = dirs
-        .into_iter()
-        .map(|path| FileEntry {
-            path,
-            is_directory: true,
-            git_status: None,
-            git_layer: None,
-        })
-        .collect();
-    entries.splice(0..0, dir_entries);
-
-    Ok(entries)
+    entries.push(FileEntry {
+        path: path.to_string(),
+        is_directory: false,
+        git_status,
+        git_layer,
+    });
 }
 
 /// Read a file from a workspace's worktree.
@@ -1799,6 +1926,104 @@ mod tests {
         assert!(is_high_volume_path(".next/static/chunks/main.js"));
         assert!(!is_high_volume_path("src/node_modules_helper.rs"));
         assert!(!is_high_volume_path("mytarget/foo"));
+    }
+
+    #[test]
+    fn top_level_bucket_extracts_first_segment() {
+        assert_eq!(top_level_bucket(".direnv/bin/python"), ".direnv/");
+        assert_eq!(top_level_bucket("src/main.rs"), "src/");
+        assert_eq!(top_level_bucket("Cargo.toml"), "");
+        assert_eq!(top_level_bucket(""), "");
+    }
+
+    #[tokio::test]
+    async fn ignored_tree_does_not_starve_tracked_files() {
+        // Regression for the post-#694 symptom where a single noisy
+        // ignored top-level directory (`.codex/`, `.direnv/`, etc.) sorts
+        // alphabetically before tracked content and consumed the
+        // `MAX_FILES` cap, producing a Files panel that showed only
+        // ignored directories.
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+
+        for args in [
+            vec!["init"],
+            vec!["config", "user.email", "test@test.com"],
+            vec!["config", "user.name", "Test"],
+        ] {
+            std::process::Command::new("git")
+                .args(&args)
+                .current_dir(root)
+                .output()
+                .unwrap();
+        }
+
+        // Tracked files at lowercase + uppercase top-level paths so any
+        // alphabetical-truncation regression would hide them behind
+        // `.heavy_ignored/` in collated order.
+        std::fs::write(root.join("Cargo.toml"), "x").unwrap();
+        std::fs::write(root.join("README.md"), "x").unwrap();
+        std::fs::create_dir(root.join("src")).unwrap();
+        std::fs::write(root.join("src").join("main.rs"), "x").unwrap();
+
+        for args in [
+            vec!["add", "Cargo.toml", "README.md", "src/main.rs"],
+            vec!["commit", "-m", "init"],
+        ] {
+            std::process::Command::new("git")
+                .args(&args)
+                .current_dir(root)
+                .output()
+                .unwrap();
+        }
+
+        // Heavy ignored tree: cap (200) + headroom worth of files in a
+        // dot-prefixed dir so it sorts first.
+        std::fs::write(root.join(".gitignore"), ".heavy_ignored/\n").unwrap();
+        std::fs::create_dir(root.join(".heavy_ignored")).unwrap();
+        let extra = MAX_IGNORED_FILES_PER_TOP_DIR + 50;
+        for i in 0..extra {
+            std::fs::write(
+                root.join(".heavy_ignored").join(format!("f_{i:05}.dat")),
+                "",
+            )
+            .unwrap();
+        }
+
+        let entries = collect_workspace_file_entries(&root.to_string_lossy())
+            .await
+            .unwrap();
+        let files: Vec<&str> = entries
+            .iter()
+            .filter(|e| !e.is_directory)
+            .map(|e| e.path.as_str())
+            .collect();
+
+        assert!(
+            files.contains(&"Cargo.toml"),
+            "tracked Cargo.toml must survive heavy ignored tree; got: {files:?}"
+        );
+        assert!(
+            files.contains(&"README.md"),
+            "tracked README.md must survive heavy ignored tree"
+        );
+        assert!(
+            files.contains(&"src/main.rs"),
+            "tracked src/main.rs must survive heavy ignored tree"
+        );
+
+        let ignored_in_heavy = files
+            .iter()
+            .filter(|p| p.starts_with(".heavy_ignored/"))
+            .count();
+        assert!(
+            ignored_in_heavy <= MAX_IGNORED_FILES_PER_TOP_DIR,
+            "ignored bucket must be capped at {MAX_IGNORED_FILES_PER_TOP_DIR}; got {ignored_in_heavy}"
+        );
+        assert!(
+            ignored_in_heavy > 0,
+            "ignored bucket should still surface some entries so the user knows the directory exists"
+        );
     }
 
     #[test]

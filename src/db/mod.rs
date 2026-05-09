@@ -391,6 +391,85 @@ mod tests {
         assert_eq!(count_applied(&db) as usize, MIGRATIONS.len());
     }
 
+    /// Pin the keybinding rename: after the renaming migration runs,
+    /// any user-customized override of `keybinding:file-viewer.close-file-tab`
+    /// must land at `keybinding:global.close-tab` and the legacy key
+    /// must be gone. The migration is run as part of `Database::open_in_memory`
+    /// alongside everything else, so this test seeds the *prior* state
+    /// by inserting the legacy row and re-running the migration's SQL
+    /// directly — exercising the same INSERT OR IGNORE / DELETE pair
+    /// the runtime applies.
+    #[test]
+    fn test_close_tab_keybinding_rename_migration() {
+        let db = Database::open_in_memory().unwrap();
+        // Seed the legacy row that an existing user would have had
+        // before pulling this build.
+        db.conn()
+            .execute(
+                "INSERT INTO app_settings (key, value) VALUES (?1, ?2)",
+                params!["keybinding:file-viewer.close-file-tab", "mod+x"],
+            )
+            .unwrap();
+        // Re-execute the migration body. INSERT OR IGNORE is the
+        // important guard — a user who already has a custom binding on
+        // the new id keeps it; only orphaned legacy rows are migrated.
+        let migration_sql =
+            include_str!("../migrations/20260509000540_rename_close_file_tab_keybinding.sql");
+        db.conn().execute_batch(migration_sql).unwrap();
+
+        let new_value: Option<String> = db
+            .conn()
+            .query_row(
+                "SELECT value FROM app_settings WHERE key = 'keybinding:global.close-tab'",
+                [],
+                |r| r.get(0),
+            )
+            .ok();
+        assert_eq!(new_value.as_deref(), Some("mod+x"));
+
+        let legacy_present: bool = db
+            .conn()
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM app_settings WHERE key = 'keybinding:file-viewer.close-file-tab')",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(!legacy_present, "legacy row must be removed");
+    }
+
+    /// `INSERT OR IGNORE` semantics: an explicit override under the
+    /// new id wins over the legacy value when both are present (e.g.
+    /// a user who customised the binding across both versions). The
+    /// legacy row is still removed afterward.
+    #[test]
+    fn test_close_tab_keybinding_rename_preserves_existing_new_id() {
+        let db = Database::open_in_memory().unwrap();
+        db.conn()
+            .execute_batch(
+                "INSERT INTO app_settings (key, value) VALUES \
+                 ('keybinding:file-viewer.close-file-tab', 'legacy-value'), \
+                 ('keybinding:global.close-tab', 'new-value');",
+            )
+            .unwrap();
+        let migration_sql =
+            include_str!("../migrations/20260509000540_rename_close_file_tab_keybinding.sql");
+        db.conn().execute_batch(migration_sql).unwrap();
+
+        let new_value: String = db
+            .conn()
+            .query_row(
+                "SELECT value FROM app_settings WHERE key = 'keybinding:global.close-tab'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            new_value, "new-value",
+            "explicit new-id override must not be clobbered by INSERT OR IGNORE",
+        );
+    }
+
     #[test]
     fn test_migrate_is_idempotent() {
         let db = Database::open_in_memory().unwrap();
