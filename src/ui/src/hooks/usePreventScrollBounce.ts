@@ -4,6 +4,11 @@ function canScrollVertically(el: HTMLElement) {
   return el.scrollHeight > el.clientHeight + 1;
 }
 
+function allowsVerticalScrolling(el: HTMLElement) {
+  const { overflowY } = window.getComputedStyle(el);
+  return overflowY === "auto" || overflowY === "scroll" || overflowY === "overlay";
+}
+
 function canScrollInDirection(el: HTMLElement, deltaY: number) {
   if (!canScrollVertically(el)) return false;
   if (deltaY < 0) return el.scrollTop > 0;
@@ -21,7 +26,11 @@ function nearestScrollableWithin(
 
   let el: Element | null = target;
   while (el && el !== boundary) {
-    if (el instanceof HTMLElement && canScrollVertically(el)) {
+    if (
+      el instanceof HTMLElement &&
+      canScrollVertically(el) &&
+      allowsVerticalScrolling(el)
+    ) {
       return el;
     }
     el = el.parentElement;
@@ -30,20 +39,47 @@ function nearestScrollableWithin(
   return boundary;
 }
 
-function shouldBlockBoundaryScroll(
+function maxScrollTop(el: HTMLElement) {
+  return Math.max(0, el.scrollHeight - el.clientHeight);
+}
+
+function clampScrollTop(el: HTMLElement) {
+  const max = maxScrollTop(el);
+  if (el.scrollTop < 0) {
+    el.scrollTop = 0;
+  } else if (el.scrollTop > max) {
+    el.scrollTop = max;
+  }
+}
+
+function shouldHandleEvent(
+  eventTarget: EventTarget | null,
+  boundary: HTMLElement,
+): eventTarget is Node {
+  return eventTarget instanceof Node && boundary.contains(eventTarget);
+}
+
+function boundaryScrollTarget(
   eventTarget: EventTarget | null,
   boundary: HTMLElement,
   deltaY: number,
 ) {
-  if (deltaY === 0) return false;
+  if (deltaY === 0 || !shouldHandleEvent(eventTarget, boundary)) return null;
 
   const activeScroller = nearestScrollableWithin(eventTarget, boundary);
-  if (canScrollInDirection(activeScroller, deltaY)) return false;
+  if (canScrollInDirection(activeScroller, deltaY)) return null;
   if (activeScroller !== boundary && canScrollInDirection(boundary, deltaY)) {
-    return false;
+    return null;
   }
 
-  return true;
+  return activeScroller;
+}
+
+function blockBoundaryScroll(event: Event, scrollTarget: HTMLElement) {
+  clampScrollTop(scrollTarget);
+  if (event.cancelable) event.preventDefault();
+  event.stopPropagation();
+  requestAnimationFrame(() => clampScrollTop(scrollTarget));
 }
 
 /**
@@ -58,17 +94,24 @@ export function usePreventScrollBounce(
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
+    const document = el.ownerDocument;
 
     const onWheel = (event: WheelEvent) => {
       if (Math.abs(event.deltaY) <= Math.abs(event.deltaX)) return;
-      if (!shouldBlockBoundaryScroll(event.target, el, event.deltaY)) return;
-      if (event.cancelable) event.preventDefault();
+      const scrollTarget = boundaryScrollTarget(event.target, el, event.deltaY);
+      if (!scrollTarget) return;
+      blockBoundaryScroll(event, scrollTarget);
     };
 
     let lastTouchY: number | null = null;
     let touchTarget: EventTarget | null = null;
 
     const onTouchStart = (event: TouchEvent) => {
+      if (!shouldHandleEvent(event.target, el)) {
+        lastTouchY = null;
+        touchTarget = null;
+        return;
+      }
       lastTouchY = event.touches[0]?.clientY ?? null;
       touchTarget = event.target;
     };
@@ -80,19 +123,26 @@ export function usePreventScrollBounce(
       const deltaY = lastTouchY - currentY;
       lastTouchY = currentY;
 
-      if (!shouldBlockBoundaryScroll(touchTarget, el, deltaY)) return;
-      if (event.cancelable) event.preventDefault();
+      const scrollTarget = boundaryScrollTarget(touchTarget, el, deltaY);
+      if (!scrollTarget) return;
+      blockBoundaryScroll(event, scrollTarget);
     };
 
-    const options: AddEventListenerOptions = { passive: false };
-    el.addEventListener("wheel", onWheel, options);
-    el.addEventListener("touchstart", onTouchStart, options);
-    el.addEventListener("touchmove", onTouchMove, options);
+    const onScroll = () => {
+      clampScrollTop(el);
+    };
+
+    const options: AddEventListenerOptions = { capture: true, passive: false };
+    document.addEventListener("wheel", onWheel, options);
+    document.addEventListener("touchstart", onTouchStart, options);
+    document.addEventListener("touchmove", onTouchMove, options);
+    el.addEventListener("scroll", onScroll, { passive: true });
 
     return () => {
-      el.removeEventListener("wheel", onWheel, options);
-      el.removeEventListener("touchstart", onTouchStart, options);
-      el.removeEventListener("touchmove", onTouchMove, options);
+      document.removeEventListener("wheel", onWheel, options);
+      document.removeEventListener("touchstart", onTouchStart, options);
+      document.removeEventListener("touchmove", onTouchMove, options);
+      el.removeEventListener("scroll", onScroll);
     };
   }, [containerRef]);
 }

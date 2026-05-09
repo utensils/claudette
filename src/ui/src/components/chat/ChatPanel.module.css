@@ -21,6 +21,7 @@
 .messages {
   flex: 1;
   overflow-y: auto;
+  overscroll-behavior-y: none;
   padding: 20px 28px;
   display: flex;
   flex-direction: column;
