@@ -270,6 +270,10 @@
   background: var(--selected-bg);
 }
 
+.appPickerOptionSelected:hover {
+  background: var(--selected-bg);
+}
+
 .appPickerOptionText {
   min-width: 0;
   flex: 1;

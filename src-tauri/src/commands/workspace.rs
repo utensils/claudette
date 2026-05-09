@@ -925,11 +925,12 @@ pub async fn open_workspace_in_terminal(
             .ok()
             .flatten()
     });
-    let detected_apps = state.detected_apps.read().await.clone();
-
-    if let Some(app_id) =
+    let app_id = {
+        let detected_apps = state.detected_apps.read().await;
         apps::select_workspace_terminal_app_id(&detected_apps, default_terminal_app_id.as_deref())
-    {
+    };
+
+    if let Some(app_id) = app_id {
         tracing::info!(
             target: "claudette::workspace",
             terminal_app_id = %app_id,
