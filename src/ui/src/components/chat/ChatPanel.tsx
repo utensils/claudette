@@ -1,6 +1,11 @@
 import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { useTranslation } from "react-i18next";
-import { LoaderCircle, SendHorizontal } from "lucide-react";
+import {
+  CornerDownRight,
+  LoaderCircle,
+  SendHorizontal,
+  Trash2,
+} from "lucide-react";
 import { ChatSearchBar } from "./ChatSearchBar";
 import { useAppStore } from "../../stores/useAppStore";
 import {
@@ -28,7 +33,7 @@ import {
 } from "../../services/tauri";
 import { applySelectedModel } from "./applySelectedModel";
 import { findLatestPlanFilePath } from "./planFilePath";
-import type { PermissionLevel } from "../../stores/useAppStore";
+import type { PermissionLevel, QueuedMessage } from "../../stores/useAppStore";
 import { reconstructCompletedTurns } from "../../utils/reconstructTurns";
 import { extractLatestCallUsage } from "../../utils/extractLatestCallUsage";
 import type { AttachmentInput, ChatMessage } from "../../types/chat";
@@ -67,6 +72,8 @@ import { CliInvocationBanner } from "./CliInvocationBanner";
 import { CurrentTurnTaskProgress } from "./CurrentTurnTaskProgress";
 import { ChatInputArea } from "./ChatInputArea";
 import { EMPTY_ACTIVITIES } from "./chatConstants";
+
+const EMPTY_QUEUED_MESSAGES: QueuedMessage[] = [];
 
 export function ChatPanel() {
   const { t } = useTranslation("chat");
@@ -225,10 +232,14 @@ export function ChatPanel() {
   );
   const clearPlanApproval = useAppStore((s) => s.clearPlanApproval);
   const setPlanMode = useAppStore((s) => s.setPlanMode);
-  const queuedMessage = useAppStore(
-    (s) => (activeSessionId ? s.queuedMessages[activeSessionId] ?? null : null)
+  const queuedMessages = useAppStore(
+    (s) =>
+      activeSessionId
+        ? s.queuedMessages[activeSessionId] ?? EMPTY_QUEUED_MESSAGES
+        : EMPTY_QUEUED_MESSAGES,
   );
   const setQueuedMessage = useAppStore((s) => s.setQueuedMessage);
+  const removeQueuedMessage = useAppStore((s) => s.removeQueuedMessage);
   const clearQueuedMessage = useAppStore((s) => s.clearQueuedMessage);
   const addCheckpoint = useAppStore((s) => s.addCheckpoint);
   const addWorkspace = useAppStore((s) => s.addWorkspace);
@@ -659,15 +670,29 @@ export function ChatPanel() {
     mentionedFiles?: Set<string>,
     attachments?: AttachmentInput[],
   ) => void) | null>(null);
+  const autoDispatchQueuedIdRef = useRef<string | null>(null);
   useEffect(() => {
-    if (isSteeringQueued || isRunning || !activeSessionId || !queuedMessage) return;
+    const nextQueuedMessage = queuedMessages[0];
+    if (
+      isSteeringQueued ||
+      isRunning ||
+      !activeSessionId ||
+      !nextQueuedMessage ||
+      autoDispatchQueuedIdRef.current
+    ) {
+      return;
+    }
     // Agent just finished — dispatch the queued message.
-    const { content, mentionedFiles, attachments } = queuedMessage;
-    clearQueuedMessage(activeSessionId);
+    const { id, content, mentionedFiles, attachments } = nextQueuedMessage;
+    autoDispatchQueuedIdRef.current = id;
+    removeQueuedMessage(activeSessionId, id);
     const filesSet = mentionedFiles?.length ? new Set(mentionedFiles) : undefined;
     // Use a microtask to avoid calling handleSend during render.
-    queueMicrotask(() => handleSendRef.current?.(content, filesSet, attachments));
-  }, [isSteeringQueued, isRunning, activeSessionId, queuedMessage, clearQueuedMessage]);
+    queueMicrotask(() => {
+      handleSendRef.current?.(content, filesSet, attachments);
+      autoDispatchQueuedIdRef.current = null;
+    });
+  }, [isSteeringQueued, isRunning, activeSessionId, queuedMessages, removeQueuedMessage]);
 
   if (!ws) return null;
 
@@ -773,8 +798,10 @@ export function ChatPanel() {
     }
   };
 
-  const handleSteerQueuedMessage = async () => {
-    if (!activeSessionId || !queuedMessage || isSteeringQueued) return;
+  const handleSteerQueuedMessage = async (queuedMessageId: string) => {
+    if (!activeSessionId || isSteeringQueued) return;
+    const queuedMessage = queuedMessages.find((message) => message.id === queuedMessageId);
+    if (!queuedMessage) return;
     if (ws?.remote_connection_id) {
       setError("Mid-turn steering is not yet supported for remote workspaces");
       return;
@@ -789,7 +816,7 @@ export function ChatPanel() {
     const messageId = crypto.randomUUID();
     setError(null);
     setIsSteeringQueued(true);
-    clearQueuedMessage(sessionId);
+    removeQueuedMessage(sessionId, queuedMessage.id);
     try {
       const checkpoint = await steerQueuedChatMessage(
         sessionId,
@@ -806,7 +833,6 @@ export function ChatPanel() {
       historyIndexRef.current = -1;
       draftRef.current = "";
       addPersistedUserMessageToStore(sessionId, messageId, content, attachments);
-      clearQueuedMessage(sessionId);
     } catch (e) {
       const errMsg = String(e);
       console.error("steerQueuedChatMessage failed:", errMsg);
@@ -1329,13 +1355,47 @@ export function ChatPanel() {
                 </div>
               )}
 
-              {queuedMessage && activeSessionId && (
-                <div className={styles.queuedMessage}>
-                  <span className={styles.queuedLabel}>{t("queued_label")}</span>
-                  <span className={styles.queuedContent}>{queuedMessage.content}</span>
+              {error && <div className={styles.errorBanner}>{error}</div>}
+            </>
+          )}
+        </div>
+      </ScrollContext.Provider>
+      </div>
+
+      <ScrollToBottomPill
+        visible={!isAtBottom && messages.length > 0}
+        onClick={scrollToBottom}
+      />
+
+      {queuedMessages.length > 0 && activeSessionId && (
+        <div className={styles.queuedPopover}>
+          <div className={styles.queuedPopoverHeader}>
+            <span className={styles.queuedLabel}>
+              {t("queued_label")} · {queuedMessages.length}
+            </span>
+            <button
+              className={styles.queuedClearAll}
+              onClick={() => clearQueuedMessage(activeSessionId)}
+              title={t("cancel_queued")}
+            >
+              {t("clear_queue")}
+            </button>
+          </div>
+          <div className={styles.queuedList}>
+            {queuedMessages.map((message) => {
+              const content = message.content.trim();
+              const fallback = message.attachments?.length
+                ? message.attachments.map((attachment) => attachment.filename).join(", ")
+                : t("queued_attachment_fallback");
+              return (
+                <div className={styles.queuedMessage} key={message.id}>
+                  <span className={styles.queuedIcon} aria-hidden="true">
+                    <CornerDownRight size={14} />
+                  </span>
+                  <span className={styles.queuedContent}>{content || fallback}</span>
                   <button
                     className={styles.queuedSteer}
-                    onClick={handleSteerQueuedMessage}
+                    onClick={() => handleSteerQueuedMessage(message.id)}
                     disabled={isSteeringQueued || !isRunning}
                     title={t("steer_queued")}
                     aria-label={t("steer_queued")}
@@ -1349,25 +1409,18 @@ export function ChatPanel() {
                   </button>
                   <button
                     className={styles.queuedCancel}
-                    onClick={() => clearQueuedMessage(activeSessionId)}
+                    onClick={() => removeQueuedMessage(activeSessionId, message.id)}
                     title={t("cancel_queued")}
+                    aria-label={t("cancel_queued")}
                   >
-                    ×
+                    <Trash2 size={14} />
                   </button>
                 </div>
-              )}
-
-              {error && <div className={styles.errorBanner}>{error}</div>}
-            </>
-          )}
+              );
+            })}
+          </div>
         </div>
-      </ScrollContext.Provider>
-      </div>
-
-      <ScrollToBottomPill
-        visible={!isAtBottom && messages.length > 0}
-        onClick={scrollToBottom}
-      />
+      )}
 
       <ChatInputArea
         onSend={handleSend}

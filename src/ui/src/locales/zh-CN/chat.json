@@ -4,6 +4,8 @@
   "compacting_aria": "正在压缩上下文，已用 {{elapsed}}",
   "processing_aria": "处理中，已用 {{elapsed}}",
   "queued_label": "已排队",
+  "clear_queue": "清空",
+  "queued_attachment_fallback": "附件",
   "cancel_queued": "取消排队的消息",
   "steer_queued": "发送给正在运行的智能体",
   "steer_queued_short": "引导",
