@@ -122,15 +122,19 @@ function stateBadge(source: EnvSourceInfo): string {
  * never claim it's a specific tool we don't know about.
  */
 function unavailableTooltip(pluginName: string): string {
+  // CLI availability is probed once at PluginRegistry discovery; the
+  // user has to restart Claudette to pick up a newly-installed tool.
+  // Be explicit so the toggle's tooltip doesn't promise live recovery.
+  const restartHint = "Install it and restart Claudette to enable this provider.";
   switch (pluginName) {
     case "env-nix-devshell":
-      return "Install `nix` to enable this provider.";
+      return `Install \`nix\` and restart Claudette to enable this provider.`;
     case "env-mise":
-      return "Install `mise` to enable this provider.";
+      return `Install \`mise\` and restart Claudette to enable this provider.`;
     case "env-direnv":
-      return "Install `direnv` to enable this provider.";
+      return `Install \`direnv\` and restart Claudette to enable this provider.`;
     default:
-      return "The required CLI for this provider is not on PATH. Install it to enable.";
+      return `The required CLI for this provider is not on PATH. ${restartHint}`;
   }
 }
 
@@ -385,9 +389,10 @@ export function EnvPanel({ target }: EnvPanelProps) {
           const isOpen = expanded.has(source.plugin_name);
           // Treat the toggle as locked-off while unavailable: visually
           // off, non-actionable, and tooltip points at the fix
-          // (install the missing CLI). Persisting the user's intent
-          // separately from system capability means re-installing the
-          // CLI auto-recovers without forcing them to re-toggle.
+          // (install the missing CLI, then restart Claudette to
+          // re-probe PATH). The per-repo `enabled` setting is left
+          // untouched so the user's intent survives the install +
+          // restart cycle without forcing them to re-toggle.
           const toggleOn = source.enabled && !source.unavailable;
           const toggleDisabled = !resolvedOnce || source.unavailable;
           const toggleTitle = source.unavailable

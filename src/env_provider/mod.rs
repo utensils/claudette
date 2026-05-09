@@ -1166,6 +1166,98 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn unavailable_does_not_swallow_pending_reconsent() {
+        // Codex peer review: a community env-provider whose live
+        // manifest grew an unapproved CLI requirement which is ALSO
+        // not on PATH must still surface re-consent, not silently
+        // disappear as "not installed". The dispatcher should fall
+        // through to call_operation, which returns NeedsReconsent and
+        // bubbles up as an error in the resolved source.
+        let tmp = tempfile::tempdir().unwrap();
+        let plugin_dir = tempfile::tempdir().unwrap();
+        let pdir = plugin_dir.path().join("env-community");
+        std::fs::create_dir_all(&pdir).unwrap();
+        // Discovery sees an empty required_clis (so cli_available =
+        // true) and a community .install_meta.json. We then mutate
+        // the manifest in-place to simulate post-install drift that
+        // grew a CLI requirement, mirroring the existing reconsent
+        // tests in plugin_runtime::mod.rs.
+        std::fs::write(
+            pdir.join("plugin.json"),
+            r#"{
+                "name": "env-community",
+                "display_name": "Community env",
+                "version": "1.0.0",
+                "description": "test",
+                "kind": "env-provider",
+                "operations": ["detect", "export"]
+            }"#,
+        )
+        .unwrap();
+        std::fs::write(
+            pdir.join("init.lua"),
+            r#"
+            local M = {}
+            function M.detect() return true end
+            function M.export() return { env = {}, watched = {} } end
+            return M
+            "#,
+        )
+        .unwrap();
+        let empty_grants: Vec<String> = Vec::new();
+        let meta = serde_json::json!({
+            "source": "community",
+            "kind": "plugin:env-provider",
+            "registry_sha": "0".repeat(40),
+            "contribution_sha": "1".repeat(40),
+            "sha256": "2".repeat(64),
+            "installed_at": "2026-05-02T00:00:00Z",
+            "granted_capabilities": empty_grants,
+            "version": "1.0.0",
+        });
+        std::fs::write(
+            pdir.join(".install_meta.json"),
+            serde_json::to_string_pretty(&meta).unwrap(),
+        )
+        .unwrap();
+
+        let mut registry = crate::plugin_runtime::PluginRegistry::discover(plugin_dir.path());
+        // Drift: manifest now requires a CLI the user never granted,
+        // and that same CLI is not on PATH. Without the reconsent
+        // guard this would resolve as "unavailable" and hide the
+        // capability-grant prompt entirely.
+        let plugin = registry.plugins.get_mut("env-community").unwrap();
+        plugin.manifest.required_clis = vec!["claudette-test-not-on-path".to_string()];
+        plugin.cli_available = false;
+
+        assert!(registry.needs_reconsent("env-community"));
+        assert!(!registry.is_cli_available("env-community"));
+
+        let cache = EnvCache::new();
+        let resolved = resolve_with_registry(
+            &registry,
+            &cache,
+            tmp.path(),
+            &ws_info(),
+            &Default::default(),
+        )
+        .await;
+        let source = resolved
+            .sources
+            .iter()
+            .find(|s| s.plugin_name == "env-community")
+            .expect("plugin must appear in sources");
+        // Must NOT be the silent "unavailable" skip — the runtime's
+        // re-consent error must propagate so the user sees it.
+        assert_ne!(source.error.as_deref(), Some("unavailable"));
+        let err = source.error.as_deref().expect("must surface an error");
+        assert!(
+            err.contains("re-consent") || err.contains("Reconsent") || err.contains("reconsent"),
+            "expected reconsent error, got: {err}"
+        );
+    }
+
+    #[tokio::test]
     async fn resolve_with_registry_treats_globally_disabled_as_disabled() {
         // Regression guard for the UAT finding: globally-disabled plugins
         // used to surface as `detect` errors with "Plugin '...' is

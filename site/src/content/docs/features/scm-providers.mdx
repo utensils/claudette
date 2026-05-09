@@ -74,7 +74,7 @@ Bundled env-providers:
 
 Toggle individual providers in **Settings > Plugins**. Each plugin's manifest declares any user-configurable settings — for example, `env-direnv` exposes `auto_allow` to skip the per-path `direnv allow` safeguard if you'd rather trust your own `.envrc` files automatically.
 
-If a bundled provider's required CLI isn't installed (e.g. `nix` missing on a non-Nix host), Claudette marks it **not installed** in the Environment panel and silently skips it on every workspace spawn — no toast, no error. The toggle is locked in this state; install the underlying tool and the provider re-activates on the next workspace switch.
+If a bundled provider's required CLI isn't installed (e.g. `nix` missing on a non-Nix host), Claudette marks it **not installed** in the Environment panel and silently skips it on every workspace spawn — no toast, no error. The toggle is locked in this state. CLI availability is probed once at startup, so if you install the underlying tool while Claudette is running, restart the app to pick up the change.
 
 When Claudette creates a new workspace, it resolves env-providers before the workspace appears as ready. Selecting an existing workspace also performs the same warmup before fresh agent turns or terminal PTYs can start. That first warmup primes tools like `direnv` for the worktree, then setup scripts, terminal tabs, agent subprocesses, and MCP servers inherit the same merged environment.
 

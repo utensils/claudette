@@ -375,6 +375,28 @@ impl PluginRegistry {
             .unwrap_or(true)
     }
 
+    /// Whether the plugin's live manifest declares `required_clis`
+    /// that the user-approved `granted_capabilities` does not cover.
+    /// Returns `false` for unknown plugins, bundled plugins, and
+    /// pre-redesign user-installed plugins (`PluginTrust::Unknown`).
+    /// Non-zero only for community plugins whose post-install manifest
+    /// grew a CLI requirement that the user hasn't yet approved.
+    ///
+    /// Dispatchers that soft-skip on `is_cli_available` (env-provider)
+    /// must consult this *first*: a community plugin that needs
+    /// re-consent and is also missing its CLI should still surface the
+    /// re-consent prompt, not vanish silently as "not installed".
+    pub fn needs_reconsent(&self, plugin_name: &str) -> bool {
+        self.plugins
+            .get(plugin_name)
+            .map(|p| {
+                !p.trust
+                    .missing_capabilities(&p.manifest.required_clis)
+                    .is_empty()
+            })
+            .unwrap_or(false)
+    }
+
     /// Execute an operation on a plugin.
     ///
     /// Creates a fresh Lua VM, loads the plugin script, calls the specified

@@ -97,6 +97,16 @@ impl EnvProviderBackend for PluginRegistryBackend<'_> {
     }
 
     fn is_plugin_unavailable(&self, plugin: &str) -> bool {
+        // Re-consent must always surface (#580): if the live manifest
+        // grew a CLI requirement the user hasn't approved, the
+        // dispatcher must NOT swallow that as a silent "not installed"
+        // skip — the user needs to see the prompt regardless of
+        // whether the new tool is on PATH yet. Falling through here
+        // lets `call_operation` return `NeedsReconsent` from the
+        // detect/export call, which `resolve_one` records as an error.
+        if self.registry.needs_reconsent(plugin) {
+            return false;
+        }
         !self.registry.is_cli_available(plugin)
     }
 
