@@ -14,7 +14,10 @@
   background: var(--chat-header-bg);
   border-bottom: 1px solid var(--divider);
   box-shadow: var(--shadow-sm);
-  animation: fadeIn 0.15s ease;
+}
+
+:where([data-platform="mac"]) .banner {
+  background: color-mix(in srgb, var(--chat-header-bg) 88%, transparent);
 }
 
 .bannerReady,

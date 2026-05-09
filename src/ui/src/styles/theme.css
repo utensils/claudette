@@ -61,6 +61,10 @@
   --hover-bg-subtle:     rgba(240, 235, 229, 0.04);
   --selected-bg:         rgba(224, 120, 80, 0.10);
   --divider:             #3d3832;
+  --scrollbar-size:      8px;
+  --scrollbar-edge-inset: 8px;
+  --scrollbar-thumb:     var(--hover-bg);
+  --scrollbar-thumb-hover: rgba(var(--accent-primary-rgb), 0.25);
 
   /* ---- Agent status ---- */
   --status-running:      #e07850;
@@ -885,7 +889,29 @@
   margin: 0;
   padding: 0;
   box-sizing: border-box;
+  scrollbar-color: var(--scrollbar-thumb) transparent;
+  scrollbar-width: thin;
 }
+
+/*
+ * Overscroll guard: applied at the root scroll surfaces only, not on `*`.
+ *
+ * Earlier branches set `overscroll-behavior: contain` on `*`, which also
+ * landed it on every nested scrollable widget — code blocks, thinking
+ * blocks, attachment previews, slash-command pickers, etc. With it on
+ * those, wheel/trackpad scrolling at the top/bottom edge of a nested
+ * surface stops chaining to the chat scroller, so the user gets stuck
+ * on the inner widget until they move the cursor out. It also undermines
+ * `usePreventScrollBounce`, which deliberately allows the gesture
+ * through when a parent surface can still scroll in the same direction.
+ *
+ * The body-level rubber band is suppressed by the `html, body, #root`
+ * `overscroll-behavior: none` rule below; the chat messages container
+ * gets its WebKit-elastic-bounce treatment from the `usePreventScrollBounce`
+ * hook (`hooks/usePreventScrollBounce.ts`), which was written specifically
+ * because CSS `overscroll-behavior` is not reliable enough in macOS
+ * WKWebView. Don't reintroduce a global `*` rule for this.
+ */
 
 html,
 body,
@@ -900,6 +926,7 @@ body,
   line-height: var(--body-line);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  overscroll-behavior: none;
 }
 
 h1 { font-size: var(--h1-size); font-weight: var(--h1-weight); line-height: var(--h1-line); letter-spacing: -0.02em; }
@@ -983,15 +1010,18 @@ select:disabled {
   box-shadow: 0 0 0 2px rgba(var(--accent-primary-rgb), 0.5);
 }
 
-/* Scrollbars — thin, dim by default, accent on hover */
-::-webkit-scrollbar { width: 8px; height: 8px; }
+/* Scrollbars — shared app style: thin, dim by default, accent on hover */
+::-webkit-scrollbar {
+  width: var(--scrollbar-size);
+  height: var(--scrollbar-size);
+}
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb {
-  background: var(--hover-bg);
+  background: var(--scrollbar-thumb);
   border-radius: var(--radius-sm);
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(var(--accent-primary-rgb), 0.25);
+  background: var(--scrollbar-thumb-hover);
 }
 
 /* Pixelated imagery — mascot + pixel accents only */

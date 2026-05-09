@@ -69,6 +69,7 @@
   overflow: hidden;
   display: flex;
   flex-direction: column;
+  background: var(--app-bg);
   contain: layout style;
 }
 
@@ -77,6 +78,7 @@
   overflow: hidden;
   display: flex;
   flex-direction: column;
+  background: var(--app-bg);
   contain: layout style;
 }
 
@@ -163,4 +165,14 @@
   .rightSidebarContent {
     transition: none;
   }
+}
+
+:where([data-platform="mac"]) .sidebar,
+:where([data-platform="mac"]) .rightSidebar {
+  background: color-mix(in srgb, var(--sidebar-bg) 88%, transparent);
+}
+
+:where([data-platform="mac"]) .center,
+:where([data-platform="mac"]) .content {
+  background: color-mix(in srgb, var(--app-bg) 92%, transparent);
 }

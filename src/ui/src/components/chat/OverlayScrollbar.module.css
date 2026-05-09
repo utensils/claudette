@@ -1,0 +1,71 @@
+/* Custom DOM scrollbar overlay, matched to xterm.js's `.scrollbar > .slider`
+ * and Monaco's `.monaco-scrollable-element > .scrollbar > .slider`. Pure CSS
+ * scrollbars (`::-webkit-scrollbar` / `scrollbar-color`) cannot reliably be
+ * forced out of overlay mode in macOS WKWebView, and OS overlay scrollbars
+ * do not scale with browser zoom — so chat parity needs a real DOM slider
+ * sized in CSS pixels just like xterm and Monaco draw.
+ *
+ * The track lives inside the scrolling viewport's `position: relative`
+ * parent and is anchored to the right edge. The slider is a child div the
+ * component repositions via `transform: translateY(...)` and `height`.
+ *
+ * Width / radius / colors all come from the same tokens xterm and Monaco
+ * use (see TerminalPanel.module.css and monacoTheme.ts). Update those
+ * tokens — not local literals — to keep the three surfaces aligned. */
+
+.track {
+  position: absolute;
+  top: 0;
+  /* Inset from the wrapper's right wall by `--scrollbar-edge-inset` so the
+   * slider lines up with where xterm (`.paneRoot { inset: 8px }`) and
+   * Monaco (`.host { margin-right: var(--scrollbar-edge-inset) }`) draw
+   * their own custom sliders. The 8px breathing room between the slider
+   * and the panel's right wall is the visual signature shared by all
+   * three surfaces — anchoring `right: 0` would push the chat slider
+   * 8px outboard of that line. */
+  right: var(--scrollbar-edge-inset);
+  bottom: 0;
+  width: var(--scrollbar-size);
+  /* `pointer-events: none` while not overflowing means clicks in the
+   * 8px right-edge band pass through to message content underneath
+   * (the band overlaps `.messages` because the track is a sibling of
+   * `.messages` and `.messages` has a `margin-right` matching the
+   * track inset). When overflowing, the track flips to `auto` so the
+   * track click-to-page handler fires — see OverlayScrollbar.tsx. */
+  pointer-events: none;
+  z-index: 1;
+  /* Hide entirely when there's no overflow; the component clears the data
+   * attribute in that case. Avoids a phantom rail on short conversations. */
+  opacity: 0;
+  transition: opacity var(--transition-fast);
+}
+
+.track[data-overflowing="true"] {
+  opacity: 1;
+  pointer-events: auto;
+  /* Track click-to-page wants the standard arrow cursor (clicking the
+   * rail isn't a text-selection or drag affordance). The slider keeps
+   * its own `cursor: default`. */
+  cursor: default;
+}
+
+.slider {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  width: var(--scrollbar-size);
+  background: var(--scrollbar-thumb);
+  border-radius: var(--radius-sm);
+  pointer-events: auto;
+  cursor: default;
+  /* Skip the property-list animation on translate/height — the slider must
+   * track scrollTop without a trailing easing or it feels rubbery. */
+  transition: background var(--transition-fast);
+  will-change: transform, height;
+}
+
+.slider:hover,
+.slider[data-dragging="true"] {
+  background: var(--scrollbar-thumb-hover);
+}

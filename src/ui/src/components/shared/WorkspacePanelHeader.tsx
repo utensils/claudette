@@ -1,3 +1,5 @@
+import type { MouseEvent } from "react";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { GitBranch } from "lucide-react";
 import { useAppStore } from "../../stores/useAppStore";
 import { WorkspaceActions } from "../chat/WorkspaceActions";
@@ -15,9 +17,17 @@ export function WorkspacePanelHeader() {
   const repo = repositories.find((r) => r.id === ws?.repository_id);
   const defaultBranch = repo ? defaultBranchesMap[repo.id] : undefined;
 
+  const handleHeaderLabelMouseDown = (event: MouseEvent<HTMLDivElement>) => {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    void getCurrentWindow().startDragging().catch((err) => {
+      console.error("Failed to start window drag from header label:", err);
+    });
+  };
+
   return (
     <div className={`${styles.header} ${!sidebarVisible ? styles.noSidebar : ""}`} data-tauri-drag-region>
-      <div className={styles.headerLeft}>
+      <div className={styles.headerLeft} onMouseDown={handleHeaderLabelMouseDown}>
         {ws && (repo ? (
           <span className={styles.branchInfo}>
             <span className={styles.repoName}>{repo.name}</span>

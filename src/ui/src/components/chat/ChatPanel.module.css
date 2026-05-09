@@ -21,11 +21,30 @@
 .messages {
   flex: 1;
   overflow-y: auto;
+  overscroll-behavior-y: none;
+  /* Right gap matches xterm's `inset: 8px` and Monaco's host
+   * `margin-right: var(--scrollbar-edge-inset)`. The custom slider
+   * (rendered by `<OverlayScrollbar />`) lives inside this 8px lane. */
+  margin-right: var(--scrollbar-edge-inset);
   padding: 20px 28px;
   display: flex;
   flex-direction: column;
   gap: 2px;
   contain: layout style;
+  /* Hide the host's native scrollbar — `<OverlayScrollbar />` draws a
+   * pixel-sized DOM slider that matches xterm.js / Monaco. macOS
+   * WKWebView ignores `::-webkit-scrollbar` widths when the system uses
+   * overlay scrollbars, and overlay scrollbars don't scale with browser
+   * zoom, so the custom slider is the only way to keep all three
+   * surfaces consistent. */
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.messages::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
 }
 
 .empty {
@@ -58,7 +77,6 @@
   color: var(--status-stopped);
   white-space: pre-wrap;
   word-break: break-word;
-  animation: fadeInUp 0.15s ease;
 }
 
 /* --- Block-based message layout ---
@@ -69,7 +87,6 @@
 
 .message {
   max-width: 100%;
-  animation: fadeInUp 0.15s ease both;
 }
 
 /* User messages — compact input blocks */
@@ -259,7 +276,6 @@
   gap: 10px;
   padding: 10px 12px;
   font-size: 13px;
-  animation: fadeIn 0.2s ease;
   background: rgba(var(--accent-primary-rgb), 0.03);
   border-radius: 8px;
   border: 1px solid rgba(var(--accent-primary-rgb), 0.06);

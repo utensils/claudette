@@ -224,13 +224,16 @@
   justify-content: center;
   color: var(--text-muted);
   gap: 12px;
-  animation: fadeIn 0.4s ease;
 }
 
 .emptyIcon {
   color: var(--accent-primary);
   opacity: 0.4;
   margin-bottom: 4px;
+}
+
+:where([data-platform="mac"]) .toolbar {
+  background: color-mix(in srgb, var(--chat-header-bg) 88%, transparent);
 }
 
 .emptyTitle {

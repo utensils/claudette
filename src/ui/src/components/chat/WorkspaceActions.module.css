@@ -132,8 +132,13 @@
 }
 
 .appIconImage {
-  object-fit: contain;
-  background: transparent;
+  overflow: hidden;
+  background-color: transparent;
+  background-position: center;
+  background-repeat: no-repeat;
+  background-size: contain;
+  isolation: isolate;
+  transform: translateZ(0);
 }
 
 .appIconFallback {

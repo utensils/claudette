@@ -16,7 +16,6 @@
   padding: 4px;
   z-index: 100;
   box-shadow: var(--shadow-lg);
-  animation: scaleIn 0.12s ease;
 }
 
 .groupLabel {

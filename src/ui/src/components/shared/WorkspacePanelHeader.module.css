@@ -18,12 +18,28 @@
   align-items: center;
   gap: 8px;
   min-width: 0;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+}
+
+.headerLeft * {
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
 }
 
 .headerRight {
   display: flex;
   align-items: center;
   gap: 8px;
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+}
+
+.headerRight * {
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
 }
 
 .branchInfo {
@@ -71,4 +87,8 @@
 
 [data-platform="mac"] .noSidebar {
   padding-left: 80px;
+}
+
+:where([data-platform="mac"]) .header {
+  background: color-mix(in srgb, var(--chat-header-bg) 88%, transparent);
 }

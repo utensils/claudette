@@ -7,6 +7,7 @@ import {
   Trash2,
 } from "lucide-react";
 import { ChatSearchBar } from "./ChatSearchBar";
+import { OverlayScrollbar } from "./OverlayScrollbar";
 import { useAppStore } from "../../stores/useAppStore";
 import {
   loadAttachmentData,
@@ -64,6 +65,7 @@ import { ScrollToBottomPill } from "./ScrollToBottomPill";
 import { useStickyScroll } from "../../hooks/useStickyScroll";
 import { tooltipWithHotkey } from "../../hotkeys/display";
 import { isMacHotkeyPlatform } from "../../hotkeys/platform";
+import { usePreventScrollBounce } from "../../hooks/usePreventScrollBounce";
 import styles from "./ChatPanel.module.css";
 import { shouldDisable1mContext, formatElapsedSeconds } from "./chatHelpers";
 import { ScrollContext } from "./ScrollContext";
@@ -299,6 +301,7 @@ export function ChatPanel() {
   // Sticky scroll: auto-follow when at bottom, stop when user scrolls up.
   const { isAtBottom, scrollToBottom, handleContentChanged } =
     useStickyScroll(messagesContainerRef);
+  usePreventScrollBounce(messagesContainerRef);
 
   // Memoize context value to avoid re-rendering StreamingMessage on every parent render.
   const scrollContextValue = useMemo(
@@ -1259,6 +1262,12 @@ export function ChatPanel() {
           />
         )}
         <ScrollContext.Provider value={scrollContextValue}>
+        {/* Custom DOM scrollbar overlay. Mirrors xterm.js / Monaco's
+         * always-visible 8px slider so all three surfaces stay
+         * pixel-identical at every browser zoom (the OS overlay
+         * scrollbar that WKWebView would render on `.messages` instead
+         * doesn't scale with zoom). */}
+        <OverlayScrollbar targetRef={messagesContainerRef} />
         <div className={styles.messages} ref={messagesContainerRef}>
           <CliInvocationBanner
             invocation={cliInvocation}

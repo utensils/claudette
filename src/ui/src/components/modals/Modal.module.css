@@ -6,7 +6,6 @@
   align-items: center;
   justify-content: center;
   z-index: 100;
-  animation: fadeIn 0.15s ease;
 }
 
 .card {
@@ -17,7 +16,6 @@
   max-height: 80vh;
   overflow-y: auto;
   box-shadow: var(--shadow-lg);
-  animation: scaleIn 0.2s ease;
 }
 
 .header {

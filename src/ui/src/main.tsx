@@ -33,6 +33,13 @@ import { prewarmHighlighter } from "./utils/highlight";
 import { bootstrapGrammarRegistry } from "./utils/grammarRegistry";
 import App from "./App.tsx";
 
+const platform = navigator.platform.toLowerCase();
+document.documentElement.dataset.platform = platform.includes("mac")
+  ? "mac"
+  : platform.includes("win")
+    ? "windows"
+    : "linux";
+
 // Phase 2 of the log bridge: console mirroring. The early listeners
 // were already armed at `./utils/log` import time above; this call
 // only wires `console.{error,warn,info,log}` interception (gated by

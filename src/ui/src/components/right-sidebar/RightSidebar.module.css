@@ -26,6 +26,10 @@
   min-height: var(--tab-bar-h);
 }
 
+:where([data-platform="mac"]) .tabBar {
+  background: color-mix(in srgb, var(--sidebar-bg) 88%, transparent);
+}
+
 .tab {
   flex: 1;
   display: flex;
