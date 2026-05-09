@@ -91,8 +91,8 @@ end
 
 -- Normalize GitLab job status to canonical CiCheckStatus values.
 -- GitLab returns: created, pending, running, success, failed, canceled,
--- skipped, manual. Map them onto the four-canonical statuses Rust
--- consumes:
+-- skipped, manual. Map them onto the five canonical CiCheckStatus
+-- variants Rust consumes:
 --   success                 → "success"
 --   failed                  → "failure"
 --   canceled                → "cancelled"  (note GitLab's "canceled" — single l)

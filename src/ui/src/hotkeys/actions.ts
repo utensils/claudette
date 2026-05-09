@@ -350,8 +350,8 @@ export const HOTKEY_ACTIONS = [
     //    all prompt before close).
     //
     // Replaces the prior `file-viewer.close-file-tab` action; the
-    // `20260508T_rename_close_file_tab_keybinding.sql` migration carries
-    // any user-customised binding forward.
+    // `20260509000540_rename_close_file_tab_keybinding.sql` migration
+    // carries any user-customised binding forward.
     id: "global.close-tab",
     scope: "global",
     category: "keyboard_category_navigation",

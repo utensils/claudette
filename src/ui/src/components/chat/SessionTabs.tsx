@@ -31,19 +31,6 @@ import {
 } from "./sessionTabsLogic";
 import { ask } from "@tauri-apps/plugin-dialog";
 import { chatCloseConfirmKind } from "../../hotkeys/contextActions";
-
-/** Tauri's native confirm dialog. Used everywhere the close-tab UI
- *  asks the user to confirm — `window.confirm()` is a silent no-op
- *  in Tauri 2 webviews and was the cause of the "Cmd+W kills running
- *  sessions without prompting" regression. */
-async function askToClose(message: string): Promise<boolean> {
-  return ask(message, {
-    title: "Close session",
-    kind: "warning",
-    okLabel: "Close",
-    cancelLabel: "Cancel",
-  });
-}
 import { SessionStatusIcon, type SessionStatusKind } from "../shared/SessionStatusIcon";
 import { DangerousFlagBadge } from "./DangerousFlagBadge";
 import { hasDangerousFlag } from "../../stores/slices/workspaceClaudeFlagsSlice";
@@ -73,6 +60,19 @@ import type {
 import styles from "./SessionTabs.module.css";
 
 type NavDirection = "prev" | "next" | "first" | "last";
+
+/** Tauri's native confirm dialog. Used everywhere the close-tab UI
+ *  asks the user to confirm — `window.confirm()` is a silent no-op
+ *  in Tauri 2 webviews and was the cause of the "Cmd+W kills running
+ *  sessions without prompting" regression. */
+async function askToClose(message: string): Promise<boolean> {
+  return ask(message, {
+    title: "Close session",
+    kind: "warning",
+    okLabel: "Close",
+    cancelLabel: "Cancel",
+  });
+}
 
 // `NavEntry` and `buildWorkspaceTabNavEntries` are imported from
 // `./sessionTabsLogic` so the cycle-tabs hotkey and this component

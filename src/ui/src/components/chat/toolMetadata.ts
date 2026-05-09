@@ -33,7 +33,12 @@
 
 export interface ToolDisplayMeta {
   /** Input field whose value is the primary content to surface as
-   *  the tool-call summary. Must be a string-valued field. */
+   *  the tool-call summary. Strings are summarized verbatim;
+   *  `displayFromField` also handles arrays (joined, with a special
+   *  `count` form for `todos`) and objects (JSON-stringified) so a
+   *  registry entry pointing at `entities` / `fields` / `todos` works
+   *  too — though `contentLang` highlighting only makes sense on
+   *  string values. */
   contentField: string;
   /** Optional Shiki language id for highlighting the field's value
    *  when rendered as a code block. `null` / absent renders plain. */
