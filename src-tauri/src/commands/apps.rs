@@ -8,6 +8,7 @@ use crate::state::AppState;
 use claudette::process::CommandWindowExt as _;
 
 const DEFAULT_APPS_JSON: &str = include_str!("../../default-apps.json");
+pub(crate) const DEFAULT_TERMINAL_APP_SETTING_KEY: &str = "default_terminal_app_id";
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -51,6 +52,26 @@ pub struct DetectedApp {
     /// A platform-resolved application icon as a browser-renderable data URL.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub icon_data_url: Option<String>,
+}
+
+pub(crate) fn select_workspace_terminal_app_id(
+    detected_apps: &[DetectedApp],
+    preferred_app_id: Option<&str>,
+) -> Option<String> {
+    let terminals = detected_apps
+        .iter()
+        .filter(|app| app.category == AppCategory::Terminal);
+
+    if let Some(preferred_app_id) = preferred_app_id.and_then(|id| {
+        let trimmed = id.trim();
+        (!trimmed.is_empty()).then_some(trimmed)
+    }) {
+        if let Some(app) = terminals.clone().find(|app| app.id == preferred_app_id) {
+            return Some(app.id.clone());
+        }
+    }
+
+    terminals.map(|app| app.id.clone()).next()
 }
 
 // ---------------------------------------------------------------------------
@@ -771,7 +792,7 @@ async fn open_in_terminal(
     editor_entry: &AppEntry,
     editor_detected: &DetectedApp,
     worktree_path: &str,
-    state: &State<'_, AppState>,
+    state: &AppState,
 ) -> Result<(), String> {
     let config = load_apps_config();
 
@@ -831,11 +852,10 @@ async fn open_in_terminal(
     Ok(())
 }
 
-#[tauri::command]
-pub async fn open_workspace_in_app(
-    app_id: String,
-    worktree_path: String,
-    state: State<'_, AppState>,
+pub(crate) async fn open_workspace_in_app_inner(
+    app_id: &str,
+    worktree_path: &str,
+    state: &AppState,
 ) -> Result<(), String> {
     // Reload config each time so edits to open_args, needs_terminal, etc. take
     // effect without restart.  Note: the *detected apps list* (which apps appear
@@ -855,14 +875,14 @@ pub async fn open_workspace_in_app(
         .first()
         .is_some_and(|a| a == "__applescript__")
     {
-        return open_applescript(&app_id, &worktree_path).await;
+        return open_applescript(app_id, worktree_path).await;
     }
 
     #[cfg(target_os = "macos")]
     if entry.open_args.first().is_some_and(|a| a == "__open__") {
         tokio::process::Command::new("open")
             .no_console_window()
-            .arg(&worktree_path)
+            .arg(worktree_path)
             .spawn()
             .map_err(|e| format!("Failed to open workspace: {e}"))?;
         return Ok(());
@@ -878,7 +898,7 @@ pub async fn open_workspace_in_app(
             .ok_or_else(|| format!("App '{app_id}' not detected on this system"))?;
         let app_path = detected.detected_path.clone();
         drop(detected_apps);
-        return open_macos_app(&app_path, &worktree_path).await;
+        return open_macos_app(&app_path, worktree_path).await;
     }
 
     // Look up the detected path for this app.
@@ -892,20 +912,20 @@ pub async fn open_workspace_in_app(
 
     // Handle TUI editors that need a terminal host.
     if entry.needs_terminal {
-        return open_in_terminal(&entry, &detected, &worktree_path, &state).await;
+        return open_in_terminal(&entry, &detected, worktree_path, state).await;
     }
 
     // Handle .app-only detection on macOS (CLI not in PATH).
     #[cfg(target_os = "macos")]
     if detected.detected_path.ends_with(".app") {
-        return open_macos_app(&detected.detected_path, &worktree_path).await;
+        return open_macos_app(&detected.detected_path, worktree_path).await;
     }
 
     // Normal binary launch: substitute {} in open_args with the worktree path.
     let args: Vec<String> = entry
         .open_args
         .iter()
-        .map(|a| a.replace("{}", &worktree_path))
+        .map(|a| a.replace("{}", worktree_path))
         .collect();
 
     tokio::process::Command::new(&detected.detected_path)
@@ -917,6 +937,15 @@ pub async fn open_workspace_in_app(
     Ok(())
 }
 
+#[tauri::command]
+pub async fn open_workspace_in_app(
+    app_id: String,
+    worktree_path: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    open_workspace_in_app_inner(&app_id, &worktree_path, state.inner()).await
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -924,6 +953,16 @@ pub async fn open_workspace_in_app(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn detected_app(id: &str, name: &str, category: AppCategory) -> DetectedApp {
+        DetectedApp {
+            id: id.to_string(),
+            name: name.to_string(),
+            category,
+            detected_path: format!("/usr/bin/{id}"),
+            icon_data_url: None,
+        }
+    }
 
     #[test]
     fn parse_valid_config() {
@@ -1001,6 +1040,57 @@ mod tests {
         }"#;
         let config: AppsConfig = serde_json::from_str(json).unwrap();
         assert_eq!(config.apps[0].category, AppCategory::FileManager);
+    }
+
+    #[test]
+    fn select_workspace_terminal_prefers_detected_override() {
+        let apps = vec![
+            detected_app("vscode", "VS Code", AppCategory::Editor),
+            detected_app("terminal", "Terminal", AppCategory::Terminal),
+            detected_app("ghostty", "Ghostty", AppCategory::Terminal),
+        ];
+
+        assert_eq!(
+            select_workspace_terminal_app_id(&apps, Some("ghostty")).as_deref(),
+            Some("ghostty")
+        );
+    }
+
+    #[test]
+    fn select_workspace_terminal_ignores_non_terminal_override() {
+        let apps = vec![
+            detected_app("vscode", "VS Code", AppCategory::Editor),
+            detected_app("terminal", "Terminal", AppCategory::Terminal),
+        ];
+
+        assert_eq!(
+            select_workspace_terminal_app_id(&apps, Some("vscode")).as_deref(),
+            Some("terminal")
+        );
+    }
+
+    #[test]
+    fn select_workspace_terminal_uses_first_detected_for_auto() {
+        let apps = vec![
+            detected_app("vscode", "VS Code", AppCategory::Editor),
+            detected_app("iterm2", "iTerm2", AppCategory::Terminal),
+            detected_app("ghostty", "Ghostty", AppCategory::Terminal),
+        ];
+
+        assert_eq!(
+            select_workspace_terminal_app_id(&apps, None).as_deref(),
+            Some("iterm2")
+        );
+    }
+
+    #[test]
+    fn select_workspace_terminal_returns_none_without_terminals() {
+        let apps = vec![detected_app("vscode", "VS Code", AppCategory::Editor)];
+
+        assert_eq!(
+            select_workspace_terminal_app_id(&apps, Some("ghostty")),
+            None
+        );
     }
 
     #[test]

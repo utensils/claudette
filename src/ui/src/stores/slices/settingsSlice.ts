@@ -9,6 +9,8 @@ export type ToolDisplayMode = "grouped" | "inline";
 export interface SettingsSlice {
   worktreeBaseDir: string;
   setWorktreeBaseDir: (dir: string) => void;
+  defaultTerminalAppId: string | null;
+  setDefaultTerminalAppId: (appId: string | null) => void;
   defaultBranches: Record<string, string>;
   setDefaultBranches: (branches: Record<string, string>) => void;
   terminalFontSize: number;
@@ -95,6 +97,8 @@ export const createSettingsSlice: StateCreator<
 > = (set) => ({
   worktreeBaseDir: "",
   setWorktreeBaseDir: (dir) => set({ worktreeBaseDir: dir }),
+  defaultTerminalAppId: null,
+  setDefaultTerminalAppId: (appId) => set({ defaultTerminalAppId: appId }),
   defaultBranches: {},
   setDefaultBranches: (branches) => set({ defaultBranches: branches }),
   terminalFontSize: 11,
