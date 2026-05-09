@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { ChevronDown, ChevronUp, Pencil, SquareArrowOutUpRight } from "lucide-react";
 import { relativizePath } from "../../hooks/toolSummary";
 import { HighlightedPlainText } from "./HighlightedPlainText";
@@ -22,15 +22,25 @@ export function InlineEditSummary({
 }) {
   const file = summary.files[0];
   if (!file) return null;
+  // Single-file is the common case (one Edit / Write call). Multi-file
+  // happens when a tool (e.g. apply_patch / `diff --git` blob) touches
+  // several files in one shot — render an "Editing N files" label so
+  // the +/- totals match the surface, instead of misattributing the
+  // aggregate churn to just `files[0]`.
+  const isMulti = summary.files.length > 1;
   return (
     <span className={styles.inlineEditSummary}>
       <Pencil size={12} aria-hidden="true" className={styles.inlineEditIcon} />
       <span className={styles.inlineEditVerb}>Editing</span>
       <span className={styles.inlineEditPath}>
-        <HighlightedPlainText
-          text={relativizePath(file.filePath, worktreePath)}
-          query={searchQuery}
-        />
+        {isMulti ? (
+          `${summary.files.length} files`
+        ) : (
+          <HighlightedPlainText
+            text={relativizePath(file.filePath, worktreePath)}
+            query={searchQuery}
+          />
+        )}
       </span>
       <ChangeStats added={summary.added} removed={summary.removed} />
     </span>
@@ -48,20 +58,35 @@ export function TurnEditSummaryCard({
   searchQuery: string;
   worktreePath?: string | null;
   onLoadPreview?: (filePath: string) => Promise<EditPreviewLine[]>;
-  /** Open the file's diff in the workspace's diff panel (Monaco).
-   *  Wired from `MessagesWithTurns` to `openDiffTab(workspaceId, ...)`.
-   *  Undefined hides the popout button (e.g. when the workspace is
-   *  unknown or the file isn't in the worktree diff). */
+  /** Open the file in the Monaco editor tab. Wired from
+   *  `MessagesWithTurns` to `openFileTab(workspaceId, ...)` — same
+   *  action the FILES tree uses, not the diff viewer. Undefined
+   *  hides the popout button (e.g. when no workspace context is
+   *  available). */
   onOpenFile?: (filePath: string) => void;
 }) {
   const [expandedFile, setExpandedFile] = useState<string | null>(null);
   const [previewByFile, setPreviewByFile] = useState<Record<string, PreviewState>>({});
+  // In-flight tracker so rapid clicks before state commits can't fan
+  // out duplicate `onLoadPreview` calls. A ref (not state) so the
+  // check is synchronous — React Strict-Mode-safe and not re-run by
+  // a state-updater double-invoke.
+  const inFlightRef = useRef<Set<string>>(new Set());
 
   const toggleFile = (file: EditFileStat) => {
     setExpandedFile((current) => (current === file.filePath ? null : file.filePath));
-    if (file.previewLines.length > 0 || !onLoadPreview || previewByFile[file.filePath]) {
+    if (file.previewLines.length > 0 || !onLoadPreview) return;
+    // Skip ONLY for `loading`/`ready`. An `error` entry must still
+    // permit a retry on the next click — the previous gate
+    // (`previewByFile[file.filePath]` truthy) permanently locked an
+    // error out, so a transient backend failure was unrecoverable
+    // without a remount.
+    const existing = previewByFile[file.filePath];
+    if (existing && (existing.status === "loading" || existing.status === "ready")) {
       return;
     }
+    if (inFlightRef.current.has(file.filePath)) return;
+    inFlightRef.current.add(file.filePath);
     setPreviewByFile((current) => ({
       ...current,
       [file.filePath]: { status: "loading", lines: [] },
@@ -78,6 +103,9 @@ export function TurnEditSummaryCard({
           ...current,
           [file.filePath]: { status: "error", lines: [] },
         }));
+      })
+      .finally(() => {
+        inFlightRef.current.delete(file.filePath);
       });
   };
 
@@ -115,11 +143,12 @@ export function TurnEditSummaryCard({
                   </span>
                   <ChangeStats added={file.added} removed={file.removed} />
                 </button>
-                {/* Action cluster: popout (open diff in Monaco panel) +
-                 * chevron (expand inline preview). Kept as siblings of
-                 * the row button so the popout click doesn't toggle
-                 * expansion — distinct intents, distinct buttons.
-                 * Mirrors the Codex / GitHub PR file-row affordance. */}
+                {/* Action cluster: popout (open file in Monaco
+                 * editor) + chevron (expand inline preview). Kept as
+                 * siblings of the row button so the popout click
+                 * doesn't toggle expansion — distinct intents,
+                 * distinct buttons. Mirrors the Codex / GitHub PR
+                 * file-row affordance. */}
                 <div className={styles.turnEditFileActions}>
                   {onOpenFile && (
                     <button

@@ -70,8 +70,9 @@ export function TurnSummary({
    *  scoped to what THIS turn touched, not the cumulative worktree diff. */
   editSummaryFallback?: EditSummary | null;
   onLoadEditPreview?: (filePath: string) => Promise<EditPreviewLine[]>;
-  /** Open a file's diff in the workspace diff panel (Monaco). Wired
-   *  by `MessagesWithTurns` to `openDiffTab(workspaceId, filePath)`. */
+  /** Open a file in the Monaco editor tab. Wired by
+   *  `MessagesWithTurns` to `openFileTab(workspaceId, filePath)` —
+   *  same action the FILES tree uses, NOT the diff viewer. */
   onOpenEditFile?: (filePath: string) => void;
 }) {
   const visibleActivities = activities ?? turn.activities;

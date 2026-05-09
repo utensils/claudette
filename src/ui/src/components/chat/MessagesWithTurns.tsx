@@ -8,6 +8,7 @@ import type { ChatMessage, ChatAttachment } from "../../types/chat";
 import { roleClassKey, shouldRenderAsMarkdown } from "./messageRendering";
 import { HighlightedMessageMarkdown } from "./HighlightedMessageMarkdown";
 import { HighlightedPlainText } from "./HighlightedPlainText";
+import { relativizePath } from "../../hooks/toolSummary";
 import { ThinkingBlock } from "./ThinkingBlock";
 import { collapsedToolGroupKey } from "./collapsedToolGroupKey";
 import { CompactionDivider } from "./CompactionDivider";
@@ -451,12 +452,15 @@ export const MessagesWithTurns = memo(function MessagesWithTurns({
   // Activity-derived edits use absolute paths (the agent's full path
   // including the worktree prefix); the file-tab store keys by repo-
   // relative path, so strip the worktree prefix when present.
+  // `relativizePath` handles both `/` and `\` so this works on Windows
+  // worktrees too. If the result still looks absolute (POSIX `/...`
+  // or Windows `C:\...` / `C:/...`), the file isn't reachable via the
+  // current worktree — bail rather than passing a bad key into the
+  // file-tab store.
   const openFileInMonaco = useCallback(
     (filePath: string) => {
-      const rel =
-        worktreePath && filePath.startsWith(worktreePath + "/")
-          ? filePath.slice(worktreePath.length + 1)
-          : filePath;
+      const rel = relativizePath(filePath, worktreePath);
+      if (/^([a-zA-Z]:[\\/]|[\\/])/.test(rel)) return;
       openFileTab(workspaceId, rel);
     },
     [openFileTab, workspaceId, worktreePath],
