@@ -398,9 +398,8 @@ mod tests {
         // Re-execute the migration body. INSERT OR IGNORE is the
         // important guard — a user who already has a custom binding on
         // the new id keeps it; only orphaned legacy rows are migrated.
-        let migration_sql = include_str!(
-            "../migrations/20260509000540_rename_close_file_tab_keybinding.sql"
-        );
+        let migration_sql =
+            include_str!("../migrations/20260509000540_rename_close_file_tab_keybinding.sql");
         db.conn().execute_batch(migration_sql).unwrap();
 
         let new_value: Option<String> = db
@@ -438,9 +437,8 @@ mod tests {
                  ('keybinding:global.close-tab', 'new-value');",
             )
             .unwrap();
-        let migration_sql = include_str!(
-            "../migrations/20260509000540_rename_close_file_tab_keybinding.sql"
-        );
+        let migration_sql =
+            include_str!("../migrations/20260509000540_rename_close_file_tab_keybinding.sql");
         db.conn().execute_batch(migration_sql).unwrap();
 
         let new_value: String = db

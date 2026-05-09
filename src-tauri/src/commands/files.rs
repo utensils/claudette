@@ -173,7 +173,13 @@ async fn collect_workspace_file_entries(worktree_path: &str) -> Result<Vec<FileE
     // Pass 1: tracked + untracked-not-ignored. Annotate with git status.
     stream_ls_files(
         worktree_path,
-        &["ls-files", "--cached", "--others", "--exclude-standard", "-z"],
+        &[
+            "ls-files",
+            "--cached",
+            "--others",
+            "--exclude-standard",
+            "-z",
+        ],
         &mut |path| {
             if entries.len() >= MAX_FILES {
                 return StreamCallback::Stop;
