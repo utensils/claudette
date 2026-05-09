@@ -50,23 +50,22 @@ $env:PATH    = "$machinePath;$userPath"
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 Set-Location $repoRoot
 
-# 2) Port probing. PowerShell has no `lsof`; bind a TcpListener on
-#    127.0.0.1:<port> to test availability — succeeds iff nothing is
-#    listening on that port. Stop() releases the bind immediately so the
-#    real Vite/debug servers can claim the port a moment later.
+# 2) Port probing. PowerShell has no `lsof`; ask the IP global props for
+#    every TCP listener on the box and reject any port that already has
+#    one. This covers both IPv4 and IPv6 listeners — important because
+#    Vite binds on `::1` (IPv6 loopback) on Windows and a 127.0.0.1-only
+#    bind probe was happy to call the port "free" while Vite was about
+#    to fail with "Port 14253 is already in use". Using the property
+#    table also avoids the brief listener-bind race that the previous
+#    TcpListener::Start/Stop probe introduced.
 function Test-PortFree {
     param([int]$Port)
-    $listener = $null
-    try {
-        $listener = [System.Net.Sockets.TcpListener]::new(
-            [System.Net.IPAddress]::Loopback, $Port)
-        $listener.Start()
-        return $true
-    } catch {
-        return $false
-    } finally {
-        if ($listener) { $listener.Stop() }
+    $globalProps = [System.Net.NetworkInformation.IPGlobalProperties]::GetIPGlobalProperties()
+    $listeners = $globalProps.GetActiveTcpListeners()
+    foreach ($listener in $listeners) {
+        if ($listener.Port -eq $Port) { return $false }
     }
+    return $true
 }
 
 function Find-FreePort {
@@ -120,14 +119,10 @@ $destExe = Join-Path $destDir "claudette-$triple.exe"
 Copy-Item $srcExe $destExe -Force
 Write-Host "▸ Staged sidecar:   $destExe"
 
-# 4) bun install (cheap if up-to-date).
-Push-Location (Join-Path $repoRoot 'src\ui')
-try {
-    & bun install
-    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-} finally {
-    Pop-Location
-}
+# 4) `bun install` runs as part of the `beforeDevCommand` override
+#    below, so we don't need a separate pass here. Kept the original
+#    dev.sh's pre-install step out so a fresh checkout doesn't bun
+#    install twice every time.
 
 # 5) Discovery file — same shape as dev.sh's so /claudette-debug picks
 #    up Windows dev instances identically. Use $env:TEMP since
@@ -164,28 +159,65 @@ if (Test-Path -LiteralPath '{0}') {{
 $cleanupAction = [ScriptBlock]::Create($cleanupBody)
 Register-EngineEvent -SourceIdentifier PowerShell.Exiting -Action $cleanupAction | Out-Null
 
-# 6) Launch Tauri.
+# 6) Build frontend + run the Tauri binary in release mode.
+#
+# This deliberately diverges from dev.sh — Windows ARM64 has two
+# independent issues that block the standard "vite dev + cargo run"
+# flow that dev.sh uses on Linux/macOS:
+#
+#   (a) `cargo tauri dev` always merges the package's [features].default
+#       into the resulting `cargo run` invocation, even when -f is
+#       passed. tauri-cli 2.11.1 has no --no-default-features flag.
+#       That drags in `voice`, which pulls `candle-*` → `gemm-f16`,
+#       whose ARMv8.2 inline asm (`fmla v0.8h, ..., fmul v0.8h, ...`)
+#       requires `fullfp16` — a target feature not enabled by the
+#       default `aarch64-pc-windows-msvc` baseline. Debug profile hits
+#       the asm path and fails with `instruction requires: fullfp16`;
+#       release profile happens to optimize it away.
+#
+#   (b) The Tauri 2 + Windows ARM64 + debug-build webview path returns
+#       `WebView2 error HRESULT 0x80070057 ("The parameter is incorrect.")`
+#       at `CreateCoreWebView2Controller` — the binary stays alive but
+#       no msedgewebview2 children spawn, leaving an empty window.
+#       Reproducible with bare `cargo run -p claudette-tauri --no-default-features
+#       --features devtools,server,alternative-backends`, so it isn't
+#       caused by anything dev.ps1 sets. Release-built binaries on the
+#       same machine create the webview cleanly (verified via the
+#       smoke-tested `target/release/claudette-app.exe`).
+#
+# Workaround: skip `cargo tauri dev` AND skip Vite. Build the frontend
+# once with `bun run build` (so the embedded `frontendDist` from
+# tauri.conf.json is up-to-date) and run the Tauri binary in release
+# mode (`--release`). cfg(debug_assertions) is then off, so Tauri loads
+# from the embedded dist instead of devUrl — sidestepping the dev URL
+# webview-init bug. Cost: no frontend hot-reload (rerun `dev` after
+# editing `src/ui/`), and no `/claudette-debug` TCP eval server (it's
+# gated `#[cfg(debug_assertions)]`).
+#
+# Users who want true hot-reload + voice on Windows once these issues
+# are resolved upstream can set `$env:CLAUDETTE_DEV_USE_DEBUG = '1'`
+# and `$env:CARGO_TAURI_FEATURES` and re-enable the dev-URL/Vite path
+# in this script (currently elided).
 $features = if ($env:CARGO_TAURI_FEATURES) { $env:CARGO_TAURI_FEATURES }
-            else { 'devtools,server,voice,alternative-backends' }
-
-# Override `beforeDevCommand` to drop the `.sh` invocation that
-# tauri.conf.json ships for Unix devs. The remaining
-# `bun install && bun run dev` is portable: cmd /C parses && fine and
-# bun lives on PATH. We also pin `devUrl` to the probed port so the
-# webview connects to whatever Vite actually bound.
-$confOverride = @{
-    build = @{
-        devUrl            = "http://localhost:$vitePort"
-        beforeDevCommand  = @{
-            script = 'bun install && bun run dev'
-            cwd    = '../src/ui'
-        }
-    }
-} | ConvertTo-Json -Compress -Depth 5
+            else { 'devtools,server,alternative-backends' }
 
 Write-Host "▸ Features:         $features"
-Write-Host "▸ Launching cargo tauri dev"
+Write-Host "▸ Profile:          release  (debug profile's WebView2 init is broken on this target)"
+Write-Host "▸ Building frontend (cd src/ui; bun run build)"
+
+Push-Location (Join-Path $repoRoot 'src\ui')
+try {
+    & bun install
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    & bun run build
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+} finally {
+    Pop-Location
+}
+
+Write-Host "▸ Frontend built    -> src/ui/dist"
+Write-Host "▸ Launching claudette-app (release; first build is slow, incremental builds are fast)"
 Write-Host ""
 
-& cargo tauri dev --features $features -c $confOverride
+& cargo run -p claudette-tauri --release --no-default-features --features $features
 exit $LASTEXITCODE
