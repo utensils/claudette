@@ -356,6 +356,47 @@ impl PluginRegistry {
         self.disabled.read().unwrap().contains(plugin_name)
     }
 
+    /// Whether the plugin's `manifest.required_clis` were all on PATH at
+    /// registry discovery. Returns `true` for unknown plugin names so
+    /// this method isn't the place that reports "missing plugin"
+    /// errors — `call_operation` already does that with a clearer
+    /// `PluginNotFound` error.
+    ///
+    /// Used by the env-provider dispatcher to treat an env-provider
+    /// whose CLI is missing as "skip silently" rather than as a hard
+    /// error (issue #718). For SCM plugins the existing
+    /// `cli_available`-gated `CliNotFound` short-circuit in
+    /// `call_operation` still applies — only consumers that explicitly
+    /// query this method get the soft-skip behavior.
+    pub fn is_cli_available(&self, plugin_name: &str) -> bool {
+        self.plugins
+            .get(plugin_name)
+            .map(|p| p.cli_available)
+            .unwrap_or(true)
+    }
+
+    /// Whether the plugin's live manifest declares `required_clis`
+    /// that the user-approved `granted_capabilities` does not cover.
+    /// Returns `false` for unknown plugins, bundled plugins, and
+    /// pre-redesign user-installed plugins (`PluginTrust::Unknown`).
+    /// Non-zero only for community plugins whose post-install manifest
+    /// grew a CLI requirement that the user hasn't yet approved.
+    ///
+    /// Dispatchers that soft-skip on `is_cli_available` (env-provider)
+    /// must consult this *first*: a community plugin that needs
+    /// re-consent and is also missing its CLI should still surface the
+    /// re-consent prompt, not vanish silently as "not installed".
+    pub fn needs_reconsent(&self, plugin_name: &str) -> bool {
+        self.plugins
+            .get(plugin_name)
+            .map(|p| {
+                !p.trust
+                    .missing_capabilities(&p.manifest.required_clis)
+                    .is_empty()
+            })
+            .unwrap_or(false)
+    }
+
     /// Execute an operation on a plugin.
     ///
     /// Creates a fresh Lua VM, loads the plugin script, calls the specified

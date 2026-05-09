@@ -89,6 +89,13 @@ pub struct EnvSourceInfo {
     pub display_name: String,
     pub detected: bool,
     pub enabled: bool,
+    /// True when the plugin's required CLI (e.g. `nix`, `mise`,
+    /// `direnv`) is not on PATH. The dispatcher records this via the
+    /// "unavailable" error marker; we surface it as a dedicated flag
+    /// so the EnvPanel can render a distinct "not installed" badge
+    /// (with the toggle disabled) rather than the generic error
+    /// treatment. See issue #718.
+    pub unavailable: bool,
     pub vars_contributed: usize,
     pub cached: bool,
     /// Milliseconds since the Unix epoch. Frontend formats this
@@ -171,11 +178,20 @@ pub async fn get_env_sources(
                 .cloned()
                 .unwrap_or_else(|| s.plugin_name.clone());
             let enabled = !disabled.contains(&s.plugin_name);
+            // The dispatcher writes `error: Some("unavailable")` to
+            // signal "required CLI isn't on PATH". Promote that to a
+            // dedicated flag and clear the error string so the UI
+            // doesn't render it as a generic provider failure — and
+            // the EnvPanel can disable the toggle with a clear
+            // "Install <cli> to enable" hint instead. See issue #718.
+            let unavailable = s.error.as_deref() == Some("unavailable");
+            let error = if unavailable { None } else { s.error };
             EnvSourceInfo {
                 plugin_name: s.plugin_name,
                 display_name,
                 detected: s.detected,
                 enabled,
+                unavailable,
                 vars_contributed: s.vars_contributed,
                 cached: s.cached,
                 evaluated_at_ms: s
@@ -183,7 +199,7 @@ pub async fn get_env_sources(
                     .duration_since(std::time::UNIX_EPOCH)
                     .map(|d| d.as_millis())
                     .unwrap_or(0),
-                error: s.error,
+                error,
             }
         })
         .collect();
@@ -209,6 +225,11 @@ fn prepare_workspace_error(resolved: &claudette::env_provider::ResolvedEnv) -> O
         return Some(format!("Environment setup needed: {summaries}"));
     }
 
+    // "disabled" = user toggled it off (per-repo or globally).
+    // "unavailable" = required CLI not on PATH; bundled env-providers
+    // ship for everyone, so most users won't have all of nix/mise/
+    // direnv installed and that is not a user-actionable error
+    // (issue #718). Both are silent skips at the toast layer.
     let summaries = resolved
         .sources
         .iter()
@@ -216,7 +237,7 @@ fn prepare_workspace_error(resolved: &claudette::env_provider::ResolvedEnv) -> O
             source
                 .error
                 .as_deref()
-                .is_some_and(|error| error != "disabled")
+                .is_some_and(|error| error != "disabled" && error != "unavailable")
         })
         .map(source_error_summary)
         .collect::<Vec<_>>();
@@ -725,6 +746,40 @@ mod tests {
         source.error = Some("disabled".to_string());
         let resolved = ResolvedEnv {
             sources: vec![source],
+            ..Default::default()
+        };
+
+        assert_eq!(prepare_workspace_error(&resolved), None);
+    }
+
+    #[test]
+    fn prepare_workspace_error_ignores_unavailable_sources() {
+        // Regression for issue #718: an env-provider with a missing
+        // required CLI must not produce a workspace-switch toast.
+        let mut source = src("env-nix-devshell");
+        source.error = Some("unavailable".to_string());
+        let resolved = ResolvedEnv {
+            sources: vec![source],
+            ..Default::default()
+        };
+
+        assert_eq!(prepare_workspace_error(&resolved), None);
+    }
+
+    #[test]
+    fn prepare_workspace_error_ignores_mixed_disabled_and_unavailable() {
+        // The common case for a fresh Linux install without nix:
+        // env-direnv detected fine, env-mise was disabled per-repo,
+        // env-nix-devshell is unavailable. None should trigger a toast.
+        let mut direnv = src("env-direnv");
+        direnv.detected = true;
+        direnv.error = None;
+        let mut mise = src("env-mise");
+        mise.error = Some("disabled".to_string());
+        let mut nix = src("env-nix-devshell");
+        nix.error = Some("unavailable".to_string());
+        let resolved = ResolvedEnv {
+            sources: vec![direnv, mise, nix],
             ..Default::default()
         };
 

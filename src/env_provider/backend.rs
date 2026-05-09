@@ -39,6 +39,19 @@ pub trait EnvProviderBackend: Send + Sync {
         false
     }
 
+    /// True when the plugin's required CLI (e.g. `nix`, `mise`,
+    /// `direnv`) is not on PATH and so the plugin cannot run. Distinct
+    /// from `is_plugin_disabled` — the user did not turn this off; the
+    /// system simply doesn't have the tool. The dispatcher treats this
+    /// as a silent skip with `error: "unavailable"` rather than letting
+    /// the runtime's `CliNotFound` bubble up to a user-facing toast on
+    /// every workspace switch. See issue #718. Default `false` keeps
+    /// existing callers (including [`mock::MockBackend`] in non-`unavailable`
+    /// tests) on the prior behavior.
+    fn is_plugin_unavailable(&self, _plugin: &str) -> bool {
+        false
+    }
+
     /// Run the plugin's `detect` operation. Returns `true` if the
     /// plugin wants to contribute env for this worktree.
     fn detect(
@@ -81,6 +94,20 @@ impl EnvProviderBackend for PluginRegistryBackend<'_> {
 
     fn is_plugin_disabled(&self, plugin: &str) -> bool {
         self.registry.is_disabled(plugin)
+    }
+
+    fn is_plugin_unavailable(&self, plugin: &str) -> bool {
+        // Re-consent must always surface (#580): if the live manifest
+        // grew a CLI requirement the user hasn't approved, the
+        // dispatcher must NOT swallow that as a silent "not installed"
+        // skip — the user needs to see the prompt regardless of
+        // whether the new tool is on PATH yet. Falling through here
+        // lets `call_operation` return `NeedsReconsent` from the
+        // detect/export call, which `resolve_one` records as an error.
+        if self.registry.needs_reconsent(plugin) {
+            return false;
+        }
+        !self.registry.is_cli_available(plugin)
     }
 
     async fn detect(
@@ -187,6 +214,10 @@ pub(crate) mod mock {
         pub calls: Mutex<HashMap<String, (usize, usize)>>,
         /// Plugin names that should report as globally disabled.
         pub globally_disabled: std::collections::HashSet<String>,
+        /// Plugin names whose required CLI is not on PATH. Surfaced via
+        /// [`EnvProviderBackend::is_plugin_unavailable`]; the dispatcher
+        /// then short-circuits the same way it does for `disabled`.
+        pub unavailable: std::collections::HashSet<String>,
     }
 
     impl MockBackend {
@@ -197,11 +228,17 @@ pub(crate) mod mock {
                 export_results: HashMap::new(),
                 calls: Mutex::new(HashMap::new()),
                 globally_disabled: std::collections::HashSet::new(),
+                unavailable: std::collections::HashSet::new(),
             }
         }
 
         pub fn with_globally_disabled(mut self, name: &str) -> Self {
             self.globally_disabled.insert(name.to_string());
+            self
+        }
+
+        pub fn with_unavailable(mut self, name: &str) -> Self {
+            self.unavailable.insert(name.to_string());
             self
         }
 
@@ -243,6 +280,10 @@ pub(crate) mod mock {
 
         fn is_plugin_disabled(&self, plugin: &str) -> bool {
             self.globally_disabled.contains(plugin)
+        }
+
+        fn is_plugin_unavailable(&self, plugin: &str) -> bool {
+            self.unavailable.contains(plugin)
         }
 
         async fn detect(

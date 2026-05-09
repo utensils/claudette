@@ -302,6 +302,26 @@ pub async fn resolve_for_workspace(
             });
             continue;
         }
+        // "Unavailable" means the plugin's required CLI (e.g. `nix`,
+        // `mise`, `direnv`) is not on PATH. Bundled env-providers ship
+        // for every user — most won't have all three CLIs installed —
+        // so this is the canonical "doesn't apply, skip silently"
+        // signal, NOT a hard error. We treat it like `disabled`
+        // (drop cache, record reason, no toast) but use a distinct
+        // marker so the EnvPanel can render "not installed" instead
+        // of "disabled". See issue #718.
+        if backend.is_plugin_unavailable(&name) {
+            cache.invalidate(worktree, Some(&name));
+            sources.push(ResolvedSource {
+                plugin_name: name,
+                detected: false,
+                vars_contributed: 0,
+                cached: false,
+                evaluated_at: SystemTime::now(),
+                error: Some("unavailable".to_string()),
+            });
+            continue;
+        }
         let source = resolve_one(backend, cache, &name, worktree, ws_info, &mut merged).await;
         sources.push(source);
     }
@@ -1018,6 +1038,226 @@ mod tests {
         // Sanity: still valid UTF-8 (push to String would have panicked
         // if the cut landed mid-char).
         assert!(s.is_char_boundary(s.len()));
+    }
+
+    #[tokio::test]
+    async fn unavailable_provider_is_skipped_silently() {
+        // Regression for issue #718: an env-provider whose required CLI
+        // is not on PATH must skip with `error: "unavailable"` rather
+        // than letting `CliNotFound` bubble up as a noisy toast.
+        let tmp = tempfile::tempdir().unwrap();
+        let backend = MockBackend::new()
+            .with_plugin("env-nix-devshell")
+            .with_unavailable("env-nix-devshell")
+            // Even if detect were Ok(true), it must not run for an
+            // unavailable plugin — assert call counts below.
+            .detects("env-nix-devshell", true);
+        let cache = EnvCache::new();
+        let resolved = resolve_for_workspace(
+            &backend,
+            &cache,
+            tmp.path(),
+            &ws_info(),
+            &Default::default(),
+        )
+        .await;
+
+        let (detects, exports) = backend.call_counts("env-nix-devshell");
+        assert_eq!(detects, 0, "unavailable provider must not run detect");
+        assert_eq!(exports, 0, "unavailable provider must not run export");
+        assert_eq!(resolved.sources.len(), 1);
+        assert_eq!(resolved.sources[0].error.as_deref(), Some("unavailable"));
+        assert!(!resolved.sources[0].detected);
+    }
+
+    #[tokio::test]
+    async fn unavailable_provider_evicts_stale_cache() {
+        // If the user had the CLI installed last session and we cached
+        // an export, then uninstalled it, the next resolve must drop
+        // that cache entry instead of leaking stale env vars.
+        let tmp = tempfile::tempdir().unwrap();
+        let envrc = tmp.path().join(".envrc");
+        std::fs::write(&envrc, "x").unwrap();
+        let cache = EnvCache::new();
+        cache.put(
+            tmp.path(),
+            "env-direnv",
+            &export_of(&[("STALE", Some("yes"))], vec![envrc.clone()]),
+        );
+        assert!(cache.get_fresh(tmp.path(), "env-direnv").is_some());
+
+        let backend = MockBackend::new()
+            .with_plugin("env-direnv")
+            .with_unavailable("env-direnv");
+        let resolved = resolve_for_workspace(
+            &backend,
+            &cache,
+            tmp.path(),
+            &ws_info(),
+            &Default::default(),
+        )
+        .await;
+
+        assert!(resolved.vars.is_empty());
+        assert_eq!(resolved.sources[0].error.as_deref(), Some("unavailable"));
+        assert!(
+            cache.get_fresh(tmp.path(), "env-direnv").is_none(),
+            "unavailable must invalidate any cached export"
+        );
+    }
+
+    #[tokio::test]
+    async fn resolve_with_registry_treats_missing_cli_as_unavailable() {
+        // End-to-end through the real PluginRegistry: a manifest that
+        // requires a CLI which is guaranteed-not-on-PATH should resolve
+        // to `error: "unavailable"`, not `error: "detect: CLI tool ...
+        // is not installed"`. Without this, every workspace switch
+        // toasts for users without nix/mise/direnv installed.
+        let tmp = tempfile::tempdir().unwrap();
+        let plugin_dir = tempfile::tempdir().unwrap();
+        let pdir = plugin_dir.path().join("env-fakecli");
+        std::fs::create_dir_all(&pdir).unwrap();
+        // Generate a UUID-suffixed CLI name so the test stays
+        // deterministic even on (admittedly unlikely) machines where
+        // a binary with our hardcoded sentinel name happens to exist.
+        // No image we ship to / build on uses uuid-suffixed names, so
+        // collision is mathematically impossible here.
+        let fake_cli = format!("claudette-test-{}", uuid::Uuid::new_v4());
+        let manifest = serde_json::json!({
+            "name": "env-fakecli",
+            "display_name": "Fake CLI",
+            "version": "1.0.0",
+            "description": "test",
+            "kind": "env-provider",
+            "operations": ["detect", "export"],
+            "required_clis": [fake_cli],
+        });
+        std::fs::write(pdir.join("plugin.json"), manifest.to_string()).unwrap();
+        std::fs::write(
+            pdir.join("init.lua"),
+            r#"
+            local M = {}
+            function M.detect() return true end
+            function M.export() return { env = {}, watched = {} } end
+            return M
+            "#,
+        )
+        .unwrap();
+
+        let registry = crate::plugin_runtime::PluginRegistry::discover(plugin_dir.path());
+        // Sanity: the plugin loaded, but its CLI was not found.
+        assert!(registry.plugins.contains_key("env-fakecli"));
+        assert!(!registry.is_cli_available("env-fakecli"));
+
+        let cache = EnvCache::new();
+        let resolved = resolve_with_registry(
+            &registry,
+            &cache,
+            tmp.path(),
+            &ws_info(),
+            &Default::default(),
+        )
+        .await;
+
+        let source = resolved
+            .sources
+            .iter()
+            .find(|s| s.plugin_name == "env-fakecli")
+            .expect("plugin must appear in sources");
+        assert_eq!(source.error.as_deref(), Some("unavailable"));
+        assert!(!source.detected);
+    }
+
+    #[tokio::test]
+    async fn unavailable_does_not_swallow_pending_reconsent() {
+        // Codex peer review: a community env-provider whose live
+        // manifest grew an unapproved CLI requirement which is ALSO
+        // not on PATH must still surface re-consent, not silently
+        // disappear as "not installed". The dispatcher should fall
+        // through to call_operation, which returns NeedsReconsent and
+        // bubbles up as an error in the resolved source.
+        let tmp = tempfile::tempdir().unwrap();
+        let plugin_dir = tempfile::tempdir().unwrap();
+        let pdir = plugin_dir.path().join("env-community");
+        std::fs::create_dir_all(&pdir).unwrap();
+        // Discovery sees an empty required_clis (so cli_available =
+        // true) and a community .install_meta.json. We then mutate
+        // the manifest in-place to simulate post-install drift that
+        // grew a CLI requirement, mirroring the existing reconsent
+        // tests in plugin_runtime::mod.rs.
+        std::fs::write(
+            pdir.join("plugin.json"),
+            r#"{
+                "name": "env-community",
+                "display_name": "Community env",
+                "version": "1.0.0",
+                "description": "test",
+                "kind": "env-provider",
+                "operations": ["detect", "export"]
+            }"#,
+        )
+        .unwrap();
+        std::fs::write(
+            pdir.join("init.lua"),
+            r#"
+            local M = {}
+            function M.detect() return true end
+            function M.export() return { env = {}, watched = {} } end
+            return M
+            "#,
+        )
+        .unwrap();
+        let empty_grants: Vec<String> = Vec::new();
+        let meta = serde_json::json!({
+            "source": "community",
+            "kind": "plugin:env-provider",
+            "registry_sha": "0".repeat(40),
+            "contribution_sha": "1".repeat(40),
+            "sha256": "2".repeat(64),
+            "installed_at": "2026-05-02T00:00:00Z",
+            "granted_capabilities": empty_grants,
+            "version": "1.0.0",
+        });
+        std::fs::write(
+            pdir.join(".install_meta.json"),
+            serde_json::to_string_pretty(&meta).unwrap(),
+        )
+        .unwrap();
+
+        let mut registry = crate::plugin_runtime::PluginRegistry::discover(plugin_dir.path());
+        // Drift: manifest now requires a CLI the user never granted,
+        // and that same CLI is not on PATH. Without the reconsent
+        // guard this would resolve as "unavailable" and hide the
+        // capability-grant prompt entirely.
+        let plugin = registry.plugins.get_mut("env-community").unwrap();
+        plugin.manifest.required_clis = vec!["claudette-test-not-on-path".to_string()];
+        plugin.cli_available = false;
+
+        assert!(registry.needs_reconsent("env-community"));
+        assert!(!registry.is_cli_available("env-community"));
+
+        let cache = EnvCache::new();
+        let resolved = resolve_with_registry(
+            &registry,
+            &cache,
+            tmp.path(),
+            &ws_info(),
+            &Default::default(),
+        )
+        .await;
+        let source = resolved
+            .sources
+            .iter()
+            .find(|s| s.plugin_name == "env-community")
+            .expect("plugin must appear in sources");
+        // Must NOT be the silent "unavailable" skip — the runtime's
+        // re-consent error must propagate so the user sees it.
+        assert_ne!(source.error.as_deref(), Some("unavailable"));
+        let err = source.error.as_deref().expect("must surface an error");
+        assert!(
+            err.contains("re-consent") || err.contains("Reconsent") || err.contains("reconsent"),
+            "expected reconsent error, got: {err}"
+        );
     }
 
     #[tokio::test]
