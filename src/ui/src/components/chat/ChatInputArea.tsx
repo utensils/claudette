@@ -262,6 +262,7 @@ export function ChatInputArea({
   const [dragActive, setDragActive] = useState(false);
   const [attachMenuOpen, setAttachMenuOpen] = useState(false);
   const [contextPopoverOpen, setContextPopoverOpen] = useState(false);
+  const meterRef = useRef<HTMLButtonElement>(null);
   const pluginRefreshToken = useAppStore((s) => s.pluginRefreshToken);
   const openSettings = useAppStore((s) => s.openSettings);
 
@@ -1268,6 +1269,7 @@ export function ChatInputArea({
         </div>
         <div className={styles.inputControlsRight}>
           <SegmentedMeter
+            ref={meterRef}
             sessionId={sessionId}
             onClick={() => setContextPopoverOpen((v) => !v)}
           />
@@ -1391,6 +1393,7 @@ export function ChatInputArea({
               onClose={() => setContextPopoverOpen(false)}
               onCompact={() => { onSend("/compact"); }}
               onClear={() => { onSend("/clear"); }}
+              triggerRef={meterRef}
             />
           )}
         </div>
