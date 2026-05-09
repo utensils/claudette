@@ -21,9 +21,16 @@
 // deliberate.
 
 import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
+// Resolve from the test file's own URL — `__dirname` is undefined in
+// real ESM modules. Vitest currently shims it, but mirroring the
+// pattern used by `components/layout/headerAlignment.test.ts` keeps
+// this test portable to bare Node and isn't dependent on the shim.
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
 const UI_SRC = join(__dirname, "..", "..");
 
 function readCss(rel: string): string {

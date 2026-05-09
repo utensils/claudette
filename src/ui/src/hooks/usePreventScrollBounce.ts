@@ -1,6 +1,13 @@
 import { useEffect, type RefObject } from "react";
 
-function canScrollVertically(el: HTMLElement) {
+// The boundary-detection helpers below are exported so the test suite
+// (`usePreventScrollBounce.test.ts`) can pin their behavior directly.
+// They're pure (no DOM mutation, no side effects) and small enough that
+// testing them in isolation is faster + more readable than reaching
+// through the React hook lifecycle. The hook itself just composes these
+// with capture-phase document listeners.
+
+export function canScrollVertically(el: HTMLElement) {
   return el.scrollHeight > el.clientHeight + 1;
 }
 
@@ -9,7 +16,7 @@ function allowsVerticalScrolling(el: HTMLElement) {
   return overflowY === "auto" || overflowY === "scroll" || overflowY === "overlay";
 }
 
-function canScrollInDirection(el: HTMLElement, deltaY: number) {
+export function canScrollInDirection(el: HTMLElement, deltaY: number) {
   if (!canScrollVertically(el)) return false;
   if (deltaY < 0) return el.scrollTop > 0;
   if (deltaY > 0) {
@@ -18,7 +25,7 @@ function canScrollInDirection(el: HTMLElement, deltaY: number) {
   return false;
 }
 
-function nearestScrollableWithin(
+export function nearestScrollableWithin(
   target: EventTarget | null,
   boundary: HTMLElement,
 ) {
@@ -59,7 +66,7 @@ function shouldHandleEvent(
   return eventTarget instanceof Node && boundary.contains(eventTarget);
 }
 
-function boundaryScrollTarget(
+export function boundaryScrollTarget(
   eventTarget: EventTarget | null,
   boundary: HTMLElement,
   deltaY: number,

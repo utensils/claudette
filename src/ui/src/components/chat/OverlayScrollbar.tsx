@@ -70,11 +70,18 @@ export function OverlayScrollbar({ targetRef }: OverlayScrollbarProps) {
       return;
     }
     // Slider height proportional to viewport / content ratio, with a
-    // floor so a very long thread still shows a draggable handle.
+    // floor so a very long thread still shows a draggable handle. Clamp
+    // the result to `clientHeight` so the slider never exceeds the rail
+    // — at extremely small viewports (user resizes the chat panel below
+    // 24px) the floor would otherwise produce a thumb taller than the
+    // track and a negative `maxTop` that yields a negative `translateY`.
     const minHeight = 24;
     const rawHeight = (clientHeight / scrollHeight) * clientHeight;
-    const height = Math.max(minHeight, rawHeight);
-    const maxTop = clientHeight - height;
+    const height = Math.min(clientHeight, Math.max(minHeight, rawHeight));
+    // `Math.max(0, ...)` keeps the rail upper-bound sane in the same
+    // tiny-viewport edge case (where `clientHeight < minHeight` and
+    // height === clientHeight, so clientHeight - height is 0 anyway).
+    const maxTop = Math.max(0, clientHeight - height);
     // `scrollHeight - clientHeight > 0` is guaranteed by the `overflow`
     // gate above — the divide-by-zero branch never executes here.
     const scrollProgress = scrollTop / (scrollHeight - clientHeight);
