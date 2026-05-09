@@ -8,6 +8,8 @@ interface ToolbarPillProps {
   active?: boolean;
   disabled?: boolean;
   title?: string;
+  "data-tooltip"?: string;
+  "data-tooltip-placement"?: "top" | "bottom";
   chevron?: boolean;
   onClick?: () => void;
   ariaPressed?: boolean;
@@ -23,6 +25,8 @@ export function ToolbarPill({
   active,
   disabled,
   title,
+  "data-tooltip": dataTooltip,
+  "data-tooltip-placement": dataTooltipPlacement,
   chevron,
   onClick,
   ariaPressed,
@@ -37,7 +41,8 @@ export function ToolbarPill({
       className={`${styles.pill} ${active ? styles.pillActive : ""} ${className ?? ""}`}
       onClick={onClick}
       disabled={disabled}
-      title={title}
+      data-tooltip={dataTooltip ?? title}
+      data-tooltip-placement={dataTooltipPlacement}
       aria-pressed={ariaPressed}
       aria-expanded={ariaExpanded}
       aria-label={ariaLabel}

@@ -2,7 +2,7 @@
   display: inline-flex;
   border: 1px solid var(--divider);
   border-radius: 6px;
-  overflow: hidden;
+  overflow: visible;
   background: var(--surface-subtle, transparent);
 }
 

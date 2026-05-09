@@ -15,11 +15,10 @@ import {
   useAppStore,
 } from "../../stores/useAppStore";
 import {
-  formatBinding,
-  getEffectiveBindingById,
   resolveHotkeyAction,
 } from "../../hotkeys/bindings";
 import { isMacHotkeyPlatform } from "../../hotkeys/platform";
+import { tooltipWithHotkey } from "../../hotkeys/display";
 import { fileBufferKey } from "../../stores/slices/fileTreeSlice";
 import {
   loadDiffFiles,
@@ -378,13 +377,7 @@ function FileViewerInner({ workspaceId, path, t }: FileViewerInnerProps) {
     requestCloseFileTab();
   }, [closeFileTabNonce, requestCloseFileTab, workspaceId]);
 
-  const previewShortcutHint = formatBinding(
-    getEffectiveBindingById(
-      "file-viewer.toggle-markdown-preview",
-      keybindings,
-    ),
-    isMacHotkeyPlatform(),
-  );
+  const isMac = isMacHotkeyPlatform();
 
   // Resolution context for relative `<img>` references inside the rendered
   // markdown. Workspace-relative paths in a README — e.g. `./assets/logo.png`
@@ -441,12 +434,22 @@ function FileViewerInner({ workspaceId, path, t }: FileViewerInnerProps) {
                   {
                     value: "source",
                     icon: <Code size={14} aria-hidden="true" />,
-                    tooltip: `${t("file_tooltip_source")} (${previewShortcutHint})`,
+                    tooltip: tooltipWithHotkey(
+                      t("file_tooltip_source"),
+                      "file-viewer.toggle-markdown-preview",
+                      keybindings,
+                      isMac,
+                    ),
                   },
                   {
                     value: "preview",
                     icon: <BookOpen size={14} aria-hidden="true" />,
-                    tooltip: `${t("file_tooltip_markdown_preview")} (${previewShortcutHint})`,
+                    tooltip: tooltipWithHotkey(
+                      t("file_tooltip_markdown_preview"),
+                      "file-viewer.toggle-markdown-preview",
+                      keybindings,
+                      isMac,
+                    ),
                   },
                 ]}
               />

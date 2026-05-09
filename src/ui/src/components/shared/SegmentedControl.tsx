@@ -47,7 +47,8 @@ export function SegmentedControl<T extends string>({
             onClick={() => {
               if (!opt.disabled) onChange(opt.value);
             }}
-            title={label}
+            data-tooltip={label}
+            data-tooltip-placement="bottom"
             aria-label={label}
           >
             {opt.icon}

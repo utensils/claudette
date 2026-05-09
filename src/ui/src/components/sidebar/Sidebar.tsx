@@ -34,6 +34,8 @@ import { UpdateBanner } from "../layout/UpdateBanner";
 import { ContextMenu, type ContextMenuItem } from "../shared/ContextMenu";
 import { useTabDragReorder } from "../../hooks/useTabDragReorder";
 import { TabDragGhost } from "../shared/TabDragGhost";
+import { getHotkeyLabel, tooltipAttributes } from "../../hotkeys/display";
+import type { HotkeyActionId } from "../../hotkeys/actions";
 import {
   isManualWorkspaceOrder,
   orderRepoWorkspaces,
@@ -122,6 +124,7 @@ export const Sidebar = memo(function Sidebar() {
     (s) => s.clearManualWorkspaceOrder,
   );
   const metaKeyHeld = useAppStore((s) => s.metaKeyHeld);
+  const keybindings = useAppStore((s) => s.keybindings);
   const isMac = navigator.platform.startsWith("Mac");
   const { t } = useTranslation("sidebar");
 
@@ -1049,6 +1052,15 @@ export const Sidebar = memo(function Sidebar() {
           const runningCount = repoWorkspaces.filter(
             (ws) => isAgentBusy(ws.agent_status)
           ).length;
+          const jumpActionId = repoIdx < 9
+            ? (`global.jump-to-project-${repoIdx + 1}` as HotkeyActionId)
+            : null;
+          const jumpShortcut = jumpActionId
+            ? getHotkeyLabel(jumpActionId, keybindings, isMac)
+            : null;
+          const jumpTooltip = jumpShortcut
+            ? `Jump to project ${repoIdx + 1} (${jumpShortcut})`
+            : undefined;
 
           return (
             <div
@@ -1149,6 +1161,8 @@ export const Sidebar = memo(function Sidebar() {
               )}
               <div
                 className={styles.repoHeader}
+                data-tooltip={jumpTooltip}
+                data-tooltip-placement="bottom"
                 onClick={() => { if (!didDragRef.current) toggleRepoCollapsed(repo.id); }}
                 onContextMenu={(e) => {
                   e.preventDefault();
@@ -1226,9 +1240,12 @@ export const Sidebar = memo(function Sidebar() {
                     </button>
                   </>
                 )}
-                {repoIdx < 9 && (
-                  <kbd aria-hidden="true" className={`${styles.shortcutBadge} ${metaKeyHeld ? styles.shortcutBadgeVisible : ""}`}>
-                    {isMac ? "⌘" : "Ctrl+"}{repoIdx + 1}
+                {jumpShortcut && (
+                  <kbd
+                    aria-hidden="true"
+                    className={`${styles.shortcutBadge} ${metaKeyHeld ? styles.shortcutBadgeVisible : ""}`}
+                  >
+                    {jumpShortcut}
                   </kbd>
                 )}
               </div>
@@ -1282,7 +1299,8 @@ export const Sidebar = memo(function Sidebar() {
         <button
           className={styles.footerBtn}
           onClick={() => openSettings()}
-          title={t("settings")}
+          {...tooltipAttributes(t("settings"), "global.open-settings", keybindings, isMac)}
+          aria-label={t("settings")}
         >
           <Settings size={16} />
         </button>

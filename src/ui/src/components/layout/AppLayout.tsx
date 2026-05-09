@@ -16,6 +16,7 @@ import { ModalRouter } from "../modals/ModalRouter";
 import { SettingsPage } from "../settings/SettingsPage";
 import { ResizeHandle } from "./ResizeHandle";
 import { ToastContainer } from "./Toast";
+import { AppTooltip } from "../shared/AppTooltip";
 import { useAgentStream } from "../../hooks/useAgentStream";
 import { useKeyboardShortcuts } from "../../hooks/useKeyboardShortcuts";
 import { useBranchRefresh } from "../../hooks/useBranchRefresh";
@@ -196,6 +197,7 @@ export function AppLayout() {
       {fuzzyFinderOpen && <FuzzyFinder />}
       {commandPaletteOpen && <CommandPalette />}
       <ToastContainer />
+      <AppTooltip />
     </div>
   );
 }

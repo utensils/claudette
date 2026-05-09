@@ -36,6 +36,8 @@ import {
   eventToBinding,
   getEffectiveBindingById,
 } from "../../hotkeys/bindings";
+import { tooltipWithHotkey } from "../../hotkeys/display";
+import { isMacHotkeyPlatform } from "../../hotkeys/platform";
 import { ComposerToolbar } from "./composer/ComposerToolbar";
 import { ContextPopover } from "./composer/ContextPopover";
 import { SegmentedMeter } from "./composer/SegmentedMeter";
@@ -327,6 +329,18 @@ export function ChatInputArea({
     voice.activeProvider,
   );
   useVoiceHotkey(voice, voiceToggleHotkey, voiceHoldHotkey);
+  const isMac = isMacHotkeyPlatform();
+  const voiceButtonLabel = voice.state === "recording"
+    ? t("voice_stop")
+    : voice.state === "transcribing"
+      ? t("voice_discard")
+      : voice.state === "starting"
+        ? t("voice_cancel")
+        : t("voice_input");
+  const voiceButtonTooltip =
+    voice.state === "recording" || voice.state === "idle"
+      ? tooltipWithHotkey(voiceButtonLabel, "voice.toggle", keybindings, isMac)
+      : voiceButtonLabel;
 
   // VU meter dynamic-vs-static decision lives in the parent because it
   // depends on the OS reduced-motion preference and the active provider's
@@ -1370,24 +1384,8 @@ export function ChatInputArea({
               else void voice.start();
             }}
             disabled={isRunning}
-            title={
-              voice.state === "recording"
-                ? t("voice_stop")
-                : voice.state === "transcribing"
-                  ? t("voice_discard")
-                  : voice.state === "starting"
-                    ? t("voice_cancel")
-                    : t("voice_input")
-            }
-            aria-label={
-              voice.state === "recording"
-                ? t("voice_stop")
-                : voice.state === "transcribing"
-                  ? t("voice_discard")
-                  : voice.state === "starting"
-                    ? t("voice_cancel")
-                    : t("voice_input")
-            }
+            data-tooltip={voiceButtonTooltip}
+            aria-label={voiceButtonLabel}
           >
             {voice.state === "transcribing" ? (
               <X size={16} />
