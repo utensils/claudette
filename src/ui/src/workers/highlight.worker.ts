@@ -206,7 +206,14 @@ async function highlight(code: string, lang: string): Promise<string | null> {
     const codeEl = findCodeElement(root);
     if (!codeEl) return null;
     if (!codeEl.children.every(isStructurallySafe)) return null;
-    return toHtml({ type: "root", children: codeEl.children });
+    // Strip the trailing \n text node Shiki appends for its <pre> context — it
+    // renders as a phantom blank line inside our <code white-space:pre> cells.
+    const last = codeEl.children[codeEl.children.length - 1];
+    const children =
+      last?.type === "text" && /^\n+$/.test(last.value)
+        ? codeEl.children.slice(0, -1)
+        : codeEl.children;
+    return toHtml({ type: "root", children });
   } catch {
     return null;
   }
