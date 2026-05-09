@@ -498,13 +498,27 @@
   align-items: center;
   gap: 8px;
   padding: 8px 10px;
-  border-bottom: 1px solid var(--divider);
+  width: 100%;
+  background: none;
+  border: none;
+  border-bottom: 1px solid transparent;
   color: var(--text-primary);
   font-size: 13px;
   font-weight: 500;
+  text-align: left;
+  cursor: pointer;
+}
+
+.turnEditSummaryHeader[aria-expanded="true"] {
+  border-bottom-color: var(--divider);
+}
+
+.turnEditSummaryHeader:hover {
+  background: var(--bg-hover);
 }
 
 .turnEditSummaryTitle {
+  flex: 1;
   min-width: 0;
 }
 
@@ -599,7 +613,9 @@
 }
 
 .turnEditDiffPreview {
-  overflow: hidden;
+  overflow-x: hidden;
+  overflow-y: auto;
+  max-height: 320px;
   border-top: 1px solid var(--divider);
   background: var(--chat-bg);
   font-family: var(--font-mono);
@@ -769,7 +785,7 @@
 @keyframes editDiffReveal {
   from {
     opacity: 0;
-    transform: translateY(-3px);
+    transform: translateY(3px);
   }
   to {
     opacity: 1;
