@@ -17,6 +17,14 @@
       "open_args": ["{}"]
     },
     {
+      "id": "sublime",
+      "name": "Sublime Text",
+      "category": "editor",
+      "bin_names": ["subl"],
+      "mac_app_names": ["Sublime Text.app"],
+      "open_args": ["{}"]
+    },
+    {
       "id": "zed",
       "name": "Zed",
       "category": "editor",
@@ -25,11 +33,40 @@
       "open_args": ["{}"]
     },
     {
-      "id": "sublime",
-      "name": "Sublime Text",
-      "category": "editor",
-      "bin_names": ["subl"],
-      "mac_app_names": ["Sublime Text.app"],
+      "id": "finder",
+      "name": "Finder",
+      "category": "file_manager",
+      "mac_app_names": ["Finder.app"],
+      "open_args": ["__open__"]
+    },
+    {
+      "id": "macos-terminal",
+      "name": "Terminal",
+      "category": "terminal",
+      "mac_app_names": ["__always__"],
+      "open_args": ["__applescript__"]
+    },
+    {
+      "id": "iterm2",
+      "name": "iTerm2",
+      "category": "terminal",
+      "mac_app_names": ["iTerm.app"],
+      "open_args": ["__applescript__"]
+    },
+    {
+      "id": "ghostty",
+      "name": "Ghostty",
+      "category": "terminal",
+      "bin_names": ["ghostty"],
+      "mac_app_names": ["Ghostty.app"],
+      "open_args": ["--working-directory={}"]
+    },
+    {
+      "id": "warp",
+      "name": "Warp",
+      "category": "terminal",
+      "bin_names": ["warp"],
+      "mac_app_names": ["Warp.app"],
       "open_args": ["{}"]
     },
     {
@@ -81,34 +118,12 @@
       "open_args": ["--directory", "{}"]
     },
     {
-      "id": "ghostty",
-      "name": "Ghostty",
-      "category": "terminal",
-      "bin_names": ["ghostty"],
-      "mac_app_names": ["Ghostty.app"],
-      "open_args": ["--working-directory={}"]
-    },
-    {
       "id": "wezterm",
       "name": "WezTerm",
       "category": "terminal",
       "bin_names": ["wezterm"],
       "mac_app_names": ["WezTerm.app"],
       "open_args": ["start", "--cwd", "{}"]
-    },
-    {
-      "id": "iterm2",
-      "name": "iTerm2",
-      "category": "terminal",
-      "mac_app_names": ["iTerm.app"],
-      "open_args": ["__applescript__"]
-    },
-    {
-      "id": "macos-terminal",
-      "name": "Terminal",
-      "category": "terminal",
-      "mac_app_names": ["__always__"],
-      "open_args": ["__applescript__"]
     },
     {
       "id": "gnome-terminal",

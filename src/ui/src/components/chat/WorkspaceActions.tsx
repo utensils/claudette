@@ -1,78 +1,220 @@
-import { useMemo } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
+import { useTranslation } from "react-i18next";
+import {
+  ChevronDown,
+  Code2,
+  Copy,
+  FolderOpen,
+  MonitorCog,
+  SquareMenu,
+  Terminal,
+} from "lucide-react";
 import { useAppStore } from "../../stores/useAppStore";
 import { openWorkspaceInApp } from "../../services/tauri";
-import { HeaderMenu } from "./HeaderMenu";
+import type { AppCategory, DetectedApp } from "../../types/apps";
+import styles from "./WorkspaceActions.module.css";
 
 interface WorkspaceActionsProps {
   worktreePath: string | null;
   disabled?: boolean;
 }
 
-const CATEGORY_LABELS: Record<string, string> = {
-  editor: "Editors",
-  terminal: "Terminals",
-  ide: "IDEs",
-};
+const CATEGORY_ORDER: AppCategory[] = [
+  "editor",
+  "file_manager",
+  "terminal",
+  "ide",
+];
 
-const CATEGORY_ORDER = ["editor", "terminal", "ide"] as const;
+function preferredPrimaryApp(apps: DetectedApp[]): DetectedApp | null {
+  for (const category of CATEGORY_ORDER) {
+    const app = apps.find((candidate) => candidate.category === category);
+    if (app) return app;
+  }
+  return null;
+}
+
+function categoryIcon(category: AppCategory) {
+  switch (category) {
+    case "editor":
+      return Code2;
+    case "file_manager":
+      return FolderOpen;
+    case "terminal":
+      return Terminal;
+    case "ide":
+      return MonitorCog;
+  }
+}
+
+function AppIcon({ app }: { app: DetectedApp }) {
+  if (app.icon_data_url) {
+    return (
+      <img
+        className={styles.appIconImage}
+        src={app.icon_data_url}
+        alt=""
+        aria-hidden="true"
+      />
+    );
+  }
+
+  const Icon = categoryIcon(app.category);
+  return (
+    <span
+      className={`${styles.appIconFallback} ${styles[`appIcon_${app.category}`]}`}
+      aria-hidden="true"
+    >
+      <Icon size={14} strokeWidth={2.2} />
+    </span>
+  );
+}
 
 export function WorkspaceActions({
   worktreePath,
   disabled = false,
 }: WorkspaceActionsProps) {
+  const { t } = useTranslation("chat");
   const detectedApps = useAppStore((s) => s.detectedApps);
+  const addToast = useAppStore((s) => s.addToast);
+  const [open, setOpen] = useState(false);
+  const [busyAction, setBusyAction] = useState<string | null>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
 
-  const items = useMemo(() => {
-    const menuItems: { value: string; label: string; group?: string }[] = [];
+  const apps = useMemo(
+    () =>
+      CATEGORY_ORDER.flatMap((category) =>
+        detectedApps.filter((app) => app.category === category),
+      ),
+    [detectedApps],
+  );
+  const primaryApp = useMemo(() => preferredPrimaryApp(apps), [apps]);
+  const unavailable = disabled || !worktreePath;
 
-    for (const category of CATEGORY_ORDER) {
-      const apps = detectedApps.filter((a) => a.category === category);
-      const groupLabel = CATEGORY_LABELS[category];
-      for (const app of apps) {
-        menuItems.push({
-          value: `open:${app.id}`,
-          label: `Open in ${app.name}`,
-          group: groupLabel,
-        });
+  useEffect(() => {
+    if (!open) return;
+    const handlePointerDown = (event: MouseEvent) => {
+      if (!containerRef.current?.contains(event.target as Node)) {
+        setOpen(false);
       }
-    }
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.stopPropagation();
+        setOpen(false);
+      }
+    };
+    window.addEventListener("mousedown", handlePointerDown, true);
+    window.addEventListener("keydown", handleKeyDown, true);
+    return () => {
+      window.removeEventListener("mousedown", handlePointerDown, true);
+      window.removeEventListener("keydown", handleKeyDown, true);
+    };
+  }, [open]);
 
-    menuItems.push({
-      value: "copy-path",
-      label: "Copy Path",
-      group: "Other",
-    });
+  useEffect(() => {
+    if (unavailable) setOpen(false);
+  }, [unavailable]);
 
-    return menuItems;
-  }, [detectedApps]);
+  const openApp = useCallback(
+    async (app: DetectedApp) => {
+      if (!worktreePath) return;
+      setBusyAction(app.id);
+      try {
+        await openWorkspaceInApp(app.id, worktreePath);
+        setOpen(false);
+      } catch (err) {
+        console.error(`Failed to open workspace in ${app.name}:`, err);
+        addToast(t("workspace_actions_open_failed", { app: app.name }));
+      } finally {
+        setBusyAction(null);
+      }
+    },
+    [addToast, t, worktreePath],
+  );
 
-  const handleSelect = async (action: string) => {
+  const copyPath = useCallback(async () => {
     if (!worktreePath) return;
-
-    if (action.startsWith("open:")) {
-      const appId = action.slice(5);
-      try {
-        await openWorkspaceInApp(appId, worktreePath);
-      } catch (err) {
-        console.error(`Failed to open in app ${appId}:`, err);
-      }
-    } else if (action === "copy-path") {
-      try {
-        await writeText(worktreePath);
-      } catch (err) {
-        console.error("Failed to copy path:", err);
-      }
+    setBusyAction("copy-path");
+    try {
+      await writeText(worktreePath);
+      addToast(t("workspace_actions_copied_path"));
+      setOpen(false);
+    } catch (err) {
+      console.error("Failed to copy workspace path:", err);
+      addToast(t("workspace_actions_copy_failed"));
+    } finally {
+      setBusyAction(null);
     }
-  };
+  }, [addToast, t, worktreePath]);
+
+  const primaryTitle = primaryApp
+    ? t("workspace_actions_open_in", { app: primaryApp.name })
+    : t("workspace_actions_no_apps");
+  const menuDisabled = unavailable;
 
   return (
-    <HeaderMenu
-      label="Actions"
-      items={items}
-      disabled={disabled || !worktreePath}
-      title="Workspace actions"
-      onSelect={handleSelect}
-    />
+    <div className={styles.container} ref={containerRef}>
+      <div className={styles.splitButton}>
+        <button
+          className={styles.primaryButton}
+          type="button"
+          disabled={unavailable || !primaryApp || busyAction !== null}
+          title={primaryTitle}
+          aria-label={primaryTitle}
+          onClick={() => {
+            if (primaryApp) void openApp(primaryApp);
+          }}
+        >
+          {primaryApp ? <AppIcon app={primaryApp} /> : <SquareMenu size={14} />}
+        </button>
+        <button
+          className={styles.menuButton}
+          type="button"
+          disabled={menuDisabled || busyAction !== null}
+          title={t("workspace_actions_menu")}
+          aria-label={t("workspace_actions_menu")}
+          aria-haspopup="menu"
+          aria-expanded={open}
+          onClick={() => setOpen((value) => !value)}
+        >
+          <ChevronDown size={13} />
+        </button>
+      </div>
+      {open && (
+        <div className={styles.menu} role="menu">
+          {apps.map((app) => (
+            <button
+              className={styles.menuItem}
+              type="button"
+              role="menuitem"
+              key={app.id}
+              disabled={busyAction !== null}
+              onClick={() => void openApp(app)}
+            >
+              <AppIcon app={app} />
+              <span className={styles.menuItemLabel}>{app.name}</span>
+            </button>
+          ))}
+          <div className={styles.utilityGroup}>
+            <button
+              className={styles.menuItem}
+              type="button"
+              role="menuitem"
+              disabled={busyAction !== null || !worktreePath}
+              onClick={() => void copyPath()}
+            >
+              <span className={styles.utilityIcon} aria-hidden="true">
+                <Copy size={14} strokeWidth={2.2} />
+              </span>
+              <span className={styles.menuItemLabel}>
+                {t("workspace_actions_copy_path")}
+              </span>
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
   );
 }

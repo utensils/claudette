@@ -1,5 +1,6 @@
 use std::path::{Path, PathBuf};
 
+use base64::{Engine as _, engine::general_purpose};
 use serde::{Deserialize, Serialize};
 use tauri::State;
 
@@ -9,9 +10,10 @@ use claudette::process::CommandWindowExt as _;
 const DEFAULT_APPS_JSON: &str = include_str!("../../default-apps.json");
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
+#[serde(rename_all = "snake_case")]
 pub enum AppCategory {
     Editor,
+    FileManager,
     Terminal,
     Ide,
 }
@@ -46,6 +48,9 @@ pub struct DetectedApp {
     pub category: AppCategory,
     /// The resolved binary path or .app bundle path.
     pub detected_path: String,
+    /// A platform-resolved application icon as a browser-renderable data URL.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub icon_data_url: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -167,8 +172,355 @@ fn find_mac_app(app_name: &str) -> Option<PathBuf> {
         // Sentinel: always detected on macOS (e.g. Terminal.app).
         return Some(PathBuf::from("/System/Applications/Utilities/Terminal.app"));
     }
-    let path = PathBuf::from("/Applications").join(app_name);
-    if path.exists() { Some(path) } else { None }
+    let roots = [
+        PathBuf::from("/Applications"),
+        PathBuf::from("/Applications/Utilities"),
+        PathBuf::from("/System/Applications"),
+        PathBuf::from("/System/Applications/Utilities"),
+        PathBuf::from("/System/Library/CoreServices"),
+    ];
+
+    if let Some(path) = roots
+        .iter()
+        .map(|root| root.join(app_name))
+        .find(|path| path.exists())
+    {
+        return Some(path);
+    }
+
+    dirs::home_dir()
+        .map(|home| home.join("Applications").join(app_name))
+        .filter(|path| path.exists())
+}
+
+fn data_url_from_bytes(media_type: &str, bytes: &[u8]) -> String {
+    format!(
+        "data:{media_type};base64,{}",
+        general_purpose::STANDARD.encode(bytes)
+    )
+}
+
+fn image_data_url_from_file(path: &Path) -> Option<String> {
+    let ext = path
+        .extension()
+        .and_then(|value| value.to_str())
+        .map(str::to_ascii_lowercase)?;
+    let media_type = match ext.as_str() {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "svg" => "image/svg+xml",
+        "webp" => "image/webp",
+        _ => return None,
+    };
+    let bytes = std::fs::read(path).ok()?;
+    Some(data_url_from_bytes(media_type, &bytes))
+}
+
+#[cfg(target_os = "macos")]
+fn mac_icon_from_app_bundle(app_path: &Path) -> Option<String> {
+    let info_plist = app_path.join("Contents/Info.plist");
+    let output = std::process::Command::new("/usr/libexec/PlistBuddy")
+        .args(["-c", "Print :CFBundleIconFile"])
+        .arg(&info_plist)
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+
+    let icon_name = String::from_utf8(output.stdout).ok()?;
+    let icon_name = icon_name.trim();
+    if icon_name.is_empty() {
+        return None;
+    }
+
+    let icon_filename = if Path::new(icon_name).extension().is_some() {
+        icon_name.to_owned()
+    } else {
+        format!("{icon_name}.icns")
+    };
+    let icon_path = app_path.join("Contents/Resources").join(icon_filename);
+    if !icon_path.exists() {
+        return None;
+    }
+
+    let out_dir = std::env::temp_dir().join(format!(
+        "claudette-app-icon-{}-{}",
+        std::process::id(),
+        uuid::Uuid::new_v4()
+    ));
+    std::fs::create_dir_all(&out_dir).ok()?;
+    let out_file = out_dir.join("icon.png");
+
+    let output = std::process::Command::new("sips")
+        .args(["-s", "format", "png"])
+        .arg(&icon_path)
+        .arg("--out")
+        .arg(&out_file)
+        .output()
+        .ok();
+
+    let icon = output
+        .filter(|output| output.status.success())
+        .and_then(|_| image_data_url_from_file(&out_file));
+
+    let _ = std::fs::remove_dir_all(&out_dir);
+    icon
+}
+
+#[cfg(target_os = "macos")]
+fn app_icon_data_url(entry: &AppEntry, detected_path: &Path) -> Option<String> {
+    entry
+        .mac_app_names
+        .iter()
+        .find_map(|name| find_mac_app(name))
+        .or_else(|| {
+            detected_path
+                .ends_with(".app")
+                .then(|| detected_path.to_path_buf())
+        })
+        .and_then(|app_path| mac_icon_from_app_bundle(&app_path))
+}
+
+#[cfg(target_os = "linux")]
+fn desktop_file_dirs() -> Vec<PathBuf> {
+    let mut dirs = vec![
+        PathBuf::from("/usr/share/applications"),
+        PathBuf::from("/usr/local/share/applications"),
+        PathBuf::from("/var/lib/flatpak/exports/share/applications"),
+    ];
+
+    if let Some(home) = dirs::home_dir() {
+        dirs.push(home.join(".local/share/applications"));
+        dirs.push(home.join(".local/share/flatpak/exports/share/applications"));
+    }
+
+    dirs
+}
+
+#[cfg(target_os = "linux")]
+fn parse_desktop_value(contents: &str, key: &str) -> Option<String> {
+    let prefix = format!("{key}=");
+    contents
+        .lines()
+        .find_map(|line| line.strip_prefix(&prefix))
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+#[cfg(target_os = "linux")]
+fn normalized_match_text(value: &str) -> String {
+    value
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect()
+}
+
+#[cfg(target_os = "linux")]
+fn desktop_file_matches(
+    entry: &AppEntry,
+    detected_path: &Path,
+    file_stem: &str,
+    contents: &str,
+) -> bool {
+    let exec = parse_desktop_value(contents, "Exec").unwrap_or_default();
+    let name = parse_desktop_value(contents, "Name").unwrap_or_default();
+    let detected_name = detected_path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default();
+
+    let mut needles = vec![entry.id.as_str(), entry.name.as_str(), detected_name];
+    needles.extend(entry.bin_names.iter().map(String::as_str));
+
+    let desktop_key = normalized_match_text(file_stem);
+    let name_key = normalized_match_text(&name);
+    let exec_key = normalized_match_text(&exec);
+
+    needles.iter().any(|needle| {
+        let key = normalized_match_text(needle);
+        !key.is_empty()
+            && (desktop_key.contains(&key) || name_key.contains(&key) || exec_key.contains(&key))
+    })
+}
+
+#[cfg(target_os = "linux")]
+fn find_linux_desktop_icon_name(entry: &AppEntry, detected_path: &Path) -> Option<String> {
+    for dir in desktop_file_dirs() {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            continue;
+        };
+        for entry_path in entries.filter_map(Result::ok).map(|entry| entry.path()) {
+            if !entry_path
+                .extension()
+                .and_then(|ext| ext.to_str())
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("desktop"))
+            {
+                continue;
+            }
+            let Ok(contents) = std::fs::read_to_string(&entry_path) else {
+                continue;
+            };
+            let file_stem = entry_path
+                .file_stem()
+                .and_then(|value| value.to_str())
+                .unwrap_or_default();
+            if desktop_file_matches(entry, detected_path, file_stem, &contents) {
+                if let Some(icon) = parse_desktop_value(&contents, "Icon") {
+                    return Some(icon);
+                }
+            }
+        }
+    }
+    None
+}
+
+#[cfg(target_os = "linux")]
+fn linux_icon_roots() -> Vec<PathBuf> {
+    let mut roots = vec![
+        PathBuf::from("/usr/share/pixmaps"),
+        PathBuf::from("/usr/share/icons"),
+        PathBuf::from("/usr/local/share/icons"),
+    ];
+    if let Some(home) = dirs::home_dir() {
+        roots.push(home.join(".local/share/icons"));
+        roots.push(home.join(".icons"));
+    }
+    roots
+}
+
+#[cfg(target_os = "linux")]
+fn icon_candidate_score(path: &Path) -> u8 {
+    let text = path.to_string_lossy();
+    if text.contains("/64x64/") {
+        0
+    } else if text.contains("/128x128/") {
+        1
+    } else if text.contains("/256x256/") {
+        2
+    } else if text.contains("/scalable/") {
+        3
+    } else if text.ends_with(".png") {
+        4
+    } else {
+        5
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn find_icon_file_recursive(root: &Path, icon_name: &str, max_depth: usize) -> Option<PathBuf> {
+    let mut stack = vec![(root.to_path_buf(), 0usize)];
+    let mut best: Option<PathBuf> = None;
+    let mut visited = 0usize;
+
+    while let Some((dir, depth)) = stack.pop() {
+        visited += 1;
+        if visited > 12_000 {
+            break;
+        }
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            continue;
+        };
+        for path in entries.filter_map(Result::ok).map(|entry| entry.path()) {
+            if path.is_dir() {
+                if depth < max_depth {
+                    stack.push((path, depth + 1));
+                }
+                continue;
+            }
+
+            let Some(stem) = path.file_stem().and_then(|value| value.to_str()) else {
+                continue;
+            };
+            if stem != icon_name {
+                continue;
+            }
+            if image_data_url_from_file(&path).is_none() {
+                continue;
+            }
+
+            let replace = best
+                .as_ref()
+                .is_none_or(|current| icon_candidate_score(&path) < icon_candidate_score(current));
+            if replace {
+                best = Some(path);
+            }
+        }
+    }
+
+    best
+}
+
+#[cfg(target_os = "linux")]
+fn linux_icon_file_from_name(icon_name: &str) -> Option<PathBuf> {
+    let icon_path = PathBuf::from(icon_name);
+    if icon_path.is_absolute() && icon_path.exists() {
+        return Some(icon_path);
+    }
+
+    let direct_names =
+        ["png", "svg", "jpg", "jpeg", "webp"].map(|ext| format!("{icon_name}.{ext}"));
+    for root in linux_icon_roots() {
+        for direct_name in &direct_names {
+            let direct = root.join(direct_name);
+            if direct.exists() {
+                return Some(direct);
+            }
+        }
+        if let Some(path) = find_icon_file_recursive(&root, icon_name, 6) {
+            return Some(path);
+        }
+    }
+
+    None
+}
+
+#[cfg(target_os = "linux")]
+fn app_icon_data_url(entry: &AppEntry, detected_path: &Path) -> Option<String> {
+    find_linux_desktop_icon_name(entry, detected_path)
+        .and_then(|name| linux_icon_file_from_name(&name))
+        .and_then(|path| image_data_url_from_file(&path))
+}
+
+#[cfg(target_os = "windows")]
+fn app_icon_data_url(_entry: &AppEntry, detected_path: &Path) -> Option<String> {
+    let script = r#"
+Add-Type -AssemblyName System.Drawing
+$icon = [System.Drawing.Icon]::ExtractAssociatedIcon($args[0])
+if ($null -eq $icon) { exit 2 }
+$bitmap = $icon.ToBitmap()
+$stream = New-Object System.IO.MemoryStream
+$bitmap.Save($stream, [System.Drawing.Imaging.ImageFormat]::Png)
+[Convert]::ToBase64String($stream.ToArray())
+"#;
+
+    let output = std::process::Command::new("powershell.exe")
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+        ])
+        .arg(script)
+        .arg(detected_path)
+        .output()
+        .ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    let encoded = String::from_utf8(output.stdout).ok()?;
+    let encoded = encoded.trim();
+    (!encoded.is_empty()).then(|| format!("data:image/png;base64,{encoded}"))
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+fn app_icon_data_url(_entry: &AppEntry, _detected_path: &Path) -> Option<String> {
+    None
 }
 
 /// Detect installed apps from the given config, searching the provided PATH dirs.
@@ -177,26 +529,32 @@ fn detect_with_paths(config: &AppsConfig, path_dirs: &[PathBuf]) -> Vec<Detected
     let category_order = |c: &AppCategory| -> u8 {
         match c {
             AppCategory::Editor => 0,
-            AppCategory::Terminal => 1,
-            AppCategory::Ide => 2,
+            AppCategory::FileManager => 1,
+            AppCategory::Terminal => 2,
+            AppCategory::Ide => 3,
         }
     };
 
-    let mut detected: Vec<DetectedApp> = Vec::new();
+    let mut detected: Vec<(usize, DetectedApp)> = Vec::new();
 
-    for entry in &config.apps {
+    for (index, entry) in config.apps.iter().enumerate() {
         // Try bin_names first.
         if let Some(bin_path) = entry
             .bin_names
             .iter()
             .find_map(|name| find_binary(name, path_dirs))
         {
-            detected.push(DetectedApp {
-                id: entry.id.clone(),
-                name: entry.name.clone(),
-                category: entry.category,
-                detected_path: bin_path.to_string_lossy().to_string(),
-            });
+            let icon_data_url = app_icon_data_url(entry, &bin_path);
+            detected.push((
+                index,
+                DetectedApp {
+                    id: entry.id.clone(),
+                    name: entry.name.clone(),
+                    category: entry.category,
+                    detected_path: bin_path.to_string_lossy().to_string(),
+                    icon_data_url,
+                },
+            ));
             continue;
         }
 
@@ -207,23 +565,28 @@ fn detect_with_paths(config: &AppsConfig, path_dirs: &[PathBuf]) -> Vec<Detected
             .iter()
             .find_map(|name| find_mac_app(name))
         {
-            detected.push(DetectedApp {
-                id: entry.id.clone(),
-                name: entry.name.clone(),
-                category: entry.category,
-                detected_path: app_path.to_string_lossy().to_string(),
-            });
+            let icon_data_url = app_icon_data_url(entry, &app_path);
+            detected.push((
+                index,
+                DetectedApp {
+                    id: entry.id.clone(),
+                    name: entry.name.clone(),
+                    category: entry.category,
+                    detected_path: app_path.to_string_lossy().to_string(),
+                    icon_data_url,
+                },
+            ));
             continue;
         }
     }
 
     detected.sort_by(|a, b| {
-        category_order(&a.category)
-            .cmp(&category_order(&b.category))
-            .then_with(|| a.name.cmp(&b.name))
+        category_order(&a.1.category)
+            .cmp(&category_order(&b.1.category))
+            .then_with(|| a.0.cmp(&b.0))
     });
 
-    detected
+    detected.into_iter().map(|(_, app)| app).collect()
 }
 
 /// Public detection entry point using the real system PATH.
@@ -495,6 +858,16 @@ pub async fn open_workspace_in_app(
         return open_applescript(&app_id, &worktree_path).await;
     }
 
+    #[cfg(target_os = "macos")]
+    if entry.open_args.first().is_some_and(|a| a == "__open__") {
+        tokio::process::Command::new("open")
+            .no_console_window()
+            .arg(&worktree_path)
+            .spawn()
+            .map_err(|e| format!("Failed to open workspace: {e}"))?;
+        return Ok(());
+    }
+
     // Handle __open_a__ sentinel (Xcode) — look up detected_path to get the .app bundle.
     #[cfg(target_os = "macos")]
     if entry.open_args.first().is_some_and(|a| a == "__open_a__") {
@@ -617,6 +990,20 @@ mod tests {
     }
 
     #[test]
+    fn parse_file_manager_category() {
+        let json = r#"{
+            "apps": [{
+                "id": "finder",
+                "name": "Finder",
+                "category": "file_manager",
+                "open_args": ["__open__"]
+            }]
+        }"#;
+        let config: AppsConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(config.apps[0].category, AppCategory::FileManager);
+    }
+
+    #[test]
     fn parse_embedded_default_config() {
         let config: AppsConfig =
             serde_json::from_str(DEFAULT_APPS_JSON).expect("default-apps.json must parse");
@@ -727,10 +1114,9 @@ mod tests {
     }
 
     #[test]
-    fn detect_sorted_by_category_then_name() {
+    fn detect_sorted_by_category_then_config_order() {
         let tmp = tempfile::tempdir().unwrap();
-        // Create two executables
-        for name in ["zterm", "aeditor"] {
+        for name in ["zterm", "beditor", "aeditor"] {
             let bin = tmp.path().join(name);
             std::fs::write(&bin, "#!/bin/sh\n").unwrap();
             #[cfg(unix)]
@@ -752,6 +1138,15 @@ mod tests {
                     needs_terminal: false,
                 },
                 AppEntry {
+                    id: "beditor".into(),
+                    name: "B Editor".into(),
+                    category: AppCategory::Editor,
+                    bin_names: vec!["beditor".into()],
+                    mac_app_names: vec![],
+                    open_args: vec!["{}".into()],
+                    needs_terminal: false,
+                },
+                AppEntry {
                     id: "aeditor".into(),
                     name: "A Editor".into(),
                     category: AppCategory::Editor,
@@ -764,9 +1159,13 @@ mod tests {
         };
 
         let detected = detect_with_paths(&config, &[tmp.path().to_path_buf()]);
-        assert_eq!(detected.len(), 2);
-        // Editors come before Terminals (category order: editor, terminal, ide)
-        assert_eq!(detected[0].id, "aeditor");
-        assert_eq!(detected[1].id, "zterm");
+        assert_eq!(detected.len(), 3);
+        assert_eq!(
+            detected
+                .iter()
+                .map(|app| app.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["beditor", "aeditor", "zterm"],
+        );
     }
 }
