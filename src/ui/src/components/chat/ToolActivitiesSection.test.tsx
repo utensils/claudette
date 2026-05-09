@@ -496,7 +496,7 @@ describe("ToolActivitiesSection", () => {
         assistantText=""
         searchQuery=""
         worktreePath="/repo"
-        editSummaryOverride={{
+        editSummaryFallback={{
           added: 9,
           removed: 2,
           files: [
@@ -535,6 +535,67 @@ describe("ToolActivitiesSection", () => {
 
     expect(row.getAttribute("aria-expanded")).toBe("true");
     expect(container.textContent).toContain("const next = true;");
+  });
+
+  it("prefers turn-scoped activity edits over the workspace-diff fallback", async () => {
+    // Regression for the bug fixed alongside `editSummaryFallback`:
+    // before this, the workspace-diff override always won, so the
+    // latest turn's card listed *every* file with worktree changes
+    // even if the turn itself only touched a subset. The activity
+    // parser is the source of truth for "files THIS turn touched";
+    // the workspace diff is just a rescue when no edit tools matched.
+    const editActivity = activity("Edit", {
+      inputJson: JSON.stringify({
+        file_path: "/repo/src/app.ts",
+        old_string: "old",
+        new_string: "new",
+      }),
+    });
+
+    const container = await render(
+      <TurnSummary
+        turn={{
+          id: "turn-1",
+          activities: [editActivity],
+          messageCount: 1,
+          collapsed: false,
+          afterMessageIndex: 1,
+        }}
+        collapsed={false}
+        onToggle={() => {}}
+        assistantText=""
+        searchQuery=""
+        worktreePath="/repo"
+        editSummaryFallback={{
+          added: 99,
+          removed: 99,
+          files: [
+            {
+              filePath: "/repo/src/app.ts",
+              added: 50,
+              removed: 50,
+              previewLines: [],
+            },
+            {
+              filePath: "/repo/src/other.ts",
+              added: 49,
+              removed: 49,
+              previewLines: [],
+            },
+          ],
+        }}
+      />,
+    );
+
+    // Turn-scoped: 1 file (the Edit's file_path), +1 -1 (one new line,
+    // one old line). The fallback's 2-file / +99 -99 view must NOT win.
+    expect(container.textContent).toContain("1 file changed");
+    expect(container.textContent).toContain("src/app.ts");
+    expect(container.textContent).not.toContain("other.ts");
+    expect(container.textContent).toContain("+1");
+    expect(container.textContent).toContain("-1");
+    expect(container.textContent).not.toContain("+99");
+    expect(container.textContent).not.toContain("-99");
   });
 });
 

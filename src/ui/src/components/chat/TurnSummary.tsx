@@ -38,7 +38,7 @@ export function TurnSummary({
   worktreePath,
   label,
   inline = false,
-  editSummaryOverride,
+  editSummaryFallback,
   onLoadEditPreview,
 }: {
   turn: CompletedTurn;
@@ -62,7 +62,12 @@ export function TurnSummary({
   worktreePath?: string | null;
   label?: string;
   inline?: boolean;
-  editSummaryOverride?: EditSummary | null;
+  /** Rescue summary used only when activity-derived edits return null —
+   *  typically the workspace-diff summary for the latest turn, where the
+   *  agent's tools couldn't be parsed (Bash heredoc, MCP write tool, etc.).
+   *  Activity-derived data wins when present so per-turn churn stays
+   *  scoped to what THIS turn touched, not the cumulative worktree diff. */
+  editSummaryFallback?: EditSummary | null;
   onLoadEditPreview?: (filePath: string) => Promise<EditPreviewLine[]>;
 }) {
   const visibleActivities = activities ?? turn.activities;
@@ -79,7 +84,7 @@ export function TurnSummary({
     [showFooter, turn.activities],
   );
   const editSummary = showFooter
-    ? editSummaryOverride ?? activityEditSummary
+    ? activityEditSummary ?? editSummaryFallback ?? null
     : null;
 
   // Force-expand if the query matches in any activity summary or the

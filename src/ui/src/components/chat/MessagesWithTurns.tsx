@@ -562,6 +562,13 @@ export const MessagesWithTurns = memo(function MessagesWithTurns({
       <>
         {groupEntries.map(({ turn, globalIdx, activities, label, showFooter }) => {
           const isLatestCompletedTurn = turn.id === latestCompletedTurnId;
+          // The card prefers per-turn activity-derived edits ("files
+          // THIS turn touched"). Workspace-diff summary is offered as a
+          // rescue only on the latest turn — `TurnSummary` uses it only
+          // when the activity parser couldn't recognize any edits
+          // (Bash heredoc, MCP write tool, etc.). Older turns get no
+          // rescue: their workspace-diff entry would include later
+          // turns' churn, which would mislead.
           const fallbackEditSummary =
             showFooter && isLatestCompletedTurn ? workspaceDiffSummary : null;
           // A single turn can produce multiple display groups when
@@ -624,20 +631,24 @@ export const MessagesWithTurns = memo(function MessagesWithTurns({
               onRollback={showFooter ? buildOnRollback(turn.id) : undefined}
               searchQuery={searchQuery}
               worktreePath={worktreePath}
-              editSummaryOverride={fallbackEditSummary}
+              editSummaryFallback={fallbackEditSummary}
               onLoadEditPreview={
-                fallbackEditSummary ? loadWorkspaceDiffPreview : undefined
+                showFooter && isLatestCompletedTurn
+                  ? loadWorkspaceDiffPreview
+                  : undefined
               }
             />
           );
         })}
         {footerEntries.map(({ turn }) => {
           const isLatestCompletedTurn = turn.id === latestCompletedTurnId;
-          const workspaceSummary = isLatestCompletedTurn
-            ? workspaceDiffSummary
-            : null;
+          // Same precedence as the group-entries path above: turn-scoped
+          // activity edits win; workspace diff only rescues the latest
+          // turn when activities can't be parsed into edit churn.
+          const turnActivitySummary = editSummaryByTurnId.get(turn.id) ?? null;
           const editSummary =
-            workspaceSummary ?? editSummaryByTurnId.get(turn.id) ?? null;
+            turnActivitySummary ??
+            (isLatestCompletedTurn ? workspaceDiffSummary : null);
           return (
             <React.Fragment key={`${turn.id}:${position}:footer`}>
               {editSummary && (
@@ -646,7 +657,7 @@ export const MessagesWithTurns = memo(function MessagesWithTurns({
                   searchQuery={searchQuery}
                   worktreePath={worktreePath}
                   onLoadPreview={
-                    workspaceSummary ? loadWorkspaceDiffPreview : undefined
+                    isLatestCompletedTurn ? loadWorkspaceDiffPreview : undefined
                   }
                 />
               )}
