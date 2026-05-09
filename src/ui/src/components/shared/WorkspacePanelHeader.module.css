@@ -20,6 +20,8 @@
   min-width: 0;
   user-select: none;
   -webkit-user-select: none;
+  -webkit-app-region: drag;
+  app-region: drag;
 }
 
 .headerRight {
