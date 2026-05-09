@@ -18,7 +18,27 @@
 #   VITE_PORT_BASE         start port for Vite probe (default 14253)
 #   CLAUDETTE_DEBUG_PORT_BASE   start port for debug probe (default 19432)
 #   CARGO_TAURI_FEATURES   features to pass to tauri (default devtools,server,voice,alternative-backends)
+#
+# Flags:
+#   --clean                Run as a fresh user — points CLAUDETTE_HOME and
+#                          CLAUDETTE_DATA_DIR at a per-PID tmp tree so the
+#                          launch sees no existing repos, workspaces, or
+#                          settings. Useful for testing first-run UX (the
+#                          welcome empty state, onboarding) without nuking
+#                          the real ~/.claudette/ tree.
 set -euo pipefail
+
+clean_session=0
+passthrough_args=()
+while (( $# )); do
+  case "$1" in
+    --clean) clean_session=1 ;;
+    --) shift; passthrough_args+=("$@"); break ;;
+    *) passthrough_args+=("$1") ;;
+  esac
+  shift
+done
+set -- "${passthrough_args[@]+"${passthrough_args[@]}"}"
 
 repo_root="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$repo_root"
@@ -106,7 +126,25 @@ with open(out, "w") as f:
     }, f)
 ' "$discovery_file" "$$" "$debug_port" "$vite_port" "$started" "$cwd" "$branch"
 
-cleanup() { rm -f "$discovery_file"; }
+if (( clean_session )); then
+  # Per-PID sandbox so a parallel `dev --clean` doesn't reuse this session's
+  # state. The cleanup trap removes both directories on exit, but they're
+  # under TMPDIR anyway so a forgotten kill -9 won't leak forever.
+  clean_root="$discovery_dir/clean-$$"
+  export CLAUDETTE_HOME="$clean_root/home"
+  export CLAUDETTE_DATA_DIR="$clean_root/data"
+  mkdir -p "$CLAUDETTE_HOME" "$CLAUDETTE_DATA_DIR"
+  echo "▸ Clean session:    $clean_root"
+  echo "▸ CLAUDETTE_HOME:   $CLAUDETTE_HOME"
+  echo "▸ CLAUDETTE_DATA_DIR: $CLAUDETTE_DATA_DIR"
+fi
+
+cleanup() {
+  rm -f "$discovery_file"
+  if (( clean_session )) && [[ -n "${clean_root:-}" && -d "$clean_root" ]]; then
+    rm -rf "$clean_root"
+  fi
+}
 trap cleanup EXIT INT TERM
 
 echo "▸ Branch:           $branch"

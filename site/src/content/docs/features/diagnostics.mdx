@@ -109,6 +109,21 @@ If you'd rather isolate them, set `CLAUDETTE_LOG_DIR` to a per-instance path bef
 
 On startup, Claudette also scans `${TMPDIR}/claudette-dev/*.json` (the discovery files `scripts/dev.sh` writes) and emits a `WARN` if another live PID is already running against the same DB path. The warning fires once at boot and explains exactly why it can corrupt persisted state — useful when an old instance lingers and you didn't notice.
 
+## Sandboxed (fresh-user) sessions
+
+For testing first-run UX (the welcome card, onboarding, plugin seeding) you can launch Claudette with a completely empty data tree:
+
+```bash
+./scripts/dev.sh --clean
+```
+
+The flag points two env vars at a per-PID directory under `${TMPDIR}/claudette-dev/clean-<pid>/` and removes the tree on exit:
+
+- **`CLAUDETTE_HOME`** overrides the `~/.claudette/` tree (workspaces, plugins, themes, logs, models, packs).
+- **`CLAUDETTE_DATA_DIR`** overrides the OS data directory holding `claudette.db`.
+
+You can also set either env var manually for a longer-lived sandbox — e.g. `CLAUDETTE_HOME=/tmp/claudette-demo CLAUDETTE_DATA_DIR=/tmp/claudette-demo/data ./scripts/dev.sh` keeps the sandbox across restarts.
+
 ## Filing a bug report
 
 1. Reproduce the issue.

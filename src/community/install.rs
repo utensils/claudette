@@ -129,12 +129,11 @@ pub struct InstallRoots {
 }
 
 impl InstallRoots {
-    /// Resolve the standard install roots (`~/.claudette/plugins/` and
-    /// `~/.claudette/themes/`). Returns `None` if `dirs::home_dir()`
-    /// fails (extremely rare; only on broken systems).
+    /// Resolve the standard install roots (`<claudette_home>/plugins/` and
+    /// `<claudette_home>/themes/`). The base honors `$CLAUDETTE_HOME` so
+    /// fresh-user dev sessions install into the sandbox, not the real tree.
     pub fn from_home() -> Option<Self> {
-        let home = dirs::home_dir()?;
-        let base = home.join(".claudette");
+        let base = crate::path::claudette_home();
         Some(Self {
             plugins_dir: base.join("plugins"),
             themes_dir: base.join("themes"),

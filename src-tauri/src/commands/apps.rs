@@ -78,9 +78,10 @@ pub(crate) fn select_workspace_terminal_app_id(
 // Config loading
 // ---------------------------------------------------------------------------
 
-/// Resolve the path to the user's apps.json config file.
+/// Resolve the path to the user's apps.json config file. Honors
+/// `$CLAUDETTE_HOME` via [`claudette::path::claudette_home`].
 fn apps_config_path() -> Option<PathBuf> {
-    dirs::home_dir().map(|h| h.join(".claudette").join("apps.json"))
+    Some(claudette::path::claudette_home().join("apps.json"))
 }
 
 /// Load and parse apps.json from the given path.

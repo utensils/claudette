@@ -46,10 +46,7 @@ pub fn default_config_path() -> PathBuf {
 }
 
 pub fn db_path() -> PathBuf {
-    dirs::data_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("claudette")
-        .join("claudette.db")
+    claudette::path::data_dir().join("claudette.db")
 }
 
 /// Run the claudette-server with the given options. Blocks indefinitely,
@@ -89,10 +86,7 @@ pub async fn run(options: ServerOptions) -> Result<(), Box<dyn std::error::Error
     let _ = claudette::db::Database::open(&db_path);
 
     let worktree_base_dir = {
-        let default = dirs::home_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join(".claudette")
-            .join("workspaces");
+        let default = claudette::path::claudette_home().join("workspaces");
         if let Ok(db) = claudette::db::Database::open(&db_path) {
             db.get_app_setting("worktree_base_dir")
                 .ok()
@@ -110,10 +104,7 @@ pub async fn run(options: ServerOptions) -> Result<(), Box<dyn std::error::Error
     // this is a no-op; if the user is running headless, it makes the
     // standard providers (direnv / mise / dotenv / nix-devshell)
     // available without any manual setup.
-    let plugin_dir = dirs::home_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".claudette")
-        .join("plugins");
+    let plugin_dir = claudette::path::claudette_home().join("plugins");
     let _ = std::fs::create_dir_all(&plugin_dir);
     for warning in claudette::plugin_runtime::seed::seed_bundled_plugins(&plugin_dir) {
         tracing::warn!(target: "claudette::plugin", "{}", warning);
