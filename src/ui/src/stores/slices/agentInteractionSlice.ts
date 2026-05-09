@@ -36,6 +36,27 @@ export interface ChatSearchState {
   matchIndex: number;
 }
 
+export interface QueuedMessage {
+  id: string;
+  content: string;
+  mentionedFiles?: string[];
+  attachments?: AttachmentInput[];
+}
+
+let queuedMessageFallbackCounter = 0;
+
+function createQueuedMessageId(): string {
+  const crypto = globalThis.crypto;
+  if (crypto?.randomUUID) return crypto.randomUUID();
+  if (crypto?.getRandomValues) {
+    const values = new Uint32Array(4);
+    crypto.getRandomValues(values);
+    return `queued-${Array.from(values, (value) => value.toString(36)).join("-")}`;
+  }
+  queuedMessageFallbackCounter += 1;
+  return `queued-${Date.now()}-${queuedMessageFallbackCounter}`;
+}
+
 export interface AgentInteractionSlice {
   agentQuestions: Record<string, AgentQuestion>;
   setAgentQuestion: (q: AgentQuestion) => void;
@@ -51,20 +72,14 @@ export interface AgentInteractionSlice {
   setChatSearchQuery: (wsId: string, query: string) => void;
   setChatSearchMatchIndex: (wsId: string, idx: number) => void;
 
-  queuedMessages: Record<
-    string,
-    {
-      content: string;
-      mentionedFiles?: string[];
-      attachments?: AttachmentInput[];
-    }
-  >;
+  queuedMessages: Record<string, QueuedMessage[]>;
   setQueuedMessage: (
     sessionId: string,
     content: string,
     mentionedFiles?: string[],
     attachments?: AttachmentInput[],
   ) => void;
+  removeQueuedMessage: (sessionId: string, queuedMessageId: string) => void;
   clearQueuedMessage: (sessionId: string) => void;
 }
 
@@ -165,9 +180,28 @@ export const createAgentInteractionSlice: StateCreator<
     set((s) => ({
       queuedMessages: {
         ...s.queuedMessages,
-        [sessionId]: { content, mentionedFiles, attachments },
+        [sessionId]: [
+          ...(s.queuedMessages[sessionId] || []),
+          { id: createQueuedMessageId(), content, mentionedFiles, attachments },
+        ],
       },
     })),
+  removeQueuedMessage: (sessionId, queuedMessageId) =>
+    set((s) => {
+      const remaining = (s.queuedMessages[sessionId] || []).filter(
+        (message) => message.id !== queuedMessageId,
+      );
+      if (remaining.length === 0) {
+        const { [sessionId]: _, ...rest } = s.queuedMessages;
+        return { queuedMessages: rest };
+      }
+      return {
+        queuedMessages: {
+          ...s.queuedMessages,
+          [sessionId]: remaining,
+        },
+      };
+    }),
   clearQueuedMessage: (sessionId) =>
     set((s) => {
       const { [sessionId]: _, ...rest } = s.queuedMessages;

@@ -6,6 +6,7 @@ import {
   type AgentQuestionItem,
   type ChatSearchState,
   type PlanApproval,
+  type QueuedMessage,
 } from "./slices/agentInteractionSlice";
 import {
   createChatSessionsSlice,
@@ -79,6 +80,7 @@ export type {
   CompletedTurn,
   PermissionLevel,
   PlanApproval,
+  QueuedMessage,
   ToolActivity,
   TurnUsage,
 };

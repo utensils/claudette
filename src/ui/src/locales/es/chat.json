@@ -4,6 +4,8 @@
   "compacting_aria": "Compactando contexto, {{elapsed}} transcurridos",
   "processing_aria": "Procesando, {{elapsed}} transcurridos",
   "queued_label": "En cola",
+  "clear_queue": "Limpiar",
+  "queued_attachment_fallback": "Adjunto",
   "cancel_queued": "Cancelar mensaje en cola",
   "steer_queued": "Enviar al agente en ejecución",
   "steer_queued_short": "Dirigir",

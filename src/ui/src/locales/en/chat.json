@@ -4,6 +4,8 @@
   "compacting_aria": "Compacting context, {{elapsed}} elapsed",
   "processing_aria": "Processing, {{elapsed}} elapsed",
   "queued_label": "Queued",
+  "clear_queue": "Clear",
+  "queued_attachment_fallback": "Attachment",
   "cancel_queued": "Cancel queued message",
   "steer_queued": "Send to running agent",
   "steer_queued_short": "Steer",
