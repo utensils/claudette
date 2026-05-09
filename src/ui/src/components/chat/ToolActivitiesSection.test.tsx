@@ -2,7 +2,17 @@
 
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+// Stub the Shiki highlight worker so EditChangeSummary's highlightCode calls
+// don't crash with "Worker is not defined" in the happy-dom environment.
+vi.mock("../../workers/highlight.worker?worker", () => ({
+  default: class FakeWorker {
+    postMessage(): void {}
+    addEventListener(): void {}
+    terminate(): void {}
+  },
+}));
 
 import type { CompletedTurn, ToolActivity } from "../../stores/useAppStore";
 import { AgentToolCallGroup } from "./AgentToolCallGroup";
