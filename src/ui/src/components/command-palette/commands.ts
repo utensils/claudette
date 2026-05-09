@@ -26,6 +26,7 @@ import {
 import type { ThemeDefinition } from "../../types/theme";
 import { getHotkeyLabel } from "../../hotkeys/display";
 import type { KeybindingMap } from "../../hotkeys/bindings";
+import { isMacHotkeyPlatform } from "../../hotkeys/platform";
 import { MODELS } from "../chat/ModelSelector";
 import type { Model } from "../chat/modelRegistry";
 import { isFastSupported, isEffortSupported, isXhighEffortAllowed, isMaxEffortAllowed } from "../chat/modelCapabilities";
@@ -218,9 +219,7 @@ export function buildFileCommands(
 
 export function buildCommands(ctx: CommandContext): Command[] {
   const cmds: Command[] = [];
-  const isMac = ((navigator as unknown as Record<string, unknown>).userAgentData as { platform?: string } | undefined)
-    ?.platform?.toLowerCase().startsWith("mac")
-    ?? navigator.platform.startsWith("Mac");
+  const isMac = isMacHotkeyPlatform();
   const shortcut = (actionId: Parameters<typeof getHotkeyLabel>[0]) =>
     getHotkeyLabel(actionId, ctx.keybindings, isMac) ?? undefined;
 
