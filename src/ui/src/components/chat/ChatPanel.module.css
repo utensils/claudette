@@ -22,16 +22,35 @@
   flex: 1;
   overflow-y: auto;
   overscroll-behavior-y: none;
+  /* Reserve the scrollbar lane unconditionally so message growth that
+   * crosses the overflow threshold doesn't reflow the column under the
+   * cursor. Combined with the right-edge inset below this gives xterm /
+   * Monaco / chat the same visual gap from the panel's right wall. */
+  scrollbar-gutter: stable;
   margin-right: var(--scrollbar-edge-inset);
   padding: 20px 28px;
   display: flex;
   flex-direction: column;
   gap: 2px;
   contain: layout style;
+  /* Override the global `* { scrollbar-width: thin }` so WebKit honors the
+   * `::-webkit-scrollbar` width below. With `thin`, macOS WKWebView falls
+   * back to the OS overlay scrollbar — which renders at a fixed device
+   * pixel width and does NOT scale with browser zoom, so chat would drift
+   * out of sync with xterm's xterm.js slider and Monaco's custom slider as
+   * the user zooms in or out. `auto` lets our explicit pixel width win and
+   * scales uniformly with the rest of the UI. */
+  scrollbar-width: auto;
+  scrollbar-color: var(--scrollbar-thumb) transparent;
 }
 
 .messages::-webkit-scrollbar {
-  width: 12px;
+  width: var(--scrollbar-size);
+  height: var(--scrollbar-size);
+}
+
+.messages::-webkit-scrollbar-track {
+  background: transparent;
 }
 
 .messages::-webkit-scrollbar-thumb {
