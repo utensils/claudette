@@ -13,6 +13,7 @@ use claudette::names::NameGenerator;
 use claudette::ops::workspace::{self as ops_workspace, CreateParams, SetupResult};
 use claudette::process::CommandWindowExt as _;
 
+use crate::commands::apps::{self, DEFAULT_TERMINAL_APP_SETTING_KEY};
 use crate::ops_hooks::TauriHooks;
 use crate::state::AppState;
 
@@ -913,8 +914,36 @@ pub async fn import_worktrees(
 }
 
 #[tauri::command]
-pub async fn open_workspace_in_terminal(worktree_path: String) -> Result<(), String> {
+pub async fn open_workspace_in_terminal(
+    worktree_path: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
     tracing::info!(target: "claudette::workspace", worktree_path = %worktree_path, "opening terminal for workspace");
+
+    let default_terminal_app_id = Database::open(&state.db_path).ok().and_then(|db| {
+        db.get_app_setting(DEFAULT_TERMINAL_APP_SETTING_KEY)
+            .ok()
+            .flatten()
+    });
+    let detected_apps = state.detected_apps.read().await.clone();
+
+    if let Some(app_id) =
+        apps::select_workspace_terminal_app_id(&detected_apps, default_terminal_app_id.as_deref())
+    {
+        tracing::info!(
+            target: "claudette::workspace",
+            terminal_app_id = %app_id,
+            configured_terminal_app_id = ?default_terminal_app_id,
+            "opening workspace in detected terminal app"
+        );
+        return apps::open_workspace_in_app_inner(&app_id, &worktree_path, state.inner()).await;
+    }
+
+    tracing::warn!(
+        target: "claudette::workspace",
+        configured_terminal_app_id = ?default_terminal_app_id,
+        "no detected terminal app found; using platform fallback"
+    );
 
     #[cfg(target_os = "linux")]
     {

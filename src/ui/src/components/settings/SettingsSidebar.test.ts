@@ -57,4 +57,13 @@ describe("getAppSections", () => {
     expect(notificationsIdx).toBeLessThan(editorIdx);
     expect(editorIdx).toBeLessThan(gitIdx);
   });
+
+  it("does not show a standalone Workspace Apps section", () => {
+    expect(
+      getAppSections(false, false).map((section) => section.id),
+    ).not.toContain("workspace-apps");
+    expect(
+      getAppSections(true, true).map((section) => section.id),
+    ).not.toContain("workspace-apps");
+  });
 });
