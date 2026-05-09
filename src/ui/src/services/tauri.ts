@@ -250,6 +250,10 @@ export function runWorkspaceSetup(
   return invoke("run_workspace_setup", { workspaceId });
 }
 
+export function prepareWorkspaceEnvironment(workspaceId: string): Promise<void> {
+  return invoke("prepare_workspace_environment", { workspaceId });
+}
+
 export function archiveWorkspace(id: string, skipArchiveScript?: boolean): Promise<boolean> {
   return invoke("archive_workspace", { id, skipArchiveScript: skipArchiveScript ?? false });
 }

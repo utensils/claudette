@@ -2,14 +2,27 @@ import type { StateCreator } from "zustand";
 import type { Workspace } from "../../types";
 import type { AppState } from "../useAppStore";
 
+export type WorkspaceEnvironmentStatus = "idle" | "preparing" | "ready" | "error";
+
+export interface WorkspaceEnvironmentPreparation {
+  status: WorkspaceEnvironmentStatus;
+  error?: string;
+}
+
 export interface WorkspacesSlice {
   workspaces: Workspace[];
   selectedWorkspaceId: string | null;
+  workspaceEnvironment: Record<string, WorkspaceEnvironmentPreparation>;
   setWorkspaces: (workspaces: Workspace[]) => void;
   addWorkspace: (ws: Workspace) => void;
   updateWorkspace: (id: string, updates: Partial<Workspace>) => void;
   removeWorkspace: (id: string) => void;
   selectWorkspace: (id: string | null) => void;
+  setWorkspaceEnvironment: (
+    id: string,
+    status: WorkspaceEnvironmentStatus,
+    error?: string,
+  ) => void;
 }
 
 export const createWorkspacesSlice: StateCreator<
@@ -20,6 +33,7 @@ export const createWorkspacesSlice: StateCreator<
 > = (set) => ({
   workspaces: [],
   selectedWorkspaceId: null,
+  workspaceEnvironment: {},
   setWorkspaces: (workspaces) => set({ workspaces }),
   // Idempotent by id: workspace creates can race between the Tauri
   // command's response (Sidebar calls `addWorkspace` after the await
@@ -100,6 +114,8 @@ export const createWorkspacesSlice: StateCreator<
       // sessions→diffs→files layout instead of dredging up old entries.
       const newTabOrder = { ...s.tabOrderByWorkspace };
       delete newTabOrder[id];
+      const newWorkspaceEnvironment = { ...s.workspaceEnvironment };
+      delete newWorkspaceEnvironment[id];
       return {
         workspaces: s.workspaces.filter((w) => w.id !== id),
         selectedWorkspaceId:
@@ -115,6 +131,7 @@ export const createWorkspacesSlice: StateCreator<
         diffSelectionByWorkspace: newDiffSelection,
         chatDrafts: newChatDrafts,
         tabOrderByWorkspace: newTabOrder,
+        workspaceEnvironment: newWorkspaceEnvironment,
       };
     }),
   selectWorkspace: (id) =>
@@ -171,6 +188,17 @@ export const createWorkspacesSlice: StateCreator<
         // SHA leaks across the boundary.
         diffMergeBase: null,
       };
+      if (id) {
+        const incoming = s.workspaces.find((w) => w.id === id);
+        if (incoming) {
+          updates.workspaceEnvironment = {
+            ...s.workspaceEnvironment,
+            [id]: {
+              status: incoming.remote_connection_id ? "ready" : "preparing",
+            },
+          };
+        }
+      }
       if (id && s.unreadCompletions.has(id)) {
         const next = new Set(s.unreadCompletions);
         next.delete(id);
@@ -178,4 +206,11 @@ export const createWorkspacesSlice: StateCreator<
       }
       return updates;
     }),
+  setWorkspaceEnvironment: (id, status, error) =>
+    set((s) => ({
+      workspaceEnvironment: {
+        ...s.workspaceEnvironment,
+        [id]: error ? { status, error } : { status },
+      },
+    })),
 });

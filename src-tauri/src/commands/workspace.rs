@@ -11,6 +11,7 @@ use claudette::mcp_supervisor::McpSupervisor;
 use claudette::model::{AgentStatus, ChatMessage, ChatRole, Workspace, WorkspaceStatus};
 use claudette::names::NameGenerator;
 use claudette::ops::workspace::{self as ops_workspace, CreateParams, SetupResult};
+use claudette::ops::{NoopHooks, NotificationEvent, OpsHooks, WorkspaceChangeKind};
 use claudette::process::CommandWindowExt as _;
 
 use crate::commands::apps::{self, DEFAULT_TERMINAL_APP_SETTING_KEY};
@@ -74,7 +75,6 @@ pub(crate) async fn create_workspace_inner(
     let prefix = ops_workspace::resolve_branch_prefix(&prefix_mode, &prefix_custom).await;
     let worktree_base = state.worktree_base_dir.read().await.clone();
 
-    let hooks = TauriHooks::new(app.clone());
     let params = CreateParams {
         repo_id,
         name,
@@ -83,30 +83,32 @@ pub(crate) async fn create_workspace_inner(
     let out = if preserve_supplied_name {
         ops_workspace::create_preserving_supplied_name(
             &mut db,
-            hooks.as_ref(),
+            &NoopHooks,
             worktree_base.as_path(),
             params,
         )
         .await
     } else {
-        ops_workspace::create(&mut db, hooks.as_ref(), worktree_base.as_path(), params).await
+        ops_workspace::create(&mut db, &NoopHooks, worktree_base.as_path(), params).await
     }
     .map_err(|e| e.to_string())?;
 
-    // Setup script runs after the workspace exists so we can resolve the
-    // env-provider stack against the worktree path, then thread the
-    // resulting env into the script's process. The op intentionally
-    // stays out of env resolution because the plugin registry lives in
-    // AppState — only the GUI has it today.
+    // Resolve env-provider output before the workspace is announced to the
+    // frontend. That makes a newly-created worktree wait for direnv/mise/etc.
+    // warmup (including env-direnv's optional auto-allow) before the user can
+    // launch an agent from the normal UI path. Setup scripts reuse the same
+    // resolved env below so they run in the exact environment the first agent
+    // process will inherit.
+    let repos = db.list_repositories().map_err(|e| e.to_string())?;
+    let repo = repos
+        .iter()
+        .find(|r| r.id == repo_id)
+        .ok_or("Repository not found")?;
+    let resolved_env = resolve_env_for_workspace(state, &out.workspace, &repo.path).await;
+
     let setup_result = if skip_setup {
         None
     } else {
-        let repos = db.list_repositories().map_err(|e| e.to_string())?;
-        let repo = repos
-            .iter()
-            .find(|r| r.id == repo_id)
-            .ok_or("Repository not found")?;
-        let resolved_env = resolve_env_for_workspace(state, &out.workspace, &repo.path).await;
         ops_workspace::resolve_and_run_setup(
             &out.workspace,
             Path::new(&repo.path),
@@ -118,6 +120,14 @@ pub(crate) async fn create_workspace_inner(
         )
         .await
     };
+
+    // The shared op intentionally writes the DB row before env/setup can run,
+    // but the GUI should not observe the row until the environment is ready.
+    // Emit the lifecycle hook after the warmup/setup phase instead of using
+    // TauriHooks inside the op.
+    let hooks = TauriHooks::new(app.clone());
+    hooks.workspace_changed(&out.workspace.id, WorkspaceChangeKind::Created);
+    hooks.notification(NotificationEvent::SessionStart);
 
     Ok(CreateWorkspaceResult {
         workspace: out.workspace,

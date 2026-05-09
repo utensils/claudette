@@ -7,7 +7,7 @@
   "filter_all_repos": "所有仓库",
   "filter_show_archived": "显示已归档",
   "clear_repo_filter": "清除仓库筛选",
-  "creating_workspace": "正在创建工作区…",
+  "creating_workspace": "正在准备工作区环境…",
   "share_active_title": "正在共享 — 点击查看连接字符串",
   "share_inactive_title": "共享此设备",
   "nearby_section": "附近",

@@ -22,6 +22,7 @@
   "remove_attachment": "移除",
   "composer_placeholder_idle": "发送消息...",
   "composer_placeholder_queued": "输入以排队消息...",
+  "composer_placeholder_preparing_env": "正在准备工作区环境...",
   "composer_placeholder_shell": "运行 shell 命令...",
   "shell_mode_label": "Shell",
   "voice_input": "语音输入",
