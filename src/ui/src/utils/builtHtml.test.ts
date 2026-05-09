@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -41,9 +41,23 @@ function extractInlineScripts(html: string): string[] {
   return out;
 }
 
+// Note on `describe.skipIf`: vitest still invokes the describe-block
+// callback at collection time even when the suite is marked skipped — the
+// `it` registrations are turned into placeholders rather than the body being
+// elided entirely. So any synchronous I/O at the top of the describe body
+// (like `readFileSync(DIST_HTML)`) runs unconditionally, which crashes
+// collection on a fresh checkout where `dist/` does not yet exist (the
+// case on a Windows dev box bootstrapping the repo before any
+// `bun run build`). Move the read into `beforeAll` so it only runs when
+// the suite actually executes.
 describe.skipIf(!existsSync(DIST_HTML))("built dist/index.html", () => {
-  const html = readFileSync(DIST_HTML, "utf-8");
-  const inlineScripts = extractInlineScripts(html);
+  let html: string;
+  let inlineScripts: string[];
+
+  beforeAll(() => {
+    html = readFileSync(DIST_HTML, "utf-8");
+    inlineScripts = extractInlineScripts(html);
+  });
 
   // ---- Strategy A: every inline <script> parses as valid JavaScript ----
   //
