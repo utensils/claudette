@@ -356,6 +356,25 @@ impl PluginRegistry {
         self.disabled.read().unwrap().contains(plugin_name)
     }
 
+    /// Whether the plugin's `manifest.required_clis` were all on PATH at
+    /// registry discovery. Returns `true` for unknown plugin names so
+    /// the CLI-availability check is not the surface that surfaces
+    /// "missing plugin" errors — `call_operation` already does that with
+    /// a clearer error.
+    ///
+    /// Used by the env-provider dispatcher to treat an env-provider
+    /// whose CLI is missing as "skip silently" rather than as a hard
+    /// error (issue #718). For SCM plugins the existing
+    /// `cli_available`-gated `CliNotFound` short-circuit in
+    /// `call_operation` still applies — only consumers that explicitly
+    /// query this method get the soft-skip behavior.
+    pub fn is_cli_available(&self, plugin_name: &str) -> bool {
+        self.plugins
+            .get(plugin_name)
+            .map(|p| p.cli_available)
+            .unwrap_or(true)
+    }
+
     /// Execute an operation on a plugin.
     ///
     /// Creates a fresh Lua VM, loads the plugin script, calls the specified

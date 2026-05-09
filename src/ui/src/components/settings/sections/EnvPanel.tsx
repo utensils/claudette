@@ -93,9 +93,10 @@ function trustablePluginFromError(
  *   green  — active + fresh eval
  *   blue   — active + cache hit (same semantic as MCP "connected")
  *   red    — error (direnv blocked, mise untrusted, flake eval failed)
- *   dim    — not detected (plugin's detect() returned false) OR disabled
+ *   dim    — not detected, disabled, OR required CLI not installed
  */
 function stateColor(source: EnvSourceInfo): string {
+  if (source.unavailable) return "var(--text-faint)";
   if (!source.enabled) return "var(--text-faint)";
   if (source.error) return "var(--status-stopped)";
   if (!source.detected) return "var(--text-faint)";
@@ -103,10 +104,34 @@ function stateColor(source: EnvSourceInfo): string {
 }
 
 function stateBadge(source: EnvSourceInfo): string {
+  // "not installed" is a system-capability state — distinct from
+  // "disabled" (user toggled off) so users know whether the fix is
+  // toggling Claudette or installing the underlying tool.
+  if (source.unavailable) return "not installed";
   if (!source.enabled) return "disabled";
   if (source.error) return "error";
   if (!source.detected) return "not detected";
   return source.cached ? "cached" : "fresh";
+}
+
+/**
+ * Required-CLI hint per bundled provider — names the tool the user
+ * needs to install for the plugin to apply. Returned as the toggle's
+ * tooltip when the plugin is in the `unavailable` state. Generic
+ * fallback for third-party providers names "the required CLI" so we
+ * never claim it's a specific tool we don't know about.
+ */
+function unavailableTooltip(pluginName: string): string {
+  switch (pluginName) {
+    case "env-nix-devshell":
+      return "Install `nix` to enable this provider.";
+    case "env-mise":
+      return "Install `mise` to enable this provider.";
+    case "env-direnv":
+      return "Install `direnv` to enable this provider.";
+    default:
+      return "The required CLI for this provider is not on PATH. Install it to enable.";
+  }
 }
 
 function formatRelativeTime(ms: number): string {
@@ -202,6 +227,11 @@ export function EnvPanel({ target }: EnvPanelProps) {
               display_name: p.display_name,
               detected: false,
               enabled: true,
+              // Placeholder rows pre-resolve. The real resolve fills in
+              // the actual unavailable state from the registry's CLI
+              // probe; until then assume installed so we don't flicker
+              // a "not installed" badge for a tool the user does have.
+              unavailable: false,
               vars_contributed: 0,
               cached: false,
               evaluated_at_ms: 0,
@@ -344,9 +374,27 @@ export function EnvPanel({ target }: EnvPanelProps) {
 
       <div className={styles.mcpList}>
         {sources.map((source) => {
+          // `unavailable` is a system-capability state — the plugin's
+          // CLI isn't on PATH, so there is no error to expand and the
+          // toggle is meaningless until the user installs the tool.
           const hasError =
-            source.enabled && !!source.error && source.error !== "disabled";
+            source.enabled &&
+            !source.unavailable &&
+            !!source.error &&
+            source.error !== "disabled";
           const isOpen = expanded.has(source.plugin_name);
+          // Treat the toggle as locked-off while unavailable: visually
+          // off, non-actionable, and tooltip points at the fix
+          // (install the missing CLI). Persisting the user's intent
+          // separately from system capability means re-installing the
+          // CLI auto-recovers without forcing them to re-toggle.
+          const toggleOn = source.enabled && !source.unavailable;
+          const toggleDisabled = !resolvedOnce || source.unavailable;
+          const toggleTitle = source.unavailable
+            ? unavailableTooltip(source.plugin_name)
+            : !resolvedOnce
+              ? "Resolving environment providers…"
+              : undefined;
           return (
             <div key={source.plugin_name}>
               <div className={styles.mcpRow}>
@@ -357,20 +405,32 @@ export function EnvPanel({ target }: EnvPanelProps) {
                     title={stateBadge(source)}
                   />
                   <span
-                    className={`${styles.mcpName} ${!source.enabled ? styles.mcpNameDisabled : ""}`}
+                    className={`${styles.mcpName} ${!source.enabled || source.unavailable ? styles.mcpNameDisabled : ""}`}
                   >
                     {source.display_name}
                   </span>
-                  <span className={styles.mcpBadge}>{stateBadge(source)}</span>
-                  {source.enabled && source.detected && !source.error && (
-                    <span className={styles.settingDescription}>
-                      {source.vars_contributed} var
-                      {source.vars_contributed === 1 ? "" : "s"}
-                      {source.evaluated_at_ms > 0 && (
-                        <> · {formatRelativeTime(source.evaluated_at_ms)}</>
-                      )}
-                    </span>
-                  )}
+                  <span
+                    className={styles.mcpBadge}
+                    title={
+                      source.unavailable
+                        ? unavailableTooltip(source.plugin_name)
+                        : undefined
+                    }
+                  >
+                    {stateBadge(source)}
+                  </span>
+                  {source.enabled &&
+                    !source.unavailable &&
+                    source.detected &&
+                    !source.error && (
+                      <span className={styles.settingDescription}>
+                        {source.vars_contributed} var
+                        {source.vars_contributed === 1 ? "" : "s"}
+                        {source.evaluated_at_ms > 0 && (
+                          <> · {formatRelativeTime(source.evaluated_at_ms)}</>
+                        )}
+                      </span>
+                    )}
                 </div>
                 <div className={styles.mcpActions}>
                   {hasError && (
@@ -385,19 +445,15 @@ export function EnvPanel({ target }: EnvPanelProps) {
                   )}
                   <button
                     type="button"
-                    className={`${styles.mcpToggle} ${source.enabled ? styles.mcpToggleOn : ""}`}
+                    className={`${styles.mcpToggle} ${toggleOn ? styles.mcpToggleOn : ""}`}
                     onClick={() =>
                       handleToggle(source.plugin_name, !source.enabled)
                     }
                     role="switch"
-                    aria-checked={source.enabled}
-                    aria-label={`${source.enabled ? "Disable" : "Enable"} ${source.display_name}`}
-                    disabled={!resolvedOnce}
-                    title={
-                      !resolvedOnce
-                        ? "Resolving environment providers…"
-                        : undefined
-                    }
+                    aria-checked={toggleOn}
+                    aria-label={`${toggleOn ? "Disable" : "Enable"} ${source.display_name}`}
+                    disabled={toggleDisabled}
+                    title={toggleTitle}
                   >
                     <span className={styles.mcpToggleKnob} />
                   </button>

@@ -24,6 +24,14 @@ export interface EnvSourceInfo {
   detected: boolean;
   /** Whether the user has this provider enabled for the workspace's repo. */
   enabled: boolean;
+  /**
+   * True when the plugin's required CLI (e.g. `nix`, `mise`, `direnv`)
+   * is not on PATH. Distinct from `enabled` (user intent) and `error`
+   * (runtime failure): the system can't run this provider until the
+   * tool is installed. The toggle is locked off in this state. See
+   * GitHub issue 718.
+   */
+  unavailable: boolean;
   /** How many env vars this plugin contributed to the merged result. */
   vars_contributed: number;
   /** `true` when this plugin's contribution came from the mtime cache. */
