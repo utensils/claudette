@@ -2,7 +2,7 @@
 
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { ThinkingBlock } from "./ThinkingBlock";
 import styles from "./ThinkingBlock.module.css";
@@ -31,6 +31,7 @@ afterEach(async () => {
   for (const container of mountedContainers.splice(0)) {
     container.remove();
   }
+  vi.restoreAllMocks();
 });
 
 describe("ThinkingBlock", () => {
@@ -54,5 +55,15 @@ describe("ThinkingBlock", () => {
     expect(container.querySelector("[aria-expanded]")).toBeNull();
     expect(container.textContent).toContain("Thinking");
     expect(container.textContent).toContain("private reasoning");
+  });
+
+  it("does not start the typewriter loop when typewriter mode is omitted", async () => {
+    const requestAnimationFrame = vi.spyOn(window, "requestAnimationFrame");
+
+    await render(
+      <ThinkingBlock content="private reasoning" isStreaming={false} inline />,
+    );
+
+    expect(requestAnimationFrame).not.toHaveBeenCalled();
   });
 });

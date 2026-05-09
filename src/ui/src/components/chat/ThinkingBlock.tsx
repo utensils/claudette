@@ -29,7 +29,7 @@ export function ThinkingBlock({
     !!searchQuery && content.toLowerCase().includes(searchQuery.toLowerCase());
   const isExpanded = inline || expanded || queryMatches;
   const { displayed, showCaret } = useTypewriter(content, isStreaming, {
-    enabled: enableTypewriter && isExpanded,
+    enabled: !!enableTypewriter && isExpanded,
   });
 
   if (!content) return null;
