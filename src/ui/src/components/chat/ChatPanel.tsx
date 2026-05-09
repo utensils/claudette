@@ -299,14 +299,14 @@ export function ChatPanel() {
   );
 
   // Sticky scroll: auto-follow when at bottom, stop when user scrolls up.
-  const { isAtBottom, scrollToBottom, handleContentChanged } =
+  const { isAtBottom, scrollToBottom, handleContentChanged, suppressNextAutoScrollRef } =
     useStickyScroll(messagesContainerRef);
   usePreventScrollBounce(messagesContainerRef);
 
   // Memoize context value to avoid re-rendering StreamingMessage on every parent render.
   const scrollContextValue = useMemo(
-    () => ({ handleContentChanged }),
-    [handleContentChanged],
+    () => ({ handleContentChanged, suppressNextAutoScrollRef }),
+    [handleContentChanged, suppressNextAutoScrollRef],
   );
 
   // Elapsed timer for running agent.

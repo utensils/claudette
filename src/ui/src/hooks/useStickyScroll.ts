@@ -19,6 +19,12 @@ export function useStickyScroll(
   const [isAtBottom, setIsAtBottom] = useState(true);
   const programmaticScrollRef = useRef(false);
   const rafPendingRef = useRef(false);
+  const suppressNextAutoScrollRef = useRef(false);
+  // Kept in a ref so the RAF callback always reads the latest value without
+  // needing threshold in its useCallback deps (which would recreate the fn
+  // and re-attach the MutationObserver on every threshold change).
+  const thresholdRef = useRef(threshold);
+  thresholdRef.current = threshold;
 
   /**
    * Auto-scroll to bottom if the user is already there.
@@ -30,6 +36,26 @@ export function useStickyScroll(
     rafPendingRef.current = true;
     requestAnimationFrame(() => {
       rafPendingRef.current = false;
+      const suppress = suppressNextAutoScrollRef.current;
+      suppressNextAutoScrollRef.current = false;
+      if (suppress) {
+        // Content grew but we intentionally skipped the auto-scroll (e.g. the
+        // user expanded an inline diff preview). Recompute the actual scroll
+        // position so the scroll-to-bottom pill and subsequent auto-scroll
+        // decisions reflect reality — without this, isAtBottomRef stays `true`
+        // and the very next DOM mutation (syntax-highlight re-render, etc.)
+        // would unexpectedly jump to bottom.
+        const el = containerRef.current;
+        if (el) {
+          const atBottom =
+            el.scrollTop + el.clientHeight >= el.scrollHeight - thresholdRef.current;
+          if (atBottom !== isAtBottomRef.current) {
+            isAtBottomRef.current = atBottom;
+            setIsAtBottom(atBottom);
+          }
+        }
+        return;
+      }
       if (!isAtBottomRef.current) return;
       const el = containerRef.current;
       if (el) {
@@ -118,5 +144,5 @@ export function useStickyScroll(
     });
   }, [containerRef]);
 
-  return { isAtBottom, scrollToBottom, handleContentChanged } as const;
+  return { isAtBottom, scrollToBottom, handleContentChanged, suppressNextAutoScrollRef } as const;
 }

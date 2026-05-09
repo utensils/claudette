@@ -1,8 +1,12 @@
-import { useRef, useState } from "react";
-import { ChevronDown, ChevronUp, Pencil, SquareArrowOutUpRight } from "lucide-react";
+import { memo, useContext, useEffect, useRef, useState } from "react";
+import { ChevronDown, ChevronUp, FilePenLine, Pencil } from "lucide-react";
 import { relativizePath } from "../../hooks/toolSummary";
+import { bootstrapGrammarRegistry } from "../../utils/grammarRegistry";
+import { getCachedHighlight, highlightCode } from "../../utils/highlight";
+import { languageForFile } from "../../utils/languageForFile";
 import { HighlightedPlainText } from "./HighlightedPlainText";
 import type { EditFileStat, EditPreviewLine, EditSummary } from "./editActivitySummary";
+import { ScrollContext } from "./ScrollContext";
 import styles from "./ChatPanel.module.css";
 
 type PreviewState =
@@ -65,16 +69,69 @@ export function TurnEditSummaryCard({
    *  available). */
   onOpenFile?: (filePath: string) => void;
 }) {
+  const [listExpanded, setListExpanded] = useState(false);
   const [expandedFile, setExpandedFile] = useState<string | null>(null);
   const [previewByFile, setPreviewByFile] = useState<Record<string, PreviewState>>({});
+  const [cacheVersion, setCacheVersion] = useState(0);
+  // Plugin grammars register at startup; re-render once they're ready so
+  // `languageForFile` resolves plugin-contributed extensions correctly.
+  // Mirrors the same pattern used in DiffViewer.tsx.
+  const [grammarsReady, setGrammarsReady] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    void bootstrapGrammarRegistry().then(() => {
+      if (!cancelled) setGrammarsReady(true);
+    });
+    return () => { cancelled = true; };
+  }, []);
   // In-flight tracker so rapid clicks before state commits can't fan
   // out duplicate `onLoadPreview` calls. A ref (not state) so the
   // check is synchronous — React Strict-Mode-safe and not re-run by
   // a state-updater double-invoke.
   const inFlightRef = useRef<Set<string>>(new Set());
+  const { suppressNextAutoScrollRef } = useContext(ScrollContext);
+
+  // Prewarm the Shiki line cache whenever the expanded file's preview lines
+  // are available. Mirrors the same pattern used in DiffViewer.tsx: fire
+  // async highlightCode per distinct line, then bump cacheVersion so the
+  // memoized DiffPreviewLine instances re-evaluate getCachedHighlight.
+  useEffect(() => {
+    if (!expandedFile) return;
+    const lang = languageForFile(expandedFile);
+    if (!lang) return;
+    const fileStat = summary.files.find((f) => f.filePath === expandedFile);
+    if (!fileStat) return;
+    const previewState = previewByFile[expandedFile];
+    const lines =
+      fileStat.previewLines.length > 0
+        ? fileStat.previewLines
+        : (previewState?.lines ?? []);
+    const codeLines = lines.filter((l) => l.type !== "hunk").map((l) => l.content);
+    if (codeLines.length === 0) return;
+    let cancelled = false;
+    void Promise.all(
+      Array.from(new Set(codeLines)).map((code) => highlightCode(code, lang)),
+    ).then(() => {
+      if (!cancelled) setCacheVersion((v) => v + 1);
+    });
+    return () => {
+      cancelled = true;
+    };
+  // grammarsReady isn't used directly but its presence in the dep array
+  // causes the prewarm to re-run once plugin grammars finish loading.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [expandedFile, previewByFile, summary.files, grammarsReady]);
 
   const toggleFile = (file: EditFileStat) => {
+    const isOpening = expandedFile !== file.filePath;
+    if (isOpening) {
+      // Prevent useStickyScroll from auto-scrolling to bottom when the preview
+      // appears — that scroll fires before the browser paints, causing a
+      // visible upward flash before any post-hoc correction could run.
+      suppressNextAutoScrollRef.current = true;
+    }
     setExpandedFile((current) => (current === file.filePath ? null : file.filePath));
+
     if (file.previewLines.length > 0 || !onLoadPreview) return;
     // Skip ONLY for `loading`/`ready`. An `error` entry must still
     // permit a retry on the next click — the previous gate
@@ -111,13 +168,19 @@ export function TurnEditSummaryCard({
 
   return (
     <div className={styles.turnEditSummary}>
-      <div className={styles.turnEditSummaryHeader}>
+      <button
+        type="button"
+        className={styles.turnEditSummaryHeader}
+        aria-expanded={listExpanded}
+        onClick={() => setListExpanded((v) => !v)}
+      >
         <span className={styles.turnEditSummaryTitle}>
           {summary.files.length} file{summary.files.length !== 1 ? "s" : ""} changed
         </span>
         <ChangeStats added={summary.added} removed={summary.removed} />
-      </div>
-      <div className={styles.turnEditFileList}>
+        {listExpanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+      </button>
+      {listExpanded && <div className={styles.turnEditFileList}>
         {summary.files.map((file) => {
           const expanded = expandedFile === file.filePath;
           const previewState = previewByFile[file.filePath];
@@ -125,8 +188,12 @@ export function TurnEditSummaryCard({
             ? file.previewLines
             : previewState?.lines ?? [];
           const canExpand = file.previewLines.length > 0 || !!onLoadPreview;
+          const language = languageForFile(file.filePath);
           return (
-            <div key={file.filePath} className={styles.turnEditFile}>
+            <div
+              key={file.filePath}
+              className={styles.turnEditFile}
+            >
               <div className={styles.turnEditFileRowWrap}>
                 <button
                   type="button"
@@ -161,7 +228,7 @@ export function TurnEditSummaryCard({
                         onOpenFile(file.filePath);
                       }}
                     >
-                      <SquareArrowOutUpRight size={13} />
+                      <FilePenLine size={13} />
                     </button>
                   )}
                   {canExpand && (
@@ -184,12 +251,14 @@ export function TurnEditSummaryCard({
                 <InlineDiffPreview
                   lines={previewLines}
                   status={previewState?.status ?? "ready"}
+                  language={language}
+                  cacheVersion={cacheVersion}
                 />
               )}
             </div>
           );
         })}
-      </div>
+      </div>}
     </div>
   );
 }
@@ -228,9 +297,13 @@ function AnimatedStat({
 function InlineDiffPreview({
   lines,
   status,
+  language,
+  cacheVersion,
 }: {
   lines: EditPreviewLine[];
   status: PreviewState["status"];
+  language: string | null;
+  cacheVersion: number;
 }) {
   if (status === "loading") {
     return <div className={styles.turnEditDiffState}>Loading diff…</div>;
@@ -244,13 +317,28 @@ function InlineDiffPreview({
   return (
     <div className={styles.turnEditDiffPreview}>
       {lines.map((line, index) => (
-        <DiffPreviewLine key={`${index}:${line.type}`} line={line} />
+        <DiffPreviewLine
+          key={`${index}:${line.type}`}
+          line={line}
+          language={language}
+          cacheVersion={cacheVersion}
+        />
       ))}
     </div>
   );
 }
 
-function DiffPreviewLine({ line }: { line: EditPreviewLine }) {
+const DiffPreviewLine = memo(function DiffPreviewLine({
+  line,
+  language,
+  cacheVersion: _cacheVersion,
+}: {
+  line: EditPreviewLine;
+  language: string | null;
+  // Passed solely to bust memo when the Shiki cache is primed — not
+  // read directly. Same pattern as LineContent in DiffViewer.tsx.
+  cacheVersion: number;
+}) {
   // Hunk separators get their own full-width row (no gutters):
   // optional `@@ -X,Y +A,B @@` header text inline (workspace-diff
   // path) or just a divider band (activity path, where multiple Edit
@@ -269,6 +357,7 @@ function DiffPreviewLine({ line }: { line: EditPreviewLine }) {
       : line.type === "removed"
         ? styles.turnEditDiffLineRemoved
         : "";
+  const html = language ? getCachedHighlight(line.content, language) : null;
   return (
     <div className={`${styles.turnEditDiffLine} ${lineClass}`}>
       <span className={styles.turnEditDiffLineNumber}>
@@ -280,7 +369,14 @@ function DiffPreviewLine({ line }: { line: EditPreviewLine }) {
       <span className={styles.turnEditDiffPrefix}>
         {line.type === "added" ? "+" : line.type === "removed" ? "-" : " "}
       </span>
-      <code className={styles.turnEditDiffContent}>{line.content || " "}</code>
+      {html !== null ? (
+        <code
+          className={styles.turnEditDiffContent}
+          dangerouslySetInnerHTML={{ __html: html }}
+        />
+      ) : (
+        <code className={styles.turnEditDiffContent}>{line.content || " "}</code>
+      )}
     </div>
   );
-}
+});
