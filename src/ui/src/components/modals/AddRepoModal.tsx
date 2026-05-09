@@ -101,6 +101,7 @@ export function AddRepoModal() {
     try {
       const repo = await initRepository(parentPath.trim(), projectName.trim());
       addRepo(repo);
+      setDefaultBranches({ ...defaultBranches, [repo.id]: "main" });
       closeModal();
     } catch (e) {
       setError(String(e));

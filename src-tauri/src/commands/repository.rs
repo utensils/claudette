@@ -418,53 +418,65 @@ pub async fn init_repository(
     let dir = Path::new(&parent_path).join(&name);
     std::fs::create_dir(&dir).map_err(|e| format!("Failed to create directory: {e}"))?;
 
-    let dir_str = dir.to_str().unwrap_or("").to_string();
+    // All error paths from here must clean up the directory we just created.
+    let result = init_repository_inner(&dir, &name, &app, state).await;
+    if result.is_err() {
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+    result
+}
 
+async fn init_repository_inner(
+    dir: &Path,
+    name: &str,
+    app: &AppHandle,
+    state: State<'_, AppState>,
+) -> Result<Repository, String> {
     let init_ok = tokio::process::Command::new("git")
-        .args(["-C", &dir_str, "init", "-b", "main"])
+        .arg("-C")
+        .arg(dir)
+        .args(["init", "-b", "main"])
         .output()
         .await
         .map(|o| o.status.success())
         .unwrap_or(false);
     if !init_ok {
-        let _ = std::fs::remove_dir(&dir);
         return Err("git init failed — is git installed?".to_string());
     }
 
     // Set a repo-local identity so the empty commit succeeds even when the
     // user has no global git config. These values live only in .git/config.
     let _ = tokio::process::Command::new("git")
-        .args([
-            "-C",
-            &dir_str,
-            "config",
-            "user.email",
-            "claudette@localhost",
-        ])
+        .arg("-C")
+        .arg(dir)
+        .args(["config", "user.email", "claudette@localhost"])
         .output()
         .await;
     let _ = tokio::process::Command::new("git")
-        .args(["-C", &dir_str, "config", "user.name", "Claudette"])
+        .arg("-C")
+        .arg(dir)
+        .args(["config", "user.name", "Claudette"])
         .output()
         .await;
 
     let commit_ok = tokio::process::Command::new("git")
-        .args(["-C", &dir_str, "commit", "--allow-empty", "-m", "init"])
+        .arg("-C")
+        .arg(dir)
+        .args(["commit", "--allow-empty", "-m", "init"])
         .output()
         .await
         .map(|o| o.status.success())
         .unwrap_or(false);
     if !commit_ok {
-        let _ = std::fs::remove_dir_all(&dir);
         return Err("Failed to create initial commit".to_string());
     }
 
-    let canon = std::fs::canonicalize(&dir).map_err(|e| format!("Invalid path: {e}"))?;
+    let canon = std::fs::canonicalize(dir).map_err(|e| format!("Invalid path: {e}"))?;
     let canon_str = canon.to_string_lossy().to_string();
     let repo_name = canon
         .file_name()
         .map(|n| n.to_string_lossy().to_string())
-        .unwrap_or_else(|| name.clone());
+        .unwrap_or_else(|| name.to_string());
     let path_slug = slug_from_path(&canon_str);
 
     let repo = Repository {
@@ -487,9 +499,16 @@ pub async fn init_repository(
     };
 
     let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
-    db.insert_repository(&repo).map_err(|e| e.to_string())?;
+    db.insert_repository(&repo).map_err(|e| {
+        if is_duplicate_repository_path_error(&e) {
+            "This repository is already in Claudette.".to_string()
+        } else {
+            e.to_string()
+        }
+    })?;
 
-    crate::tray::rebuild_tray(&app);
+    crate::tray::rebuild_tray(app);
+    crate::commands::env::spawn_repo_env_warmup(app.clone(), repo.id.clone());
 
     Ok(repo)
 }
