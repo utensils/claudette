@@ -71,6 +71,8 @@
   "appearance_show_running_commands_desc": "Exibe uma lista recolhível dos processos em primeiro plano executando nos terminais de cada workspace. Desativado por padrão.",
   "appearance_group_tool_calls": "Agrupar chamadas adjacentes",
   "appearance_group_tool_calls_desc": "Recolhe chamadas regulares adjacentes em blocos de resumo. Desative para mostrar cada chamada principal de ferramenta, chamada de Agent e bloco de pensamento em linha.",
+  "appearance_extended_tool_call_output": "Saída estendida de chamadas de ferramenta",
+  "appearance_extended_tool_call_output_desc": "Adiciona detalhes de entrada expansíveis e copiáveis abaixo das linhas de chamadas de ferramenta. Desativado por padrão.",
   "appearance_interface_font": "Fonte da interface",
   "appearance_interface_font_desc": "Fonte para o texto da interface. Os temas podem definir um padrão.",
   "appearance_custom_interface_font": "Fonte de interface personalizada",

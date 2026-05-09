@@ -30,6 +30,7 @@ export function ToolActivityRow({
 }: ToolActivityRowProps) {
   const expanded = useAppStore((s) => !!s.expandedToolUseIds[activity.toolUseId]);
   const toggleToolUseExpanded = useAppStore((s) => s.toggleToolUseExpanded);
+  const extendedToolCallOutput = useAppStore((s) => s.extendedToolCallOutput);
   const editSummary = summarizeToolActivityEdit(activity);
   const summary = activitySummaryText(activity);
   const details = useMemo(() => toolDetails(activity), [activity]);
@@ -39,7 +40,9 @@ export function ToolActivityRow({
   const [, forceUpdate] = useReducer((n: number) => n + 1, 0);
 
   useEffect(() => {
-    if (!expanded || !details.lang || cachedHtml != null) return;
+    if (!extendedToolCallOutput || !expanded || !details.lang || cachedHtml != null) {
+      return;
+    }
     let cancelled = false;
     void highlightCode(details.content, details.lang).then((html) => {
       if (!cancelled && html != null) forceUpdate();
@@ -47,28 +50,30 @@ export function ToolActivityRow({
     return () => {
       cancelled = true;
     };
-  }, [cachedHtml, details.content, details.lang, expanded]);
+  }, [cachedHtml, details.content, details.lang, expanded, extendedToolCallOutput]);
 
   const label = `${expanded ? "Collapse" : "Expand"} ${activity.toolName} input details`;
 
   return (
     <div key={activity.toolUseId} className={styles.toolActivity}>
       <div className={styles.toolHeader}>
-        <button
-          type="button"
-          role="button"
-          className={`${styles.toolDetailsToggle} ${
-            expanded ? styles.toolDetailsToggleExpanded : ""
-          }`}
-          aria-expanded={expanded}
-          aria-label={label}
-          onClick={(event) => {
-            event.stopPropagation();
-            toggleToolUseExpanded(activity.toolUseId);
-          }}
-        >
-          <ChevronRight size={13} aria-hidden="true" />
-        </button>
+        {extendedToolCallOutput && (
+          <button
+            type="button"
+            role="button"
+            className={`${styles.toolDetailsToggle} ${
+              expanded ? styles.toolDetailsToggleExpanded : ""
+            }`}
+            aria-expanded={expanded}
+            aria-label={label}
+            onClick={(event) => {
+              event.stopPropagation();
+              toggleToolUseExpanded(activity.toolUseId);
+            }}
+          >
+            <ChevronRight size={13} aria-hidden="true" />
+          </button>
+        )}
         {editSummary ? (
           <InlineEditSummary
             summary={editSummary}
@@ -92,7 +97,7 @@ export function ToolActivityRow({
           </span>
         )}
       </div>
-      {expanded && (
+      {extendedToolCallOutput && expanded && (
         <CodeBlock
           className={styles.toolDetailsCode}
           onClick={(event: MouseEvent<HTMLPreElement>) => event.stopPropagation()}

@@ -71,6 +71,8 @@
   "appearance_show_running_commands_desc": "显示每个工作区终端中前台进程的可折叠列表。默认关闭。",
   "appearance_group_tool_calls": "分组相邻工具调用",
   "appearance_group_tool_calls_desc": "将相邻的常规工具调用折叠为摘要块。关闭后，每个顶层工具调用、Agent 调用和思考块都会以内联方式显示。",
+  "appearance_extended_tool_call_output": "扩展工具调用输出",
+  "appearance_extended_tool_call_output_desc": "在工具调用行下方添加可展开、可复制的输入详情。默认关闭。",
   "appearance_interface_font": "界面字体",
   "appearance_interface_font_desc": "界面文本的字体。主题可设置默认字体。",
   "appearance_custom_interface_font": "自定义界面字体",

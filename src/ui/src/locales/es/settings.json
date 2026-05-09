@@ -71,6 +71,8 @@
   "appearance_show_running_commands_desc": "Muestra una lista plegable de los procesos en primer plano que se ejecutan en los terminales de cada espacio de trabajo. Desactivado por defecto.",
   "appearance_group_tool_calls": "Agrupar llamadas adyacentes",
   "appearance_group_tool_calls_desc": "Contrae llamadas normales adyacentes en bloques de resumen. Desactívalo para mostrar cada llamada principal de herramienta, llamada de Agent y bloque de pensamiento en línea.",
+  "appearance_extended_tool_call_output": "Salida extendida de llamadas de herramientas",
+  "appearance_extended_tool_call_output_desc": "Agrega detalles de entrada expandibles y copiables debajo de las filas de llamadas de herramientas. Desactivado por defecto.",
   "appearance_interface_font": "Fuente de la interfaz",
   "appearance_interface_font_desc": "Fuente para el texto de la interfaz. Los temas pueden establecer una predeterminada.",
   "appearance_custom_interface_font": "Fuente de interfaz personalizada",

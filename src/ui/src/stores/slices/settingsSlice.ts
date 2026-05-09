@@ -39,6 +39,8 @@ export interface SettingsSlice {
   setShowSidebarRunningCommands: (v: boolean) => void;
   toolDisplayMode: ToolDisplayMode;
   setToolDisplayMode: (mode: ToolDisplayMode) => void;
+  extendedToolCallOutput: boolean;
+  setExtendedToolCallOutput: (enabled: boolean) => void;
 
   // Experimental
   claudetteTerminalEnabled: boolean;
@@ -124,6 +126,9 @@ export const createSettingsSlice: StateCreator<
   setShowSidebarRunningCommands: (v) => set({ showSidebarRunningCommands: v }),
   toolDisplayMode: "grouped",
   setToolDisplayMode: (mode) => set({ toolDisplayMode: mode }),
+  extendedToolCallOutput: false,
+  setExtendedToolCallOutput: (enabled) =>
+    set({ extendedToolCallOutput: enabled }),
 
   claudetteTerminalEnabled: false,
   setClaudetteTerminalEnabled: (enabled) =>

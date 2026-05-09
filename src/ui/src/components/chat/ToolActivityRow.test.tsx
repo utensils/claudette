@@ -56,11 +56,17 @@ async function render(node: React.ReactNode): Promise<HTMLElement> {
 beforeEach(() => {
   highlightCalls.length = 0;
   highlightCache.clear();
-  useAppStore.setState({ expandedToolUseIds: {} });
+  useAppStore.setState({
+    expandedToolUseIds: {},
+    extendedToolCallOutput: true,
+  });
 });
 
 afterEach(async () => {
-  useAppStore.setState({ expandedToolUseIds: {} });
+  useAppStore.setState({
+    expandedToolUseIds: {},
+    extendedToolCallOutput: false,
+  });
   for (const root of mountedRoots.splice(0).reverse()) {
     await act(async () => {
       root.unmount();
@@ -72,6 +78,24 @@ afterEach(async () => {
 });
 
 describe("ToolActivityRow", () => {
+  it("uses the compact row without a detail chevron when extended output is disabled", async () => {
+    useAppStore.setState({ extendedToolCallOutput: false });
+    const container = await render(
+      <ToolActivityRow
+        activity={activity("Bash", {
+          inputJson: JSON.stringify({ command: "echo one" }),
+        })}
+        searchQuery=""
+      />,
+    );
+
+    expect(container.textContent).toContain("Bash");
+    expect(container.textContent).toContain("echo one");
+    expect(container.querySelector("button[aria-expanded]")).toBeNull();
+    expect(container.querySelector("pre")).toBeNull();
+    expect(highlightCalls).toEqual([]);
+  });
+
   it("toggles highlighted full input details for code-like tools", async () => {
     const sql = "WITH users AS (\n  SELECT * FROM users\n)\nSELECT * FROM users";
     const container = await render(
