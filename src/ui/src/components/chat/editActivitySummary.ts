@@ -14,7 +14,7 @@ export interface EditSummary {
   removed: number;
 }
 
-export type EditPreviewLineType = "added" | "removed" | "context";
+export type EditPreviewLineType = "added" | "removed" | "context" | "hunk";
 
 export interface EditPreviewLine {
   type: EditPreviewLineType;
@@ -67,9 +67,22 @@ export function summarizeDiffFiles(files: readonly DiffFile[]): EditSummary | nu
 
 export function previewLinesFromFileDiff(diff: FileDiff): EditPreviewLine[] {
   const lines: EditPreviewLine[] = [];
-  for (const hunk of diff.hunks) {
+  diff.hunks.forEach((hunk, idx) => {
+    if (lines.length >= MAX_PREVIEW_LINES_PER_FILE) return;
+    // Separator between hunks (skip before the first one) so a file
+    // edited in distant regions visually breaks into chunks instead
+    // of running as one long block. The header carries the
+    // `@@ -OLD,N +NEW,M @@` text the backend already produced.
+    if (idx > 0) {
+      lines.push({
+        type: "hunk",
+        oldLineNumber: null,
+        newLineNumber: null,
+        content: hunk.header,
+      });
+    }
     for (const line of hunk.lines) {
-      if (lines.length >= MAX_PREVIEW_LINES_PER_FILE) return lines;
+      if (lines.length >= MAX_PREVIEW_LINES_PER_FILE) return;
       lines.push({
         type:
           line.line_type === "Added"
@@ -82,7 +95,7 @@ export function previewLinesFromFileDiff(diff: FileDiff): EditPreviewLine[] {
         content: line.content,
       });
     }
-  }
+  });
   return lines;
 }
 
@@ -194,10 +207,24 @@ function mergeStats(stats: readonly EditFileStat[]): EditSummary | null {
     if (existing) {
       existing.added += stat.added;
       existing.removed += stat.removed;
-      existing.previewLines = capPreviewLines([
-        ...existing.previewLines,
-        ...stat.previewLines,
-      ]);
+      // Separate each merged contribution with a hunk row so multiple
+      // Edit calls to the same file render as visually distinct
+      // chunks instead of one tall blob. Skip when either side is
+      // empty (avoids a leading or trailing separator with no
+      // surrounding content).
+      const merged = stat.previewLines.length > 0 && existing.previewLines.length > 0
+        ? [
+            ...existing.previewLines,
+            {
+              type: "hunk" as const,
+              oldLineNumber: null,
+              newLineNumber: null,
+              content: "",
+            },
+            ...stat.previewLines,
+          ]
+        : [...existing.previewLines, ...stat.previewLines];
+      existing.previewLines = capPreviewLines(merged);
     } else {
       byPath.set(stat.filePath, {
         ...stat,
@@ -257,6 +284,18 @@ function parsePatchStats(patch: string): EditFileStat[] {
     if (hunkMatch) {
       oldLineNumber = Number(hunkMatch[1]);
       newLineNumber = Number(hunkMatch[2]);
+      // Emit a separator row for every `@@` after the first one in
+      // this file, so multi-hunk patches break up vertically. Skip
+      // the leading separator since the file header already opens
+      // the first hunk visually.
+      if (active.previewLines.length > 0) {
+        pushPreviewLine(active, {
+          type: "hunk",
+          oldLineNumber: null,
+          newLineNumber: null,
+          content: line,
+        });
+      }
       continue;
     }
     if (line.startsWith("+++") || line.startsWith("---") || line.startsWith("***")) {

@@ -289,21 +289,24 @@ export function ChatInputArea({
     const ta = textareaRef.current;
     const start = ta?.selectionStart ?? cursorPos;
     const end = ta?.selectionEnd ?? cursorPos;
-    setChatInput((currentInput) => {
-      const next = insertTranscriptAtSelection(
-        currentInput,
-        transcript,
-        start,
-        end,
-      );
-      setCursorPos(next.cursor);
-      requestAnimationFrame(() => {
-        const current = textareaRef.current;
-        if (!current) return;
-        current.focus();
-        current.selectionStart = current.selectionEnd = next.cursor;
-      });
-      return next.text;
+    // Compute the next state outside the updater so the updater stays
+    // pure. React may run a `setX(updater)` updater multiple times
+    // (Strict Mode, concurrent rendering); calling other setters from
+    // inside it triggers the "Cannot update a component while
+    // rendering" dev warning and risks compounding side-effects.
+    const next = insertTranscriptAtSelection(
+      ta?.value ?? "",
+      transcript,
+      start,
+      end,
+    );
+    setChatInput(next.text);
+    setCursorPos(next.cursor);
+    requestAnimationFrame(() => {
+      const current = textareaRef.current;
+      if (!current) return;
+      current.focus();
+      current.selectionStart = current.selectionEnd = next.cursor;
     });
   }, [cursorPos]);
 
