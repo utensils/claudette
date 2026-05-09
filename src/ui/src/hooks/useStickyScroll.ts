@@ -19,6 +19,7 @@ export function useStickyScroll(
   const [isAtBottom, setIsAtBottom] = useState(true);
   const programmaticScrollRef = useRef(false);
   const rafPendingRef = useRef(false);
+  const suppressNextAutoScrollRef = useRef(false);
 
   /**
    * Auto-scroll to bottom if the user is already there.
@@ -30,7 +31,9 @@ export function useStickyScroll(
     rafPendingRef.current = true;
     requestAnimationFrame(() => {
       rafPendingRef.current = false;
-      if (!isAtBottomRef.current) return;
+      const suppress = suppressNextAutoScrollRef.current;
+      suppressNextAutoScrollRef.current = false;
+      if (!isAtBottomRef.current || suppress) return;
       const el = containerRef.current;
       if (el) {
         const prev = el.scrollTop;
@@ -118,5 +121,5 @@ export function useStickyScroll(
     });
   }, [containerRef]);
 
-  return { isAtBottom, scrollToBottom, handleContentChanged } as const;
+  return { isAtBottom, scrollToBottom, handleContentChanged, suppressNextAutoScrollRef } as const;
 }
