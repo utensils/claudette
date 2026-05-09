@@ -92,6 +92,20 @@ describe("file path store updates", () => {
     expect(state.fileBuffers[`${WS}:b.ts`]).toBeUndefined();
   });
 
+  it("closes an active file tab and selects the tab to its left", () => {
+    openLoadedFile("a.ts");
+    openLoadedFile("b.ts");
+    openLoadedFile("c.ts");
+    useAppStore.getState().selectFileTab(WS, "c.ts");
+
+    useAppStore.getState().closeFileTab(WS, "c.ts");
+
+    const state = useAppStore.getState();
+    expect(state.fileTabsByWorkspace[WS]).toEqual(["a.ts", "b.ts"]);
+    expect(state.activeFileTabByWorkspace[WS]).toBe("b.ts");
+    expect(state.fileBuffers[`${WS}:c.ts`]).toBeUndefined();
+  });
+
   it("removes all child file tabs when a folder is deleted", () => {
     openLoadedFile("src/components/Button.tsx");
     openLoadedFile("src/components/Card.tsx");
