@@ -69,6 +69,27 @@ export const RightSidebar = memo(function RightSidebar() {
   // preserved) means stale data from workspace A would render until B's
   // fetch resolves.
   const diffLoadVersion = useRef(0);
+  // Dedup guard for the two polling intervals. The version-token above is a
+  // *coalescing* pattern (latest response wins for UI state); it does not
+  // prevent overlapping dispatches. On a slow repo (e.g. nixpkgs where
+  // `git merge-base origin/master HEAD` takes ~6s after a fast-forward of
+  // upstream/master, exceeding the 3s active polling cadence), unguarded
+  // ticks pile up faster than they drain — each tick fans out 4 git
+  // invocations on the Rust side and the resulting `git` swarm pegs the
+  // machine. The interval ticks consult this counter and skip a tick
+  // whenever any previous fetch is still in flight; one-shot loads (initial
+  // select, post-stop refresh) always run but still bump the counter so a
+  // polling tick that fires inside their window doesn't double up.
+  //
+  // A counter (rather than a boolean) is required because overlapping loads
+  // are possible across workspace switches: switching to workspace B while
+  // workspace A's load is still pending starts B's load while A is still
+  // running, and A's earlier-resolving `.finally` would open the gate while
+  // B is still in flight if the guard were a boolean. Decrementing only
+  // when each individual dispatch resolves keeps the gate closed until the
+  // last in-flight load drains. Decrement lives in `.finally` so an error
+  // path can't permanently wedge the gate.
+  const loadDiffInFlightCount = useRef(0);
 
   const activeSessionId = useAppStore(selectActiveSessionId);
   const { totalCount: taskCount } = useTaskTracker(activeSessionId);
@@ -169,6 +190,7 @@ export const RightSidebar = memo(function RightSidebar() {
     setDiffLoading(true);
     const version = ++diffLoadVersion.current;
     const workspaceId = selectedWorkspaceId;
+    loadDiffInFlightCount.current += 1;
     loadDiff(workspaceId)
       .then((result) => {
         if (!isDiffResultStillValid(workspaceId, version)) return;
@@ -178,6 +200,9 @@ export const RightSidebar = memo(function RightSidebar() {
       .catch(() => {
         if (!isDiffResultStillValid(workspaceId, version)) return;
         setDiffLoading(false);
+      })
+      .finally(() => {
+        loadDiffInFlightCount.current -= 1;
       });
   }, [selectedWorkspaceId, loadDiff, applyDiffResult, setDiffLoading, clearDiff, isDiffResultStillValid]);
 
@@ -187,13 +212,21 @@ export const RightSidebar = memo(function RightSidebar() {
     const workspaceId = selectedWorkspaceId;
 
     const interval = setInterval(() => {
+      // Skip this tick if the previous fetch hasn't resolved. Without this,
+      // on a slow repo each `git merge-base` outlives the 3s polling
+      // cadence and the swarm grows linearly until the machine melts.
+      if (loadDiffInFlightCount.current > 0) return;
       const version = ++diffLoadVersion.current;
+      loadDiffInFlightCount.current += 1;
       loadDiff(workspaceId)
         .then((result) => {
           if (!isDiffResultStillValid(workspaceId, version)) return;
           applyDiffResult(result);
         })
-        .catch(() => {});
+        .catch(() => {})
+        .finally(() => {
+          loadDiffInFlightCount.current -= 1;
+        });
     }, DIFF_AGENT_RUNNING_INTERVAL_MS);
 
     return () => clearInterval(interval);
@@ -210,6 +243,7 @@ export const RightSidebar = memo(function RightSidebar() {
     const timer = setTimeout(() => {
       setDiffLoading(true);
       const version = ++diffLoadVersion.current;
+      loadDiffInFlightCount.current += 1;
       loadDiff(workspaceId)
         .then((result) => {
           if (!isDiffResultStillValid(workspaceId, version)) return;
@@ -220,6 +254,9 @@ export const RightSidebar = memo(function RightSidebar() {
           if (!isDiffResultStillValid(workspaceId, version)) return;
           console.error("Failed to refresh diff files:", e);
           setDiffLoading(false);
+        })
+        .finally(() => {
+          loadDiffInFlightCount.current -= 1;
         });
     }, 500);
 
@@ -235,13 +272,21 @@ export const RightSidebar = memo(function RightSidebar() {
     const workspaceId = selectedWorkspaceId;
 
     const interval = setInterval(() => {
+      // See active-polling effect above: skip tick when previous fetch is
+      // still in flight. The 10s idle cadence rarely overlaps in practice,
+      // but a concurrent `git fetch` can push merge-base latency past it.
+      if (loadDiffInFlightCount.current > 0) return;
       const version = ++diffLoadVersion.current;
+      loadDiffInFlightCount.current += 1;
       loadDiff(workspaceId)
         .then((result) => {
           if (!isDiffResultStillValid(workspaceId, version)) return;
           applyDiffResult(result);
         })
-        .catch(() => {});
+        .catch(() => {})
+        .finally(() => {
+          loadDiffInFlightCount.current -= 1;
+        });
     }, IDLE_REFRESH_INTERVAL_MS);
 
     return () => clearInterval(interval);

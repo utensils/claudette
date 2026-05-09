@@ -61,6 +61,27 @@ export function FilesPanel() {
   );
   const [focusRequest, setFocusRequest] = useState(0);
   const loadVersionRef = useRef(0);
+  // Dedup guard for the active + idle polling intervals. The version-token
+  // above coalesces overlapping responses (latest wins for UI state) but
+  // does not prevent overlapping dispatches. On a slow worktree
+  // `listWorkspaceFiles` can outlive the polling cadence, in which case
+  // unguarded ticks would pile up faster than they drain — the same shape
+  // that produced ~195 stuck `git` processes from RightSidebar's diff
+  // polling on a divergent nixpkgs fork. Polling ticks consult this counter
+  // and skip when any previous load is still in flight; one-shot loads
+  // (workspace select, post-stop refresh, refreshNonce-driven reload)
+  // always run but bump the counter so a polling tick fired inside their
+  // window doesn't double up.
+  //
+  // A counter (rather than a boolean) is required because overlapping loads
+  // are possible across rapid workspace switches or back-to-back
+  // `refreshNonce` bumps: switching to workspace B while workspace A's
+  // load is still pending kicks off B while A keeps running, and A's
+  // earlier-resolving `.finally` would clear a boolean flag while B is
+  // still in flight, reopening the polling gate. Decrementing only when
+  // each individual call's `finally` runs keeps the gate closed until the
+  // last in-flight load drains.
+  const loadFilesInFlightCount = useRef(0);
   const prevIsRunning = useRef(false);
   const ws = workspaces.find((w) => w.id === selectedWorkspaceId);
   const isRunning = isAgentBusy(ws?.agent_status);
@@ -76,6 +97,7 @@ export function FilesPanel() {
         setLoading(true);
       }
       setError(null);
+      loadFilesInFlightCount.current += 1;
       try {
         const result = await listWorkspaceFiles(workspaceId);
         if (version !== loadVersionRef.current) return;
@@ -87,6 +109,8 @@ export function FilesPanel() {
         if (useAppStore.getState().selectedWorkspaceId !== workspaceId) return;
         setError(String(e));
         setLoading(false);
+      } finally {
+        loadFilesInFlightCount.current -= 1;
       }
     },
     [],
@@ -106,6 +130,9 @@ export function FilesPanel() {
   useEffect(() => {
     if (!selectedWorkspaceId || !isRunning) return;
     const interval = setInterval(() => {
+      // Skip when a previous load is still in flight — see
+      // `loadFilesInFlightCount` declaration above for the pileup rationale.
+      if (loadFilesInFlightCount.current > 0) return;
       void loadFiles(selectedWorkspaceId, false);
     }, FILES_AGENT_RUNNING_INTERVAL_MS);
     return () => clearInterval(interval);
@@ -130,6 +157,9 @@ export function FilesPanel() {
   useEffect(() => {
     if (!selectedWorkspaceId || isRunning) return;
     const interval = setInterval(() => {
+      // Skip when a previous load is still in flight — see
+      // `loadFilesInFlightCount` declaration above for the pileup rationale.
+      if (loadFilesInFlightCount.current > 0) return;
       void loadFiles(selectedWorkspaceId, false);
     }, IDLE_REFRESH_INTERVAL_MS);
     return () => clearInterval(interval);
