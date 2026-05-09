@@ -72,3 +72,7 @@
 [data-platform="mac"] .noSidebar {
   padding-left: 80px;
 }
+
+:where([data-platform="mac"]) .header {
+  background: color-mix(in srgb, var(--chat-header-bg) 88%, transparent);
+}

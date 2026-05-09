@@ -29,6 +29,7 @@
 
 [data-platform="mac"] .sidebar {
   padding-top: 38px;
+  background: color-mix(in srgb, var(--sidebar-bg) 88%, transparent);
 }
 
 .backLink {
@@ -111,6 +112,15 @@
   overflow-y: auto;
   padding: 32px 48px;
   background: var(--app-bg);
+}
+
+:where([data-platform="mac"]) .container {
+  background: transparent;
+}
+
+:where([data-platform="mac"]) .content,
+:where([data-platform="mac"]) .attributionBar {
+  background: color-mix(in srgb, var(--app-bg) 92%, transparent);
 }
 
 .attributionBar {

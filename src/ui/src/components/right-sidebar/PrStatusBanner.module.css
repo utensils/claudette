@@ -16,6 +16,10 @@
   box-shadow: var(--shadow-sm);
 }
 
+:where([data-platform="mac"]) .banner {
+  background: color-mix(in srgb, var(--chat-header-bg) 88%, transparent);
+}
+
 .bannerReady,
 .bannerOpen {
   background: color-mix(in srgb, var(--badge-done) 12%, var(--chat-header-bg));

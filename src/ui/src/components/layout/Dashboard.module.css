@@ -232,6 +232,10 @@
   margin-bottom: 4px;
 }
 
+:where([data-platform="mac"]) .toolbar {
+  background: color-mix(in srgb, var(--chat-header-bg) 88%, transparent);
+}
+
 .emptyTitle {
   font-size: 16px;
   font-weight: 600;

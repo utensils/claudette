@@ -17,11 +17,18 @@
         "center": true,
         "maximized": false,
         "visible": false,
+        "transparent": true,
         "titleBarStyle": "Overlay",
         "hiddenTitle": true,
+        "trafficLightPosition": { "x": 16, "y": 18 },
+        "windowEffects": {
+          "effects": ["sidebar", "mica", "tabbed", "windowBackground"],
+          "state": "followsWindowActiveState"
+        },
         "dragDropEnabled": true
       }
     ],
+    "macOSPrivateApi": true,
     "security": {
       "csp": "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; connect-src ipc: http://ipc.localhost https://github.com; img-src 'self' asset: http://asset.localhost data: blob:; media-src 'self' blob:; font-src 'self' data:",
       "capabilities": [
