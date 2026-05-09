@@ -26,6 +26,12 @@
   right: var(--scrollbar-edge-inset);
   bottom: 0;
   width: var(--scrollbar-size);
+  /* `pointer-events: none` while not overflowing means clicks in the
+   * 8px right-edge band pass through to message content underneath
+   * (the band overlaps `.messages` because the track is a sibling of
+   * `.messages` and `.messages` has a `margin-right` matching the
+   * track inset). When overflowing, the track flips to `auto` so the
+   * track click-to-page handler fires — see OverlayScrollbar.tsx. */
   pointer-events: none;
   z-index: 1;
   /* Hide entirely when there's no overflow; the component clears the data
@@ -36,6 +42,11 @@
 
 .track[data-overflowing="true"] {
   opacity: 1;
+  pointer-events: auto;
+  /* Track click-to-page wants the standard arrow cursor (clicking the
+   * rail isn't a text-selection or drag affordance). The slider keeps
+   * its own `cursor: default`. */
+  cursor: default;
 }
 
 .slider {

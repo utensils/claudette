@@ -889,10 +889,29 @@
   margin: 0;
   padding: 0;
   box-sizing: border-box;
-  overscroll-behavior: contain;
   scrollbar-color: var(--scrollbar-thumb) transparent;
   scrollbar-width: thin;
 }
+
+/*
+ * Overscroll guard: applied at the root scroll surfaces only, not on `*`.
+ *
+ * Earlier branches set `overscroll-behavior: contain` on `*`, which also
+ * landed it on every nested scrollable widget — code blocks, thinking
+ * blocks, attachment previews, slash-command pickers, etc. With it on
+ * those, wheel/trackpad scrolling at the top/bottom edge of a nested
+ * surface stops chaining to the chat scroller, so the user gets stuck
+ * on the inner widget until they move the cursor out. It also undermines
+ * `usePreventScrollBounce`, which deliberately allows the gesture
+ * through when a parent surface can still scroll in the same direction.
+ *
+ * The body-level rubber band is suppressed by the `html, body, #root`
+ * `overscroll-behavior: none` rule below; the chat messages container
+ * gets its WebKit-elastic-bounce treatment from the `usePreventScrollBounce`
+ * hook (`hooks/usePreventScrollBounce.ts`), which was written specifically
+ * because CSS `overscroll-behavior` is not reliable enough in macOS
+ * WKWebView. Don't reintroduce a global `*` rule for this.
+ */
 
 html,
 body,
