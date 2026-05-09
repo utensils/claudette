@@ -147,4 +147,26 @@ describe("workspacesSlice.addWorkspace", () => {
       error: "direnv failed",
     });
   });
+
+  it("marks a local workspace as preparing as soon as it is selected", () => {
+    useAppStore.getState().addWorkspace(makeWorkspace());
+
+    useAppStore.getState().selectWorkspace("ws-1");
+
+    expect(useAppStore.getState().workspaceEnvironment["ws-1"]).toEqual({
+      status: "preparing",
+    });
+  });
+
+  it("marks a remote workspace ready as soon as it is selected", () => {
+    useAppStore.getState().addWorkspace(
+      makeWorkspace({ id: "ws-remote", remote_connection_id: "remote-1" }),
+    );
+
+    useAppStore.getState().selectWorkspace("ws-remote");
+
+    expect(useAppStore.getState().workspaceEnvironment["ws-remote"]).toEqual({
+      status: "ready",
+    });
+  });
 });

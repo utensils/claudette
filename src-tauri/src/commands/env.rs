@@ -190,9 +190,48 @@ pub async fn get_env_sources(
     Ok(sources)
 }
 
-/// Resolve env-providers for a workspace without returning diagnostic details.
-/// Used on workspace selection to warm direnv/mise/dotenv/nix-devshell before
-/// the user can start a fresh agent process or terminal PTY.
+fn source_error_summary(source: &claudette::env_provider::ResolvedSource) -> String {
+    format!(
+        "{}: {}",
+        source.plugin_name,
+        source.error.as_deref().unwrap_or("unknown error")
+    )
+}
+
+fn prepare_workspace_error(resolved: &claudette::env_provider::ResolvedEnv) -> Option<String> {
+    let trust_errors = resolved.trust_errors();
+    if !trust_errors.is_empty() {
+        let summaries = trust_errors
+            .into_iter()
+            .map(source_error_summary)
+            .collect::<Vec<_>>()
+            .join("; ");
+        return Some(format!("Environment setup needed: {summaries}"));
+    }
+
+    let summaries = resolved
+        .sources
+        .iter()
+        .filter(|source| {
+            source
+                .error
+                .as_deref()
+                .is_some_and(|error| error != "disabled")
+        })
+        .map(source_error_summary)
+        .collect::<Vec<_>>();
+    if summaries.is_empty() {
+        None
+    } else {
+        Some(format!(
+            "Environment provider failed: {}",
+            summaries.join("; ")
+        ))
+    }
+}
+
+/// Resolve env-providers for a workspace before the user can start a fresh
+/// agent process or terminal PTY.
 #[tauri::command]
 pub async fn prepare_workspace_environment(
     workspace_id: String,
@@ -214,6 +253,9 @@ pub async fn prepare_workspace_environment(
     )
     .await;
     register_resolved_with_watcher(&state, Path::new(&worktree), &resolved.sources).await;
+    if let Some(error) = prepare_workspace_error(&resolved) {
+        return Err(error);
+    }
     Ok(())
 }
 
@@ -627,7 +669,7 @@ pub fn get_host_env_flags() -> HostEnvFlags {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use claudette::env_provider::ResolvedSource;
+    use claudette::env_provider::{ResolvedEnv, ResolvedSource};
     use std::collections::HashSet;
     use std::time::SystemTime;
 
@@ -675,5 +717,52 @@ mod tests {
     fn filter_globally_disabled_empty_passes_through() {
         let visible = filter_globally_disabled(Vec::new(), |_| true);
         assert!(visible.is_empty());
+    }
+
+    #[test]
+    fn prepare_workspace_error_ignores_disabled_sources() {
+        let mut source = src("env-direnv");
+        source.error = Some("disabled".to_string());
+        let resolved = ResolvedEnv {
+            sources: vec![source],
+            ..Default::default()
+        };
+
+        assert_eq!(prepare_workspace_error(&resolved), None);
+    }
+
+    #[test]
+    fn prepare_workspace_error_surfaces_trust_errors() {
+        let mut source = src("env-direnv");
+        source.error = Some(
+            "direnv: error /repo/.envrc is blocked. Run `direnv allow` to approve its content"
+                .to_string(),
+        );
+        let resolved = ResolvedEnv {
+            sources: vec![source],
+            ..Default::default()
+        };
+
+        let message = prepare_workspace_error(&resolved).unwrap();
+
+        assert!(message.starts_with("Environment setup needed: env-direnv:"));
+        assert!(message.contains("direnv allow"));
+    }
+
+    #[test]
+    fn prepare_workspace_error_surfaces_generic_provider_errors() {
+        let mut source = src("env-mise");
+        source.error = Some("mise failed to export env".to_string());
+        let resolved = ResolvedEnv {
+            sources: vec![source],
+            ..Default::default()
+        };
+
+        let message = prepare_workspace_error(&resolved).unwrap();
+
+        assert_eq!(
+            message,
+            "Environment provider failed: env-mise: mise failed to export env"
+        );
     }
 }

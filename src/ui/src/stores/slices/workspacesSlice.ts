@@ -188,6 +188,17 @@ export const createWorkspacesSlice: StateCreator<
         // SHA leaks across the boundary.
         diffMergeBase: null,
       };
+      if (id) {
+        const incoming = s.workspaces.find((w) => w.id === id);
+        if (incoming) {
+          updates.workspaceEnvironment = {
+            ...s.workspaceEnvironment,
+            [id]: {
+              status: incoming.remote_connection_id ? "ready" : "preparing",
+            },
+          };
+        }
+      }
       if (id && s.unreadCompletions.has(id)) {
         const next = new Set(s.unreadCompletions);
         next.delete(id);

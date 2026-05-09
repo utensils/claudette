@@ -4,41 +4,51 @@ import { useAppStore } from "../stores/useAppStore";
 
 export function useWorkspaceEnvironmentPreparation() {
   const selectedWorkspaceId = useAppStore((s) => s.selectedWorkspaceId);
-  const selectedWorkspace = useAppStore((s) =>
-    s.selectedWorkspaceId
-      ? s.workspaces.find((w) => w.id === s.selectedWorkspaceId) ?? null
-      : null,
-  );
+  const selectedWorkspaceRemoteConnectionId = useAppStore((s) => {
+    if (!s.selectedWorkspaceId) return null;
+    const selectedWorkspace = s.workspaces.find(
+      (w) => w.id === s.selectedWorkspaceId,
+    );
+    return selectedWorkspace?.remote_connection_id;
+  });
   const setWorkspaceEnvironment = useAppStore((s) => s.setWorkspaceEnvironment);
   const addToast = useAppStore((s) => s.addToast);
 
   useEffect(() => {
-    if (!selectedWorkspaceId || !selectedWorkspace) return;
-    if (selectedWorkspace.remote_connection_id) {
+    if (!selectedWorkspaceId) return;
+    if (selectedWorkspaceRemoteConnectionId === undefined) return;
+    if (selectedWorkspaceRemoteConnectionId) {
       setWorkspaceEnvironment(selectedWorkspaceId, "ready");
       return;
     }
 
+    const workspaceId = selectedWorkspaceId;
     let cancelled = false;
-    setWorkspaceEnvironment(selectedWorkspaceId, "preparing");
+    setWorkspaceEnvironment(workspaceId, "preparing");
 
-    prepareWorkspaceEnvironment(selectedWorkspaceId)
+    prepareWorkspaceEnvironment(workspaceId)
       .then(() => {
-        if (!cancelled) setWorkspaceEnvironment(selectedWorkspaceId, "ready");
+        if (!cancelled) setWorkspaceEnvironment(workspaceId, "ready");
       })
       .catch((err) => {
         if (cancelled) return;
         const message = String(err);
-        setWorkspaceEnvironment(selectedWorkspaceId, "error", message);
+        setWorkspaceEnvironment(workspaceId, "error", message);
         addToast(`Workspace environment failed: ${message}`);
       });
 
     return () => {
       cancelled = true;
+      if (
+        useAppStore.getState().workspaceEnvironment[workspaceId]?.status ===
+        "preparing"
+      ) {
+        setWorkspaceEnvironment(workspaceId, "idle");
+      }
     };
   }, [
     selectedWorkspaceId,
-    selectedWorkspace,
+    selectedWorkspaceRemoteConnectionId,
     setWorkspaceEnvironment,
     addToast,
   ]);

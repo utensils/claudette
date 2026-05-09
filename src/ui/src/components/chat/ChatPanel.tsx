@@ -80,11 +80,13 @@ const EMPTY_QUEUED_MESSAGES: QueuedMessage[] = [];
 export function ChatPanel() {
   const { t } = useTranslation("chat");
   const selectedWorkspaceId = useAppStore((s) => s.selectedWorkspaceId);
-  const workspaceEnvironmentPreparing = useAppStore((s) =>
-    s.selectedWorkspaceId
-      ? s.workspaceEnvironment[s.selectedWorkspaceId]?.status === "preparing"
-      : false,
-  );
+  const workspaceEnvironmentPreparing = useAppStore((s) => {
+    if (!s.selectedWorkspaceId) return false;
+    const workspace = s.workspaces.find((w) => w.id === s.selectedWorkspaceId);
+    if (!workspace || workspace.remote_connection_id) return false;
+    const status = s.workspaceEnvironment[s.selectedWorkspaceId]?.status;
+    return status !== "ready" && status !== "error";
+  });
   const activeSessionId = useAppStore((s) =>
     s.selectedWorkspaceId
       ? s.selectedSessionIdByWorkspaceId[s.selectedWorkspaceId] ?? null

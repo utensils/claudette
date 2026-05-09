@@ -107,4 +107,82 @@ describe("useWorkspaceEnvironmentPreparation", () => {
       status: "ready",
     });
   });
+
+  it("does not restart env preparation when unrelated workspace fields update", async () => {
+    useAppStore.setState({
+      selectedWorkspaceId: "ws-1",
+      workspaces: [makeWorkspace()],
+    });
+
+    await renderHarness();
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    act(() => {
+      useAppStore
+        .getState()
+        .updateWorkspace("ws-1", { status_line: "agent is still running" });
+    });
+
+    expect(serviceMocks.prepareWorkspaceEnvironment).toHaveBeenCalledTimes(1);
+  });
+
+  it("clears stale preparing state when selection changes before preparation finishes", async () => {
+    let resolvePreparation!: () => void;
+    serviceMocks.prepareWorkspaceEnvironment.mockReturnValue(
+      new Promise<void>((resolve) => {
+        resolvePreparation = resolve;
+      }),
+    );
+    useAppStore.setState({
+      selectedWorkspaceId: "ws-1",
+      workspaces: [makeWorkspace()],
+    });
+
+    await renderHarness();
+    expect(useAppStore.getState().workspaceEnvironment["ws-1"]).toEqual({
+      status: "preparing",
+    });
+
+    act(() => {
+      useAppStore.setState({ selectedWorkspaceId: null });
+    });
+
+    expect(useAppStore.getState().workspaceEnvironment["ws-1"]).toEqual({
+      status: "idle",
+    });
+
+    await act(async () => {
+      resolvePreparation();
+      await Promise.resolve();
+    });
+
+    expect(useAppStore.getState().workspaceEnvironment["ws-1"]).toEqual({
+      status: "idle",
+    });
+  });
+
+  it("marks the workspace as errored when env preparation fails", async () => {
+    serviceMocks.prepareWorkspaceEnvironment.mockRejectedValue(
+      new Error("direnv blocked"),
+    );
+    useAppStore.setState({
+      selectedWorkspaceId: "ws-1",
+      workspaces: [makeWorkspace()],
+    });
+
+    await renderHarness();
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(useAppStore.getState().workspaceEnvironment["ws-1"]).toEqual({
+      status: "error",
+      error: "Error: direnv blocked",
+    });
+    expect(useAppStore.getState().toasts.at(-1)?.message).toBe(
+      "Workspace environment failed: Error: direnv blocked",
+    );
+  });
 });

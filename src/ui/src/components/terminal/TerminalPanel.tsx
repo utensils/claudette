@@ -94,6 +94,7 @@ interface AgentTaskOutputPayload {
 
 const terminalInputEncoder = new TextEncoder();
 const terminalContextMenuOptions = { capture: true };
+type AppStoreState = ReturnType<typeof useAppStore.getState>;
 
 function encodeTerminalCommand(command: string): number[] {
   const normalized = command.replace(/\r?\n/g, "\r");
@@ -103,11 +104,21 @@ function encodeTerminalCommand(command: string): number[] {
 
 async function waitForWorkspaceEnvironment(workspaceId: string) {
   for (let attempt = 0; attempt < 300; attempt += 1) {
-    const status =
-      useAppStore.getState().workspaceEnvironment[workspaceId]?.status;
-    if (status !== "preparing") return;
+    if (!workspaceEnvironmentPending(useAppStore.getState(), workspaceId)) {
+      return;
+    }
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
+}
+
+function workspaceEnvironmentPending(
+  state: AppStoreState,
+  workspaceId: string,
+): boolean {
+  const workspace = state.workspaces.find((w) => w.id === workspaceId);
+  if (!workspace || workspace.remote_connection_id) return false;
+  const status = state.workspaceEnvironment[workspaceId]?.status;
+  return status !== "ready" && status !== "error";
 }
 
 // Per-leaf xterm + PTY handle. The container is a detached <div> that we
@@ -358,7 +369,7 @@ export const TerminalPanel = memo(function TerminalPanel() {
   const selectedWorkspaceId = useAppStore((s) => s.selectedWorkspaceId);
   const workspaceEnvironmentPreparing = useAppStore((s) =>
     s.selectedWorkspaceId
-      ? s.workspaceEnvironment[s.selectedWorkspaceId]?.status === "preparing"
+      ? workspaceEnvironmentPending(s, s.selectedWorkspaceId)
       : false,
   );
   const workspaces = useAppStore((s) => s.workspaces);
@@ -477,7 +488,7 @@ export const TerminalPanel = memo(function TerminalPanel() {
   const handleCreateTab = useCallback(async () => {
     const wsId = selectedWorkspaceIdRef.current;
     if (!wsId) return;
-    if (useAppStore.getState().workspaceEnvironment[wsId]?.status === "preparing") return;
+    if (workspaceEnvironmentPending(useAppStore.getState(), wsId)) return;
     try {
       const tab = await createTerminalTab(wsId);
       addTerminalTab(wsId, tab);
