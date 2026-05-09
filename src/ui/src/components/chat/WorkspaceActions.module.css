@@ -13,7 +13,6 @@
   background: var(--chat-input-bg);
   overflow: hidden;
   box-shadow: var(--shadow-sm);
-  isolation: isolate;
 }
 
 .primaryButton,
@@ -134,10 +133,7 @@
 
 .appIconImage {
   object-fit: contain;
-  background: transparent;
-  backface-visibility: hidden;
-  contain: paint;
-  transform: translateZ(0);
+  background: var(--app-icon-image-bg);
 }
 
 .appIconFallback {

@@ -61,6 +61,7 @@
   --hover-bg-subtle:     rgba(240, 235, 229, 0.04);
   --selected-bg:         rgba(224, 120, 80, 0.10);
   --divider:             #3d3832;
+  --app-icon-image-bg:   #ffffff;
 
   /* ---- Agent status ---- */
   --status-running:      #e07850;
