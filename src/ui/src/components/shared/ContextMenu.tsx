@@ -19,6 +19,7 @@ export type ContextMenuItem =
       label: string;
       onSelect: () => void | Promise<void>;
       icon?: ReactNode;
+      shortcut?: string;
       disabled?: boolean;
       variant?: "default" | "danger";
       closeOnSelect?: boolean;
@@ -143,7 +144,12 @@ export function ContextMenu({
             }}
           >
             {item.icon ? <span className={styles.icon}>{item.icon}</span> : null}
-            <span>{item.label}</span>
+            <span className={styles.label}>{item.label}</span>
+            {item.shortcut ? (
+              <span className={styles.shortcut} aria-hidden="true">
+                {item.shortcut}
+              </span>
+            ) : null}
           </button>
         );
       })}

@@ -21,7 +21,7 @@ import {
 } from "@tauri-apps/plugin-clipboard-manager";
 import { useAppStore } from "../../stores/useAppStore";
 import { getTerminalTheme } from "../../utils/theme";
-import { tooltipAttributes } from "../../hotkeys/display";
+import { getHotkeyLabel, tooltipAttributes } from "../../hotkeys/display";
 import { isMacHotkeyPlatform } from "../../hotkeys/platform";
 import {
   createTerminalTab,
@@ -1270,17 +1270,31 @@ export const TerminalPanel = memo(function TerminalPanel() {
 
   const terminalContextMenuItems = useMemo<AttachmentContextMenuItem[]>(() => {
     const items: AttachmentContextMenuItem[] = [];
+    const copyShortcut =
+      getHotkeyLabel("terminal.copy-selection", keybindings, hotkeyIsMac) ?? undefined;
+    const pasteShortcut =
+      getHotkeyLabel("terminal.paste", keybindings, hotkeyIsMac) ?? undefined;
     if (contextMenu?.hasSelection) {
-      items.push({ label: "Copy", onSelect: handleCopyContextTerminal });
+      items.push({
+        label: "Copy",
+        shortcut: copyShortcut,
+        onSelect: handleCopyContextTerminal,
+      });
     }
     if (contextMenu?.leafId) {
-      items.push({ label: "Paste", onSelect: handlePasteContextTerminal });
+      items.push({
+        label: "Paste",
+        shortcut: pasteShortcut,
+        onSelect: handlePasteContextTerminal,
+      });
     }
     items.push({ label: "Clear terminal", onSelect: handleClearContextTerminal });
     return items;
   }, [
     contextMenu?.hasSelection,
     contextMenu?.leafId,
+    keybindings,
+    hotkeyIsMac,
     handleCopyContextTerminal,
     handlePasteContextTerminal,
     handleClearContextTerminal,

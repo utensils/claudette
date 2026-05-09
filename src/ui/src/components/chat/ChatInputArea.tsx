@@ -341,6 +341,14 @@ export function ChatInputArea({
     voice.state === "recording" || voice.state === "idle"
       ? tooltipWithHotkey(voiceButtonLabel, "voice.toggle", keybindings, isMac)
       : voiceButtonLabel;
+  const sendButtonLabel = isRunning
+    ? t("stop_agent")
+    : composerMode === "shell"
+      ? t("run_shell_command")
+      : t("send_message");
+  const sendButtonTooltip = isRunning
+    ? tooltipWithHotkey(sendButtonLabel, "global.dismiss-or-stop", keybindings, isMac)
+    : null;
 
   // VU meter dynamic-vs-static decision lives in the parent because it
   // depends on the OS reduced-motion preference and the active provider's
@@ -1399,20 +1407,9 @@ export function ChatInputArea({
             className={`${styles.sendBtn} ${isRunning ? styles.sendBtnStop : ""}`}
             onClick={isRunning ? onStop : handleSend}
             disabled={!isRunning && !chatInput.trim() && pendingAttachments.length === 0}
-            title={
-              isRunning
-                ? t("stop_agent")
-                : composerMode === "shell"
-                  ? t("run_shell_command")
-                  : t("send_message")
-            }
-            aria-label={
-              isRunning
-                ? t("stop_agent")
-                : composerMode === "shell"
-                  ? t("run_shell_command")
-                  : t("send_message")
-            }
+            title={sendButtonTooltip ? undefined : sendButtonLabel}
+            data-tooltip={sendButtonTooltip ?? undefined}
+            aria-label={sendButtonLabel}
           >
             {isRunning ? <Square size={16} /> : <Send size={16} />}
           </button>

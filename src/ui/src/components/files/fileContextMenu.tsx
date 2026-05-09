@@ -16,6 +16,7 @@ export interface FileContextTarget {
 
 export interface FileContextMenuCallbacks {
   newFile?: () => void;
+  newFileShortcut?: string;
   open: () => void | Promise<void>;
   reveal: () => void | Promise<void>;
   copyPath: () => void | Promise<void>;
@@ -51,6 +52,7 @@ export function buildFileContextMenuItems(
           {
             label: "New File",
             icon: <FilePlus size={14} aria-hidden="true" />,
+            shortcut: callbacks.newFileShortcut,
             onSelect: callbacks.newFile,
             closeOnSelect: false,
           } satisfies ContextMenuItem,

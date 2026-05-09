@@ -7,6 +7,8 @@ import {
 } from "../../services/tauri";
 import { useAppStore } from "../../stores/useAppStore";
 import { pathMatchesTarget } from "../../stores/slices/fileTreeSlice";
+import { getHotkeyLabel } from "../../hotkeys/display";
+import { isMacHotkeyPlatform } from "../../hotkeys/platform";
 import { ContextMenu, type ContextMenuItem } from "../shared/ContextMenu";
 import { DeletePathConfirm } from "./DeletePathConfirm";
 import {
@@ -56,6 +58,7 @@ export function FilePathContextMenu({
 }: FilePathContextMenuProps) {
   const openFileTab = useAppStore((s) => s.openFileTab);
   const addToast = useAppStore((s) => s.addToast);
+  const keybindings = useAppStore((s) => s.keybindings);
   const { trashPath } = useFilePathActions(workspaceId);
   const [deleteTarget, setDeleteTarget] = useState<FileContextTarget | null>(null);
   const [menuVisible, setMenuVisible] = useState(true);
@@ -69,6 +72,8 @@ export function FilePathContextMenu({
   );
 
   const items = useMemo<ContextMenuItem[]>(() => {
+    const newFileShortcut =
+      getHotkeyLabel("global.new-tab", keybindings, isMacHotkeyPlatform()) ?? undefined;
     const fileItems = buildFileContextMenuItems(target, {
       newFile: onCreateFileRequest
         ? () => {
@@ -77,6 +82,7 @@ export function FilePathContextMenu({
             onClose();
           }
         : undefined,
+      newFileShortcut,
       open: () => {
         if (target.isDirectory) {
           return openWorkspacePath(workspaceId, target.path).finally(() =>
@@ -117,6 +123,7 @@ export function FilePathContextMenu({
   }, [
     addToast,
     beforeItems,
+    keybindings,
     onClose,
     onCreateFileRequest,
     onOperationComplete,
