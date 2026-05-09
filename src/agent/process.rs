@@ -336,11 +336,15 @@ async fn pid_is_alive(pid: u32) -> bool {
     }
 }
 
-#[cfg(test)]
+// Tests in this module shell out to POSIX-only utilities (`sh`, `kill -0`,
+// `trap`) and rely on Unix signal semantics, so the entire module is gated
+// behind `#[cfg(unix)]`. Without this gate, Windows builds emit `unused
+// import: super::*` because every individual test is `#[cfg(unix)]` and
+// `RUSTFLAGS=-Dwarnings` in CI promotes that to an error.
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
 
-    #[cfg(unix)]
     #[tokio::test]
     async fn test_stop_agent_graceful_stops_process_before_escalation() {
         // Spawn a process that traps SIGTERM and exits cleanly.

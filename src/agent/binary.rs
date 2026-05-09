@@ -297,6 +297,9 @@ fn login_shell_path() -> Option<OsString> {
 mod tests {
     use super::*;
 
+    // Used only by the Unix tests below; gated to silence the Windows-side
+    // dead-code warning that `RUSTFLAGS=-Dwarnings` promotes to an error.
+    #[cfg(unix)]
     fn no_shell() -> Option<OsString> {
         None
     }
