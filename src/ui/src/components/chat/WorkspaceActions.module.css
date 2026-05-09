@@ -137,10 +137,27 @@
 }
 
 .appIconFallback {
-  color: var(--text-muted);
-  font-size: var(--fs-xs);
-  font-weight: var(--fw-semibold);
-  line-height: 1;
+  color: var(--text-primary);
+}
+
+.appIcon_editor {
+  color: var(--tool-read);
+  background: var(--selected-bg);
+}
+
+.appIcon_file_manager {
+  color: var(--badge-done);
+  background: var(--hover-bg-subtle);
+}
+
+.appIcon_terminal {
+  color: var(--tool-bash);
+  background: var(--terminal-tab-bg);
+}
+
+.appIcon_ide {
+  color: var(--badge-plan);
+  background: var(--toolbar-active);
 }
 
 .utilityIcon {

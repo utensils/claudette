@@ -3,8 +3,12 @@ import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { useTranslation } from "react-i18next";
 import {
   ChevronDown,
+  Code2,
   Copy,
+  FolderOpen,
+  MonitorCog,
   SquareMenu,
+  Terminal,
 } from "lucide-react";
 import { useAppStore } from "../../stores/useAppStore";
 import { openWorkspaceInApp } from "../../services/tauri";
@@ -31,6 +35,19 @@ function preferredPrimaryApp(apps: DetectedApp[]): DetectedApp | null {
   return null;
 }
 
+function categoryIcon(category: AppCategory) {
+  switch (category) {
+    case "editor":
+      return Code2;
+    case "file_manager":
+      return FolderOpen;
+    case "terminal":
+      return Terminal;
+    case "ide":
+      return MonitorCog;
+  }
+}
+
 function AppIcon({ app }: { app: DetectedApp }) {
   if (app.icon_data_url) {
     return (
@@ -43,9 +60,13 @@ function AppIcon({ app }: { app: DetectedApp }) {
     );
   }
 
+  const Icon = categoryIcon(app.category);
   return (
-    <span className={styles.appIconFallback} aria-hidden="true">
-      {app.name.trim().charAt(0).toUpperCase()}
+    <span
+      className={`${styles.appIconFallback} ${styles[`appIcon_${app.category}`]}`}
+      aria-hidden="true"
+    >
+      <Icon size={14} strokeWidth={2.2} />
     </span>
   );
 }
