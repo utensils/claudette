@@ -9,9 +9,10 @@ use claudette::process::CommandWindowExt as _;
 const DEFAULT_APPS_JSON: &str = include_str!("../../default-apps.json");
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
+#[serde(rename_all = "snake_case")]
 pub enum AppCategory {
     Editor,
+    FileManager,
     Terminal,
     Ide,
 }
@@ -167,8 +168,25 @@ fn find_mac_app(app_name: &str) -> Option<PathBuf> {
         // Sentinel: always detected on macOS (e.g. Terminal.app).
         return Some(PathBuf::from("/System/Applications/Utilities/Terminal.app"));
     }
-    let path = PathBuf::from("/Applications").join(app_name);
-    if path.exists() { Some(path) } else { None }
+    let roots = [
+        PathBuf::from("/Applications"),
+        PathBuf::from("/Applications/Utilities"),
+        PathBuf::from("/System/Applications"),
+        PathBuf::from("/System/Applications/Utilities"),
+        PathBuf::from("/System/Library/CoreServices"),
+    ];
+
+    if let Some(path) = roots
+        .iter()
+        .map(|root| root.join(app_name))
+        .find(|path| path.exists())
+    {
+        return Some(path);
+    }
+
+    dirs::home_dir()
+        .map(|home| home.join("Applications").join(app_name))
+        .filter(|path| path.exists())
 }
 
 /// Detect installed apps from the given config, searching the provided PATH dirs.
@@ -177,26 +195,30 @@ fn detect_with_paths(config: &AppsConfig, path_dirs: &[PathBuf]) -> Vec<Detected
     let category_order = |c: &AppCategory| -> u8 {
         match c {
             AppCategory::Editor => 0,
-            AppCategory::Terminal => 1,
-            AppCategory::Ide => 2,
+            AppCategory::FileManager => 1,
+            AppCategory::Terminal => 2,
+            AppCategory::Ide => 3,
         }
     };
 
-    let mut detected: Vec<DetectedApp> = Vec::new();
+    let mut detected: Vec<(usize, DetectedApp)> = Vec::new();
 
-    for entry in &config.apps {
+    for (index, entry) in config.apps.iter().enumerate() {
         // Try bin_names first.
         if let Some(bin_path) = entry
             .bin_names
             .iter()
             .find_map(|name| find_binary(name, path_dirs))
         {
-            detected.push(DetectedApp {
-                id: entry.id.clone(),
-                name: entry.name.clone(),
-                category: entry.category,
-                detected_path: bin_path.to_string_lossy().to_string(),
-            });
+            detected.push((
+                index,
+                DetectedApp {
+                    id: entry.id.clone(),
+                    name: entry.name.clone(),
+                    category: entry.category,
+                    detected_path: bin_path.to_string_lossy().to_string(),
+                },
+            ));
             continue;
         }
 
@@ -207,23 +229,26 @@ fn detect_with_paths(config: &AppsConfig, path_dirs: &[PathBuf]) -> Vec<Detected
             .iter()
             .find_map(|name| find_mac_app(name))
         {
-            detected.push(DetectedApp {
-                id: entry.id.clone(),
-                name: entry.name.clone(),
-                category: entry.category,
-                detected_path: app_path.to_string_lossy().to_string(),
-            });
+            detected.push((
+                index,
+                DetectedApp {
+                    id: entry.id.clone(),
+                    name: entry.name.clone(),
+                    category: entry.category,
+                    detected_path: app_path.to_string_lossy().to_string(),
+                },
+            ));
             continue;
         }
     }
 
     detected.sort_by(|a, b| {
-        category_order(&a.category)
-            .cmp(&category_order(&b.category))
-            .then_with(|| a.name.cmp(&b.name))
+        category_order(&a.1.category)
+            .cmp(&category_order(&b.1.category))
+            .then_with(|| a.0.cmp(&b.0))
     });
 
-    detected
+    detected.into_iter().map(|(_, app)| app).collect()
 }
 
 /// Public detection entry point using the real system PATH.
@@ -495,6 +520,16 @@ pub async fn open_workspace_in_app(
         return open_applescript(&app_id, &worktree_path).await;
     }
 
+    #[cfg(target_os = "macos")]
+    if entry.open_args.first().is_some_and(|a| a == "__open__") {
+        tokio::process::Command::new("open")
+            .no_console_window()
+            .arg(&worktree_path)
+            .spawn()
+            .map_err(|e| format!("Failed to open workspace: {e}"))?;
+        return Ok(());
+    }
+
     // Handle __open_a__ sentinel (Xcode) — look up detected_path to get the .app bundle.
     #[cfg(target_os = "macos")]
     if entry.open_args.first().is_some_and(|a| a == "__open_a__") {
@@ -617,6 +652,20 @@ mod tests {
     }
 
     #[test]
+    fn parse_file_manager_category() {
+        let json = r#"{
+            "apps": [{
+                "id": "finder",
+                "name": "Finder",
+                "category": "file_manager",
+                "open_args": ["__open__"]
+            }]
+        }"#;
+        let config: AppsConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(config.apps[0].category, AppCategory::FileManager);
+    }
+
+    #[test]
     fn parse_embedded_default_config() {
         let config: AppsConfig =
             serde_json::from_str(DEFAULT_APPS_JSON).expect("default-apps.json must parse");
@@ -727,10 +776,9 @@ mod tests {
     }
 
     #[test]
-    fn detect_sorted_by_category_then_name() {
+    fn detect_sorted_by_category_then_config_order() {
         let tmp = tempfile::tempdir().unwrap();
-        // Create two executables
-        for name in ["zterm", "aeditor"] {
+        for name in ["zterm", "beditor", "aeditor"] {
             let bin = tmp.path().join(name);
             std::fs::write(&bin, "#!/bin/sh\n").unwrap();
             #[cfg(unix)]
@@ -752,6 +800,15 @@ mod tests {
                     needs_terminal: false,
                 },
                 AppEntry {
+                    id: "beditor".into(),
+                    name: "B Editor".into(),
+                    category: AppCategory::Editor,
+                    bin_names: vec!["beditor".into()],
+                    mac_app_names: vec![],
+                    open_args: vec!["{}".into()],
+                    needs_terminal: false,
+                },
+                AppEntry {
                     id: "aeditor".into(),
                     name: "A Editor".into(),
                     category: AppCategory::Editor,
@@ -764,9 +821,13 @@ mod tests {
         };
 
         let detected = detect_with_paths(&config, &[tmp.path().to_path_buf()]);
-        assert_eq!(detected.len(), 2);
-        // Editors come before Terminals (category order: editor, terminal, ide)
-        assert_eq!(detected[0].id, "aeditor");
-        assert_eq!(detected[1].id, "zterm");
+        assert_eq!(detected.len(), 3);
+        assert_eq!(
+            detected
+                .iter()
+                .map(|app| app.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["beditor", "aeditor", "zterm"],
+        );
     }
 }

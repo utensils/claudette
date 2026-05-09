@@ -1,4 +1,4 @@
-export type AppCategory = "editor" | "terminal" | "ide";
+export type AppCategory = "editor" | "file_manager" | "terminal" | "ide";
 
 export interface DetectedApp {
   id: string;
