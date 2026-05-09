@@ -358,9 +358,9 @@ impl PluginRegistry {
 
     /// Whether the plugin's `manifest.required_clis` were all on PATH at
     /// registry discovery. Returns `true` for unknown plugin names so
-    /// the CLI-availability check is not the surface that surfaces
-    /// "missing plugin" errors — `call_operation` already does that with
-    /// a clearer error.
+    /// this method isn't the place that reports "missing plugin"
+    /// errors — `call_operation` already does that with a clearer
+    /// `PluginNotFound` error.
     ///
     /// Used by the env-provider dispatcher to treat an env-provider
     /// whose CLI is missing as "skip silently" rather than as a hard

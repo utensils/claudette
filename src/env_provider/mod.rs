@@ -1117,19 +1117,22 @@ mod tests {
         let plugin_dir = tempfile::tempdir().unwrap();
         let pdir = plugin_dir.path().join("env-fakecli");
         std::fs::create_dir_all(&pdir).unwrap();
-        std::fs::write(
-            pdir.join("plugin.json"),
-            r#"{
-                "name": "env-fakecli",
-                "display_name": "Fake CLI",
-                "version": "1.0.0",
-                "description": "test",
-                "kind": "env-provider",
-                "operations": ["detect", "export"],
-                "required_clis": ["claudette-test-definitely-not-on-path"]
-            }"#,
-        )
-        .unwrap();
+        // Generate a UUID-suffixed CLI name so the test stays
+        // deterministic even on (admittedly unlikely) machines where
+        // a binary with our hardcoded sentinel name happens to exist.
+        // No image we ship to / build on uses uuid-suffixed names, so
+        // collision is mathematically impossible here.
+        let fake_cli = format!("claudette-test-{}", uuid::Uuid::new_v4());
+        let manifest = serde_json::json!({
+            "name": "env-fakecli",
+            "display_name": "Fake CLI",
+            "version": "1.0.0",
+            "description": "test",
+            "kind": "env-provider",
+            "operations": ["detect", "export"],
+            "required_clis": [fake_cli],
+        });
+        std::fs::write(pdir.join("plugin.json"), manifest.to_string()).unwrap();
         std::fs::write(
             pdir.join("init.lua"),
             r#"
