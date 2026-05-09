@@ -31,11 +31,10 @@ export function SegmentedControl<T extends string>({
         const isActive = opt.value === value;
         const label =
           opt.disabled && opt.disabledTooltip ? opt.disabledTooltip : opt.tooltip;
-        // Use `aria-disabled` (not the native `disabled` attribute) so the
-        // browser still fires hover/focus events and the `title` tooltip
-        // surfaces on disabled segments — that's how users learn *why*
-        // Edit is unavailable on a binary/oversize/image file. Click is
-        // suppressed via the onClick guard. `aria-pressed` is still
+        // Use `aria-disabled` (not the native `disabled` attribute) so hover
+        // and focus still reach AppTooltip on disabled segments. That's how
+        // users learn why Edit is unavailable on binary/oversize/image files.
+        // Click is suppressed via the onClick guard. `aria-pressed` is still
         // emitted; the toggle's visual style flips through `.buttonActive`.
         return (
           <button

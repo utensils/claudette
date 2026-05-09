@@ -21,6 +21,7 @@
   "new_workspace": "新規ワークスペース",
   "settings": "設定",
   "help_menu_trigger": "ヘルプとリソース",
+  "jump_to_project": "プロジェクト {{number}} へ移動",
   "relink": "再リンク",
   "remove": "削除",
   "add_repository": "リポジトリを追加",

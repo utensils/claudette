@@ -34,7 +34,7 @@ import { UpdateBanner } from "../layout/UpdateBanner";
 import { ContextMenu, type ContextMenuItem } from "../shared/ContextMenu";
 import { useTabDragReorder } from "../../hooks/useTabDragReorder";
 import { TabDragGhost } from "../shared/TabDragGhost";
-import { getHotkeyLabel, tooltipAttributes } from "../../hotkeys/display";
+import { getHotkeyLabel, tooltipAttributes, tooltipWithHotkey } from "../../hotkeys/display";
 import type { HotkeyActionId } from "../../hotkeys/actions";
 import {
   isManualWorkspaceOrder,
@@ -1058,8 +1058,15 @@ export const Sidebar = memo(function Sidebar() {
           const jumpShortcut = jumpActionId
             ? getHotkeyLabel(jumpActionId, keybindings, isMac)
             : null;
-          const jumpTooltip = jumpShortcut
-            ? `Jump to project ${repoIdx + 1} (${jumpShortcut})`
+          const jumpLabel =
+            t("jump_to_project", { number: repoIdx + 1 }) ?? "";
+          const jumpTooltip = jumpActionId && jumpShortcut && jumpLabel
+            ? tooltipWithHotkey(
+                jumpLabel,
+                jumpActionId,
+                keybindings,
+                isMac,
+              )
             : undefined;
 
           return (

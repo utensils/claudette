@@ -21,6 +21,7 @@
   "new_workspace": "新建工作区",
   "settings": "设置",
   "help_menu_trigger": "帮助和资源",
+  "jump_to_project": "跳转到项目 {{number}}",
   "relink": "重新链接",
   "remove": "移除",
   "add_repository": "添加仓库",

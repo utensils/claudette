@@ -17,7 +17,7 @@ interface TooltipPosition {
   top: number;
 }
 
-interface FixedRect {
+export interface TooltipRect {
   left: number;
   top: number;
   right: number;
@@ -44,7 +44,7 @@ function readPlacement(el: HTMLElement): TooltipPlacement {
   return el.dataset.tooltipPlacement === "bottom" ? "bottom" : "top";
 }
 
-function toFixedRect(rect: DOMRect): FixedRect {
+function toFixedRect(rect: DOMRect): TooltipRect {
   const topLeft = viewportToFixed(rect.left, rect.top);
   const bottomRight = viewportToFixed(rect.right, rect.bottom);
   return {
@@ -55,6 +55,40 @@ function toFixedRect(rect: DOMRect): FixedRect {
     width: bottomRight.x - topLeft.x,
     height: bottomRight.y - topLeft.y,
   };
+}
+
+export function calculateTooltipPosition({
+  anchorRect,
+  tooltipRect,
+  viewport,
+  placement,
+}: {
+  anchorRect: TooltipRect;
+  tooltipRect: Pick<TooltipRect, "width" | "height">;
+  viewport: { width: number; height: number };
+  placement: TooltipPlacement;
+}): TooltipPosition {
+  const { width, height } = tooltipRect;
+  const centeredLeft = anchorRect.left + anchorRect.width / 2 - width / 2;
+  const maxLeft = viewport.width - width - VIEWPORT_MARGIN;
+  const left = clamp(centeredLeft, VIEWPORT_MARGIN, Math.max(VIEWPORT_MARGIN, maxLeft));
+
+  const preferredTop =
+    placement === "bottom"
+      ? anchorRect.bottom + TOOLTIP_GAP
+      : anchorRect.top - height - TOOLTIP_GAP;
+  const alternateTop =
+    placement === "bottom"
+      ? anchorRect.top - height - TOOLTIP_GAP
+      : anchorRect.bottom + TOOLTIP_GAP;
+  const fitsPreferred =
+    preferredTop >= VIEWPORT_MARGIN &&
+    preferredTop + height <= viewport.height - VIEWPORT_MARGIN;
+  const unclampedTop = fitsPreferred ? preferredTop : alternateTop;
+  const maxTop = viewport.height - height - VIEWPORT_MARGIN;
+  const top = clamp(unclampedTop, VIEWPORT_MARGIN, Math.max(VIEWPORT_MARGIN, maxTop));
+
+  return { left, top };
 }
 
 export function AppTooltip() {
@@ -160,28 +194,14 @@ export function AppTooltip() {
 
     const anchorRect = toFixedRect(tooltip.rect);
     const tooltipRect = toFixedRect(node.getBoundingClientRect());
-    const { width, height } = tooltipRect;
-    const viewport = viewportLayoutSize();
-    const centeredLeft = anchorRect.left + anchorRect.width / 2 - width / 2;
-    const maxLeft = viewport.width - width - VIEWPORT_MARGIN;
-    const left = clamp(centeredLeft, VIEWPORT_MARGIN, Math.max(VIEWPORT_MARGIN, maxLeft));
-
-    const preferredTop =
-      tooltip.placement === "bottom"
-        ? anchorRect.bottom + TOOLTIP_GAP
-        : anchorRect.top - height - TOOLTIP_GAP;
-    const alternateTop =
-      tooltip.placement === "bottom"
-        ? anchorRect.top - height - TOOLTIP_GAP
-        : anchorRect.bottom + TOOLTIP_GAP;
-    const fitsPreferred =
-      preferredTop >= VIEWPORT_MARGIN &&
-      preferredTop + height <= viewport.height - VIEWPORT_MARGIN;
-    const unclampedTop = fitsPreferred ? preferredTop : alternateTop;
-    const maxTop = viewport.height - height - VIEWPORT_MARGIN;
-    const top = clamp(unclampedTop, VIEWPORT_MARGIN, Math.max(VIEWPORT_MARGIN, maxTop));
-
-    setPosition({ left, top });
+    setPosition(
+      calculateTooltipPosition({
+        anchorRect,
+        tooltipRect,
+        viewport: viewportLayoutSize(),
+        placement: tooltip.placement,
+      }),
+    );
   }, [tooltip]);
 
   if (!tooltip || typeof document === "undefined") return null;

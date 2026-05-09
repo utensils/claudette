@@ -10,6 +10,7 @@
   box-shadow: var(--shadow-md);
   font-size: var(--fs-sm);
   line-height: 1.2;
-  white-space: nowrap;
+  white-space: normal;
+  overflow-wrap: anywhere;
   pointer-events: none;
 }
