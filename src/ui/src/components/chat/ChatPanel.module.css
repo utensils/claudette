@@ -22,11 +22,25 @@
   flex: 1;
   overflow-y: auto;
   overscroll-behavior-y: none;
+  margin-right: var(--scrollbar-edge-inset);
   padding: 20px 28px;
   display: flex;
   flex-direction: column;
   gap: 2px;
   contain: layout style;
+}
+
+.messages::-webkit-scrollbar {
+  width: 12px;
+}
+
+.messages::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb);
+  border-radius: var(--radius-sm);
+}
+
+.messages::-webkit-scrollbar-thumb:hover {
+  background: var(--scrollbar-thumb-hover);
 }
 
 .empty {

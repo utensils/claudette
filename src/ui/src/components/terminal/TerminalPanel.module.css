@@ -229,6 +229,38 @@
   background: var(--scrollbar-thumb-hover) !important;
 }
 
+.termContainer :global(.xterm .xterm-scrollable-element > .scrollbar.vertical) {
+  left: auto !important;
+  right: 0 !important;
+  width: var(--scrollbar-size) !important;
+}
+
+.termContainer :global(.xterm .xterm-scrollable-element > .scrollbar.horizontal) {
+  bottom: 0 !important;
+  height: var(--scrollbar-size) !important;
+}
+
+.termContainer :global(.xterm .xterm-scrollable-element > .scrollbar > .slider) {
+  background: var(--scrollbar-thumb) !important;
+  border-radius: var(--radius-sm) !important;
+}
+
+.termContainer :global(.xterm .xterm-scrollable-element > .scrollbar.vertical > .slider) {
+  left: 0 !important;
+  right: 0 !important;
+  width: var(--scrollbar-size) !important;
+}
+
+.termContainer :global(.xterm .xterm-scrollable-element > .scrollbar.horizontal > .slider) {
+  bottom: 0 !important;
+  height: var(--scrollbar-size) !important;
+}
+
+.termContainer :global(.xterm .xterm-scrollable-element > .scrollbar > .slider:hover),
+.termContainer :global(.xterm .xterm-scrollable-element > .scrollbar > .slider.active) {
+  background: var(--scrollbar-thumb-hover) !important;
+}
+
 .spawnError {
   position: absolute;
   top: 12px;

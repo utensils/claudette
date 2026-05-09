@@ -61,8 +61,8 @@
   --hover-bg-subtle:     rgba(240, 235, 229, 0.04);
   --selected-bg:         rgba(224, 120, 80, 0.10);
   --divider:             #3d3832;
-  --app-icon-image-bg:   #ffffff;
   --scrollbar-size:      8px;
+  --scrollbar-edge-inset: 8px;
   --scrollbar-thumb:     var(--hover-bg);
   --scrollbar-thumb-hover: rgba(var(--accent-primary-rgb), 0.25);
 

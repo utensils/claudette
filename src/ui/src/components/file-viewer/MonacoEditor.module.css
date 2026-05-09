@@ -1,6 +1,7 @@
 .host {
   flex: 1;
   min-height: 0;
+  margin-right: var(--scrollbar-edge-inset);
   overflow: hidden;
   display: flex;
 }

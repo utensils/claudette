@@ -133,7 +133,7 @@
 
 .appIconImage {
   overflow: hidden;
-  background-color: var(--app-icon-image-bg);
+  background-color: transparent;
   background-position: center;
   background-repeat: no-repeat;
   background-size: contain;
