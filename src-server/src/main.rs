@@ -46,6 +46,16 @@ enum Commands {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Install the shared `tracing` subscriber before any code path emits
+    // events. Without this, the conversions in `lib.rs` / `ws.rs` /
+    // `handler.rs` (plugin bootstrap warnings, TLS handshake failures,
+    // per-connection auth diagnostics) would be dropped on the floor when
+    // someone runs the standalone `claudette-server` binary — only the
+    // Tauri-embedded path installed the subscriber before. Held for the
+    // life of `main` so the non-blocking file appender flushes pending
+    // writes on exit.
+    let _log_handle = claudette::logging::init();
+
     let cli = Cli::parse();
     let config_path = cli.config.clone().unwrap_or_else(default_config_path);
 
