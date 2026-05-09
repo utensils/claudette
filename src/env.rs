@@ -420,6 +420,11 @@ mod tests {
         assert!(result.is_ok(), "should find `echo` in enriched PATH");
     }
 
+    // `sh` is not on a default Windows PATH (Git Bash ships `bash.exe` but
+    // not a top-level `sh.exe`), so this assertion is Unix-only. The sibling
+    // `which_in_enriched_path_finds_echo` covers the equivalent positive case
+    // on Windows via Scoop's GNU coreutils `echo.exe`.
+    #[cfg(unix)]
     #[test]
     fn which_in_enriched_path_finds_sh() {
         let result = which_in_enriched_path("sh");
