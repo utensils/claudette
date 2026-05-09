@@ -77,18 +77,10 @@
   }
 }
 
-.group + .group,
 .utilityGroup {
   margin-top: var(--space-1);
   padding-top: var(--space-1);
   border-top: 1px solid var(--divider);
-}
-
-.groupLabel {
-  padding: var(--space-1) var(--space-2);
-  color: var(--text-faint);
-  font-size: var(--fs-xs);
-  line-height: var(--lh-tight);
 }
 
 .menuItem {
@@ -125,7 +117,8 @@
   font-size: var(--fs-base);
 }
 
-.appIcon,
+.appIconImage,
+.appIconFallback,
 .utilityIcon {
   display: inline-flex;
   align-items: center;
@@ -138,24 +131,16 @@
   background: var(--hover-bg);
 }
 
-.appIcon_editor {
-  color: var(--tool-read);
-  background: var(--selected-bg);
+.appIconImage {
+  object-fit: contain;
+  background: transparent;
 }
 
-.appIcon_file_manager {
-  color: var(--badge-done);
-  background: var(--hover-bg-subtle);
-}
-
-.appIcon_terminal {
-  color: var(--tool-bash);
-  background: var(--terminal-tab-bg);
-}
-
-.appIcon_ide {
-  color: var(--badge-plan);
-  background: var(--toolbar-active);
+.appIconFallback {
+  color: var(--text-muted);
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-semibold);
+  line-height: 1;
 }
 
 .utilityIcon {

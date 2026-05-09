@@ -3,11 +3,8 @@ import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { useTranslation } from "react-i18next";
 import {
   ChevronDown,
-  Code2,
   Copy,
-  FolderOpen,
-  MonitorCog,
-  Terminal,
+  SquareMenu,
 } from "lucide-react";
 import { useAppStore } from "../../stores/useAppStore";
 import { openWorkspaceInApp } from "../../services/tauri";
@@ -26,32 +23,6 @@ const CATEGORY_ORDER: AppCategory[] = [
   "ide",
 ];
 
-function categoryLabel(category: AppCategory): string {
-  switch (category) {
-    case "editor":
-      return "Editors";
-    case "file_manager":
-      return "File managers";
-    case "terminal":
-      return "Terminals";
-    case "ide":
-      return "IDEs";
-  }
-}
-
-function categoryIcon(category: AppCategory) {
-  switch (category) {
-    case "editor":
-      return Code2;
-    case "file_manager":
-      return FolderOpen;
-    case "terminal":
-      return Terminal;
-    case "ide":
-      return MonitorCog;
-  }
-}
-
 function preferredPrimaryApp(apps: DetectedApp[]): DetectedApp | null {
   for (const category of CATEGORY_ORDER) {
     const app = apps.find((candidate) => candidate.category === category);
@@ -61,13 +32,20 @@ function preferredPrimaryApp(apps: DetectedApp[]): DetectedApp | null {
 }
 
 function AppIcon({ app }: { app: DetectedApp }) {
-  const Icon = categoryIcon(app.category);
+  if (app.icon_data_url) {
+    return (
+      <img
+        className={styles.appIconImage}
+        src={app.icon_data_url}
+        alt=""
+        aria-hidden="true"
+      />
+    );
+  }
+
   return (
-    <span
-      className={`${styles.appIcon} ${styles[`appIcon_${app.category}`]}`}
-      aria-hidden="true"
-    >
-      <Icon size={14} strokeWidth={2.2} />
+    <span className={styles.appIconFallback} aria-hidden="true">
+      {app.name.trim().charAt(0).toUpperCase()}
     </span>
   );
 }
@@ -168,7 +146,7 @@ export function WorkspaceActions({
             if (primaryApp) void openApp(primaryApp);
           }}
         >
-          {primaryApp ? <AppIcon app={primaryApp} /> : <Code2 size={14} />}
+          {primaryApp ? <AppIcon app={primaryApp} /> : <SquareMenu size={14} />}
         </button>
         <button
           className={styles.menuButton}
@@ -185,28 +163,19 @@ export function WorkspaceActions({
       </div>
       {open && (
         <div className={styles.menu} role="menu">
-          {CATEGORY_ORDER.map((category) => {
-            const categoryApps = apps.filter((app) => app.category === category);
-            if (categoryApps.length === 0) return null;
-            return (
-              <div className={styles.group} key={category}>
-                <div className={styles.groupLabel}>{categoryLabel(category)}</div>
-                {categoryApps.map((app) => (
-                  <button
-                    className={styles.menuItem}
-                    type="button"
-                    role="menuitem"
-                    key={app.id}
-                    disabled={busyAction !== null}
-                    onClick={() => void openApp(app)}
-                  >
-                    <AppIcon app={app} />
-                    <span className={styles.menuItemLabel}>{app.name}</span>
-                  </button>
-                ))}
-              </div>
-            );
-          })}
+          {apps.map((app) => (
+            <button
+              className={styles.menuItem}
+              type="button"
+              role="menuitem"
+              key={app.id}
+              disabled={busyAction !== null}
+              onClick={() => void openApp(app)}
+            >
+              <AppIcon app={app} />
+              <span className={styles.menuItemLabel}>{app.name}</span>
+            </button>
+          ))}
           <div className={styles.utilityGroup}>
             <button
               className={styles.menuItem}

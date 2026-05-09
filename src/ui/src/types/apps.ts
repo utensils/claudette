@@ -5,4 +5,5 @@ export interface DetectedApp {
   name: string;
   category: AppCategory;
   detected_path: string;
+  icon_data_url?: string;
 }
