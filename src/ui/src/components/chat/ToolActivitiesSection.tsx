@@ -17,6 +17,8 @@ import {
   groupToolActivitiesForDisplay,
 } from "./toolActivityGroups";
 import { collapsedToolGroupKey } from "./collapsedToolGroupKey";
+import { InlineEditSummary } from "./EditChangeSummary";
+import { summarizeToolActivityEdit } from "./editActivitySummary";
 
 /**
  * Current tool activities section — subscribes to toolActivities for this workspace.
@@ -182,16 +184,25 @@ function ToolActivityRow({
   searchQuery: string;
   worktreePath?: string | null;
 }) {
+  const editSummary = summarizeToolActivityEdit(activity);
   return (
     <div className={styles.toolActivity}>
       <div className={styles.toolHeader}>
-        <span
-          className={styles.toolName}
-          style={{ color: toolColor(activity.toolName) }}
-        >
-          {activity.toolName}
-        </span>
-        {activitySummaryText(activity) && (
+        {editSummary ? (
+          <InlineEditSummary
+            summary={editSummary}
+            searchQuery={searchQuery}
+            worktreePath={worktreePath}
+          />
+        ) : (
+          <span
+            className={styles.toolName}
+            style={{ color: toolColor(activity.toolName) }}
+          >
+            {activity.toolName}
+          </span>
+        )}
+        {!editSummary && activitySummaryText(activity) && (
           <span className={styles.toolSummary}>
             <HighlightedPlainText
               text={relativizePath(activitySummaryText(activity), worktreePath)}

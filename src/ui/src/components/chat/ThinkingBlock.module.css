@@ -85,4 +85,10 @@
   padding: 2px 8px 4px 28px;
   border-top: none;
   background: transparent;
+  /* Inline thinking blocks live inside the chat scroller — they must
+   * not introduce a second scrollbar inside that surface. The boxed
+   * variant caps height at 400px and scrolls; the inline variant
+   * lets long thoughts grow naturally. */
+  max-height: none;
+  overflow-y: visible;
 }

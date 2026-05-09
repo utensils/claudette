@@ -1,3 +1,4 @@
+import { useMemo } from "react";
 import type { CompletedTurn, ToolActivity } from "../../stores/useAppStore";
 import type { TaskTrackerResult } from "../../hooks/useTaskTracker";
 import { relativizePath } from "../../hooks/toolSummary";
@@ -12,6 +13,13 @@ import {
 } from "./agentToolCallRendering";
 import { AgentToolCallGroup } from "./AgentToolCallGroup";
 import { isAgentActivity } from "./toolActivityGroups";
+import { InlineEditSummary, TurnEditSummaryCard } from "./EditChangeSummary";
+import {
+  type EditPreviewLine,
+  type EditSummary,
+  summarizeToolActivityEdit,
+  summarizeTurnEdits,
+} from "./editActivitySummary";
 
 /**
  * Render a single completed turn summary (collapsible tool call list).
@@ -30,6 +38,9 @@ export function TurnSummary({
   worktreePath,
   label,
   inline = false,
+  editSummaryFallback,
+  onLoadEditPreview,
+  onOpenEditFile,
 }: {
   turn: CompletedTurn;
   activities?: ToolActivity[];
@@ -52,6 +63,17 @@ export function TurnSummary({
   worktreePath?: string | null;
   label?: string;
   inline?: boolean;
+  /** Rescue summary used only when activity-derived edits return null —
+   *  typically the workspace-diff summary for the latest turn, where the
+   *  agent's tools couldn't be parsed (Bash heredoc, MCP write tool, etc.).
+   *  Activity-derived data wins when present so per-turn churn stays
+   *  scoped to what THIS turn touched, not the cumulative worktree diff. */
+  editSummaryFallback?: EditSummary | null;
+  onLoadEditPreview?: (filePath: string) => Promise<EditPreviewLine[]>;
+  /** Open a file in the Monaco editor tab. Wired by
+   *  `MessagesWithTurns` to `openFileTab(workspaceId, filePath)` —
+   *  same action the FILES tree uses, NOT the diff viewer. */
+  onOpenEditFile?: (filePath: string) => void;
 }) {
   const visibleActivities = activities ?? turn.activities;
   const hasElapsed = typeof turn.durationMs === "number" && turn.durationMs > 0;
@@ -62,6 +84,13 @@ export function TurnSummary({
   const hasRollback = !!onRollback;
   const shouldShowFooter =
     showFooter && (hasElapsed || hasTokens || hasCopy || hasFork || hasRollback);
+  const activityEditSummary = useMemo(
+    () => (showFooter ? summarizeTurnEdits(turn.activities) : null),
+    [showFooter, turn.activities],
+  );
+  const editSummary = showFooter
+    ? activityEditSummary ?? editSummaryFallback ?? null
+    : null;
 
   // Force-expand if the query matches in any activity summary or the
   // resolved tool-summary fallback. Without this, marks would land in
@@ -76,22 +105,35 @@ export function TurnSummary({
       activityMatchesSearch(activity, searchQuery, worktreePath),
     );
   const isExpanded = inline || !collapsed || queryHasMatch;
-  const renderedActivities = visibleActivities.map((act: ToolActivity) =>
-    isAgentActivity(act) ? (
-      <AgentToolCallGroup
-        key={act.toolUseId}
-        activity={act}
-        searchQuery={searchQuery}
-        worktreePath={worktreePath}
-        inline={inline}
-      />
-    ) : (
+  const renderedActivities = visibleActivities.map((act: ToolActivity) => {
+    if (isAgentActivity(act)) {
+      return (
+        <AgentToolCallGroup
+          key={act.toolUseId}
+          activity={act}
+          searchQuery={searchQuery}
+          worktreePath={worktreePath}
+          inline={inline}
+        />
+      );
+    }
+
+    const editSummaryForActivity = summarizeToolActivityEdit(act);
+    return (
       <div key={act.toolUseId} className={styles.toolActivity}>
         <div className={styles.toolHeader}>
-          <span className={styles.toolName} style={{ color: toolColor(act.toolName) }}>
-            {act.toolName}
-          </span>
-          {activitySummaryText(act) && (
+          {editSummaryForActivity ? (
+            <InlineEditSummary
+              summary={editSummaryForActivity}
+              searchQuery={searchQuery}
+              worktreePath={worktreePath}
+            />
+          ) : (
+            <span className={styles.toolName} style={{ color: toolColor(act.toolName) }}>
+              {act.toolName}
+            </span>
+          )}
+          {!editSummaryForActivity && activitySummaryText(act) && (
             <span className={styles.toolSummary}>
               <HighlightedPlainText
                 text={relativizePath(activitySummaryText(act), worktreePath)}
@@ -101,8 +143,8 @@ export function TurnSummary({
           )}
         </div>
       </div>
-    ),
-  );
+    );
+  });
 
   return (
     <div className={styles.turnSummaryWrapper}>
@@ -141,6 +183,15 @@ export function TurnSummary({
         <TaskProgressBar
           completedCount={taskProgress.completedCount}
           totalCount={taskProgress.totalCount}
+        />
+      )}
+      {editSummary && (
+        <TurnEditSummaryCard
+          summary={editSummary}
+          searchQuery={searchQuery}
+          worktreePath={worktreePath}
+          onLoadPreview={onLoadEditPreview}
+          onOpenFile={onOpenEditFile}
         />
       )}
       {shouldShowFooter && (
