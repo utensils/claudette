@@ -136,16 +136,10 @@ describe("buildModelCommands — extraUsage icon and description", () => {
   const close = vi.fn();
   const cmds = buildModelCommands("opus", onSelect, close);
 
-  // Opus 1M is included with Max/Team/Enterprise but extra usage on Pro, so its
-  // description names Pro explicitly. Sonnet 1M is extra usage on every paid plan,
-  // so it keeps the generic wording.
-  it("Opus 1M gets a Pro-only extra-usage description", () => {
-    const opus1m = cmds.find((c) => c.id === "model:opus")!;
-    expect(opus1m.description).toBe("Extra usage on Pro plans: 1M context billed at API rates");
-    expect(opus1m.icon.displayName ?? opus1m.icon.name).toContain("BadgeDollarSign");
-  });
-
-  it("Sonnet 1M gets the generic extra-usage description", () => {
+  // Sonnet 4.6 1M is the only model currently flagged as extra usage; on
+  // Max/Team/Enterprise plans Opus 1M is included with the subscription, so
+  // it intentionally does not surface the extra-usage indicator.
+  it("extra-usage models get BadgeDollarSign icon and description", () => {
     const sonnet1m = cmds.find((c) => c.id === "model:claude-sonnet-4-6[1m]")!;
     expect(sonnet1m.description).toBe("Extra usage: 1M context billed at API rates");
     expect(sonnet1m.icon.displayName ?? sonnet1m.icon.name).toContain("BadgeDollarSign");
@@ -155,6 +149,16 @@ describe("buildModelCommands — extraUsage icon and description", () => {
     const opus47 = cmds.find((c) => c.id === "model:claude-opus-4-7")!;
     expect(opus47.description).toBeUndefined();
     expect(opus47.icon.displayName ?? opus47.icon.name).toContain("Sparkles");
+  });
+
+  it("Opus 1M variants are not flagged as extra usage", () => {
+    const opus1m = cmds.find((c) => c.id === "model:opus")!;
+    expect(opus1m.description).toBeUndefined();
+    expect(opus1m.icon.displayName ?? opus1m.icon.name).toContain("Sparkles");
+
+    const opus46_1m = cmds.find((c) => c.id === "model:claude-opus-4-6[1m]")!;
+    expect(opus46_1m.description).toBeUndefined();
+    expect(opus46_1m.icon.displayName ?? opus46_1m.icon.name).toContain("Sparkles");
   });
 
   it("selected model gets checkmark in name", () => {

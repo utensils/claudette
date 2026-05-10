@@ -148,11 +148,7 @@ export function buildModelCommands(
   return models.map((m) => ({
     id: `model:${m.providerQualifiedId ?? m.id}`,
     name: `${m.providerLabel ? `${m.providerLabel} / ` : ""}${m.label}${m.id === selectedModel && (m.providerId ?? "anthropic") === selectedProvider ? " ✓" : ""}`,
-    description: m.extraUsage
-      ? m.extraUsageScope === "pro_only"
-        ? "Extra usage on Pro plans: 1M context billed at API rates"
-        : "Extra usage: 1M context billed at API rates"
-      : undefined,
+    description: m.extraUsage ? "Extra usage: 1M context billed at API rates" : undefined,
     category: "agent" as const,
     icon: m.extraUsage ? BadgeDollarSign : Sparkles,
     keywords: ["model", ...m.label.toLowerCase().split(/\s+/)],

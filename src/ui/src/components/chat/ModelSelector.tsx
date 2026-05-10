@@ -133,11 +133,7 @@ function ModelRow({
       {model.extraUsage && (
         <span
           className={styles.extraUsage}
-          title={t(
-            model.extraUsageScope === "pro_only"
-              ? "mcp_extra_usage_tip_pro_only"
-              : "mcp_extra_usage_tip",
-          )}
+          title={t("mcp_extra_usage_tip")}
         >
           <CircleDollarSign size={14} />
         </span>

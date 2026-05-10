@@ -149,7 +149,6 @@ export function ComposerToolbar({
     ? `${currentModel.providerLabel} / ${currentModel.label}`
     : currentModel?.label ?? selectedModel;
   const isExtraUsage = currentModel?.extraUsage ?? false;
-  const extraUsageProOnly = currentModel?.extraUsageScope === "pro_only";
   const isMac = isMacHotkeyPlatform();
 
   if (!loaded) return null;
@@ -163,13 +162,7 @@ export function ComposerToolbar({
           chevron
           onClick={() => setModelSelectorOpen(!modelSelectorOpen)}
           disabled={disabled}
-          title={
-            isExtraUsage
-              ? extraUsageProOnly
-                ? "Change model (extra usage on Pro plans: 1M context billed at API rates)"
-                : "Change model (extra usage: 1M context billed at API rates)"
-              : "Change model"
-          }
+          title={isExtraUsage ? "Change model (extra usage: 1M context billed at API rates)" : "Change model"}
         >
           {isExtraUsage && <CircleDollarSign size={14} className={styles.extraUsage} />}
         </ToolbarPill>
