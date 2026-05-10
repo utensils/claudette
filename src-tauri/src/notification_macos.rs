@@ -60,8 +60,10 @@ static DELEGATE_REGISTERED: OnceLock<()> = OnceLock::new();
 
 const DELEGATE_CLASS_NAME: &str = "ClaudetteNotificationDelegate";
 
-// `UNAuthorizationOptions` bits we care about (alert + sound).
-const UN_AUTH_BADGE: usize = 1 << 0;
+// `UNAuthorizationOptions` bits we care about. Notably absent: BADGE.
+// We never call `setBadge:` anywhere in `src-tauri`, so requesting badge
+// capability would broaden the system permission prompt for a feature
+// we don't use.
 const UN_AUTH_SOUND: usize = 1 << 1;
 const UN_AUTH_ALERT: usize = 1 << 2;
 
@@ -292,7 +294,7 @@ unsafe fn request_authorization() {
     if center.is_null() {
         return;
     }
-    let options = UN_AUTH_ALERT | UN_AUTH_SOUND | UN_AUTH_BADGE;
+    let options = UN_AUTH_ALERT | UN_AUTH_SOUND;
 
     let handler = ConcreteBlock::new(|granted: BOOL, error: *mut Object| {
         // `objc::runtime::BOOL` is the platform's native bool — `bool` on
@@ -331,11 +333,21 @@ unsafe fn post(workspace_id: &str, title: &str, body: &str, sound: &str) {
         return;
     }
 
+    // `[UNMutableNotificationContent new]` returns +1 retained. Cocoa
+    // factory methods named with `new`/`alloc`/`copy`/`mutableCopy`
+    // transfer ownership to the caller — unlike e.g.
+    // `[UNNotificationRequest requestWith…]` which returns autoreleased.
+    // `addNotificationRequest:` copies the content internally, so we own
+    // the original retain and must release it. Autorelease immediately
+    // so every early-return path below is leak-safe; the main thread's
+    // runloop autorelease pool reaps it on this iteration.
     let content_cls = class!(UNMutableNotificationContent);
     let content: *mut Object = unsafe { msg_send![content_cls, new] };
     if content.is_null() {
         return;
     }
+    let _: *mut Object = unsafe { msg_send![content, autorelease] };
+
     let _: () = unsafe { msg_send![content, setTitle: nsstring(title)] };
     let _: () = unsafe { msg_send![content, setBody: nsstring(body)] };
 
