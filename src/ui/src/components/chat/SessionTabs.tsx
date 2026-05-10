@@ -274,10 +274,21 @@ export function SessionTabs({ workspaceId }: Props) {
     // ("running" / "active" / "last" → confirm) stay in lockstep
     // between the close button and the keystroke. Each kind maps to
     // its own translated string so the message matches the trigger.
+    // Pull draft + pending-attachment state for the placeholder-skip
+    // guard inside chatCloseConfirmKind: a brand-new "New chat" with
+    // unsent typing in the composer must still trip the confirm dialog
+    // — letting the close button silently archive that session would
+    // discard the user's work-in-progress.
+    const storeNow = useAppStore.getState();
+    const draft = storeNow.chatDrafts[session.id] ?? null;
+    const pendingAttachmentsCount =
+      (storeNow.pendingAttachmentsBySession[session.id] ?? []).length;
     const kind = chatCloseConfirmKind({
       session,
       activeSessions,
       isActiveSession: session.id === selectedSessionId,
+      draft,
+      pendingAttachmentsCount,
     });
     if (kind !== "none") {
       const message =

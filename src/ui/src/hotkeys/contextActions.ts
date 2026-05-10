@@ -108,15 +108,32 @@ export function chatCloseConfirmKind(args: {
   session: ChatSession;
   activeSessions: readonly ChatSession[];
   isActiveSession: boolean;
+  /** Optional: caller passes the session's composer draft text so we can
+   *  preserve the close confirmation when there's unsent typing in the
+   *  box. Without this, the placeholder-skip rule below would silently
+   *  discard a user's in-progress prompt. */
+  draft?: string | null;
+  /** Optional: caller passes the session's pending-attachment count for
+   *  the same "don't lose unsent work" reason as `draft`. */
+  pendingAttachmentsCount?: number;
 }): ChatCloseConfirmKind {
-  const { session, activeSessions, isActiveSession } = args;
+  const {
+    session,
+    activeSessions,
+    isActiveSession,
+    draft,
+    pendingAttachmentsCount,
+  } = args;
   if (session.agent_status === "Running") return "running";
-  // A fresh, untouched placeholder ("New chat" with zero turns and no live
-  // agent) is safe to close without confirmation regardless of whether it's
-  // the active or last tab — there's nothing to lose. Letting it close
-  // quietly is what makes "close the final tab to land on the workspace
-  // empty state" feel right.
-  if (session.turn_count === 0) return "none";
+  const hasUnsentDraft =
+    (draft != null && draft.trim().length > 0) ||
+    (pendingAttachmentsCount != null && pendingAttachmentsCount > 0);
+  // A fresh, untouched placeholder ("New chat" with zero turns, no live
+  // agent, no draft, no pending attachments) is safe to close without
+  // confirmation regardless of whether it's the active or last tab —
+  // there's nothing to lose. The unsent-draft guard prevents Cmd+W from
+  // silently discarding composer content the user typed but hasn't sent.
+  if (session.turn_count === 0 && !hasUnsentDraft) return "none";
   const activeCount = activeSessions.filter((s) => s.status === "Active").length;
   if (isActiveSession) return "active";
   if (activeCount <= 1) return "last";
@@ -165,26 +182,24 @@ export function executeNewTab(overrides?: Partial<ContextActionDeps>): void {
 }
 
 /**
- * Cmd/Ctrl+Shift+N — create a new workspace in the given project. The
- * keyboard hook resolves which project (project-scoped repo → active
- * workspace's repo → first local repo) and hands the id to this fn so
- * the orchestration matches Sidebar's `+` button: generate slug, call
- * createWorkspace, push into the store, expand the parent sidebar group,
- * select the new workspace. Errors surface via console — the hook layer
- * doesn't have access to the toast slice without bloating its closure.
+ * Cmd/Ctrl+Shift+N — create a new workspace in the given project. Routes
+ * through the shared `createWorkspaceOrchestrated` so the hotkey path
+ * runs the FULL creation flow that the sidebar `+` button and the
+ * welcome-card CTA already use: generate slug, call createWorkspace,
+ * push into store, expand parent group, select the new workspace, surface
+ * the slug-rename rationale as a system message, and either auto-run
+ * the setup script or pop the confirmSetupScript modal. Earlier this
+ * helper had a reduced inline implementation that silently skipped the
+ * setup-script flow — that meant Cmd+Shift+N could land users in a
+ * workspace whose `.claudette.json` setup never ran.
  */
 export function executeNewWorkspace(repoId: string): void {
   void (async () => {
     try {
-      const { createWorkspace, generateWorkspaceName } = await import(
-        "../services/tauri"
+      const { createWorkspaceOrchestrated } = await import(
+        "../hooks/useCreateWorkspace"
       );
-      const generated = await generateWorkspaceName();
-      const result = await createWorkspace(repoId, generated.slug, true);
-      const store = useAppStore.getState();
-      store.addWorkspace(result.workspace);
-      store.expandRepo(repoId);
-      store.selectWorkspace(result.workspace.id);
+      await createWorkspaceOrchestrated(repoId);
     } catch (err) {
       console.error("[hotkey] executeNewWorkspace failed:", err);
     }
@@ -244,6 +259,12 @@ export function executeCloseTab(overrides?: Partial<ContextActionDeps>): void {
     session,
     activeSessions: sessions,
     isActiveSession: true,
+    // Read draft + pending-attachment state so a fresh placeholder with
+    // an unsent prompt typed into the composer still trips the confirm
+    // dialog instead of being silently archived.
+    draft: store.chatDrafts[sessionId] ?? null,
+    pendingAttachmentsCount:
+      (store.pendingAttachmentsBySession[sessionId] ?? []).length,
   });
 
   // The whole flow is async because Tauri's native ask() returns a

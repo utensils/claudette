@@ -143,6 +143,50 @@ describe("chatCloseConfirmKind", () => {
     });
     expect(kind).toBe("none");
   });
+
+  it("preserves the confirm when a fresh placeholder has a draft typed", () => {
+    // Regression: a brand-new session with turn_count===0 but unsent
+    // composer content must still trip the close confirmation —
+    // otherwise Cmd+W silently archives the session AND removeChatSession
+    // wipes the draft, discarding the user's in-progress prompt without
+    // a warning. The `draft` arg lets the helper see that work-in-flight.
+    const session = makeSession("a", { turn_count: 0 });
+    const kind = chatCloseConfirmKind({
+      session,
+      activeSessions: [session],
+      isActiveSession: true,
+      draft: "  half-typed prompt ",
+    });
+    expect(kind).toBe("active");
+  });
+
+  it("preserves the confirm when a fresh placeholder has a pending attachment", () => {
+    // Same regression as above for attachments: a screenshot dropped onto
+    // the composer survives in pendingAttachmentsBySession until the user
+    // sends. Dropping the confirm here would silently lose that file.
+    const session = makeSession("a", { turn_count: 0 });
+    const kind = chatCloseConfirmKind({
+      session,
+      activeSessions: [session],
+      isActiveSession: true,
+      pendingAttachmentsCount: 1,
+    });
+    expect(kind).toBe("active");
+  });
+
+  it("treats whitespace-only drafts as empty (no spurious confirm)", () => {
+    // Whitespace-only drafts (newlines from cursor positioning, leftover
+    // spaces from a focus-fallthrough) shouldn't trigger the unsent-work
+    // confirm — that would feel like a phantom dialog.
+    const session = makeSession("a", { turn_count: 0 });
+    const kind = chatCloseConfirmKind({
+      session,
+      activeSessions: [session],
+      isActiveSession: true,
+      draft: "   \n  ",
+    });
+    expect(kind).toBe("none");
+  });
 });
 
 describe("executeNewTab", () => {

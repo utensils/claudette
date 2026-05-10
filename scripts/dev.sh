@@ -28,11 +28,51 @@
 #                          the real ~/.claudette/ tree.
 set -euo pipefail
 
+print_usage() {
+  cat <<EOF
+Usage: scripts/dev.sh [FLAGS] [-- TAURI_PASSTHROUGH_ARGS...]
+
+Launch the Claudette Tauri dev build with port discovery, sidecar staging,
+and (on macOS) the signed-bundle runner so TCC permissions attach to
+Claudette rather than the terminal.
+
+Flags:
+  --clean              Run as a fresh user — points CLAUDETTE_HOME and
+                       CLAUDETTE_DATA_DIR at a per-PID tmp tree so the
+                       launch sees no existing repos, workspaces, or
+                       settings. Cleaned up on exit. Useful for testing
+                       first-run UX (welcome card, onboarding) without
+                       nuking the real ~/.claudette/ tree.
+  -h, --help           Print this usage and exit.
+  --                   Pass everything after this flag straight to the
+                       Tauri CLI (e.g. --release, --no-default-features).
+
+Env vars (each consulted at process start):
+  VITE_PORT_BASE       First Vite port to probe.            Default 14253
+  CLAUDETTE_DEBUG_PORT_BASE
+                       First debug-eval port to probe.      Default 19432
+  CARGO_TAURI_FEATURES Features to forward to \`cargo tauri dev\`.
+                       Default: devtools,server,voice,alternative-backends
+  CLAUDETTE_HOME       Override the ~/.claudette/ tree (workspaces,
+                       plugins, themes, logs, models, packs, apps.json).
+  CLAUDETTE_DATA_DIR   Override the OS data dir holding claudette.db
+                       (\`dirs::data_dir()/claudette/\` by default).
+  CLAUDETTE_LOG_DIR    Per-instance log dir override (otherwise derived
+                       from CLAUDETTE_HOME).
+
+Discovery file:
+  Each invocation writes \${TMPDIR:-/tmp}/claudette-dev/<pid>.json so the
+  /claudette-debug skill (and similar tools) can find the matching dev
+  build when multiple are running. Removed on exit.
+EOF
+}
+
 clean_session=0
 passthrough_args=()
 while (( $# )); do
   case "$1" in
     --clean) clean_session=1 ;;
+    -h|--help) print_usage; exit 0 ;;
     --) shift; passthrough_args+=("$@"); break ;;
     *) passthrough_args+=("$1") ;;
   esac
