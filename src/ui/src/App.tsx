@@ -160,7 +160,8 @@ function App() {
         // exactly the kind of regression we want the rollback to
         // catch — see the comment on the `bootOk` useEffect above.
         setInitialDataLoaded(true);
-        // Hydrate SCM summaries from persisted cache for instant sidebar display.
+        // Hydrate SCM summaries and detail from persisted cache so sidebar
+        // badges and the PR banner show instantly without a network call.
         for (const row of data.scm_cache) {
           if (row.pr_json == null) continue;
           try {
@@ -178,12 +179,24 @@ function App() {
             const checks = Array.isArray(parsedChecks)
               ? (parsedChecks as import("./types/plugin").CiCheck[])
               : [];
-            useAppStore.getState().setScmSummary(row.workspace_id, {
+            const store = useAppStore.getState();
+            store.setScmSummary(row.workspace_id, {
               hasPr: pr !== null,
               prState: pr?.state ?? null,
               ciState: pr ? deriveScmCiState(pr.ci_status, checks) : null,
               lastUpdated: new Date(row.fetched_at.replace(" ", "T") + "Z").getTime(),
             });
+            // Also seed the per-workspace detail map so selecting any workspace
+            // shows the PR banner immediately instead of waiting for a fetch.
+            if (pr) {
+              store.setScmDetail({
+                workspace_id: row.workspace_id,
+                pull_request: pr,
+                ci_checks: checks,
+                provider: row.provider ?? null,
+                error: row.error ?? null,
+              });
+            }
           } catch {
             // Corrupted cache entry — skip silently, will be refreshed by polling.
           }
@@ -541,10 +554,9 @@ function App() {
           : null,
         lastUpdated: Date.now(),
       });
-      // Update detail if this is the selected workspace
-      if (store.selectedWorkspaceId === detail.workspace_id) {
-        store.setScmDetail(detail);
-      }
+      // Update per-workspace detail for all polled workspaces so switching
+      // to any of them shows the PR banner immediately without a new fetch.
+      store.setScmDetail(detail);
     });
 
     // Listen for missing-CLI events (claude/git/gh not on PATH). Routes to the

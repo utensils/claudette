@@ -120,6 +120,7 @@ function M.ci_status(args)
         "--output-format", "json",
     })
     if not ok then
+        host.log("warn", "ci_status failed for branch " .. tostring(args.branch) .. ": " .. tostring(data))
         return {}
     end
     local checks = {}
