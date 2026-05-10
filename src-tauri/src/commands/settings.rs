@@ -129,7 +129,7 @@ pub fn list_notification_sounds() -> Vec<String> {
         sounds.extend(system);
     }
     #[cfg(windows)]
-    if let Ok(entries) = std::fs::read_dir(claudette::audio::WINDOWS_MEDIA_DIR) {
+    if let Ok(entries) = std::fs::read_dir(claudette::audio::windows_media_dir()) {
         let mut system: Vec<String> = entries
             .flatten()
             .filter_map(|e| {
@@ -282,9 +282,9 @@ pub fn play_notification_sound(sound: String, volume: Option<f64>) {
     {
         // PlaySoundW plays at system volume — `vol` is treated as a mute
         // toggle (handled above by the `<= 0.0` early return). For named
-        // sounds we look up `C:\Windows\Media\<name>.wav`; "Default" maps
-        // to the system "Notification.Default" alias which respects the
-        // user's chosen Default Beep in Sound settings.
+        // sounds we look up `<windows-media-dir>\<name>.wav`; "Default"
+        // maps to the system "Notification.Default" alias which respects
+        // the user's chosen Default Beep in Sound settings.
         if sound == "Default" {
             // Try the modern "Notification.Default" alias first; fall
             // back to `SystemDefault` (NT-era) for older Windows. Both
@@ -292,9 +292,20 @@ pub fn play_notification_sound(sound: String, volume: Option<f64>) {
             if !claudette::audio::play_alias_async("Notification.Default") {
                 claudette::audio::play_alias_async("SystemDefault");
             }
+        } else if !is_safe_sound_name(&sound) {
+            // Reject path separators, drive letters, and `..` so a
+            // setting like "..\..\Users\foo\secret" can't make us play
+            // arbitrary WAV files outside the system Media directory.
+            // `Path::join(absolute)` discards its base, so without this
+            // guard a maliciously edited DB row could read any file the
+            // user account can.
+            tracing::warn!(
+                target: "claudette::ui",
+                sound = %sound,
+                "notification sound name contains path syntax — refusing"
+            );
         } else {
-            let path = std::path::Path::new(claudette::audio::WINDOWS_MEDIA_DIR)
-                .join(format!("{sound}.wav"));
+            let path = claudette::audio::windows_media_dir().join(format!("{sound}.wav"));
             if !claudette::audio::play_wav_file_async(&path) {
                 tracing::debug!(
                     target: "claudette::ui",
@@ -330,8 +341,11 @@ pub(crate) fn build_notification_command(
         return None;
     }
     // Reject bare shell reserved keywords that will always fail with `sh -c`.
-    // Users sometimes enter "done" instead of `say "done"`.
-    // (Harmless on Windows — `cmd /C done` would error for the same reason.)
+    // Users sometimes enter "done" instead of `say "done"`. The check is
+    // POSIX-shell-specific — on Windows, `done` / `fi` / `esac` aren't
+    // reserved words in `cmd.exe`, and a `done.bat` on PATH is a legitimate
+    // command we shouldn't reject.
+    #[cfg(not(windows))]
     if is_bare_shell_keyword(cmd) {
         return None;
     }
@@ -354,13 +368,67 @@ pub(crate) fn build_notification_command(
     Some(command)
 }
 
-/// Returns true if `cmd` is a single shell reserved keyword that cannot
-/// be executed standalone (e.g. `done`, `then`, `fi`, `esac`).
+/// Returns true if `cmd` is a single POSIX-shell reserved keyword that
+/// cannot be executed standalone (e.g. `done`, `then`, `fi`, `esac`).
+/// Only consulted on the `sh -c` code path; Windows uses `cmd.exe`,
+/// where these aren't keywords and may be the names of real commands.
+#[cfg(not(windows))]
 fn is_bare_shell_keyword(cmd: &str) -> bool {
     matches!(
         cmd,
         "done" | "then" | "else" | "elif" | "fi" | "esac" | "do" | "in"
     )
+}
+
+/// Validate that a notification sound name is a bare filename — no path
+/// separators, no `..` segments, no drive prefixes. Used on Windows
+/// where the name is concatenated into `<windows-media-dir>\<name>.wav`
+/// and `Path::join(absolute)` would discard the base, opening a path-
+/// traversal vector if a bad value made it into the settings DB.
+#[cfg(windows)]
+fn is_safe_sound_name(name: &str) -> bool {
+    if name.is_empty() {
+        return false;
+    }
+    if name.contains(['/', '\\']) || name.contains("..") {
+        return false;
+    }
+    // Drive prefix like `C:` (any ASCII letter + colon at the start).
+    let bytes = name.as_bytes();
+    if bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' {
+        return false;
+    }
+    // Reserved DOS device names — Windows treats these specially even
+    // without an extension. Belt-and-braces against malicious values
+    // like `CON.wav` causing kernel-side weirdness.
+    let stem = name.split('.').next().unwrap_or(name).to_ascii_uppercase();
+    matches!(
+        stem.as_str(),
+        "CON"
+            | "PRN"
+            | "AUX"
+            | "NUL"
+            | "COM1"
+            | "COM2"
+            | "COM3"
+            | "COM4"
+            | "COM5"
+            | "COM6"
+            | "COM7"
+            | "COM8"
+            | "COM9"
+            | "LPT1"
+            | "LPT2"
+            | "LPT3"
+            | "LPT4"
+            | "LPT5"
+            | "LPT6"
+            | "LPT7"
+            | "LPT8"
+            | "LPT9"
+    )
+    .then_some(false)
+    .unwrap_or(true)
 }
 
 /// Run the user-configured notification command (if set) with workspace env vars.
@@ -504,15 +572,57 @@ mod tests {
     #[test]
     fn test_list_notification_sounds_includes_system_sounds_windows() {
         let sounds = list_notification_sounds();
-        // Every Windows install ships several `.wav` files under
-        // C:\Windows\Media (chimes, ding, notify, tada, …). If this
+        // Every Windows install ships several `.wav` files under the
+        // Media directory (chimes, ding, notify, tada, …). If this
         // assertion ever fails on a stripped CI image, fall back to
         // gating it the same way Linux is gated above.
+        let media_dir = claudette::audio::windows_media_dir();
         assert!(
             sounds.len() > 2,
             "Expected system sounds enumerated from {}",
-            claudette::audio::WINDOWS_MEDIA_DIR
+            media_dir.display()
         );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn test_is_safe_sound_name_rejects_path_syntax() {
+        // Bare filenames pass — they're what the dropdown produces.
+        assert!(super::is_safe_sound_name("Windows Notify"));
+        assert!(super::is_safe_sound_name("chimes"));
+        assert!(super::is_safe_sound_name("Speech On"));
+        // Path traversal: separators, drive prefixes, parent refs.
+        assert!(!super::is_safe_sound_name("../../etc/passwd"));
+        assert!(!super::is_safe_sound_name("..\\..\\Windows\\System32\\foo"));
+        assert!(!super::is_safe_sound_name("C:\\Windows\\Media\\chimes"));
+        assert!(!super::is_safe_sound_name("D:foo"));
+        assert!(!super::is_safe_sound_name("subdir/chimes"));
+        assert!(!super::is_safe_sound_name("subdir\\chimes"));
+        // Empty.
+        assert!(!super::is_safe_sound_name(""));
+        // Reserved DOS device names — case-insensitive.
+        assert!(!super::is_safe_sound_name("CON"));
+        assert!(!super::is_safe_sound_name("nul"));
+        assert!(!super::is_safe_sound_name("LPT1"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn test_build_notification_command_allows_done_dot_bat_on_windows() {
+        // POSIX shells reject bare `done`; Windows users may have a
+        // `done.bat` on PATH that is a real command. The check must be
+        // gated to non-Windows so legitimate `cmd.exe` invocations
+        // aren't rejected.
+        assert!(build_notification_command("done.bat", &sample_ws_env()).is_some());
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn test_build_notification_command_rejects_bare_done_posix() {
+        // On macOS / Linux the rejection still applies — running bare
+        // `done` against `sh -c` is always a parse error from the user
+        // forgetting to quote the surrounding say/echo.
+        assert!(build_notification_command("done", &sample_ws_env()).is_none());
     }
 
     #[test]

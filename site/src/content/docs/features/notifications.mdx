@@ -85,7 +85,7 @@ Sound playback is platform-specific and uses each OS's native audio path:
 - **macOS** — plays AIFF files from `/System/Library/Sounds` via `afplay`. The sound dropdown enumerates the same directory.
 - **Linux** — plays via `canberra-gtk-play` (with `paplay` as fallback) using freedesktop sound names.
 - **Windows** — has two paths depending on which kind of sound is playing:
-  - **System sounds** (the dropdown items resolved from `C:\Windows\Media`) play via the `PlaySoundW` Win32 API. "Default" maps to the system Notification Default alias, which respects whatever you've picked in **Settings → System → Sound → More sound settings**. PlaySoundW plays at the user's system volume — fine for short beeps, no decoder cost.
+  - **System sounds** (the dropdown items resolved from `%WINDIR%\Media`, typically `C:\Windows\Media`) play via the `PlaySoundW` Win32 API. "Default" maps to the system Notification Default alias, which respects whatever you've picked in **Settings → System → Sound → More sound settings**. PlaySoundW plays at the user's system volume — fine for short beeps, no decoder cost.
   - **OpenPeon sound packs** decode in-process via [`rodio`](https://crates.io/crates/rodio) (cpal + Symphonia). WAV, MP3, and OGG all work, and the volume slider attenuates per-call playback exactly the way it does on macOS / Linux.
 
 The split is intentional: short system beeps don't need a decoder pipeline, and rodio is only spun up when a user actually opts into a sound pack.
