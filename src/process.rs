@@ -34,6 +34,18 @@ pub trait CommandWindowExt {
     /// Suppress the cmd.exe console window Windows would otherwise create
     /// for this child. No-op on Unix-likes.
     fn no_console_window(&mut self) -> &mut Self;
+
+    /// Force-allocate a new console window for this child on Windows
+    /// (`CREATE_NEW_CONSOLE`, 0x0000_0010). Use this for terminal apps
+    /// the user is opening *intentionally* — `cmd.exe`, `powershell.exe`,
+    /// `pwsh.exe` — where suppressing the window would leave them
+    /// running invisibly, and inheriting the parent's console (the
+    /// dev-launcher's PowerShell, the Tauri release binary's empty
+    /// console) would either nest the child inside our terminal or
+    /// fail outright. No-op on Unix-likes. `wt.exe` and other GUI
+    /// terminal launchers ignore this flag because they create their
+    /// own window via app-activation, so passing it is harmless there.
+    fn new_console_window(&mut self) -> &mut Self;
 }
 
 /// Remove Claude Code harness environment that is valid for inference but can
@@ -56,6 +68,8 @@ pub fn sanitize_claude_subprocess_env(cmd: &mut tokio::process::Command) {
 
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+#[cfg(windows)]
+const CREATE_NEW_CONSOLE: u32 = 0x0000_0010;
 
 impl CommandWindowExt for std::process::Command {
     fn no_console_window(&mut self) -> &mut Self {
@@ -63,6 +77,15 @@ impl CommandWindowExt for std::process::Command {
         {
             use std::os::windows::process::CommandExt;
             self.creation_flags(CREATE_NO_WINDOW);
+        }
+        self
+    }
+
+    fn new_console_window(&mut self) -> &mut Self {
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            self.creation_flags(CREATE_NEW_CONSOLE);
         }
         self
     }
@@ -75,6 +98,12 @@ impl CommandWindowExt for tokio::process::Command {
         // the std impl above.
         #[cfg(windows)]
         self.creation_flags(CREATE_NO_WINDOW);
+        self
+    }
+
+    fn new_console_window(&mut self) -> &mut Self {
+        #[cfg(windows)]
+        self.creation_flags(CREATE_NEW_CONSOLE);
         self
     }
 }
@@ -122,6 +151,30 @@ mod tests {
     #[test]
     fn windows_flag_is_create_no_window() {
         assert_eq!(CREATE_NO_WINDOW, 0x0800_0000);
+    }
+
+    /// `CREATE_NEW_CONSOLE` (0x0000_0010) is the inverse-purpose flag:
+    /// where `CREATE_NO_WINDOW` *suppresses* console allocation,
+    /// `CREATE_NEW_CONSOLE` *forces* a fresh one. Mixing these up
+    /// silently breaks "Open in Terminal" on Windows (cmd/pwsh
+    /// launches invisibly, or gets nested into Claudette's own
+    /// console).
+    #[cfg(windows)]
+    #[test]
+    fn windows_flag_is_create_new_console() {
+        assert_eq!(CREATE_NEW_CONSOLE, 0x0000_0010);
+    }
+
+    #[test]
+    fn std_command_new_console_chain_typechecks() {
+        let mut cmd = std::process::Command::new("true");
+        let _ref: &mut std::process::Command = cmd.new_console_window().arg("-x");
+    }
+
+    #[test]
+    fn tokio_command_new_console_chain_typechecks() {
+        let mut cmd = tokio::process::Command::new("true");
+        let _ref: &mut tokio::process::Command = cmd.new_console_window().arg("-x");
     }
 
     /// On Windows, spawning a child with the flag set should succeed exactly

@@ -4,10 +4,14 @@ import { scoreCommand } from "./searchScore";
 
 import { afterAll } from "vitest";
 
-// buildCommands reads navigator.platform — stub before importing the module.
-if (typeof globalThis.navigator === "undefined") {
-  vi.stubGlobal("navigator", { platform: "MacIntel", userAgentData: undefined });
-}
+// buildCommands reads navigator.platform via isMacHotkeyPlatform() to pick
+// between `⌘⇧B`-style symbols and `Ctrl+Shift+B`-style labels for command
+// shortcuts. The shortcut assertions below pin the macOS rendering, so we
+// must force a Mac-shaped navigator regardless of the host OS or the test
+// environment's default. happy-dom defines `navigator` (so the previous
+// `typeof navigator === "undefined"` guard left the real platform in place
+// on Windows, producing `Ctrl+Shift+B` and a test failure); always stub.
+vi.stubGlobal("navigator", { platform: "MacIntel", userAgentData: undefined });
 afterAll(() => { vi.unstubAllGlobals(); });
 
 const { buildCommands, buildModelCommands, buildFileCommands } = await import("./commands");

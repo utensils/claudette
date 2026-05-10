@@ -1,0 +1,41 @@
+# Default: let git decide line endings on a per-file basis, but normalize text
+# files in the repository to LF. Combined with the rules below this means a
+# Windows checkout (`core.autocrlf=true`) won't flip shell scripts or other
+# tools that are CRLF-hostile.
+* text=auto eol=lf
+
+# Always LF — these are executed by bash on Linux/macOS and Git Bash/WSL on
+# Windows; CRLF makes bash emit `$'\r': command not found` and breaks shebangs.
+*.sh    text eol=lf
+*.bash  text eol=lf
+*.zsh   text eol=lf
+*.fish  text eol=lf
+
+# Always CRLF for Windows-only batch/PowerShell scripts so cmd.exe parses them
+# correctly even when checked out on Linux/macOS.
+*.bat   text eol=crlf
+*.cmd   text eol=crlf
+*.ps1   text eol=crlf
+
+# Binary files — never touch them, never diff them.
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.gif   binary
+*.webp  binary
+*.ico   binary
+*.icns  binary
+*.dmg   binary
+*.zip   binary
+*.gz    binary
+*.tar   binary
+*.exe   binary
+*.dll   binary
+*.so    binary
+*.dylib binary
+*.woff  binary
+*.woff2 binary
+*.ttf   binary
+*.otf   binary
+*.pdf   binary
+*.wasm  binary

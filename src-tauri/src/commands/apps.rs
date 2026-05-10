@@ -1,5 +1,8 @@
 use std::path::{Path, PathBuf};
 
+// `data_url_from_bytes` (the only consumer of these symbols) is now
+// gated to macOS, so the import has to follow.
+#[cfg(target_os = "macos")]
 use base64::{Engine as _, engine::general_purpose};
 use serde::{Deserialize, Serialize};
 use tauri::State;
@@ -30,6 +33,29 @@ pub struct AppEntry {
     #[serde(default)]
     #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     pub mac_app_names: Vec<String>,
+    /// `.exe` filenames to walk up to from `detected_path` for icon
+    /// extraction on Windows. The npm-shim layouts used by VS Code,
+    /// Cursor, etc. put a no-extension bash shim or `.cmd` wrapper in
+    /// PATH while the real `.exe` (the one with embedded icon
+    /// resources) sits one or more directories above. Setting this to
+    /// e.g. `["Code.exe"]` lets Windows builds resolve VS Code's
+    /// actual binary for `ExtractAssociatedIcon`. Ignored on other
+    /// platforms.
+    #[serde(default)]
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+    pub windows_exe_names: Vec<String>,
+    /// AppxPackage name (or prefix — `Get-AppxPackage -Name "<value>*"`)
+    /// for UWP/MSIX-packaged apps whose real binary sits inside
+    /// `%PROGRAMFILES%\WindowsApps` and is reached through a 0-byte
+    /// execution alias on PATH (e.g. Windows Terminal's `wt.exe`).
+    /// `IShellItemImageFactory` follows the alias to the console
+    /// subsystem and returns a generic glyph; the real vendor logo
+    /// lives in the package's `Assets/*Logo*.png` files. Setting this
+    /// triggers a manifest-aware lookup before the regular
+    /// `windows_exe_names` walk-up. Ignored on other platforms.
+    #[serde(default)]
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+    pub windows_appx_package: String,
     pub open_args: Vec<String>,
     #[serde(default)]
     pub needs_terminal: bool,
@@ -84,14 +110,66 @@ fn apps_config_path() -> Option<PathBuf> {
     Some(claudette::path::claudette_home().join("apps.json"))
 }
 
+/// Merge missing entries from `embedded` into `user` without
+/// overwriting any field the user has explicitly set. Two cases:
+///
+/// - **New entries:** any embedded app whose `id` is absent from
+///   `user` is appended verbatim. This lets a Claudette upgrade
+///   ship new editor / terminal entries (e.g. Windows Terminal,
+///   PowerShell 7) without forcing the user to delete their
+///   `apps.json`.
+/// - **Backfill new optional fields:** if the user's entry has an
+///   empty `mac_app_names` / `windows_exe_names`, copy from the
+///   matching embedded entry. These are never user-empty by intent
+///   (the field either matters for the platform or doesn't), and
+///   skipping them would silently break icon extraction for users
+///   whose `apps.json` predates the field being added.
+///
+/// Anything the user has actually customized — `bin_names`,
+/// `open_args`, `name`, `category`, `needs_terminal` — is left
+/// untouched.
+fn merge_missing_default_entries(mut user: AppsConfig, embedded: AppsConfig) -> AppsConfig {
+    use std::collections::HashSet;
+    let user_ids: HashSet<String> = user.apps.iter().map(|a| a.id.clone()).collect();
+
+    for app in user.apps.iter_mut() {
+        let Some(default_entry) = embedded.apps.iter().find(|d| d.id == app.id) else {
+            continue;
+        };
+        if app.mac_app_names.is_empty() && !default_entry.mac_app_names.is_empty() {
+            app.mac_app_names = default_entry.mac_app_names.clone();
+        }
+        if app.windows_exe_names.is_empty() && !default_entry.windows_exe_names.is_empty() {
+            app.windows_exe_names = default_entry.windows_exe_names.clone();
+        }
+        if app.windows_appx_package.is_empty() && !default_entry.windows_appx_package.is_empty() {
+            app.windows_appx_package = default_entry.windows_appx_package.clone();
+        }
+    }
+
+    for default_entry in embedded.apps {
+        if !user_ids.contains(&default_entry.id) {
+            user.apps.push(default_entry);
+        }
+    }
+
+    user
+}
+
 /// Load and parse apps.json from the given path.
 /// If the file doesn't exist, write the embedded default and return it.
 /// If the file is malformed, log a warning and return the embedded default.
+/// If the file parses, merge in any missing entries / fields from the
+/// embedded default so upgrades surface new apps without the user
+/// having to delete their config.
 fn load_apps_config_from(path: &Path) -> AppsConfig {
+    let embedded: AppsConfig =
+        serde_json::from_str(DEFAULT_APPS_JSON).expect("embedded default-apps.json must be valid");
+
     if path.exists() {
         match std::fs::read_to_string(path) {
             Ok(content) => match serde_json::from_str::<AppsConfig>(&content) {
-                Ok(config) => return config,
+                Ok(config) => return merge_missing_default_entries(config, embedded),
                 Err(e) => tracing::warn!(
                     target: "claudette::apps",
                     path = %path.display(),
@@ -121,7 +199,7 @@ fn load_apps_config_from(path: &Path) -> AppsConfig {
         }
     }
     // Fallback: the embedded default always parses.
-    serde_json::from_str(DEFAULT_APPS_JSON).expect("embedded default-apps.json must be valid")
+    embedded
 }
 
 /// Public entry point — resolves ~/.claudette/apps.json and loads it.
@@ -163,26 +241,56 @@ fn build_path_dirs() -> Vec<PathBuf> {
     dirs
 }
 
+/// Extensions tried in order on Windows, mirroring PATHEXT semantics
+/// closely enough for app detection. `.exe` is probed first so a real
+/// executable wins over Bash-style shims (e.g. VS Code's `bin/code`,
+/// a no-ext shell script that won't run via `CreateProcess` and isn't
+/// `ExtractAssociatedIcon`-friendly). The empty string keeps the legacy
+/// behavior of accepting bare-name matches as a last resort, which Unix
+/// configs entered into Windows PATH may rely on.
+#[cfg(windows)]
+const WINDOWS_BIN_EXTS: &[&str] = &[".exe", ".cmd", ".bat", ""];
+
 /// Check whether `name` exists as an executable in any of `path_dirs`.
 /// Returns the full path to the first match, or `None`.
 fn find_binary(name: &str, path_dirs: &[PathBuf]) -> Option<PathBuf> {
     for dir in path_dirs {
-        let candidate = dir.join(name);
-        let Ok(meta) = std::fs::metadata(&candidate) else {
-            continue;
-        };
-        if !meta.is_file() {
+        // On Windows, probe each PATHEXT-style extension before moving
+        // to the next directory so a `code.cmd` in dir A wins over a
+        // bare-name `code` farther down PATH.
+        #[cfg(windows)]
+        {
+            for ext in WINDOWS_BIN_EXTS {
+                let candidate = dir.join(format!("{name}{ext}"));
+                let Ok(meta) = std::fs::metadata(&candidate) else {
+                    continue;
+                };
+                if !meta.is_file() {
+                    continue;
+                }
+                return Some(candidate);
+            }
             continue;
         }
-        // On Unix, verify the executable bit is set.
-        #[cfg(unix)]
+        #[cfg(not(windows))]
         {
-            use std::os::unix::fs::PermissionsExt;
-            if meta.permissions().mode() & 0o111 == 0 {
+            let candidate = dir.join(name);
+            let Ok(meta) = std::fs::metadata(&candidate) else {
+                continue;
+            };
+            if !meta.is_file() {
                 continue;
             }
+            // On Unix, verify the executable bit is set.
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                if meta.permissions().mode() & 0o111 == 0 {
+                    continue;
+                }
+            }
+            return Some(candidate);
         }
-        return Some(candidate);
     }
     None
 }
@@ -215,6 +323,11 @@ fn find_mac_app(app_name: &str) -> Option<PathBuf> {
         .filter(|path| path.exists())
 }
 
+// Only `mac_icon_from_app_bundle` (gated `#[cfg(target_os = "macos")]`)
+// uses these helpers — they synthesize data URLs from the icon bytes
+// extracted via PlistBuddy/sips. Match the gate so non-macOS builds
+// don't trip `dead_code` under -Dwarnings.
+#[cfg(target_os = "macos")]
 fn data_url_from_bytes(media_type: &str, bytes: &[u8]) -> String {
     format!(
         "data:{media_type};base64,{}",
@@ -222,6 +335,7 @@ fn data_url_from_bytes(media_type: &str, bytes: &[u8]) -> String {
     )
 }
 
+#[cfg(target_os = "macos")]
 fn image_data_url_from_file(path: &Path) -> Option<String> {
     let ext = path
         .extension()
@@ -506,31 +620,329 @@ fn app_icon_data_url(entry: &AppEntry, detected_path: &Path) -> Option<String> {
         .and_then(|path| image_data_url_from_file(&path))
 }
 
+/// Walk up from `detected_path` looking for any of the manifest's
+/// `windows_exe_names`. Used to recover the real `.exe` (which carries
+/// the embedded icon resource) from PATH-resolved shims like
+/// `bin/code.cmd` (one level up) or `resources/app/bin/cursor.cmd`
+/// (three levels up). Falls back to `detected_path` so apps without
+/// a manifest entry still get whatever icon ExtractAssociatedIcon can
+/// produce.
 #[cfg(target_os = "windows")]
-fn app_icon_data_url(_entry: &AppEntry, detected_path: &Path) -> Option<String> {
-    let script = r#"
-Add-Type -AssemblyName System.Drawing
-$icon = [System.Drawing.Icon]::ExtractAssociatedIcon($args[0])
-if ($null -eq $icon) { exit 2 }
-$bitmap = $icon.ToBitmap()
-$stream = New-Object System.IO.MemoryStream
-$bitmap.Save($stream, [System.Drawing.Imaging.ImageFormat]::Png)
-[Convert]::ToBase64String($stream.ToArray())
+fn resolve_windows_icon_source(entry: &AppEntry, detected_path: &Path) -> PathBuf {
+    if entry.windows_exe_names.is_empty() {
+        return detected_path.to_path_buf();
+    }
+    // Five levels covers every layout we ship in default-apps.json
+    // (Cursor's three-deep shim is the deepest case) without risking
+    // a runaway directory walk on weird filesystems.
+    let mut dir = detected_path.parent();
+    for _ in 0..5 {
+        let Some(d) = dir else { break };
+        for exe in &entry.windows_exe_names {
+            let candidate = d.join(exe);
+            if candidate.is_file() {
+                return candidate;
+            }
+        }
+        dir = d.parent();
+    }
+    detected_path.to_path_buf()
+}
+
+/// Inline C# helper compiled at PowerShell startup. Three extraction
+/// paths in priority order:
+///
+/// 1. **AppxPackage logo** (`windows_appx_package` set) — UWP/MSIX
+///    apps whose real binary is in `%PROGRAMFILES%\WindowsApps` and
+///    is reached through a 0-byte execution alias on PATH. The alias
+///    short-circuits `IShellItemImageFactory` to the console
+///    subsystem (Windows Terminal's `wt.exe` ends up indistinguishable
+///    from `cmd.exe`). `Get-AppxPackage` exposes the package's
+///    `InstallLocation`; the manifest's `Assets/*Logo*.png` files are
+///    the real vendor logos at full resolution. We pick the largest
+///    PNG by file size and skip variants that don't render in dark
+///    UIs (`*altform-unplated*`, `*contrast-*`).
+/// 2. **`IShellItemImageFactory::GetImage` at 256×256** — the same
+///    shell API Explorer uses for its "Extra large icons" view.
+///    `SIIGBF_ICONONLY` keeps us from accidentally getting a PE-header
+///    thumbnail; `SIIGBF_BIGGERSIZEOK` lets the shell hand back its
+///    largest cached variant if 256 isn't directly available.
+/// 3. **`ExtractAssociatedIcon`** — last-resort 32×32 grab. Some
+///    shimmed paths fail the COM call entirely; this keeps the menu
+///    from showing the lucide placeholder for them.
+///
+/// Input is read from stdin: line 1 is the AppxPackage name (empty
+/// string skips the UWP path), line 2 is the .exe path. Stdin avoids
+/// every PowerShell `-Command` quoting hazard.
+#[cfg(target_os = "windows")]
+const ICON_EXTRACT_PS1: &str = r#"
+$ErrorActionPreference = 'Stop'
+$src = @'
+using System;
+using System.Drawing;
+using System.Drawing.Imaging;
+using System.IO;
+using System.Runtime.InteropServices;
+public class ClaudetteIcon {
+    [StructLayout(LayoutKind.Sequential)]
+    public struct SIZE { public int cx, cy; }
+
+    [ComImport, Guid("BCC18B79-BA16-442F-80C4-8A59C30C463B"),
+     InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    public interface IShellItemImageFactory {
+        [PreserveSig] int GetImage(SIZE size, int flags, out IntPtr phbm);
+    }
+
+    [DllImport("shell32.dll", CharSet=CharSet.Unicode, SetLastError=true)]
+    static extern int SHCreateItemFromParsingName(
+        [MarshalAs(UnmanagedType.LPWStr)] string path,
+        IntPtr bc,
+        ref Guid riid,
+        [Out, MarshalAs(UnmanagedType.Interface)] out IShellItemImageFactory ppv);
+
+    [DllImport("gdi32.dll")] static extern bool DeleteObject(IntPtr h);
+
+    public static byte[] ShellImage(string path, int size) {
+        Guid iid = new Guid("BCC18B79-BA16-442F-80C4-8A59C30C463B");
+        IShellItemImageFactory factory;
+        int hr = SHCreateItemFromParsingName(path, IntPtr.Zero, ref iid, out factory);
+        if (hr != 0) return null;
+        IntPtr hbm;
+        SIZE sz; sz.cx = size; sz.cy = size;
+        hr = factory.GetImage(sz, 0x4 | 0x1, out hbm);
+        if (hr != 0) return null;
+        try {
+            using (Bitmap bmp = Bitmap.FromHbitmap(hbm))
+            using (Bitmap argb = new Bitmap(bmp.Width, bmp.Height, PixelFormat.Format32bppArgb)) {
+                using (Graphics g = Graphics.FromImage(argb)) g.DrawImage(bmp, 0, 0);
+                using (MemoryStream ms = new MemoryStream()) {
+                    argb.Save(ms, ImageFormat.Png);
+                    return ms.ToArray();
+                }
+            }
+        } finally { DeleteObject(hbm); }
+    }
+
+    public static byte[] AssociatedIcon(string path) {
+        using (Icon ico = Icon.ExtractAssociatedIcon(path)) {
+            if (ico == null) return null;
+            using (Bitmap bmp = ico.ToBitmap())
+            using (MemoryStream ms = new MemoryStream()) {
+                bmp.Save(ms, ImageFormat.Png);
+                return ms.ToArray();
+            }
+        }
+    }
+}
+'@
+Add-Type -TypeDefinition $src -ReferencedAssemblies System.Drawing | Out-Null
+$pkg  = [Console]::In.ReadLine()
+$path = [Console]::In.ReadLine()
+
+# UWP path: read the AppxManifest to learn the *declared* logo
+# (any of the Square*Logo / Logo entries), then glob the same
+# directory for size-variant siblings (`Square44x44Logo.targetsize-256.png`,
+# `*.scale-400.png`, …) and keep the largest. The declared filename
+# rarely exists on disk by itself — Windows splits each logo into
+# one PNG per scale + target size at install time, leaving only the
+# variants. We filter out `altform-unplated` (transparent badges
+# that look wrong on a dark menu background) and `contrast-` (high-
+# contrast accessibility variants). File size is the biggest-icon
+# heuristic — UWP logos are anti-aliased PNGs whose byte count
+# scales with pixel count.
+#
+# `Get-AppxPackageManifest` works for unprivileged users, and
+# `Get-ChildItem` *can* enumerate per-package install dirs under
+# `%PROGRAMFILES%\WindowsApps` despite the parent being locked
+# down — each package's ACL grants the user list rights to its own
+# subtree.
+if (-not [string]::IsNullOrEmpty($pkg)) {
+    $appx = Get-AppxPackage -Name "${pkg}*" -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($appx) {
+        $manifest = $null
+        try { $manifest = Get-AppxPackageManifest -Package $appx.PackageFullName -ErrorAction Stop } catch { }
+        $logoRels = @()
+        if ($manifest) {
+            $vis = $manifest.Package.Applications.Application.VisualElements
+            if ($vis) {
+                foreach ($attr in 'Square150x150Logo','Square44x44Logo','Square71x71Logo','Logo') {
+                    $val = $vis.$attr
+                    if ($val) { $logoRels += $val }
+                }
+            }
+            $propLogo = $manifest.Package.Properties.Logo
+            if ($propLogo) { $logoRels += $propLogo }
+        }
+        # Last-resort guesses if the manifest didn't yield anything
+        # parseable. Most UWP packages put logos under one of these.
+        if ($logoRels.Count -eq 0) { $logoRels = @('Images\Logo.png','Assets\Logo.png') }
+        $best = $null
+        foreach ($rel in $logoRels) {
+            $fullRel = Join-Path $appx.InstallLocation $rel
+            $stem = [IO.Path]::GetFileNameWithoutExtension($fullRel)
+            $dir  = [IO.Path]::GetDirectoryName($fullRel)
+            if (-not (Test-Path $dir)) { continue }
+            $candidate = Get-ChildItem -Path $dir -Filter "$stem*.png" -ErrorAction SilentlyContinue |
+                Where-Object { $_.Name -notmatch '(?i)altform-unplated|contrast-' } |
+                Sort-Object Length -Descending |
+                Select-Object -First 1
+            if ($candidate -and (-not $best -or $candidate.Length -gt $best.Length)) {
+                $best = $candidate
+            }
+        }
+        if ($best) {
+            [Convert]::ToBase64String([IO.File]::ReadAllBytes($best.FullName))
+            exit 0
+        }
+    }
+}
+
+if ([string]::IsNullOrEmpty($path)) { exit 2 }
+$bytes = [ClaudetteIcon]::ShellImage($path, 256)
+if ($null -eq $bytes -or $bytes.Length -eq 0) {
+    $bytes = [ClaudetteIcon]::AssociatedIcon($path)
+}
+if ($null -eq $bytes -or $bytes.Length -eq 0) { exit 3 }
+[Convert]::ToBase64String($bytes)
 "#;
 
-    let output = std::process::Command::new("powershell.exe")
+/// Where the icon disk cache lives. Routed through
+/// [`claudette::path::claudette_home`] so it follows the same
+/// `$CLAUDETTE_HOME` override that `apps_config_path` and the rest
+/// of the on-disk state honor — important for `dev --clean`, which
+/// points `CLAUDETTE_HOME` at a per-PID tmp sandbox: cache entries
+/// land under the sandbox and get cleaned up when it tears down,
+/// instead of leaking into the real `~/.claudette/icon-cache/` and
+/// surviving across sessions.
+///
+/// Returns `Option` purely for symmetry with the old shape (callers
+/// already handle `None`); `claudette_home` itself falls back to
+/// `./.claudette` rather than failing, so this is effectively
+/// infallible today.
+#[cfg(target_os = "windows")]
+fn icon_cache_dir() -> Option<PathBuf> {
+    Some(claudette::path::claudette_home().join("icon-cache"))
+}
+
+/// Build a stable cache key for a Windows icon source.
+///
+/// For .exe paths we mix the canonical path, file size, and modification
+/// time so an in-place upgrade (e.g. VS Code auto-updating `Code.exe`)
+/// invalidates the cache automatically — the cache filename changes,
+/// the new run misses, and the new icon is extracted and stored under
+/// a new key.
+///
+/// For UWP packages the .exe is the alias so the path is identical
+/// across versions; we use just the package-name field. AppxPackage
+/// upgrades therefore won't auto-refresh — but Windows Terminal's
+/// logo hasn't changed in years and the cost of a stale icon is
+/// purely cosmetic. If a user wants a refresh they can clear
+/// `~/.claudette/icon-cache/`.
+///
+/// `windows_appx_package` takes precedence to ensure we cache the
+/// UWP-resolved icon (which the .exe path can't produce) under a
+/// key that doesn't collide with the .exe-derived key.
+#[cfg(target_os = "windows")]
+fn icon_cache_key(appx_package: &str, icon_source: &Path) -> Option<String> {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+
+    let mut hasher = DefaultHasher::new();
+    if !appx_package.is_empty() {
+        "appx".hash(&mut hasher);
+        appx_package.hash(&mut hasher);
+    } else {
+        "exe".hash(&mut hasher);
+        icon_source.hash(&mut hasher);
+        if let Ok(meta) = std::fs::metadata(icon_source) {
+            meta.len().hash(&mut hasher);
+            if let Ok(mtime) = meta.modified()
+                && let Ok(dur) = mtime.duration_since(std::time::UNIX_EPOCH)
+            {
+                dur.as_secs().hash(&mut hasher);
+            }
+        } else {
+            // Missing source — refuse to cache so the next attempt
+            // re-runs extraction once the file appears.
+            return None;
+        }
+    }
+    Some(format!("{:016x}", hasher.finish()))
+}
+
+#[cfg(target_os = "windows")]
+fn read_icon_cache(key: &str) -> Option<String> {
+    let path = icon_cache_dir()?.join(format!("{key}.b64"));
+    let data = std::fs::read_to_string(&path).ok()?;
+    let trimmed = data.trim();
+    (!trimmed.is_empty() && trimmed.starts_with("data:image/")).then(|| trimmed.to_owned())
+}
+
+#[cfg(target_os = "windows")]
+fn write_icon_cache(key: &str, data_url: &str) {
+    let Some(dir) = icon_cache_dir() else { return };
+    let _ = std::fs::create_dir_all(&dir);
+    let _ = std::fs::write(dir.join(format!("{key}.b64")), data_url);
+}
+
+#[cfg(target_os = "windows")]
+fn app_icon_data_url(entry: &AppEntry, detected_path: &Path) -> Option<String> {
+    let icon_source = resolve_windows_icon_source(entry, detected_path);
+
+    // Cache hit: the only case where extraction is *truly* free —
+    // no PowerShell startup, no Add-Type compile, no COM call. This
+    // is what makes "open the dropdown" feel instant on every launch
+    // after the first.
+    let cache_key = icon_cache_key(&entry.windows_appx_package, &icon_source);
+    if let Some(key) = cache_key.as_deref()
+        && let Some(cached) = read_icon_cache(key)
+    {
+        return Some(cached);
+    }
+
+    let data_url = extract_windows_icon_data_url(&entry.windows_appx_package, &icon_source)?;
+
+    if let Some(key) = cache_key.as_deref() {
+        write_icon_cache(key, &data_url);
+    }
+    Some(data_url)
+}
+
+/// Spawn a `powershell.exe` child, feed the AppxPackage name + target
+/// path on stdin (two newline-separated lines), and parse the base64
+/// PNG it prints. Lifted out of `app_icon_data_url` so the regression
+/// tests can exercise the extractor directly without manufacturing an
+/// `AppEntry` + invoking the cache.
+#[cfg(target_os = "windows")]
+fn extract_windows_icon_data_url(appx_package: &str, icon_source: &Path) -> Option<String> {
+    use std::io::Write;
+    use std::process::Stdio;
+
+    let mut child = std::process::Command::new("powershell.exe")
         .args([
             "-NoProfile",
             "-NonInteractive",
             "-ExecutionPolicy",
             "Bypass",
             "-Command",
+            ICON_EXTRACT_PS1,
         ])
-        .arg(script)
-        .arg(detected_path)
-        .output()
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
         .ok()?;
 
+    {
+        let stdin = child.stdin.as_mut()?;
+        // Two lines: AppxPackage name (or empty) then path. Empty
+        // lines are deliberate — PowerShell's
+        // `[Console]::In.ReadLine()` returns `""` for them, which
+        // the script normalizes via `IsNullOrEmpty`.
+        let _ = writeln!(stdin, "{appx_package}");
+        let _ = writeln!(stdin, "{}", icon_source.display());
+    }
+    let output = child.wait_with_output().ok()?;
     if !output.status.success() {
         return None;
     }
@@ -929,9 +1341,28 @@ pub(crate) async fn open_workspace_in_app_inner(
         .map(|a| a.replace("{}", worktree_path))
         .collect();
 
-    tokio::process::Command::new(&detected.detected_path)
-        .no_console_window()
-        .args(&args)
+    let mut cmd = tokio::process::Command::new(&detected.detected_path);
+    // Windows console terminals (cmd.exe, powershell.exe, pwsh.exe)
+    // need a fresh, visible console of their own — `CREATE_NO_WINDOW`
+    // would launch them invisibly, and inheriting Claudette's console
+    // (the dev launcher's PowerShell, or nothing at all in release)
+    // gives unusable UX. `wt.exe` ignores the flag because it activates
+    // the Windows Terminal app via a separate process, so it's safe
+    // to apply uniformly to the Terminal category. Editors / IDEs /
+    // file managers keep `no_console_window` so they don't flash a
+    // transient cmd window during launch.
+    #[cfg(target_os = "windows")]
+    {
+        if entry.category == AppCategory::Terminal {
+            cmd.new_console_window();
+        } else {
+            cmd.no_console_window();
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    cmd.no_console_window();
+
+    cmd.args(&args)
         .spawn()
         .map_err(|e| format!("Failed to launch {}: {e}", entry.name))?;
 
@@ -1145,6 +1576,8 @@ mod tests {
                 category: AppCategory::Editor,
                 bin_names: vec!["myeditor".into()],
                 mac_app_names: vec![],
+                windows_exe_names: vec![],
+                windows_appx_package: String::new(),
                 open_args: vec!["{}".into()],
                 needs_terminal: false,
             }],
@@ -1169,6 +1602,8 @@ mod tests {
                 category: AppCategory::Editor,
                 bin_names: vec!["nonexistent-binary".into()],
                 mac_app_names: vec![],
+                windows_exe_names: vec![],
+                windows_appx_package: String::new(),
                 open_args: vec!["{}".into()],
                 needs_terminal: false,
             }],
@@ -1195,6 +1630,8 @@ mod tests {
                 category: AppCategory::Editor,
                 bin_names: vec!["noexec".into()],
                 mac_app_names: vec![],
+                windows_exe_names: vec![],
+                windows_appx_package: String::new(),
                 open_args: vec!["{}".into()],
                 needs_terminal: false,
             }],
@@ -1225,6 +1662,8 @@ mod tests {
                     category: AppCategory::Terminal,
                     bin_names: vec!["zterm".into()],
                     mac_app_names: vec![],
+                    windows_exe_names: vec![],
+                    windows_appx_package: String::new(),
                     open_args: vec!["{}".into()],
                     needs_terminal: false,
                 },
@@ -1234,6 +1673,8 @@ mod tests {
                     category: AppCategory::Editor,
                     bin_names: vec!["beditor".into()],
                     mac_app_names: vec![],
+                    windows_exe_names: vec![],
+                    windows_appx_package: String::new(),
                     open_args: vec!["{}".into()],
                     needs_terminal: false,
                 },
@@ -1243,6 +1684,8 @@ mod tests {
                     category: AppCategory::Editor,
                     bin_names: vec!["aeditor".into()],
                     mac_app_names: vec![],
+                    windows_exe_names: vec![],
+                    windows_appx_package: String::new(),
                     open_args: vec!["{}".into()],
                     needs_terminal: false,
                 },
@@ -1258,5 +1701,547 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["beditor", "aeditor", "zterm"],
         );
+    }
+
+    /// Loading a stale user `apps.json` should yield a config that
+    /// includes any embedded entries the user file is missing. This is
+    /// the migration path for users whose file pre-dates the addition
+    /// of e.g. Windows Terminal, PowerShell 7, etc.
+    #[test]
+    fn load_apps_config_merges_missing_default_entries() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("apps.json");
+        // Write a one-entry user config — nothing else present.
+        std::fs::write(
+            &path,
+            r#"{"apps":[{"id":"vscode","name":"VS Code","category":"editor","bin_names":["code"],"open_args":["{}"]}]}"#,
+        )
+        .unwrap();
+
+        let config = load_apps_config_from(&path);
+
+        // User's vscode entry is preserved.
+        assert!(config.apps.iter().any(|a| a.id == "vscode"));
+        // Embedded entries the user lacked are now present.
+        assert!(config.apps.iter().any(|a| a.id == "cursor"));
+        assert!(config.apps.iter().any(|a| a.id == "windows-terminal"));
+        assert!(config.apps.iter().any(|a| a.id == "cmd"));
+    }
+
+    /// Backfilling `windows_exe_names` on a user entry that lacks it
+    /// is the mechanism that lights up icon extraction on Windows for
+    /// pre-existing `apps.json` files. The user's other fields must
+    /// stay untouched — we're only filling the gap for a new
+    /// optional field.
+    #[test]
+    fn merge_backfills_windows_exe_names_without_clobbering_user_fields() {
+        let user = AppsConfig {
+            apps: vec![AppEntry {
+                id: "vscode".into(),
+                // Custom name the user has set — must persist.
+                name: "My VSCode".into(),
+                category: AppCategory::Editor,
+                bin_names: vec!["my-code".into()],
+                mac_app_names: vec![],
+                windows_exe_names: vec![],
+                windows_appx_package: String::new(),
+                open_args: vec!["--user".into(), "{}".into()],
+                needs_terminal: false,
+            }],
+        };
+        let embedded = AppsConfig {
+            apps: vec![AppEntry {
+                id: "vscode".into(),
+                name: "VS Code".into(),
+                category: AppCategory::Editor,
+                bin_names: vec!["code".into()],
+                mac_app_names: vec!["Visual Studio Code.app".into()],
+                windows_exe_names: vec!["Code.exe".into()],
+                windows_appx_package: String::new(),
+                open_args: vec!["{}".into()],
+                needs_terminal: false,
+            }],
+        };
+
+        let merged = merge_missing_default_entries(user, embedded);
+        assert_eq!(merged.apps.len(), 1);
+        let entry = &merged.apps[0];
+        // User-customized fields untouched.
+        assert_eq!(entry.name, "My VSCode");
+        assert_eq!(entry.bin_names, vec!["my-code".to_string()]);
+        assert_eq!(
+            entry.open_args,
+            vec!["--user".to_string(), "{}".to_string()]
+        );
+        // New optional fields backfilled from the embedded default.
+        assert_eq!(entry.windows_exe_names, vec!["Code.exe".to_string()]);
+        assert_eq!(
+            entry.mac_app_names,
+            vec!["Visual Studio Code.app".to_string()]
+        );
+    }
+
+    /// If the user has explicitly set `windows_exe_names`, the merge
+    /// must NOT overwrite it. This guards the customize-then-upgrade
+    /// path: an advanced user pointing at a portable / non-default
+    /// install shouldn't have their override silently wiped on
+    /// startup.
+    #[test]
+    fn merge_does_not_overwrite_user_windows_exe_names() {
+        let user = AppsConfig {
+            apps: vec![AppEntry {
+                id: "vscode".into(),
+                name: "VS Code".into(),
+                category: AppCategory::Editor,
+                bin_names: vec!["code".into()],
+                mac_app_names: vec![],
+                windows_exe_names: vec!["PortableCode.exe".into()],
+                windows_appx_package: String::new(),
+                open_args: vec!["{}".into()],
+                needs_terminal: false,
+            }],
+        };
+        let embedded = AppsConfig {
+            apps: vec![AppEntry {
+                id: "vscode".into(),
+                name: "VS Code".into(),
+                category: AppCategory::Editor,
+                bin_names: vec!["code".into()],
+                mac_app_names: vec![],
+                windows_exe_names: vec!["Code.exe".into()],
+                windows_appx_package: String::new(),
+                open_args: vec!["{}".into()],
+                needs_terminal: false,
+            }],
+        };
+
+        let merged = merge_missing_default_entries(user, embedded);
+        assert_eq!(
+            merged.apps[0].windows_exe_names,
+            vec!["PortableCode.exe".to_string()]
+        );
+    }
+
+    /// End-to-end Windows-only regression test for icon extraction.
+    /// Targets `cmd.exe` because it's:
+    ///   - always present on every Windows install (no install
+    ///     dependency in CI),
+    ///   - has a real embedded icon resource (not a generic shell
+    ///     fallback), and
+    ///   - is a fixed path (`%WINDIR%\System32\cmd.exe`) so the
+    ///     test exercises both the COM path and the data-URL framing
+    ///     without needing any user config.
+    ///
+    /// Asserts:
+    ///   1. The extractor returns `Some` (the previous shipped
+    ///      version returned None for many inputs because of bad
+    ///      `-Command` quoting),
+    ///   2. The data URL has the expected `data:image/png;base64,`
+    ///      prefix,
+    ///   3. The decoded PNG is at least 64×64. The previous
+    ///      `ExtractAssociatedIcon` path always produced 32×32 — if
+    ///      we regress to that, this assert fails. 64 is a deliberate
+    ///      floor below the IShellItemImageFactory 256 we ask for so
+    ///      Windows builds with shell-image disabled (rare) still
+    ///      pass via the upgraded fallback.
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn extract_windows_icon_data_url_returns_high_res_png_for_cmd_exe() {
+        use base64::Engine as _;
+        use base64::engine::general_purpose::STANDARD;
+
+        let cmd = PathBuf::from(std::env::var_os("WINDIR").unwrap_or_else(|| "C:\\Windows".into()))
+            .join("System32")
+            .join("cmd.exe");
+        assert!(
+            cmd.is_file(),
+            "test precondition: {} must exist on every Windows host",
+            cmd.display()
+        );
+
+        let url = extract_windows_icon_data_url("", &cmd)
+            .expect("icon extraction returned None for cmd.exe — extractor regression");
+
+        let prefix = "data:image/png;base64,";
+        assert!(
+            url.starts_with(prefix),
+            "data URL missing png prefix: {}",
+            &url[..url.len().min(64)]
+        );
+
+        let payload = &url[prefix.len()..];
+        let png = STANDARD
+            .decode(payload)
+            .expect("base64 in data URL must decode");
+
+        // PNG signature: 89 50 4E 47 0D 0A 1A 0A.
+        assert!(png.len() > 200, "PNG body too small: {} bytes", png.len());
+        assert_eq!(
+            &png[..8],
+            b"\x89PNG\r\n\x1a\n",
+            "decoded bytes are not a PNG header"
+        );
+
+        // Parse IHDR (starts at byte 8: 4-byte length + "IHDR" chunk type
+        // + 4-byte width + 4-byte height, all big-endian).
+        let width = u32::from_be_bytes([png[16], png[17], png[18], png[19]]);
+        let height = u32::from_be_bytes([png[20], png[21], png[22], png[23]]);
+        assert!(
+            width >= 64 && height >= 64,
+            "icon resolution regressed to ExtractAssociatedIcon-only output \
+             ({width}x{height}); expected ≥64×64 from IShellItemImageFactory"
+        );
+    }
+
+    /// Bad input must surface as `None` (not panic, not hang). This
+    /// pins the contract that callers can treat the extractor as
+    /// best-effort and fall through to the lucide placeholder icon.
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn extract_windows_icon_returns_none_for_missing_path() {
+        let bogus = PathBuf::from(r"C:\does-not-exist\definitely-not-a-real-binary.exe");
+        let result = extract_windows_icon_data_url("", &bogus);
+        assert!(
+            result.is_none(),
+            "expected None for missing path; got {:?}",
+            result
+        );
+    }
+
+    /// Process-global env-var lock so any future test in this binary
+    /// that mutates `$CLAUDETTE_HOME` (or reads it via
+    /// [`claudette::path::claudette_home`]) doesn't observe another
+    /// test's override mid-run. Mirrors the `env_lock()` pattern in
+    /// `src/path.rs::tests` — cargo runs tests in a thread pool by
+    /// default, so a `--test-threads=1` assumption is not safe.
+    #[cfg(windows)]
+    fn env_lock() -> &'static std::sync::Mutex<()> {
+        static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+        LOCK.get_or_init(|| std::sync::Mutex::new(()))
+    }
+
+    /// `icon_cache_dir()` must route through `claudette_home` so the
+    /// cache lands under `dev --clean`'s per-PID sandbox instead of
+    /// the real `~/.claudette/icon-cache/`. A direct `dirs::home_dir()`
+    /// would silently leak across sessions — this test pins the
+    /// override against that regression.
+    ///
+    /// `$CLAUDETTE_HOME` is process-global, so we (a) hold `env_lock()`
+    /// for the duration of the test to serialize against any future
+    /// env-mutating test in this binary, and (b) restore the previous
+    /// value before returning regardless of pass/fail.
+    #[cfg(windows)]
+    #[test]
+    fn icon_cache_dir_honors_claudette_home_override() {
+        let _guard = env_lock().lock().unwrap_or_else(|p| p.into_inner());
+        let prev = std::env::var_os("CLAUDETTE_HOME");
+        let tmp = tempfile::tempdir().unwrap();
+        // SAFETY: protected by env_lock() so no other test in this
+        // binary is reading CLAUDETTE_HOME (directly or via
+        // claudette_home()) while we mutate it.
+        unsafe {
+            std::env::set_var("CLAUDETTE_HOME", tmp.path());
+        }
+        let dir = icon_cache_dir().expect("home is set, dir should resolve");
+        assert_eq!(dir, tmp.path().join("icon-cache"));
+        unsafe {
+            match prev {
+                Some(v) => std::env::set_var("CLAUDETTE_HOME", v),
+                None => std::env::remove_var("CLAUDETTE_HOME"),
+            }
+        }
+    }
+
+    /// Cache key must be stable for the same .exe (same path, size,
+    /// mtime) so a cold launch's extracted icon still hits on the
+    /// next launch — that's the whole point of disk caching.
+    /// `merge_*` and `resolve_windows_*` already pin the upstream
+    /// fields; this pins the downstream key derivation.
+    #[cfg(windows)]
+    #[test]
+    fn icon_cache_key_stable_for_same_exe() {
+        let tmp = tempfile::tempdir().unwrap();
+        let exe = tmp.path().join("stable.exe");
+        std::fs::write(&exe, b"MZ").unwrap();
+        let k1 = icon_cache_key("", &exe).expect("key");
+        let k2 = icon_cache_key("", &exe).expect("key");
+        assert_eq!(k1, k2);
+    }
+
+    /// Different paths must produce different keys, otherwise two
+    /// apps would clobber each other's cached icons.
+    #[cfg(windows)]
+    #[test]
+    fn icon_cache_key_differs_per_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        let a = tmp.path().join("a.exe");
+        let b = tmp.path().join("b.exe");
+        std::fs::write(&a, b"MZ").unwrap();
+        std::fs::write(&b, b"MZ").unwrap();
+        let ka = icon_cache_key("", &a).expect("key a");
+        let kb = icon_cache_key("", &b).expect("key b");
+        assert_ne!(ka, kb);
+    }
+
+    /// AppxPackage entries must key off the package name, not the
+    /// .exe path — `wt.exe` and `cmd.exe` both resolve to the same
+    /// system console alias if we only hashed the path, and the UWP
+    /// icon would never get cached separately. Passing different
+    /// packages with the same path must produce different keys.
+    #[cfg(windows)]
+    #[test]
+    fn icon_cache_key_separates_appx_from_exe() {
+        let tmp = tempfile::tempdir().unwrap();
+        let exe = tmp.path().join("alias.exe");
+        std::fs::write(&exe, b"MZ").unwrap();
+        let k_exe = icon_cache_key("", &exe).expect("exe key");
+        let k_uwp = icon_cache_key("Microsoft.WindowsTerminal", &exe).expect("uwp key");
+        assert_ne!(k_exe, k_uwp);
+    }
+
+    /// Cache miss must surface `None` so `app_icon_data_url` knows
+    /// to fall through to extraction. We exercise the read path with
+    /// a definitely-nonexistent key.
+    #[cfg(windows)]
+    #[test]
+    fn icon_cache_read_miss_returns_none() {
+        let key = "claudette-test-definitely-not-a-real-key-9q3jklm";
+        // Defensive: clean up if a prior test run left this lying.
+        if let Some(dir) = icon_cache_dir() {
+            let _ = std::fs::remove_file(dir.join(format!("{key}.b64")));
+        }
+        assert!(read_icon_cache(key).is_none());
+    }
+
+    /// Round-trip the cache: write then read must return the exact
+    /// same data URL. Pins the on-disk format so we don't accidentally
+    /// add a header / encoding step that breaks existing entries.
+    #[cfg(windows)]
+    #[test]
+    fn icon_cache_write_then_read_roundtrips() {
+        let key = format!("claudette-roundtrip-{}", std::process::id());
+        let value = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
+        write_icon_cache(&key, value);
+        let got = read_icon_cache(&key).expect("just-written cache must read back");
+        assert_eq!(got, value);
+        // Cleanup so the test is hermetic.
+        if let Some(dir) = icon_cache_dir() {
+            let _ = std::fs::remove_file(dir.join(format!("{key}.b64")));
+        }
+    }
+
+    /// Cache invalidation: changing the file's mtime must produce a
+    /// different cache key so a re-extract triggers next launch.
+    /// This is what makes VS Code's silent auto-update get a fresh
+    /// icon if the vendor ever changes it.
+    #[cfg(windows)]
+    #[test]
+    fn icon_cache_key_changes_on_mtime_change() {
+        let tmp = tempfile::tempdir().unwrap();
+        let exe = tmp.path().join("upgraded.exe");
+        std::fs::write(&exe, b"MZ").unwrap();
+        let k1 = icon_cache_key("", &exe).expect("key1");
+
+        // Bump the file's mtime by writing different content + waiting
+        // for filesystem timestamp granularity (NTFS = 100ns, but
+        // some toolchains coalesce same-second writes; sleep keeps it
+        // honest).
+        std::thread::sleep(std::time::Duration::from_secs(1));
+        std::fs::write(&exe, b"MZ\x90\x90").unwrap();
+        let k2 = icon_cache_key("", &exe).expect("key2");
+        assert_ne!(k1, k2, "cache key did not change after mtime + size delta");
+    }
+
+    /// End-to-end UWP regression: only meaningful on machines where
+    /// Windows Terminal is installed via Appx (default on Windows 11).
+    /// We skip cleanly otherwise so this can run unconditionally on
+    /// any Windows host.
+    ///
+    /// What's pinned: the AppxPackage path returns *something* high-
+    /// res (≥64×64 PNG) for `Microsoft.WindowsTerminal`. If a future
+    /// refactor drops the UWP branch, the icon would silently fall
+    /// back to the generic console glyph at 32×32 and this test
+    /// fails loudly.
+    #[cfg(windows)]
+    #[test]
+    fn extract_windows_icon_resolves_appx_package_logo_for_terminal() {
+        use base64::Engine as _;
+        use base64::engine::general_purpose::STANDARD;
+
+        // Quick gate: skip when WT isn't installed (e.g. Windows
+        // Server hosts without the optional component).
+        let pkg_check = std::process::Command::new("powershell.exe")
+            .args([
+                "-NoProfile",
+                "-Command",
+                "if (Get-AppxPackage -Name 'Microsoft.WindowsTerminal*' -ErrorAction SilentlyContinue) { 'yes' } else { 'no' }",
+            ])
+            .output();
+        let installed =
+            matches!(pkg_check, Ok(o) if String::from_utf8_lossy(&o.stdout).trim() == "yes");
+        if !installed {
+            eprintln!("skipping: Microsoft.WindowsTerminal not installed");
+            return;
+        }
+
+        // Empty path is fine — the AppxPackage branch fires before we
+        // ever look at line 2.
+        let url = extract_windows_icon_data_url("Microsoft.WindowsTerminal", Path::new(""))
+            .expect("Appx icon extraction returned None for installed package");
+
+        let prefix = "data:image/png;base64,";
+        assert!(url.starts_with(prefix), "missing png prefix: {url}");
+        let png = STANDARD
+            .decode(&url[prefix.len()..])
+            .expect("base64 decodes");
+        assert!(png.len() > 200, "PNG body too small ({} bytes)", png.len());
+        assert_eq!(&png[..8], b"\x89PNG\r\n\x1a\n");
+        let width = u32::from_be_bytes([png[16], png[17], png[18], png[19]]);
+        let height = u32::from_be_bytes([png[20], png[21], png[22], png[23]]);
+        assert!(
+            width >= 64 && height >= 64,
+            "Appx logo regressed below 64x64 ({width}x{height}) — \
+             ExtractAssociatedIcon fallback path may have taken over"
+        );
+    }
+
+    /// On Windows, find_binary should prefer `.exe` over `.cmd` over a
+    /// no-extension shim — mirroring PATHEXT order. This protects
+    /// against the VS Code layout where `bin/code` (a Bash script) and
+    /// `bin/code.cmd` coexist; we want the latter so the icon resolver
+    /// can walk up to `Code.exe` and `Command::new` doesn't try to
+    /// invoke a sh-style script.
+    #[cfg(windows)]
+    #[test]
+    fn find_binary_prefers_exe_then_cmd_then_bare_on_windows() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        std::fs::write(dir.join("tool"), "shim").unwrap();
+        std::fs::write(dir.join("tool.cmd"), "@echo off").unwrap();
+        std::fs::write(dir.join("tool.exe"), b"MZ").unwrap();
+
+        let resolved = find_binary("tool", &[dir.to_path_buf()]).unwrap();
+        assert_eq!(resolved, dir.join("tool.exe"));
+
+        std::fs::remove_file(dir.join("tool.exe")).unwrap();
+        let resolved = find_binary("tool", &[dir.to_path_buf()]).unwrap();
+        assert_eq!(resolved, dir.join("tool.cmd"));
+
+        std::fs::remove_file(dir.join("tool.cmd")).unwrap();
+        let resolved = find_binary("tool", &[dir.to_path_buf()]).unwrap();
+        assert_eq!(resolved, dir.join("tool"));
+    }
+
+    /// `resolve_windows_icon_source` must walk up from the detected
+    /// shim to the real `.exe` named in `windows_exe_names`. The
+    /// fixture mirrors VS Code's layout: `bin/code.cmd` one level
+    /// below `Code.exe`.
+    #[cfg(windows)]
+    #[test]
+    fn resolve_windows_icon_walks_up_to_named_exe() {
+        let tmp = tempfile::tempdir().unwrap();
+        let app_root = tmp.path().join("MyApp");
+        let bin_dir = app_root.join("bin");
+        std::fs::create_dir_all(&bin_dir).unwrap();
+        let shim = bin_dir.join("myapp.cmd");
+        std::fs::write(&shim, "@echo off").unwrap();
+        let real_exe = app_root.join("MyApp.exe");
+        std::fs::write(&real_exe, b"MZ").unwrap();
+
+        let entry = AppEntry {
+            id: "myapp".into(),
+            name: "My App".into(),
+            category: AppCategory::Editor,
+            bin_names: vec!["myapp".into()],
+            mac_app_names: vec![],
+            windows_exe_names: vec!["MyApp.exe".into()],
+            windows_appx_package: String::new(),
+            open_args: vec!["{}".into()],
+            needs_terminal: false,
+        };
+
+        assert_eq!(resolve_windows_icon_source(&entry, &shim), real_exe);
+    }
+
+    /// Cursor's `cursor.cmd` lives three directories below `Cursor.exe`
+    /// (`<root>/resources/app/bin/cursor.cmd`). The walk-up cap of five
+    /// must comfortably cover that.
+    #[cfg(windows)]
+    #[test]
+    fn resolve_windows_icon_walks_up_multiple_levels() {
+        let tmp = tempfile::tempdir().unwrap();
+        let app_root = tmp.path().join("cursor");
+        let deep = app_root.join("resources").join("app").join("bin");
+        std::fs::create_dir_all(&deep).unwrap();
+        let shim = deep.join("cursor.cmd");
+        std::fs::write(&shim, "@echo off").unwrap();
+        let real_exe = app_root.join("Cursor.exe");
+        std::fs::write(&real_exe, b"MZ").unwrap();
+
+        let entry = AppEntry {
+            id: "cursor".into(),
+            name: "Cursor".into(),
+            category: AppCategory::Editor,
+            bin_names: vec!["cursor".into()],
+            mac_app_names: vec![],
+            windows_exe_names: vec!["Cursor.exe".into()],
+            windows_appx_package: String::new(),
+            open_args: vec!["{}".into()],
+            needs_terminal: false,
+        };
+
+        assert_eq!(resolve_windows_icon_source(&entry, &shim), real_exe);
+    }
+
+    /// When `windows_exe_names` doesn't match anything in the walk-up,
+    /// fall back to the original detected path so the caller still
+    /// gets a stable input for `ExtractAssociatedIcon`.
+    #[cfg(windows)]
+    #[test]
+    fn resolve_windows_icon_falls_back_to_detected_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        let bin_dir = tmp.path().join("bin");
+        std::fs::create_dir_all(&bin_dir).unwrap();
+        let shim = bin_dir.join("ghost.cmd");
+        std::fs::write(&shim, "@echo off").unwrap();
+
+        let entry = AppEntry {
+            id: "ghost".into(),
+            name: "Ghost".into(),
+            category: AppCategory::Editor,
+            bin_names: vec!["ghost".into()],
+            mac_app_names: vec![],
+            windows_exe_names: vec!["Nonexistent.exe".into()],
+            windows_appx_package: String::new(),
+            open_args: vec!["{}".into()],
+            needs_terminal: false,
+        };
+
+        assert_eq!(resolve_windows_icon_source(&entry, &shim), shim);
+    }
+
+    /// An entry without `windows_exe_names` must skip the walk and
+    /// return the detected path verbatim — that's the existing
+    /// behavior for shimless apps and we don't want to regress it.
+    #[cfg(windows)]
+    #[test]
+    fn resolve_windows_icon_no_walk_without_exe_names() {
+        let tmp = tempfile::tempdir().unwrap();
+        let exe = tmp.path().join("standalone.exe");
+        std::fs::write(&exe, b"MZ").unwrap();
+
+        let entry = AppEntry {
+            id: "standalone".into(),
+            name: "Standalone".into(),
+            category: AppCategory::Terminal,
+            bin_names: vec!["standalone".into()],
+            mac_app_names: vec![],
+            windows_exe_names: vec![],
+            windows_appx_package: String::new(),
+            open_args: vec![],
+            needs_terminal: false,
+        };
+
+        assert_eq!(resolve_windows_icon_source(&entry, &exe), exe);
     }
 }

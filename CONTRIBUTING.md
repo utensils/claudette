@@ -53,8 +53,14 @@ cd claudette
 # Install frontend dependencies
 cd src/ui && bun install && cd ../..
 
-# Run in development mode
-cargo tauri dev
+# Run in development mode (macOS / Linux)
+./scripts/dev.sh
+```
+
+```powershell
+# Windows equivalent — same flags, PowerShell launcher
+.\scripts\dev.ps1
+.\scripts\dev.ps1 --help
 ```
 
 > **macOS — voice input dev mode:** if you're working on or testing the
@@ -75,6 +81,24 @@ cargo tauri dev
 > ```sh
 > cargo tauri build --no-default-features --features tauri/custom-protocol,server
 > ```
+
+> **Windows — use `scripts\dev.ps1` (not `cargo tauri dev`).** The
+> PowerShell launcher refreshes PATH from the registry (so a fresh
+> shell sees clang/cargo without restarting), forces Vite onto
+> `127.0.0.1` (Windows resolves `localhost` to `::1` first; WebView2
+> doesn't follow), drops `voice` from the default feature set
+> (`gemm-f16` requires the `fullfp16` ARMv8.2 target feature that
+> stock aarch64-pc-windows-msvc doesn't enable), skips
+> `tauri/custom-protocol` (it would suppress `import.meta.env.DEV`
+> and break `/claudette-debug`), and stages the
+> `claudette-cli` sidecar that the bundled `tauri.conf.json` would
+> otherwise look for. `--clean` and `--help` work the same as on
+> the .sh version.
+>
+> First-time prerequisites on Windows: VS C++ Build Tools (Desktop
+> development with C++ workload) and Clang/LLVM on PATH (e.g.
+> `scoop install llvm`). The PowerShell profile snippet for a bare
+> `dev` command is in the [README — Run in development mode](README.md#run-in-development-mode).
 
 ## Commit Conventions
 

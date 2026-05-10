@@ -540,7 +540,18 @@ impl Drop for ScopedHome {
     }
 }
 
-#[cfg(has_direnv)]
+// Gated as Unix-only: direnv 2.36 on Windows shells out to `bash` to
+// evaluate the `.envrc`, and on a default Windows install bash receives
+// direnv's own binary path with forward slashes and bails with
+// `/bin/bash: line 1: "C:/.../direnv.exe": No such file or directory`.
+// `direnv export json` therefore exits 1 with only its own DIRENV_*
+// metadata in stdout — never the user's exports. The contract this test
+// pins (exported var flows through) cannot be met until direnv ships a
+// non-bash Windows runtime; the sibling `integration_direnv_auto_allow_
+// off_surfaces_blocked_error` test exercises the blocked-error path
+// which doesn't depend on `.envrc` evaluation and is left un-gated so
+// it runs on every platform.
+#[cfg(all(has_direnv, unix))]
 #[tokio::test]
 async fn integration_direnv_export_returns_env() {
     // Redirect HOME + XDG_*_HOME into a tempdir so `direnv allow`
@@ -742,7 +753,13 @@ async fn integration_direnv_auto_allow_off_surfaces_blocked_error() {
 /// auto_allow=true must retry after `direnv allow` when the .envrc is
 /// blocked. After the retry the plugin reports success and vars flow
 /// through.
-#[cfg(has_direnv)]
+// Same Unix-only gate as `integration_direnv_export_returns_env`: this
+// test asserts that after `direnv allow` runs, the retried export
+// surfaces user-exported vars. On Windows direnv's bash-based .envrc
+// evaluation never produces those vars regardless of allow state, so
+// the post-retry assertion can't be met. See that test's comment for
+// the upstream bash-on-Windows root cause.
+#[cfg(all(has_direnv, unix))]
 #[tokio::test]
 async fn integration_direnv_auto_allow_on_retries_after_blocked() {
     let _scoped = ScopedHome::new();

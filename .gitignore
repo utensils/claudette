@@ -58,6 +58,9 @@ tags
 # Claude Code
 .claude/worktrees/
 .claude/scheduled_tasks.lock
+# Per-session scratch dir for Claude Code agents — long-running build
+# logs, monitor output, debug-eval transcripts. Never committed.
+/.claude-tmp/
 
 # OpenAI Codex (skills exported from .claude/skills/ via codex-export)
 .agents/

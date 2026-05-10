@@ -837,13 +837,7 @@ mod tests {
 
         let registry = PluginRegistry::discover(dir.path());
 
-        let ws = WorkspaceInfo {
-            id: "ws-1".to_string(),
-            name: "test".to_string(),
-            branch: "main".to_string(),
-            worktree_path: "/tmp".to_string(),
-            repo_path: "/tmp".to_string(),
-        };
+        let ws = test_workspace();
 
         let result = registry
             .call_operation(
@@ -876,13 +870,21 @@ mod tests {
         std::fs::write(plugin_dir.join("init.lua"), init_lua).unwrap();
     }
 
+    /// Build a `WorkspaceInfo` whose `worktree_path` and `repo_path` are
+    /// real existing directories so `Command::current_dir(...)` works in
+    /// `host.exec` tests. Hardcoding `"/tmp"` worked on Unix but on
+    /// Windows there is no `/tmp` and `tokio::process::Command::spawn`
+    /// fails with `os error 267 (ERROR_DIRECTORY)` before the child
+    /// process even starts. `std::env::temp_dir()` resolves per-platform
+    /// (`/tmp` on Unix, `%TEMP%` on Windows) and is guaranteed to exist.
     fn test_workspace() -> WorkspaceInfo {
+        let tmp = std::env::temp_dir().to_string_lossy().into_owned();
         WorkspaceInfo {
             id: "ws-1".to_string(),
             name: "test".to_string(),
             branch: "main".to_string(),
-            worktree_path: "/tmp".to_string(),
-            repo_path: "/tmp".to_string(),
+            worktree_path: tmp.clone(),
+            repo_path: tmp,
         }
     }
 
@@ -999,13 +1001,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let registry = PluginRegistry::discover(dir.path());
 
-        let ws = WorkspaceInfo {
-            id: "ws-1".to_string(),
-            name: "test".to_string(),
-            branch: "main".to_string(),
-            worktree_path: "/tmp".to_string(),
-            repo_path: "/tmp".to_string(),
-        };
+        let ws = test_workspace();
 
         let result = registry
             .call_operation("nonexistent", "op", serde_json::json!({}), ws)
@@ -1035,13 +1031,7 @@ mod tests {
 
         let registry = PluginRegistry::discover(dir.path());
 
-        let ws = WorkspaceInfo {
-            id: "ws-1".to_string(),
-            name: "test".to_string(),
-            branch: "main".to_string(),
-            worktree_path: "/tmp".to_string(),
-            repo_path: "/tmp".to_string(),
-        };
+        let ws = test_workspace();
 
         let result = registry
             .call_operation("limited", "ci_status", serde_json::json!({}), ws)
@@ -1142,13 +1132,7 @@ mod tests {
         let registry = make_plugin_with_settings_manifest(dir.path());
         registry.set_disabled("settings-demo", true);
 
-        let ws = WorkspaceInfo {
-            id: "ws-1".into(),
-            name: "test".into(),
-            branch: "main".into(),
-            worktree_path: "/tmp".into(),
-            repo_path: "/tmp".into(),
-        };
+        let ws = test_workspace();
         let result = registry
             .call_operation("settings-demo", "read_config", serde_json::json!({}), ws)
             .await;
@@ -1165,13 +1149,7 @@ mod tests {
             Some(serde_json::Value::String("bob".into())),
         );
 
-        let ws = WorkspaceInfo {
-            id: "ws-1".into(),
-            name: "test".into(),
-            branch: "main".into(),
-            worktree_path: "/tmp".into(),
-            repo_path: "/tmp".into(),
-        };
+        let ws = test_workspace();
         let result = registry
             .call_operation("settings-demo", "read_config", serde_json::json!({}), ws)
             .await

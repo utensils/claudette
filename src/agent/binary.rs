@@ -222,7 +222,22 @@ fn claude_fallback_paths(home: Option<&Path>) -> Vec<PathBuf> {
             // most likely hit on a fresh machine.
             out.push(home.join(".local").join("bin").join("claude.exe"));
             // npm global install — shims live under %APPDATA%\npm, which is
-            // `$HOME/AppData/Roaming/npm` by default.
+            // `$HOME/AppData/Roaming/npm` by default. The .cmd shim's bundled
+            // .exe (under node_modules/@anthropic-ai/claude-code/bin/) is
+            // probed BEFORE the .cmd itself: spawning the .exe directly
+            // sidesteps Rust 1.77+'s batch-file argument validation
+            // (CVE-2024-24576) that rejects JSON-bearing args
+            // (`--mcp-config`, `--settings`) at spawn time.
+            out.push(
+                home.join("AppData")
+                    .join("Roaming")
+                    .join("npm")
+                    .join("node_modules")
+                    .join("@anthropic-ai")
+                    .join("claude-code")
+                    .join("bin")
+                    .join("claude.exe"),
+            );
             out.push(
                 home.join("AppData")
                     .join("Roaming")
@@ -270,6 +285,16 @@ fn claude_fallback_paths(home: Option<&Path>) -> Vec<PathBuf> {
 /// Skips non-absolute entries to prevent repo-local execution
 /// (e.g. a `.` entry would otherwise let a malicious repo provide its own
 /// `claude` binary).
+///
+/// On Windows, when only `claude.cmd` (the npm global shim) is found in a
+/// PATH directory, prefer the bundled `claude.exe` at the standard npm
+/// layout (`<dir>/node_modules/@anthropic-ai/claude-code/bin/claude.exe`)
+/// if present. The `.cmd` shim invokes that same .exe internally; spawning
+/// it directly bypasses Rust 1.77+'s batch-file argument validation
+/// (CVE-2024-24576) which rejects args containing characters it can't
+/// safely escape for `cmd.exe` — JSON payloads passed via `--mcp-config`
+/// and `--settings` trip the check and surface as
+/// `"batch file arguments are invalid"` at spawn time.
 fn search_path_dirs(path: &std::ffi::OsStr, exists: &impl Fn(&Path) -> bool) -> Option<OsString> {
     for dir in std::env::split_paths(path) {
         if !dir.is_absolute() {
@@ -277,9 +302,24 @@ fn search_path_dirs(path: &std::ffi::OsStr, exists: &impl Fn(&Path) -> bool) -> 
         }
         for name in claude_binary_variants() {
             let candidate = dir.join(name);
-            if exists(&candidate) {
-                return Some(candidate.into_os_string());
+            if !exists(&candidate) {
+                continue;
             }
+            #[cfg(windows)]
+            {
+                if name.eq_ignore_ascii_case("claude.cmd") {
+                    let bundled = dir
+                        .join("node_modules")
+                        .join("@anthropic-ai")
+                        .join("claude-code")
+                        .join("bin")
+                        .join("claude.exe");
+                    if exists(&bundled) {
+                        return Some(bundled.into_os_string());
+                    }
+                }
+            }
+            return Some(candidate.into_os_string());
         }
     }
     None
@@ -297,6 +337,9 @@ fn login_shell_path() -> Option<OsString> {
 mod tests {
     use super::*;
 
+    // Used only by the Unix tests below; gated to silence the Windows-side
+    // dead-code warning that `RUSTFLAGS=-Dwarnings` promotes to an error.
+    #[cfg(unix)]
     fn no_shell() -> Option<OsString> {
         None
     }
@@ -509,6 +552,55 @@ mod tests {
         let expected_clone = expected.clone();
         let result = search_path_dirs(path.as_os_str(), &move |p| p == expected_clone);
         assert_eq!(result, Some(expected.into_os_string()));
+    }
+
+    /// When PATH points at the npm install dir, the .cmd shim is present but
+    /// so is the bundled `claude.exe` underneath `node_modules/...`. The
+    /// resolver must prefer the .exe so chat-send avoids Rust 1.77+'s
+    /// batch-file argument validation rejecting JSON-bearing args.
+    #[cfg(windows)]
+    #[test]
+    fn test_search_path_dirs_prefers_bundled_exe_over_cmd_shim_windows() {
+        let path = OsString::from(r"C:\tools\npm");
+        let cmd_shim = PathBuf::from(r"C:\tools\npm\claude.cmd");
+        let bundled =
+            PathBuf::from(r"C:\tools\npm\node_modules\@anthropic-ai\claude-code\bin\claude.exe");
+        let cmd_clone = cmd_shim.clone();
+        let bundled_clone = bundled.clone();
+        let result = search_path_dirs(path.as_os_str(), &move |p| {
+            p == cmd_clone || p == bundled_clone
+        });
+        assert_eq!(result, Some(bundled.into_os_string()));
+    }
+
+    /// When the .cmd shim exists but the bundled .exe is somehow absent
+    /// (broken install / partial copy), still return the .cmd so the user
+    /// gets the existing batch-arg failure message rather than a missing-CLI
+    /// error. The .cmd path is real; the bundled-exe preference is only an
+    /// optimization for the common case.
+    #[cfg(windows)]
+    #[test]
+    fn test_search_path_dirs_falls_back_to_cmd_when_bundled_exe_missing_windows() {
+        let path = OsString::from(r"C:\tools\npm");
+        let cmd_shim = PathBuf::from(r"C:\tools\npm\claude.cmd");
+        let cmd_clone = cmd_shim.clone();
+        let result = search_path_dirs(path.as_os_str(), &move |p| p == cmd_clone);
+        assert_eq!(result, Some(cmd_shim.into_os_string()));
+    }
+
+    /// Direct `claude.exe` on PATH still wins over a sibling .cmd — the
+    /// variants are tried in order and the first match returns. This is
+    /// the common case for the official Anthropic native installer.
+    #[cfg(windows)]
+    #[test]
+    fn test_search_path_dirs_direct_exe_wins_over_cmd_windows() {
+        let path = OsString::from(r"C:\tools\npm");
+        let exe = PathBuf::from(r"C:\tools\npm\claude.exe");
+        let cmd_shim = PathBuf::from(r"C:\tools\npm\claude.cmd");
+        let exe_clone = exe.clone();
+        let cmd_clone = cmd_shim.clone();
+        let result = search_path_dirs(path.as_os_str(), &move |p| p == exe_clone || p == cmd_clone);
+        assert_eq!(result, Some(exe.into_os_string()));
     }
 
     #[cfg(windows)]

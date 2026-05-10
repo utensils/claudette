@@ -1157,8 +1157,15 @@ mod tests {
             .worktree_path
             .as_deref()
             .expect("fork workspace must have a worktree path");
+        // Compare via `Path::ends_with` (component-aware) rather than
+        // `str::ends_with` so the assertion is platform-portable. The
+        // string field stores native separators — `\` on Windows — so a
+        // literal `"repo1/src-fork-2"` substring match would always fail
+        // on Windows even when the suffix is correct.
+        let new_wt_path = std::path::Path::new(new_wt);
+        let expected_suffix = std::path::Path::new("repo1").join("src-fork-2");
         assert!(
-            new_wt.ends_with("repo1/src-fork-2"),
+            new_wt_path.ends_with(&expected_suffix),
             "fork worktree must live at the suffixed path, got {new_wt}"
         );
         // Orphan dir must remain untouched — fork allocates around it,
