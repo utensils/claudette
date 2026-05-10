@@ -1,9 +1,11 @@
 ---
 title: LM Studio
-description: Run Claudette agents against models loaded in LM Studio's local server — direct routing to LM Studio's native Anthropic /v1/messages endpoint on localhost, no remote API key required.
+description: Run Claudette agents against models loaded in LM Studio's local server — Claudette's gateway forwards Claude Code's Anthropic-shape requests to LM Studio's native /v1/messages on localhost, no remote API key required.
 ---
 
-The LM Studio provider points the spawned `claude` CLI at LM Studio's built-in local server. It's a **direct-routed** backend (same fast path as Ollama): Claudette sets `ANTHROPIC_BASE_URL=http://localhost:1234` and the CLI talks straight to LM Studio with no in-process gateway, no wire-format translation, and full streaming pass-through. LM Studio 0.4.1+ implements Anthropic's `/v1/messages` endpoint natively, so this works out of the box.
+The LM Studio provider routes the spawned `claude` CLI through Claudette's in-process gateway. The gateway forwards Claude Code's Anthropic-shape requests to LM Studio's native `/v1/messages` endpoint (added in LM Studio 0.4.1+) — there's no wire-format translation work, the body goes through verbatim and 2xx response bytes stream straight back to the CLI.
+
+The gateway is in the path because LM Studio classifies hard input errors like context-window overflow as HTTP 500 with an Anthropic-shape body whose `error.type` is `api_error`. That's a transient classification — the Anthropic SDK retries it with exponential backoff — so a permanent input failure ends up as a multi-minute spinner with no surfaced error unless we demote the status code on the way back. Claudette's gateway does exactly that: 2xx pass through unchanged, non-2xx with permanent-failure-shaped messages are rewritten to 4xx so the SDK fails fast and the user sees the actual upstream message.
 
 The capability profile is the local-first one (no extended thinking / effort / fast mode / 1M-context auto-upgrade in the chat header) — the loaded model and LM Studio's tokenizer do whatever they support, but Claudette doesn't expose those Anthropic-only knobs. Tool use and vision work whenever the underlying model handles them.
 
@@ -81,24 +83,31 @@ If a model misbehaves, try switching to a different one before assuming Claudett
 
 ## How requests flow
 
-LM Studio shares Ollama's direct-routing architecture — there is no in-process gateway:
+LM Studio uses Claudette's in-process gateway with an Anthropic-shape pass-through (NOT the OpenAI-Responses translation path the OpenAI / Codex backends use):
 
-1. Claudette sets `ANTHROPIC_BASE_URL=http://localhost:1234`, `ANTHROPIC_AUTH_TOKEN=lm-studio` (placeholder), and `ANTHROPIC_API_KEY=""` on the spawned `claude` subprocess.
-2. The `claude` CLI POSTs `/v1/messages` directly to LM Studio. LM Studio 0.4.1+ speaks the Anthropic Messages API natively, so the request shape and streaming events match what the CLI expects from `api.anthropic.com`.
-3. Streamed tokens flow from LM Studio → CLI → Claudette UI in real time. No buffering, no translation.
+1. Claudette spins up an HTTP listener on `127.0.0.1:0` per backend and exports `ANTHROPIC_BASE_URL=<gateway>`, `ANTHROPIC_AUTH_TOKEN=<random>`, `CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1`, and `CLAUDE_CODE_ATTRIBUTION_HEADER=0` on the spawned `claude` subprocess.
+2. The CLI POSTs `/v1/messages` to the gateway. The gateway recognizes LM Studio backends and forwards the request body verbatim to `http://localhost:1234/v1/messages` — LM Studio 0.4.1+ speaks the Anthropic Messages API natively, so no translation is needed.
+3. **Successful (2xx) responses stream through unchanged**. The gateway mirrors LM Studio's `Content-Type` and writes upstream bytes to the CLI as they arrive — per-chunk SSE events flow straight through without buffering, so first-token latency stays close to LM Studio's own TTFT.
+4. **Non-2xx responses are intercepted**. The gateway parses the upstream body (LM Studio returns Anthropic-shape errors), checks the message text, and demotes any HTTP 5xx whose body matches a permanent-failure pattern (context length, model not loaded, etc.) to HTTP 400 with `error.type = invalid_request_error`. Without that demotion the Anthropic SDK retries 5xx with exponential backoff and the user sees a multi-minute spinner instead of the actual error.
 
-Claudette also sets `CLAUDE_CODE_ATTRIBUTION_HEADER=0` for LM Studio (and Ollama). Claude Code adds a per-request user-attribution header by default for usage attribution against `api.anthropic.com`, but its rotating value invalidates LM Studio's KV-cache prefix matching on every request — a documented [~90% performance regression](https://www.roborhythms.com/stop-claude-code-slowing-local-llm-by-90/) on local backends. Disabling it keeps the cache warm across turns; LM Studio doesn't bill anything, so the header is pure overhead.
+`CLAUDE_CODE_ATTRIBUTION_HEADER=0` keeps Claude Code from adding a rotating per-request user-attribution header. With the header on, the request prefix changes every turn and LM Studio's KV-cache prefix matching is invalidated — a documented [~90% performance regression](https://www.roborhythms.com/stop-claude-code-slowing-local-llm-by-90/) on local backends. LM Studio doesn't bill anything, so the header is pure overhead.
 
 The chat header hides **Extended thinking**, **Effort**, **Fast mode**, and **1M-context** when an LM Studio model is active — `AgentBackendConfig::builtin_lm_studio()` declares those capabilities as `false`. They map cleanly to Anthropic's API but local models implement them inconsistently or not at all, and silently swallowing them would be worse than just hiding the controls.
 
+### Why not direct routing like Ollama?
+
+Ollama doesn't use Claudette's gateway: `ANTHROPIC_BASE_URL` points the CLI straight at Ollama's `/v1/messages`. We tried the same setup for LM Studio briefly — the architecture is wire-compatible — but LM Studio classifies hard input errors like context-window overflow as **HTTP 500** with an Anthropic-shape body whose `error.type` is `api_error`. The Anthropic SDK reads that as transient and retries with backoff; users get a multi-minute spinner with no surfaced error.
+
+The thin gateway pass-through gets us the best of both: 2xx flows through with the same TTFT as direct routing (no translation, no buffering), and 5xx-with-permanent-failure-message gets demoted to 4xx so the error reaches the user immediately.
+
 ### Why not the OpenAI Responses gateway?
 
-LM Studio also exposes `/v1/responses` (OpenAI's newer Responses API). Earlier iterations of this integration used that path through Claudette's gateway, but it had two structural problems compared to direct `/v1/messages`:
+LM Studio also exposes `/v1/responses` (OpenAI's newer Responses API). Earlier iterations of this integration used that path through Claudette's gateway with full Anthropic ↔ OpenAI Responses translation, but it had two structural problems:
 
-- **Translation overhead**: Claudette had to translate Anthropic ↔ OpenAI Responses on every request. The translation buffered the full response before sending anything back, so first-token latency equalled total generation time even when LM Studio's TTFT was sub-second.
+- **Translation overhead**: the translation layer buffered the full response before sending anything back, so first-token latency equalled total generation time even when LM Studio's TTFT was sub-second.
 - **Lost streaming**: OpenAI Responses streaming uses `event: response.output_text.delta` events. Translating that incrementally into Anthropic `content_block_delta` events while preserving tool-call streaming, reasoning blocks, and stop reasons is non-trivial and a regression risk.
 
-Direct `/v1/messages` is a one-line config change (set `ANTHROPIC_BASE_URL`) that gets all of this for free. The OpenAI Responses gateway is still used for OpenAI API and Codex Subscription where there's no Anthropic-shaped alternative.
+Pass-through against LM Studio's native `/v1/messages` skips all of that and only intervenes where it has to (status-code translation on errors). The OpenAI Responses gateway path is still used for OpenAI API and Codex Subscription where there's no Anthropic-shaped alternative.
 
 ## Performance notes
 
