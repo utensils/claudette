@@ -793,10 +793,10 @@ fn platform_description() -> &'static str {
 
 #[cfg(windows)]
 fn platform_description() -> &'static str {
-    "Uses Windows System.Speech recognition through the .NET Framework. \
-     Captured audio is transcribed locally — no network round-trip. Install the \
-     speech recognizer language pack via Settings → Time & language → Speech if \
-     transcription returns no text."
+    "Uses the Windows Speech API (SAPI 5.4) via in-process COM. \
+     Captured audio is transcribed locally — no network round-trip, no extra runtime. \
+     Install a Speech Recognizer language pack via Settings → Time & language → Speech \
+     if transcription returns no text."
 }
 
 #[cfg(not(any(target_os = "macos", windows)))]
@@ -811,7 +811,7 @@ fn platform_privacy_label() -> &'static str {
 
 #[cfg(windows)]
 fn platform_privacy_label() -> &'static str {
-    "Local Windows System.Speech recognition; audio stays on this machine"
+    "Local Windows SAPI recognition; audio stays on this machine"
 }
 
 #[cfg(not(any(target_os = "macos", windows)))]
@@ -826,7 +826,7 @@ fn platform_accelerator_label() -> &'static str {
 
 #[cfg(windows)]
 fn platform_accelerator_label() -> &'static str {
-    "Windows System.Speech"
+    "Windows SAPI"
 }
 
 #[cfg(not(any(target_os = "macos", windows)))]

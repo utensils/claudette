@@ -88,6 +88,20 @@ windows-sys = { version = "0.61", features = [
     # `.exe`). Probe via OpenProcess + GetExitCodeProcess.
     "Win32_System_Threading",
 ] }
+# COM-aware bindings for the SAPI 5.4 in-process recognizer used by the
+# Windows native voice provider. `windows-sys` would force us to manage
+# IUnknown::AddRef/Release by hand; the higher-level `windows` crate
+# wraps each interface in a smart pointer whose Drop calls Release —
+# essential for keeping the COM cleanup correct under panic / early
+# return paths.
+windows = { version = "0.58", features = [
+    "Win32_Foundation",
+    "Win32_System_Com",
+    "Win32_System_Threading",
+    "Win32_System_Variant",
+    "Win32_Media_Audio",
+    "Win32_Media_Speech",
+] }
 
 [features]
 # `devtools` is in the default set so the Help → Open dev tools menu item

@@ -1,6 +1,6 @@
 ---
 title: Voice Input
-description: Speak prompts directly into the chat composer using Apple Speech, Windows System.Speech, on-device Distil-Whisper, or the Web Speech API.
+description: Speak prompts directly into the chat composer using Apple Speech, the Windows Speech API (SAPI 5.4), on-device Distil-Whisper, or the Web Speech API.
 ---
 
 Claudette lets you dictate prompts to the composer using your microphone. Four providers are available — the app picks the best one automatically, or you can pin a specific provider in Settings.
@@ -10,7 +10,7 @@ Claudette lets you dictate prompts to the composer using your microphone. Four p
 | Provider | Platforms | Runs where | Notes |
 |----------|-----------|-----------|-------|
 | **Apple Speech** | macOS | On-device, OS-managed | Uses the native Speech framework. Fast and lightweight — no model download required. Requires Microphone and Speech Recognition permission in System Settings. |
-| **Windows System.Speech** | Windows 10+ | On-device | Uses the bundled .NET Framework `System.Speech.Recognition` engine. No download. Captured audio is transcribed locally — no network round-trip. If transcription returns no text, install the speech recognizer language pack via **Settings → Time & language → Speech**. |
+| **Windows Speech API (SAPI 5.4)** | Windows 7+ | On-device | Drives the in-process SAPI recognizer (`SpInprocRecognizer`) directly via COM — no .NET, no PowerShell, no extra runtime. Captured audio is transcribed locally with no network round-trip. If transcription returns no text, install a Speech Recognizer language pack via **Settings → Time & language → Speech**. |
 | **Distil-Whisper** | macOS, Linux, Windows | Fully on-device | Uses the [`distil-whisper/distil-large-v3`](https://huggingface.co/distil-whisper/distil-large-v3) model (~1.5 GB), downloaded once from Hugging Face on first use and cached locally. All subsequent transcription is offline. Metal GPU acceleration on macOS; CPU on Linux and Windows. |
 | **Web Speech API** | Linux (fallback) | Browser-managed | Used when native capture is unavailable. Quality and language support depend on the OS browser engine. (Not used on Windows — WebView2 does not expose the Web Speech API; Windows uses System.Speech instead.) |
 
@@ -46,13 +46,13 @@ macOS requires two permissions — **Microphone** and **Speech Recognition**. Th
 - **System Settings → Privacy & Security → Microphone → Claudette**
 - **System Settings → Privacy & Security → Speech Recognition → Claudette**
 
-### Windows System.Speech
+### Windows Speech API (SAPI)
 
-No download is needed — the recognizer is bundled with the .NET Framework on every Windows install. Ensure microphone access is enabled for Claudette via **Settings → Privacy & security → Microphone**.
+No download is needed — SAPI 5.4 ships in every Windows install since 7. Ensure microphone access is enabled for Claudette via **Settings → Privacy & security → Microphone**.
 
-If transcription returns no text or surfaces a "Windows speech recognizer is not installed" error, install the speech recognizer language pack: **Settings → Time & language → Speech → Add a voice → English (United States)** (or your preferred locale's recognizer). Without an installed recognizer the engine has nothing to match against.
+If transcription returns no text or surfaces a "Windows speech recognizer is not installed" error, install a recognizer language pack: **Settings → Time & language → Speech → Add a voice → English (United States)** (or your preferred locale's recognizer). Without an installed recognizer the engine has nothing to match against.
 
-If transcription fails for another reason, the toolbar shows a short message and the underlying .NET exception chain is written to the daily diagnostics log. Open it via **Settings → Diagnostics → Open log directory** for the full context.
+If transcription fails for another reason, the toolbar shows a short, actionable message and the raw HRESULT + failed COM stage are written to the daily diagnostics log. Open it via **Settings → Diagnostics → Open log directory** for the full context.
 
 ### Distil-Whisper
 

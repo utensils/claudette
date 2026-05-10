@@ -1,17 +1,16 @@
 // The platform speech bridge gives the cross-platform `voice.rs` a single
 // trait it can lean on regardless of whether the host OS exposes a native
-// recognizer (macOS Apple Speech, Windows System.Speech), or only a stub
+// recognizer (macOS Apple Speech, Windows SAPI 5.4), or only a stub
 // fallback (Linux for now). Each `#[cfg(...)]` impl block below shares the
 // trait definition so callers in voice.rs do not need any per-OS branching
 // once they hold a `&dyn PlatformSpeechEngine`.
 //
 // The macOS path links to a small Swift static library (see build.rs) that
-// drives `SFSpeechRecognizer` / `SpeechAnalyzer`. The Windows path shells
-// out to PowerShell + System.Speech.Recognition, which is bundled with
-// every Windows install via the .NET Framework — no extra runtime, no
-// download, no cloud round-trip. Both feed the same captured-audio buffer
-// captured by `CpalAudioRecorder`, written to a temporary 16-bit PCM WAV
-// before the engine reads it back.
+// drives `SFSpeechRecognizer` / `SpeechAnalyzer`. The Windows path drives
+// SAPI 5.4 directly via COM through the `windows` crate — no .NET, no
+// PowerShell shell-out, no extra runtime. Both feed the same captured-
+// audio buffer produced by `CpalAudioRecorder`, written to a temporary
+// 16-bit PCM WAV before the engine reads it back.
 
 #[cfg(any(target_os = "macos", windows))]
 use std::path::Path;
@@ -58,23 +57,15 @@ impl PlatformSpeechAvailability {
         }
     }
 
-    // Both helpers are Windows-only today — the Windows speech bridge is
-    // the sole non-test caller. Keep the cfg tight so the symbols don't
-    // become a dead-code lint on macOS / Linux.
+    // Windows-only — the SAPI bridge advertises Ready up front; the
+    // EngineUnavailable variants are reserved for the macOS native
+    // status path or future probes that decide they need to gate the
+    // provider before the user clicks the mic.
     #[cfg(windows)]
     fn ready_now(engine_label: &str, message: impl Into<String>) -> Self {
         Self {
             status: PlatformSpeechAvailabilityStatus::Ready,
             engine_label: Some(engine_label.to_string()),
-            message: message.into(),
-        }
-    }
-
-    #[cfg(windows)]
-    fn engine_unavailable(message: impl Into<String>) -> Self {
-        Self {
-            status: PlatformSpeechAvailabilityStatus::EngineUnavailable,
-            engine_label: None,
             message: message.into(),
         }
     }
@@ -139,8 +130,8 @@ impl PlatformSpeechEngine for DefaultPlatformSpeechEngine {
     fn prepare(&self) -> PlatformSpeechAvailability {
         // Windows does not have a TCC-style "prepare" prompt the way macOS
         // does — microphone permission is granted/denied at the OS level
-        // through Settings → Privacy → Microphone, and System.Speech sees
-        // the WAV file directly without re-asking. Returning the static
+        // through Settings → Privacy → Microphone, and SAPI consumes the
+        // WAV file directly without re-asking. Returning the static
         // availability keeps the trait shape symmetric with macOS.
         windows_speech::availability()
     }
@@ -331,336 +322,472 @@ unsafe extern "C" {
     fn claudette_platform_speech_cancel();
 }
 
-// Windows speech recognition bridge — implemented via PowerShell +
-// System.Speech.Recognition (part of .NET Framework, bundled in every
-// Windows install since 7). We write the captured audio to a temp WAV,
-// hand it off to a one-shot PowerShell script that drives a
-// `SpeechRecognitionEngine.SetInputToWaveFile()` loop, and parse a JSON
-// envelope back. Unlike Windows.Media.SpeechRecognition (WinRT) which
-// only listens to the live mic, the legacy System.Speech path accepts
-// arbitrary WAV files — the same shape as the macOS file-based bridge.
+// Windows speech recognition bridge — drives SAPI 5.4's in-process
+// recognizer (`SpInprocRecognizer`) directly via COM through the
+// `windows` crate. SAPI 5.4 ships with every Windows install since 7
+// (no .NET, no PowerShell, no extra runtime), accepts arbitrary WAV
+// files via `ISpStream::BindToFile`, and surfaces real HRESULT codes
+// for diagnosis.
+//
+// Earlier iterations shelled out to `powershell.exe` +
+// `System.Speech.Recognition.SpeechRecognitionEngine`, but the .NET
+// path on Windows ARM64 / under emulation was unreliable: the
+// recognizer would throw "No audio input is supplied to this
+// recognizer" mid-call after a successful `SetInputToWaveFile`,
+// because the implicitly-opened FileStream got closed before
+// `Recognize()` consumed it. Owning the COM lifecycle ourselves
+// removes that whole class of bug — we keep `ISpStream` alive across
+// the full recognition loop and the recognizer can't lose it.
+//
+// Threading: COM is initialized as Apartment Threaded (STA) on the
+// caller thread. Voice transcription runs inside `tokio::task::
+// spawn_blocking` (see `voice.rs::stop_platform_recording`), so this
+// thread is dedicated to the call and tearing it down on return is
+// safe. The COM cleanup sentinel below ensures `CoUninitialize` runs
+// on every exit path including panics.
 #[cfg(windows)]
 mod windows_speech {
-    use std::os::windows::process::CommandExt;
+    use std::ffi::OsStr;
+    use std::os::windows::ffi::OsStrExt;
     use std::path::Path;
-    use std::process::Command;
+    use std::time::{Duration, Instant};
+
+    use windows::Win32::Foundation::{S_FALSE, WAIT_OBJECT_0};
+    use windows::Win32::Media::Speech::{
+        ISpRecoGrammar, ISpRecoResult, ISpRecognizer, ISpStream, SPEI_END_SR_STREAM,
+        SPEI_FALSE_RECOGNITION, SPEI_RECOGNITION, SPEVENT, SPFM_OPEN_READONLY, SPLO_STATIC,
+        SPRS_ACTIVE, SPRST_ACTIVE_ALWAYS, SPRST_INACTIVE, SpInprocRecognizer, SpStream,
+    };
+    use windows::Win32::System::Com::{
+        CLSCTX_ALL, COINIT_APARTMENTTHREADED, CoCreateInstance, CoInitializeEx, CoTaskMemFree,
+        CoUninitialize,
+    };
+    use windows::Win32::System::Threading::WaitForSingleObject;
+    use windows::core::{Interface, PCWSTR, PWSTR};
 
     use super::PlatformSpeechAvailability;
 
-    // CREATE_NO_WINDOW (0x0800_0000) suppresses the brief PowerShell console
-    // flash that would otherwise pop up on every transcription. The flag is
-    // only available on Windows so it lives behind the same cfg as the rest
-    // of this module.
-    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-    // Ceiling for the PowerShell side. The Rust caller wraps us in its own
-    // `transcription_timeout` (90 s by default), so this only protects against
-    // a stuck PS process that hasn't returned yet — generous on purpose.
-    const POWERSHELL_TIMEOUT_SECS: u64 = 120;
+    // The SAPI event loop polls for events at ~30 Hz (33 ms wait interval).
+    // Each iteration: WaitForSingleObject → drain GetEvents → loop. That
+    // keeps end-of-stream latency low without spinning the CPU.
+    const EVENT_POLL_WAIT_MS: u32 = 33;
+    // Hard ceiling on the recognizer event loop. The Rust caller wraps
+    // `transcribe()` in `tokio::time::timeout(transcription_timeout)`
+    // (90 s by default), so this is just belt-and-suspenders against an
+    // engine that never emits SPEI_END_SR_STREAM after consuming the WAV.
+    const RECOGNITION_DEADLINE: Duration = Duration::from_secs(120);
+
+    // SAPI's `SPFEI()` macro maps an event ID to a 64-bit interest mask.
+    // The two reserved bits below (`SPFEI_FLAGCHECK` in the C++ headers)
+    // are required so the recognizer can distinguish "no interest set"
+    // from a literal 0 mask — without them, SetInterest is a no-op.
+    const SPFEI_FLAGCHECK: u64 = (1u64 << 30) | (1u64 << 33);
+
+    /// Convert a `SPEVENTENUM` event id into the bit mask
+    /// `ISpEventSource::SetInterest` expects. Mirrors the C++ `SPFEI`
+    /// macro 1-to-1.
+    const fn spfei(event_id: i32) -> u64 {
+        SPFEI_FLAGCHECK | (1u64 << event_id)
+    }
 
     pub(super) fn availability() -> PlatformSpeechAvailability {
-        // The user-visible label is intentionally identical between the
-        // assumed-ready and degraded states; the message string is what
-        // surfaces when something is wrong. We don't probe System.Speech up
-        // front because that would cost a ~300 ms PowerShell spawn on every
-        // app launch — the trait contract for macOS is also "report what
-        // looks ready and let `transcribe()` surface real errors."
-        if find_powershell().is_some() {
-            PlatformSpeechAvailability::ready_now(
-                "Windows System.Speech",
-                "Ready via Windows System.Speech (no setup required)",
-            )
-        } else {
-            PlatformSpeechAvailability::engine_unavailable(
-                "Windows PowerShell was not found on PATH; system dictation cannot start. Install Windows PowerShell or use the offline Distil-Whisper provider.",
-            )
-        }
-    }
-
-    pub(super) fn transcribe_wav_path(wav_path: &Path) -> Result<String, String> {
-        let powershell = find_powershell().ok_or_else(|| {
-            "Windows PowerShell was not found on PATH; cannot run system dictation.".to_string()
-        })?;
-
-        // Single-quoted PowerShell strings are fully literal — only `'` needs
-        // escaping (doubled). UUID-based filenames don't contain `'`, but the
-        // user's temp-dir path could (e.g. via OneDrive folder names with
-        // apostrophes). Be defensive.
-        let path_literal = wav_path.display().to_string().replace('\'', "''");
-        let script = build_recognition_script(&path_literal);
-
-        let output = Command::new(&powershell)
-            .args([
-                "-NoProfile",
-                "-NonInteractive",
-                "-ExecutionPolicy",
-                "Bypass",
-                "-OutputFormat",
-                "Text",
-                "-Command",
-                &script,
-            ])
-            .creation_flags(CREATE_NO_WINDOW)
-            .output()
-            .map_err(|e| format!("Failed to spawn PowerShell for system dictation: {e}"))?;
-
-        // PowerShell's stdout in OutputFormat=Text is the user's `Write-Output`
-        // text. We emit a single JSON line in the script for easy parsing.
-        let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
-        let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
-
-        // Whether the PowerShell process succeeded or our envelope parser
-        // accepted the output, we want the *raw* stdout/stderr stamped into
-        // the daily log on every failure. tracing's `error!`/`warn!` ships
-        // it through the same `claudette::logging` pipeline that powers
-        // Settings → Diagnostics → Open log directory. No parallel debug
-        // file written by us — one canonical place to look.
-        if !output.status.success() {
-            tracing::error!(
-                target: "claudette::voice::platform_speech::windows",
-                exit = output.status.code().unwrap_or(-1),
-                wav = %wav_path.display(),
-                stderr = %stderr,
-                stdout = %stdout,
-                "PowerShell system dictation script exited non-zero",
-            );
-            return Err(
-                "Speech recognition failed. See Settings → Diagnostics → Open log directory for details."
-                    .to_string(),
-            );
-        }
-
-        match parse_transcription_envelope(&stdout) {
-            Ok(text) => Ok(text),
-            Err(raw) => {
-                // The full raw .NET exception chain only goes to the
-                // diagnostics log — it's multiline, contains type names,
-                // and is unpleasant in a toolbar pill. The user-facing
-                // string is a one-line, actionable summary picked by
-                // `user_facing_error`.
-                let user_facing = user_facing_error(&raw);
-                tracing::error!(
-                    target: "claudette::voice::platform_speech::windows",
-                    wav = %wav_path.display(),
-                    raw_error = %raw,
-                    user_facing = %user_facing,
-                    stdout = %stdout,
-                    stderr = %stderr,
-                    "System.Speech transcription failed",
-                );
-                Err(user_facing)
-            }
-        }
-    }
-
-    /// Map a raw .NET exception chain to a single short user-facing line.
-    /// Anything we don't recognize falls through to the generic "speech
-    /// recognition failed; check the diagnostics log" message — the raw
-    /// chain stays in the tracing log for bug reports.
-    pub(super) fn user_facing_error(raw: &str) -> String {
-        match raw {
-            text if text.contains("No recognizer of the required ID found") => {
-                "Windows speech recognizer is not installed. Install a Speech Recognizer language pack in Windows Settings → Time & language → Speech.".to_string()
-            }
-            text if text.contains("Could not load file or assembly") => {
-                "Windows System.Speech is unavailable on this machine. Switch to the Distil-Whisper provider in Plugins settings.".to_string()
-            }
-            text if text.contains("No audio input is supplied")
-                || text.contains("FileNotFoundException")
-                || text.contains("InvalidDataException")
-                || text.contains("WAV input") =>
-            {
-                "Couldn't load the recorded audio. Try recording again — see Settings → Diagnostics for details.".to_string()
-            }
-            text if text.contains("AudioFormatNotSupported")
-                || text.contains("Stream is not in the correct format") =>
-            {
-                "Windows speech recognition rejected the audio format. Try again — see Settings → Diagnostics for details.".to_string()
-            }
-            _ => "Speech recognition failed. See Settings → Diagnostics → Open log directory for details.".to_string(),
-        }
-    }
-
-    // pub(super) so the cross-module test in `windows_tests` below can pin
-    // the script's escaping rules without us having to spawn PowerShell in
-    // unit tests. Production callers go through `transcribe_wav_path`.
-    pub(super) fn build_recognition_script(path_literal: &str) -> String {
-        // The script:
-        //   1. Loads System.Speech (bundled with .NET Framework on Windows).
-        //   2. Verifies the WAV file exists + is non-trivial before touching
-        //      the recognizer. A missing/empty WAV makes `Recognize()` throw
-        //      the misleading "No audio input is supplied to this recognizer"
-        //      error; catching it up front gives the user something concrete.
-        //   3. Opens the WAV as a `FileStream` and uses
-        //      `SetInputToWaveStream`, NOT `SetInputToWaveFile`. The latter
-        //      can throw "No audio input is supplied" on Windows ARM64 / .NET
-        //      Framework under emulation even with a perfectly valid WAV —
-        //      observed in the wild as
-        //      `MethodInvocationException :: InvalidOperationException: No
-        //      audio input is supplied to this recognizer`. The stream
-        //      variant parses the RIFF header itself and consistently works.
-        //   4. Loops `Recognize()` so multi-phrase recordings are captured
-        //      whole. The 5 s pause is a System.Speech default that resets
-        //      each phrase; once the WAV stream is exhausted, `Recognize()`
-        //      returns $null and we break out.
-        //   5. On error, walks the .NET `InnerException` chain into the
-        //      JSON envelope. The Rust side maps it to a short user-facing
-        //      message; the full chain stays in the daily diagnostics log.
-        format!(
-            r#"$ErrorActionPreference='Stop'
-$wavPath = '{path}'
-try {{
-    if (-not (Test-Path -LiteralPath $wavPath)) {{
-        throw [System.IO.FileNotFoundException]::new("WAV input file does not exist", $wavPath)
-    }}
-    $wavInfo = Get-Item -LiteralPath $wavPath
-    if ($wavInfo.Length -lt 44) {{
-        throw [System.IO.InvalidDataException]::new("WAV input is too small (${{$wavInfo.Length}} bytes) to contain a valid RIFF header")
-    }}
-    Add-Type -AssemblyName System.Speech -ErrorAction Stop
-    $r = New-Object System.Speech.Recognition.SpeechRecognitionEngine
-    $stream = $null
-    try {{
-        $r.LoadGrammar((New-Object System.Speech.Recognition.DictationGrammar))
-        $stream = [System.IO.File]::OpenRead($wavPath)
-        $r.SetInputToWaveStream($stream)
-        $phrases = New-Object System.Collections.Generic.List[string]
-        while ($true) {{
-            $result = $r.Recognize([TimeSpan]::FromSeconds(5))
-            if ($null -eq $result) {{ break }}
-            if ($result.Text) {{ $phrases.Add($result.Text) }}
-        }}
-        $payload = [pscustomobject]@{{ ok = $true; text = ($phrases -join ' ') }}
-    }} finally {{
-        if ($null -ne $stream) {{ $stream.Close() }}
-        $r.Dispose()
-    }}
-}} catch {{
-    $messages = New-Object System.Collections.Generic.List[string]
-    $exception = $_.Exception
-    while ($null -ne $exception) {{
-        $msg = $exception.Message
-        # Strip the "Exception calling \"X\" with \"N\" argument(s):" wrapper
-        # PowerShell adds around .NET method-invocation throws — the wrapper
-        # is never actionable, the real cause is the next link.
-        $msg = [regex]::Replace($msg, '^Exception calling "[^"]+" with "[0-9]+" argument\(s\):\s*"?', '')
-        $msg = $msg.TrimEnd('"').Trim()
-        if ($msg) {{ $messages.Add(('{{0}}: {{1}}' -f $exception.GetType().Name, $msg)) }}
-        $exception = $exception.InnerException
-    }}
-    if ($messages.Count -eq 0) {{ $messages.Add($_.Exception.GetType().Name + ': (no message)') }}
-    $payload = [pscustomobject]@{{
-        ok = $false
-        error = ($messages -join ' :: ')
-        stack = $_.ScriptStackTrace
-    }}
-}}
-$payload | ConvertTo-Json -Compress"#,
-            path = path_literal,
+        // SAPI 5.4 is bundled with every Windows install since 7, and the
+        // `SpInprocRecognizer` CLSID is registered out of the box. We
+        // could probe by calling `CoCreateInstance` here, but that costs
+        // ~30 ms of COM initialization on every Settings refresh and the
+        // trait contract is "report what looks ready and surface real
+        // errors during `transcribe()`." Match the macOS pattern.
+        PlatformSpeechAvailability::ready_now(
+            "Windows SAPI",
+            "Ready via Windows Speech API (SAPI 5.4 — no setup required)",
         )
     }
 
-    pub(super) fn parse_transcription_envelope(stdout: &str) -> Result<String, String> {
-        // ConvertTo-Json -Compress emits a single JSON object on its own line.
-        // PowerShell may also emit warnings or other text before/after; pick
-        // the last non-empty line that looks like JSON.
-        let line = stdout
-            .lines()
-            .map(str::trim)
-            .filter(|line| line.starts_with('{') && line.ends_with('}'))
-            .next_back()
-            .ok_or_else(|| {
-                format!(
-                    "System dictation produced no recognizable output. Raw output: {}",
-                    trim_for_user(stdout).unwrap_or_else(|| "(empty)".to_string()),
-                )
-            })?;
+    pub(super) fn transcribe_wav_path(wav_path: &Path) -> Result<String, String> {
+        // Pre-flight check: if the WAV doesn't exist or is smaller than a
+        // minimal RIFF header, the recognizer's error would surface as a
+        // generic "audio input unavailable" — fail loudly here instead.
+        match std::fs::metadata(wav_path) {
+            Ok(metadata) if metadata.len() < 44 => {
+                let len = metadata.len();
+                tracing::error!(
+                    target: "claudette::voice::platform_speech::windows",
+                    wav = %wav_path.display(),
+                    bytes = len,
+                    "Recorded WAV is shorter than a RIFF header — audio capture produced no usable data",
+                );
+                return Err(
+                    "Couldn't load the recorded audio. Try recording again — see Settings → Diagnostics for details."
+                        .to_string(),
+                );
+            }
+            Err(err) => {
+                tracing::error!(
+                    target: "claudette::voice::platform_speech::windows",
+                    wav = %wav_path.display(),
+                    error = %err,
+                    "Recorded WAV is not readable",
+                );
+                return Err(
+                    "Couldn't load the recorded audio. Try recording again — see Settings → Diagnostics for details."
+                        .to_string(),
+                );
+            }
+            _ => {}
+        }
 
-        let envelope: serde_json::Value = serde_json::from_str(line).map_err(|e| {
-            format!(
-                "System dictation returned malformed output ({e}). Raw output: {}",
-                trim_for_user(line).unwrap_or_else(|| "(empty)".to_string()),
-            )
+        let _com = ComApartment::initialize().map_err(|hr| {
+            tracing::error!(
+                target: "claudette::voice::platform_speech::windows",
+                hresult = %format!("0x{:08x}", hr),
+                "CoInitializeEx failed",
+            );
+            user_facing_error(&format!("CoInitializeEx HRESULT 0x{hr:08x}"))
         })?;
 
-        let ok = envelope
-            .get("ok")
-            .and_then(|value| value.as_bool())
-            .unwrap_or(false);
-        if ok {
-            Ok(envelope
-                .get("text")
-                .and_then(|value| value.as_str())
-                .unwrap_or("")
-                .to_string())
-        } else {
-            Err(envelope
-                .get("error")
-                .and_then(|value| value.as_str())
-                .unwrap_or("System dictation reported an unspecified failure.")
-                .to_string())
-        }
-    }
-
-    /// Locate a PowerShell binary. Prefer `pwsh.exe` (PowerShell 7+) when
-    /// available, but fall back to the always-present `powershell.exe`
-    /// (PowerShell 5, ships with Windows). Both bind System.Speech via
-    /// .NET Framework / .NET, so either works.
-    fn find_powershell() -> Option<std::path::PathBuf> {
-        for name in ["pwsh.exe", "powershell.exe"] {
-            if let Some(path) = which_on_path(name) {
-                return Some(path);
+        match unsafe { transcribe_with_sapi(wav_path) } {
+            Ok(text) => Ok(text),
+            Err(SapiError {
+                stage,
+                hresult,
+                message,
+            }) => {
+                tracing::error!(
+                    target: "claudette::voice::platform_speech::windows",
+                    wav = %wav_path.display(),
+                    stage = %stage,
+                    hresult = %format!("0x{hresult:08x}"),
+                    detail = %message,
+                    "SAPI transcription failed",
+                );
+                Err(user_facing_error_for_hresult(stage, hresult))
             }
         }
-        // Last resort: the absolute path that ships with every Windows
-        // install. If it's missing here, dictation simply isn't going to
-        // work — the user has a deeply non-standard environment.
-        let fallback =
-            std::path::PathBuf::from(r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe");
-        if fallback.exists() {
-            Some(fallback)
-        } else {
-            None
-        }
     }
 
-    fn which_on_path(name: &str) -> Option<std::path::PathBuf> {
-        let path_var = std::env::var_os("PATH")?;
-        for dir in std::env::split_paths(&path_var) {
-            let candidate = dir.join(name);
-            if candidate.is_file() {
-                return Some(candidate);
+    /// Owned COM-apartment guard. `CoInitializeEx` returns `S_FALSE` on
+    /// nested calls (already initialized on this thread) — we only call
+    /// `CoUninitialize` when WE were the call that initialized, otherwise
+    /// we'd tear down a higher caller's apartment. The Drop impl runs on
+    /// every exit path including panics, which the previous `let _ =
+    /// CoUninitialize();` at the bottom of a function did NOT.
+    struct ComApartment {
+        owns: bool,
+    }
+
+    impl ComApartment {
+        fn initialize() -> Result<Self, u32> {
+            let hr = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) };
+            if hr.is_ok() {
+                Ok(Self { owns: true })
+            } else if hr == S_FALSE {
+                // Already initialized on this thread by an earlier caller —
+                // we ride along without owning the uninit.
+                Ok(Self { owns: false })
+            } else {
+                Err(hr.0 as u32)
             }
         }
-        None
     }
 
-    fn trim_for_user(text: &str) -> Option<String> {
-        let trimmed = text.trim();
-        if trimmed.is_empty() {
+    impl Drop for ComApartment {
+        fn drop(&mut self) {
+            if self.owns {
+                unsafe { CoUninitialize() };
+            }
+        }
+    }
+
+    /// Structured error from the SAPI call site — `stage` names which step
+    /// failed (so the daily log is greppable), `hresult` is the raw COM
+    /// status, and `message` is the formatted `windows::core::Error`
+    /// description for the log line.
+    struct SapiError {
+        stage: &'static str,
+        hresult: u32,
+        message: String,
+    }
+
+    impl SapiError {
+        fn from_windows(stage: &'static str, err: windows::core::Error) -> Self {
+            Self {
+                stage,
+                hresult: err.code().0 as u32,
+                message: err.message(),
+            }
+        }
+    }
+
+    /// Drive a single recognition pass against the WAV. All the COM
+    /// interfaces are kept in scope until the function returns so their
+    /// Drop calls Release in the correct order: grammar → context →
+    /// recognizer → stream. The COM apartment guard above outlives all
+    /// of them via the caller's stack frame.
+    unsafe fn transcribe_with_sapi(wav_path: &Path) -> Result<String, SapiError> {
+        let recognizer: ISpRecognizer =
+            unsafe { CoCreateInstance(&SpInprocRecognizer, None, CLSCTX_ALL) }
+                .map_err(|e| SapiError::from_windows("CoCreateInstance(SpInprocRecognizer)", e))?;
+
+        let stream: ISpStream = unsafe { CoCreateInstance(&SpStream, None, CLSCTX_ALL) }
+            .map_err(|e| SapiError::from_windows("CoCreateInstance(SpStream)", e))?;
+
+        // Bind the stream to the WAV file on disk. Passing `None` for both
+        // the format ID and `WAVEFORMATEX` lets SAPI parse the RIFF header
+        // itself — exactly the behaviour we want, vs. having to hand-tune
+        // a `WAVEFORMATEX` that matches what we wrote.
+        let mut path_w: Vec<u16> = OsStr::new(wav_path)
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect();
+        unsafe {
+            stream.BindToFile(
+                PCWSTR(path_w.as_mut_ptr()),
+                SPFM_OPEN_READONLY,
+                None,
+                None,
+                0,
+            )
+        }
+        .map_err(|e| SapiError::from_windows("ISpStream::BindToFile", e))?;
+
+        unsafe { recognizer.SetInput(&stream, false) }
+            .map_err(|e| SapiError::from_windows("ISpRecognizer::SetInput", e))?;
+
+        let context = unsafe { recognizer.CreateRecoContext() }
+            .map_err(|e| SapiError::from_windows("ISpRecognizer::CreateRecoContext", e))?;
+
+        unsafe { context.SetNotifyWin32Event() }
+            .map_err(|e| SapiError::from_windows("ISpRecoContext::SetNotifyWin32Event", e))?;
+
+        let event_handle = unsafe { context.GetNotifyEventHandle() };
+        if event_handle.0.is_null() {
+            return Err(SapiError {
+                stage: "ISpRecoContext::GetNotifyEventHandle",
+                hresult: 0,
+                message: "GetNotifyEventHandle returned a null HANDLE".to_string(),
+            });
+        }
+
+        let interest_mask = spfei(SPEI_RECOGNITION.0)
+            | spfei(SPEI_END_SR_STREAM.0)
+            | spfei(SPEI_FALSE_RECOGNITION.0);
+        unsafe { context.SetInterest(interest_mask, interest_mask) }
+            .map_err(|e| SapiError::from_windows("ISpRecoContext::SetInterest", e))?;
+
+        let grammar: ISpRecoGrammar = unsafe { context.CreateGrammar(0) }
+            .map_err(|e| SapiError::from_windows("ISpRecoContext::CreateGrammar", e))?;
+
+        unsafe { grammar.LoadDictation(PCWSTR::null(), SPLO_STATIC) }
+            .map_err(|e| SapiError::from_windows("ISpRecoGrammar::LoadDictation", e))?;
+
+        unsafe { grammar.SetDictationState(SPRS_ACTIVE) }
+            .map_err(|e| SapiError::from_windows("ISpRecoGrammar::SetDictationState", e))?;
+
+        unsafe { recognizer.SetRecoState(SPRST_ACTIVE_ALWAYS) }
+            .map_err(|e| SapiError::from_windows("ISpRecognizer::SetRecoState(ACTIVE)", e))?;
+
+        // Pull the transcript out of the event stream. Each phrase ends
+        // with an `SPEI_RECOGNITION` event whose `lParam` is an
+        // `ISpRecoResult*`; the WAV-exhausted condition fires
+        // `SPEI_END_SR_STREAM`. False recognitions (engine couldn't decide
+        // what was said) are gathered by `SPEI_FALSE_RECOGNITION` so we
+        // can include them with low confidence rather than dropping
+        // mumbled audio entirely.
+        let mut transcript = String::new();
+        let started = Instant::now();
+        loop {
+            if started.elapsed() > RECOGNITION_DEADLINE {
+                tracing::warn!(
+                    target: "claudette::voice::platform_speech::windows",
+                    "SAPI event loop hit RECOGNITION_DEADLINE without SPEI_END_SR_STREAM",
+                );
+                break;
+            }
+
+            let wait = unsafe { WaitForSingleObject(event_handle, EVENT_POLL_WAIT_MS) };
+            // WAIT_OBJECT_0 = signaled. WAIT_TIMEOUT = nothing yet, loop.
+            // Anything else is unexpected — log and stop the loop.
+            if wait != WAIT_OBJECT_0 {
+                continue;
+            }
+
+            let mut done = false;
+            loop {
+                let mut event = SPEVENT::default();
+                let mut fetched = 0u32;
+                let hr = unsafe { context.GetEvents(1, &mut event, &mut fetched) };
+                if let Err(err) = hr.clone()
+                    && hr != Ok(())
+                    && fetched == 0
+                {
+                    return Err(SapiError::from_windows("ISpRecoContext::GetEvents", err));
+                }
+                let _ = hr;
+                if fetched == 0 {
+                    break;
+                }
+
+                // _bitfield packs `eEventId` in the low 16 bits and
+                // `elParamType` in the next 16 bits. We only need the
+                // event id to dispatch.
+                let event_id = (event._bitfield & 0xFFFF) as i32;
+                if event_id == SPEI_RECOGNITION.0 || event_id == SPEI_FALSE_RECOGNITION.0 {
+                    if let Some(text) = unsafe { extract_recognition_text(&event) } {
+                        let trimmed = text.trim();
+                        if !trimmed.is_empty() {
+                            if !transcript.is_empty() {
+                                transcript.push(' ');
+                            }
+                            transcript.push_str(trimmed);
+                        }
+                    }
+                } else if event_id == SPEI_END_SR_STREAM.0 {
+                    done = true;
+                }
+
+                // Release any lParam that holds an IUnknown*. SAPI's C++
+                // SDK ships an `SPCLEAREVENT` macro that does this; we
+                // inline the equivalent. `elParamType` lives in the upper
+                // 16 bits of `_bitfield`. Type 1 (`SPET_LPARAM_IS_OBJECT`)
+                // means lParam is an IUnknown*.
+                let elparam_type = (event._bitfield >> 16) & 0xFFFF;
+                if elparam_type == 1 && event.lParam.0 != 0 {
+                    let raw = event.lParam.0 as *mut std::ffi::c_void;
+                    if !raw.is_null() {
+                        let unknown = unsafe { windows::core::IUnknown::from_raw(raw) };
+                        drop(unknown); // Release happens via Drop
+                    }
+                }
+            }
+
+            if done {
+                break;
+            }
+        }
+
+        // SetRecoState(SPRST_INACTIVE) flushes any in-flight recognizer
+        // state so the next call (recognizer/grammar/context drop below)
+        // doesn't race against the engine still processing audio.
+        let _ = unsafe { recognizer.SetRecoState(SPRST_INACTIVE) };
+
+        // grammar / context / recognizer / stream all drop here in
+        // reverse order of construction.
+        drop(grammar);
+        drop(context);
+        drop(recognizer);
+        drop(stream);
+        // Touch path_w so it stays alive through the `BindToFile` call —
+        // BindToFile copies the path, but make the lifetime explicit.
+        path_w.clear();
+
+        if transcript.is_empty() {
+            // Empty transcript on a successful event loop = recognizer
+            // saw audio but couldn't match a phrase. Same UX as the
+            // macOS path (`stop_platform_recording` rejects empty).
+            // Leave the empty string so `voice.rs` produces the
+            // standard "No speech was recognized" error.
+        }
+
+        Ok(transcript)
+    }
+
+    /// Pull the recognized text out of an `SPEI_RECOGNITION` /
+    /// `SPEI_FALSE_RECOGNITION` event. `lParam` holds an
+    /// `ISpRecoResult*`; `GetText(0, 0xFFFFFFFF, true, ...)` returns the
+    /// full phrase. Caller is responsible for releasing the result via
+    /// the SPCLEAREVENT logic in the dispatch loop.
+    unsafe fn extract_recognition_text(event: &SPEVENT) -> Option<String> {
+        if event.lParam.0 == 0 {
             return None;
         }
-        // Cap so we don't dump multi-page stack traces into a toolbar tooltip.
-        const MAX: usize = 400;
-        if trimmed.len() <= MAX {
-            Some(trimmed.to_string())
+        let raw = event.lParam.0 as *mut std::ffi::c_void;
+        // `from_raw` takes ownership of one reference. We need to keep the
+        // event's reference intact for the dispatcher's SPCLEAREVENT
+        // cleanup, so AddRef before borrowing.
+        let unknown = unsafe { windows::core::IUnknown::from_raw_borrowed(&raw) }?;
+        let result: ISpRecoResult = unknown.cast().ok()?;
+
+        let mut text_ptr = PWSTR::null();
+        let hr = unsafe { result.GetText(0, u32::MAX, true, &mut text_ptr, None) };
+        if hr.is_err() || text_ptr.is_null() {
+            return None;
+        }
+
+        let text = unsafe { text_ptr.to_string().ok() };
+        unsafe { CoTaskMemFree(Some(text_ptr.as_ptr() as *const _)) };
+        text
+    }
+
+    /// One-line, actionable user-facing error string. The raw HRESULT and
+    /// stage name still flow into the daily log via the `tracing::error!`
+    /// at the call site; this is only the toolbar pill copy.
+    ///
+    /// Public so the test module can pin the contract that every message
+    /// is short, single-line, and free of HRESULT codes / type names.
+    pub(super) fn user_facing_error(detail: &str) -> String {
+        // Most callers go through `user_facing_error_for_hresult`; this
+        // string-based variant only handles the rare CoInitializeEx
+        // failure where we don't yet have a structured stage.
+        if detail.contains("CoInitializeEx") {
+            "Couldn't initialize Windows COM for speech recognition. Restart Claudette; if it persists, switch to the offline Distil-Whisper provider in Plugins settings.".to_string()
         } else {
-            Some(format!("{}…", &trimmed[..MAX]))
+            "Speech recognition failed. See Settings → Diagnostics → Open log directory for details.".to_string()
         }
     }
 
-    // The timeout is referenced only in the comment above; reading it here
-    // keeps the const "live" if a future caller wants to wire it through to
-    // a kill-after-N-seconds path. Removing it (and the comment) is fine
-    // when we wire that up.
-    #[allow(dead_code)]
-    const _TIMEOUT_DOC: u64 = POWERSHELL_TIMEOUT_SECS;
+    /// Map a SAPI failure stage + HRESULT to a short user-facing string.
+    /// The most common failures get tailored copy with a concrete next
+    /// step; everything else falls through to the generic "see
+    /// diagnostics log" pointer.
+    pub(super) fn user_facing_error_for_hresult(stage: &str, hresult: u32) -> String {
+        // SPERR_NOT_FOUND (0x8004503A) — no recognizer installed for the
+        // requested locale. Fires from `CoCreateInstance(SpInprocRecognizer)`
+        // when the OS has no speech engine registered.
+        const SPERR_NOT_FOUND: u32 = 0x8004503A;
+        // SPERR_AUDIO_BUFFER_OVERFLOW (0x8004502A) and friends mean the
+        // audio source isn't producing data the recognizer can consume.
+        const SPERR_UNINITIALIZED: u32 = 0x80045028;
+        // CLASS_E_CLASSNOTAVAILABLE (0x80040111) — SAPI not installed.
+        const CLASS_E_CLASSNOTAVAILABLE: u32 = 0x80040111;
+        // REGDB_E_CLASSNOTREG (0x80040154) — same as above on most boxes.
+        const REGDB_E_CLASSNOTREG: u32 = 0x80040154;
+        // E_OUTOFMEMORY (0x8007000E) and E_ACCESSDENIED (0x80070005) get
+        // their own messages so users have something to act on.
+        const E_OUTOFMEMORY: u32 = 0x8007000E;
+        const E_ACCESSDENIED: u32 = 0x80070005;
+
+        match hresult {
+            SPERR_NOT_FOUND => {
+                "Windows speech recognizer is not installed. Add a Speech Recognizer language pack in Windows Settings → Time & language → Speech.".to_string()
+            }
+            CLASS_E_CLASSNOTAVAILABLE | REGDB_E_CLASSNOTREG => {
+                "Windows Speech API (SAPI) is not registered on this machine. Switch to the offline Distil-Whisper provider in Plugins settings.".to_string()
+            }
+            SPERR_UNINITIALIZED => {
+                "Windows speech recognizer reported its audio input was not initialized. Try recording again — see Settings → Diagnostics for details.".to_string()
+            }
+            E_ACCESSDENIED => {
+                "Windows denied access to the recorded audio file. Check antivirus / sandbox settings, then try again.".to_string()
+            }
+            E_OUTOFMEMORY => {
+                "Windows speech recognizer ran out of memory. Try a shorter recording.".to_string()
+            }
+            _ if stage.starts_with("ISpStream::BindToFile") => {
+                "Couldn't load the recorded audio. Try recording again — see Settings → Diagnostics for details.".to_string()
+            }
+            _ => {
+                "Speech recognition failed. See Settings → Diagnostics → Open log directory for details.".to_string()
+            }
+        }
+    }
 }
 
 // On Windows, voice.rs reaches for `cancel_active_transcription` from the
-// shared platform-speech surface. The Windows path has no cooperative-cancel
-// hook (PowerShell is a fire-and-forget child process for ~1 s), so this is
-// a no-op — the timeout in voice.rs::stop_platform_recording covers the
-// runaway-process case.
+// shared platform-speech surface. The native SAPI path has no cooperative-
+// cancel hook reachable from outside the recognition thread — the
+// `RECOGNITION_DEADLINE` event-loop ceiling and the outer `transcription_
+// timeout` in `voice.rs::stop_platform_recording` together cover the
+// runaway-engine case.
 #[cfg(windows)]
 pub(crate) fn cancel_active_transcription() {}
 
@@ -704,135 +831,113 @@ mod windows_tests {
     use super::*;
 
     #[test]
-    fn windows_availability_reports_ready_when_powershell_present() {
-        // PowerShell ships with every Windows install; the test environment
-        // we run CI in is no exception. If this asserts otherwise the
-        // environment is so non-standard that the user-facing fallback
-        // message kicks in correctly.
+    fn windows_availability_reports_ready_via_sapi() {
+        // SAPI 5.4 is bundled with every Windows install; the trait
+        // contract is "advertise Ready and let `transcribe()` surface
+        // real failures." Nothing to probe here.
         let availability = DefaultPlatformSpeechEngine::new().availability();
 
         assert_eq!(
             availability.status,
             PlatformSpeechAvailabilityStatus::Ready,
-            "expected Ready on Windows when PowerShell is on PATH (got {availability:?})",
+            "expected Ready on Windows (got {availability:?})",
         );
-        assert_eq!(
-            availability.engine_label.as_deref(),
-            Some("Windows System.Speech"),
-        );
-    }
-
-    #[test]
-    fn windows_envelope_parser_accepts_ok_payload() {
-        let stdout = r#"{"ok":true,"text":"hello world"}"#;
-        let parsed = windows_speech::parse_transcription_envelope(stdout).expect("ok payload");
-        assert_eq!(parsed, "hello world");
-    }
-
-    #[test]
-    fn windows_envelope_parser_surfaces_missing_recognizer_hint() {
-        // Walked-InnerException form — what the real script now emits.
-        let stdout = r#"{"ok":false,"error":"InvalidOperationException: No recognizer of the required ID found","stack":"at <ScriptBlock>"}"#;
-        let err = windows_speech::parse_transcription_envelope(stdout)
-            .expect_err("missing recognizer should error");
-        // The parser hands back the raw string; `transcribe_wav_path`'s
-        // mapping table is what rewrites it into the friendly hint.
-        assert!(err.contains("No recognizer of the required ID found"));
-    }
-
-    #[test]
-    fn windows_recognition_script_walks_inner_exceptions() {
-        // Pin the catch block — full .NET chain ends up in the diagnostics
-        // log, not in the toolbar. Without this walk, only the
-        // "Exception calling 'Recognize' with '1' argument(s):" wrapper
-        // would survive into the log, hiding the real cause.
-        let script = windows_speech::build_recognition_script("C:\\foo.wav");
-        assert!(script.contains("$exception = $_.Exception"));
-        assert!(script.contains("$exception.InnerException"));
-        assert!(script.contains("Exception calling"));
-        assert!(script.contains("$exception.GetType().Name"));
-    }
-
-    #[test]
-    fn windows_recognition_script_uses_wave_stream_not_wave_file() {
-        // SetInputToWaveFile silently fails on Windows ARM64 / .NET
-        // Framework under emulation, throwing the user-visible
-        // "No audio input is supplied to this recognizer" mid-recognition
-        // even with a valid WAV. SetInputToWaveStream parses the RIFF
-        // header itself and works consistently — the script must never
-        // regress to the file-based variant.
-        let script = windows_speech::build_recognition_script("C:\\foo.wav");
+        assert_eq!(availability.engine_label.as_deref(), Some("Windows SAPI"));
         assert!(
-            script.contains("SetInputToWaveStream"),
-            "script must use SetInputToWaveStream",
+            !availability.message.is_empty(),
+            "availability message must populate the toolbar / Plugins panel",
         );
-        assert!(
-            !script.contains("SetInputToWaveFile"),
-            "SetInputToWaveFile is the broken path on ARM64; do not regress",
-        );
-        assert!(
-            script.contains("OpenRead"),
-            "script must open the WAV via FileStream",
-        );
-        // Pre-checks that prevent the misleading "No audio input is
-        // supplied" cascade when the WAV is missing or empty.
-        assert!(script.contains("Test-Path -LiteralPath $wavPath"));
-        assert!(script.contains("Get-Item -LiteralPath $wavPath"));
     }
 
     #[test]
-    fn windows_user_facing_error_keeps_messages_short_and_actionable() {
-        // The toolbar pill renders the user-facing string verbatim — every
-        // message it can produce must stay one line and stay under a
-        // sensible width. The full .NET chain only goes to the log.
-        let cases = [
-            "InvalidOperationException: No audio input is supplied to this recognizer",
-            "MethodInvocationException :: InvalidOperationException: No recognizer of the required ID found",
-            "FileNotFoundException: WAV input file does not exist",
-            "AudioFormatNotSupportedException: format mismatch",
-            "FileLoadException: Could not load file or assembly System.Speech",
-            "Some unexpected .NET error we haven't categorised yet",
+    fn windows_user_facing_messages_are_short_and_clean() {
+        // The toolbar pill renders the user-facing string verbatim. Every
+        // message we can produce must stay one line and short enough to
+        // fit the 280px / 32vw error pill without ellipsizing the
+        // actionable bit. HRESULT codes and stage names belong in the
+        // tracing log, never the pill.
+        let hresults = [
+            ("CoCreateInstance(SpInprocRecognizer)", 0x8004503Au32), // SPERR_NOT_FOUND
+            ("CoCreateInstance(SpInprocRecognizer)", 0x80040111u32), // CLASS_E_CLASSNOTAVAILABLE
+            ("CoCreateInstance(SpInprocRecognizer)", 0x80040154u32), // REGDB_E_CLASSNOTREG
+            ("ISpStream::BindToFile", 0x80070003u32),                // ERROR_PATH_NOT_FOUND
+            ("ISpStream::BindToFile", 0x80070005u32),                // E_ACCESSDENIED
+            ("ISpRecognizer::SetInput", 0x80045028u32),              // SPERR_UNINITIALIZED
+            ("ISpRecognizer::SetRecoState(ACTIVE)", 0x8007000Eu32),  // E_OUTOFMEMORY
+            ("ISpRecoContext::CreateGrammar", 0x8000_0000u32),       // unknown HRESULT
         ];
-        for raw in cases {
-            let user_facing = windows_speech::user_facing_error(raw);
+        for (stage, hr) in hresults {
+            let pill = windows_speech::user_facing_error_for_hresult(stage, hr);
             assert!(
-                !user_facing.contains('\n'),
-                "user-facing error must be single line: {user_facing:?}",
+                !pill.contains('\n'),
+                "user-facing message must be single line: {pill:?}",
             );
             assert!(
-                user_facing.len() < 200,
-                "user-facing error too long ({}): {user_facing:?}",
-                user_facing.len(),
+                pill.len() < 220,
+                "user-facing message too long ({}): {pill:?}",
+                pill.len(),
             );
-            // None of the noisy raw strings should be passed through.
             assert!(
-                !user_facing.contains("InvalidOperationException")
-                    && !user_facing.contains("MethodInvocationException")
-                    && !user_facing.contains("FileNotFoundException")
-                    && !user_facing.contains("AudioFormatNotSupportedException")
-                    && !user_facing.contains("FileLoadException"),
-                "user-facing error leaked .NET type names: {user_facing:?}",
+                !pill.contains("0x") && !pill.contains("HRESULT"),
+                "user-facing message leaked HRESULT detail: {pill:?}",
+            );
+            assert!(
+                !pill.contains("ISp") && !pill.contains("CoCreateInstance"),
+                "user-facing message leaked SAPI/COM symbol names: {pill:?}",
             );
         }
     }
 
     #[test]
-    fn windows_envelope_parser_rejects_garbage_output() {
-        let err = windows_speech::parse_transcription_envelope("Some banner\nnot json")
-            .expect_err("non-JSON output should error");
-        assert!(err.contains("no recognizable output"));
+    fn windows_user_facing_messages_match_known_hresults() {
+        // Pin the specific copy for the user-impacting failures so a
+        // refactor doesn't silently replace the actionable hint with the
+        // generic fallback. Anything not pinned here is allowed to drift
+        // — these three are the failures users can fix themselves.
+        let pill = windows_speech::user_facing_error_for_hresult(
+            "CoCreateInstance(SpInprocRecognizer)",
+            0x8004503A, // SPERR_NOT_FOUND
+        );
+        assert!(
+            pill.contains("Speech Recognizer language pack"),
+            "missing recognizer must point users at the language-pack install: {pill:?}",
+        );
+
+        let pill = windows_speech::user_facing_error_for_hresult(
+            "CoCreateInstance(SpInprocRecognizer)",
+            0x80040154, // REGDB_E_CLASSNOTREG
+        );
+        assert!(
+            pill.contains("Distil-Whisper"),
+            "SAPI-not-registered must offer the offline fallback: {pill:?}",
+        );
+
+        let pill =
+            windows_speech::user_facing_error_for_hresult("ISpStream::BindToFile", 0x80070005);
+        assert!(
+            pill.contains("denied"),
+            "E_ACCESSDENIED on the WAV must mention access denial: {pill:?}",
+        );
     }
 
     #[test]
-    fn windows_recognition_script_quotes_apostrophes_in_path() {
-        let script = windows_speech::build_recognition_script("C:\\Users\\O''Connor\\foo.wav");
-        // The path must end up inside single-quoted PowerShell with the
-        // apostrophe doubled — anything else means we'd hit a parse error
-        // at runtime when the user has an apostrophe in their profile path.
-        assert!(script.contains("'C:\\Users\\O''Connor\\foo.wav'"));
-        // The stream variant must be present (we deliberately avoid
-        // SetInputToWaveFile — see windows_recognition_script_uses_wave_stream_not_wave_file).
-        assert!(script.contains("SetInputToWaveStream"));
-        assert!(script.contains("DictationGrammar"));
+    fn windows_unknown_hresult_falls_back_to_diagnostics_pointer() {
+        // Anything we haven't mapped should still send the user to
+        // Settings → Diagnostics rather than dump the raw error. Pin
+        // this so a future contributor adding HRESULT cases doesn't
+        // accidentally remove the safety net.
+        let pill =
+            windows_speech::user_facing_error_for_hresult("ISpRecoContext::GetEvents", 0xDEADBEEF);
+        assert!(pill.contains("Settings → Diagnostics"));
+    }
+
+    #[test]
+    fn windows_coinit_failure_message_mentions_distil_whisper_fallback() {
+        // CoInitializeEx failure is unrecoverable from inside the
+        // recognizer call, so the only useful next step is the offline
+        // provider. Pin the copy that says so.
+        let pill = windows_speech::user_facing_error("CoInitializeEx HRESULT 0x80004005");
+        assert!(pill.contains("Distil-Whisper"));
+        assert!(!pill.contains("HRESULT"));
     }
 }
