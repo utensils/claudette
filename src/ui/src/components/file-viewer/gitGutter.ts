@@ -22,7 +22,14 @@ export interface LineChange {
  * An `added` chunk not preceded by a `removed` chunk is a pure addition.
  */
 export function computeLineChanges(head: string, buffer: string): LineChange[] {
-  const chunks = diffLines(head, buffer);
+  // Normalize line endings before diffing. On Windows the working-tree buffer
+  // is typically CRLF (e.g. `core.autocrlf=true` checkout) while `git show`
+  // returns the blob verbatim — usually LF. Without this normalization every
+  // line differs by `\r` and `diffLines` would mark the entire file as
+  // modified, painting a solid blue stripe down the gutter.
+  const headLf = stripCr(head);
+  const bufferLf = stripCr(buffer);
+  const chunks = diffLines(headLf, bufferLf);
   const changes: LineChange[] = [];
 
   // Track the 1-based line number in the *buffer* as we walk chunks. Lines
@@ -77,6 +84,17 @@ export function computeLineChanges(head: string, buffer: string): LineChange[] {
   }
 
   return changes;
+}
+
+/**
+ * Strip `\r` from `\r\n` sequences so CRLF normalizes to LF. Bare `\r`
+ * (legacy Mac) is left alone — it would alter line counts and is rare
+ * enough that we'd rather show a real diff than silently coalesce it.
+ */
+function stripCr(s: string): string {
+  // No `\r` at all is the common case (LF or empty); skip the allocation.
+  if (s.indexOf("\r") === -1) return s;
+  return s.replace(/\r\n/g, "\n");
 }
 
 function countLines(s: string): number {

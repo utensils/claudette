@@ -71,6 +71,12 @@
       "minimumSystemVersion": "11.0",
       "entitlements": "Entitlements.plist",
       "infoPlist": "Info.plist"
+    },
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser",
+        "displayLanguageSelector": false
+      }
     }
   },
   "plugins": {
