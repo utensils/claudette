@@ -1147,6 +1147,7 @@ fn shutdown_runtime_handler(_app: &tauri::AppHandle, _event: tauri::RunEvent) {
         // the "Address already in use" error on next launch.
         tauri::RunEvent::Exit => {
             let app_state = _app.state::<state::AppState>();
+            state::APP_SHUTTING_DOWN.store(true, std::sync::atomic::Ordering::SeqCst);
 
             // Kill all spawned children (PTY shells + Claude CLI agent
             // subprocesses) before our process dies, otherwise they

@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -20,6 +20,11 @@ use crate::remote::DiscoveredServer;
 use crate::usage::UsageCacheEntry;
 #[cfg(feature = "voice")]
 use crate::voice::VoiceProviderRegistry;
+
+/// Set during `RunEvent::Exit` before we tear down PTY shells and agent
+/// subprocesses. PTY reader threads use this to avoid reporting shutdown
+/// cleanup as a natural shell exit to the frontend.
+pub static APP_SHUTTING_DOWN: AtomicBool = AtomicBool::new(false);
 
 /// Re-export for use in tray module without direct tauri::tray import.
 pub type TrayIcon = tauri::tray::TrayIcon;

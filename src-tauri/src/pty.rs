@@ -1,5 +1,6 @@
 use std::io::{Read, Write};
 use std::sync::Mutex;
+use std::sync::atomic::Ordering;
 
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 use serde::Serialize;
@@ -202,9 +203,16 @@ pub async fn spawn_pty(
                 Err(_) => break,
             }
         }
-        // Reader saw EOF (or read error) — the shell process closed its end
-        // of the PTY. Notify the frontend so it can tear down the pane and
-        // tab. Closing via the user typing `exit` is the common case.
+        // Reader saw EOF (or read error). If the app is shutting down, this
+        // EOF was caused by our own subprocess cleanup; do not let the
+        // frontend mistake it for a natural shell exit and delete the
+        // persisted terminal tab.
+        if crate::state::APP_SHUTTING_DOWN.load(Ordering::SeqCst) {
+            return;
+        }
+        // Otherwise the shell process closed its end of the PTY. Notify the
+        // frontend so it can tear down the pane and tab. Closing via the user
+        // typing `exit` is the common case.
         let _ = emitter_app.emit(
             "pty-exit",
             &PtyExitPayload {
