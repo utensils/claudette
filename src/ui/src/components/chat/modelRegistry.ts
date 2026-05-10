@@ -41,10 +41,10 @@ export const MODELS: readonly Model[] = [
   // 1M context billing per Anthropic's Claude Code docs (Model configuration → Extended context):
   //   Max/Team/Enterprise → Opus 1M included with subscription; Sonnet 1M is extra usage.
   //   Pro                → both Opus 1M and Sonnet 1M are extra usage.
-  // We optimize the flag for Max/Team/Enterprise (Claudette's primary audience), so only
-  // Sonnet 1M carries the extra-usage indicator. Pro users are slightly under-warned for
-  // Opus 1M, but the API itself doesn't surcharge tokens past 200K — the indicator is
-  // about subscription-quota billing, not per-token price.
+  // The `extraUsage` flag tracks subscription-quota inclusion, not per-token API price.
+  // We optimize for Max/Team/Enterprise (Claudette's primary audience), so only Sonnet 1M
+  // carries the indicator; Pro users selecting Opus 1M see no warning even though it
+  // counts against their extra-usage allotment.
   { id: "opus", label: "Opus 4.7 1M", group: "Claude Code", extraUsage: false, contextWindowTokens: 1_000_000 },
   { id: "claude-opus-4-7", label: "Opus 4.7", group: "Claude Code", extraUsage: false, contextWindowTokens: 200_000 },
   { id: "sonnet", label: "Sonnet 4.6", group: "Claude Code", extraUsage: false, contextWindowTokens: 200_000 },

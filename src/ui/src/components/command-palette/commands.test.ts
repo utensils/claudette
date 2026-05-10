@@ -136,9 +136,9 @@ describe("buildModelCommands — extraUsage icon and description", () => {
   const close = vi.fn();
   const cmds = buildModelCommands("opus", onSelect, close);
 
-  // Sonnet 4.6 1M is the only model currently flagged as extra usage; on
-  // Max/Team/Enterprise plans Opus 1M is included with the subscription, so
-  // it intentionally does not surface the extra-usage indicator.
+  // Sonnet 4.6 1M is currently flagged as extra usage; on Max/Team/Enterprise
+  // plans Opus 1M is included with the subscription, so it intentionally does
+  // not surface the extra-usage indicator.
   it("extra-usage models get BadgeDollarSign icon and description", () => {
     const sonnet1m = cmds.find((c) => c.id === "model:claude-sonnet-4-6[1m]")!;
     expect(sonnet1m.description).toBe("Extra usage: 1M context billed at API rates");
