@@ -1105,6 +1105,73 @@ fn backend_kind_hash_key(kind: AgentBackendKind) -> &'static str {
     }
 }
 
+/// Error from a gateway request that needs to be turned back into an HTTP
+/// response for the Claude CLI. Carries both the upstream-extracted message
+/// and the response status we want the gateway to emit — so a 4xx from LM
+/// Studio (e.g. context-length exceeded) propagates as 4xx and the SDK does
+/// not retry it as a transient 5xx.
+#[derive(Debug, Clone)]
+struct GatewayUpstreamError {
+    status: u16,
+    message: String,
+}
+
+impl GatewayUpstreamError {
+    /// Wrap a local/internal failure (couldn't even reach the upstream).
+    /// Surfaces as 502 to the CLI.
+    fn internal(message: impl Into<String>) -> Self {
+        Self {
+            status: 502,
+            message: message.into(),
+        }
+    }
+
+    /// Build from an upstream non-2xx response. Parses the OpenAI-shaped
+    /// `{error: {message: ...}}` envelope when present, else falls back to
+    /// the raw body. Preserves 4xx status codes so the CLI fails fast on
+    /// permanent input errors instead of retrying with backoff.
+    fn from_upstream(status: u16, body: &str) -> Self {
+        let message = serde_json::from_str::<Value>(body)
+            .ok()
+            .as_ref()
+            .and_then(|v| v.get("error"))
+            .and_then(|e| e.get("message"))
+            .and_then(Value::as_str)
+            .filter(|s| !s.trim().is_empty())
+            .map(str::to_string)
+            .unwrap_or_else(|| {
+                if body.trim().is_empty() {
+                    format!("upstream returned HTTP {status} with no body")
+                } else {
+                    body.to_string()
+                }
+            });
+        // 4xx → forward as-is so retries stop. Anything else collapses to
+        // 502 (bad gateway) for the SDK consumer.
+        let outbound = if (400..500).contains(&status) {
+            status
+        } else {
+            502
+        };
+        Self {
+            status: outbound,
+            message,
+        }
+    }
+}
+
+impl std::fmt::Display for GatewayUpstreamError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} (status={})", self.message, self.status)
+    }
+}
+
+impl From<String> for GatewayUpstreamError {
+    fn from(message: String) -> Self {
+        Self::internal(message)
+    }
+}
+
 async fn run_gateway(
     listener: TcpListener,
     cancel: Arc<Notify>,
@@ -1248,10 +1315,22 @@ async fn handle_gateway_connection(
             match response {
                 Ok(message) => write_json_or_sse_response(&mut stream, message).await,
                 Err(err) => {
+                    // 4xx upstream errors (e.g. LM Studio "context length
+                    // exceeded") propagate as 4xx so the SDK fails fast
+                    // instead of looping retries. Genuine 5xx upstream
+                    // failures stay 502.
+                    let error_type = if (400..500).contains(&err.status) {
+                        "invalid_request_error"
+                    } else {
+                        "api_error"
+                    };
                     write_json_response(
                         &mut stream,
-                        502,
-                        json!({"type":"error","error":{"type":"api_error","message":err}}),
+                        err.status,
+                        json!({
+                            "type":"error",
+                            "error":{"type":error_type,"message":err.message},
+                        }),
                     )
                     .await
                 }
@@ -1320,7 +1399,7 @@ async fn call_openai_responses(
     config: &AgentBackendConfig,
     secret: Option<&str>,
     anthropic_req: Value,
-) -> Result<Value, String> {
+) -> Result<Value, GatewayUpstreamError> {
     if config.kind == AgentBackendKind::CodexSubscription {
         return call_codex_responses(config, secret, anthropic_req).await;
     }
@@ -1338,18 +1417,27 @@ async fn call_openai_responses(
         "max_output_tokens": anthropic_req.get("max_tokens").cloned().unwrap_or(json!(4096)),
     });
     let client = reqwest::Client::new();
-    let value = client
+    let response = client
         .post(openai_api_url(base, "responses"))
         .bearer_auth(secret)
         .json(&openai_req)
         .send()
         .await
-        .map_err(|e| format!("OpenAI request failed: {e}"))?
-        .error_for_status()
-        .map_err(|e| format!("OpenAI request failed: {e}"))?
-        .json::<Value>()
+        .map_err(|e| GatewayUpstreamError::internal(format!("OpenAI request failed: {e}")))?;
+    let status = response.status();
+    // Read the body unconditionally — on error this is where LM Studio
+    // returns the "load with larger context" message that we want to
+    // surface verbatim instead of swallowing via error_for_status().
+    let body = response
+        .text()
         .await
-        .map_err(|e| format!("Invalid OpenAI response: {e}"))?;
+        .map_err(|e| GatewayUpstreamError::internal(format!("Invalid OpenAI response: {e}")))?;
+    if !status.is_success() {
+        return Err(GatewayUpstreamError::from_upstream(status.as_u16(), &body));
+    }
+    let value = serde_json::from_str::<Value>(&body).map_err(|e| {
+        GatewayUpstreamError::internal(format!("Invalid OpenAI response: {e}: {body}"))
+    })?;
     Ok(anthropic_message_from_openai(
         &model,
         value,
@@ -1364,11 +1452,15 @@ async fn call_codex_responses(
     config: &AgentBackendConfig,
     secret: Option<&str>,
     anthropic_req: Value,
-) -> Result<Value, String> {
-    let auth = serde_json::from_str::<CodexAuthMaterial>(
-        secret.ok_or("Codex subscription backend requires Codex CLI authentication")?,
-    )
-    .map_err(|e| format!("Invalid Codex gateway auth material: {e}"))?;
+) -> Result<Value, GatewayUpstreamError> {
+    let auth = serde_json::from_str::<CodexAuthMaterial>(secret.ok_or_else(|| {
+        GatewayUpstreamError::internal(
+            "Codex subscription backend requires Codex CLI authentication",
+        )
+    })?)
+    .map_err(|e| {
+        GatewayUpstreamError::internal(format!("Invalid Codex gateway auth material: {e}"))
+    })?;
     let model = openai_compatible_request_model(config, &anthropic_req)?;
     let instructions = codex_instructions_from_anthropic(&anthropic_req);
     let request_id = uuid::Uuid::new_v4().to_string();
@@ -1402,16 +1494,16 @@ async fn call_codex_responses(
     let response = request
         .send()
         .await
-        .map_err(|e| format!("Codex request failed: {e}"))?;
+        .map_err(|e| GatewayUpstreamError::internal(format!("Codex request failed: {e}")))?;
     let status = response.status();
     let body = response
         .text()
         .await
-        .map_err(|e| format!("Invalid Codex response body: {e}"))?;
+        .map_err(|e| GatewayUpstreamError::internal(format!("Invalid Codex response body: {e}")))?;
     if !status.is_success() {
-        return Err(format!("Codex request failed ({status}): {body}"));
+        return Err(GatewayUpstreamError::from_upstream(status.as_u16(), &body));
     }
-    let value = openai_response_from_sse(&body)?;
+    let value = openai_response_from_sse(&body).map_err(GatewayUpstreamError::internal)?;
     Ok(anthropic_message_from_openai(
         &model,
         value,
@@ -2581,5 +2673,69 @@ data: [DONE]
             openai_compatible_default_base(AgentBackendKind::OpenAiApi),
             "https://api.openai.com"
         );
+    }
+
+    #[test]
+    fn gateway_upstream_error_unwraps_openai_error_message() {
+        // The exact shape LM Studio returns for context-length overflow.
+        // Body lives inside `error.message`; status is a 4xx so retries stop.
+        let body = serde_json::json!({
+            "error": {
+                "message": "The number of tokens to keep from the initial \
+                    prompt is greater than the context length. Try to load \
+                    the model with a larger context length, or provide a \
+                    shorter input",
+                "type": "internal_error",
+                "param": null,
+                "code": "unknown",
+            }
+        })
+        .to_string();
+        let err = GatewayUpstreamError::from_upstream(400, &body);
+        assert_eq!(
+            err.status, 400,
+            "4xx must propagate as 4xx so the SDK does not retry it"
+        );
+        assert!(
+            err.message
+                .contains("load the model with a larger context length"),
+            "actual upstream message must reach the user, got: {}",
+            err.message
+        );
+        assert!(
+            !err.message.starts_with('{'),
+            "raw JSON envelope must be unwrapped to error.message"
+        );
+    }
+
+    #[test]
+    fn gateway_upstream_error_falls_back_to_raw_body_when_unparseable() {
+        // Plain-text upstream body (not JSON-shaped) must still reach the
+        // user; we never silently drop it.
+        let err = GatewayUpstreamError::from_upstream(500, "upstream went boom");
+        assert_eq!(
+            err.status, 502,
+            "5xx upstream collapses to 502 (Bad Gateway) for the SDK"
+        );
+        assert_eq!(err.message, "upstream went boom");
+
+        // Empty body still produces a useful message instead of a blank string.
+        let err = GatewayUpstreamError::from_upstream(503, "");
+        assert!(
+            err.message.contains("503") && err.message.contains("no body"),
+            "empty body fallback must mention the status, got: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn gateway_upstream_error_internal_uses_502() {
+        // Local failures (couldn't even reach upstream) are 502 — distinct
+        // from a parsed-from-upstream 5xx, but converging on the same code
+        // is fine because both indicate "Claudette gateway can't satisfy
+        // this request right now".
+        let err = GatewayUpstreamError::internal("could not bind socket");
+        assert_eq!(err.status, 502);
+        assert_eq!(err.message, "could not bind socket");
     }
 }
