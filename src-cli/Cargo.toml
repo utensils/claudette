@@ -33,3 +33,12 @@ tracing = "0.1"
 [target.'cfg(unix)'.dependencies]
 # `kill(pid, 0)` to detect stale discovery files.
 libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+# `OpenProcess + GetExitCodeProcess` to detect stale discovery files.
+# Mirrors the same probe used by `claudette-tauri::boot_probation::is_pid_alive`,
+# pinned to the same 0.61.x major already pulled in by the wider workspace.
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_System_Threading",
+] }
