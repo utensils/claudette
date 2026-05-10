@@ -445,6 +445,37 @@ fn direnv_export_strips_markers_but_keeps_watches_decoded_into_watched() {
 }
 
 #[test]
+fn direnv_export_strip_is_prefix_based_for_future_markers() {
+    // The strip matches `^DIRENV_` rather than a hardcoded deny-list,
+    // so if direnv ships a new internal marker (e.g. `DIRENV_LAYOUT_*`
+    // or anything else they add to their state machine), it won't
+    // resurface this bug. Pin the prefix-match contract here — a
+    // refactor that swaps it for an explicit list of the four known
+    // markers must update this test, which is the signal that the
+    // forward-compat property is being lost.
+    let stubbed = serde_json::json!({
+        "REAL_VAR": "keep",
+        "DIRENV_FUTURE_MARKER": "should-be-stripped",
+        "DIRENV_LAYOUT_NIX_FLAKE": "should-be-stripped",
+    });
+    let (env, _watched, _tmp) = direnv_export_returns(stubbed);
+    assert_eq!(
+        env.get("REAL_VAR").and_then(|v| v.clone()),
+        Some("keep".to_string())
+    );
+    assert!(
+        !env.contains_key("DIRENV_FUTURE_MARKER"),
+        "future direnv internal marker leaked: {:?}",
+        env.keys().collect::<Vec<_>>()
+    );
+    assert!(
+        !env.contains_key("DIRENV_LAYOUT_NIX_FLAKE"),
+        "future direnv internal marker leaked: {:?}",
+        env.keys().collect::<Vec<_>>()
+    );
+}
+
+#[test]
 fn direnv_export_strip_handles_failed_use_flake_payload() {
     // Reproduces the exact wire-shape `direnv export json` returns
     // when the .envrc body failed (e.g. `use flake` couldn't find
