@@ -669,6 +669,12 @@ export function ChatPanel() {
     // Re-attach on session switch so the sessionId ref stays in sync.
   }, [activeSessionId]);
 
+  // Clear any in-flight steer indicator when the active session changes so
+  // the banner from session A never leaks into session B's view.
+  useEffect(() => {
+    setPendingSteerContent(null);
+  }, [activeSessionId]);
+
   // Auto-scroll when new content arrives — respects user intent via useStickyScroll.
   // Only scrolls if the user is already at/near the bottom.
   const prevMsgCountRef = useRef<Record<string, number>>({});
@@ -1404,7 +1410,7 @@ export function ChatPanel() {
                 />
               )}
 
-              {isSteeringQueued && pendingSteerContent && (
+              {isSteeringQueued && (
                 <div className={styles.pendingSteer} aria-live="polite" aria-label={t("steer_pending_aria")}>
                   <span className={styles.pendingSteerIcon} aria-hidden="true">
                     <SendHorizontal size={12} />
@@ -1412,7 +1418,9 @@ export function ChatPanel() {
                   <span className={styles.pendingSteerLabel} aria-hidden="true">
                     {t("steer_pending_label")}
                   </span>
-                  <span className={styles.pendingSteerContent}>{pendingSteerContent}</span>
+                  <span className={styles.pendingSteerContent}>
+                    {pendingSteerContent ?? t("steer_pending_attachment")}
+                  </span>
                 </div>
               )}
 

@@ -11,6 +11,7 @@
   "steer_queued_short": "誘導",
   "steer_pending_label": "誘導中",
   "steer_pending_aria": "誘導プロンプトを送信中",
+  "steer_pending_attachment": "添付ファイルを送信中…",
   "stop_agent": "エージェントを停止",
   "send_message": "メッセージを送信",
   "run_shell_command": "シェルコマンドを実行",

@@ -11,6 +11,7 @@
   "steer_queued_short": "引导",
   "steer_pending_label": "引导中",
   "steer_pending_aria": "引导提示词发送中",
+  "steer_pending_attachment": "正在发送附件…",
   "stop_agent": "停止智能体",
   "send_message": "发送消息",
   "run_shell_command": "运行 shell 命令",

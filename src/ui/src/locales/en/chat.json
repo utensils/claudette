@@ -11,6 +11,7 @@
   "steer_queued_short": "Steer",
   "steer_pending_label": "Steering",
   "steer_pending_aria": "Steering prompt pending",
+  "steer_pending_attachment": "Sending attachment…",
   "stop_agent": "Stop agent",
   "send_message": "Send message",
   "run_shell_command": "Run shell command",
