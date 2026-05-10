@@ -259,6 +259,43 @@ describe("plugin settings routing", () => {
     expect(useAppStore.getState().settingsSection).toBe("plugins");
   });
 
+  it("stores a focused settings target and clears it on manual section changes", () => {
+    useAppStore.getState().openSettings("general", "claude-auth");
+
+    expect(useAppStore.getState().settingsOpen).toBe(true);
+    expect(useAppStore.getState().settingsSection).toBe("general");
+    expect(useAppStore.getState().settingsFocus).toBe("claude-auth");
+
+    useAppStore.getState().setSettingsSection("models");
+
+    expect(useAppStore.getState().settingsSection).toBe("models");
+    expect(useAppStore.getState().settingsFocus).toBeNull();
+  });
+
+  it("stores the latest Claude auth failure for the settings recovery row", () => {
+    useAppStore.getState().setClaudeAuthFailure({
+      messageId: "assistant-1",
+      error: "Invalid authentication credentials",
+    });
+
+    expect(useAppStore.getState().claudeAuthFailure).toEqual({
+      messageId: "assistant-1",
+      error: "Invalid authentication credentials",
+    });
+
+    useAppStore
+      .getState()
+      .setResolvedClaudeAuthFailureMessageId("assistant-1");
+
+    expect(useAppStore.getState().resolvedClaudeAuthFailureMessageId).toBe(
+      "assistant-1",
+    );
+
+    useAppStore.getState().setClaudeAuthFailure(null);
+
+    expect(useAppStore.getState().claudeAuthFailure).toBeNull();
+  });
+
   it("ignores openPluginSettings when plugin management is disabled", () => {
     useAppStore.setState({ pluginManagementEnabled: false });
 

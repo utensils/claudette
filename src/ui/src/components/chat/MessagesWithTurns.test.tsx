@@ -96,6 +96,8 @@ beforeEach(() => {
     toolActivities: {},
     collapsedToolGroupsBySession: {},
     checkpoints: {},
+    claudeAuthFailure: null,
+    resolvedClaudeAuthFailureMessageId: null,
     diffFiles: [],
     diffMergeBase: "base-sha",
   });
@@ -178,7 +180,11 @@ describe("MessagesWithTurns edit summaries", () => {
     await act(async () => {
       button?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     });
-    expect(openSettings).toHaveBeenCalledWith("general");
+    expect(openSettings).toHaveBeenCalledWith("general", "claude-auth");
+    expect(useAppStore.getState().claudeAuthFailure).toEqual({
+      messageId: "assistant-1",
+      error: "Failed to authenticate. API Error: 401 Invalid authentication credentials",
+    });
   });
 
   it("shows only the latest repeated auth failure as the sign-in callout", async () => {
@@ -218,6 +224,37 @@ describe("MessagesWithTurns edit summaries", () => {
     expect(container.textContent).toContain(
       "Invalid authentication credentials (401)",
     );
+  });
+
+  it("renders a resolved auth failure as the original error with a resolved marker", async () => {
+    useAppStore.setState({
+      resolvedClaudeAuthFailureMessageId: "assistant-1",
+    });
+    const messages = [
+      message("user-1", "User", "ping"),
+      message(
+        "assistant-1",
+        "Assistant",
+        "Failed to authenticate. API Error: 401 Invalid authentication credentials",
+      ),
+    ];
+
+    const container = await render(
+      <MessagesWithTurns
+        messages={messages}
+        workspaceId={WORKSPACE_ID}
+        sessionId={SESSION_ID}
+        isRunning={false}
+        searchQuery=""
+        toolDisplayMode="grouped"
+      />,
+    );
+
+    expect(container.textContent).toContain("Resolved");
+    expect(container.textContent).toContain(
+      "Invalid authentication credentials (401)",
+    );
+    expect(container.textContent).not.toContain("auth_chat_failure_title");
   });
 
   it("still shows files parsed from this turn's own edit activity", async () => {

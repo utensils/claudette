@@ -1,10 +1,12 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::process::Stdio;
+use std::time::Duration;
 use tauri::{AppHandle, Emitter, State};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{ChildStderr, ChildStdout, Command};
+use tokio::time::timeout;
 
-use claudette::process::CommandWindowExt as _;
+use claudette::process::{CommandWindowExt as _, sanitize_claude_subprocess_env};
 
 use crate::state::AppState;
 
@@ -22,6 +24,231 @@ pub struct AuthLoginComplete {
     pub success: bool,
     /// Non-null when `success` is false.
     pub error: Option<String>,
+}
+
+#[derive(Clone, Serialize, PartialEq, Eq, Debug)]
+#[serde(rename_all = "snake_case")]
+pub enum ClaudeAuthState {
+    SignedIn,
+    SignedOut,
+    Unknown,
+}
+
+#[derive(Clone, Serialize, PartialEq, Eq, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct ClaudeAuthStatus {
+    pub state: ClaudeAuthState,
+    pub logged_in: bool,
+    pub verified: bool,
+    pub auth_method: Option<String>,
+    pub api_provider: Option<String>,
+    pub message: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ClaudeAuthStatusJson {
+    logged_in: bool,
+    auth_method: Option<String>,
+    api_provider: Option<String>,
+}
+
+const AUTH_STATUS_TIMEOUT: Duration = Duration::from_millis(1_500);
+const AUTH_VALIDATE_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Ask the official Claude Code CLI for its local authentication state.
+///
+/// This intentionally uses `claude auth status --json` instead of the Usage
+/// panel's token-reading path. It is a lightweight local probe, bounded by a
+/// short timeout so opening Settings never waits on a slow CLI.
+#[tauri::command]
+pub async fn get_claude_auth_status(
+    app: AppHandle,
+    validate: Option<bool>,
+) -> Result<ClaudeAuthStatus, String> {
+    let claude_path = claudette::agent::resolve_claude_path().await;
+    let mut command = Command::new(&claude_path);
+    command
+        .no_console_window()
+        .args(["auth", "status", "--json"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .env("PATH", claudette::env::enriched_path());
+    sanitize_claude_subprocess_env(&mut command);
+
+    let output = timeout(AUTH_STATUS_TIMEOUT, command.output()).await;
+
+    let output = match output {
+        Ok(Ok(output)) => output,
+        Ok(Err(e)) => {
+            let err = claudette::missing_cli::map_spawn_err(&e, "claude", || {
+                format!("Failed to run `claude auth status`: {e}")
+            });
+            return Err(crate::missing_cli::handle_err(&app, &err).unwrap_or(err));
+        }
+        Err(_) => {
+            return Ok(ClaudeAuthStatus {
+                state: ClaudeAuthState::Unknown,
+                logged_in: false,
+                verified: false,
+                auth_method: None,
+                api_provider: None,
+                message: Some("Claude Code auth status check timed out.".into()),
+            });
+        }
+    };
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let status = if output.status.success() {
+        parse_auth_status(&stdout)?
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        auth_status_from_failed_output(&stdout, &stderr)
+    };
+
+    if validate == Some(true) && status.state == ClaudeAuthState::SignedIn {
+        return validate_claude_auth(app, claude_path, status).await;
+    }
+
+    Ok(status)
+}
+
+fn parse_auth_status(stdout: &str) -> Result<ClaudeAuthStatus, String> {
+    let parsed: ClaudeAuthStatusJson = serde_json::from_str(stdout.trim())
+        .map_err(|e| format!("Failed to parse `claude auth status --json` output: {e}"))?;
+    Ok(ClaudeAuthStatus {
+        state: if parsed.logged_in {
+            ClaudeAuthState::SignedIn
+        } else {
+            ClaudeAuthState::SignedOut
+        },
+        logged_in: parsed.logged_in,
+        verified: false,
+        auth_method: parsed.auth_method,
+        api_provider: parsed.api_provider,
+        message: None,
+    })
+}
+
+fn auth_status_from_failed_output(stdout: &str, stderr: &str) -> ClaudeAuthStatus {
+    let message = [stderr.trim(), stdout.trim()]
+        .into_iter()
+        .find(|s| !s.is_empty())
+        .unwrap_or("Unable to determine Claude Code authentication status.")
+        .to_string();
+    let lower = message.to_lowercase();
+    let looks_signed_out = lower.contains("not logged")
+        || lower.contains("not authenticated")
+        || lower.contains("login")
+        || lower.contains("credentials");
+    ClaudeAuthStatus {
+        state: if looks_signed_out {
+            ClaudeAuthState::SignedOut
+        } else {
+            ClaudeAuthState::Unknown
+        },
+        logged_in: false,
+        verified: false,
+        auth_method: None,
+        api_provider: None,
+        message: Some(message),
+    }
+}
+
+async fn validate_claude_auth(
+    app: AppHandle,
+    claude_path: std::ffi::OsString,
+    local_status: ClaudeAuthStatus,
+) -> Result<ClaudeAuthStatus, String> {
+    let mut command = Command::new(&claude_path);
+    command
+        .no_console_window()
+        .args([
+            "-p",
+            "Reply with exactly: OK",
+            "--output-format",
+            "json",
+            "--no-session-persistence",
+            "--disable-slash-commands",
+            "--strict-mcp-config",
+            "--mcp-config",
+            "{}",
+            "--tools",
+            "",
+            "--model",
+            "haiku",
+            "--max-budget-usd",
+            "0.01",
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .env("PATH", claudette::env::enriched_path());
+    sanitize_claude_subprocess_env(&mut command);
+
+    let output = timeout(AUTH_VALIDATE_TIMEOUT, command.output()).await;
+    let output = match output {
+        Ok(Ok(output)) => output,
+        Ok(Err(e)) => {
+            let err = claudette::missing_cli::map_spawn_err(&e, "claude", || {
+                format!("Failed to run Claude Code auth validation: {e}")
+            });
+            return Err(crate::missing_cli::handle_err(&app, &err).unwrap_or(err));
+        }
+        Err(_) => {
+            return Ok(ClaudeAuthStatus {
+                verified: false,
+                message: Some("Claude Code auth validation timed out.".into()),
+                state: ClaudeAuthState::Unknown,
+                logged_in: local_status.logged_in,
+                auth_method: local_status.auth_method,
+                api_provider: local_status.api_provider,
+            });
+        }
+    };
+
+    if output.status.success() {
+        return Ok(ClaudeAuthStatus {
+            verified: true,
+            message: None,
+            ..local_status
+        });
+    }
+
+    let message = validation_failure_message(&output.stdout, &output.stderr);
+    Ok(ClaudeAuthStatus {
+        state: if looks_like_auth_failure(&message) {
+            ClaudeAuthState::SignedOut
+        } else {
+            ClaudeAuthState::Unknown
+        },
+        logged_in: local_status.logged_in,
+        verified: false,
+        auth_method: local_status.auth_method,
+        api_provider: local_status.api_provider,
+        message: Some(message),
+    })
+}
+
+fn validation_failure_message(stdout: &[u8], stderr: &[u8]) -> String {
+    let stderr = String::from_utf8_lossy(stderr);
+    let stdout = String::from_utf8_lossy(stdout);
+    [stderr.trim(), stdout.trim()]
+        .into_iter()
+        .find(|s| !s.is_empty())
+        .unwrap_or("Claude Code auth validation failed.")
+        .to_string()
+}
+
+fn looks_like_auth_failure(message: &str) -> bool {
+    let lower = message.to_lowercase();
+    lower.contains("api error: 401")
+        || lower.contains("401 invalid authentication credentials")
+        || lower.contains("invalid authentication credentials")
+        || lower.contains("failed to authenticate")
+        || lower.contains("token refresh failed")
+        || lower.contains("expired or been revoked")
 }
 
 /// Spawn `claude auth login` and stream its output to the frontend.
@@ -49,20 +276,22 @@ pub async fn claude_auth_login(app: AppHandle, state: State<'_, AppState>) -> Re
         return Err("A sign-in flow is already in progress.".into());
     }
 
-    let mut child = Command::new(&claude_path)
+    let mut command = Command::new(&claude_path);
+    command
         .no_console_window()
         .args(["auth", "login"])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .kill_on_drop(true)
-        .spawn()
-        .map_err(|e| {
-            let err = claudette::missing_cli::map_spawn_err(&e, "claude", || {
-                format!("Failed to spawn `claude auth login`: {e}")
-            });
-            crate::missing_cli::handle_err(&app, &err).unwrap_or(err)
-        })?;
+        .kill_on_drop(true);
+    sanitize_claude_subprocess_env(&mut command);
+
+    let mut child = command.spawn().map_err(|e| {
+        let err = claudette::missing_cli::map_spawn_err(&e, "claude", || {
+            format!("Failed to spawn `claude auth login`: {e}")
+        });
+        crate::missing_cli::handle_err(&app, &err).unwrap_or(err)
+    })?;
 
     let stdout = child
         .stdout
@@ -164,5 +393,48 @@ async fn stream_lines_err(app: AppHandle, stream: &'static str, pipe: ChildStder
     let mut reader = BufReader::new(pipe).lines();
     while let Ok(Some(line)) = reader.next_line().await {
         let _ = app.emit("auth://login-progress", AuthLoginProgress { stream, line });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_logged_in_auth_status() {
+        let status = parse_auth_status(
+            r#"{"loggedIn":true,"authMethod":"oauth_token","apiProvider":"firstParty"}"#,
+        )
+        .unwrap();
+        assert_eq!(status.state, ClaudeAuthState::SignedIn);
+        assert!(status.logged_in);
+        assert!(!status.verified);
+        assert_eq!(status.auth_method.as_deref(), Some("oauth_token"));
+        assert_eq!(status.api_provider.as_deref(), Some("firstParty"));
+    }
+
+    #[test]
+    fn parses_logged_out_auth_status() {
+        let status = parse_auth_status(r#"{"loggedIn":false}"#).unwrap();
+        assert_eq!(status.state, ClaudeAuthState::SignedOut);
+        assert!(!status.logged_in);
+        assert!(!status.verified);
+    }
+
+    #[test]
+    fn maps_failed_login_output_to_signed_out() {
+        let status =
+            auth_status_from_failed_output("", "Not authenticated. Run claude auth login.");
+        assert_eq!(status.state, ClaudeAuthState::SignedOut);
+        assert!(!status.logged_in);
+        assert!(!status.verified);
+    }
+
+    #[test]
+    fn recognizes_validation_auth_failures() {
+        assert!(looks_like_auth_failure(
+            "Failed to authenticate. API Error: 401 Invalid authentication credentials",
+        ));
+        assert!(!looks_like_auth_failure("Model haiku is unavailable"));
     }
 }

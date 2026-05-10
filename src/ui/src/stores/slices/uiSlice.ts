@@ -6,6 +6,11 @@ import type {
 } from "../../types/plugins";
 import type { AppState } from "../useAppStore";
 
+export interface ClaudeAuthFailureState {
+  messageId: string | null;
+  error: string;
+}
+
 export interface UiSlice {
   metaKeyHeld: boolean;
   setMetaKeyHeld: (held: boolean) => void;
@@ -51,9 +56,15 @@ export interface UiSlice {
   // Settings page
   settingsOpen: boolean;
   settingsSection: string | null;
-  openSettings: (section?: string) => void;
+  settingsFocus: string | null;
+  openSettings: (section?: string, focus?: string | null) => void;
   closeSettings: () => void;
   setSettingsSection: (section: string) => void;
+  clearSettingsFocus: () => void;
+  claudeAuthFailure: ClaudeAuthFailureState | null;
+  resolvedClaudeAuthFailureMessageId: string | null;
+  setClaudeAuthFailure: (failure: ClaudeAuthFailureState | null) => void;
+  setResolvedClaudeAuthFailureMessageId: (messageId: string | null) => void;
   pluginSettingsTab: PluginSettingsTab;
   pluginSettingsRepoId: string | null;
   pluginSettingsIntent: PluginSettingsIntent | null;
@@ -175,7 +186,10 @@ export const createUiSlice: StateCreator<AppState, [], [], UiSlice> = (
   // Settings page
   settingsOpen: false,
   settingsSection: null,
-  openSettings: (section = "general") =>
+  settingsFocus: null,
+  claudeAuthFailure: null,
+  resolvedClaudeAuthFailureMessageId: null,
+  openSettings: (section = "general", focus = null) =>
     set((state) => {
       const nextSection = section === "plugins" && !state.pluginManagementEnabled
         ? "experimental"
@@ -183,6 +197,7 @@ export const createUiSlice: StateCreator<AppState, [], [], UiSlice> = (
       return {
         settingsOpen: true,
         settingsSection: nextSection,
+        settingsFocus: focus,
         pluginSettingsIntent: nextSection === "plugins" ? null : state.pluginSettingsIntent,
         pluginSettingsRepoId: nextSection === "plugins" ? null : state.pluginSettingsRepoId,
         pluginSettingsTab: nextSection === "plugins" ? "available" : state.pluginSettingsTab,
@@ -192,6 +207,7 @@ export const createUiSlice: StateCreator<AppState, [], [], UiSlice> = (
     set({
       settingsOpen: false,
       settingsSection: null,
+      settingsFocus: null,
       pluginSettingsIntent: null,
       pluginSettingsRepoId: null,
     }),
@@ -208,6 +224,7 @@ export const createUiSlice: StateCreator<AppState, [], [], UiSlice> = (
       const resetMarketplaceIntent = nextSection === "claude-code-plugins";
       return {
         settingsSection: nextSection,
+        settingsFocus: null,
         pluginSettingsIntent: resetMarketplaceIntent
           ? null
           : state.pluginSettingsIntent,
@@ -219,6 +236,10 @@ export const createUiSlice: StateCreator<AppState, [], [], UiSlice> = (
           : state.pluginSettingsTab,
       };
     }),
+  clearSettingsFocus: () => set({ settingsFocus: null }),
+  setClaudeAuthFailure: (failure) => set({ claudeAuthFailure: failure }),
+  setResolvedClaudeAuthFailureMessageId: (messageId) =>
+    set({ resolvedClaudeAuthFailureMessageId: messageId }),
   pluginSettingsTab: "available",
   pluginSettingsRepoId: null,
   pluginSettingsIntent: null,
@@ -239,6 +260,7 @@ export const createUiSlice: StateCreator<AppState, [], [], UiSlice> = (
       return {
         settingsOpen: true,
         settingsSection: "claude-code-plugins",
+        settingsFocus: null,
         pluginSettingsTab: mergedIntent.tab,
         pluginSettingsRepoId: mergedIntent.repoId,
         pluginSettingsIntent: mergedIntent,

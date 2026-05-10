@@ -1255,6 +1255,16 @@
   color: var(--status-stopped);
 }
 
+.authFocusRow {
+  border-radius: var(--radius-md);
+  background: rgba(var(--accent-primary-rgb), 0.08);
+  box-shadow: inset 3px 0 0 var(--accent-primary);
+  padding-left: 12px;
+  padding-right: 12px;
+  margin-left: -12px;
+  margin-right: -12px;
+}
+
 .authNotes {
   color: var(--text-dim);
   display: flex;

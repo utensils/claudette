@@ -153,6 +153,9 @@ export const MessagesWithTurns = memo(function MessagesWithTurns({
   const liveToolActivities = useAppStore(
     (s) => s.toolActivities[sessionId] ?? EMPTY_ACTIVITIES,
   );
+  const resolvedClaudeAuthFailureMessageId = useAppStore(
+    (s) => s.resolvedClaudeAuthFailureMessageId,
+  );
   const lastAuthFailureMessageId = useMemo(() => {
     for (let i = messages.length - 1; i >= 0; i -= 1) {
       const msg = messages[i];
@@ -845,11 +848,26 @@ export const MessagesWithTurns = memo(function MessagesWithTurns({
                   )}
                   {(msg.role === "Assistant" || msg.role === "System") &&
                   isClaudeAuthError(msg.content) &&
-                  msg.id === lastAuthFailureMessageId ? (
-                    <ChatAuthFailureCallout error={msg.content} />
+                  msg.id === lastAuthFailureMessageId &&
+                  msg.id !== resolvedClaudeAuthFailureMessageId ? (
+                    <ChatAuthFailureCallout
+                      error={msg.content}
+                      messageId={msg.id}
+                    />
                   ) : (msg.role === "Assistant" || msg.role === "System") &&
                     isClaudeAuthError(msg.content) ? (
-                    <div className={styles.authFailureText}>
+                    <div
+                      className={
+                        msg.id === resolvedClaudeAuthFailureMessageId
+                          ? styles.authFailureResolvedText
+                          : styles.authFailureText
+                      }
+                    >
+                      {msg.id === resolvedClaudeAuthFailureMessageId && (
+                        <span className={styles.authResolvedLabel}>
+                          Resolved
+                        </span>
+                      )}
                       {cleanClaudeAuthError(msg.content)}
                     </div>
                   ) : shouldRenderAsMarkdown(msg.role) ? (
