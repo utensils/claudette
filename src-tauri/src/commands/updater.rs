@@ -5,6 +5,7 @@ use tauri::{AppHandle, Emitter, State};
 use tauri_plugin_updater::UpdaterExt;
 use url::Url;
 
+use crate::boot_probation;
 use crate::state::AppState;
 
 const STABLE_URL: &str =
@@ -266,6 +267,37 @@ pub async fn install_pending_update(
     let app_for_cb = app.clone();
     let mut total: u64 = 0;
     let mut downloaded: u64 = 0;
+
+    // Emit a "preparing" pre-state before the rollback backup runs.
+    // On macOS where the install is a 200-300 MB `.app` bundle, the
+    // recursive copy can take several seconds — without this event the
+    // UI sits silent between "Install update" being clicked and the
+    // download progress bar starting to fill. Frontends that don't
+    // listen for it simply see the existing `updater://progress`
+    // sequence as before.
+    //
+    // The recursive copy is synchronous std::fs work and would block
+    // the tokio worker handling this command for the full duration of
+    // the backup — measurably bad on a 200-300 MB .app bundle.
+    // `spawn_blocking` hands the work to the dedicated blocking pool
+    // so other commands and event listeners stay responsive while the
+    // backup is created.
+    let _ = app.emit("updater://preparing", "backup");
+    let data_dir = claudette::path::data_dir();
+    let current_version = update.current_version.clone();
+    let next_version = update.version.clone();
+    let download_url = update.download_url.as_str().to_string();
+    tokio::task::spawn_blocking(move || {
+        boot_probation::prepare_for_update(
+            &data_dir,
+            &current_version,
+            &next_version,
+            &download_url,
+        )
+    })
+    .await
+    .map_err(|e| format!("boot probation prepare task panicked: {e}"))??;
+    let _ = app.emit("updater://preparing", "downloading");
 
     update
         .download_and_install(

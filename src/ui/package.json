@@ -10,6 +10,7 @@
     "lint": "eslint .",
     "lint:css": "node scripts/check-css-tokens.mjs && node scripts/check-font-mono.mjs",
     "preview": "vite preview",
+    "smoke:bundle": "node scripts/smoke-built-bundle.mjs",
     "test": "vitest run",
     "test:watch": "vitest"
   },
@@ -46,6 +47,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^9.39.4",
+    "@playwright/test": "^1.59.1",
     "@types/diff": "^8.0.0",
     "@types/node": "^24.12.0",
     "@types/react": "^19.2.14",

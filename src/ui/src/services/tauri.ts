@@ -1335,6 +1335,10 @@ export function installPendingUpdate(): Promise<void> {
   return invoke("install_pending_update");
 }
 
+export function bootOk(): Promise<void> {
+  return invoke("boot_ok");
+}
+
 import type { ThemeDefinition } from "../types/theme";
 
 export function listUserThemes(): Promise<ThemeDefinition[]> {

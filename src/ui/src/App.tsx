@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { getVersion } from "@tauri-apps/api/app";
 import { useAppStore } from "./stores/useAppStore";
-import { loadInitialData, getAppSetting, getHostEnvFlags, listRemoteConnections, listDiscoveredServers, getLocalServerStatus, detectInstalledApps, listSystemFonts, deleteTerminalTab, listAppSettingsWithPrefix, listAgentBackends } from "./services/tauri";
+import { loadInitialData, getAppSetting, getHostEnvFlags, listRemoteConnections, listDiscoveredServers, getLocalServerStatus, detectInstalledApps, listSystemFonts, deleteTerminalTab, listAppSettingsWithPrefix, listAgentBackends, bootOk } from "./services/tauri";
 import { applyTheme, applyUserFonts, loadAllThemes, findTheme, cacheThemePreference, getThemeDataAttr } from "./utils/theme";
 import { DEFAULT_THEME_ID, DEFAULT_LIGHT_THEME_ID } from "./styles/themes";
 import type { ThemeDefinition } from "./types/theme";
@@ -79,6 +79,13 @@ function App() {
     (s) => s.setManualWorkspaceOrderByRepo,
   );
   const [viewStateHydrated, setViewStateHydrated] = useState(false);
+  // Separate flag for the boot-health heartbeat: only flips on the
+  // *success* path of loadInitialData. The viewStateHydrated flag is
+  // also set in the catch() branch so the UI can render a recovery
+  // shell on a broken DB / migration / persisted-state load — but
+  // those failures are *exactly* the class of regression Gate 2 is
+  // supposed to roll back, so we must not ack on that path.
+  const [initialDataLoaded, setInitialDataLoaded] = useState(false);
 
   // Cached theme list — populated on initial load, reused by the OS handler.
   const loadedThemesRef = useRef<ThemeDefinition[]>([]);
@@ -89,6 +96,27 @@ function App() {
 
   // Listen for MCP supervisor status events from the Rust backend.
   useMcpStatus();
+
+  // Boot-health heartbeat for the post-update probation window.
+  //
+  // Two conditions must both hold before we ack:
+  //   1. `viewStateHydrated` — React has committed past the loader
+  //      (this gates the early `return null` below). A module-eval
+  //      crash in AppLayout's import graph would never flip this.
+  //   2. `initialDataLoaded` — the `.then()` branch of
+  //      `loadInitialData` resolved. The `.catch()` branch *also*
+  //      flips `viewStateHydrated` so the UI can render even when
+  //      the DB load fails, but a broken migration / corrupt persisted
+  //      state / DB lock is exactly the failure mode Gate 2 is meant
+  //      to roll back. Gating on `initialDataLoaded` keeps those
+  //      paths from accidentally marking the broken build healthy.
+  //
+  // See GitHub issue 731 for the design intent — "first paint of any
+  // non-error-boundary route".
+  useEffect(() => {
+    if (!viewStateHydrated || !initialDataLoaded) return;
+    bootOk().catch((err) => console.error("Failed to acknowledge boot:", err));
+  }, [viewStateHydrated, initialDataLoaded]);
 
   // Hydrate persisted view state after workspaces are loaded, then write back
   // future layout, selection, tab, and terminal-view changes.
@@ -119,6 +147,12 @@ function App() {
         setLastMessages(msgMap);
         await hydratePersistedViewState(localWorkspaces);
         setViewStateHydrated(true);
+        // Boot-health gate: only ack on the success path. The
+        // `.catch()` branch below also flips `viewStateHydrated` so
+        // the UI can recover, but a failed initial data load is
+        // exactly the kind of regression we want the rollback to
+        // catch — see the comment on the `bootOk` useEffect above.
+        setInitialDataLoaded(true);
         // Hydrate SCM summaries from persisted cache for instant sidebar display.
         for (const row of data.scm_cache) {
           if (row.pr_json == null) continue;

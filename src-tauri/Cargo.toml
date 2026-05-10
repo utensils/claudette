@@ -82,6 +82,11 @@ windows-sys = { version = "0.61", features = [
     "Win32_System_DataExchange",
     "Win32_System_Memory",
     "Win32_System_Ole",
+    # Used by boot_probation::is_pid_alive — the rollback helper must
+    # wait for the original GUI process to exit before the install dir
+    # can be replaced (Windows holds an exclusive lock on the running
+    # `.exe`). Probe via OpenProcess + GetExitCodeProcess.
+    "Win32_System_Threading",
 ] }
 
 [features]

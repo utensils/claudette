@@ -128,11 +128,9 @@ jobs:
             rust-target: aarch64-unknown-linux-gnu
             bundles: appimage,deb
             label: linux-aarch64
-          # Windows ships bare `.exe` assets only (no MSI/NSIS bundle).
-          # The tauri-action step is skipped on Windows and we drive
-          # cargo directly against the native MSVC toolchain baked into
-          # GitHub's Windows runners. `windows-11-arm` is GA and native,
-          # so ARM64 builds aren't cross-compiled.
+          # Windows keeps the user-facing zip asset and also publishes a
+          # signed NSIS updater asset so `latest.json` can advertise an
+          # in-app update target for Windows.
           - platform: windows-latest
             rust-target: x86_64-pc-windows-msvc
             bundles: ""
@@ -313,23 +311,28 @@ jobs:
           includeUpdaterJson: false
           args: --target ${{ matrix.rust-target }} --bundles ${{ matrix.bundles }}
 
-      # ---- Windows: direct cargo build, ship the bare .exe -----------------
+      # ---- Windows: direct Tauri build, ship zip + NSIS updater ------------
       # `custom-protocol` is the feature flag that tells tauri-build to
       # embed `frontendDist` (otherwise the release binary tries to
       # contact the devUrl at startup and shows "localhost refused to
-      # connect"). `tauri-action` sets this automatically via
-      # `cargo tauri build`; since we're bypassing it on Windows, we
-      # pass the flag explicitly. `alternative-backends` is kept in release
-      # binaries while the user-facing experimental setting remains off by
-      # default.
-      - name: Build desktop exe (Windows)
+      # connect"). `alternative-backends` is kept in release binaries
+      # while the user-facing experimental setting remains off by default.
+      - name: Install Tauri CLI (Windows)
         if: startsWith(matrix.platform, 'windows')
         shell: bash
+        run: cargo install tauri-cli --version "^2" --locked
+
+      - name: Build desktop exe and updater installer (Windows)
+        if: startsWith(matrix.platform, 'windows')
+        shell: bash
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
-          cd src/ui && bun run build && cd ../..
-          cargo build --release -p claudette-tauri \
-            --features tauri/custom-protocol,alternative-backends \
-            --target ${{ matrix.rust-target }}
+          cargo tauri build \
+            --target ${{ matrix.rust-target }} \
+            --bundles nsis \
+            --features tauri/custom-protocol,alternative-backends
 
       # Zip the bare .exe before upload. Raw unsigned .exe downloads
       # trigger aggressive SmartScreen + browser warnings ("file not
@@ -355,6 +358,29 @@ jobs:
           cp "$CLI" claudette.exe
           powershell -NoProfile -Command "Compress-Archive -Path 'claudette-app.exe','claudette.exe' -DestinationPath '$ASSET' -Force"
           gh release upload nightly-staging "$ASSET" --clobber
+
+      - name: Upload updater installer (Windows)
+        if: startsWith(matrix.platform, 'windows')
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          NSIS_DIR="target/${{ matrix.rust-target }}/release/bundle/nsis"
+          INSTALLER="$(find "$NSIS_DIR" -maxdepth 1 -name '*setup.exe' -print -quit)"
+          if [ -z "$INSTALLER" ]; then
+            echo "::error::No NSIS updater installer found in $NSIS_DIR"
+            exit 1
+          fi
+          SIG="${INSTALLER}.sig"
+          if [ ! -f "$SIG" ]; then
+            cargo tauri signer sign \
+              -k "$TAURI_SIGNING_PRIVATE_KEY" \
+              -p "$TAURI_SIGNING_PRIVATE_KEY_PASSWORD" \
+              "$INSTALLER" > "$SIG"
+          fi
+          gh release upload nightly-staging "$INSTALLER" "$SIG" --clobber
 
       - name: Build headless server
         shell: bash
