@@ -38,6 +38,17 @@ use objc::runtime::{BOOL, Class, Object, Sel};
 use objc::{class, msg_send, sel, sel_impl};
 use tauri::{AppHandle, Emitter, Manager};
 
+// Force the `UserNotifications` framework to be linked at process
+// startup. We rely on runtime class lookups (`Class::get` / `class!()`)
+// — the `class!` macro panics if a class isn't registered, so we want
+// loading to be deterministic and not depend on transitive linking
+// from another crate (e.g. tauri-plugin-notification on macOS uses the
+// deprecated `NSUserNotification` path, not UserNotifications). Listing
+// it here adds `-framework UserNotifications` to the linker invocation
+// at zero runtime cost.
+#[link(name = "UserNotifications", kind = "framework")]
+unsafe extern "C" {}
+
 /// Shared `AppHandle` reachable from the delegate callbacks. Set once at
 /// startup. Subsequent `init` calls are no-ops.
 static APP_HANDLE: OnceLock<AppHandle> = OnceLock::new();
@@ -84,10 +95,39 @@ pub fn init(app: AppHandle) {
 /// spawned; the toast and its sound are owned by the OS notification
 /// daemon. Click routing carries `workspace_id` through `userInfo` so the
 /// delegate can emit `tray-select-workspace` for the exact session.
+///
+/// Both call sites (`tray::notify_attention` and SCM PR auto-archive)
+/// reach this function from Tokio worker threads — Foundation `alloc/init`
+/// without an autorelease pool leaks, and UNUserNotificationCenter's
+/// own contracts assume main-thread access for delegate setup. We
+/// dispatch to the main runloop via `AppHandle::run_on_main_thread`
+/// (the same pattern used elsewhere in `tray.rs`) so the work runs
+/// under the main thread's existing pool.
 pub fn send(workspace_id: &str, title: &str, body: &str, sound: &str) {
-    unsafe {
-        post(workspace_id, title, body, sound);
-    }
+    let Some(app) = APP_HANDLE.get() else {
+        // `init` hasn't run yet — happens only if a notification fires
+        // during early setup before `notification_macos::init`. Drop it
+        // rather than racing.
+        tracing::debug!(
+            target: "claudette::notify",
+            "send() called before init — dropping notification",
+        );
+        return;
+    };
+
+    let workspace_id = workspace_id.to_string();
+    let title = title.to_string();
+    let body = body.to_string();
+    let sound = sound.to_string();
+
+    let _ = app.run_on_main_thread(move || {
+        // SAFETY: dispatched onto the main runloop, which always has an
+        // autorelease pool installed by AppKit. All Foundation /
+        // UserNotifications calls inside `post` are safe here.
+        unsafe {
+            post(&workspace_id, &title, &body, &sound);
+        }
+    });
 }
 
 // ---- delegate class --------------------------------------------------------
@@ -146,11 +186,25 @@ extern "C" fn did_receive(
     response: *mut Object,
     completion: *mut Object,
 ) {
-    if !response.is_null()
-        && let Some(app) = APP_HANDLE.get()
-    {
+    // `didReceiveNotificationResponse:` fires for *every* user
+    // interaction the system reports back to the app, not just
+    // clicks. We only want to navigate on the default action (the
+    // user clicked the toast body). Skip:
+    //   - `UNNotificationDismissActionIdentifier` — explicit dismiss
+    //     (only fires if a category opts in via
+    //     `UNNotificationCategoryOptionCustomDismissAction`, which
+    //     we don't currently use, but guarding keeps intent explicit
+    //     for future maintainers).
+    //   - any custom action button identifiers — none today, but
+    //     this is the right place to branch when we add them.
+    let is_default_action = !response.is_null()
         // SAFETY: `response` is a non-null `UNNotificationResponse`
         // owned by AppKit for the duration of this callback.
+        && unsafe { is_default_action(response) };
+
+    if is_default_action && let Some(app) = APP_HANDLE.get() {
+        // SAFETY: `response` is non-null per the check above; AppKit
+        // retains it for the lifetime of this callback.
         let workspace_id = unsafe { extract_workspace_id(response) };
 
         // Mirror the previous `tray::send_notification` macOS branch:
@@ -176,6 +230,19 @@ extern "C" fn did_receive(
             (*block).call(());
         }
     }
+}
+
+/// `true` iff this response represents the default action (toast body
+/// click). False for `UNNotificationDismissActionIdentifier` or any
+/// custom action button.
+unsafe fn is_default_action(response: *mut Object) -> bool {
+    let action_id: *mut Object = unsafe { msg_send![response, actionIdentifier] };
+    let Some(s) = (unsafe { ns_string_to_rust(action_id) }) else {
+        return false;
+    };
+    // Apple-defined constant string. We compare by value rather than
+    // pulling in the symbol so this stays a one-file integration.
+    s == "com.apple.UNNotificationDefaultActionIdentifier"
 }
 
 unsafe fn extract_workspace_id(response: *mut Object) -> Option<String> {
