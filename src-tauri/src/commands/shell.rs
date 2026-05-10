@@ -68,20 +68,46 @@ fn posix_detect_user_shell() -> (String, ShellType) {
 /// Windows-side detection. portable-pty's `new_default_prog()` falls
 /// back to `cmd.exe` here, which never loads any user-customizable
 /// profile — so an integrated terminal looks nothing like the user's
-/// regular Windows Terminal session. Pick the most modern PowerShell
-/// that's actually on PATH, then degrade gracefully.
+/// regular Windows Terminal session.
+///
+/// `pwsh.exe` (PowerShell 7+) and `powershell.exe` (Windows PowerShell
+/// 5.1) read profiles from totally different paths
+/// (`Documents\PowerShell\…` vs `Documents\WindowsPowerShell\…`), so
+/// blindly preferring `pwsh.exe` when the user has only ever written a
+/// PS5.1 profile drops them into an empty PS7 banner with none of their
+/// prompt customizations. The fix: pick the flavour whose profile the
+/// user has actually written.
 ///
 /// Resolution order:
-///   1. `pwsh.exe` on PATH    — PowerShell 7+ (cross-platform, modern)
-///   2. `powershell.exe`      — in-box Windows PowerShell 5.1
-///   3. `%ComSpec%`           — user's deliberate cmd override, if set
-///   4. `%WINDIR%\System32\cmd.exe` — guaranteed-present last resort
+///   1. `pwsh.exe` on PATH **and** a PS7 profile exists  — modern PS, configured
+///   2. `powershell.exe` on PATH **and** a PS5.1 profile exists, **and** no PS7 profile — match what the user actually customizes
+///   3. `pwsh.exe` on PATH                               — modern default when no profile signal either way
+///   4. `powershell.exe` on PATH                         — in-box fallback
+///   5. `%ComSpec%`                                      — user's deliberate cmd override, if set
+///   6. `%WINDIR%\System32\cmd.exe`                      — guaranteed-present last resort
 #[cfg(target_os = "windows")]
 fn windows_detect_user_shell() -> (String, ShellType) {
     let path = std::env::var_os("PATH");
     let comspec = std::env::var_os("ComSpec");
     let windir = std::env::var_os("WINDIR");
-    detect_windows_shell_inner(path.as_deref(), comspec.as_deref(), windir.as_deref())
+    let userprofile = std::env::var_os("USERPROFILE");
+    detect_windows_shell_inner(
+        path.as_deref(),
+        comspec.as_deref(),
+        windir.as_deref(),
+        userprofile.as_deref(),
+    )
+}
+
+/// Which PowerShell flavour we're checking for a user profile.
+#[cfg(target_os = "windows")]
+#[derive(Debug, Clone, Copy)]
+enum PsFlavour {
+    /// PowerShell 7+ (`pwsh.exe`). Reads from `Documents\PowerShell\…`.
+    Pwsh,
+    /// Windows PowerShell 5.1 (`powershell.exe`). Reads from
+    /// `Documents\WindowsPowerShell\…`.
+    WindowsPs,
 }
 
 /// Pure-function core of `windows_detect_user_shell`, parameterised on
@@ -92,16 +118,42 @@ fn detect_windows_shell_inner(
     path_env: Option<&std::ffi::OsStr>,
     comspec: Option<&std::ffi::OsStr>,
     windir: Option<&std::ffi::OsStr>,
+    userprofile: Option<&std::ffi::OsStr>,
 ) -> (String, ShellType) {
-    if let Some(found) = find_in_path("pwsh.exe", path_env) {
-        return (found, ShellType::PowerShell);
+    let pwsh = find_in_path("pwsh.exe", path_env);
+    let powershell = find_in_path("powershell.exe", path_env);
+
+    let userprofile_path = userprofile.map(std::path::Path::new);
+    let has_pwsh_profile = has_powershell_profile(PsFlavour::Pwsh, userprofile_path);
+    let has_ps51_profile = has_powershell_profile(PsFlavour::WindowsPs, userprofile_path);
+
+    // 1: PS7 + PS7 profile → run the configured PS7 setup.
+    if has_pwsh_profile && let Some(p) = pwsh.clone() {
+        return (p, ShellType::PowerShell);
     }
-    if let Some(found) = find_in_path("powershell.exe", path_env) {
-        return (found, ShellType::PowerShell);
+    // 2: PS5.1 profile, no PS7 profile, PS5.1 installed → match the
+    //    user's actual customizations rather than their unconfigured
+    //    PS7. This is the fallthrough that previously left OneDrive
+    //    PS5.1 users staring at a bare `pwsh.exe` banner.
+    if has_ps51_profile
+        && !has_pwsh_profile
+        && let Some(p) = powershell.clone()
+    {
+        return (p, ShellType::PowerShell);
     }
+    // 3: No profile signal — prefer modern PS7 if installed.
+    if let Some(p) = pwsh {
+        return (p, ShellType::PowerShell);
+    }
+    // 4: Fall back to in-box Windows PowerShell.
+    if let Some(p) = powershell {
+        return (p, ShellType::PowerShell);
+    }
+    // 5: Honour an explicit cmd override.
     if let Some(cs) = comspec.and_then(|s| s.to_str()).filter(|s| !s.is_empty()) {
         return (cs.to_string(), ShellType::Cmd);
     }
+    // 6: Always-present last resort.
     let win = windir.and_then(|s| s.to_str()).unwrap_or(r"C:\Windows");
     (format!(r"{win}\System32\cmd.exe"), ShellType::Cmd)
 }
@@ -116,6 +168,42 @@ fn find_in_path(name: &str, path_env: Option<&std::ffi::OsStr>) -> Option<String
         }
     }
     None
+}
+
+/// True if the user has any per-host or all-hosts profile written for
+/// the given PowerShell flavour. We check both the regular `Documents`
+/// folder and OneDrive-redirected `OneDrive\Documents` because Office
+/// 365 / Windows 11 Backup commonly redirects Documents into OneDrive
+/// (this is exactly how the bug surfaced on the original report — the
+/// user's PS5.1 profile lived under `OneDrive\Documents\…`, so the old
+/// "always pick pwsh" heuristic missed it and they got an empty PS7
+/// banner with no prompt customizations).
+///
+/// We deliberately don't probe `$PSHOME`-rooted all-users profiles —
+/// those are sysadmin territory, much rarer than per-user profiles, and
+/// using their presence as a signal would mislead detection on
+/// corp-managed machines.
+#[cfg(target_os = "windows")]
+fn has_powershell_profile(flavour: PsFlavour, userprofile: Option<&std::path::Path>) -> bool {
+    let Some(home) = userprofile else {
+        return false;
+    };
+    let dir = match flavour {
+        PsFlavour::Pwsh => "PowerShell",
+        PsFlavour::WindowsPs => "WindowsPowerShell",
+    };
+    for docs in ["Documents", r"OneDrive\Documents"] {
+        // Per-host (`Microsoft.PowerShell_profile.ps1`) and all-hosts
+        // (`Profile.ps1`) both count: either kind of file means the
+        // user has set something up for this PowerShell flavour.
+        for filename in ["Microsoft.PowerShell_profile.ps1", "Profile.ps1"] {
+            let candidate = home.join(docs).join(dir).join(filename);
+            if candidate.is_file() {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 #[tauri::command]
@@ -382,19 +470,22 @@ mod tests {
     // ---------------------------------------------------------------------
     // Windows shell detection
     //
-    // These tests pin the resolution order pwsh → powershell → ComSpec →
+    // These tests pin the resolution order pwsh-with-profile →
+    // powershell-with-profile → pwsh → powershell → ComSpec →
     // %WINDIR%\System32\cmd.exe so a regression that quietly drops back
-    // to `cmd.exe` (the symptom we just fixed) gets caught in CI. They
-    // call `detect_windows_shell_inner` directly with synthetic env
-    // values rather than mutating the process environment, so the tests
-    // are safe to run under cargo's default parallel test harness.
+    // to `cmd.exe` (the original bug) or quietly drops the user into an
+    // unconfigured `pwsh.exe` despite a PS5.1 profile being present (the
+    // OneDrive-redirect bug surfaced in follow-up testing) gets caught
+    // in CI. They call `detect_windows_shell_inner` directly with
+    // synthetic env values rather than mutating the process environment,
+    // so the tests are safe to run under cargo's parallel test harness.
     // ---------------------------------------------------------------------
     #[cfg(target_os = "windows")]
     mod windows_shell {
         use super::super::{ShellType, detect_windows_shell_inner};
         use std::ffi::{OsStr, OsString};
-        use std::fs::File;
-        use std::path::Path;
+        use std::fs::{self, File};
+        use std::path::{Path, PathBuf};
         use tempfile::TempDir;
 
         /// Drop an empty file at `<dir>/<name>` so `Path::is_file()`
@@ -410,20 +501,162 @@ mod tests {
             std::env::join_paths(dirs.iter().map(|p| p.as_ref())).expect("join_paths")
         }
 
+        /// Which `Documents` parent we want the synthetic profile under
+        /// — `Documents\` (regular) vs `OneDrive\Documents\` (the
+        /// Office 365 / Win11 Backup redirect that originally hid the
+        /// user's PS5.1 profile from the heuristic).
+        enum DocsKind {
+            Regular,
+            OneDrive,
+        }
+
+        /// Drop a `Microsoft.PowerShell_profile.ps1` for the given
+        /// flavour under a fake USERPROFILE so `has_powershell_profile`
+        /// observes it the same way it would in production.
+        fn touch_profile(home: &Path, flavour: &str, docs: DocsKind) -> PathBuf {
+            let docs_dir = match docs {
+                DocsKind::Regular => home.join("Documents"),
+                DocsKind::OneDrive => home.join("OneDrive").join("Documents"),
+            };
+            let dir = docs_dir.join(flavour);
+            fs::create_dir_all(&dir).expect("create profile dir");
+            let path = dir.join("Microsoft.PowerShell_profile.ps1");
+            File::create(&path).expect("create profile file");
+            path
+        }
+
         #[test]
-        fn prefers_pwsh_over_powershell_when_both_present() {
+        fn prefers_pwsh_when_only_pwsh_profile_present() {
             let pwsh_dir = TempDir::new().unwrap();
             let ps_dir = TempDir::new().unwrap();
+            let home = TempDir::new().unwrap();
             touch(pwsh_dir.path(), "pwsh.exe");
             touch(ps_dir.path(), "powershell.exe");
+            touch_profile(home.path(), "PowerShell", DocsKind::Regular);
 
             let path = join_path(&[pwsh_dir.path(), ps_dir.path()]);
-            let (shell, kind) = detect_windows_shell_inner(Some(path.as_os_str()), None, None);
+            let (shell, kind) = detect_windows_shell_inner(
+                Some(path.as_os_str()),
+                None,
+                None,
+                Some(home.path().as_os_str()),
+            );
 
             assert_eq!(kind, ShellType::PowerShell);
             assert!(
                 shell.ends_with("pwsh.exe"),
-                "expected pwsh.exe to win the lookup, got {shell:?}"
+                "pwsh.exe + PS7 profile should win, got {shell:?}"
+            );
+        }
+
+        #[test]
+        fn prefers_powershell_when_only_ps51_profile_present() {
+            // Both PowerShells installed, but the user has only ever
+            // written a Windows PowerShell profile — the original report.
+            // Spawning `pwsh.exe` here would drop them at an unconfigured
+            // PS7 banner, which is exactly the bug.
+            let pwsh_dir = TempDir::new().unwrap();
+            let ps_dir = TempDir::new().unwrap();
+            let home = TempDir::new().unwrap();
+            touch(pwsh_dir.path(), "pwsh.exe");
+            touch(ps_dir.path(), "powershell.exe");
+            touch_profile(home.path(), "WindowsPowerShell", DocsKind::Regular);
+
+            let path = join_path(&[pwsh_dir.path(), ps_dir.path()]);
+            let (shell, kind) = detect_windows_shell_inner(
+                Some(path.as_os_str()),
+                None,
+                None,
+                Some(home.path().as_os_str()),
+            );
+
+            assert_eq!(kind, ShellType::PowerShell);
+            assert!(
+                shell.ends_with("powershell.exe"),
+                "PS5.1 profile should pull in powershell.exe over pwsh.exe, got {shell:?}"
+            );
+        }
+
+        #[test]
+        fn detects_ps51_profile_through_onedrive_redirect() {
+            // The exact shape of the original bug report: PS profile
+            // lives at `<USERPROFILE>\OneDrive\Documents\WindowsPowerShell\…`
+            // because Office/Win11 Backup redirected Documents into
+            // OneDrive. The detection must see through that redirect.
+            let pwsh_dir = TempDir::new().unwrap();
+            let ps_dir = TempDir::new().unwrap();
+            let home = TempDir::new().unwrap();
+            touch(pwsh_dir.path(), "pwsh.exe");
+            touch(ps_dir.path(), "powershell.exe");
+            touch_profile(home.path(), "WindowsPowerShell", DocsKind::OneDrive);
+
+            let path = join_path(&[pwsh_dir.path(), ps_dir.path()]);
+            let (shell, kind) = detect_windows_shell_inner(
+                Some(path.as_os_str()),
+                None,
+                None,
+                Some(home.path().as_os_str()),
+            );
+
+            assert_eq!(kind, ShellType::PowerShell);
+            assert!(
+                shell.ends_with("powershell.exe"),
+                "OneDrive-redirected PS5.1 profile must beat unconfigured pwsh.exe, got {shell:?}"
+            );
+        }
+
+        #[test]
+        fn prefers_pwsh_when_both_profiles_present() {
+            // Both profiles → modern PS wins. PS7 users who also have a
+            // legacy PS5.1 profile around get PS7, which matches their
+            // expectation when they explicitly installed PS7.
+            let pwsh_dir = TempDir::new().unwrap();
+            let ps_dir = TempDir::new().unwrap();
+            let home = TempDir::new().unwrap();
+            touch(pwsh_dir.path(), "pwsh.exe");
+            touch(ps_dir.path(), "powershell.exe");
+            touch_profile(home.path(), "PowerShell", DocsKind::Regular);
+            touch_profile(home.path(), "WindowsPowerShell", DocsKind::Regular);
+
+            let path = join_path(&[pwsh_dir.path(), ps_dir.path()]);
+            let (shell, kind) = detect_windows_shell_inner(
+                Some(path.as_os_str()),
+                None,
+                None,
+                Some(home.path().as_os_str()),
+            );
+
+            assert_eq!(kind, ShellType::PowerShell);
+            assert!(
+                shell.ends_with("pwsh.exe"),
+                "both profiles present → modern PS wins, got {shell:?}"
+            );
+        }
+
+        #[test]
+        fn defaults_to_pwsh_when_no_profile_signal() {
+            // Both shells installed, neither has a profile → modern PS
+            // is the right default. (PS7 in this state is not "broken";
+            // it just shows a clean prompt with no customizations,
+            // which is identical to a stock PS5.1 prompt.)
+            let pwsh_dir = TempDir::new().unwrap();
+            let ps_dir = TempDir::new().unwrap();
+            let home = TempDir::new().unwrap();
+            touch(pwsh_dir.path(), "pwsh.exe");
+            touch(ps_dir.path(), "powershell.exe");
+
+            let path = join_path(&[pwsh_dir.path(), ps_dir.path()]);
+            let (shell, kind) = detect_windows_shell_inner(
+                Some(path.as_os_str()),
+                None,
+                None,
+                Some(home.path().as_os_str()),
+            );
+
+            assert_eq!(kind, ShellType::PowerShell);
+            assert!(
+                shell.ends_with("pwsh.exe"),
+                "no profile signal → prefer pwsh.exe, got {shell:?}"
             );
         }
 
@@ -433,7 +666,8 @@ mod tests {
             touch(only_ps.path(), "powershell.exe");
 
             let path = join_path(&[only_ps.path()]);
-            let (shell, kind) = detect_windows_shell_inner(Some(path.as_os_str()), None, None);
+            let (shell, kind) =
+                detect_windows_shell_inner(Some(path.as_os_str()), None, None, None);
 
             assert_eq!(kind, ShellType::PowerShell);
             assert!(
@@ -448,8 +682,12 @@ mod tests {
             let path = join_path(&[empty.path()]);
             let comspec: OsString = r"C:\Custom\cmd.exe".into();
 
-            let (shell, kind) =
-                detect_windows_shell_inner(Some(path.as_os_str()), Some(comspec.as_os_str()), None);
+            let (shell, kind) = detect_windows_shell_inner(
+                Some(path.as_os_str()),
+                Some(comspec.as_os_str()),
+                None,
+                None,
+            );
 
             assert_eq!(kind, ShellType::Cmd);
             assert_eq!(shell, r"C:\Custom\cmd.exe");
@@ -466,6 +704,7 @@ mod tests {
                 Some(path.as_os_str()),
                 Some(blank_comspec.as_os_str()),
                 Some(windir.as_os_str()),
+                None,
             );
 
             assert_eq!(kind, ShellType::Cmd);
@@ -478,8 +717,12 @@ mod tests {
             let path = join_path(&[empty.path()]);
             let windir: OsString = r"D:\WindowsTest".into();
 
-            let (shell, kind) =
-                detect_windows_shell_inner(Some(path.as_os_str()), None, Some(windir.as_os_str()));
+            let (shell, kind) = detect_windows_shell_inner(
+                Some(path.as_os_str()),
+                None,
+                Some(windir.as_os_str()),
+                None,
+            );
 
             assert_eq!(kind, ShellType::Cmd);
             assert_eq!(shell, r"D:\WindowsTest\System32\cmd.exe");
@@ -490,7 +733,8 @@ mod tests {
             let empty = TempDir::new().unwrap();
             let path = join_path(&[empty.path()]);
 
-            let (shell, kind) = detect_windows_shell_inner(Some(path.as_os_str()), None, None);
+            let (shell, kind) =
+                detect_windows_shell_inner(Some(path.as_os_str()), None, None, None);
 
             assert_eq!(kind, ShellType::Cmd);
             assert_eq!(shell, r"C:\Windows\System32\cmd.exe");
@@ -501,7 +745,7 @@ mod tests {
             // No PATH at all (e.g. an exotic launchd-style minimal env)
             // should still produce a runnable shell rather than panic.
             let none: Option<&OsStr> = None;
-            let (shell, kind) = detect_windows_shell_inner(none, none, none);
+            let (shell, kind) = detect_windows_shell_inner(none, none, none, none);
             assert_eq!(kind, ShellType::Cmd);
             assert_eq!(shell, r"C:\Windows\System32\cmd.exe");
         }
