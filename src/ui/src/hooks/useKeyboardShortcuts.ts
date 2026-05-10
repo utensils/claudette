@@ -9,7 +9,11 @@ import {
 } from "../utils/focusTargets";
 import { adjustUiFontSize } from "../utils/fontSettings";
 import { resolveHotkeyAction } from "../hotkeys/bindings";
-import { executeCloseTab, executeNewTab } from "../hotkeys/contextActions";
+import {
+  executeCloseTab,
+  executeNewTab,
+  executeNewWorkspace,
+} from "../hotkeys/contextActions";
 import type { HotkeyActionId } from "../hotkeys/actions";
 
 export function useKeyboardShortcuts() {
@@ -236,13 +240,15 @@ export function useKeyboardShortcuts() {
             })();
             const target = fromScoped ?? fromWorkspace ?? localRepos[0] ?? null;
             if (!target) return;
-            // Lazy import keeps the workspace-creation orchestration out
-            // of this hook's main bundle (it pulls in setup-script flow
-            // and confirm-modal data). The dynamic import resolves once
-            // and is cached by the module loader.
-            void import("../hotkeys/contextActions").then(({ executeNewWorkspace }) => {
-              executeNewWorkspace(target.id);
-            });
+            // Direct call — `executeNewWorkspace` is statically imported
+            // at the top of this file. The previous `await import(...)`
+            // form looked like a code-split optimization but was an
+            // INEFFECTIVE_DYNAMIC_IMPORT (contextActions is already
+            // statically reachable via Cmd+T / Cmd+W) and made the
+            // bundler emit useCreateWorkspace into an own chunk that
+            // raced its dependencies during module init in production
+            // builds — see the static-import comment in contextActions.
+            executeNewWorkspace(target.id);
             return;
           }
           default:
