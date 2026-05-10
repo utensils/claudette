@@ -865,7 +865,7 @@ export const MessagesWithTurns = memo(function MessagesWithTurns({
                     >
                       {msg.id === resolvedClaudeAuthFailureMessageId && (
                         <span className={styles.authResolvedLabel}>
-                          Resolved
+                          {t("auth_resolved_label")}
                         </span>
                       )}
                       {cleanClaudeAuthError(msg.content)}

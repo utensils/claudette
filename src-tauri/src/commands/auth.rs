@@ -74,6 +74,7 @@ pub async fn get_claude_auth_status(
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
+        .kill_on_drop(true)
         .env("PATH", claudette::env::enriched_path());
     sanitize_claude_subprocess_env(&mut command);
 
@@ -184,6 +185,7 @@ async fn validate_claude_auth(
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
+        .kill_on_drop(true)
         .env("PATH", claudette::env::enriched_path());
     sanitize_claude_subprocess_env(&mut command);
 
@@ -283,6 +285,7 @@ pub async fn claude_auth_login(app: AppHandle, state: State<'_, AppState>) -> Re
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
+        .env("PATH", claudette::env::enriched_path())
         .kill_on_drop(true);
     sanitize_claude_subprocess_env(&mut command);
 

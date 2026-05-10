@@ -1,7 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { LogIn, RefreshCw, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
-import { cleanClaudeAuthError, useClaudeAuthLogin } from "./claudeAuth";
+import {
+  AUTH_SETTINGS_FOCUS,
+  cleanClaudeAuthError,
+  isClaudeAuthError,
+  useClaudeAuthLogin,
+} from "./claudeAuth";
 import { getClaudeAuthStatus, type ClaudeAuthStatus } from "../../services/tauri";
 import { useAppStore } from "../../stores/useAppStore";
 import styles from "../settings/Settings.module.css";
@@ -10,8 +15,6 @@ type AuthStatusCheck =
   | { status: "checking" }
   | { status: "ready"; value: ClaudeAuthStatus }
   | { status: "error"; error: string };
-
-const AUTH_SETTINGS_FOCUS = "claude-auth";
 
 export function ClaudeCodeAuthSetting() {
   const { t } = useTranslation("settings");
@@ -22,6 +25,7 @@ export function ClaudeCodeAuthSetting() {
   const setResolvedClaudeAuthFailureMessageId = useAppStore(
     (s) => s.setResolvedClaudeAuthFailureMessageId,
   );
+  const claudeAuthFailureMessageId = claudeAuthFailure?.messageId ?? null;
   const rowRef = useRef<HTMLDivElement>(null);
   const [isFocused, setIsFocused] = useState(false);
   const [statusCheck, setStatusCheck] = useState<AuthStatusCheck>({
@@ -29,12 +33,12 @@ export function ClaudeCodeAuthSetting() {
   });
 
   const markAuthRecovered = useCallback(() => {
-    if (claudeAuthFailure?.messageId) {
-      setResolvedClaudeAuthFailureMessageId(claudeAuthFailure.messageId);
+    if (claudeAuthFailureMessageId) {
+      setResolvedClaudeAuthFailureMessageId(claudeAuthFailureMessageId);
     }
     setClaudeAuthFailure(null);
   }, [
-    claudeAuthFailure,
+    claudeAuthFailureMessageId,
     setClaudeAuthFailure,
     setResolvedClaudeAuthFailureMessageId,
   ]);
@@ -45,9 +49,13 @@ export function ClaudeCodeAuthSetting() {
       const value = await getClaudeAuthStatus(validate);
       if (value.state === "signed_in" && value.verified) {
         markAuthRecovered();
-      } else if (validate && value.state !== "signed_in" && value.message) {
+      } else if (
+        validate &&
+        value.message &&
+        (value.state === "signed_out" || isClaudeAuthError(value.message))
+      ) {
         setClaudeAuthFailure({
-          messageId: claudeAuthFailure?.messageId ?? null,
+          messageId: claudeAuthFailureMessageId,
           error: value.message,
         });
       }
@@ -55,7 +63,7 @@ export function ClaudeCodeAuthSetting() {
     } catch (e) {
       setStatusCheck({ status: "error", error: String(e) });
     }
-  }, [claudeAuthFailure?.messageId, markAuthRecovered, setClaudeAuthFailure]);
+  }, [claudeAuthFailureMessageId, markAuthRecovered, setClaudeAuthFailure]);
 
   const { authState, startAuthLogin, cancelAuthLogin } = useClaudeAuthLogin({
     onSuccess: async () => {
@@ -207,5 +215,3 @@ export function ClaudeCodeAuthSetting() {
     </div>
   );
 }
-
-export { AUTH_SETTINGS_FOCUS };

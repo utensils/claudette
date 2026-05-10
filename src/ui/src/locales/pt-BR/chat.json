@@ -148,5 +148,7 @@
   "diff_mode_diff": "Diff",
   "diff_mode_preview": "Pré-visualização",
 
+  "auth_resolved_label": "Resolvido",
+
   "terminal_failed_to_start": "Falha ao iniciar o shell"
 }

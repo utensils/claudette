@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import {
   cancelClaudeAuthLogin,
@@ -15,6 +15,8 @@ type AuthLoginProgress = { stream: "stdout" | "stderr"; line: string };
 type AuthLoginComplete = { success: boolean; error: string | null };
 
 const AUTH_URL_PATTERN = /https?:\/\/[^\s]+/;
+
+export const AUTH_SETTINGS_FOCUS = "claude-auth";
 
 const AUTH_ERROR_PATTERNS = [
   "api error: 401",
@@ -53,9 +55,14 @@ export function useClaudeAuthLogin({
 }: {
   onSuccess?: () => void | Promise<void>;
 } = {}) {
+  const onSuccessRef = useRef(onSuccess);
   const [authState, setAuthState] = useState<ClaudeAuthLoginState>({
     status: "idle",
   });
+
+  useEffect(() => {
+    onSuccessRef.current = onSuccess;
+  }, [onSuccess]);
 
   useEffect(() => {
     const unlisteners: UnlistenFn[] = [];
@@ -84,7 +91,7 @@ export function useClaudeAuthLogin({
       const { success, error } = event.payload;
       if (success) {
         setAuthState({ status: "success" });
-        void onSuccess?.();
+        void onSuccessRef.current?.();
       } else {
         setAuthState({
           status: "error",
@@ -104,7 +111,7 @@ export function useClaudeAuthLogin({
       cancelled = true;
       unlisteners.forEach((fn) => fn());
     };
-  }, [onSuccess]);
+  }, []);
 
   const startAuthLogin = useCallback(async () => {
     setAuthState({ status: "running", manualUrl: null });

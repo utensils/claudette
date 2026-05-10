@@ -146,5 +146,7 @@
   "diff_mode_diff": "差分",
   "diff_mode_preview": "プレビュー",
 
+  "auth_resolved_label": "解決済み",
+
   "terminal_failed_to_start": "シェルの起動に失敗しました"
 }

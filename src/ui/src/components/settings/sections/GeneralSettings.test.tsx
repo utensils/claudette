@@ -216,4 +216,42 @@ describe("GeneralSettings", () => {
     );
     expect(container.textContent).not.toContain("auth_status_signed_in");
   });
+
+  it("does not persist unknown auth validation results as chat auth failures", async () => {
+    serviceMocks.getClaudeAuthStatus
+      .mockResolvedValueOnce({
+        state: "signed_in",
+        loggedIn: true,
+        verified: false,
+        authMethod: "oauth_token",
+        apiProvider: "firstParty",
+        message: null,
+      })
+      .mockResolvedValueOnce({
+        state: "unknown",
+        loggedIn: true,
+        verified: false,
+        authMethod: "oauth_token",
+        apiProvider: "firstParty",
+        message: "Claude Code auth validation timed out.",
+      });
+
+    const container = await renderGeneralSettings();
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    const refresh = container.querySelector<HTMLButtonElement>(
+      'button[aria-label="auth_refresh_status"]',
+    );
+    expect(refresh).not.toBeNull();
+    await act(async () => {
+      refresh?.click();
+      await Promise.resolve();
+    });
+
+    expect(serviceMocks.getClaudeAuthStatus).toHaveBeenCalledTimes(2);
+    expect(serviceMocks.getClaudeAuthStatus).toHaveBeenLastCalledWith(true);
+    expect(appStore.setClaudeAuthFailure).not.toHaveBeenCalled();
+  });
 });

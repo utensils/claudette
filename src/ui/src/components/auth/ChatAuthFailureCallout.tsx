@@ -1,8 +1,7 @@
 import { KeyRound } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { useAppStore } from "../../stores/useAppStore";
-import { AUTH_SETTINGS_FOCUS } from "./ClaudeCodeAuthSetting";
-import { cleanClaudeAuthError } from "./claudeAuth";
+import { AUTH_SETTINGS_FOCUS, cleanClaudeAuthError } from "./claudeAuth";
 import styles from "./ChatAuthFailureCallout.module.css";
 
 export function ChatAuthFailureCallout({
@@ -26,6 +25,7 @@ export function ChatAuthFailureCallout({
         <div className={styles.description}>{t("auth_chat_failure_desc")}</div>
         <div className={styles.error}>{cleanClaudeAuthError(error)}</div>
         <button
+          type="button"
           className={styles.action}
           onClick={() => {
             setClaudeAuthFailure({ messageId, error });

@@ -250,7 +250,7 @@ describe("MessagesWithTurns edit summaries", () => {
       />,
     );
 
-    expect(container.textContent).toContain("Resolved");
+    expect(container.textContent).toContain("auth_resolved_label");
     expect(container.textContent).toContain(
       "Invalid authentication credentials (401)",
     );

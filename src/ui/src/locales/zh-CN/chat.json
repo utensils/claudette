@@ -146,5 +146,7 @@
   "diff_mode_diff": "差异",
   "diff_mode_preview": "预览",
 
+  "auth_resolved_label": "已解决",
+
   "terminal_failed_to_start": "启动 shell 失败"
 }

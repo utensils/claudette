@@ -182,5 +182,7 @@
   "file_external_change_reload_tooltip": "File changed on disk — click to reload (your unsaved edits will be lost)",
   "file_external_change_reload_aria": "Reload from disk",
 
+  "auth_resolved_label": "Resolved",
+
   "terminal_failed_to_start": "Failed to start shell"
 }
