@@ -7,6 +7,14 @@ export type WorkspaceEnvironmentStatus = "idle" | "preparing" | "ready" | "error
 export interface WorkspaceEnvironmentPreparation {
   status: WorkspaceEnvironmentStatus;
   error?: string;
+  /** Plugin currently running (e.g. "env-direnv") while `status ===
+   *  "preparing"`. Cleared on transition to ready/idle so the UI
+   *  doesn't keep showing a stale plugin name. */
+  current_plugin?: string;
+  /** `Date.now()` when the active plugin started. The UI ticks an
+   *  elapsed counter off this so subscribers don't have to track
+   *  their own timers. */
+  started_at?: number;
 }
 
 export interface WorkspacesSlice {
@@ -40,6 +48,17 @@ export interface WorkspacesSlice {
     id: string,
     status: WorkspaceEnvironmentStatus,
     error?: string,
+  ) => void;
+  /** Update the per-workspace progress entry from a
+   *  `workspace_env_progress` Tauri event. `plugin === null` clears
+   *  the active plugin (paired with the matching `finished` event).
+   *  Implicitly bumps `status` to `preparing` while plugins are
+   *  running so the sidebar lights up regardless of which workspace
+   *  the user has selected. */
+  setWorkspaceEnvironmentProgress: (
+    id: string,
+    plugin: string | null,
+    started_at?: number,
   ) => void;
 }
 
@@ -268,10 +287,43 @@ export const createWorkspacesSlice: StateCreator<
       return { selectedWorkspaceId: null, selectedRepositoryId: null };
     }),
   setWorkspaceEnvironment: (id, status, error) =>
-    set((s) => ({
-      workspaceEnvironment: {
-        ...s.workspaceEnvironment,
-        [id]: error ? { status, error } : { status },
-      },
-    })),
+    set((s) => {
+      // Always drop the per-plugin progress fields when the status is
+      // explicitly set: "preparing" is set at the start of a fresh
+      // resolve (any previous `current_plugin` / `started_at` belong
+      // to a stale resolve and shouldn't carry over), and terminal
+      // states (ready / error / idle) mean we're done so the sidebar/
+      // composer/terminal must stop showing the "loading env-direnv
+      // (Ns)…" hint. Live progress arrives via
+      // `setWorkspaceEnvironmentProgress`, which is the only writer
+      // that fills in those fields.
+      return {
+        workspaceEnvironment: {
+          ...s.workspaceEnvironment,
+          [id]: { status, error },
+        },
+      };
+    }),
+  setWorkspaceEnvironmentProgress: (id, plugin, started_at) =>
+    set((s) => {
+      const previous = s.workspaceEnvironment[id];
+      // Only force-bump to "preparing" while a plugin is running. A
+      // null plugin (the matching `finished` event) leaves the status
+      // alone so the prepare-flow's resolve-then-status-update keeps
+      // the final "ready" / "error" transition under its control.
+      const status: WorkspaceEnvironmentStatus =
+        plugin !== null ? "preparing" : (previous?.status ?? "idle");
+      const entry: WorkspaceEnvironmentPreparation = {
+        status,
+        error: previous?.error,
+        current_plugin: plugin ?? undefined,
+        started_at: plugin !== null ? (started_at ?? Date.now()) : undefined,
+      };
+      return {
+        workspaceEnvironment: {
+          ...s.workspaceEnvironment,
+          [id]: entry,
+        },
+      };
+    }),
 });

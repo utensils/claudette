@@ -1268,6 +1268,7 @@ fn build_workspace_info(
             .clone()
             .unwrap_or_else(|| repo.path.clone()),
         repo_path: repo.path,
+        repo_id: Some(workspace.repository_id.clone()),
     })
 }
 

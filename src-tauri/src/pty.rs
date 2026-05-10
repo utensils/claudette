@@ -88,17 +88,11 @@ pub async fn spawn_pty(
     // is: our CLAUDETTE_* markers + direnv/mise/dotenv/nix-devshell env is
     // the "base" the shell inherits; the user's shell profile runs after
     // and can override/add if they want.
-    let ws_info = claudette::plugin_runtime::host_api::WorkspaceInfo {
-        id: workspace_id.clone(),
-        name: workspace_name.clone(),
-        branch: branch_name.clone(),
-        worktree_path: working_dir.clone(),
-        repo_path: root_path.clone(),
-    };
-    let disabled_env_providers = {
-        // Look up repo_id + per-repo env-provider disables in a single
-        // DB open — this runs on every PTY spawn, so avoid duplicate
-        // opens and workspace-list scans.
+    // Look up repo_id once: same DB open feeds both the per-repo
+    // env-provider disable set AND the `WorkspaceInfo.repo_id` that
+    // routes per-repo plugin overrides (Environment subsection of
+    // Repo Settings) through to the runtime.
+    let (repo_id_opt, disabled_env_providers) = {
         use claudette::db::Database;
         Database::open(&state.db_path)
             .ok()
@@ -112,22 +106,39 @@ pub async fn spawn_pty(
                             .map(|w| w.repository_id)
                     })
                     .unwrap_or_default();
-                if repo_id.is_empty() {
+                let disabled = if repo_id.is_empty() {
                     Default::default()
                 } else {
                     crate::commands::env::load_disabled_providers(&db, &repo_id)
-                }
+                };
+                let repo_opt = (!repo_id.is_empty()).then_some(repo_id);
+                (repo_opt, disabled)
             })
-            .unwrap_or_default()
+            .unwrap_or_else(|| (None, Default::default()))
+    };
+    let ws_info = claudette::plugin_runtime::host_api::WorkspaceInfo {
+        id: workspace_id.clone(),
+        name: workspace_name.clone(),
+        branch: branch_name.clone(),
+        worktree_path: working_dir.clone(),
+        repo_path: root_path.clone(),
+        repo_id: repo_id_opt,
     };
     let resolved_env = {
-        let registry = state.plugins.read().await;
-        claudette::env_provider::resolve_with_registry(
+        // Snapshot the plugin registry — `plugins_snapshot` releases
+        // the outer RwLock immediately so opening the Plugins
+        // settings page (which awaits `list_claudette_plugins`) is
+        // never blocked by a slow PTY-spawn env resolve.
+        let registry = state.plugins_snapshot().await;
+        let progress =
+            crate::commands::env::TauriEnvProgressSink::new(app.clone(), workspace_id.clone());
+        claudette::env_provider::resolve_with_registry_and_progress(
             &registry,
             &state.env_cache,
             std::path::Path::new(&working_dir),
             &ws_info,
             &disabled_env_providers,
+            Some(&progress),
         )
         .await
     };

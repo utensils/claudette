@@ -302,6 +302,7 @@ pub async fn resolve_workspace_env(
         branch: ws.branch_name.clone(),
         worktree_path: worktree_path.to_string(),
         repo_path: repo.map(|r| r.path.clone()).unwrap_or_default(),
+        repo_id: Some(ws.repository_id.clone()),
     };
     let registry = plugins_lock.read().await;
     claudette::env_provider::resolve_with_registry(

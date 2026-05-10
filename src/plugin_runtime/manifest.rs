@@ -38,7 +38,7 @@ pub struct PluginManifest {
     /// User-facing settings the Plugins UI renders a form for. Values
     /// are persisted in `app_settings` as `plugin:{name}:setting:{key}`
     /// and piped into `HostContext.config` at invocation time so plugin
-    /// scripts read them via `host.config("auto_allow")`.
+    /// scripts read them via `host.config("<key>")`.
     #[serde(default)]
     pub settings: Vec<PluginSettingField>,
     /// Language metadata contributed by a `language-grammar` plugin.
@@ -149,12 +149,35 @@ pub enum PluginSettingField {
         default: Option<String>,
         options: Vec<SelectOption>,
     },
+    /// Numeric input. Stored as JSON number; UI renders an `<input
+    /// type="number">` honoring the optional `min` / `max` / `step`.
+    /// `unit` is a free-text suffix (e.g. `"seconds"`) shown next to
+    /// the field — does not affect parsing.
+    Number {
+        key: String,
+        label: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        description: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        default: Option<f64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        min: Option<f64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        max: Option<f64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        step: Option<f64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        unit: Option<String>,
+    },
 }
 
 impl PluginSettingField {
     pub fn key(&self) -> &str {
         match self {
-            Self::Boolean { key, .. } | Self::Text { key, .. } | Self::Select { key, .. } => key,
+            Self::Boolean { key, .. }
+            | Self::Text { key, .. }
+            | Self::Select { key, .. }
+            | Self::Number { key, .. } => key,
         }
     }
 
@@ -170,6 +193,10 @@ impl PluginSettingField {
             Self::Select { default, .. } => default
                 .clone()
                 .map(serde_json::Value::String)
+                .unwrap_or(serde_json::Value::Null),
+            Self::Number { default, .. } => default
+                .and_then(serde_json::Number::from_f64)
+                .map(serde_json::Value::Number)
                 .unwrap_or(serde_json::Value::Null),
         }
     }
@@ -529,6 +556,141 @@ mod tests {
         };
         let json = serde_json::to_string(&field).unwrap();
         assert!(json.contains(r#""type":"boolean""#), "got {json}");
+        let back: PluginSettingField = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, field);
+    }
+
+    #[test]
+    fn manifest_parses_number_setting() {
+        // Numeric settings carry default + bounds. All bounds are
+        // optional so a manifest can declare just `default` if it
+        // doesn't care about clamping.
+        let json = r#"{
+            "name": "env-direnv",
+            "display_name": "direnv",
+            "version": "1.0.0",
+            "description": "direnv env provider",
+            "kind": "env-provider",
+            "operations": ["detect", "export"],
+            "settings": [
+                {
+                    "type": "number",
+                    "key": "timeout_seconds",
+                    "label": "Timeout (seconds)",
+                    "description": "Max time to wait for direnv export",
+                    "default": 120,
+                    "min": 5,
+                    "max": 600,
+                    "step": 5,
+                    "unit": "seconds"
+                }
+            ]
+        }"#;
+        let manifest: PluginManifest = serde_json::from_str(json).unwrap();
+        assert_eq!(manifest.settings.len(), 1);
+        match &manifest.settings[0] {
+            PluginSettingField::Number {
+                key,
+                label,
+                description,
+                default,
+                min,
+                max,
+                step,
+                unit,
+            } => {
+                assert_eq!(key, "timeout_seconds");
+                assert_eq!(label, "Timeout (seconds)");
+                assert_eq!(
+                    description.as_deref(),
+                    Some("Max time to wait for direnv export")
+                );
+                assert_eq!(*default, Some(120.0));
+                assert_eq!(*min, Some(5.0));
+                assert_eq!(*max, Some(600.0));
+                assert_eq!(*step, Some(5.0));
+                assert_eq!(unit.as_deref(), Some("seconds"));
+            }
+            other => panic!("expected number, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn number_setting_default_value_helper() {
+        let with_default = PluginSettingField::Number {
+            key: "k".into(),
+            label: "l".into(),
+            description: None,
+            default: Some(120.0),
+            min: None,
+            max: None,
+            step: None,
+            unit: None,
+        };
+        match with_default.default_value() {
+            serde_json::Value::Number(n) => assert_eq!(n.as_f64(), Some(120.0)),
+            other => panic!("expected number value, got {other:?}"),
+        }
+        assert_eq!(with_default.key(), "k");
+
+        let no_default = PluginSettingField::Number {
+            key: "k".into(),
+            label: "l".into(),
+            description: None,
+            default: None,
+            min: None,
+            max: None,
+            step: None,
+            unit: None,
+        };
+        assert_eq!(no_default.default_value(), serde_json::Value::Null);
+    }
+
+    #[test]
+    fn number_setting_minimal_manifest() {
+        // Only required fields are key + label + the type tag; min/max/
+        // step/unit/default/description are all optional.
+        let json = r#"{
+            "type": "number",
+            "key": "x",
+            "label": "X"
+        }"#;
+        let field: PluginSettingField = serde_json::from_str(json).unwrap();
+        match field {
+            PluginSettingField::Number {
+                default,
+                min,
+                max,
+                step,
+                unit,
+                description,
+                ..
+            } => {
+                assert_eq!(default, None);
+                assert_eq!(min, None);
+                assert_eq!(max, None);
+                assert_eq!(step, None);
+                assert_eq!(unit, None);
+                assert_eq!(description, None);
+            }
+            other => panic!("expected number, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn number_setting_roundtrips() {
+        let field = PluginSettingField::Number {
+            key: "timeout_seconds".into(),
+            label: "Timeout".into(),
+            description: None,
+            default: Some(120.0),
+            min: Some(5.0),
+            max: Some(600.0),
+            step: Some(5.0),
+            unit: Some("seconds".into()),
+        };
+        let json = serde_json::to_string(&field).unwrap();
+        assert!(json.contains(r#""type":"number""#), "got {json}");
         let back: PluginSettingField = serde_json::from_str(&json).unwrap();
         assert_eq!(back, field);
     }

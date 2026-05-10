@@ -5,5 +5,18 @@
   "description": "Activate a Nix flake or shell.nix devshell for workspace subprocesses",
   "kind": "env-provider",
   "required_clis": ["nix"],
-  "operations": ["detect", "export"]
+  "operations": ["detect", "export"],
+  "settings": [
+    {
+      "type": "number",
+      "key": "timeout_seconds",
+      "label": "Timeout (seconds)",
+      "description": "Maximum time to wait for `nix print-dev-env`. Cold flake evaluations on a fresh checkout — especially with substituters disabled or large transitive closures — can exceed 90 seconds; consider raising to 300 for slow networks. Per-repo overrides live in Repo Settings → Environment.",
+      "default": 120,
+      "min": 5,
+      "max": 600,
+      "step": 5,
+      "unit": "seconds"
+    }
+  ]
 }

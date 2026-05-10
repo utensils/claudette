@@ -8,11 +8,15 @@
   "operations": ["detect", "export"],
   "settings": [
     {
-      "type": "boolean",
-      "key": "auto_trust",
-      "label": "Always trust mise config",
-      "description": "When mise reports config files as not trusted, run `mise trust` automatically. mise normally requires per-path trust — enabling this bypasses that for zero-friction activation.",
-      "default": false
+      "type": "number",
+      "key": "timeout_seconds",
+      "label": "Timeout (seconds)",
+      "description": "Maximum time to wait for `mise env`. Heavy mise toolchains that pull missing runtimes on first hit can exceed 60 seconds; raise this when a workspace fails with `mise timed out`. Per-repo overrides live in Repo Settings → Environment.",
+      "default": 120,
+      "min": 5,
+      "max": 600,
+      "step": 5,
+      "unit": "seconds"
     }
   ]
 }

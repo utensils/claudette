@@ -36,8 +36,9 @@ fn make_vm(plugin: &str, allowed: &[&str], worktree: &Path) -> Lua {
             branch: "main".into(),
             worktree_path: worktree.to_string_lossy().into_owned(),
             repo_path: worktree.to_string_lossy().into_owned(),
+            ..Default::default()
         },
-        config: Default::default(),
+        ..Default::default()
     };
     create_lua_vm(ctx).expect("create vm")
 }
@@ -592,6 +593,7 @@ async fn integration_direnv_export_returns_env() {
         branch: "main".into(),
         worktree_path: tmp.path().to_string_lossy().into_owned(),
         repo_path: tmp.path().to_string_lossy().into_owned(),
+        ..Default::default()
     };
 
     let resolved = crate::env_provider::resolve_for_workspace(
@@ -656,6 +658,7 @@ async fn integration_mise_export_returns_env() {
         branch: "main".into(),
         worktree_path: tmp.path().to_string_lossy().into_owned(),
         repo_path: tmp.path().to_string_lossy().into_owned(),
+        ..Default::default()
     };
 
     let resolved = crate::env_provider::resolve_for_workspace(
@@ -685,13 +688,15 @@ async fn integration_mise_export_returns_env() {
     );
 }
 
-/// auto_allow default (unset / false): an unallowed .envrc must stay
+/// repo_trust default (unset / "ask"): an unallowed .envrc must stay
 /// blocked. The plugin reports the error as-is; no retry is attempted,
 /// and no vars are contributed. This is the "safe by default" path that
-/// honors direnv's per-path trust model.
+/// honors direnv's per-path trust model — Claudette only auto-runs
+/// `direnv allow` for repos the user has explicitly trusted via the
+/// per-repo prompt.
 #[cfg(has_direnv)]
 #[tokio::test]
-async fn integration_direnv_auto_allow_off_surfaces_blocked_error() {
+async fn integration_direnv_untrusted_repo_surfaces_blocked_error() {
     let _scoped = ScopedHome::new();
 
     let tmp = tempfile::tempdir().unwrap();
@@ -706,9 +711,8 @@ async fn integration_direnv_auto_allow_off_surfaces_blocked_error() {
     let plugin_dir = tempfile::tempdir().unwrap();
     crate::plugin_runtime::seed::seed_bundled_plugins(plugin_dir.path());
     let registry = crate::plugin_runtime::PluginRegistry::discover(plugin_dir.path());
-    // Explicit default — make sure auto_allow=false behaves the same as
-    // "never configured" (manifest default).
-    registry.set_setting("env-direnv", "auto_allow", Some(serde_json::json!(false)));
+    // No `repo_trust` override set — matches a fresh repo where the
+    // user hasn't responded to the trust prompt yet.
 
     let backend = crate::env_provider::backend::PluginRegistryBackend::new(&registry);
     let cache = crate::env_provider::cache::EnvCache::new();
@@ -718,6 +722,7 @@ async fn integration_direnv_auto_allow_off_surfaces_blocked_error() {
         branch: "main".into(),
         worktree_path: tmp.path().to_string_lossy().into_owned(),
         repo_path: tmp.path().to_string_lossy().into_owned(),
+        ..Default::default()
     };
 
     let resolved = crate::env_provider::resolve_for_workspace(
@@ -735,7 +740,7 @@ async fn integration_direnv_auto_allow_off_surfaces_blocked_error() {
         .expect("env-direnv must appear in sources");
     assert!(
         direnv_source.error.is_some(),
-        "auto_allow=false must surface the blocked error, got sources={:#?}",
+        "untrusted repo must surface the blocked error, got sources={:#?}",
         resolved.sources
     );
     let err = direnv_source.error.as_ref().unwrap();
@@ -750,9 +755,9 @@ async fn integration_direnv_auto_allow_off_surfaces_blocked_error() {
     );
 }
 
-/// auto_allow=true must retry after `direnv allow` when the .envrc is
-/// blocked. After the retry the plugin reports success and vars flow
-/// through.
+/// `repo_trust = "allow"` must retry after `direnv allow` when the
+/// .envrc is blocked. After the retry the plugin reports success and
+/// vars flow through.
 // Same Unix-only gate as `integration_direnv_export_returns_env`: this
 // test asserts that after `direnv allow` runs, the retried export
 // surfaces user-exported vars. On Windows direnv's bash-based .envrc
@@ -761,7 +766,7 @@ async fn integration_direnv_auto_allow_off_surfaces_blocked_error() {
 // the upstream bash-on-Windows root cause.
 #[cfg(all(has_direnv, unix))]
 #[tokio::test]
-async fn integration_direnv_auto_allow_on_retries_after_blocked() {
+async fn integration_direnv_trusted_repo_retries_after_blocked() {
     let _scoped = ScopedHome::new();
 
     let tmp = tempfile::tempdir().unwrap();
@@ -774,7 +779,16 @@ async fn integration_direnv_auto_allow_on_retries_after_blocked() {
     let plugin_dir = tempfile::tempdir().unwrap();
     crate::plugin_runtime::seed::seed_bundled_plugins(plugin_dir.path());
     let registry = crate::plugin_runtime::PluginRegistry::discover(plugin_dir.path());
-    registry.set_setting("env-direnv", "auto_allow", Some(serde_json::json!(true)));
+    // Per-repo trust: simulates the user clicking "Trust direnv for
+    // this repo" in the EnvPanel error card. The plugin's Lua sees
+    // `repo_trust = "allow"` via `host.config` and auto-runs
+    // `direnv allow` on first encounter with a blocked .envrc.
+    registry.set_repo_setting(
+        "repo-trusted",
+        "env-direnv",
+        "repo_trust",
+        Some(serde_json::json!("allow")),
+    );
 
     let backend = crate::env_provider::backend::PluginRegistryBackend::new(&registry);
     let cache = crate::env_provider::cache::EnvCache::new();
@@ -784,6 +798,7 @@ async fn integration_direnv_auto_allow_on_retries_after_blocked() {
         branch: "main".into(),
         worktree_path: tmp.path().to_string_lossy().into_owned(),
         repo_path: tmp.path().to_string_lossy().into_owned(),
+        repo_id: Some("repo-trusted".into()),
     };
 
     let resolved = crate::env_provider::resolve_for_workspace(
@@ -801,7 +816,7 @@ async fn integration_direnv_auto_allow_on_retries_after_blocked() {
         .expect("env-direnv must appear in sources");
     assert!(
         direnv_source.error.is_none(),
-        "auto_allow=true must retry past the blocked error; got {:?}",
+        "trusted repo must retry past the blocked error; got {:?}",
         direnv_source.error
     );
     assert_eq!(
@@ -813,11 +828,11 @@ async fn integration_direnv_auto_allow_on_retries_after_blocked() {
     );
 }
 
-/// auto_trust default (unset / false): an untrusted mise.toml must stay
+/// repo_trust default (unset / "ask"): an untrusted mise.toml must stay
 /// blocked — errors surface as-is, no retry, no vars contributed.
 #[cfg(has_mise)]
 #[tokio::test]
-async fn integration_mise_auto_trust_off_surfaces_untrusted_error() {
+async fn integration_mise_untrusted_repo_surfaces_untrusted_error() {
     let _scoped = ScopedHome::new();
 
     let tmp = tempfile::tempdir().unwrap();
@@ -832,7 +847,7 @@ async fn integration_mise_auto_trust_off_surfaces_untrusted_error() {
     let plugin_dir = tempfile::tempdir().unwrap();
     crate::plugin_runtime::seed::seed_bundled_plugins(plugin_dir.path());
     let registry = crate::plugin_runtime::PluginRegistry::discover(plugin_dir.path());
-    registry.set_setting("env-mise", "auto_trust", Some(serde_json::json!(false)));
+    // No `repo_trust` override — fresh repo, user hasn't decided yet.
 
     let backend = crate::env_provider::backend::PluginRegistryBackend::new(&registry);
     let cache = crate::env_provider::cache::EnvCache::new();
@@ -842,6 +857,7 @@ async fn integration_mise_auto_trust_off_surfaces_untrusted_error() {
         branch: "main".into(),
         worktree_path: tmp.path().to_string_lossy().into_owned(),
         repo_path: tmp.path().to_string_lossy().into_owned(),
+        ..Default::default()
     };
 
     let resolved = crate::env_provider::resolve_for_workspace(
@@ -859,7 +875,7 @@ async fn integration_mise_auto_trust_off_surfaces_untrusted_error() {
         .expect("env-mise must appear in sources");
     assert!(
         mise_source.error.is_some(),
-        "auto_trust=false must surface untrusted error; sources={:#?}",
+        "untrusted repo must surface untrusted error; sources={:#?}",
         resolved.sources
     );
     let err = mise_source.error.as_ref().unwrap();
@@ -871,11 +887,12 @@ async fn integration_mise_auto_trust_off_surfaces_untrusted_error() {
     assert!(!resolved.vars.contains_key("CLAUDETTE_MISE_DENY"));
 }
 
-/// auto_trust=true must retry after `mise trust` when the mise.toml is
-/// untrusted, and then report success with vars flowing through.
+/// `repo_trust = "allow"` must retry after `mise trust` when the
+/// mise.toml is untrusted, and then report success with vars flowing
+/// through.
 #[cfg(has_mise)]
 #[tokio::test]
-async fn integration_mise_auto_trust_on_retries_after_untrusted() {
+async fn integration_mise_trusted_repo_retries_after_untrusted() {
     let _scoped = ScopedHome::new();
 
     let tmp = tempfile::tempdir().unwrap();
@@ -888,7 +905,13 @@ async fn integration_mise_auto_trust_on_retries_after_untrusted() {
     let plugin_dir = tempfile::tempdir().unwrap();
     crate::plugin_runtime::seed::seed_bundled_plugins(plugin_dir.path());
     let registry = crate::plugin_runtime::PluginRegistry::discover(plugin_dir.path());
-    registry.set_setting("env-mise", "auto_trust", Some(serde_json::json!(true)));
+    // Per-repo trust: simulates clicking "Trust mise for this repo".
+    registry.set_repo_setting(
+        "repo-trusted-mise",
+        "env-mise",
+        "repo_trust",
+        Some(serde_json::json!("allow")),
+    );
 
     let backend = crate::env_provider::backend::PluginRegistryBackend::new(&registry);
     let cache = crate::env_provider::cache::EnvCache::new();
@@ -898,6 +921,7 @@ async fn integration_mise_auto_trust_on_retries_after_untrusted() {
         branch: "main".into(),
         worktree_path: tmp.path().to_string_lossy().into_owned(),
         repo_path: tmp.path().to_string_lossy().into_owned(),
+        repo_id: Some("repo-trusted-mise".into()),
     };
 
     let resolved = crate::env_provider::resolve_for_workspace(
@@ -915,7 +939,7 @@ async fn integration_mise_auto_trust_on_retries_after_untrusted() {
         .expect("env-mise must appear in sources");
     assert!(
         mise_source.error.is_none(),
-        "auto_trust=true must retry past the untrusted error; got {:?}",
+        "trusted repo must retry past the untrusted error; got {:?}",
         mise_source.error
     );
     assert_eq!(
@@ -1014,6 +1038,7 @@ async fn integration_nix_devshell_export_returns_env() {
         branch: "main".into(),
         worktree_path: tmp.path().to_string_lossy().into_owned(),
         repo_path: tmp.path().to_string_lossy().into_owned(),
+        ..Default::default()
     };
 
     let resolved = crate::env_provider::resolve_for_workspace(

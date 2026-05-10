@@ -15,18 +15,57 @@ pub struct HostContext {
     pub allowed_clis: Vec<String>,
     pub workspace_info: WorkspaceInfo,
     pub config: HashMap<String, serde_json::Value>,
+    /// Per-`host.exec` call timeout. Resolved by
+    /// [`crate::plugin_runtime::PluginRegistry::effective_timeout`] from
+    /// the plugin's manifest default + any global / per-repo overrides
+    /// before each invocation, so a slow Nix-flake direnv on one repo
+    /// can have a 5-minute window without changing the default for
+    /// every other workspace.
+    pub exec_timeout: Duration,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct WorkspaceInfo {
     pub id: String,
     pub name: String,
     pub branch: String,
     pub worktree_path: String,
     pub repo_path: String,
+    /// Repository database id (the `repositories.id` row this workspace
+    /// belongs to). Used by the runtime to look up per-repo plugin
+    /// setting overrides cached in [`crate::plugin_runtime::PluginRegistry`].
+    /// Optional because some legacy call sites build a synthetic
+    /// `WorkspaceInfo` without a repo (tests, ephemeral PTY spawns
+    /// before the repo is wired); the runtime treats `None` as "no
+    /// repo overrides apply".
+    pub repo_id: Option<String>,
 }
 
-const EXEC_TIMEOUT: Duration = Duration::from_secs(30);
+/// Default per-`host.exec` and per-operation timeout when neither the
+/// manifest nor user settings specify one. Bumped to 120s (was 30s)
+/// because a cold direnv-driven Nix flake or a heavy mise toolchain
+/// commonly takes 60–90s on first evaluation, and a tighter cap fails
+/// real workspaces. Per-plugin overrides further extend this when the
+/// 120s default still isn't enough.
+pub const DEFAULT_EXEC_TIMEOUT: Duration = Duration::from_secs(120);
+
+impl Default for HostContext {
+    /// Every field except `exec_timeout` defaults to its type's
+    /// `Default`. `exec_timeout` defaults to [`DEFAULT_EXEC_TIMEOUT`]
+    /// (120s) rather than `Duration::default()` (0s) so test helpers
+    /// that build a `HostContext { ..Default::default() }` get a
+    /// realistic timeout instead of one that fires instantly.
+    fn default() -> Self {
+        Self {
+            plugin_name: String::new(),
+            kind: PluginKind::default(),
+            allowed_clis: Vec::new(),
+            workspace_info: WorkspaceInfo::default(),
+            config: HashMap::new(),
+            exec_timeout: DEFAULT_EXEC_TIMEOUT,
+        }
+    }
+}
 
 /// Create a sandboxed Lua VM with the host API registered.
 pub fn create_lua_vm(ctx: HostContext) -> LuaResult<Lua> {
@@ -462,14 +501,18 @@ async fn host_exec(
         LuaError::external(msg)
     })?;
 
-    // Run with timeout — kill_on_drop ensures the child is killed if
-    // the future is dropped on timeout.
-    let output = tokio::time::timeout(EXEC_TIMEOUT, child.wait_with_output())
+    // Run with the per-context timeout — kill_on_drop ensures the
+    // child is killed if the future is dropped on timeout. The timeout
+    // is resolved per-invocation in `call_operation_with_timeout` so a
+    // single registry can serve fast and slow workspaces simultaneously
+    // without sharing one global cap.
+    let exec_timeout = ctx.exec_timeout;
+    let output = tokio::time::timeout(exec_timeout, child.wait_with_output())
         .await
         .map_err(|_| {
             LuaError::external(format!(
                 "Command '{cmd}' timed out after {}s",
-                EXEC_TIMEOUT.as_secs()
+                exec_timeout.as_secs()
             ))
         })?
         .map_err(|e| LuaError::external(format!("Failed to execute '{cmd}': {e}")))?;
@@ -514,8 +557,9 @@ mod tests {
                 branch: "main".to_string(),
                 worktree_path: tmp.clone(),
                 repo_path: tmp,
+                ..Default::default()
             },
-            config: HashMap::new(),
+            ..Default::default()
         }
     }
 
@@ -797,8 +841,9 @@ mod tests {
                 branch: "main".into(),
                 worktree_path: worktree.to_string_lossy().into_owned(),
                 repo_path: worktree.to_string_lossy().into_owned(),
+                ..Default::default()
             },
-            config: HashMap::new(),
+            ..Default::default()
         }
     }
 

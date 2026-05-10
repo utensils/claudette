@@ -33,6 +33,21 @@ export type PluginSettingField =
       description?: string | null;
       default?: string | null;
       options: Array<{ value: string; label: string }>;
+    }
+  | {
+      type: "number";
+      key: string;
+      label: string;
+      description?: string | null;
+      default?: number | null;
+      /** Optional inclusive lower bound. Renders as `<input min>`. */
+      min?: number | null;
+      /** Optional inclusive upper bound. Renders as `<input max>`. */
+      max?: number | null;
+      /** Optional input granularity. Renders as `<input step>`. */
+      step?: number | null;
+      /** Free-text suffix (e.g. "seconds") shown next to the input. */
+      unit?: string | null;
     };
 
 export interface ClaudettePluginInfo {

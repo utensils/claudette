@@ -28,6 +28,7 @@ import {
 } from "../../services/tauri";
 import { Settings, Link, X, Share2, Plus, Globe, Archive, Trash2, CircleCheck, CircleAlert, CircleQuestionMark, Cog, Filter, LayoutDashboard, CircleDashed, CircleStop, GitPullRequestArrow, GitPullRequestDraft, GitMerge, GitPullRequestClosed, ChevronRight, ChevronDown, ArrowDownAZ } from "lucide-react";
 import { RepoIcon } from "../shared/RepoIcon";
+import { WorkspaceEnvSpinner } from "./WorkspaceEnvSpinner";
 import { extractRemoteWorkspace } from "./remoteWorkspaceResponse";
 import { HelpMenu } from "./HelpMenu";
 import { UpdateBanner } from "../layout/UpdateBanner";
@@ -116,6 +117,7 @@ export const Sidebar = memo(function Sidebar() {
   const sessionsByWorkspace = useAppStore((s) => s.sessionsByWorkspace);
   const setSessionsForWorkspace = useAppStore((s) => s.setSessionsForWorkspace);
   const scmSummary = useAppStore((s) => s.scmSummary);
+  const workspaceEnvironment = useAppStore((s) => s.workspaceEnvironment);
   const setRepositories = useAppStore((s) => s.setRepositories);
   const setWorkspaces = useAppStore((s) => s.setWorkspaces);
   const manualWorkspaceOrderByRepo = useAppStore(
@@ -693,6 +695,16 @@ export const Sidebar = memo(function Sidebar() {
           <span className={styles.badgeAsk} title={t("status_badge_ask_title")} aria-label={t("status_badge_ask_aria")} role="img">
             <CircleQuestionMark size={14} />
           </span>
+        ) : workspaceEnvironment[ws.id]?.status === "preparing"
+            && ws.agent_status !== "Running"
+            && ws.agent_status !== "Compacting" ? (
+          // Env-provider resolution priority: shown when this workspace
+          // is currently in `preparing` AND the agent isn't already
+          // running. Sidebar listens to `workspace_env_progress` events
+          // globally so we light up here even when a different
+          // workspace is selected — covers PTY spawns / new chat
+          // sessions in background workspaces.
+          <WorkspaceEnvSpinner workspaceId={ws.id} />
         ) : ws.agent_status === "Running" || ws.agent_status === "Compacting" ? (
           <span
             className={styles.statusSpinner}

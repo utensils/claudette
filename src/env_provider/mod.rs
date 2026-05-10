@@ -50,8 +50,45 @@ pub async fn resolve_with_registry(
     ws_info: &WorkspaceInfo,
     disabled: &std::collections::HashSet<String>,
 ) -> ResolvedEnv {
+    resolve_with_registry_and_progress(registry, cache, worktree, ws_info, disabled, None).await
+}
+
+/// Variant of [`resolve_with_registry`] that surfaces per-plugin
+/// progress to a sink. Used by Tauri command handlers to broadcast a
+/// `workspace_env_progress` event so all UI surfaces (sidebar row,
+/// chat composer, terminal overlay) can show "loading env-direnv (Ns)…"
+/// regardless of which workspace the user is viewing. `None` for the
+/// `progress` argument is equivalent to [`resolve_with_registry`] —
+/// the cache-hit fast path still skips the sink entirely.
+pub async fn resolve_with_registry_and_progress(
+    registry: &crate::plugin_runtime::PluginRegistry,
+    cache: &EnvCache,
+    worktree: &Path,
+    ws_info: &WorkspaceInfo,
+    disabled: &std::collections::HashSet<String>,
+    progress: Option<&dyn EnvProgressSink>,
+) -> ResolvedEnv {
     let backend = PluginRegistryBackend::new(registry);
-    resolve_for_workspace(&backend, cache, worktree, ws_info, disabled).await
+    resolve_for_workspace_with_progress(&backend, cache, worktree, ws_info, disabled, progress)
+        .await
+}
+
+/// Receiver for env-provider progress events. Implementors broadcast
+/// "started" / "finished" notifications so UI surfaces can render a
+/// loading state for each plugin invocation. The dispatcher only
+/// fires on cache *misses* — cache hits skip the sink so the sidebar
+/// doesn't flash a spinner for instant resolutions.
+pub trait EnvProgressSink: Send + Sync {
+    /// A plugin's `detect`/`export` is about to run. Receivers
+    /// typically map this to a "preparing" status entry in the UI
+    /// store keyed by `(workspace_id, plugin_name)`.
+    fn started(&self, plugin: &str);
+    /// The plugin's invocation finished. `ok = true` when the
+    /// dispatcher merged at least some env (or determined the plugin
+    /// doesn't apply); `false` reflects a hard error string. `elapsed`
+    /// matches what the spinner UI shows so receivers don't have to
+    /// re-time on their side.
+    fn finished(&self, plugin: &str, ok: bool, elapsed: std::time::Duration);
 }
 
 /// The merged env contributed by all detected env-provider plugins.
@@ -268,6 +305,19 @@ pub async fn resolve_for_workspace(
     ws_info: &WorkspaceInfo,
     disabled: &std::collections::HashSet<String>,
 ) -> ResolvedEnv {
+    resolve_for_workspace_with_progress(backend, cache, worktree, ws_info, disabled, None).await
+}
+
+/// Variant of [`resolve_for_workspace`] that emits per-plugin
+/// progress events to the supplied sink. See [`EnvProgressSink`].
+pub async fn resolve_for_workspace_with_progress(
+    backend: &impl EnvProviderBackend,
+    cache: &EnvCache,
+    worktree: &Path,
+    ws_info: &WorkspaceInfo,
+    disabled: &std::collections::HashSet<String>,
+    progress: Option<&dyn EnvProgressSink>,
+) -> ResolvedEnv {
     let mut names = backend.env_provider_names();
     // Sort: primary by precedence (ascending, so higher overwrites on
     // merge); secondary by name so unknown providers with tied
@@ -322,7 +372,16 @@ pub async fn resolve_for_workspace(
             });
             continue;
         }
-        let source = resolve_one(backend, cache, &name, worktree, ws_info, &mut merged).await;
+        let source = resolve_one(
+            backend,
+            cache,
+            &name,
+            worktree,
+            ws_info,
+            &mut merged,
+            progress,
+        )
+        .await;
         sources.push(source);
     }
 
@@ -339,8 +398,12 @@ async fn resolve_one(
     worktree: &Path,
     ws_info: &WorkspaceInfo,
     merged: &mut EnvMap,
+    progress: Option<&dyn EnvProgressSink>,
 ) -> ResolvedSource {
-    // 1. Fast path: cache hit → skip detect AND export.
+    // 1. Fast path: cache hit → skip detect AND export. Notably also
+    //    skip the progress sink — a cache hit is instantaneous and
+    //    flashing the UI loading state for it would be more confusing
+    //    than helpful.
     if let Some(entry) = cache.get_fresh(worktree, name) {
         let contributed = entry.env.len();
         merge_into(merged, &entry.env);
@@ -354,10 +417,24 @@ async fn resolve_one(
         };
     }
 
+    // From here on we know the plugin will actually run — emit
+    // "started" so the UI can render a per-plugin spinner. The
+    // "finished" call is paired in every return arm below.
+    let started = std::time::Instant::now();
+    if let Some(sink) = progress {
+        sink.started(name);
+    }
+    let emit_finished = |ok: bool| {
+        if let Some(sink) = progress {
+            sink.finished(name, ok, started.elapsed());
+        }
+    };
+
     // 2. Slow path: run detect.
     let detected = match backend.detect(name, worktree, ws_info).await {
         Ok(v) => v,
         Err(e) => {
+            emit_finished(false);
             return ResolvedSource {
                 plugin_name: name.to_string(),
                 detected: false,
@@ -373,6 +450,7 @@ async fn resolve_one(
         // Drop any stale cache for this (worktree, plugin) — plugin no
         // longer applies (e.g. user deleted `.envrc`).
         cache.invalidate(worktree, Some(name));
+        emit_finished(true);
         return ResolvedSource {
             plugin_name: name.to_string(),
             detected: false,
@@ -389,6 +467,7 @@ async fn resolve_one(
             let contributed = export.env.len();
             cache.put(worktree, name, &export);
             merge_into(merged, &export.env);
+            emit_finished(true);
             ResolvedSource {
                 plugin_name: name.to_string(),
                 detected: true,
@@ -398,14 +477,17 @@ async fn resolve_one(
                 error: None,
             }
         }
-        Err(e) => ResolvedSource {
-            plugin_name: name.to_string(),
-            detected: true,
-            vars_contributed: 0,
-            cached: false,
-            evaluated_at: SystemTime::now(),
-            error: Some(format!("export: {e}")),
-        },
+        Err(e) => {
+            emit_finished(false);
+            ResolvedSource {
+                plugin_name: name.to_string(),
+                detected: true,
+                vars_contributed: 0,
+                cached: false,
+                evaluated_at: SystemTime::now(),
+                error: Some(format!("export: {e}")),
+            }
+        }
     }
 }
 
@@ -431,6 +513,7 @@ mod tests {
             branch: "main".into(),
             worktree_path: "/tmp".into(),
             repo_path: "/tmp".into(),
+            ..Default::default()
         }
     }
 
@@ -1314,5 +1397,139 @@ mod tests {
             .expect("plugin must appear in sources");
         assert_eq!(source.error.as_deref(), Some("disabled"));
         assert!(!source.detected);
+    }
+
+    /// Capture every `started`/`finished` call so the test can assert
+    /// the dispatcher fires exactly once per non-cache-hit invocation
+    /// and skips the sink for cache hits.
+    #[derive(Default)]
+    struct RecordingSink {
+        events: std::sync::Mutex<Vec<(&'static str, String, Option<bool>)>>,
+    }
+
+    impl EnvProgressSink for RecordingSink {
+        fn started(&self, plugin: &str) {
+            self.events
+                .lock()
+                .unwrap()
+                .push(("started", plugin.to_string(), None));
+        }
+        fn finished(&self, plugin: &str, ok: bool, _elapsed: std::time::Duration) {
+            self.events
+                .lock()
+                .unwrap()
+                .push(("finished", plugin.to_string(), Some(ok)));
+        }
+    }
+
+    #[tokio::test]
+    async fn progress_sink_fires_for_each_invoked_plugin() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join(".envrc"), "x").unwrap();
+
+        let backend = MockBackend::new()
+            .with_plugin("env-direnv")
+            .detects("env-direnv", true)
+            .exports(
+                "env-direnv",
+                export_of(&[("FOO", Some("bar"))], vec![tmp.path().join(".envrc")]),
+            );
+        let cache = EnvCache::new();
+        let sink = RecordingSink::default();
+        let _ = resolve_for_workspace_with_progress(
+            &backend,
+            &cache,
+            tmp.path(),
+            &ws_info(),
+            &Default::default(),
+            Some(&sink),
+        )
+        .await;
+
+        let events = sink.events.lock().unwrap();
+        assert_eq!(
+            events.len(),
+            2,
+            "expect a started+finished pair, got {events:?}"
+        );
+        assert_eq!(events[0].0, "started");
+        assert_eq!(events[0].1, "env-direnv");
+        assert_eq!(events[1].0, "finished");
+        assert_eq!(events[1].1, "env-direnv");
+        assert_eq!(events[1].2, Some(true));
+    }
+
+    #[tokio::test]
+    async fn progress_sink_skipped_on_cache_hit() {
+        let tmp = tempfile::tempdir().unwrap();
+        let envrc = tmp.path().join(".envrc");
+        std::fs::write(&envrc, "x").unwrap();
+
+        let backend = MockBackend::new()
+            .with_plugin("env-direnv")
+            .detects("env-direnv", true)
+            .exports(
+                "env-direnv",
+                export_of(&[("FOO", Some("bar"))], vec![envrc.clone()]),
+            );
+        let cache = EnvCache::new();
+
+        // Prime the cache with one resolve (no sink), then re-run with
+        // a recording sink. The cache hit should bypass the sink.
+        let _ = resolve_for_workspace(
+            &backend,
+            &cache,
+            tmp.path(),
+            &ws_info(),
+            &Default::default(),
+        )
+        .await;
+
+        let sink = RecordingSink::default();
+        let resolved = resolve_for_workspace_with_progress(
+            &backend,
+            &cache,
+            tmp.path(),
+            &ws_info(),
+            &Default::default(),
+            Some(&sink),
+        )
+        .await;
+
+        assert!(resolved.sources.iter().any(|s| s.cached));
+        assert!(
+            sink.events.lock().unwrap().is_empty(),
+            "cache hits must not flash the loading UI"
+        );
+    }
+
+    #[tokio::test]
+    async fn progress_sink_reports_error_when_export_fails() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join(".envrc"), "x").unwrap();
+
+        // detect=true + export error → finished should fire with ok=false.
+        let backend = MockBackend::new()
+            .with_plugin("env-direnv")
+            .detects("env-direnv", true)
+            .export_fails("env-direnv", "boom");
+        let cache = EnvCache::new();
+        let sink = RecordingSink::default();
+        let _ = resolve_for_workspace_with_progress(
+            &backend,
+            &cache,
+            tmp.path(),
+            &ws_info(),
+            &Default::default(),
+            Some(&sink),
+        )
+        .await;
+
+        let events = sink.events.lock().unwrap();
+        let finished = events
+            .iter()
+            .find(|(kind, _, _)| *kind == "finished")
+            .expect("finished event missing");
+        assert_eq!(finished.2, Some(false));
     }
 }

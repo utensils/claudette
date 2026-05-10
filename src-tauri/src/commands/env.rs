@@ -31,6 +31,78 @@ pub struct EnvCacheInvalidatedPayload {
     pub plugin_name: String,
 }
 
+/// Phase reported by the env-provider progress sink. Routed through
+/// the `workspace_env_progress` Tauri event so every UI surface
+/// (sidebar row, chat composer, terminal overlay) can render the same
+/// loading state regardless of which workspace the user is viewing.
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EnvProgressPhase {
+    Started,
+    Finished,
+}
+
+#[derive(Clone, Serialize)]
+pub struct WorkspaceEnvProgressPayload {
+    pub workspace_id: String,
+    pub plugin: String,
+    pub phase: EnvProgressPhase,
+    /// Milliseconds since `started`. Zero on the `started` event so
+    /// the UI can use it as the base for its own elapsed-time counter.
+    pub elapsed_ms: u64,
+    /// Set on `finished` only. `None` on `started`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ok: Option<bool>,
+}
+
+/// Bridge that turns `EnvProgressSink` callbacks into Tauri events.
+/// Every Tauri-side env-resolve call site builds one of these so the
+/// sidebar/composer/terminal loading state stays in sync across all
+/// entry points (workspace creation, selection, agent spawn, PTY
+/// spawn, env-panel reload).
+///
+/// The `workspace_id` baked in here is the same id the frontend's
+/// Zustand store keys `workspaceEnvironment` by — the synthetic
+/// `repo:{id}` form used by EnvPanel's repo-mode resolves is fine
+/// because the JS side ignores progress for ids it isn't tracking.
+pub struct TauriEnvProgressSink {
+    app: AppHandle,
+    workspace_id: String,
+}
+
+impl TauriEnvProgressSink {
+    pub fn new(app: AppHandle, workspace_id: String) -> Self {
+        Self { app, workspace_id }
+    }
+}
+
+impl claudette::env_provider::EnvProgressSink for TauriEnvProgressSink {
+    fn started(&self, plugin: &str) {
+        let _ = self.app.emit(
+            "workspace_env_progress",
+            WorkspaceEnvProgressPayload {
+                workspace_id: self.workspace_id.clone(),
+                plugin: plugin.to_string(),
+                phase: EnvProgressPhase::Started,
+                elapsed_ms: 0,
+                ok: None,
+            },
+        );
+    }
+    fn finished(&self, plugin: &str, ok: bool, elapsed: std::time::Duration) {
+        let _ = self.app.emit(
+            "workspace_env_progress",
+            WorkspaceEnvProgressPayload {
+                workspace_id: self.workspace_id.clone(),
+                plugin: plugin.to_string(),
+                phase: EnvProgressPhase::Finished,
+                elapsed_ms: elapsed.as_millis() as u64,
+                ok: Some(ok),
+            },
+        );
+    }
+}
+
 /// App-settings key for "is this env-provider enabled for this repo?".
 /// Default (absent key) is enabled. `"false"` disables.
 fn enabled_key(repo_id: &str, plugin_name: &str) -> String {
@@ -139,6 +211,7 @@ pub async fn get_env_target_worktree(
 #[tauri::command]
 pub async fn get_env_sources(
     target: EnvTarget,
+    app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<Vec<EnvSourceInfo>, String> {
     let (worktree, ws_info, repo_id) = resolve_target(&state, &target).await?;
@@ -146,7 +219,10 @@ pub async fn get_env_sources(
         let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
         load_disabled_providers(&db, &repo_id)
     };
-    let registry = state.plugins.read().await;
+    // Snapshot the registry so the read lock is released before we
+    // start awaiting — env resolves can take ~120s on cold direnv/Nix
+    // and would otherwise block the Plugins settings page from loading.
+    let registry = state.plugins_snapshot().await;
     // Look up display_name for each plugin from the registry so the UI
     // shows "direnv" instead of the internal "env-direnv" name.
     let display_names: std::collections::HashMap<String, String> = registry
@@ -154,12 +230,14 @@ pub async fn get_env_sources(
         .iter()
         .map(|(name, p)| (name.clone(), p.manifest.display_name.clone()))
         .collect();
-    let resolved = claudette::env_provider::resolve_with_registry(
+    let progress = TauriEnvProgressSink::new(app, ws_info.id.clone());
+    let resolved = claudette::env_provider::resolve_with_registry_and_progress(
         &registry,
         &state.env_cache,
         Path::new(&worktree),
         &ws_info,
         &disabled,
+        Some(&progress),
     )
     .await;
 
@@ -256,6 +334,7 @@ fn prepare_workspace_error(resolved: &claudette::env_provider::ResolvedEnv) -> O
 #[tauri::command]
 pub async fn prepare_workspace_environment(
     workspace_id: String,
+    app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
     let target = EnvTarget::Workspace { workspace_id };
@@ -264,13 +343,17 @@ pub async fn prepare_workspace_environment(
         let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
         load_disabled_providers(&db, &repo_id)
     };
-    let registry = state.plugins.read().await;
-    let resolved = claudette::env_provider::resolve_with_registry(
+    // Snapshot — see `plugins_snapshot` doc; this command can run
+    // ~120s on cold env-providers and must not stall the Plugins UI.
+    let registry = state.plugins_snapshot().await;
+    let progress = TauriEnvProgressSink::new(app, ws_info.id.clone());
+    let resolved = claudette::env_provider::resolve_with_registry_and_progress(
         &registry,
         &state.env_cache,
         Path::new(&worktree),
         &ws_info,
         &disabled,
+        Some(&progress),
     )
     .await;
     register_resolved_with_watcher(&state, Path::new(&worktree), &resolved.sources).await;
@@ -526,6 +609,7 @@ async fn resolve_target(
                 branch: ws.branch_name.clone(),
                 worktree_path: worktree.clone(),
                 repo_path: repo.path,
+                repo_id: Some(repo_id.clone()),
             };
             Ok((worktree, ws_info, repo_id))
         }
@@ -546,6 +630,7 @@ async fn resolve_target(
                 branch: String::new(),
                 worktree_path: repo.path.clone(),
                 repo_path: repo.path.clone(),
+                repo_id: Some(repo.id.clone()),
             };
             Ok((repo.path, ws_info, repo.id))
         }
@@ -653,15 +738,20 @@ pub fn spawn_repo_env_warmup(app: AppHandle, repo_id: String) {
             branch: String::new(),
             worktree_path: repo.path.clone(),
             repo_path: repo.path.clone(),
+            repo_id: Some(repo.id.clone()),
         };
         let disabled = load_disabled_providers(&db, &repo.id);
-        let registry = state.plugins.read().await;
-        let resolved = claudette::env_provider::resolve_with_registry(
+        // Best-effort warmup — snapshot so the resolve doesn't stall
+        // any concurrent Plugins/SCM commands.
+        let registry = state.plugins_snapshot().await;
+        let progress = TauriEnvProgressSink::new(app.clone(), ws_info.id.clone());
+        let resolved = claudette::env_provider::resolve_with_registry_and_progress(
             &registry,
             &state.env_cache,
             Path::new(&repo.path),
             &ws_info,
             &disabled,
+            Some(&progress),
         )
         .await;
         register_resolved_with_watcher(&state, Path::new(&repo.path), &resolved.sources).await;

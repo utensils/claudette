@@ -393,6 +393,7 @@ async fn ensure_persistent_session_for_remote_control(
         branch: workspace.branch_name.clone(),
         worktree_path: worktree_path.to_string(),
         repo_path: repo_path.to_string(),
+        repo_id: repo.as_ref().map(|r| r.id.clone()),
     };
     let disabled_env_providers = {
         let db = Database::open(db_path).map_err(|e| e.to_string())?;
@@ -402,13 +403,19 @@ async fn ensure_persistent_session_for_remote_control(
         )
     };
     let resolved_env = {
-        let registry = state.plugins.read().await;
-        claudette::env_provider::resolve_with_registry(
+        // Snapshot — see `plugins_snapshot` doc.
+        let registry = state.plugins_snapshot().await;
+        let progress = crate::commands::env::TauriEnvProgressSink::new(
+            app.clone(),
+            ws_info_for_env.id.clone(),
+        );
+        claudette::env_provider::resolve_with_registry_and_progress(
             &registry,
             &state.env_cache,
             std::path::Path::new(worktree_path),
             &ws_info_for_env,
             &disabled_env_providers,
+            Some(&progress),
         )
         .await
     };

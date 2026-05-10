@@ -55,6 +55,7 @@ import {
   focusActiveTerminal,
   focusChatPrompt,
 } from "../../utils/focusTargets";
+import { TerminalEnvOverlay } from "./TerminalEnvOverlay";
 import { TerminalPaneTree } from "./TerminalPaneTree";
 import type { TerminalTab } from "../../types/terminal";
 import {
@@ -102,12 +103,28 @@ function encodeTerminalCommand(command: string): number[] {
   return Array.from(terminalInputEncoder.encode(withReturn));
 }
 
+/**
+ * Block until the selected workspace's env-provider layer reaches a
+ * terminal state (ready/error). Time-bounded by `TERMINAL_ENV_WAIT_MS`
+ * — bumped from the previous 30s ceiling because the runtime's per-
+ * plugin timeout now defaults to 120s and a cold Nix flake can run
+ * even longer when configured to do so via the per-repo override.
+ *
+ * The actual visibility of the wait is owned by `TerminalEnvOverlay`,
+ * which subscribes to the same store entry and renders a banner with
+ * the current plugin name + elapsed seconds. This function still
+ * blocks the tab/command dispatch logic so we don't accidentally
+ * spawn a PTY (or feed a queued command) into a child that would
+ * inherit a stale or partial env.
+ */
+const TERMINAL_ENV_WAIT_MS = 5 * 60 * 1000;
 async function waitForWorkspaceEnvironment(workspaceId: string) {
-  for (let attempt = 0; attempt < 300; attempt += 1) {
+  const deadline = Date.now() + TERMINAL_ENV_WAIT_MS;
+  while (Date.now() < deadline) {
     if (!workspaceEnvironmentPending(useAppStore.getState(), workspaceId)) {
       return;
     }
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    await new Promise((resolve) => setTimeout(resolve, 250));
   }
 }
 
@@ -1533,6 +1550,7 @@ export const TerminalPanel = memo(function TerminalPanel() {
 
   return (
     <div className={styles.panel}>
+      <TerminalEnvOverlay workspaceId={selectedWorkspaceId} />
       <div
         className={styles.tabBar}
         data-tab-dragging={draggingTabId !== null || undefined}

@@ -664,6 +664,7 @@ fn make_workspace_info(
             .clone()
             .unwrap_or_else(|| repo.path.clone()),
         repo_path: repo.path.clone(),
+        repo_id: Some(repo.id.clone()),
     }
 }
 
