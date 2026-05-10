@@ -559,13 +559,39 @@ function App() {
       store.setScmDetail(detail);
     });
 
-    // Listen for missing-CLI events (claude/git/gh not on PATH). Routes to the
-    // MissingCliModal so users see platform-specific install guidance instead
-    // of a raw subprocess error.
+    // Listen for missing-CLI events (claude/git/gh not on PATH).
+    //
+    // The store decides whether to auto-open the modal — first occurrence
+    // per tool opens it (so non-chat surfaces like auth, repository, SCM,
+    // and plugin-settings keep their direct-modal UX), but once the user
+    // dismisses the modal for a given tool, subsequent events only refresh
+    // the cache. This keeps a high-frequency surface like chat-send from
+    // re-popping the modal on every retry while still letting non-chat
+    // surfaces show install guidance the first time. The inline "View
+    // install options" link in `ChatErrorBanner` calls
+    // `openMissingCliModal()`, which clears the dismissal — explicit user
+    // action overrides the snooze.
     const unlistenMissingCli = listen<import("./components/modals/MissingCliModal").MissingCliData>(
       "missing-dependency",
       (event) => {
-        useAppStore.getState().openModal("missingCli", event.payload as unknown as Record<string, unknown>);
+        useAppStore
+          .getState()
+          .reportMissingCli(event.payload as unknown as Record<string, unknown>);
+      },
+    );
+
+    // Listen for missing-worktree events. Emitted when a chat / plugin spawn
+    // tries to chdir into a worktree directory that has been deleted out
+    // from under us. We cache the path so per-workspace UI (chat error
+    // banner, sidebar warning) can surface a recovery affordance instead of
+    // letting a confusing chained error cascade — historically this case
+    // showed up in the UI as "Claude CLI not installed" because chdir(2)
+    // and execvp(2) both surface as `ErrorKind::NotFound` from
+    // `Command::spawn()`.
+    const unlistenMissingWorktree = listen<{ worktree_path: string }>(
+      "missing-worktree",
+      (event) => {
+        useAppStore.getState().setLastMissingWorktree(event.payload.worktree_path);
       },
     );
 
@@ -745,6 +771,7 @@ function App() {
       unlistenChatTurnSettings.then((fn) => fn());
       unlistenChatTurnStarted.then((fn) => fn());
       unlistenMissingCli.then((fn) => fn());
+      unlistenMissingWorktree.then((fn) => fn());
     };
   }, [setRepositories, setWorkspaces, setWorktreeBaseDir, setDefaultTerminalAppId, setDefaultBranches, setTerminalFontSize, setLastMessages, setRemoteConnections, setDiscoveredServers, setLocalServerRunning, setLocalServerConnectionString, setCurrentThemeId, setThemeMode, setThemeDark, setThemeLight, setUiFontSize, setFontFamilySans, setFontFamilyMono, setSystemFonts, setDetectedApps, setUsageInsightsEnabled, setClaudetteTerminalEnabled, setShowSidebarRunningCommands, setToolDisplayMode, setExtendedToolCallOutput, setPluginManagementEnabled, setClaudeRemoteControlEnabled, setCommunityRegistryEnabled, setAlternativeBackendsAvailable, setAlternativeBackendsEnabled, setAgentBackends, setDefaultAgentBackendId, setEditorGitGutterBase, setEditorMinimapEnabled, setDisable1mContext, setAppVersion, setVoiceToggleHotkey, setVoiceHoldHotkey, setKeybindings, setManualWorkspaceOrderByRepo]);
 

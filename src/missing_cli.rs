@@ -9,6 +9,26 @@
 //!    dialog instead of leaking the subprocess error.
 //! 2. Per-tool × per-OS install guidance ([`guidance_for`]) rendered by the
 //!    `MissingCliModal` on the frontend.
+//!
+//! ## A note on `ErrorKind::NotFound`
+//!
+//! `Command::spawn()` collapses several distinct OS-level failures into a
+//! single `ErrorKind::NotFound`: a failed `chdir(current_dir)`, a failed
+//! `execvp(program)`, and on Windows a failed `CreateProcess`. So a missing
+//! worktree directory and a missing `claude` binary are
+//! indistinguishable at the spawn-error level.
+//!
+//! That ambiguity caused a real-world bug: deleting a workspace's worktree
+//! would surface as "Claude CLI not installed" and pop the install modal,
+//! because every chat-send went through `cmd.spawn()` with `current_dir =
+//! <missing path>` and we mapped *every* `NotFound` to MISSING_CLI.
+//!
+//! The fix is to validate the inputs *we* control before spawning: pre-check
+//! that the working directory exists (see [`precheck_cwd`]) and emit a
+//! distinct [`MISSING_CWD_PREFIX`] sentinel when it doesn't. The
+//! `map_spawn_err` mapping for executables is then unambiguous.
+
+use std::path::Path;
 
 use serde::Serialize;
 
@@ -17,6 +37,16 @@ use serde::Serialize;
 /// followed by `: <original error>` — the parser ignores anything after the
 /// tool token).
 pub const SPAWN_ERR_PREFIX: &str = "MISSING_CLI:";
+
+/// Prefix on error strings returned when a spawn-site's `current_dir`
+/// no longer exists (e.g. the worktree directory was deleted out from under
+/// us). Format: `"MISSING_CWD:<absolute-path>"`.
+///
+/// We need this distinct from [`SPAWN_ERR_PREFIX`] because the OS error code
+/// for "chdir failed" and "exec failed" is identical (`ENOENT` →
+/// `ErrorKind::NotFound`); without the pre-check the missing-CWD case would
+/// be misreported as a missing CLI.
+pub const MISSING_CWD_PREFIX: &str = "MISSING_CWD:";
 
 /// Produce the sentinel error string for a spawn site that failed because the
 /// named CLI is not on PATH.
@@ -50,6 +80,10 @@ pub fn is_not_found(err: &std::io::Error) -> bool {
 /// cmd.spawn().map_err(|e| missing_cli::map_spawn_err(&e, "claude",
 ///     || format!("Failed to spawn claude at {:?}: {e}", path)))?;
 /// ```
+///
+/// Callers that pass a `current_dir` to the command **must** also call
+/// [`precheck_cwd`] first; otherwise a missing working directory will
+/// surface here as a misleading MISSING_CLI sentinel.
 pub fn map_spawn_err(
     err: &std::io::Error,
     tool: &str,
@@ -59,6 +93,88 @@ pub fn map_spawn_err(
         format_err(tool)
     } else {
         fallback()
+    }
+}
+
+/// Format the missing-cwd sentinel for a given path.
+pub fn format_cwd_err(path: &Path) -> String {
+    format!("{MISSING_CWD_PREFIX}{}", path.display())
+}
+
+/// If `err` carries the [`MISSING_CWD_PREFIX`] sentinel, return the path
+/// portion. Symmetric with [`parse_err`].
+///
+/// Unlike [`parse_err`], the cwd sentinel format is strictly `MISSING_CWD:<path>`
+/// with no optional `": "` suffix, so this returns the full remainder
+/// verbatim. Splitting on `": "` would corrupt valid Unix paths that
+/// contain it (e.g. `/Users/me/Project: v2`) — the path is the entire
+/// payload. If a future revision needs to append diagnostics, switch to
+/// an escaping or length-prefixed scheme rather than reintroducing a
+/// raw delimiter that can collide with valid path characters.
+pub fn parse_cwd_err(err: &str) -> Option<&str> {
+    err.strip_prefix(MISSING_CWD_PREFIX)
+}
+
+/// Returns `true` if the error carries either the missing-cli or missing-cwd
+/// sentinel. Useful for callers that just want to know "this is a structured
+/// not-found we already classified — don't double-report".
+pub fn is_sentinel(err: &str) -> bool {
+    err.starts_with(SPAWN_ERR_PREFIX) || err.starts_with(MISSING_CWD_PREFIX)
+}
+
+/// Pre-spawn check that the `current_dir` we're about to hand to
+/// `Command::current_dir()` actually exists. Returns the [`MISSING_CWD_PREFIX`]
+/// sentinel when it doesn't, so the Tauri layer can surface a "worktree
+/// missing" UX instead of mistakenly blaming the executable.
+///
+/// This **must** be called before spawning any subprocess that uses
+/// `current_dir(...)` — see the module docs for why.
+///
+/// We deliberately *don't* use `Path::is_dir()` here because it collapses
+/// every metadata error — `NotFound`, `PermissionDenied`, transient IO
+/// failures — into `false`. Treating a permission error as "worktree
+/// missing" would surface the wrong recovery UX (Archive / Recreate)
+/// for a workspace whose worktree exists but isn't readable. Instead we
+/// pull metadata explicitly and only emit the sentinel for `NotFound`
+/// (or for the case where the path exists but is not a directory —
+/// `chdir(2)` will fail with `ENOTDIR` for that, which we want to
+/// classify the same way). Other error kinds get a non-sentinel
+/// message so the calling surface falls through to its default error
+/// handler.
+pub fn precheck_cwd(path: &Path) -> Result<(), String> {
+    match std::fs::symlink_metadata(path) {
+        Ok(meta) => {
+            // Follow symlinks for the dir check — `current_dir` accepts a
+            // symlink that resolves to a directory.
+            if meta.file_type().is_symlink() {
+                match std::fs::metadata(path) {
+                    Ok(m) if m.is_dir() => Ok(()),
+                    Ok(_) => Err(format_cwd_err(path)),
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                        // Broken symlink — chdir would ENOENT. Same UX as
+                        // a missing path.
+                        Err(format_cwd_err(path))
+                    }
+                    Err(e) => Err(format!(
+                        "Cannot stat working directory {}: {e}",
+                        path.display()
+                    )),
+                }
+            } else if meta.is_dir() {
+                Ok(())
+            } else {
+                // Regular file or other non-directory — chdir will ENOTDIR.
+                // From the user's perspective this is the same recovery
+                // case as "worktree missing": the path Claudette has
+                // recorded is no longer a usable working directory.
+                Err(format_cwd_err(path))
+            }
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Err(format_cwd_err(path)),
+        Err(e) => Err(format!(
+            "Cannot stat working directory {}: {e}",
+            path.display()
+        )),
     }
 }
 
@@ -246,6 +362,96 @@ fn gh_options() -> Vec<InstallOption> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn precheck_cwd_ok_for_existing_dir() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        assert!(precheck_cwd(tmp.path()).is_ok());
+    }
+
+    #[test]
+    fn precheck_cwd_returns_sentinel_for_missing_dir() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let missing = tmp.path().join("does-not-exist");
+        let err = precheck_cwd(&missing).expect_err("should error");
+        assert!(err.starts_with(MISSING_CWD_PREFIX), "got {err:?}");
+        let parsed = parse_cwd_err(&err).expect("parses");
+        assert_eq!(parsed, missing.to_string_lossy());
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn precheck_cwd_returns_non_sentinel_on_permission_denied() {
+        // Regression for Copilot review on the missing-CLI fix PR: an unreadable worktree
+        // directory (mode 000) must NOT be classified as MISSING_CWD,
+        // because the recovery UX for a permission error is fundamentally
+        // different from "worktree was deleted" — there's no need to
+        // archive or recreate, the user just needs to fix permissions.
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let parent = tmp.path().join("locked");
+        std::fs::create_dir(&parent).unwrap();
+        // Make the *parent* unreadable so symlink_metadata on the child
+        // path returns PermissionDenied, not NotFound. Operating on the
+        // dir itself in 000 mode still lets stat succeed, which would
+        // mask the test.
+        let original = std::fs::metadata(&parent).unwrap().permissions();
+        std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o000)).unwrap();
+
+        let target = parent.join("inner");
+        let result = precheck_cwd(&target);
+
+        // Restore perms before any assertion that might panic, so the
+        // tempdir cleanup doesn't fail.
+        std::fs::set_permissions(&parent, original).unwrap();
+
+        let err = result.expect_err("permission-denied parent should produce an error");
+        assert!(
+            !err.starts_with(MISSING_CWD_PREFIX),
+            "permission errors must not produce MISSING_CWD sentinel: {err:?}"
+        );
+        assert!(
+            err.to_lowercase().contains("cannot stat"),
+            "expected non-sentinel error wording, got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn precheck_cwd_rejects_files() {
+        // A regular file is not a usable working directory — chdir(2) would
+        // fail. precheck_cwd must reject this too, not only outright-missing
+        // paths.
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let file = tmp.path().join("not-a-dir");
+        std::fs::write(&file, b"x").unwrap();
+        let err = precheck_cwd(&file).expect_err("should error");
+        assert!(err.starts_with(MISSING_CWD_PREFIX), "got {err:?}");
+    }
+
+    #[test]
+    fn parse_cwd_err_rejects_non_sentinel() {
+        assert_eq!(parse_cwd_err("Failed: nope"), None);
+        assert_eq!(parse_cwd_err("MISSING_CLI:claude"), None);
+    }
+
+    #[test]
+    fn parse_cwd_err_preserves_paths_containing_colon_space() {
+        // Regression for Copilot review on the missing-CLI fix PR: a path
+        // like `/Users/me/Project: v2` contains the literal `": "` two-byte
+        // sequence. The previous parser split on it and lost the suffix —
+        // surfacing `/Users/me/Project` as the worktree path, which then
+        // couldn't be matched against any workspace record.
+        let path = "/Users/me/Project: v2";
+        let s = format_cwd_err(std::path::Path::new(path));
+        assert_eq!(parse_cwd_err(&s), Some(path));
+    }
+
+    #[test]
+    fn is_sentinel_recognizes_both_kinds() {
+        assert!(is_sentinel("MISSING_CLI:claude"));
+        assert!(is_sentinel("MISSING_CWD:/tmp/gone"));
+        assert!(!is_sentinel("Some other error"));
+    }
 
     #[test]
     fn format_and_parse_roundtrip() {

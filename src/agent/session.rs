@@ -85,6 +85,11 @@ impl PersistentSession {
             settings,
         );
 
+        // Pre-check the working directory exists so a deleted worktree does
+        // not surface as a misleading MISSING_CLI sentinel — see
+        // [`crate::missing_cli`] module docs.
+        crate::missing_cli::precheck_cwd(working_dir)?;
+
         let claude_path = resolve_claude_path().await;
         let mut cmd = Command::new(&claude_path);
         cmd.no_console_window();

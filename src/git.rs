@@ -673,11 +673,27 @@ pub async fn create_worktree_from_ref(
 }
 
 /// Restore a worktree for an existing branch (no -b flag).
+///
+/// This is also the path that the missing-worktree recovery banner runs
+/// when the user has `rm -rf`'d the worktree directory out from under
+/// us. In that case Git still has the stale entry in
+/// `.git/worktrees/<name>/` (its `gitdir` file points at the directory
+/// that no longer exists), and `git worktree add <same-path> -- <branch>`
+/// refuses with `fatal: '<path>' is a missing but locked worktree` or
+/// `'<path>' already exists`. Prune the stale registration first.
+///
+/// `git worktree prune` is safe to run unconditionally: it only deletes
+/// registrations whose directory is missing on disk. If nothing is
+/// stale, it's a no-op. We intentionally swallow its error so a
+/// transient prune failure doesn't block the user from retrying — if
+/// the subsequent `add` still hits the stale entry, *that* error is the
+/// useful one to surface.
 pub async fn restore_worktree(
     repo_path: &str,
     branch_name: &str,
     worktree_path: &str,
 ) -> Result<String, GitError> {
+    let _ = run_git(repo_path, &["worktree", "prune"]).await;
     run_git(
         repo_path,
         &["worktree", "add", worktree_path, "--", branch_name],
@@ -1144,6 +1160,44 @@ mod tests {
 
         // Clean up.
         remove_worktree(repo_path, wt_path2, true).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_restore_worktree_after_manual_rm() {
+        // Regression for the missing-worktree recovery banner: when the
+        // user has `rm -rf`'d the worktree directory directly (without
+        // going through Claudette's archive flow), Git still has the
+        // stale registration in `.git/worktrees/<name>/`. A bare
+        // `git worktree add <same-path>` then fails with
+        // `'<path>' is a missing but locked worktree`. `restore_worktree`
+        // must transparently prune the stale entry first so the recovery
+        // path the new ChatErrorBanner exposes (Recreate worktree button)
+        // actually works.
+        let dir = setup_temp_repo().await;
+        let repo_path = dir.path().to_str().unwrap();
+
+        let wt_dir = tempfile::tempdir().unwrap();
+        let wt_path = wt_dir.path().to_str().unwrap().to_string();
+        create_worktree(repo_path, "claudette/manual-rm", &wt_path, None, None)
+            .await
+            .unwrap();
+
+        // Simulate user running `rm -rf` on the worktree directory.
+        // The git registration in `.git/worktrees/...` is intentionally
+        // *not* cleaned — that's exactly the broken state we're testing.
+        std::fs::remove_dir_all(&wt_path).unwrap();
+
+        // Without the prune in `restore_worktree`, this would error with
+        // `'<path>' is a missing but locked worktree` and the user's
+        // Recreate button would fail.
+        let abs = restore_worktree(repo_path, "claudette/manual-rm", &wt_path)
+            .await
+            .expect("restore_worktree should prune stale registration and re-add");
+        assert!(!abs.is_empty());
+        let branch = current_branch(&wt_path).await.unwrap();
+        assert_eq!(branch, "claudette/manual-rm");
+
+        remove_worktree(repo_path, &wt_path, true).await.unwrap();
     }
 
     #[tokio::test]
