@@ -492,6 +492,8 @@ pub(crate) async fn archive_workspace_inner(
                             output_tokens: None,
                             cache_read_tokens: None,
                             cache_creation_tokens: None,
+                            author_participant_id: None,
+                            author_display_name: None,
                         };
                         if let Err(err) = db.insert_chat_message(&msg) {
                             tracing::warn!(

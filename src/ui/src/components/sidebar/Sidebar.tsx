@@ -116,7 +116,6 @@ export const Sidebar = memo(function Sidebar() {
   const sessionsByWorkspace = useAppStore((s) => s.sessionsByWorkspace);
   const setSessionsForWorkspace = useAppStore((s) => s.setSessionsForWorkspace);
   const scmSummary = useAppStore((s) => s.scmSummary);
-  const workspaceEnvironment = useAppStore((s) => s.workspaceEnvironment);
   const setRepositories = useAppStore((s) => s.setRepositories);
   const setWorkspaces = useAppStore((s) => s.setWorkspaces);
   const manualWorkspaceOrderByRepo = useAppStore(
