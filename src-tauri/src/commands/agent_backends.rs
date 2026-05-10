@@ -586,18 +586,25 @@ fn backend_models_contain(backend: &AgentBackendConfig, model: &str) -> bool {
         .any(|candidate| candidate.id == model)
 }
 
-/// Stable fingerprint of a backend's discovered + manual model list — used
-/// to decide whether a chat-send re-discovery actually changed anything
-/// worth persisting. Matches the freshness signal in `runtime_hash`
-/// (id + context_window_tokens) so a context-slider change in LM Studio
-/// reliably triggers both a DB write and a gateway respawn.
+/// Order-independent fingerprint of a backend's discovered + manual model
+/// list — used to decide whether a chat-send re-discovery actually changed
+/// anything worth persisting. Matches the freshness signal in
+/// `runtime_hash` (id + context_window_tokens) so a context-slider change
+/// in LM Studio reliably triggers both a DB write and a gateway respawn.
+///
+/// Sorted by model id so the same set of models in a different upstream
+/// order produces the same signature — otherwise a single discovery call
+/// that returned items in a different order would force an unnecessary DB
+/// write + gateway respawn on every chat send.
 fn backend_models_signature(backend: &AgentBackendConfig) -> Vec<(String, u32)> {
-    backend
+    let mut entries: Vec<(String, u32)> = backend
         .discovered_models
         .iter()
         .chain(backend.manual_models.iter())
         .map(|model| (model.id.clone(), model.context_window_tokens))
-        .collect()
+        .collect();
+    entries.sort();
+    entries
 }
 
 fn apply_discovered_models(backend: &mut AgentBackendConfig, discovered: Vec<AgentBackendModel>) {
@@ -899,19 +906,45 @@ async fn discover_lm_studio_models(
         .as_deref()
         .unwrap_or("http://localhost:1234")
         .trim_end_matches('/');
-    let secret = load_secure_secret(SECRET_BUCKET, &backend.id)
-        .ok()
-        .flatten();
+    // Treat secure-store failures as soft (a corrupt keychain entry is
+    // distinct from "no secret was ever set") and tell the user via the
+    // log so a discovery-fails-silently bug is debuggable. A missing /
+    // blank secret is fine — LM Studio accepts any bearer locally and
+    // we substitute a placeholder below.
+    let secret = match load_secure_secret(SECRET_BUCKET, &backend.id) {
+        Ok(maybe) => maybe,
+        Err(err) => {
+            tracing::warn!(
+                target: "claudette::backend",
+                backend_id = %backend.id,
+                error = %err,
+                "LM Studio secret unreadable from secure store — falling back to placeholder bearer for discovery"
+            );
+            None
+        }
+    };
+    // LM Studio's local server accepts any bearer — empty included — but
+    // some users front it with an authenticating proxy that rejects
+    // requests *without* an Authorization header even if the value
+    // doesn't matter. Always send a bearer (user-supplied or the
+    // `lm-studio` placeholder) so discovery works in both setups,
+    // matching what the runtime path does.
+    let bearer = secret
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or("lm-studio")
+        .to_string();
     let client = reqwest::Client::new();
 
     // Prefer LM Studio's native v0 endpoint, which exposes per-model
     // max_context_length / loaded_context_length. Fall back to the OpenAI-shaped
     // /v1/models if v0 is missing (older or stripped builds).
-    let mut v0_request = client.get(format!("{base}/api/v0/models"));
-    if let Some(secret) = secret.as_deref().filter(|s| !s.trim().is_empty()) {
-        v0_request = v0_request.bearer_auth(secret);
-    }
-    let v0_response = v0_request.send().await;
+    let v0_response = client
+        .get(format!("{base}/api/v0/models"))
+        .bearer_auth(&bearer)
+        .send()
+        .await;
     if let Ok(response) = v0_response
         && response.status().is_success()
         && let Ok(value) = response.json::<Value>().await
@@ -922,11 +955,9 @@ async fn discover_lm_studio_models(
         }
     }
 
-    let mut v1_request = client.get(openai_api_url(base, "models"));
-    if let Some(secret) = secret.as_deref().filter(|s| !s.trim().is_empty()) {
-        v1_request = v1_request.bearer_auth(secret);
-    }
-    let value = v1_request
+    let value = client
+        .get(openai_api_url(base, "models"))
+        .bearer_auth(&bearer)
         .send()
         .await
         .map_err(|e| format!("Failed to query LM Studio: {e}"))?
@@ -1176,13 +1207,21 @@ fn runtime_hash(config: &AgentBackendConfig, secret: Option<&str>, model: Option
     // the gateway's pre-flight check would keep using the stale context
     // size baked into the running task. id+context is enough — label and
     // discovered-flag don't affect runtime behaviour.
-    for entry in config
+    //
+    // Sort first: upstream discovery doesn't guarantee a stable order, so
+    // hashing in iteration order would rotate the hash on every chat send
+    // even when nothing actually changed, forcing a needless gateway
+    // teardown/respawn cycle.
+    let mut model_entries: Vec<(&str, u32)> = config
         .discovered_models
         .iter()
         .chain(config.manual_models.iter())
-    {
-        entry.id.hash(&mut hasher);
-        entry.context_window_tokens.hash(&mut hasher);
+        .map(|entry| (entry.id.as_str(), entry.context_window_tokens))
+        .collect();
+    model_entries.sort();
+    for (id, ctx) in &model_entries {
+        id.hash(&mut hasher);
+        ctx.hash(&mut hasher);
     }
     format!("{:016x}", hasher.finish())
 }
@@ -1237,7 +1276,11 @@ impl GatewayUpstreamError {
                 if body.trim().is_empty() {
                     format!("upstream returned HTTP {status} with no body")
                 } else {
-                    body.to_string()
+                    // Cap the raw-body fallback so a cloud proxy's giant
+                    // HTML 502 page or an upstream debug dump can't
+                    // balloon error responses or log lines. The full
+                    // body is logged via tracing::warn for postmortem.
+                    truncate_for_error_message(body)
                 }
             });
         // 4xx → forward as-is so retries stop. 5xx that are *semantically*
@@ -1257,6 +1300,47 @@ impl GatewayUpstreamError {
             message,
         }
     }
+}
+
+/// Map an outbound HTTP status to the Anthropic error-envelope `type`
+/// string the Claude CLI / SDK expect for that class. Default is
+/// `api_error` (transient — SDK may retry); 4xx → kind-specific labels
+/// so 401/403/404/429 don't all collapse to `invalid_request_error`,
+/// which would re-classify `429`s out of the SDK's rate-limit retry path.
+fn anthropic_error_type_for(status: u16) -> &'static str {
+    match status {
+        401 => "authentication_error",
+        403 => "permission_error",
+        404 => "not_found_error",
+        413 => "request_too_large",
+        429 => "rate_limit_error",
+        400..=499 => "invalid_request_error",
+        _ => "api_error",
+    }
+}
+
+/// Cap an upstream body / payload that might end up in a user-visible
+/// error string. Keeps just enough context to be actionable; protects
+/// log files and chat UI from being flooded by upstream HTML / proxy
+/// error pages. Caller is responsible for tracing::warn-ing the full
+/// body if a postmortem-quality copy is needed.
+fn truncate_for_error_message(body: &str) -> String {
+    const MAX: usize = 512;
+    let mut trimmed = body.trim();
+    if trimmed.len() <= MAX {
+        return trimmed.to_string();
+    }
+    // Walk back to the last char boundary at or below MAX so we never
+    // slice into a multibyte UTF-8 sequence.
+    let mut cut = MAX;
+    while cut > 0 && !trimmed.is_char_boundary(cut) {
+        cut -= 1;
+    }
+    trimmed = &trimmed[..cut];
+    format!(
+        "{trimmed}… [truncated, {total} bytes total]",
+        total = body.len()
+    )
 }
 
 /// Returns true when the upstream message describes a hard input error that
@@ -1437,15 +1521,14 @@ async fn handle_gateway_connection(
             match response {
                 Ok(message) => write_json_or_sse_response(&mut stream, message).await,
                 Err(err) => {
-                    // 4xx upstream errors (e.g. LM Studio "context length
-                    // exceeded") propagate as 4xx so the SDK fails fast
-                    // instead of looping retries. Genuine 5xx upstream
-                    // failures stay 502.
-                    let error_type = if (400..500).contains(&err.status) {
-                        "invalid_request_error"
-                    } else {
-                        "api_error"
-                    };
+                    // Map the outbound status to the closest Anthropic
+                    // error-envelope type so the SDK's retry classifier
+                    // sees the right category — 401 stays an auth
+                    // error, 429 stays a rate-limit error (still
+                    // retryable with the appropriate backoff), generic
+                    // 4xx is `invalid_request_error` (no retry), 5xx
+                    // is `api_error` (retry).
+                    let error_type = anthropic_error_type_for(err.status);
                     write_json_response(
                         &mut stream,
                         err.status,
@@ -1609,7 +1692,14 @@ async fn call_openai_responses(
         return Err(GatewayUpstreamError::from_upstream(status.as_u16(), &body));
     }
     let value = serde_json::from_str::<Value>(&body).map_err(|e| {
-        GatewayUpstreamError::internal(format!("Invalid OpenAI response: {e}: {body}"))
+        // Cap the body in the user-visible error so a non-JSON proxy
+        // page (e.g. a Cloudflare 502 HTML splash) doesn't drown the
+        // chat UI. Full body still goes to the tracing log via the
+        // gateway connection-error path.
+        GatewayUpstreamError::internal(format!(
+            "Invalid OpenAI response: {e}: {snippet}",
+            snippet = truncate_for_error_message(&body)
+        ))
     })?;
     Ok(anthropic_message_from_openai(
         &model,
@@ -2950,6 +3040,60 @@ data: [DONE]
             err.message.contains("503") && err.message.contains("no body"),
             "empty body fallback must mention the status, got: {}",
             err.message
+        );
+    }
+
+    #[test]
+    fn anthropic_error_type_for_routes_status_codes() {
+        // Specific 4xx codes get their dedicated Anthropic types so
+        // the SDK's retry classifier behaves correctly: 429 stays a
+        // rate-limit error (retryable with backoff), 401/403 stay
+        // permission/auth (non-retryable), 404 stays not_found.
+        assert_eq!(anthropic_error_type_for(401), "authentication_error");
+        assert_eq!(anthropic_error_type_for(403), "permission_error");
+        assert_eq!(anthropic_error_type_for(404), "not_found_error");
+        assert_eq!(anthropic_error_type_for(413), "request_too_large");
+        assert_eq!(anthropic_error_type_for(429), "rate_limit_error");
+        // Other 4xx fall back to invalid_request_error (the catch-all
+        // for "your request is malformed and won't succeed on retry").
+        assert_eq!(anthropic_error_type_for(400), "invalid_request_error");
+        assert_eq!(anthropic_error_type_for(422), "invalid_request_error");
+        // 5xx and anything else collapse to api_error so the SDK's
+        // retry-with-backoff path stays in effect for transient outages.
+        assert_eq!(anthropic_error_type_for(500), "api_error");
+        assert_eq!(anthropic_error_type_for(502), "api_error");
+        assert_eq!(anthropic_error_type_for(503), "api_error");
+    }
+
+    #[test]
+    fn truncate_for_error_message_caps_runaway_payloads() {
+        // Short payloads pass through unchanged.
+        assert_eq!(truncate_for_error_message("hi"), "hi");
+
+        // Payloads at the cap return as-is (no trailing marker).
+        let exact = "x".repeat(512);
+        assert_eq!(truncate_for_error_message(&exact), exact);
+
+        // Anything longer is sliced to ≤512 chars and tagged with the
+        // original byte count so the user knows the snippet is partial.
+        let huge = "y".repeat(5_000);
+        let truncated = truncate_for_error_message(&huge);
+        assert!(truncated.contains("[truncated, 5000 bytes total]"));
+        assert!(
+            truncated.len() < 600,
+            "truncated output must stay near the cap, got {} bytes",
+            truncated.len()
+        );
+
+        // Multibyte UTF-8 must not be sliced mid-character.
+        let mut wide = String::new();
+        for _ in 0..200 {
+            wide.push_str("日本語"); // 3 bytes per char
+        }
+        let truncated = truncate_for_error_message(&wide);
+        assert!(
+            truncated.is_char_boundary(truncated.len()),
+            "truncation must land on a char boundary"
         );
     }
 

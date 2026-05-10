@@ -71,10 +71,10 @@ function App() {
   const setAlternativeBackendsEnabled = useAppStore((s) => s.setAlternativeBackendsEnabled);
   const setAgentBackends = useAppStore((s) => s.setAgentBackends);
   const setDefaultAgentBackendId = useAppStore((s) => s.setDefaultAgentBackendId);
-  // Live polling readers — used to keep LM Studio's loaded_context_length
-  // accurate without making the user click Settings → Refresh whenever
-  // they change the context-length slider in LM Studio's UI.
-  const agentBackends = useAppStore((s) => s.agentBackends);
+  // Read for the LM Studio polling effect below. We deliberately do
+  // *not* subscribe to `agentBackends` here — the polling tick reads
+  // the live list via `useAppStore.getState()` so we don't tear the
+  // interval down whenever the list updates.
   const alternativeBackendsEnabled = useAppStore(
     (s) => s.alternativeBackendsEnabled,
   );
@@ -755,15 +755,24 @@ function App() {
   // Cost: one localhost GET per LM Studio backend per 8 s. Discovery
   // round-trip is sub-50 ms in practice. We don't poll OpenAI / Codex —
   // their context windows are immutable so the initial fetch suffices.
+  //
+  // Important: read the *current* backend list from the Zustand store
+  // inside `tick` (via `useAppStore.getState()`), not from the captured
+  // `agentBackends` snapshot. Putting `agentBackends` in the dep list
+  // would tear the interval down and recreate it on every successful
+  // tick (because each tick calls `setAgentBackends`, which produces a
+  // new array reference) — leading to canceled in-flight requests and
+  // missed refreshes. The effect now only re-runs when the experimental
+  // flag flips.
   useEffect(() => {
     if (!alternativeBackendsEnabled) return;
-    const lmStudioBackends = agentBackends
-      .filter((b) => b.kind === "lm_studio" && b.enabled)
-      .map((b) => b.id);
-    if (lmStudioBackends.length === 0) return;
     let cancelled = false;
     const tick = async () => {
-      for (const id of lmStudioBackends) {
+      const live = useAppStore.getState().agentBackends;
+      const ids = live
+        .filter((b) => b.kind === "lm_studio" && b.enabled)
+        .map((b) => b.id);
+      for (const id of ids) {
         if (cancelled) return;
         try {
           const refreshed = await refreshAgentBackendModels(id);
@@ -781,7 +790,7 @@ function App() {
       cancelled = true;
       window.clearInterval(timer);
     };
-  }, [alternativeBackendsEnabled, agentBackends, setAgentBackends]);
+  }, [alternativeBackendsEnabled, setAgentBackends]);
 
   // Listen for OS light/dark changes and switch theme when mode is "system".
   useEffect(() => {
