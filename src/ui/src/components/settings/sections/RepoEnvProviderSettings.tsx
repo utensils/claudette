@@ -36,8 +36,19 @@ export function RepoEnvProviderSettings({ repoId }: RepoEnvProviderSettingsProps
   const refresh = useCallback(async () => {
     try {
       const all = await listClaudettePlugins();
+      // Only list providers that are globally enabled. A plugin
+      // disabled in Settings → Plugins won't run anyway (the runtime
+      // short-circuits with `PluginDisabled` regardless of per-repo
+      // overrides), so showing its config form here would mislead the
+      // user into thinking they could re-enable it just for this repo
+      // — they can't. Disabling globally is the only path to disable a
+      // provider; per-repo overrides exist only to *tune* an enabled
+      // provider's behavior. Hiding disabled providers also keeps the
+      // panel from drifting out of sync with what the global Plugins
+      // page shows as the source of truth.
       const envProviders = all.filter(
-        (p) => p.kind === "env-provider" && p.settings_schema.length > 0,
+        (p) =>
+          p.kind === "env-provider" && p.enabled && p.settings_schema.length > 0,
       );
       const overridesByPlugin: Record<string, Record<string, unknown>> = {};
       await Promise.all(
