@@ -4,10 +4,13 @@ import type { AppState } from "../useAppStore";
 
 export interface ScmSlice {
   scmSummary: Record<string, ScmSummary>;
-  scmDetail: ScmDetail | null;
+  /** Full PR+CI detail keyed by workspace_id. Populated at boot from SQLite
+   *  cache and kept fresh by background polling events — so workspace switches
+   *  can show instant state without a network round-trip. */
+  scmDetails: Record<string, ScmDetail>;
   scmDetailLoading: boolean;
   setScmSummary: (wsId: string, summary: ScmSummary) => void;
-  setScmDetail: (detail: ScmDetail | null) => void;
+  setScmDetail: (detail: ScmDetail) => void;
   setScmDetailLoading: (loading: boolean) => void;
 }
 
@@ -15,12 +18,15 @@ export const createScmSlice: StateCreator<AppState, [], [], ScmSlice> = (
   set,
 ) => ({
   scmSummary: {},
-  scmDetail: null,
+  scmDetails: {},
   scmDetailLoading: false,
   setScmSummary: (wsId, summary) =>
     set((s) => ({
       scmSummary: { ...s.scmSummary, [wsId]: summary },
     })),
-  setScmDetail: (detail) => set({ scmDetail: detail }),
+  setScmDetail: (detail) =>
+    set((s) => ({
+      scmDetails: { ...s.scmDetails, [detail.workspace_id]: detail },
+    })),
   setScmDetailLoading: (loading) => set({ scmDetailLoading: loading }),
 });

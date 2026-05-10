@@ -231,6 +231,71 @@ async fn create_inner(
     })
 }
 
+/// Build the platform-default shell invocation Claudette uses to run
+/// user setup / archive scripts.
+///
+/// POSIX hosts get `sh -c <script>`; Windows gets `cmd.exe /S /C <script>`
+/// so a stock install (no Git Bash on PATH) can still execute scripts —
+/// this matches the shape `commands/settings.rs::build_notification_command`
+/// already uses for user-supplied notification commands. Common spawn
+/// configuration (cwd, enriched PATH, piped stdio, Unix process group for
+/// timeout-driven SIGKILL of the entire subtree) is applied here so the
+/// two callers — setup and archive — stay byte-identical.
+fn build_script_command(script: &str, worktree_path: &Path) -> TokioCommand {
+    #[cfg(not(windows))]
+    let mut cmd = {
+        let mut c = TokioCommand::new("sh");
+        c.arg("-c").arg(script);
+        c
+    };
+    #[cfg(windows)]
+    let mut cmd = {
+        let mut c = TokioCommand::new("cmd.exe");
+        // /S = leave the rest of the command line alone (no double-quote
+        // stripping); /C = run the command and exit. Same flags used by
+        // the notification-command builder.
+        c.arg("/S").arg("/C").arg(script);
+        c
+    };
+    cmd.no_console_window();
+    cmd.current_dir(worktree_path)
+        .env("PATH", enriched_path())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    // Process group on Unix so a timeout SIGKILL hits every grandchild
+    // (e.g. `npm install` spawns workers that wouldn't exit otherwise).
+    // Windows has no process-group signal — the timeout path runs
+    // `taskkill /T /F` on the child PID (see [`kill_script_subtree`])
+    // before falling through to `child.kill().await` as belt-and-
+    // suspenders.
+    #[cfg(unix)]
+    cmd.process_group(0);
+    cmd
+}
+
+/// Best-effort termination of a hung setup / archive script and every
+/// descendant it spawned. Runs in the timeout arm of both
+/// [`resolve_and_run_setup`] and [`resolve_and_run_archive`] before the
+/// caller's `child.kill().await`.
+///
+/// On Unix the caller does the work itself with `kill(-pgid, SIGKILL)`
+/// — the spawn set `process_group(0)`, so a single syscall fells the
+/// whole tree. On Windows there is no equivalent: `child.kill()` is
+/// `TerminateProcess` on the immediate child only, so a hung
+/// `npm install` would leave its compiler/installer workers orphaned to
+/// the desktop session. `taskkill /T /F` walks the per-PID descendant
+/// tree the kernel already tracks and force-terminates everything in
+/// one call. Errors are ignored because `child.kill().await` is the
+/// fallback and we're already in a "we don't care, just kill it" path.
+#[cfg(windows)]
+async fn kill_script_subtree(pid: u32) {
+    let _ = TokioCommand::new("taskkill")
+        .no_console_window()
+        .args(["/PID", &pid.to_string(), "/T", "/F"])
+        .output()
+        .await;
+}
+
 /// Resolve the setup script (preferring `.claudette.json`, falling back to
 /// the per-repo settings script) and execute it. Returns `None` when no
 /// script is configured — the common case for newly-added repositories.
@@ -294,20 +359,7 @@ pub async fn resolve_and_run_setup(
     };
     let ws_env = WorkspaceEnv::from_workspace(ws, &repo_path_str, default_branch);
 
-    // Process group on Unix so a timeout SIGKILL hits every grandchild
-    // (e.g. `npm install` spawns workers that wouldn't exit otherwise).
-    // Windows has no process-group signal — `child.kill()` only terminates
-    // the immediate child there.
-    let mut cmd = TokioCommand::new("sh");
-    cmd.no_console_window();
-    cmd.arg("-c")
-        .arg(&script)
-        .current_dir(worktree_path)
-        .env("PATH", enriched_path())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped());
-    #[cfg(unix)]
-    cmd.process_group(0);
+    let mut cmd = build_script_command(&script, worktree_path);
     if let Some(env) = resolved_env {
         env.apply(&mut cmd);
     }
@@ -326,7 +378,6 @@ pub async fn resolve_and_run_setup(
         }
     };
 
-    #[cfg(unix)]
     let pid = child.id();
 
     let stdout_handle = child.stdout.take();
@@ -384,6 +435,10 @@ pub async fn resolve_and_run_setup(
                 unsafe {
                     libc::kill(-(pgid as i32), libc::SIGKILL);
                 }
+            }
+            #[cfg(windows)]
+            if let Some(child_pid) = pid {
+                kill_script_subtree(child_pid).await;
             }
             let _ = child.kill().await;
             let _ = child.wait().await;
@@ -471,16 +526,7 @@ pub async fn resolve_and_run_archive(
     };
     let ws_env = WorkspaceEnv::from_workspace(ws, &repo_path_str, default_branch);
 
-    let mut cmd = TokioCommand::new("sh");
-    cmd.no_console_window();
-    cmd.arg("-c")
-        .arg(&script)
-        .current_dir(worktree_path)
-        .env("PATH", enriched_path())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped());
-    #[cfg(unix)]
-    cmd.process_group(0);
+    let mut cmd = build_script_command(&script, worktree_path);
     if let Some(env) = resolved_env {
         env.apply(&mut cmd);
     }
@@ -499,7 +545,6 @@ pub async fn resolve_and_run_archive(
         }
     };
 
-    #[cfg(unix)]
     let pid = child.id();
 
     let stdout_handle = child.stdout.take();
@@ -557,6 +602,10 @@ pub async fn resolve_and_run_archive(
                 unsafe {
                     libc::kill(-(pgid as i32), libc::SIGKILL);
                 }
+            }
+            #[cfg(windows)]
+            if let Some(child_pid) = pid {
+                kill_script_subtree(child_pid).await;
             }
             let _ = child.kill().await;
             let _ = child.wait().await;
@@ -976,5 +1025,100 @@ mod tests {
             vec![WorkspaceChangeKind::Created, WorkspaceChangeKind::Archived,],
             "delete_branch=false must keep emitting Archived"
         );
+    }
+
+    /// `build_script_command` must produce a Command that actually runs
+    /// the user-supplied script on the host's default shell — `sh -c` on
+    /// Unix and `cmd.exe /S /C` on Windows. Before the cross-platform
+    /// gating was added, every Windows host without Git Bash on PATH
+    /// failed setup-script execution with an opaque ENOENT.
+    ///
+    /// We assert the contract end-to-end: spawn the helper with a
+    /// trivial `echo` (recognised by both shells), run the command,
+    /// and read the stdout the script actually produced.
+    #[tokio::test]
+    async fn build_script_command_executes_on_host_shell() {
+        let cwd = tempfile::tempdir().unwrap();
+        // `echo hello` is a builtin on both `cmd.exe` and POSIX shells,
+        // so the test is independent of any external binary on PATH.
+        let mut cmd = build_script_command("echo hello", cwd.path());
+        let output = cmd.output().await.expect("spawn host shell");
+        assert!(
+            output.status.success(),
+            "host shell exited non-zero: status={:?} stderr={}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr),
+        );
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        // Trim because Windows `cmd.exe /C echo hello` emits "hello\r\n"
+        // and POSIX `sh -c 'echo hello'` emits "hello\n".
+        assert_eq!(
+            stdout.trim(),
+            "hello",
+            "expected `echo hello` stdout, got {stdout:?}",
+        );
+    }
+
+    /// `kill_script_subtree` must terminate a hung script's full
+    /// descendant tree on Windows, not just the `cmd.exe` root. Spawn a
+    /// shell with a long-lived backgrounded child (`ping -n 30`) plus an
+    /// inline child (`ping -n 30`), call the helper against the root
+    /// PID, and assert both root and children are gone.
+    ///
+    /// This is the contract the setup/archive timeout arm relies on —
+    /// pre-fix the timeout only ran `child.kill()` (TerminateProcess on
+    /// the immediate child) so backgrounded `npm install` workers
+    /// orphaned to the desktop session.
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn kill_script_subtree_terminates_grandchildren() {
+        use std::time::Duration;
+
+        let mut child = TokioCommand::new("cmd.exe")
+            .no_console_window()
+            .args([
+                "/C",
+                "start /B ping -n 30 127.0.0.1 >NUL & ping -n 30 127.0.0.1 >NUL",
+            ])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("spawn cmd.exe");
+
+        let root_pid = child.id().expect("child pid");
+
+        // Give the shell a beat to fork its descendants.
+        tokio::time::sleep(Duration::from_millis(250)).await;
+
+        kill_script_subtree(root_pid).await;
+
+        // Wait the child handle so its in-process state matches reality.
+        // `taskkill /T /F` is fast (<100ms typical), but we still bound
+        // the wait so a misbehaving Windows host can't hang the suite.
+        let waited = tokio::time::timeout(Duration::from_secs(5), child.wait()).await;
+        assert!(
+            waited.is_ok(),
+            "child did not exit within 5 s after kill_script_subtree"
+        );
+
+        // Spot-check the root is dead. Use the same OpenProcess probe
+        // the CLI's discovery reader uses for stale-file detection so
+        // the assertion exercises a path we already test elsewhere.
+        use windows_sys::Win32::Foundation::{CloseHandle, STILL_ACTIVE};
+        use windows_sys::Win32::System::Threading::{
+            GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+        };
+        let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, root_pid) };
+        if !handle.is_null() {
+            let mut code: u32 = 0;
+            let ok = unsafe { GetExitCodeProcess(handle, &mut code) };
+            unsafe { CloseHandle(handle) };
+            assert!(
+                ok == 0 || code as i32 != STILL_ACTIVE,
+                "root pid {root_pid} still STILL_ACTIVE after kill_script_subtree"
+            );
+        }
+        // If OpenProcess returned NULL the PID is gone — that's the
+        // happy case, no further assertion needed.
     }
 }

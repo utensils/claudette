@@ -421,6 +421,14 @@ async fn host_exec(
         args.push(arg);
     }
 
+    // Pre-check the worktree directory still exists. Without this, a
+    // user-deleted worktree would surface here as a misleading
+    // `MISSING_CLI:<tool>` (because `Command::spawn` returns
+    // `ErrorKind::NotFound` for both a failed chdir and a failed exec).
+    // See [`crate::missing_cli`] module docs.
+    crate::missing_cli::precheck_cwd(std::path::Path::new(&ctx.workspace_info.worktree_path))
+        .map_err(LuaError::external)?;
+
     // Build and execute the command with kill_on_drop so timed-out
     // processes don't leak.
     let mut command = Command::new(cmd);

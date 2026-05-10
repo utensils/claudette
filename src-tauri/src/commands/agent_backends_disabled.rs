@@ -26,6 +26,8 @@ pub struct BackendStatus {
 pub struct BackendListResponse {
     pub backends: Vec<AgentBackendConfig>,
     pub default_backend_id: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -45,6 +47,7 @@ pub async fn list_agent_backends(
     Ok(BackendListResponse {
         backends: vec![AgentBackendConfig::builtin_anthropic()],
         default_backend_id: "anthropic".to_string(),
+        warnings: Vec::new(),
     })
 }
 

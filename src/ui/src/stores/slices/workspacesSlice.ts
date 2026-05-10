@@ -157,6 +157,16 @@ export const createWorkspacesSlice: StateCreator<
       delete newTabOrder[id];
       const newWorkspaceEnvironment = { ...s.workspaceEnvironment };
       delete newWorkspaceEnvironment[id];
+      // Drop cached SCM state so the maps don't grow unboundedly and so a
+      // workspace id reused later (restore-from-archive collision) can't
+      // surface stale PR/CI data before the next poll completes. The
+      // SQLite cache row is handled separately by the Rust archive path
+      // (ON DELETE CASCADE on scm_status_cache, plus an explicit delete
+      // in `archive_workspace_inner`).
+      const newScmSummary = { ...s.scmSummary };
+      delete newScmSummary[id];
+      const newScmDetails = { ...s.scmDetails };
+      delete newScmDetails[id];
       return {
         workspaces: s.workspaces.filter((w) => w.id !== id),
         selectedWorkspaceId:
@@ -173,6 +183,8 @@ export const createWorkspacesSlice: StateCreator<
         chatDrafts: newChatDrafts,
         tabOrderByWorkspace: newTabOrder,
         workspaceEnvironment: newWorkspaceEnvironment,
+        scmSummary: newScmSummary,
+        scmDetails: newScmDetails,
       };
     }),
   selectWorkspace: (id) =>

@@ -108,11 +108,39 @@ fn pid_alive(pid: u32) -> bool {
 }
 
 #[cfg(windows)]
-fn pid_alive(_pid: u32) -> bool {
-    // TODO(windows): use OpenProcess + GetExitCodeProcess. For now,
-    // assume alive — the IPC connect will fail with a clear error if
-    // the process is actually gone, so this just defers the diagnostic.
-    true
+fn pid_alive(pid: u32) -> bool {
+    // Mirrors `claudette-tauri::boot_probation::is_pid_alive`: open the
+    // process with the most narrowly scoped right that lets us call
+    // `GetExitCodeProcess`, then treat `STILL_ACTIVE` (259) as "alive"
+    // and any other exit code (or `OpenProcess` returning NULL because
+    // the PID is gone or a security descriptor we can't probe) as
+    // "dead". A failed probe collapses to "dead" so the caller surfaces
+    // the cleaner `Stale { pid }` diagnostic instead of waiting for the
+    // IPC dial to fail with a generic "connect refused".
+    use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE, STILL_ACTIVE};
+    use windows_sys::Win32::System::Threading::{
+        GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+    };
+    if pid == 0 {
+        return false;
+    }
+    // SAFETY: OpenProcess with a non-null PID either returns a valid
+    // handle or NULL on failure. We always close a non-null handle.
+    let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
+    if handle.is_null() || handle == INVALID_HANDLE_VALUE {
+        return false;
+    }
+    let mut code: u32 = 0;
+    // SAFETY: handle is a valid process handle; code is a writable u32.
+    let ok = unsafe { GetExitCodeProcess(handle, &mut code) };
+    // SAFETY: handle is non-null and we own it.
+    unsafe {
+        CloseHandle(handle);
+    }
+    if ok == 0 {
+        return false;
+    }
+    code as i32 == STILL_ACTIVE
 }
 
 #[cfg(not(any(unix, windows)))]

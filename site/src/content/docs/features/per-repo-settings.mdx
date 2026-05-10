@@ -26,7 +26,7 @@ python -m venv .venv && source .venv/bin/activate && pip install -r requirements
 mix deps.get && mix ecto.setup
 ```
 
-The script runs in the workspace's worktree directory using your default shell. [Workspace environment variables](/claudette/features/settings/#environment-variables) like `$CLAUDETTE_WORKSPACE_NAME` and `$CLAUDETTE_ROOT_PATH` are available in setup scripts.
+The script runs in the workspace's worktree directory using your platform's default shell — `sh -c` on macOS and Linux, `cmd.exe /S /C` on Windows — so write the script in whichever syntax matches your host. [Workspace environment variables](/claudette/features/settings/#environment-variables) like `$CLAUDETTE_WORKSPACE_NAME` and `$CLAUDETTE_ROOT_PATH` are available in setup scripts (use `%CLAUDETTE_WORKSPACE_NAME%` etc. in `cmd.exe`).
 
 By default, Claudette shows a confirmation modal with the script contents before running it. Tick **Skip confirmation when running setup scripts** in the repo settings (or **Always run setup scripts for this repo** in the modal) to opt into auto-run for that repository.
 
@@ -47,7 +47,7 @@ git stash push -u -m "claudette archive"
 docker compose down
 ```
 
-The script runs in the workspace's worktree directory and has access to the same workspace environment variables as setup scripts. The worktree is still on disk while the script runs, so any commands that need to read workspace files will work as expected.
+The script runs in the workspace's worktree directory through the same platform shell as the setup script (`sh -c` on macOS/Linux, `cmd.exe /S /C` on Windows) and has access to the same workspace environment variables. The worktree is still on disk while the script runs, so any commands that need to read workspace files will work as expected.
 
 By default, Claudette prompts before archiving when an archive script is configured — the modal shows the script contents and lets you choose **Run & Archive** or **Archive without running**. Tick **Skip confirmation when running archive scripts** in repo settings (or **Always run archive scripts for this repo** in the modal) to skip the prompt for that repository.
 

@@ -1,26 +1,40 @@
 //! Best-effort termination of a process and everything it spawned.
 //!
-//! Why we can't just `kill(-pgid, …)`: `cargo-watch`, `nohup`, `setsid` and
-//! similar tools deliberately put their child commands into a new session or
-//! process group so signals to the parent's PG don't propagate. Signaling the
-//! shell's PG kills the shell + immediate-child commands but leaves the
-//! grandchildren running, orphaned to PID 1.
+//! Why we can't just `kill(-pgid, …)` on Unix: `cargo-watch`, `nohup`,
+//! `setsid` and similar tools deliberately put their child commands into a
+//! new session or process group so signals to the parent's PG don't
+//! propagate. Signaling the shell's PG kills the shell + immediate-child
+//! commands but leaves the grandchildren running, orphaned to PID 1.
 //!
-//! Approach: walk the process tree via `ps -A -o pid,ppid` (works on macOS
-//! and Linux without extra deps), enumerate every descendant of each root,
-//! then SIGTERM the whole set in parallel with a brief grace period before
-//! escalating to SIGKILL. Crucially, descendants are collected BEFORE the
-//! roots are killed — once the shell dies, its children re-parent to PID 1
-//! and become unreachable via ancestry walk.
+//! Unix approach: walk the process tree via `ps -A -o pid,ppid` (works on
+//! macOS and Linux without extra deps), enumerate every descendant of each
+//! root, then SIGTERM the whole set in parallel with a brief grace period
+//! before escalating to SIGKILL. Crucially, descendants are collected
+//! BEFORE the roots are killed — once the shell dies, its children
+//! re-parent to PID 1 and become unreachable via ancestry walk.
+//!
+//! Windows approach: `taskkill /T` already walks the per-PID descendant
+//! tree (it traverses the parent-PID + Job Object ancestry inside the
+//! kernel) and signals every entry, so we don't enumerate ourselves. We
+//! still want the same two-phase shape — graceful close first, then a
+//! force escalation after a poll window — so a friendly child like
+//! `cargo-watch` gets a chance to clean up before we hard-kill it.
+
+use std::time::{Duration, Instant};
 
 #[cfg(unix)]
 use std::collections::HashMap;
-#[cfg(unix)]
-use std::time::{Duration, Instant};
+
+#[cfg(windows)]
+use claudette::process::CommandWindowExt as _;
 
 /// Walk the process tree from each root and return every descendant PID
 /// (not including the roots themselves). Single `ps` invocation regardless
 /// of how many roots are provided.
+///
+/// Unix-only — kept public so the Unix unit tests can introspect tree
+/// shape. Windows uses `taskkill /T` for the descendant traversal and
+/// never needs to enumerate the tree from user space.
 #[cfg(unix)]
 pub fn collect_descendants(roots: &[i32]) -> Vec<i32> {
     let output = match std::process::Command::new("ps")
@@ -87,6 +101,81 @@ pub fn kill_processes_with_descendants(roots: &[i32], grace_ms: u64) {
     for &pid in &all {
         unsafe { libc::kill(pid, libc::SIGKILL) };
     }
+}
+
+/// Windows analog. `taskkill /T <pid>` sends `WM_CLOSE` (and a
+/// CTRL_CLOSE_EVENT to console subsystem children) to the per-PID
+/// descendant tree, giving cooperative children a chance to flush; after
+/// the grace window we escalate any survivor to `taskkill /T /F`, which
+/// calls `TerminateProcess` on the whole subtree.
+///
+/// We never `taskkill` from inside the helper itself in `RunEvent::Exit`
+/// — the parent process is *us*, and `/T` would happily kill the still-
+/// running tokio runtime. The roots passed in are exclusively child PIDs
+/// that Claudette itself spawned (PTY shells, agent CLI subprocesses).
+#[cfg(windows)]
+pub fn kill_processes_with_descendants(roots: &[i32], grace_ms: u64) {
+    let roots: Vec<i32> = roots.iter().copied().filter(|&p| p > 0).collect();
+    if roots.is_empty() {
+        return;
+    }
+
+    // Phase 1: graceful taskkill /T (per-root subtree).
+    for &pid in &roots {
+        let _ = std::process::Command::new("taskkill")
+            .no_console_window()
+            .args(["/PID", &pid.to_string(), "/T"])
+            .output();
+    }
+
+    // Phase 2: poll for exit. `OpenProcess + GetExitCodeProcess` mirrors
+    // the pattern in `boot_probation::is_pid_alive` — same narrowly-scoped
+    // `PROCESS_QUERY_LIMITED_INFORMATION` right.
+    let deadline = Instant::now() + Duration::from_millis(grace_ms);
+    while Instant::now() < deadline {
+        let any_alive = roots.iter().any(|&p| pid_is_alive(p as u32));
+        if !any_alive {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+
+    // Phase 3: force-kill the subtree.
+    for &pid in &roots {
+        let _ = std::process::Command::new("taskkill")
+            .no_console_window()
+            .args(["/PID", &pid.to_string(), "/T", "/F"])
+            .output();
+    }
+}
+
+/// Liveness probe for the Windows poll loop above.
+#[cfg(windows)]
+fn pid_is_alive(pid: u32) -> bool {
+    use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE, STILL_ACTIVE};
+    use windows_sys::Win32::System::Threading::{
+        GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+    };
+    if pid == 0 {
+        return false;
+    }
+    // SAFETY: OpenProcess with a non-null PID either returns a valid
+    // handle or NULL on failure. We always close a non-null handle.
+    let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
+    if handle.is_null() || handle == INVALID_HANDLE_VALUE {
+        return false;
+    }
+    let mut code: u32 = 0;
+    // SAFETY: handle is a valid process handle; code is a writable u32.
+    let ok = unsafe { GetExitCodeProcess(handle, &mut code) };
+    // SAFETY: handle is non-null and we own it.
+    unsafe {
+        CloseHandle(handle);
+    }
+    if ok == 0 {
+        return false;
+    }
+    code as i32 == STILL_ACTIVE
 }
 
 #[cfg(test)]
@@ -166,5 +255,42 @@ mod tests {
         for pid in &descendants_before {
             assert!(!pid_alive(*pid), "descendant {pid} still alive");
         }
+    }
+}
+
+#[cfg(test)]
+#[cfg(windows)]
+mod tests_windows {
+    use super::*;
+    use std::process::{Command, Stdio};
+
+    /// `cmd /c "start /B ping -n 30 127.0.0.1 & ping -n 30 127.0.0.1"` spawns
+    /// `cmd.exe` as the root with a backgrounded `ping` and an inline `ping`
+    /// — two long-lived descendants. `kill_processes_with_descendants`
+    /// should bring all three down within the grace window.
+    #[test]
+    fn kill_with_descendants_terminates_subtree_windows() {
+        let mut child = Command::new("cmd.exe")
+            .args([
+                "/C",
+                "start /B ping -n 30 127.0.0.1 >NUL & ping -n 30 127.0.0.1 >NUL",
+            ])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .stdin(Stdio::null())
+            .spawn()
+            .expect("spawn cmd.exe");
+        let root = child.id() as i32;
+
+        // Give the cmd shell a moment to fork its descendants.
+        std::thread::sleep(Duration::from_millis(250));
+
+        kill_processes_with_descendants(&[root], 500);
+
+        // Reap so the test process doesn't leak a zombie handle.
+        let _ = child.wait();
+
+        // Root must be gone.
+        assert!(!pid_is_alive(root as u32), "root {root} still alive");
     }
 }

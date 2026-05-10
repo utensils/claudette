@@ -403,11 +403,12 @@ pub async fn close_pty(pty_id: u64, state: State<'_, AppState>) -> Result<(), St
     if let Ok(mut child) = handle.child.into_inner() {
         // Walk the shell's subtree and kill every descendant before the
         // shell itself, so cargo-watch-style grandchildren don't survive
-        // by being orphaned to launchd. 100ms grace for graceful exit.
-        // The walk shells out to `ps` and uses `std::thread::sleep` for
-        // the grace window — wrap in spawn_blocking so we don't block
-        // a tokio worker for the duration.
-        #[cfg(unix)]
+        // by being orphaned to launchd / the Windows desktop. 100 ms
+        // grace for graceful exit. On Unix the walk shells out to `ps`;
+        // on Windows it shells out to `taskkill /T` and uses
+        // `std::thread::sleep` for the grace window — wrap in
+        // spawn_blocking so we don't block a tokio worker for the
+        // duration either way.
         if let Some(pid) = child.process_id() {
             let _ = tokio::task::spawn_blocking(move || {
                 crate::subprocess_cleanup::kill_processes_with_descendants(&[pid as i32], 100);

@@ -1217,14 +1217,15 @@ fn migrate_legacy_env_provider_trust(db: &claudette::db::Database) {
 
 /// `RunEvent::Exit` is the last hook before the Tauri runtime tears down,
 /// so anything Claudette spawned that we haven't already reaped will
-/// re-parent to PID 1 if we don't kill it here.
+/// re-parent to PID 1 (Unix) or be left running detached on the desktop
+/// session (Windows) if we don't kill it here.
 ///
 /// We treat PTY shells and persistent Claude CLI agents the same way: each
 /// is a "root" whose entire descendant tree must die. `cargo-watch` and
 /// similar tools deliberately put their grandchildren into a fresh
 /// session/PG, so signaling the root's process group leaves them behind —
-/// the subtree walk in `subprocess_cleanup` is the reliable path.
-#[cfg(unix)]
+/// the subtree walk in `subprocess_cleanup` is the reliable path on both
+/// platforms (Unix walks `ps`, Windows shells out to `taskkill /T`).
 fn cleanup_subprocesses_on_exit(app_state: &state::AppState) {
     let mut roots: Vec<i32> = Vec::new();
 
@@ -1272,13 +1273,13 @@ fn shutdown_runtime_handler(_app: &tauri::AppHandle, _event: tauri::RunEvent) {
 
             // Kill all spawned children (PTY shells + Claude CLI agent
             // subprocesses) before our process dies, otherwise they
-            // re-parent to launchd and survive — the user has to hunt
-            // them down with `ps`. Each root's full descendant tree is
-            // walked via `subprocess_cleanup` and signaled in parallel,
-            // which catches grandchildren detached into a fresh
-            // session/PG (e.g. cargo-watch's nxv serve) that a plain
-            // PG signal would miss.
-            #[cfg(unix)]
+            // re-parent to launchd / the Windows desktop and survive —
+            // the user has to hunt them down with `ps` / Task Manager.
+            // Each root's full descendant tree is walked via
+            // `subprocess_cleanup` and signaled in parallel, which
+            // catches grandchildren detached into a fresh session/PG
+            // (e.g. cargo-watch's nxv serve) that a plain PG signal —
+            // or a bare TerminateProcess on Windows — would miss.
             cleanup_subprocesses_on_exit(&app_state);
 
             // try_write avoids blocking if another thread holds the lock

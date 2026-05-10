@@ -160,7 +160,8 @@ function App() {
         // exactly the kind of regression we want the rollback to
         // catch — see the comment on the `bootOk` useEffect above.
         setInitialDataLoaded(true);
-        // Hydrate SCM summaries from persisted cache for instant sidebar display.
+        // Hydrate SCM summaries and detail from persisted cache so sidebar
+        // badges and the PR banner show instantly without a network call.
         for (const row of data.scm_cache) {
           if (row.pr_json == null) continue;
           try {
@@ -178,12 +179,24 @@ function App() {
             const checks = Array.isArray(parsedChecks)
               ? (parsedChecks as import("./types/plugin").CiCheck[])
               : [];
-            useAppStore.getState().setScmSummary(row.workspace_id, {
+            const store = useAppStore.getState();
+            store.setScmSummary(row.workspace_id, {
               hasPr: pr !== null,
               prState: pr?.state ?? null,
               ciState: pr ? deriveScmCiState(pr.ci_status, checks) : null,
               lastUpdated: new Date(row.fetched_at.replace(" ", "T") + "Z").getTime(),
             });
+            // Also seed the per-workspace detail map so selecting any workspace
+            // shows the PR banner immediately instead of waiting for a fetch.
+            if (pr) {
+              store.setScmDetail({
+                workspace_id: row.workspace_id,
+                pull_request: pr,
+                ci_checks: checks,
+                provider: row.provider ?? null,
+                error: row.error ?? null,
+              });
+            }
           } catch {
             // Corrupted cache entry — skip silently, will be refreshed by polling.
           }
@@ -541,19 +554,44 @@ function App() {
           : null,
         lastUpdated: Date.now(),
       });
-      // Update detail if this is the selected workspace
-      if (store.selectedWorkspaceId === detail.workspace_id) {
-        store.setScmDetail(detail);
-      }
+      // Update per-workspace detail for all polled workspaces so switching
+      // to any of them shows the PR banner immediately without a new fetch.
+      store.setScmDetail(detail);
     });
 
-    // Listen for missing-CLI events (claude/git/gh not on PATH). Routes to the
-    // MissingCliModal so users see platform-specific install guidance instead
-    // of a raw subprocess error.
+    // Listen for missing-CLI events (claude/git/gh not on PATH).
+    //
+    // The store decides whether to auto-open the modal — first occurrence
+    // per tool opens it (so non-chat surfaces like auth, repository, SCM,
+    // and plugin-settings keep their direct-modal UX), but once the user
+    // dismisses the modal for a given tool, subsequent events only refresh
+    // the cache. This keeps a high-frequency surface like chat-send from
+    // re-popping the modal on every retry while still letting non-chat
+    // surfaces show install guidance the first time. The inline "View
+    // install options" link in `ChatErrorBanner` calls
+    // `openMissingCliModal()`, which clears the dismissal — explicit user
+    // action overrides the snooze.
     const unlistenMissingCli = listen<import("./components/modals/MissingCliModal").MissingCliData>(
       "missing-dependency",
       (event) => {
-        useAppStore.getState().openModal("missingCli", event.payload as unknown as Record<string, unknown>);
+        useAppStore
+          .getState()
+          .reportMissingCli(event.payload as unknown as Record<string, unknown>);
+      },
+    );
+
+    // Listen for missing-worktree events. Emitted when a chat / plugin spawn
+    // tries to chdir into a worktree directory that has been deleted out
+    // from under us. We cache the path so per-workspace UI (chat error
+    // banner, sidebar warning) can surface a recovery affordance instead of
+    // letting a confusing chained error cascade — historically this case
+    // showed up in the UI as "Claude CLI not installed" because chdir(2)
+    // and execvp(2) both surface as `ErrorKind::NotFound` from
+    // `Command::spawn()`.
+    const unlistenMissingWorktree = listen<{ worktree_path: string }>(
+      "missing-worktree",
+      (event) => {
+        useAppStore.getState().setLastMissingWorktree(event.payload.worktree_path);
       },
     );
 
@@ -733,6 +771,7 @@ function App() {
       unlistenChatTurnSettings.then((fn) => fn());
       unlistenChatTurnStarted.then((fn) => fn());
       unlistenMissingCli.then((fn) => fn());
+      unlistenMissingWorktree.then((fn) => fn());
     };
   }, [setRepositories, setWorkspaces, setWorktreeBaseDir, setDefaultTerminalAppId, setDefaultBranches, setTerminalFontSize, setLastMessages, setRemoteConnections, setDiscoveredServers, setLocalServerRunning, setLocalServerConnectionString, setCurrentThemeId, setThemeMode, setThemeDark, setThemeLight, setUiFontSize, setFontFamilySans, setFontFamilyMono, setSystemFonts, setDetectedApps, setUsageInsightsEnabled, setClaudetteTerminalEnabled, setShowSidebarRunningCommands, setToolDisplayMode, setExtendedToolCallOutput, setPluginManagementEnabled, setClaudeRemoteControlEnabled, setCommunityRegistryEnabled, setAlternativeBackendsAvailable, setAlternativeBackendsEnabled, setAgentBackends, setDefaultAgentBackendId, setEditorGitGutterBase, setEditorMinimapEnabled, setDisable1mContext, setAppVersion, setVoiceToggleHotkey, setVoiceHoldHotkey, setKeybindings, setManualWorkspaceOrderByRepo]);
 

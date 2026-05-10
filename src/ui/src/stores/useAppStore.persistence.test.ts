@@ -292,3 +292,63 @@ describe("clearDiff resets selection map", () => {
     expect(useAppStore.getState().diffSelectionByWorkspace).toEqual({});
   });
 });
+
+// ---------- SCM cleanup ----------
+
+describe("SCM cleanup on workspace/repository removal", () => {
+  beforeEach(() => {
+    reset();
+    useAppStore.setState({
+      repositories: [makeRepository("r1")],
+      scmSummary: {
+        "ws-a": { hasPr: true, prState: "open", ciState: "success", lastUpdated: 0 },
+        "ws-b": { hasPr: false, prState: null, ciState: null, lastUpdated: 0 },
+      },
+      scmDetails: {
+        "ws-a": {
+          workspace_id: "ws-a",
+          pull_request: {
+            number: 1,
+            title: "t",
+            state: "open",
+            url: "",
+            author: "",
+            branch: "",
+            base: "",
+            draft: false,
+            ci_status: "success",
+          },
+          ci_checks: [],
+          provider: "github",
+          error: null,
+        },
+        "ws-b": {
+          workspace_id: "ws-b",
+          pull_request: null,
+          ci_checks: [],
+          provider: "github",
+          error: null,
+        },
+      },
+    });
+  });
+
+  // Without these cleanups the maps grow unboundedly across remove/restore
+  // cycles, and a workspace id reused later would surface stale PR/banner
+  // state before the next poll completes.
+  it("removeWorkspace evicts scmSummary and scmDetails for that id only", () => {
+    useAppStore.getState().removeWorkspace("ws-a");
+    const state = useAppStore.getState();
+    expect(state.scmSummary["ws-a"]).toBeUndefined();
+    expect(state.scmDetails["ws-a"]).toBeUndefined();
+    expect(state.scmSummary["ws-b"]).toBeDefined();
+    expect(state.scmDetails["ws-b"]).toBeDefined();
+  });
+
+  it("removeRepository evicts scmSummary and scmDetails for every workspace under it", () => {
+    useAppStore.getState().removeRepository("r1");
+    const state = useAppStore.getState();
+    expect(state.scmSummary).toEqual({});
+    expect(state.scmDetails).toEqual({});
+  });
+});

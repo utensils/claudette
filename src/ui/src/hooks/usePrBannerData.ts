@@ -37,20 +37,25 @@ export function usePrBannerData(): {
   const scmSummary = useAppStore((s) =>
     selectedWorkspaceId ? s.scmSummary[selectedWorkspaceId] : undefined
   );
-  const scmDetail = useAppStore((s) => s.scmDetail);
+  // Per-workspace detail: populated at boot from SQLite cache and kept fresh
+  // by polling events, so switching workspaces shows instant state.
+  const scmDetail = useAppStore((s) =>
+    selectedWorkspaceId ? s.scmDetails[selectedWorkspaceId] : undefined
+  );
   const setScmDetail = useAppStore((s) => s.setScmDetail);
   const setScmDetailLoading = useAppStore((s) => s.setScmDetailLoading);
   const setScmSummary = useAppStore((s) => s.setScmSummary);
 
+  // Guards against concurrent in-flight fetches for the same workspace.
   const fetchedForRef = useRef<string | null>(null);
 
   useEffect(() => {
     if (!selectedWorkspaceId) return;
     if (!scmSummary?.hasPr) return;
 
-    // Already have detail for this workspace
-    if (scmDetail?.workspace_id === selectedWorkspaceId) return;
-    // Already fetched for this workspace
+    // Detail already loaded for this workspace (from cache or prior fetch).
+    if (scmDetail) return;
+    // Fetch already in-flight for this workspace.
     if (fetchedForRef.current === selectedWorkspaceId) return;
 
     fetchedForRef.current = selectedWorkspaceId;
@@ -79,24 +84,20 @@ export function usePrBannerData(): {
         }
       })
       .catch(() => {
-        // Reset so a retry is possible on next render cycle
+        // Reset so a retry is possible on next render cycle.
         fetchedForRef.current = null;
       })
       .finally(() => setScmDetailLoading(false));
   }, [
     selectedWorkspaceId,
     scmSummary?.hasPr,
-    scmDetail?.workspace_id,
+    scmDetail,
     setScmDetail,
     setScmDetailLoading,
     setScmSummary,
   ]);
 
-  if (
-    !selectedWorkspaceId ||
-    !scmDetail?.pull_request ||
-    scmDetail.workspace_id !== selectedWorkspaceId
-  ) {
+  if (!selectedWorkspaceId || !scmDetail?.pull_request) {
     return { pr: null, checks: [], status: null };
   }
 

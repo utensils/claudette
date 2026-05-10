@@ -166,6 +166,11 @@ pub async fn generate_branch_name(
     // Truncate prompt to keep the Haiku call fast and cheap.
     let truncated: String = prompt_text.chars().take(200).collect();
 
+    // Pre-check the working directory exists — a deleted worktree would
+    // otherwise surface as a misleading MISSING_CLI sentinel (see
+    // [`crate::missing_cli`] module docs).
+    crate::missing_cli::precheck_cwd(std::path::Path::new(worktree_path))?;
+
     let claude_path = resolve_claude_path().await;
     let mut cmd = Command::new(&claude_path);
     cmd.no_console_window();
@@ -236,6 +241,10 @@ pub async fn generate_session_name(
     ws_env: Option<&WorkspaceEnv>,
 ) -> Result<String, String> {
     let truncated: String = prompt_text.chars().take(200).collect();
+
+    // Pre-check the working directory exists — see naming.rs sibling and
+    // [`crate::missing_cli`] module docs.
+    crate::missing_cli::precheck_cwd(std::path::Path::new(worktree_path))?;
 
     let claude_path = resolve_claude_path().await;
     let mut cmd = Command::new(&claude_path);
