@@ -116,6 +116,17 @@ When enabled, archiving a workspace deletes the local branch — but only if the
 
 Per-repository settings are documented in [Per-Repo Settings](/claudette/features/per-repo-settings/).
 
+## Plugins
+
+| Setting | Description | Default |
+|---------|-------------|---------|
+| Built-in Claudette plugins | Toggle Rust-implemented Claudette tools such as file delivery. | Enabled |
+| Voice providers | Choose and prepare voice input providers. If a provider cannot load in the current build, the row shows its own error while the rest of the Plugins panel stays usable. | Platform-dependent |
+| Source control providers | Toggle bundled Lua SCM providers such as GitHub/GitLab. | Enabled |
+| Environment providers | Toggle bundled Lua environment activators such as direnv, mise, dotenv, and Nix devshell. | Enabled |
+| Language grammars | Toggle bundled grammar plugins used by editor/chat highlighting. | Enabled |
+| Reload bundled plugins | Reseed bundled plugin files from the app bundle, preserving user-modified plugin files. | — |
+
 ## Environment Variables
 
 Claudette sets the following `CLAUDETTE_*` environment variables in every subprocess it spawns — terminals, setup and archive scripts, the agent CLI, and notification commands.
