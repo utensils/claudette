@@ -160,6 +160,7 @@
   "auth_signing_in_hint": "Complete the flow in your browser. This panel will update when sign-in finishes.",
   "auth_manual_url": "If the browser didn't open, click here",
   "auth_sign_in": "Sign in",
+  "auth_open_settings": "Open Authentication",
   "auth_cancel": "Cancel",
   "auth_success": "Signed in. Retry the action that needed authentication.",
   "auth_agent_note": "Agent runs continue to use the credentials managed by `claude`; Claudette does not copy OAuth tokens into chat subprocesses.",

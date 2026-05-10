@@ -173,7 +173,7 @@ describe("MessagesWithTurns edit summaries", () => {
 
     expect(container.textContent).toContain("auth_chat_failure_title");
     const button = Array.from(container.querySelectorAll("button")).find(
-      (item) => item.textContent?.includes("auth_sign_in"),
+      (item) => item.textContent?.includes("auth_open_settings"),
     );
     await act(async () => {
       button?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
