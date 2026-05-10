@@ -339,7 +339,7 @@
   "experimental_usage_desc": "Show usage data from your Claude Code subscription (session limits, weekly limits, extra usage). Requires a Pro or Max plan with standard login.",
   "experimental_usage_aria": "Usage Insights",
   "experimental_alternative_backends": "Alternative Claude Code backends",
-  "experimental_alternative_backends_desc": "Expose Ollama, OpenAI-compatible, and custom backends through the Claude Code harness.",
+  "experimental_alternative_backends_desc": "Expose Ollama, LM Studio, OpenAI-compatible, and custom backends through the Claude Code harness.",
   "experimental_alternative_backends_aria": "Alternative Claude Code backends",
 
   "plugins_title": "Plugins",

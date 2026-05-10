@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use base64::Engine as _;
+use futures_util::StreamExt;
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -206,7 +207,7 @@ pub async fn delete_agent_backend(
 ) -> Result<Vec<AgentBackendConfig>, String> {
     if matches!(
         backend_id.as_str(),
-        "anthropic" | "ollama" | "openai-api" | "codex-subscription"
+        "anthropic" | "ollama" | "openai-api" | "codex-subscription" | "lm-studio"
     ) {
         return Err("Built-in backends can be disabled but not deleted".to_string());
     }
@@ -317,7 +318,20 @@ pub async fn resolve_backend_runtime(
         if backend.kind == AgentBackendKind::OpenAiApi && secret.is_none() {
             return Err("OpenAI API backend requires an API key in Settings → Models".to_string());
         }
+        let pre_hydrate = backend.clone();
         hydrate_gateway_models_for_runtime(&mut backend, model).await?;
+        // Persist fresh discoveries (new model list, new context windows)
+        // so the UI's token-capacity indicator and the next list_agent_backends
+        // call see the live values — without requiring a manual Settings →
+        // Models refresh. Limited to a real change to keep the chat-send
+        // hot path off the DB writer when nothing has actually moved.
+        if backend_models_signature(&backend) != backend_models_signature(&pre_hydrate)
+            && let Ok(mut all) = load_backend_configs(&db)
+            && let Some(slot) = all.iter_mut().find(|item| item.id == backend.id)
+        {
+            *slot = backend.clone();
+            let _ = save_backend_configs(&db, &all);
+        }
         if let Some(model) = model.map(str::trim).filter(|model| !model.is_empty()) {
             backend.default_model = Some(model.to_string());
         }
@@ -333,6 +347,18 @@ pub async fn resolve_backend_runtime(
                 "1".to_string(),
             ),
         ];
+        // LM Studio benefits from the same KV-cache reuse fix Ollama gets:
+        // suppress Claude Code's rotating attribution header so identical
+        // request prefixes hit LM Studio's prefix cache turn after turn.
+        // (Routing-wise LM Studio still goes through our gateway because
+        // it returns HTTP 500 for context-overflow, which the SDK retries
+        // unless we demote it to 4xx. See `proxy_anthropic_messages`.)
+        if backend.kind == AgentBackendKind::LmStudio {
+            env.push((
+                "CLAUDE_CODE_ATTRIBUTION_HEADER".to_string(),
+                "0".to_string(),
+            ));
+        }
         append_custom_model_env(&mut env, &backend, model);
         return Ok(AgentBackendRuntime {
             backend_id: Some(backend.id),
@@ -354,6 +380,21 @@ pub async fn resolve_backend_runtime(
     ];
     if backend.kind == AgentBackendKind::Ollama {
         env.push(("ANTHROPIC_API_KEY".to_string(), String::new()));
+        // Disable the per-request user-attribution header. Claude Code
+        // adds it for usage attribution against api.anthropic.com, but
+        // its rotating value invalidates every local KV-cache prefix
+        // and causes a documented ~90 % perf regression on local
+        // backends (see github.com/anthropics/claude-code/issues/29230,
+        // roborhythms.com/stop-claude-code-slowing-local-llm-by-90).
+        // Ollama doesn't bill anything, so the header is pure overhead.
+        // LM Studio gets the same env via the gateway-routed path
+        // (where we forward this env via the spawned CLI's environment
+        // and the gateway itself strips the header from upstream
+        // requests).
+        env.push((
+            "CLAUDE_CODE_ATTRIBUTION_HEADER".to_string(),
+            "0".to_string(),
+        ));
     } else if let Some(secret) = secret.clone() {
         env.push(("ANTHROPIC_API_KEY".to_string(), secret));
     }
@@ -481,7 +522,9 @@ async fn hydrate_gateway_models_for_runtime(
 ) -> Result<(), String> {
     if !matches!(
         backend.kind,
-        AgentBackendKind::OpenAiApi | AgentBackendKind::CodexSubscription
+        AgentBackendKind::OpenAiApi
+            | AgentBackendKind::CodexSubscription
+            | AgentBackendKind::LmStudio
     ) {
         return Ok(());
     }
@@ -489,7 +532,15 @@ async fn hydrate_gateway_models_for_runtime(
     let selected_is_known = model
         .map(|model| backend_models_contain(backend, model))
         .unwrap_or(true);
-    if has_models && selected_is_known {
+    // LM Studio's loaded_context_length changes every time the user
+    // reloads the model with a different context slider, so we can't
+    // trust a cached discovery response here — the pre-flight gate uses
+    // that value as ground truth. Always re-discover on the chat-send
+    // hot path; it's a single GET to localhost (typically <50ms) and a
+    // stale cache means the user sees a 4k-context error after they
+    // already reloaded the model with 256k.
+    let force_refresh = matches!(backend.kind, AgentBackendKind::LmStudio);
+    if !force_refresh && has_models && selected_is_known {
         return Ok(());
     }
 
@@ -518,12 +569,34 @@ fn backend_models_contain(backend: &AgentBackendConfig, model: &str) -> bool {
         .any(|candidate| candidate.id == model)
 }
 
+/// Order-independent fingerprint of a backend's discovered + manual model
+/// list — used to decide whether a chat-send re-discovery actually changed
+/// anything worth persisting. Matches the freshness signal in
+/// `runtime_hash` (id + context_window_tokens) so a context-slider change
+/// in LM Studio reliably triggers both a DB write and a gateway respawn.
+///
+/// Sorted by model id so the same set of models in a different upstream
+/// order produces the same signature — otherwise a single discovery call
+/// that returned items in a different order would force an unnecessary DB
+/// write + gateway respawn on every chat send.
+fn backend_models_signature(backend: &AgentBackendConfig) -> Vec<(String, u32)> {
+    let mut entries: Vec<(String, u32)> = backend
+        .discovered_models
+        .iter()
+        .chain(backend.manual_models.iter())
+        .map(|model| (model.id.clone(), model.context_window_tokens))
+        .collect();
+    entries.sort();
+    entries
+}
+
 fn apply_discovered_models(backend: &mut AgentBackendConfig, discovered: Vec<AgentBackendModel>) {
     if matches!(
         backend.kind,
         AgentBackendKind::Ollama
             | AgentBackendKind::OpenAiApi
             | AgentBackendKind::CodexSubscription
+            | AgentBackendKind::LmStudio
     ) && !discovered.is_empty()
     {
         backend.manual_models.clear();
@@ -584,6 +657,7 @@ fn default_backends() -> Vec<AgentBackendConfig> {
         AgentBackendConfig::builtin_ollama(),
         AgentBackendConfig::builtin_openai_api(),
         AgentBackendConfig::builtin_codex_subscription(),
+        AgentBackendConfig::builtin_lm_studio(),
     ]
 }
 
@@ -654,6 +728,7 @@ fn normalize_backend(mut backend: AgentBackendConfig) -> AgentBackendConfig {
         AgentBackendKind::Ollama
             | AgentBackendKind::OpenAiApi
             | AgentBackendKind::CodexSubscription
+            | AgentBackendKind::LmStudio
     ) {
         backend.model_discovery = true;
     }
@@ -748,6 +823,7 @@ async fn discover_models(backend: &AgentBackendConfig) -> Result<Vec<AgentBacken
         }
         AgentBackendKind::OpenAiApi => discover_openai_api_models(backend).await,
         AgentBackendKind::CodexSubscription => discover_codex_models().await,
+        AgentBackendKind::LmStudio => discover_lm_studio_models(backend).await,
         _ => Ok(backend.manual_models.clone()),
     }
 }
@@ -803,6 +879,114 @@ async fn discover_openai_api_models(
         &value,
         backend.context_window_default,
     )))
+}
+
+async fn discover_lm_studio_models(
+    backend: &AgentBackendConfig,
+) -> Result<Vec<AgentBackendModel>, String> {
+    let base = backend
+        .base_url
+        .as_deref()
+        .unwrap_or("http://localhost:1234")
+        .trim_end_matches('/');
+    // Treat secure-store failures as soft (a corrupt keychain entry is
+    // distinct from "no secret was ever set") and tell the user via the
+    // log so a discovery-fails-silently bug is debuggable. A missing /
+    // blank secret is fine — LM Studio accepts any bearer locally and
+    // we substitute a placeholder below.
+    let secret = match load_secure_secret(SECRET_BUCKET, &backend.id) {
+        Ok(maybe) => maybe,
+        Err(err) => {
+            tracing::warn!(
+                target: "claudette::backend",
+                backend_id = %backend.id,
+                error = %err,
+                "LM Studio secret unreadable from secure store — falling back to placeholder bearer for discovery"
+            );
+            None
+        }
+    };
+    // LM Studio's local server accepts any bearer — empty included — but
+    // some users front it with an authenticating proxy that rejects
+    // requests *without* an Authorization header even if the value
+    // doesn't matter. Always send a bearer (user-supplied or the
+    // `lm-studio` placeholder) so discovery works in both setups,
+    // matching what the runtime path does.
+    let bearer = secret
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or("lm-studio")
+        .to_string();
+    let client = reqwest::Client::new();
+
+    // Prefer LM Studio's native v0 endpoint, which exposes per-model
+    // max_context_length / loaded_context_length. Fall back to the OpenAI-shaped
+    // /v1/models if v0 is missing (older or stripped builds).
+    let v0_response = client
+        .get(format!("{base}/api/v0/models"))
+        .bearer_auth(&bearer)
+        .send()
+        .await;
+    if let Ok(response) = v0_response
+        && response.status().is_success()
+        && let Ok(value) = response.json::<Value>().await
+    {
+        let models = lm_studio_models_from_v0(&value, backend.context_window_default);
+        if !models.is_empty() {
+            return Ok(models);
+        }
+    }
+
+    let value = client
+        .get(openai_api_url(base, "models"))
+        .bearer_auth(&bearer)
+        .send()
+        .await
+        .map_err(|e| format!("Failed to query LM Studio: {e}"))?
+        .error_for_status()
+        .map_err(|e| format!("LM Studio model discovery failed: {e}"))?
+        .json::<Value>()
+        .await
+        .map_err(|e| format!("Invalid LM Studio model response: {e}"))?;
+    Ok(models_from_openai_shape(
+        &value,
+        backend.context_window_default,
+    ))
+}
+
+fn lm_studio_models_from_v0(value: &Value, default_context: u32) -> Vec<AgentBackendModel> {
+    value
+        .get("data")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|model| {
+            let id = model.get("id").and_then(Value::as_str)?;
+            // Skip embedding/vision-only entries — they aren't usable as chat
+            // backends for the agent loop. Everything else (LLM, instruct,
+            // unknown) is fair game.
+            if model
+                .get("type")
+                .and_then(Value::as_str)
+                .is_some_and(|kind| kind.eq_ignore_ascii_case("embeddings"))
+            {
+                return None;
+            }
+            let context = model
+                .get("loaded_context_length")
+                .or_else(|| model.get("max_context_length"))
+                .and_then(Value::as_u64)
+                .and_then(|n| u32::try_from(n).ok())
+                .unwrap_or(default_context);
+            Some(AgentBackendModel {
+                id: id.to_string(),
+                label: id.to_string(),
+                context_window_tokens: context,
+                discovered: true,
+            })
+        })
+        .collect()
 }
 
 async fn discover_codex_models() -> Result<Vec<AgentBackendModel>, String> {
@@ -1000,6 +1184,28 @@ fn runtime_hash(config: &AgentBackendConfig, secret: Option<&str>, model: Option
     config.model_discovery.hash(&mut hasher);
     model.hash(&mut hasher);
     secret.unwrap_or("").hash(&mut hasher);
+    // Fingerprint the per-model context windows so a fresh discovery that
+    // bumps `loaded_context_length` (LM Studio reload with a new slider)
+    // forces the gateway to respawn with the new snapshot. Without this
+    // the gateway's pre-flight check would keep using the stale context
+    // size baked into the running task. id+context is enough — label and
+    // discovered-flag don't affect runtime behaviour.
+    //
+    // Sort first: upstream discovery doesn't guarantee a stable order, so
+    // hashing in iteration order would rotate the hash on every chat send
+    // even when nothing actually changed, forcing a needless gateway
+    // teardown/respawn cycle.
+    let mut model_entries: Vec<(&str, u32)> = config
+        .discovered_models
+        .iter()
+        .chain(config.manual_models.iter())
+        .map(|entry| (entry.id.as_str(), entry.context_window_tokens))
+        .collect();
+    model_entries.sort();
+    for (id, ctx) in &model_entries {
+        id.hash(&mut hasher);
+        ctx.hash(&mut hasher);
+    }
     format!("{:016x}", hasher.finish())
 }
 
@@ -1011,6 +1217,147 @@ fn backend_kind_hash_key(kind: AgentBackendKind) -> &'static str {
         AgentBackendKind::CodexSubscription => "codex_subscription",
         AgentBackendKind::CustomAnthropic => "custom_anthropic",
         AgentBackendKind::CustomOpenAi => "custom_openai",
+        AgentBackendKind::LmStudio => "lm_studio",
+    }
+}
+
+/// Error from a gateway request that needs to be turned back into an HTTP
+/// response for the Claude CLI. Carries both the upstream-extracted message
+/// and the response status we want the gateway to emit — so a 4xx from LM
+/// Studio (e.g. context-length exceeded) propagates as 4xx and the SDK does
+/// not retry it as a transient 5xx.
+#[derive(Debug, Clone)]
+struct GatewayUpstreamError {
+    status: u16,
+    message: String,
+}
+
+impl GatewayUpstreamError {
+    /// Wrap a local/internal failure (couldn't even reach the upstream).
+    /// Surfaces as 502 to the CLI.
+    fn internal(message: impl Into<String>) -> Self {
+        Self {
+            status: 502,
+            message: message.into(),
+        }
+    }
+
+    /// Build from an upstream non-2xx response. Parses the OpenAI-shaped
+    /// `{error: {message: ...}}` envelope when present, else falls back to
+    /// the raw body. Preserves 4xx status codes so the CLI fails fast on
+    /// permanent input errors instead of retrying with backoff.
+    fn from_upstream(status: u16, body: &str) -> Self {
+        let message = serde_json::from_str::<Value>(body)
+            .ok()
+            .as_ref()
+            .and_then(|v| v.get("error"))
+            .and_then(|e| e.get("message"))
+            .and_then(Value::as_str)
+            .filter(|s| !s.trim().is_empty())
+            .map(str::to_string)
+            .unwrap_or_else(|| {
+                if body.trim().is_empty() {
+                    format!("upstream returned HTTP {status} with no body")
+                } else {
+                    // Cap the raw-body fallback so a cloud proxy's giant
+                    // HTML 502 page or an upstream debug dump can't
+                    // balloon error responses or log lines. The full
+                    // body is logged via tracing::warn for postmortem.
+                    truncate_for_error_message(body)
+                }
+            });
+        // 4xx → forward as-is so retries stop. 5xx that are *semantically*
+        // permanent (LM Studio classifies "tokens to keep > context length"
+        // as HTTP 500 even though it's a hard input error) get demoted to
+        // 400 so the Anthropic SDK does not retry them with backoff.
+        // Anything else collapses to 502 (bad gateway) for the SDK consumer.
+        let outbound = if (400..500).contains(&status) {
+            status
+        } else if upstream_message_is_permanent_failure(&message) {
+            400
+        } else {
+            502
+        };
+        Self {
+            status: outbound,
+            message,
+        }
+    }
+}
+
+/// Map an outbound HTTP status to the Anthropic error-envelope `type`
+/// string the Claude CLI / SDK expect for that class. Default is
+/// `api_error` (transient — SDK may retry); 4xx → kind-specific labels
+/// so 401/403/404/429 don't all collapse to `invalid_request_error`,
+/// which would re-classify `429`s out of the SDK's rate-limit retry path.
+fn anthropic_error_type_for(status: u16) -> &'static str {
+    match status {
+        401 => "authentication_error",
+        403 => "permission_error",
+        404 => "not_found_error",
+        413 => "request_too_large",
+        429 => "rate_limit_error",
+        400..=499 => "invalid_request_error",
+        _ => "api_error",
+    }
+}
+
+/// Cap an upstream body / payload that might end up in a user-visible
+/// error string. Keeps just enough context to be actionable; protects
+/// log files and chat UI from being flooded by upstream HTML / proxy
+/// error pages. Caller is responsible for tracing::warn-ing the full
+/// body if a postmortem-quality copy is needed.
+fn truncate_for_error_message(body: &str) -> String {
+    const MAX: usize = 512;
+    let mut trimmed = body.trim();
+    if trimmed.len() <= MAX {
+        return trimmed.to_string();
+    }
+    // Walk back to the last char boundary at or below MAX so we never
+    // slice into a multibyte UTF-8 sequence.
+    let mut cut = MAX;
+    while cut > 0 && !trimmed.is_char_boundary(cut) {
+        cut -= 1;
+    }
+    trimmed = &trimmed[..cut];
+    format!(
+        "{trimmed}… [truncated, {total} bytes total]",
+        total = body.len()
+    )
+}
+
+/// Returns true when the upstream message describes a hard input error that
+/// will fail identically on retry — context-window overflow, model not
+/// loaded, model not found, etc. Matched case-insensitively against
+/// substrings observed in the wild from LM Studio, llama.cpp, vLLM, and
+/// OpenAI-compatible gateways. Keep the list narrow: false positives mean
+/// users miss out on transient-failure retries.
+fn upstream_message_is_permanent_failure(message: &str) -> bool {
+    let lower = message.to_ascii_lowercase();
+    const NEEDLES: &[&str] = &[
+        "context length",
+        "tokens to keep",
+        "context window",
+        "exceeds the maximum",
+        "model is not loaded",
+        "model not loaded",
+        "model not found",
+        "no model is loaded",
+        "input is too long",
+        "prompt is too long",
+    ];
+    NEEDLES.iter().any(|needle| lower.contains(needle))
+}
+
+impl std::fmt::Display for GatewayUpstreamError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} (status={})", self.message, self.status)
+    }
+}
+
+impl From<String> for GatewayUpstreamError {
+    fn from(message: String) -> Self {
+        Self::internal(message)
     }
 }
 
@@ -1153,16 +1500,27 @@ async fn handle_gateway_connection(
         ("POST", "/v1/messages") => {
             let req = serde_json::from_slice::<Value>(body)
                 .map_err(|e| format!("invalid messages request: {e}"))?;
-            let response = call_openai_responses(&config, upstream_secret.as_deref(), req).await;
-            match response {
-                Ok(message) => write_json_or_sse_response(&mut stream, message).await,
-                Err(err) => {
-                    write_json_response(
-                        &mut stream,
-                        502,
-                        json!({"type":"error","error":{"type":"api_error","message":err}}),
-                    )
-                    .await
+            // LM Studio speaks Anthropic's wire format natively — there's
+            // no OpenAI-Responses translation work to do, just forward
+            // bytes. The pass-through writes the response (including
+            // streaming SSE) directly to the client TCP stream so we
+            // preserve TTFT, and intercepts non-2xx upstream responses
+            // to apply the same status-demotion logic the gateway uses
+            // for OpenAI-shape backends (otherwise LM Studio's HTTP 500
+            // for context-overflow triggers the SDK's retry-with-backoff
+            // path and the user sees a multi-minute spinner instead of
+            // the actual error message).
+            if config.kind == AgentBackendKind::LmStudio {
+                match proxy_anthropic_messages(&config, &req, &mut stream).await {
+                    Ok(()) => Ok(()),
+                    Err(err) => write_anthropic_error_response(&mut stream, err).await,
+                }
+            } else {
+                let response =
+                    call_openai_responses(&config, upstream_secret.as_deref(), req).await;
+                match response {
+                    Ok(message) => write_json_or_sse_response(&mut stream, message).await,
+                    Err(err) => write_anthropic_error_response(&mut stream, err).await,
                 }
             }
         }
@@ -1202,19 +1560,218 @@ fn gateway_auth_matches(header: &str, auth_token: &str) -> bool {
     })
 }
 
+// Gateway backends that go through the OpenAI-Responses translation
+// path (OpenAi, Codex, CustomOpenAi) require a real API key — they
+// hit api.openai.com or chatgpt.com and need real auth. LM Studio is
+// also gateway-routed but takes the Anthropic-shape pass-through in
+// `proxy_anthropic_messages` instead of this helper, and its
+// local-first placeholder-bearer logic lives there + in
+// `discover_lm_studio_models` (where it's actually exercised).
+fn openai_compatible_bearer_token(secret: Option<&str>) -> Result<String, String> {
+    secret
+        .map(str::to_string)
+        .ok_or_else(|| "OpenAI-compatible backend requires an API key".to_string())
+}
+
+fn openai_compatible_default_base(_kind: AgentBackendKind) -> &'static str {
+    "https://api.openai.com"
+}
+
+/// Approximate the prompt+tools size and compare against the backend's
+/// known context window for `model`. Returns Some(error) when the request
+/// is obviously too large to fit, so we can fail fast at 400 instead of
+/// waiting on the upstream server to tokenize and reject it. Returns None
+/// when the model's context window isn't known (e.g. user added a manual
+/// model without a discovered context size) — in that case we still send
+/// upstream and let the runtime classify any overflow via
+/// `from_upstream` + `upstream_message_is_permanent_failure`.
+fn preflight_context_window_check(
+    config: &AgentBackendConfig,
+    model: &str,
+    openai_req: &Value,
+) -> Option<GatewayUpstreamError> {
+    let context = config
+        .discovered_models
+        .iter()
+        .chain(config.manual_models.iter())
+        .find(|m| m.id == model)
+        .map(|m| m.context_window_tokens)
+        .filter(|n| *n > 0)?;
+    // Body length / 4 is a deliberate over-estimate for English text and
+    // a conservative match for tokenizer-dense JSON tool schemas. Same
+    // approximation we use in /v1/messages/count_tokens, so the count
+    // and the gate stay consistent.
+    let approx_tokens = openai_req.to_string().len() / 4;
+    // Reserve some headroom for completion tokens — even a 1-token reply
+    // needs a slot. 90% of the window is a reasonable hard ceiling.
+    let limit = (context as usize).saturating_mul(9) / 10;
+    if approx_tokens <= limit {
+        return None;
+    }
+    Some(GatewayUpstreamError {
+        status: 400,
+        message: format!(
+            "Prompt is too large for the model's loaded context window. \
+             Approx {approx_tokens} tokens of input vs {context} tokens \
+             of context for `{model}`. Reload the model in {label} with a \
+             larger context length, or pick a model with a bigger window.",
+            label = config.label,
+        ),
+    })
+}
+
+/// Forward an Anthropic Messages API request to LM Studio's native
+/// `/v1/messages` endpoint. Bypasses the OpenAI Responses translation
+/// `call_openai_responses` does — LM Studio 0.4.1+ implements Anthropic's
+/// wire format natively, so the only thing we need from the gateway is
+/// **status-code translation**: LM Studio returns HTTP 500 for hard
+/// input errors like context-window overflow, which the Anthropic SDK
+/// retries with backoff. The response body is in Anthropic shape
+/// (`{type: error, error: {type, message}}`) — we just need to fix the
+/// status before forwarding to the CLI.
+///
+/// Successful (2xx) responses are streamed through unchanged so the
+/// agent UI gets per-chunk SSE events as LM Studio produces them
+/// (preserving TTFT). The pass-through writes directly to `out_stream`
+/// rather than buffering into a `Value` like the OpenAI-Responses path.
+async fn proxy_anthropic_messages(
+    config: &AgentBackendConfig,
+    anthropic_req: &Value,
+    out_stream: &mut TcpStream,
+) -> Result<(), GatewayUpstreamError> {
+    let base = config
+        .base_url
+        .as_deref()
+        .unwrap_or("http://localhost:1234")
+        .trim_end_matches('/');
+    // LM Studio's `/v1/messages` accepts any bearer locally — but a user
+    // who fronts the server with an authenticating proxy would reject a
+    // missing Authorization header. Always send the placeholder so both
+    // setups work.
+    let bearer = load_secure_secret(SECRET_BUCKET, &config.id)
+        .ok()
+        .flatten()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "lm-studio".to_string());
+    // Pre-flight: same approximation we use for OpenAI-Responses-routed
+    // backends. LM Studio enforces its own context check too, but our
+    // pre-flight wins on UX (~1 ms vs ~40 s round-trip to LM Studio's
+    // tokenizer) and produces a tailored message that names the actual
+    // numbers.
+    let model = anthropic_req
+        .get("model")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    if !model.is_empty()
+        && let Some(err) = preflight_context_window_check(config, &model, anthropic_req)
+    {
+        return Err(err);
+    }
+
+    let stream_requested = anthropic_req
+        .get("stream")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+
+    let response = reqwest::Client::new()
+        .post(format!("{base}/v1/messages"))
+        .bearer_auth(&bearer)
+        .header(reqwest::header::CONTENT_TYPE, "application/json")
+        .header("anthropic-version", "2023-06-01")
+        .json(anthropic_req)
+        .send()
+        .await
+        .map_err(|e| GatewayUpstreamError::internal(format!("LM Studio request failed: {e}")))?;
+
+    let status = response.status();
+    if !status.is_success() {
+        let body = response.text().await.map_err(|e| {
+            GatewayUpstreamError::internal(format!("Invalid LM Studio response body: {e}"))
+        })?;
+        return Err(GatewayUpstreamError::from_upstream(status.as_u16(), &body));
+    }
+
+    // Forward the response. We mirror the upstream Content-Type so the
+    // CLI sees `text/event-stream` for streaming requests and JSON for
+    // non-streaming ones, then close the connection at end-of-body so
+    // we can stream without committing to a Content-Length. Same
+    // `Connection: close` pattern the OpenAI-Responses fallback uses.
+    let content_type = response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_string)
+        .unwrap_or_else(|| {
+            if stream_requested {
+                "text/event-stream".to_string()
+            } else {
+                "application/json".to_string()
+            }
+        });
+    let header_block = format!(
+        "HTTP/1.1 200 OK\r\n\
+         Content-Type: {content_type}\r\n\
+         Cache-Control: no-cache\r\n\
+         Connection: close\r\n\
+         \r\n"
+    );
+    out_stream
+        .write_all(header_block.as_bytes())
+        .await
+        .map_err(|e| GatewayUpstreamError::internal(format!("write headers failed: {e}")))?;
+
+    let mut body_stream = response.bytes_stream();
+    while let Some(chunk) = body_stream.next().await {
+        let chunk = chunk
+            .map_err(|e| GatewayUpstreamError::internal(format!("upstream stream error: {e}")))?;
+        out_stream
+            .write_all(&chunk)
+            .await
+            .map_err(|e| GatewayUpstreamError::internal(format!("write chunk failed: {e}")))?;
+    }
+    out_stream
+        .flush()
+        .await
+        .map_err(|e| GatewayUpstreamError::internal(format!("flush failed: {e}")))?;
+    Ok(())
+}
+
+/// Format a `GatewayUpstreamError` as the JSON error envelope the
+/// Anthropic CLI / SDK expect, picking the most accurate `error.type`
+/// for the outbound HTTP status. Centralized so every gateway code path
+/// (OpenAI-Responses translation, LM Studio pass-through) produces an
+/// identical shape.
+async fn write_anthropic_error_response(
+    stream: &mut TcpStream,
+    err: GatewayUpstreamError,
+) -> Result<(), String> {
+    let error_type = anthropic_error_type_for(err.status);
+    write_json_response(
+        stream,
+        err.status,
+        json!({
+            "type":"error",
+            "error":{"type":error_type,"message":err.message},
+        }),
+    )
+    .await
+}
+
 async fn call_openai_responses(
     config: &AgentBackendConfig,
     secret: Option<&str>,
     anthropic_req: Value,
-) -> Result<Value, String> {
+) -> Result<Value, GatewayUpstreamError> {
     if config.kind == AgentBackendKind::CodexSubscription {
         return call_codex_responses(config, secret, anthropic_req).await;
     }
-    let secret = secret.ok_or("OpenAI-compatible backend requires an API key")?;
+    let secret = openai_compatible_bearer_token(secret)?;
     let base = config
         .base_url
         .as_deref()
-        .unwrap_or("https://api.openai.com")
+        .unwrap_or_else(|| openai_compatible_default_base(config.kind))
         .trim_end_matches('/');
     let model = openai_compatible_request_model(config, &anthropic_req)?;
     let openai_req = json!({
@@ -1223,19 +1780,43 @@ async fn call_openai_responses(
         "tools": tools_from_anthropic(&anthropic_req),
         "max_output_tokens": anthropic_req.get("max_tokens").cloned().unwrap_or(json!(4096)),
     });
+    // Pre-flight: when the backend reports a per-model context window
+    // (LM Studio's `loaded_context_length`, OpenAI's `context_window_tokens`)
+    // and the serialized request obviously won't fit, fail fast with a
+    // user-actionable message instead of waiting ~40s for LM Studio to
+    // tokenize the prompt and reject it as HTTP 500.
+    if let Some(err) = preflight_context_window_check(config, &model, &openai_req) {
+        return Err(err);
+    }
     let client = reqwest::Client::new();
-    let value = client
+    let response = client
         .post(openai_api_url(base, "responses"))
         .bearer_auth(secret)
         .json(&openai_req)
         .send()
         .await
-        .map_err(|e| format!("OpenAI request failed: {e}"))?
-        .error_for_status()
-        .map_err(|e| format!("OpenAI request failed: {e}"))?
-        .json::<Value>()
+        .map_err(|e| GatewayUpstreamError::internal(format!("OpenAI request failed: {e}")))?;
+    let status = response.status();
+    // Read the body unconditionally — on error this is where LM Studio
+    // returns the "load with larger context" message that we want to
+    // surface verbatim instead of swallowing via error_for_status().
+    let body = response
+        .text()
         .await
-        .map_err(|e| format!("Invalid OpenAI response: {e}"))?;
+        .map_err(|e| GatewayUpstreamError::internal(format!("Invalid OpenAI response: {e}")))?;
+    if !status.is_success() {
+        return Err(GatewayUpstreamError::from_upstream(status.as_u16(), &body));
+    }
+    let value = serde_json::from_str::<Value>(&body).map_err(|e| {
+        // Cap the body in the user-visible error so a non-JSON proxy
+        // page (e.g. a Cloudflare 502 HTML splash) doesn't drown the
+        // chat UI. Full body still goes to the tracing log via the
+        // gateway connection-error path.
+        GatewayUpstreamError::internal(format!(
+            "Invalid OpenAI response: {e}: {snippet}",
+            snippet = truncate_for_error_message(&body)
+        ))
+    })?;
     Ok(anthropic_message_from_openai(
         &model,
         value,
@@ -1250,11 +1831,15 @@ async fn call_codex_responses(
     config: &AgentBackendConfig,
     secret: Option<&str>,
     anthropic_req: Value,
-) -> Result<Value, String> {
-    let auth = serde_json::from_str::<CodexAuthMaterial>(
-        secret.ok_or("Codex subscription backend requires Codex CLI authentication")?,
-    )
-    .map_err(|e| format!("Invalid Codex gateway auth material: {e}"))?;
+) -> Result<Value, GatewayUpstreamError> {
+    let auth = serde_json::from_str::<CodexAuthMaterial>(secret.ok_or_else(|| {
+        GatewayUpstreamError::internal(
+            "Codex subscription backend requires Codex CLI authentication",
+        )
+    })?)
+    .map_err(|e| {
+        GatewayUpstreamError::internal(format!("Invalid Codex gateway auth material: {e}"))
+    })?;
     let model = openai_compatible_request_model(config, &anthropic_req)?;
     let instructions = codex_instructions_from_anthropic(&anthropic_req);
     let request_id = uuid::Uuid::new_v4().to_string();
@@ -1288,16 +1873,16 @@ async fn call_codex_responses(
     let response = request
         .send()
         .await
-        .map_err(|e| format!("Codex request failed: {e}"))?;
+        .map_err(|e| GatewayUpstreamError::internal(format!("Codex request failed: {e}")))?;
     let status = response.status();
     let body = response
         .text()
         .await
-        .map_err(|e| format!("Invalid Codex response body: {e}"))?;
+        .map_err(|e| GatewayUpstreamError::internal(format!("Invalid Codex response body: {e}")))?;
     if !status.is_success() {
-        return Err(format!("Codex request failed ({status}): {body}"));
+        return Err(GatewayUpstreamError::from_upstream(status.as_u16(), &body));
     }
-    let value = openai_response_from_sse(&body)?;
+    let value = openai_response_from_sse(&body).map_err(GatewayUpstreamError::internal)?;
     Ok(anthropic_message_from_openai(
         &model,
         value,
@@ -1935,6 +2520,51 @@ mod tests {
     }
 
     #[test]
+    fn lm_studio_routing_classification_pinned() {
+        // Pinned: LM Studio MUST stay on the gateway path. Direct
+        // routing (`is_anthropic_compatible() == true`) loses our
+        // status-code translation, and LM Studio's HTTP 500 for
+        // context-overflow ends up in the SDK's retry-with-backoff
+        // path — the user sees a multi-minute spinner instead of the
+        // actual error. The gateway uses `proxy_anthropic_messages`
+        // (not the OpenAI-Responses translator) so streaming
+        // pass-through is preserved; only error status codes get
+        // rewritten on the way back.
+        assert!(AgentBackendKind::LmStudio.needs_gateway());
+        assert!(!AgentBackendKind::LmStudio.is_anthropic_compatible());
+        // Sanity-check the rest of the matrix to catch a copy-paste
+        // misclassification of an unrelated kind.
+        assert!(AgentBackendKind::Anthropic.is_anthropic_compatible());
+        assert!(AgentBackendKind::Ollama.is_anthropic_compatible());
+        assert!(AgentBackendKind::CustomAnthropic.is_anthropic_compatible());
+        assert!(AgentBackendKind::OpenAiApi.needs_gateway());
+        assert!(AgentBackendKind::CodexSubscription.needs_gateway());
+        assert!(AgentBackendKind::CustomOpenAi.needs_gateway());
+    }
+
+    #[test]
+    fn runtime_hash_changes_when_discovered_context_window_changes() {
+        // Regression: LM Studio's loaded_context_length changes when the
+        // user reloads a model with a different context slider. The
+        // gateway must respawn on that change so the pre-flight check
+        // doesn't keep using the stale context size.
+        let mut backend = AgentBackendConfig::builtin_lm_studio();
+        backend.discovered_models = vec![AgentBackendModel {
+            id: "qwen3.6-35b-a3b-ud-mlx".to_string(),
+            label: "qwen3.6-35b-a3b-ud-mlx".to_string(),
+            context_window_tokens: 4096,
+            discovered: true,
+        }];
+        let small = runtime_hash(&backend, None, Some("qwen3.6-35b-a3b-ud-mlx"));
+        backend.discovered_models[0].context_window_tokens = 262_144;
+        let large = runtime_hash(&backend, None, Some("qwen3.6-35b-a3b-ud-mlx"));
+        assert_ne!(
+            small, large,
+            "context-window change must rotate the hash so ensure() respawns the gateway"
+        );
+    }
+
+    #[test]
     fn backend_kind_hash_key_uses_stable_wire_values() {
         assert_eq!(
             backend_kind_hash_key(AgentBackendKind::Anthropic),
@@ -1947,6 +2577,10 @@ mod tests {
         assert_eq!(
             backend_kind_hash_key(AgentBackendKind::CustomOpenAi),
             "custom_openai"
+        );
+        assert_eq!(
+            backend_kind_hash_key(AgentBackendKind::LmStudio),
+            "lm_studio"
         );
     }
 
@@ -2365,5 +2999,342 @@ data: [DONE]
         assert!(body.contains(
             r#""delta":{"partial_json":"{\"path\":\"README.md\"}","type":"input_json_delta"}"#
         ));
+    }
+
+    #[test]
+    fn lm_studio_builtin_defaults_match_local_server() {
+        let backend = AgentBackendConfig::builtin_lm_studio();
+        assert_eq!(backend.id, "lm-studio");
+        assert_eq!(backend.kind, AgentBackendKind::LmStudio);
+        assert!(
+            backend.kind.needs_gateway(),
+            "LM Studio routes through our gateway so we can demote its \
+             HTTP 500 context-overflow responses to 4xx — without that \
+             the Anthropic SDK retries the error with backoff and the \
+             user sees a multi-minute spinner. Inside the gateway we use \
+             the `proxy_anthropic_messages` pass-through (no wire-format \
+             translation) since LM Studio 0.4.1+ speaks Anthropic /v1/messages \
+             natively."
+        );
+        assert!(
+            !backend.kind.is_anthropic_compatible(),
+            "is_anthropic_compatible() means the spawned CLI talks to the \
+             upstream directly with no in-process gateway. LM Studio is \
+             *wire-compatible* with Anthropic but still needs the gateway \
+             for status-code translation."
+        );
+        assert_eq!(
+            backend.base_url.as_deref(),
+            Some("http://localhost:1234"),
+            "URL must match LM Studio's stock `lms server start --port 1234` default"
+        );
+        assert!(backend.model_discovery);
+        assert!(!backend.enabled, "Disabled by default until user opts in");
+    }
+
+    #[test]
+    fn lm_studio_v0_parser_reads_per_model_context_lengths() {
+        // Sample shape from `GET /api/v0/models` on LM Studio 0.4+.
+        let payload = json!({
+            "data": [
+                {
+                    "id": "qwen2.5-coder-7b-instruct",
+                    "type": "llm",
+                    "loaded_context_length": 32_768,
+                    "max_context_length": 131_072,
+                },
+                {
+                    "id": "llama-3.2-3b-instruct",
+                    "type": "llm",
+                    "max_context_length": 8_192,
+                },
+                {
+                    "id": "nomic-embed-text-v1.5",
+                    "type": "embeddings",
+                    "max_context_length": 8_192,
+                },
+            ]
+        });
+        let models = lm_studio_models_from_v0(&payload, 4_096);
+        assert_eq!(models.len(), 2, "embedding entries must be filtered out");
+        assert_eq!(models[0].id, "qwen2.5-coder-7b-instruct");
+        assert_eq!(
+            models[0].context_window_tokens, 32_768,
+            "loaded_context_length wins over max_context_length when both are present"
+        );
+        assert_eq!(models[1].id, "llama-3.2-3b-instruct");
+        assert_eq!(models[1].context_window_tokens, 8_192);
+    }
+
+    #[test]
+    fn lm_studio_v0_parser_falls_back_to_default_context_when_missing() {
+        let payload = json!({
+            "data": [{"id": "model-without-context", "type": "llm"}]
+        });
+        let models = lm_studio_models_from_v0(&payload, 8_192);
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0].context_window_tokens, 8_192);
+    }
+
+    #[test]
+    fn openai_compatible_bearer_token_requires_a_real_secret() {
+        // Every gateway backend that reaches `call_openai_responses`
+        // (OpenAi, Codex, CustomOpenAi) requires a real API key — the
+        // gateway does not substitute placeholders. LM Studio's
+        // local-first placeholder lives in the LM Studio code path
+        // (which is direct-routed and never enters this helper).
+        assert_eq!(
+            openai_compatible_bearer_token(Some("user-token")).as_deref(),
+            Ok("user-token"),
+            "user-supplied bearer must be forwarded as-is"
+        );
+        assert!(openai_compatible_bearer_token(None).is_err());
+
+        // Default base URL still defined for compatibility with the
+        // existing call site, but we no longer branch by kind because
+        // every remaining gateway-routed backend that uses this default
+        // points at the OpenAI API.
+        assert_eq!(
+            openai_compatible_default_base(AgentBackendKind::OpenAiApi),
+            "https://api.openai.com"
+        );
+        assert_eq!(
+            openai_compatible_default_base(AgentBackendKind::CustomOpenAi),
+            "https://api.openai.com"
+        );
+    }
+
+    #[test]
+    fn gateway_upstream_error_unwraps_openai_error_message() {
+        // The exact shape LM Studio returns for context-length overflow.
+        // Body lives inside `error.message`; status is a 4xx so retries stop.
+        let body = serde_json::json!({
+            "error": {
+                "message": "The number of tokens to keep from the initial \
+                    prompt is greater than the context length. Try to load \
+                    the model with a larger context length, or provide a \
+                    shorter input",
+                "type": "internal_error",
+                "param": null,
+                "code": "unknown",
+            }
+        })
+        .to_string();
+        let err = GatewayUpstreamError::from_upstream(400, &body);
+        assert_eq!(
+            err.status, 400,
+            "4xx must propagate as 4xx so the SDK does not retry it"
+        );
+        assert!(
+            err.message
+                .contains("load the model with a larger context length"),
+            "actual upstream message must reach the user, got: {}",
+            err.message
+        );
+        assert!(
+            !err.message.starts_with('{'),
+            "raw JSON envelope must be unwrapped to error.message"
+        );
+    }
+
+    #[test]
+    fn gateway_upstream_error_falls_back_to_raw_body_when_unparseable() {
+        // Plain-text upstream body (not JSON-shaped) must still reach the
+        // user; we never silently drop it.
+        let err = GatewayUpstreamError::from_upstream(500, "upstream went boom");
+        assert_eq!(
+            err.status, 502,
+            "5xx upstream collapses to 502 (Bad Gateway) for the SDK"
+        );
+        assert_eq!(err.message, "upstream went boom");
+
+        // Empty body still produces a useful message instead of a blank string.
+        let err = GatewayUpstreamError::from_upstream(503, "");
+        assert!(
+            err.message.contains("503") && err.message.contains("no body"),
+            "empty body fallback must mention the status, got: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn anthropic_error_type_for_routes_status_codes() {
+        // Specific 4xx codes get their dedicated Anthropic types so
+        // the SDK's retry classifier behaves correctly: 429 stays a
+        // rate-limit error (retryable with backoff), 401/403 stay
+        // permission/auth (non-retryable), 404 stays not_found.
+        assert_eq!(anthropic_error_type_for(401), "authentication_error");
+        assert_eq!(anthropic_error_type_for(403), "permission_error");
+        assert_eq!(anthropic_error_type_for(404), "not_found_error");
+        assert_eq!(anthropic_error_type_for(413), "request_too_large");
+        assert_eq!(anthropic_error_type_for(429), "rate_limit_error");
+        // Other 4xx fall back to invalid_request_error (the catch-all
+        // for "your request is malformed and won't succeed on retry").
+        assert_eq!(anthropic_error_type_for(400), "invalid_request_error");
+        assert_eq!(anthropic_error_type_for(422), "invalid_request_error");
+        // 5xx and anything else collapse to api_error so the SDK's
+        // retry-with-backoff path stays in effect for transient outages.
+        assert_eq!(anthropic_error_type_for(500), "api_error");
+        assert_eq!(anthropic_error_type_for(502), "api_error");
+        assert_eq!(anthropic_error_type_for(503), "api_error");
+    }
+
+    #[test]
+    fn truncate_for_error_message_caps_runaway_payloads() {
+        // Short payloads pass through unchanged.
+        assert_eq!(truncate_for_error_message("hi"), "hi");
+
+        // Payloads at the cap return as-is (no trailing marker).
+        let exact = "x".repeat(512);
+        assert_eq!(truncate_for_error_message(&exact), exact);
+
+        // Anything longer is sliced to ≤512 chars and tagged with the
+        // original byte count so the user knows the snippet is partial.
+        let huge = "y".repeat(5_000);
+        let truncated = truncate_for_error_message(&huge);
+        assert!(truncated.contains("[truncated, 5000 bytes total]"));
+        assert!(
+            truncated.len() < 600,
+            "truncated output must stay near the cap, got {} bytes",
+            truncated.len()
+        );
+
+        // Multibyte UTF-8 must not be sliced mid-character.
+        let mut wide = String::new();
+        for _ in 0..200 {
+            wide.push_str("日本語"); // 3 bytes per char
+        }
+        let truncated = truncate_for_error_message(&wide);
+        assert!(
+            truncated.is_char_boundary(truncated.len()),
+            "truncation must land on a char boundary"
+        );
+    }
+
+    #[test]
+    fn gateway_upstream_error_internal_uses_502() {
+        // Local failures (couldn't even reach upstream) are 502 — distinct
+        // from a parsed-from-upstream 5xx, but converging on the same code
+        // is fine because both indicate "Claudette gateway can't satisfy
+        // this request right now".
+        let err = GatewayUpstreamError::internal("could not bind socket");
+        assert_eq!(err.status, 502);
+        assert_eq!(err.message, "could not bind socket");
+    }
+
+    #[test]
+    fn gateway_upstream_error_promotes_5xx_context_overflow_to_400() {
+        // LM Studio classifies "tokens to keep > context length" as HTTP
+        // 500 (verified empirically against `lms server` 0.4). Without the
+        // message-text demotion, the SDK retries this with exponential
+        // backoff and the user sees a 2-3 minute spinner. With it, the
+        // request fails fast at 400.
+        let body = serde_json::json!({
+            "error": {
+                "message": "The number of tokens to keep from the initial \
+                    prompt is greater than the context length. Try to load \
+                    the model with a larger context length, or provide a \
+                    shorter input",
+                "type": "internal_error",
+            }
+        })
+        .to_string();
+        let err = GatewayUpstreamError::from_upstream(500, &body);
+        assert_eq!(
+            err.status, 400,
+            "5xx with context-overflow message must demote to 400 so the \
+             SDK does not retry it"
+        );
+        assert!(err.message.contains("larger context length"));
+    }
+
+    #[test]
+    fn gateway_upstream_error_keeps_unknown_5xx_at_502() {
+        // A 5xx with a generic message (transient outage) must NOT be
+        // demoted — that case really should be retried.
+        let body = serde_json::json!({
+            "error": {"message": "internal server error", "type": "server_error"}
+        })
+        .to_string();
+        let err = GatewayUpstreamError::from_upstream(500, &body);
+        assert_eq!(err.status, 502);
+        assert_eq!(err.message, "internal server error");
+    }
+
+    #[test]
+    fn upstream_message_permanent_failure_classifier_recognises_known_phrases() {
+        let cases: &[(&str, bool)] = &[
+            ("tokens to keep from the initial prompt", true),
+            ("greater than the context length", true),
+            ("This exceeds the maximum context window", true),
+            ("Model is not loaded", true),
+            ("model not found", true),
+            ("Input is too long", true),
+            ("rate limit exceeded, retry after 30s", false),
+            ("upstream timed out", false),
+            ("internal server error", false),
+        ];
+        for (msg, expected) in cases {
+            assert_eq!(
+                upstream_message_is_permanent_failure(msg),
+                *expected,
+                "classifier disagreed on: {msg:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn preflight_context_window_check_rejects_obvious_overflow() {
+        // 4096-token loaded context, ~12k bytes of JSON ≈ 3000 approx
+        // tokens fits comfortably. Bump to 60k bytes ≈ 15k approx tokens
+        // and we trip the 90% gate (3686-token ceiling).
+        let mut backend = AgentBackendConfig::builtin_lm_studio();
+        backend.discovered_models = vec![AgentBackendModel {
+            id: "qwen3.6-35b-a3b-ud-mlx".to_string(),
+            label: "qwen3.6-35b-a3b-ud-mlx".to_string(),
+            context_window_tokens: 4096,
+            discovered: true,
+        }];
+
+        // Small request → passes pre-flight.
+        let small = json!({
+            "model": "qwen3.6-35b-a3b-ud-mlx",
+            "input": "ping",
+        });
+        assert!(
+            preflight_context_window_check(&backend, "qwen3.6-35b-a3b-ud-mlx", &small).is_none()
+        );
+
+        // Big request → trips pre-flight with a clear message and 400.
+        let huge_input = "x".repeat(80_000); // ~20k approx tokens
+        let big = json!({
+            "model": "qwen3.6-35b-a3b-ud-mlx",
+            "input": huge_input,
+        });
+        let err = preflight_context_window_check(&backend, "qwen3.6-35b-a3b-ud-mlx", &big)
+            .expect("oversized request must trip pre-flight");
+        assert_eq!(err.status, 400);
+        assert!(
+            err.message.contains("4096"),
+            "error must cite the loaded context size, got: {}",
+            err.message
+        );
+        assert!(err.message.contains("LM Studio"));
+    }
+
+    #[test]
+    fn preflight_context_window_check_skips_when_window_unknown() {
+        // Manual-only model with no discovered context size → no gate
+        // (we don't second-guess the user's manual entry).
+        let mut backend = AgentBackendConfig::builtin_lm_studio();
+        backend.discovered_models.clear();
+        backend.manual_models = vec![AgentBackendModel {
+            id: "custom-model".to_string(),
+            label: "custom-model".to_string(),
+            context_window_tokens: 0,
+            discovered: false,
+        }];
+        let req = json!({"model": "custom-model", "input": "x".repeat(100_000)});
+        assert!(preflight_context_window_check(&backend, "custom-model", &req).is_none());
     }
 }
