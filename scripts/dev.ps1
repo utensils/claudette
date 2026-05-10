@@ -29,8 +29,12 @@
 #   $env:CARGO_TAURI_FEATURES       features (default devtools,server,alternative-backends)
 #
 # Flags:
-#   --clean              Run as a fresh user (per-PID CLAUDETTE_HOME +
-#                        CLAUDETTE_DATA_DIR). See -h for details.
+#   --clean              Run as a fresh user — points CLAUDETTE_HOME,
+#                        CLAUDETTE_DATA_DIR, and CLAUDE_CONFIG_DIR at
+#                        per-PID tmp dirs so the launch sees no existing
+#                        repos, settings, plugins, or Claude auth, and
+#                        nothing it does writes back to the real user
+#                        state. Cleaned up on exit. See -h for details.
 #   -h, --help           Print usage and exit.
 #
 # Usage from any PowerShell prompt in the repo:
@@ -60,12 +64,21 @@ and the IPv4-bound Vite + custom-protocol-off configuration that Windows
 needs for the WebView2 + /claudette-debug combination to work.
 
 Flags:
-  --clean              Run as a fresh user — points CLAUDETTE_HOME and
-                       CLAUDETTE_DATA_DIR at a per-PID tmp tree so the
-                       launch sees no existing repos, workspaces, or
-                       settings. Cleaned up on exit. Useful for testing
-                       first-run UX (welcome card, onboarding) without
-                       nuking the real ~/.claudette/ tree.
+  --clean              Run as a fresh user — points three env vars at a
+                       per-PID tmp tree so the launch sees no existing
+                       state and nothing it writes leaks back to the
+                       real user:
+
+                         CLAUDETTE_HOME      ~/.claudette/ (workspaces,
+                                             themes, logs, packs)
+                         CLAUDETTE_DATA_DIR  OS data dir for claudette.db
+                         CLAUDE_CONFIG_DIR   ~/.claude/ (Claude CLI
+                                             settings, credentials,
+                                             plugins, marketplaces)
+
+                       Cleaned up on exit. Useful for testing first-run
+                       UX (welcome card, onboarding) and plugin/auth
+                       flows without nuking real user data.
   -h, --help           Print this usage and exit.
   --                   Pass everything after this flag straight to
                        ``cargo run`` (e.g. --release, --quiet).
@@ -85,6 +98,11 @@ Env vars (each consulted at process start):
                        plugins, themes, logs, models, packs, apps.json).
   `$env:CLAUDETTE_DATA_DIR
                        Override the OS data dir holding claudette.db.
+  `$env:CLAUDE_CONFIG_DIR
+                       Override the Claude CLI's ~/.claude/ tree
+                       (settings.json, .credentials.json, plugins,
+                       marketplaces). Read by both the Claude CLI itself
+                       and Claudette's plugin / auth code paths.
   `$env:CLAUDETTE_LOG_DIR
                        Per-instance log dir (otherwise derived from
                        CLAUDETTE_HOME).
@@ -247,16 +265,32 @@ Write-Host "▸ Discovery file:   $discoveryFile"
 # discovery dir so the cleanup sweep finds it predictably. The trap
 # below removes the directory on script exit; a hard kill leaves it
 # behind, but it's under $env:TEMP so it won't leak forever.
+#
+# Three env vars get pointed at the sandbox — only the first two are
+# Claudette-specific:
+#
+#   CLAUDETTE_HOME      ~/.claudette/ tree (workspaces, themes, logs, packs)
+#   CLAUDETTE_DATA_DIR  OS data dir holding claudette.db
+#   CLAUDE_CONFIG_DIR   ~/.claude/ tree, owned by the *Claude CLI* but
+#                       actively read+written by Claudette: settings.json,
+#                       .credentials.json, plugins/, plugins/marketplaces/.
+#                       Without this, a --clean run that touches plugins,
+#                       auth, or marketplaces writes those changes into
+#                       the user's real ~/.claude/, defeating the
+#                       "simulate a new user" purpose of the flag.
 $cleanRoot = $null
 if ($cleanSession) {
     $cleanRoot = Join-Path $discoveryDir "clean-$PID"
     $env:CLAUDETTE_HOME      = Join-Path $cleanRoot 'home'
     $env:CLAUDETTE_DATA_DIR  = Join-Path $cleanRoot 'data'
+    $env:CLAUDE_CONFIG_DIR   = Join-Path $cleanRoot 'claude-config'
     New-Item -ItemType Directory -Force -Path $env:CLAUDETTE_HOME | Out-Null
     New-Item -ItemType Directory -Force -Path $env:CLAUDETTE_DATA_DIR | Out-Null
-    Write-Host "▸ Clean session:    $cleanRoot"
-    Write-Host "▸ CLAUDETTE_HOME:   $env:CLAUDETTE_HOME"
+    New-Item -ItemType Directory -Force -Path $env:CLAUDE_CONFIG_DIR | Out-Null
+    Write-Host "▸ Clean session:      $cleanRoot"
+    Write-Host "▸ CLAUDETTE_HOME:     $env:CLAUDETTE_HOME"
     Write-Host "▸ CLAUDETTE_DATA_DIR: $env:CLAUDETTE_DATA_DIR"
+    Write-Host "▸ CLAUDE_CONFIG_DIR:  $env:CLAUDE_CONFIG_DIR"
 }
 
 # Best-effort cleanup. PowerShell can't trap SIGTERM/SIGINT identically

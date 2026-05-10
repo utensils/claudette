@@ -114,15 +114,17 @@ On startup, Claudette also scans `${TMPDIR}/claudette-dev/*.json` (the discovery
 For testing first-run UX (the welcome card, onboarding, plugin seeding) you can launch Claudette with a completely empty data tree:
 
 ```bash
-./scripts/dev.sh --clean
+./scripts/dev.sh --clean         # macOS / Linux
+.\scripts\dev.ps1 --clean        # Windows (PowerShell)
 ```
 
-The flag points two env vars at a per-PID directory under `${TMPDIR}/claudette-dev/clean-<pid>/` and removes the tree on exit:
+The flag points three env vars at a per-PID directory under `${TMPDIR}/claudette-dev/clean-<pid>/` (`$env:TEMP\claudette-dev\clean-<pid>\` on Windows) and removes the tree on exit:
 
 - **`CLAUDETTE_HOME`** overrides the `~/.claudette/` tree (workspaces, plugins, themes, logs, models, packs).
 - **`CLAUDETTE_DATA_DIR`** overrides the OS data directory holding `claudette.db`.
+- **`CLAUDE_CONFIG_DIR`** overrides the **Claude CLI's** `~/.claude/` tree, which Claudette reads and writes for `settings.json`, `.credentials.json`, installed plugins, and marketplace registrations. Without this override, a `--clean` run that touches plugins or auth would write into the real `~/.claude/` and survive the sandbox tear-down — defeating the "simulate a new user" purpose of the flag.
 
-You can also set either env var manually for a longer-lived sandbox — e.g. `CLAUDETTE_HOME=/tmp/claudette-demo CLAUDETTE_DATA_DIR=/tmp/claudette-demo/data ./scripts/dev.sh` keeps the sandbox across restarts.
+You can also set any of these env vars manually for a longer-lived sandbox — e.g. `CLAUDETTE_HOME=/tmp/claudette-demo CLAUDETTE_DATA_DIR=/tmp/claudette-demo/data CLAUDE_CONFIG_DIR=/tmp/claudette-demo/claude ./scripts/dev.sh` keeps the sandbox across restarts.
 
 ## Filing a bug report
 
