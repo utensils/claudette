@@ -49,6 +49,14 @@ impl BackendStatus {
 pub struct BackendListResponse {
     pub backends: Vec<AgentBackendConfig>,
     pub default_backend_id: String,
+    /// Non-fatal diagnostics emitted while loading the persisted backend
+    /// list — e.g. a stored entry whose `kind` isn't recognized by this
+    /// build (forward/backward compat across dev channels). Surfaced to
+    /// the UI so the user knows their config wasn't fully applied, but
+    /// the loader still returns the valid entries instead of failing the
+    /// whole panel.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -171,13 +179,37 @@ pub async fn list_agent_backends(
     state: State<'_, AppState>,
 ) -> Result<BackendListResponse, String> {
     let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
-    let default_backend_id = db
+    let stored_default = db
         .get_app_setting("default_agent_backend")
         .map_err(|e| e.to_string())?
         .unwrap_or_else(|| "anthropic".to_string());
+    let mut loaded = load_backend_configs_tolerant(&db)?;
+    // If the stored default points to a backend that didn't make it
+    // through the tolerant load (e.g. a user-defined backend whose
+    // `kind` this build doesn't recognize), the UI would otherwise
+    // pre-select a non-existent entry. Fall back to anthropic, which
+    // is always present, and surface a warning so the user knows.
+    // The persisted setting is left alone — a build that does
+    // recognize the kind will pick it up unchanged.
+    let default_backend_id = if loaded.backends.iter().any(|b| b.id == stored_default) {
+        stored_default
+    } else {
+        loaded.warnings.push(format!(
+            "Default backend `{stored_default}` is not available in this build; \
+                 falling back to `anthropic` for this session. \
+                 Stored setting unchanged."
+        ));
+        tracing::warn!(
+            target: "agent_backends",
+            stored_default = %stored_default,
+            "default backend setting points to a backend not in the loaded list"
+        );
+        "anthropic".to_string()
+    };
     Ok(BackendListResponse {
-        backends: load_backend_configs(&db)?,
+        backends: loaded.backends,
         default_backend_id,
+        warnings: loaded.warnings,
     })
 }
 
@@ -611,41 +643,142 @@ fn apply_discovered_models(backend: &mut AgentBackendConfig, discovered: Vec<Age
     backend.discovered_models = discovered;
 }
 
-fn load_backend_configs(db: &Database) -> Result<Vec<AgentBackendConfig>, String> {
+/// Result of a tolerant load: the active backend list and any
+/// non-fatal diagnostics surfaced to the UI. Unknown passthrough
+/// entries are NOT carried on this struct — `save_backend_configs`
+/// re-reads them from the raw blob at write time so the field would
+/// be dead in production. Tests assert passthrough behavior by
+/// calling `read_unknown_passthrough` directly.
+struct LoadedBackends {
+    backends: Vec<AgentBackendConfig>,
+    warnings: Vec<String>,
+}
+
+/// Tolerant variant: parses the stored backend list entry-by-entry so
+/// a single unknown variant (e.g. a `kind` this build doesn't know)
+/// downgrades to a warning instead of failing the whole settings load.
+///
+/// Two failure modes are guarded:
+///   1. The top-level JSON is unparseable — surfaces a single warning
+///      and returns the built-in defaults. The raw blob is left in
+///      place *on this read* so a user can recover it externally;
+///      the first subsequent user-initiated save will overwrite it
+///      (see [`read_unknown_passthrough`]).
+///   2. An individual entry fails to deserialize — that one entry is
+///      skipped from the active list but kept in the persisted JSON.
+///      `save_backend_configs` re-reads the raw blob and splices the
+///      unknown entry back on the next write so a downgrade-then-
+///      upgrade cycle is non-destructive.
+fn load_backend_configs_tolerant(db: &Database) -> Result<LoadedBackends, String> {
     let mut backends = default_backends();
+    let mut warnings: Vec<String> = Vec::new();
+
     if let Some(raw) = db
         .get_app_setting(SETTINGS_KEY)
         .map_err(|e| e.to_string())?
     {
-        for saved in serde_json::from_str::<Vec<AgentBackendConfig>>(&raw)
-            .map_err(|e| format!("Failed to parse backend settings: {e}"))?
-        {
-            if let Some(existing) = backends.iter_mut().find(|b| b.id == saved.id) {
-                *existing = normalize_backend(saved);
-            } else {
-                backends.push(normalize_backend(saved));
+        match serde_json::from_str::<Vec<Value>>(&raw) {
+            Ok(entries) => {
+                for entry in entries {
+                    match serde_json::from_value::<AgentBackendConfig>(entry.clone()) {
+                        Ok(saved) => {
+                            if let Some(existing) = backends.iter_mut().find(|b| b.id == saved.id) {
+                                *existing = normalize_backend(saved);
+                            } else {
+                                backends.push(normalize_backend(saved));
+                            }
+                        }
+                        Err(err) => {
+                            let id = entry.get("id").and_then(Value::as_str).unwrap_or("<no id>");
+                            let kind = entry
+                                .get("kind")
+                                .and_then(Value::as_str)
+                                .unwrap_or("<no kind>");
+                            warnings.push(format!(
+                                "Skipped backend entry id=`{id}` kind=`{kind}`: {err}. \
+                                 Entry preserved and will be reapplied on a build that supports it."
+                            ));
+                            tracing::warn!(
+                                target: "agent_backends",
+                                id, kind, error = %err,
+                                "tolerant load: preserving unknown backend entry as passthrough"
+                            );
+                        }
+                    }
+                }
+            }
+            Err(err) => {
+                warnings.push(format!(
+                    "Backend settings JSON is unreadable; using built-in defaults this session. \
+                     Stored value left untouched for recovery on this read. ({err})"
+                ));
+                tracing::error!(
+                    target: "agent_backends",
+                    error = %err,
+                    "tolerant load: top-level JSON parse failed; falling back to defaults"
+                );
             }
         }
     }
+
     for backend in &mut backends {
         backend.has_secret = load_secure_secret(SECRET_BUCKET, &backend.id)
             .ok()
             .flatten()
             .is_some();
     }
-    Ok(backends)
+
+    Ok(LoadedBackends { backends, warnings })
+}
+
+fn load_backend_configs(db: &Database) -> Result<Vec<AgentBackendConfig>, String> {
+    Ok(load_backend_configs_tolerant(db)?.backends)
+}
+
+/// Re-read the stored JSON and return any entries this build can't
+/// deserialize. Used by `save_backend_configs` to splice unknown
+/// passthrough entries back into the persisted blob so they survive
+/// edits made by an older build.
+///
+/// Returns `Err` on DB read failure so the caller surfaces the problem
+/// instead of silently dropping unknowns. Returns `Ok(empty)` when the
+/// stored blob is missing or its top-level JSON is unparseable —
+/// passthrough is unsafe in either case (no source-of-truth array to
+/// preserve), and the next save will write a clean list. This is the
+/// only documented path that overwrites a corrupt blob.
+fn read_unknown_passthrough(db: &Database) -> Result<Vec<Value>, String> {
+    let Some(raw) = db
+        .get_app_setting(SETTINGS_KEY)
+        .map_err(|e| e.to_string())?
+    else {
+        return Ok(Vec::new());
+    };
+    let Ok(entries) = serde_json::from_str::<Vec<Value>>(&raw) else {
+        return Ok(Vec::new());
+    };
+    Ok(entries
+        .into_iter()
+        .filter(|entry| serde_json::from_value::<AgentBackendConfig>(entry.clone()).is_err())
+        .collect())
 }
 
 fn save_backend_configs(db: &Database, backends: &[AgentBackendConfig]) -> Result<(), String> {
-    let persisted: Vec<_> = backends
+    let mut persisted: Vec<Value> = backends
         .iter()
         .filter(|backend| backend.id != "anthropic")
         .map(|backend| {
             let mut backend = backend.clone();
             backend.has_secret = false;
-            backend
+            serde_json::to_value(backend).map_err(|e| e.to_string())
         })
-        .collect();
+        .collect::<Result<Vec<_>, _>>()?;
+
+    // Splice unknown passthrough entries back so a build that doesn't
+    // recognize them doesn't quietly drop them on every save. Errors
+    // here propagate — silently dropping unknowns on a transient DB
+    // read failure would defeat the whole point of the passthrough.
+    persisted.extend(read_unknown_passthrough(db)?);
+
     let raw = serde_json::to_string(&persisted).map_err(|e| e.to_string())?;
     db.set_app_setting(SETTINGS_KEY, &raw)
         .map_err(|e| e.to_string())
@@ -2507,6 +2640,359 @@ mod tests {
             context_window_tokens: 400_000,
             discovered: true,
         }
+    }
+
+    #[test]
+    fn tolerant_load_skips_unknown_kind_and_preserves_passthrough() {
+        // Simulates the reported breakage: a newer build wrote a
+        // `lm_studio` entry, an older build is now reading it. The
+        // unknown entry must NOT take down the rest of the panel —
+        // valid entries (and the built-in defaults) should still load.
+        let db = Database::open_in_memory().expect("test db should open");
+        let mut ollama = AgentBackendConfig::builtin_ollama();
+        ollama.enabled = true;
+        let mut ollama_value = serde_json::to_value(&ollama).expect("ollama serializes");
+        // Pollute the entry with a future-only field to also verify
+        // serde tolerates additive fields (it does, by default —
+        // deny_unknown_fields is not set on AgentBackendConfig).
+        ollama_value
+            .as_object_mut()
+            .expect("object")
+            .insert("future_only_field".to_string(), serde_json::json!(7));
+
+        let unknown_value = serde_json::json!({
+            "id": "future-thing",
+            "label": "Future Thing",
+            "kind": "totally_new_backend",
+            "enabled": true
+        });
+
+        let raw = serde_json::Value::Array(vec![ollama_value, unknown_value]);
+        db.set_app_setting(SETTINGS_KEY, &raw.to_string())
+            .expect("seed should save");
+
+        let loaded = load_backend_configs_tolerant(&db).expect("tolerant load should succeed");
+
+        // Ollama applied on top of the default.
+        let ollama = loaded
+            .backends
+            .iter()
+            .find(|b| b.id == "ollama")
+            .expect("ollama survived tolerant load");
+        assert!(ollama.enabled);
+
+        // Anthropic default still present (loader merges into defaults).
+        assert!(loaded.backends.iter().any(|b| b.id == "anthropic"));
+
+        // Unknown entry observable via the read helper, not dropped.
+        let passthrough = read_unknown_passthrough(&db).expect("passthrough read should succeed");
+        assert_eq!(passthrough.len(), 1);
+        assert_eq!(
+            passthrough[0].get("id").and_then(Value::as_str),
+            Some("future-thing")
+        );
+
+        // User-visible warning names the offending id+kind.
+        assert_eq!(loaded.warnings.len(), 1);
+        let warning = &loaded.warnings[0];
+        assert!(
+            warning.contains("future-thing") && warning.contains("totally_new_backend"),
+            "warning should name the offending entry: {warning}"
+        );
+    }
+
+    #[test]
+    fn save_after_tolerant_load_round_trips_unknown_entry() {
+        // Regression guard: a downgrade-then-upgrade cycle must not lose
+        // the user's LM-Studio-style config. After an older build does a
+        // tolerant load and then saves edits, the unknown entry must
+        // still be present in SQLite for the newer build to pick up.
+        let db = Database::open_in_memory().expect("test db should open");
+        let raw = serde_json::json!([
+            {
+                "id": "future-thing",
+                "label": "Future Thing",
+                "kind": "totally_new_backend",
+                "enabled": true,
+                "some_future_field": 42
+            }
+        ]);
+        db.set_app_setting(SETTINGS_KEY, &raw.to_string())
+            .expect("seed should save");
+
+        // Older build loads, then saves an unrelated edit (toggling
+        // ollama on). The unknown entry should ride along.
+        let mut backends = load_backend_configs(&db).expect("tolerant load should succeed");
+        let ollama = backends
+            .iter_mut()
+            .find(|b| b.id == "ollama")
+            .expect("default ollama present");
+        ollama.enabled = true;
+        // The default `builtin_ollama` ships with empty discovered models,
+        // so save filters cleanly without needing extra fixture mutation.
+        save_backend_configs(&db, &backends).expect("save should succeed");
+
+        let stored_raw = db
+            .get_app_setting(SETTINGS_KEY)
+            .expect("stored value should read")
+            .expect("stored value should exist");
+        let stored: Vec<Value> =
+            serde_json::from_str(&stored_raw).expect("stored JSON should parse");
+
+        let preserved = stored
+            .iter()
+            .find(|entry| entry.get("id").and_then(Value::as_str) == Some("future-thing"))
+            .expect("unknown entry must round-trip through save");
+        assert_eq!(
+            preserved.get("kind").and_then(Value::as_str),
+            Some("totally_new_backend")
+        );
+        // Even unknown future-only fields are preserved verbatim.
+        assert_eq!(
+            preserved.get("some_future_field").and_then(Value::as_i64),
+            Some(42)
+        );
+    }
+
+    #[test]
+    fn tolerant_load_falls_back_when_top_level_json_is_garbage() {
+        // If the stored blob is corrupt (truncated write, hand-edit
+        // typo), the loader must not poison the panel — it returns
+        // built-in defaults plus a warning, and crucially does NOT
+        // overwrite the corrupt blob (so the user can recover it).
+        let db = Database::open_in_memory().expect("test db should open");
+        db.set_app_setting(SETTINGS_KEY, "{not valid json")
+            .expect("seed should save");
+
+        let loaded = load_backend_configs_tolerant(&db).expect("tolerant load should succeed");
+
+        assert!(loaded.backends.iter().any(|b| b.id == "anthropic"));
+        let passthrough = read_unknown_passthrough(&db).expect("passthrough read should succeed");
+        assert!(
+            passthrough.is_empty(),
+            "corrupt top-level JSON has no recoverable passthrough"
+        );
+        assert_eq!(loaded.warnings.len(), 1);
+        assert!(loaded.warnings[0].contains("unreadable"));
+
+        // Corrupt blob untouched on read.
+        let still_there = db
+            .get_app_setting(SETTINGS_KEY)
+            .expect("read should succeed")
+            .expect("value still stored");
+        assert_eq!(still_there, "{not valid json");
+    }
+
+    #[test]
+    fn save_after_corrupt_blob_writes_clean_list_and_loses_corrupt_value() {
+        // Documents the corrupt-blob save behavior explicitly, since
+        // it's the one path where this PR's tolerant loader IS allowed
+        // to overwrite stored data: there's no recoverable structure
+        // to splice unknowns from. Once a user save runs, the corrupt
+        // bytes are gone — by design, with a warning surfaced on the
+        // preceding read.
+        let db = Database::open_in_memory().expect("test db should open");
+        db.set_app_setting(SETTINGS_KEY, "{still not valid json")
+            .expect("seed should save");
+
+        let mut backends = load_backend_configs(&db).expect("tolerant load should succeed");
+        let ollama = backends
+            .iter_mut()
+            .find(|b| b.id == "ollama")
+            .expect("default ollama present");
+        ollama.enabled = true;
+        save_backend_configs(&db, &backends).expect("save should succeed");
+
+        let stored_raw = db
+            .get_app_setting(SETTINGS_KEY)
+            .expect("stored value should read")
+            .expect("stored value should exist");
+        // Now valid JSON, no passthrough.
+        let stored: Vec<Value> = serde_json::from_str(&stored_raw).expect("stored JSON now parses");
+        assert!(
+            stored
+                .iter()
+                .all(|entry| serde_json::from_value::<AgentBackendConfig>(entry.clone()).is_ok()),
+            "every entry post-save deserializes cleanly"
+        );
+    }
+
+    #[test]
+    fn tolerant_load_warns_per_unknown_entry_and_handles_missing_fields() {
+        // Multiple unknown entries with different shapes — including
+        // entries missing `id` or `kind` — should each get their own
+        // warning and pass through cleanly. Pins the warning placeholder
+        // strings (`<no id>` / `<no kind>`) so a later refactor doesn't
+        // silently change diagnostic UX.
+        let db = Database::open_in_memory().expect("test db should open");
+        let raw = serde_json::json!([
+            {
+                "id": "future-a",
+                "label": "Future A",
+                "kind": "kind_alpha",
+                "enabled": true
+            },
+            // Missing `kind` — falls into the err arm because
+            // AgentBackendConfig requires it.
+            {
+                "id": "future-b",
+                "label": "Future B",
+                "enabled": false
+            },
+            // Missing `id` AND has an entirely unknown kind.
+            {
+                "label": "Future C",
+                "kind": "kind_gamma"
+            }
+        ]);
+        db.set_app_setting(SETTINGS_KEY, &raw.to_string())
+            .expect("seed should save");
+
+        let loaded = load_backend_configs_tolerant(&db).expect("tolerant load should succeed");
+        assert_eq!(loaded.warnings.len(), 3, "one warning per unknown entry");
+
+        // Placeholder strings stay stable.
+        assert!(loaded.warnings.iter().any(|w| w.contains("future-a")));
+        assert!(loaded.warnings.iter().any(|w| w.contains("kind_alpha")));
+        assert!(loaded.warnings.iter().any(|w| w.contains("future-b")));
+        assert!(loaded.warnings.iter().any(|w| w.contains("<no kind>")));
+        assert!(loaded.warnings.iter().any(|w| w.contains("<no id>")));
+        assert!(loaded.warnings.iter().any(|w| w.contains("kind_gamma")));
+
+        // All three unknowns are observable as passthrough; nothing dropped.
+        let passthrough = read_unknown_passthrough(&db).expect("passthrough read should succeed");
+        assert_eq!(passthrough.len(), 3);
+    }
+
+    #[test]
+    fn list_agent_backends_falls_back_when_default_points_to_skipped_unknown() {
+        // Regression guard for a Copilot-flagged edge case: if the
+        // user's `default_agent_backend` pointed to a backend whose
+        // `kind` this build doesn't recognize, the entry is skipped
+        // by tolerant load, and the UI would otherwise pre-select a
+        // backend that isn't in the returned list. The response must
+        // (a) override default_backend_id to a backend that exists,
+        // (b) surface a warning, and (c) leave the persisted setting
+        // unchanged so a build that does recognize the kind picks it
+        // up cleanly.
+        let db = Database::open_in_memory().expect("test db should open");
+        db.set_app_setting("default_agent_backend", "future-thing")
+            .expect("seed default should save");
+        let raw = serde_json::json!([
+            {
+                "id": "future-thing",
+                "label": "Future Thing",
+                "kind": "totally_new_backend",
+                "enabled": true
+            }
+        ]);
+        db.set_app_setting(SETTINGS_KEY, &raw.to_string())
+            .expect("seed should save");
+
+        // Mirror what list_agent_backends does post-load.
+        let stored_default = db
+            .get_app_setting("default_agent_backend")
+            .expect("read default")
+            .expect("default present");
+        let mut loaded = load_backend_configs_tolerant(&db).expect("tolerant load should succeed");
+        let default_backend_id = if loaded.backends.iter().any(|b| b.id == stored_default) {
+            stored_default.clone()
+        } else {
+            loaded.warnings.push(format!(
+                "Default backend `{stored_default}` is not available in this build; \
+                 falling back to `anthropic` for this session. \
+                 Stored setting unchanged."
+            ));
+            "anthropic".to_string()
+        };
+
+        // Fallback wired up correctly.
+        assert_eq!(default_backend_id, "anthropic");
+        assert!(loaded.backends.iter().any(|b| b.id == "anthropic"));
+
+        // Two warnings: one from the per-entry skip, one from the
+        // default-pointer fallback.
+        assert!(
+            loaded
+                .warnings
+                .iter()
+                .any(|w| w.contains("future-thing") && w.contains("falling back")),
+            "warnings should include the default-fallback diagnostic"
+        );
+        assert!(
+            loaded
+                .warnings
+                .iter()
+                .any(|w| w.contains("totally_new_backend")),
+            "warnings should still include the per-entry skip diagnostic"
+        );
+
+        // Persisted default-setting untouched — a build that does
+        // recognize `totally_new_backend` will see the user's choice
+        // come back automatically.
+        let still_stored = db
+            .get_app_setting("default_agent_backend")
+            .expect("read default after")
+            .expect("default still present");
+        assert_eq!(still_stored, "future-thing");
+    }
+
+    #[test]
+    fn save_agent_backend_command_path_preserves_unknown_entries() {
+        // Closer to the production path than save_after_tolerant_load_…:
+        // simulates what `save_agent_backend` does (load → mutate one
+        // known backend → save) starting from a blob that already
+        // contains an unknown entry. Pins that the unknown entry
+        // survives the full load/merge/save round-trip a user toggle
+        // would take.
+        let db = Database::open_in_memory().expect("test db should open");
+        let mut ollama = AgentBackendConfig::builtin_ollama();
+        ollama.enabled = false;
+        let ollama_value = serde_json::to_value(&ollama).expect("ollama serializes");
+        let unknown = serde_json::json!({
+            "id": "future-thing",
+            "label": "Future Thing",
+            "kind": "kind_omega",
+            "enabled": true,
+            "future_only_field": "preserved-value"
+        });
+        let raw = serde_json::Value::Array(vec![ollama_value, unknown]);
+        db.set_app_setting(SETTINGS_KEY, &raw.to_string())
+            .expect("seed should save");
+
+        // Mirror save_agent_backend's body: load_backend_configs →
+        // mutate the matching slot → save_backend_configs.
+        let mut backends = load_backend_configs(&db).expect("tolerant load should succeed");
+        let slot = backends
+            .iter_mut()
+            .find(|b| b.id == "ollama")
+            .expect("ollama present");
+        slot.enabled = true;
+        save_backend_configs(&db, &backends).expect("save should succeed");
+
+        let stored_raw = db
+            .get_app_setting(SETTINGS_KEY)
+            .expect("read should succeed")
+            .expect("value present");
+        let stored: Vec<Value> = serde_json::from_str(&stored_raw).expect("JSON parses post-save");
+
+        let preserved = stored
+            .iter()
+            .find(|e| e.get("id").and_then(Value::as_str) == Some("future-thing"))
+            .expect("unknown entry survived save_agent_backend-like flow");
+        assert_eq!(
+            preserved.get("future_only_field").and_then(Value::as_str),
+            Some("preserved-value"),
+            "future-only fields preserved verbatim"
+        );
+
+        // And the user's edit landed.
+        let post_load = load_backend_configs(&db).expect("post-save load should succeed");
+        let ollama_after = post_load
+            .iter()
+            .find(|b| b.id == "ollama")
+            .expect("ollama present");
+        assert!(ollama_after.enabled);
     }
 
     #[test]
