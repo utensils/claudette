@@ -178,6 +178,68 @@ pub async fn set_claudette_plugin_setting(
     Ok(())
 }
 
+/// Persist a **per-repo** override for one of a plugin's declared
+/// settings fields. Pass `value: null` to clear the override (reverts
+/// to the global plugin setting / manifest default).
+///
+/// Storage key: `repo:{repo_id}:plugin:{plugin_name}:setting:{key}`.
+/// Side effects mirror [`set_claudette_plugin_setting`]: the registry's
+/// in-memory map is updated immediately, and the env cache is
+/// invalidated for the affected plugin so the next resolve sees the
+/// new value.
+#[tauri::command]
+pub async fn set_claudette_plugin_repo_setting(
+    repo_id: String,
+    plugin_name: String,
+    key: String,
+    value: serde_json::Value,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
+    let storage_key = format!("repo:{repo_id}:plugin:{plugin_name}:setting:{key}");
+
+    let registry = state.plugins.read().await;
+    if value.is_null() {
+        db.delete_app_setting(&storage_key)
+            .map_err(|e| e.to_string())?;
+        registry.set_repo_setting(&repo_id, &plugin_name, &key, None);
+    } else {
+        let serialized = serde_json::to_string(&value).map_err(|e| e.to_string())?;
+        db.set_app_setting(&storage_key, &serialized)
+            .map_err(|e| e.to_string())?;
+        registry.set_repo_setting(&repo_id, &plugin_name, &key, Some(value));
+    }
+
+    state.env_cache.invalidate_plugin_everywhere(&plugin_name);
+    Ok(())
+}
+
+/// Read the per-repo settings map for a plugin in the given repo.
+/// Returns the **per-repo overrides only** (not merged with global
+/// values), with manifest defaults filled in from the registry as
+/// `null` for keys with no override. Used by Repo Settings →
+/// Environment to render the form.
+#[tauri::command]
+pub async fn get_claudette_plugin_repo_settings(
+    repo_id: String,
+    plugin_name: String,
+    state: State<'_, AppState>,
+) -> Result<std::collections::HashMap<String, serde_json::Value>, String> {
+    let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
+    let prefix = format!("repo:{repo_id}:plugin:{plugin_name}:setting:");
+    let mut out: std::collections::HashMap<String, serde_json::Value> =
+        std::collections::HashMap::new();
+    if let Ok(entries) = db.list_app_settings_with_prefix(&prefix) {
+        for (key, value) in entries {
+            let setting_key = key[prefix.len()..].to_string();
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&value) {
+                out.insert(setting_key, v);
+            }
+        }
+    }
+    Ok(out)
+}
+
 /// Reseed all bundled plugins from the in-binary tarball over any
 /// unmodified on-disk copies. Skips any plugin whose `init.lua` has
 /// been user-modified (hash mismatch). Useful as an escape hatch when
@@ -209,6 +271,28 @@ pub async fn reseed_bundled_plugins(state: State<'_, AppState>) -> Result<Vec<St
                 {
                     new_registry.set_setting(plugin_name, setting_key, Some(v));
                 }
+            }
+        }
+    }
+    // Re-hydrate per-repo overrides too — keep the same shape as
+    // startup hydration in `main.rs` so reseed leaves no setting
+    // category behind.
+    if let Ok(entries) = db.list_app_settings_with_prefix("repo:") {
+        for (key, value) in entries {
+            let rest = &key["repo:".len()..];
+            let Some((repo_id, tail)) = rest.split_once(':') else {
+                continue;
+            };
+            let Some(rest) = tail.strip_prefix("plugin:") else {
+                continue;
+            };
+            let Some((plugin_name, tail)) = rest.split_once(':') else {
+                continue;
+            };
+            if let Some(setting_key) = tail.strip_prefix("setting:")
+                && let Ok(v) = serde_json::from_str::<serde_json::Value>(&value)
+            {
+                new_registry.set_repo_setting(repo_id, plugin_name, setting_key, Some(v));
             }
         }
     }

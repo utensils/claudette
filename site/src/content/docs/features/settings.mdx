@@ -125,6 +125,9 @@ Per-repository settings are documented in [Per-Repo Settings](/claudette/feature
 | Voice providers | Choose and prepare voice input providers. If a provider cannot load in the current build, the row shows its own error while the rest of the Plugins panel stays usable. | Platform-dependent |
 | Source control providers | Toggle bundled Lua SCM providers such as GitHub/GitLab. | Enabled |
 | Environment providers | Toggle bundled Lua environment activators such as direnv, mise, dotenv, and Nix devshell. | Enabled |
+| Env provider — Always allow `.envrc` (env-direnv) | When direnv reports an `.envrc` as blocked, run `direnv allow` automatically. Bypasses direnv's per-path approval. | Off |
+| Env provider — Always trust mise config (env-mise) | When mise reports config files as not trusted, run `mise trust` automatically. | Off |
+| Env provider — Timeout (each env provider) | Maximum seconds to wait for a single env-provider invocation (`direnv export`, `mise env`, `nix print-dev-env`, etc.). Bumped from 30s to 120s in 0.24 — cold Nix flakes routinely run 60–120s. Range 5–600s. | 120 seconds |
 | Language grammars | Toggle bundled grammar plugins used by editor/chat highlighting. | Enabled |
 | Reload bundled plugins | Reseed bundled plugin files from the app bundle, preserving user-modified plugin files. | — |
 

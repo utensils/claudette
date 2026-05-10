@@ -1516,6 +1516,102 @@
   border-color: var(--accent-color, var(--text-primary));
 }
 
+/* Numeric plugin settings (e.g. timeout_seconds): wrap the number
+ * input + unit suffix on a single inline row instead of stretching
+ * the input to the full form width like text inputs. The input itself
+ * uses `.numberInput` (composes from `.input`) so it shares the
+ * standard form-control styling. */
+.pluginSettingNumberWrap {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+}
+
+.pluginSettingNumberRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.pluginSettingUnit {
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+/* Per-repo env-provider overrides — list of cards under the Env
+ * panel in Repo Settings. Visually distinct from the global Plugins
+ * form so users can tell at a glance which scope they're editing. */
+.repoEnvProviderList {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 8px;
+}
+
+.repoEnvProviderCard {
+  border: 1px solid var(--divider);
+  border-radius: 4px;
+  padding: 12px;
+  background: var(--input-bg, var(--selected-bg));
+}
+
+.repoEnvProviderHeader {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.repoEnvProviderName {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.repoEnvProviderInternal {
+  font-size: 11px;
+  color: var(--text-dim);
+  font-family:
+    ui-monospace,
+    "SF Mono",
+    Menlo,
+    monospace;
+}
+
+.repoEnvProviderField {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+/* Bordered marker on the LEFT edge to call out values that diverge
+ * from the global default. Subtler than swapping background colors —
+ * preserves contrast for the input itself while still being scannable. */
+.repoEnvProviderFieldOverridden {
+  border-left: 2px solid var(--accent-primary);
+  padding-left: 8px;
+  margin-left: -10px;
+}
+
+.repoEnvProviderClearBtn {
+  font-size: 11px;
+  padding: 4px 10px;
+  border-radius: 3px;
+  border: 1px solid var(--sidebar-border);
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  align-self: center;
+  flex-shrink: 0;
+  font-weight: 500;
+}
+
+.repoEnvProviderClearBtn:hover {
+  border-color: var(--accent-primary);
+  color: var(--text-primary);
+}
+
 .envErrorRunBtn {
   font-size: 11px;
   padding: 4px 10px;

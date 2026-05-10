@@ -13,6 +13,17 @@
       "label": "Always allow .envrc",
       "description": "When direnv reports an .envrc as blocked, run `direnv allow` automatically. Note: direnv normally hashes the .envrc path so each worktree must be allowed separately — enabling this bypasses that per-path safeguard.",
       "default": false
+    },
+    {
+      "type": "number",
+      "key": "timeout_seconds",
+      "label": "Timeout (seconds)",
+      "description": "Maximum time to wait for `direnv export json`. A cold .envrc that triggers `nix develop` or a heavy mise toolchain commonly takes 60–120 seconds on first run; raise this when a workspace fails with `direnv timed out`. Per-repo overrides live in Repo Settings → Environment.",
+      "default": 120,
+      "min": 5,
+      "max": 600,
+      "step": 5,
+      "unit": "seconds"
     }
   ]
 }

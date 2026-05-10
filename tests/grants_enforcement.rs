@@ -56,6 +56,7 @@ fn workspace(dir: &Path) -> WorkspaceInfo {
         branch: "main".into(),
         worktree_path: dir.to_string_lossy().into_owned(),
         repo_path: dir.to_string_lossy().into_owned(),
+        ..Default::default()
     }
 }
 

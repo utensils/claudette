@@ -17,6 +17,7 @@ import { RepoIcon } from "../../shared/RepoIcon";
 import { IconPicker } from "../../modals/IconPicker";
 import { ClaudeFlagsSettings } from "./ClaudeFlagsSettings";
 import { EnvPanel } from "./EnvPanel";
+import { RepoEnvProviderSettings } from "./RepoEnvProviderSettings";
 import {
   InheritedGlobalsList,
   PinnedPromptsManager,
@@ -509,6 +510,8 @@ export function RepoSettings({ repoId }: RepoSettingsProps) {
         <div className={styles.fieldLabel}>{t("repo_environment")}</div>
         <EnvPanel target={envTarget} />
       </div>
+
+      <RepoEnvProviderSettings repoId={repoId} />
 
       <div className={styles.fieldGroup}>
         <div className={styles.fieldLabel}>{t("repo_custom_instructions")}</div>

@@ -12,6 +12,14 @@ const serviceMocks = vi.hoisted(() => ({
 
 vi.mock("../services/tauri", () => serviceMocks);
 
+// The hook subscribes to `workspace_env_progress` Tauri events at
+// mount; in vitest there's no Tauri runtime so `listen` would crash
+// trying to call into the IPC bridge. Stub it with a no-op that
+// resolves to a no-op cleanup function so the effect can run.
+vi.mock("@tauri-apps/api/event", () => ({
+  listen: vi.fn().mockResolvedValue(() => undefined),
+}));
+
 import { useWorkspaceEnvironmentPreparation } from "./useWorkspaceEnvironmentPreparation";
 
 function makeWorkspace(overrides: Partial<Workspace> = {}): Workspace {

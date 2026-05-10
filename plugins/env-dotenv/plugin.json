@@ -5,5 +5,18 @@
   "description": "Parse .env file and apply KEY=VALUE entries to workspace subprocesses",
   "kind": "env-provider",
   "required_clis": [],
-  "operations": ["detect", "export"]
+  "operations": ["detect", "export"],
+  "settings": [
+    {
+      "type": "number",
+      "key": "timeout_seconds",
+      "label": "Timeout (seconds)",
+      "description": "Maximum time to parse the .env file. Parsing is cheap — the cap mostly defends against pathological filesystem stalls. Per-repo overrides live in Repo Settings → Environment.",
+      "default": 120,
+      "min": 5,
+      "max": 600,
+      "step": 5,
+      "unit": "seconds"
+    }
+  ]
 }

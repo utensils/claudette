@@ -24,9 +24,9 @@ import type { LanguageInfo } from "../../../types/grammars";
 import type {
   ClaudettePluginInfo,
   ClaudettePluginKind,
-  PluginSettingField,
 } from "../../../types/claudettePlugins";
 import type { VoiceDownloadProgress, VoiceProviderInfo } from "../../../types/voice";
+import { PluginSettingInput } from "../PluginSettingInput";
 import styles from "../Settings.module.css";
 
 const KIND_ORDER: ClaudettePluginKind[] = ["scm", "env-provider", "language-grammar"];
@@ -829,7 +829,7 @@ function PluginRow({
           {hasSettings && (
             <div className={styles.pluginSettingsForm}>
               {plugin.settings_schema.map((field) => (
-                <SettingInput
+                <PluginSettingInput
                   key={field.key}
                   field={field}
                   value={plugin.setting_values[field.key]}
@@ -840,85 +840,6 @@ function PluginRow({
           )}
         </div>
       )}
-    </div>
-  );
-}
-
-function SettingInput({
-  field,
-  value,
-  onChange,
-}: {
-  field: PluginSettingField;
-  value: unknown;
-  onChange: (value: unknown) => void;
-}) {
-  if (field.type === "boolean") {
-    const checked = value === true;
-    return (
-      <label className={styles.pluginSettingRow}>
-        <button
-          type="button"
-          className={`${styles.mcpToggle} ${checked ? styles.mcpToggleOn : ""}`}
-          onClick={() => onChange(!checked)}
-          role="switch"
-          aria-checked={checked}
-          aria-label={field.label}
-        >
-          <span className={styles.mcpToggleKnob} />
-        </button>
-        <div>
-          <div className={styles.pluginSettingLabel}>{field.label}</div>
-          {field.description && (
-            <div className={styles.envErrorHint}>{field.description}</div>
-          )}
-        </div>
-      </label>
-    );
-  }
-
-  if (field.type === "text") {
-    const stringValue = typeof value === "string" ? value : (field.default ?? "");
-    return (
-      <div className={styles.pluginSettingRow}>
-        <div>
-          <div className={styles.pluginSettingLabel}>{field.label}</div>
-          {field.description && (
-            <div className={styles.envErrorHint}>{field.description}</div>
-          )}
-          <input
-            type="text"
-            value={stringValue}
-            placeholder={field.placeholder ?? ""}
-            onChange={(e) => onChange(e.target.value || null)}
-            className={styles.textInput}
-          />
-        </div>
-      </div>
-    );
-  }
-
-  // select
-  const stringValue = typeof value === "string" ? value : (field.default ?? "");
-  return (
-    <div className={styles.pluginSettingRow}>
-      <div>
-        <div className={styles.pluginSettingLabel}>{field.label}</div>
-        {field.description && (
-          <div className={styles.envErrorHint}>{field.description}</div>
-        )}
-        <select
-          value={stringValue}
-          onChange={(e) => onChange(e.target.value || null)}
-          className={styles.textInput}
-        >
-          {field.options.map((opt) => (
-            <option key={opt.value} value={opt.value}>
-              {opt.label}
-            </option>
-          ))}
-        </select>
-      </div>
     </div>
   );
 }

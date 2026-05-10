@@ -4,6 +4,7 @@ import { AlertCircle, FileText, LoaderCircle, Mic, Plus, Send, Square, Terminal 
 import { open } from "@tauri-apps/plugin-dialog";
 import { VoiceMeter } from "./VoiceMeter";
 import { useAppStore } from "../../stores/useAppStore";
+import { useEnvElapsedSeconds } from "../../hooks/useEnvElapsedSeconds";
 import {
   listSlashCommands,
   listWorkspaceFiles,
@@ -245,6 +246,35 @@ export function ChatInputArea({
   const [filesLoaded, setFilesLoaded] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const { t } = useTranslation("chat");
+  // Live ticking elapsed-seconds while the env-provider layer is
+  // resolving for this workspace. Drives the composer placeholder
+  // ("Preparing direnv (12s)…") so the user sees that something is
+  // actually happening on long Nix-flake / mise-toolchain warmups.
+  const { plugin: envPlugin, seconds: envSeconds } = useEnvElapsedSeconds(
+    selectedWorkspaceId,
+  );
+  const composerEnvPlaceholder = workspaceEnvironmentPreparing
+    ? envPlugin && envSeconds !== null
+      ? t("composer_placeholder_preparing_env_with_plugin", {
+          defaultValue: "Preparing {{plugin}} ({{seconds}}s)…",
+          plugin:
+            envPlugin === "env-direnv"
+              ? "direnv"
+              : envPlugin === "env-mise"
+                ? "mise"
+                : envPlugin === "env-dotenv"
+                  ? "dotenv"
+                  : envPlugin === "env-nix-devshell"
+                    ? "nix"
+                    : envPlugin,
+          seconds: envSeconds,
+        })
+      : t("composer_placeholder_preparing_env")
+    : composerMode === "shell"
+      ? t("composer_placeholder_shell")
+      : isRunning
+        ? t("composer_placeholder_queued")
+        : t("composer_placeholder_idle");
   const filesCache = useRef<Record<string, FileEntry[]>>({});
   const mentionedFilesRef = useRef<Set<string>>(new Set());
   // `pendingAttachments` is the local view (with transient blob URLs);
@@ -1285,15 +1315,7 @@ export function ChatInputArea({
           }}
           onKeyDown={handleKeyDown}
           onPaste={handlePaste}
-          placeholder={
-            workspaceEnvironmentPreparing
-              ? t("composer_placeholder_preparing_env")
-              : composerMode === "shell"
-              ? t("composer_placeholder_shell")
-              : isRunning
-                ? t("composer_placeholder_queued")
-                : t("composer_placeholder_idle")
-          }
+          placeholder={composerEnvPlaceholder}
         />
       </div>
       <div className={styles.inputControls}>

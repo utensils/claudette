@@ -8,15 +8,31 @@ use std::path::{Path, PathBuf};
 use std::sync::RwLock;
 use std::time::{Duration, Instant};
 
-use host_api::{HostContext, WorkspaceInfo};
-use manifest::{PluginKind, PluginManifest};
+use host_api::{DEFAULT_EXEC_TIMEOUT, HostContext, WorkspaceInfo};
+use manifest::{PluginKind, PluginManifest, PluginSettingField};
 use mlua::{LuaSerdeExt, VmState};
 
-/// Overall operation timeout. A plugin can make multiple serial
-/// `host.exec` calls (each capped at 30s), but pure-Lua loops have no
-/// inner cap. This bounds the total time a single call_operation can
-/// hang the polling loop or a Tauri command.
-const OPERATION_TIMEOUT: Duration = Duration::from_secs(60);
+/// Well-known plugin setting key used to override the runtime's
+/// per-`host.exec` and per-operation timeout. A plugin manifest can
+/// declare a `Number`-typed setting with this key (and an optional
+/// `min`/`max` bound) to surface the timeout in the Plugins settings
+/// UI; the user can additionally override it per-repo via the
+/// "Environment" subsection in Repo Settings.
+pub const TIMEOUT_SETTING_KEY: &str = "timeout_seconds";
+
+/// Hard cap on user-supplied timeout values. Prevents a typo like
+/// `99999` from effectively disabling the safety net.
+const MAX_TIMEOUT_SECS: u64 = 600;
+
+/// Hard floor on user-supplied timeout values. A 0/1-second cap would
+/// fail nearly every real env-provider invocation; clamping prevents
+/// users from configuring an unusable workspace.
+const MIN_TIMEOUT_SECS: u64 = 5;
+
+/// Nested-map shape for [`PluginRegistry::repo_setting_overrides`].
+/// Aliased so the `RwLock<...>` declaration stays readable — clippy
+/// flags the raw triple-nested `HashMap` as `type_complexity`.
+type RepoSettingMap = HashMap<String, HashMap<String, HashMap<String, serde_json::Value>>>;
 
 #[derive(Debug)]
 struct LuaOperationTimeout;
@@ -172,6 +188,14 @@ pub struct PluginRegistry {
     /// `call_operation` building its HostContext) don't contend with
     /// writes from the UI layer.
     setting_overrides: RwLock<HashMap<String, HashMap<String, serde_json::Value>>>,
+    /// Per-repo setting overrides. Shape: `{ repo_id -> { plugin -> {
+    /// key -> value } } }`. Populated from `app_settings` rows whose
+    /// key matches `repo:{repo_id}:plugin:{name}:setting:{key}`.
+    /// Layered on top of `setting_overrides` when the dispatcher
+    /// resolves a config for a workspace whose [`WorkspaceInfo::repo_id`]
+    /// is set. Cleared per-repo via [`PluginRegistry::set_repo_setting`]
+    /// so the env cache invalidates on any change to a repo's overrides.
+    repo_setting_overrides: RwLock<RepoSettingMap>,
     /// Globally-disabled plugin names. `call_operation` short-circuits
     /// with `PluginDisabled` for any name in this set; dispatchers that
     /// want to skip silently (e.g. env-provider resolution) should call
@@ -199,6 +223,7 @@ impl PluginRegistry {
                     plugins,
                     plugin_dir: plugin_dir.to_path_buf(),
                     setting_overrides: RwLock::new(HashMap::new()),
+                    repo_setting_overrides: RwLock::new(HashMap::new()),
                     disabled: RwLock::new(HashSet::new()),
                 };
             }
@@ -266,6 +291,7 @@ impl PluginRegistry {
             plugins,
             plugin_dir: plugin_dir.to_path_buf(),
             setting_overrides: RwLock::new(HashMap::new()),
+            repo_setting_overrides: RwLock::new(HashMap::new()),
             disabled: RwLock::new(HashSet::new()),
         }
     }
@@ -297,9 +323,10 @@ impl PluginRegistry {
         }
     }
 
-    /// Return the effective config map a plugin's Lua VM will see.
-    /// Precedence (lowest → highest): manifest `settings[].default` →
-    /// static `plugin.config` → user setting overrides.
+    /// Return the effective config map a plugin's Lua VM will see —
+    /// without any per-repo layering. Precedence (lowest → highest):
+    /// manifest `settings[].default` → static `plugin.config` → global
+    /// user setting overrides.
     ///
     /// Returns an empty map for unknown plugin names rather than an
     /// error; `call_operation` is the surface that rejects unknown
@@ -327,6 +354,153 @@ impl PluginRegistry {
         }
 
         out
+    }
+
+    /// Effective config for a specific invocation, layering per-repo
+    /// overrides on top of [`PluginRegistry::effective_config`] when
+    /// `ws_info.repo_id` is set. The Tauri layer hydrates per-repo
+    /// overrides from `app_settings` rows of shape
+    /// `repo:{repo_id}:plugin:{name}:setting:{key}` via
+    /// [`PluginRegistry::set_repo_setting`].
+    pub fn effective_config_for_invocation(
+        &self,
+        plugin_name: &str,
+        ws_info: &WorkspaceInfo,
+    ) -> HashMap<String, serde_json::Value> {
+        let mut out = self.effective_config(plugin_name);
+        if let Some(repo_id) = ws_info.repo_id.as_deref() {
+            let overrides = self.repo_setting_overrides.read().unwrap();
+            if let Some(plugin_map) = overrides.get(repo_id).and_then(|m| m.get(plugin_name)) {
+                for (k, v) in plugin_map {
+                    out.insert(k.clone(), v.clone());
+                }
+            }
+        }
+        out
+    }
+
+    /// Set or clear a per-repo setting override. Pass `None` to clear
+    /// — empties the per-plugin map (and the per-repo entry) when the
+    /// last value goes away so the next read short-circuits without
+    /// touching the repo's bucket. No-op for unknown plugin names —
+    /// matches [`PluginRegistry::set_setting`] so stale `repo:*`
+    /// entries from removed plugins don't accumulate.
+    pub fn set_repo_setting(
+        &self,
+        repo_id: &str,
+        plugin_name: &str,
+        key: &str,
+        value: Option<serde_json::Value>,
+    ) {
+        if !self.plugins.contains_key(plugin_name) {
+            return;
+        }
+        let mut guard = self.repo_setting_overrides.write().unwrap();
+        match value {
+            Some(v) => {
+                guard
+                    .entry(repo_id.to_string())
+                    .or_default()
+                    .entry(plugin_name.to_string())
+                    .or_default()
+                    .insert(key.to_string(), v);
+            }
+            None => {
+                if let Some(repo_map) = guard.get_mut(repo_id) {
+                    if let Some(plugin_map) = repo_map.get_mut(plugin_name) {
+                        plugin_map.remove(key);
+                        if plugin_map.is_empty() {
+                            repo_map.remove(plugin_name);
+                        }
+                    }
+                    if repo_map.is_empty() {
+                        guard.remove(repo_id);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Resolves the effective per-`host.exec` and per-operation
+    /// timeout for a plugin invocation, trying overrides in priority
+    /// order and using the **first valid** value found:
+    ///   1. per-repo override
+    ///      (`repo:{repo_id}:plugin:{plugin}:setting:timeout_seconds`),
+    ///   2. global override (`plugin:{plugin}:setting:timeout_seconds`),
+    ///   3. manifest default (from a `Number`-typed
+    ///      [`PluginSettingField`] whose key is [`TIMEOUT_SETTING_KEY`]),
+    ///   4. [`DEFAULT_EXEC_TIMEOUT`] (120s) as the global fallback.
+    ///
+    /// Invalid overrides (non-numeric strings, negatives, NaN, false)
+    /// are skipped so the next tier gets a chance — e.g. a malformed
+    /// per-repo value falls back to the global, then the manifest, not
+    /// straight to 120s. The resolved value is then clamped into the
+    /// manifest's `[min, max]` (further clamped into the global
+    /// `[MIN_TIMEOUT_SECS, MAX_TIMEOUT_SECS]` safety net) so a typo
+    /// like `2` or `99999` can't render the workspace unusable.
+    pub fn effective_timeout(
+        &self,
+        plugin_name: &str,
+        ws_info: Option<&WorkspaceInfo>,
+    ) -> Duration {
+        // Pull the matching `Number` field once so we don't iterate
+        // the manifest's settings vec four times.
+        let (manifest_default, manifest_min_max) = self
+            .plugins
+            .get(plugin_name)
+            .and_then(|p| {
+                p.manifest.settings.iter().find_map(|f| match f {
+                    PluginSettingField::Number {
+                        key,
+                        default,
+                        min,
+                        max,
+                        ..
+                    } if key == TIMEOUT_SETTING_KEY => Some((*default, (*min, *max))),
+                    _ => None,
+                })
+            })
+            .unwrap_or((None, (None, None)));
+
+        let per_repo = ws_info
+            .and_then(|info| info.repo_id.as_deref())
+            .and_then(|repo_id| {
+                self.repo_setting_overrides
+                    .read()
+                    .unwrap()
+                    .get(repo_id)
+                    .and_then(|plugins| plugins.get(plugin_name))
+                    .and_then(|kvs| kvs.get(TIMEOUT_SETTING_KEY))
+                    .cloned()
+            });
+        let global = self
+            .setting_overrides
+            .read()
+            .unwrap()
+            .get(plugin_name)
+            .and_then(|kvs| kvs.get(TIMEOUT_SETTING_KEY))
+            .cloned();
+
+        // First valid number from the override chain wins. Manifest
+        // default is consulted if both override slots are absent or
+        // unparseable; the global constant catches the case where the
+        // plugin doesn't declare `timeout_seconds` at all.
+        let resolved_secs = [per_repo, global]
+            .into_iter()
+            .flatten()
+            .find_map(parse_timeout_value)
+            .or(manifest_default.filter(|v| v.is_finite() && *v > 0.0))
+            .unwrap_or_else(|| DEFAULT_EXEC_TIMEOUT.as_secs() as f64);
+
+        let (manifest_min, manifest_max) = manifest_min_max;
+        let lo = manifest_min
+            .map(|m| m.max(MIN_TIMEOUT_SECS as f64))
+            .unwrap_or(MIN_TIMEOUT_SECS as f64);
+        let hi = manifest_max
+            .map(|m| m.min(MAX_TIMEOUT_SECS as f64))
+            .unwrap_or(MAX_TIMEOUT_SECS as f64);
+        let secs = resolved_secs.clamp(lo, hi).round() as u64;
+        Duration::from_secs(secs)
     }
 
     /// Globally enable/disable a plugin. Disabled plugins return
@@ -408,14 +582,13 @@ impl PluginRegistry {
         args: serde_json::Value,
         workspace_info: WorkspaceInfo,
     ) -> Result<serde_json::Value, PluginError> {
-        self.call_operation_with_timeout(
-            plugin_name,
-            operation,
-            args,
-            workspace_info,
-            OPERATION_TIMEOUT,
-        )
-        .await
+        // Resolve the effective timeout per-invocation so the
+        // operation cap and the per-`host.exec` cap stay in sync. Both
+        // now scale with the plugin's manifest default + any global /
+        // per-repo overrides — see `effective_timeout`.
+        let timeout = self.effective_timeout(plugin_name, Some(&workspace_info));
+        self.call_operation_with_timeout(plugin_name, operation, args, workspace_info, timeout)
+            .await
     }
 
     async fn call_operation_with_timeout(
@@ -471,12 +644,20 @@ impl PluginRegistry {
         let allowed_clis = plugin
             .trust
             .effective_allowlist(&plugin.manifest.required_clis);
+        // Per-`host.exec` timeout matches the operation timeout: a
+        // single export that does N serial exec calls would otherwise
+        // be allowed (operation budget) to exceed the per-call budget.
+        // Resolving once here keeps both sides consistent for this
+        // invocation even if a concurrent UI write changes the global
+        // override mid-call.
+        let config = self.effective_config_for_invocation(plugin_name, &workspace_info);
         let ctx = HostContext {
             plugin_name: plugin_name.to_string(),
             kind: plugin.manifest.kind,
             allowed_clis,
             workspace_info,
-            config: self.effective_config(plugin_name),
+            config,
+            exec_timeout: operation_timeout,
         };
 
         let lua =
@@ -554,6 +735,33 @@ impl PluginRegistry {
     pub fn plugin_dir(&self) -> &Path {
         &self.plugin_dir
     }
+}
+
+/// Parse a stored timeout value into seconds. Accepts JSON numbers
+/// directly and JSON strings (`"60"`) for forward-compat with text
+/// inputs whose payload type can drift across UI versions. Anything
+/// else — booleans, arrays, NaN, negatives — returns `None` so the
+/// caller falls back to the manifest default. Logged as a warning so
+/// diagnostic surfaces can show that a saved override is being
+/// ignored.
+fn parse_timeout_value(value: serde_json::Value) -> Option<f64> {
+    let parsed = match &value {
+        serde_json::Value::Number(n) => n.as_f64(),
+        serde_json::Value::String(s) => s.trim().parse::<f64>().ok(),
+        _ => None,
+    };
+    if let Some(v) = parsed
+        && v.is_finite()
+        && v > 0.0
+    {
+        return Some(v);
+    }
+    tracing::debug!(
+        target: "claudette::plugin",
+        value = ?value,
+        "ignoring non-numeric / non-positive timeout override; using default"
+    );
+    None
 }
 
 fn install_operation_timeout_interrupt(lua: &mlua::Lua, operation_timeout: Duration) {
@@ -885,6 +1093,7 @@ mod tests {
             branch: "main".to_string(),
             worktree_path: tmp.clone(),
             repo_path: tmp,
+            ..Default::default()
         }
     }
 
@@ -1173,6 +1382,191 @@ mod tests {
         // entries in the map.
         let overrides = registry.setting_overrides.read().unwrap();
         assert!(!overrides.contains_key("does-not-exist"));
+    }
+
+    /// Build a registry whose plugin declares a `Number`-typed
+    /// `timeout_seconds` setting. Used by the timeout-resolution tests
+    /// to exercise the manifest default + global override + per-repo
+    /// override layering without going through the env-provider
+    /// dispatch.
+    fn make_plugin_with_timeout_manifest(dir: &Path, default: u64) -> PluginRegistry {
+        let plugin_dir = dir.join("timeout-demo");
+        std::fs::create_dir(&plugin_dir).unwrap();
+        let manifest = format!(
+            r#"{{
+                "name": "timeout-demo",
+                "display_name": "Timeout Demo",
+                "version": "1.0.0",
+                "description": "demo",
+                "operations": ["noop"],
+                "settings": [
+                    {{
+                        "type": "number",
+                        "key": "timeout_seconds",
+                        "label": "Timeout",
+                        "default": {default},
+                        "min": 5,
+                        "max": 600
+                    }}
+                ]
+            }}"#
+        );
+        std::fs::write(plugin_dir.join("plugin.json"), manifest).unwrap();
+        std::fs::write(
+            plugin_dir.join("init.lua"),
+            "local M = {} function M.noop(a) return {} end return M",
+        )
+        .unwrap();
+        PluginRegistry::discover(dir)
+    }
+
+    #[test]
+    fn effective_timeout_uses_manifest_default() {
+        let dir = tempfile::tempdir().unwrap();
+        let registry = make_plugin_with_timeout_manifest(dir.path(), 90);
+        let resolved = registry.effective_timeout("timeout-demo", None);
+        assert_eq!(resolved, Duration::from_secs(90));
+    }
+
+    #[test]
+    fn effective_timeout_falls_back_when_no_manifest_setting() {
+        // Plugin without a `timeout_seconds` field: resolver returns
+        // the global DEFAULT_EXEC_TIMEOUT (120s).
+        let dir = tempfile::tempdir().unwrap();
+        let registry = make_plugin_with_settings_manifest(dir.path());
+        let resolved = registry.effective_timeout("settings-demo", None);
+        assert_eq!(resolved, DEFAULT_EXEC_TIMEOUT);
+    }
+
+    #[test]
+    fn effective_timeout_global_override_wins_over_manifest() {
+        let dir = tempfile::tempdir().unwrap();
+        let registry = make_plugin_with_timeout_manifest(dir.path(), 60);
+        registry.set_setting(
+            "timeout-demo",
+            TIMEOUT_SETTING_KEY,
+            Some(serde_json::json!(300)),
+        );
+        let resolved = registry.effective_timeout("timeout-demo", None);
+        assert_eq!(resolved, Duration::from_secs(300));
+    }
+
+    #[test]
+    fn effective_timeout_per_repo_override_wins_over_global() {
+        let dir = tempfile::tempdir().unwrap();
+        let registry = make_plugin_with_timeout_manifest(dir.path(), 60);
+        registry.set_setting(
+            "timeout-demo",
+            TIMEOUT_SETTING_KEY,
+            Some(serde_json::json!(120)),
+        );
+        registry.set_repo_setting(
+            "repo-A",
+            "timeout-demo",
+            TIMEOUT_SETTING_KEY,
+            Some(serde_json::json!(240)),
+        );
+
+        let mut ws = test_workspace();
+        ws.repo_id = Some("repo-A".to_string());
+        let resolved = registry.effective_timeout("timeout-demo", Some(&ws));
+        assert_eq!(resolved, Duration::from_secs(240));
+
+        // Different repo gets the global override, not the repo-A override.
+        let mut other = test_workspace();
+        other.repo_id = Some("repo-B".to_string());
+        let resolved_b = registry.effective_timeout("timeout-demo", Some(&other));
+        assert_eq!(resolved_b, Duration::from_secs(120));
+    }
+
+    #[test]
+    fn effective_timeout_clamps_to_manifest_bounds() {
+        let dir = tempfile::tempdir().unwrap();
+        let registry = make_plugin_with_timeout_manifest(dir.path(), 60);
+        // Override well above the manifest max=600 → clamps to 600.
+        registry.set_setting(
+            "timeout-demo",
+            TIMEOUT_SETTING_KEY,
+            Some(serde_json::json!(99_999)),
+        );
+        let resolved = registry.effective_timeout("timeout-demo", None);
+        assert_eq!(resolved, Duration::from_secs(600));
+
+        // Override below the manifest min=5 → clamps to 5.
+        registry.set_setting(
+            "timeout-demo",
+            TIMEOUT_SETTING_KEY,
+            Some(serde_json::json!(1)),
+        );
+        let resolved = registry.effective_timeout("timeout-demo", None);
+        assert_eq!(resolved, Duration::from_secs(5));
+    }
+
+    #[test]
+    fn effective_timeout_invalid_value_falls_back_to_default() {
+        let dir = tempfile::tempdir().unwrap();
+        let registry = make_plugin_with_timeout_manifest(dir.path(), 90);
+        // Garbage values: each one falls back to the manifest default.
+        for bad in [
+            serde_json::json!("not a number"),
+            serde_json::json!(-5),
+            serde_json::json!(0),
+            serde_json::json!(true),
+        ] {
+            registry.set_setting("timeout-demo", TIMEOUT_SETTING_KEY, Some(bad.clone()));
+            let resolved = registry.effective_timeout("timeout-demo", None);
+            assert_eq!(
+                resolved,
+                Duration::from_secs(90),
+                "value {bad:?} should fall back to manifest default"
+            );
+        }
+
+        // String form of a valid number is accepted (forward-compat
+        // with text inputs whose payload type can drift).
+        registry.set_setting(
+            "timeout-demo",
+            TIMEOUT_SETTING_KEY,
+            Some(serde_json::json!("180")),
+        );
+        let resolved = registry.effective_timeout("timeout-demo", None);
+        assert_eq!(resolved, Duration::from_secs(180));
+    }
+
+    #[test]
+    fn set_repo_setting_ignores_unknown_plugin_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let registry = PluginRegistry::discover(dir.path());
+        registry.set_repo_setting(
+            "repo-A",
+            "does-not-exist",
+            "k",
+            Some(serde_json::json!("v")),
+        );
+        let overrides = registry.repo_setting_overrides.read().unwrap();
+        assert!(!overrides.contains_key("repo-A"));
+    }
+
+    #[test]
+    fn set_repo_setting_clear_collapses_empty_buckets() {
+        let dir = tempfile::tempdir().unwrap();
+        let registry = make_plugin_with_timeout_manifest(dir.path(), 60);
+        registry.set_repo_setting(
+            "repo-A",
+            "timeout-demo",
+            TIMEOUT_SETTING_KEY,
+            Some(serde_json::json!(240)),
+        );
+        // Sanity check: the override is present.
+        {
+            let overrides = registry.repo_setting_overrides.read().unwrap();
+            assert!(overrides.contains_key("repo-A"));
+        }
+        // Clearing the only key should remove the entire repo entry,
+        // not leave an empty {repo-A: {timeout-demo: {}}} bucket.
+        registry.set_repo_setting("repo-A", "timeout-demo", TIMEOUT_SETTING_KEY, None);
+        let overrides = registry.repo_setting_overrides.read().unwrap();
+        assert!(!overrides.contains_key("repo-A"));
     }
 
     // ---- Capability enforcement (#580) -------------------------------------

@@ -53,6 +53,14 @@ By default, Claudette prompts before archiving when an archive script is configu
 
 If the archive script fails or times out, Claudette continues with the archive — a system message in the workspace's last chat session records the script output and exit status, so you can inspect what happened.
 
+## Environment Provider Overrides
+
+The **Environment** section in each repo's settings exposes a per-repo override for every env-provider plugin (direnv, mise, dotenv, Nix devshell). Each plugin's manifest-declared settings — currently `timeout_seconds` for all four, plus `auto_allow` (direnv) / `auto_trust` (mise) — show up as a form. Setting a value here only applies to workspaces in this repo; cleared fields fall back to the global default in **Settings → Plugins**.
+
+The most common reason to set a per-repo override is **timeout**: the default cap is 120 seconds, which covers most cold direnv/mise/Nix runs. Some Nix flakes (large transitive closures, slow substituter networks) routinely exceed that. Bump `Timeout (seconds)` for those repos rather than globally; the global value still applies everywhere else.
+
+While an env-provider is resolving, Claudette surfaces the active plugin and elapsed time in three places: the workspace's row in the sidebar (spinner + tooltip), the chat composer placeholder, and an overlay above the integrated terminal. The terminal won't open a prompt and the agent won't spawn until the env layer is ready or fails.
+
 ## Custom Instructions
 
 Text that is appended to the agent's system prompt at the start of every chat in this repository. Use this to give the agent context about your project:

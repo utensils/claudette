@@ -36,8 +36,9 @@ fn make_vm(plugin: &str, allowed: &[&str], worktree: &Path) -> Lua {
             branch: "main".into(),
             worktree_path: worktree.to_string_lossy().into_owned(),
             repo_path: worktree.to_string_lossy().into_owned(),
+            ..Default::default()
         },
-        config: Default::default(),
+        ..Default::default()
     };
     create_lua_vm(ctx).expect("create vm")
 }
@@ -592,6 +593,7 @@ async fn integration_direnv_export_returns_env() {
         branch: "main".into(),
         worktree_path: tmp.path().to_string_lossy().into_owned(),
         repo_path: tmp.path().to_string_lossy().into_owned(),
+        ..Default::default()
     };
 
     let resolved = crate::env_provider::resolve_for_workspace(
@@ -656,6 +658,7 @@ async fn integration_mise_export_returns_env() {
         branch: "main".into(),
         worktree_path: tmp.path().to_string_lossy().into_owned(),
         repo_path: tmp.path().to_string_lossy().into_owned(),
+        ..Default::default()
     };
 
     let resolved = crate::env_provider::resolve_for_workspace(
@@ -718,6 +721,7 @@ async fn integration_direnv_auto_allow_off_surfaces_blocked_error() {
         branch: "main".into(),
         worktree_path: tmp.path().to_string_lossy().into_owned(),
         repo_path: tmp.path().to_string_lossy().into_owned(),
+        ..Default::default()
     };
 
     let resolved = crate::env_provider::resolve_for_workspace(
@@ -784,6 +788,7 @@ async fn integration_direnv_auto_allow_on_retries_after_blocked() {
         branch: "main".into(),
         worktree_path: tmp.path().to_string_lossy().into_owned(),
         repo_path: tmp.path().to_string_lossy().into_owned(),
+        ..Default::default()
     };
 
     let resolved = crate::env_provider::resolve_for_workspace(
@@ -842,6 +847,7 @@ async fn integration_mise_auto_trust_off_surfaces_untrusted_error() {
         branch: "main".into(),
         worktree_path: tmp.path().to_string_lossy().into_owned(),
         repo_path: tmp.path().to_string_lossy().into_owned(),
+        ..Default::default()
     };
 
     let resolved = crate::env_provider::resolve_for_workspace(
@@ -898,6 +904,7 @@ async fn integration_mise_auto_trust_on_retries_after_untrusted() {
         branch: "main".into(),
         worktree_path: tmp.path().to_string_lossy().into_owned(),
         repo_path: tmp.path().to_string_lossy().into_owned(),
+        ..Default::default()
     };
 
     let resolved = crate::env_provider::resolve_for_workspace(
@@ -1014,6 +1021,7 @@ async fn integration_nix_devshell_export_returns_env() {
         branch: "main".into(),
         worktree_path: tmp.path().to_string_lossy().into_owned(),
         repo_path: tmp.path().to_string_lossy().into_owned(),
+        ..Default::default()
     };
 
     let resolved = crate::env_provider::resolve_for_workspace(

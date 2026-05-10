@@ -1823,6 +1823,7 @@ pub async fn send_chat_message(
         branch: ws.branch_name.clone(),
         worktree_path: worktree_path.clone(),
         repo_path: repo_path.to_string(),
+        repo_id: repo.as_ref().map(|r| r.id.clone()),
     };
     let disabled_env_providers = {
         let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
@@ -1831,12 +1832,17 @@ pub async fn send_chat_message(
     };
     let resolved_env = {
         let registry = state.plugins.read().await;
-        claudette::env_provider::resolve_with_registry(
+        let progress = crate::commands::env::TauriEnvProgressSink::new(
+            app.clone(),
+            ws_info_for_env.id.clone(),
+        );
+        claudette::env_provider::resolve_with_registry_and_progress(
             &registry,
             &state.env_cache,
             std::path::Path::new(&worktree_path),
             &ws_info_for_env,
             &disabled_env_providers,
+            Some(&progress),
         )
         .await
     };

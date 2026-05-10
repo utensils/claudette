@@ -107,7 +107,8 @@ pub(crate) async fn create_workspace_inner(
         .iter()
         .find(|r| r.id == repo_id)
         .ok_or("Repository not found")?;
-    let resolved_env = resolve_env_for_workspace(state, &out.workspace, &repo.path).await;
+    let resolved_env =
+        resolve_env_for_workspace(state, &out.workspace, &repo.path, Some(app)).await;
 
     let setup_result = if skip_setup {
         None
@@ -191,6 +192,7 @@ pub async fn fork_workspace_at_checkpoint(
 #[tauri::command]
 pub async fn run_workspace_setup(
     workspace_id: String,
+    app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<Option<SetupResult>, String> {
     let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
@@ -211,7 +213,7 @@ pub async fn run_workspace_setup(
         .find(|r| r.id == ws.repository_id)
         .ok_or("Repository not found")?;
 
-    let resolved_env = resolve_env_for_workspace(&state, ws, &repo.path).await;
+    let resolved_env = resolve_env_for_workspace(&state, ws, &repo.path, Some(&app)).await;
     let result = ops_workspace::resolve_and_run_setup(
         ws,
         Path::new(&repo.path),
@@ -230,6 +232,12 @@ pub async fn run_workspace_setup(
 /// [`claudette::env_provider::ResolvedEnv`] merged from all detected
 /// providers (direnv, mise, dotenv, nix-devshell).
 ///
+/// When `app` is `Some`, per-plugin progress is emitted as
+/// `workspace_env_progress` Tauri events so the sidebar / chat
+/// composer / terminal overlay can render the loading state. The
+/// archive path passes `None` because there is no UI to show progress
+/// to once the workspace is being torn down.
+///
 /// Returns `None` when the workspace has no worktree path yet (which
 /// shouldn't happen by the time we're about to spawn, but keeps the
 /// call sites defensive).
@@ -237,6 +245,7 @@ async fn resolve_env_for_workspace(
     state: &AppState,
     ws: &Workspace,
     repo_path: &str,
+    app: Option<&AppHandle>,
 ) -> Option<claudette::env_provider::ResolvedEnv> {
     let worktree = ws.worktree_path.as_deref()?;
     let ws_info = claudette::plugin_runtime::host_api::WorkspaceInfo {
@@ -245,17 +254,23 @@ async fn resolve_env_for_workspace(
         branch: ws.branch_name.clone(),
         worktree_path: worktree.to_string(),
         repo_path: repo_path.to_string(),
+        repo_id: Some(ws.repository_id.clone()),
     };
     let disabled = Database::open(&state.db_path)
         .map(|db| crate::commands::env::load_disabled_providers(&db, &ws.repository_id))
         .unwrap_or_default();
     let registry = state.plugins.read().await;
-    let resolved = claudette::env_provider::resolve_with_registry(
+    let progress =
+        app.map(|h| crate::commands::env::TauriEnvProgressSink::new(h.clone(), ws.id.clone()));
+    let resolved = claudette::env_provider::resolve_with_registry_and_progress(
         &registry,
         &state.env_cache,
         Path::new(worktree),
         &ws_info,
         &disabled,
+        progress
+            .as_ref()
+            .map(|p| p as &dyn claudette::env_provider::EnvProgressSink),
     )
     .await;
     crate::commands::env::register_resolved_with_watcher(
@@ -390,7 +405,9 @@ pub(crate) async fn archive_workspace_inner(
         match (ws_opt, repo_opt) {
             (Some(ws), Some(repo)) => {
                 if let Some(ref wt_path) = ws.worktree_path {
-                    let resolved_env = resolve_env_for_workspace(state, ws, &repo.path).await;
+                    // Archive teardown: no UI is observing the
+                    // workspace anymore, so skip progress events.
+                    let resolved_env = resolve_env_for_workspace(state, ws, &repo.path, None).await;
                     let result = ops_workspace::resolve_and_run_archive(
                         ws,
                         Path::new(&repo.path),

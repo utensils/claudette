@@ -418,18 +418,42 @@ fn main() {
     // user setting overrides) from app_settings so the very first call
     // after startup reflects what the user configured previously. Any
     // failure here is non-fatal: the registry just runs with defaults.
-    if let Ok(db) = Database::open(&db_path)
-        && let Ok(entries) = db.list_app_settings_with_prefix("plugin:")
-    {
-        for (key, value) in entries {
-            let rest = &key["plugin:".len()..];
-            if let Some((plugin_name, tail)) = rest.split_once(':') {
-                if tail == "enabled" && value == "false" {
-                    plugins.set_disabled(plugin_name, true);
-                } else if let Some(setting_key) = tail.strip_prefix("setting:")
+    if let Ok(db) = Database::open(&db_path) {
+        if let Ok(entries) = db.list_app_settings_with_prefix("plugin:") {
+            for (key, value) in entries {
+                let rest = &key["plugin:".len()..];
+                if let Some((plugin_name, tail)) = rest.split_once(':') {
+                    if tail == "enabled" && value == "false" {
+                        plugins.set_disabled(plugin_name, true);
+                    } else if let Some(setting_key) = tail.strip_prefix("setting:")
+                        && let Ok(v) = serde_json::from_str::<serde_json::Value>(&value)
+                    {
+                        plugins.set_setting(plugin_name, setting_key, Some(v));
+                    }
+                }
+            }
+        }
+        // Per-repo plugin setting overrides
+        // (`repo:{repo_id}:plugin:{name}:setting:{key} = <json>`). Parsed
+        // into the registry's `repo_setting_overrides` map so the next
+        // env-resolve in that repo sees the override before the user
+        // re-opens Repo Settings.
+        if let Ok(entries) = db.list_app_settings_with_prefix("repo:") {
+            for (key, value) in entries {
+                let rest = &key["repo:".len()..];
+                let Some((repo_id, tail)) = rest.split_once(':') else {
+                    continue;
+                };
+                let Some(rest) = tail.strip_prefix("plugin:") else {
+                    continue;
+                };
+                let Some((plugin_name, tail)) = rest.split_once(':') else {
+                    continue;
+                };
+                if let Some(setting_key) = tail.strip_prefix("setting:")
                     && let Ok(v) = serde_json::from_str::<serde_json::Value>(&value)
                 {
-                    plugins.set_setting(plugin_name, setting_key, Some(v));
+                    plugins.set_repo_setting(repo_id, plugin_name, setting_key, Some(v));
                 }
             }
         }
@@ -1071,6 +1095,8 @@ fn main() {
             commands::plugins_runtime::list_claudette_plugins,
             commands::plugins_runtime::set_claudette_plugin_enabled,
             commands::plugins_runtime::set_claudette_plugin_setting,
+            commands::plugins_runtime::set_claudette_plugin_repo_setting,
+            commands::plugins_runtime::get_claudette_plugin_repo_settings,
             commands::plugins_runtime::reseed_bundled_plugins,
             // Built-in Claudette plugins (Rust-implemented agent surfaces)
             commands::plugins_runtime::list_builtin_claudette_plugins,
