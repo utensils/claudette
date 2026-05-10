@@ -1,6 +1,6 @@
 ---
 title: LM Studio
-description: Run Claudette agents against models loaded in LM Studio's local server — OpenAI-compatible Responses API on localhost, no remote API key required.
+description: Run Claudette agents against models loaded in LM Studio's local server — direct routing to LM Studio's native Anthropic /v1/messages endpoint on localhost, no remote API key required.
 ---
 
 The LM Studio provider points the spawned `claude` CLI at LM Studio's built-in local server. It's a **direct-routed** backend (same fast path as Ollama): Claudette sets `ANTHROPIC_BASE_URL=http://localhost:1234` and the CLI talks straight to LM Studio with no in-process gateway, no wire-format translation, and full streaming pass-through. LM Studio 0.4.1+ implements Anthropic's `/v1/messages` endpoint natively, so this works out of the box.

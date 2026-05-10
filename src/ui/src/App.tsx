@@ -764,9 +764,19 @@ function App() {
   // new array reference) — leading to canceled in-flight requests and
   // missed refreshes. The effect now only re-runs when the experimental
   // flag flips.
+  //
+  // Self-scheduling `setTimeout` instead of `setInterval` so the next
+  // tick is only queued *after* the current one resolves. With
+  // `setInterval`, a slow refresh (overloaded LM Studio, multiple
+  // backends, slow disk on the secret-store read) would let multiple
+  // ticks run concurrently, race `setAgentBackends`, and hammer the
+  // backend's `refresh_agent_backend_models` DB writer. The await-then-
+  // schedule pattern makes the period a *floor* (always ≥8 s between
+  // tick starts) rather than a ceiling.
   useEffect(() => {
     if (!alternativeBackendsEnabled) return;
     let cancelled = false;
+    let timer: number | null = null;
     const tick = async () => {
       const live = useAppStore.getState().agentBackends;
       const ids = live
@@ -784,11 +794,14 @@ function App() {
           // banner separately when the user actually tries to send.
         }
       }
+      if (!cancelled) {
+        timer = window.setTimeout(tick, 8_000);
+      }
     };
-    const timer = window.setInterval(tick, 8_000);
+    timer = window.setTimeout(tick, 8_000);
     return () => {
       cancelled = true;
-      window.clearInterval(timer);
+      if (timer !== null) window.clearTimeout(timer);
     };
   }, [alternativeBackendsEnabled, setAgentBackends]);
 

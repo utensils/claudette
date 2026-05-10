@@ -1577,27 +1577,20 @@ fn gateway_auth_matches(header: &str, auth_token: &str) -> bool {
     })
 }
 
-// LM Studio's local server accepts any bearer token, so its API-key field is
-// optional — substitute a stable placeholder when the user hasn't set one.
-// Every other gateway-routed backend (OpenAI, custom OpenAI-shaped) still
-// requires a real key.
-fn openai_compatible_bearer_token(
-    kind: AgentBackendKind,
-    secret: Option<&str>,
-) -> Result<String, String> {
-    match (kind, secret) {
-        (AgentBackendKind::LmStudio, Some(s)) if !s.trim().is_empty() => Ok(s.to_string()),
-        (AgentBackendKind::LmStudio, _) => Ok("lm-studio".to_string()),
-        (_, Some(s)) => Ok(s.to_string()),
-        (_, None) => Err("OpenAI-compatible backend requires an API key".to_string()),
-    }
+// All currently-supported gateway backends (OpenAi, Codex, CustomOpenAi)
+// require a real API key. LM Studio used to land here too, with a
+// placeholder-bearer fallback, but it left the gateway path entirely once
+// it shipped native /v1/messages support — its placeholder logic now
+// lives in `discover_lm_studio_models` and the runtime env-var setup in
+// `resolve_backend_runtime`.
+fn openai_compatible_bearer_token(secret: Option<&str>) -> Result<String, String> {
+    secret
+        .map(str::to_string)
+        .ok_or_else(|| "OpenAI-compatible backend requires an API key".to_string())
 }
 
-fn openai_compatible_default_base(kind: AgentBackendKind) -> &'static str {
-    match kind {
-        AgentBackendKind::LmStudio => "http://localhost:1234",
-        _ => "https://api.openai.com",
-    }
+fn openai_compatible_default_base(_kind: AgentBackendKind) -> &'static str {
+    "https://api.openai.com"
 }
 
 /// Approximate the prompt+tools size and compare against the backend's
@@ -1651,7 +1644,7 @@ async fn call_openai_responses(
     if config.kind == AgentBackendKind::CodexSubscription {
         return call_codex_responses(config, secret, anthropic_req).await;
     }
-    let secret = openai_compatible_bearer_token(config.kind, secret)?;
+    let secret = openai_compatible_bearer_token(secret)?;
     let base = config
         .base_url
         .as_deref()
@@ -2953,39 +2946,29 @@ data: [DONE]
     }
 
     #[test]
-    fn openai_compatible_bearer_token_makes_lm_studio_secret_optional() {
-        // LM Studio: missing or blank secret falls back to a placeholder so the
-        // request still carries a valid Bearer header.
+    fn openai_compatible_bearer_token_requires_a_real_secret() {
+        // Every gateway backend that reaches `call_openai_responses`
+        // (OpenAi, Codex, CustomOpenAi) requires a real API key — the
+        // gateway does not substitute placeholders. LM Studio's
+        // local-first placeholder lives in the LM Studio code path
+        // (which is direct-routed and never enters this helper).
         assert_eq!(
-            openai_compatible_bearer_token(AgentBackendKind::LmStudio, None).as_deref(),
-            Ok("lm-studio")
-        );
-        assert_eq!(
-            openai_compatible_bearer_token(AgentBackendKind::LmStudio, Some("")).as_deref(),
-            Ok("lm-studio")
-        );
-        assert_eq!(
-            openai_compatible_bearer_token(AgentBackendKind::LmStudio, Some("   ")).as_deref(),
-            Ok("lm-studio")
-        );
-        assert_eq!(
-            openai_compatible_bearer_token(AgentBackendKind::LmStudio, Some("user-token"))
-                .as_deref(),
+            openai_compatible_bearer_token(Some("user-token")).as_deref(),
             Ok("user-token"),
             "user-supplied bearer must be forwarded as-is"
         );
+        assert!(openai_compatible_bearer_token(None).is_err());
 
-        // OpenAI: missing secret is still a hard error.
-        assert!(openai_compatible_bearer_token(AgentBackendKind::OpenAiApi, None).is_err());
-
-        // Default base URL also branches by kind so LM Studio doesn't get
-        // pointed at api.openai.com when its base_url is unset.
-        assert_eq!(
-            openai_compatible_default_base(AgentBackendKind::LmStudio),
-            "http://localhost:1234"
-        );
+        // Default base URL still defined for compatibility with the
+        // existing call site, but we no longer branch by kind because
+        // every remaining gateway-routed backend that uses this default
+        // points at the OpenAI API.
         assert_eq!(
             openai_compatible_default_base(AgentBackendKind::OpenAiApi),
+            "https://api.openai.com"
+        );
+        assert_eq!(
+            openai_compatible_default_base(AgentBackendKind::CustomOpenAi),
             "https://api.openai.com"
         );
     }
