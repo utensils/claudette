@@ -14,12 +14,22 @@ use super::Database;
 fn extract_plan_file_path(content: &str) -> Option<String> {
     let marker = "/.claude/plans/";
     let marker_idx = content.find(marker)?;
-    let prefix = &content[..marker_idx];
-    let start = prefix.rfind('/').unwrap_or(0);
+    let start = content[..marker_idx]
+        .rfind(|c: char| c.is_whitespace() || matches!(c, '"' | '\'' | '`' | '<' | '(' | '[' | '{'))
+        .map_or(0, |idx| {
+            idx + content[idx..]
+                .chars()
+                .next()
+                .map(char::len_utf8)
+                .unwrap_or(0)
+        });
     let rest = &content[start..];
     let end = rest.find(".md")? + ".md".len();
     let candidate = &rest[..end];
     if candidate.contains('\n') || candidate.contains('\r') {
+        return None;
+    }
+    if !candidate.starts_with('/') {
         return None;
     }
     Some(candidate.to_string())
@@ -1731,6 +1741,28 @@ mod tests {
         assert_eq!(
             db.latest_plan_file_path_for_session(&session_id).unwrap(),
             Some("/repo/.claude/plans/new.md".to_string()),
+        );
+    }
+
+    #[test]
+    fn latest_plan_file_path_for_session_keeps_full_absolute_path() {
+        let db = setup_db_with_workspace();
+        db.insert_chat_message(&make_chat_msg(
+            &db,
+            "m1",
+            "w1",
+            ChatRole::Assistant,
+            "View plan - /tmp/ws/.claude/plans/new.md",
+        ))
+        .unwrap();
+
+        let session_id = db
+            .default_session_id_for_workspace("w1")
+            .unwrap()
+            .expect("default session");
+        assert_eq!(
+            db.latest_plan_file_path_for_session(&session_id).unwrap(),
+            Some("/tmp/ws/.claude/plans/new.md".to_string()),
         );
     }
 }

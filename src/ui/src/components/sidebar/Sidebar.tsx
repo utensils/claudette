@@ -114,6 +114,8 @@ export const Sidebar = memo(function Sidebar() {
   const addToast = useAppStore((s) => s.addToast);
   const unreadCompletions = useAppStore((s) => s.unreadCompletions);
   const sessionsByWorkspace = useAppStore((s) => s.sessionsByWorkspace);
+  const agentQuestions = useAppStore((s) => s.agentQuestions);
+  const planApprovals = useAppStore((s) => s.planApprovals);
   const setSessionsForWorkspace = useAppStore((s) => s.setSessionsForWorkspace);
   const scmSummary = useAppStore((s) => s.scmSummary);
   const setRepositories = useAppStore((s) => s.setRepositories);
@@ -651,13 +653,15 @@ export const Sidebar = memo(function Sidebar() {
       workspaceDrag.dropTarget?.id === ws.id &&
       workspaceDrag.dropTarget.placement === "after";
     // Compute the unread/attention badge here only because the row's
-    // `wsUnread` className depends on it. The actual icon rendering lives
-    // in `WorkspaceStatusIcon`, which re-derives the same state — keeping
-    // the duplication in sync isn't a concern because the inputs are the
-    // same store slices and a divergence would surface immediately.
+    // `wsUnread` className depends on it. Keep these inputs aligned with
+    // `WorkspaceStatusIcon` so the row highlight and leading icon do not drift.
     const wsSessions = sessionsByWorkspace[ws.id] ?? [];
-    const hasPlan = wsSessions.some((s) => s.needs_attention && s.attention_kind === "Plan");
-    const hasQuestion = wsSessions.some((s) => s.needs_attention && s.attention_kind !== "Plan");
+    const hasPlan = wsSessions.some(
+      (s) => planApprovals[s.id] || (s.needs_attention && s.attention_kind === "Plan"),
+    );
+    const hasQuestion = wsSessions.some(
+      (s) => agentQuestions[s.id] || (s.needs_attention && s.attention_kind !== "Plan"),
+    );
     const hasUnreadBadge =
       hasQuestion
       || hasPlan

@@ -401,12 +401,6 @@ pub async fn handle_tls_connection(
         auth_consensus_required,
     );
 
-    println!(
-        "[ws] Authenticated connection from {addr} as {} ({})",
-        ctx.display_name,
-        ctx.participant_id.as_str()
-    );
-
     // Spawn the per-connection workspace event forwarder when the host
     // has wired up a bus. Each event is filtered against this connection's
     // allowed workspaces before forwarding, so a remote never learns about

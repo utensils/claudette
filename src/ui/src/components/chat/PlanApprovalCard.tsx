@@ -217,8 +217,8 @@ export function PlanApprovalCard({
  * the session has no open vote (solo or non-consensus collab) — the card
  * then behaves identically to its pre-collab single-shot form.
  *
- * The local host's voting status is derived from the `votes` map keyed by
- * `"host"`, matching what the Rust resolver records.
+ * The local marker is derived from the current workspace's self participant id,
+ * not from the host sentinel, so remote viewers see their own vote labeled.
  */
 function ConsensusProgress({ approval }: { approval: PlanApproval }) {
   const { t } = useTranslation("chat");

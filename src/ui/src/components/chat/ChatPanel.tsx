@@ -286,6 +286,9 @@ export function ChatPanel() {
   const pendingPlan = useAppStore(
     (s) => (activeSessionId ? s.planApprovals[activeSessionId] ?? null : null)
   );
+  const pendingConsensusVote = useAppStore(
+    (s) => (activeSessionId ? s.consensusVotes[activeSessionId] ?? null : null),
+  );
   const setPlanApproval = useAppStore((s) => s.setPlanApproval);
   const clearPlanApproval = useAppStore((s) => s.clearPlanApproval);
   const openConsensusVote = useAppStore((s) => s.openConsensusVote);
@@ -1515,13 +1518,15 @@ export function ChatPanel() {
                         submitPlanApproval,
                         sendRemoteCommand,
                       });
-                      clearPlanApproval(sid);
-                      // User action is authoritative for ending the plan
-                      // phase — flip planMode off so the next turn triggers
-                      // drift detection (backend `session_exited_plan` covers
-                      // this already, but clearing the UI state keeps the
-                      // toolbar chip in sync).
-                      setPlanMode(sid, false);
+                      if (pendingConsensusVote?.toolUseId !== toolUseId) {
+                        clearPlanApproval(sid);
+                        // User action is authoritative for ending the plan
+                        // phase — flip planMode off so the next turn triggers
+                        // drift detection (backend `session_exited_plan` covers
+                        // this already, but clearing the UI state keeps the
+                        // toolbar chip in sync).
+                        setPlanMode(sid, false);
+                      }
                     } catch (e) {
                       if (isStalePlanApprovalError(e)) {
                         clearPlanApproval(sid);

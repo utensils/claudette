@@ -43,7 +43,10 @@ import type {
   GitFileLayer,
   StagedDiffFiles,
 } from "../types/diff";
-import type { Participant } from "../stores/slices/collabSlice";
+import type {
+  Participant,
+  ParticipantVote,
+} from "../stores/slices/collabSlice";
 
 // -- Data --
 
@@ -780,6 +783,24 @@ export function setClaudeRemoteControl(
 export interface CollaborationSessionSnapshot {
   participants: Participant[];
   turn_holder: string | null;
+  turn_started_at_ms: number | null;
+  turn_settings: {
+    model?: string | null;
+    plan_mode?: boolean;
+  } | null;
+  pending_vote: {
+    tool_use_id: string;
+    required_voters: Participant[];
+    votes: Record<string, ParticipantVote>;
+    input?: unknown;
+    plan_file_path?: string | null;
+  } | null;
+  pending_question: {
+    tool_use_id: string;
+    required_voters: Participant[];
+    votes: Record<string, { answers: Record<string, string> }>;
+    input?: unknown;
+  } | null;
 }
 
 export function collaborationSessionSnapshot(
