@@ -62,6 +62,15 @@ chrono = "0.4"
 # PATH updates made after claudette started (winget/installer edits) without
 # forcing the user to log out and back in.
 winreg = "0.55"
+# `PlaySoundW` for Windows notification audio (see `audio.rs`). Tiny —
+# we only enable the audio submodule and Foundation, no extra runtime.
+windows-sys = { version = "0.61", features = ["Win32_Media_Audio", "Win32_Foundation"] }
+# Pure-Rust audio playback, Windows-only (macOS/Linux already shell out
+# to native players). Used for OpenPeon sound packs that ship MP3 / OGG
+# — `PlaySoundW` only handles PCM WAV. Default features pull in legacy
+# decoders (minimp3, lewton, claxon); we route everything through
+# Symphonia instead for one decoder pipeline and a smaller binary.
+rodio = { version = "0.22", default-features = false, features = ["playback", "symphonia-wav", "symphonia-mp3", "symphonia-vorbis"] }
 
 [target.'cfg(unix)'.dependencies]
 # Used by `ops::workspace` to SIGKILL the process group of a setup script

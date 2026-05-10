@@ -1,6 +1,7 @@
 pub mod agent;
 pub mod agent_backend;
 pub mod agent_mcp;
+pub mod audio;
 pub mod cesp;
 pub mod chat;
 pub mod claude_flags_store;

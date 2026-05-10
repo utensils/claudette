@@ -128,6 +128,25 @@ pub fn list_notification_sounds() -> Vec<String> {
         system.sort();
         sounds.extend(system);
     }
+    #[cfg(windows)]
+    if let Ok(entries) = std::fs::read_dir(claudette::audio::WINDOWS_MEDIA_DIR) {
+        let mut system: Vec<String> = entries
+            .flatten()
+            .filter_map(|e| {
+                let path = e.path();
+                if path
+                    .extension()
+                    .is_some_and(|ext| ext.eq_ignore_ascii_case("wav"))
+                {
+                    path.file_stem().map(|n| n.to_string_lossy().to_string())
+                } else {
+                    None
+                }
+            })
+            .collect();
+        system.sort();
+        sounds.extend(system);
+    }
     sounds
 }
 
@@ -259,7 +278,33 @@ pub fn play_notification_sound(sound: String, volume: Option<f64>) {
             spawn_and_reap(child);
         }
     }
-    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    #[cfg(windows)]
+    {
+        // PlaySoundW plays at system volume — `vol` is treated as a mute
+        // toggle (handled above by the `<= 0.0` early return). For named
+        // sounds we look up `C:\Windows\Media\<name>.wav`; "Default" maps
+        // to the system "Notification.Default" alias which respects the
+        // user's chosen Default Beep in Sound settings.
+        if sound == "Default" {
+            // Try the modern "Notification.Default" alias first; fall
+            // back to `SystemDefault` (NT-era) for older Windows. Both
+            // are Win32 PlaySound aliases — no file paths involved.
+            if !claudette::audio::play_alias_async("Notification.Default") {
+                claudette::audio::play_alias_async("SystemDefault");
+            }
+        } else {
+            let path = std::path::Path::new(claudette::audio::WINDOWS_MEDIA_DIR)
+                .join(format!("{sound}.wav"));
+            if !claudette::audio::play_wav_file_async(&path) {
+                tracing::debug!(
+                    target: "claudette::ui",
+                    path = %path.display(),
+                    "notification sound not found or failed to play"
+                );
+            }
+        }
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
     {
         let _ = (sound, vol);
     }
@@ -267,6 +312,15 @@ pub fn play_notification_sound(sound: String, volume: Option<f64>) {
 
 /// Build a Command for the notification shell command with workspace env vars.
 /// Returns None if the command is empty.
+///
+/// Shell selection:
+/// - macOS / Linux: `sh -c <cmd>` (POSIX-compatible)
+/// - Windows: `cmd.exe /S /C <cmd>` (the shell every Windows install has;
+///   `/S` disables `cmd`'s special-character mangling so the user's
+///   command is passed verbatim, and `/C` runs and exits)
+///
+/// Users who want `bash` semantics on Windows can write `bash -c "..."`
+/// inside their command — `cmd /C` will resolve `bash` from PATH.
 pub(crate) fn build_notification_command(
     cmd: &str,
     ws_env: &claudette::env::WorkspaceEnv,
@@ -277,12 +331,25 @@ pub(crate) fn build_notification_command(
     }
     // Reject bare shell reserved keywords that will always fail with `sh -c`.
     // Users sometimes enter "done" instead of `say "done"`.
+    // (Harmless on Windows — `cmd /C done` would error for the same reason.)
     if is_bare_shell_keyword(cmd) {
         return None;
     }
-    let mut command = std::process::Command::new("sh");
+    #[cfg(not(windows))]
+    let mut command = {
+        let mut c = std::process::Command::new("sh");
+        c.arg("-c").arg(cmd);
+        c
+    };
+    #[cfg(windows)]
+    let mut command = {
+        let mut c = std::process::Command::new("cmd.exe");
+        // /S = leave the command line alone (no double-quote stripping);
+        // /C = execute the command and terminate.
+        c.arg("/S").arg("/C").arg(cmd);
+        c
+    };
     command.no_console_window();
-    command.arg("-c").arg(cmd);
     ws_env.apply_std(&mut command);
     Some(command)
 }
@@ -433,6 +500,21 @@ mod tests {
         assert!(sounds.len() > 2, "Expected system sounds on macOS");
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn test_list_notification_sounds_includes_system_sounds_windows() {
+        let sounds = list_notification_sounds();
+        // Every Windows install ships several `.wav` files under
+        // C:\Windows\Media (chimes, ding, notify, tada, …). If this
+        // assertion ever fails on a stripped CI image, fall back to
+        // gating it the same way Linux is gated above.
+        assert!(
+            sounds.len() > 2,
+            "Expected system sounds enumerated from {}",
+            claudette::audio::WINDOWS_MEDIA_DIR
+        );
+    }
+
     #[test]
     fn test_play_notification_sound_none_is_noop() {
         // Should not panic or spawn any process.
@@ -461,12 +543,27 @@ mod tests {
     fn test_build_notification_command_sets_shell_and_args() {
         let cmd = build_notification_command("echo hello", &sample_ws_env()).unwrap();
         let program = cmd.get_program().to_string_lossy().to_string();
-        assert_eq!(program, "sh");
         let args: Vec<String> = cmd
             .get_args()
             .map(|a| a.to_string_lossy().to_string())
             .collect();
-        assert_eq!(args, vec!["-c", "echo hello"]);
+        #[cfg(not(windows))]
+        {
+            assert_eq!(program, "sh");
+            assert_eq!(args, vec!["-c", "echo hello"]);
+        }
+        #[cfg(windows)]
+        {
+            // `cmd.exe` keeps its `.exe` suffix when constructed via
+            // `Command::new("cmd.exe")` — assert on the basename so a
+            // future switch to bare `"cmd"` (or full path) doesn't break
+            // this test.
+            assert!(
+                program.eq_ignore_ascii_case("cmd.exe") || program.eq_ignore_ascii_case("cmd"),
+                "expected cmd shell on Windows, got {program}"
+            );
+            assert_eq!(args, vec!["/S", "/C", "echo hello"]);
+        }
     }
 
     #[test]
@@ -500,17 +597,26 @@ mod tests {
 
     #[test]
     fn test_notification_command_runs_and_receives_env() {
-        // Actually spawn a process and verify env vars are passed through.
-        let tmp = std::env::temp_dir().join("claudette-test-notify-cmd.txt");
-        let cmd_str = format!(
-            "echo $CLAUDETTE_WORKSPACE_NAME,$CLAUDETTE_ROOT_PATH > {}",
-            tmp.display()
-        );
+        // Verify env vars are passed through to the spawned shell. Shell
+        // syntax differs by platform: `sh` reads `$VAR`, `cmd.exe` reads
+        // `%VAR%`. We capture stdout rather than shell-redirecting to a
+        // temp file — the latter forces us into platform-specific quote
+        // rules (`cmd /S /C` does not honour `\"` the way Rust's stock
+        // arg-quoter emits them) and the captured-stdout path is just as
+        // good a check that env vars reached the child.
+        #[cfg(not(windows))]
+        let cmd_str = "echo $CLAUDETTE_WORKSPACE_NAME,$CLAUDETTE_ROOT_PATH".to_string();
+        #[cfg(windows)]
+        let cmd_str = "echo %CLAUDETTE_WORKSPACE_NAME%,%CLAUDETTE_ROOT_PATH%".to_string();
         let mut command = build_notification_command(&cmd_str, &sample_ws_env()).unwrap();
-        let mut child = command.spawn().expect("Failed to spawn test command");
-        child.wait().expect("Failed to wait for test command");
-        let output = std::fs::read_to_string(&tmp).expect("Failed to read output file");
-        std::fs::remove_file(&tmp).ok();
-        assert_eq!(output.trim(), "my-workspace,/home/user/repo");
+        let output = command.output().expect("Failed to run test command");
+        assert!(
+            output.status.success(),
+            "shell command failed: status={:?} stderr={}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stdout = String::from_utf8(output.stdout).expect("stdout was not utf-8");
+        assert_eq!(stdout.trim(), "my-workspace,/home/user/repo");
     }
 }

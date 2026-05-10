@@ -221,8 +221,9 @@ Do not trigger CoreAudio or Speech.framework permission prompts at app launch �
 
 - Notification sound and commands run on the **Rust side** (not in the webview) — macOS suspends webview JS when the window is hidden
 - `tray.rs` handles attention notifications (AskUserQuestion/ExitPlanMode); `commands/chat.rs` handles agent-finished notifications
-- Both paths use the shared `build_notification_command` helper in `commands/settings.rs`
-- `mac-notification-sys` for native macOS notifications with click-to-navigate; `tauri-plugin-notification` on Linux
+- Both paths use the shared `build_notification_command` helper in `commands/settings.rs` — `sh -c <cmd>` on macOS/Linux, `cmd.exe /S /C <cmd>` on Windows
+- Native notification banners: `mac-notification-sys` on macOS (click-to-navigate), `tauri-plugin-notification` on Linux/Windows
+- **Sound playback** is platform-specific. macOS/Linux shell out to `afplay` / `paplay` / `ffplay` inline. Windows uses `claudette::audio` (`src/audio.rs`): `PlaySoundW` for built-in `C:\Windows\Media` system sounds (no decoder, no per-call volume) and `rodio` (cpal + Symphonia, gated to Windows-only deps) for OpenPeon sound packs that ship MP3/OGG/WAV. New Windows audio code belongs in `audio.rs` so the `unsafe` FFI and feature gating stay in one place.
 
 ### Database conventions
 

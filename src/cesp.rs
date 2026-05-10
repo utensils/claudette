@@ -482,9 +482,21 @@ pub fn play_audio_file(path: &Path, volume: f64) {
         }
     }
 
-    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    #[cfg(windows)]
     {
-        let _ = (path, volume);
+        // Windows has no shipped CLI player, so we decode in-process via
+        // `rodio`. This handles WAV / MP3 / OGG — the formats the curated
+        // OpenPeon packs (Alan Rickman, Elise, …) actually ship. Volume
+        // is honoured exactly the way `afplay -v` / `paplay --volume` do
+        // it on the other platforms.
+        let played = crate::audio::play_audio_file_async(path, volume as f32);
+        if !played {
+            tracing::warn!(
+                target: "claudette::cesp",
+                path = %path.display(),
+                "rodio playback failed to queue — see earlier audio log for the underlying error"
+            );
+        }
     }
 }
 
