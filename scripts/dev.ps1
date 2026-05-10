@@ -195,10 +195,22 @@ $destExe = Join-Path $destDir "claudette-$triple.exe"
 Copy-Item $srcExe $destExe -Force
 Write-Host "▸ Staged sidecar:   $destExe"
 
-# 5) `bun install` runs as part of the `beforeDevCommand` override
-#    below, so we don't need a separate pass here. Kept the original
-#    dev.sh's pre-install step out so a fresh checkout doesn't bun
-#    install twice every time.
+# 5) `bun install` so a fresh clone has node_modules before Vite
+#    starts. Mirrors dev.sh's explicit pre-install pass. Unlike dev.sh
+#    we *don't* also get a second pass from `tauri.conf.json`'s
+#    `beforeDevCommand` because step 7 below bypasses `cargo tauri
+#    dev` entirely (see the long-form comment there for why), so this
+#    step is the only install. `--frozen-lockfile` matches CI and
+#    fails fast if `bun.lock` drifted.
+Write-Host "▸ bun install       (cd src/ui)"
+$bunInstall = Start-Process bun `
+    -ArgumentList @('install', '--frozen-lockfile') `
+    -WorkingDirectory (Join-Path $repoRoot 'src\ui') `
+    -NoNewWindow -Wait -PassThru
+if ($bunInstall.ExitCode -ne 0) {
+    Write-Error "bun install failed (exit $($bunInstall.ExitCode))"
+    exit $bunInstall.ExitCode
+}
 
 # 6) Discovery file — same shape as dev.sh's so /claudette-debug picks
 #    up Windows dev instances identically. Use $env:TEMP since
@@ -216,7 +228,17 @@ $discoveryPayload = [ordered]@{
     branch     = $branch
     started_at = $started
 } | ConvertTo-Json -Compress
-Set-Content -Path $discoveryFile -Value $discoveryPayload -Encoding utf8 -NoNewline
+# Set-Content -Encoding utf8 emits a UTF-8 BOM on Windows PowerShell 5.1
+# (only pwsh 6+ defaults to no-BOM). debug-eval.sh on Windows reads this
+# file via `python3 json.load`, which doesn't strip BOMs and chokes at
+# byte 0 with `Expecting value`. Write the file via .NET with an
+# explicit no-BOM UTF-8 encoder so output is byte-identical on PS 5.1
+# and pwsh 7+.
+[IO.File]::WriteAllText(
+    $discoveryFile,
+    $discoveryPayload,
+    (New-Object System.Text.UTF8Encoding($false))
+)
 
 Write-Host "▸ Discovery file:   $discoveryFile"
 

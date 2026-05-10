@@ -1908,26 +1908,37 @@ mod tests {
         );
     }
 
+    /// Process-global env-var lock so any future test in this binary
+    /// that mutates `$CLAUDETTE_HOME` (or reads it via
+    /// [`claudette::path::claudette_home`]) doesn't observe another
+    /// test's override mid-run. Mirrors the `env_lock()` pattern in
+    /// `src/path.rs::tests` — cargo runs tests in a thread pool by
+    /// default, so a `--test-threads=1` assumption is not safe.
+    #[cfg(windows)]
+    fn env_lock() -> &'static std::sync::Mutex<()> {
+        static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+        LOCK.get_or_init(|| std::sync::Mutex::new(()))
+    }
+
     /// `icon_cache_dir()` must route through `claudette_home` so the
     /// cache lands under `dev --clean`'s per-PID sandbox instead of
     /// the real `~/.claudette/icon-cache/`. A direct `dirs::home_dir()`
     /// would silently leak across sessions — this test pins the
     /// override against that regression.
     ///
-    /// `$CLAUDETTE_HOME` is process-global so we restore the previous
-    /// value after the test, regardless of pass/fail.
+    /// `$CLAUDETTE_HOME` is process-global, so we (a) hold `env_lock()`
+    /// for the duration of the test to serialize against any future
+    /// env-mutating test in this binary, and (b) restore the previous
+    /// value before returning regardless of pass/fail.
     #[cfg(windows)]
     #[test]
     fn icon_cache_dir_honors_claudette_home_override() {
+        let _guard = env_lock().lock().unwrap_or_else(|p| p.into_inner());
         let prev = std::env::var_os("CLAUDETTE_HOME");
         let tmp = tempfile::tempdir().unwrap();
-        // SAFETY: cargo test on Windows runs tests serially within a
-        // single process by default, but other tests in this binary
-        // could in principle observe CLAUDETTE_HOME mid-flight.
-        // We rely on the same pragma the upstream `path::tests` use
-        // (single-threaded `--test-threads=1` is the project default
-        // for env-mutating tests). Either way, the prev-value restore
-        // below keeps the suite hermetic if test ordering changes.
+        // SAFETY: protected by env_lock() so no other test in this
+        // binary is reading CLAUDETTE_HOME (directly or via
+        // claudette_home()) while we mutate it.
         unsafe {
             std::env::set_var("CLAUDETTE_HOME", tmp.path());
         }
