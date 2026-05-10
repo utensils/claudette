@@ -191,16 +191,33 @@ export const createUiSlice: StateCreator<AppState, [], [], UiSlice> = (
   resolvedClaudeAuthFailureMessageId: null,
   openSettings: (section = "general", focus = null) =>
     set((state) => {
-      const nextSection = section === "plugins" && !state.pluginManagementEnabled
-        ? "experimental"
-        : section;
+      // Only `claude-code-plugins` (the Claude CLI marketplace integration)
+      // is gated behind `pluginManagementEnabled`. The `plugins` section
+      // (Claudette's own built-in Lua plugins — voice providers, SCM, env
+      // providers) is always reachable. Routing `"plugins"` to
+      // `"experimental"` was a bug where the voice-error → Plugins flow
+      // landed on the wrong page when plugin management was off, hiding
+      // the Distil-Whisper "Download model" button the user was sent
+      // there to click. setSettingsSection (below) already gets this
+      // distinction right; openSettings now matches.
+      const nextSection =
+        section === "claude-code-plugins" && !state.pluginManagementEnabled
+          ? "experimental"
+          : section;
+      const resetMarketplaceIntent = nextSection === "claude-code-plugins";
       return {
         settingsOpen: true,
         settingsSection: nextSection,
         settingsFocus: focus,
-        pluginSettingsIntent: nextSection === "plugins" ? null : state.pluginSettingsIntent,
-        pluginSettingsRepoId: nextSection === "plugins" ? null : state.pluginSettingsRepoId,
-        pluginSettingsTab: nextSection === "plugins" ? "available" : state.pluginSettingsTab,
+        pluginSettingsIntent: resetMarketplaceIntent
+          ? null
+          : state.pluginSettingsIntent,
+        pluginSettingsRepoId: resetMarketplaceIntent
+          ? null
+          : state.pluginSettingsRepoId,
+        pluginSettingsTab: resetMarketplaceIntent
+          ? "available"
+          : state.pluginSettingsTab,
       };
     }),
   closeSettings: () =>
