@@ -143,12 +143,13 @@ export function AppLayout() {
               )}
             </div>
             {/*
-              Always mount the terminal panel when a workspace is selected;
-              drive visibility via a CSS class. Unmounting on collapse would
-              dispose every xterm instance and kill every PTY child —
-              toggling the panel must NOT destroy running shells.
-              The ResizeHandle has no state worth preserving and is only
-              useful when the panel is visible, so we conditionally render it.
+              Always mount the terminal panel; drive visibility via a CSS
+              class. TerminalPanel owns every live xterm/PTY instance across
+              workspaces, so unmounting it on collapse, dashboard/project view,
+              or settings swaps would dispose xterm instances and kill PTY
+              children. The ResizeHandle has no state worth preserving and is
+              only useful when a selected workspace's panel is visible, so we
+              conditionally render it.
             */}
             {selectedWorkspaceId && terminalPanelVisible && (
               <ResizeHandle
@@ -161,14 +162,14 @@ export function AppLayout() {
                 onResizeEnd={handleTerminalResizeEnd}
               />
             )}
-            {selectedWorkspaceId && (
-              <div
-                className={`${styles.terminal} ${terminalPanelVisible ? "" : styles.terminalHidden}`}
-                aria-hidden={!terminalPanelVisible}
-              >
-                <TerminalPanel />
-              </div>
-            )}
+            <div
+              className={`${styles.terminal} ${
+                selectedWorkspaceId && terminalPanelVisible ? "" : styles.terminalHidden
+              }`}
+              aria-hidden={!selectedWorkspaceId || !terminalPanelVisible}
+            >
+              <TerminalPanel />
+            </div>
           </div>
           {selectedWorkspaceId && (
             <>
