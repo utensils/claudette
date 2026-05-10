@@ -8,6 +8,8 @@ mod commands;
 mod ipc;
 mod mdns;
 mod missing_cli;
+#[cfg(target_os = "macos")]
+mod notification_macos;
 mod ops_hooks;
 #[cfg(feature = "voice")]
 mod platform_speech;
@@ -697,20 +699,19 @@ fn main() {
             // 1200x800/maximized placement flash before saved bounds apply.
             window_state::restore_main_window(app);
 
-            // Set the notification app identity before any notifications are sent.
-            // mac-notification-sys uses Once — first call wins. We call early so
-            // both our direct calls and the tauri-plugin-notification share the
-            // same identity.
+            // Register the UNUserNotificationCenter delegate and request
+            // authorization. Replaces the old `mac-notification-sys`
+            // integration (issue #736) — the previous crate spawned a
+            // runloop-polling thread per toast that never got reaped, leaking
+            // ~N² CPU. UNUserNotificationCenter is delegate-based and
+            // OS-managed; per-workspace click routing is preserved via
+            // `userInfo[workspace_id]` (see notification_macos.rs).
+            //
+            // Requires a code-signed bundle: scripts/dev.sh + release builds
+            // both supply one. Bare `cargo tauri dev` will silently no-op
+            // (logged as a warning) — switch to scripts/dev.sh for toasts.
             #[cfg(target_os = "macos")]
-            {
-                let bundle_id = app.config().identifier.clone();
-                let identity = if cfg!(debug_assertions) {
-                    "com.apple.Terminal".to_string()
-                } else {
-                    bundle_id
-                };
-                let _ = mac_notification_sys::set_application(&identity);
-            }
+            notification_macos::init(app.handle().clone());
 
             // Start debug eval TCP server (dev builds only).
             #[cfg(debug_assertions)]

@@ -66,8 +66,11 @@ hound = { version = "3", optional = true }
 candle-core = { version = "=0.9.2", features = ["metal"], optional = true }
 candle-nn = { version = "=0.9.2", features = ["metal"], optional = true }
 candle-transformers = { version = "=0.9.2", features = ["metal"], optional = true }
-mac-notification-sys = "0.6"
 objc = "0.2"
+# Pairs with `objc` 0.2 — we use `ConcreteBlock` to provide the
+# `requestAuthorizationWithOptions:completionHandler:` callback expected
+# by UNUserNotificationCenter. Used only by `notification_macos.rs`.
+block = "0.1"
 raw-window-handle = "0.6"
 
 [target.'cfg(windows)'.dependencies]
