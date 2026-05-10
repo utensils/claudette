@@ -34,12 +34,13 @@ end
 function M.export(args)
     local result = host.exec("mise", { "env", "--json" })
 
-    -- Auto-trust opt-in: when mise reports config files as not trusted
-    -- and the user has enabled auto_trust, run `mise trust` once and
-    -- retry. Single retry avoids an infinite loop if trust fails for
-    -- another reason.
+    -- Per-repo trust: when mise reports config files as not trusted
+    -- and the user has authorized mise for this repository (via the
+    -- one-time per-repo trust prompt), run `mise trust` and retry.
+    -- Single retry avoids an infinite loop if trust fails for another
+    -- reason.
     if result.code ~= 0
-        and host.config("auto_trust") == true
+        and host.config("repo_trust") == "allow"
         and (result.stderr or ""):match("not trusted") then
         host.exec("mise", { "trust" })
         result = host.exec("mise", { "env", "--json" })

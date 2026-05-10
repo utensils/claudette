@@ -55,9 +55,20 @@ If the archive script fails or times out, Claudette continues with the archive �
 
 ## Environment Provider Overrides
 
-The **Environment** section in each repo's settings shows every env-provider plugin (direnv, mise, dotenv, Nix devshell) with its live status, a per-repo enable toggle, and a **Settings** drawer that exposes the plugin's manifest-declared settings as per-repo overrides. Currently those are `timeout_seconds` for every provider, plus `auto_allow` (direnv) / `auto_trust` (mise). Setting a value here only applies to workspaces in this repo; clicking **Use global default** on an overridden field clears the per-repo value and falls back to **Settings → Plugins**.
+The **Environment** section in each repo's settings shows every env-provider plugin (direnv, mise, dotenv, Nix devshell) with its live status, a per-repo enable toggle, and a **Settings** drawer with the plugin's manifest-declared settings as per-repo overrides (currently `timeout_seconds`). Setting a value here only applies to workspaces in this repo; clicking **Use global default** on an overridden field clears the per-repo value and falls back to **Settings → Plugins**.
 
 The most common reason to set a per-repo override is **timeout**: the default cap is 120 seconds, which covers most cold direnv/mise/Nix runs. Some Nix flakes (large transitive closures, slow substituter networks) routinely exceed that. Bump `Timeout (seconds)` for those repos rather than globally; the global value still applies everywhere else.
+
+### One-time per-repo trust prompt
+
+direnv and mise both refuse to evaluate config files that haven't been explicitly approved per worktree (`direnv allow` / `mise trust`). Claudette surfaces this as a "blocked" / "not trusted" error in the env panel with two buttons:
+
+- **Trust [provider] for this repo** — runs the trust command in the current worktree and remembers the decision in this repo's settings. Every workspace under the same repo auto-runs the trust command on first encounter from then on, without prompting again.
+- **Disable for this repo** — skips the provider for this repo entirely. Other env-providers still run. You can re-enable from the row's toggle if you change your mind.
+
+The decision is per-repo, not global, so trusting one project's `.envrc` doesn't affect any other. The pre-0.24 global `auto_allow` / `auto_trust` toggles have been removed; users who had them enabled are migrated automatically to per-repo `repo_trust = "allow"` for every repository they had at the time of upgrade.
+
+### Loading state
 
 While an env-provider is resolving, Claudette surfaces the active plugin and elapsed time in three places: the workspace's row in the sidebar (spinner + tooltip), the chat composer placeholder, and an overlay above the integrated terminal. The terminal won't open a prompt and the agent won't spawn until the env layer is ready or fails.
 

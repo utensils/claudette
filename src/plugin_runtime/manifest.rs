@@ -38,7 +38,7 @@ pub struct PluginManifest {
     /// User-facing settings the Plugins UI renders a form for. Values
     /// are persisted in `app_settings` as `plugin:{name}:setting:{key}`
     /// and piped into `HostContext.config` at invocation time so plugin
-    /// scripts read them via `host.config("auto_allow")`.
+    /// scripts read them via `host.config("<key>")`.
     #[serde(default)]
     pub settings: Vec<PluginSettingField>,
     /// Language metadata contributed by a `language-grammar` plugin.

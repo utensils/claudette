@@ -72,13 +72,6 @@ function envProvider(
     enabled: true,
     settings_schema: [
       {
-        type: "boolean",
-        key: "auto_trust",
-        label: "Always trust mise config",
-        description: null,
-        default: false,
-      },
-      {
         type: "number",
         key: "timeout_seconds",
         label: "Timeout (seconds)",
@@ -90,7 +83,7 @@ function envProvider(
         unit: "seconds",
       },
     ],
-    setting_values: { auto_trust: false, timeout_seconds: 120 },
+    setting_values: { timeout_seconds: 120 },
     ...overrides,
   };
 }
@@ -164,16 +157,6 @@ describe("EnvPanel — per-repo settings drawer", () => {
         name: "env-direnv",
         display_name: "direnv",
         enabled: true,
-        settings_schema: [
-          {
-            type: "boolean",
-            key: "auto_allow",
-            label: "Always allow .envrc",
-            description: null,
-            default: false,
-          },
-        ],
-        setting_values: { auto_allow: false },
       }),
       envProvider({ name: "env-mise", display_name: "mise", enabled: false }),
     ]);

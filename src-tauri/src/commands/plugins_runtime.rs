@@ -170,7 +170,7 @@ pub async fn set_claudette_plugin_setting(
         registry.set_setting(&plugin_name, &key, Some(value));
     }
 
-    // Settings can affect future exports (e.g. `auto_allow` turning on
+    // Settings can affect future exports (e.g. `repo_trust` flipping on
     // means the next export retries with `direnv allow`). Invalidate
     // any env-cache entries whose plugin name matches so the next
     // resolve picks up the new behavior.

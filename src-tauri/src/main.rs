@@ -419,6 +419,19 @@ fn main() {
     // after startup reflects what the user configured previously. Any
     // failure here is non-fatal: the registry just runs with defaults.
     if let Ok(db) = Database::open(&db_path) {
+        // One-shot migration from the old global `auto_allow` /
+        // `auto_trust` toggles to per-repo `repo_trust = "allow"`. The
+        // old toggles were footguns: a single click bypassed direnv's
+        // / mise's per-path safety for *every* future workspace on the
+        // machine. The new model keeps the per-path safety intact,
+        // automating only the worktrees in repos the user explicitly
+        // trusted.
+        //
+        // Idempotent: once the legacy keys are removed, subsequent
+        // startups skip this branch entirely. We don't write a "ran"
+        // marker — the source-key absence IS the marker.
+        migrate_legacy_env_provider_trust(&db);
+
         if let Ok(entries) = db.list_app_settings_with_prefix("plugin:") {
             for (key, value) in entries {
                 let rest = &key["plugin:".len()..];
@@ -1148,6 +1161,70 @@ fn main() {
 /// session/PG, so signaling the root's process group leaves them behind —
 /// the subtree walk in `subprocess_cleanup` is the reliable path.
 #[cfg(unix)]
+/// One-shot migration from the legacy global trust toggles
+/// (`plugin:env-direnv:setting:auto_allow`,
+/// `plugin:env-mise:setting:auto_trust`) to the new per-repo
+/// `repo_trust = "allow"` model.
+///
+/// Idempotent. Subsequent startups find the source keys gone and
+/// skip the branch — no "ran" marker is needed because the source-
+/// key absence IS the marker. Migration semantics:
+///
+/// - Old key value is JSON-encoded (bool). We migrate ONLY when the
+///   value is the literal string `"true"` — anything else (false,
+///   absent, malformed) means the user wasn't actively opted in, so
+///   the new "ask once per repo" default is the correct behavior
+///   for them.
+/// - When migrating, every repository in the database gets
+///   `repo:{id}:plugin:{name}:setting:repo_trust = "\"allow\""`. This
+///   preserves the user's prior intent (trust everywhere they used
+///   the plugin) without making them re-approve a stack of repos.
+///   Repos created after the migration get the default ask flow.
+/// - The legacy key is deleted regardless of value, so a future
+///   debug session doesn't see ghost settings that have no effect.
+fn migrate_legacy_env_provider_trust(db: &claudette::db::Database) {
+    let migrations = [
+        ("plugin:env-direnv:setting:auto_allow", "env-direnv"),
+        ("plugin:env-mise:setting:auto_trust", "env-mise"),
+    ];
+    for (legacy_key, plugin_name) in migrations {
+        let stored = match db.get_app_setting(legacy_key) {
+            Ok(Some(value)) => value,
+            _ => continue,
+        };
+        let opted_in = stored.trim() == "true";
+        if opted_in {
+            match db.list_repositories() {
+                Ok(repos) => {
+                    for repo in repos {
+                        let new_key =
+                            format!("repo:{}:plugin:{}:setting:repo_trust", repo.id, plugin_name);
+                        let _ = db.set_app_setting(&new_key, "\"allow\"");
+                    }
+                    tracing::info!(
+                        target: "claudette::migration",
+                        plugin = plugin_name,
+                        "migrated legacy global trust toggle to per-repo repo_trust=allow"
+                    );
+                }
+                Err(err) => {
+                    tracing::warn!(
+                        target: "claudette::migration",
+                        plugin = plugin_name,
+                        error = %err,
+                        "could not list repositories to migrate trust setting"
+                    );
+                    // Bail without deleting the legacy key — better to
+                    // retry next startup than to silently lose the
+                    // user's opt-in state.
+                    continue;
+                }
+            }
+        }
+        let _ = db.delete_app_setting(legacy_key);
+    }
+}
+
 fn cleanup_subprocesses_on_exit(app_state: &state::AppState) {
     let mut roots: Vec<i32> = Vec::new();
 
@@ -1223,6 +1300,162 @@ fn shutdown_runtime_handler(_app: &tauri::AppHandle, _event: tauri::RunEvent) {
 mod tests {
     #[cfg(target_os = "macos")]
     use super::MACOS_CLOSE_WINDOW_ACCELERATOR;
+    use super::migrate_legacy_env_provider_trust;
+    use claudette::db::Database;
+    use claudette::model::Repository;
+    use std::path::Path;
+    use tempfile::tempdir;
+
+    /// Build a fresh DB at `<dir>/claudette.sqlite` with `repos` rows
+    /// for each entry in `repo_ids`. Returns the open Database. The
+    /// migration only reads `repos.id`; the rest of the columns are
+    /// filled with throwaway placeholders so we don't have to touch
+    /// other crates' fixture builders.
+    fn db_with_repos(dir: &Path, repo_ids: &[&str]) -> Database {
+        let db_path = dir.join("claudette.sqlite");
+        let db = Database::open(&db_path).expect("open db");
+        for id in repo_ids {
+            let repo = Repository {
+                id: (*id).to_string(),
+                name: format!("repo-{id}"),
+                path: dir
+                    .join(format!("repo-{id}"))
+                    .to_string_lossy()
+                    .into_owned(),
+                path_slug: format!("repo-{id}"),
+                icon: None,
+                created_at: "2026-05-01T00:00:00Z".into(),
+                setup_script: None,
+                custom_instructions: None,
+                sort_order: 0,
+                branch_rename_preferences: None,
+                setup_script_auto_run: false,
+                archive_script: None,
+                archive_script_auto_run: false,
+                base_branch: None,
+                default_remote: None,
+                path_valid: true,
+            };
+            db.insert_repository(&repo).expect("insert repo");
+        }
+        db
+    }
+
+    /// `auto_allow = true` migrates to `repo_trust = "allow"` for every
+    /// repository in the database, AND deletes the legacy global key.
+    /// This preserves the user's prior intent (they had opted in) while
+    /// flipping to the new safer per-repo storage.
+    #[test]
+    fn migrate_auto_allow_sets_per_repo_trust_for_all_repos() {
+        let dir = tempdir().unwrap();
+        let db = db_with_repos(dir.path(), &["alpha", "beta", "gamma"]);
+        // Legacy global toggle, opted in.
+        db.set_app_setting("plugin:env-direnv:setting:auto_allow", "true")
+            .unwrap();
+
+        migrate_legacy_env_provider_trust(&db);
+
+        // Every repo gets the new key set.
+        for repo_id in ["alpha", "beta", "gamma"] {
+            let key = format!("repo:{repo_id}:plugin:env-direnv:setting:repo_trust");
+            assert_eq!(
+                db.get_app_setting(&key).unwrap(),
+                Some("\"allow\"".into()),
+                "repo {repo_id} must have repo_trust='allow' after migration"
+            );
+        }
+        // Legacy key is gone — re-running migration is a no-op.
+        assert_eq!(
+            db.get_app_setting("plugin:env-direnv:setting:auto_allow")
+                .unwrap(),
+            None,
+            "legacy global key must be deleted on successful migration"
+        );
+    }
+
+    /// `auto_trust = true` (mise) follows the same migration shape as
+    /// auto_allow (direnv) — same code path, same expected outcome.
+    /// Keeps the two providers in lockstep so a future divergence
+    /// fails this test.
+    #[test]
+    fn migrate_auto_trust_writes_repo_trust_for_mise() {
+        let dir = tempdir().unwrap();
+        let db = db_with_repos(dir.path(), &["one"]);
+        db.set_app_setting("plugin:env-mise:setting:auto_trust", "true")
+            .unwrap();
+
+        migrate_legacy_env_provider_trust(&db);
+
+        assert_eq!(
+            db.get_app_setting("repo:one:plugin:env-mise:setting:repo_trust")
+                .unwrap(),
+            Some("\"allow\"".into()),
+        );
+        assert_eq!(
+            db.get_app_setting("plugin:env-mise:setting:auto_trust")
+                .unwrap(),
+            None,
+        );
+    }
+
+    /// `auto_allow = false` (and any non-"true" value) MUST NOT migrate
+    /// trust to any repo — the user wasn't opted in. The legacy key is
+    /// still deleted so it doesn't linger as a dead setting in
+    /// app_settings, but no `repo_trust` entries are written.
+    #[test]
+    fn migrate_skips_when_legacy_value_is_false() {
+        let dir = tempdir().unwrap();
+        let db = db_with_repos(dir.path(), &["alpha"]);
+        db.set_app_setting("plugin:env-direnv:setting:auto_allow", "false")
+            .unwrap();
+
+        migrate_legacy_env_provider_trust(&db);
+
+        // No per-repo trust key written — the user opted OUT.
+        assert_eq!(
+            db.get_app_setting("repo:alpha:plugin:env-direnv:setting:repo_trust")
+                .unwrap(),
+            None,
+            "false legacy value must NOT propagate as per-repo allow"
+        );
+        // Legacy key cleaned up.
+        assert_eq!(
+            db.get_app_setting("plugin:env-direnv:setting:auto_allow")
+                .unwrap(),
+            None,
+        );
+    }
+
+    /// Migration is idempotent: a second run after a successful first
+    /// run is a no-op (the source key is already gone). Pins this so
+    /// a future "always run on every startup" regression won't double-
+    /// write or corrupt the per-repo state.
+    #[test]
+    fn migrate_is_idempotent() {
+        let dir = tempdir().unwrap();
+        let db = db_with_repos(dir.path(), &["alpha"]);
+        db.set_app_setting("plugin:env-direnv:setting:auto_allow", "true")
+            .unwrap();
+
+        migrate_legacy_env_provider_trust(&db);
+        // After first run: trust set, legacy key gone.
+
+        // Manually clear the migrated value so we can prove the second
+        // run doesn't rewrite it (it shouldn't even try — source key
+        // is missing).
+        db.delete_app_setting("repo:alpha:plugin:env-direnv:setting:repo_trust")
+            .unwrap();
+
+        migrate_legacy_env_provider_trust(&db);
+
+        // Second run: no rewrite, since the source key is gone.
+        assert_eq!(
+            db.get_app_setting("repo:alpha:plugin:env-direnv:setting:repo_trust")
+                .unwrap(),
+            None,
+            "second migration run must not rewrite cleared trust state"
+        );
+    }
 
     // Regression: the native macOS "Close Window" menu item must NOT bind
     // `Cmd+W`. If it does, macOS catches the key at the OS level before

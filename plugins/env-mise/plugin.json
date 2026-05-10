@@ -8,13 +8,6 @@
   "operations": ["detect", "export"],
   "settings": [
     {
-      "type": "boolean",
-      "key": "auto_trust",
-      "label": "Always trust mise config",
-      "description": "When mise reports config files as not trusted, run `mise trust` automatically. mise normally requires per-path trust — enabling this bypasses that for zero-friction activation.",
-      "default": false
-    },
-    {
       "type": "number",
       "key": "timeout_seconds",
       "label": "Timeout (seconds)",

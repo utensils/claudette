@@ -32,14 +32,16 @@ end
 function M.export(args)
     local result = host.exec("direnv", { "export", "json" })
 
-    -- If the .envrc is blocked and the user has opted into auto-allow,
-    -- run `direnv allow` once and retry. direnv normally hashes the
-    -- .envrc path so each worktree must be allowed independently —
-    -- opting in consciously trades that per-path safeguard for zero-
-    -- friction activation. Retry only once to avoid infinite loops if
-    -- `allow` somehow fails to unblock.
+    -- If the .envrc is blocked and the user has previously trusted
+    -- direnv for this repository (via the per-repo trust prompt), run
+    -- `direnv allow` once and retry. direnv hashes the .envrc path so
+    -- each worktree is approved independently; the repo-scoped trust
+    -- decision means Claudette automates that per-worktree approval
+    -- on the user's behalf, but ONLY for repos they explicitly
+    -- authorized. Retry once to avoid infinite loops if `allow`
+    -- fails to unblock for some reason.
     if result.code ~= 0
-        and host.config("auto_allow") == true
+        and host.config("repo_trust") == "allow"
         and (result.stderr or ""):match("is blocked") then
         host.exec("direnv", { "allow" })
         result = host.exec("direnv", { "export", "json" })

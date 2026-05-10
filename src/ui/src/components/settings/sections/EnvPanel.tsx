@@ -381,12 +381,46 @@ export function EnvPanel({ target }: EnvPanelProps) {
       setRunningTrust(pluginName);
       setTrustError(null);
       try {
+        // Per-repo trust persistence: when the user clicks "Trust
+        // [provider] for this repo" in the error card, remember that
+        // decision in `app_settings`. The plugin's Lua reads this
+        // value via `host.config("repo_trust")` on every subsequent
+        // resolve, so future workspaces in the same repo auto-run
+        // `direnv allow` / `mise trust` without re-prompting. Only
+        // applies in repo-mode targets — workspace-mode resolves
+        // skip persistence (no per-repo scope to attach trust to).
+        if (repoIdForOverrides) {
+          await setClaudettePluginRepoSetting(
+            repoIdForOverrides,
+            pluginName,
+            "repo_trust",
+            "allow",
+          );
+        }
         await runEnvTrust(target, pluginName);
         await refresh();
       } catch (e) {
         setTrustError(String(e));
       } finally {
         setRunningTrust(null);
+      }
+    },
+    [target, refresh, repoIdForOverrides],
+  );
+
+  const handleDisableForRepo = useCallback(
+    async (pluginName: string) => {
+      // "Deny" semantic from the trust prompt: disable this provider
+      // for this repo only. Reuses the existing per-repo enable
+      // plumbing — the runtime filters denied providers out of the
+      // resolve before they ever run, so no `repo_trust` setting is
+      // needed in addition. The user can re-enable from the row's
+      // toggle if they change their mind.
+      try {
+        await setEnvProviderEnabled(target, pluginName, false);
+        await refresh();
+      } catch (e) {
+        setFetchError(String(e));
       }
     },
     [target, refresh],
@@ -615,6 +649,7 @@ export function EnvPanel({ target }: EnvPanelProps) {
               {hasError && isOpen && (
                 <ErrorCard
                   pluginName={source.plugin_name}
+                  displayName={source.display_name}
                   error={source.error!}
                   trustablePlugin={trustablePluginFromError(
                     source.plugin_name,
@@ -622,6 +657,11 @@ export function EnvPanel({ target }: EnvPanelProps) {
                   )}
                   running={runningTrust === source.plugin_name}
                   onRunTrust={() => handleRunTrust(source.plugin_name)}
+                  onDisableForRepo={
+                    repoIdForOverrides
+                      ? () => handleDisableForRepo(source.plugin_name)
+                      : undefined
+                  }
                 />
               )}
               {showSettings && settingsOpen && (
@@ -661,16 +701,24 @@ export function EnvPanel({ target }: EnvPanelProps) {
 
 function ErrorCard({
   pluginName,
+  displayName,
   error,
   trustablePlugin,
   running,
   onRunTrust,
+  onDisableForRepo,
 }: {
   pluginName: string;
+  displayName: string;
   error: string;
   trustablePlugin: "env-direnv" | "env-mise" | null;
   running: boolean;
   onRunTrust: () => void;
+  /** When set, the user is in repo-mode and clicking the "Disable for
+   *  this repo" button denies the provider for the current repository
+   *  via the existing per-repo enable toggle. Absent in workspace mode
+   *  — there's no per-workspace deny semantic. */
+  onDisableForRepo?: () => void;
 }) {
   const insight = analyzeError(pluginName, error);
   // Two independent hook instances so the "Copied" flag tracks per button
@@ -692,7 +740,44 @@ function ErrorCard({
             <code className={styles.envErrorCmd}>
               {insight.suggestedCommand}
             </code>
-            {trustablePlugin && (
+            {trustablePlugin && onDisableForRepo && (
+              // Per-repo trust prompt: the two-button "Trust /
+              // Disable for this repo" pair. "Trust" persists
+              // `repo_trust = "allow"` and runs the trust command
+              // once; future workspaces in the same repo auto-allow
+              // on first encounter. "Disable for this repo" reuses
+              // the existing per-repo enable toggle to skip the
+              // provider entirely. We render the pair only when we
+              // know the repo scope (onDisableForRepo set).
+              <>
+                <button
+                  type="button"
+                  className={styles.envErrorRunBtn}
+                  onClick={onRunTrust}
+                  disabled={running}
+                  title={`Allow ${displayName} for every workspace in this repository — runs ${insight.suggestedCommand} now and remembers the choice.`}
+                >
+                  {running
+                    ? "Trusting…"
+                    : `Trust ${displayName} for this repo`}
+                </button>
+                <button
+                  type="button"
+                  className={styles.envErrorCopyBtn}
+                  onClick={onDisableForRepo}
+                  disabled={running}
+                  title={`Skip ${displayName} for this repository. Other env providers still run.`}
+                >
+                  Disable for this repo
+                </button>
+              </>
+            )}
+            {trustablePlugin && !onDisableForRepo && (
+              // Workspace-mode fallback: only the one-shot run is
+              // available because per-repo persistence has no scope.
+              // Surfaces the same Run button as before so workspace-
+              // scoped EnvPanel mounts (no `repoIdForOverrides`)
+              // keep the original UX.
               <button
                 type="button"
                 className={styles.envErrorRunBtn}
