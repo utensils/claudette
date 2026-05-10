@@ -144,8 +144,6 @@ export function PluginsSettings() {
       setLoadErrors((prev) => ({ ...prev, lua: null }));
     } catch (e) {
       setLoadErrors((prev) => ({ ...prev, lua: errorMessage(e) }));
-    } finally {
-      setLoading(false);
     }
   }, []);
 
