@@ -6,13 +6,22 @@
   position: relative;
 }
 
+/* macOS-only: fills the 38px overlay-title-bar gap so the user can drag the
+   window from the area above the sidebar back-link. On Windows/Linux the
+   native title bar already handles dragging, and rendering this overlay
+   would sit on top of (and steal clicks from) the back-link button. */
 .dragRegion {
+  display: none;
   position: absolute;
   top: 0;
   left: 0;
   right: 0;
   height: 38px;
   z-index: 1;
+}
+
+[data-platform="mac"] .dragRegion {
+  display: block;
 }
 
 /* ── Settings sidebar ── */

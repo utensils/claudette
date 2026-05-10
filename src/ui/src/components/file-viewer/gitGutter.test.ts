@@ -63,6 +63,30 @@ describe("computeLineChanges", () => {
     const changes = computeLineChanges("a\nb\n", "");
     expect(changes).toEqual([{ line: 1, kind: "delete-above" }]);
   });
+
+  // Regression: on Windows the working-tree buffer is typically CRLF while
+  // the git blob returned by `read_workspace_file_at_revision` is LF. Without
+  // CRLF normalization `diffLines` would mark every line as `modify`, painting
+  // a solid blue stripe down the entire gutter. See gitGutter.ts::stripCr.
+  it("treats CRLF buffer vs LF head as unchanged when content matches", () => {
+    const head = "alpha\nbeta\ngamma\n";
+    const buffer = "alpha\r\nbeta\r\ngamma\r\n";
+    expect(computeLineChanges(head, buffer)).toEqual([]);
+  });
+
+  it("only marks the genuinely-modified line when CRLF and LF mix", () => {
+    const head = "alpha\nbeta\ngamma\n";
+    const buffer = "alpha\r\nBETA\r\ngamma\r\n";
+    expect(computeLineChanges(head, buffer)).toEqual([
+      { line: 2, kind: "modify" },
+    ]);
+  });
+
+  it("normalizes CRLF on the head side too (defensive)", () => {
+    const head = "alpha\r\nbeta\r\n";
+    const buffer = "alpha\nbeta\n";
+    expect(computeLineChanges(head, buffer)).toEqual([]);
+  });
 });
 
 // Minimal Monaco stub for the Range constructor and the
