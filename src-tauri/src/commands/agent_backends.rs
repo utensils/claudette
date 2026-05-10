@@ -1146,10 +1146,15 @@ impl GatewayUpstreamError {
                     body.to_string()
                 }
             });
-        // 4xx → forward as-is so retries stop. Anything else collapses to
-        // 502 (bad gateway) for the SDK consumer.
+        // 4xx → forward as-is so retries stop. 5xx that are *semantically*
+        // permanent (LM Studio classifies "tokens to keep > context length"
+        // as HTTP 500 even though it's a hard input error) get demoted to
+        // 400 so the Anthropic SDK does not retry them with backoff.
+        // Anything else collapses to 502 (bad gateway) for the SDK consumer.
         let outbound = if (400..500).contains(&status) {
             status
+        } else if upstream_message_is_permanent_failure(&message) {
+            400
         } else {
             502
         };
@@ -1158,6 +1163,29 @@ impl GatewayUpstreamError {
             message,
         }
     }
+}
+
+/// Returns true when the upstream message describes a hard input error that
+/// will fail identically on retry — context-window overflow, model not
+/// loaded, model not found, etc. Matched case-insensitively against
+/// substrings observed in the wild from LM Studio, llama.cpp, vLLM, and
+/// OpenAI-compatible gateways. Keep the list narrow: false positives mean
+/// users miss out on transient-failure retries.
+fn upstream_message_is_permanent_failure(message: &str) -> bool {
+    let lower = message.to_ascii_lowercase();
+    const NEEDLES: &[&str] = &[
+        "context length",
+        "tokens to keep",
+        "context window",
+        "exceeds the maximum",
+        "model is not loaded",
+        "model not loaded",
+        "model not found",
+        "no model is loaded",
+        "input is too long",
+        "prompt is too long",
+    ];
+    NEEDLES.iter().any(|needle| lower.contains(needle))
 }
 
 impl std::fmt::Display for GatewayUpstreamError {
@@ -1395,6 +1423,49 @@ fn openai_compatible_default_base(kind: AgentBackendKind) -> &'static str {
     }
 }
 
+/// Approximate the prompt+tools size and compare against the backend's
+/// known context window for `model`. Returns Some(error) when the request
+/// is obviously too large to fit, so we can fail fast at 400 instead of
+/// waiting on the upstream server to tokenize and reject it. Returns None
+/// when the model's context window isn't known (e.g. user added a manual
+/// model without a discovered context size) — in that case we still send
+/// upstream and let the runtime classify any overflow via
+/// `from_upstream` + `upstream_message_is_permanent_failure`.
+fn preflight_context_window_check(
+    config: &AgentBackendConfig,
+    model: &str,
+    openai_req: &Value,
+) -> Option<GatewayUpstreamError> {
+    let context = config
+        .discovered_models
+        .iter()
+        .chain(config.manual_models.iter())
+        .find(|m| m.id == model)
+        .map(|m| m.context_window_tokens)
+        .filter(|n| *n > 0)?;
+    // Body length / 4 is a deliberate over-estimate for English text and
+    // a conservative match for tokenizer-dense JSON tool schemas. Same
+    // approximation we use in /v1/messages/count_tokens, so the count
+    // and the gate stay consistent.
+    let approx_tokens = openai_req.to_string().len() / 4;
+    // Reserve some headroom for completion tokens — even a 1-token reply
+    // needs a slot. 90% of the window is a reasonable hard ceiling.
+    let limit = (context as usize).saturating_mul(9) / 10;
+    if approx_tokens <= limit {
+        return None;
+    }
+    Some(GatewayUpstreamError {
+        status: 400,
+        message: format!(
+            "Prompt is too large for the model's loaded context window. \
+             Approx {approx_tokens} tokens of input vs {context} tokens \
+             of context for `{model}`. Reload the model in {label} with a \
+             larger context length, or pick a model with a bigger window.",
+            label = config.label,
+        ),
+    })
+}
+
 async fn call_openai_responses(
     config: &AgentBackendConfig,
     secret: Option<&str>,
@@ -1416,6 +1487,14 @@ async fn call_openai_responses(
         "tools": tools_from_anthropic(&anthropic_req),
         "max_output_tokens": anthropic_req.get("max_tokens").cloned().unwrap_or(json!(4096)),
     });
+    // Pre-flight: when the backend reports a per-model context window
+    // (LM Studio's `loaded_context_length`, OpenAI's `context_window_tokens`)
+    // and the serialized request obviously won't fit, fail fast with a
+    // user-actionable message instead of waiting ~40s for LM Studio to
+    // tokenize the prompt and reject it as HTTP 500.
+    if let Some(err) = preflight_context_window_check(config, &model, &openai_req) {
+        return Err(err);
+    }
     let client = reqwest::Client::new();
     let response = client
         .post(openai_api_url(base, "responses"))
@@ -2737,5 +2816,121 @@ data: [DONE]
         let err = GatewayUpstreamError::internal("could not bind socket");
         assert_eq!(err.status, 502);
         assert_eq!(err.message, "could not bind socket");
+    }
+
+    #[test]
+    fn gateway_upstream_error_promotes_5xx_context_overflow_to_400() {
+        // LM Studio classifies "tokens to keep > context length" as HTTP
+        // 500 (verified empirically against `lms server` 0.4). Without the
+        // message-text demotion, the SDK retries this with exponential
+        // backoff and the user sees a 2-3 minute spinner. With it, the
+        // request fails fast at 400.
+        let body = serde_json::json!({
+            "error": {
+                "message": "The number of tokens to keep from the initial \
+                    prompt is greater than the context length. Try to load \
+                    the model with a larger context length, or provide a \
+                    shorter input",
+                "type": "internal_error",
+            }
+        })
+        .to_string();
+        let err = GatewayUpstreamError::from_upstream(500, &body);
+        assert_eq!(
+            err.status, 400,
+            "5xx with context-overflow message must demote to 400 so the \
+             SDK does not retry it"
+        );
+        assert!(err.message.contains("larger context length"));
+    }
+
+    #[test]
+    fn gateway_upstream_error_keeps_unknown_5xx_at_502() {
+        // A 5xx with a generic message (transient outage) must NOT be
+        // demoted — that case really should be retried.
+        let body = serde_json::json!({
+            "error": {"message": "internal server error", "type": "server_error"}
+        })
+        .to_string();
+        let err = GatewayUpstreamError::from_upstream(500, &body);
+        assert_eq!(err.status, 502);
+        assert_eq!(err.message, "internal server error");
+    }
+
+    #[test]
+    fn upstream_message_permanent_failure_classifier_recognises_known_phrases() {
+        let cases: &[(&str, bool)] = &[
+            ("tokens to keep from the initial prompt", true),
+            ("greater than the context length", true),
+            ("This exceeds the maximum context window", true),
+            ("Model is not loaded", true),
+            ("model not found", true),
+            ("Input is too long", true),
+            ("rate limit exceeded, retry after 30s", false),
+            ("upstream timed out", false),
+            ("internal server error", false),
+        ];
+        for (msg, expected) in cases {
+            assert_eq!(
+                upstream_message_is_permanent_failure(msg),
+                *expected,
+                "classifier disagreed on: {msg:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn preflight_context_window_check_rejects_obvious_overflow() {
+        // 4096-token loaded context, ~12k bytes of JSON ≈ 3000 approx
+        // tokens fits comfortably. Bump to 60k bytes ≈ 15k approx tokens
+        // and we trip the 90% gate (3686-token ceiling).
+        let mut backend = AgentBackendConfig::builtin_lm_studio();
+        backend.discovered_models = vec![AgentBackendModel {
+            id: "qwen3.6-35b-a3b-ud-mlx".to_string(),
+            label: "qwen3.6-35b-a3b-ud-mlx".to_string(),
+            context_window_tokens: 4096,
+            discovered: true,
+        }];
+
+        // Small request → passes pre-flight.
+        let small = json!({
+            "model": "qwen3.6-35b-a3b-ud-mlx",
+            "input": "ping",
+        });
+        assert!(
+            preflight_context_window_check(&backend, "qwen3.6-35b-a3b-ud-mlx", &small).is_none()
+        );
+
+        // Big request → trips pre-flight with a clear message and 400.
+        let huge_input = "x".repeat(80_000); // ~20k approx tokens
+        let big = json!({
+            "model": "qwen3.6-35b-a3b-ud-mlx",
+            "input": huge_input,
+        });
+        let err = preflight_context_window_check(&backend, "qwen3.6-35b-a3b-ud-mlx", &big)
+            .expect("oversized request must trip pre-flight");
+        assert_eq!(err.status, 400);
+        assert!(
+            err.message.contains("4096"),
+            "error must cite the loaded context size, got: {}",
+            err.message
+        );
+        assert!(err.message.contains("LM Studio"));
+    }
+
+    #[test]
+    fn preflight_context_window_check_skips_when_window_unknown() {
+        // Manual-only model with no discovered context size → no gate
+        // (we don't second-guess the user's manual entry).
+        let mut backend = AgentBackendConfig::builtin_lm_studio();
+        backend.discovered_models.clear();
+        backend.manual_models = vec![AgentBackendModel {
+            id: "custom-model".to_string(),
+            label: "custom-model".to_string(),
+            context_window_tokens: 0,
+            discovered: false,
+        }];
+        let req = json!({"model": "custom-model", "input": "x".repeat(100_000)});
+        assert!(preflight_context_window_check(&backend, "custom-model", &req).is_none());
     }
 }
