@@ -129,7 +129,8 @@ export const createTerminalSlice: StateCreator<
     })),
   removeTerminalTab: (wsId, tabId) =>
     set((s) => {
-      const tabs = (s.terminalTabs[wsId] || []).filter((t) => t.id !== tabId);
+      const allTabs = s.terminalTabs[wsId] || [];
+      const tabs = allTabs.filter((t) => t.id !== tabId);
       const wasActive = s.activeTerminalTabId[wsId] === tabId;
       // Drop the tab's pane tree and active-pane entry. The terminal panel
       // cleans up xterm instances by observing the terminalTabs map, and
@@ -157,7 +158,15 @@ export const createTerminalSlice: StateCreator<
         terminalTabs: { ...s.terminalTabs, [wsId]: tabs },
         agentBackgroundTasksBySessionId: nextTasks,
         activeTerminalTabId: wasActive
-          ? { ...s.activeTerminalTabId, [wsId]: tabs[0]?.id ?? null }
+          ? {
+              ...s.activeTerminalTabId,
+              [wsId]: (() => {
+                const closedIndex = allTabs.findIndex((t) => t.id === tabId);
+                // Prefer the tab immediately to the left; fall back to the
+                // new first tab when closing the leftmost tab.
+                return (closedIndex > 0 ? tabs[closedIndex - 1] : tabs[0])?.id ?? null;
+              })(),
+            }
           : s.activeTerminalTabId,
         terminalPaneTrees: nextTrees,
         activeTerminalPaneId: nextActivePane,

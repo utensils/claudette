@@ -265,11 +265,33 @@ describe("terminal slice: removeTerminalTab", () => {
     expect(remaining.map((t) => t.id)).toEqual([2]);
   });
 
-  it("when removing the active tab, falls back to the first remaining tab in that workspace", () => {
+  it("when removing the leftmost active tab, activates the new first (right neighbor) tab", () => {
     useAppStore.getState().setTerminalTabs(WS_A, [makeTab(1, WS_A), makeTab(2, WS_A)]);
     useAppStore.getState().setActiveTerminalTab(WS_A, 1);
 
     useAppStore.getState().removeTerminalTab(WS_A, 1);
+
+    expect(useAppStore.getState().activeTerminalTabId[WS_A]).toBe(2);
+  });
+
+  it("when removing a non-leftmost active tab, activates the left neighbor", () => {
+    useAppStore
+      .getState()
+      .setTerminalTabs(WS_A, [makeTab(1, WS_A), makeTab(2, WS_A), makeTab(3, WS_A)]);
+    useAppStore.getState().setActiveTerminalTab(WS_A, 2);
+
+    useAppStore.getState().removeTerminalTab(WS_A, 2);
+
+    expect(useAppStore.getState().activeTerminalTabId[WS_A]).toBe(1);
+  });
+
+  it("when removing the rightmost active tab, activates the left neighbor", () => {
+    useAppStore
+      .getState()
+      .setTerminalTabs(WS_A, [makeTab(1, WS_A), makeTab(2, WS_A), makeTab(3, WS_A)]);
+    useAppStore.getState().setActiveTerminalTab(WS_A, 3);
+
+    useAppStore.getState().removeTerminalTab(WS_A, 3);
 
     expect(useAppStore.getState().activeTerminalTabId[WS_A]).toBe(2);
   });
