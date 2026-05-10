@@ -902,6 +902,7 @@ fn main() {
             commands::chat::session::set_session_cli_invocation,
             commands::chat::session::reorder_chat_sessions,
             commands::chat::session::archive_chat_session,
+            commands::chat::session::restore_chat_session,
             // Plan
             commands::plan::read_plan_file,
             // Metrics

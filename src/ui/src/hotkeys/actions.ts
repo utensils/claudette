@@ -222,6 +222,22 @@ export const HOTKEY_ACTIONS = [
     suppressInInteractive: true,
   },
   {
+    // Cmd/Ctrl+Shift+N: create a new workspace in the currently focused
+    // project. Resolution order: the project-scoped view's selected repo
+    // → the active workspace's repo → the first non-remote repo. The
+    // resolver lives in `useKeyboardShortcuts` so it can read live store
+    // state without forcing a re-render dance through React hooks here.
+    id: "global.new-workspace",
+    scope: "global",
+    category: "keyboard_category_workspace",
+    description: "keyboard_action_new_workspace",
+    defaultBinding: allPlatforms("mod+shift+n"),
+    match: "key",
+    rebindable: true,
+    suppressUnderOverlay: true,
+    suppressInInteractive: false,
+  },
+  {
     id: "terminal.new-tab",
     scope: "terminal",
     category: "keyboard_category_terminal",

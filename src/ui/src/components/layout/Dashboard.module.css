@@ -4,35 +4,46 @@
   flex-direction: column;
 }
 
-.toolbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 10px 20px;
-  background: var(--chat-header-bg);
-  border-bottom: 1px solid var(--divider);
-  flex-shrink: 0;
+/* Header chrome lives in `PanelHeader.module.css`. The classes below are
+   the *content* slotted into PanelHeader's left side: the global
+   "Dashboard" label and the project-scoped repo breadcrumb. */
+
+/* Match the workspace + project-scoped header typography (mixed-case
+   monospace, primary text color) so the three views share a consistent
+   header voice. The previous uppercase chip treatment ("DASHBOARD")
+   read as a separate visual language and made nav transitions feel
+   unsettled. */
+.dashboardTitle {
+  font-size: 13px;
+  font-family: var(--font-mono);
+  font-weight: 600;
+  color: var(--text-primary);
 }
 
-.header {
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--text-dim);
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
+/* Project-scoped header matches the chat workspace header's typography
+   (monospace, mixed case, repo name bold) so swapping between the two
+   views doesn't shuffle font metrics. The dashboard's "DASHBOARD"
+   label keeps its own uppercase chip treatment because there's no
+   per-project slot competing with it there. */
+.scopedHeader {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   min-width: 0; /* let .headerPath ellipsize when the toolbar is tight */
+  font-size: 13px;
+  font-family: var(--font-mono);
+}
+
+.scopedRepoName {
+  font-weight: 600;
+  color: var(--text-primary);
+  white-space: nowrap;
 }
 
 .headerPath {
   font-family: var(--font-mono);
-  font-size: 11px;
-  font-weight: 400;
-  text-transform: none;
-  letter-spacing: 0;
-  color: var(--text-faint);
+  font-size: 13px;
+  color: var(--text-muted);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -43,31 +54,6 @@
   flex-shrink: 0;
 }
 
-.backButton {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 24px;
-  height: 24px;
-  padding: 0;
-  margin-right: 4px;
-  background: transparent;
-  border: 1px solid transparent;
-  border-radius: 4px;
-  color: var(--text-muted);
-  cursor: pointer;
-  flex-shrink: 0;
-  transition:
-    background var(--transition-fast),
-    color var(--transition-fast),
-    border-color var(--transition-fast);
-}
-
-.backButton:hover {
-  background: var(--hover-bg);
-  border-color: var(--divider);
-  color: var(--text-primary);
-}
 
 .headerCount {
   color: var(--accent-primary);
@@ -259,9 +245,8 @@
   font-style: italic;
 }
 
-/* Empty-state styling moved to WelcomeEmptyState.module.css. The macOS
-   toolbar tint stays here because the toolbar lives in this module. */
-
-:where([data-platform="mac"]) .toolbar {
-  background: color-mix(in srgb, var(--chat-header-bg) 88%, transparent);
-}
+/* Empty-state styling moved to WelcomeEmptyState.module.css; toolbar
+   chrome (drag-region, mac tint, traffic-light shift) moved to the
+   shared `PanelHeader.module.css`. Nothing toolbar-related lives here
+   anymore — kept the comment so future readers don't re-add styles
+   that already exist in the shared module. */

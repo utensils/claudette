@@ -219,6 +219,32 @@ export function useKeyboardShortcuts() {
             // chat-close confirmation rules.
             executeCloseTab();
             return;
+          case "global.new-workspace": {
+            // Resolve the target project: project-scoped view's pinned
+            // repo, then the active workspace's repo, finally the first
+            // local repo (so the shortcut still works from the global
+            // dashboard with a single repo).
+            const cur = useAppStore.getState();
+            const localRepos = cur.repositories.filter((r) => !r.remote_connection_id);
+            const fromScoped = cur.selectedRepositoryId
+              ? localRepos.find((r) => r.id === cur.selectedRepositoryId)
+              : null;
+            const fromWorkspace = (() => {
+              if (!cur.selectedWorkspaceId) return null;
+              const ws = cur.workspaces.find((w) => w.id === cur.selectedWorkspaceId);
+              return ws ? localRepos.find((r) => r.id === ws.repository_id) : null;
+            })();
+            const target = fromScoped ?? fromWorkspace ?? localRepos[0] ?? null;
+            if (!target) return;
+            // Lazy import keeps the workspace-creation orchestration out
+            // of this hook's main bundle (it pulls in setup-script flow
+            // and confirm-modal data). The dynamic import resolves once
+            // and is cached by the module loader.
+            void import("../hotkeys/contextActions").then(({ executeNewWorkspace }) => {
+              executeNewWorkspace(target.id);
+            });
+            return;
+          }
           default:
             return;
         }

@@ -1,46 +1,8 @@
-.header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 10px 20px;
-  /* Pin to the shared layout header height so the right-sidebar's tab bar
-   * (which uses the same var) lines up with this header's bottom border.
-   * box-sizing: border-box keeps the 1px bottom border inside the height. */
-  min-height: var(--workspace-header-h);
-  box-sizing: border-box;
-  background: var(--chat-header-bg);
-  border-bottom: 1px solid var(--divider);
-  box-shadow: var(--shadow-sm);
-}
-
-.headerLeft {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-  user-select: none;
-  -webkit-user-select: none;
-  -webkit-app-region: no-drag;
-  app-region: no-drag;
-}
-
-.headerLeft * {
-  -webkit-app-region: no-drag;
-  app-region: no-drag;
-}
-
-.headerRight {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  -webkit-app-region: no-drag;
-  app-region: no-drag;
-}
-
-.headerRight * {
-  -webkit-app-region: no-drag;
-  app-region: no-drag;
-}
+/* Header chrome (drag-region, padding, traffic-light shift, no-select)
+   lives in the shared `PanelHeader.module.css`. This file owns only the
+   workspace-specific breadcrumb styling: repo name, branch, base branch.
+   Keep it scoped to those concerns so future header consumers can compose
+   PanelHeader without inheriting branch typography they don't want. */
 
 .branchInfo {
   display: flex;
@@ -83,12 +45,4 @@
 .baseBranch {
   color: var(--text-dim);
   white-space: nowrap;
-}
-
-[data-platform="mac"] .noSidebar {
-  padding-left: 80px;
-}
-
-:where([data-platform="mac"]) .header {
-  background: color-mix(in srgb, var(--chat-header-bg) 88%, transparent);
 }

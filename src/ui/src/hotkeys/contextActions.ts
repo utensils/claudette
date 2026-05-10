@@ -111,6 +111,12 @@ export function chatCloseConfirmKind(args: {
 }): ChatCloseConfirmKind {
   const { session, activeSessions, isActiveSession } = args;
   if (session.agent_status === "Running") return "running";
+  // A fresh, untouched placeholder ("New chat" with zero turns and no live
+  // agent) is safe to close without confirmation regardless of whether it's
+  // the active or last tab — there's nothing to lose. Letting it close
+  // quietly is what makes "close the final tab to land on the workspace
+  // empty state" feel right.
+  if (session.turn_count === 0) return "none";
   const activeCount = activeSessions.filter((s) => s.status === "Active").length;
   if (isActiveSession) return "active";
   if (activeCount <= 1) return "last";
@@ -154,6 +160,33 @@ export function executeNewTab(overrides?: Partial<ContextActionDeps>): void {
       post.selectSession(wsId, session.id);
     } catch (err) {
       console.error("[hotkey] executeNewTab failed:", err);
+    }
+  })();
+}
+
+/**
+ * Cmd/Ctrl+Shift+N — create a new workspace in the given project. The
+ * keyboard hook resolves which project (project-scoped repo → active
+ * workspace's repo → first local repo) and hands the id to this fn so
+ * the orchestration matches Sidebar's `+` button: generate slug, call
+ * createWorkspace, push into the store, expand the parent sidebar group,
+ * select the new workspace. Errors surface via console — the hook layer
+ * doesn't have access to the toast slice without bloating its closure.
+ */
+export function executeNewWorkspace(repoId: string): void {
+  void (async () => {
+    try {
+      const { createWorkspace, generateWorkspaceName } = await import(
+        "../services/tauri"
+      );
+      const generated = await generateWorkspaceName();
+      const result = await createWorkspace(repoId, generated.slug, true);
+      const store = useAppStore.getState();
+      store.addWorkspace(result.workspace);
+      store.expandRepo(repoId);
+      store.selectWorkspace(result.workspace.id);
+    } catch (err) {
+      console.error("[hotkey] executeNewWorkspace failed:", err);
     }
   })();
 }
@@ -243,7 +276,20 @@ export function executeCloseTab(overrides?: Partial<ContextActionDeps>): void {
     }
 
     try {
-      const autoCreated = await deps.archiveChatSession(sessionId);
+      // Mirror SessionTabs' close-button decision: skip the auto-replace
+      // only when this is the last tab across every kind, so Cmd+W on a
+      // workspace's final chat session lands on the empty-tabs view
+      // instead of churning a fresh placeholder under the user's cursor.
+      const stateNow = useAppStore.getState();
+      const activeSessions = (stateNow.sessionsByWorkspace[wsId] ?? []).filter(
+        (s) => s.status === "Active",
+      );
+      const diffTabs = stateNow.diffTabsByWorkspace[wsId] ?? [];
+      const fileTabs = stateNow.fileTabsByWorkspace[wsId] ?? [];
+      const isLastSession = activeSessions.length <= 1;
+      const noOtherTabs = diffTabs.length === 0 && fileTabs.length === 0;
+      const autoReplace = !(isLastSession && noOtherTabs);
+      const autoCreated = await deps.archiveChatSession(sessionId, autoReplace);
       const post = useAppStore.getState();
       post.removeChatSession(sessionId);
       if (autoCreated && post.selectedWorkspaceId === wsId) {

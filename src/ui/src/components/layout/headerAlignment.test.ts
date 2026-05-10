@@ -40,8 +40,13 @@ describe("layout header alignment", () => {
     expect(theme).toMatch(/--tab-bar-h\s*:\s*\d+px/);
   });
 
-  it("WorkspacePanelHeader pins to --workspace-header-h", () => {
-    const css = readCss("components/shared/WorkspacePanelHeader.module.css");
+  it("PanelHeader pins to --workspace-header-h", () => {
+    // The header chrome (drag-region, padding, min-height) lives in the
+    // shared PanelHeader.module.css after the unification refactor.
+    // WorkspacePanelHeader composes PanelHeader and only owns the chat
+    // breadcrumb typography, so its module no longer holds the height
+    // pin — the assertion follows the chrome to its new home.
+    const css = readCss("components/shared/PanelHeader.module.css");
     expect(css).toMatch(/min-height:\s*var\(--workspace-header-h\)/);
   });
 

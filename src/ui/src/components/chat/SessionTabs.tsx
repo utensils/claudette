@@ -240,7 +240,16 @@ export function SessionTabs({ workspaceId }: Props) {
   const archiveSessionImmediate = useCallback(
     async (session: ChatSession) => {
       try {
-        const autoCreated = await archiveChatSession(session.id);
+        // Decide whether the backend should auto-create a replacement. We
+        // skip the replacement only when this is the LAST tab in the
+        // workspace across every kind (chat sessions, diff tabs, file tabs)
+        // — that's the "close the final tab and land on the empty-tabs
+        // view" path. As long as some other tab is still around, keeping
+        // the always-≥1-active-session invariant matches existing UX.
+        const isLastSession = activeSessions.length <= 1;
+        const noOtherTabs = diffTabs.length === 0 && fileTabs.length === 0;
+        const autoReplace = !(isLastSession && noOtherTabs);
+        const autoCreated = await archiveChatSession(session.id, autoReplace);
         loadVersionRef.current += 1;
         removeChatSession(session.id);
         if (autoCreated) {
@@ -256,7 +265,7 @@ export function SessionTabs({ workspaceId }: Props) {
         console.error("[SessionTabs] Failed to archive session:", err);
       }
     },
-    [removeChatSession, addChatSession, selectSession, workspaceId],
+    [removeChatSession, addChatSession, selectSession, workspaceId, activeSessions, diffTabs, fileTabs],
   );
 
   const handleArchive = async (session: ChatSession) => {

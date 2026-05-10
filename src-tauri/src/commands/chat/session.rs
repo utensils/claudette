@@ -125,15 +125,35 @@ pub async fn reorder_chat_sessions(
         .map_err(|e| e.to_string())
 }
 
+/// Restore an archived chat session — flips its status back to `active`
+/// and clears `archived_at` so it reappears in the workspace's tab list.
+/// Used by the workspace empty-tabs view's "resume previous session"
+/// affordance. Returns the rehydrated session row.
+#[tauri::command]
+pub async fn restore_chat_session(
+    session_id: String,
+    state: State<'_, AppState>,
+) -> Result<ChatSession, String> {
+    let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
+    let restored = db
+        .restore_chat_session(&session_id)
+        .map_err(|e| e.to_string())?;
+    let agents = state.agents.read().await;
+    Ok(hydrate_session(restored, &agents))
+}
+
 /// Archive a chat session (soft-delete). Stops its running agent first, then
-/// marks the row archived. If this was the workspace's last active session,
-/// a fresh `New chat` session is created so every workspace always has ≥1
-/// active session. Returns the newly created session in that case, `None`
-/// otherwise — the frontend uses the return value to select the new tab.
+/// marks the row archived. By default — when the caller omits `auto_replace`
+/// or passes `Some(true)` — closing the workspace's last active session
+/// auto-creates a fresh `New chat` so every workspace stays at ≥1 active
+/// session. Pass `Some(false)` to opt out: the workspace becomes session-less
+/// and the frontend can surface its empty-tabs view. Returns the newly
+/// created session when a replacement was made; `None` otherwise.
 #[tauri::command]
 pub async fn archive_chat_session(
     app: AppHandle,
     session_id: String,
+    auto_replace: Option<bool>,
     state: State<'_, AppState>,
 ) -> Result<Option<ChatSession>, String> {
     let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
@@ -155,9 +175,14 @@ pub async fn archive_chat_session(
         let _ = agent::stop_agent(pid).await;
     }
 
-    let fresh = db
-        .archive_chat_session_ensuring_active(&session_id, &workspace_id)
-        .map_err(|e| e.to_string())?;
+    let fresh = if auto_replace.unwrap_or(true) {
+        db.archive_chat_session_ensuring_active(&session_id, &workspace_id)
+            .map_err(|e| e.to_string())?
+    } else {
+        db.archive_chat_session_only(&session_id)
+            .map_err(|e| e.to_string())?;
+        None
+    };
 
     // Rebuild the tray so per-workspace running/attention aggregates reflect
     // the removed agent (and, if this was the last session, the auto-created

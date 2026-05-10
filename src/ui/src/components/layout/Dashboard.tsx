@@ -1,9 +1,10 @@
 import { memo, useCallback, useMemo, useEffect, useState } from "react";
-import { GitBranch, Globe, ChevronDown, ChevronRight, LayoutDashboard } from "lucide-react";
+import { GitBranch, Globe, ChevronDown, ChevronRight } from "lucide-react";
 import { useAppStore } from "../../stores/useAppStore";
 import type { AgentStatus } from "../../types/workspace";
 import { isAgentBusy } from "../../utils/agentStatus";
 import { RepoIcon } from "../shared/RepoIcon";
+import { PanelHeader } from "../shared/PanelHeader";
 import { PanelToggles } from "../shared/PanelToggles";
 import { StatsStrip, AnalyticsSection, MicroStats } from "../metrics";
 import { SessionStatusIcon, type SessionStatusKind } from "../shared/SessionStatusIcon";
@@ -183,7 +184,6 @@ export function Dashboard() {
   const openModal = useAppStore((s) => s.openModal);
   const addToast = useAppStore((s) => s.addToast);
   const selectedRepositoryId = useAppStore((s) => s.selectedRepositoryId);
-  const goToDashboard = useAppStore((s) => s.goToDashboard);
 
   const fetchDashboardMetrics = useAppStore((s) => s.fetchDashboardMetrics);
   const fetchAnalyticsMetrics = useAppStore((s) => s.fetchAnalyticsMetrics);
@@ -314,25 +314,18 @@ export function Dashboard() {
     ).length;
     return (
       <div className={styles.dashboard}>
-        <div className={styles.toolbar} data-tauri-drag-region>
-          <button
-            type="button"
-            className={styles.backButton}
-            onClick={goToDashboard}
-            title="Dashboard"
-            aria-label="Dashboard"
-          >
-            <LayoutDashboard size={14} />
-          </button>
-          <div className={styles.header}>
-            {scopedRepo.icon && (
-              <RepoIcon icon={scopedRepo.icon} size={12} className={styles.repoIcon} />
-            )}
-            <span>{scopedRepo.name}</span>
-            <span className={styles.headerPath}>{scopedRepo.path}</span>
-          </div>
-          <PanelToggles />
-        </div>
+        <PanelHeader
+          left={
+            <span className={styles.scopedHeader}>
+              {scopedRepo.icon && (
+                <RepoIcon icon={scopedRepo.icon} size={12} className={styles.repoIcon} />
+              )}
+              <span className={styles.scopedRepoName}>{scopedRepo.name}</span>
+              <span className={styles.headerPath}>{scopedRepo.path}</span>
+            </span>
+          }
+          right={<PanelToggles />}
+        />
         <div className={styles.scrollBody}>
           <WelcomeEmptyState
             repositories={[scopedRepo]}
@@ -390,10 +383,10 @@ export function Dashboard() {
   if (activeWorkspaces.length === 0) {
     return (
       <div className={styles.dashboard}>
-        <div className={styles.toolbar} data-tauri-drag-region>
-          <div className={styles.header}>Dashboard</div>
-          <PanelToggles />
-        </div>
+        <PanelHeader
+          left={<span className={styles.dashboardTitle}>Dashboard</span>}
+          right={<PanelToggles />}
+        />
         <div className={styles.scrollBody}>
           <StatsStrip />
           <AnalyticsSection />
@@ -415,10 +408,10 @@ export function Dashboard() {
 
   return (
     <div className={styles.dashboard}>
-      <div className={styles.toolbar} data-tauri-drag-region>
-        <div className={styles.header}>Dashboard</div>
-        <PanelToggles />
-      </div>
+      <PanelHeader
+        left={<span className={styles.dashboardTitle}>Dashboard</span>}
+        right={<PanelToggles />}
+      />
       <div className={styles.scrollBody}>
         <StatsStrip />
         <AnalyticsSection />

@@ -82,7 +82,9 @@ describe("chatCloseConfirmKind", () => {
   });
 
   it("returns 'active' when the session is selected and not running", () => {
-    const session = makeSession("a");
+    // turn_count > 0 so the placeholder-skip rule (turn_count===0 → 'none')
+    // doesn't pre-empt the 'active' branch we're checking here.
+    const session = makeSession("a", { turn_count: 1 });
     const kind = chatCloseConfirmKind({
       session,
       activeSessions: [session, makeSession("b"), makeSession("c")],
@@ -92,7 +94,7 @@ describe("chatCloseConfirmKind", () => {
   });
 
   it("returns 'last' when this is the only Active session", () => {
-    const session = makeSession("a");
+    const session = makeSession("a", { turn_count: 1 });
     const kind = chatCloseConfirmKind({
       session,
       activeSessions: [session],
@@ -102,7 +104,7 @@ describe("chatCloseConfirmKind", () => {
   });
 
   it("returns 'none' for a non-active, non-last, non-running close", () => {
-    const session = makeSession("a");
+    const session = makeSession("a", { turn_count: 1 });
     const kind = chatCloseConfirmKind({
       session,
       activeSessions: [session, makeSession("b"), makeSession("c")],
@@ -112,7 +114,7 @@ describe("chatCloseConfirmKind", () => {
   });
 
   it("ignores Archived sessions when counting toward 'last'", () => {
-    const session = makeSession("a");
+    const session = makeSession("a", { turn_count: 1 });
     const kind = chatCloseConfirmKind({
       session,
       activeSessions: [
@@ -125,6 +127,21 @@ describe("chatCloseConfirmKind", () => {
     // Two archived siblings don't count — `a` is still the only Active
     // one, so closing it triggers the 'last' confirm.
     expect(kind).toBe("last");
+  });
+
+  it("returns 'none' for a fresh placeholder regardless of last/active", () => {
+    // Pin the new behaviour: turn_count===0 short-circuits the
+    // confirm-prompt logic so closing a brand-new "New chat" (the only
+    // session in the workspace, currently active) doesn't trip the
+    // "active" or "last" prompts. There's nothing to lose, and the user
+    // explicitly wants the empty-tabs view to be reachable from there.
+    const session = makeSession("a", { turn_count: 0 });
+    const kind = chatCloseConfirmKind({
+      session,
+      activeSessions: [session],
+      isActiveSession: true,
+    });
+    expect(kind).toBe("none");
   });
 });
 
@@ -247,7 +264,9 @@ describe("executeCloseTab", () => {
   });
 
   it("chat context: prompts before closing the active session", async () => {
-    const session = makeSession("a");
+    // turn_count > 0 so the placeholder-skip rule doesn't fire; we want
+    // the confirm path here to assert the "active session" branch.
+    const session = makeSession("a", { turn_count: 3 });
     useAppStore.setState({
       sessionsByWorkspace: { [WS]: [session, makeSession("b")] },
       selectedSessionIdByWorkspaceId: { [WS]: "a" },
@@ -265,7 +284,9 @@ describe("executeCloseTab", () => {
     // pinned here — the i18n-aware copy lives in SessionTabs;
     // contextActions uses an English fallback for the Monaco path.
     expect(confirm).toHaveBeenCalledTimes(1);
-    expect(archiveChatSession).toHaveBeenCalledWith("a");
+    // Two sessions present, so this isn't the workspace's last tab —
+    // the auto-replace flag stays at the historical default of true.
+    expect(archiveChatSession).toHaveBeenCalledWith("a", true);
   });
 
   it("chat context: after Cmd+W closes a session, selects the tab to its left", async () => {
@@ -288,7 +309,9 @@ describe("executeCloseTab", () => {
   });
 
   it("chat context: cancelled confirm leaves state untouched", async () => {
-    const session = makeSession("a");
+    // turn_count > 0 keeps the placeholder-skip rule out of this test —
+    // we want to assert that the "no" answer to a real confirm aborts.
+    const session = makeSession("a", { turn_count: 3 });
     useAppStore.setState({
       sessionsByWorkspace: { [WS]: [session, makeSession("b")] },
       selectedSessionIdByWorkspaceId: { [WS]: "a" },
@@ -348,13 +371,19 @@ describe("executeCloseTab", () => {
     await new Promise((r) => setTimeout(r, 0));
 
     expect(confirm).toHaveBeenCalledTimes(1);
-    expect(archiveChatSession).toHaveBeenCalledWith("a");
+    // This is the workspace's last tab (no diff/file tabs either) so
+    // the auto-replace flag flips to false — the workspace lands on
+    // its empty-tabs view instead of getting a fresh placeholder.
+    expect(archiveChatSession).toHaveBeenCalledWith("a", false);
   });
 
   it("chat context: adds + selects the auto-created replacement when archive returns one", async () => {
-    const session = makeSession("a");
+    // Two sessions so isLastSession=false, auto-replace flag stays true.
+    // The mock returns a replacement to exercise the "promote new session"
+    // branch — what we're pinning here is the frontend selection path,
+    // not the backend's actual replace decision.
     useAppStore.setState({
-      sessionsByWorkspace: { [WS]: [session] },
+      sessionsByWorkspace: { [WS]: [makeSession("a"), makeSession("b")] },
       selectedSessionIdByWorkspaceId: { [WS]: "a" },
     });
     const replacement = makeSession("auto-1");

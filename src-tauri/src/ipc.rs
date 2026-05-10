@@ -831,10 +831,19 @@ async fn handle_archive_chat_session(
     params: &serde_json::Value,
 ) -> Result<serde_json::Value, String> {
     let chat_session_id = param_chat_session_id(params)?;
+    // CLI / IPC callers don't currently differentiate the auto-replace
+    // behaviour — we keep the historical "always replace" default so any
+    // external scripting that closes a workspace's last session still
+    // sees a fresh placeholder appear, matching pre-change semantics.
+    let auto_replace = params.get("autoReplace").and_then(|v| v.as_bool());
     let state = app_state(app)?;
-    let fresh =
-        crate::commands::chat::session::archive_chat_session(app.clone(), chat_session_id, state)
-            .await?;
+    let fresh = crate::commands::chat::session::archive_chat_session(
+        app.clone(),
+        chat_session_id,
+        auto_replace,
+        state,
+    )
+    .await?;
     serde_json::to_value(fresh).map_err(|e| e.to_string())
 }
 

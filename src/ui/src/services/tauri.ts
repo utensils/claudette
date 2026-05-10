@@ -897,14 +897,29 @@ export function reorderChatSessions(
 }
 
 /**
- * Archive a chat session. Returns the freshly auto-created session if this
- * was the workspace's last active session (so the frontend can select it),
- * otherwise null.
+ * Restore a previously archived chat session — flips status back to active
+ * and clears `archived_at` so the session reappears in the workspace's
+ * tab list. The frontend should add the returned row back to the store.
+ */
+export function restoreChatSession(
+  sessionId: string,
+): Promise<ChatSession> {
+  return invoke("restore_chat_session", { sessionId });
+}
+
+/**
+ * Archive a chat session. By default, when this was the workspace's last
+ * active session, the backend auto-creates a fresh "New chat" replacement
+ * and returns it (so the frontend can select the new tab). Pass
+ * `autoReplace: false` to opt out — the workspace becomes session-less and
+ * the frontend can render its empty-tabs view. Returns the auto-created
+ * session in the auto-replace path; `null` otherwise.
  */
 export function archiveChatSession(
   sessionId: string,
+  autoReplace: boolean = true,
 ): Promise<ChatSession | null> {
-  return invoke("archive_chat_session", { sessionId });
+  return invoke("archive_chat_session", { sessionId, autoReplace });
 }
 
 // -- Plan --

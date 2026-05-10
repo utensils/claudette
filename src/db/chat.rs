@@ -519,6 +519,42 @@ impl Database {
         Ok(())
     }
 
+    /// Restore a previously archived session: flip its status back to
+    /// active and clear `archived_at`. Used by the workspace empty-tabs
+    /// view's "resume previous session" affordance. Returns the rehydrated
+    /// session row; errors if the id doesn't exist.
+    pub fn restore_chat_session(
+        &self,
+        chat_session_id: &str,
+    ) -> Result<ChatSession, rusqlite::Error> {
+        self.conn.execute(
+            "UPDATE chat_sessions
+             SET status = 'active', archived_at = NULL
+             WHERE id = ?1",
+            params![chat_session_id],
+        )?;
+        let sql = format!(
+            "SELECT {} FROM chat_sessions WHERE id = ?1",
+            Self::CHAT_SESSION_COLS
+        );
+        self.conn
+            .query_row(&sql, params![chat_session_id], Self::parse_chat_session_row)
+    }
+
+    /// Archive a session without creating a replacement. Used by the
+    /// "close last tab" path that wants the workspace's empty-tabs view
+    /// to surface; callers that need the always-≥1 invariant should use
+    /// [`Self::archive_chat_session_ensuring_active`] instead.
+    pub fn archive_chat_session_only(&self, chat_session_id: &str) -> Result<(), rusqlite::Error> {
+        self.conn.execute(
+            "UPDATE chat_sessions
+             SET status = 'archived', archived_at = datetime('now')
+             WHERE id = ?1",
+            params![chat_session_id],
+        )?;
+        Ok(())
+    }
+
     /// Archive a session while preserving the "workspace has ≥1 active
     /// session" invariant. Runs archive + remaining-count + conditional
     /// replacement create as a single transaction so observers never see a

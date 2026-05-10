@@ -1,0 +1,60 @@
+/* Shared header chrome for Dashboard, project-scoped, and chat views.
+   Mirrors the existing WorkspacePanelHeader visual treatment so swapping
+   between views (no-workspace ↔ workspace selected) doesn't shuffle the
+   surrounding chrome by even a pixel. */
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 20px;
+  /* Pin to the shared layout header height so the right-sidebar's tab bar
+   * (which uses the same var) lines up with this header's bottom border.
+   * box-sizing: border-box keeps the 1px bottom border inside the height. */
+  min-height: var(--workspace-header-h);
+  box-sizing: border-box;
+  background: var(--chat-header-bg);
+  border-bottom: 1px solid var(--divider);
+  box-shadow: var(--shadow-sm);
+  flex-shrink: 0;
+}
+
+.headerLeft {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  /* Non-selectable so the drag-region isn't broken by accidental text
+     selection on the title — without this you can drag the title text
+     and the OS window stays put. */
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+}
+
+.headerLeft * {
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+}
+
+.headerRight {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+}
+
+.headerRight * {
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+}
+
+[data-platform="mac"] .noSidebar {
+  padding-left: 80px;
+}
+
+:where([data-platform="mac"]) .header {
+  background: color-mix(in srgb, var(--chat-header-bg) 88%, transparent);
+}
