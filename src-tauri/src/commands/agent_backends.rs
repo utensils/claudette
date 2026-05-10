@@ -1560,12 +1560,13 @@ fn gateway_auth_matches(header: &str, auth_token: &str) -> bool {
     })
 }
 
-// All currently-supported gateway backends (OpenAi, Codex, CustomOpenAi)
-// require a real API key. LM Studio used to land here too, with a
-// placeholder-bearer fallback, but it left the gateway path entirely once
-// it shipped native /v1/messages support — its placeholder logic now
-// lives in `discover_lm_studio_models` and the runtime env-var setup in
-// `resolve_backend_runtime`.
+// Gateway backends that go through the OpenAI-Responses translation
+// path (OpenAi, Codex, CustomOpenAi) require a real API key — they
+// hit api.openai.com or chatgpt.com and need real auth. LM Studio is
+// also gateway-routed but takes the Anthropic-shape pass-through in
+// `proxy_anthropic_messages` instead of this helper, and its
+// local-first placeholder-bearer logic lives there + in
+// `discover_lm_studio_models` (where it's actually exercised).
 fn openai_compatible_bearer_token(secret: Option<&str>) -> Result<String, String> {
     secret
         .map(str::to_string)
