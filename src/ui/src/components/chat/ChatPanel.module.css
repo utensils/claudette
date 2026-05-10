@@ -338,6 +338,60 @@
   }
 }
 
+/* Pending steering prompt indicator */
+.pendingSteer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  font-size: 12px;
+  background: rgba(var(--accent-primary-rgb), 0.04);
+  border-radius: 6px;
+  border: 1px solid rgba(var(--accent-primary-rgb), 0.1);
+  border-left: 2px solid rgba(var(--accent-primary-rgb), 0.5);
+  margin-top: 4px;
+  animation: pendingSteerPulse 2s ease-in-out infinite;
+}
+
+.pendingSteerIcon {
+  display: inline-flex;
+  align-items: center;
+  color: var(--accent-primary);
+  opacity: 0.7;
+  flex-shrink: 0;
+}
+
+.pendingSteerLabel {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--accent-primary);
+  opacity: 0.8;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.pendingSteerContent {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+  color: var(--text-muted);
+}
+
+@keyframes pendingSteerPulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.55; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pendingSteer {
+    animation: none;
+  }
+}
+
 .elapsed {
   color: var(--text-dim);
   font-size: 12px;

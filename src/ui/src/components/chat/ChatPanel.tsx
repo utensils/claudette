@@ -119,6 +119,7 @@ export function ChatPanel() {
   const processingRef = useRef<HTMLDivElement>(null);
   const [error, setError] = useState<string | null>(null);
   const [isSteeringQueued, setIsSteeringQueued] = useState(false);
+  const [pendingSteerContent, setPendingSteerContent] = useState<string | null>(null);
   const isMac = isMacHotkeyPlatform();
   const steerQueuedTooltip = tooltipWithHotkey(
     t("steer_queued"),
@@ -668,6 +669,12 @@ export function ChatPanel() {
     // Re-attach on session switch so the sessionId ref stays in sync.
   }, [activeSessionId]);
 
+  // Clear any in-flight steer indicator when the active session changes so
+  // the banner from session A never leaks into session B's view.
+  useEffect(() => {
+    setPendingSteerContent(null);
+  }, [activeSessionId]);
+
   // Auto-scroll when new content arrives — respects user intent via useStickyScroll.
   // Only scrolls if the user is already at/near the bottom.
   const prevMsgCountRef = useRef<Record<string, number>>({});
@@ -814,6 +821,7 @@ export function ChatPanel() {
       : undefined;
     setError(null);
     setIsSteeringQueued(true);
+    setPendingSteerContent(content.trim() || null);
     try {
       const checkpoint = await steerQueuedChatMessage(
         sessionId,
@@ -839,6 +847,7 @@ export function ChatPanel() {
       setError(errMsg);
     } finally {
       setIsSteeringQueued(false);
+      setPendingSteerContent(null);
     }
   };
 
@@ -860,6 +869,7 @@ export function ChatPanel() {
     const messageId = crypto.randomUUID();
     setError(null);
     setIsSteeringQueued(true);
+    setPendingSteerContent(content.trim() || null);
     removeQueuedMessage(sessionId, queuedMessage.id);
     try {
       const checkpoint = await steerQueuedChatMessage(
@@ -884,6 +894,7 @@ export function ChatPanel() {
       setError(errMsg);
     } finally {
       setIsSteeringQueued(false);
+      setPendingSteerContent(null);
     }
   };
 
@@ -1397,6 +1408,20 @@ export function ChatPanel() {
                     }
                   }}
                 />
+              )}
+
+              {isSteeringQueued && (
+                <div className={styles.pendingSteer} aria-live="polite" aria-label={t("steer_pending_aria")}>
+                  <span className={styles.pendingSteerIcon} aria-hidden="true">
+                    <SendHorizontal size={12} />
+                  </span>
+                  <span className={styles.pendingSteerLabel} aria-hidden="true">
+                    {t("steer_pending_label")}
+                  </span>
+                  <span className={styles.pendingSteerContent}>
+                    {pendingSteerContent ?? t("steer_pending_attachment")}
+                  </span>
+                </div>
               )}
 
               {isRunning && !pendingQuestion && !pendingPlan && (
