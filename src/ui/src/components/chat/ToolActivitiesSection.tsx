@@ -139,15 +139,25 @@ function GroupedToolActivityRows({
   // running. The previous "expand if any activity is still running"
   // heuristic was intentionally removed: with grouped tool calls on
   // (the new-user default), the chat surface stays quiet and the user
-  // expands what they want. Completed turns persist `turn.collapsed =
-  // true` (see `useAgentStream.ts` and `reconstructTurns.ts`), so the
+  // expands what they want. Completed turns initialize
+  // `turn.collapsed = true` in `chatSlice.finalizeTurn` and
+  // `reconstructTurns.ts` (the DB-replay path), so the
   // running→completed transition no longer changes the default.
   const defaultCollapsed = true;
   const collapsed = userOverride ?? defaultCollapsed;
   const isExpanded = queryHasMatch || !collapsed;
   const toggle = () => {
     if (!groupKey) return;
-    setCollapsedToolGroup(sessionId, groupKey, !collapsed);
+    // Persist based on the *visible* state, not the raw `collapsed`
+    // boolean. Otherwise, clicking the header while a search query is
+    // forcing the group expanded would silently flip the underlying
+    // override (`!collapsed` = `!true` = `false`, expand) — the click
+    // appears to do nothing because aria-expanded stays true, but
+    // when the user clears the search the group surprises them by
+    // springing open. Storing `isExpanded` ("if currently visible,
+    // collapse it") matches the user's intent: a click on a visible
+    // header is "hide this", a click on a hidden header is "show this".
+    setCollapsedToolGroup(sessionId, groupKey, isExpanded);
   };
 
   return (
@@ -229,7 +239,12 @@ function GroupedAgentActivity({
   const isCollapsed = !queryHasMatch && collapsed;
   const toggle = () => {
     if (!groupKey) return;
-    setCollapsedToolGroup(sessionId, groupKey, !collapsed);
+    // Persist based on the visible state (`isCollapsed`), not the raw
+    // `collapsed` boolean — see the matching comment in
+    // `GroupedToolActivityRows#toggle` for why. Without this, clicking
+    // a search-force-expanded agent header silently flips the override
+    // and the agent surprises the user when the search is cleared.
+    setCollapsedToolGroup(sessionId, groupKey, !isCollapsed);
   };
 
   return (

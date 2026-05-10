@@ -503,6 +503,64 @@ describe("ToolActivitiesSection", () => {
     expect(container.textContent).toContain("Edit");
   });
 
+  it("clicking a search-force-expanded tool group persists 'collapse' (not the underlying inverse)", async () => {
+    // Regression for a latent bug where `toggle()` flipped the
+    // persisted override based on the raw `collapsed` boolean instead
+    // of the *visible* state. A search query forces the group open;
+    // clicking the header should be interpreted as "hide this", not
+    // silently flip the underlying override behind the search and
+    // surprise the user when they clear the query.
+    const runningActivity = activity("Bash", {
+      toolUseId: "search-toggle-1",
+      resultText: "",
+      summary: "secret-token-payload",
+    });
+    const container = await render(
+      <ToolActivitiesSection
+        sessionId="session-search-toggle"
+        toolDisplayMode="grouped"
+        searchQuery="secret-token"
+        activities={[runningActivity]}
+      />,
+    );
+
+    const header = container.querySelector(
+      '[role="button"][aria-expanded]',
+    ) as HTMLElement;
+    // Search match force-expands the default-collapsed group.
+    expect(header.getAttribute("aria-expanded")).toBe("true");
+
+    // User clicks the visible header — intent is "hide this".
+    await act(async () => {
+      header.click();
+    });
+
+    // Slice now records `true` (collapsed) — matching the click intent.
+    expect(
+      useAppStore.getState().collapsedToolGroupsBySession[
+        "session-search-toggle"
+      ]?.["tools:search-toggle-1"],
+    ).toBe(true);
+
+    // Clearing the search should leave the group collapsed (not
+    // unexpectedly springing open as the pre-fix code would have done).
+    await act(async () => {
+      mountedRoots[0].render(
+        <ToolActivitiesSection
+          sessionId="session-search-toggle"
+          toolDisplayMode="grouped"
+          searchQuery=""
+          activities={[runningActivity]}
+        />,
+      );
+    });
+
+    const headerAfter = container.querySelector(
+      '[role="button"][aria-expanded]',
+    ) as HTMLElement;
+    expect(headerAfter.getAttribute("aria-expanded")).toBe("false");
+  });
+
   it("collapses live Agent groups by default in grouped mode while keeping progress visible", async () => {
     // Pinning the new live-Agent UX: header label + status / count /
     // latest-tool progress row stays visible while collapsed; only
@@ -650,6 +708,75 @@ describe("ToolActivitiesSection", () => {
     ) as HTMLElement;
     expect(headerAfter.getAttribute("aria-expanded")).toBe("true");
     expect(container.textContent).toContain("Read");
+  });
+
+  it("clicking a search-force-expanded live Agent persists 'collapse' (matches visible intent)", async () => {
+    // Same regression as the tool-group toggle-during-search test, on
+    // the agent code path. Without the visible-state fix in
+    // `GroupedAgentActivity`, clicking a search-force-expanded agent
+    // header silently flips the persisted override (`!collapsed` =
+    // `false`, expanded) so the agent springs open the moment the
+    // user clears the query.
+    const { useAppStore } = await import("../../stores/useAppStore");
+    useAppStore.setState({ collapsedToolGroupsBySession: {} });
+
+    const agentActivity = activity("Agent", {
+      toolUseId: "agent-search-toggle-1",
+      agentDescription: "Survey UI",
+      agentToolCalls: [
+        {
+          toolUseId: "nested-search-toggle-1",
+          toolName: "Read",
+          agentId: "a",
+          status: "completed",
+          startedAt: "2026-05-08T00:00:00Z",
+          input: { file_path: "/repo/src/secret-token-target.ts" },
+        },
+      ],
+    });
+    const container = await render(
+      <ToolActivitiesSection
+        sessionId="session-agent-search-toggle"
+        toolDisplayMode="grouped"
+        searchQuery="secret-token"
+        activities={[agentActivity]}
+      />,
+    );
+
+    const header = container.querySelector(
+      '[role="button"][aria-expanded]',
+    ) as HTMLElement;
+    // Search match force-expands the default-collapsed agent.
+    expect(header.getAttribute("aria-expanded")).toBe("true");
+
+    // User clicks the visible header — intent is "hide this".
+    await act(async () => {
+      header.click();
+    });
+
+    // Slice records `true` (collapsed), matching the click intent.
+    expect(
+      useAppStore.getState().collapsedToolGroupsBySession[
+        "session-agent-search-toggle"
+      ]?.["agent:agent-search-toggle-1"],
+    ).toBe(true);
+
+    // Clearing the search must leave the agent collapsed.
+    await act(async () => {
+      mountedRoots[0].render(
+        <ToolActivitiesSection
+          sessionId="session-agent-search-toggle"
+          toolDisplayMode="grouped"
+          searchQuery=""
+          activities={[agentActivity]}
+        />,
+      );
+    });
+
+    const headerAfter = container.querySelector(
+      '[role="button"][aria-expanded]',
+    ) as HTMLElement;
+    expect(headerAfter.getAttribute("aria-expanded")).toBe("false");
   });
 
   it("does not wrap inline-mode Agent groups in a collapsible header", async () => {
