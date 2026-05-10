@@ -12,9 +12,9 @@
 // capture the hook's return value into an outer `let result` rather than
 // relying on `act()`'s return value. React's typed `act` *does* forward
 // the callback's resolved value, but doing it this way removes any
-// ambiguity (Copilot review on PR #747 flagged the inline form as
-// potentially returning `undefined`) and the explicit binding is clearer
-// to read.
+// ambiguity (Copilot review on the missing-CLI fix PR flagged the inline
+// form as potentially returning `undefined`) and the explicit binding is
+// clearer to read.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act } from "react";
@@ -154,7 +154,7 @@ describe("useWorkspaceLifecycle.archive", () => {
 
     // Capture the hook return via an outer binding rather than relying on
     // `act`'s return value — see the file-header note about Copilot
-    // review feedback on PR #747.
+    // review feedback.
     let result: LifecycleResult | undefined;
     await act(async () => {
       result = await archive("ws-1");

@@ -375,7 +375,7 @@ mod tests {
     #[test]
     #[cfg(unix)]
     fn precheck_cwd_returns_non_sentinel_on_permission_denied() {
-        // Regression for Copilot review on PR #747: an unreadable worktree
+        // Regression for Copilot review on the missing-CLI fix PR: an unreadable worktree
         // directory (mode 000) must NOT be classified as MISSING_CWD,
         // because the recovery UX for a permission error is fundamentally
         // different from "worktree was deleted" — there's no need to
