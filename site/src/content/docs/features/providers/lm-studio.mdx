@@ -39,6 +39,23 @@ lms load qwen2.5-coder-7b-instruct  # load it into VRAM
 
 Quantized GGUF builds give the best speed-to-quality trade-off on consumer hardware. Tool-tuned models (Qwen Coder, Llama Instruct, Mistral Instruct) handle Claude-style tool calls; chat-only models will likely ignore tool definitions.
 
+### Pick a context length that fits Claude Code
+
+LM Studio defaults newly-loaded models to **4096 tokens of context** regardless of what the underlying model supports. That's a conservative VRAM floor — but Claude Code's system prompt + bundled tool definitions alone are around **40–55 k tokens** before you've typed anything, so a 4 k context will hard-fail every send.
+
+Drag the **Context Length** slider in LM Studio's My Models panel for the loaded model and reload it. Recommended floors:
+
+| Conversation type | Minimum loaded context |
+|---|---|
+| `ping`-style smoke tests (system prompt + tools, ≤1 turn) | 64 k |
+| Light coding tasks (a few file reads + edits) | 96 k |
+| Heavy MCP tool usage (Playwright / browser sessions, lots of tool defs) | 128 k+ |
+| Long sessions with substantial transcript history | 192 k+ |
+
+The model's `max_context_length` is the absolute ceiling (whatever the underlying weights support — often 256 k for newer Qwen / Llama builds). The `loaded_context_length` is what you've actually committed VRAM to, and that's what Claudette's pre-flight check measures against. If your machine can't fit the recommended floor, switch to a smaller model with a longer-context build (e.g. a 7B Qwen at 128 k beats a 35B Qwen capped at 4 k for Claude Code workflows).
+
+You can change the slider mid-session — Claudette polls LM Studio every ~8 seconds while at least one LM Studio backend is enabled, so the composer's token-capacity indicator and the pre-flight gate update automatically without needing a Settings → Refresh click.
+
 ## Configure in Claudette
 
 1. Open **Settings > Models**. The `lm-studio` backend appears in the list.
@@ -92,6 +109,10 @@ This is why the chat-header **Thinking**, **Effort**, **Fast mode**, and **1M-co
 **Gateway restart loop** — usually the upstream rejecting the translated request. Open the agent's terminal tab to see stderr from the listener; the most common cause is a model ID the upstream doesn't recognize. Click **Refresh models** in Settings > Models.
 
 **Agent hangs on the first turn** — LM Studio is loading the model into VRAM. First-turn latency on a cold model can be 10–60 seconds depending on size. Subsequent turns are much faster.
+
+**Send fails immediately with `400 Prompt is too large for the model's loaded context window`** — the model is loaded with a context shorter than Claude Code's system prompt + tool defs. Reload the model in LM Studio with a larger Context Length slider value (see [Pick a context length that fits Claude Code](#pick-a-context-length-that-fits-claude-code)). The composer's token-capacity indicator updates within ~8 seconds of you reloading.
+
+**Composer shows a stale context size after reloading the LM Studio model** — Claudette polls LM Studio's `/api/v0/models` every ~8 seconds while an LM Studio backend is enabled, so the indicator should refresh on its own. If it doesn't, click **Refresh models** in Settings > Models for an immediate update. The polling effect is gated behind the experimental flag — disabling alternative backends pauses the poll.
 
 ## See also
 

@@ -317,7 +317,20 @@ pub async fn resolve_backend_runtime(
         if backend.kind == AgentBackendKind::OpenAiApi && secret.is_none() {
             return Err("OpenAI API backend requires an API key in Settings → Models".to_string());
         }
+        let pre_hydrate = backend.clone();
         hydrate_gateway_models_for_runtime(&mut backend, model).await?;
+        // Persist fresh discoveries (new model list, new context windows)
+        // so the UI's token-capacity indicator and the next list_agent_backends
+        // call see the live values — without requiring a manual Settings →
+        // Models refresh. Limited to a real change to keep the chat-send
+        // hot path off the DB writer when nothing has actually moved.
+        if backend_models_signature(&backend) != backend_models_signature(&pre_hydrate)
+            && let Ok(mut all) = load_backend_configs(&db)
+            && let Some(slot) = all.iter_mut().find(|item| item.id == backend.id)
+        {
+            *slot = backend.clone();
+            let _ = save_backend_configs(&db, &all);
+        }
         if let Some(model) = model.map(str::trim).filter(|model| !model.is_empty()) {
             backend.default_model = Some(model.to_string());
         }
@@ -526,6 +539,20 @@ fn backend_models_contain(backend: &AgentBackendConfig, model: &str) -> bool {
         .iter()
         .chain(backend.discovered_models.iter())
         .any(|candidate| candidate.id == model)
+}
+
+/// Stable fingerprint of a backend's discovered + manual model list — used
+/// to decide whether a chat-send re-discovery actually changed anything
+/// worth persisting. Matches the freshness signal in `runtime_hash`
+/// (id + context_window_tokens) so a context-slider change in LM Studio
+/// reliably triggers both a DB write and a gateway respawn.
+fn backend_models_signature(backend: &AgentBackendConfig) -> Vec<(String, u32)> {
+    backend
+        .discovered_models
+        .iter()
+        .chain(backend.manual_models.iter())
+        .map(|model| (model.id.clone(), model.context_window_tokens))
+        .collect()
 }
 
 fn apply_discovered_models(backend: &mut AgentBackendConfig, discovered: Vec<AgentBackendModel>) {

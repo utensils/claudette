@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { getVersion } from "@tauri-apps/api/app";
 import { useAppStore } from "./stores/useAppStore";
-import { loadInitialData, getAppSetting, getHostEnvFlags, listRemoteConnections, listDiscoveredServers, getLocalServerStatus, detectInstalledApps, listSystemFonts, deleteTerminalTab, listAppSettingsWithPrefix, listAgentBackends, bootOk } from "./services/tauri";
+import { loadInitialData, getAppSetting, getHostEnvFlags, listRemoteConnections, listDiscoveredServers, getLocalServerStatus, detectInstalledApps, listSystemFonts, deleteTerminalTab, listAppSettingsWithPrefix, listAgentBackends, refreshAgentBackendModels, bootOk } from "./services/tauri";
 import { applyTheme, applyUserFonts, loadAllThemes, findTheme, cacheThemePreference, getThemeDataAttr } from "./utils/theme";
 import { DEFAULT_THEME_ID, DEFAULT_LIGHT_THEME_ID } from "./styles/themes";
 import type { ThemeDefinition } from "./types/theme";
@@ -71,6 +71,13 @@ function App() {
   const setAlternativeBackendsEnabled = useAppStore((s) => s.setAlternativeBackendsEnabled);
   const setAgentBackends = useAppStore((s) => s.setAgentBackends);
   const setDefaultAgentBackendId = useAppStore((s) => s.setDefaultAgentBackendId);
+  // Live polling readers — used to keep LM Studio's loaded_context_length
+  // accurate without making the user click Settings → Refresh whenever
+  // they change the context-length slider in LM Studio's UI.
+  const agentBackends = useAppStore((s) => s.agentBackends);
+  const alternativeBackendsEnabled = useAppStore(
+    (s) => s.alternativeBackendsEnabled,
+  );
   const setVoiceToggleHotkey = useAppStore((s) => s.setVoiceToggleHotkey);
   const setVoiceHoldHotkey = useAppStore((s) => s.setVoiceHoldHotkey);
   const setKeybindings = useAppStore((s) => s.setKeybindings);
@@ -728,6 +735,53 @@ function App() {
       unlistenMissingCli.then((fn) => fn());
     };
   }, [setRepositories, setWorkspaces, setWorktreeBaseDir, setDefaultTerminalAppId, setDefaultBranches, setTerminalFontSize, setLastMessages, setRemoteConnections, setDiscoveredServers, setLocalServerRunning, setLocalServerConnectionString, setCurrentThemeId, setThemeMode, setThemeDark, setThemeLight, setUiFontSize, setFontFamilySans, setFontFamilyMono, setSystemFonts, setDetectedApps, setUsageInsightsEnabled, setClaudetteTerminalEnabled, setShowSidebarRunningCommands, setToolDisplayMode, setExtendedToolCallOutput, setPluginManagementEnabled, setClaudeRemoteControlEnabled, setCommunityRegistryEnabled, setAlternativeBackendsAvailable, setAlternativeBackendsEnabled, setAgentBackends, setDefaultAgentBackendId, setEditorGitGutterBase, setEditorMinimapEnabled, setDisable1mContext, setAppVersion, setVoiceToggleHotkey, setVoiceHoldHotkey, setKeybindings, setManualWorkspaceOrderByRepo]);
+
+  // Live freshness for LM Studio's `loaded_context_length`.
+  //
+  // LM Studio is the one backend whose per-model context window can change
+  // at any time — the user drags the Context Length slider in LM Studio's
+  // UI, hits "Reload model", and the same model id now reports a different
+  // loaded context. We need that change reflected in the composer's
+  // capacity indicator and in the gateway pre-flight without making the
+  // user click Settings → Refresh.
+  //
+  // Strategy: while at least one LM Studio backend is enabled, poll
+  // `refreshAgentBackendModels` for each one every 8 s. That command runs
+  // discovery, persists the fresh discovered_models to the DB, and
+  // returns the updated config — which we splice into the Zustand store
+  // so every consumer (model registry, ContextMeter, SegmentedMeter,
+  // ContextPopover, ModelSelector) sees the live value.
+  //
+  // Cost: one localhost GET per LM Studio backend per 8 s. Discovery
+  // round-trip is sub-50 ms in practice. We don't poll OpenAI / Codex —
+  // their context windows are immutable so the initial fetch suffices.
+  useEffect(() => {
+    if (!alternativeBackendsEnabled) return;
+    const lmStudioBackends = agentBackends
+      .filter((b) => b.kind === "lm_studio" && b.enabled)
+      .map((b) => b.id);
+    if (lmStudioBackends.length === 0) return;
+    let cancelled = false;
+    const tick = async () => {
+      for (const id of lmStudioBackends) {
+        if (cancelled) return;
+        try {
+          const refreshed = await refreshAgentBackendModels(id);
+          if (cancelled) return;
+          setAgentBackends(refreshed);
+        } catch {
+          // LM Studio not running, model not loaded, etc. — silent.
+          // The ChatPanel surfaces the friendly "backend unreachable"
+          // banner separately when the user actually tries to send.
+        }
+      }
+    };
+    const timer = window.setInterval(tick, 8_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [alternativeBackendsEnabled, agentBackends, setAgentBackends]);
 
   // Listen for OS light/dark changes and switch theme when mode is "system".
   useEffect(() => {
