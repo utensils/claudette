@@ -1,8 +1,9 @@
 use std::path::{Path, PathBuf};
 
-// `data_url_from_bytes` (the only consumer of these symbols) is now
-// gated to macOS, so the import has to follow.
-#[cfg(target_os = "macos")]
+// `data_url_from_bytes` (the only consumer of these symbols) is gated
+// to macOS + Linux — macOS reads icons out of `.app` bundles, Linux
+// reads them from XDG icon roots — so the import follows.
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 use base64::{Engine as _, engine::general_purpose};
 use serde::{Deserialize, Serialize};
 use tauri::State;
@@ -323,11 +324,12 @@ fn find_mac_app(app_name: &str) -> Option<PathBuf> {
         .filter(|path| path.exists())
 }
 
-// Only `mac_icon_from_app_bundle` (gated `#[cfg(target_os = "macos")]`)
-// uses these helpers — they synthesize data URLs from the icon bytes
-// extracted via PlistBuddy/sips. Match the gate so non-macOS builds
-// don't trip `dead_code` under -Dwarnings.
-#[cfg(target_os = "macos")]
+// Used by both `mac_icon_from_app_bundle` (PlistBuddy/sips bytes) and
+// the Linux icon walk (`find_icon_file_recursive` →
+// `image_data_url_from_file`) to synthesize data URLs for the
+// workspace-opener UI. Match the gate to both consumers so Windows
+// builds don't trip `dead_code` under -Dwarnings.
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 fn data_url_from_bytes(media_type: &str, bytes: &[u8]) -> String {
     format!(
         "data:{media_type};base64,{}",
@@ -335,7 +337,7 @@ fn data_url_from_bytes(media_type: &str, bytes: &[u8]) -> String {
     )
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 fn image_data_url_from_file(path: &Path) -> Option<String> {
     let ext = path
         .extension()
@@ -2243,5 +2245,135 @@ mod tests {
         };
 
         assert_eq!(resolve_windows_icon_source(&entry, &exe), exe);
+    }
+
+    // --- icon-helper cfg-gating regression tests ----------------------
+    //
+    // These exist to catch a class of regression where someone narrows
+    // the `cfg(...)` on `data_url_from_bytes` / `image_data_url_from_file`
+    // and breaks the Linux build, because the Linux icon lookup path
+    // (`find_icon_file_recursive`, `app_icon_data_url`) also calls
+    // `image_data_url_from_file`. That mistake shipped once already
+    // (PR #729's "only consumed by mac_icon_from_app_bundle" claim was
+    // wrong — Linux's XDG icon walk consumes it too) and only surfaced
+    // in nightly because PR CI doesn't compile `claudette-tauri` on
+    // Linux. Every test here is `#[cfg(any(target_os = "macos",
+    // target_os = "linux"))]` or stricter — narrowing either gate will
+    // refuse to compile this module, which is the signal we want.
+
+    /// `data_url_from_bytes` must be reachable from both macOS and Linux
+    /// — both platforms encode discovered icon files as data URLs for
+    /// the workspace opener UI.
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[test]
+    fn data_url_from_bytes_encodes_payload() {
+        let url = data_url_from_bytes("image/png", b"hello");
+        // base64("hello") == "aGVsbG8="
+        assert_eq!(url, "data:image/png;base64,aGVsbG8=");
+    }
+
+    /// `image_data_url_from_file` must compile and return a data URL
+    /// for known image extensions on both macOS and Linux. The bytes
+    /// don't have to be a real PNG — the helper picks media type from
+    /// the extension and base64-encodes whatever it reads.
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[test]
+    fn image_data_url_from_file_returns_data_url_for_known_extensions() {
+        let tmp = tempfile::tempdir().unwrap();
+
+        let png = tmp.path().join("icon.png");
+        std::fs::write(&png, b"hello").unwrap();
+        assert_eq!(
+            image_data_url_from_file(&png).as_deref(),
+            Some("data:image/png;base64,aGVsbG8=")
+        );
+
+        let svg = tmp.path().join("icon.svg");
+        std::fs::write(&svg, b"<svg/>").unwrap();
+        assert_eq!(
+            image_data_url_from_file(&svg).as_deref(),
+            Some("data:image/svg+xml;base64,PHN2Zy8+")
+        );
+
+        // Case folding on the extension — covers `.PNG` etc.
+        let upper = tmp.path().join("upper.PNG");
+        std::fs::write(&upper, b"hi").unwrap();
+        assert!(
+            image_data_url_from_file(&upper)
+                .is_some_and(|url| url.starts_with("data:image/png;base64,"))
+        );
+    }
+
+    /// Unknown / non-image extensions must return `None` so the icon
+    /// fallback chain can keep walking. Pinning this guards against a
+    /// future "default to octet-stream" change that would smuggle
+    /// arbitrary files into the UI.
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[test]
+    fn image_data_url_from_file_rejects_unknown_extension() {
+        let tmp = tempfile::tempdir().unwrap();
+        let txt = tmp.path().join("not-an-icon.txt");
+        std::fs::write(&txt, b"hello").unwrap();
+        assert!(image_data_url_from_file(&txt).is_none());
+
+        let no_ext = tmp.path().join("bare");
+        std::fs::write(&no_ext, b"hello").unwrap();
+        assert!(image_data_url_from_file(&no_ext).is_none());
+    }
+
+    /// End-to-end: the Linux icon lookup walks an XDG-shaped tree and
+    /// must hand the resulting path to `image_data_url_from_file`. This
+    /// is the *exact* call site that broke in nightly — if either the
+    /// recursive walk or the data-URL helper is gated wrong on Linux,
+    /// this test stops compiling on Linux.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_find_icon_file_recursive_returns_path_consumable_by_data_url_helper() {
+        let tmp = tempfile::tempdir().unwrap();
+        // Mirror the production call shape — `linux_icon_file_from_name`
+        // hands each entry of `linux_icon_roots()` (e.g. `/usr/share/icons`)
+        // to `find_icon_file_recursive`, which expects the
+        // `hicolor/<size>/apps/<icon>` tree to live *inside* that root.
+        let icons_root = tmp.path().join("icons");
+        let icon_dir = icons_root.join("hicolor/16x16/apps");
+        std::fs::create_dir_all(&icon_dir).unwrap();
+        let icon_path = icon_dir.join("myapp.png");
+        std::fs::write(&icon_path, b"hello").unwrap();
+
+        let found = find_icon_file_recursive(&icons_root, "myapp", 6)
+            .expect("recursive walk must find the staged icon");
+        assert_eq!(found, icon_path);
+
+        let data_url =
+            image_data_url_from_file(&found).expect("found path must be encodable by the helper");
+        assert!(data_url.starts_with("data:image/png;base64,"));
+    }
+
+    /// Decoy filename with the same stem but a non-image extension
+    /// must be skipped — `find_icon_file_recursive` filters via
+    /// `image_data_url_from_file`, and that contract is what makes the
+    /// Linux walk safe. Regressing this would let `myapp.txt` shadow
+    /// `myapp.svg` and surface a missing-icon to the UI.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_find_icon_file_recursive_skips_non_image_extensions() {
+        let tmp = tempfile::tempdir().unwrap();
+        let icons_root = tmp.path().join("icons");
+        // Decoy lives in the shallow `16x16/apps` slot — a hit-by-stem
+        // that the walker must reject because `.txt` isn't an image
+        // type the data-URL helper recognizes.
+        let decoy_dir = icons_root.join("hicolor/16x16/apps");
+        std::fs::create_dir_all(&decoy_dir).unwrap();
+        std::fs::write(decoy_dir.join("myapp.txt"), b"not an icon").unwrap();
+        // Real icon lives one tier deeper in `scalable/apps`. The walker
+        // has to keep going past the decoy to reach it.
+        let real_dir = icons_root.join("hicolor/scalable/apps");
+        std::fs::create_dir_all(&real_dir).unwrap();
+        let real = real_dir.join("myapp.svg");
+        std::fs::write(&real, b"<svg/>").unwrap();
+
+        let found = find_icon_file_recursive(&icons_root, "myapp", 6)
+            .expect("walker must find the .svg even when a .txt decoy exists");
+        assert_eq!(found, real);
     }
 }
