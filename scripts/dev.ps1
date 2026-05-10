@@ -93,10 +93,13 @@ Env vars (each consulted at process start):
                        Default: devtools,server,voice,alternative-backends
                        (matches scripts/dev.sh / Nix devshell exactly so a
                        single muscle memory works on every host). On
-                       aarch64-pc-windows-msvc the dev script auto-adds
+                       aarch64-pc-windows-msvc the dev script appends
                        ``-C target-feature=+fullfp16`` to RUSTFLAGS so
-                       ``gemm-f16``'s ARMv8.2 inline asm compiles — see
-                       the comment block lower in this script for why.
+                       ``gemm-f16``'s ARMv8.2 inline asm compiles —
+                       existing RUSTFLAGS are preserved (rustc
+                       concatenates ``-C target-feature`` directives so
+                       multiple sources compose cleanly). See the
+                       comment block lower in this script for why.
   `$env:CLAUDETTE_HOME Override the ~/.claudette/ tree (workspaces,
                        plugins, themes, logs, models, packs, apps.json).
   `$env:CLAUDETTE_DATA_DIR
@@ -396,15 +399,26 @@ Register-EngineEvent -SourceIdentifier PowerShell.Exiting -Action $cleanupAction
 $features = if ($env:CARGO_TAURI_FEATURES) { $env:CARGO_TAURI_FEATURES }
             else { 'devtools,server,voice,alternative-backends' }
 
-# Auto-enable fullfp16 only when (a) we're on aarch64 Windows and (b) the
-# user hasn't already set RUSTFLAGS to something opinionated. Skipping the
-# inject when the user has their own RUSTFLAGS avoids silently overwriting
-# (e.g.) a `-Dwarnings` they wanted us to honor.
-if ($triple -eq 'aarch64-pc-windows-msvc' `
-        -and $features -match 'voice' `
-        -and -not $env:RUSTFLAGS) {
-    $env:RUSTFLAGS = '-C target-feature=+fullfp16'
-    Write-Host "▸ RUSTFLAGS:        $env:RUSTFLAGS  (auto-added for ARM64 voice build)"
+# Auto-enable fullfp16 on aarch64-pc-windows-msvc when `voice` is in the
+# feature set: gemm-f16's ARMv8.2 inline asm requires it, and the stock
+# baseline doesn't.
+#
+# Important: rustc concatenates rustflags from *every* `-C target-feature`
+# directive, so appending our flag to an existing RUSTFLAGS works
+# correctly — it doesn't clobber the user's own flags. Earlier revisions
+# only injected when RUSTFLAGS was unset, which silently broke the build
+# for anyone who had RUSTFLAGS set for unrelated reasons (e.g. `-Dwarnings`
+# from a prior shell). If the user has already added `+fullfp16`
+# themselves, we skip to avoid a duplicate directive in the log.
+$needFullFp16 = $triple -eq 'aarch64-pc-windows-msvc' -and $features -match 'voice'
+if ($needFullFp16 -and $env:RUSTFLAGS -notmatch 'target-feature=\+fullfp16') {
+    if ($env:RUSTFLAGS) {
+        $env:RUSTFLAGS = "$env:RUSTFLAGS -C target-feature=+fullfp16"
+        Write-Host "▸ RUSTFLAGS:        $env:RUSTFLAGS  (appended +fullfp16 for ARM64 voice build)"
+    } else {
+        $env:RUSTFLAGS = '-C target-feature=+fullfp16'
+        Write-Host "▸ RUSTFLAGS:        $env:RUSTFLAGS  (auto-added for ARM64 voice build)"
+    }
 } elseif ($env:RUSTFLAGS) {
     Write-Host "▸ RUSTFLAGS:        $env:RUSTFLAGS  (preserved from environment)"
 }

@@ -94,7 +94,11 @@ windows-sys = { version = "0.61", features = [
 # wraps each interface in a smart pointer whose Drop calls Release —
 # essential for keeping the COM cleanup correct under panic / early
 # return paths.
-windows = { version = "0.58", features = [
+#
+# Pinned to the 0.61.x major already pulled in transitively by the
+# wider build (e.g. via tauri-plugin-fs's WebView2 deps), so we don't
+# duplicate the Win32 codegen across two `windows` major versions.
+windows = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_System_Com",
     "Win32_System_Threading",

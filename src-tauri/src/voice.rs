@@ -780,11 +780,11 @@ impl VoiceProviderRegistry {
 struct PlatformVoiceProvider;
 
 // The platform provider has a real native bridge on macOS (Apple Speech via
-// Swift FFI) and on Windows (System.Speech via PowerShell). Both platforms
-// ride the `Native` recording-mode path: cpal captures the audio, the trait
-// runs transcription on the captured WAV. Linux has no native bridge yet and
-// falls back to the webview Web Speech API, which is what the
-// `Webview` mode signals to the frontend.
+// Swift FFI) and on Windows (SAPI 5.4 via the `windows` crate's COM
+// bindings). Both platforms ride the `Native` recording-mode path: cpal
+// captures the audio, the trait runs transcription on the captured WAV.
+// Linux has no native bridge yet and falls back to the webview Web Speech
+// API, which is what the `Webview` mode signals to the frontend.
 #[cfg(any(target_os = "macos", windows))]
 fn platform_recording_mode() -> VoiceRecordingMode {
     VoiceRecordingMode::Native
@@ -954,9 +954,9 @@ impl VoiceProvider for PlatformVoiceProvider {
         db_path: &Path,
     ) -> Result<VoiceProviderInfo, String> {
         // macOS uses prepare() to drive the TCC permission dialogs;
-        // Windows uses it as a (cheap) revalidation that PowerShell +
-        // System.Speech are still reachable. Both go through the trait so
-        // tests can substitute a fake engine. Linux has no engine here.
+        // Windows uses it as a (cheap, no-op today) revalidation that
+        // SAPI is still reachable. Both go through the trait so tests
+        // can substitute a fake engine. Linux has no engine here.
         #[cfg(any(target_os = "macos", windows))]
         {
             let _ = registry.platform_speech.prepare();

@@ -99,7 +99,7 @@ Both launchers do a few things `cargo tauri dev` doesn't:
 **Windows-only details** the `dev.ps1` launcher takes care of so you don't have to:
 
 - Forces Vite's bind to `127.0.0.1` (IPv4). Vite's default `localhost` resolves to `::1` on Windows, but WebView2 navigates IPv4-first — mismatch surfaces as a blank webview with `HRESULT 0x80070057`.
-- Defaults to the same feature set as `scripts/dev.sh` — `devtools,server,voice,alternative-backends`. On `aarch64-pc-windows-msvc` the launcher auto-injects `RUSTFLAGS=-C target-feature=+fullfp16` so the `gemm-f16` ARMv8.2 inline asm in the `voice` feature compiles. Override with `$env:CARGO_TAURI_FEATURES` to drop voice or add other features; an existing `$env:RUSTFLAGS` is preserved verbatim.
+- Defaults to the same feature set as `scripts/dev.sh` — `devtools,server,voice,alternative-backends`. On `aarch64-pc-windows-msvc` the launcher appends `-C target-feature=+fullfp16` to `$env:RUSTFLAGS` so the `gemm-f16` ARMv8.2 inline asm in the `voice` feature compiles. Existing `RUSTFLAGS` are kept (rustc concatenates `-C target-feature` directives), so any flags you already set continue to apply. Override the feature set with `$env:CARGO_TAURI_FEATURES` to drop voice or add other features.
 - Skips `tauri/custom-protocol`. With it on, `import.meta.env.DEV` is false in the webview, which leaves `window.__CLAUDETTE_INVOKE__` unset and breaks the `/claudette-debug` TCP eval server.
 - Stages the `claudette-cli` sidecar at the path Tauri's `bundle.externalBin` expects — necessary because `tauri.conf.json`'s `beforeDevCommand` shell script can't run on Windows.
 

@@ -352,7 +352,7 @@ mod windows_speech {
     use std::path::Path;
     use std::time::{Duration, Instant};
 
-    use windows::Win32::Foundation::{S_FALSE, WAIT_OBJECT_0};
+    use windows::Win32::Foundation::{S_FALSE, WAIT_FAILED, WAIT_OBJECT_0, WAIT_TIMEOUT};
     use windows::Win32::Media::Speech::{
         ISpRecoGrammar, ISpRecoResult, ISpRecognizer, ISpStream, SPEI_END_SR_STREAM,
         SPEI_FALSE_RECOGNITION, SPEI_RECOGNITION, SPEVENT, SPFM_OPEN_READONLY, SPLO_STATIC,
@@ -478,12 +478,18 @@ mod windows_speech {
     impl ComApartment {
         fn initialize() -> Result<Self, u32> {
             let hr = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) };
-            if hr.is_ok() {
-                Ok(Self { owns: true })
-            } else if hr == S_FALSE {
-                // Already initialized on this thread by an earlier caller —
-                // we ride along without owning the uninit.
+            // `HRESULT::is_ok()` returns true for any non-negative status,
+            // which includes both S_OK *and* S_FALSE — the previous
+            // ordering made the S_FALSE arm dead code. Check S_FALSE
+            // first so a nested-init caller doesn't tear down a parent's
+            // apartment when our guard drops.
+            if hr == S_FALSE {
+                // Apartment was already initialized on this thread by an
+                // earlier caller — we ride along without owning the
+                // uninit, so Drop becomes a no-op.
                 Ok(Self { owns: false })
+            } else if hr.is_ok() {
+                Ok(Self { owns: true })
             } else {
                 Err(hr.0 as u32)
             }
@@ -605,24 +611,42 @@ mod windows_speech {
             }
 
             let wait = unsafe { WaitForSingleObject(event_handle, EVENT_POLL_WAIT_MS) };
-            // WAIT_OBJECT_0 = signaled. WAIT_TIMEOUT = nothing yet, loop.
-            // Anything else is unexpected — log and stop the loop.
-            if wait != WAIT_OBJECT_0 {
-                continue;
+            // Three distinct outcomes:
+            //   * WAIT_OBJECT_0 — handle signaled; drain events below.
+            //   * WAIT_TIMEOUT  — recognizer is mid-utterance and just
+            //                    hasn't emitted yet; loop on the outer
+            //                    `RECOGNITION_DEADLINE` budget.
+            //   * Anything else — WAIT_FAILED (GetLastError-bearing) or
+            //                    WAIT_ABANDONED. Log and bail; spinning
+            //                    here would mask a real OS-level fault
+            //                    until the deadline.
+            match wait {
+                WAIT_OBJECT_0 => {}
+                WAIT_TIMEOUT => continue,
+                other => {
+                    return Err(SapiError {
+                        stage: "WaitForSingleObject(ISpRecoContext event)",
+                        hresult: if other == WAIT_FAILED { 0 } else { other.0 },
+                        message: format!(
+                            "WaitForSingleObject returned unexpected status {:#x}",
+                            other.0
+                        ),
+                    });
+                }
             }
 
             let mut done = false;
             loop {
                 let mut event = SPEVENT::default();
                 let mut fetched = 0u32;
-                let hr = unsafe { context.GetEvents(1, &mut event, &mut fetched) };
-                if let Err(err) = hr.clone()
-                    && hr != Ok(())
-                    && fetched == 0
-                {
+                // GetEvents returns Err on a real COM failure; on success
+                // (including "no events available right now") it returns
+                // Ok and fetched stays 0. Match on the Result directly —
+                // the previous chain compared an HRESULT alongside Err
+                // which was both redundant and harder to follow.
+                if let Err(err) = unsafe { context.GetEvents(1, &mut event, &mut fetched) } {
                     return Err(SapiError::from_windows("ISpRecoContext::GetEvents", err));
                 }
-                let _ = hr;
                 if fetched == 0 {
                     break;
                 }
