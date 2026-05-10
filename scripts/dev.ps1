@@ -6,30 +6,37 @@
 # the Windows-side `cargo`/`bun`/`tauri` aren't on the WSL distro's PATH.
 #
 # What this does, in order:
-#   1. Refresh PATH from the registry so clang/llvm (Scoop-installed) and
+#   1. Parse flags (--clean, --help) — matching dev.sh's surface so muscle
+#      memory carries across platforms.
+#   2. Refresh PATH from the registry so clang/llvm (Scoop-installed) and
 #      cargo are visible — required for `ring` to compile its ARM64 asm.
-#   2. Probe a free Vite port (default base 14253) and a free debug-eval port
+#   3. Probe a free Vite port (default base 14253) and a free debug-eval port
 #      (default base 19432). Same ports as dev.sh so /claudette-debug
 #      discovery works the same way on Windows.
-#   3. Stage the `claudette-cli` binary at the path Tauri's
+#   4. Stage the `claudette-cli` binary at the path Tauri's
 #      `bundle.externalBin` expects (`src-tauri/binaries/claudette-<triple>.exe`).
 #      Necessary because `tauri.conf.json`'s `beforeDevCommand` script — the
 #      .sh that does this on Unix — can't run here. We override
 #      `beforeDevCommand` below to bypass that step.
-#   4. `bun install` in `src/ui` (cheap if up-to-date).
-#   5. Write the per-PID discovery file at `$env:TEMP\claudette-dev\<pid>.json`
+#   5. `bun install` in `src/ui` (cheap if up-to-date).
+#   6. Write the per-PID discovery file at `$env:TEMP\claudette-dev\<pid>.json`
 #      so /claudette-debug helpers can find this instance.
-#   6. `cargo tauri dev` with the chosen features and a config override that
-#      (a) replaces `beforeDevCommand` with a portable `bun install &&
-#      bun run dev` (no .sh), and (b) points `devUrl` at the probed port.
+#   7. Start Vite (forced to 127.0.0.1) and `cargo run` claudette-tauri.
 #
 # Env overrides (same names as dev.sh):
 #   $env:VITE_PORT_BASE             start port for Vite probe (default 14253)
 #   $env:CLAUDETTE_DEBUG_PORT_BASE  start port for debug probe (default 19432)
-#   $env:CARGO_TAURI_FEATURES       features (default devtools,server,voice,alternative-backends)
+#   $env:CARGO_TAURI_FEATURES       features (default devtools,server,alternative-backends)
+#
+# Flags:
+#   --clean              Run as a fresh user (per-PID CLAUDETTE_HOME +
+#                        CLAUDETTE_DATA_DIR). See -h for details.
+#   -h, --help           Print usage and exit.
 #
 # Usage from any PowerShell prompt in the repo:
 #   .\scripts\dev.ps1
+#   .\scripts\dev.ps1 --clean
+#   .\scripts\dev.ps1 --help
 #
 # To get bare `dev` like the Nix devshell, add this to your PowerShell
 # profile (`$PROFILE`):
@@ -40,7 +47,76 @@
 
 $ErrorActionPreference = 'Stop'
 
-# 1) Refresh PATH from the registry. Without this, a fresh PowerShell
+# 1) Parse flags before doing anything expensive (PATH refresh, port probe,
+#    cargo build). Matches dev.sh's surface so `dev --clean` / `dev -h` /
+#    `dev --help` work identically on Windows. Unknown args are forwarded
+#    to `cargo run` after `--`, mirroring dev.sh's passthrough slot.
+function Show-Usage {
+    @"
+Usage: scripts\dev.ps1 [FLAGS] [-- CARGO_PASSTHROUGH_ARGS...]
+
+Launch the Claudette Tauri dev build with port discovery, sidecar staging,
+and the IPv4-bound Vite + custom-protocol-off configuration that Windows
+needs for the WebView2 + /claudette-debug combination to work.
+
+Flags:
+  --clean              Run as a fresh user — points CLAUDETTE_HOME and
+                       CLAUDETTE_DATA_DIR at a per-PID tmp tree so the
+                       launch sees no existing repos, workspaces, or
+                       settings. Cleaned up on exit. Useful for testing
+                       first-run UX (welcome card, onboarding) without
+                       nuking the real ~/.claudette/ tree.
+  -h, --help           Print this usage and exit.
+  --                   Pass everything after this flag straight to
+                       ``cargo run`` (e.g. --release, --quiet).
+
+Env vars (each consulted at process start):
+  `$env:VITE_PORT_BASE
+                       First Vite port to probe.            Default 14253
+  `$env:CLAUDETTE_DEBUG_PORT_BASE
+                       First debug-eval port to probe.      Default 19432
+  `$env:CARGO_TAURI_FEATURES
+                       Features to forward to ``cargo run``.
+                       Default: devtools,server,alternative-backends
+                       (voice is dropped from the Windows default — see the
+                       comment block lower in this script for the
+                       gemm-f16 / fullfp16 reason.)
+  `$env:CLAUDETTE_HOME Override the ~/.claudette/ tree (workspaces,
+                       plugins, themes, logs, models, packs, apps.json).
+  `$env:CLAUDETTE_DATA_DIR
+                       Override the OS data dir holding claudette.db.
+  `$env:CLAUDETTE_LOG_DIR
+                       Per-instance log dir (otherwise derived from
+                       CLAUDETTE_HOME).
+
+Discovery file:
+  Each invocation writes `$env:TEMP\claudette-dev\<pid>.json so the
+  /claudette-debug skill (and similar tools) find the matching dev
+  build when multiple are running. Removed on exit.
+"@ | Write-Host
+}
+
+$cleanSession = $false
+$showHelp = $false
+$passthrough = @()
+$inPassthrough = $false
+foreach ($a in $args) {
+    if ($inPassthrough) { $passthrough += $a; continue }
+    switch -Exact ($a) {
+        '--clean' { $cleanSession = $true }
+        '-h'      { $showHelp = $true }
+        '--help'  { $showHelp = $true }
+        '--'      { $inPassthrough = $true }
+        default   { $passthrough += $a }
+    }
+}
+
+if ($showHelp) {
+    Show-Usage
+    exit 0
+}
+
+# 2) Refresh PATH from the registry. Without this, a fresh PowerShell
 #    inherited from before LLVM was installed has no clang on PATH and
 #    the `ring` build script fails with `failed to find tool "clang"`.
 $machinePath = [Environment]::GetEnvironmentVariable("PATH", "Machine")
@@ -50,7 +126,7 @@ $env:PATH    = "$machinePath;$userPath"
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 Set-Location $repoRoot
 
-# 2) Port probing. PowerShell has no `lsof`; ask the IP global props for
+# 3) Port probing. PowerShell has no `lsof`; ask the IP global props for
 #    every TCP listener on the box and reject any port that already has
 #    one. This covers both IPv4 and IPv6 listeners — important because
 #    Vite binds on `::1` (IPv6 loopback) on Windows and a 127.0.0.1-only
@@ -84,7 +160,7 @@ $debugPort = Find-FreePort -Start $debugBase
 $env:VITE_PORT             = $vitePort
 $env:CLAUDETTE_DEBUG_PORT  = $debugPort
 
-# 3) Resolve the host triple — the staged sidecar's filename has to match
+# 4) Resolve the host triple — the staged sidecar's filename has to match
 #    the value Tauri stamps into `TAURI_ENV_TARGET_TRIPLE` at build time
 #    (looked up via `bundle.externalBin`).
 $tripleLine = (& rustc -vV) | Select-String -Pattern '^host:\s*(.+)$'
@@ -119,12 +195,12 @@ $destExe = Join-Path $destDir "claudette-$triple.exe"
 Copy-Item $srcExe $destExe -Force
 Write-Host "▸ Staged sidecar:   $destExe"
 
-# 4) `bun install` runs as part of the `beforeDevCommand` override
+# 5) `bun install` runs as part of the `beforeDevCommand` override
 #    below, so we don't need a separate pass here. Kept the original
 #    dev.sh's pre-install step out so a fresh checkout doesn't bun
 #    install twice every time.
 
-# 5) Discovery file — same shape as dev.sh's so /claudette-debug picks
+# 6) Discovery file — same shape as dev.sh's so /claudette-debug picks
 #    up Windows dev instances identically. Use $env:TEMP since
 #    $TMPDIR isn't set on Windows by default.
 $discoveryDir = Join-Path $env:TEMP 'claudette-dev'
@@ -144,6 +220,23 @@ Set-Content -Path $discoveryFile -Value $discoveryPayload -Encoding utf8 -NoNewl
 
 Write-Host "▸ Discovery file:   $discoveryFile"
 
+# --clean: per-PID sandbox so a parallel `dev --clean` doesn't reuse this
+# session's state. Mirrors dev.sh's clean_root layout under the same
+# discovery dir so the cleanup sweep finds it predictably. The trap
+# below removes the directory on script exit; a hard kill leaves it
+# behind, but it's under $env:TEMP so it won't leak forever.
+$cleanRoot = $null
+if ($cleanSession) {
+    $cleanRoot = Join-Path $discoveryDir "clean-$PID"
+    $env:CLAUDETTE_HOME      = Join-Path $cleanRoot 'home'
+    $env:CLAUDETTE_DATA_DIR  = Join-Path $cleanRoot 'data'
+    New-Item -ItemType Directory -Force -Path $env:CLAUDETTE_HOME | Out-Null
+    New-Item -ItemType Directory -Force -Path $env:CLAUDETTE_DATA_DIR | Out-Null
+    Write-Host "▸ Clean session:    $cleanRoot"
+    Write-Host "▸ CLAUDETTE_HOME:   $env:CLAUDETTE_HOME"
+    Write-Host "▸ CLAUDETTE_DATA_DIR: $env:CLAUDETTE_DATA_DIR"
+}
+
 # Best-effort cleanup. PowerShell can't trap SIGTERM/SIGINT identically
 # to bash; PowerShell.Exiting fires for clean exits and most Ctrl-C
 # scenarios. A killed -9 still leaves the file behind, but the file is
@@ -151,15 +244,21 @@ Write-Host "▸ Discovery file:   $discoveryFile"
 # Build the cleanup body via -f so we don't have to deal with the
 # here-string's column-0 termination requirement (PowerShell rejects
 # `"@` with any leading whitespace, which fights `scripts/` indent).
+# Use a string fallback rather than `??` so the script parses in
+# Windows PowerShell 5.1 (no null-coalescing) as well as pwsh 7+.
+$cleanRootForCleanup = if ($null -eq $cleanRoot) { '' } else { $cleanRoot }
 $cleanupBody = @'
 if (Test-Path -LiteralPath '{0}') {{
     Remove-Item -LiteralPath '{0}' -Force -ErrorAction SilentlyContinue
 }}
-'@ -f $discoveryFile
+if ('{1}' -ne '' -and (Test-Path -LiteralPath '{1}')) {{
+    Remove-Item -LiteralPath '{1}' -Recurse -Force -ErrorAction SilentlyContinue
+}}
+'@ -f $discoveryFile, $cleanRootForCleanup
 $cleanupAction = [ScriptBlock]::Create($cleanupBody)
 Register-EngineEvent -SourceIdentifier PowerShell.Exiting -Action $cleanupAction | Out-Null
 
-# 6) Start Vite + run the Tauri binary in debug mode.
+# 7) Start Vite + run the Tauri binary in debug mode.
 #
 # Why this differs from dev.sh:
 #
@@ -257,9 +356,12 @@ if (-not $ready) {
 Write-Host "▸ Vite ready"
 
 Write-Host "▸ Launching claudette-app (debug; first build is slow, incremental builds are fast)"
+if ($passthrough.Count -gt 0) {
+    Write-Host "▸ Passthrough args: $($passthrough -join ' ')"
+}
 Write-Host ""
 
-& cargo run -p claudette-tauri --no-default-features --features $features
+& cargo run -p claudette-tauri --no-default-features --features $features @passthrough
 $cargoExit = $LASTEXITCODE
 
 # Best-effort cleanup so the next `dev` doesn't hit "Port 14253 in use".

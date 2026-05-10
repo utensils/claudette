@@ -53,6 +53,7 @@ Claudette is a cross-platform desktop application built with [Tauri 2](https://t
     ```sh
     cargo tauri build --no-default-features --features tauri/custom-protocol,server
     ```
+  - **Windows**: [Visual Studio C++ Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/) with the **Desktop development with C++** workload (or full Visual Studio 2022). Building `ring` on ARM64 also requires Clang/LLVM on PATH — `scoop install llvm` is the easiest path. WebView2 ships with Windows 11 and recent Windows 10. Voice support is off by default on Windows; see [Run in development mode](#run-in-development-mode) for the opt-in.
 
 ## Getting started
 
@@ -63,22 +64,44 @@ cd src/ui && bun install && cd ../..
 
 ### Run in development mode
 
-Two equivalent paths — pick whichever fits the change you're making:
+Pick the launcher that matches your platform — they share the same flag surface (`--clean`, `-h`/`--help`) so muscle memory carries across:
 
 ```sh
-# Quick path (works for everything except macOS voice input)
-cargo tauri dev
-
-# Full-feature path (recommended; required for macOS voice input)
-./scripts/dev.sh
+# macOS / Linux — shell launcher
+./scripts/dev.sh                 # full-feature dev (required for macOS voice)
+./scripts/dev.sh --clean         # fresh-user sandbox under TMPDIR
+cargo tauri dev                  # quick path; no voice, no port probing
 ```
 
-`./scripts/dev.sh` does a few things `cargo tauri dev` doesn't:
+```powershell
+# Windows — PowerShell launcher
+.\scripts\dev.ps1                # equivalent of dev.sh, ARM64 + x64
+.\scripts\dev.ps1 --clean        # fresh-user sandbox under $env:TEMP
+.\scripts\dev.ps1 --help         # full flag/env reference
+```
+
+To get the bare `dev` command (matching the Nix devshell), add this to your PowerShell profile (`$PROFILE`):
+
+```powershell
+function dev {
+    $repo = "<absolute path to your claudette clone>"
+    & "$repo\scripts\dev.ps1" @args
+}
+```
+
+Both launchers do a few things `cargo tauri dev` doesn't:
 
 - **macOS only**: wraps the binary in a signed `Claudette Dev.app` bundle (with the right `Info.plist` usage strings and `Entitlements.plist`) and launches it via Launch Services. This is required because macOS's privacy system (TCC) refuses to grant Microphone or Speech Recognition permissions to a bare Mach-O binary and aborts the process when the prompt appears.
 - Probes free Vite + debug-eval ports and exports them so multiple dev instances can run side by side.
 - Stages the `claudette-cli` sidecar binary so the in-app CLI install path works in dev.
-- Writes a per-PID discovery file at `${TMPDIR:-/tmp}/claudette-dev/<pid>.json` consumed by the `/claudette-debug` skill.
+- Writes a per-PID discovery file at `${TMPDIR:-/tmp}/claudette-dev/<pid>.json` (or `$env:TEMP\claudette-dev\<pid>.json` on Windows) consumed by the `/claudette-debug` skill.
+
+**Windows-only details** the `dev.ps1` launcher takes care of so you don't have to:
+
+- Forces Vite's bind to `127.0.0.1` (IPv4). Vite's default `localhost` resolves to `::1` on Windows, but WebView2 navigates IPv4-first — mismatch surfaces as a blank webview with `HRESULT 0x80070057`.
+- Drops the `voice` feature from the default feature set. The `gemm-f16` crate's ARMv8.2 inline asm needs the `fullfp16` target feature that the stock `aarch64-pc-windows-msvc` baseline doesn't enable. Opt back in by setting `$env:CARGO_TAURI_FEATURES = 'devtools,server,voice,alternative-backends'` and `$env:RUSTFLAGS = '-C target-feature=+fullfp16'` before `dev`.
+- Skips `tauri/custom-protocol`. With it on, `import.meta.env.DEV` is false in the webview, which leaves `window.__CLAUDETTE_INVOKE__` unset and breaks the `/claudette-debug` TCP eval server.
+- Stages the `claudette-cli` sidecar at the path Tauri's `bundle.externalBin` expects — necessary because `tauri.conf.json`'s `beforeDevCommand` shell script can't run on Windows.
 
 ### Build, test, lint
 
