@@ -20,12 +20,14 @@
 #   CARGO_TAURI_FEATURES   features to pass to tauri (default devtools,server,voice,alternative-backends)
 #
 # Flags:
-#   --clean                Run as a fresh user — points CLAUDETTE_HOME and
-#                          CLAUDETTE_DATA_DIR at a per-PID tmp tree so the
-#                          launch sees no existing repos, workspaces, or
-#                          settings. Useful for testing first-run UX (the
-#                          welcome empty state, onboarding) without nuking
-#                          the real ~/.claudette/ tree.
+#   --clean                Run as a fresh user — points CLAUDETTE_HOME,
+#                          CLAUDETTE_DATA_DIR, and CLAUDE_CONFIG_DIR at a
+#                          per-PID tmp tree so the launch sees no existing
+#                          state and nothing it writes leaks back to the
+#                          real user (workspaces, settings, plugins, or
+#                          Claude auth). Useful for testing first-run UX,
+#                          plugin/marketplace flows, and login flows
+#                          without touching ~/.claudette/ or ~/.claude/.
 set -euo pipefail
 
 print_usage() {
@@ -37,12 +39,21 @@ and (on macOS) the signed-bundle runner so TCC permissions attach to
 Claudette rather than the terminal.
 
 Flags:
-  --clean              Run as a fresh user — points CLAUDETTE_HOME and
-                       CLAUDETTE_DATA_DIR at a per-PID tmp tree so the
-                       launch sees no existing repos, workspaces, or
-                       settings. Cleaned up on exit. Useful for testing
-                       first-run UX (welcome card, onboarding) without
-                       nuking the real ~/.claudette/ tree.
+  --clean              Run as a fresh user — points three env vars at a
+                       per-PID tmp tree so the launch sees no existing
+                       state and nothing it writes leaks back to the
+                       real user:
+
+                         CLAUDETTE_HOME      ~/.claudette/ (workspaces,
+                                             themes, logs, packs)
+                         CLAUDETTE_DATA_DIR  OS data dir for claudette.db
+                         CLAUDE_CONFIG_DIR   ~/.claude/ (Claude CLI
+                                             settings, credentials,
+                                             plugins, marketplaces)
+
+                       Cleaned up on exit. Useful for testing first-run
+                       UX (welcome card, onboarding) and plugin/auth
+                       flows without nuking real user data.
   -h, --help           Print this usage and exit.
   --                   Pass everything after this flag straight to the
                        Tauri CLI (e.g. --release, --no-default-features).
@@ -57,6 +68,10 @@ Env vars (each consulted at process start):
                        plugins, themes, logs, models, packs, apps.json).
   CLAUDETTE_DATA_DIR   Override the OS data dir holding claudette.db
                        (\`dirs::data_dir()/claudette/\` by default).
+  CLAUDE_CONFIG_DIR    Override the Claude CLI's ~/.claude/ tree
+                       (settings.json, .credentials.json, plugins,
+                       marketplaces). Read by both the Claude CLI
+                       itself and Claudette's plugin / auth code paths.
   CLAUDETTE_LOG_DIR    Per-instance log dir override (otherwise derived
                        from CLAUDETTE_HOME).
 
@@ -168,15 +183,25 @@ with open(out, "w") as f:
 
 if (( clean_session )); then
   # Per-PID sandbox so a parallel `dev --clean` doesn't reuse this session's
-  # state. The cleanup trap removes both directories on exit, but they're
+  # state. The cleanup trap removes the directory on exit, but it lives
   # under TMPDIR anyway so a forgotten kill -9 won't leak forever.
+  #
+  # Three env vars get pointed at the sandbox — only the first two are
+  # Claudette-specific. CLAUDE_CONFIG_DIR routes the *Claude CLI's*
+  # ~/.claude/ tree, which Claudette actively reads and writes
+  # (settings.json, .credentials.json, plugins/, plugins/marketplaces/).
+  # Without that override, a --clean run that touches plugins, auth, or
+  # marketplaces silently writes those changes into the user's real
+  # ~/.claude/, defeating the "simulate a new user" purpose of the flag.
   clean_root="$discovery_dir/clean-$$"
   export CLAUDETTE_HOME="$clean_root/home"
   export CLAUDETTE_DATA_DIR="$clean_root/data"
-  mkdir -p "$CLAUDETTE_HOME" "$CLAUDETTE_DATA_DIR"
-  echo "▸ Clean session:    $clean_root"
-  echo "▸ CLAUDETTE_HOME:   $CLAUDETTE_HOME"
+  export CLAUDE_CONFIG_DIR="$clean_root/claude-config"
+  mkdir -p "$CLAUDETTE_HOME" "$CLAUDETTE_DATA_DIR" "$CLAUDE_CONFIG_DIR"
+  echo "▸ Clean session:      $clean_root"
+  echo "▸ CLAUDETTE_HOME:     $CLAUDETTE_HOME"
   echo "▸ CLAUDETTE_DATA_DIR: $CLAUDETTE_DATA_DIR"
+  echo "▸ CLAUDE_CONFIG_DIR:  $CLAUDE_CONFIG_DIR"
 fi
 
 cleanup() {

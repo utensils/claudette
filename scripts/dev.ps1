@@ -29,8 +29,12 @@
 #   $env:CARGO_TAURI_FEATURES       features (default devtools,server,alternative-backends)
 #
 # Flags:
-#   --clean              Run as a fresh user (per-PID CLAUDETTE_HOME +
-#                        CLAUDETTE_DATA_DIR). See -h for details.
+#   --clean              Run as a fresh user — points CLAUDETTE_HOME,
+#                        CLAUDETTE_DATA_DIR, and CLAUDE_CONFIG_DIR at
+#                        per-PID tmp dirs so the launch sees no existing
+#                        repos, settings, plugins, or Claude auth, and
+#                        nothing it does writes back to the real user
+#                        state. Cleaned up on exit. See -h for details.
 #   -h, --help           Print usage and exit.
 #
 # Usage from any PowerShell prompt in the repo:
@@ -60,12 +64,21 @@ and the IPv4-bound Vite + custom-protocol-off configuration that Windows
 needs for the WebView2 + /claudette-debug combination to work.
 
 Flags:
-  --clean              Run as a fresh user — points CLAUDETTE_HOME and
-                       CLAUDETTE_DATA_DIR at a per-PID tmp tree so the
-                       launch sees no existing repos, workspaces, or
-                       settings. Cleaned up on exit. Useful for testing
-                       first-run UX (welcome card, onboarding) without
-                       nuking the real ~/.claudette/ tree.
+  --clean              Run as a fresh user — points three env vars at a
+                       per-PID tmp tree so the launch sees no existing
+                       state and nothing it writes leaks back to the
+                       real user:
+
+                         CLAUDETTE_HOME      ~/.claudette/ (workspaces,
+                                             themes, logs, packs)
+                         CLAUDETTE_DATA_DIR  OS data dir for claudette.db
+                         CLAUDE_CONFIG_DIR   ~/.claude/ (Claude CLI
+                                             settings, credentials,
+                                             plugins, marketplaces)
+
+                       Cleaned up on exit. Useful for testing first-run
+                       UX (welcome card, onboarding) and plugin/auth
+                       flows without nuking real user data.
   -h, --help           Print this usage and exit.
   --                   Pass everything after this flag straight to
                        ``cargo run`` (e.g. --release, --quiet).
@@ -85,6 +98,11 @@ Env vars (each consulted at process start):
                        plugins, themes, logs, models, packs, apps.json).
   `$env:CLAUDETTE_DATA_DIR
                        Override the OS data dir holding claudette.db.
+  `$env:CLAUDE_CONFIG_DIR
+                       Override the Claude CLI's ~/.claude/ tree
+                       (settings.json, .credentials.json, plugins,
+                       marketplaces). Read by both the Claude CLI itself
+                       and Claudette's plugin / auth code paths.
   `$env:CLAUDETTE_LOG_DIR
                        Per-instance log dir (otherwise derived from
                        CLAUDETTE_HOME).
@@ -247,16 +265,52 @@ Write-Host "▸ Discovery file:   $discoveryFile"
 # discovery dir so the cleanup sweep finds it predictably. The trap
 # below removes the directory on script exit; a hard kill leaves it
 # behind, but it's under $env:TEMP so it won't leak forever.
+#
+# Three env vars get pointed at the sandbox — only the first two are
+# Claudette-specific:
+#
+#   CLAUDETTE_HOME      ~/.claudette/ tree (workspaces, themes, logs, packs)
+#   CLAUDETTE_DATA_DIR  OS data dir holding claudette.db
+#   CLAUDE_CONFIG_DIR   ~/.claude/ tree, owned by the *Claude CLI* but
+#                       actively read+written by Claudette: settings.json,
+#                       .credentials.json, plugins/, plugins/marketplaces/.
+#                       Without this, a --clean run that touches plugins,
+#                       auth, or marketplaces writes those changes into
+#                       the user's real ~/.claude/, defeating the
+#                       "simulate a new user" purpose of the flag.
+#
+# Env-var lifetime: when this script is invoked from an interactive
+# PowerShell prompt (the common case via the `dev` profile function),
+# `$env:NAME = ...` mutates the *caller's* process environment because
+# `&` runs the script in the same process. Without restoring the
+# original values on exit, the user's shell would still have
+# CLAUDE_CONFIG_DIR / CLAUDETTE_HOME / CLAUDETTE_DATA_DIR pointing at
+# the now-deleted clean root after `dev --clean` completes — silently
+# affecting any subsequent Claudette CLI usage from that prompt. We
+# therefore snapshot the prior values (or absence) up front and put
+# the unset/restore in the same PowerShell.Exiting handler that
+# removes the temp tree.
 $cleanRoot = $null
+$prevClaudetteHome     = $null
+$prevClaudetteDataDir  = $null
+$prevClaudeConfigDir   = $null
+$cleanSandboxEnvVars   = $false
 if ($cleanSession) {
     $cleanRoot = Join-Path $discoveryDir "clean-$PID"
+    $prevClaudetteHome    = if (Test-Path Env:\CLAUDETTE_HOME)     { $env:CLAUDETTE_HOME }     else { $null }
+    $prevClaudetteDataDir = if (Test-Path Env:\CLAUDETTE_DATA_DIR) { $env:CLAUDETTE_DATA_DIR } else { $null }
+    $prevClaudeConfigDir  = if (Test-Path Env:\CLAUDE_CONFIG_DIR)  { $env:CLAUDE_CONFIG_DIR }  else { $null }
+    $cleanSandboxEnvVars  = $true
     $env:CLAUDETTE_HOME      = Join-Path $cleanRoot 'home'
     $env:CLAUDETTE_DATA_DIR  = Join-Path $cleanRoot 'data'
+    $env:CLAUDE_CONFIG_DIR   = Join-Path $cleanRoot 'claude-config'
     New-Item -ItemType Directory -Force -Path $env:CLAUDETTE_HOME | Out-Null
     New-Item -ItemType Directory -Force -Path $env:CLAUDETTE_DATA_DIR | Out-Null
-    Write-Host "▸ Clean session:    $cleanRoot"
-    Write-Host "▸ CLAUDETTE_HOME:   $env:CLAUDETTE_HOME"
+    New-Item -ItemType Directory -Force -Path $env:CLAUDE_CONFIG_DIR | Out-Null
+    Write-Host "▸ Clean session:      $cleanRoot"
+    Write-Host "▸ CLAUDETTE_HOME:     $env:CLAUDETTE_HOME"
     Write-Host "▸ CLAUDETTE_DATA_DIR: $env:CLAUDETTE_DATA_DIR"
+    Write-Host "▸ CLAUDE_CONFIG_DIR:  $env:CLAUDE_CONFIG_DIR"
 }
 
 # Best-effort cleanup. PowerShell can't trap SIGTERM/SIGINT identically
@@ -268,7 +322,18 @@ if ($cleanSession) {
 # `"@` with any leading whitespace, which fights `scripts/` indent).
 # Use a string fallback rather than `??` so the script parses in
 # Windows PowerShell 5.1 (no null-coalescing) as well as pwsh 7+.
+#
+# The env-var section restores each of the three sandbox vars to its
+# pre-launch value (or removes it entirely if it wasn't set), so the
+# caller's PowerShell session is left exactly as it was before
+# `dev --clean` ran. Sentinel literal `__UNSET__` rides through the
+# format string to distinguish "wasn't set" from "was set to empty
+# string" — both legal pre-states, but they need different handling.
 $cleanRootForCleanup = if ($null -eq $cleanRoot) { '' } else { $cleanRoot }
+$envScrubFlag        = if ($cleanSandboxEnvVars) { '1' } else { '' }
+$prevHomeForCleanup       = if ($null -eq $prevClaudetteHome)    { '__UNSET__' } else { $prevClaudetteHome }
+$prevDataDirForCleanup    = if ($null -eq $prevClaudetteDataDir) { '__UNSET__' } else { $prevClaudetteDataDir }
+$prevConfigDirForCleanup  = if ($null -eq $prevClaudeConfigDir)  { '__UNSET__' } else { $prevClaudeConfigDir }
 $cleanupBody = @'
 if (Test-Path -LiteralPath '{0}') {{
     Remove-Item -LiteralPath '{0}' -Force -ErrorAction SilentlyContinue
@@ -276,7 +341,16 @@ if (Test-Path -LiteralPath '{0}') {{
 if ('{1}' -ne '' -and (Test-Path -LiteralPath '{1}')) {{
     Remove-Item -LiteralPath '{1}' -Recurse -Force -ErrorAction SilentlyContinue
 }}
-'@ -f $discoveryFile, $cleanRootForCleanup
+if ('{2}' -ne '') {{
+    if ('{3}' -eq '__UNSET__') {{ Remove-Item Env:\CLAUDETTE_HOME -ErrorAction SilentlyContinue }}
+    else {{ $env:CLAUDETTE_HOME = '{3}' }}
+    if ('{4}' -eq '__UNSET__') {{ Remove-Item Env:\CLAUDETTE_DATA_DIR -ErrorAction SilentlyContinue }}
+    else {{ $env:CLAUDETTE_DATA_DIR = '{4}' }}
+    if ('{5}' -eq '__UNSET__') {{ Remove-Item Env:\CLAUDE_CONFIG_DIR -ErrorAction SilentlyContinue }}
+    else {{ $env:CLAUDE_CONFIG_DIR = '{5}' }}
+}}
+'@ -f $discoveryFile, $cleanRootForCleanup, $envScrubFlag,
+       $prevHomeForCleanup, $prevDataDirForCleanup, $prevConfigDirForCleanup
 $cleanupAction = [ScriptBlock]::Create($cleanupBody)
 Register-EngineEvent -SourceIdentifier PowerShell.Exiting -Action $cleanupAction | Out-Null
 
