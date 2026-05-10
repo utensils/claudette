@@ -170,7 +170,7 @@ export async function createWorkspaceOrchestrated(
   }
 }
 
-export interface UseCreateWorkspaceOptions extends CreateWorkspaceOptions {}
+export type UseCreateWorkspaceOptions = CreateWorkspaceOptions;
 
 /** React hook wrapping `createWorkspaceOrchestrated` with local React
  *  state so a button can disable itself while the call is in flight.

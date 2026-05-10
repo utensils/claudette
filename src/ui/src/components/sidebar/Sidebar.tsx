@@ -195,8 +195,11 @@ export const Sidebar = memo(function Sidebar() {
   const creatingWorkspace = creatingWorkspaceRepoId
     ? { repoId: creatingWorkspaceRepoId }
     : null;
-  const setCreatingWorkspace = (v: { repoId: string } | null) =>
-    setCreatingWorkspaceRepoId(v?.repoId ?? null);
+  const setCreatingWorkspace = useCallback(
+    (v: { repoId: string } | null) =>
+      setCreatingWorkspaceRepoId(v?.repoId ?? null),
+    [setCreatingWorkspaceRepoId],
+  );
   const [repoContextMenu, setRepoContextMenu] = useState<{
     repoId: string;
     x: number;
@@ -318,7 +321,7 @@ export const Sidebar = memo(function Sidebar() {
     } finally {
       creatingRef.current = false;
     }
-  }, [addWorkspace, selectWorkspace, addChatMessage, openModal]);
+  }, [addWorkspace, selectWorkspace, addChatMessage, openModal, setCreatingWorkspace]);
 
   const filteredWorkspaces = useMemo(
     () => workspaces.filter((ws) => {
