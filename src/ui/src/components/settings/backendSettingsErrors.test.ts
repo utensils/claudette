@@ -48,4 +48,20 @@ describe("formatBackendError", () => {
 
     expect(message).toBe("OpenAI API backend requires an API key in Settings -> Models");
   });
+
+  it("turns unreachable LM Studio into an actionable hint pointing at `lms server start`", () => {
+    const message = formatBackendError(
+      "Failed to query LM Studio: error sending request for url (http://localhost:1234/api/v0/models)",
+      backend({
+        id: "lm-studio",
+        label: "LM Studio",
+        kind: "lm_studio",
+        base_url: "http://localhost:1234",
+      }),
+    );
+
+    expect(message).toBe(
+      "LM Studio is not reachable at http://localhost:1234. Run `lms server start` or update the Base URL.",
+    );
+  });
 });

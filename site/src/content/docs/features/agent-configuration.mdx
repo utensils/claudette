@@ -89,13 +89,13 @@ The **Settings > Claude CLI flags** panel exposes the underlying `claude` comman
 
 ## Alternative Providers
 
-Claudette can run agents against alternative providers — [Ollama](/claudette/features/providers/ollama/) (local), or [OpenAI / Codex](/claudette/features/providers/openai-codex/) (gateway-translated) — instead of the official `claude` CLI. This is gated by the **Alternative Claude Code backends** experimental flag (the toggle keeps that wording in the UI).
+Claudette can run agents against alternative providers — [Ollama](/claudette/features/providers/ollama/) (local, Anthropic-wire), [LM Studio](/claudette/features/providers/lm-studio/) (local, Anthropic-wire via `/v1/messages`), or [OpenAI / Codex](/claudette/features/providers/openai-codex/) (remote, gateway-translated) — instead of the official `claude` CLI. This is gated by the **Alternative Claude Code backends** experimental flag (the toggle keeps that wording in the UI).
 
 Several chat-header toggles on this page only apply to certain providers. The capability matrix in the dedicated section shows the full picture, but the highlights:
 
 - **Effort, fast mode, 1M-context auto-upgrade** — Anthropic only.
 - **Extended thinking** — Anthropic and Ollama (when the model supports it).
-- **All Claude-side toggles** — hidden on gateway providers (OpenAI / Codex), because the OpenAI Responses API has no equivalents.
+- **All Claude-side toggles** — hidden on every non-Anthropic provider (Ollama / LM Studio / OpenAI / Codex). Local models and OpenAI's Responses API implement these Anthropic-specific knobs inconsistently or not at all, so the chat header hides them rather than silently ignoring user intent.
 
 → Full setup, capability matrix, and per-provider instructions: **[Alternative Providers](/claudette/features/providers/)**
 

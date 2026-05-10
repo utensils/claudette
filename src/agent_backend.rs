@@ -11,6 +11,7 @@ pub enum AgentBackendKind {
     CustomAnthropic,
     #[serde(rename = "custom_openai")]
     CustomOpenAi,
+    LmStudio,
 }
 
 impl AgentBackendKind {
@@ -19,9 +20,28 @@ impl AgentBackendKind {
     }
 
     pub fn needs_gateway(self) -> bool {
+        // LM Studio 0.4.1+ implements `/v1/messages` natively (same
+        // Anthropic wire format Ollama uses), so we *could* point the
+        // spawned claude CLI directly at it. But LM Studio classifies
+        // hard input errors like context-window overflow as HTTP 500
+        // with an Anthropic-shaped body whose `error.type` is
+        // `api_error`. That's a transient classification — Anthropic's
+        // SDK retries it with exponential backoff — so a permanent
+        // input failure ends up as a multi-minute spinner with no
+        // surfaced error, even though the upstream message is right
+        // there.
+        //
+        // Routing LM Studio through our gateway gives us a place to
+        // demote those mis-classified 5xx responses to 4xx (via
+        // `GatewayUpstreamError::from_upstream` +
+        // `upstream_message_is_permanent_failure`). The gateway
+        // forwards 2xx bodies through unchanged so streaming events
+        // still flow without translation overhead — only the error
+        // path gets rewritten. See `proxy_anthropic_messages` and the
+        // matching test fixtures.
         matches!(
             self,
-            Self::OpenAiApi | Self::CodexSubscription | Self::CustomOpenAi
+            Self::OpenAiApi | Self::CodexSubscription | Self::CustomOpenAi | Self::LmStudio
         )
     }
 }
@@ -160,6 +180,27 @@ impl AgentBackendConfig {
             auth_ref: Some("codex-cli".to_string()),
             capabilities: AgentBackendCapabilities::gateway(),
             context_window_default: 400_000,
+            model_discovery: true,
+            has_secret: false,
+        }
+    }
+
+    pub fn builtin_lm_studio() -> Self {
+        Self {
+            id: "lm-studio".to_string(),
+            label: "LM Studio".to_string(),
+            kind: AgentBackendKind::LmStudio,
+            base_url: Some("http://localhost:1234".to_string()),
+            enabled: false,
+            default_model: None,
+            manual_models: Vec::new(),
+            discovered_models: Vec::new(),
+            auth_ref: Some("agent-backend:lm-studio".to_string()),
+            capabilities: AgentBackendCapabilities::gateway(),
+            // Most LM Studio loadouts default to a 4-8k context window; pick a
+            // safer floor than the OpenAI-style 400k. Per-model values from
+            // /api/v0/models override this when discovery succeeds.
+            context_window_default: 8_192,
             model_discovery: true,
             has_secret: false,
         }

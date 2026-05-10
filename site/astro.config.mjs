@@ -92,6 +92,7 @@ export default defineConfig({
           items: [
             { slug: 'features/providers' },
             { slug: 'features/providers/ollama' },
+            { slug: 'features/providers/lm-studio' },
             { slug: 'features/providers/openai-codex' },
           ],
         },

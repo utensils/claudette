@@ -203,7 +203,7 @@
   "experimental_usage_desc": "显示来自 Claude Code 订阅的用量数据（会话限制、每周限制、额外用量）。需要使用标准登录的 Pro 或 Max 计划。",
   "experimental_usage_aria": "用量洞察",
   "experimental_alternative_backends": "Claude Code 替代后端",
-  "experimental_alternative_backends_desc": "通过 Claude Code harness 暴露 Ollama、OpenAI 兼容提供方和自定义后端。",
+  "experimental_alternative_backends_desc": "通过 Claude Code harness 暴露 Ollama、LM Studio、OpenAI 兼容提供方和自定义后端。",
   "experimental_alternative_backends_aria": "Claude Code 替代后端",
   "plugins_title": "插件",
   "plugins_loading": "加载中…",
