@@ -709,47 +709,19 @@ pub(crate) fn send_notification(
     sound: &str,
     #[cfg_attr(target_os = "macos", allow(unused))] volume: f64,
 ) {
-    // On macOS, use mac-notification-sys directly so we can block for the
-    // click response. When the user clicks the notification, show the window
-    // and navigate to the session — even if the window was hidden (close-to-tray).
+    // macOS: post via UNUserNotificationCenter. Non-blocking; the OS
+    // owns the toast lifecycle and plays the sound out-of-process. Click
+    // routing is preserved by stashing workspace_id in userInfo —
+    // delegate callbacks emit `tray-select-workspace`. See issue #736
+    // for the thread-leak this replaces.
     #[cfg(target_os = "macos")]
     {
-        let app_clone = app.clone();
-        let ws_id = workspace_id.to_string();
-        let title = title.to_string();
-        let body = body.to_string();
-        let sound = sound.to_string();
-
-        std::thread::spawn(move || {
-            let mut n = mac_notification_sys::Notification::new();
-            n.title(&title).message(&body).wait_for_click(true);
-            match sound.as_str() {
-                "None" => {}
-                "Default" => {
-                    n.default_sound();
-                }
-                custom => {
-                    n.sound(custom);
-                }
-            }
-
-            if let Ok(response) = n.send()
-                && matches!(
-                    response,
-                    mac_notification_sys::NotificationResponse::Click
-                        | mac_notification_sys::NotificationResponse::ActionButton(_)
-                )
-            {
-                show_and_focus(&app_clone);
-                if !ws_id.is_empty() {
-                    let _ = app_clone.emit("tray-select-workspace", ws_id);
-                }
-            }
-        });
+        let _ = app;
+        crate::notification_macos::send(workspace_id, title, body, sound);
     }
 
-    // On non-macOS, fall back to tauri-plugin-notification (fire-and-forget)
-    // and play the configured sound via play_notification_sound.
+    // Non-macOS: tauri-plugin-notification (fire-and-forget) for the
+    // toast, plus play_notification_sound for the configured sound.
     #[cfg(not(target_os = "macos"))]
     {
         let _ = workspace_id;

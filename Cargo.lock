@@ -934,6 +934,7 @@ version = "0.23.0"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
+ "block",
  "candle-core",
  "candle-nn",
  "candle-transformers",
@@ -952,7 +953,6 @@ dependencies = [
  "image",
  "interprocess",
  "libc",
- "mac-notification-sys",
  "mdns-sd",
  "objc",
  "parking_lot",
