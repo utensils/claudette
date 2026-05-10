@@ -33,11 +33,13 @@ pub mod permissions;
 pub mod plugin;
 pub mod plugin_runtime;
 pub mod process;
+pub mod room;
 pub mod rpc;
 pub mod scm;
 pub mod slash_commands;
 pub mod snapshot;
 pub mod workspace_alloc;
+pub mod workspace_events;
 pub mod workspace_sync;
 
 use base64::Engine;

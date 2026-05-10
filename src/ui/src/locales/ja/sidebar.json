@@ -72,6 +72,8 @@
   "auto_deleted_merged": "ワークスペース「{{name}}」を削除しました — PR #{{prNumber}} がマージされました",
   "auto_archived_merged_nopr": "ワークスペース「{{name}}」をアーカイブしました — PR がマージされました",
   "auto_deleted_merged_nopr": "ワークスペース「{{name}}」を削除しました — PR がマージされました",
+  "remote_workspace_archived_named": "ワークスペース「{{name}}」がホストによってアーカイブされました",
+  "remote_workspace_archived_unnamed": "共有ワークスペースがホストによってアーカイブされました",
   "no_workspaces_archived_for_repo": "一致するワークスペースがありません — このリポジトリのワークスペースはすべてアーカイブされています。",
   "no_workspaces_all_archived": "すべてのワークスペースがアーカイブされています。",
   "no_repos": "ローカルリポジトリがまだありません — 下のツールバーから追加してください。",

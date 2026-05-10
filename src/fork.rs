@@ -349,6 +349,8 @@ fn copy_history(
             output_tokens: msg.output_tokens,
             cache_read_tokens: msg.cache_read_tokens,
             cache_creation_tokens: msg.cache_creation_tokens,
+            author_participant_id: msg.author_participant_id.clone(),
+            author_display_name: msg.author_display_name.clone(),
         };
         db.insert_chat_message(&copied)?;
     }
@@ -574,6 +576,8 @@ mod tests {
             output_tokens: None,
             cache_read_tokens: None,
             cache_creation_tokens: None,
+            author_participant_id: None,
+            author_display_name: None,
         }
     }
 
@@ -1110,6 +1114,8 @@ mod tests {
             output_tokens: None,
             cache_read_tokens: None,
             cache_creation_tokens: None,
+            author_participant_id: None,
+            author_display_name: None,
         })
         .unwrap();
         db.insert_checkpoint(&ConversationCheckpoint {

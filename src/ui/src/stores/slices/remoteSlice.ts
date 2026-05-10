@@ -29,6 +29,14 @@ export interface RemoteSlice {
   setLocalServerRunning: (running: boolean) => void;
   setLocalServerConnectionString: (cs: string | null) => void;
 
+  // Workspace-scoped collaborative shares. Number of currently-active
+  // shares the host has minted (independent of the legacy
+  // `localServerRunning` flag — the new model can have shares live
+  // without the legacy subprocess server). Surfaced so the sidebar
+  // ShareButton can show the right active/inactive styling.
+  activeSharesCount: number;
+  setActiveSharesCount: (count: number) => void;
+
   // MCP Status (per-repository)
   mcpStatus: Record<string, McpStatusSnapshot>;
   setMcpStatus: (repoId: string, snapshot: McpStatusSnapshot) => void;
@@ -49,8 +57,20 @@ export const createRemoteSlice: StateCreator<
   discoveredServers: [],
   activeRemoteIds: [],
   setRemoteConnections: (conns) => set({ remoteConnections: conns }),
+  // Upsert by id. The pairing flow now refreshes an existing row in
+  // place when re-pairing the same host:port, returning the original
+  // connection id; an unconditional append would leave the old entry
+  // shadowing the refreshed one in the sidebar.
   addRemoteConnection: (conn) =>
-    set((s) => ({ remoteConnections: [...s.remoteConnections, conn] })),
+    set((s) => {
+      const idx = s.remoteConnections.findIndex((c) => c.id === conn.id);
+      if (idx === -1) {
+        return { remoteConnections: [...s.remoteConnections, conn] };
+      }
+      const merged = [...s.remoteConnections];
+      merged[idx] = conn;
+      return { remoteConnections: merged };
+    }),
   removeRemoteConnection: (id) =>
     set((s) => ({
       remoteConnections: s.remoteConnections.filter((c) => c.id !== id),
@@ -136,6 +156,10 @@ export const createRemoteSlice: StateCreator<
   setLocalServerRunning: (running) => set({ localServerRunning: running }),
   setLocalServerConnectionString: (cs) =>
     set({ localServerConnectionString: cs }),
+
+  // Active shares count
+  activeSharesCount: 0,
+  setActiveSharesCount: (count) => set({ activeSharesCount: count }),
 
   // MCP Status
   mcpStatus: {},

@@ -11,6 +11,30 @@ use crate::model::{AgentStatus, Attachment, AttachmentOrigin, ChatMessage, ChatS
 
 use super::Database;
 
+fn extract_plan_file_path(content: &str) -> Option<String> {
+    let marker = "/.claude/plans/";
+    let marker_idx = content.find(marker)?;
+    let start = content[..marker_idx]
+        .rfind(|c: char| c.is_whitespace() || matches!(c, '"' | '\'' | '`' | '<' | '(' | '[' | '{'))
+        .map_or(0, |idx| {
+            idx + content[idx..]
+                .chars()
+                .next()
+                .map(char::len_utf8)
+                .unwrap_or(0)
+        });
+    let rest = &content[start..];
+    let end = rest.find(".md")? + ".md".len();
+    let candidate = &rest[..end];
+    if candidate.contains('\n') || candidate.contains('\r') {
+        return None;
+    }
+    if !candidate.starts_with('/') {
+        return None;
+    }
+    Some(candidate.to_string())
+}
+
 fn row_to_attachment(row: &rusqlite::Row) -> rusqlite::Result<Attachment> {
     let data: Vec<u8> = row.get(4)?;
     let origin_str: String = row.get(9)?;
@@ -39,8 +63,9 @@ impl Database {
         self.conn.execute(
             "INSERT INTO chat_messages (
                 id, workspace_id, chat_session_id, role, content, cost_usd, duration_ms, thinking,
-                input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens,
+                author_participant_id, author_display_name
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
             params![
                 msg.id,
                 msg.workspace_id,
@@ -54,6 +79,8 @@ impl Database {
                 msg.output_tokens,
                 msg.cache_read_tokens,
                 msg.cache_creation_tokens,
+                msg.author_participant_id,
+                msg.author_display_name,
             ],
         )?;
         Ok(())
@@ -79,12 +106,14 @@ impl Database {
             output_tokens: row.get(10)?,
             cache_read_tokens: row.get(11)?,
             cache_creation_tokens: row.get(12)?,
+            author_participant_id: row.get(13)?,
+            author_display_name: row.get(14)?,
         })
     }
 
     pub(super) const CHAT_MESSAGE_COLS: &str = "id, workspace_id, chat_session_id, role, content, cost_usd, \
          duration_ms, created_at, thinking, input_tokens, output_tokens, cache_read_tokens, \
-         cache_creation_tokens";
+         cache_creation_tokens, author_participant_id, author_display_name";
 
     /// Predicate that filters out legacy empty assistant rows (assistant role,
     /// empty content, no thinking text). The frontend used to drop these in
@@ -136,6 +165,26 @@ impl Database {
                 |row| row.get::<_, String>(0),
             )
             .optional()
+    }
+
+    pub fn latest_plan_file_path_for_session(
+        &self,
+        chat_session_id: &str,
+    ) -> Result<Option<String>, rusqlite::Error> {
+        let mut stmt = self.conn.prepare(
+            "SELECT content FROM chat_messages
+             WHERE chat_session_id = ?1
+               AND content LIKE '%.claude/plans/%.md%'
+             ORDER BY created_at DESC, rowid DESC
+             LIMIT 20",
+        )?;
+        let rows = stmt.query_map(params![chat_session_id], |row| row.get::<_, String>(0))?;
+        for row in rows {
+            if let Some(path) = extract_plan_file_path(&row?) {
+                return Ok(Some(path));
+            }
+        }
+        Ok(None)
     }
 
     /// Count all non-legacy messages for a session (legacy = empty assistant
@@ -1663,5 +1712,57 @@ mod tests {
                 "expected FromSqlConversionFailure for unknown session status, got: {other:?}",
             ),
         }
+    }
+
+    #[test]
+    fn latest_plan_file_path_for_session_finds_recent_plan_without_full_history() {
+        let db = setup_db_with_workspace();
+        db.insert_chat_message(&make_chat_msg(
+            &db,
+            "m1",
+            "w1",
+            ChatRole::Assistant,
+            "View plan - /repo/.claude/plans/old.md",
+        ))
+        .unwrap();
+        db.insert_chat_message(&make_chat_msg(
+            &db,
+            "m2",
+            "w1",
+            ChatRole::Assistant,
+            "View plan - /repo/.claude/plans/new.md",
+        ))
+        .unwrap();
+
+        let session_id = db
+            .default_session_id_for_workspace("w1")
+            .unwrap()
+            .expect("default session");
+        assert_eq!(
+            db.latest_plan_file_path_for_session(&session_id).unwrap(),
+            Some("/repo/.claude/plans/new.md".to_string()),
+        );
+    }
+
+    #[test]
+    fn latest_plan_file_path_for_session_keeps_full_absolute_path() {
+        let db = setup_db_with_workspace();
+        db.insert_chat_message(&make_chat_msg(
+            &db,
+            "m1",
+            "w1",
+            ChatRole::Assistant,
+            "View plan - /tmp/ws/.claude/plans/new.md",
+        ))
+        .unwrap();
+
+        let session_id = db
+            .default_session_id_for_workspace("w1")
+            .unwrap()
+            .expect("default session");
+        assert_eq!(
+            db.latest_plan_file_path_for_session(&session_id).unwrap(),
+            Some("/tmp/ws/.claude/plans/new.md".to_string()),
+        );
     }
 }

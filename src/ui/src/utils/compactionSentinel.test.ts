@@ -22,7 +22,7 @@ function sysMsg(id: string, content: string, afterIndex: number = 0): ChatMessag
     input_tokens: null,
     output_tokens: null,
     cache_read_tokens: null,
-    cache_creation_tokens: null,
+    cache_creation_tokens: null, author_participant_id: null, author_display_name: null,
   };
 }
 

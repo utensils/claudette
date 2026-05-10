@@ -1,25 +1,173 @@
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use claudette::agent::{self, AgentEvent, AgentSettings, InnerStreamEvent, StreamEvent};
 use claudette::chat::{
     BuildAssistantArgs, CheckpointArgs, build_assistant_chat_message, create_turn_checkpoint,
-    extract_assistant_text, extract_event_thinking,
 };
 use claudette::db::Database;
-use claudette::model::{ChatMessage, ChatRole};
+use claudette::model::{ChatMessage, ChatRole, WorkspaceStatus};
+use claudette::room::ParticipantId;
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 use serde_json::json;
+use tokio::sync::Mutex;
 
 use crate::ws::{AgentSessionState, PtyHandle, ServerState, Writer, send_message};
 
 use claudette::permissions::tools_for_level;
 
+/// Per-connection identity + authorization scope, passed into every RPC
+/// handler. Constructed once in `ws.rs` after authentication, then carried
+/// for the life of the connection. RPC dispatchers consult this to:
+///
+/// - stamp `author_participant_id` / `author_display_name` on user messages
+/// - reject host-only operations (kick / mute) from non-host participants
+/// - identify the source of a vote in plan-consensus resolution
+/// - enforce that mutating RPCs only target sessions the caller has joined
+/// - **gate every workspace-touching RPC** on the share's allowed workspace
+///   set, and reject all RPCs once the parent share is revoked
+///
+/// Handlers must NOT trust client-supplied identity or scope in params —
+/// only this struct is authoritative. `is_host` is always `false` for
+/// connections that arrive through the WebSocket; the host process
+/// constructs its own `ParticipantId::HOST` ctx for its own publish path.
+///
+/// `joined_sessions` is shared mutably (behind `Mutex`) across the spawned
+/// dispatch tasks for a single connection so a `join_session` on one task
+/// is visible to subsequent RPCs on others. Cleared on `leave_session`
+/// and on connection close (see `ws.rs`).
+#[derive(Debug, Clone)]
+pub struct ConnectionCtx {
+    pub participant_id: ParticipantId,
+    pub display_name: String,
+    pub is_host: bool,
+    pub joined_sessions: Arc<Mutex<HashSet<String>>>,
+    pub room_forwarders: Arc<Mutex<HashMap<String, tokio::task::JoinHandle<()>>>>,
+    /// The id of the share this connection authenticated against. Each RPC
+    /// re-checks the share still exists in the live config; a missing
+    /// share means the host revoked it and every subsequent request fails.
+    pub share_id: String,
+    /// Workspace ids the share grants access to. The handler's
+    /// `ctx_can_access_workspace` helper consults this on every
+    /// workspace-touching RPC; list RPCs filter their results down to it.
+    pub allowed_workspace_ids: Vec<String>,
+    /// Whether the parent share enables collaborative mode. When true,
+    /// joining a chat session in scope auto-creates a `Room` with
+    /// `consensus_required` set from the share — the host doesn't need
+    /// to enable collab per session.
+    pub collaborative: bool,
+    pub consensus_required: bool,
+}
+
+impl ConnectionCtx {
+    /// Construct a ctx for an authenticated WebSocket connection from the
+    /// matching share + session.
+    pub fn from_session(
+        participant_id: String,
+        display_name: String,
+        share_id: String,
+        allowed_workspace_ids: Vec<String>,
+        collaborative: bool,
+        consensus_required: bool,
+    ) -> Self {
+        Self {
+            participant_id: ParticipantId(participant_id),
+            display_name,
+            is_host: false,
+            joined_sessions: Arc::new(Mutex::new(HashSet::new())),
+            room_forwarders: Arc::new(Mutex::new(HashMap::new())),
+            share_id,
+            allowed_workspace_ids,
+            collaborative,
+            consensus_required,
+        }
+    }
+
+    pub async fn has_joined(&self, chat_session_id: &str) -> bool {
+        self.joined_sessions.lock().await.contains(chat_session_id)
+    }
+
+    /// Whether this connection's share permits operating on the given
+    /// workspace. The host's local UI never goes through this gate (it
+    /// runs as `ParticipantId::HOST` and skips the WS auth path entirely);
+    /// remote participants always do.
+    pub fn can_access_workspace(&self, workspace_id: &str) -> bool {
+        self.allowed_workspace_ids
+            .iter()
+            .any(|id| id == workspace_id)
+    }
+}
+
+async fn ctx_can_access_workspace_live(
+    state: &Arc<ServerState>,
+    ctx: &ConnectionCtx,
+    workspace_id: &str,
+) -> bool {
+    if ctx.can_access_workspace(workspace_id) {
+        return true;
+    }
+    let cfg = state.config.lock().await;
+    cfg.shares
+        .iter()
+        .find(|share| share.id == ctx.share_id)
+        .map(|share| {
+            share
+                .allowed_workspace_ids
+                .iter()
+                .any(|id| id == workspace_id)
+        })
+        .unwrap_or(false)
+}
+
+/// Resolve a chat-session id to its workspace id and check that the
+/// connection's share grants access to that workspace. Returns the
+/// workspace id on success so the caller can reuse it (e.g. to look up
+/// the worktree path), or an `Err(json-rpc-error-message)` to bail out.
+async fn ctx_authorize_chat_session(
+    state: &Arc<ServerState>,
+    ctx: &ConnectionCtx,
+    chat_session_id: &str,
+) -> Result<String, String> {
+    let db = open_db(state).map_err(|e| e.to_string())?;
+    let session = db
+        .get_chat_session(chat_session_id)
+        .map_err(|e| e.to_string())?
+        .ok_or("Chat session not found")?;
+    if !ctx_can_access_workspace_live(state, ctx, &session.workspace_id).await {
+        return Err("Not authorized for this workspace".into());
+    }
+    Ok(session.workspace_id)
+}
+
 /// Dispatch a JSON-RPC request and return a JSON-RPC response.
 pub async fn handle_request(
     state: &Arc<ServerState>,
     writer: &Arc<Writer>,
+    ctx: &ConnectionCtx,
     request: &serde_json::Value,
 ) -> serde_json::Value {
+    // Revocation check: if the share that issued this connection has been
+    // removed from the live config, every subsequent RPC is rejected
+    // before any work happens. This is what makes "stop sharing" actually
+    // stop in-flight access. Cheap — one async lock + a vec scan over
+    // a handful of entries.
+    {
+        let cfg = state.config.lock().await;
+        if !cfg.shares.iter().any(|s| s.id == ctx.share_id) {
+            let id = request
+                .get("id")
+                .cloned()
+                .unwrap_or(serde_json::Value::Null);
+            return json!({
+                "id": id,
+                "error": {
+                    "code": -1,
+                    "message": "This share has been revoked by the host."
+                }
+            });
+        }
+    }
+
     let id = request
         .get("id")
         .cloned()
@@ -28,128 +176,224 @@ pub async fn handle_request(
     let params = request.get("params").cloned().unwrap_or_default();
 
     let result = match method {
-        "load_initial_data" => handle_load_initial_data(state).await,
+        "load_initial_data" => handle_load_initial_data(state, ctx).await,
         "load_chat_history" => {
             let chat_session_id = param_chat_session_id(&params);
-            handle_load_chat_history(state, &chat_session_id).await
+            match ctx_authorize_chat_session(state, ctx, &chat_session_id).await {
+                Err(e) => Err(e),
+                Ok(_) => handle_load_chat_history(state, &chat_session_id).await,
+            }
         }
         "send_chat_message" => {
             let chat_session_id = param_chat_session_id(&params);
-            let content = param_str(&params, "content");
-            let permission_level = params
-                .get("permission_level")
-                .and_then(|v| v.as_str())
-                .map(String::from);
-            let model = params
-                .get("model")
-                .and_then(|v| v.as_str())
-                .map(String::from);
-            let fast_mode = params.get("fast_mode").and_then(|v| v.as_bool());
-            let thinking_enabled = params.get("thinking_enabled").and_then(|v| v.as_bool());
-            let plan_mode = params.get("plan_mode").and_then(|v| v.as_bool());
-            let effort = params
-                .get("effort")
-                .and_then(|v| v.as_str())
-                .map(String::from);
-            let chrome_enabled = params.get("chrome_enabled").and_then(|v| v.as_bool());
-            let disable_1m_context = params.get("disable_1m_context").and_then(|v| v.as_bool());
-            let backend_id = params
-                .get("backend_id")
-                .and_then(|v| v.as_str())
-                .map(String::from);
-            let mentioned_files: Option<Vec<String>> = params
-                .get("mentioned_files")
-                .and_then(|v| serde_json::from_value(v.clone()).ok());
-            handle_send_chat_message(
-                state,
-                writer,
-                &chat_session_id,
-                &content,
-                permission_level.as_deref(),
-                model,
-                fast_mode,
-                thinking_enabled,
-                plan_mode,
-                effort,
-                chrome_enabled,
-                disable_1m_context,
-                backend_id,
-                mentioned_files,
-            )
-            .await
+            // Workspace scope gate — also early-rejects unknown sessions.
+            match ctx_authorize_chat_session(state, ctx, &chat_session_id).await {
+                Err(e) => Err(e),
+                Ok(_) => {
+                    // Collab-only secondary gate: must have join_session'd
+                    // and not be muted.
+                    let collab_block = if let Some(room) = state.rooms.get(&chat_session_id).await {
+                        if !ctx.has_joined(&chat_session_id).await {
+                            Some("Not joined to this session".to_string())
+                        } else if room.is_muted(&ctx.participant_id).await {
+                            Some("Muted participants cannot send messages".to_string())
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    };
+                    if let Some(msg) = collab_block {
+                        Err(msg)
+                    } else {
+                        let content = param_str(&params, "content");
+                        let permission_level = params
+                            .get("permission_level")
+                            .and_then(|v| v.as_str())
+                            .map(String::from);
+                        let model = params
+                            .get("model")
+                            .and_then(|v| v.as_str())
+                            .map(String::from);
+                        let fast_mode = params.get("fast_mode").and_then(|v| v.as_bool());
+                        let thinking_enabled =
+                            params.get("thinking_enabled").and_then(|v| v.as_bool());
+                        let plan_mode = params.get("plan_mode").and_then(|v| v.as_bool());
+                        let effort = params
+                            .get("effort")
+                            .and_then(|v| v.as_str())
+                            .map(String::from);
+                        let chrome_enabled = params.get("chrome_enabled").and_then(|v| v.as_bool());
+                        let disable_1m_context =
+                            params.get("disable_1m_context").and_then(|v| v.as_bool());
+                        let backend_id = params
+                            .get("backend_id")
+                            .and_then(|v| v.as_str())
+                            .map(String::from);
+                        let mentioned_files: Option<Vec<String>> = params
+                            .get("mentioned_files")
+                            .and_then(|v| serde_json::from_value(v.clone()).ok());
+                        let message_id = params
+                            .get("message_id")
+                            .and_then(|v| v.as_str())
+                            .map(String::from);
+                        handle_send_chat_message(
+                            state,
+                            writer,
+                            ctx,
+                            &chat_session_id,
+                            message_id,
+                            &content,
+                            permission_level.as_deref(),
+                            model,
+                            fast_mode,
+                            thinking_enabled,
+                            plan_mode,
+                            effort,
+                            chrome_enabled,
+                            disable_1m_context,
+                            backend_id,
+                            mentioned_files,
+                        )
+                        .await
+                    }
+                }
+            }
         }
         "steer_queued_chat_message" => {
             Err("Mid-turn steering is not yet supported for remote sessions".to_string())
         }
         "stop_agent" => {
             let chat_session_id = param_chat_session_id(&params);
-            handle_stop_agent(state, &chat_session_id).await
+            match ctx_authorize_chat_session(state, ctx, &chat_session_id).await {
+                Err(e) => Err(e),
+                Ok(_) => handle_stop_agent(state, &chat_session_id).await,
+            }
         }
         "reset_agent_session" => {
             let chat_session_id = param_chat_session_id(&params);
-            let mut agents = state.agents.write().await;
-            agents.remove(&chat_session_id);
-            Ok(json!(null))
+            match ctx_authorize_chat_session(state, ctx, &chat_session_id).await {
+                Err(e) => Err(e),
+                Ok(_) => {
+                    let mut agents = state.agents.write().await;
+                    agents.remove(&chat_session_id);
+                    Ok(json!(null))
+                }
+            }
         }
         "list_repositories" => {
-            let db = open_db(state).map_err(|e| e.to_string());
-            match db {
-                Ok(db) => db
-                    .list_repositories()
-                    .map(|repos| serde_json::to_value(repos).unwrap_or_default())
-                    .map_err(|e| e.to_string()),
-                Err(e) => Err(e),
-            }
+            // Filter to repos that contain at least one in-scope workspace.
+            // Repos with zero in-scope workspaces leak nothing useful and
+            // would only confuse the remote UI, so we hide them.
+            (|| -> Result<serde_json::Value, String> {
+                let db = open_db(state).map_err(|e| e.to_string())?;
+                let repos = db.list_repositories().map_err(|e| e.to_string())?;
+                let workspaces = db.list_workspaces().map_err(|e| e.to_string())?;
+                let allowed_repo_ids: HashSet<String> = workspaces
+                    .iter()
+                    .filter(|w| ctx.can_access_workspace(&w.id))
+                    .map(|w| w.repository_id.clone())
+                    .collect();
+                let filtered: Vec<_> = repos
+                    .into_iter()
+                    .filter(|r| allowed_repo_ids.contains(&r.id))
+                    .collect();
+                Ok(serde_json::to_value(filtered).unwrap_or_default())
+            })()
         }
         "list_workspaces" => {
             let db = open_db(state).map_err(|e| e.to_string());
             match db {
                 Ok(db) => db
                     .list_workspaces()
-                    .map(|ws| serde_json::to_value(ws).unwrap_or_default())
+                    .map(|ws| {
+                        // Archived workspaces are excluded — once a host
+                        // archives a workspace, remotes should treat it
+                        // as gone. The push-side `workspace-lifecycle`
+                        // event removes it live; this filter handles the
+                        // reconnect / refresh path so the workspace
+                        // doesn't reappear on subsequent calls.
+                        let filtered: Vec<_> = ws
+                            .into_iter()
+                            .filter(|w| ctx.can_access_workspace(&w.id))
+                            .filter(|w| w.status == WorkspaceStatus::Active)
+                            .collect();
+                        serde_json::to_value(filtered).unwrap_or_default()
+                    })
                     .map_err(|e| e.to_string()),
                 Err(e) => Err(e),
             }
         }
         "create_workspace" => {
-            let repository_id = param_str(&params, "repository_id");
-            let name = param_str(&params, "name");
-            let preserve_supplied_name = params
-                .get("preserve_name")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(false);
-            handle_create_workspace(state, &repository_id, &name, preserve_supplied_name).await
+            // Creating a workspace can't be in-scope by definition (the
+            // workspace doesn't exist yet, so it's not in any allow list).
+            // Reserve this for the host only.
+            Err("Remote clients cannot create workspaces".into())
         }
         "archive_workspace" => {
             let workspace_id = param_str(&params, "workspace_id");
-            handle_archive_workspace(state, &workspace_id).await
+            if !ctx_can_access_workspace_live(state, ctx, &workspace_id).await {
+                Err("Not authorized for this workspace".into())
+            } else {
+                handle_archive_workspace(state, &workspace_id).await
+            }
         }
         "load_diff_files" => {
             let workspace_id = param_str(&params, "workspace_id");
-            handle_load_diff_files(state, &workspace_id).await
+            if !ctx_can_access_workspace_live(state, ctx, &workspace_id).await {
+                Err("Not authorized for this workspace".into())
+            } else {
+                handle_load_diff_files(state, &workspace_id).await
+            }
         }
         "load_file_diff" => {
+            // `worktree_path` is a filesystem path, not a workspace id —
+            // the auth gate runs on the workspace lookup that produced it.
+            // Cross-reference: the path must match a worktree of a workspace
+            // in scope. Otherwise a remote could read arbitrary files.
             let worktree_path = param_str(&params, "worktree_path");
-            let file_path = param_str(&params, "file_path");
-            let merge_base = param_str(&params, "merge_base");
-            let diff_layer = params
-                .get("diff_layer")
-                .and_then(|v| v.as_str())
-                .map(String::from);
-            handle_load_file_diff(
-                &worktree_path,
-                &file_path,
-                &merge_base,
-                diff_layer.as_deref(),
-            )
-            .await
+            let workspaces = open_db(state)
+                .map_err(|e| e.to_string())
+                .and_then(|db| db.list_workspaces().map_err(|e| e.to_string()))
+                .unwrap_or_default();
+            let mut allowed = false;
+            for workspace in workspaces
+                .iter()
+                .filter(|w| w.worktree_path.as_deref() == Some(&worktree_path))
+            {
+                if ctx_can_access_workspace_live(state, ctx, &workspace.id).await {
+                    allowed = true;
+                    break;
+                }
+            }
+            if !allowed {
+                Err("Not authorized for this worktree".into())
+            } else {
+                let file_path = param_str(&params, "file_path");
+                let merge_base = param_str(&params, "merge_base");
+                let diff_layer = params
+                    .get("diff_layer")
+                    .and_then(|v| v.as_str())
+                    .map(String::from);
+                handle_load_file_diff(
+                    &worktree_path,
+                    &file_path,
+                    &merge_base,
+                    diff_layer.as_deref(),
+                )
+                .await
+            }
         }
         "spawn_pty" => {
             let workspace_id = param_str(&params, "workspace_id");
-            let cwd = param_str(&params, "cwd");
-            let rows = params.get("rows").and_then(|v| v.as_u64()).unwrap_or(24) as u16;
-            let cols = params.get("cols").and_then(|v| v.as_u64()).unwrap_or(80) as u16;
-            handle_spawn_pty(state, writer, &workspace_id, &cwd, rows, cols).await
+            if !ctx_can_access_workspace_live(state, ctx, &workspace_id).await {
+                Err("Not authorized for this workspace".into())
+            } else {
+                let cwd = param_str(&params, "cwd");
+                let rows = params.get("rows").and_then(|v| v.as_u64()).unwrap_or(24) as u16;
+                let cols = params.get("cols").and_then(|v| v.as_u64()).unwrap_or(80) as u16;
+                handle_spawn_pty(state, writer, &workspace_id, &cwd, rows, cols).await
+            }
         }
         "write_pty" => {
             let pty_id = params.get("pty_id").and_then(|v| v.as_u64()).unwrap_or(0);
@@ -175,38 +419,148 @@ pub async fn handle_request(
             handle_close_pty(state, pty_id).await
         }
         "get_app_setting" => {
+            // Global settings are not workspace-scoped; treat reads as
+            // benign metadata (theme, fonts, feature flags) since the
+            // remote client may need them for rendering. Writes are
+            // host-only — see `set_app_setting` below.
             let key = param_str(&params, "key");
             handle_get_app_setting(state, &key)
         }
         "set_app_setting" => {
-            let key = param_str(&params, "key");
-            let value = param_str(&params, "value");
-            handle_set_app_setting(state, &key, &value).await
+            // Settings are global; a scoped remote shouldn't be able to
+            // mutate machine-wide config. Host-only.
+            Err("Remote clients cannot change app settings".into())
         }
         "list_chat_sessions" => {
             let workspace_id = param_str(&params, "workspace_id");
-            let include_archived = params
-                .get("include_archived")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(false);
-            handle_list_chat_sessions(state, &workspace_id, include_archived)
+            if !ctx_can_access_workspace_live(state, ctx, &workspace_id).await {
+                Err("Not authorized for this workspace".into())
+            } else {
+                let include_archived = params
+                    .get("include_archived")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+                handle_list_chat_sessions(state, &workspace_id, include_archived)
+            }
         }
         "get_chat_session" => {
             let chat_session_id = param_chat_session_id(&params);
-            handle_get_chat_session(state, &chat_session_id)
+            match ctx_authorize_chat_session(state, ctx, &chat_session_id).await {
+                Err(e) => Err(e),
+                Ok(_) => handle_get_chat_session(state, &chat_session_id),
+            }
         }
         "create_chat_session" => {
             let workspace_id = param_str(&params, "workspace_id");
-            handle_create_chat_session(state, &workspace_id)
+            if !ctx_can_access_workspace_live(state, ctx, &workspace_id).await {
+                Err("Not authorized for this workspace".into())
+            } else {
+                handle_create_chat_session(state, &workspace_id)
+            }
         }
         "rename_chat_session" => {
             let chat_session_id = param_chat_session_id(&params);
-            let name = param_str(&params, "name");
-            handle_rename_chat_session(state, &chat_session_id, &name)
+            match ctx_authorize_chat_session(state, ctx, &chat_session_id).await {
+                Err(e) => Err(e),
+                Ok(_) => {
+                    let name = param_str(&params, "name");
+                    handle_rename_chat_session(state, &chat_session_id, &name)
+                }
+            }
         }
         "archive_chat_session" => {
             let chat_session_id = param_chat_session_id(&params);
-            handle_archive_chat_session(state, &chat_session_id).await
+            match ctx_authorize_chat_session(state, ctx, &chat_session_id).await {
+                Err(e) => Err(e),
+                Ok(_) => handle_archive_chat_session(state, &chat_session_id).await,
+            }
+        }
+        "join_session" => {
+            let chat_session_id = param_chat_session_id(&params);
+            match ctx_authorize_chat_session(state, ctx, &chat_session_id).await {
+                Err(e) => Err(e),
+                Ok(_) => {
+                    crate::collab::handle_join_session(state, writer, ctx, &chat_session_id).await
+                }
+            }
+        }
+        "leave_session" => {
+            let chat_session_id = param_chat_session_id(&params);
+            match ctx_authorize_chat_session(state, ctx, &chat_session_id).await {
+                Err(e) => Err(e),
+                Ok(_) => crate::collab::handle_leave_session(state, ctx, &chat_session_id).await,
+            }
+        }
+        "vote_plan_approval" => {
+            let chat_session_id = param_chat_session_id(&params);
+            match ctx_authorize_chat_session(state, ctx, &chat_session_id).await {
+                Err(e) => Err(e),
+                Ok(_) => {
+                    let tool_use_id = param_str(&params, "tool_use_id");
+                    let approved = params
+                        .get("approved")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false);
+                    let reason = params
+                        .get("reason")
+                        .and_then(|v| v.as_str())
+                        .map(String::from);
+                    crate::collab::handle_vote_plan_approval(
+                        state,
+                        ctx,
+                        &chat_session_id,
+                        &tool_use_id,
+                        approved,
+                        reason,
+                    )
+                    .await
+                }
+            }
+        }
+        "submit_agent_answer" => {
+            let chat_session_id = param_chat_session_id(&params);
+            match ctx_authorize_chat_session(state, ctx, &chat_session_id).await {
+                Err(e) => Err(e),
+                Ok(_) => {
+                    let tool_use_id = param_str(&params, "tool_use_id");
+                    let answers = params
+                        .get("answers")
+                        .and_then(|v| serde_json::from_value(v.clone()).ok())
+                        .unwrap_or_default();
+                    let annotations = params.get("annotations").cloned();
+                    crate::collab::handle_submit_agent_answer(
+                        state,
+                        ctx,
+                        &chat_session_id,
+                        &tool_use_id,
+                        answers,
+                        annotations,
+                    )
+                    .await
+                }
+            }
+        }
+        "read_plan_file" => {
+            // Remote participants need to view plans during a consensus
+            // vote, but a remote with a workspace-scoped share must NOT
+            // be able to read plan files outside that scope. Two layers
+            // of defense:
+            //   1. `chat_session_id` is required and gates through the
+            //      same `ctx_authorize_chat_session` check every other
+            //      workspace-touching RPC uses — so a share scoped to
+            //      workspace A can't ever ask about a session in
+            //      workspace B.
+            //   2. The canonical path must resolve to somewhere under
+            //      that session's worktree, AND match the existing
+            //      `.claude/plans/*.md` whitelist. The path-shape check
+            //      mirrors the local Tauri command in
+            //      `src-tauri/src/commands/plan.rs::read_plan_file`.
+            let chat_session_id = param_chat_session_id(&params);
+            let path = param_str(&params, "path");
+            match ctx_authorize_chat_session(state, ctx, &chat_session_id).await {
+                Err(e) => Err(e),
+                Ok(workspace_id) => handle_read_plan_file(state, &workspace_id, path).await,
+            }
         }
         "refresh_claude_flags" => {
             // Drop the cache so the next `cached_claude_flag_defs` call
@@ -341,10 +695,33 @@ fn now_iso() -> String {
 
 // ---- Command handlers ----
 
-async fn handle_load_initial_data(state: &ServerState) -> Result<serde_json::Value, String> {
+async fn handle_load_initial_data(
+    state: &ServerState,
+    ctx: &ConnectionCtx,
+) -> Result<serde_json::Value, String> {
     let db = open_db(state)?;
-    let repositories = db.list_repositories().map_err(|e| e.to_string())?;
-    let workspaces = db.list_workspaces().map_err(|e| e.to_string())?;
+    // Filter both lists down to the connection's scope. Workspaces is the
+    // direct gate; repositories follows from workspaces (a repo is visible
+    // iff at least one of its workspaces is in scope).
+    let all_workspaces = db.list_workspaces().map_err(|e| e.to_string())?;
+    // Hide archived workspaces from remotes. Archive is a host-side
+    // soft-delete that tears down the worktree and stops agents — the
+    // workspace can't usefully be operated on remotely anyway, and
+    // leaving it in the list lets the bug under PR #612 manifest where
+    // the remote shows ghost entries for archived workspaces.
+    let workspaces: Vec<_> = all_workspaces
+        .into_iter()
+        .filter(|w| ctx.can_access_workspace(&w.id))
+        .filter(|w| w.status == WorkspaceStatus::Active)
+        .collect();
+    let allowed_repo_ids: std::collections::HashSet<String> =
+        workspaces.iter().map(|w| w.repository_id.clone()).collect();
+    let repositories: Vec<_> = db
+        .list_repositories()
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .filter(|r| allowed_repo_ids.contains(&r.id))
+        .collect();
 
     let worktree_base_dir = {
         let dir = state.worktree_base_dir.read().await;
@@ -419,7 +796,13 @@ async fn handle_load_initial_data(state: &ServerState) -> Result<serde_json::Val
         })
         .collect();
 
-    let last_messages = db.last_message_per_workspace().map_err(|e| e.to_string())?;
+    // Filter last-message entries to the in-scope workspaces.
+    let last_messages: Vec<_> = db
+        .last_message_per_workspace()
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .filter(|m| ctx.can_access_workspace(&m.workspace_id))
+        .collect();
 
     Ok(json!({
         "repositories": repositories,
@@ -428,6 +811,57 @@ async fn handle_load_initial_data(state: &ServerState) -> Result<serde_json::Val
         "default_branches": default_branches,
         "last_messages": last_messages,
     }))
+}
+
+async fn handle_read_plan_file(
+    state: &ServerState,
+    workspace_id: &str,
+    path: String,
+) -> Result<serde_json::Value, String> {
+    use std::path::{Path, PathBuf};
+    // Look up the workspace's worktree. Plans live under
+    // `<worktree>/.claude/plans/`; any path that doesn't canonicalize to
+    // somewhere inside *that* worktree is rejected, so a scoped share
+    // can't read other workspaces' plans even though they're all under
+    // `.claude/plans/` on disk.
+    let db = open_db(state)?;
+    let workspaces = db.list_workspaces().map_err(|e| e.to_string())?;
+    let worktree_path: PathBuf = workspaces
+        .iter()
+        .find(|w| w.id == workspace_id)
+        .and_then(|w| w.worktree_path.clone())
+        .map(PathBuf::from)
+        .ok_or_else(|| "Workspace has no worktree".to_string())?;
+    let allowed_root = std::fs::canonicalize(&worktree_path)
+        .map_err(|e| format!("Workspace worktree is unreadable: {e}"))?;
+
+    let content = tokio::task::spawn_blocking(move || {
+        let canonical = std::fs::canonicalize(Path::new(&path))
+            .map_err(|e| format!("Invalid plan path: {e}"))?;
+        // Containment check: the requested path must canonicalize to a
+        // descendant of the workspace's worktree. `starts_with` works on
+        // canonicalized paths because both sides have all `..` and
+        // symlinks resolved.
+        if !canonical.starts_with(&allowed_root) {
+            return Err("Plan path is outside the workspace's worktree".to_string());
+        }
+        // Path-shape whitelist: must include `.claude/plans/` and end
+        // with `.md`. Mirrors the Tauri-side command's check.
+        let components: Vec<&str> = canonical
+            .components()
+            .filter_map(|c| c.as_os_str().to_str())
+            .collect();
+        let has_plans_dir = components
+            .windows(2)
+            .any(|w| w[0] == ".claude" && w[1] == "plans");
+        if !has_plans_dir || canonical.extension().and_then(|e| e.to_str()) != Some("md") {
+            return Err("Only .claude/plans/*.md files can be read".to_string());
+        }
+        std::fs::read_to_string(&canonical).map_err(|e| format!("Failed to read plan file: {e}"))
+    })
+    .await
+    .map_err(|e| format!("Failed to read plan file: {e}"))??;
+    Ok(serde_json::Value::String(content))
 }
 
 async fn handle_load_chat_history(
@@ -445,7 +879,9 @@ async fn handle_load_chat_history(
 async fn handle_send_chat_message(
     state: &Arc<ServerState>,
     writer: &Arc<Writer>,
+    ctx: &ConnectionCtx,
     chat_session_id: &str,
+    message_id: Option<String>,
     content: &str,
     permission_level: Option<&str>,
     model: Option<String>,
@@ -480,7 +916,7 @@ async fn handle_send_chat_message(
 
     // Save user message.
     let user_msg = ChatMessage {
-        id: uuid::Uuid::new_v4().to_string(),
+        id: message_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
         workspace_id: workspace_id.clone(),
         chat_session_id: chat_session_id.clone(),
         role: ChatRole::User,
@@ -493,9 +929,24 @@ async fn handle_send_chat_message(
         output_tokens: None,
         cache_read_tokens: None,
         cache_creation_tokens: None,
+        author_participant_id: Some(ctx.participant_id.0.clone()),
+        author_display_name: Some(ctx.display_name.clone()),
     };
     db.insert_chat_message(&user_msg)
         .map_err(|e| e.to_string())?;
+
+    // In collaborative mode, broadcast the user message so other participants
+    // render it live. Without this, only the *agent's* responses propagate
+    // (via agent-stream); user prompts only persist to DB and would never
+    // show up in another participant's UI in real time. Frontend dedupe
+    // skips when `author_participant_id === selfParticipantId` so the
+    // sender's own optimistic message isn't duplicated.
+    if let Some(room) = state.rooms.get(&chat_session_id).await {
+        room.publish(json!({
+            "event": "chat-message-added",
+            "payload": &user_msg,
+        }));
+    }
 
     let level = permission_level.unwrap_or("full");
     let allowed_tools = tools_for_level(level);
@@ -655,12 +1106,48 @@ async fn handle_send_chat_message(
     session.session_resolved_env = resolved_env.vars.clone();
     drop(agents);
 
-    // Bridge agent events to WebSocket.
+    // Bridge agent events to subscribers. When a room exists for this
+    // session (collaborative mode), every event is published to the room's
+    // broadcast channel — fan-out is handled by per-connection forwarder
+    // tasks (see `handle_join_session`). When no room exists (solo / 1:1
+    // legacy), events flow directly to the prompter's writer.
     let ws_id = workspace_id.clone();
     let chat_session_id_for_stream = chat_session_id.clone();
     let db_path = state.db_path.clone();
     let wt_path = worktree_path.clone();
     let user_msg_id = user_msg.id.clone();
+    let room = state.rooms.get(&chat_session_id).await;
+    // Acquire the turn lock for this participant just before spawning the
+    // bridge. Hard reject — competing participants are already greyed out
+    // by the `turn-started` broadcast below.
+    if let Some(r) = &room
+        && let Err(holder) = r.try_acquire_turn(&ctx.participant_id).await
+    {
+        return Err(format!("turn-locked-by:{}", holder.as_str()));
+    }
+    if let Some(r) = &room {
+        let started_at_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(0);
+        *r.turn_started_at_ms.lock().await = Some(started_at_ms);
+        *r.turn_settings.write().await = Some(claudette::room::TurnSettingsSnapshot {
+            model: agent_settings.model.clone(),
+            plan_mode: agent_settings.plan_mode,
+        });
+        r.publish(json!({
+            "event": "turn-started",
+            "payload": {
+                "workspace_id": &workspace_id,
+                "chat_session_id": &chat_session_id,
+                "participant_id": ctx.participant_id.as_str(),
+                "display_name": &ctx.display_name,
+                "started_at_ms": started_at_ms,
+                "model": agent_settings.model.clone(),
+                "plan_mode": agent_settings.plan_mode,
+            },
+        }));
+    }
     let state = Arc::clone(state);
     let writer = Arc::clone(writer);
     tokio::spawn(async move {
@@ -710,10 +1197,12 @@ async fn handle_send_chat_message(
                 agents.remove(&chat_session_id_for_stream);
             }
 
-            // Track per-assistant-message cumulative usage as the CLI streams
-            // it. The final MessageDelta before message_stop carries the
-            // authoritative per-message total; we overwrite on every delta and
-            // consume it when the assistant message is persisted below.
+            // Track per-assistant-message cumulative usage as the CLI streams it.
+            // The final MessageDelta before message_stop carries the authoritative
+            // per-message total; we overwrite on every delta and consume it when the
+            // assistant message is persisted below. Mirrors the Tauri-side bridge in
+            // `src-tauri/src/commands/chat/send.rs`. Without this, remote-initiated
+            // turns persist with null token counts.
             if let AgentEvent::Stream(StreamEvent::Stream {
                 event: InnerStreamEvent::MessageDelta { usage: Some(u) },
             }) = &event
@@ -725,9 +1214,39 @@ async fn handle_send_chat_message(
             // events per turn (thinking-only, then text). Accumulate thinking
             // and save only when text content arrives.
             if let AgentEvent::Stream(StreamEvent::Assistant { ref message }) = event {
-                let full_text = extract_assistant_text(message);
+                let full_text: String = message
+                    .content
+                    .iter()
+                    .filter_map(|block| {
+                        if let claudette::agent::ContentBlock::Text { text } = block {
+                            Some(text.as_str())
+                        } else {
+                            None
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join("");
 
-                if let Some(t) = extract_event_thinking(message) {
+                let event_thinking: Option<String> = {
+                    let parts: Vec<&str> = message
+                        .content
+                        .iter()
+                        .filter_map(|block| {
+                            if let claudette::agent::ContentBlock::Thinking { thinking } = block {
+                                Some(thinking.as_str())
+                            } else {
+                                None
+                            }
+                        })
+                        .collect();
+                    if parts.is_empty() {
+                        None
+                    } else {
+                        Some(parts.join(""))
+                    }
+                };
+
+                if let Some(t) = event_thinking {
                     pending_thinking = Some(match pending_thinking.take() {
                         Some(mut existing) => {
                             existing.push_str(&t);
@@ -792,16 +1311,36 @@ async fn handle_send_chat_message(
                 }
             }
 
-            // Emit event over WebSocket.
-            let event_msg = json!({
-                "event": "agent-stream",
+            // Emit event. Collab path (room exists) → publish so the room's
+            // subscribers fan it out. Legacy path (no room) → direct write
+            // to the prompter's writer, matching today's 1:1 behavior.
+            //
+            // Build the payload via the shared `AgentStreamPayload` struct
+            // so the wire shape stays in lockstep with the Tauri-side
+            // bridge and the frontend's TypeScript interface. Hand-rolled
+            // JSON here once silently regressed to a `session_id` key
+            // and dropped every event on remote receivers — see
+            // `src/chat.rs::AgentStreamPayload` for the full backstory.
+            let payload = claudette::chat::AgentStreamPayload {
+                workspace_id: ws_id.clone(),
+                chat_session_id: chat_session_id_for_stream.clone(),
+                event,
+            };
+            let event_msg = json!({ "event": "agent-stream", "payload": payload });
+            match &room {
+                Some(r) => r.publish(event_msg),
+                None => send_message(&writer, &event_msg).await,
+            }
+        }
+        if let Some(r) = &room {
+            r.release_turn().await;
+            r.publish(json!({
+                "event": "turn-ended",
                 "payload": {
-                    "workspace_id": ws_id,
-                    "session_id": chat_session_id_for_stream,
-                    "event": event,
-                }
-            });
-            send_message(&writer, &event_msg).await;
+                    "workspace_id": &ws_id,
+                    "chat_session_id": &chat_session_id_for_stream,
+                },
+            }));
         }
     });
 
@@ -842,11 +1381,14 @@ async fn handle_stop_agent(
         output_tokens: None,
         cache_read_tokens: None,
         cache_creation_tokens: None,
+        author_participant_id: None,
+        author_display_name: None,
     };
     db.insert_chat_message(&msg).map_err(|e| e.to_string())?;
     Ok(json!(null))
 }
 
+#[allow(dead_code)] // Workspace creation is host-only; the dispatch arm rejects.
 async fn handle_create_workspace(
     state: &ServerState,
     repository_id: &str,
@@ -911,7 +1453,7 @@ async fn handle_archive_workspace(
     workspace_id: &str,
 ) -> Result<serde_json::Value, String> {
     use claudette::ops::{NoopHooks, workspace as ops_workspace};
-
+    use claudette::workspace_events::WorkspaceEvent;
     // Stop any running agents for sessions in this workspace. Collect the
     // PIDs to stop under the lock, then drop the lock before awaiting any
     // process teardowns to avoid blocking unrelated requests. Agent state
@@ -946,6 +1488,16 @@ async fn handle_archive_workspace(
     )
     .await
     .map_err(|e| e.to_string())?;
+
+    // Notify every connected remote (including the initiator's siblings,
+    // and the host's own UI subscribers if any) that the workspace is gone.
+    // Without this, a remote that didn't initiate the archive would keep
+    // showing the workspace in its sidebar until the next reconnect.
+    if let Some(bus) = state.workspace_events.as_ref() {
+        bus.publish(WorkspaceEvent::Archived {
+            workspace_id: workspace_id.to_string(),
+        });
+    }
 
     Ok(json!(null))
 }
@@ -1160,6 +1712,7 @@ fn handle_get_app_setting(state: &ServerState, key: &str) -> Result<serde_json::
     Ok(json!(value))
 }
 
+#[allow(dead_code)] // App settings are host-only; the dispatch arm rejects.
 async fn handle_set_app_setting(
     state: &ServerState,
     key: &str,

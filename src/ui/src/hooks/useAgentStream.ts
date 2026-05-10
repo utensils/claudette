@@ -1,9 +1,12 @@
 import { useEffect, useRef } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { useAppStore } from "../stores/useAppStore";
+import { selfParticipantIdForWorkspace } from "./useSelfParticipantId";
 import {
+  collaborationSessionSnapshot,
   loadChatHistory,
   saveTurnToolActivities,
+  sendRemoteCommand,
   setSessionCliInvocation,
 } from "../services/tauri";
 import type { AgentStreamPayload } from "../types/agent-events";
@@ -24,6 +27,8 @@ import { extractLatestCallUsage } from "../utils/extractLatestCallUsage";
 import { buildCompactionSentinel } from "../utils/compactionSentinel";
 import { pickMeterUsageFromResult } from "./pickMeterUsageFromResult";
 import { applyCommandLineEvent } from "./useAgentStreamLogic";
+import { isRemoteCheckpointWorkspace } from "./checkpointWorkspace";
+import { applyRemoteJoinSessionSnapshot } from "../components/chat/remoteJoinSessionSnapshot";
 
 const ASK_USER_QUESTION_TOOL = "AskUserQuestion";
 
@@ -61,6 +66,9 @@ export function useAgentStream() {
   const setPlanApproval = useAppStore((s) => s.setPlanApproval);
   const finalizeTurn = useAppStore((s) => s.finalizeTurn);
   const setPlanMode = useAppStore((s) => s.setPlanMode);
+  const setSelectedModel = useAppStore((s) => s.setSelectedModel);
+  const setPromptStartTime = useAppStore((s) => s.setPromptStartTime);
+  const clearPromptStartTime = useAppStore((s) => s.clearPromptStartTime);
   const addCompactionEvent = useAppStore((s) => s.addCompactionEvent);
 
   // Per-session map: sessionId → (content-block index → tool entry). Two
@@ -278,7 +286,7 @@ export function useAgentStream() {
                 input_tokens: null,
                 output_tokens: null,
                 cache_read_tokens: m.post_tokens,
-                cache_creation_tokens: null,
+                cache_creation_tokens: null, author_participant_id: null, author_display_name: null,
               };
               store.addChatMessage(sessionId, liveSentinel);
 
@@ -508,7 +516,7 @@ export function useAgentStream() {
                 input_tokens: null,
                 output_tokens: null,
                 cache_read_tokens: null,
-                cache_creation_tokens: null,
+                cache_creation_tokens: null, author_participant_id: null, author_display_name: null,
               });
               // streamingThinking is NOT cleared here — StreamingThinkingBlock
               // needs to keep rendering through the typewriter drain so the
@@ -683,6 +691,7 @@ export function useAgentStream() {
       tool_use_id: string;
       tool_name: string;
       input: unknown;
+      required_voters?: import("../stores/slices/collabSlice").Participant[];
     }>("agent-permission-prompt", (event) => {
       if (!active) return;
       const {
@@ -690,6 +699,7 @@ export function useAgentStream() {
         tool_use_id: toolUseId,
         tool_name: toolName,
         input,
+        required_voters: requiredVoters,
       } = event.payload;
       if (toolName === ASK_USER_QUESTION_TOOL) {
         // The CLI guarantees `input` is the validated tool-input object —
@@ -698,7 +708,15 @@ export function useAgentStream() {
           try {
             const questions = parseAskUserQuestion(input as Record<string, unknown>);
             if (questions.length > 0) {
-              setAgentQuestion({ sessionId, toolUseId, questions });
+              setAgentQuestion({
+                sessionId,
+                toolUseId,
+                questions,
+                requiredVoters: Array.isArray(requiredVoters)
+                  ? requiredVoters
+                  : undefined,
+                votes: {},
+              });
               // Keep the ChatSession row in sync so the tab icon + sidebar
               // aggregate reflect the pending attention without a reload.
               updateChatSession(sessionId, {
@@ -773,9 +791,13 @@ export function useAgentStream() {
       checkpoint: ConversationCheckpoint;
     }>("checkpoint-created", (event) => {
       if (!active) return;
-      const { chat_session_id: sessionId, checkpoint } = event.payload;
+      const { workspace_id: wsId, chat_session_id: sessionId, checkpoint } = event.payload;
       addCheckpoint(sessionId, checkpoint);
       turnCheckpointIdRef.current[sessionId] = checkpoint.id;
+      const isRemoteWorkspace = isRemoteCheckpointWorkspace(
+        useAppStore.getState().workspaces,
+        wsId,
+      );
 
       // Persist tool activities for the just-completed turn, then reload
       // messages so the store has DB-persisted IDs. The save MUST complete
@@ -786,13 +808,24 @@ export function useAgentStream() {
       // finalization) and turnMessageCountRef instead of completedTurns.
       const currentActivities = useAppStore.getState().toolActivities[sessionId] || [];
       debugChat("stream", "checkpoint-created", {
+        wsId,
         sessionId,
         checkpointId: checkpoint.id,
         checkpointMessageId: checkpoint.message_id,
         turnIndex: checkpoint.turn_index,
         currentToolCount: currentActivities.length,
         pendingMessageCount: turnMessageCountRef.current[sessionId] || 0,
+        isRemoteWorkspace,
       });
+
+      if (isRemoteWorkspace) {
+        debugChat("stream", "checkpoint-local-persistence-skipped-remote", {
+          wsId,
+          sessionId,
+          checkpointId: checkpoint.id,
+        });
+        return;
+      }
       const savePromise = currentActivities.length > 0
         ? (() => {
             const messageCount = turnMessageCountRef.current[sessionId] || 0;
@@ -943,6 +976,42 @@ export function useAgentStream() {
     };
   }, [addChatMessage]);
 
+  // Listen for collaborative user-message broadcasts. The bridge (both
+  // server-side handler.rs and Tauri-side chat/send.rs) publishes
+  // `chat-message-added` to the room when a user message is persisted in
+  // a collaborative session, so other participants render it live.
+  // Sender-side dedupe: skip when the message's author_participant_id
+  // matches the local user's selfParticipantId for that workspace —
+  // the sender already rendered it optimistically and broadcasting back
+  // would otherwise produce a duplicate row.
+  //
+  // Note on the rare hydration race: if the broadcast arrives before
+  // `workspaces` / `remoteConnections` are populated, `selfPid` resolves
+  // to `null` and the dedupe is skipped — so the sender briefly sees a
+  // duplicate. In practice this only happens on cold-boot when an
+  // already-running collab session immediately fires; the optimistic UI
+  // and the broadcast both target the same `addChatMessage` reducer so
+  // the ordering is consistent even when dedupe fails.
+  useEffect(() => {
+    let active = true;
+    const unlisten = listen<ChatMessage>("chat-message-added", (event) => {
+      if (!active) return;
+      const msg = event.payload;
+      const selfPid = selfParticipantIdForWorkspace(
+        useAppStore.getState(),
+        msg.workspace_id,
+      );
+      if (msg.author_participant_id && selfPid && msg.author_participant_id === selfPid) {
+        return;
+      }
+      addChatMessage(msg.chat_session_id, msg);
+    });
+    return () => {
+      active = false;
+      unlisten.then((fn) => fn());
+    };
+  }, [addChatMessage]);
+
   // Listen for agent-authored attachments delivered via the
   // `mcp__claudette__send_to_user` tool. The Rust bridge has already
   // persisted them; we just need to mirror into the in-memory store so the
@@ -1029,4 +1098,249 @@ export function useAgentStream() {
       unlisten.then((fn) => fn());
     };
   }, []);
+
+  // -- Collaborative-session events --
+  //
+  // The host process re-emits broadcast room events to the local webview;
+  // remote clients receive the same events directly over the WebSocket and
+  // through the existing remote-event forwarder.
+  //
+  // Five events funnel into store mutations:
+  //   - participants-changed: refresh the per-session roster
+  //   - turn-started / turn-ended: drive composer enable/disable
+  //   - plan-vote-opened: open a consensus card
+  //   - plan-vote-cast: record a vote
+  //   - plan-vote-resolved: clear the consensus and approval cards
+  const setParticipants = useAppStore((s) => s.setParticipants);
+  const setTurnHolder = useAppStore((s) => s.setTurnHolder);
+  const openConsensusVote = useAppStore((s) => s.openConsensusVote);
+  const recordConsensusVote = useAppStore((s) => s.recordConsensusVote);
+  const clearConsensusVote = useAppStore((s) => s.clearConsensusVote);
+  const clearPlanApproval = useAppStore((s) => s.clearPlanApproval);
+  const clearAgentQuestion = useAppStore((s) => s.clearAgentQuestion);
+  const recordAgentQuestionVote = useAppStore((s) => s.recordAgentQuestionVote);
+  const setAgentQuestionSnapshot = useAppStore((s) => s.setAgentQuestion);
+  useEffect(() => {
+    let active = true;
+    const applySnapshot = (sessionId: string, snapshot: unknown) => {
+      const state = useAppStore.getState();
+      const workspaceId = Object.entries(state.sessionsByWorkspace).find(
+        ([, sessions]) => sessions.some((session) => session.id === sessionId),
+      )?.[0];
+      applyRemoteJoinSessionSnapshot(sessionId, snapshot, {
+        setParticipants,
+        setTurnHolder,
+        openConsensusVote,
+        recordConsensusVote,
+        setPlanApproval,
+        setPlanMode,
+        setSelectedModel,
+        setAgentQuestion: setAgentQuestionSnapshot,
+        setPromptStartTime: (startedAtMs) => {
+          if (workspaceId) setPromptStartTime(workspaceId, startedAtMs);
+        },
+      });
+    };
+    const resyncSession = async (sessionId: string) => {
+      const state = useAppStore.getState();
+      const workspaceEntry = Object.entries(state.sessionsByWorkspace).find(
+        ([, sessions]) => sessions.some((session) => session.id === sessionId),
+      );
+      const workspaceId = workspaceEntry?.[0];
+      const workspace = workspaceId
+        ? state.workspaces.find((ws) => ws.id === workspaceId)
+        : undefined;
+      try {
+        const snapshot = workspace?.remote_connection_id
+          ? await sendRemoteCommand(workspace.remote_connection_id, "join_session", {
+              chat_session_id: sessionId,
+            })
+          : await collaborationSessionSnapshot(sessionId);
+        if (active) applySnapshot(sessionId, snapshot);
+      } catch (e) {
+        console.warn("collaboration resync failed:", e);
+      }
+    };
+    const unlistenParticipants = listen<{
+      chat_session_id: string;
+      participants: import("../stores/slices/collabSlice").Participant[];
+    }>("participants-changed", (event) => {
+      if (!active) return;
+      setParticipants(event.payload.chat_session_id, event.payload.participants);
+    });
+    const unlistenStarted = listen<{
+      workspace_id?: string;
+      chat_session_id: string;
+      participant_id: string;
+      display_name: string;
+      started_at_ms?: number;
+      model?: string | null;
+      plan_mode?: boolean;
+    }>("turn-started", (event) => {
+      if (!active) return;
+      const {
+        workspace_id,
+        chat_session_id,
+        participant_id,
+        display_name,
+        started_at_ms,
+        model,
+        plan_mode,
+      } = event.payload;
+      setTurnHolder(chat_session_id, { participant_id, display_name });
+      // Flip the per-session and per-workspace agent_status to "Running" so
+      // every connected participant — not just the one that initiated the
+      // turn — sees the spinner in their sidebar. The initiating side
+      // already set this optimistically in the React layer; for everyone
+      // else, this broadcast is the only signal.
+      //
+      // workspace_id is included by post-bdee038 bridges; older clients
+      // may not send it. Fall back to looking up via sessionsByWorkspace
+      // so we still update the session-level status either way.
+      if (workspace_id) {
+        useAppStore.getState().updateWorkspace(workspace_id, { agent_status: "Running" });
+        if (typeof started_at_ms === "number" && started_at_ms > 0) {
+          setPromptStartTime(workspace_id, started_at_ms);
+        }
+      }
+      if (typeof model === "string" && model) {
+        setSelectedModel(chat_session_id, model);
+      }
+      if (typeof plan_mode === "boolean") {
+        setPlanMode(chat_session_id, plan_mode);
+      }
+      useAppStore.getState().updateChatSession(chat_session_id, { agent_status: "Running" });
+    });
+    const unlistenEnded = listen<{
+      workspace_id?: string;
+      chat_session_id: string;
+    }>("turn-ended", (event) => {
+      if (!active) return;
+      if (event.payload.workspace_id) {
+        clearPromptStartTime(event.payload.workspace_id);
+      }
+      setTurnHolder(event.payload.chat_session_id, null);
+      // Note: we don't reset agent_status here — the agent-stream
+      // ProcessExited handler is the canonical place for that and
+      // distinguishes Idle vs. Stopped based on whether a `result`
+      // event was seen. Both turn-ended and ProcessExited reach every
+      // participant via the room broadcast, so the ProcessExited path
+      // handles the post-turn state for everyone.
+    });
+    const unlistenOpened = listen<{
+      chat_session_id: string;
+      tool_use_id: string;
+      required_voters: import("../stores/slices/collabSlice").Participant[];
+    }>("plan-vote-opened", (event) => {
+      if (!active) return;
+      const { chat_session_id, tool_use_id, required_voters } = event.payload;
+      openConsensusVote(chat_session_id, tool_use_id, required_voters);
+    });
+    const unlistenCast = listen<{
+      chat_session_id: string;
+      tool_use_id: string;
+      participant_id: string;
+      vote: import("../stores/slices/collabSlice").ParticipantVote;
+    }>("plan-vote-cast", (event) => {
+      if (!active) return;
+      const { chat_session_id, tool_use_id, participant_id, vote } =
+        event.payload;
+      recordConsensusVote(chat_session_id, tool_use_id, participant_id, vote);
+    });
+    const unlistenResolved = listen<{ chat_session_id: string }>(
+      "plan-vote-resolved",
+      (event) => {
+        if (!active) return;
+        clearConsensusVote(event.payload.chat_session_id);
+        clearPlanApproval(event.payload.chat_session_id);
+      },
+    );
+    const unlistenQuestionResolved = listen<{ chat_session_id: string }>(
+      "agent-question-resolved",
+      (event) => {
+        if (!active) return;
+        clearAgentQuestion(event.payload.chat_session_id);
+      },
+    );
+    const unlistenQuestionCast = listen<{
+      chat_session_id: string;
+      tool_use_id: string;
+      participant_id: string;
+      answers: Record<string, string>;
+    }>("agent-question-answer-cast", (event) => {
+      if (!active) return;
+      const { chat_session_id, tool_use_id, participant_id, answers } =
+        event.payload;
+      recordAgentQuestionVote(
+        chat_session_id,
+        tool_use_id,
+        participant_id,
+        answers,
+      );
+    });
+    const unlistenHistoryReplaced = listen<{
+      workspace_id: string;
+      chat_session_id: string;
+      checkpoint_id: string | null;
+      messages: import("../types/chat").ChatMessage[];
+    }>("session-history-replaced", (event) => {
+      if (!active) return;
+      const {
+        workspace_id,
+        chat_session_id,
+        checkpoint_id,
+        messages,
+      } = event.payload;
+      useAppStore
+        .getState()
+        .rollbackConversation(
+          chat_session_id,
+          workspace_id,
+          checkpoint_id ?? "__clear__",
+          messages,
+        );
+    });
+    const unlistenResyncRequired = listen<{
+      chat_session_id?: string | null;
+    } | null>("resync-required", (event) => {
+      if (!active) return;
+      const requestedSessionId = event.payload?.chat_session_id ?? null;
+      const sessionIds = requestedSessionId
+        ? [requestedSessionId]
+        : Object.values(useAppStore.getState().sessionsByWorkspace)
+            .flat()
+            .map((session) => session.id);
+      for (const sessionId of sessionIds) {
+        void resyncSession(sessionId);
+      }
+    });
+    return () => {
+      active = false;
+      unlistenParticipants.then((fn) => fn());
+      unlistenStarted.then((fn) => fn());
+      unlistenEnded.then((fn) => fn());
+      unlistenOpened.then((fn) => fn());
+      unlistenCast.then((fn) => fn());
+      unlistenResolved.then((fn) => fn());
+      unlistenQuestionCast.then((fn) => fn());
+      unlistenQuestionResolved.then((fn) => fn());
+      unlistenHistoryReplaced.then((fn) => fn());
+      unlistenResyncRequired.then((fn) => fn());
+    };
+  }, [
+    setParticipants,
+    setTurnHolder,
+    setPromptStartTime,
+    setSelectedModel,
+    setPlanMode,
+    clearPromptStartTime,
+    openConsensusVote,
+    recordConsensusVote,
+    setPlanApproval,
+    clearConsensusVote,
+    clearPlanApproval,
+    clearAgentQuestion,
+    recordAgentQuestionVote,
+    setAgentQuestionSnapshot,
+  ]);
 }

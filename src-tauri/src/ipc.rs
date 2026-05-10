@@ -1336,6 +1336,8 @@ mod tests {
             output_tokens: None,
             cache_read_tokens: None,
             cache_creation_tokens: None,
+            author_participant_id: None,
+            author_display_name: None,
         }
     }
 
@@ -1580,6 +1582,9 @@ mod tests {
                 request_id: "req-1".into(),
                 tool_name: "AskUserQuestion".into(),
                 original_input: json!({"questions": [{"question": "Proceed?"}]}),
+                required_voters: Default::default(),
+                votes: Default::default(),
+                question_votes: Default::default(),
             },
         );
         agent.pending_permissions.insert(
@@ -1588,6 +1593,9 @@ mod tests {
                 request_id: "req-2".into(),
                 tool_name: "ExitPlanMode".into(),
                 original_input: json!({"plan": "Do it"}),
+                required_voters: Default::default(),
+                votes: Default::default(),
+                question_votes: Default::default(),
             },
         );
 

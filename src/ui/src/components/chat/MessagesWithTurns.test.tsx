@@ -36,6 +36,8 @@ function message(
     output_tokens: null,
     cache_read_tokens: null,
     cache_creation_tokens: null,
+    author_participant_id: null,
+    author_display_name: null,
   };
 }
 

@@ -2,10 +2,11 @@ import { useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { getVersion } from "@tauri-apps/api/app";
 import { useAppStore } from "./stores/useAppStore";
-import { loadInitialData, getAppSetting, getHostEnvFlags, listRemoteConnections, listDiscoveredServers, getLocalServerStatus, detectInstalledApps, listSystemFonts, deleteTerminalTab, listAppSettingsWithPrefix, listAgentBackends, refreshAgentBackendModels, bootOk } from "./services/tauri";
+import { loadInitialData, getAppSetting, getHostEnvFlags, listRemoteConnections, listDiscoveredServers, getLocalServerStatus, listShares, detectInstalledApps, listSystemFonts, deleteTerminalTab, listAppSettingsWithPrefix, listAgentBackends, refreshAgentBackendModels, bootOk } from "./services/tauri";
 import { applyTheme, applyUserFonts, loadAllThemes, findTheme, cacheThemePreference, getThemeDataAttr } from "./utils/theme";
 import { DEFAULT_THEME_ID, DEFAULT_LIGHT_THEME_ID } from "./styles/themes";
 import type { ThemeDefinition } from "./types/theme";
+import type { Workspace } from "./types/workspace";
 import { adjustUiFontSize, resetUiFontSize } from "./utils/fontSettings";
 import { deriveScmCiState } from "./utils/scmChecks";
 import { KEYBINDING_SETTING_PREFIX } from "./hotkeys/bindings";
@@ -294,6 +295,16 @@ function App() {
       })
       .catch((err) => console.error("Failed to load local server status:", err));
 
+    // Hydrate the active-shares count once at startup so the sidebar's
+    // ShareButton reflects persisted shares even before the user opens
+    // the share modal. ShareModal's own `refresh` keeps this in sync
+    // afterwards (mint, stop, periodic refresh).
+    listShares()
+      .then((shares) => useAppStore.getState().setActiveSharesCount(shares.length))
+      .catch(() => {
+        // Server feature off / no shares — leave count at 0.
+      });
+
     detectInstalledApps()
       .then(setDetectedApps)
       .catch((err) => console.error("Failed to detect installed apps:", err));
@@ -394,6 +405,18 @@ function App() {
             legacyVoiceHold === "disabled" ? null : `code:${legacyVoiceHold}`;
         }
         setKeybindings(bindings);
+      })
+      .catch(() => {});
+    // Hydrate collaboration preferences. Both default to "off / blank" so a
+    // failed read leaves the rest of the app working unchanged.
+    getAppSetting("collab:display_name")
+      .then((val) => { if (val) useAppStore.getState().setCollabDisplayName(val); })
+      .catch(() => {});
+    getAppSetting("collab:default_consensus_required")
+      .then((val) => {
+        if (val === "true") {
+          useAppStore.getState().setCollabDefaultConsensusRequired(true);
+        }
       })
       .catch(() => {});
     getAppSetting("language")
@@ -752,6 +775,52 @@ function App() {
       store.addToast(msg);
     });
 
+    // Listen for cross-process workspace lifecycle events forwarded from a
+    // remote claudette-server (today: archive). The host publishes via
+    // `WorkspaceEventBus`, the WS connection forwards as `{event:"workspace-lifecycle", payload}`,
+    // `RemoteConnectionManager` re-emits it as a Tauri event, and we land here.
+    // The remote-side response: drop the workspace from the sidebar, clear
+    // selection if it was active, and toast the user. The forwarder on the
+    // host side already filters by the connection's allowed-workspaces scope,
+    // so we trust the workspace id arrived legitimately.
+    const unlistenWorkspaceLifecycle = listen<{
+      kind: string;
+      workspace_id?: string;
+      source_workspace_id?: string;
+      workspace?: Workspace;
+    }>(
+      "workspace-lifecycle",
+      (event) => {
+        const { kind, workspace_id, source_workspace_id, workspace } = event.payload;
+        const store = useAppStore.getState();
+        if (kind === "forked" && workspace && source_workspace_id) {
+          const source = store.workspaces.find((w) => w.id === source_workspace_id);
+          const remoteWorkspace: Workspace = {
+            ...workspace,
+            remote_connection_id: source?.remote_connection_id ?? null,
+          };
+          if (store.workspaces.some((w) => w.id === remoteWorkspace.id)) {
+            store.updateWorkspace(remoteWorkspace.id, remoteWorkspace);
+          } else {
+            store.addWorkspace(remoteWorkspace);
+          }
+          store.selectWorkspace(remoteWorkspace.id);
+          return;
+        }
+        if (kind !== "archived" || !workspace_id) return;
+        // Capture the name BEFORE removing the workspace so the toast can
+        // identify which one disappeared. The Workspace lookup falls back to
+        // an unnamed message for the (rare) race where the workspace was
+        // already gone client-side before the event arrived.
+        const ws = store.workspaces.find((w) => w.id === workspace_id);
+        store.removeWorkspace(workspace_id);
+        const msg = ws?.name
+          ? i18n.t("sidebar:remote_workspace_archived_named", { name: ws.name })
+          : i18n.t("sidebar:remote_workspace_archived_unnamed");
+        store.addToast(msg);
+      },
+    );
+
     return () => {
       isActive = false;
       window.clearInterval(discoveredServersPollId);
@@ -770,6 +839,7 @@ function App() {
       unlistenWorkspacesChanged.then((fn) => fn());
       unlistenChatTurnSettings.then((fn) => fn());
       unlistenChatTurnStarted.then((fn) => fn());
+      unlistenWorkspaceLifecycle.then((fn) => fn());
       unlistenMissingCli.then((fn) => fn());
       unlistenMissingWorktree.then((fn) => fn());
     };

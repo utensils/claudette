@@ -281,8 +281,13 @@
   transition: background var(--transition-fast);
 }
 
-.approveBtn:hover {
+.approveBtn:hover:not(:disabled) {
   background: rgba(var(--accent-primary-rgb), 0.18);
+}
+
+.approveBtn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
 .divider {
@@ -332,6 +337,11 @@
 
 .freeformInput::placeholder {
   color: var(--text-faint);
+}
+
+.freeformInput:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
 }
 
 .feedbackBtn {

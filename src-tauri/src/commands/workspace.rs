@@ -181,10 +181,46 @@ pub async fn fork_workspace_at_checkpoint(
     .await
     .map_err(|e| e.to_string())?;
 
+    let forked_workspace = outcome.workspace.clone();
+
+    #[cfg(feature = "server")]
+    {
+        if let Some(cfg_arc) = state.share_server_config.read().await.clone() {
+            let mut cfg = cfg_arc.lock().await;
+            let mut changed = false;
+            for share in &mut cfg.shares {
+                let includes_source = share
+                    .allowed_workspace_ids
+                    .iter()
+                    .any(|id| id == &workspace_id);
+                let includes_fork = share
+                    .allowed_workspace_ids
+                    .iter()
+                    .any(|id| id == &forked_workspace.id);
+                if includes_source && !includes_fork {
+                    share
+                        .allowed_workspace_ids
+                        .push(forked_workspace.id.clone());
+                    changed = true;
+                }
+            }
+            if changed {
+                let _ = cfg.save(&claudette_server::default_config_path());
+            }
+        }
+    }
+
+    state
+        .workspace_events
+        .publish(claudette::workspace_events::WorkspaceEvent::Forked {
+            source_workspace_id: workspace_id.clone(),
+            workspace: forked_workspace.clone(),
+        });
+
     crate::tray::rebuild_tray(&app);
 
     Ok(ForkWorkspaceResult {
-        workspace: outcome.workspace,
+        workspace: forked_workspace,
         session_resumed: outcome.session_resumed,
     })
 }
@@ -456,6 +492,8 @@ pub(crate) async fn archive_workspace_inner(
                             output_tokens: None,
                             cache_read_tokens: None,
                             cache_creation_tokens: None,
+                            author_participant_id: None,
+                            author_display_name: None,
                         };
                         if let Err(err) = db.insert_chat_message(&msg) {
                             tracing::warn!(
@@ -506,6 +544,18 @@ pub(crate) async fn archive_workspace_inner(
         supervisor.remove_repo(&out.repository_id).await;
         let _ = app.emit("mcp-status-cleared", &out.repository_id);
     }
+
+    // Notify connected remotes so they remove the workspace from their
+    // sidebar live, instead of waiting for the next reconnect to filter
+    // it out. The forwarder in `claudette-server::ws` filters by the
+    // connection's allowed-workspaces scope before delivering.
+    state
+        .workspace_events
+        .publish(claudette::workspace_events::WorkspaceEvent::Archived {
+            workspace_id: id.to_string(),
+        });
+
+    crate::tray::rebuild_tray(app);
 
     Ok(ArchiveWorkspaceOutput {
         delete_branch,

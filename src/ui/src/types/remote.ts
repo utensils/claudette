@@ -7,6 +7,11 @@ export interface RemoteConnectionInfo {
   cert_fingerprint: string | null;
   auto_connect: boolean;
   created_at: string;
+  /** This local user's identity as seen by the remote server. Derived from
+   *  the session token; used by the UI to detect "this message is mine"
+   *  when rendering chat in collaborative sessions. Optional because the
+   *  Rust side `#[serde(skip_serializing_if = "Option::is_none")]`s it. */
+  participant_id?: string | null;
 }
 
 export interface DiscoveredServer {
@@ -21,6 +26,7 @@ export interface PairResult {
   connection: RemoteConnectionInfo;
   server_name: string;
   initial_data: RemoteInitialData | null;
+  participant_id?: string | null;
 }
 
 export interface RemoteInitialData {

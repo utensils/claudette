@@ -185,6 +185,10 @@ impl WebSocketTransport {
                 .and_then(|n| n.as_str())
                 .unwrap_or("Unknown")
                 .to_string(),
+            participant_id: result
+                .get("participant_id")
+                .and_then(|p| p.as_str())
+                .map(String::from),
         })
     }
 
@@ -216,6 +220,10 @@ impl WebSocketTransport {
                 .and_then(|n| n.as_str())
                 .unwrap_or("Unknown")
                 .to_string(),
+            participant_id: result
+                .get("participant_id")
+                .and_then(|p| p.as_str())
+                .map(String::from),
         })
     }
 }
@@ -223,6 +231,10 @@ impl WebSocketTransport {
 pub struct AuthResult {
     pub session_token: Option<String>,
     pub server_name: String,
+    /// The server-derived participant id for this connection. Used by the
+    /// frontend to detect "this message is mine" in collaborative sessions.
+    /// `None` for older servers that don't return it.
+    pub participant_id: Option<String>,
 }
 
 #[async_trait::async_trait]

@@ -104,9 +104,23 @@ pub async fn rollback_to_checkpoint(
     db.clear_chat_session_state(&chat_session_id)
         .map_err(|e| e.to_string())?;
 
-    // Return the truncated message list for this session.
-    db.list_chat_messages_for_session(&chat_session_id)
-        .map_err(|e| e.to_string())
+    // Return the truncated message list for this session and broadcast the
+    // replacement to any remote participants watching the same room.
+    let messages = db
+        .list_chat_messages_for_session(&chat_session_id)
+        .map_err(|e| e.to_string())?;
+    if let Some(room) = state.rooms.get(&chat_session_id).await {
+        room.publish(serde_json::json!({
+            "event": "session-history-replaced",
+            "payload": {
+                "workspace_id": workspace_id,
+                "chat_session_id": chat_session_id,
+                "checkpoint_id": checkpoint_id,
+                "messages": messages.clone(),
+            },
+        }));
+    }
+    Ok(messages)
 }
 
 /// Clear the entire conversation for a workspace, optionally restoring files
@@ -184,9 +198,23 @@ pub async fn clear_conversation(
     db.clear_chat_session_state(&chat_session_id)
         .map_err(|e| e.to_string())?;
 
-    // Return empty list.
-    db.list_chat_messages_for_session(&chat_session_id)
-        .map_err(|e| e.to_string())
+    // Return empty list and broadcast the replacement to any remote
+    // participants watching the same room.
+    let messages = db
+        .list_chat_messages_for_session(&chat_session_id)
+        .map_err(|e| e.to_string())?;
+    if let Some(room) = state.rooms.get(&chat_session_id).await {
+        room.publish(serde_json::json!({
+            "event": "session-history-replaced",
+            "payload": {
+                "workspace_id": workspace_id,
+                "chat_session_id": chat_session_id,
+                "checkpoint_id": serde_json::Value::Null,
+                "messages": messages.clone(),
+            },
+        }));
+    }
+    Ok(messages)
 }
 
 #[tauri::command]

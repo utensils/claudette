@@ -1049,6 +1049,8 @@ fn prepare_user_send(
     message_id: Option<String>,
     content: &str,
     attachments: Option<&[AttachmentInput]>,
+    author_participant_id: Option<String>,
+    author_display_name: Option<String>,
 ) -> Result<PreparedUserSend, String> {
     let user_msg = ChatMessage {
         id: message_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
@@ -1064,6 +1066,8 @@ fn prepare_user_send(
         output_tokens: None,
         cache_read_tokens: None,
         cache_creation_tokens: None,
+        author_participant_id,
+        author_display_name,
     };
 
     let mut att_models: Vec<claudette::model::Attachment> = Vec::new();
@@ -1228,12 +1232,24 @@ pub async fn steer_queued_chat_message(
             .ok_or("No active persistent Claude session for this chat")?
     };
 
+    let room_for_user_send = state.rooms.get(&chat_session_id).await;
+    if let Some(room) = &room_for_user_send {
+        crate::commands::remote::ensure_host_participant(&state, room).await;
+    }
+    let host_author = room_for_user_send.as_ref().map(|_| {
+        (
+            claudette::room::ParticipantId::HOST.to_string(),
+            state.resolve_host_display_name(),
+        )
+    });
     let prepared_user_send = prepare_user_send(
         &workspace_id,
         &chat_session_id,
         message_id,
         &content,
         attachments.as_deref(),
+        host_author.as_ref().map(|(id, _)| id.clone()),
+        host_author.as_ref().map(|(_, name)| name.clone()),
     )?;
 
     let anchor_msg_id = db
@@ -1279,6 +1295,12 @@ pub async fn steer_queued_chat_message(
             "stdin write failure",
         );
         return Err(e);
+    }
+    if let Some(room) = &room_for_user_send {
+        room.publish(serde_json::json!({
+            "event": "chat-message-added",
+            "payload": &prepared_user_send.user_msg,
+        }));
     }
     Ok(Some(pre_steer_checkpoint))
 }
@@ -1350,16 +1372,42 @@ pub async fn send_chat_message(
 
     // Save user message to DB. Use the frontend-provided ID so optimistic
     // UI state (attachments keyed by message ID) stays consistent.
+    let room_for_user_send = state.rooms.get(&chat_session_id).await;
+    if let Some(room) = &room_for_user_send {
+        crate::commands::remote::ensure_host_participant(&state, room).await;
+    }
+    let host_author = room_for_user_send.as_ref().map(|_| {
+        (
+            claudette::room::ParticipantId::HOST.to_string(),
+            state.resolve_host_display_name(),
+        )
+    });
     let prepared_user_send = prepare_user_send(
         &workspace_id,
         &chat_session_id,
         message_id,
         &content,
         attachments.as_deref(),
+        host_author.as_ref().map(|(id, _)| id.clone()),
+        host_author.as_ref().map(|(_, name)| name.clone()),
     )?;
     persist_user_send(&db, &prepared_user_send)?;
     let user_msg = prepared_user_send.user_msg.clone();
     let image_attachments = prepared_user_send.cli_atts;
+
+    // In collaborative mode, broadcast the user message so other participants
+    // render it live. Without this, only the agent's responses propagate
+    // (via agent-stream) — user prompts persist to DB but never reach
+    // other participants. Frontend dedupes via
+    // `author_participant_id === selfParticipantId` so the sender's own
+    // optimistic message isn't duplicated. Solo / 1:1 sessions skip this:
+    // the local UI already rendered the message optimistically.
+    if let Some(room) = &room_for_user_send {
+        room.publish(serde_json::json!({
+            "event": "chat-message-added",
+            "payload": &user_msg,
+        }));
+    }
 
     // Resolve allowed tools from permission level.
     let level = permission_level.as_deref().unwrap_or("full");
@@ -1993,6 +2041,8 @@ pub async fn send_chat_message(
             output_tokens: None,
             cache_read_tokens: None,
             cache_creation_tokens: None,
+            author_participant_id: None,
+            author_display_name: None,
         };
         if let Err(err) = db.insert_chat_message(&warning) {
             // Logging-only: a missing warning shouldn't block the turn.
@@ -2466,6 +2516,59 @@ pub async fn send_chat_message(
     let wt_path = worktree_path.clone();
     let user_msg_id = user_msg.id.clone();
     let repo_id_for_mcp = ws.repository_id.clone();
+    // Captured once: in collaborative mode, every event is published to this
+    // room (where the host's own UI subscribes alongside any joined remote
+    // clients). In solo mode this is `None` and the bridge keeps emitting
+    // directly via `app.emit("agent-stream", ...)`.
+    let room_for_stream = state.rooms.get(&chat_session_id).await;
+    // The host's own UI is just another subscriber of this room. The
+    // host-side mirror task that re-emits room events into the local
+    // webview is attached at room *creation* time via
+    // `RoomRegistry::set_on_create` (installed once in `main.rs::setup`),
+    // so by the time we get here the host is already listening — even
+    // if the room was first created by a remote `join_session` whose
+    // `participants-changed` publish would otherwise have raced ahead
+    // of any subscriber spawned on the bridge path.
+    // Acquire the turn lock just before spawning the bridge so we never
+    // leak the lock across an early `?` propagation. Hard reject — the
+    // composer in other clients greys out on `turn-started`, so by the
+    // time a competing send arrives we expect this almost always to fail
+    // only on genuine races (composer flicker, stale UI).
+    let host_participant = claudette::room::ParticipantId::host();
+    if let Some(room) = &room_for_stream
+        && let Err(holder) = room.try_acquire_turn(&host_participant).await
+    {
+        return Err(format!("turn-locked-by:{}", holder.as_str()));
+    }
+    if let Some(room) = &room_for_stream {
+        // Use the configured collaboration display name so the
+        // turn-started broadcast matches the author chip stamped on
+        // chat messages and the roster entry for the host. Hardcoding
+        // "Host" here would surface inconsistently when the user has
+        // set a custom collab display name in settings.
+        let host_display_name = state.resolve_host_display_name();
+        let started_at_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(0);
+        *room.turn_started_at_ms.lock().await = Some(started_at_ms);
+        *room.turn_settings.write().await = Some(claudette::room::TurnSettingsSnapshot {
+            model: agent_settings.model.clone(),
+            plan_mode: agent_settings.plan_mode,
+        });
+        room.publish(serde_json::json!({
+            "event": "turn-started",
+            "payload": {
+                "workspace_id": &workspace_id,
+                "chat_session_id": &chat_session_id,
+                "participant_id": host_participant.as_str(),
+                "display_name": host_display_name,
+                "started_at_ms": started_at_ms,
+                "model": agent_settings.model.clone(),
+                "plan_mode": agent_settings.plan_mode,
+            },
+        }));
+    }
     drop(ws_env); // consumed by rename_ws_env; notification path rebuilds from DB
     tokio::spawn(async move {
         if claimed_rename {
@@ -2753,6 +2856,33 @@ pub async fn send_chat_message(
             {
                 if matches!(tool_name.as_str(), "AskUserQuestion" | "ExitPlanMode") {
                     let app_state = app.state::<AppState>();
+
+                    // Collab consensus snapshot: prompts in a room with
+                    // `consensus_required = true` gate on all unmuted
+                    // participants. Muted participants are excluded — they
+                    // can't act on a vote, so they can't hold one up. Late
+                    // joiners are observers only.
+                    let (required_voters, vote_voters_payload) =
+                        if matches!(tool_name.as_str(), "AskUserQuestion" | "ExitPlanMode")
+                            && let Some(room) =
+                                app_state.rooms.get(&chat_session_id_for_stream).await
+                            && *room.consensus_required.read().await
+                        {
+                            let participants = room.participants.read().await;
+                            let voters: std::collections::HashSet<claudette::room::ParticipantId> =
+                                participants
+                                    .values()
+                                    .filter(|p| !p.muted)
+                                    .map(|p| p.id.clone())
+                                    .collect();
+                            let payload: Vec<&claudette::room::ParticipantInfo> =
+                                participants.values().filter(|p| !p.muted).collect();
+                            let json_voters = serde_json::to_value(&payload).unwrap_or_default();
+                            (voters, Some(json_voters))
+                        } else {
+                            (std::collections::HashSet::new(), None)
+                        };
+
                     let mut agents = app_state.agents.write().await;
                     if let Some(session) = agents.get_mut(&chat_session_id_for_stream) {
                         session.pending_permissions.insert(
@@ -2761,18 +2891,69 @@ pub async fn send_chat_message(
                                 request_id: request_id.clone(),
                                 tool_name: tool_name.clone(),
                                 original_input: input.clone(),
+                                required_voters: required_voters.clone(),
+                                votes: std::collections::HashMap::new(),
+                                question_votes: std::collections::HashMap::new(),
                             },
                         );
                     }
                     drop(agents);
+
+                    // Snapshot any open plan approval in the room so reconnect
+                    // and lag recovery can rebuild the card even when the
+                    // prompt is not consensus-gated.
+                    if tool_name == "ExitPlanMode"
+                        && let Some(room) = app_state.rooms.get(&chat_session_id_for_stream).await
+                    {
+                        *room.pending_vote.write().await = Some(claudette::room::PendingVote::new(
+                            tool_use_id.clone(),
+                            required_voters.clone(),
+                            input.clone(),
+                        ));
+                        // Broadcast the consensus vote opening so all
+                        // subscribers render the progress rows. Non-consensus
+                        // prompts still use the pending_vote snapshot above,
+                        // but skip the consensus-progress event.
+                        if let Some(voters) = vote_voters_payload.clone() {
+                            room.publish(serde_json::json!({
+                                "event": "plan-vote-opened",
+                                "payload": {
+                                    "chat_session_id": &chat_session_id_for_stream,
+                                    "tool_use_id": &tool_use_id,
+                                    "required_voters": voters,
+                                },
+                            }));
+                        }
+                    }
+                    let required_voters_payload = vote_voters_payload.clone();
                     let payload = serde_json::json!({
                         "workspace_id": &ws_id,
                         "chat_session_id": &chat_session_id_for_stream,
                         "tool_use_id": tool_use_id,
                         "tool_name": tool_name,
                         "input": input,
+                        "required_voters": required_voters_payload,
                     });
-                    let _ = app.emit("agent-permission-prompt", &payload);
+                    // In a collaborative room, broadcast the permission
+                    // prompt to every participant so the question / plan
+                    // card renders on both ends. Without this only the
+                    // prompter saw it — remotes saw the tool call appear
+                    // in the activity feed but the actual interactive
+                    // surface never reached them.
+                    //
+                    // Both ExitPlanMode and AskUserQuestion get the
+                    // broadcast treatment. In consensus rooms, both hold the
+                    // CLI control response until the required participants
+                    // vote/answer. Solo / 1:1 sessions keep using the
+                    // original host-local emit.
+                    if let Some(room) = app_state.rooms.get(&chat_session_id_for_stream).await {
+                        room.publish(serde_json::json!({
+                            "event": "agent-permission-prompt",
+                            "payload": payload,
+                        }));
+                    } else {
+                        let _ = app.emit("agent-permission-prompt", &payload);
+                    }
 
                     // Fire the system notification after the frontend has the
                     // data it needs to render the card. We emit
@@ -2946,6 +3127,8 @@ pub async fn send_chat_message(
                     output_tokens: None,
                     cache_read_tokens: None,
                     cache_creation_tokens: None,
+                    author_participant_id: None,
+                    author_display_name: None,
                 };
                 let _ = db.insert_chat_message(&msg);
             }
@@ -3378,7 +3561,32 @@ pub async fn send_chat_message(
                 chat_session_id: chat_session_id_for_stream.clone(),
                 event,
             };
-            let _ = app.emit("agent-stream", &payload);
+            // Collab path (room exists) → publish to the room as a JSON-RPC
+            // envelope. The host's own UI subscribes via `start_share` and
+            // translates each envelope back to `app.emit(event, payload)`;
+            // remote forwarders write the envelope to the WebSocket wire
+            // as-is. Single source of truth across host + remote subscribers.
+            match &room_for_stream {
+                Some(room) => room.publish(serde_json::json!({
+                    "event": "agent-stream",
+                    "payload": &payload,
+                })),
+                None => {
+                    let _ = app.emit("agent-stream", &payload);
+                }
+            }
+        }
+        // Stream is done — release the turn lock and tell other participants
+        // their composers can re-enable. Solo sessions (`None`) skip this.
+        if let Some(room) = &room_for_stream {
+            room.release_turn().await;
+            room.publish(serde_json::json!({
+                "event": "turn-ended",
+                "payload": {
+                    "workspace_id": &ws_id,
+                    "chat_session_id": &chat_session_id_for_stream,
+                },
+            }));
         }
     });
 
@@ -3413,6 +3621,8 @@ mod tests {
             output_tokens: None,
             cache_read_tokens: None,
             cache_creation_tokens: None,
+            author_participant_id: None,
+            author_display_name: None,
         }
     }
 

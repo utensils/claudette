@@ -20,6 +20,7 @@ import {
   archiveChatSession,
   readWorkspaceFileForViewer,
   reorderChatSessions,
+  sendRemoteCommand,
 } from "../../services/tauri";
 import { useTabDragReorder } from "../../hooks/useTabDragReorder";
 import { TabDragGhost } from "../shared/TabDragGhost";
@@ -189,9 +190,22 @@ export function SessionTabs({ workspaceId }: Props) {
   const [creating, setCreating] = useState(false);
 
   // Load sessions for this workspace on mount / workspace change.
+  // For remote workspaces, route through the share's WebSocket — the
+  // local DB on the remote machine doesn't have the host's chat sessions.
+  // Without this, `activeSessionId` would never populate for remote
+  // workspaces, ChatPanel's join_session effect would never fire, and
+  // the collab session would be inert (no participants, no broadcast).
   useEffect(() => {
     const version = ++loadVersionRef.current;
-    listChatSessions(workspaceId, false)
+    const ws = useAppStore.getState().workspaces.find((w) => w.id === workspaceId);
+    const remoteConnId = ws?.remote_connection_id ?? null;
+    const promise = remoteConnId
+      ? (sendRemoteCommand(remoteConnId, "list_chat_sessions", {
+          workspace_id: workspaceId,
+          include_archived: false,
+        }) as Promise<ChatSession[]>)
+      : listChatSessions(workspaceId, false);
+    promise
       .then((sessions) => {
         if (version === loadVersionRef.current) {
           setSessionsForWorkspace(workspaceId, sessions);

@@ -17,6 +17,8 @@ function msg(overrides: Partial<ChatMessage>): ChatMessage {
     output_tokens: overrides.output_tokens ?? null,
     cache_read_tokens: overrides.cache_read_tokens ?? null,
     cache_creation_tokens: overrides.cache_creation_tokens ?? null,
+    author_participant_id: overrides.author_participant_id ?? null,
+    author_display_name: overrides.author_display_name ?? null,
   };
 }
 
