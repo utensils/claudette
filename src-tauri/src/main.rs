@@ -1151,16 +1151,6 @@ fn main() {
         .run(shutdown_runtime_handler);
 }
 
-/// `RunEvent::Exit` is the last hook before the Tauri runtime tears down,
-/// so anything Claudette spawned that we haven't already reaped will
-/// re-parent to PID 1 if we don't kill it here.
-///
-/// We treat PTY shells and persistent Claude CLI agents the same way: each
-/// is a "root" whose entire descendant tree must die. `cargo-watch` and
-/// similar tools deliberately put their grandchildren into a fresh
-/// session/PG, so signaling the root's process group leaves them behind —
-/// the subtree walk in `subprocess_cleanup` is the reliable path.
-#[cfg(unix)]
 /// One-shot migration from the legacy global trust toggles
 /// (`plugin:env-direnv:setting:auto_allow`,
 /// `plugin:env-mise:setting:auto_trust`) to the new per-repo
@@ -1225,6 +1215,16 @@ fn migrate_legacy_env_provider_trust(db: &claudette::db::Database) {
     }
 }
 
+/// `RunEvent::Exit` is the last hook before the Tauri runtime tears down,
+/// so anything Claudette spawned that we haven't already reaped will
+/// re-parent to PID 1 if we don't kill it here.
+///
+/// We treat PTY shells and persistent Claude CLI agents the same way: each
+/// is a "root" whose entire descendant tree must die. `cargo-watch` and
+/// similar tools deliberately put their grandchildren into a fresh
+/// session/PG, so signaling the root's process group leaves them behind —
+/// the subtree walk in `subprocess_cleanup` is the reliable path.
+#[cfg(unix)]
 fn cleanup_subprocesses_on_exit(app_state: &state::AppState) {
     let mut roots: Vec<i32> = Vec::new();
 
@@ -1424,6 +1424,23 @@ mod tests {
                 .unwrap(),
             None,
         );
+    }
+
+    /// The migration helper must be cross-platform. A regression
+    /// caught by Codex review during 32a17b58: inserting the function
+    /// near a `#[cfg(unix)]` attribute can accidentally swallow that
+    /// cfg, leaving the migration Unix-only and the gated function
+    /// unconditional — exactly the inverse of what we want, and
+    /// invisible until Windows CI runs. Asserting `fn(&Database)`
+    /// resolves on every target keeps the migration callable in
+    /// release builds for all supported platforms.
+    #[test]
+    fn migrate_helper_resolves_unconditionally() {
+        // If the helper ever gains a `#[cfg(unix)]` (or any other
+        // platform gate) by accident, this line fails to compile on
+        // the gated-out platform's CI. Taking a function pointer is
+        // sufficient — we don't need to call it.
+        let _: fn(&Database) = migrate_legacy_env_provider_trust;
     }
 
     /// Migration is idempotent: a second run after a successful first
