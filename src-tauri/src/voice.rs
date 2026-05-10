@@ -31,7 +31,21 @@ const DISTIL_ID: &str = "voice-distil-whisper-candle";
 const DISTIL_CACHE_DIR: &str = "distil-whisper-large-v3";
 const DISTIL_READY_MESSAGE: &str = "Ready for offline transcription";
 const TARGET_SAMPLE_RATE: u32 = whisper::SAMPLE_RATE as u32;
+// Hard ceiling on a single Distil-Whisper transcription pass. On macOS
+// Metal the 756M-param `distil-large-v3` model handles a 30 s clip in a
+// few seconds; on CPU (Linux + Windows, including ARM64) the same
+// workload is an order of magnitude slower because Candle loads weights
+// in F32 with no GPU acceleration. The previous 90 s blanket timeout
+// was tuned for Metal and routinely fired on CPU even for a single
+// segment of speech, surfacing as "Voice transcription timed out after
+// 90 seconds" with the recording silently discarded. Split the default
+// so each platform's actual hardware floor governs the cap, and the
+// CPU-side ceiling (5 min) gives breathing room for ARM64 Windows
+// users transcribing more than a sentence.
+#[cfg(target_os = "macos")]
 const DISTIL_TRANSCRIPTION_TIMEOUT: Duration = Duration::from_secs(90);
+#[cfg(not(target_os = "macos"))]
+const DISTIL_TRANSCRIPTION_TIMEOUT: Duration = Duration::from_secs(300);
 const MIN_SIGNAL_PEAK: f32 = 0.001;
 const DISTIL_MODEL_FILES: [(&str, Option<u64>); 5] = [
     ("config.json", None),
@@ -693,12 +707,7 @@ impl VoiceProviderRegistry {
         }
 
         let transcript = result
-            .map_err(|_| {
-                format!(
-                    "Voice transcription timed out after {} seconds. Try a shorter recording or check the selected voice provider.",
-                    timeout.as_secs()
-                )
-            })?
+            .map_err(|_| timeout_error_message(timeout))?
             .map_err(|e| format!("Voice transcription task failed: {e}"))??;
         let transcript = transcript.trim().to_string();
         if transcript.is_empty() {
@@ -1243,6 +1252,27 @@ fn probe_candle_whisper_op(
     run: impl FnOnce() -> candle_core::Result<()>,
 ) -> Result<(), String> {
     run().map_err(|e| format!("{op}: {e}"))
+}
+
+/// Format the user-visible message when Distil-Whisper hits its
+/// hard timeout. On CPU platforms (Linux + Windows) the ceiling is
+/// already 5× the macOS Metal default, so a timeout almost certainly
+/// means the workload is too big for CPU inference rather than a stuck
+/// worker — pivot the user toward the always-faster platform provider
+/// (SAPI on Windows, Apple Speech on macOS) instead of asking them to
+/// "try again."
+fn timeout_error_message(timeout: Duration) -> String {
+    #[cfg(target_os = "macos")]
+    let suggestion = "Try a shorter recording or switch to System dictation in Plugins settings.";
+    #[cfg(target_os = "windows")]
+    let suggestion = "On CPU this model is slow on long clips — try a shorter recording or switch to System dictation (Windows SAPI) in Plugins settings.";
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    let suggestion = "Try a shorter recording or check the selected voice provider.";
+    format!(
+        "Voice transcription timed out after {} seconds. {}",
+        timeout.as_secs(),
+        suggestion
+    )
 }
 
 fn validate_captured_audio(audio: &CapturedAudio) -> Result<(), String> {
@@ -3001,6 +3031,55 @@ mod tests {
             .expect_err("slow transcription should time out");
 
         assert!(err.contains("timed out"));
+        // Platform-aware suggestion: don't make CPU users blindly retry —
+        // route them to the platform provider that's actually fast on
+        // their hardware. The macOS variant already pointed at System
+        // dictation; bring Windows users along too.
+        #[cfg(target_os = "windows")]
+        assert!(
+            err.contains("Windows SAPI") || err.contains("System dictation"),
+            "Windows timeout must point at the SAPI provider: {err}",
+        );
+        #[cfg(target_os = "macos")]
+        assert!(
+            err.contains("System dictation"),
+            "macOS timeout must point at the platform provider: {err}",
+        );
+    }
+
+    #[test]
+    fn timeout_error_message_renders_platform_specific_hint() {
+        // Pin the contract directly — a refactor that drops the
+        // platform-specific suggestion would silently regress.
+        let msg = timeout_error_message(std::time::Duration::from_secs(300));
+        assert!(msg.starts_with("Voice transcription timed out after 300 seconds"));
+        #[cfg(target_os = "windows")]
+        {
+            assert!(msg.contains("CPU"));
+            assert!(msg.contains("System dictation"));
+        }
+        #[cfg(target_os = "macos")]
+        assert!(msg.contains("System dictation"));
+    }
+
+    #[test]
+    fn distil_transcription_timeout_default_matches_platform_hardware() {
+        // macOS hits Metal so the small ceiling is fine; CPU platforms
+        // need much more headroom for distil-whisper-large-v3 to chew
+        // through a multi-segment clip. Pin both so a future "let's just
+        // bump the macOS default to be safe" doesn't silently slow down
+        // failure detection on the platform that doesn't need it.
+        #[cfg(target_os = "macos")]
+        assert_eq!(
+            DISTIL_TRANSCRIPTION_TIMEOUT,
+            std::time::Duration::from_secs(90)
+        );
+        #[cfg(not(target_os = "macos"))]
+        assert!(
+            DISTIL_TRANSCRIPTION_TIMEOUT >= std::time::Duration::from_secs(180),
+            "CPU transcription timeout must be >= 180 s; was {:?}",
+            DISTIL_TRANSCRIPTION_TIMEOUT,
+        );
     }
 
     #[tokio::test]
