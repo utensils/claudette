@@ -491,7 +491,15 @@ async fn hydrate_gateway_models_for_runtime(
     let selected_is_known = model
         .map(|model| backend_models_contain(backend, model))
         .unwrap_or(true);
-    if has_models && selected_is_known {
+    // LM Studio's loaded_context_length changes every time the user
+    // reloads the model with a different context slider, so we can't
+    // trust a cached discovery response here — the pre-flight gate uses
+    // that value as ground truth. Always re-discover on the chat-send
+    // hot path; it's a single GET to localhost (typically <50ms) and a
+    // stale cache means the user sees a 4k-context error after they
+    // already reloaded the model with 256k.
+    let force_refresh = matches!(backend.kind, AgentBackendKind::LmStudio);
+    if !force_refresh && has_models && selected_is_known {
         return Ok(());
     }
 
@@ -1090,6 +1098,20 @@ fn runtime_hash(config: &AgentBackendConfig, secret: Option<&str>, model: Option
     config.model_discovery.hash(&mut hasher);
     model.hash(&mut hasher);
     secret.unwrap_or("").hash(&mut hasher);
+    // Fingerprint the per-model context windows so a fresh discovery that
+    // bumps `loaded_context_length` (LM Studio reload with a new slider)
+    // forces the gateway to respawn with the new snapshot. Without this
+    // the gateway's pre-flight check would keep using the stale context
+    // size baked into the running task. id+context is enough — label and
+    // discovered-flag don't affect runtime behaviour.
+    for entry in config
+        .discovered_models
+        .iter()
+        .chain(config.manual_models.iter())
+    {
+        entry.id.hash(&mut hasher);
+        entry.context_window_tokens.hash(&mut hasher);
+    }
     format!("{:016x}", hasher.finish())
 }
 
@@ -2217,6 +2239,28 @@ mod tests {
         let c = runtime_hash(&backend, Some("two"), Some("glm"));
         assert_ne!(a, b);
         assert_ne!(b, c);
+    }
+
+    #[test]
+    fn runtime_hash_changes_when_discovered_context_window_changes() {
+        // Regression: LM Studio's loaded_context_length changes when the
+        // user reloads a model with a different context slider. The
+        // gateway must respawn on that change so the pre-flight check
+        // doesn't keep using the stale context size.
+        let mut backend = AgentBackendConfig::builtin_lm_studio();
+        backend.discovered_models = vec![AgentBackendModel {
+            id: "qwen3.6-35b-a3b-ud-mlx".to_string(),
+            label: "qwen3.6-35b-a3b-ud-mlx".to_string(),
+            context_window_tokens: 4096,
+            discovered: true,
+        }];
+        let small = runtime_hash(&backend, None, Some("qwen3.6-35b-a3b-ud-mlx"));
+        backend.discovered_models[0].context_window_tokens = 262_144;
+        let large = runtime_hash(&backend, None, Some("qwen3.6-35b-a3b-ud-mlx"));
+        assert_ne!(
+            small, large,
+            "context-window change must rotate the hash so ensure() respawns the gateway"
+        );
     }
 
     #[test]
