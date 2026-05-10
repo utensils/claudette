@@ -19,7 +19,7 @@ If you sign in or out of Claude Code outside Claudette, Claudette picks it up au
 
 ## Signing in from inside Claudette
 
-The **Settings > Usage** panel is the only surface that triggers `claude auth login` from inside Claudette — it does so when no usable credentials exist, when an existing token has expired and refresh fails, or on a manual click of the sign-in button. There is no automatic workspace-creation login flow; if you create a workspace before signing in, the agent's first turn fails with a credentials error and you'll need to authenticate via the Usage panel (or `claude auth login` in any terminal).
+The **Settings > Authentication** panel triggers `claude auth login` from inside Claudette. Chat auth failures route you there, and Usage-panel credential failures reuse the same sign-in flow, so sign-in is available even when Usage Insights is disabled. There is no automatic workspace-creation login flow; if you create a workspace before signing in, the agent's first turn shows a credentials callout and you'll need to authenticate via **Settings > Authentication** (or `claude auth login` in any terminal).
 
 When the panel triggers it, the CLI:
 
@@ -37,7 +37,7 @@ Cancel via the in-panel cancel button (kills the subprocess) or by closing the b
 
 ## Pro and Max plans (OAuth)
 
-If you've authenticated `claude` with a Pro or Max subscription, Claudette's spawned agents use that authentication. Token usage shows up under your Anthropic account at [claude.ai/settings/usage](https://claude.ai/settings/usage), and the **Settings > Usage** panel inside Claudette can deep-link there.
+If you've authenticated `claude` with a Pro or Max subscription, Claudette's spawned agents use that authentication. Token usage shows up under your Anthropic account at [claude.ai/settings/usage](https://claude.ai/settings/usage), and the **Settings > Usage** panel inside Claudette can deep-link there when Usage Insights is enabled.
 
 ### Parallel agents and your plan
 

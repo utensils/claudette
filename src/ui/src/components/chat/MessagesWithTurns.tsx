@@ -50,6 +50,8 @@ import {
 import { PdfThumbnail } from "./PdfThumbnail";
 import { MessageCopyButton } from "./MessageCopyButton";
 import { groupToolActivitiesForDisplay } from "./toolActivityGroups";
+import { ChatAuthFailureCallout } from "../auth/ChatAuthFailureCallout";
+import { isClaudeAuthError } from "../auth/claudeAuth";
 import {
   EMPTY_ACTIVITIES,
   EMPTY_ATTACHMENTS,
@@ -829,7 +831,10 @@ export const MessagesWithTurns = memo(function MessagesWithTurns({
                       })}
                     </div>
                   )}
-                  {shouldRenderAsMarkdown(msg.role) ? (
+                  {(msg.role === "Assistant" || msg.role === "System") &&
+                  isClaudeAuthError(msg.content) ? (
+                    <ChatAuthFailureCallout error={msg.content} />
+                  ) : shouldRenderAsMarkdown(msg.role) ? (
                     // Assistant + System: run through Markdown so plan-mode dumps,
                     // setup-script output, and other multi-line system notes
                     // preserve headings, lists, and code blocks instead of

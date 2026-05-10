@@ -12,7 +12,9 @@ Claudette surfaces two related but distinct views:
 
 The **Settings > Usage** panel shows your subscription type, rate-limit tier, and current consumption against your plan. Open it from the sidebar footer or via the `/usage` slash command.
 
-This panel is gated by the **Usage Insights** experimental toggle (off by default). When the toggle is off, Claudette never reads your Claude Code OAuth tokens — they stay strictly in the keychain / `.credentials.json` for the `claude` CLI's own use. Enable it in **Settings > Experimental** if you want the panel. Requires a Pro or Max plan with standard login (env-var auth tokens like `CLAUDE_CODE_OAUTH_TOKEN` lack the OAuth scopes the API needs).
+This panel is gated by the **Usage Insights** experimental toggle (off by default). When the toggle is off, Claudette never reads your Claude Code OAuth tokens for usage data — they stay strictly in the keychain / `.credentials.json` for the `claude` CLI's own use. Enable it in **Settings > Experimental** if you want the panel. Requires a Pro or Max plan with standard login (env-var auth tokens like `CLAUDE_CODE_OAUTH_TOKEN` lack the OAuth scopes the API needs).
+
+Claude Code sign-in itself is separate and always available in **Settings > Authentication**. Usage credential failures reuse that same sign-in flow.
 
 The data comes from the same usage API your Claude Code CLI hits. Claudette caches the result for 5 minutes to avoid hammering the endpoint, and backs off for 2 minutes if a fetch fails (e.g. a rate limit). To force a refresh, close and reopen the panel.
 

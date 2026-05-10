@@ -1090,7 +1090,7 @@ const helpFixture: SlashCommand[] = [
     description: "Open Claudette settings",
     source: "builtin",
     aliases: ["configure"],
-    argument_hint: "[general|models|usage]",
+    argument_hint: "[general|models|authentication|usage]",
     kind: "settings_route",
   },
   {
@@ -1158,7 +1158,7 @@ describe("formatHelpMessage", () => {
   it("renders the command invocation as inline code and appends description", () => {
     const out = formatHelpMessage(helpFixture);
     expect(out).toContain(
-      "- `/config [general|models|usage]`  (alias: /configure) — Open Claudette settings",
+      "- `/config [general|models|authentication|usage]`  (alias: /configure) — Open Claudette settings",
     );
     expect(out).toContain(
       "- `/init [extra guidance]` — Bootstrap repo guidance (CLAUDE.md) via the agent",

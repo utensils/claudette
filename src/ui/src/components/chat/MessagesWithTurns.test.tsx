@@ -2,11 +2,14 @@
 
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { useAppStore, type CompletedTurn, type ToolActivity } from "../../stores/useAppStore";
 import type { ChatMessage } from "../../types/chat";
 import { MessagesWithTurns } from "./MessagesWithTurns";
+
+(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean })
+  .IS_REACT_ACT_ENVIRONMENT = true;
 
 const WORKSPACE_ID = "workspace-1";
 const SESSION_ID = "session-1";
@@ -143,6 +146,39 @@ describe("MessagesWithTurns edit summaries", () => {
     expect(container.textContent).toContain("mcp__postgres__query");
     expect(container.textContent).not.toContain("1 file changed");
     expect(container.textContent).not.toContain("dirty-from-other-session.ts");
+  });
+
+  it("renders auth failures as a sign-in callout", async () => {
+    const openSettings = vi.fn();
+    useAppStore.setState({ openSettings });
+    const messages = [
+      message("user-1", "User", "ping"),
+      message(
+        "assistant-1",
+        "Assistant",
+        "Failed to authenticate. API Error: 401 Invalid authentication credentials",
+      ),
+    ];
+
+    const container = await render(
+      <MessagesWithTurns
+        messages={messages}
+        workspaceId={WORKSPACE_ID}
+        sessionId={SESSION_ID}
+        isRunning={false}
+        searchQuery=""
+        toolDisplayMode="grouped"
+      />,
+    );
+
+    expect(container.textContent).toContain("auth_chat_failure_title");
+    const button = Array.from(container.querySelectorAll("button")).find(
+      (item) => item.textContent?.includes("auth_sign_in"),
+    );
+    await act(async () => {
+      button?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    expect(openSettings).toHaveBeenCalledWith("authentication");
   });
 
   it("still shows files parsed from this turn's own edit activity", async () => {

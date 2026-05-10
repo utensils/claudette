@@ -29,6 +29,14 @@ Default values applied to all new agent sessions. Per-workspace overrides are av
 
 See [Agent Configuration](/claudette/features/agent-configuration/) for detailed descriptions of each option.
 
+## Authentication
+
+| Setting | Description | Default |
+|---------|-------------|---------|
+| Claude Code sign-in | Runs the official `claude auth login` flow and streams progress back into Claudette. Used by chat and Usage-panel auth failures. | — |
+
+Claudette does not maintain a separate sign-out control. Use `claude auth logout` in a terminal to sign out of Claude Code.
+
 ## Appearance
 
 | Setting | Description | Default |

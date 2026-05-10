@@ -141,6 +141,14 @@
   margin: 0 0 32px;
 }
 
+.sectionDescription {
+  color: var(--text-dim);
+  font-size: 13px;
+  line-height: 1.55;
+  margin: -20px 0 24px;
+  max-width: 640px;
+}
+
 .sectionHeader {
   display: flex;
   align-items: center;
@@ -1164,6 +1172,78 @@
   color: var(--text-primary);
   margin-bottom: 12px;
   padding-top: 8px;
+}
+
+.authPanel {
+  border: 1px solid var(--divider);
+  border-radius: var(--radius-lg);
+  background: var(--sidebar-bg);
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-width: 640px;
+}
+
+.authPanelHeader {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 12px;
+  align-items: flex-start;
+  color: var(--text-primary);
+}
+
+.authPanelHeader svg {
+  color: var(--accent-primary);
+  margin-top: 2px;
+}
+
+.authPanelTitle {
+  color: var(--text-primary);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.authPanelDescription {
+  color: var(--text-dim);
+  font-size: 13px;
+  line-height: 1.5;
+  margin-top: 4px;
+}
+
+.authPanelStatus {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  color: var(--text-dim);
+  font-size: 13px;
+}
+
+.authPanelError {
+  border: 1px solid var(--error-border);
+  border-radius: var(--radius-md);
+  background: var(--error-bg);
+  color: var(--status-stopped);
+  font-size: 13px;
+  line-height: 1.5;
+  padding: 10px 12px;
+  word-break: break-word;
+}
+
+.authPanelSuccess {
+  color: var(--status-running);
+  font-size: 13px;
+}
+
+.authNotes {
+  color: var(--text-dim);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 13px;
+  line-height: 1.5;
+  margin-top: 16px;
+  max-width: 640px;
 }
 
 .usageManageLink {
