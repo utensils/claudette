@@ -105,7 +105,10 @@ export interface AgentBackendListResponse {
    * backend entry whose `kind` isn't recognized by this build. The
    * entries are preserved in SQLite (so they round-trip through
    * downgrades), but the user should know they aren't active.
-   * Empty array when everything parsed cleanly.
+   * Omitted from the wire payload (i.e. `undefined` here) when
+   * everything parsed cleanly — the Rust side uses
+   * `skip_serializing_if = "Vec::is_empty"`, so consumers should
+   * treat `undefined` and `[]` identically.
    */
   warnings?: string[];
 }

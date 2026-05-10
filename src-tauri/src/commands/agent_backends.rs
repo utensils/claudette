@@ -179,11 +179,33 @@ pub async fn list_agent_backends(
     state: State<'_, AppState>,
 ) -> Result<BackendListResponse, String> {
     let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
-    let default_backend_id = db
+    let stored_default = db
         .get_app_setting("default_agent_backend")
         .map_err(|e| e.to_string())?
         .unwrap_or_else(|| "anthropic".to_string());
-    let loaded = load_backend_configs_tolerant(&db)?;
+    let mut loaded = load_backend_configs_tolerant(&db)?;
+    // If the stored default points to a backend that didn't make it
+    // through the tolerant load (e.g. a user-defined backend whose
+    // `kind` this build doesn't recognize), the UI would otherwise
+    // pre-select a non-existent entry. Fall back to anthropic, which
+    // is always present, and surface a warning so the user knows.
+    // The persisted setting is left alone — a build that does
+    // recognize the kind will pick it up unchanged.
+    let default_backend_id = if loaded.backends.iter().any(|b| b.id == stored_default) {
+        stored_default
+    } else {
+        loaded.warnings.push(format!(
+            "Default backend `{stored_default}` is not available in this build; \
+                 falling back to `anthropic` for this session. \
+                 Stored setting unchanged."
+        ));
+        tracing::warn!(
+            target: "agent_backends",
+            stored_default = %stored_default,
+            "default backend setting points to a backend not in the loaded list"
+        );
+        "anthropic".to_string()
+    };
     Ok(BackendListResponse {
         backends: loaded.backends,
         default_backend_id,
@@ -2840,6 +2862,79 @@ mod tests {
         // All three unknowns are observable as passthrough; nothing dropped.
         let passthrough = read_unknown_passthrough(&db).expect("passthrough read should succeed");
         assert_eq!(passthrough.len(), 3);
+    }
+
+    #[test]
+    fn list_agent_backends_falls_back_when_default_points_to_skipped_unknown() {
+        // Regression guard for a Copilot-flagged edge case: if the
+        // user's `default_agent_backend` pointed to a backend whose
+        // `kind` this build doesn't recognize, the entry is skipped
+        // by tolerant load, and the UI would otherwise pre-select a
+        // backend that isn't in the returned list. The response must
+        // (a) override default_backend_id to a backend that exists,
+        // (b) surface a warning, and (c) leave the persisted setting
+        // unchanged so a build that does recognize the kind picks it
+        // up cleanly.
+        let db = Database::open_in_memory().expect("test db should open");
+        db.set_app_setting("default_agent_backend", "future-thing")
+            .expect("seed default should save");
+        let raw = serde_json::json!([
+            {
+                "id": "future-thing",
+                "label": "Future Thing",
+                "kind": "totally_new_backend",
+                "enabled": true
+            }
+        ]);
+        db.set_app_setting(SETTINGS_KEY, &raw.to_string())
+            .expect("seed should save");
+
+        // Mirror what list_agent_backends does post-load.
+        let stored_default = db
+            .get_app_setting("default_agent_backend")
+            .expect("read default")
+            .expect("default present");
+        let mut loaded = load_backend_configs_tolerant(&db).expect("tolerant load should succeed");
+        let default_backend_id = if loaded.backends.iter().any(|b| b.id == stored_default) {
+            stored_default.clone()
+        } else {
+            loaded.warnings.push(format!(
+                "Default backend `{stored_default}` is not available in this build; \
+                 falling back to `anthropic` for this session. \
+                 Stored setting unchanged."
+            ));
+            "anthropic".to_string()
+        };
+
+        // Fallback wired up correctly.
+        assert_eq!(default_backend_id, "anthropic");
+        assert!(loaded.backends.iter().any(|b| b.id == "anthropic"));
+
+        // Two warnings: one from the per-entry skip, one from the
+        // default-pointer fallback.
+        assert!(
+            loaded
+                .warnings
+                .iter()
+                .any(|w| w.contains("future-thing") && w.contains("falling back")),
+            "warnings should include the default-fallback diagnostic"
+        );
+        assert!(
+            loaded
+                .warnings
+                .iter()
+                .any(|w| w.contains("totally_new_backend")),
+            "warnings should still include the per-entry skip diagnostic"
+        );
+
+        // Persisted default-setting untouched — a build that does
+        // recognize `totally_new_backend` will see the user's choice
+        // come back automatically.
+        let still_stored = db
+            .get_app_setting("default_agent_backend")
+            .expect("read default after")
+            .expect("default still present");
+        assert_eq!(still_stored, "future-thing");
     }
 
     #[test]

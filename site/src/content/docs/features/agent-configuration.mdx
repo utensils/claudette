@@ -101,7 +101,7 @@ Several chat-header toggles on this page only apply to certain providers. The ca
 
 ### Forward/backward compat: warning banner in Models
 
-If you switch between build channels (e.g. nightly → stable, or run two builds against the same data directory), a newer build can write a backend entry whose `kind` an older build doesn't recognize yet. When that happens, **Settings → Models** shows an orange-tinted warning banner naming the offending entry — your config isn't lost. The unknown entry is preserved as opaque JSON in your settings and reactivates automatically on a build that knows it. Saves from the older build splice the unknown entry back into the stored blob, so a downgrade-and-re-upgrade cycle is non-destructive.
+If you switch between build channels (e.g. nightly → stable, or run two builds against the same data directory), a newer build can write a backend entry whose `kind` an older build doesn't recognize yet. When that happens, **Settings → Models** shows an accent-tinted warning banner (the exact color depends on the active theme) naming the offending entry — your config isn't lost. The unknown entry is preserved as opaque JSON in your settings and reactivates automatically on a build that knows it. Saves from the older build splice the unknown entry back into the stored blob, so a downgrade-and-re-upgrade cycle is non-destructive.
 
 ## File References (@-mentions)
 
