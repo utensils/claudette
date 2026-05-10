@@ -257,6 +257,17 @@ pub async fn load_scm_detail(
         should_persist,
     } = outcome;
 
+    if let Some(ref e) = error {
+        tracing::warn!(
+            target: "claudette::scm",
+            workspace_id = %workspace_id,
+            branch = %cache_key.1,
+            provider = %provider_name,
+            error = %e,
+            "SCM fetch error"
+        );
+    }
+
     if should_persist {
         persist_scm_cache(
             &state.scm_cache,
@@ -770,6 +781,17 @@ async fn poll_workspace_scm(app_state: &AppState, workspace_id: &str) -> Option<
         error,
         should_persist,
     } = outcome;
+
+    if let Some(ref e) = error {
+        tracing::warn!(
+            target: "claudette::scm",
+            workspace_id = %workspace_id,
+            branch = %cache_key.1,
+            provider = %provider_name,
+            error = %e,
+            "SCM poll error"
+        );
+    }
 
     if should_persist {
         persist_scm_cache(
