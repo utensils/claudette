@@ -188,6 +188,38 @@ describe("useWorkspaceEnvironmentPreparation", () => {
     });
   });
 
+  /**
+   * Build a fresh listen-callback capture and a thin emitter helper.
+   * The harness mocks `@tauri-apps/api/event::listen` to a no-op, so
+   * we install our own capture per test to fire synthetic
+   * `workspace_env_progress` events into the hook.
+   */
+  async function withCapturedProgressListener(): Promise<{
+    fire: (payload: {
+      workspace_id: string;
+      plugin: string;
+      phase: "started" | "finished" | "complete";
+      elapsed_ms: number;
+      ok?: boolean;
+    }) => void;
+  }> {
+    const listeners: Array<(event: { payload: unknown }) => void> = [];
+    const eventMod = await import("@tauri-apps/api/event");
+    vi.mocked(eventMod.listen).mockImplementation((_name, cb) => {
+      listeners.push(cb as (event: { payload: unknown }) => void);
+      return Promise.resolve(() => undefined);
+    });
+    return {
+      fire: (payload) => {
+        act(() => {
+          for (const cb of listeners) {
+            cb({ payload });
+          }
+        });
+      },
+    };
+  }
+
   it("recovers from a dropped Tauri response when a 'complete' progress event arrives", async () => {
     // The Windows regression we're guarding against: WebView2
     // occasionally drops the response message for a short Tauri
@@ -205,15 +237,7 @@ describe("useWorkspaceEnvironmentPreparation", () => {
       workspaces: [makeWorkspace()],
     });
 
-    // Capture the listen callback so we can fire it manually below —
-    // the test harness mocks `@tauri-apps/api/event::listen` to a
-    // no-op, so we have to install our own handler this way.
-    const eventListeners: Array<(event: { payload: unknown }) => void> = [];
-    const eventMod = await import("@tauri-apps/api/event");
-    vi.mocked(eventMod.listen).mockImplementation((_name, cb) => {
-      eventListeners.push(cb as (event: { payload: unknown }) => void);
-      return Promise.resolve(() => undefined);
-    });
+    const { fire } = await withCapturedProgressListener();
 
     await renderHarness();
     await act(async () => {
@@ -227,22 +251,208 @@ describe("useWorkspaceEnvironmentPreparation", () => {
     // Fire the `complete` event the Rust-side sink would emit at the
     // end of every resolve, regardless of which Tauri command
     // initiated it.
-    act(() => {
-      for (const cb of eventListeners) {
-        cb({
-          payload: {
-            workspace_id: "ws-1",
-            plugin: "",
-            phase: "complete",
-            elapsed_ms: 0,
-          },
-        });
-      }
+    fire({
+      workspace_id: "ws-1",
+      plugin: "",
+      phase: "complete",
+      elapsed_ms: 0,
     });
 
     expect(useAppStore.getState().workspaceEnvironment["ws-1"]).toEqual({
       status: "ready",
     });
+  });
+
+  it("does not regress a ready workspace when a stray 'complete' event arrives", async () => {
+    // The Complete event is best-effort — if it arrives for a
+    // workspace whose status has already been set to "ready" by a
+    // prior `.then`, it MUST NOT silently revert. This pin matters
+    // because the Drop-emitted Complete and the Tauri command's own
+    // `.then` race naturally; on a healthy IPC channel the `.then`
+    // wins, and Complete then arrives as a no-op terminator.
+    serviceMocks.prepareWorkspaceEnvironment.mockResolvedValue(undefined);
+    useAppStore.setState({
+      selectedWorkspaceId: "ws-1",
+      workspaces: [makeWorkspace()],
+    });
+
+    const { fire } = await withCapturedProgressListener();
+
+    await renderHarness();
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    // `.then` ran first → status is ready before Complete arrives.
+    expect(useAppStore.getState().workspaceEnvironment["ws-1"]).toEqual({
+      status: "ready",
+    });
+
+    fire({
+      workspace_id: "ws-1",
+      plugin: "",
+      phase: "complete",
+      elapsed_ms: 0,
+    });
+
+    expect(useAppStore.getState().workspaceEnvironment["ws-1"]).toEqual({
+      status: "ready",
+    });
+  });
+
+  it("does not override an 'error' workspace when 'complete' arrives", async () => {
+    // The error case has the same race risk as the ready case: a
+    // backend resolve that fails (e.g. direnv blocked) sets status
+    // to "error" via the prep `.catch`; the sink's Drop fires
+    // Complete immediately after, and that terminator must NOT
+    // silently overwrite the error the user needs to see.
+    serviceMocks.prepareWorkspaceEnvironment.mockRejectedValue(
+      new Error("direnv blocked"),
+    );
+    useAppStore.setState({
+      selectedWorkspaceId: "ws-1",
+      workspaces: [makeWorkspace()],
+    });
+
+    const { fire } = await withCapturedProgressListener();
+
+    await renderHarness();
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(useAppStore.getState().workspaceEnvironment["ws-1"]).toMatchObject({
+      status: "error",
+    });
+
+    fire({
+      workspace_id: "ws-1",
+      plugin: "",
+      phase: "complete",
+      elapsed_ms: 0,
+    });
+
+    expect(useAppStore.getState().workspaceEnvironment["ws-1"]).toMatchObject({
+      status: "error",
+    });
+  });
+
+  it("handles a full Started → Finished → Complete sequence from a non-prep path (e.g. spawn_pty)", async () => {
+    // The original Windows bug: `spawn_pty` runs its own env resolve
+    // that emits Started/Finished progress events (flipping status
+    // to "preparing" via `setWorkspaceEnvironmentProgress`), but no
+    // dedicated Tauri-command `.then` exists on the JS side to
+    // finalize. The Complete event from Drop on the sink is now the
+    // authoritative finalizer for these paths; this test exercises
+    // the full sequence without the prep hook ever firing.
+    useAppStore.setState({
+      selectedWorkspaceId: null, // prep effect skipped — no selected workspace
+      workspaces: [makeWorkspace()],
+      workspaceEnvironment: { "ws-1": { status: "ready" } },
+    });
+
+    const { fire } = await withCapturedProgressListener();
+
+    await renderHarness();
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    // Started: status flips to "preparing", current_plugin set.
+    fire({
+      workspace_id: "ws-1",
+      plugin: "env-dotenv",
+      phase: "started",
+      elapsed_ms: 0,
+    });
+    expect(useAppStore.getState().workspaceEnvironment["ws-1"]).toMatchObject({
+      status: "preparing",
+      current_plugin: "env-dotenv",
+    });
+
+    // Finished: current_plugin cleared, status stays "preparing"
+    // (more plugins may be coming).
+    fire({
+      workspace_id: "ws-1",
+      plugin: "env-dotenv",
+      phase: "finished",
+      elapsed_ms: 12,
+      ok: true,
+    });
+    expect(useAppStore.getState().workspaceEnvironment["ws-1"]).toMatchObject({
+      status: "preparing",
+    });
+    expect(
+      useAppStore.getState().workspaceEnvironment["ws-1"]?.current_plugin,
+    ).toBeUndefined();
+
+    // Complete: the resolve loop is done. Transition out of
+    // progress-induced "preparing" back to "ready".
+    fire({
+      workspace_id: "ws-1",
+      plugin: "",
+      phase: "complete",
+      elapsed_ms: 0,
+    });
+    expect(useAppStore.getState().workspaceEnvironment["ws-1"]).toEqual({
+      status: "ready",
+    });
+  });
+
+  it("routes progress for a non-selected workspace and still finalizes via Complete", async () => {
+    // The sidebar shows "preparing" badges for every workspace
+    // resolving env, not just the selected one. This pin matters
+    // because background paths (repo warmup, a different
+    // workspace's PTY spawn) emit progress that the listener must
+    // route by workspace_id, and Complete must finalize the
+    // intended workspace — not silently target the active one.
+    useAppStore.setState({
+      selectedWorkspaceId: "ws-1",
+      workspaces: [
+        makeWorkspace({ id: "ws-1" }),
+        makeWorkspace({ id: "ws-2", name: "other" }),
+      ],
+      workspaceEnvironment: { "ws-1": { status: "ready" } },
+    });
+    serviceMocks.prepareWorkspaceEnvironment.mockResolvedValue(undefined);
+
+    const { fire } = await withCapturedProgressListener();
+
+    await renderHarness();
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    fire({
+      workspace_id: "ws-2",
+      plugin: "env-direnv",
+      phase: "started",
+      elapsed_ms: 0,
+    });
+
+    expect(useAppStore.getState().workspaceEnvironment["ws-2"]).toMatchObject({
+      status: "preparing",
+      current_plugin: "env-direnv",
+    });
+    expect(useAppStore.getState().workspaceEnvironment["ws-1"]?.status).toBe(
+      "ready",
+    );
+
+    fire({
+      workspace_id: "ws-2",
+      plugin: "",
+      phase: "complete",
+      elapsed_ms: 0,
+    });
+
+    expect(useAppStore.getState().workspaceEnvironment["ws-2"]).toEqual({
+      status: "ready",
+    });
+    // The selected workspace's status is untouched by the other ws's
+    // progress stream.
+    expect(useAppStore.getState().workspaceEnvironment["ws-1"]?.status).toBe(
+      "ready",
+    );
   });
 
   it("marks the workspace as errored when env preparation fails", async () => {
