@@ -713,12 +713,22 @@ async fn poll_workspace_scm(app_state: &AppState, workspace_id: &str) -> Option<
     {
         Ok(Some(name)) => name,
         Ok(None) => {
-            // Confirmed no provider for this remote — clear any stale cache row.
+            // Confirmed no provider for this remote — clear stale cache and
+            // return an empty detail so the polling loop emits a clearing
+            // scm-data-updated event. Without this, boot-hydrated detail in
+            // the frontend is never evicted when a provider is removed, and
+            // the PR banner sticks on screen indefinitely.
             if let Ok(db) = Database::open(&app_state.db_path) {
                 let _ = db.delete_scm_status_cache(workspace_id);
             }
             app_state.scm_cache.entries.write().await.remove(&cache_key);
-            return None;
+            return Some(ScmDetail {
+                workspace_id: workspace_id.to_string(),
+                pull_request: None,
+                ci_checks: vec![],
+                provider: None,
+                error: None,
+            });
         }
         Err(e) => {
             // Transient remote-lookup failure — preserve any prior cached detail
