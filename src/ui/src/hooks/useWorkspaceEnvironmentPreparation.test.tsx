@@ -136,15 +136,17 @@ describe("useWorkspaceEnvironmentPreparation", () => {
     expect(serviceMocks.prepareWorkspaceEnvironment).toHaveBeenCalledTimes(1);
   });
 
-  it("leaves status at 'preparing' when selection changes mid-flight; per-closure settled prevents stale resolution from updating state", async () => {
+  it("leaves status at 'preparing' when selection changes mid-flight; cancelled guard prevents stale resolution from toasting", async () => {
     // Previously this test pinned cleanup-sets-idle behavior. That
-    // behavior was the source of a Windows-specific UI lock: when
-    // WebView2 dropped the Tauri response message, the second
-    // mount's `cancelled` guard swallowed any late resolution, and
-    // status stayed at "idle" / "preparing" forever with no path
-    // back to "ready". The cleanup no longer mutates status; a
-    // per-closure `settled` flag (and a 30s deadline, exercised in a
-    // separate test) provide the recovery guarantee instead.
+    // behaviour was the source of a Windows-specific UI lock: when
+    // WebView2 dropped the Tauri response message for the prep
+    // command, the second mount's `cancelled` guard swallowed any
+    // late resolution, and status stayed at "idle" / "preparing"
+    // forever with no path back to "ready". The cleanup no longer
+    // mutates status, and the `cancelled` flag is retained only to
+    // suppress stale toasts from `.catch`. The actual recovery for
+    // a dropped Tauri response lives in the Complete progress event
+    // — see the "recovers from a dropped Tauri response" test below.
     let resolvePreparation!: () => void;
     serviceMocks.prepareWorkspaceEnvironment.mockReturnValue(
       new Promise<void>((resolve) => {
@@ -165,12 +167,11 @@ describe("useWorkspaceEnvironmentPreparation", () => {
       useAppStore.setState({ selectedWorkspaceId: null });
     });
 
-    // Cleanup ran but does NOT touch status — the in-flight prep is
-    // either going to resolve (and settle for the live closure, which
-    // is now marked settled, so its .then is a no-op) or will time
-    // out on its own deadline. Leaving status as "preparing" here
-    // means a user who returns to this workspace before the deadline
-    // sees the actual in-flight state rather than a synthetic "idle".
+    // Cleanup ran but does NOT touch status — the in-flight prep
+    // promise is still pending. The user-visible recovery for a
+    // mid-flight navigate-away lives in the Complete progress
+    // event (Rust-side Drop fires it regardless of where the
+    // resolve was initiated), not in this hook's cleanup.
     expect(useAppStore.getState().workspaceEnvironment["ws-1"]).toEqual({
       status: "preparing",
     });
@@ -180,9 +181,11 @@ describe("useWorkspaceEnvironmentPreparation", () => {
       await Promise.resolve();
     });
 
-    // The closure's `settled` was set to true by the cleanup, so
-    // this late resolution is correctly ignored — no transition to
-    // "ready" for a workspace the user has navigated away from.
+    // The `.then` checks `cancelled` (set true by cleanup) and
+    // returns early — status is NOT silently flipped to "ready"
+    // for a workspace whose effect has torn down. The Complete
+    // progress event remains the lifecycle-independent recovery
+    // path for any workspace genuinely stuck at "preparing".
     expect(useAppStore.getState().workspaceEnvironment["ws-1"]).toEqual({
       status: "preparing",
     });
@@ -251,6 +254,138 @@ describe("useWorkspaceEnvironmentPreparation", () => {
     // Fire the `complete` event the Rust-side sink would emit at the
     // end of every resolve, regardless of which Tauri command
     // initiated it.
+    fire({
+      workspace_id: "ws-1",
+      plugin: "",
+      phase: "complete",
+      elapsed_ms: 0,
+    });
+
+    expect(useAppStore.getState().workspaceEnvironment["ws-1"]).toEqual({
+      status: "ready",
+    });
+  });
+
+  it("transitions to 'error' on 'complete' when any plugin reported failure (dropped Err response recovery)", async () => {
+    // The Windows IPC-drop variant where the bug bites hardest: the
+    // backend prep returned Err (e.g. direnv .envrc blocked), but
+    // WebView2 dropped the response so `.catch` never fired. Without
+    // failure tracking, the Complete handler would silently mark
+    // "ready" — hiding the trust error from the user. With failure
+    // tracking, the Complete handler sees that a plugin emitted
+    // `finished { ok: false }` during this resolve and transitions
+    // to "error" with a synthetic message pointing at the env panel
+    // (where the per-plugin error text is surfaced).
+    serviceMocks.prepareWorkspaceEnvironment.mockReturnValue(
+      new Promise<void>(() => undefined),
+    );
+    useAppStore.setState({
+      selectedWorkspaceId: "ws-1",
+      workspaces: [makeWorkspace()],
+    });
+
+    const { fire } = await withCapturedProgressListener();
+
+    await renderHarness();
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    // Started → Finished with ok=false → Complete. Mirrors what the
+    // Rust sink emits when a plugin's detect/export errors and the
+    // dispatcher records the failure but the command's Tauri
+    // response is dropped en route to the webview.
+    fire({
+      workspace_id: "ws-1",
+      plugin: "env-direnv",
+      phase: "started",
+      elapsed_ms: 0,
+    });
+    fire({
+      workspace_id: "ws-1",
+      plugin: "env-direnv",
+      phase: "finished",
+      elapsed_ms: 8,
+      ok: false,
+    });
+    fire({
+      workspace_id: "ws-1",
+      plugin: "",
+      phase: "complete",
+      elapsed_ms: 0,
+    });
+
+    const env = useAppStore.getState().workspaceEnvironment["ws-1"];
+    expect(env?.status).toBe("error");
+    expect(env?.error).toMatch(/environment provider reported errors/i);
+  });
+
+  it("clears per-workspace failure tracking after Complete so a fresh resolve isn't poisoned", async () => {
+    // The failure flag is reset on every Complete so a subsequent
+    // resolve starts with a clean slate. Without the reset, a
+    // workspace that ever saw `ok: false` would stay "stuck error"
+    // forever even after the user fixed the underlying issue
+    // (e.g. ran `direnv allow`) and the next resolve succeeded.
+    serviceMocks.prepareWorkspaceEnvironment.mockReturnValue(
+      new Promise<void>(() => undefined),
+    );
+    useAppStore.setState({
+      selectedWorkspaceId: "ws-1",
+      workspaces: [makeWorkspace()],
+    });
+
+    const { fire } = await withCapturedProgressListener();
+
+    await renderHarness();
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    // Resolve #1: a plugin failed.
+    fire({
+      workspace_id: "ws-1",
+      plugin: "env-direnv",
+      phase: "started",
+      elapsed_ms: 0,
+    });
+    fire({
+      workspace_id: "ws-1",
+      plugin: "env-direnv",
+      phase: "finished",
+      elapsed_ms: 8,
+      ok: false,
+    });
+    fire({
+      workspace_id: "ws-1",
+      plugin: "",
+      phase: "complete",
+      elapsed_ms: 0,
+    });
+    expect(useAppStore.getState().workspaceEnvironment["ws-1"]?.status).toBe(
+      "error",
+    );
+
+    // Reset to "preparing" so the next Complete has a status to act on
+    // (mirroring what a fresh selectWorkspace → prep call would do).
+    useAppStore
+      .getState()
+      .setWorkspaceEnvironment("ws-1", "preparing");
+
+    // Resolve #2: same workspace, this time all plugins succeed.
+    // The failure tracking from resolve #1 MUST NOT leak in.
+    fire({
+      workspace_id: "ws-1",
+      plugin: "env-dotenv",
+      phase: "started",
+      elapsed_ms: 0,
+    });
+    fire({
+      workspace_id: "ws-1",
+      plugin: "env-dotenv",
+      phase: "finished",
+      elapsed_ms: 4,
+      ok: true,
+    });
     fire({
       workspace_id: "ws-1",
       plugin: "",

@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { prepareWorkspaceEnvironment } from "../services/tauri";
 import { useAppStore } from "../stores/useAppStore";
@@ -39,6 +39,16 @@ export function useWorkspaceEnvironmentPreparation() {
   );
   const addToast = useAppStore((s) => s.addToast);
 
+  // Per-workspace flag: did any plugin emit `finished { ok: false }`
+  // during the current resolve? Used by the Complete handler to
+  // decide between transitioning to "ready" (clean resolve) vs
+  // "error" (something failed). Without this, a backend prep that
+  // returned Err whose Tauri response was dropped by the WebView2
+  // IPC bridge would still get silently marked "ready" — hiding
+  // trust errors and provider failures from the user. Cleared on
+  // each Complete so a subsequent resolve starts fresh.
+  const failedDuringResolveRef = useRef<Map<string, boolean>>(new Map());
+
   // Global listener: subscribe once per app session and route every
   // workspace_env_progress event into the store, regardless of which
   // workspace is currently selected. This lets the sidebar show a
@@ -48,27 +58,56 @@ export function useWorkspaceEnvironmentPreparation() {
   useEffect(() => {
     let mounted = true;
     let unlisten: (() => void) | undefined;
+    const failed = failedDuringResolveRef.current;
     listen<WorkspaceEnvProgressPayload>("workspace_env_progress", (event) => {
       if (!mounted) return;
-      const { workspace_id, plugin, phase } = event.payload;
+      const { workspace_id, plugin, phase, ok } = event.payload;
       if (phase === "started") {
         setWorkspaceEnvironmentProgress(workspace_id, plugin);
       } else if (phase === "finished") {
         setWorkspaceEnvironmentProgress(workspace_id, null);
+        // Track per-plugin failures so the Complete handler below
+        // can distinguish "all plugins succeeded — safe to mark
+        // ready" from "something failed — mark error so a dropped
+        // Tauri Err response doesn't silently paper over a trust
+        // error or provider failure".
+        if (ok === false) {
+          failed.set(workspace_id, true);
+        }
       } else {
         // phase === "complete" — fires once at end of every backend
         // resolve. Clear the active-plugin display and, critically,
         // transition any workspace stuck at "preparing" purely from
-        // the progress-driven status bumps back to "ready". This
-        // recovers the spawn_pty / agent-spawn paths where no
-        // dedicated `.then` handler exists to finalize the status.
+        // the progress-driven status bumps back to "ready" (or
+        // "error" if any plugin reported failure). This recovers
+        // the spawn_pty / agent-spawn paths where no dedicated
+        // `.then` handler exists to finalize the status.
         setWorkspaceEnvironmentProgress(workspace_id, null);
+        const anyFailed = failed.get(workspace_id) ?? false;
+        failed.delete(workspace_id);
         const cur =
           useAppStore.getState().workspaceEnvironment[workspace_id]?.status;
         if (cur === "preparing") {
-          useAppStore
-            .getState()
-            .setWorkspaceEnvironment(workspace_id, "ready");
+          if (anyFailed) {
+            // The progress events don't carry the per-plugin error
+            // text (only `ok: boolean`), so we can't reproduce the
+            // detailed message the prep `.catch` would have shown.
+            // A generic error pointing the user at the env panel is
+            // strictly better than silently marking "ready" and
+            // leaving them to discover the failure on the next
+            // agent spawn.
+            useAppStore
+              .getState()
+              .setWorkspaceEnvironment(
+                workspace_id,
+                "error",
+                "Environment provider reported errors during resolve. See Repo Settings → Environment for per-plugin details.",
+              );
+          } else {
+            useAppStore
+              .getState()
+              .setWorkspaceEnvironment(workspace_id, "ready");
+          }
         }
       }
     }).then((stop) => {
