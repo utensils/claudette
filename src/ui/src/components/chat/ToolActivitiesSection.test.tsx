@@ -288,8 +288,10 @@ describe("ToolActivitiesSection", () => {
   });
 
   it("lets the user expand a still-running group via header click", async () => {
-    // After PR #743 flipped the default to collapsed-while-running,
+    // After PR 743 flipped the default to collapsed-while-running,
     // the click affordance now opens (instead of closes) a live group.
+    // (Bare number, no `#`, mirrors the `PR 696` reference above —
+    // the design-token check treats `#NNN` like a 3-digit hex color.)
     const runningActivities = [
       activity("Bash", { resultText: "" }),
       activity("Read", { resultText: "" }),
