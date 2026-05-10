@@ -55,7 +55,7 @@ If the archive script fails or times out, Claudette continues with the archive �
 
 ## Environment Provider Overrides
 
-The **Environment** section in each repo's settings exposes a per-repo override for every env-provider plugin (direnv, mise, dotenv, Nix devshell). Each plugin's manifest-declared settings — currently `timeout_seconds` for all four, plus `auto_allow` (direnv) / `auto_trust` (mise) — show up as a form. Setting a value here only applies to workspaces in this repo; cleared fields fall back to the global default in **Settings → Plugins**.
+The **Environment** section in each repo's settings shows every env-provider plugin (direnv, mise, dotenv, Nix devshell) with its live status, a per-repo enable toggle, and a **Settings** drawer that exposes the plugin's manifest-declared settings as per-repo overrides. Currently those are `timeout_seconds` for every provider, plus `auto_allow` (direnv) / `auto_trust` (mise). Setting a value here only applies to workspaces in this repo; clicking **Use global default** on an overridden field clears the per-repo value and falls back to **Settings → Plugins**.
 
 The most common reason to set a per-repo override is **timeout**: the default cap is 120 seconds, which covers most cold direnv/mise/Nix runs. Some Nix flakes (large transitive closures, slow substituter networks) routinely exceed that. Bump `Timeout (seconds)` for those repos rather than globally; the global value still applies everywhere else.
 

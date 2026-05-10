@@ -8,8 +8,17 @@ import {
   runEnvTrust,
   setEnvProviderEnabled,
 } from "../../../services/env";
-import { listClaudettePlugins } from "../../../services/claudettePlugins";
+import {
+  getClaudettePluginRepoSettings,
+  listClaudettePlugins,
+  setClaudettePluginRepoSetting,
+} from "../../../services/claudettePlugins";
+import type {
+  ClaudettePluginInfo,
+  PluginSettingField,
+} from "../../../types/claudettePlugins";
 import type { EnvSourceInfo, EnvTarget } from "../../../types/env";
+import { PluginSettingInput } from "../PluginSettingInput";
 import styles from "../Settings.module.css";
 
 interface ErrorInsight {
@@ -175,6 +184,32 @@ export function EnvPanel({ target }: EnvPanelProps) {
   // state — so we lock per-row toggles to avoid the user acting on a
   // placeholder value.
   const [resolvedOnce, setResolvedOnce] = useState(false);
+  // Per-plugin manifest info (settings_schema, globally-enabled flag,
+  // current effective values). We keep this map alongside the
+  // resolved-sources rows so each row can render its per-repo
+  // settings form inline — keeping all per-provider concerns
+  // (status, enable toggle, settings overrides) in one card instead
+  // of as a separate "Env provider overrides" section beneath.
+  const [pluginInfo, setPluginInfo] = useState<
+    Record<string, ClaudettePluginInfo>
+  >({});
+  // Per-repo override values for each plugin's settings, lazily loaded
+  // on first expansion of the row's settings drawer. Shape: `{ plugin
+  // -> { key -> value } }`.
+  const [repoOverrides, setRepoOverrides] = useState<
+    Record<string, Record<string, unknown>>
+  >({});
+  const [overridesLoaded, setOverridesLoaded] = useState<Set<string>>(
+    new Set(),
+  );
+  // Two independent expansion sets — errors and settings can be open
+  // simultaneously without one toggling the other.
+  const [expandedSettings, setExpandedSettings] = useState<Set<string>>(
+    new Set(),
+  );
+
+  const repoIdForOverrides =
+    target.kind === "repo" ? target.repo_id : null;
 
   const toggleExpanded = useCallback((name: string) => {
     setExpanded((prev) => {
@@ -212,7 +247,10 @@ export function EnvPanel({ target }: EnvPanelProps) {
     setResolvedOnce(false);
     setSources(null);
     setExpanded(new Set());
+    setExpandedSettings(new Set());
     setTrustError(null);
+    setRepoOverrides({});
+    setOverridesLoaded(new Set());
   }, [target]);
 
   useEffect(() => {
@@ -221,6 +259,18 @@ export function EnvPanel({ target }: EnvPanelProps) {
       try {
         const plugins = await listClaudettePlugins();
         if (cancelled) return;
+        // Snapshot the env-provider manifests so the per-row settings
+        // drawer can render its form without an extra fetch. We index
+        // by name so the row JSX can do an O(1) lookup; we keep ALL
+        // env-providers (even disabled) so the form's `enabled` filter
+        // is the single source of truth, not an upstream slice.
+        const byName: Record<string, ClaudettePluginInfo> = {};
+        for (const p of plugins) {
+          if (p.kind === "env-provider") {
+            byName[p.name] = p;
+          }
+        }
+        setPluginInfo(byName);
         setSources((prev) => {
           // If the resolve pass already populated us (fast repo), keep it.
           if (prev !== null) return prev;
@@ -342,6 +392,77 @@ export function EnvPanel({ target }: EnvPanelProps) {
     [target, refresh],
   );
 
+  // Lazy-load a plugin's per-repo overrides on first expansion. Saves a
+  // round trip per plugin until the user actually opens the drawer.
+  const ensureOverridesLoaded = useCallback(
+    async (pluginName: string) => {
+      if (!repoIdForOverrides) return;
+      if (overridesLoaded.has(pluginName)) return;
+      try {
+        const overrides = await getClaudettePluginRepoSettings(
+          repoIdForOverrides,
+          pluginName,
+        );
+        setRepoOverrides((prev) => ({ ...prev, [pluginName]: overrides }));
+        setOverridesLoaded((prev) => {
+          const next = new Set(prev);
+          next.add(pluginName);
+          return next;
+        });
+      } catch {
+        // Best-effort — the form falls back to manifest defaults if
+        // we can't load the per-repo overrides, and the next mount
+        // will retry.
+      }
+    },
+    [repoIdForOverrides, overridesLoaded],
+  );
+
+  const toggleSettings = useCallback(
+    (pluginName: string) => {
+      setExpandedSettings((prev) => {
+        const next = new Set(prev);
+        if (next.has(pluginName)) {
+          next.delete(pluginName);
+        } else {
+          next.add(pluginName);
+          void ensureOverridesLoaded(pluginName);
+        }
+        return next;
+      });
+    },
+    [ensureOverridesLoaded],
+  );
+
+  const handleSettingChange = useCallback(
+    async (pluginName: string, key: string, value: unknown) => {
+      if (!repoIdForOverrides) return;
+      try {
+        await setClaudettePluginRepoSetting(
+          repoIdForOverrides,
+          pluginName,
+          key,
+          value,
+        );
+        // Optimistic update — match RepoEnvProviderSettings semantics:
+        // `null` means "use global default", drop the key from the
+        // override map so the form falls back to the global value.
+        setRepoOverrides((prev) => {
+          const nextPlugin = { ...(prev[pluginName] ?? {}) };
+          if (value === null) {
+            delete nextPlugin[key];
+          } else {
+            nextPlugin[key] = value;
+          }
+          return { ...prev, [pluginName]: nextPlugin };
+        });
+      } catch (e) {
+        setFetchError(String(e));
+      }
+    },
+    [repoIdForOverrides],
+  );
+
   if (fetchError) {
     return (
       <div className={styles.mcpError} role="alert">
@@ -400,6 +521,23 @@ export function EnvPanel({ target }: EnvPanelProps) {
             : !resolvedOnce
               ? "Resolving environment providers…"
               : undefined;
+          // Show the inline Settings drawer only when:
+          //   1. We're in repo mode (per-repo overrides only make
+          //      sense scoped to a repository).
+          //   2. The plugin is globally enabled — disabled plugins
+          //      won't run regardless of any per-repo override, so
+          //      surfacing the form would mislead the user (matches
+          //      the rule the standalone RepoEnvProviderSettings
+          //      panel enforced before this UX merge).
+          //   3. The manifest declares at least one user-facing
+          //      setting; otherwise there's nothing to render.
+          const info = pluginInfo[source.plugin_name];
+          const showSettings =
+            !!repoIdForOverrides &&
+            !!info &&
+            info.enabled &&
+            info.settings_schema.length > 0;
+          const settingsOpen = expandedSettings.has(source.plugin_name);
           return (
             <div key={source.plugin_name}>
               <div className={styles.mcpRow}>
@@ -438,6 +576,16 @@ export function EnvPanel({ target }: EnvPanelProps) {
                     )}
                 </div>
                 <div className={styles.mcpActions}>
+                  {showSettings && (
+                    <button
+                      type="button"
+                      className={styles.envDetailsBtn}
+                      onClick={() => toggleSettings(source.plugin_name)}
+                      aria-expanded={settingsOpen}
+                    >
+                      {settingsOpen ? "Hide settings" : "Settings"}
+                    </button>
+                  )}
                   {hasError && (
                     <button
                       type="button"
@@ -474,6 +622,16 @@ export function EnvPanel({ target }: EnvPanelProps) {
                   )}
                   running={runningTrust === source.plugin_name}
                   onRunTrust={() => handleRunTrust(source.plugin_name)}
+                />
+              )}
+              {showSettings && settingsOpen && (
+                <ProviderSettingsDrawer
+                  schema={info!.settings_schema}
+                  globalValues={info!.setting_values}
+                  overrides={repoOverrides[source.plugin_name] ?? {}}
+                  onChange={(key, value) =>
+                    handleSettingChange(source.plugin_name, key, value)
+                  }
                 />
               )}
             </div>
@@ -566,6 +724,74 @@ function ErrorCard({
           {copiedRaw ? "Copied" : "Copy full error"}
         </button>
       </details>
+    </div>
+  );
+}
+
+/**
+ * Inline drawer that renders a plugin's manifest settings as a form
+ * scoped to one repository. Each input shows the per-repo override
+ * when present, falling back to the global value Claudette would
+ * otherwise apply (so the user always sees what would actually take
+ * effect). A "Use global default" affordance appears next to any
+ * field with an active per-repo override and clears it on click.
+ *
+ * Lives next to EnvPanel rather than as a standalone settings page
+ * so each provider's status, enable toggle, and config knobs sit in
+ * one card — Repo Settings used to render this list as a separate
+ * "Env provider overrides" section beneath the Environment status,
+ * which duplicated the provider list and confused which scope each
+ * toggle controlled.
+ */
+function ProviderSettingsDrawer({
+  schema,
+  globalValues,
+  overrides,
+  onChange,
+}: {
+  schema: PluginSettingField[];
+  globalValues: Record<string, unknown>;
+  overrides: Record<string, unknown>;
+  onChange: (key: string, value: unknown) => void;
+}) {
+  return (
+    <div className={styles.envSettingsDrawer}>
+      {schema.map((field) => {
+        const overrideValue = overrides[field.key];
+        const overridden = overrideValue !== undefined;
+        // When no override exists, show the global value so the user
+        // can see what the workspace would inherit; when overridden,
+        // show the override value so editing it is direct.
+        const displayValue = overridden
+          ? overrideValue
+          : globalValues[field.key];
+        return (
+          <div
+            key={field.key}
+            className={
+              overridden
+                ? `${styles.envSettingsField} ${styles.envSettingsFieldOverridden}`
+                : styles.envSettingsField
+            }
+          >
+            <PluginSettingInput
+              field={field}
+              value={displayValue}
+              onChange={(value) => onChange(field.key, value)}
+            />
+            {overridden && (
+              <button
+                type="button"
+                className={styles.envSettingsClearBtn}
+                onClick={() => onChange(field.key, null)}
+                title="Clear this repo's override and use the global default"
+              >
+                Use global default
+              </button>
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 }
