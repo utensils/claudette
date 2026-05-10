@@ -50,6 +50,8 @@ import {
 import { PdfThumbnail } from "./PdfThumbnail";
 import { MessageCopyButton } from "./MessageCopyButton";
 import { groupToolActivitiesForDisplay } from "./toolActivityGroups";
+import { ChatAuthFailureCallout } from "../auth/ChatAuthFailureCallout";
+import { cleanClaudeAuthError, isClaudeAuthError } from "../auth/claudeAuth";
 import {
   EMPTY_ACTIVITIES,
   EMPTY_ATTACHMENTS,
@@ -151,6 +153,21 @@ export const MessagesWithTurns = memo(function MessagesWithTurns({
   const liveToolActivities = useAppStore(
     (s) => s.toolActivities[sessionId] ?? EMPTY_ACTIVITIES,
   );
+  const resolvedClaudeAuthFailureMessageId = useAppStore(
+    (s) => s.resolvedClaudeAuthFailureMessageId,
+  );
+  const lastAuthFailureMessageId = useMemo(() => {
+    for (let i = messages.length - 1; i >= 0; i -= 1) {
+      const msg = messages[i];
+      if (
+        (msg.role === "Assistant" || msg.role === "System") &&
+        isClaudeAuthError(msg.content)
+      ) {
+        return msg.id;
+      }
+    }
+    return null;
+  }, [messages]);
 
   // Pre-build a Map keyed by message_id for O(1) lookup in the render loop.
   //
@@ -829,7 +846,31 @@ export const MessagesWithTurns = memo(function MessagesWithTurns({
                       })}
                     </div>
                   )}
-                  {shouldRenderAsMarkdown(msg.role) ? (
+                  {(msg.role === "Assistant" || msg.role === "System") &&
+                  isClaudeAuthError(msg.content) &&
+                  msg.id === lastAuthFailureMessageId &&
+                  msg.id !== resolvedClaudeAuthFailureMessageId ? (
+                    <ChatAuthFailureCallout
+                      error={msg.content}
+                      messageId={msg.id}
+                    />
+                  ) : (msg.role === "Assistant" || msg.role === "System") &&
+                    isClaudeAuthError(msg.content) ? (
+                    <div
+                      className={
+                        msg.id === resolvedClaudeAuthFailureMessageId
+                          ? styles.authFailureResolvedText
+                          : styles.authFailureText
+                      }
+                    >
+                      {msg.id === resolvedClaudeAuthFailureMessageId && (
+                        <span className={styles.authResolvedLabel}>
+                          {t("auth_resolved_label")}
+                        </span>
+                      )}
+                      {cleanClaudeAuthError(msg.content)}
+                    </div>
+                  ) : shouldRenderAsMarkdown(msg.role) ? (
                     // Assistant + System: run through Markdown so plan-mode dumps,
                     // setup-script output, and other multi-line system notes
                     // preserve headings, lists, and code blocks instead of

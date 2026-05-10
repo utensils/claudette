@@ -38,6 +38,15 @@ describe("getAppSections", () => {
     );
   });
 
+  it("keeps Usage out of the always-visible app sections", () => {
+    expect(
+      getAppSections(false, false).map((section) => section.id),
+    ).not.toContain("usage");
+    expect(
+      getAppSections(true, true).map((section) => section.id),
+    ).not.toContain("usage");
+  });
+
   it("always shows the Help section, regardless of plugin/community flags", () => {
     // Help is always-on (no experimental gate) — it surfaces the
     // shortcuts viewer + changelog link for any user.

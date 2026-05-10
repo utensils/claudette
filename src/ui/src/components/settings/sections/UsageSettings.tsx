@@ -1,36 +1,18 @@
 import { useEffect, useCallback, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { RefreshCw, LogIn, X } from "lucide-react";
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { RefreshCw } from "lucide-react";
 import { useAppStore } from "../../../stores/useAppStore";
 import {
   getClaudeCodeUsage,
   openUsageSettings,
-  claudeAuthLogin,
-  cancelClaudeAuthLogin,
 } from "../../../services/tauri";
 import type { UsageLimit, ExtraUsage } from "../../../types/usage";
+import {
+  cleanClaudeAuthError,
+  isClaudeAuthError,
+} from "../../auth/claudeAuth";
+import { ClaudeCodeAuthPanel } from "../../auth/ClaudeCodeAuthPanel";
 import styles from "../Settings.module.css";
-
-type AuthLoginState =
-  | { status: "idle" }
-  | { status: "running"; manualUrl: string | null }
-  | { status: "success" }
-  | { status: "error"; error: string };
-
-type AuthLoginProgress = { stream: "stdout" | "stderr"; line: string };
-type AuthLoginComplete = { success: boolean; error: string | null };
-
-const AUTH_URL_PATTERN = /https?:\/\/[^\s]+/;
-
-function isAuthError(error: string): boolean {
-  if (error.includes("ENV_AUTH:")) return false;
-  return (
-    error.includes("Token refresh failed") ||
-    error.includes("credentials not found") ||
-    error.includes("expired or been revoked")
-  );
-}
 
 function barColor(pct: number): string {
   if (pct >= 85) return "var(--status-stopped)";
@@ -182,7 +164,6 @@ export function UsageSettings() {
   const usage = useAppStore((s) => s.claudeCodeUsage);
   const setUsage = useAppStore((s) => s.setClaudeCodeUsage);
   const [fetchState, setFetchState] = useState<FetchState>({ status: "loading" });
-  const [authState, setAuthState] = useState<AuthLoginState>({ status: "idle" });
 
   const fetchUsage = useCallback(async () => {
     setFetchState({ status: "loading" });
@@ -198,70 +179,6 @@ export function UsageSettings() {
   useEffect(() => {
     fetchUsage();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
-
-  useEffect(() => {
-    const unlisteners: UnlistenFn[] = [];
-    let cancelled = false;
-
-    listen<AuthLoginProgress>("auth://login-progress", (event) => {
-      const { line } = event.payload;
-      const match = line.match(AUTH_URL_PATTERN);
-      if (!match) return;
-      setAuthState((current) => {
-        if (current.status !== "running" || current.manualUrl !== null) return current;
-        return { status: "running", manualUrl: match[0] };
-      });
-    })
-      .then((fn) => {
-        if (cancelled) fn();
-        else unlisteners.push(fn);
-      })
-      .catch((err) => {
-        console.error("Failed to subscribe to auth://login-progress", err);
-      });
-
-    listen<AuthLoginComplete>("auth://login-complete", (event) => {
-      const { success, error } = event.payload;
-      if (success) {
-        setAuthState({ status: "success" });
-        fetchUsage();
-      } else {
-        setAuthState({
-          status: "error",
-          error: error ?? "Sign-in failed.",
-        });
-      }
-    })
-      .then((fn) => {
-        if (cancelled) fn();
-        else unlisteners.push(fn);
-      })
-      .catch((err) => {
-        console.error("Failed to subscribe to auth://login-complete", err);
-      });
-
-    return () => {
-      cancelled = true;
-      unlisteners.forEach((fn) => fn());
-    };
-  }, [fetchUsage]);
-
-  const startAuthLogin = useCallback(async () => {
-    setAuthState({ status: "running", manualUrl: null });
-    try {
-      await claudeAuthLogin();
-    } catch (e) {
-      setAuthState({ status: "error", error: String(e) });
-    }
-  }, []);
-
-  const cancelAuthLogin = useCallback(async () => {
-    try {
-      await cancelClaudeAuthLogin();
-    } catch (e) {
-      setAuthState({ status: "error", error: String(e) });
-    }
-  }, []);
 
   const limits: { title: string; limit: UsageLimit }[] = [];
   if (usage?.usage.five_hour) {
@@ -281,58 +198,29 @@ export function UsageSettings() {
     <div>
       <h2 className={styles.sectionTitle}>{t("usage_title")}</h2>
 
-      {fetchState.status === "loading" && !usage && authState.status !== "running" && (
+      {fetchState.status === "loading" && !usage && (
         <div className={styles.usageEmptyState}>{t("usage_loading")}</div>
       )}
 
-      {authState.status === "running" && (
-        <div className={styles.usageEmptyState}>
-          <span>{t("usage_signing_in")}</span>
-          <span className={styles.usageTimestamp}>
-            {t("usage_signing_in_hint")}
-          </span>
-          {authState.manualUrl && (
-            <a
-              className={styles.usageManageLink}
-              href={authState.manualUrl}
-              target="_blank"
-              rel="noreferrer"
-            >
-              {t("usage_manual_url")}
-            </a>
-          )}
-          <button className={styles.usageRefreshBtn} onClick={cancelAuthLogin}>
-            <X size={12} /> {t("usage_cancel")}
-          </button>
-        </div>
-      )}
-
-      {fetchState.status === "error" && !usage && authState.status !== "running" && (
-        <div className={styles.usageEmptyState}>
-          <span className={styles.usageErrorMessage}>
-            {fetchState.error.includes("ENV_AUTH:")
-              ? fetchState.error.replace("ENV_AUTH:", "")
-              : fetchState.error}
-          </span>
-          {authState.status === "error" && (
-            <span className={styles.usageTimestamp}>{authState.error}</span>
-          )}
-          <div className={styles.usageActions}>
-            {isAuthError(fetchState.error) && (
-              <button
-                className={`${styles.usageRefreshBtn} ${styles.usageRefreshBtnPrimary}`}
-                onClick={startAuthLogin}
-              >
-                <LogIn size={12} /> {t("usage_sign_in")}
-              </button>
-            )}
+      {fetchState.status === "error" && !usage && (
+        isClaudeAuthError(fetchState.error) ? (
+          <ClaudeCodeAuthPanel
+            error={fetchState.error}
+            onAuthenticated={fetchUsage}
+            onRetry={fetchUsage}
+          />
+        ) : (
+          <div className={styles.usageEmptyState}>
+            <span className={styles.usageErrorMessage}>
+              {cleanClaudeAuthError(fetchState.error)}
+            </span>
             {!fetchState.error.includes("ENV_AUTH:") && (
               <button className={styles.usageRefreshBtn} onClick={fetchUsage}>
                 <RefreshCw size={12} /> {tCommon("retry")}
               </button>
             )}
           </div>
-        </div>
+        )
       )}
 
       {usage && (

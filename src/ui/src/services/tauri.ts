@@ -1524,6 +1524,19 @@ export function openReleaseNotes(): Promise<void> {
 
 // -- Auth --
 
+export interface ClaudeAuthStatus {
+  state: "signed_in" | "signed_out" | "unknown";
+  loggedIn: boolean;
+  verified: boolean;
+  authMethod: string | null;
+  apiProvider: string | null;
+  message: string | null;
+}
+
+export function getClaudeAuthStatus(validate = false): Promise<ClaudeAuthStatus> {
+  return invoke("get_claude_auth_status", { validate });
+}
+
 export function claudeAuthLogin(): Promise<void> {
   return invoke("claude_auth_login");
 }

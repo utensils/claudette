@@ -2,11 +2,14 @@
 
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { useAppStore, type CompletedTurn, type ToolActivity } from "../../stores/useAppStore";
 import type { ChatMessage } from "../../types/chat";
 import { MessagesWithTurns } from "./MessagesWithTurns";
+
+(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean })
+  .IS_REACT_ACT_ENVIRONMENT = true;
 
 const WORKSPACE_ID = "workspace-1";
 const SESSION_ID = "session-1";
@@ -93,6 +96,8 @@ beforeEach(() => {
     toolActivities: {},
     collapsedToolGroupsBySession: {},
     checkpoints: {},
+    claudeAuthFailure: null,
+    resolvedClaudeAuthFailureMessageId: null,
     diffFiles: [],
     diffMergeBase: "base-sha",
   });
@@ -143,6 +148,113 @@ describe("MessagesWithTurns edit summaries", () => {
     expect(container.textContent).toContain("mcp__postgres__query");
     expect(container.textContent).not.toContain("1 file changed");
     expect(container.textContent).not.toContain("dirty-from-other-session.ts");
+  });
+
+  it("renders auth failures as a sign-in callout", async () => {
+    const openSettings = vi.fn();
+    useAppStore.setState({ openSettings });
+    const messages = [
+      message("user-1", "User", "ping"),
+      message(
+        "assistant-1",
+        "Assistant",
+        "Failed to authenticate. API Error: 401 Invalid authentication credentials",
+      ),
+    ];
+
+    const container = await render(
+      <MessagesWithTurns
+        messages={messages}
+        workspaceId={WORKSPACE_ID}
+        sessionId={SESSION_ID}
+        isRunning={false}
+        searchQuery=""
+        toolDisplayMode="grouped"
+      />,
+    );
+
+    expect(container.textContent).toContain("auth_chat_failure_title");
+    const button = Array.from(container.querySelectorAll("button")).find(
+      (item) => item.textContent?.includes("auth_open_settings"),
+    );
+    await act(async () => {
+      button?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    expect(openSettings).toHaveBeenCalledWith("general", "claude-auth");
+    expect(useAppStore.getState().claudeAuthFailure).toEqual({
+      messageId: "assistant-1",
+      error: "Failed to authenticate. API Error: 401 Invalid authentication credentials",
+    });
+  });
+
+  it("shows only the latest repeated auth failure as the sign-in callout", async () => {
+    const messages = [
+      message("user-1", "User", "Explore this project"),
+      message(
+        "assistant-1",
+        "Assistant",
+        "Failed to authenticate. API Error: 401 Invalid authentication credentials",
+      ),
+      message("user-2", "User", "ping"),
+      message(
+        "assistant-2",
+        "Assistant",
+        "Failed to authenticate. API Error: 401 Invalid authentication credentials",
+      ),
+    ];
+
+    const container = await render(
+      <MessagesWithTurns
+        messages={messages}
+        workspaceId={WORKSPACE_ID}
+        sessionId={SESSION_ID}
+        isRunning={false}
+        searchQuery=""
+        toolDisplayMode="grouped"
+      />,
+    );
+
+    const authButtons = Array.from(container.querySelectorAll("button")).filter(
+      (button) => button.textContent?.includes("auth_open_settings"),
+    );
+    expect(authButtons).toHaveLength(1);
+    expect(
+      container.textContent?.match(/auth_chat_failure_title/g) ?? [],
+    ).toHaveLength(1);
+    expect(container.textContent).toContain(
+      "Invalid authentication credentials (401)",
+    );
+  });
+
+  it("renders a resolved auth failure as the original error with a resolved marker", async () => {
+    useAppStore.setState({
+      resolvedClaudeAuthFailureMessageId: "assistant-1",
+    });
+    const messages = [
+      message("user-1", "User", "ping"),
+      message(
+        "assistant-1",
+        "Assistant",
+        "Failed to authenticate. API Error: 401 Invalid authentication credentials",
+      ),
+    ];
+
+    const container = await render(
+      <MessagesWithTurns
+        messages={messages}
+        workspaceId={WORKSPACE_ID}
+        sessionId={SESSION_ID}
+        isRunning={false}
+        searchQuery=""
+        toolDisplayMode="grouped"
+      />,
+    );
+
+    expect(container.textContent).toContain("auth_resolved_label");
+    expect(container.textContent).toContain(
+      "Invalid authentication credentials (401)",
+    );
+    expect(container.textContent).not.toContain("auth_chat_failure_title");
   });
 
   it("still shows files parsed from this turn's own edit activity", async () => {

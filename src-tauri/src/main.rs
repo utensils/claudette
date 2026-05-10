@@ -1030,6 +1030,7 @@ fn main() {
             commands::usage::open_usage_settings,
             commands::usage::open_release_notes,
             // Auth
+            commands::auth::get_claude_auth_status,
             commands::auth::claude_auth_login,
             commands::auth::cancel_claude_auth_login,
             // SCM Plugins
