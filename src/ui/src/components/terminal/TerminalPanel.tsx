@@ -21,6 +21,7 @@ import {
 } from "@tauri-apps/plugin-clipboard-manager";
 import { useAppStore } from "../../stores/useAppStore";
 import { getTerminalTheme } from "../../utils/theme";
+import { isWorkspaceEnvironmentPreparing } from "../../utils/workspaceEnvironment";
 import { getHotkeyLabel, tooltipAttributes } from "../../hotkeys/display";
 import { isMacHotkeyPlatform } from "../../hotkeys/platform";
 import {
@@ -128,14 +129,15 @@ async function waitForWorkspaceEnvironment(workspaceId: string) {
   }
 }
 
+// Re-export under the existing in-file name so the rest of TerminalPanel
+// keeps working without churn. The actual gate logic and rationale live
+// in `utils/workspaceEnvironment.ts`, which `ChatPanel` shares — both
+// surfaces must gate identically.
 function workspaceEnvironmentPending(
   state: AppStoreState,
   workspaceId: string,
 ): boolean {
-  const workspace = state.workspaces.find((w) => w.id === workspaceId);
-  if (!workspace || workspace.remote_connection_id) return false;
-  const status = state.workspaceEnvironment[workspaceId]?.status;
-  return status !== "ready" && status !== "error";
+  return isWorkspaceEnvironmentPreparing(state, workspaceId);
 }
 
 // Per-leaf xterm + PTY handle. The container is a detached <div> that we
