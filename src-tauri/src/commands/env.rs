@@ -219,7 +219,10 @@ pub async fn get_env_sources(
         let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
         load_disabled_providers(&db, &repo_id)
     };
-    let registry = state.plugins.read().await;
+    // Snapshot the registry so the read lock is released before we
+    // start awaiting — env resolves can take ~120s on cold direnv/Nix
+    // and would otherwise block the Plugins settings page from loading.
+    let registry = state.plugins_snapshot().await;
     // Look up display_name for each plugin from the registry so the UI
     // shows "direnv" instead of the internal "env-direnv" name.
     let display_names: std::collections::HashMap<String, String> = registry
@@ -340,7 +343,9 @@ pub async fn prepare_workspace_environment(
         let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
         load_disabled_providers(&db, &repo_id)
     };
-    let registry = state.plugins.read().await;
+    // Snapshot — see `plugins_snapshot` doc; this command can run
+    // ~120s on cold env-providers and must not stall the Plugins UI.
+    let registry = state.plugins_snapshot().await;
     let progress = TauriEnvProgressSink::new(app, ws_info.id.clone());
     let resolved = claudette::env_provider::resolve_with_registry_and_progress(
         &registry,
@@ -736,7 +741,9 @@ pub fn spawn_repo_env_warmup(app: AppHandle, repo_id: String) {
             repo_id: Some(repo.id.clone()),
         };
         let disabled = load_disabled_providers(&db, &repo.id);
-        let registry = state.plugins.read().await;
+        // Best-effort warmup — snapshot so the resolve doesn't stall
+        // any concurrent Plugins/SCM commands.
+        let registry = state.plugins_snapshot().await;
         let progress = TauriEnvProgressSink::new(app.clone(), ws_info.id.clone());
         let resolved = claudette::env_provider::resolve_with_registry_and_progress(
             &registry,

@@ -499,8 +499,23 @@ pub struct AppState {
     pub next_tray_seq: AtomicU64,
     /// Cached Claude Code OAuth token and usage data.
     pub usage_cache: RwLock<Option<UsageCacheEntry>>,
-    /// SCM provider plugin registry.
-    pub plugins: RwLock<PluginRegistry>,
+    /// SCM + env-provider + language-grammar plugin registry.
+    ///
+    /// Wrapped as `RwLock<Arc<PluginRegistry>>` (rather than the simpler
+    /// `RwLock<PluginRegistry>`) so callers can [`AppState::plugins_snapshot`]
+    /// — clone the `Arc` and release the outer lock immediately. This
+    /// matters because env-provider resolves can run for ~120 seconds
+    /// (the new default timeout); holding the outer read lock for that
+    /// long stalls every other Tauri command that also reads plugins
+    /// (notably `list_claudette_plugins`, which is what the Plugins
+    /// settings page awaits on mount). The snapshot pattern keeps the
+    /// lock-hold-time bounded to the few microseconds it takes to
+    /// `Arc::clone`, regardless of how long the resolve runs.
+    ///
+    /// Reseed paths swap the Arc by writing a fresh `Arc::new(...)`;
+    /// in-flight snapshots keep working against the old registry until
+    /// they drop.
+    pub plugins: RwLock<Arc<PluginRegistry>>,
     #[cfg(feature = "voice")]
     /// Native voice provider registry and model cache metadata.
     pub voice: Arc<VoiceProviderRegistry>,
@@ -567,7 +582,7 @@ impl AppState {
             tray_handle: Mutex::new(None),
             next_tray_seq: AtomicU64::new(1),
             usage_cache: RwLock::new(None),
-            plugins: RwLock::new(plugins),
+            plugins: RwLock::new(Arc::new(plugins)),
             #[cfg(feature = "voice")]
             voice: Arc::new(VoiceProviderRegistry::new(
                 VoiceProviderRegistry::default_model_root(),
@@ -588,6 +603,25 @@ impl AppState {
 
     pub fn next_pty_id(&self) -> u64 {
         self.next_pty_id.fetch_add(1, Ordering::Relaxed)
+    }
+
+    /// Snapshot the plugin registry for use across `await` points.
+    ///
+    /// The lock is held only long enough to `Arc::clone` the inner
+    /// pointer; the returned `Arc<PluginRegistry>` keeps working even
+    /// if a concurrent reseed swaps the registry mid-flight (the old
+    /// Arc lives until the last snapshot is dropped).
+    ///
+    /// Callers MUST prefer this over `state.plugins.read().await`
+    /// whenever the registry is needed across an `await` that could
+    /// take more than a few milliseconds — env-provider resolves are
+    /// the canonical example, but agent spawns and PTY creates also
+    /// qualify. Direct `read()` is fine for the snapshot itself
+    /// (read-then-clone-then-drop) and for the swap-on-reseed write
+    /// path; everything else should go through this helper to keep
+    /// the Plugins settings page from stalling while env loads.
+    pub async fn plugins_snapshot(&self) -> Arc<PluginRegistry> {
+        Arc::clone(&*self.plugins.read().await)
     }
 }
 
@@ -684,5 +718,105 @@ mod tests {
             !is_alive(pid),
             "child should be dead after LocalServerState is dropped"
         );
+    }
+
+    // ---- Regression: Plugins page hangs while env loads ---------------------
+    //
+    // The `state.plugins` lock pattern is what keeps the Plugins settings page
+    // (which awaits `list_claudette_plugins`) responsive while a long-running
+    // env-provider resolve is in flight elsewhere in the app. Before the
+    // `Arc<PluginRegistry>` snapshot fix, the env-resolve held the outer
+    // `RwLock` for the full ~120s of its `host.exec` budget, and any
+    // concurrent `list_claudette_plugins` call queued behind it (especially
+    // problematic given tokio's writer-preferring fairness — a brief setting
+    // write would freeze every reader behind it).
+    //
+    // These tests pin the invariant so a future refactor that re-introduces
+    // long-held outer locks fails fast in CI rather than as a UX bug report.
+
+    use claudette::plugin_runtime::PluginRegistry;
+
+    fn empty_registry() -> PluginRegistry {
+        // Empty plugin dir — no plugins, no Lua, no I/O. We're testing the
+        // lock pattern, not what's inside the registry.
+        let dir = tempfile::tempdir().unwrap();
+        PluginRegistry::discover(dir.path())
+    }
+
+    /// `plugins_snapshot()` must not hold the outer lock past return —
+    /// otherwise a concurrent `list_claudette_plugins` would queue behind a
+    /// long-running env resolve. Holding a snapshot is fine; it's the outer
+    /// `RwLock` that must stay free.
+    #[tokio::test]
+    async fn plugins_snapshot_releases_outer_lock_for_concurrent_writes() {
+        let lock = RwLock::new(Arc::new(empty_registry()));
+
+        // Take a snapshot — this is what env-resolve does at its top.
+        let snapshot = Arc::clone(&*lock.read().await);
+
+        // Even with the snapshot still held, a write swap must succeed
+        // immediately. 50ms is deliberately tight: any real lock contention
+        // would blow past this on even the slowest CI runner.
+        let write_result = tokio::time::timeout(Duration::from_millis(50), async {
+            let mut guard = lock.write().await;
+            *guard = Arc::new(empty_registry());
+        })
+        .await;
+        assert!(
+            write_result.is_ok(),
+            "write must not be blocked by a held snapshot — \
+             see AppState::plugins_snapshot doc"
+        );
+
+        // Snapshot is still valid even after the swap — Arc keeps the old
+        // registry alive until every snapshot drops. This is what lets in-
+        // flight env-resolves keep working across a reseed.
+        assert_eq!(snapshot.plugins.len(), 0);
+    }
+
+    /// While one task is mid-resolve (holding a snapshot), another task's
+    /// `plugins_snapshot()` must return within milliseconds. This is the
+    /// exact contract `list_claudette_plugins` relies on to keep the
+    /// Plugins settings page from showing "Loading…" indefinitely while
+    /// `prepare_workspace_environment` runs.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn second_snapshot_during_long_resolve_returns_immediately() {
+        let lock = Arc::new(RwLock::new(Arc::new(empty_registry())));
+
+        // Simulate a long-running env-resolve: spawn a task that takes a
+        // snapshot and holds it (with the snapshot still alive) for the
+        // duration of the test. The fix means the OUTER lock isn't held;
+        // only an Arc reference is.
+        let lock_for_holder = Arc::clone(&lock);
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel::<()>();
+        let (finish_tx, finish_rx) = tokio::sync::oneshot::channel::<()>();
+        let holder = tokio::spawn(async move {
+            let _snapshot = Arc::clone(&*lock_for_holder.read().await);
+            started_tx.send(()).unwrap();
+            // Hold the snapshot until the test signals "you can drop it now".
+            // Mirrors how a real resolve awaits the Lua VM.
+            let _ = finish_rx.await;
+        });
+
+        started_rx.await.unwrap();
+
+        // The Plugins settings page does this on mount: take a snapshot to
+        // build its `ClaudettePluginInfo` list. Even with the resolve task
+        // holding its own snapshot, this must return well under 50ms.
+        let elapsed = {
+            let started = std::time::Instant::now();
+            let _list_snapshot = Arc::clone(&*lock.read().await);
+            started.elapsed()
+        };
+        assert!(
+            elapsed < Duration::from_millis(50),
+            "list_claudette_plugins-equivalent snapshot took {elapsed:?} \
+             while a concurrent env-resolve was in flight; the Arc \
+             snapshot pattern must keep the outer lock contention-free"
+        );
+
+        // Cleanup.
+        finish_tx.send(()).unwrap();
+        holder.await.unwrap();
     }
 }

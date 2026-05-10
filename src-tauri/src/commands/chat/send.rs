@@ -1831,7 +1831,9 @@ pub async fn send_chat_message(
         crate::commands::env::load_disabled_providers(&db, repo_id)
     };
     let resolved_env = {
-        let registry = state.plugins.read().await;
+        // Snapshot — see `plugins_snapshot` doc; agent spawn must not
+        // block the Plugins settings UI while env resolves.
+        let registry = state.plugins_snapshot().await;
         let progress = crate::commands::env::TauriEnvProgressSink::new(
             app.clone(),
             ws_info_for_env.id.clone(),

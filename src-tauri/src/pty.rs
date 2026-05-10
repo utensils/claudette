@@ -125,7 +125,11 @@ pub async fn spawn_pty(
         repo_id: repo_id_opt,
     };
     let resolved_env = {
-        let registry = state.plugins.read().await;
+        // Snapshot the plugin registry — `plugins_snapshot` releases
+        // the outer RwLock immediately so opening the Plugins
+        // settings page (which awaits `list_claudette_plugins`) is
+        // never blocked by a slow PTY-spawn env resolve.
+        let registry = state.plugins_snapshot().await;
         let progress =
             crate::commands::env::TauriEnvProgressSink::new(app.clone(), workspace_id.clone());
         claudette::env_provider::resolve_with_registry_and_progress(

@@ -259,7 +259,11 @@ async fn resolve_env_for_workspace(
     let disabled = Database::open(&state.db_path)
         .map(|db| crate::commands::env::load_disabled_providers(&db, &ws.repository_id))
         .unwrap_or_default();
-    let registry = state.plugins.read().await;
+    // Snapshot — workspace creation runs the env-provider resolve
+    // inline (the setup script needs the resolved env), and that
+    // resolve can run ~120s. Holding the outer RwLock that long
+    // stalls the Plugins settings page; see `plugins_snapshot`.
+    let registry = state.plugins_snapshot().await;
     let progress =
         app.map(|h| crate::commands::env::TauriEnvProgressSink::new(h.clone(), ws.id.clone()));
     let resolved = claudette::env_provider::resolve_with_registry_and_progress(

@@ -296,7 +296,12 @@ pub async fn reseed_bundled_plugins(state: State<'_, AppState>) -> Result<Vec<St
             }
         }
     }
-    *state.plugins.write().await = new_registry;
+    // Swap the `Arc<PluginRegistry>`, not the registry itself, so any
+    // env-resolve / scm call currently holding a snapshot keeps
+    // working against the old registry until it drops. Holds the
+    // write lock only long enough to swap the pointer — see
+    // [`AppState::plugins_snapshot`] for the lock-hold-time rationale.
+    *state.plugins.write().await = std::sync::Arc::new(new_registry);
 
     Ok(warnings)
 }

@@ -403,7 +403,8 @@ async fn ensure_persistent_session_for_remote_control(
         )
     };
     let resolved_env = {
-        let registry = state.plugins.read().await;
+        // Snapshot — see `plugins_snapshot` doc.
+        let registry = state.plugins_snapshot().await;
         let progress = crate::commands::env::TauriEnvProgressSink::new(
             app.clone(),
             ws_info_for_env.id.clone(),

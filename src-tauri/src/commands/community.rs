@@ -604,7 +604,10 @@ async fn rehydrate_plugin_registry(state: &State<'_, AppState>) -> Result<(), St
             }
         }
     }
-    *state.plugins.write().await = new_registry;
+    // Swap the `Arc<PluginRegistry>` so in-flight snapshots from
+    // concurrent reads keep working against the old registry — see
+    // [`AppState::plugins_snapshot`] for the lock-hold-time rationale.
+    *state.plugins.write().await = std::sync::Arc::new(new_registry);
     Ok(())
 }
 
