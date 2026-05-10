@@ -26,6 +26,18 @@ import {
 } from "../services/tauri";
 import { useAppStore } from "../stores/useAppStore";
 import type { ChatSession } from "../types/chat";
+// Static import (was previously a `await import(...)` inside
+// `executeNewWorkspace`). The dynamic form was ineffective in production
+// builds — Dashboard.tsx already statically pulls in
+// `useCreateWorkspace`, so the chunker's "splittable" hint here didn't
+// reduce bundle size; instead it pushed `useCreateWorkspace` into its own
+// chunk that, under Rolldown's chunking, ended up evaluating BEFORE the
+// chunk that defines the React/zustand `__toESM(require(...))` shims it
+// needs at module-init time. Result: a `TypeError: r is not a function`
+// on production launch and a blank #root. Keeping this static guarantees
+// the import lands in a chunk that has its dependencies resolved by the
+// time module init runs.
+import { createWorkspaceOrchestrated } from "../hooks/useCreateWorkspace";
 
 export interface ContextActionDeps {
   /** Override the new-session backend call; tests pass a stub.
@@ -194,16 +206,13 @@ export function executeNewTab(overrides?: Partial<ContextActionDeps>): void {
  * workspace whose `.claudette.json` setup never ran.
  */
 export function executeNewWorkspace(repoId: string): void {
-  void (async () => {
-    try {
-      const { createWorkspaceOrchestrated } = await import(
-        "../hooks/useCreateWorkspace"
-      );
-      await createWorkspaceOrchestrated(repoId);
-    } catch (err) {
-      console.error("[hotkey] executeNewWorkspace failed:", err);
-    }
-  })();
+  // Synchronous fire-and-forget — the orchestration is async internally,
+  // but we don't need to await it from the hotkey path (the UI updates
+  // via store mutations). The `.catch` keeps a thrown rejection from
+  // surfacing as an unhandled-promise warning.
+  createWorkspaceOrchestrated(repoId).catch((err) => {
+    console.error("[hotkey] executeNewWorkspace failed:", err);
+  });
 }
 
 /**
