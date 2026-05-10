@@ -354,19 +354,64 @@ pub async fn resolve_backend_runtime(
         });
     }
 
+    // LM Studio shares Ollama's direct-routing path now (it speaks
+    // /v1/messages natively in 0.4.1+) but defaults to a different
+    // localhost port and uses its own placeholder token. Ollama keeps
+    // 11434 + "ollama"; LM Studio takes 1234 + "lm-studio".
+    let (default_base, default_token) = match backend.kind {
+        AgentBackendKind::LmStudio => ("http://localhost:1234", "lm-studio"),
+        _ => ("http://localhost:11434", "ollama"),
+    };
     let base_url = backend
         .base_url
         .clone()
-        .unwrap_or_else(|| "http://localhost:11434".to_string());
+        .unwrap_or_else(|| default_base.to_string());
+    // Refresh discovered models for LM Studio on every chat-send so the
+    // composer's loaded_context_length and the gateway-side hash match
+    // the live LM Studio server state. The user can change the context
+    // slider mid-session and we want that reflected immediately. Cheap:
+    // single GET to localhost. Errors are non-fatal — if discovery fails
+    // we keep whatever we already have rather than blocking the send.
+    if backend.kind == AgentBackendKind::LmStudio
+        && let Ok(discovered) = discover_models(&backend).await
+        && !discovered.is_empty()
+    {
+        let pre = backend_models_signature(&backend);
+        backend.discovered_models = discovered;
+        backend.manual_models.clear();
+        let post = backend_models_signature(&backend);
+        if pre != post
+            && let Ok(mut all) = load_backend_configs(&db)
+            && let Some(slot) = all.iter_mut().find(|item| item.id == backend.id)
+        {
+            *slot = backend.clone();
+            let _ = save_backend_configs(&db, &all);
+        }
+    }
     let mut env = vec![
         ("ANTHROPIC_BASE_URL".to_string(), base_url),
         (
             "ANTHROPIC_AUTH_TOKEN".to_string(),
-            secret.clone().unwrap_or_else(|| "ollama".to_string()),
+            secret.clone().unwrap_or_else(|| default_token.to_string()),
         ),
     ];
-    if backend.kind == AgentBackendKind::Ollama {
+    if matches!(
+        backend.kind,
+        AgentBackendKind::Ollama | AgentBackendKind::LmStudio
+    ) {
         env.push(("ANTHROPIC_API_KEY".to_string(), String::new()));
+        // Disable the per-request user-attribution header. Claude Code
+        // adds it for usage attribution against api.anthropic.com, but
+        // its rotating value invalidates every local KV-cache prefix
+        // and causes a documented ~90 % perf regression on local
+        // backends (see github.com/anthropics/claude-code/issues/29230,
+        // roborhythms.com/stop-claude-code-slowing-local-llm-by-90).
+        // Ollama/LM Studio don't bill anything, so the header is pure
+        // overhead.
+        env.push((
+            "CLAUDE_CODE_ATTRIBUTION_HEADER".to_string(),
+            "0".to_string(),
+        ));
     } else if let Some(secret) = secret.clone() {
         env.push(("ANTHROPIC_API_KEY".to_string(), secret));
     }
@@ -2269,6 +2314,27 @@ mod tests {
     }
 
     #[test]
+    fn lm_studio_routing_uses_anthropic_compatible_classification() {
+        // Pinned: LM Studio MUST stay on the direct (non-gateway) path.
+        // Flipping this back to needs_gateway() would re-introduce the
+        // OpenAI-Responses translation overhead and lose native
+        // streaming pass-through. There is no fallback — if a future
+        // LM Studio release breaks /v1/messages, fix discovery /
+        // surface a clear error rather than silently routing through
+        // the gateway with a different perf profile.
+        assert!(AgentBackendKind::LmStudio.is_anthropic_compatible());
+        assert!(!AgentBackendKind::LmStudio.needs_gateway());
+        // Sanity-check the rest of the matrix to catch a copy-paste
+        // misclassification of an unrelated kind.
+        assert!(AgentBackendKind::Anthropic.is_anthropic_compatible());
+        assert!(AgentBackendKind::Ollama.is_anthropic_compatible());
+        assert!(AgentBackendKind::CustomAnthropic.is_anthropic_compatible());
+        assert!(AgentBackendKind::OpenAiApi.needs_gateway());
+        assert!(AgentBackendKind::CodexSubscription.needs_gateway());
+        assert!(AgentBackendKind::CustomOpenAi.needs_gateway());
+    }
+
+    #[test]
     fn runtime_hash_changes_when_discovered_context_window_changes() {
         // Regression: LM Studio's loaded_context_length changes when the
         // user reloads a model with a different context slider. The
@@ -2732,8 +2798,17 @@ data: [DONE]
         let backend = AgentBackendConfig::builtin_lm_studio();
         assert_eq!(backend.id, "lm-studio");
         assert_eq!(backend.kind, AgentBackendKind::LmStudio);
-        assert!(backend.kind.needs_gateway());
-        assert!(!backend.kind.is_anthropic_compatible());
+        assert!(
+            !backend.kind.needs_gateway(),
+            "LM Studio 0.4.1+ implements /v1/messages natively, so it takes \
+             the direct ANTHROPIC_BASE_URL path (like Ollama) instead of \
+             the OpenAI-Responses gateway"
+        );
+        assert!(
+            backend.kind.is_anthropic_compatible(),
+            "Direct routing requires the kind to be classified as \
+             Anthropic-compatible — same as Ollama and CustomAnthropic"
+        );
         assert_eq!(
             backend.base_url.as_deref(),
             Some("http://localhost:1234"),

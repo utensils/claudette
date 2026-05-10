@@ -3,9 +3,9 @@ title: LM Studio
 description: Run Claudette agents against models loaded in LM Studio's local server — OpenAI-compatible Responses API on localhost, no remote API key required.
 ---
 
-The LM Studio provider points the spawned `claude` CLI at LM Studio's built-in local server. It's a gateway-routed backend (Claudette translates Claude's wire format into the OpenAI Responses API), but with the **local-first UX of Ollama**: no remote network calls, no required API key, and the runtime stays on your machine.
+The LM Studio provider points the spawned `claude` CLI at LM Studio's built-in local server. It's a **direct-routed** backend (same fast path as Ollama): Claudette sets `ANTHROPIC_BASE_URL=http://localhost:1234` and the CLI talks straight to LM Studio with no in-process gateway, no wire-format translation, and full streaming pass-through. LM Studio 0.4.1+ implements Anthropic's `/v1/messages` endpoint natively, so this works out of the box.
 
-LM Studio uses the **gateway** path because its server speaks the OpenAI Responses API (`/v1/responses`), not Anthropic's wire format. The capability profile matches OpenAI / Codex: tools and vision yes (model-dependent), but the Anthropic-only knobs (extended thinking, effort levels, fast mode, 1M-context auto-upgrade) are hidden when an LM Studio model is active.
+The capability profile is the local-first one (no extended thinking / effort / fast mode / 1M-context auto-upgrade in the chat header) — the loaded model and LM Studio's tokenizer do whatever they support, but Claudette doesn't expose those Anthropic-only knobs. Tool use and vision work whenever the underlying model handles them.
 
 ## Prerequisites
 
@@ -81,13 +81,24 @@ If a model misbehaves, try switching to a different one before assuming Claudett
 
 ## How requests flow
 
-LM Studio rides the same gateway architecture as the OpenAI / Codex backends:
+LM Studio shares Ollama's direct-routing architecture — there is no in-process gateway:
 
-1. Claudette spins up a per-session HTTP listener on `127.0.0.1:0`. The spawned `claude` subprocess gets `ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN`, and `CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1`.
-2. The `claude` CLI thinks it's talking to api.anthropic.com; it's actually hitting Claudette's local listener.
-3. The listener translates the request into a `POST /v1/responses` call against `http://localhost:1234/v1/responses` and translates the streaming response back into Claude's event format.
+1. Claudette sets `ANTHROPIC_BASE_URL=http://localhost:1234`, `ANTHROPIC_AUTH_TOKEN=lm-studio` (placeholder), and `ANTHROPIC_API_KEY=""` on the spawned `claude` subprocess.
+2. The `claude` CLI POSTs `/v1/messages` directly to LM Studio. LM Studio 0.4.1+ speaks the Anthropic Messages API natively, so the request shape and streaming events match what the CLI expects from `api.anthropic.com`.
+3. Streamed tokens flow from LM Studio → CLI → Claudette UI in real time. No buffering, no translation.
 
-This is why the chat-header **Thinking**, **Effort**, **Fast mode**, and **1M-context** toggles are hidden when LM Studio is active — there are no equivalents in the OpenAI Responses shape.
+Claudette also sets `CLAUDE_CODE_ATTRIBUTION_HEADER=0` for LM Studio (and Ollama). Claude Code adds a per-request user-attribution header by default for usage attribution against `api.anthropic.com`, but its rotating value invalidates LM Studio's KV-cache prefix matching on every request — a documented [~90% performance regression](https://www.roborhythms.com/stop-claude-code-slowing-local-llm-by-90/) on local backends. Disabling it keeps the cache warm across turns; LM Studio doesn't bill anything, so the header is pure overhead.
+
+The chat header hides **Extended thinking**, **Effort**, **Fast mode**, and **1M-context** when an LM Studio model is active — `AgentBackendConfig::builtin_lm_studio()` declares those capabilities as `false`. They map cleanly to Anthropic's API but local models implement them inconsistently or not at all, and silently swallowing them would be worse than just hiding the controls.
+
+### Why not the OpenAI Responses gateway?
+
+LM Studio also exposes `/v1/responses` (OpenAI's newer Responses API). Earlier iterations of this integration used that path through Claudette's gateway, but it had two structural problems compared to direct `/v1/messages`:
+
+- **Translation overhead**: Claudette had to translate Anthropic ↔ OpenAI Responses on every request. The translation buffered the full response before sending anything back, so first-token latency equalled total generation time even when LM Studio's TTFT was sub-second.
+- **Lost streaming**: OpenAI Responses streaming uses `event: response.output_text.delta` events. Translating that incrementally into Anthropic `content_block_delta` events while preserving tool-call streaming, reasoning blocks, and stop reasons is non-trivial and a regression risk.
+
+Direct `/v1/messages` is a one-line config change (set `ANTHROPIC_BASE_URL`) that gets all of this for free. The OpenAI Responses gateway is still used for OpenAI API and Codex Subscription where there's no Anthropic-shaped alternative.
 
 ## Performance notes
 
@@ -106,13 +117,13 @@ This is why the chat-header **Thinking**, **Effort**, **Fast mode**, and **1M-co
 
 **Tool calls get ignored** — the loaded model isn't tool-tuned. Switch to a model with built-in tool-use support (Qwen Coder, Llama Instruct).
 
-**Gateway restart loop** — usually the upstream rejecting the translated request. Open the agent's terminal tab to see stderr from the listener; the most common cause is a model ID the upstream doesn't recognize. Click **Refresh models** in Settings > Models.
+**Send fails with `400 Bad Request` mentioning context length** — LM Studio rejected the request because the loaded `loaded_context_length` is smaller than Claude Code's prompt + tool defs. Bump the Context Length slider in LM Studio's My Models panel and reload the model; see [Pick a context length that fits Claude Code](#pick-a-context-length-that-fits-claude-code).
 
 **Agent hangs on the first turn** — LM Studio is loading the model into VRAM. First-turn latency on a cold model can be 10–60 seconds depending on size. Subsequent turns are much faster.
 
-**Send fails immediately with `400 Prompt is too large for the model's loaded context window`** — the model is loaded with a context shorter than Claude Code's system prompt + tool defs. Reload the model in LM Studio with a larger Context Length slider value (see [Pick a context length that fits Claude Code](#pick-a-context-length-that-fits-claude-code)). The composer's token-capacity indicator updates within ~8 seconds of you reloading.
-
 **Composer shows a stale context size after reloading the LM Studio model** — Claudette polls LM Studio's `/api/v0/models` every ~8 seconds while an LM Studio backend is enabled, so the indicator should refresh on its own. If it doesn't, click **Refresh models** in Settings > Models for an immediate update. The polling effect is gated behind the experimental flag — disabling alternative backends pauses the poll.
+
+**Local turns are slower than they should be** — make sure `CLAUDE_CODE_ATTRIBUTION_HEADER=0` is in effect (Claudette sets it automatically for LM Studio and Ollama; verify by checking the agent's terminal tab `env` output). With the header on, every request gets a rotating attribution string that breaks LM Studio's KV-cache prefix matching and re-runs prompt processing from scratch.
 
 ## See also
 

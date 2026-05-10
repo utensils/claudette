@@ -16,13 +16,26 @@ pub enum AgentBackendKind {
 
 impl AgentBackendKind {
     pub fn is_anthropic_compatible(self) -> bool {
-        matches!(self, Self::Anthropic | Self::Ollama | Self::CustomAnthropic)
+        // LM Studio 0.4.1+ implements `/v1/messages` natively — same
+        // Anthropic wire format Ollama uses — so we route the spawned
+        // claude CLI directly at it via ANTHROPIC_BASE_URL instead of
+        // running an in-process gateway that translates Anthropic ↔
+        // OpenAI Responses. The direct path is dramatically faster
+        // (native SSE streaming pass-through, no buffer-then-translate
+        // round trip, KV-cache prefix matching works) and doesn't need
+        // any of our gateway error-classification work — LM Studio
+        // already returns Anthropic-shaped errors. See lm-studio.mdx
+        // for the architecture comparison.
+        matches!(
+            self,
+            Self::Anthropic | Self::Ollama | Self::CustomAnthropic | Self::LmStudio
+        )
     }
 
     pub fn needs_gateway(self) -> bool {
         matches!(
             self,
-            Self::OpenAiApi | Self::CodexSubscription | Self::CustomOpenAi | Self::LmStudio
+            Self::OpenAiApi | Self::CodexSubscription | Self::CustomOpenAi
         )
     }
 }
