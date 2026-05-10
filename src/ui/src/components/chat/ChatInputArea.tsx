@@ -1,9 +1,8 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { FileText, LoaderCircle, Mic, Plus, Send, Square, Terminal as TerminalIcon, X } from "lucide-react";
+import { AlertCircle, FileText, LoaderCircle, Mic, Plus, Send, Square, Terminal as TerminalIcon, X } from "lucide-react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { VoiceMeter } from "./VoiceMeter";
-import { VoiceErrorPill } from "./VoiceErrorPill";
 import { useAppStore } from "../../stores/useAppStore";
 import {
   listSlashCommands,
@@ -1365,13 +1364,27 @@ export function ChatInputArea({
             </div>
           )}
           {voice.state === "error" && voice.error && (
-            <VoiceErrorPill
-              error={voice.error}
-              opensSettings={voiceErrorOpensSettings}
-              onOpenSettings={() => openSettings("plugins")}
-              onDismiss={() => voice.cancel()}
-              dismissHint={t("voice_error_dismiss_hint")}
-            />
+            voiceErrorOpensSettings ? (
+              <button
+                type="button"
+                className={styles.voiceErrorBtn}
+                onClick={() => openSettings("plugins")}
+                title={voice.error}
+              >
+                <AlertCircle size={12} className={styles.voiceErrorIcon} aria-hidden="true" />
+                <span className={styles.voiceErrorText}>{voice.error}</span>
+              </button>
+            ) : (
+              <button
+                type="button"
+                className={styles.voiceErrorBtn}
+                onClick={() => voice.cancel()}
+                title={`${voice.error ?? ""}\n\n${t("voice_error_dismiss_hint")}`}
+              >
+                <AlertCircle size={12} className={styles.voiceErrorIcon} aria-hidden="true" />
+                <span className={styles.voiceErrorText}>{voice.error}</span>
+              </button>
+            )
           )}
           <button
             type="button"

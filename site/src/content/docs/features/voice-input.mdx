@@ -50,9 +50,9 @@ macOS requires two permissions — **Microphone** and **Speech Recognition**. Th
 
 No download is needed — the recognizer is bundled with the .NET Framework on every Windows install. Ensure microphone access is enabled for Claudette via **Settings → Privacy & security → Microphone**.
 
-If transcription returns no text or surfaces a "No recognizer of the required ID found" error, install the speech recognizer language pack: **Settings → Time & language → Speech → Add a voice → English (United States)** (or your preferred locale's recognizer). Without an installed recognizer the engine has nothing to match against.
+If transcription returns no text or surfaces a "Windows speech recognizer is not installed" error, install the speech recognizer language pack: **Settings → Time & language → Speech → Add a voice → English (United States)** (or your preferred locale's recognizer). Without an installed recognizer the engine has nothing to match against.
 
-If transcription still fails, the diagnostics log captures the underlying .NET exception — open it via **Settings → Diagnostics → Open log directory**, or click **Logs** on the toolbar error chip.
+If transcription fails for another reason, the toolbar shows a short message and the underlying .NET exception chain is written to the daily diagnostics log. Open it via **Settings → Diagnostics → Open log directory** for the full context.
 
 ### Distil-Whisper
 

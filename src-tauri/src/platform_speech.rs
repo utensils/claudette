@@ -423,75 +423,61 @@ mod windows_speech {
                 stdout = %stdout,
                 "PowerShell system dictation script exited non-zero",
             );
-            return Err(format_failure(
-                &format!(
-                    "System dictation script failed (exit {})",
-                    output.status.code().unwrap_or(-1),
-                ),
-                trim_for_user(&stderr).as_deref(),
-            ));
+            return Err(
+                "Speech recognition failed. See Settings → Diagnostics → Open log directory for details."
+                    .to_string(),
+            );
         }
 
         match parse_transcription_envelope(&stdout) {
             Ok(text) => Ok(text),
-            Err(reason) => {
-                let mapped = map_recognized_error(&reason);
-                // Stamp the raw .NET exception chain into the daily log so
-                // a future bug report has the underlying cause even when
-                // the user-visible message has been mapped to a friendly
-                // hint. Same `target` as the caller in voice.rs uses for
-                // its own warns — a single `RUST_LOG=claudette::voice=debug`
-                // filter sees the whole pipeline.
+            Err(raw) => {
+                // The full raw .NET exception chain only goes to the
+                // diagnostics log — it's multiline, contains type names,
+                // and is unpleasant in a toolbar pill. The user-facing
+                // string is a one-line, actionable summary picked by
+                // `user_facing_error`.
+                let user_facing = user_facing_error(&raw);
                 tracing::error!(
                     target: "claudette::voice::platform_speech::windows",
                     wav = %wav_path.display(),
-                    raw_error = %reason,
-                    mapped = %mapped,
+                    raw_error = %raw,
+                    user_facing = %user_facing,
                     stdout = %stdout,
                     stderr = %stderr,
                     "System.Speech transcription failed",
                 );
-                Err(format_failure(&mapped, None))
+                Err(user_facing)
             }
         }
     }
 
-    fn map_recognized_error(reason: &str) -> String {
-        // Map common .NET Framework error fragments to actionable hints.
-        // These strings are what System.Speech surfaces when the OS does
-        // not have the expected speech recognizer / language pack
-        // installed.
-        match reason {
+    /// Map a raw .NET exception chain to a single short user-facing line.
+    /// Anything we don't recognize falls through to the generic "speech
+    /// recognition failed; check the diagnostics log" message — the raw
+    /// chain stays in the tracing log for bug reports.
+    pub(super) fn user_facing_error(raw: &str) -> String {
+        match raw {
             text if text.contains("No recognizer of the required ID found") => {
-                "Windows System.Speech recognizer is not installed. Install \"English (United States) Speech Recognizer\" via Settings → Time & language → Speech, then try again.".to_string()
+                "Windows speech recognizer is not installed. Install a Speech Recognizer language pack in Windows Settings → Time & language → Speech.".to_string()
             }
             text if text.contains("Could not load file or assembly") => {
-                "System.Speech is unavailable on this Windows install. Use the offline Distil-Whisper provider in Plugins settings.".to_string()
+                "Windows System.Speech is unavailable on this machine. Switch to the Distil-Whisper provider in Plugins settings.".to_string()
+            }
+            text if text.contains("No audio input is supplied")
+                || text.contains("FileNotFoundException")
+                || text.contains("InvalidDataException")
+                || text.contains("WAV input") =>
+            {
+                "Couldn't load the recorded audio. Try recording again — see Settings → Diagnostics for details.".to_string()
             }
             text if text.contains("AudioFormatNotSupported")
                 || text.contains("Stream is not in the correct format") =>
             {
-                "Windows System.Speech rejected the captured audio format. Try a different microphone or restart Claudette; if it persists, switch to the offline Distil-Whisper provider in Plugins settings.".to_string()
+                "Windows speech recognition rejected the audio format. Try again — see Settings → Diagnostics for details.".to_string()
             }
-            other => other.to_string(),
+            _ => "Speech recognition failed. See Settings → Diagnostics → Open log directory for details.".to_string(),
         }
-    }
-
-    fn format_failure(message: &str, stderr_hint: Option<&str>) -> String {
-        let mut out = message.to_string();
-        if let Some(hint) = stderr_hint
-            && !out.contains(hint)
-        {
-            out.push_str(": ");
-            out.push_str(hint);
-        }
-        // Single-source the troubleshooting pointer so users always know
-        // where to find the structured details we just logged. The Settings
-        // panel uses `claudette::logging::log_dir()`; the toolbar pointer
-        // names the route, not the path, so the message survives moves
-        // (e.g. CLAUDETTE_LOG_DIR overrides).
-        out.push_str(" — full details in Settings → Diagnostics → Open log directory.");
-        out
     }
 
     // pub(super) so the cross-module test in `windows_tests` below can pin
@@ -499,31 +485,44 @@ mod windows_speech {
     // unit tests. Production callers go through `transcribe_wav_path`.
     pub(super) fn build_recognition_script(path_literal: &str) -> String {
         // The script:
-        //   1. Loads System.Speech (always present on .NET Framework Windows).
-        //   2. Sets the WAV file as input — supports any 16-bit PCM mono/stereo
-        //      file at common sample rates; we generate 16 kHz mono.
-        //   3. Loops `Recognize()` so we capture every phrase, not just the
-        //      first one. The 5 s pause between phrases is a System.Speech
-        //      default that resets each phrase; once the WAV is exhausted,
-        //      `Recognize()` returns $null and we break out.
-        //   4. On error, walks the .NET InnerException chain. Without this
-        //      we'd surface PowerShell's "Exception calling 'Recognize' with
-        //      '1' argument(s): <real cause>" wrapper, which then gets
-        //      truncated in the toolbar pill — the user sees an opaque
-        //      "Exception calling..." message and has nothing to act on.
-        //      Stripping the leading `Exception calling ... :` wrapper and
-        //      joining the inner messages surfaces the actual cause
-        //      ("Audio device error", "No recognizer ...", etc.).
-        //   5. Emits a single-line JSON envelope so the Rust parser doesn't
-        //      have to deal with PowerShell's localized error formatting.
+        //   1. Loads System.Speech (bundled with .NET Framework on Windows).
+        //   2. Verifies the WAV file exists + is non-trivial before touching
+        //      the recognizer. A missing/empty WAV makes `Recognize()` throw
+        //      the misleading "No audio input is supplied to this recognizer"
+        //      error; catching it up front gives the user something concrete.
+        //   3. Opens the WAV as a `FileStream` and uses
+        //      `SetInputToWaveStream`, NOT `SetInputToWaveFile`. The latter
+        //      can throw "No audio input is supplied" on Windows ARM64 / .NET
+        //      Framework under emulation even with a perfectly valid WAV —
+        //      observed in the wild as
+        //      `MethodInvocationException :: InvalidOperationException: No
+        //      audio input is supplied to this recognizer`. The stream
+        //      variant parses the RIFF header itself and consistently works.
+        //   4. Loops `Recognize()` so multi-phrase recordings are captured
+        //      whole. The 5 s pause is a System.Speech default that resets
+        //      each phrase; once the WAV stream is exhausted, `Recognize()`
+        //      returns $null and we break out.
+        //   5. On error, walks the .NET `InnerException` chain into the
+        //      JSON envelope. The Rust side maps it to a short user-facing
+        //      message; the full chain stays in the daily diagnostics log.
         format!(
             r#"$ErrorActionPreference='Stop'
+$wavPath = '{path}'
 try {{
+    if (-not (Test-Path -LiteralPath $wavPath)) {{
+        throw [System.IO.FileNotFoundException]::new("WAV input file does not exist", $wavPath)
+    }}
+    $wavInfo = Get-Item -LiteralPath $wavPath
+    if ($wavInfo.Length -lt 44) {{
+        throw [System.IO.InvalidDataException]::new("WAV input is too small (${{$wavInfo.Length}} bytes) to contain a valid RIFF header")
+    }}
     Add-Type -AssemblyName System.Speech -ErrorAction Stop
     $r = New-Object System.Speech.Recognition.SpeechRecognitionEngine
+    $stream = $null
     try {{
         $r.LoadGrammar((New-Object System.Speech.Recognition.DictationGrammar))
-        $r.SetInputToWaveFile('{path}')
+        $stream = [System.IO.File]::OpenRead($wavPath)
+        $r.SetInputToWaveStream($stream)
         $phrases = New-Object System.Collections.Generic.List[string]
         while ($true) {{
             $result = $r.Recognize([TimeSpan]::FromSeconds(5))
@@ -532,6 +531,7 @@ try {{
         }}
         $payload = [pscustomobject]@{{ ok = $true; text = ($phrases -join ' ') }}
     }} finally {{
+        if ($null -ne $stream) {{ $stream.Close() }}
         $r.Dispose()
     }}
 }} catch {{
@@ -540,8 +540,8 @@ try {{
     while ($null -ne $exception) {{
         $msg = $exception.Message
         # Strip the "Exception calling \"X\" with \"N\" argument(s):" wrapper
-        # PowerShell adds when a method invocation throws — the wrapper is
-        # never actionable on its own; the real cause is the next link.
+        # PowerShell adds around .NET method-invocation throws — the wrapper
+        # is never actionable, the real cause is the next link.
         $msg = [regex]::Replace($msg, '^Exception calling "[^"]+" with "[0-9]+" argument\(s\):\s*"?', '')
         $msg = $msg.TrimEnd('"').Trim()
         if ($msg) {{ $messages.Add(('{{0}}: {{1}}' -f $exception.GetType().Name, $msg)) }}
@@ -742,21 +742,78 @@ mod windows_tests {
 
     #[test]
     fn windows_recognition_script_walks_inner_exceptions() {
-        // Pin the catch block we depend on for surfacing the real .NET
-        // exception. Without this, PowerShell would return its own
-        // "Exception calling 'Recognize' with '1' argument(s):" wrapper —
-        // visible to the user as an opaque truncated pill.
+        // Pin the catch block — full .NET chain ends up in the diagnostics
+        // log, not in the toolbar. Without this walk, only the
+        // "Exception calling 'Recognize' with '1' argument(s):" wrapper
+        // would survive into the log, hiding the real cause.
         let script = windows_speech::build_recognition_script("C:\\foo.wav");
         assert!(script.contains("$exception = $_.Exception"));
         assert!(script.contains("$exception.InnerException"));
-        // The wrapper-strip regex must stay — empirically the bare wrapper
-        // text is what shows up in the toolbar and the inner is what's
-        // useful.
         assert!(script.contains("Exception calling"));
-        // We always emit the type name so log readers know which .NET
-        // exception class triggered (InvalidOperationException vs.
-        // ArgumentException vs. AudioFormatNotSupportedException, etc.).
         assert!(script.contains("$exception.GetType().Name"));
+    }
+
+    #[test]
+    fn windows_recognition_script_uses_wave_stream_not_wave_file() {
+        // SetInputToWaveFile silently fails on Windows ARM64 / .NET
+        // Framework under emulation, throwing the user-visible
+        // "No audio input is supplied to this recognizer" mid-recognition
+        // even with a valid WAV. SetInputToWaveStream parses the RIFF
+        // header itself and works consistently — the script must never
+        // regress to the file-based variant.
+        let script = windows_speech::build_recognition_script("C:\\foo.wav");
+        assert!(
+            script.contains("SetInputToWaveStream"),
+            "script must use SetInputToWaveStream",
+        );
+        assert!(
+            !script.contains("SetInputToWaveFile"),
+            "SetInputToWaveFile is the broken path on ARM64; do not regress",
+        );
+        assert!(
+            script.contains("OpenRead"),
+            "script must open the WAV via FileStream",
+        );
+        // Pre-checks that prevent the misleading "No audio input is
+        // supplied" cascade when the WAV is missing or empty.
+        assert!(script.contains("Test-Path -LiteralPath $wavPath"));
+        assert!(script.contains("Get-Item -LiteralPath $wavPath"));
+    }
+
+    #[test]
+    fn windows_user_facing_error_keeps_messages_short_and_actionable() {
+        // The toolbar pill renders the user-facing string verbatim — every
+        // message it can produce must stay one line and stay under a
+        // sensible width. The full .NET chain only goes to the log.
+        let cases = [
+            "InvalidOperationException: No audio input is supplied to this recognizer",
+            "MethodInvocationException :: InvalidOperationException: No recognizer of the required ID found",
+            "FileNotFoundException: WAV input file does not exist",
+            "AudioFormatNotSupportedException: format mismatch",
+            "FileLoadException: Could not load file or assembly System.Speech",
+            "Some unexpected .NET error we haven't categorised yet",
+        ];
+        for raw in cases {
+            let user_facing = windows_speech::user_facing_error(raw);
+            assert!(
+                !user_facing.contains('\n'),
+                "user-facing error must be single line: {user_facing:?}",
+            );
+            assert!(
+                user_facing.len() < 200,
+                "user-facing error too long ({}): {user_facing:?}",
+                user_facing.len(),
+            );
+            // None of the noisy raw strings should be passed through.
+            assert!(
+                !user_facing.contains("InvalidOperationException")
+                    && !user_facing.contains("MethodInvocationException")
+                    && !user_facing.contains("FileNotFoundException")
+                    && !user_facing.contains("AudioFormatNotSupportedException")
+                    && !user_facing.contains("FileLoadException"),
+                "user-facing error leaked .NET type names: {user_facing:?}",
+            );
+        }
     }
 
     #[test]
@@ -773,7 +830,9 @@ mod windows_tests {
         // apostrophe doubled — anything else means we'd hit a parse error
         // at runtime when the user has an apostrophe in their profile path.
         assert!(script.contains("'C:\\Users\\O''Connor\\foo.wav'"));
-        assert!(script.contains("SetInputToWaveFile"));
+        // The stream variant must be present (we deliberately avoid
+        // SetInputToWaveFile — see windows_recognition_script_uses_wave_stream_not_wave_file).
+        assert!(script.contains("SetInputToWaveStream"));
         assert!(script.contains("DictationGrammar"));
     }
 }
