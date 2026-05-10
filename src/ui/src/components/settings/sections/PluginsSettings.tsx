@@ -30,6 +30,19 @@ import type { VoiceDownloadProgress, VoiceProviderInfo } from "../../../types/vo
 import styles from "../Settings.module.css";
 
 const KIND_ORDER: ClaudettePluginKind[] = ["scm", "env-provider", "language-grammar"];
+type PluginLoadErrorKey = "lua" | "builtins" | "voice";
+
+function emptyLoadErrors(): Record<PluginLoadErrorKey, string | null> {
+  return {
+    lua: null,
+    builtins: null,
+    voice: null,
+  };
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
 
 // Returns a literal union (not bare `string`) so the i18next `t()`
 // surface still type-checks the key against the locales file.
@@ -67,47 +80,72 @@ export function PluginsSettings() {
   const [voiceProgress, setVoiceProgress] = useState<Record<string, VoiceDownloadProgress>>({});
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [loadErrors, setLoadErrors] = useState<Record<PluginLoadErrorKey, string | null>>(
+    emptyLoadErrors,
+  );
   const [reseedMessage, setReseedMessage] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
 
   const refreshAll = useCallback(async () => {
     setLoading(true);
     setError(null);
-    try {
-      const [luaResult, builtinResult, voiceResult, grammarResult] =
-        await Promise.all([
-          listClaudettePlugins(),
-          listBuiltinClaudettePlugins(),
-          listVoiceProviders(),
-          // Grammar registry returns only enabled plugins, so a
-          // disabled language-grammar plugin shows up in `luaResult`
-          // (no chips) but not in `grammarResult` — that's the
-          // intended UX cue (chips appear only when active).
-          listLanguageGrammars().catch(() => ({ languages: [], grammars: [] })),
-        ]);
-      setPlugins(luaResult);
-      setBuiltins(builtinResult);
-      setVoiceProviders(voiceResult);
+    const [luaResult, builtinResult, voiceResult, grammarResult] =
+      await Promise.allSettled([
+        listClaudettePlugins(),
+        listBuiltinClaudettePlugins(),
+        listVoiceProviders(),
+        // Grammar registry returns only enabled plugins, so a
+        // disabled language-grammar plugin shows up in `luaResult`
+        // (no chips) but not in `grammarResult` — that's the
+        // intended UX cue (chips appear only when active).
+        listLanguageGrammars(),
+      ]);
+
+    const nextLoadErrors = emptyLoadErrors();
+    if (luaResult.status === "fulfilled") {
+      setPlugins(luaResult.value);
+    } else {
+      nextLoadErrors.lua = errorMessage(luaResult.reason);
+      setPlugins(null);
+    }
+
+    if (builtinResult.status === "fulfilled") {
+      setBuiltins(builtinResult.value);
+    } else {
+      nextLoadErrors.builtins = errorMessage(builtinResult.reason);
+      setBuiltins(null);
+    }
+
+    if (voiceResult.status === "fulfilled") {
+      setVoiceProviders(voiceResult.value);
+    } else {
+      nextLoadErrors.voice = errorMessage(voiceResult.reason);
+      setVoiceProviders(null);
+    }
+
+    if (grammarResult.status === "fulfilled") {
       const byPlugin = new Map<string, LanguageInfo[]>();
-      for (const lang of grammarResult.languages) {
+      for (const lang of grammarResult.value.languages) {
         const existing = byPlugin.get(lang.plugin_name) ?? [];
         existing.push(lang);
         byPlugin.set(lang.plugin_name, existing);
       }
       setGrammarLanguages(byPlugin);
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setLoading(false);
     }
+
+    setLoadErrors(nextLoadErrors);
+    setLoading(false);
   }, []);
 
   const refreshPlugins = useCallback(async () => {
     setError(null);
     try {
       setPlugins(await listClaudettePlugins());
+      setLoadErrors((prev) => ({ ...prev, lua: null }));
     } catch (e) {
-      setError(String(e));
+      setLoadErrors((prev) => ({ ...prev, lua: errorMessage(e) }));
+    } finally {
+      setLoading(false);
     }
   }, []);
 
@@ -134,8 +172,9 @@ export function PluginsSettings() {
     setError(null);
     try {
       setBuiltins(await listBuiltinClaudettePlugins());
+      setLoadErrors((prev) => ({ ...prev, builtins: null }));
     } catch (e) {
-      setError(String(e));
+      setLoadErrors((prev) => ({ ...prev, builtins: errorMessage(e) }));
     }
   }, []);
 
@@ -143,8 +182,9 @@ export function PluginsSettings() {
     setError(null);
     try {
       setVoiceProviders(await listVoiceProviders());
+      setLoadErrors((prev) => ({ ...prev, voice: null }));
     } catch (e) {
-      setError(String(e));
+      setLoadErrors((prev) => ({ ...prev, voice: errorMessage(e) }));
     }
   }, []);
 
@@ -154,7 +194,7 @@ export function PluginsSettings() {
         await setBuiltinClaudettePluginEnabled(pluginName, nextEnabled);
         await refreshBuiltins();
       } catch (e) {
-        setError(String(e));
+        setError(errorMessage(e));
       }
     },
     [refreshBuiltins],
@@ -166,7 +206,7 @@ export function PluginsSettings() {
         await setSelectedVoiceProvider(providerId);
         await refreshVoice();
       } catch (e) {
-        setError(String(e));
+        setError(errorMessage(e));
       }
     },
     [refreshVoice],
@@ -178,7 +218,7 @@ export function PluginsSettings() {
         await setVoiceProviderEnabled(providerId, nextEnabled);
         await refreshVoice();
       } catch (e) {
-        setError(String(e));
+        setError(errorMessage(e));
       }
     },
     [refreshVoice],
@@ -191,7 +231,7 @@ export function PluginsSettings() {
         await prepareVoiceProvider(providerId);
         await refreshVoice();
       } catch (e) {
-        setError(String(e));
+        setError(errorMessage(e));
         await refreshVoice();
       } finally {
         setPreparingVoiceProvider(null);
@@ -206,7 +246,7 @@ export function PluginsSettings() {
         await removeVoiceProviderModel(providerId);
         await refreshVoice();
       } catch (e) {
-        setError(String(e));
+        setError(errorMessage(e));
       }
     },
     [refreshVoice],
@@ -275,7 +315,7 @@ export function PluginsSettings() {
           await refreshGrammars();
         }
       } catch (e) {
-        setError(String(e));
+        setError(errorMessage(e));
       }
     },
     [refreshPlugins, refreshGrammarLanguages, plugins],
@@ -287,7 +327,7 @@ export function PluginsSettings() {
         await setClaudettePluginSetting(pluginName, key, value);
         await refreshPlugins();
       } catch (e) {
-        setError(String(e));
+        setError(errorMessage(e));
       }
     },
     [refreshPlugins],
@@ -304,22 +344,15 @@ export function PluginsSettings() {
       );
       await refreshPlugins();
     } catch (e) {
-      setError(String(e));
+      setError(errorMessage(e));
     }
   }, [refreshPlugins, t]);
 
-  if (error) {
-    return (
-      <div>
-        <h2 className={styles.sectionTitle}>{t("plugins_title")}</h2>
-        <div className={styles.mcpError} role="alert">
-          {t("plugins_load_error", { error })}
-        </div>
-      </div>
-    );
-  }
+  const hasAnyLoadError = Object.values(loadErrors).some(Boolean);
+  const hasAnyLoadedGroup =
+    plugins !== null || builtins !== null || voiceProviders !== null;
 
-  if (loading && plugins === null) {
+  if (loading && !hasAnyLoadedGroup && !hasAnyLoadError) {
     return (
       <div>
         <h2 className={styles.sectionTitle}>{t("plugins_title")}</h2>
@@ -341,8 +374,23 @@ export function PluginsSettings() {
         {t("plugins_desc")}{" "}
         <em>{t("plugins_desc_note")}</em>
       </div>
+      {error && (
+        <div className={styles.mcpError} role="alert">
+          {t("plugins_action_error", { error })}
+        </div>
+      )}
 
-      {builtins && builtins.length > 0 && (
+      {loadErrors.builtins ? (
+        <div className={styles.fieldGroup}>
+          <div className={styles.mcpGroupLabel}>{t("plugins_builtins_label")}</div>
+          <div className={styles.mcpList}>
+            <PluginGroupErrorRow
+              name={t("plugins_builtins_label")}
+              error={loadErrors.builtins}
+            />
+          </div>
+        </div>
+      ) : builtins && builtins.length > 0 && (
         <div className={styles.fieldGroup}>
           <div className={styles.mcpGroupLabel}>{t("plugins_builtins_label")}</div>
           <div className={styles.mcpList}>
@@ -362,7 +410,17 @@ export function PluginsSettings() {
         </div>
       )}
 
-      {voiceProviders && voiceProviders.length > 0 && (
+      {loadErrors.voice ? (
+        <div className={styles.fieldGroup}>
+          <div className={styles.mcpGroupLabel}>{t("plugins_voice_label")}</div>
+          <div className={styles.mcpList}>
+            <PluginGroupErrorRow
+              name={t("plugins_voice_label")}
+              error={loadErrors.voice}
+            />
+          </div>
+        </div>
+      ) : voiceProviders && voiceProviders.length > 0 && (
         <div className={styles.fieldGroup}>
           <div className={styles.mcpGroupLabel}>{t("plugins_voice_label")}</div>
           <div className={styles.mcpList}>
@@ -391,7 +449,19 @@ export function PluginsSettings() {
         </div>
       )}
 
-      {grouped.length === 0 && (
+      {loadErrors.lua && (
+        <div className={styles.fieldGroup}>
+          <div className={styles.mcpGroupLabel}>{t("plugins_claudette_label")}</div>
+          <div className={styles.mcpList}>
+            <PluginGroupErrorRow
+              name={t("plugins_claudette_label")}
+              error={loadErrors.lua}
+            />
+          </div>
+        </div>
+      )}
+
+      {grouped.length === 0 && !loadErrors.lua && (
         <div className={styles.settingDescription}>{t("plugins_none")}</div>
       )}
 
@@ -427,6 +497,32 @@ export function PluginsSettings() {
         {reseedMessage && (
           <span className={styles.settingDescription}>{reseedMessage}</span>
         )}
+      </div>
+    </div>
+  );
+}
+
+function PluginGroupErrorRow({
+  name,
+  error,
+}: {
+  name: string;
+  error: string;
+}) {
+  const { t } = useTranslation("settings");
+  return (
+    <div className={styles.mcpRow} role="alert">
+      <div className={styles.mcpInfo}>
+        <span
+          className={styles.mcpStatusDot}
+          style={{ background: "var(--status-stopped)" }}
+          title={t("plugins_badge_error")}
+        />
+        <span className={styles.mcpName}>{name}</span>
+        <span className={styles.mcpBadge}>{t("plugins_badge_error")}</span>
+        <span className={styles.mcpError} title={error}>
+          {t("plugins_group_load_error", { error })}
+        </span>
       </div>
     </div>
   );
@@ -483,6 +579,7 @@ function VoiceProviderRow({
     provider.enabled &&
     provider.setupRequired &&
     (provider.status === "needs-setup" || provider.status === "error");
+  const canToggle = provider.status !== "unavailable";
   const modeLabel = provider.offline
     ? "offline"
     : provider.recordingMode === "native"
@@ -528,6 +625,7 @@ function VoiceProviderRow({
             type="button"
             className={`${styles.mcpToggle} ${provider.enabled ? styles.mcpToggleOn : ""}`}
             onClick={() => onToggleEnabled(!provider.enabled)}
+            disabled={!canToggle}
             role="switch"
             aria-checked={provider.enabled}
             aria-label={provider.enabled ? t("plugins_disable_aria", { name: provider.name }) : t("plugins_enable_aria", { name: provider.name })}

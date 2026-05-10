@@ -164,7 +164,26 @@ const VOICE_NOT_BUILT: &str = "voice support not built into this binary";
 #[cfg(not(feature = "voice"))]
 #[tauri::command]
 pub async fn voice_list_providers() -> Result<Vec<serde_json::Value>, String> {
-    Err(VOICE_NOT_BUILT.into())
+    Ok(vec![serde_json::json!({
+        "id": "voice-support",
+        "name": "Voice support",
+        "description": "Voice input is unavailable in this build.",
+        "kind": "platform",
+        "recordingMode": "native",
+        "privacyLabel": "Voice support was not compiled into this binary.",
+        "offline": false,
+        "downloadRequired": false,
+        "modelSizeLabel": null,
+        "cachePath": null,
+        "acceleratorLabel": null,
+        "status": "unavailable",
+        "statusLabel": "unavailable",
+        "enabled": false,
+        "selected": false,
+        "setupRequired": false,
+        "canRemoveModel": false,
+        "error": VOICE_NOT_BUILT,
+    })])
 }
 
 #[cfg(not(feature = "voice"))]
