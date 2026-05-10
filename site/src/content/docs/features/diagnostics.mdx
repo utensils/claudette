@@ -114,9 +114,13 @@ On startup, Claudette also scans `${TMPDIR}/claudette-dev/*.json` (the discovery
 
 ## Update boot-health rollback
 
-After an in-app update, Claudette starts the new build on a short probation window. The React app sends a boot heartbeat after its first successful paint. If that heartbeat never arrives, Claudette treats the update as failed to start and tries to restore the previous self-contained install.
+After an in-app update, Claudette starts the new build on a short probation window (10 s by default). The React app sends a boot heartbeat after the first commit past the loader (`viewStateHydrated` is true and `loadInitialData` resolved). If that heartbeat never arrives, Claudette treats the update as failed to start and tries to restore the previous self-contained install.
 
 When rollback succeeds, the next launch shows a native dialog saying which version failed and which version was restored. When rollback cannot be applied (for example, there was no usable previous-install backup or the install location could not be replaced), Claudette writes a no-loop failure report and shows a dialog with the failed version plus the release URL to download manually.
+
+A force-quit during the probation window leaves the sentinel on disk; the next launch increments the attempt counter and treats `attempts >= 2` as "this build runs" (the user already booted past the timer once), clears the sentinel, and skips arming the timer. This avoids spurious rollbacks on an otherwise healthy build whose user happens to quit during every probation window.
+
+Backups under `~/.claudette/updates/previous/` are pruned to a single generation each time `prepare_for_update` runs, so the directory does not grow unbounded across updates.
 
 Useful files for a rollback bug report:
 
@@ -128,6 +132,10 @@ Useful files for a rollback bug report:
 | `~/.claudette/logs/claudette.<DATE>.log` | Structured timeline under the `claudette::updater` target. |
 
 The OS data dir is `~/Library/Application Support/claudette/` on macOS, `$XDG_DATA_HOME/claudette/` on Linux, and `%APPDATA%/claudette/` on Windows unless `CLAUDETTE_DATA_DIR` overrides it.
+
+### Tuning the probation window
+
+`CLAUDETTE_BOOT_PROBATION_SECS` overrides the default 10 s probation. Useful for slow first-launch scenarios (e.g. cold-cache Linux builds where libwebkit2gtk dynamic loading dominates startup time) and for shrinking the window while testing the rollback path locally. Values are clamped to the range 1–120 s; non-numeric values fall back to the default. Setting `CLAUDETTE_BOOT_PROBATION_SECS=2` plus an artificial pre-render hang in the React tree is the recommended way to exercise the rollback dialog from a dev build.
 
 ## Sandboxed (fresh-user) sessions
 

@@ -90,9 +90,22 @@ function App() {
   // Listen for MCP supervisor status events from the Rust backend.
   useMcpStatus();
 
+  // Boot-health heartbeat for the post-update probation window.
+  //
+  // This must NOT fire on the initial render — at that point this
+  // component returns `null` (see the `if (!viewStateHydrated) return
+  // null;` early return below), AppLayout has not mounted, and a
+  // module-eval crash inside AppLayout's import graph would still leave
+  // App's first useEffect to fire and silently mark the broken build
+  // healthy. Gate on `viewStateHydrated` so we only ack after the React
+  // tree has actually committed past the loader, and after
+  // `loadInitialData` succeeded (it's the gate that flips
+  // `viewStateHydrated`). See GitHub issue 731 for the design intent —
+  // "first paint of any non-error-boundary route".
   useEffect(() => {
+    if (!viewStateHydrated) return;
     bootOk().catch((err) => console.error("Failed to acknowledge boot:", err));
-  }, []);
+  }, [viewStateHydrated]);
 
   // Hydrate persisted view state after workspaces are loaded, then write back
   // future layout, selection, tab, and terminal-view changes.

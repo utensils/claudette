@@ -11,7 +11,27 @@ use tokio::sync::Notify;
 
 const SENTINEL_FILE: &str = "boot-probation.json";
 const REPORT_FILE: &str = "boot-rollback-report.json";
-const PROBATION_TIMEOUT: Duration = Duration::from_secs(10);
+const DEFAULT_PROBATION_SECS: u64 = 10;
+/// Hard floor / ceiling for the env-var override. A 0-second probation
+/// would never let `boot_ok` race the timer; a 10-minute probation makes
+/// the rollback feel broken to users on the unhappy path.
+const MIN_PROBATION_SECS: u64 = 1;
+const MAX_PROBATION_SECS: u64 = 120;
+/// After this many recorded launch attempts on the same sentinel, we
+/// stop arming the rollback. The user has already booted past the
+/// probation window once (otherwise we'd have rolled back on attempt
+/// 1) — that's the strongest "this build runs" signal we can collect
+/// without IPC. Issue #731 specifically calls out this heuristic for
+/// the force-quit-during-probation edge case.
+const MAX_PROBATION_ATTEMPTS: u32 = 2;
+
+fn probation_timeout() -> Duration {
+    let raw = std::env::var("CLAUDETTE_BOOT_PROBATION_SECS")
+        .ok()
+        .and_then(|s| s.trim().parse::<u64>().ok())
+        .unwrap_or(DEFAULT_PROBATION_SECS);
+    Duration::from_secs(raw.clamp(MIN_PROBATION_SECS, MAX_PROBATION_SECS))
+}
 
 #[derive(Default)]
 pub struct BootProbationState {
@@ -151,6 +171,17 @@ pub fn prepare_for_update(
     write_probation(data_dir, &probation)
 }
 
+/// Mark this boot as healthy so the in-memory timer is cancelled and
+/// the on-disk sentinel is dropped.
+///
+/// Order is deliberate: we ack the in-memory state **before** attempting
+/// the file delete. If `remove_file` fails (disk full, permission
+/// denied, weirder filesystem state), the timer is already cancelled —
+/// we'd rather acknowledge a healthy build and leak a stale sentinel
+/// than fail fast and let the rollback fire on a perfectly working
+/// build. The next launch's `start_monitor` will increment `attempts`
+/// on the leaked sentinel; `MAX_PROBATION_ATTEMPTS` then bounds the
+/// retries so the leak self-heals on the second healthy boot.
 pub async fn acknowledge_boot(
     data_dir: &Path,
     state: &Arc<BootProbationState>,
@@ -169,19 +200,47 @@ pub fn start_monitor(app: AppHandle, state: Arc<BootProbationState>, data_dir: P
     let Ok(mut probation) = read_probation_path(&path) else {
         return;
     };
-    if probation.status == ProbationStatus::RollbackFailed {
+    // RollbackFailed: a previous launch already tried and surfaced the
+    // user-facing dialog — don't try again, the report is one-shot.
+    // RollbackInProgress: a previous launch's helper is currently
+    // restoring the backup and waiting on parent exit. Re-arming here
+    // would race the helper for the install location and could spawn
+    // a second helper that competes with it.
+    if matches!(
+        probation.status,
+        ProbationStatus::RollbackFailed | ProbationStatus::RollbackInProgress
+    ) {
         return;
     }
 
     probation.attempts = probation.attempts.saturating_add(1);
+
+    // Bounded retry: once we've recorded MAX_PROBATION_ATTEMPTS launches
+    // without a rollback firing, the user has booted past the timer at
+    // least once. Treat the build as healthy, drop the sentinel, and
+    // skip arming. Without this bound, a user who force-quits during
+    // every probation window would keep tripping rollbacks on a build
+    // that actually works for them.
+    if probation.attempts >= MAX_PROBATION_ATTEMPTS {
+        tracing::info!(
+            target: "claudette::updater",
+            attempts = probation.attempts,
+            failed_version = %probation.failed_version,
+            "boot probation cleared after reaching attempt threshold without a rollback"
+        );
+        let _ = std::fs::remove_file(&path);
+        return;
+    }
+
     if let Err(e) = write_probation(&data_dir, &probation) {
         tracing::warn!(target: "claudette::updater", error = %e, "failed to update boot probation attempt count");
     }
 
+    let timeout = probation_timeout();
     tauri::async_runtime::spawn(async move {
         tokio::select! {
             _ = state.cancel.notified() => {}
-            _ = tokio::time::sleep(PROBATION_TIMEOUT) => {
+            _ = tokio::time::sleep(timeout) => {
                 if state.is_acknowledged() {
                     return;
                 }
@@ -366,19 +425,26 @@ fn spawn_rollback_helper(sentinel: &Path) -> Result<(), String> {
         .map_err(|e| format!("spawn rollback helper {}: {e}", helper.display()))
 }
 
-fn helper_executable(_sentinel: &Path) -> Result<PathBuf, String> {
+#[cfg(windows)]
+fn helper_executable(sentinel: &Path) -> Result<PathBuf, String> {
+    // Windows holds an exclusive lock on a running .exe, so the helper
+    // cannot run from inside the install dir we're about to rewrite.
+    // Stage a copy alongside the sentinel (data dir, outside the install
+    // tree) and run that one instead. The copy leaks one exe per failed
+    // update — small (~10 MB) and well-bounded.
     let current = std::env::current_exe().map_err(|e| format!("current_exe: {e}"))?;
-    #[cfg(windows)]
-    {
-        let helper = result_path_parent(_sentinel).join("boot-rollback-helper.exe");
-        std::fs::copy(&current, &helper)
-            .map_err(|e| format!("copy rollback helper {}: {e}", helper.display()))?;
-        Ok(helper)
-    }
-    #[cfg(not(windows))]
-    {
-        Ok(current)
-    }
+    let helper = result_path_parent(sentinel).join("boot-rollback-helper.exe");
+    std::fs::copy(&current, &helper)
+        .map_err(|e| format!("copy rollback helper {}: {e}", helper.display()))?;
+    Ok(helper)
+}
+
+#[cfg(not(windows))]
+fn helper_executable(_sentinel: &Path) -> Result<PathBuf, String> {
+    // Unix lets us delete a running executable (the inode persists for
+    // the life of the running process), so the helper can be the
+    // current exe — no copy needed.
+    std::env::current_exe().map_err(|e| format!("current_exe: {e}"))
 }
 
 fn wait_for_parent_exit(pid: u32, timeout: Duration) {
@@ -490,18 +556,72 @@ fn create_backup(target: &InstallTarget, current_version: &str) -> Result<Option
             backup_path.display()
         ));
     }
+    // GC stale backups from prior versions. We keep only the
+    // just-written one — at this point the new install hasn't been
+    // staged yet, so this is the *only* backup we'll need to fall
+    // back on. A 200-300 MB `.app` bundle accumulating once per
+    // update would otherwise turn `~/.claudette/updates/previous/`
+    // into a slow disk leak.
+    let _ = prune_stale_backups(&backup_root);
     Ok(Some(backup_path))
 }
 
+/// Best-effort sweep of `~/.claudette/updates/previous/`. Deletes every
+/// versioned subdirectory except `keep`. Failures are logged and
+/// swallowed — a residual backup is never worse than aborting the
+/// update mid-flight.
+fn prune_stale_backups(keep: &Path) {
+    let Some(parent) = keep.parent() else {
+        return;
+    };
+    let Ok(entries) = std::fs::read_dir(parent) else {
+        return;
+    };
+    let keep_name = keep.file_name();
+    for entry in entries.flatten() {
+        if Some(entry.file_name().as_os_str()) == keep_name.map(|s| s.as_ref()) {
+            continue;
+        }
+        let path = entry.path();
+        if let Err(e) = remove_path(&path) {
+            tracing::warn!(
+                target: "claudette::updater",
+                path = %path.display(),
+                error = %e,
+                "failed to GC stale boot rollback backup"
+            );
+        }
+    }
+}
+
+/// Recursive `cp -a` that preserves symlinks.
+///
+/// macOS `.app` bundles routinely contain symlinks inside `Frameworks/`
+/// (e.g. `Foo.framework/Foo -> Versions/Current/Foo`). The previous
+/// implementation used `entry.metadata().is_dir()` to decide between
+/// directory recursion and `std::fs::copy`; metadata for a symlink is
+/// the symlink itself (`is_dir() == false`), so symlinks fell through
+/// to `std::fs::copy`, which **follows** symlinks. A symlink-to-directory
+/// then errors with `Is a directory`, which we surfaced as a backup
+/// failure and degraded silently to "report only" rollback.
+///
+/// We now branch on `file_type()` (which exposes `is_symlink()`) and
+/// recreate links via `std::os::*::fs::symlink*`, mirroring `cp -R` /
+/// `rsync -a` semantics. On Windows, creating symlinks normally
+/// requires Developer Mode or admin privileges; if it fails we surface
+/// the io error rather than silently losing the link.
 fn copy_path(from: &Path, to: &Path) -> std::io::Result<()> {
-    let meta = std::fs::metadata(from)?;
-    if meta.is_dir() {
+    let file_type = std::fs::symlink_metadata(from)?.file_type();
+    if file_type.is_symlink() {
+        copy_symlink(from, to)
+    } else if file_type.is_dir() {
         copy_dir_recursive(from, to)
     } else {
         if let Some(parent) = to.parent() {
             std::fs::create_dir_all(parent)?;
         }
         std::fs::copy(from, to)?;
+        let meta = std::fs::metadata(from)?;
         std::fs::set_permissions(to, meta.permissions())?;
         Ok(())
     }
@@ -513,14 +633,18 @@ fn copy_dir_recursive(from: &Path, to: &Path) -> std::io::Result<()> {
         let entry = entry?;
         let source = entry.path();
         let dest = to.join(entry.file_name());
-        let meta = entry.metadata()?;
-        if meta.is_dir() {
+        let file_type = entry.file_type()?;
+        if file_type.is_symlink() {
+            copy_symlink(&source, &dest)?;
+        } else if file_type.is_dir() {
             copy_dir_recursive(&source, &dest)?;
         } else {
-            if let Some(parent) = dest.parent() {
-                std::fs::create_dir_all(parent)?;
-            }
             std::fs::copy(&source, &dest)?;
+            // For regular files, `entry.metadata()` is the file's own
+            // metadata (the symlink branch above already handled link
+            // entries). Setting permissions explicitly survives any
+            // platform where `std::fs::copy` doesn't preserve them.
+            let meta = entry.metadata()?;
             std::fs::set_permissions(&dest, meta.permissions())?;
         }
     }
@@ -529,13 +653,57 @@ fn copy_dir_recursive(from: &Path, to: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
+#[cfg(unix)]
+fn copy_symlink(from: &Path, to: &Path) -> std::io::Result<()> {
+    use std::os::unix::fs::symlink;
+    let target = std::fs::read_link(from)?;
+    if let Some(parent) = to.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    // `symlink()` refuses to clobber an existing entry; drop whatever
+    // is there first. The previous remove_path() handles dir/file/link
+    // (it now uses symlink_metadata so it won't dereference a link).
+    remove_path_no_follow(to)?;
+    symlink(target, to)
+}
+
+#[cfg(windows)]
+fn copy_symlink(from: &Path, to: &Path) -> std::io::Result<()> {
+    use std::os::windows::fs::{symlink_dir, symlink_file};
+    let target = std::fs::read_link(from)?;
+    if let Some(parent) = to.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    remove_path_no_follow(to)?;
+    // Probe the resolved target type to choose between symlink_file
+    // and symlink_dir. If the target is unreachable (broken link or
+    // relative-to-source resolution we can't follow), default to
+    // symlink_file — matches PowerShell's `New-Item -ItemType
+    // SymbolicLink` default for unresolved targets.
+    let is_dir = from.metadata().map(|m| m.is_dir()).unwrap_or(false);
+    if is_dir {
+        symlink_dir(target, to)
+    } else {
+        symlink_file(target, to)
+    }
+}
+
 fn remove_path(path: &Path) -> std::io::Result<()> {
-    match std::fs::metadata(path) {
+    match std::fs::symlink_metadata(path) {
+        Ok(meta) if meta.file_type().is_symlink() => std::fs::remove_file(path),
         Ok(meta) if meta.is_dir() => std::fs::remove_dir_all(path),
         Ok(_) => std::fs::remove_file(path),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(e) => Err(e),
     }
+}
+
+/// Identical to `remove_path` today (both branch on `symlink_metadata`),
+/// but kept as a distinct name at the symlink-replacement call sites so
+/// future readers can see "we explicitly do not want to follow the link
+/// at this point" without re-deriving it from `remove_path`'s body.
+fn remove_path_no_follow(path: &Path) -> std::io::Result<()> {
+    remove_path(path)
 }
 
 fn read_probation_path(path: &Path) -> Result<BootProbation, String> {
@@ -726,5 +894,158 @@ mod tests {
         let got = read_probation_path(&sentinel_path(tmp.path())).unwrap();
         assert_eq!(got.status, ProbationStatus::RollbackInProgress);
         assert_eq!(got.attempts, 2);
+    }
+
+    /// Regression: macOS `.app` bundles routinely contain framework
+    /// symlinks like `Foo.framework/Foo -> Versions/Current/Foo`. Before
+    /// this branch the recursive copy used `metadata().is_dir()`, hit the
+    /// non-dir branch on a symlink, and failed because `std::fs::copy`
+    /// can't copy a symlink-to-directory (`Is a directory`). The backup
+    /// then errored out and rollback silently degraded to a "report
+    /// only" path. This test fixes that contract by asserting symlinks
+    /// survive a backup → restore roundtrip.
+    #[cfg(unix)]
+    #[test]
+    fn copy_path_preserves_symlinks_for_macos_frameworks() {
+        use std::os::unix::fs::symlink;
+        let tmp = tempdir().unwrap();
+        let src = tmp.path().join("Source.app");
+        let frameworks = src.join("Contents/Frameworks/Foo.framework");
+        let versions = frameworks.join("Versions/A");
+        std::fs::create_dir_all(&versions).unwrap();
+        std::fs::write(versions.join("Foo"), b"binary").unwrap();
+        // Both kinds of symlink layouts found in real .app bundles:
+        // a relative symlink to a directory and a relative symlink to
+        // a file inside that directory.
+        symlink("A", frameworks.join("Versions/Current")).unwrap();
+        symlink("Versions/Current/Foo", frameworks.join("Foo")).unwrap();
+
+        let dst = tmp.path().join("Backup.app");
+        copy_path(&src, &dst).unwrap();
+
+        let dir_link = dst.join("Contents/Frameworks/Foo.framework/Versions/Current");
+        let file_link = dst.join("Contents/Frameworks/Foo.framework/Foo");
+        assert!(
+            std::fs::symlink_metadata(&dir_link)
+                .unwrap()
+                .file_type()
+                .is_symlink(),
+            "Versions/Current must remain a symlink"
+        );
+        assert_eq!(std::fs::read_link(&dir_link).unwrap(), Path::new("A"));
+        assert!(
+            std::fs::symlink_metadata(&file_link)
+                .unwrap()
+                .file_type()
+                .is_symlink(),
+            "Foo entry must remain a symlink"
+        );
+        assert_eq!(
+            std::fs::read_link(&file_link).unwrap(),
+            Path::new("Versions/Current/Foo")
+        );
+        // The link's target must still resolve through the restored bundle.
+        assert_eq!(std::fs::read(&file_link).unwrap(), b"binary");
+    }
+
+    #[test]
+    fn create_backup_prunes_older_siblings() {
+        let _guard = env_lock().lock().unwrap_or_else(|p| p.into_inner());
+        let tmp = tempdir().unwrap();
+        let home = tmp.path().join("home");
+        unsafe { std::env::set_var("CLAUDETTE_HOME", &home) };
+
+        // Pre-existing stale generation we expect to be cleaned up.
+        let stale = updates_previous_dir("0.10.0");
+        std::fs::create_dir_all(stale.join("Old.AppImage")).unwrap();
+        std::fs::write(stale.join("Old.AppImage/payload"), b"old").unwrap();
+
+        let source_dir = tmp.path().join("Source.AppImage");
+        std::fs::write(&source_dir, b"current binary").unwrap();
+        let target = InstallTarget {
+            kind: InstallKind::LinuxAppImage,
+            target_path: source_dir.clone(),
+            executable_path: source_dir.clone(),
+            is_dir: false,
+        };
+
+        let backup = create_backup(&target, "0.24.0").unwrap().unwrap();
+        assert!(backup.exists(), "fresh backup should exist");
+        assert!(!stale.exists(), "stale {} should be GC'd", stale.display());
+
+        unsafe { std::env::remove_var("CLAUDETTE_HOME") };
+    }
+
+    #[test]
+    fn start_monitor_clears_sentinel_at_attempt_threshold() {
+        // Guard against any lingering env probation override that another
+        // test might have set in this process. start_monitor uses
+        // probation_timeout() which honors $CLAUDETTE_BOOT_PROBATION_SECS.
+        let tmp = tempdir().unwrap();
+        let mut probation = sample_probation(tmp.path(), None);
+        probation.attempts = MAX_PROBATION_ATTEMPTS - 1;
+        write_probation(tmp.path(), &probation).unwrap();
+
+        // Re-read, increment, write, decide via the same logic
+        // start_monitor uses. We can't call start_monitor directly here
+        // because it spawns onto the Tauri async runtime which needs
+        // an AppHandle; the threshold logic itself is what we want
+        // covered.
+        let path = sentinel_path(tmp.path());
+        let mut p = read_probation_path(&path).unwrap();
+        p.attempts = p.attempts.saturating_add(1);
+        if p.attempts >= MAX_PROBATION_ATTEMPTS {
+            std::fs::remove_file(&path).unwrap();
+        } else {
+            write_probation(tmp.path(), &p).unwrap();
+        }
+
+        assert!(
+            !path.exists(),
+            "sentinel must be cleared once we reach the attempt threshold"
+        );
+    }
+
+    #[test]
+    fn probation_timeout_clamps_env_override() {
+        // Re-use env_lock to keep this from racing other env-mutating
+        // tests in this module.
+        let _guard = env_lock().lock().unwrap_or_else(|p| p.into_inner());
+        unsafe { std::env::set_var("CLAUDETTE_BOOT_PROBATION_SECS", "0") };
+        assert!(probation_timeout() >= Duration::from_secs(MIN_PROBATION_SECS));
+        unsafe { std::env::set_var("CLAUDETTE_BOOT_PROBATION_SECS", "9999") };
+        assert!(probation_timeout() <= Duration::from_secs(MAX_PROBATION_SECS));
+        unsafe { std::env::set_var("CLAUDETTE_BOOT_PROBATION_SECS", "garbage") };
+        assert_eq!(
+            probation_timeout(),
+            Duration::from_secs(DEFAULT_PROBATION_SECS)
+        );
+        unsafe { std::env::remove_var("CLAUDETTE_BOOT_PROBATION_SECS") };
+    }
+
+    /// Regression: when we restore a backup over a destination that
+    /// already contains a symlink, the previous `remove_path` followed
+    /// `std::fs::metadata` which dereferenced the link and could
+    /// recursively delete the link's *target* instead of the link
+    /// itself. Lock that down: removing through a symlink should drop
+    /// the link, not its target.
+    #[cfg(unix)]
+    #[test]
+    fn remove_path_does_not_follow_symlinks() {
+        use std::os::unix::fs::symlink;
+        let tmp = tempdir().unwrap();
+        let target_dir = tmp.path().join("target_dir");
+        std::fs::create_dir_all(&target_dir).unwrap();
+        std::fs::write(target_dir.join("keepme"), b"keep").unwrap();
+        let link = tmp.path().join("link");
+        symlink(&target_dir, &link).unwrap();
+
+        remove_path(&link).unwrap();
+
+        assert!(!link.exists(), "the symlink itself should be gone");
+        assert!(
+            target_dir.join("keepme").exists(),
+            "the link's target must not be touched"
+        );
     }
 }

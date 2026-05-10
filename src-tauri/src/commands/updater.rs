@@ -268,12 +268,21 @@ pub async fn install_pending_update(
     let mut total: u64 = 0;
     let mut downloaded: u64 = 0;
 
+    // Emit a "preparing" pre-state before the rollback backup runs.
+    // On macOS where the install is a 200-300 MB `.app` bundle, the
+    // recursive copy can take several seconds — without this event the
+    // UI sits silent between "Install update" being clicked and the
+    // download progress bar starting to fill. Frontends that don't
+    // listen for it simply see the existing `updater://progress`
+    // sequence as before.
+    let _ = app.emit("updater://preparing", "backup");
     boot_probation::prepare_for_update(
         &claudette::path::data_dir(),
         &update.current_version,
         &update.version,
         update.download_url.as_str(),
     )?;
+    let _ = app.emit("updater://preparing", "downloading");
 
     update
         .download_and_install(

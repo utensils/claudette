@@ -92,6 +92,7 @@ try {
   await page.addInitScript(() => {
     let nextCallbackId = 1;
     const callbacks = new Map();
+    window.__CLAUDETTE_SMOKE_UNKNOWN_INVOKES__ = [];
     window.__TAURI_INTERNALS__ = {
       invoke: async (command) => window.__CLAUDETTE_SMOKE_INVOKE__(command),
       transformCallback: (callback, once = false) => {
@@ -145,6 +146,12 @@ try {
         case "plugin:event|listen":
           return 1;
         default:
+          // Record but don't throw — bubbling an exception here causes
+          // a chain of unhandled-rejection console errors that mask the
+          // first useful diagnostic. We collect the unknown command and
+          // let the Node side decide whether to fail the run after the
+          // boot completes.
+          window.__CLAUDETTE_SMOKE_UNKNOWN_INVOKES__.push(command);
           return null;
       }
     };
@@ -161,6 +168,21 @@ try {
 
   if (failures.length > 0) {
     throw new Error(`Bundle boot emitted fatal errors:\n${failures.join("\n")}`);
+  }
+
+  // Surface unmocked Tauri commands so new boot-time IPC doesn't slip
+  // past the smoke. This is a warning today (env-gated to fail-loud)
+  // rather than a hard failure — the smoke is meant to catch *boot*
+  // breakage; an unmocked but optional command shouldn't block PRs
+  // unless we explicitly want it to.
+  const unknown = await page.evaluate(() => window.__CLAUDETTE_SMOKE_UNKNOWN_INVOKES__ || []);
+  const dedup = Array.from(new Set(unknown));
+  if (dedup.length > 0) {
+    const msg = `Smoke saw unmocked Tauri invocations: ${dedup.join(", ")}`;
+    if (process.env.CLAUDETTE_SMOKE_STRICT === "1") {
+      throw new Error(msg);
+    }
+    console.warn(`warn: ${msg}`);
   }
 
   console.log(`Built bundle boot smoke passed at ${url}`);
