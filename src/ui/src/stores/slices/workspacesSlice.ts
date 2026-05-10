@@ -16,6 +16,12 @@ export interface WorkspacesSlice {
    *  view rendered when no workspace is selected. Mutually exclusive with
    *  `selectedWorkspaceId`: setting one clears the other. */
   selectedRepositoryId: string | null;
+  /** Repo id with a workspace creation currently in flight. Drives the
+   *  sidebar's optimistic "preparing workspace…" placeholder row so that
+   *  any caller (sidebar `+`, welcome card CTA, project-scoped CTA,
+   *  Cmd+Shift+N hotkey) gives the same visual feedback. */
+  creatingWorkspaceRepoId: string | null;
+  setCreatingWorkspaceRepoId: (repoId: string | null) => void;
   workspaceEnvironment: Record<string, WorkspaceEnvironmentPreparation>;
   setWorkspaces: (workspaces: Workspace[]) => void;
   addWorkspace: (ws: Workspace) => void;
@@ -46,6 +52,9 @@ export const createWorkspacesSlice: StateCreator<
   workspaces: [],
   selectedWorkspaceId: null,
   selectedRepositoryId: null,
+  creatingWorkspaceRepoId: null,
+  setCreatingWorkspaceRepoId: (creatingWorkspaceRepoId) =>
+    set({ creatingWorkspaceRepoId }),
   workspaceEnvironment: {},
   setWorkspaces: (workspaces) => set({ workspaces }),
   // Idempotent by id: workspace creates can race between the Tauri

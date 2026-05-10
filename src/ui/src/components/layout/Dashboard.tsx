@@ -1,5 +1,5 @@
 import { memo, useCallback, useMemo, useEffect, useState } from "react";
-import { GitBranch, Globe, ChevronDown, ChevronRight } from "lucide-react";
+import { GitBranch, Globe, ChevronDown, ChevronRight, Archive, RotateCcw } from "lucide-react";
 import { useAppStore } from "../../stores/useAppStore";
 import type { AgentStatus } from "../../types/workspace";
 import { isAgentBusy } from "../../utils/agentStatus";
@@ -11,6 +11,7 @@ import { SessionStatusIcon, type SessionStatusKind } from "../shared/SessionStat
 import { formatElapsedSeconds } from "../chat/chatHelpers";
 import { WelcomeEmptyState } from "./WelcomeEmptyState";
 import { useCreateWorkspace } from "../../hooks/useCreateWorkspace";
+import { restoreWorkspace } from "../../services/tauri";
 import styles from "./Dashboard.module.css";
 
 /** Strip markdown syntax for a clean one-line preview. */
@@ -308,6 +309,34 @@ export function Dashboard() {
     [sortedWorkspaces, scopedRepo],
   );
 
+  const scopedArchivedWorkspaces = useMemo(
+    () => (scopedRepo
+      ? workspaces
+          .filter((ws) => ws.repository_id === scopedRepo.id && ws.status === "Archived")
+          .sort((a, b) => b.created_at.localeCompare(a.created_at))
+      : []),
+    [workspaces, scopedRepo],
+  );
+
+  const updateWorkspace = useAppStore((s) => s.updateWorkspace);
+  const [archivedOpen, setArchivedOpen] = useState(false);
+  const [restoringWsId, setRestoringWsId] = useState<string | null>(null);
+  const handleRestoreWorkspace = useCallback(
+    async (wsId: string) => {
+      if (restoringWsId) return;
+      setRestoringWsId(wsId);
+      try {
+        const path = await restoreWorkspace(wsId);
+        updateWorkspace(wsId, { status: "Active", worktree_path: path });
+      } catch (e) {
+        addToast(`Failed to restore: ${e instanceof Error ? e.message : String(e)}`);
+      } finally {
+        setRestoringWsId(null);
+      }
+    },
+    [updateWorkspace, addToast, restoringWsId],
+  );
+
   if (scopedRepo) {
     const scopedRunning = scopedWorkspaceRows.filter(
       ({ ws }) => isAgentBusy(ws.agent_status),
@@ -372,6 +401,49 @@ export function Dashboard() {
                     />
                   ))}
                 </div>
+              )}
+            </div>
+          )}
+          {scopedArchivedWorkspaces.length > 0 && (
+            <div className={styles.workspacesSection}>
+              <button
+                type="button"
+                className={styles.workspacesHeader}
+                onClick={() => setArchivedOpen((v) => !v)}
+                aria-expanded={archivedOpen}
+              >
+                {archivedOpen ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+                <Archive size={12} className={styles.archivedIcon} aria-hidden="true" />
+                <span className={styles.workspacesTitle}>Archived</span>
+                <span className={styles.headerCount}>
+                  {scopedArchivedWorkspaces.length}
+                </span>
+              </button>
+              {archivedOpen && (
+                <ul className={styles.archivedList}>
+                  {scopedArchivedWorkspaces.map((ws) => (
+                    <li key={ws.id} className={styles.archivedRow}>
+                      <span className={styles.archivedBody}>
+                        <span className={styles.archivedName}>{ws.name}</span>
+                        <span className={styles.archivedBranch}>
+                          <GitBranch size={11} aria-hidden="true" />
+                          {ws.branch_name}
+                        </span>
+                      </span>
+                      <button
+                        type="button"
+                        className={styles.archivedRestore}
+                        onClick={() => handleRestoreWorkspace(ws.id)}
+                        disabled={restoringWsId !== null}
+                        title={`Restore ${ws.name}`}
+                        aria-label={`Restore ${ws.name}`}
+                      >
+                        <RotateCcw size={12} />
+                        Restore
+                      </button>
+                    </li>
+                  ))}
+                </ul>
               )}
             </div>
           )}

@@ -250,3 +250,89 @@
    shared `PanelHeader.module.css`. Nothing toolbar-related lives here
    anymore — kept the comment so future readers don't re-add styles
    that already exist in the shared module. */
+
+/* Archived workspaces section on the project-scoped view. Renders below
+   the active workspace grid (or below the welcome card when there are
+   no active workspaces) so the project view is a complete summary of
+   work-in-the-fridge for the repo, not just live work. */
+
+.archivedIcon {
+  color: var(--text-faint);
+  flex-shrink: 0;
+}
+
+.archivedList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.archivedRow {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 12px;
+  background: var(--hover-bg-subtle);
+  border: 1px solid var(--divider);
+  border-radius: 6px;
+}
+
+.archivedBody {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  flex: 1;
+}
+
+.archivedName {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.archivedBranch {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-dim);
+  flex-shrink: 0;
+}
+
+.archivedRestore {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 500;
+  background: transparent;
+  color: var(--text-muted);
+  border: 1px solid var(--divider);
+  border-radius: 5px;
+  cursor: pointer;
+  transition:
+    background var(--transition-fast),
+    border-color var(--transition-fast),
+    color var(--transition-fast);
+}
+
+.archivedRestore:hover:not(:disabled) {
+  background: var(--hover-bg);
+  border-color: var(--text-faint);
+  color: var(--text-primary);
+}
+
+.archivedRestore:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}

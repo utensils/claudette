@@ -183,7 +183,20 @@ export const Sidebar = memo(function Sidebar() {
   const creatingRef = useRef(false);
   const archivingRef = useRef<Set<string>>(new Set());
   const restoringRef = useRef<Set<string>>(new Set());
-  const [creatingWorkspace, setCreatingWorkspace] = useState<{ repoId: string } | null>(null);
+  // Store-backed optimistic-row state — replaces a local useState pair so
+  // that any caller of useCreateWorkspace (welcome card, project-scoped
+  // CTA, Cmd+Shift+N hotkey) lights up the same sidebar placeholder row
+  // as the inline `+` button does. The setter is still used below for
+  // the inline path, which doesn't yet route through the hook.
+  const creatingWorkspaceRepoId = useAppStore((s) => s.creatingWorkspaceRepoId);
+  const setCreatingWorkspaceRepoId = useAppStore(
+    (s) => s.setCreatingWorkspaceRepoId,
+  );
+  const creatingWorkspace = creatingWorkspaceRepoId
+    ? { repoId: creatingWorkspaceRepoId }
+    : null;
+  const setCreatingWorkspace = (v: { repoId: string } | null) =>
+    setCreatingWorkspaceRepoId(v?.repoId ?? null);
   const [repoContextMenu, setRepoContextMenu] = useState<{
     repoId: string;
     x: number;

@@ -44,6 +44,9 @@ export function useCreateWorkspace(options: UseCreateWorkspaceOptions = {}) {
   const addChatMessage = useAppStore((s) => s.addChatMessage);
   const openModal = useAppStore((s) => s.openModal);
   const expandRepo = useAppStore((s) => s.expandRepo);
+  const setCreatingWorkspaceRepoId = useAppStore(
+    (s) => s.setCreatingWorkspaceRepoId,
+  );
 
   // Single-flight guard — duplicate clicks while a creation is in flight are
   // dropped silently. The ref lets us short-circuit before we even touch state.
@@ -55,6 +58,11 @@ export function useCreateWorkspace(options: UseCreateWorkspaceOptions = {}) {
       if (inFlight.current) return null;
       inFlight.current = true;
       setCreatingRepoId(repoId);
+      // Publish to the store so the sidebar's optimistic "preparing
+      // workspace…" placeholder row appears immediately, regardless of
+      // which UI surface (sidebar +, welcome card, project view, hotkey)
+      // triggered the creation. Cleared in `finally` below.
+      setCreatingWorkspaceRepoId(repoId);
 
       try {
         const generated = await generateWorkspaceName();
@@ -160,10 +168,19 @@ export function useCreateWorkspace(options: UseCreateWorkspaceOptions = {}) {
         throw e;
       } finally {
         setCreatingRepoId(null);
+        setCreatingWorkspaceRepoId(null);
         inFlight.current = false;
       }
     },
-    [addWorkspace, selectWorkspace, addChatMessage, openModal, expandRepo, selectOnCreate],
+    [
+      addWorkspace,
+      selectWorkspace,
+      addChatMessage,
+      openModal,
+      expandRepo,
+      setCreatingWorkspaceRepoId,
+      selectOnCreate,
+    ],
   );
 
   return {
