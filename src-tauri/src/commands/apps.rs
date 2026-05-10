@@ -806,13 +806,22 @@ if ($null -eq $bytes -or $bytes.Length -eq 0) { exit 3 }
 [Convert]::ToBase64String($bytes)
 "#;
 
-/// Where the icon disk cache lives. Same parent as `apps.json` so a
-/// `rm -rf ~/.claudette` (or a Windows equivalent) wipes both at
-/// once. Cache files are tiny base64 PNGs (~50KB max each) so a
-/// stale entry costs no real space.
+/// Where the icon disk cache lives. Routed through
+/// [`claudette::path::claudette_home`] so it follows the same
+/// `$CLAUDETTE_HOME` override that `apps_config_path` and the rest
+/// of the on-disk state honor — important for `dev --clean`, which
+/// points `CLAUDETTE_HOME` at a per-PID tmp sandbox: cache entries
+/// land under the sandbox and get cleaned up when it tears down,
+/// instead of leaking into the real `~/.claudette/icon-cache/` and
+/// surviving across sessions.
+///
+/// Returns `Option` purely for symmetry with the old shape (callers
+/// already handle `None`); `claudette_home` itself falls back to
+/// `./.claudette` rather than failing, so this is effectively
+/// infallible today.
 #[cfg(target_os = "windows")]
 fn icon_cache_dir() -> Option<PathBuf> {
-    dirs::home_dir().map(|h| h.join(".claudette").join("icon-cache"))
+    Some(claudette::path::claudette_home().join("icon-cache"))
 }
 
 /// Build a stable cache key for a Windows icon source.
@@ -1897,6 +1906,39 @@ mod tests {
             "expected None for missing path; got {:?}",
             result
         );
+    }
+
+    /// `icon_cache_dir()` must route through `claudette_home` so the
+    /// cache lands under `dev --clean`'s per-PID sandbox instead of
+    /// the real `~/.claudette/icon-cache/`. A direct `dirs::home_dir()`
+    /// would silently leak across sessions — this test pins the
+    /// override against that regression.
+    ///
+    /// `$CLAUDETTE_HOME` is process-global so we restore the previous
+    /// value after the test, regardless of pass/fail.
+    #[cfg(windows)]
+    #[test]
+    fn icon_cache_dir_honors_claudette_home_override() {
+        let prev = std::env::var_os("CLAUDETTE_HOME");
+        let tmp = tempfile::tempdir().unwrap();
+        // SAFETY: cargo test on Windows runs tests serially within a
+        // single process by default, but other tests in this binary
+        // could in principle observe CLAUDETTE_HOME mid-flight.
+        // We rely on the same pragma the upstream `path::tests` use
+        // (single-threaded `--test-threads=1` is the project default
+        // for env-mutating tests). Either way, the prev-value restore
+        // below keeps the suite hermetic if test ordering changes.
+        unsafe {
+            std::env::set_var("CLAUDETTE_HOME", tmp.path());
+        }
+        let dir = icon_cache_dir().expect("home is set, dir should resolve");
+        assert_eq!(dir, tmp.path().join("icon-cache"));
+        unsafe {
+            match prev {
+                Some(v) => std::env::set_var("CLAUDETTE_HOME", v),
+                None => std::env::remove_var("CLAUDETTE_HOME"),
+            }
+        }
     }
 
     /// Cache key must be stable for the same .exe (same path, size,

@@ -30,7 +30,7 @@
 // on Windows (where `bash` may resolve to WSL bash which can't see the
 // Windows-side `node` binary) without depending on a POSIX shell.
 
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join, relative, resolve, sep } from "node:path";
 
