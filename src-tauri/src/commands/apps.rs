@@ -98,14 +98,63 @@ fn apps_config_path() -> Option<PathBuf> {
     Some(claudette::path::claudette_home().join("apps.json"))
 }
 
+/// Merge missing entries from `embedded` into `user` without
+/// overwriting any field the user has explicitly set. Two cases:
+///
+/// - **New entries:** any embedded app whose `id` is absent from
+///   `user` is appended verbatim. This lets a Claudette upgrade
+///   ship new editor / terminal entries (e.g. Windows Terminal,
+///   PowerShell 7) without forcing the user to delete their
+///   `apps.json`.
+/// - **Backfill new optional fields:** if the user's entry has an
+///   empty `mac_app_names` / `windows_exe_names`, copy from the
+///   matching embedded entry. These are never user-empty by intent
+///   (the field either matters for the platform or doesn't), and
+///   skipping them would silently break icon extraction for users
+///   whose `apps.json` predates the field being added.
+///
+/// Anything the user has actually customized — `bin_names`,
+/// `open_args`, `name`, `category`, `needs_terminal` — is left
+/// untouched.
+fn merge_missing_default_entries(mut user: AppsConfig, embedded: AppsConfig) -> AppsConfig {
+    use std::collections::HashSet;
+    let user_ids: HashSet<String> = user.apps.iter().map(|a| a.id.clone()).collect();
+
+    for app in user.apps.iter_mut() {
+        let Some(default_entry) = embedded.apps.iter().find(|d| d.id == app.id) else {
+            continue;
+        };
+        if app.mac_app_names.is_empty() && !default_entry.mac_app_names.is_empty() {
+            app.mac_app_names = default_entry.mac_app_names.clone();
+        }
+        if app.windows_exe_names.is_empty() && !default_entry.windows_exe_names.is_empty() {
+            app.windows_exe_names = default_entry.windows_exe_names.clone();
+        }
+    }
+
+    for default_entry in embedded.apps {
+        if !user_ids.contains(&default_entry.id) {
+            user.apps.push(default_entry);
+        }
+    }
+
+    user
+}
+
 /// Load and parse apps.json from the given path.
 /// If the file doesn't exist, write the embedded default and return it.
 /// If the file is malformed, log a warning and return the embedded default.
+/// If the file parses, merge in any missing entries / fields from the
+/// embedded default so upgrades surface new apps without the user
+/// having to delete their config.
 fn load_apps_config_from(path: &Path) -> AppsConfig {
+    let embedded: AppsConfig =
+        serde_json::from_str(DEFAULT_APPS_JSON).expect("embedded default-apps.json must be valid");
+
     if path.exists() {
         match std::fs::read_to_string(path) {
             Ok(content) => match serde_json::from_str::<AppsConfig>(&content) {
-                Ok(config) => return config,
+                Ok(config) => return merge_missing_default_entries(config, embedded),
                 Err(e) => tracing::warn!(
                     target: "claudette::apps",
                     path = %path.display(),
@@ -135,7 +184,7 @@ fn load_apps_config_from(path: &Path) -> AppsConfig {
         }
     }
     // Fallback: the embedded default always parses.
-    serde_json::from_str(DEFAULT_APPS_JSON).expect("embedded default-apps.json must be valid")
+    embedded
 }
 
 /// Public entry point — resolves ~/.claudette/apps.json and loads it.
@@ -1010,9 +1059,28 @@ pub(crate) async fn open_workspace_in_app_inner(
         .map(|a| a.replace("{}", worktree_path))
         .collect();
 
-    tokio::process::Command::new(&detected.detected_path)
-        .no_console_window()
-        .args(&args)
+    let mut cmd = tokio::process::Command::new(&detected.detected_path);
+    // Windows console terminals (cmd.exe, powershell.exe, pwsh.exe)
+    // need a fresh, visible console of their own — `CREATE_NO_WINDOW`
+    // would launch them invisibly, and inheriting Claudette's console
+    // (the dev launcher's PowerShell, or nothing at all in release)
+    // gives unusable UX. `wt.exe` ignores the flag because it activates
+    // the Windows Terminal app via a separate process, so it's safe
+    // to apply uniformly to the Terminal category. Editors / IDEs /
+    // file managers keep `no_console_window` so they don't flash a
+    // transient cmd window during launch.
+    #[cfg(target_os = "windows")]
+    {
+        if entry.category == AppCategory::Terminal {
+            cmd.new_console_window();
+        } else {
+            cmd.no_console_window();
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    cmd.no_console_window();
+
+    cmd.args(&args)
         .spawn()
         .map_err(|e| format!("Failed to launch {}: {e}", entry.name))?;
 
@@ -1344,6 +1412,121 @@ mod tests {
                 .map(|app| app.id.as_str())
                 .collect::<Vec<_>>(),
             vec!["beditor", "aeditor", "zterm"],
+        );
+    }
+
+    /// Loading a stale user `apps.json` should yield a config that
+    /// includes any embedded entries the user file is missing. This is
+    /// the migration path for users whose file pre-dates the addition
+    /// of e.g. Windows Terminal, PowerShell 7, etc.
+    #[test]
+    fn load_apps_config_merges_missing_default_entries() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("apps.json");
+        // Write a one-entry user config — nothing else present.
+        std::fs::write(
+            &path,
+            r#"{"apps":[{"id":"vscode","name":"VS Code","category":"editor","bin_names":["code"],"open_args":["{}"]}]}"#,
+        )
+        .unwrap();
+
+        let config = load_apps_config_from(&path);
+
+        // User's vscode entry is preserved.
+        assert!(config.apps.iter().any(|a| a.id == "vscode"));
+        // Embedded entries the user lacked are now present.
+        assert!(config.apps.iter().any(|a| a.id == "cursor"));
+        assert!(config.apps.iter().any(|a| a.id == "windows-terminal"));
+        assert!(config.apps.iter().any(|a| a.id == "cmd"));
+    }
+
+    /// Backfilling `windows_exe_names` on a user entry that lacks it
+    /// is the mechanism that lights up icon extraction on Windows for
+    /// pre-existing `apps.json` files. The user's other fields must
+    /// stay untouched — we're only filling the gap for a new
+    /// optional field.
+    #[test]
+    fn merge_backfills_windows_exe_names_without_clobbering_user_fields() {
+        let user = AppsConfig {
+            apps: vec![AppEntry {
+                id: "vscode".into(),
+                // Custom name the user has set — must persist.
+                name: "My VSCode".into(),
+                category: AppCategory::Editor,
+                bin_names: vec!["my-code".into()],
+                mac_app_names: vec![],
+                windows_exe_names: vec![],
+                open_args: vec!["--user".into(), "{}".into()],
+                needs_terminal: false,
+            }],
+        };
+        let embedded = AppsConfig {
+            apps: vec![AppEntry {
+                id: "vscode".into(),
+                name: "VS Code".into(),
+                category: AppCategory::Editor,
+                bin_names: vec!["code".into()],
+                mac_app_names: vec!["Visual Studio Code.app".into()],
+                windows_exe_names: vec!["Code.exe".into()],
+                open_args: vec!["{}".into()],
+                needs_terminal: false,
+            }],
+        };
+
+        let merged = merge_missing_default_entries(user, embedded);
+        assert_eq!(merged.apps.len(), 1);
+        let entry = &merged.apps[0];
+        // User-customized fields untouched.
+        assert_eq!(entry.name, "My VSCode");
+        assert_eq!(entry.bin_names, vec!["my-code".to_string()]);
+        assert_eq!(
+            entry.open_args,
+            vec!["--user".to_string(), "{}".to_string()]
+        );
+        // New optional fields backfilled from the embedded default.
+        assert_eq!(entry.windows_exe_names, vec!["Code.exe".to_string()]);
+        assert_eq!(
+            entry.mac_app_names,
+            vec!["Visual Studio Code.app".to_string()]
+        );
+    }
+
+    /// If the user has explicitly set `windows_exe_names`, the merge
+    /// must NOT overwrite it. This guards the customize-then-upgrade
+    /// path: an advanced user pointing at a portable / non-default
+    /// install shouldn't have their override silently wiped on
+    /// startup.
+    #[test]
+    fn merge_does_not_overwrite_user_windows_exe_names() {
+        let user = AppsConfig {
+            apps: vec![AppEntry {
+                id: "vscode".into(),
+                name: "VS Code".into(),
+                category: AppCategory::Editor,
+                bin_names: vec!["code".into()],
+                mac_app_names: vec![],
+                windows_exe_names: vec!["PortableCode.exe".into()],
+                open_args: vec!["{}".into()],
+                needs_terminal: false,
+            }],
+        };
+        let embedded = AppsConfig {
+            apps: vec![AppEntry {
+                id: "vscode".into(),
+                name: "VS Code".into(),
+                category: AppCategory::Editor,
+                bin_names: vec!["code".into()],
+                mac_app_names: vec![],
+                windows_exe_names: vec!["Code.exe".into()],
+                open_args: vec!["{}".into()],
+                needs_terminal: false,
+            }],
+        };
+
+        let merged = merge_missing_default_entries(user, embedded);
+        assert_eq!(
+            merged.apps[0].windows_exe_names,
+            vec!["PortableCode.exe".to_string()]
         );
     }
 

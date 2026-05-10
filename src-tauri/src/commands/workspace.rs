@@ -12,11 +12,9 @@ use claudette::model::{AgentStatus, ChatMessage, ChatRole, Workspace, WorkspaceS
 use claudette::names::NameGenerator;
 use claudette::ops::workspace::{self as ops_workspace, CreateParams, SetupResult};
 use claudette::ops::{NoopHooks, NotificationEvent, OpsHooks, WorkspaceChangeKind};
-// Only the linux + macOS workspace-opener branches below call
-// `.no_console_window()`; on Windows every call site is `#[cfg]`-ed
-// away, so the trait import is unused. Match the import's gate to the
-// call sites' so Windows -Dwarnings builds stay clean.
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+// All three platforms call into the trait now: Linux/macOS via
+// `.no_console_window()`, Windows via `.new_console_window()` for the
+// fallback terminal launchers below.
 use claudette::process::CommandWindowExt as _;
 
 use crate::commands::apps::{self, DEFAULT_TERMINAL_APP_SETTING_KEY};
@@ -1041,7 +1039,66 @@ pub async fn open_workspace_in_terminal(
         Ok(())
     }
 
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    #[cfg(target_os = "windows")]
+    {
+        // Reach this branch only when no terminal app was detected at
+        // startup — `apps.json` is missing or the user has no terminal
+        // emulator on PATH. Try the four shipping-on-every-Windows
+        // terminals in order of "likely-installed-and-pleasant":
+        // Windows Terminal first (Win11 default + nicer UX), pwsh
+        // second (modern PowerShell), then Windows PowerShell, then
+        // cmd.exe (always present, last-resort). `new_console_window`
+        // ensures cmd/pwsh actually surface a window — see
+        // `process.rs::new_console_window` for the rationale.
+        let attempts: &[(&str, Vec<&str>)] = &[
+            ("wt.exe", vec!["-d", &worktree_path]),
+            (
+                "pwsh.exe",
+                vec!["-NoExit", "-WorkingDirectory", &worktree_path],
+            ),
+            (
+                "powershell.exe",
+                vec!["-NoExit", "-WorkingDirectory", &worktree_path],
+            ),
+            ("cmd.exe", vec!["/K", "cd", "/d", &worktree_path]),
+        ];
+
+        let mut errors = Vec::new();
+        for (binary, args) in attempts {
+            let mut cmd = tokio::process::Command::new(binary);
+            cmd.new_console_window();
+            for arg in args {
+                cmd.arg(arg);
+            }
+            match cmd.spawn() {
+                Ok(_) => {
+                    tracing::info!(
+                        target: "claudette::workspace",
+                        terminal = %binary,
+                        args = ?args,
+                        "successfully launched windows terminal fallback"
+                    );
+                    return Ok(());
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        target: "claudette::workspace",
+                        terminal = %binary,
+                        error = %e,
+                        "failed to launch windows terminal fallback"
+                    );
+                    errors.push(format!("{binary}: {e}"));
+                }
+            }
+        }
+
+        Err(format!(
+            "No Windows terminal could be launched. Tried: {}",
+            errors.join(", ")
+        ))
+    }
+
+    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
     {
         Err("Unsupported platform".to_string())
     }

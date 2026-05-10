@@ -563,9 +563,8 @@ mod tests {
     fn test_search_path_dirs_prefers_bundled_exe_over_cmd_shim_windows() {
         let path = OsString::from(r"C:\tools\npm");
         let cmd_shim = PathBuf::from(r"C:\tools\npm\claude.cmd");
-        let bundled = PathBuf::from(
-            r"C:\tools\npm\node_modules\@anthropic-ai\claude-code\bin\claude.exe",
-        );
+        let bundled =
+            PathBuf::from(r"C:\tools\npm\node_modules\@anthropic-ai\claude-code\bin\claude.exe");
         let cmd_clone = cmd_shim.clone();
         let bundled_clone = bundled.clone();
         let result = search_path_dirs(path.as_os_str(), &move |p| {
@@ -600,9 +599,7 @@ mod tests {
         let cmd_shim = PathBuf::from(r"C:\tools\npm\claude.cmd");
         let exe_clone = exe.clone();
         let cmd_clone = cmd_shim.clone();
-        let result = search_path_dirs(path.as_os_str(), &move |p| {
-            p == exe_clone || p == cmd_clone
-        });
+        let result = search_path_dirs(path.as_os_str(), &move |p| p == exe_clone || p == cmd_clone);
         assert_eq!(result, Some(exe.into_os_string()));
     }
 
