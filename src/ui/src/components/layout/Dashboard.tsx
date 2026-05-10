@@ -1,5 +1,5 @@
 import { memo, useCallback, useMemo, useEffect, useState } from "react";
-import { GitBranch, Globe, ChevronDown, ChevronRight, ArrowLeft } from "lucide-react";
+import { GitBranch, Globe, ChevronDown, ChevronRight, LayoutDashboard } from "lucide-react";
 import { useAppStore } from "../../stores/useAppStore";
 import type { AgentStatus } from "../../types/workspace";
 import { isAgentBusy } from "../../utils/agentStatus";
@@ -183,7 +183,7 @@ export function Dashboard() {
   const openModal = useAppStore((s) => s.openModal);
   const addToast = useAppStore((s) => s.addToast);
   const selectedRepositoryId = useAppStore((s) => s.selectedRepositoryId);
-  const selectRepository = useAppStore((s) => s.selectRepository);
+  const goToDashboard = useAppStore((s) => s.goToDashboard);
 
   const fetchDashboardMetrics = useAppStore((s) => s.fetchDashboardMetrics);
   const fetchAnalyticsMetrics = useAppStore((s) => s.fetchAnalyticsMetrics);
@@ -318,11 +318,11 @@ export function Dashboard() {
           <button
             type="button"
             className={styles.backButton}
-            onClick={() => selectRepository(null)}
-            title="Back to Dashboard"
-            aria-label="Back to Dashboard"
+            onClick={goToDashboard}
+            title="Dashboard"
+            aria-label="Dashboard"
           >
-            <ArrowLeft size={14} />
+            <LayoutDashboard size={14} />
           </button>
           <div className={styles.header}>
             {scopedRepo.icon && (
@@ -340,6 +340,12 @@ export function Dashboard() {
             onCreateWorkspace={handleCreateForRepo}
             onAddRepository={handleAddRepository}
             creating={creating}
+            title={`Start a workspace in ${scopedRepo.name}.`}
+            subtitle={
+              scopedWorkspaceRows.length > 0
+                ? "Or jump back into one of the workspaces below."
+                : "This project doesn't have any active workspaces yet."
+            }
           />
           {scopedWorkspaceRows.length > 0 && (
             <div className={styles.workspacesSection}>

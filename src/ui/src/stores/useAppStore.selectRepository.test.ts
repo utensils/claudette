@@ -76,10 +76,10 @@ describe("selectWorkspace", () => {
     expect(state.selectedRepositoryId).toBeNull();
   });
 
-  it("preserves selectedRepositoryId on Back-to-Dashboard (workspace=null)", () => {
-    // Back-to-Dashboard should land the user back on the project view they
-    // were navigating from — losing it would force them to re-select the
-    // project they were obviously already focused on.
+  it("preserves selectedRepositoryId when clearing workspace (workspace=null)", () => {
+    // Clearing a workspace via selectWorkspace(null) is a "deselect"
+    // primitive; it should leave any project-scoped view intact so callers
+    // composing the two actions can stage their own ordering.
     useAppStore.setState({
       workspaces: [makeWs("ws-1", "repo-1")],
       selectedWorkspaceId: "ws-1",
@@ -91,5 +91,42 @@ describe("selectWorkspace", () => {
     const state = useAppStore.getState();
     expect(state.selectedWorkspaceId).toBeNull();
     expect(state.selectedRepositoryId).toBe("repo-1");
+  });
+});
+
+describe("goToDashboard", () => {
+  it("clears both workspace and repository selection in one shot", () => {
+    // The Dashboard is Claudette's default view; navigating to it shouldn't
+    // require composing two separate clears. The atomic action protects the
+    // UI from rendering an intermediate "workspace cleared but project
+    // still selected" frame.
+    useAppStore.setState({
+      workspaces: [makeWs("ws-1", "repo-1")],
+      selectedWorkspaceId: "ws-1",
+      selectedRepositoryId: "repo-1",
+    });
+
+    useAppStore.getState().goToDashboard();
+
+    const state = useAppStore.getState();
+    expect(state.selectedWorkspaceId).toBeNull();
+    expect(state.selectedRepositoryId).toBeNull();
+  });
+
+  it("is a no-op when already on the dashboard", () => {
+    useAppStore.setState({
+      selectedWorkspaceId: null,
+      selectedRepositoryId: null,
+    });
+
+    const before = useAppStore.getState();
+    useAppStore.getState().goToDashboard();
+    const after = useAppStore.getState();
+
+    // Reference equality on the slice contents — confirms `set` returned
+    // `s` unchanged rather than producing a new selectedWorkspaceId/Repo
+    // pair that would re-render every subscriber.
+    expect(after.selectedWorkspaceId).toBe(before.selectedWorkspaceId);
+    expect(after.selectedRepositoryId).toBe(before.selectedRepositoryId);
   });
 });

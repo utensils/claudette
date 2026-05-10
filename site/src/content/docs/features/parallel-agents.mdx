@@ -30,9 +30,17 @@ If you don't have any repositories yet, the welcome card collapses to a single *
 
 ### Project-scoped view
 
-Click any project header in the sidebar (or press `⌘/Ctrl + N` for the Nth project) to open a **project-scoped view**: the same welcome card pre-targeted at that project, with the project's existing workspaces listed beneath it. Selecting a workspace from there leaves the project view; the **Back to Dashboard** arrow in the toolbar returns to the global view.
+Click any project header in the sidebar (or press `⌘/Ctrl + N` for the Nth project) to open a **project-scoped view**: a card pre-targeted at that project, with the project's existing workspaces listed beneath it. Selecting a workspace from there leaves the project view; the **Dashboard** button in the toolbar (top-left) returns to the global view.
 
 The project-scoped view replaces the previous behavior where `⌘/Ctrl + N` was a no-op for projects with no workspaces — first-run users now have a discoverable landing pad for any project they jump to.
+
+### Empty-tabs view inside a workspace
+
+If you close every tab inside a workspace (chat sessions, diff tabs, file tabs), the workspace switches to a similar **No open tabs** card. Press `⌘/Ctrl + T` (or click the `+` in the tab strip) to open a fresh chat session — the workspace itself stays running, only its tabs were closed.
+
+### After creating a workspace
+
+Newly created workspaces always appear under an expanded project group in the sidebar — Claudette force-expands the parent on creation so a fresh workspace is never hidden inside a collapsed group.
 
 ## Creating Parallel Workspaces
 

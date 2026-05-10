@@ -43,6 +43,7 @@ export function useCreateWorkspace(options: UseCreateWorkspaceOptions = {}) {
   const selectWorkspace = useAppStore((s) => s.selectWorkspace);
   const addChatMessage = useAppStore((s) => s.addChatMessage);
   const openModal = useAppStore((s) => s.openModal);
+  const expandRepo = useAppStore((s) => s.expandRepo);
 
   // Single-flight guard — duplicate clicks while a creation is in flight are
   // dropped silently. The ref lets us short-circuit before we even touch state.
@@ -60,6 +61,10 @@ export function useCreateWorkspace(options: UseCreateWorkspaceOptions = {}) {
         const result = await createWorkspace(repoId, generated.slug, true);
 
         addWorkspace(result.workspace);
+        // Always expand the parent repo group — leaving a freshly created
+        // workspace hidden inside a collapsed repo (because the user
+        // collapsed it earlier or hadn't expanded it yet) is disorienting.
+        expandRepo(repoId);
         if (selectOnCreate) selectWorkspace(result.workspace.id);
 
         const sessionId = result.default_session_id;
@@ -158,7 +163,7 @@ export function useCreateWorkspace(options: UseCreateWorkspaceOptions = {}) {
         inFlight.current = false;
       }
     },
-    [addWorkspace, selectWorkspace, addChatMessage, openModal, selectOnCreate],
+    [addWorkspace, selectWorkspace, addChatMessage, openModal, expandRepo, selectOnCreate],
   );
 
   return {

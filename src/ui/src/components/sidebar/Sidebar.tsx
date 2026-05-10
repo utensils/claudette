@@ -93,6 +93,7 @@ export const Sidebar = memo(function Sidebar() {
   const selectWorkspace = useAppStore((s) => s.selectWorkspace);
   const selectedRepositoryId = useAppStore((s) => s.selectedRepositoryId);
   const selectRepository = useAppStore((s) => s.selectRepository);
+  const goToDashboard = useAppStore((s) => s.goToDashboard);
   const sidebarGroupBy = useAppStore((s) => s.sidebarGroupBy);
   const setSidebarGroupBy = useAppStore((s) => s.setSidebarGroupBy);
   const sidebarRepoFilter = useAppStore((s) => s.sidebarRepoFilter);
@@ -226,6 +227,10 @@ export const Sidebar = memo(function Sidebar() {
       setCreatingWorkspace(null);
 
       addWorkspace(result.workspace);
+      // Mirror useCreateWorkspace's expand-on-create — the sidebar still
+      // has its own orchestration, but a collapsed parent group hiding a
+      // freshly created workspace is the same UX bug from either path.
+      useAppStore.getState().expandRepo(repoId);
       selectWorkspace(result.workspace.id);
       const sessionId = result.default_session_id;
       if (generated.message) {
@@ -879,7 +884,7 @@ export const Sidebar = memo(function Sidebar() {
         <div className={styles.headerActions}>
           <button
             className={styles.dashboardBtn}
-            onClick={() => selectWorkspace(null)}
+            onClick={goToDashboard}
             title={t("back_to_dashboard")}
             aria-label={t("back_to_dashboard")}
           >

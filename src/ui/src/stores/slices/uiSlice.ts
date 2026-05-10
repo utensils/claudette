@@ -39,6 +39,9 @@ export interface UiSlice {
   markWorkspaceOrderManual: (repoId: string) => void;
   clearManualWorkspaceOrder: (repoId: string) => void;
   toggleRepoCollapsed: (id: string) => void;
+  /** Force a repo group expanded — used after workspace creation so a
+   *  freshly minted workspace is never hidden inside a collapsed parent. */
+  expandRepo: (id: string) => void;
   toggleStatusGroupCollapsed: (id: string) => void;
   toggleFuzzyFinder: () => void;
   toggleCommandPalette: () => void;
@@ -132,6 +135,16 @@ export const createUiSlice: StateCreator<AppState, [], [], UiSlice> = (
         [id]: !s.repoCollapsed[id],
       },
     })),
+  expandRepo: (id) =>
+    set((s) => {
+      // No-op when already expanded so subscribers don't churn.
+      if (!s.repoCollapsed[id]) return s;
+      const next = { ...s.repoCollapsed };
+      // Remove the key entirely rather than writing `false` — repoCollapsed
+      // treats absence as expanded, so this keeps the map small over time.
+      delete next[id];
+      return { repoCollapsed: next };
+    }),
   toggleStatusGroupCollapsed: (id) =>
     set((s) => ({
       statusGroupCollapsed: {

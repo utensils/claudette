@@ -17,6 +17,14 @@ export interface WelcomeEmptyStateProps {
   /** True when a workspace creation is already in flight; used to dim the primary CTA so
    *  the user can't double-click into a race. */
   creating?: boolean;
+  /** Optional headline override. Defaults to a context-neutral greeting; the
+   *  project-scoped view in Dashboard passes a title that names the selected
+   *  project so "Welcome to Claudette" doesn't feel like a first-run banner
+   *  on every navigation. */
+  title?: string;
+  /** Optional sub-headline override paired with `title`. Defaults flex on the
+   *  presence of repositories so the zero-repo case reads as onboarding. */
+  subtitle?: string;
 }
 
 /** Welcome card shown on the Dashboard when no active workspaces exist. Replaces the
@@ -27,6 +35,8 @@ export const WelcomeEmptyState = memo(function WelcomeEmptyState({
   onCreateWorkspace,
   onAddRepository,
   creating = false,
+  title,
+  subtitle,
 }: WelcomeEmptyStateProps) {
   // Project rows render in recency order, falling back to sidebar sort_order for repos
   // that have never had a workspace (and therefore no last-message timestamp).
@@ -52,15 +62,23 @@ export const WelcomeEmptyState = memo(function WelcomeEmptyState({
 
   const hasRepos = orderedRepos.length > 0;
 
+  // Default headline avoids "Welcome to Claudette" because the card also
+  // appears in non-first-run states (returning user with no active
+  // workspace, project-scoped view). "Ready when you are." reads as the
+  // assistant's standby rather than a launch screen.
+  const resolvedTitle =
+    title ?? (hasRepos ? "Ready when you are." : "Let's set up your first project.");
+  const resolvedSubtitle =
+    subtitle ??
+    (hasRepos
+      ? "No active workspaces yet. Create one to start a conversation with Claude."
+      : "Add a project — Claudette will create a git worktree and a Claude session for it.");
+
   return (
     <div className={styles.welcome}>
       <div className={styles.card}>
-        <h1 className={styles.title}>Welcome to Claudette</h1>
-        <p className={styles.subtitle}>
-          {hasRepos
-            ? "No active workspaces yet. Create one to start a conversation with Claude."
-            : "Add a project to get started — Claudette will create a worktree and a Claude session for it."}
-        </p>
+        <h1 className={styles.title}>{resolvedTitle}</h1>
+        <p className={styles.subtitle}>{resolvedSubtitle}</p>
 
         {suggestedRepo && (
           <button

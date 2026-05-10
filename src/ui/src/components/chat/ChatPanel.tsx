@@ -8,6 +8,7 @@ import {
 } from "lucide-react";
 import { ChatSearchBar } from "./ChatSearchBar";
 import { OverlayScrollbar } from "./OverlayScrollbar";
+import { WorkspaceEmptyTabs } from "./WorkspaceEmptyTabs";
 import { useAppStore } from "../../stores/useAppStore";
 import {
   loadAttachmentData,
@@ -205,6 +206,29 @@ export function ChatPanel() {
   const ws = workspaces.find((w) => w.id === selectedWorkspaceId);
   const repo = repositories.find((r) => r.id === ws?.repository_id);
   const defaultBranch = repo ? defaultBranchesMap[repo.id] : undefined;
+
+  // Counts feeding the "all tabs closed" empty state. Each selector is
+  // intentionally a `.length || 0` so the subscribed value is a primitive —
+  // returning the array would re-fire on every reference change.
+  const activeSessionCount = useAppStore((s) =>
+    selectedWorkspaceId
+      ? (s.sessionsByWorkspace[selectedWorkspaceId] ?? []).filter(
+          (sess) => sess.status === "Active",
+        ).length
+      : 0,
+  );
+  const diffTabCount = useAppStore((s) =>
+    selectedWorkspaceId
+      ? (s.diffTabsByWorkspace[selectedWorkspaceId] ?? []).length
+      : 0,
+  );
+  const fileTabCount = useAppStore((s) =>
+    selectedWorkspaceId
+      ? (s.fileTabsByWorkspace[selectedWorkspaceId] ?? []).length
+      : 0,
+  );
+  const noOpenTabs =
+    activeSessionCount === 0 && diffTabCount === 0 && fileTabCount === 0;
   const messages = activeSessionId
     ? chatMessages[activeSessionId] || []
     : [];
@@ -1254,6 +1278,14 @@ export function ChatPanel() {
       <WorkspacePanelHeader />
       {selectedWorkspaceId && <SessionTabs workspaceId={selectedWorkspaceId} />}
 
+      {noOpenTabs ? (
+        // All chat sessions, diff tabs, and file tabs are closed. Skip the
+        // chat content + composer entirely so the user lands on a clear
+        // affordance for opening a new session instead of a blank pane.
+        // The tab strip's `+` button stays above for the mouse path.
+        <WorkspaceEmptyTabs workspace={ws} repository={repo} />
+      ) : (
+      <>
       <div className={styles.messagesWrapper}>
         {selectedWorkspaceId && (
           <ChatSearchBar
@@ -1478,6 +1510,8 @@ export function ChatPanel() {
         onAttachmentContextMenu={openAttachmentMenu}
         onAttachmentClick={openLightbox}
       />
+      </>
+      )}
       {attachmentMenu && (() => {
         const mt = attachmentMenu.attachment.media_type;
         const labels = buildAttachmentMenuLabels(mt);

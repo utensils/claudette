@@ -25,6 +25,11 @@ export interface WorkspacesSlice {
   /** Select (or clear) the project-scoped view. Setting a non-null id also
    *  clears any selected workspace so the project view replaces it. */
   selectRepository: (id: string | null) => void;
+  /** Clear both workspace and repository selection in one shot. The global
+   *  Dashboard is Claudette's default view; navigating to it shouldn't read
+   *  as "back" because the dashboard isn't on a stack. Atomic so the UI
+   *  doesn't transition through an intermediate single-cleared state. */
+  goToDashboard: () => void;
   setWorkspaceEnvironment: (
     id: string,
     status: WorkspaceEnvironmentStatus,
@@ -233,6 +238,13 @@ export const createWorkspacesSlice: StateCreator<
         // the workspace alone — that's just "exit project view" semantics.
         selectedWorkspaceId: id ? null : s.selectedWorkspaceId,
       };
+    }),
+  goToDashboard: () =>
+    set((s) => {
+      if (s.selectedWorkspaceId === null && s.selectedRepositoryId === null) {
+        return s;
+      }
+      return { selectedWorkspaceId: null, selectedRepositoryId: null };
     }),
   setWorkspaceEnvironment: (id, status, error) =>
     set((s) => ({
