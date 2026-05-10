@@ -119,6 +119,7 @@ export function ChatPanel() {
   const processingRef = useRef<HTMLDivElement>(null);
   const [error, setError] = useState<string | null>(null);
   const [isSteeringQueued, setIsSteeringQueued] = useState(false);
+  const [pendingSteerContent, setPendingSteerContent] = useState<string | null>(null);
   const isMac = isMacHotkeyPlatform();
   const steerQueuedTooltip = tooltipWithHotkey(
     t("steer_queued"),
@@ -814,6 +815,7 @@ export function ChatPanel() {
       : undefined;
     setError(null);
     setIsSteeringQueued(true);
+    setPendingSteerContent(content.trim() || null);
     try {
       const checkpoint = await steerQueuedChatMessage(
         sessionId,
@@ -839,6 +841,7 @@ export function ChatPanel() {
       setError(errMsg);
     } finally {
       setIsSteeringQueued(false);
+      setPendingSteerContent(null);
     }
   };
 
@@ -860,6 +863,7 @@ export function ChatPanel() {
     const messageId = crypto.randomUUID();
     setError(null);
     setIsSteeringQueued(true);
+    setPendingSteerContent(content.trim() || null);
     removeQueuedMessage(sessionId, queuedMessage.id);
     try {
       const checkpoint = await steerQueuedChatMessage(
@@ -884,6 +888,7 @@ export function ChatPanel() {
       setError(errMsg);
     } finally {
       setIsSteeringQueued(false);
+      setPendingSteerContent(null);
     }
   };
 
@@ -1397,6 +1402,18 @@ export function ChatPanel() {
                     }
                   }}
                 />
+              )}
+
+              {isSteeringQueued && pendingSteerContent && (
+                <div className={styles.pendingSteer} aria-live="polite" aria-label={t("steer_pending_aria")}>
+                  <span className={styles.pendingSteerIcon} aria-hidden="true">
+                    <SendHorizontal size={12} />
+                  </span>
+                  <span className={styles.pendingSteerLabel} aria-hidden="true">
+                    {t("steer_pending_label")}
+                  </span>
+                  <span className={styles.pendingSteerContent}>{pendingSteerContent}</span>
+                </div>
               )}
 
               {isRunning && !pendingQuestion && !pendingPlan && (
