@@ -36,11 +36,21 @@ cd "$ROOT"
 # 1. Build claudette-app once. We use a debug build because:
 #    - It keeps the test fast (release adds 2-3 minutes).
 #    - The helper subcommand has no debug-vs-release behavioral split.
+#
+# Build wrapper precedence:
+#   1. Already inside a Nix shell ($IN_NIX_SHELL set) — call cargo directly.
+#   2. `nix` is available on PATH — wrap in `nix develop -c` so contributors
+#      who use the project's flake get the same toolchain.
+#   3. Fall back to bare `cargo` so contributors without Nix can still run
+#      this smoke. They need a stable Rust toolchain in PATH already
+#      (which the README assumes for `cargo tauri dev` to work).
 echo "==> building claudette-app (debug)"
 if [ -n "${IN_NIX_SHELL:-}" ]; then
   cargo build -p claudette-tauri >/dev/null
-else
+elif command -v nix >/dev/null 2>&1; then
   nix develop -c cargo build -p claudette-tauri >/dev/null
+else
+  cargo build -p claudette-tauri >/dev/null
 fi
 APP_BIN="$ROOT/target/debug/claudette-app"
 if [ ! -x "$APP_BIN" ]; then
