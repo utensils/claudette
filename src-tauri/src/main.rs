@@ -915,6 +915,8 @@ fn main() {
             commands::diff::load_file_diff,
             commands::diff::revert_file,
             commands::diff::discard_file,
+            commands::diff::track_file,
+            commands::diff::track_files,
             commands::diff::stage_file,
             commands::diff::unstage_file,
             commands::diff::stage_files,

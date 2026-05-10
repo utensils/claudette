@@ -739,6 +739,33 @@ pub async fn unstage_file(worktree_path: &str, file_path: &str) -> Result<(), Di
     Ok(())
 }
 
+/// Mark an untracked file as intent-to-add (`git add -N -- <file>`).
+/// This makes git aware of the path without staging any content — the full
+/// file content then appears in the *unstaged* section where it can be
+/// reviewed and selectively staged. Use instead of `stage_file` when the
+/// goal is to move an untracked file into the unstaged section.
+pub async fn track_file(worktree_path: &str, file_path: &str) -> Result<(), DiffError> {
+    validate_file_path(file_path)?;
+    run_git(worktree_path, &["add", "-N", "--", file_path]).await?;
+    Ok(())
+}
+
+/// Mark many untracked files as intent-to-add in a single `git add -N`
+/// invocation. Batching avoids `.git/index.lock` contention. See
+/// [`track_file`] for the semantics.
+pub async fn track_files(worktree_path: &str, file_paths: &[String]) -> Result<(), DiffError> {
+    if file_paths.is_empty() {
+        return Ok(());
+    }
+    for p in file_paths {
+        validate_file_path(p)?;
+    }
+    let mut args: Vec<&str> = vec!["add", "-N", "--"];
+    args.extend(file_paths.iter().map(String::as_str));
+    run_git(worktree_path, &args).await?;
+    Ok(())
+}
+
 /// Stage many files in a single `git add -A` invocation. Issuing one command
 /// with N pathspecs avoids `.git/index.lock` contention that parallel
 /// per-file `git add`s race on, and is also faster than serializing them.

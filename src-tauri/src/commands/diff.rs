@@ -145,6 +145,20 @@ pub async fn revert_file(
 }
 
 #[tauri::command]
+pub async fn track_file(worktree_path: String, file_path: String) -> Result<(), String> {
+    diff::track_file(&worktree_path, &file_path)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn track_files(worktree_path: String, file_paths: Vec<String>) -> Result<(), String> {
+    diff::track_files(&worktree_path, &file_paths)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 pub async fn stage_file(worktree_path: String, file_path: String) -> Result<(), String> {
     diff::stage_file(&worktree_path, &file_path)
         .await

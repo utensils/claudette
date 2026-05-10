@@ -1160,6 +1160,20 @@ export function discardFile(
   return invoke("discard_file", { worktreePath, filePath, isUntracked });
 }
 
+export function trackFile(
+  worktreePath: string,
+  filePath: string,
+): Promise<void> {
+  return invoke("track_file", { worktreePath, filePath });
+}
+
+export function trackFiles(
+  worktreePath: string,
+  filePaths: string[],
+): Promise<void> {
+  return invoke("track_files", { worktreePath, filePaths });
+}
+
 export function stageFile(
   worktreePath: string,
   filePath: string,
