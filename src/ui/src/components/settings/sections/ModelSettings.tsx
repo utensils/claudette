@@ -20,6 +20,12 @@ export function ModelSettings() {
   const [defaultEffort, setDefaultEffort] = useState("auto");
   const [defaultShowThinking, setDefaultShowThinking] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Tolerant-loader diagnostics: non-fatal warnings emitted when
+  // stored backend entries can't be parsed by this build (e.g. a
+  // newer dev build wrote `lm_studio` and we're an older build).
+  // Backend keeps the entries as opaque passthrough; user just needs
+  // to know they aren't active in this session.
+  const [backendWarnings, setBackendWarnings] = useState<string[]>([]);
   const alternativeBackendsEnabled = useAppStore((s) => s.alternativeBackendsEnabled);
   const agentBackends = useAppStore((s) => s.agentBackends);
   const setAgentBackends = useAppStore((s) => s.setAgentBackends);
@@ -42,8 +48,17 @@ export function ModelSettings() {
         setAgentBackends(data.backends);
         setDefaultBackend(data.default_backend_id);
         setDefaultAgentBackendId(data.default_backend_id);
+        setBackendWarnings(data.warnings ?? []);
       })
-      .catch(() => {});
+      .catch((e) => {
+        // No longer silent: previously a `.catch(() => {})` here meant
+        // a backend-settings parse failure left the Models panel
+        // empty with zero diagnostics. The Rust loader is now
+        // tolerant per-entry, so reaching this catch implies a
+        // genuinely unrecoverable failure (DB open, top-level
+        // command error). Surface it so the user can act.
+        setError(`Failed to load agent backends: ${String(e)}`);
+      });
     getAppSetting("default_thinking")
       .then((val) => setDefaultThinking(val === "true"))
       .catch(() => {});
@@ -155,6 +170,25 @@ export function ModelSettings() {
       <h2 className={styles.sectionTitle}>{t("models_title")}</h2>
 
       {error && <div className={styles.error}>{error}</div>}
+
+      {backendWarnings.length > 0 && (
+        <div className={styles.backendWarningBanner} role="status" aria-live="polite">
+          <div className={styles.backendWarningTitle}>
+            {t("models_backend_warnings_title", "Some saved backend entries weren't loaded")}
+          </div>
+          <ul className={styles.backendWarningList}>
+            {backendWarnings.map((msg, i) => (
+              <li key={i}>{msg}</li>
+            ))}
+          </ul>
+          <div className={styles.backendWarningHint}>
+            {t(
+              "models_backend_warnings_hint",
+              "These entries are preserved in your settings and will reactivate on a build that supports them.",
+            )}
+          </div>
+        </div>
+      )}
 
       <div className={styles.settingRow}>
         <div className={styles.settingInfo}>

@@ -100,6 +100,14 @@ export interface AgentBackendConfig {
 export interface AgentBackendListResponse {
   backends: AgentBackendConfig[];
   default_backend_id: string;
+  /**
+   * Non-fatal diagnostics from the tolerant loader — e.g. a stored
+   * backend entry whose `kind` isn't recognized by this build. The
+   * entries are preserved in SQLite (so they round-trip through
+   * downgrades), but the user should know they aren't active.
+   * Empty array when everything parsed cleanly.
+   */
+  warnings?: string[];
 }
 
 export interface BackendSecretUpdate {

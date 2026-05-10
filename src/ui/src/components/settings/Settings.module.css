@@ -971,6 +971,44 @@
   margin-top: 4px;
 }
 
+/* Tolerant-loader warnings for the Models panel: non-fatal, advisory.
+   Uses the accent palette (not error red) because the user's data is
+   safe — entries are preserved as opaque passthrough and will reactivate
+   on a build that knows them. */
+.backendWarningBanner {
+  border: 1px solid var(--accent-bg-strong);
+  border-radius: var(--radius-md);
+  background: var(--accent-bg);
+  color: var(--text-primary);
+  font-size: 13px;
+  line-height: 1.5;
+  padding: 10px 12px;
+  margin: 8px 0 16px;
+}
+
+.backendWarningTitle {
+  font-weight: 600;
+  margin-bottom: 6px;
+  color: var(--accent-primary);
+}
+
+.backendWarningList {
+  margin: 0;
+  padding-left: 18px;
+  color: var(--text-dim);
+}
+
+.backendWarningList li {
+  word-break: break-word;
+  margin-bottom: 2px;
+}
+
+.backendWarningHint {
+  margin-top: 8px;
+  color: var(--text-dim);
+  font-size: 12px;
+}
+
 /* ── Repo header (icon + editable name) ── */
 
 .repoHeader {
