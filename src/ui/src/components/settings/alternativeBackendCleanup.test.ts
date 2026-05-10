@@ -59,4 +59,19 @@ describe("isAlternativeBackendSelection", () => {
   it("treats unknown Anthropic-provider models as unsafe when the feature is off", () => {
     expect(isAlternativeBackendSelection("future-gpt", "anthropic")).toBe(true);
   });
+
+  it("treats lm-studio sessions as alternative so the cleanup walker resets them", () => {
+    expect(isAlternativeBackendSelection("qwen2.5-coder-7b-instruct", "lm-studio")).toBe(true);
+
+    // And the planner picks them up alongside ollama / codex sessions.
+    const plan = planAlternativeBackendDisableCleanup({
+      defaultModel: "opus",
+      defaultBackend: "anthropic",
+      sessionModels: [["model:sess-1", "qwen2.5-coder-7b-instruct"]],
+      sessionProviders: [["model_provider:sess-1", "lm-studio"]],
+      selectedModels: {},
+      selectedProviders: {},
+    });
+    expect(plan.sessionIds).toContain("sess-1");
+  });
 });

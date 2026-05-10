@@ -206,7 +206,7 @@ pub async fn delete_agent_backend(
 ) -> Result<Vec<AgentBackendConfig>, String> {
     if matches!(
         backend_id.as_str(),
-        "anthropic" | "ollama" | "openai-api" | "codex-subscription"
+        "anthropic" | "ollama" | "openai-api" | "codex-subscription" | "lm-studio"
     ) {
         return Err("Built-in backends can be disabled but not deleted".to_string());
     }
@@ -481,7 +481,9 @@ async fn hydrate_gateway_models_for_runtime(
 ) -> Result<(), String> {
     if !matches!(
         backend.kind,
-        AgentBackendKind::OpenAiApi | AgentBackendKind::CodexSubscription
+        AgentBackendKind::OpenAiApi
+            | AgentBackendKind::CodexSubscription
+            | AgentBackendKind::LmStudio
     ) {
         return Ok(());
     }
@@ -524,6 +526,7 @@ fn apply_discovered_models(backend: &mut AgentBackendConfig, discovered: Vec<Age
         AgentBackendKind::Ollama
             | AgentBackendKind::OpenAiApi
             | AgentBackendKind::CodexSubscription
+            | AgentBackendKind::LmStudio
     ) && !discovered.is_empty()
     {
         backend.manual_models.clear();
@@ -584,6 +587,7 @@ fn default_backends() -> Vec<AgentBackendConfig> {
         AgentBackendConfig::builtin_ollama(),
         AgentBackendConfig::builtin_openai_api(),
         AgentBackendConfig::builtin_codex_subscription(),
+        AgentBackendConfig::builtin_lm_studio(),
     ]
 }
 
@@ -654,6 +658,7 @@ fn normalize_backend(mut backend: AgentBackendConfig) -> AgentBackendConfig {
         AgentBackendKind::Ollama
             | AgentBackendKind::OpenAiApi
             | AgentBackendKind::CodexSubscription
+            | AgentBackendKind::LmStudio
     ) {
         backend.model_discovery = true;
     }
@@ -748,6 +753,7 @@ async fn discover_models(backend: &AgentBackendConfig) -> Result<Vec<AgentBacken
         }
         AgentBackendKind::OpenAiApi => discover_openai_api_models(backend).await,
         AgentBackendKind::CodexSubscription => discover_codex_models().await,
+        AgentBackendKind::LmStudio => discover_lm_studio_models(backend).await,
         _ => Ok(backend.manual_models.clone()),
     }
 }
@@ -803,6 +809,90 @@ async fn discover_openai_api_models(
         &value,
         backend.context_window_default,
     )))
+}
+
+async fn discover_lm_studio_models(
+    backend: &AgentBackendConfig,
+) -> Result<Vec<AgentBackendModel>, String> {
+    let base = backend
+        .base_url
+        .as_deref()
+        .unwrap_or("http://localhost:1234")
+        .trim_end_matches('/');
+    let secret = load_secure_secret(SECRET_BUCKET, &backend.id)
+        .ok()
+        .flatten();
+    let client = reqwest::Client::new();
+
+    // Prefer LM Studio's native v0 endpoint, which exposes per-model
+    // max_context_length / loaded_context_length. Fall back to the OpenAI-shaped
+    // /v1/models if v0 is missing (older or stripped builds).
+    let mut v0_request = client.get(format!("{base}/api/v0/models"));
+    if let Some(secret) = secret.as_deref().filter(|s| !s.trim().is_empty()) {
+        v0_request = v0_request.bearer_auth(secret);
+    }
+    let v0_response = v0_request.send().await;
+    if let Ok(response) = v0_response
+        && response.status().is_success()
+        && let Ok(value) = response.json::<Value>().await
+    {
+        let models = lm_studio_models_from_v0(&value, backend.context_window_default);
+        if !models.is_empty() {
+            return Ok(models);
+        }
+    }
+
+    let mut v1_request = client.get(openai_api_url(base, "models"));
+    if let Some(secret) = secret.as_deref().filter(|s| !s.trim().is_empty()) {
+        v1_request = v1_request.bearer_auth(secret);
+    }
+    let value = v1_request
+        .send()
+        .await
+        .map_err(|e| format!("Failed to query LM Studio: {e}"))?
+        .error_for_status()
+        .map_err(|e| format!("LM Studio model discovery failed: {e}"))?
+        .json::<Value>()
+        .await
+        .map_err(|e| format!("Invalid LM Studio model response: {e}"))?;
+    Ok(models_from_openai_shape(
+        &value,
+        backend.context_window_default,
+    ))
+}
+
+fn lm_studio_models_from_v0(value: &Value, default_context: u32) -> Vec<AgentBackendModel> {
+    value
+        .get("data")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|model| {
+            let id = model.get("id").and_then(Value::as_str)?;
+            // Skip embedding/vision-only entries — they aren't usable as chat
+            // backends for the agent loop. Everything else (LLM, instruct,
+            // unknown) is fair game.
+            if model
+                .get("type")
+                .and_then(Value::as_str)
+                .is_some_and(|kind| kind.eq_ignore_ascii_case("embeddings"))
+            {
+                return None;
+            }
+            let context = model
+                .get("loaded_context_length")
+                .or_else(|| model.get("max_context_length"))
+                .and_then(Value::as_u64)
+                .and_then(|n| u32::try_from(n).ok())
+                .unwrap_or(default_context);
+            Some(AgentBackendModel {
+                id: id.to_string(),
+                label: id.to_string(),
+                context_window_tokens: context,
+                discovered: true,
+            })
+        })
+        .collect()
 }
 
 async fn discover_codex_models() -> Result<Vec<AgentBackendModel>, String> {
@@ -1011,6 +1101,7 @@ fn backend_kind_hash_key(kind: AgentBackendKind) -> &'static str {
         AgentBackendKind::CodexSubscription => "codex_subscription",
         AgentBackendKind::CustomAnthropic => "custom_anthropic",
         AgentBackendKind::CustomOpenAi => "custom_openai",
+        AgentBackendKind::LmStudio => "lm_studio",
     }
 }
 
@@ -1202,6 +1293,29 @@ fn gateway_auth_matches(header: &str, auth_token: &str) -> bool {
     })
 }
 
+// LM Studio's local server accepts any bearer token, so its API-key field is
+// optional — substitute a stable placeholder when the user hasn't set one.
+// Every other gateway-routed backend (OpenAI, custom OpenAI-shaped) still
+// requires a real key.
+fn openai_compatible_bearer_token(
+    kind: AgentBackendKind,
+    secret: Option<&str>,
+) -> Result<String, String> {
+    match (kind, secret) {
+        (AgentBackendKind::LmStudio, Some(s)) if !s.trim().is_empty() => Ok(s.to_string()),
+        (AgentBackendKind::LmStudio, _) => Ok("lm-studio".to_string()),
+        (_, Some(s)) => Ok(s.to_string()),
+        (_, None) => Err("OpenAI-compatible backend requires an API key".to_string()),
+    }
+}
+
+fn openai_compatible_default_base(kind: AgentBackendKind) -> &'static str {
+    match kind {
+        AgentBackendKind::LmStudio => "http://localhost:1234",
+        _ => "https://api.openai.com",
+    }
+}
+
 async fn call_openai_responses(
     config: &AgentBackendConfig,
     secret: Option<&str>,
@@ -1210,11 +1324,11 @@ async fn call_openai_responses(
     if config.kind == AgentBackendKind::CodexSubscription {
         return call_codex_responses(config, secret, anthropic_req).await;
     }
-    let secret = secret.ok_or("OpenAI-compatible backend requires an API key")?;
+    let secret = openai_compatible_bearer_token(config.kind, secret)?;
     let base = config
         .base_url
         .as_deref()
-        .unwrap_or("https://api.openai.com")
+        .unwrap_or_else(|| openai_compatible_default_base(config.kind))
         .trim_end_matches('/');
     let model = openai_compatible_request_model(config, &anthropic_req)?;
     let openai_req = json!({
@@ -1948,6 +2062,10 @@ mod tests {
             backend_kind_hash_key(AgentBackendKind::CustomOpenAi),
             "custom_openai"
         );
+        assert_eq!(
+            backend_kind_hash_key(AgentBackendKind::LmStudio),
+            "lm_studio"
+        );
     }
 
     #[test]
@@ -2365,5 +2483,103 @@ data: [DONE]
         assert!(body.contains(
             r#""delta":{"partial_json":"{\"path\":\"README.md\"}","type":"input_json_delta"}"#
         ));
+    }
+
+    #[test]
+    fn lm_studio_builtin_defaults_match_local_server() {
+        let backend = AgentBackendConfig::builtin_lm_studio();
+        assert_eq!(backend.id, "lm-studio");
+        assert_eq!(backend.kind, AgentBackendKind::LmStudio);
+        assert!(backend.kind.needs_gateway());
+        assert!(!backend.kind.is_anthropic_compatible());
+        assert_eq!(
+            backend.base_url.as_deref(),
+            Some("http://localhost:1234"),
+            "URL must match LM Studio's stock `lms server start --port 1234` default"
+        );
+        assert!(backend.model_discovery);
+        assert!(!backend.enabled, "Disabled by default until user opts in");
+    }
+
+    #[test]
+    fn lm_studio_v0_parser_reads_per_model_context_lengths() {
+        // Sample shape from `GET /api/v0/models` on LM Studio 0.4+.
+        let payload = json!({
+            "data": [
+                {
+                    "id": "qwen2.5-coder-7b-instruct",
+                    "type": "llm",
+                    "loaded_context_length": 32_768,
+                    "max_context_length": 131_072,
+                },
+                {
+                    "id": "llama-3.2-3b-instruct",
+                    "type": "llm",
+                    "max_context_length": 8_192,
+                },
+                {
+                    "id": "nomic-embed-text-v1.5",
+                    "type": "embeddings",
+                    "max_context_length": 8_192,
+                },
+            ]
+        });
+        let models = lm_studio_models_from_v0(&payload, 4_096);
+        assert_eq!(models.len(), 2, "embedding entries must be filtered out");
+        assert_eq!(models[0].id, "qwen2.5-coder-7b-instruct");
+        assert_eq!(
+            models[0].context_window_tokens, 32_768,
+            "loaded_context_length wins over max_context_length when both are present"
+        );
+        assert_eq!(models[1].id, "llama-3.2-3b-instruct");
+        assert_eq!(models[1].context_window_tokens, 8_192);
+    }
+
+    #[test]
+    fn lm_studio_v0_parser_falls_back_to_default_context_when_missing() {
+        let payload = json!({
+            "data": [{"id": "model-without-context", "type": "llm"}]
+        });
+        let models = lm_studio_models_from_v0(&payload, 8_192);
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0].context_window_tokens, 8_192);
+    }
+
+    #[test]
+    fn openai_compatible_bearer_token_makes_lm_studio_secret_optional() {
+        // LM Studio: missing or blank secret falls back to a placeholder so the
+        // request still carries a valid Bearer header.
+        assert_eq!(
+            openai_compatible_bearer_token(AgentBackendKind::LmStudio, None).as_deref(),
+            Ok("lm-studio")
+        );
+        assert_eq!(
+            openai_compatible_bearer_token(AgentBackendKind::LmStudio, Some("")).as_deref(),
+            Ok("lm-studio")
+        );
+        assert_eq!(
+            openai_compatible_bearer_token(AgentBackendKind::LmStudio, Some("   ")).as_deref(),
+            Ok("lm-studio")
+        );
+        assert_eq!(
+            openai_compatible_bearer_token(AgentBackendKind::LmStudio, Some("user-token"))
+                .as_deref(),
+            Ok("user-token"),
+            "user-supplied bearer must be forwarded as-is"
+        );
+
+        // OpenAI: missing secret is still a hard error.
+        assert!(openai_compatible_bearer_token(AgentBackendKind::OpenAiApi, None).is_err());
+
+        // Default base URL also branches by kind so LM Studio doesn't get
+        // pointed at api.openai.com when its base_url is unset.
+        assert_eq!(
+            openai_compatible_default_base(AgentBackendKind::LmStudio),
+            "http://localhost:1234"
+        );
+        assert_eq!(
+            openai_compatible_default_base(AgentBackendKind::OpenAiApi),
+            "https://api.openai.com"
+        );
     }
 }

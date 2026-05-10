@@ -1,0 +1,101 @@
+---
+title: LM Studio
+description: Run Claudette agents against models loaded in LM Studio's local server — OpenAI-compatible Responses API on localhost, no remote API key required.
+---
+
+The LM Studio provider points the spawned `claude` CLI at LM Studio's built-in local server. It's a gateway-routed backend (Claudette translates Claude's wire format into the OpenAI Responses API), but with the **local-first UX of Ollama**: no remote network calls, no required API key, and the runtime stays on your machine.
+
+LM Studio uses the **gateway** path because its server speaks the OpenAI Responses API (`/v1/responses`), not Anthropic's wire format. The capability profile matches OpenAI / Codex: tools and vision yes (model-dependent), but the Anthropic-only knobs (extended thinking, effort levels, fast mode, 1M-context auto-upgrade) are hidden when an LM Studio model is active.
+
+## Prerequisites
+
+1. Make sure the [Alternative Claude Code backends experimental flag](/claudette/features/providers/#enabling-the-feature) is on.
+2. Install LM Studio:
+   - **macOS / Windows / Linux**: download from [lmstudio.ai/download](https://lmstudio.ai/download).
+3. Install the `lms` CLI (bundled with LM Studio; verify with `lms --version`).
+
+## Start the local server
+
+```sh
+lms server start --port 1234
+```
+
+The server defaults to port `1234`; pass `--port` if you need a different one. Confirm it's reachable:
+
+```sh
+curl http://localhost:1234/v1/models
+```
+
+You should get back a JSON `{"data":[…]}` payload listing whatever you've loaded into LM Studio.
+
+## Load at least one model
+
+LM Studio doesn't auto-load models — pick one via the desktop UI's **My Models** tab and load it, or use the CLI:
+
+```sh
+lms get qwen2.5-coder-7b-instruct   # tool-tuned coding model
+lms load qwen2.5-coder-7b-instruct  # load it into VRAM
+```
+
+Quantized GGUF builds give the best speed-to-quality trade-off on consumer hardware. Tool-tuned models (Qwen Coder, Llama Instruct, Mistral Instruct) handle Claude-style tool calls; chat-only models will likely ignore tool definitions.
+
+## Configure in Claudette
+
+1. Open **Settings > Models**. The `lm-studio` backend appears in the list.
+2. The base URL is pre-filled to `http://localhost:1234`. Change it if your server listens elsewhere (different port, LAN host, etc.). Don't include the `/v1` suffix — Claudette appends it.
+3. (Optional) Add a bearer token in the **API key** field if you've put LM Studio behind an authenticating proxy. Local installs don't need one — Claudette substitutes a placeholder so the upstream still receives an `Authorization` header.
+4. Click **Test** — Claudette pings the server to confirm it's reachable and counts loaded models.
+5. Click **Refresh models** — Claudette queries LM Studio's `/api/v0/models` (and falls back to `/v1/models` on older builds), populating the model list with each model's `loaded_context_length` / `max_context_length`.
+6. (Optional) Set a default model.
+7. Toggle **Enabled** on. The provider is now selectable in the chat header.
+
+## Picking a session model
+
+Once enabled, the model picker in the chat header includes LM Studio models alongside Claude. Pick one and the next turn runs through LM Studio.
+
+The chat header hides the **Extended thinking**, **Effort**, **Fast mode**, and **1M-context** toggles when an LM Studio model is active — `AgentBackendConfig::builtin_lm_studio()` declares those capabilities as `false` (gateway profile). Tool use and vision stay available, but actual support depends on the loaded model.
+
+## Tool use and vision
+
+- **Tool use** — works on tool-tuned models (Qwen Coder, Llama Instruct, etc.). Plain chat models may ignore tool definitions silently.
+- **Vision** — works on multimodal models (LLaVA, MiniCPM-V, Qwen2-VL). Text-only models drop image attachments without complaining.
+
+If a model misbehaves, try switching to a different one before assuming Claudette is broken.
+
+## How requests flow
+
+LM Studio rides the same gateway architecture as the OpenAI / Codex backends:
+
+1. Claudette spins up a per-session HTTP listener on `127.0.0.1:0`. The spawned `claude` subprocess gets `ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN`, and `CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1`.
+2. The `claude` CLI thinks it's talking to api.anthropic.com; it's actually hitting Claudette's local listener.
+3. The listener translates the request into a `POST /v1/responses` call against `http://localhost:1234/v1/responses` and translates the streaming response back into Claude's event format.
+
+This is why the chat-header **Thinking**, **Effort**, **Fast mode**, and **1M-context** toggles are hidden when LM Studio is active — there are no equivalents in the OpenAI Responses shape.
+
+## Performance notes
+
+- LM Studio runs on GPU when available (Metal on macOS, CUDA on Linux/Windows with the right drivers); falls back to CPU otherwise.
+- Large models need substantial VRAM/RAM. Watch LM Studio's resource gauge while a turn runs.
+- Concurrent agents amplify pressure. Keep parallelism low (1–2 workspaces at a time) when running locally, especially if the model isn't fully GPU-resident.
+- LM Studio caches loaded models in memory; the first turn after a load is slower. Subsequent turns reuse the loaded weights and are much faster.
+
+## Troubleshooting
+
+**Test fails with "LM Studio is not reachable"** — the server isn't running, or it's bound to a different port. Run `lms server start --port 1234` and confirm `curl http://localhost:1234/v1/models` works first.
+
+**Refresh models returns nothing** — you haven't loaded any models in LM Studio yet. Open the desktop app's **My Models** tab (or `lms load <model>`) and click Refresh again.
+
+**Agent immediately errors with "no models"** — same as above; LM Studio reports an empty model list when nothing is loaded.
+
+**Tool calls get ignored** — the loaded model isn't tool-tuned. Switch to a model with built-in tool-use support (Qwen Coder, Llama Instruct).
+
+**Gateway restart loop** — usually the upstream rejecting the translated request. Open the agent's terminal tab to see stderr from the listener; the most common cause is a model ID the upstream doesn't recognize. Click **Refresh models** in Settings > Models.
+
+**Agent hangs on the first turn** — LM Studio is loading the model into VRAM. First-turn latency on a cold model can be 10–60 seconds depending on size. Subsequent turns are much faster.
+
+## See also
+
+- [Alternative Providers overview](/claudette/features/providers/) — capability matrix and architecture
+- [Ollama](/claudette/features/providers/ollama/) — the native (non-gateway) local-LLM alternative
+- [OpenAI & Codex](/claudette/features/providers/openai-codex/) — the remote gateway-based alternatives
+- [Agent Configuration](/claudette/features/agent-configuration/) — chat-header toggles and how they map to provider capabilities

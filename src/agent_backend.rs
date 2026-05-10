@@ -11,6 +11,7 @@ pub enum AgentBackendKind {
     CustomAnthropic,
     #[serde(rename = "custom_openai")]
     CustomOpenAi,
+    LmStudio,
 }
 
 impl AgentBackendKind {
@@ -21,7 +22,7 @@ impl AgentBackendKind {
     pub fn needs_gateway(self) -> bool {
         matches!(
             self,
-            Self::OpenAiApi | Self::CodexSubscription | Self::CustomOpenAi
+            Self::OpenAiApi | Self::CodexSubscription | Self::CustomOpenAi | Self::LmStudio
         )
     }
 }
@@ -160,6 +161,27 @@ impl AgentBackendConfig {
             auth_ref: Some("codex-cli".to_string()),
             capabilities: AgentBackendCapabilities::gateway(),
             context_window_default: 400_000,
+            model_discovery: true,
+            has_secret: false,
+        }
+    }
+
+    pub fn builtin_lm_studio() -> Self {
+        Self {
+            id: "lm-studio".to_string(),
+            label: "LM Studio".to_string(),
+            kind: AgentBackendKind::LmStudio,
+            base_url: Some("http://localhost:1234".to_string()),
+            enabled: false,
+            default_model: None,
+            manual_models: Vec::new(),
+            discovered_models: Vec::new(),
+            auth_ref: Some("agent-backend:lm-studio".to_string()),
+            capabilities: AgentBackendCapabilities::gateway(),
+            // Most LM Studio loadouts default to a 4-8k context window; pick a
+            // safer floor than the OpenAI-style 400k. Per-model values from
+            // /api/v0/models override this when discovery succeeds.
+            context_window_default: 8_192,
             model_discovery: true,
             has_secret: false,
         }

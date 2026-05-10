@@ -652,6 +652,7 @@ function isDiscoveryBackend(backend: AgentBackendConfig) {
     backend.model_discovery ||
     backend.kind === "ollama" ||
     backend.kind === "openai_api" ||
-    backend.kind === "codex_subscription"
+    backend.kind === "codex_subscription" ||
+    backend.kind === "lm_studio"
   );
 }
