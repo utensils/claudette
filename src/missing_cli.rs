@@ -103,9 +103,16 @@ pub fn format_cwd_err(path: &Path) -> String {
 
 /// If `err` carries the [`MISSING_CWD_PREFIX`] sentinel, return the path
 /// portion. Symmetric with [`parse_err`].
+///
+/// Unlike [`parse_err`], the cwd sentinel format is strictly `MISSING_CWD:<path>`
+/// with no optional `": "` suffix, so this returns the full remainder
+/// verbatim. Splitting on `": "` would corrupt valid Unix paths that
+/// contain it (e.g. `/Users/me/Project: v2`) — the path is the entire
+/// payload. If a future revision needs to append diagnostics, switch to
+/// an escaping or length-prefixed scheme rather than reintroducing a
+/// raw delimiter that can collide with valid path characters.
 pub fn parse_cwd_err(err: &str) -> Option<&str> {
-    let rest = err.strip_prefix(MISSING_CWD_PREFIX)?;
-    Some(rest.split_once(": ").map(|(p, _)| p).unwrap_or(rest))
+    err.strip_prefix(MISSING_CWD_PREFIX)
 }
 
 /// Returns `true` if the error carries either the missing-cli or missing-cwd
@@ -425,6 +432,18 @@ mod tests {
     fn parse_cwd_err_rejects_non_sentinel() {
         assert_eq!(parse_cwd_err("Failed: nope"), None);
         assert_eq!(parse_cwd_err("MISSING_CLI:claude"), None);
+    }
+
+    #[test]
+    fn parse_cwd_err_preserves_paths_containing_colon_space() {
+        // Regression for Copilot review on the missing-CLI fix PR: a path
+        // like `/Users/me/Project: v2` contains the literal `": "` two-byte
+        // sequence. The previous parser split on it and lost the suffix —
+        // surfacing `/Users/me/Project` as the worktree path, which then
+        // couldn't be matched against any workspace record.
+        let path = "/Users/me/Project: v2";
+        let s = format_cwd_err(std::path::Path::new(path));
+        assert_eq!(parse_cwd_err(&s), Some(path));
     }
 
     #[test]

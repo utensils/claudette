@@ -353,6 +353,46 @@ fn should_defer_persistent_restart_for_state(
     has_persistent_session && has_running_background_tasks
 }
 
+/// Recovery sequence shared by every spawn-failed branch in the persistent-
+/// session start logic below: clear the persisted Claude session row in the
+/// DB, reset the in-memory `AgentSessionState` to "no live session", and
+/// route the error through `crate::missing_cli::handle_err` so structured
+/// sentinels (`MISSING_CLI:<tool>`, `MISSING_CWD:<path>`) emit their
+/// corresponding Tauri event and get rewritten into a friendly message.
+///
+/// Both the initial-start path and the respawn path call this from two
+/// different match arms each (the structural-failure short-circuit and the
+/// terminal-error case), so a regression that updates one site without the
+/// others would leave the next turn looking at stale state — exactly the
+/// asymmetry that originally let `claude --session-id <stale-sid>` re-launch
+/// fresh sessions pinned to dead transcripts. Keeping the cleanup in one
+/// helper makes that class of drift impossible.
+///
+/// We open a fresh `Database` inside the helper (rather than borrowing the
+/// caller's connection) because `rusqlite::Connection` is `!Sync` — holding
+/// a `&Database` across the `state.agents.write().await` would make the
+/// outer Tauri command's future `!Send`. This matches the conventional
+/// "open a fresh DB connection per command" pattern documented in the
+/// project CLAUDE.md.
+async fn fail_after_clearing_session_state(
+    app: &AppHandle,
+    state: &AppState,
+    db_path: &std::path::Path,
+    chat_session_id: &str,
+    err: String,
+) -> String {
+    if let Ok(db) = Database::open(db_path) {
+        let _ = db.clear_chat_session_state(chat_session_id);
+    }
+    let mut agents = state.agents.write().await;
+    if let Some(session) = agents.get_mut(chat_session_id) {
+        session.session_id = String::new();
+        session.turn_count = 0;
+    }
+    drop(agents);
+    crate::missing_cli::handle_err(app, &err).unwrap_or(err)
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn apply_task_notification_status(
     app: &AppHandle,
@@ -2099,15 +2139,14 @@ pub async fn send_chat_message(
                     // missing-dependency / missing-worktree event. Short-
                     // circuit and surface the structured error directly.
                     Err(e2) if is_resume && claudette::missing_cli::is_sentinel(&e2) => {
-                        let _ = db.clear_chat_session_state(&chat_session_id);
-                        let mut agents = state.agents.write().await;
-                        if let Some(session) = agents.get_mut(&chat_session_id) {
-                            session.session_id = String::new();
-                            session.turn_count = 0;
-                        }
-                        drop(agents);
-                        let e2 = crate::missing_cli::handle_err(&app, &e2).unwrap_or(e2);
-                        return Err(e2);
+                        return Err(fail_after_clearing_session_state(
+                            &app,
+                            &state,
+                            &state.db_path,
+                            &chat_session_id,
+                            e2,
+                        )
+                        .await);
                     }
                     Err(e2) if is_resume => {
                         tracing::warn!(
@@ -2131,25 +2170,23 @@ pub async fn send_chat_message(
                         (ps, fresh)
                     }
                     Err(e2) => {
-                        // Clear DB AND in-memory together — the sibling
-                        // failure path at ~line 2089 does both, and leaving
-                        // them out of sync left a window where the next turn
-                        // saw `has_persisted=false` but `saved_session_id`
-                        // non-empty, which made `should_resume` return false
-                        // and the respawn logic above launched
-                        // `claude --session-id <stale-sid>` (fresh session
-                        // pinned to an existing transcript id) instead of
-                        // either resuming or starting cleanly. Mirror the
-                        // sibling so the asymmetry can't reopen.
-                        let _ = db.clear_chat_session_state(&chat_session_id);
-                        let mut agents = state.agents.write().await;
-                        if let Some(session) = agents.get_mut(&chat_session_id) {
-                            session.session_id = String::new();
-                            session.turn_count = 0;
-                        }
-                        drop(agents);
-                        let e2 = crate::missing_cli::handle_err(&app, &e2).unwrap_or(e2);
-                        return Err(e2);
+                        // Symmetric with the structural-failure arm above —
+                        // see `fail_after_clearing_session_state`. The
+                        // shared helper exists specifically to keep this
+                        // and that arm in lockstep; previously diverging
+                        // resets here re-opened a window where the next
+                        // turn saw `has_persisted=false` but a non-empty
+                        // `saved_session_id`, causing
+                        // `claude --session-id <stale-sid>` to launch a
+                        // fresh session pinned to a dead transcript id.
+                        return Err(fail_after_clearing_session_state(
+                            &app,
+                            &state,
+                            &state.db_path,
+                            &chat_session_id,
+                            e2,
+                        )
+                        .await);
                     }
                 };
                 let local_user_message_uuid = uuid::Uuid::new_v4().to_string();
@@ -2238,15 +2275,14 @@ pub async fn send_chat_message(
             // structured error directly so the UI shows the right banner /
             // dialog instead of double-emitting events.
             Err(e) if is_resume && claudette::missing_cli::is_sentinel(&e) => {
-                let _ = db.clear_chat_session_state(&chat_session_id);
-                agents = state.agents.write().await;
-                if let Some(session) = agents.get_mut(&chat_session_id) {
-                    session.turn_count = 0;
-                    session.session_id = String::new();
-                }
-                drop(agents);
-                let e = crate::missing_cli::handle_err(&app, &e).unwrap_or(e);
-                return Err(e);
+                return Err(fail_after_clearing_session_state(
+                    &app,
+                    &state,
+                    &state.db_path,
+                    &chat_session_id,
+                    e,
+                )
+                .await);
             }
             Err(e) if is_resume => {
                 // Resume failed (stale/corrupt session) — start fresh instead.
@@ -2275,15 +2311,14 @@ pub async fn send_chat_message(
                 // so the next attempt doesn't try --resume with a dead
                 // session ID. Must be per-session (not workspace-scoped)
                 // because other tabs in this workspace may still be live.
-                let _ = db.clear_chat_session_state(&chat_session_id);
-                agents = state.agents.write().await;
-                if let Some(session) = agents.get_mut(&chat_session_id) {
-                    session.turn_count = 0;
-                    session.session_id = String::new();
-                }
-                drop(agents);
-                let e = crate::missing_cli::handle_err(&app, &e).unwrap_or(e);
-                return Err(e);
+                return Err(fail_after_clearing_session_state(
+                    &app,
+                    &state,
+                    &state.db_path,
+                    &chat_session_id,
+                    e,
+                )
+                .await);
             }
         };
         let local_user_message_uuid = uuid::Uuid::new_v4().to_string();
