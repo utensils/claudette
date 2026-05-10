@@ -77,7 +77,19 @@ pub async fn spawn_pty(
     // a data migration.
     let working_dir = claudette::path::strip_verbatim_prefix(&working_dir).to_string();
 
-    let mut cmd = CommandBuilder::new_default_prog();
+    // Use our own shell detection rather than portable-pty's
+    // `new_default_prog()`. The portable-pty default is `$SHELL`-or-/bin/sh
+    // on Unix and `%ComSpec%`-or-cmd.exe on Windows; the latter is the
+    // bug we're fixing here — `cmd.exe` doesn't load any user-side
+    // profile, so the integrated terminal on Windows looks nothing like
+    // the user's regular shell. `detect_user_shell` prefers `pwsh.exe`
+    // (PowerShell 7+) and falls back through `powershell.exe`,
+    // `%ComSpec%`, and finally `cmd.exe`. Both PowerShell flavours
+    // auto-load `$PROFILE` when launched interactively in a ConPTY, so
+    // no extra args are needed; cmd honours its registry-based AutoRun
+    // for the same reason.
+    let (shell_path, _shell_type) = detect_user_shell();
+    let mut cmd = CommandBuilder::new(&shell_path);
     cmd.cwd(&working_dir);
     configure_pty_env(&mut cmd);
 

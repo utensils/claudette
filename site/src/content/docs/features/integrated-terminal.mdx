@@ -32,6 +32,29 @@ Each pane runs its own independent PTY in the workspace's worktree. Up to six pa
 
 Split layouts are **ephemeral** — the app reopens each tab as a single pane on restart. Tab identity and titles are persisted; the split arrangement within a tab is not.
 
+## Default Shell
+
+Each PTY launches your platform's interactive shell, with that shell's normal profile loading mechanism intact — so prompts, aliases, modules, and `direnv`/`mise`/etc. integrations from your dotfiles all work.
+
+### macOS / Linux
+
+`$SHELL` is honoured if set; otherwise `/bin/zsh` (macOS) or `/bin/bash` (Linux). The shell's regular profile (`~/.zshrc`, `~/.bashrc`, etc.) loads as it would in any other terminal.
+
+### Windows
+
+`pwsh.exe` (PowerShell 7+) and `powershell.exe` (Windows PowerShell 5.1) read profiles from totally different paths — `Documents\PowerShell\…` vs `Documents\WindowsPowerShell\…` — so blindly preferring PS7 leaves PS5.1 users staring at an unconfigured banner. Claudette's resolution is **profile-aware**: it picks the PowerShell flavour whose profile you've actually written.
+
+1. `pwsh.exe` on `PATH` **and** a PS7 profile exists
+2. `powershell.exe` on `PATH` **and** a PS5.1 profile exists (and there's no PS7 profile)
+3. `pwsh.exe` on `PATH` (modern default when no profile signal either way)
+4. `powershell.exe` on `PATH` (in-box fallback)
+5. `%ComSpec%` (deliberate `cmd.exe` override, if set)
+6. `%WINDIR%\System32\cmd.exe` (always-present last resort)
+
+Profile detection probes both `%USERPROFILE%\Documents\…` and `%USERPROFILE%\OneDrive\Documents\…` (Office 365 and Windows 11 Backup commonly redirect Documents into OneDrive). Both per-host (`Microsoft.PowerShell_profile.ps1`) and all-hosts (`Profile.ps1`) profiles count.
+
+No extra arguments are passed, so the shell behaves the same as it would in a stock Windows Terminal tab — PowerShell auto-loads `$PROFILE`, and `cmd.exe` honours its `HKCU\Software\Microsoft\Command Processor\AutoRun` entry.
+
 ## Terminal Font Size
 
 Adjust the terminal font size in `Settings > Appearance > Terminal font size` (range: 8–24px, default: 11px).
