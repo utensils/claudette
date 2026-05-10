@@ -157,6 +157,7 @@ export function ChatToolbar({ sessionId, disabled }: ChatToolbarProps) {
     ? `${currentModel.providerLabel} / ${currentModel.label}`
     : currentModel?.label ?? selectedModel;
   const isExtraUsage = currentModel?.extraUsage ?? false;
+  const extraUsageProOnly = currentModel?.extraUsageScope === "pro_only";
   const effortLabel =
     EFFORT_LEVELS.find((l) => l.id === effortLevel)?.label ?? effortLevel;
   const isMac = isMacHotkeyPlatform();
@@ -170,7 +171,11 @@ export function ChatToolbar({ sessionId, disabled }: ChatToolbarProps) {
         className={`${styles.chip}`}
         onClick={() => setModelSelectorOpen(!modelSelectorOpen)}
         disabled={disabled}
-        title={isExtraUsage ? t("change_model_extra_usage") : t("change_model")}
+        title={
+          isExtraUsage
+            ? t(extraUsageProOnly ? "change_model_extra_usage_pro_only" : "change_model_extra_usage")
+            : t("change_model")
+        }
       >
         <Sparkles size={14} />
         <span className={styles.chipLabel}>{modelLabel}</span>
