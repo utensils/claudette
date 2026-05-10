@@ -634,33 +634,141 @@ fn resolve_windows_icon_source(entry: &AppEntry, detected_path: &Path) -> PathBu
     detected_path.to_path_buf()
 }
 
+/// Inline C# helper compiled at PowerShell startup. Wraps two
+/// extraction paths so we can prefer the high-res shell-image API
+/// (`IShellItemImageFactory::GetImage`, the same one Explorer uses
+/// for its "Extra large icons" view) and fall back to
+/// `ExtractAssociatedIcon` when the shell can't produce a bitmap.
+///
+/// Why two: `ExtractAssociatedIcon` always returns the 32×32
+/// resource Windows registered with the file association — fast and
+/// reliable but visibly fuzzy in our menu when the macOS counterparts
+/// are pulling 256×256 from `.icns`. `IShellItemImageFactory` walks
+/// every icon group resource embedded in the `.exe` and synthesizes
+/// the requested size, so VS Code / Cursor / Sublime / IntelliJ end
+/// up at full vendor resolution. Some shimmed paths and
+/// `WindowsApps`-execution-alias targets fail the COM call though,
+/// hence the fallback.
+///
+/// The path is read from stdin (one line, UTF-16 native PowerShell
+/// handles backslashes / spaces / quotes natively) so we sidestep
+/// every PowerShell `-Command` quoting hazard.
+#[cfg(target_os = "windows")]
+const ICON_EXTRACT_PS1: &str = r#"
+$ErrorActionPreference = 'Stop'
+$src = @'
+using System;
+using System.Drawing;
+using System.Drawing.Imaging;
+using System.IO;
+using System.Runtime.InteropServices;
+public class ClaudetteIcon {
+    [StructLayout(LayoutKind.Sequential)]
+    public struct SIZE { public int cx, cy; }
+
+    [ComImport, Guid("BCC18B79-BA16-442F-80C4-8A59C30C463B"),
+     InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    public interface IShellItemImageFactory {
+        [PreserveSig] int GetImage(SIZE size, int flags, out IntPtr phbm);
+    }
+
+    [DllImport("shell32.dll", CharSet=CharSet.Unicode, SetLastError=true)]
+    static extern int SHCreateItemFromParsingName(
+        [MarshalAs(UnmanagedType.LPWStr)] string path,
+        IntPtr bc,
+        ref Guid riid,
+        [Out, MarshalAs(UnmanagedType.Interface)] out IShellItemImageFactory ppv);
+
+    [DllImport("gdi32.dll")] static extern bool DeleteObject(IntPtr h);
+
+    public static byte[] ShellImage(string path, int size) {
+        Guid iid = new Guid("BCC18B79-BA16-442F-80C4-8A59C30C463B");
+        IShellItemImageFactory factory;
+        int hr = SHCreateItemFromParsingName(path, IntPtr.Zero, ref iid, out factory);
+        if (hr != 0) return null;
+        IntPtr hbm;
+        SIZE sz; sz.cx = size; sz.cy = size;
+        // SIIGBF_ICONONLY (0x4): never return a thumbnail of file
+        //   contents (we want the embedded icon resource, not e.g.
+        //   the PE-header preview of the executable).
+        // SIIGBF_BIGGERSIZEOK (0x1): if Windows only has a smaller
+        //   variant cached, return that instead of failing.
+        hr = factory.GetImage(sz, 0x4 | 0x1, out hbm);
+        if (hr != 0) return null;
+        try {
+            using (Bitmap bmp = Bitmap.FromHbitmap(hbm))
+            using (Bitmap argb = new Bitmap(bmp.Width, bmp.Height, PixelFormat.Format32bppArgb)) {
+                using (Graphics g = Graphics.FromImage(argb)) g.DrawImage(bmp, 0, 0);
+                using (MemoryStream ms = new MemoryStream()) {
+                    argb.Save(ms, ImageFormat.Png);
+                    return ms.ToArray();
+                }
+            }
+        } finally { DeleteObject(hbm); }
+    }
+
+    public static byte[] AssociatedIcon(string path) {
+        using (Icon ico = Icon.ExtractAssociatedIcon(path)) {
+            if (ico == null) return null;
+            using (Bitmap bmp = ico.ToBitmap())
+            using (MemoryStream ms = new MemoryStream()) {
+                bmp.Save(ms, ImageFormat.Png);
+                return ms.ToArray();
+            }
+        }
+    }
+}
+'@
+Add-Type -TypeDefinition $src -ReferencedAssemblies System.Drawing | Out-Null
+$path = [Console]::In.ReadLine()
+if ([string]::IsNullOrEmpty($path)) { exit 2 }
+$bytes = [ClaudetteIcon]::ShellImage($path, 256)
+if ($null -eq $bytes -or $bytes.Length -eq 0) {
+    $bytes = [ClaudetteIcon]::AssociatedIcon($path)
+}
+if ($null -eq $bytes -or $bytes.Length -eq 0) { exit 3 }
+[Convert]::ToBase64String($bytes)
+"#;
+
 #[cfg(target_os = "windows")]
 fn app_icon_data_url(entry: &AppEntry, detected_path: &Path) -> Option<String> {
     let icon_source = resolve_windows_icon_source(entry, detected_path);
+    extract_windows_icon_data_url(&icon_source)
+}
 
-    let script = r#"
-Add-Type -AssemblyName System.Drawing
-$icon = [System.Drawing.Icon]::ExtractAssociatedIcon($args[0])
-if ($null -eq $icon) { exit 2 }
-$bitmap = $icon.ToBitmap()
-$stream = New-Object System.IO.MemoryStream
-$bitmap.Save($stream, [System.Drawing.Imaging.ImageFormat]::Png)
-[Convert]::ToBase64String($stream.ToArray())
-"#;
+/// Spawn a `powershell.exe` child, feed the target path on stdin, and
+/// parse the base64 PNG it prints. Lifted out of `app_icon_data_url`
+/// so the regression test can exercise the extractor directly without
+/// a synthesized `AppEntry` + `windows_exe_names` walk.
+#[cfg(target_os = "windows")]
+fn extract_windows_icon_data_url(icon_source: &Path) -> Option<String> {
+    use std::io::Write;
+    use std::process::Stdio;
 
-    let output = std::process::Command::new("powershell.exe")
+    let mut child = std::process::Command::new("powershell.exe")
         .args([
             "-NoProfile",
             "-NonInteractive",
             "-ExecutionPolicy",
             "Bypass",
             "-Command",
+            ICON_EXTRACT_PS1,
         ])
-        .arg(script)
-        .arg(&icon_source)
-        .output()
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
         .ok()?;
 
+    {
+        let stdin = child.stdin.as_mut()?;
+        // Write the path literally followed by a newline. PowerShell's
+        // `[Console]::In.ReadLine()` reads one CRLF-terminated line,
+        // which is exactly what we want — no quoting, no -Command
+        // tokenization, no env-var pollution across siblings.
+        let _ = writeln!(stdin, "{}", icon_source.display());
+    }
+    let output = child.wait_with_output().ok()?;
     if !output.status.success() {
         return None;
     }
@@ -1527,6 +1635,92 @@ mod tests {
         assert_eq!(
             merged.apps[0].windows_exe_names,
             vec!["PortableCode.exe".to_string()]
+        );
+    }
+
+    /// End-to-end Windows-only regression test for icon extraction.
+    /// Targets `cmd.exe` because it's:
+    ///   - always present on every Windows install (no install
+    ///     dependency in CI),
+    ///   - has a real embedded icon resource (not a generic shell
+    ///     fallback), and
+    ///   - is a fixed path (`%WINDIR%\System32\cmd.exe`) so the
+    ///     test exercises both the COM path and the data-URL framing
+    ///     without needing any user config.
+    ///
+    /// Asserts:
+    ///   1. The extractor returns `Some` (the previous shipped
+    ///      version returned None for many inputs because of bad
+    ///      `-Command` quoting),
+    ///   2. The data URL has the expected `data:image/png;base64,`
+    ///      prefix,
+    ///   3. The decoded PNG is at least 64×64. The previous
+    ///      `ExtractAssociatedIcon` path always produced 32×32 — if
+    ///      we regress to that, this assert fails. 64 is a deliberate
+    ///      floor below the IShellItemImageFactory 256 we ask for so
+    ///      Windows builds with shell-image disabled (rare) still
+    ///      pass via the upgraded fallback.
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn extract_windows_icon_data_url_returns_high_res_png_for_cmd_exe() {
+        use base64::Engine as _;
+        use base64::engine::general_purpose::STANDARD;
+
+        let cmd = PathBuf::from(std::env::var_os("WINDIR").unwrap_or_else(|| "C:\\Windows".into()))
+            .join("System32")
+            .join("cmd.exe");
+        assert!(
+            cmd.is_file(),
+            "test precondition: {} must exist on every Windows host",
+            cmd.display()
+        );
+
+        let url = extract_windows_icon_data_url(&cmd)
+            .expect("icon extraction returned None for cmd.exe — extractor regression");
+
+        let prefix = "data:image/png;base64,";
+        assert!(
+            url.starts_with(prefix),
+            "data URL missing png prefix: {}",
+            &url[..url.len().min(64)]
+        );
+
+        let payload = &url[prefix.len()..];
+        let png = STANDARD
+            .decode(payload)
+            .expect("base64 in data URL must decode");
+
+        // PNG signature: 89 50 4E 47 0D 0A 1A 0A.
+        assert!(png.len() > 200, "PNG body too small: {} bytes", png.len());
+        assert_eq!(
+            &png[..8],
+            b"\x89PNG\r\n\x1a\n",
+            "decoded bytes are not a PNG header"
+        );
+
+        // Parse IHDR (starts at byte 8: 4-byte length + "IHDR" chunk type
+        // + 4-byte width + 4-byte height, all big-endian).
+        let width = u32::from_be_bytes([png[16], png[17], png[18], png[19]]);
+        let height = u32::from_be_bytes([png[20], png[21], png[22], png[23]]);
+        assert!(
+            width >= 64 && height >= 64,
+            "icon resolution regressed to ExtractAssociatedIcon-only output \
+             ({width}x{height}); expected ≥64×64 from IShellItemImageFactory"
+        );
+    }
+
+    /// Bad input must surface as `None` (not panic, not hang). This
+    /// pins the contract that callers can treat the extractor as
+    /// best-effort and fall through to the lucide placeholder icon.
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn extract_windows_icon_returns_none_for_missing_path() {
+        let bogus = PathBuf::from(r"C:\does-not-exist\definitely-not-a-real-binary.exe");
+        let result = extract_windows_icon_data_url(&bogus);
+        assert!(
+            result.is_none(),
+            "expected None for missing path; got {:?}",
+            result
         );
     }
 
