@@ -7,10 +7,7 @@ import { EMPTY_ACTIVITIES } from "./chatConstants";
 import { activityMatchesSearch } from "./agentToolCallRendering";
 import { AgentToolCallGroup } from "./AgentToolCallGroup";
 import { ToolActivityRow } from "./ToolActivityRow";
-import {
-  groupHasRunningActivity,
-  groupToolActivitiesForDisplay,
-} from "./toolActivityGroups";
+import { groupToolActivitiesForDisplay } from "./toolActivityGroups";
 import { collapsedToolGroupKey } from "./collapsedToolGroupKey";
 
 /**
@@ -48,13 +45,27 @@ export const ToolActivitiesSection = memo(function ToolActivitiesSection({
     >
       {displayGroups.map((group) =>
         group.kind === "agent" && group.activities[0] ? (
-          <AgentToolCallGroup
-            key={group.key}
-            activity={group.activities[0]}
-            searchQuery={searchQuery}
-            worktreePath={worktreePath}
-            inline={toolDisplayMode === "inline"}
-          />
+          // Inline mode keeps the legacy always-expanded Agent rendering;
+          // grouped mode wraps the same component with a chevron+toggle
+          // and a default-collapsed-while-running stance so live Agent
+          // groups behave like any other tool group.
+          toolDisplayMode === "inline" ? (
+            <AgentToolCallGroup
+              key={group.key}
+              activity={group.activities[0]}
+              searchQuery={searchQuery}
+              worktreePath={worktreePath}
+              inline
+            />
+          ) : (
+            <GroupedAgentActivity
+              key={`grouped:${group.activities[0].toolUseId}`}
+              sessionId={sessionId}
+              activity={group.activities[0]}
+              searchQuery={searchQuery}
+              worktreePath={worktreePath}
+            />
+          )
         ) : toolDisplayMode === "inline" ? (
           group.activities.map((act) => (
             <ToolActivityRow
@@ -122,15 +133,31 @@ function GroupedToolActivityRows({
   // search bar's hit counter would tick up but nothing visible would
   // change. This wins over `userOverride === true` (user explicitly
   // collapsed) on purpose: the user typed a query expecting matches,
-  // and surprise-hidden hits regress chat search. The slice's
-  // `collapsed: true` value semantically matches `userOverride` from
-  // the previous local-state version (true → collapsed).
-  const defaultCollapsed = !groupHasRunningActivity(activities, true);
+  // and surprise-hidden hits regress chat search.
+  //
+  // Groups default to collapsed unconditionally — including while
+  // running. The previous "expand if any activity is still running"
+  // heuristic was intentionally removed: with grouped tool calls on
+  // (the new-user default), the chat surface stays quiet and the user
+  // expands what they want. Completed turns initialize
+  // `turn.collapsed = true` in `chatSlice.finalizeTurn` and
+  // `reconstructTurns.ts` (the DB-replay path), so the
+  // running→completed transition no longer changes the default.
+  const defaultCollapsed = true;
   const collapsed = userOverride ?? defaultCollapsed;
   const isExpanded = queryHasMatch || !collapsed;
   const toggle = () => {
     if (!groupKey) return;
-    setCollapsedToolGroup(sessionId, groupKey, !collapsed);
+    // Persist based on the *visible* state, not the raw `collapsed`
+    // boolean. Otherwise, clicking the header while a search query is
+    // forcing the group expanded would silently flip the underlying
+    // override (`!collapsed` = `!true` = `false`, expand) — the click
+    // appears to do nothing because aria-expanded stays true, but
+    // when the user clears the search the group surprises them by
+    // springing open. Storing `isExpanded` ("if currently visible,
+    // collapse it") matches the user's intent: a click on a visible
+    // header is "hide this", a click on a hidden header is "show this".
+    setCollapsedToolGroup(sessionId, groupKey, isExpanded);
   };
 
   return (
@@ -165,5 +192,68 @@ function GroupedToolActivityRows({
         </div>
       )}
     </div>
+  );
+}
+
+/**
+ * Live (running-turn) wrapper around a single Agent activity that
+ * adds a chevron + collapse toggle while leaving the existing
+ * `AgentToolCallGroup` markup intact. The header label and the
+ * progress row (status / count / latest tool) remain visible while
+ * collapsed; only the per-tool-call list is hidden. This matches the
+ * UX choice for grouped tool calls: live agents run for minutes, and
+ * a user glancing at the chat needs to see "is it making progress"
+ * without expanding.
+ *
+ * Persistence reuses `collapsedToolGroupsBySession` keyed via
+ * `collapsedToolGroupKey` (which already discriminates `agent:` vs
+ * `tools:`) so a user's expand/collapse choice survives the
+ * running→completed transition: when the turn ends, `TurnSummary`
+ * reads the same key.
+ */
+function GroupedAgentActivity({
+  sessionId,
+  activity,
+  searchQuery,
+  worktreePath,
+}: {
+  sessionId: string;
+  activity: ToolActivity;
+  searchQuery: string;
+  worktreePath?: string | null;
+}) {
+  const groupKey = collapsedToolGroupKey([activity]);
+  const userOverride = useAppStore((s) =>
+    groupKey ? s.collapsedToolGroupsBySession[sessionId]?.[groupKey] : undefined,
+  );
+  const setCollapsedToolGroup = useAppStore((s) => s.setCollapsedToolGroup);
+
+  // Force-expand on a search hit for the same reason regular tool
+  // groups do: marks need a mounted DOM target. `activityMatchesSearch`
+  // already walks `activity.agentToolCalls`, so a query that matches
+  // an agent-internal call still pops the parent open.
+  const queryHasMatch =
+    !!searchQuery && activityMatchesSearch(activity, searchQuery, worktreePath);
+  const defaultCollapsed = true;
+  const collapsed = userOverride ?? defaultCollapsed;
+  const isCollapsed = !queryHasMatch && collapsed;
+  const toggle = () => {
+    if (!groupKey) return;
+    // Persist based on the visible state (`isCollapsed`), not the raw
+    // `collapsed` boolean — see the matching comment in
+    // `GroupedToolActivityRows#toggle` for why. Without this, clicking
+    // a search-force-expanded agent header silently flips the override
+    // and the agent surprises the user when the search is cleared.
+    setCollapsedToolGroup(sessionId, groupKey, !isCollapsed);
+  };
+
+  return (
+    <AgentToolCallGroup
+      activity={activity}
+      searchQuery={searchQuery}
+      worktreePath={worktreePath}
+      collapsed={isCollapsed}
+      onToggle={toggle}
+    />
   );
 }
