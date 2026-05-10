@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useAppStore } from "../../stores/useAppStore";
-import { archiveWorkspace, restoreWorkspace } from "../../services/tauri";
+import { useWorkspaceLifecycle } from "../../hooks/useWorkspaceLifecycle";
 import styles from "./ChatErrorBanner.module.css";
 import chatStyles from "./ChatPanel.module.css";
 
@@ -41,6 +41,7 @@ export function ChatErrorBanner({ message, workspaceId, onRecovered }: Props) {
   const { t } = useTranslation("chat");
   const openMissingCliModal = useAppStore((s) => s.openMissingCliModal);
   const setLastMissingWorktree = useAppStore((s) => s.setLastMissingWorktree);
+  const { archive, restore } = useWorkspaceLifecycle();
   const [busy, setBusy] = useState<"archive" | "recreate" | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
 
@@ -51,14 +52,22 @@ export function ChatErrorBanner({ message, workspaceId, onRecovered }: Props) {
     if (!workspaceId || busy) return;
     setActionError(null);
     setBusy("archive");
-    try {
-      await archiveWorkspace(workspaceId);
+    // The worktree is already gone, so any repo archive_script that would
+    // chdir into it would fail anyway — short-circuit it. This also means
+    // the Sidebar's archive-script confirmation modal is intentionally
+    // bypassed for this recovery surface (cf. useWorkspaceLifecycle docs).
+    const result = await archive(workspaceId, { skipScript: true });
+    setBusy(null);
+    if (result.ok) {
+      // `archive` already deselects the workspace, so the user lands on
+      // the "Start a workspace" empty state — same UX as clicking Archive
+      // in the sidebar context menu.
       setLastMissingWorktree(null);
       onRecovered?.();
-    } catch (e) {
-      setActionError(t("missing_worktree_archive_failed", { error: String(e) }));
-    } finally {
-      setBusy(null);
+    } else {
+      setActionError(
+        t("missing_worktree_archive_failed", { error: String(result.error) }),
+      );
     }
   }
 
@@ -66,17 +75,18 @@ export function ChatErrorBanner({ message, workspaceId, onRecovered }: Props) {
     if (!workspaceId || busy) return;
     setActionError(null);
     setBusy("recreate");
-    try {
-      // `restore_workspace` re-runs `git worktree add` for the workspace's
-      // saved branch and re-marks the workspace Active. Idempotent enough
-      // to retry on transient failures.
-      await restoreWorkspace(workspaceId);
+    // `restore` re-runs `git worktree add` for the workspace's saved
+    // branch and re-marks the workspace Active. Idempotent enough to
+    // retry on transient failures.
+    const result = await restore(workspaceId);
+    setBusy(null);
+    if (result.ok) {
       setLastMissingWorktree(null);
       onRecovered?.();
-    } catch (e) {
-      setActionError(t("missing_worktree_recreate_failed", { error: String(e) }));
-    } finally {
-      setBusy(null);
+    } else {
+      setActionError(
+        t("missing_worktree_recreate_failed", { error: String(result.error) }),
+      );
     }
   }
 

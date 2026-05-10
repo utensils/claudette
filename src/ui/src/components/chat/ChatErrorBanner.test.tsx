@@ -17,12 +17,18 @@ vi.mock("../../stores/useAppStore", () => ({
     selector(appStore),
 }));
 
-const tauriApi = vi.hoisted(() => ({
-  archiveWorkspace: vi.fn(async () => true),
-  restoreWorkspace: vi.fn(async () => "/restored"),
+type LifecycleResult = { ok: true } | { ok: false; error: unknown };
+
+const lifecycle = vi.hoisted(() => ({
+  archive: vi.fn<(id: string, opts?: { skipScript?: boolean }) => Promise<LifecycleResult>>(
+    async () => ({ ok: true }),
+  ),
+  restore: vi.fn<(id: string) => Promise<LifecycleResult>>(async () => ({ ok: true })),
 }));
 
-vi.mock("../../services/tauri", () => tauriApi);
+vi.mock("../../hooks/useWorkspaceLifecycle", () => ({
+  useWorkspaceLifecycle: () => lifecycle,
+}));
 
 vi.mock("react-i18next", () => ({
   useTranslation: () => ({
@@ -65,8 +71,8 @@ describe("ChatErrorBanner", () => {
   beforeEach(() => {
     appStore.openMissingCliModal.mockReset();
     appStore.setLastMissingWorktree.mockReset();
-    tauriApi.archiveWorkspace.mockReset().mockResolvedValue(true);
-    tauriApi.restoreWorkspace.mockReset().mockResolvedValue("/restored");
+    lifecycle.archive.mockReset().mockResolvedValue({ ok: true });
+    lifecycle.restore.mockReset().mockResolvedValue({ ok: true });
   });
 
   afterEach(async () => {
@@ -97,8 +103,8 @@ describe("ChatErrorBanner", () => {
       (buttons[0] as HTMLButtonElement).click();
     });
     expect(appStore.openMissingCliModal).toHaveBeenCalledTimes(1);
-    expect(tauriApi.archiveWorkspace).not.toHaveBeenCalled();
-    expect(tauriApi.restoreWorkspace).not.toHaveBeenCalled();
+    expect(lifecycle.archive).not.toHaveBeenCalled();
+    expect(lifecycle.restore).not.toHaveBeenCalled();
   });
 
   it("shows Archive + Recreate buttons for missing-worktree errors", async () => {
@@ -114,13 +120,17 @@ describe("ChatErrorBanner", () => {
     await act(async () => {
       (buttons[0] as HTMLButtonElement).click();
     });
-    expect(tauriApi.archiveWorkspace).toHaveBeenCalledWith("ws-1");
+    // `useWorkspaceLifecycle().archive` is invoked with `skipScript: true`
+    // because the worktree is gone — any archive_script that would chdir
+    // into it would fail anyway, so bypassing keeps the recovery path
+    // unblocked.
+    expect(lifecycle.archive).toHaveBeenCalledWith("ws-1", { skipScript: true });
     expect(appStore.setLastMissingWorktree).toHaveBeenCalledWith(null);
     expect(onRecovered).toHaveBeenCalledTimes(1);
   });
 
   it("shows action error and stays mounted when archive fails", async () => {
-    tauriApi.archiveWorkspace.mockRejectedValueOnce(new Error("repo locked"));
+    lifecycle.archive.mockResolvedValueOnce({ ok: false, error: new Error("repo locked") });
     const onRecovered = vi.fn();
     const container = await render({
       message: "Workspace directory is missing: /tmp/gone. Recreate it.",
@@ -147,7 +157,7 @@ describe("ChatErrorBanner", () => {
     await act(async () => {
       recreateBtn.click();
     });
-    expect(tauriApi.restoreWorkspace).toHaveBeenCalledWith("ws-1");
+    expect(lifecycle.restore).toHaveBeenCalledWith("ws-1");
     expect(onRecovered).toHaveBeenCalledTimes(1);
   });
 });
