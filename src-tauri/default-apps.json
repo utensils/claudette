@@ -6,6 +6,7 @@
       "category": "editor",
       "bin_names": ["code"],
       "mac_app_names": ["Visual Studio Code.app"],
+      "windows_exe_names": ["Code.exe"],
       "open_args": ["{}"]
     },
     {
@@ -14,6 +15,7 @@
       "category": "editor",
       "bin_names": ["cursor"],
       "mac_app_names": ["Cursor.app"],
+      "windows_exe_names": ["Cursor.exe"],
       "open_args": ["{}"]
     },
     {
@@ -22,6 +24,7 @@
       "category": "editor",
       "bin_names": ["subl"],
       "mac_app_names": ["Sublime Text.app"],
+      "windows_exe_names": ["sublime_text.exe"],
       "open_args": ["{}"]
     },
     {
@@ -30,6 +33,7 @@
       "category": "editor",
       "bin_names": ["zed"],
       "mac_app_names": ["Zed.app"],
+      "windows_exe_names": ["Zed.exe"],
       "open_args": ["{}"]
     },
     {
@@ -99,6 +103,7 @@
       "category": "editor",
       "bin_names": ["emacs"],
       "mac_app_names": ["Emacs.app"],
+      "windows_exe_names": ["runemacs.exe", "emacs.exe"],
       "open_args": ["{}"]
     },
     {
@@ -107,6 +112,7 @@
       "category": "terminal",
       "bin_names": ["alacritty"],
       "mac_app_names": ["Alacritty.app"],
+      "windows_exe_names": ["alacritty.exe"],
       "open_args": ["--working-directory", "{}"]
     },
     {
@@ -115,6 +121,7 @@
       "category": "terminal",
       "bin_names": ["kitty"],
       "mac_app_names": ["kitty.app"],
+      "windows_exe_names": ["kitty.exe"],
       "open_args": ["--directory", "{}"]
     },
     {
@@ -123,6 +130,7 @@
       "category": "terminal",
       "bin_names": ["wezterm"],
       "mac_app_names": ["WezTerm.app"],
+      "windows_exe_names": ["wezterm-gui.exe", "wezterm.exe"],
       "open_args": ["start", "--cwd", "{}"]
     },
     {
@@ -154,11 +162,44 @@
       "open_args": ["--working-directory", "{}"]
     },
     {
+      "id": "windows-terminal",
+      "name": "Windows Terminal",
+      "category": "terminal",
+      "bin_names": ["wt"],
+      "windows_exe_names": ["wt.exe", "WindowsTerminal.exe"],
+      "open_args": ["-d", "{}"]
+    },
+    {
+      "id": "powershell-7",
+      "name": "PowerShell",
+      "category": "terminal",
+      "bin_names": ["pwsh"],
+      "windows_exe_names": ["pwsh.exe"],
+      "open_args": ["-NoExit", "-WorkingDirectory", "{}"]
+    },
+    {
+      "id": "windows-powershell",
+      "name": "Windows PowerShell",
+      "category": "terminal",
+      "bin_names": ["powershell"],
+      "windows_exe_names": ["powershell.exe"],
+      "open_args": ["-NoExit", "-WorkingDirectory", "{}"]
+    },
+    {
+      "id": "cmd",
+      "name": "Command Prompt",
+      "category": "terminal",
+      "bin_names": ["cmd"],
+      "windows_exe_names": ["cmd.exe"],
+      "open_args": ["/K", "cd", "/d", "{}"]
+    },
+    {
       "id": "intellij",
       "name": "IntelliJ IDEA",
       "category": "ide",
       "bin_names": ["idea"],
       "mac_app_names": ["IntelliJ IDEA.app", "IntelliJ IDEA CE.app"],
+      "windows_exe_names": ["idea64.exe", "idea.exe"],
       "open_args": ["{}"]
     },
     {

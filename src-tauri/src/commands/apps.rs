@@ -33,6 +33,17 @@ pub struct AppEntry {
     #[serde(default)]
     #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     pub mac_app_names: Vec<String>,
+    /// `.exe` filenames to walk up to from `detected_path` for icon
+    /// extraction on Windows. The npm-shim layouts used by VS Code,
+    /// Cursor, etc. put a no-extension bash shim or `.cmd` wrapper in
+    /// PATH while the real `.exe` (the one with embedded icon
+    /// resources) sits one or more directories above. Setting this to
+    /// e.g. `["Code.exe"]` lets Windows builds resolve VS Code's
+    /// actual binary for `ExtractAssociatedIcon`. Ignored on other
+    /// platforms.
+    #[serde(default)]
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+    pub windows_exe_names: Vec<String>,
     pub open_args: Vec<String>,
     #[serde(default)]
     pub needs_terminal: bool,
@@ -166,26 +177,56 @@ fn build_path_dirs() -> Vec<PathBuf> {
     dirs
 }
 
+/// Extensions tried in order on Windows, mirroring PATHEXT semantics
+/// closely enough for app detection. `.exe` is probed first so a real
+/// executable wins over Bash-style shims (e.g. VS Code's `bin/code`,
+/// a no-ext shell script that won't run via `CreateProcess` and isn't
+/// `ExtractAssociatedIcon`-friendly). The empty string keeps the legacy
+/// behavior of accepting bare-name matches as a last resort, which Unix
+/// configs entered into Windows PATH may rely on.
+#[cfg(windows)]
+const WINDOWS_BIN_EXTS: &[&str] = &[".exe", ".cmd", ".bat", ""];
+
 /// Check whether `name` exists as an executable in any of `path_dirs`.
 /// Returns the full path to the first match, or `None`.
 fn find_binary(name: &str, path_dirs: &[PathBuf]) -> Option<PathBuf> {
     for dir in path_dirs {
-        let candidate = dir.join(name);
-        let Ok(meta) = std::fs::metadata(&candidate) else {
-            continue;
-        };
-        if !meta.is_file() {
+        // On Windows, probe each PATHEXT-style extension before moving
+        // to the next directory so a `code.cmd` in dir A wins over a
+        // bare-name `code` farther down PATH.
+        #[cfg(windows)]
+        {
+            for ext in WINDOWS_BIN_EXTS {
+                let candidate = dir.join(format!("{name}{ext}"));
+                let Ok(meta) = std::fs::metadata(&candidate) else {
+                    continue;
+                };
+                if !meta.is_file() {
+                    continue;
+                }
+                return Some(candidate);
+            }
             continue;
         }
-        // On Unix, verify the executable bit is set.
-        #[cfg(unix)]
+        #[cfg(not(windows))]
         {
-            use std::os::unix::fs::PermissionsExt;
-            if meta.permissions().mode() & 0o111 == 0 {
+            let candidate = dir.join(name);
+            let Ok(meta) = std::fs::metadata(&candidate) else {
+                continue;
+            };
+            if !meta.is_file() {
                 continue;
             }
+            // On Unix, verify the executable bit is set.
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                if meta.permissions().mode() & 0o111 == 0 {
+                    continue;
+                }
+            }
+            return Some(candidate);
         }
-        return Some(candidate);
     }
     None
 }
@@ -515,8 +556,39 @@ fn app_icon_data_url(entry: &AppEntry, detected_path: &Path) -> Option<String> {
         .and_then(|path| image_data_url_from_file(&path))
 }
 
+/// Walk up from `detected_path` looking for any of the manifest's
+/// `windows_exe_names`. Used to recover the real `.exe` (which carries
+/// the embedded icon resource) from PATH-resolved shims like
+/// `bin/code.cmd` (one level up) or `resources/app/bin/cursor.cmd`
+/// (three levels up). Falls back to `detected_path` so apps without
+/// a manifest entry still get whatever icon ExtractAssociatedIcon can
+/// produce.
 #[cfg(target_os = "windows")]
-fn app_icon_data_url(_entry: &AppEntry, detected_path: &Path) -> Option<String> {
+fn resolve_windows_icon_source(entry: &AppEntry, detected_path: &Path) -> PathBuf {
+    if entry.windows_exe_names.is_empty() {
+        return detected_path.to_path_buf();
+    }
+    // Five levels covers every layout we ship in default-apps.json
+    // (Cursor's three-deep shim is the deepest case) without risking
+    // a runaway directory walk on weird filesystems.
+    let mut dir = detected_path.parent();
+    for _ in 0..5 {
+        let Some(d) = dir else { break };
+        for exe in &entry.windows_exe_names {
+            let candidate = d.join(exe);
+            if candidate.is_file() {
+                return candidate;
+            }
+        }
+        dir = d.parent();
+    }
+    detected_path.to_path_buf()
+}
+
+#[cfg(target_os = "windows")]
+fn app_icon_data_url(entry: &AppEntry, detected_path: &Path) -> Option<String> {
+    let icon_source = resolve_windows_icon_source(entry, detected_path);
+
     let script = r#"
 Add-Type -AssemblyName System.Drawing
 $icon = [System.Drawing.Icon]::ExtractAssociatedIcon($args[0])
@@ -536,7 +608,7 @@ $bitmap.Save($stream, [System.Drawing.Imaging.ImageFormat]::Png)
             "-Command",
         ])
         .arg(script)
-        .arg(detected_path)
+        .arg(&icon_source)
         .output()
         .ok()?;
 
@@ -1154,6 +1226,7 @@ mod tests {
                 category: AppCategory::Editor,
                 bin_names: vec!["myeditor".into()],
                 mac_app_names: vec![],
+                windows_exe_names: vec![],
                 open_args: vec!["{}".into()],
                 needs_terminal: false,
             }],
@@ -1178,6 +1251,7 @@ mod tests {
                 category: AppCategory::Editor,
                 bin_names: vec!["nonexistent-binary".into()],
                 mac_app_names: vec![],
+                windows_exe_names: vec![],
                 open_args: vec!["{}".into()],
                 needs_terminal: false,
             }],
@@ -1204,6 +1278,7 @@ mod tests {
                 category: AppCategory::Editor,
                 bin_names: vec!["noexec".into()],
                 mac_app_names: vec![],
+                windows_exe_names: vec![],
                 open_args: vec!["{}".into()],
                 needs_terminal: false,
             }],
@@ -1234,6 +1309,7 @@ mod tests {
                     category: AppCategory::Terminal,
                     bin_names: vec!["zterm".into()],
                     mac_app_names: vec![],
+                    windows_exe_names: vec![],
                     open_args: vec!["{}".into()],
                     needs_terminal: false,
                 },
@@ -1243,6 +1319,7 @@ mod tests {
                     category: AppCategory::Editor,
                     bin_names: vec!["beditor".into()],
                     mac_app_names: vec![],
+                    windows_exe_names: vec![],
                     open_args: vec!["{}".into()],
                     needs_terminal: false,
                 },
@@ -1252,6 +1329,7 @@ mod tests {
                     category: AppCategory::Editor,
                     bin_names: vec!["aeditor".into()],
                     mac_app_names: vec![],
+                    windows_exe_names: vec![],
                     open_args: vec!["{}".into()],
                     needs_terminal: false,
                 },
@@ -1267,5 +1345,141 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["beditor", "aeditor", "zterm"],
         );
+    }
+
+    /// On Windows, find_binary should prefer `.exe` over `.cmd` over a
+    /// no-extension shim — mirroring PATHEXT order. This protects
+    /// against the VS Code layout where `bin/code` (a Bash script) and
+    /// `bin/code.cmd` coexist; we want the latter so the icon resolver
+    /// can walk up to `Code.exe` and `Command::new` doesn't try to
+    /// invoke a sh-style script.
+    #[cfg(windows)]
+    #[test]
+    fn find_binary_prefers_exe_then_cmd_then_bare_on_windows() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        std::fs::write(dir.join("tool"), "shim").unwrap();
+        std::fs::write(dir.join("tool.cmd"), "@echo off").unwrap();
+        std::fs::write(dir.join("tool.exe"), b"MZ").unwrap();
+
+        let resolved = find_binary("tool", &[dir.to_path_buf()]).unwrap();
+        assert_eq!(resolved, dir.join("tool.exe"));
+
+        std::fs::remove_file(dir.join("tool.exe")).unwrap();
+        let resolved = find_binary("tool", &[dir.to_path_buf()]).unwrap();
+        assert_eq!(resolved, dir.join("tool.cmd"));
+
+        std::fs::remove_file(dir.join("tool.cmd")).unwrap();
+        let resolved = find_binary("tool", &[dir.to_path_buf()]).unwrap();
+        assert_eq!(resolved, dir.join("tool"));
+    }
+
+    /// `resolve_windows_icon_source` must walk up from the detected
+    /// shim to the real `.exe` named in `windows_exe_names`. The
+    /// fixture mirrors VS Code's layout: `bin/code.cmd` one level
+    /// below `Code.exe`.
+    #[cfg(windows)]
+    #[test]
+    fn resolve_windows_icon_walks_up_to_named_exe() {
+        let tmp = tempfile::tempdir().unwrap();
+        let app_root = tmp.path().join("MyApp");
+        let bin_dir = app_root.join("bin");
+        std::fs::create_dir_all(&bin_dir).unwrap();
+        let shim = bin_dir.join("myapp.cmd");
+        std::fs::write(&shim, "@echo off").unwrap();
+        let real_exe = app_root.join("MyApp.exe");
+        std::fs::write(&real_exe, b"MZ").unwrap();
+
+        let entry = AppEntry {
+            id: "myapp".into(),
+            name: "My App".into(),
+            category: AppCategory::Editor,
+            bin_names: vec!["myapp".into()],
+            mac_app_names: vec![],
+            windows_exe_names: vec!["MyApp.exe".into()],
+            open_args: vec!["{}".into()],
+            needs_terminal: false,
+        };
+
+        assert_eq!(resolve_windows_icon_source(&entry, &shim), real_exe);
+    }
+
+    /// Cursor's `cursor.cmd` lives three directories below `Cursor.exe`
+    /// (`<root>/resources/app/bin/cursor.cmd`). The walk-up cap of five
+    /// must comfortably cover that.
+    #[cfg(windows)]
+    #[test]
+    fn resolve_windows_icon_walks_up_multiple_levels() {
+        let tmp = tempfile::tempdir().unwrap();
+        let app_root = tmp.path().join("cursor");
+        let deep = app_root.join("resources").join("app").join("bin");
+        std::fs::create_dir_all(&deep).unwrap();
+        let shim = deep.join("cursor.cmd");
+        std::fs::write(&shim, "@echo off").unwrap();
+        let real_exe = app_root.join("Cursor.exe");
+        std::fs::write(&real_exe, b"MZ").unwrap();
+
+        let entry = AppEntry {
+            id: "cursor".into(),
+            name: "Cursor".into(),
+            category: AppCategory::Editor,
+            bin_names: vec!["cursor".into()],
+            mac_app_names: vec![],
+            windows_exe_names: vec!["Cursor.exe".into()],
+            open_args: vec!["{}".into()],
+            needs_terminal: false,
+        };
+
+        assert_eq!(resolve_windows_icon_source(&entry, &shim), real_exe);
+    }
+
+    /// When `windows_exe_names` doesn't match anything in the walk-up,
+    /// fall back to the original detected path so the caller still
+    /// gets a stable input for `ExtractAssociatedIcon`.
+    #[cfg(windows)]
+    #[test]
+    fn resolve_windows_icon_falls_back_to_detected_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        let bin_dir = tmp.path().join("bin");
+        std::fs::create_dir_all(&bin_dir).unwrap();
+        let shim = bin_dir.join("ghost.cmd");
+        std::fs::write(&shim, "@echo off").unwrap();
+
+        let entry = AppEntry {
+            id: "ghost".into(),
+            name: "Ghost".into(),
+            category: AppCategory::Editor,
+            bin_names: vec!["ghost".into()],
+            mac_app_names: vec![],
+            windows_exe_names: vec!["Nonexistent.exe".into()],
+            open_args: vec!["{}".into()],
+            needs_terminal: false,
+        };
+
+        assert_eq!(resolve_windows_icon_source(&entry, &shim), shim);
+    }
+
+    /// An entry without `windows_exe_names` must skip the walk and
+    /// return the detected path verbatim — that's the existing
+    /// behavior for shimless apps and we don't want to regress it.
+    #[cfg(windows)]
+    #[test]
+    fn resolve_windows_icon_no_walk_without_exe_names() {
+        let tmp = tempfile::tempdir().unwrap();
+        let exe = tmp.path().join("standalone.exe");
+        std::fs::write(&exe, b"MZ").unwrap();
+
+        let entry = AppEntry {
+            id: "standalone".into(),
+            name: "Standalone".into(),
+            category: AppCategory::Terminal,
+            bin_names: vec!["standalone".into()],
+            mac_app_names: vec![],
+            windows_exe_names: vec![],
+            open_args: vec![],
+            needs_terminal: false,
+        };
+
+        assert_eq!(resolve_windows_icon_source(&entry, &exe), exe);
     }
 }
