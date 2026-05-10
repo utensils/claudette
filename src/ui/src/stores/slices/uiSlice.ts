@@ -15,6 +15,8 @@ export interface UiSlice {
   rightSidebarWidth: number;
   terminalHeight: number;
   rightSidebarTab: "files" | "changes" | "tasks";
+  changesViewMode: "list" | "tree";
+  setChangesViewMode: (mode: "list" | "tree") => void;
   sidebarGroupBy: "status" | "repo";
   sidebarRepoFilter: string; // repo ID or "all"
   sidebarShowArchived: boolean;
@@ -95,6 +97,8 @@ export const createUiSlice: StateCreator<AppState, [], [], UiSlice> = (
   rightSidebarWidth: 250,
   terminalHeight: 300,
   rightSidebarTab: "files",
+  changesViewMode: "list",
+  setChangesViewMode: (mode) => set({ changesViewMode: mode }),
   sidebarGroupBy: "repo",
   sidebarRepoFilter: "all",
   sidebarShowArchived: false,

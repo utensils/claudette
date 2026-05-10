@@ -1,10 +1,12 @@
 import { Fragment, memo, useCallback, useEffect, useRef, useState } from "react";
+import { useIsLightTheme } from "../../hooks/useIsLightTheme";
+import { getMaterialFileIconUrl } from "../../utils/materialIcons";
 import { isAgentBusy } from "../../utils/agentStatus";
 import {
   DIFF_AGENT_RUNNING_INTERVAL_MS,
   IDLE_REFRESH_INTERVAL_MS,
 } from "../../utils/pollingIntervals";
-import { ChevronRight, Undo2, Trash2, Plus, Minus, FilePenLine } from "lucide-react";
+import { ChevronRight, Undo2, Trash2, Plus, Minus, FilePenLine, List, FolderTree } from "lucide-react";
 import { useAppStore, selectActiveSessionId } from "../../stores/useAppStore";
 import { useTaskTracker } from "../../hooks/useTaskTracker";
 import {
@@ -14,6 +16,8 @@ import {
   sendRemoteCommand,
   stageFile,
   stageFiles,
+  trackFile,
+  trackFiles,
   unstageFile,
   unstageFiles,
 } from "../../services/tauri";
@@ -25,6 +29,7 @@ import {
 } from "../chat/AttachmentContextMenu";
 import { TaskList } from "./TaskList";
 import { PrStatusBanner } from "./PrStatusBanner";
+import { DiffTreeView } from "./DiffTreeView";
 import { FilesPanel } from "../files/FilesPanel";
 import {
   DiscardChangesConfirm,
@@ -55,7 +60,10 @@ export const RightSidebar = memo(function RightSidebar() {
   const setDiffSelectedCommitHash = useAppStore((s) => s.setDiffSelectedCommitHash);
   const activeTab = useAppStore((s) => s.rightSidebarTab);
   const setActiveTab = useAppStore((s) => s.setRightSidebarTab);
+  const changesViewMode = useAppStore((s) => s.changesViewMode);
+  const setChangesViewMode = useAppStore((s) => s.setChangesViewMode);
 
+  const isLight = useIsLightTheme();
   const ws = workspaces.find((w) => w.id === selectedWorkspaceId);
   const isRunning = isAgentBusy(ws?.agent_status);
   const remoteConnectionId = ws?.remote_connection_id ?? null;
@@ -318,7 +326,8 @@ export const RightSidebar = memo(function RightSidebar() {
     const isSelected = diffSelectedFile === file.path
       && (diffSelectedLayer ?? "flat") === (layer ?? "flat");
     const canDiscard = localGitOpsEnabled && isDiscardableLayer(layer);
-    const canStage = localGitOpsEnabled && (layer === "unstaged" || layer === "untracked");
+    const canTrack = localGitOpsEnabled && layer === "untracked";
+    const canStage = localGitOpsEnabled && layer === "unstaged";
     const canUnstage = localGitOpsEnabled && layer === "staged";
     // Deleted files don't exist on disk regardless of layer (staged deletions
     // are already removed by `git rm`; committed deletions are gone from HEAD).
@@ -335,6 +344,14 @@ export const RightSidebar = memo(function RightSidebar() {
       e.stopPropagation();
       if (!canDiscard) return;
       setDiscardTarget({ file, layer });
+    };
+
+    const handleTrackClick = (e: React.MouseEvent) => {
+      e.stopPropagation();
+      if (!canTrack || gitOpInFlight) return;
+      performTrack(file.path).catch((err) => {
+        console.error("Failed to track file:", err);
+      });
     };
 
     const handleStageClick = (e: React.MouseEvent) => {
@@ -359,6 +376,11 @@ export const RightSidebar = memo(function RightSidebar() {
       openFileTab(selectedWorkspaceId, file.path);
     };
 
+    const lastSlash = file.path.lastIndexOf('/');
+    const basename = lastSlash >= 0 ? file.path.slice(lastSlash + 1) : file.path;
+    const dirname = lastSlash >= 0 ? file.path.slice(0, lastSlash) : '';
+    const iconUrl = getMaterialFileIconUrl(basename, isLight);
+
     return (
     <div
       key={`${layer ?? "flat"}-${file.path}`}
@@ -377,68 +399,93 @@ export const RightSidebar = memo(function RightSidebar() {
       >
         {statusLabel(file.status)}
       </span>
-      <span className={styles.path}>{file.path}</span>
-      {(file.additions != null || file.deletions != null) && (
-        <span className={styles.stats}>
-          {file.additions != null && (
-            <span className={styles.additions}>+{file.additions}</span>
+      <img
+        src={iconUrl}
+        width={14}
+        height={14}
+        className={styles.fileIcon}
+        alt=""
+        aria-hidden="true"
+      />
+      <div className={styles.fileInfo} title={`${file.path} · ${typeof file.status === "string" ? file.status : "Renamed"}`}>
+        <span className={styles.fileName}>{basename}</span>
+        {dirname && <span className={styles.fileDir}>{dirname}</span>}
+      </div>
+      <span className={styles.fileEndSlot}>
+        <span className={styles.rowActions}>
+          {canOpenSource && (
+            <button
+              type="button"
+              className={styles.rowAction}
+              onClick={handleOpenClick}
+              title="Open in editor"
+              aria-label="Open in editor"
+            >
+              <FilePenLine size={12} />
+            </button>
           )}
-          {file.deletions != null && (
-            <span className={styles.deletions}>-{file.deletions}</span>
+          {canTrack && (
+            <button
+              type="button"
+              className={styles.rowAction}
+              onClick={handleTrackClick}
+              disabled={gitOpInFlight}
+              title="Track (move to unstaged)"
+              aria-label="Track"
+            >
+              <Plus size={12} />
+            </button>
+          )}
+          {canStage && (
+            <button
+              type="button"
+              className={styles.rowAction}
+              onClick={handleStageClick}
+              disabled={gitOpInFlight}
+              title="Stage"
+              aria-label="Stage"
+            >
+              <Plus size={12} />
+            </button>
+          )}
+          {canUnstage && (
+            <button
+              type="button"
+              className={styles.rowAction}
+              onClick={handleUnstageClick}
+              disabled={gitOpInFlight}
+              title="Unstage"
+              aria-label="Unstage"
+            >
+              <Minus size={12} />
+            </button>
+          )}
+          {canDiscard && (
+            <button
+              type="button"
+              className={`${styles.rowAction} ${styles.rowActionDanger}`}
+              onClick={handleDiscardClick}
+              disabled={gitOpInFlight}
+              title={layer === "untracked" ? "Delete" : "Discard changes"}
+              aria-label={layer === "untracked" ? "Delete" : "Discard changes"}
+            >
+              {layer === "untracked" ? (
+                <Trash2 size={12} />
+              ) : (
+                <Undo2 size={12} />
+              )}
+            </button>
           )}
         </span>
-      )}
-      <span className={styles.rowActions}>
-        {canOpenSource && (
-          <button
-            type="button"
-            className={styles.rowAction}
-            onClick={handleOpenClick}
-            title="Open in editor"
-            aria-label="Open in editor"
-          >
-            <FilePenLine size={12} />
-          </button>
-        )}
-        {canStage && (
-          <button
-            type="button"
-            className={styles.rowAction}
-            onClick={handleStageClick}
-            disabled={gitOpInFlight}
-            title="Stage"
-            aria-label="Stage"
-          >
-            <Plus size={12} />
-          </button>
-        )}
-        {canUnstage && (
-          <button
-            type="button"
-            className={styles.rowAction}
-            onClick={handleUnstageClick}
-            disabled={gitOpInFlight}
-            title="Unstage"
-            aria-label="Unstage"
-          >
-            <Minus size={12} />
-          </button>
-        )}
-        {canDiscard && (
-          <button
-            type="button"
-            className={`${styles.rowAction} ${styles.rowActionDanger}`}
-            onClick={handleDiscardClick}
-            disabled={gitOpInFlight}
-            title={layer === "untracked" ? "Delete" : "Discard changes"}
-            aria-label={layer === "untracked" ? "Delete" : "Discard changes"}
-          >
-            {layer === "untracked" ? (
-              <Trash2 size={12} />
-            ) : (
-              <Undo2 size={12} />
+        {(file.additions != null || file.deletions != null) && (
+          <span className={styles.stats}>
+            {file.additions != null && (
+              <span className={styles.additions}>+{file.additions}</span>
             )}
-          </button>
+            {file.deletions != null && (
+              <span className={styles.deletions}>-{file.deletions}</span>
+            )}
+          </span>
         )}
       </span>
     </div>
@@ -489,6 +536,26 @@ export const RightSidebar = memo(function RightSidebar() {
       state.setDiffSelectedFile(null);
     }
   }, []);
+
+  const performTrack = useCallback(
+    (filePath: string) =>
+      runIndexOp(async () => {
+        clearSelectionIfAffected([filePath]);
+        await trackFile(worktreePath!, filePath);
+      }),
+    [runIndexOp, clearSelectionIfAffected, worktreePath],
+  );
+
+  const performTrackAll = useCallback(
+    (files: DiffFile[]) =>
+      runIndexOp(async () => {
+        if (files.length === 0) return;
+        const paths = files.map((f) => f.path);
+        clearSelectionIfAffected(paths);
+        await trackFiles(worktreePath!, paths);
+      }),
+    [runIndexOp, clearSelectionIfAffected, worktreePath],
+  );
 
   const performStage = useCallback(
     (filePath: string) =>
@@ -592,6 +659,30 @@ export const RightSidebar = memo(function RightSidebar() {
             <span className={styles.tabBadge}>{taskCount}</span>
           )}
         </button>
+        {activeTab === "changes" && (
+          <span className={styles.tabBarEnd}>
+            <button
+              type="button"
+              className={`${styles.viewToggle} ${changesViewMode === "list" ? styles.viewToggleActive : ""}`}
+              onClick={() => setChangesViewMode("list")}
+              title="List view"
+              aria-label="List view"
+              aria-pressed={changesViewMode === "list"}
+            >
+              <List size={13} />
+            </button>
+            <button
+              type="button"
+              className={`${styles.viewToggle} ${changesViewMode === "tree" ? styles.viewToggleActive : ""}`}
+              onClick={() => setChangesViewMode("tree")}
+              title="Tree view"
+              aria-label="Tree view"
+              aria-pressed={changesViewMode === "tree"}
+            >
+              <FolderTree size={13} />
+            </button>
+          </span>
+        )}
       </div>
 
       {activeTab === "files" && <FilesPanel />}
@@ -615,6 +706,7 @@ export const RightSidebar = memo(function RightSidebar() {
                   layer="staged"
                   accentColor="var(--accent-dim)"
                   renderFileRow={renderFileRow}
+                  viewMode={changesViewMode}
                   onUnstageAll={
                     localGitOpsEnabled
                       ? () => {
@@ -632,6 +724,7 @@ export const RightSidebar = memo(function RightSidebar() {
                   layer="unstaged"
                   accentColor="var(--tool-task)"
                   renderFileRow={renderFileRow}
+                  viewMode={changesViewMode}
                   onStageAll={
                     localGitOpsEnabled
                       ? () => {
@@ -658,6 +751,26 @@ export const RightSidebar = memo(function RightSidebar() {
                   layer="untracked"
                   accentColor="var(--text-dim)"
                   renderFileRow={renderFileRow}
+                  viewMode={changesViewMode}
+                  onTrackAll={
+                    localGitOpsEnabled
+                      ? () => {
+                          performTrackAll(diffStagedFiles!.untracked).catch((err) => {
+                            console.error("Failed to track all files:", err);
+                          });
+                        }
+                      : undefined
+                  }
+                  onDiscardAll={
+                    localGitOpsEnabled
+                      ? () =>
+                          setBulkDiscardTarget({
+                            files: diffStagedFiles!.untracked,
+                            layer: "untracked",
+                          })
+                      : undefined
+                  }
+                  disabled={gitOpInFlight}
                 />
                 <FileGroup
                   label="Committed"
@@ -665,6 +778,7 @@ export const RightSidebar = memo(function RightSidebar() {
                   layer="committed"
                   accentColor="var(--diff-added-text)"
                   renderFileRow={renderFileRow}
+                  viewMode={changesViewMode}
                 />
                 {commitHistory && commitHistory.length > 0 && (
                   <CommitGroup
@@ -682,6 +796,9 @@ export const RightSidebar = memo(function RightSidebar() {
                   />
                 )}
               </Fragment>
+            ) : changesViewMode === "tree" ? (
+              // Fallback tree (remote server without staged_files)
+              <DiffTreeView files={diffFiles} renderFileRow={renderFileRow} />
             ) : (
               // Fallback: flat list (remote server without staged_files)
               diffFiles.map((file) => renderFileRow(file))
@@ -750,6 +867,8 @@ function FileGroup({
   layer,
   accentColor,
   renderFileRow,
+  viewMode,
+  onTrackAll,
   onStageAll,
   onUnstageAll,
   onDiscardAll,
@@ -760,6 +879,8 @@ function FileGroup({
   layer: DiffLayer;
   accentColor: string;
   renderFileRow: (file: DiffFile, layer?: DiffLayer) => React.ReactElement;
+  viewMode: "list" | "tree";
+  onTrackAll?: () => void;
   onStageAll?: () => void;
   onUnstageAll?: () => void;
   onDiscardAll?: () => void;
@@ -769,7 +890,7 @@ function FileGroup({
 
   if (files.length === 0) return null;
 
-  const hasActions = onStageAll != null || onUnstageAll != null || onDiscardAll != null;
+  const hasActions = onTrackAll != null || onStageAll != null || onUnstageAll != null || onDiscardAll != null;
 
   return (
     <div
@@ -791,6 +912,18 @@ function FileGroup({
         </button>
         {hasActions && (
           <span className={styles.groupActions}>
+            {onTrackAll && (
+              <button
+                type="button"
+                className={styles.groupAction}
+                onClick={onTrackAll}
+                disabled={disabled}
+                title="Track all (move to unstaged)"
+                aria-label="Track all"
+              >
+                <Plus size={12} />
+              </button>
+            )}
             {onStageAll && (
               <button
                 type="button"
@@ -830,7 +963,11 @@ function FileGroup({
           </span>
         )}
       </div>
-      {!collapsed && files.map((file) => renderFileRow(file, layer))}
+      {!collapsed && (
+        viewMode === "tree"
+          ? <DiffTreeView files={files} layer={layer} renderFileRow={renderFileRow} />
+          : files.map((file) => renderFileRow(file, layer))
+      )}
     </div>
   );
 }
@@ -863,6 +1000,7 @@ function CommitGroup({
   openFileTab: (workspaceId: string, path: string) => void;
   onFileClick: (file: DiffFile, commitHash: string) => void;
 }) {
+  const isLight = useIsLightTheme();
   const [collapsed, setCollapsed] = useState(true);
   const [expandedHashes, setExpandedHashes] = useState<Record<string, boolean>>({});
 
@@ -911,58 +1049,69 @@ function CommitGroup({
                       selectedFile === file.path &&
                       selectedCommitHash === commit.hash;
                     const canOpen = selectedWorkspaceId != null && file.status !== "Deleted";
+                    const lastSlash = file.path.lastIndexOf('/');
+                    const basename = lastSlash >= 0 ? file.path.slice(lastSlash + 1) : file.path;
+                    const dirname = lastSlash >= 0 ? file.path.slice(0, lastSlash) : '';
+                    const iconUrl = getMaterialFileIconUrl(basename, isLight);
+                    const fileStatusColor =
+                      typeof file.status === "string"
+                        ? file.status === "Added"
+                          ? "var(--diff-added-text)"
+                          : file.status === "Modified"
+                            ? "var(--tool-task)"
+                            : "var(--diff-removed-text)"
+                        : "var(--diff-hunk-header)";
+                    const fileStatusLabel =
+                      typeof file.status === "string"
+                        ? file.status === "Added" ? "A" : file.status === "Modified" ? "M" : "D"
+                        : "R";
                     return (
                       <div
                         key={file.path}
                         className={`${styles.file} ${styles.commitFileRow} ${isSelected ? styles.fileSelected : ""}`}
                         onClick={() => onFileClick(file, commit.hash)}
                       >
-                        <span
-                          className={styles.status}
-                          style={{
-                            color:
-                              typeof file.status === "string"
-                                ? file.status === "Added"
-                                  ? "var(--diff-added-text)"
-                                  : file.status === "Modified"
-                                    ? "var(--tool-task)"
-                                    : "var(--diff-removed-text)"
-                                : "var(--diff-hunk-header)",
-                          }}
-                        >
-                          {typeof file.status === "string"
-                            ? file.status === "Added"
-                              ? "A"
-                              : file.status === "Modified"
-                                ? "M"
-                                : "D"
-                            : "R"}
+                        <span className={styles.status} style={{ color: fileStatusColor }}>
+                          {fileStatusLabel}
                         </span>
-                        <span className={styles.path}>{file.path}</span>
-                        {(file.additions != null || file.deletions != null) && (
-                          <span className={styles.stats}>
-                            {file.additions != null && (
-                              <span className={styles.additions}>+{file.additions}</span>
-                            )}
-                            {file.deletions != null && (
-                              <span className={styles.deletions}>-{file.deletions}</span>
+                        <img
+                          src={iconUrl}
+                          width={14}
+                          height={14}
+                          className={styles.fileIcon}
+                          alt=""
+                          aria-hidden="true"
+                        />
+                        <div className={styles.fileInfo} title={`${file.path} · ${typeof file.status === "string" ? file.status : "Renamed"}`}>
+                          <span className={styles.fileName}>{basename}</span>
+                          {dirname && <span className={styles.fileDir}>{dirname}</span>}
+                        </div>
+                        <span className={styles.fileEndSlot}>
+                          <span className={styles.rowActions}>
+                            {canOpen && (
+                              <button
+                                type="button"
+                                className={styles.rowAction}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  openFileTab(selectedWorkspaceId, file.path);
+                                }}
+                                title="Open in editor"
+                                aria-label="Open in editor"
+                              >
+                                <FilePenLine size={12} />
+                              </button>
                             )}
                           </span>
-                        )}
-                        <span className={styles.rowActions}>
-                          {canOpen && (
-                            <button
-                              type="button"
-                              className={styles.rowAction}
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                openFileTab(selectedWorkspaceId, file.path);
-                              }}
-                              title="Open in editor"
-                              aria-label="Open in editor"
-                            >
-                              <FilePenLine size={12} />
-                            </button>
+                          {(file.additions != null || file.deletions != null) && (
+                            <span className={styles.stats}>
+                              {file.additions != null && (
+                                <span className={styles.additions}>+{file.additions}</span>
+                              )}
+                              {file.deletions != null && (
+                                <span className={styles.deletions}>-{file.deletions}</span>
+                              )}
+                            </span>
                           )}
                         </span>
                       </div>

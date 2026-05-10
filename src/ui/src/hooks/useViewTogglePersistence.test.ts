@@ -41,6 +41,7 @@ function makePersistedState(
     rightSidebarWidth: 250,
     terminalHeight: 300,
     rightSidebarTab: "files",
+    changesViewMode: "list",
     sidebarGroupBy: "repo",
     sidebarRepoFilter: "all",
     sidebarShowArchived: false,

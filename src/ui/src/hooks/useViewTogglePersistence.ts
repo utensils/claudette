@@ -25,6 +25,7 @@ const LEGACY_KEYS = {
 
 const RIGHT_SIDEBAR_TABS = ["files", "changes", "tasks"] as const;
 const SIDEBAR_GROUP_BYS = ["status", "repo"] as const;
+const CHANGES_VIEW_MODES = ["list", "tree"] as const;
 const DIFF_LAYERS = ["committed", "staged", "unstaged", "untracked"] as const;
 const STATUS_GROUP_KEYS = [
   "status:merged",
@@ -37,6 +38,7 @@ const STATUS_GROUP_KEYS = [
 
 type RightSidebarTab = (typeof RIGHT_SIDEBAR_TABS)[number];
 type SidebarGroupBy = (typeof SIDEBAR_GROUP_BYS)[number];
+type ChangesViewMode = (typeof CHANGES_VIEW_MODES)[number];
 
 export interface PersistedViewStateV1 {
   version: 1;
@@ -47,6 +49,7 @@ export interface PersistedViewStateV1 {
   rightSidebarWidth: number;
   terminalHeight: number;
   rightSidebarTab: RightSidebarTab;
+  changesViewMode: ChangesViewMode;
   sidebarGroupBy: SidebarGroupBy;
   sidebarRepoFilter: string;
   sidebarShowArchived: boolean;
@@ -170,6 +173,12 @@ function parseRightSidebarTab(value: unknown, fallback: RightSidebarTab): RightS
 function parseSidebarGroupBy(value: unknown, fallback: SidebarGroupBy): SidebarGroupBy {
   return typeof value === "string" && (SIDEBAR_GROUP_BYS as readonly string[]).includes(value)
     ? (value as SidebarGroupBy)
+    : fallback;
+}
+
+function parseChangesViewMode(value: unknown, fallback: ChangesViewMode): ChangesViewMode {
+  return typeof value === "string" && (CHANGES_VIEW_MODES as readonly string[]).includes(value)
+    ? (value as ChangesViewMode)
     : fallback;
 }
 
@@ -335,6 +344,7 @@ function parsePersistedViewState(raw: string | null): PersistedViewState | null 
     rightSidebarWidth: clampNumber(parsed.rightSidebarWidth, 150, 600, 250),
     terminalHeight: clampNumber(parsed.terminalHeight, 100, 800, 300),
     rightSidebarTab: parseRightSidebarTab(parsed.rightSidebarTab, "files"),
+    changesViewMode: parseChangesViewMode(parsed.changesViewMode, "list"),
     sidebarGroupBy: parseSidebarGroupBy(parsed.sidebarGroupBy, "repo"),
     sidebarRepoFilter: typeof parsed.sidebarRepoFilter === "string" ? parsed.sidebarRepoFilter : "all",
     sidebarShowArchived:
@@ -449,6 +459,7 @@ export function buildPersistedViewState(state: AppState): PersistedViewStateV1 {
     rightSidebarWidth: state.rightSidebarWidth,
     terminalHeight: state.terminalHeight,
     rightSidebarTab: state.rightSidebarTab,
+    changesViewMode: state.changesViewMode,
     sidebarGroupBy: state.sidebarGroupBy,
     sidebarRepoFilter: state.sidebarRepoFilter,
     sidebarShowArchived: state.sidebarShowArchived,
@@ -599,6 +610,7 @@ export function applyPersistedViewState(
     rightSidebarWidth: persisted.rightSidebarWidth,
     terminalHeight: persisted.terminalHeight,
     rightSidebarTab: persisted.rightSidebarTab,
+    changesViewMode: persisted.changesViewMode,
     sidebarGroupBy: persisted.sidebarGroupBy,
     sidebarRepoFilter:
       persisted.sidebarRepoFilter === "all" || activeRepositoryIds.has(persisted.sidebarRepoFilter)
