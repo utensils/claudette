@@ -1967,11 +1967,11 @@ pub async fn send_chat_message(
     let saved_turn_count = session.turn_count;
 
     // Helper: start a persistent session, using --resume for restored sessions.
-    // Routes claude-missing errors through the missing-CLI dialog emitter so
-    // both the initial-start and respawn paths surface the same guidance.
+    // The closure intentionally returns the *raw* error (sentinels included)
+    // so each call site can choose between retry-with-fresh-session and
+    // surface-the-structured-error before any event emission happens.
     let ws_env_for_persistent = ws_env.clone();
     let resolved_env_for_persistent = resolved_env.clone();
-    let app_for_persistent = app.clone();
     let start_persistent = move |worktree: String,
                                  sid: String,
                                  is_resume: bool,
@@ -1980,8 +1980,17 @@ pub async fn send_chat_message(
                                  settings: AgentSettings| {
         let env = ws_env_for_persistent.clone();
         let resolved = resolved_env_for_persistent.clone();
-        let app = app_for_persistent.clone();
         async move {
+            // Note: do NOT route the error through `crate::missing_cli::handle_err`
+            // here. The caller's resume-fallback arm needs to inspect the raw
+            // `MISSING_CLI` / `MISSING_CWD` sentinel via
+            // `claudette::missing_cli::is_sentinel` to decide whether retrying
+            // with a fresh session is worthwhile, and `handle_err` rewrites
+            // the sentinel into a friendly message — making the structural
+            // signal unrecoverable. The terminal-failure arms below call
+            // `handle_err` themselves, which keeps event emission attributed
+            // to the actual decision-to-fail rather than to the speculative
+            // first attempt of a resume.
             let started = PersistentSession::start(
                 std::path::Path::new(&worktree),
                 &sid,
@@ -1992,8 +2001,7 @@ pub async fn send_chat_message(
                 Some(&env),
                 Some(&resolved),
             )
-            .await
-            .map_err(|e| crate::missing_cli::handle_err(&app, &e).unwrap_or(e))?;
+            .await?;
             Ok::<Arc<PersistentSession>, String>(Arc::new(started))
         }
     };
@@ -2084,6 +2092,23 @@ pub async fn send_chat_message(
                 .await
                 {
                     Ok(ps) => (ps, spawn_sid.clone()),
+                    // Mirrors the sibling sentinel guard further below in this
+                    // command — when the resume failure is structural (CLI
+                    // missing or worktree deleted), retrying with a fresh
+                    // session would fail identically and double-emit the
+                    // missing-dependency / missing-worktree event. Short-
+                    // circuit and surface the structured error directly.
+                    Err(e2) if is_resume && claudette::missing_cli::is_sentinel(&e2) => {
+                        let _ = db.clear_chat_session_state(&chat_session_id);
+                        let mut agents = state.agents.write().await;
+                        if let Some(session) = agents.get_mut(&chat_session_id) {
+                            session.session_id = String::new();
+                            session.turn_count = 0;
+                        }
+                        drop(agents);
+                        let e2 = crate::missing_cli::handle_err(&app, &e2).unwrap_or(e2);
+                        return Err(e2);
+                    }
                     Err(e2) if is_resume => {
                         tracing::warn!(
                             target: "claudette::chat",
@@ -2101,7 +2126,8 @@ pub async fn send_chat_message(
                             custom_instructions.clone(),
                             respawn_settings.clone(),
                         )
-                        .await?;
+                        .await
+                        .map_err(|e| crate::missing_cli::handle_err(&app, &e).unwrap_or(e))?;
                         (ps, fresh)
                     }
                     Err(e2) => {
@@ -2122,6 +2148,7 @@ pub async fn send_chat_message(
                             session.turn_count = 0;
                         }
                         drop(agents);
+                        let e2 = crate::missing_cli::handle_err(&app, &e2).unwrap_or(e2);
                         return Err(e2);
                     }
                 };

@@ -561,19 +561,22 @@ function App() {
 
     // Listen for missing-CLI events (claude/git/gh not on PATH).
     //
-    // We **do not** auto-open the modal here. The CLI is optional for many
-    // Claudette workflows (worktree management, diffs, terminal) and even
-    // when a user is actively trying to use the chat, popping a full-screen
-    // modal on every send turns a recoverable error into a hard blocker.
-    // Instead we cache the guidance and let the originating surface render
-    // a non-blocking inline link (`openMissingCliModal()`) that opens the
-    // modal on click.
+    // The store decides whether to auto-open the modal — first occurrence
+    // per tool opens it (so non-chat surfaces like auth, repository, SCM,
+    // and plugin-settings keep their direct-modal UX), but once the user
+    // dismisses the modal for a given tool, subsequent events only refresh
+    // the cache. This keeps a high-frequency surface like chat-send from
+    // re-popping the modal on every retry while still letting non-chat
+    // surfaces show install guidance the first time. The inline "View
+    // install options" link in `ChatErrorBanner` calls
+    // `openMissingCliModal()`, which clears the dismissal — explicit user
+    // action overrides the snooze.
     const unlistenMissingCli = listen<import("./components/modals/MissingCliModal").MissingCliData>(
       "missing-dependency",
       (event) => {
         useAppStore
           .getState()
-          .setLastMissingCli(event.payload as unknown as Record<string, unknown>);
+          .reportMissingCli(event.payload as unknown as Record<string, unknown>);
       },
     );
 

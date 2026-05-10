@@ -4,10 +4,17 @@
 //! [`claudette::missing_cli::format_err`] string so its error signatures stay
 //! simple (`Result<_, String>` / `GitError::CliNotFound`). This module
 //! intercepts those sentinels at the Tauri boundary, emits a structured
-//! `missing-dependency` event that the frontend listens for to surface
-//! install guidance (rendered as a non-blocking inline link, not a popup),
-//! and rewrites the error into a short, friendly message so any UI that
-//! surfaces the raw `Err` string is still readable.
+//! `missing-dependency` event that the frontend listens for, and rewrites
+//! the error into a short, friendly message so any UI that surfaces the
+//! raw `Err` string is still readable.
+//!
+//! On the frontend, `reportMissingCli(payload)` decides whether to
+//! auto-open the install-guidance modal: the first event for a given tool
+//! pops the modal (so non-chat surfaces — auth, repository, SCM, plugin
+//! settings — keep their direct-modal UX), and once the user dismisses
+//! the modal, subsequent events for that tool only refresh the cache.
+//! The chat error banner renders an inline "View install options →" link
+//! that always reopens the modal regardless of dismissal state.
 //!
 //! It also recognizes the sibling `MISSING_CWD:<path>` sentinel (emitted
 //! when a spawn site's working directory has been deleted out from under
@@ -77,14 +84,12 @@ fn emit_missing_worktree(app: &AppHandle, payload: &MissingWorktree) {
 }
 
 fn friendly_message(guidance: &MissingCli) -> String {
-    // The dialog is rendered on demand by `MissingCliModal` — this string
-    // shows up inline in chat/SCM/auth surfaces. Phrase it so it still
-    // reads correctly when the frontend chooses *not* to open the modal
-    // automatically (which is the new default — see App.tsx).
-    format!(
-        "{} is not installed. Click below for install options.",
-        guidance.display_name
-    )
+    // The string is rendered both inline (chat banner) and as a fallback
+    // surface when the modal listener isn't mounted. Phrase it neutrally:
+    // the chat banner appends a "View install options →" link, and
+    // non-chat surfaces (auth, repository, SCM, plugin settings) get the
+    // modal auto-opened on the first event for the tool.
+    format!("{} is not installed.", guidance.display_name)
 }
 
 fn missing_worktree_message(path: &str) -> String {
@@ -101,13 +106,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn friendly_message_uses_display_name_and_links_modal() {
+    fn friendly_message_uses_display_name() {
         let g = missing_cli::guidance_for("claude");
         let msg = friendly_message(&g);
-        assert!(msg.starts_with("Claude CLI is not installed."));
+        // The frontend matches on " is not installed." to decide whether
+        // to render the inline "View install options" link, so this
+        // wording is part of the cross-language contract — keep it.
         assert!(
-            msg.contains("install options"),
-            "friendly message should hint at the install-options modal: {msg:?}"
+            msg.starts_with("Claude CLI is not installed."),
+            "got {msg:?}"
         );
     }
 

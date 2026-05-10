@@ -11,6 +11,16 @@ export interface ClaudeAuthFailureState {
   error: string;
 }
 
+/** Pull the `tool` token out of a missing-CLI payload (the Tauri event
+ *  shape declared in `src-tauri/src/missing_cli.rs::MissingCli`). Used by
+ *  the missing-CLI dismissal logic — kept narrow so it's safe against the
+ *  loosely-typed `Record<string, unknown>` we pass through `modalData`. */
+function readTool(payload: Record<string, unknown> | null | undefined): string | null {
+  if (!payload) return null;
+  const v = payload.tool;
+  return typeof v === "string" && v.length > 0 ? v : null;
+}
+
 export interface UiSlice {
   metaKeyHeld: boolean;
   setMetaKeyHeld: (held: boolean) => void;
@@ -90,21 +100,31 @@ export interface UiSlice {
 
   /** Latest missing-CLI guidance reported by the backend.
    *
-   *  We deliberately do **not** auto-open the `missingCli` modal on every
-   *  `missing-dependency` event — the Claude CLI is *optional* for many
-   *  Claudette workflows (worktree management, diff viewing, terminal use)
-   *  and a full-screen modal popping repeatedly when a user just sends a
-   *  chat message turns a runtime error into a hard blocker.
-   *
-   *  Instead the latest guidance is cached here, and the surface that
-   *  produced the error (e.g. ChatPanel's inline error banner) renders an
-   *  on-demand "View install options" affordance that opens the modal via
-   *  [`openMissingCliModal`]. */
+   *  Cached so any surface that wants to re-open the modal on demand (e.g.
+   *  `ChatErrorBanner`'s inline "View install options" link) can do so
+   *  without re-fetching from the backend. */
   lastMissingCli: Record<string, unknown> | null;
   setLastMissingCli: (data: Record<string, unknown> | null) => void;
-  /** Open `missingCli` modal using the cached guidance. No-op when none is
-   *  cached — e.g. user clicked the link before the backend emitted any
-   *  guidance, which shouldn't be reachable but is harmless. */
+
+  /** Tools the user has explicitly dismissed the missing-CLI modal for in
+   *  this app session. The first time the backend emits a `missing-dependency`
+   *  for a tool, the modal auto-opens (so non-chat surfaces — auth,
+   *  repository, SCM, plugin settings — still surface install guidance the
+   *  way they always have). After the user closes the modal, subsequent
+   *  events for the same tool only refresh the cache; the auto-open is
+   *  suppressed so a high-frequency surface like chat-send doesn't
+   *  re-pop the modal on every retry. The inline link still opens the
+   *  modal on demand and clears the dismissal — see
+   *  [`openMissingCliModal`]. */
+  missingCliDismissedTools: string[];
+  /** Auto-open hook fired by the `missing-dependency` listener — caches
+   *  the guidance and opens the modal unless the tool is in the dismissed
+   *  list. */
+  reportMissingCli: (data: Record<string, unknown>) => void;
+  /** Open `missingCli` modal using the cached guidance. Always opens
+   *  (regardless of dismissal state) and clears the dismissal flag for
+   *  the cached tool — explicit user action overrides snooze. No-op when
+   *  no guidance has been cached yet. */
   openMissingCliModal: () => void;
 
   /** Latest missing-worktree path reported by the backend.
@@ -322,15 +342,55 @@ export const createUiSlice: StateCreator<AppState, [], [], UiSlice> = (
   activeModal: null,
   modalData: {},
   openModal: (name, data = {}) => set({ activeModal: name, modalData: data }),
-  closeModal: () => set({ activeModal: null, modalData: {} }),
+  closeModal: () =>
+    set((state) => {
+      // Closing the missing-CLI modal records a per-tool dismissal so the
+      // listener won't auto-reopen for the same tool on every subsequent
+      // missing-dependency event. Inline links and explicit
+      // `openMissingCliModal()` calls clear this and re-show.
+      if (state.activeModal === "missingCli") {
+        const tool = readTool(state.modalData);
+        if (tool && !state.missingCliDismissedTools.includes(tool)) {
+          return {
+            activeModal: null,
+            modalData: {},
+            missingCliDismissedTools: [...state.missingCliDismissedTools, tool],
+          };
+        }
+      }
+      return { activeModal: null, modalData: {} };
+    }),
   lastMissingCli: null,
+  missingCliDismissedTools: [],
   setLastMissingCli: (data) => set({ lastMissingCli: data }),
+  reportMissingCli: (data) =>
+    set((state) => {
+      const tool = readTool(data);
+      const dismissed = tool ? state.missingCliDismissedTools.includes(tool) : false;
+      // Always cache so explicit reopen has a fresh payload to render.
+      // Auto-open only when not dismissed — i.e. first time per tool, or
+      // after the user clicked the inline link to bring it back.
+      if (dismissed) {
+        return { lastMissingCli: data };
+      }
+      return {
+        lastMissingCli: data,
+        activeModal: "missingCli",
+        modalData: data,
+      };
+    }),
   openMissingCliModal: () =>
-    set((state) =>
-      state.lastMissingCli
-        ? { activeModal: "missingCli", modalData: state.lastMissingCli }
-        : {},
-    ),
+    set((state) => {
+      if (!state.lastMissingCli) return {};
+      const tool = readTool(state.lastMissingCli);
+      const dismissed = state.missingCliDismissedTools;
+      const nextDismissed = tool ? dismissed.filter((t) => t !== tool) : dismissed;
+      return {
+        activeModal: "missingCli",
+        modalData: state.lastMissingCli,
+        missingCliDismissedTools: nextDismissed,
+      };
+    }),
   lastMissingWorktree: null,
   setLastMissingWorktree: (path) => set({ lastMissingWorktree: path }),
 
