@@ -2205,6 +2205,22 @@ pub async fn send_chat_message(
         .await
         {
             Ok(ps) => (ps, sid),
+            // Resume failed and the failure is a *structural* problem
+            // (binary or worktree gone) — retrying with a fresh session
+            // will fail identically. Skip the retry and surface the
+            // structured error directly so the UI shows the right banner /
+            // dialog instead of double-emitting events.
+            Err(e) if is_resume && claudette::missing_cli::is_sentinel(&e) => {
+                let _ = db.clear_chat_session_state(&chat_session_id);
+                agents = state.agents.write().await;
+                if let Some(session) = agents.get_mut(&chat_session_id) {
+                    session.turn_count = 0;
+                    session.session_id = String::new();
+                }
+                drop(agents);
+                let e = crate::missing_cli::handle_err(&app, &e).unwrap_or(e);
+                return Err(e);
+            }
             Err(e) if is_resume => {
                 // Resume failed (stale/corrupt session) — start fresh instead.
                 tracing::warn!(
@@ -2223,7 +2239,8 @@ pub async fn send_chat_message(
                     custom_instructions.clone(),
                     spawn_settings.clone(),
                 )
-                .await?;
+                .await
+                .map_err(|e| crate::missing_cli::handle_err(&app, &e).unwrap_or(e))?;
                 (ps, fresh_sid)
             }
             Err(e) => {

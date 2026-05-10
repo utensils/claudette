@@ -6,6 +6,7 @@ import {
   SendHorizontal,
   Trash2,
 } from "lucide-react";
+import { ChatErrorBanner } from "./ChatErrorBanner";
 import { ChatSearchBar } from "./ChatSearchBar";
 import { OverlayScrollbar } from "./OverlayScrollbar";
 import { WorkspaceEmptyTabs } from "./WorkspaceEmptyTabs";
@@ -1445,7 +1446,13 @@ export function ChatPanel() {
                 </div>
               )}
 
-              {error && <div className={styles.errorBanner}>{error}</div>}
+              {error && (
+                <ChatErrorBanner
+                  message={error}
+                  workspaceId={selectedWorkspaceId}
+                  onRecovered={() => setError(null)}
+                />
+              )}
             </>
           )}
         </div>

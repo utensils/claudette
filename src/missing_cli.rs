@@ -9,6 +9,26 @@
 //!    dialog instead of leaking the subprocess error.
 //! 2. Per-tool × per-OS install guidance ([`guidance_for`]) rendered by the
 //!    `MissingCliModal` on the frontend.
+//!
+//! ## A note on `ErrorKind::NotFound`
+//!
+//! `Command::spawn()` collapses several distinct OS-level failures into a
+//! single `ErrorKind::NotFound`: a failed `chdir(current_dir)`, a failed
+//! `execvp(program)`, and on Windows a failed `CreateProcess`. So a missing
+//! worktree directory and a missing `claude` binary are
+//! indistinguishable at the spawn-error level.
+//!
+//! That ambiguity caused a real-world bug: deleting a workspace's worktree
+//! would surface as "Claude CLI not installed" and pop the install modal,
+//! because every chat-send went through `cmd.spawn()` with `current_dir =
+//! <missing path>` and we mapped *every* `NotFound` to MISSING_CLI.
+//!
+//! The fix is to validate the inputs *we* control before spawning: pre-check
+//! that the working directory exists (see [`precheck_cwd`]) and emit a
+//! distinct [`MISSING_CWD_PREFIX`] sentinel when it doesn't. The
+//! `map_spawn_err` mapping for executables is then unambiguous.
+
+use std::path::Path;
 
 use serde::Serialize;
 
@@ -17,6 +37,16 @@ use serde::Serialize;
 /// followed by `: <original error>` — the parser ignores anything after the
 /// tool token).
 pub const SPAWN_ERR_PREFIX: &str = "MISSING_CLI:";
+
+/// Prefix on error strings returned when a spawn-site's `current_dir`
+/// no longer exists (e.g. the worktree directory was deleted out from under
+/// us). Format: `"MISSING_CWD:<absolute-path>"`.
+///
+/// We need this distinct from [`SPAWN_ERR_PREFIX`] because the OS error code
+/// for "chdir failed" and "exec failed" is identical (`ENOENT` →
+/// `ErrorKind::NotFound`); without the pre-check the missing-CWD case would
+/// be misreported as a missing CLI.
+pub const MISSING_CWD_PREFIX: &str = "MISSING_CWD:";
 
 /// Produce the sentinel error string for a spawn site that failed because the
 /// named CLI is not on PATH.
@@ -50,6 +80,10 @@ pub fn is_not_found(err: &std::io::Error) -> bool {
 /// cmd.spawn().map_err(|e| missing_cli::map_spawn_err(&e, "claude",
 ///     || format!("Failed to spawn claude at {:?}: {e}", path)))?;
 /// ```
+///
+/// Callers that pass a `current_dir` to the command **must** also call
+/// [`precheck_cwd`] first; otherwise a missing working directory will
+/// surface here as a misleading MISSING_CLI sentinel.
 pub fn map_spawn_err(
     err: &std::io::Error,
     tool: &str,
@@ -59,6 +93,43 @@ pub fn map_spawn_err(
         format_err(tool)
     } else {
         fallback()
+    }
+}
+
+/// Format the missing-cwd sentinel for a given path.
+pub fn format_cwd_err(path: &Path) -> String {
+    format!("{MISSING_CWD_PREFIX}{}", path.display())
+}
+
+/// If `err` carries the [`MISSING_CWD_PREFIX`] sentinel, return the path
+/// portion. Symmetric with [`parse_err`].
+pub fn parse_cwd_err(err: &str) -> Option<&str> {
+    let rest = err.strip_prefix(MISSING_CWD_PREFIX)?;
+    Some(rest.split_once(": ").map(|(p, _)| p).unwrap_or(rest))
+}
+
+/// Returns `true` if the error carries either the missing-cli or missing-cwd
+/// sentinel. Useful for callers that just want to know "this is a structured
+/// not-found we already classified — don't double-report".
+pub fn is_sentinel(err: &str) -> bool {
+    err.starts_with(SPAWN_ERR_PREFIX) || err.starts_with(MISSING_CWD_PREFIX)
+}
+
+/// Pre-spawn check that the `current_dir` we're about to hand to
+/// `Command::current_dir()` actually exists. Returns the [`MISSING_CWD_PREFIX`]
+/// sentinel when it doesn't, so the Tauri layer can surface a "worktree
+/// missing" UX instead of mistakenly blaming the executable.
+///
+/// This **must** be called before spawning any subprocess that uses
+/// `current_dir(...)` — see the module docs for why.
+pub fn precheck_cwd(path: &Path) -> Result<(), String> {
+    // `is_dir()` follows symlinks and returns false for broken symlinks,
+    // missing entries, and regular files alike — all of which would cause
+    // chdir to fail at spawn time.
+    if path.is_dir() {
+        Ok(())
+    } else {
+        Err(format_cwd_err(path))
     }
 }
 
@@ -246,6 +317,47 @@ fn gh_options() -> Vec<InstallOption> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn precheck_cwd_ok_for_existing_dir() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        assert!(precheck_cwd(tmp.path()).is_ok());
+    }
+
+    #[test]
+    fn precheck_cwd_returns_sentinel_for_missing_dir() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let missing = tmp.path().join("does-not-exist");
+        let err = precheck_cwd(&missing).expect_err("should error");
+        assert!(err.starts_with(MISSING_CWD_PREFIX), "got {err:?}");
+        let parsed = parse_cwd_err(&err).expect("parses");
+        assert_eq!(parsed, missing.to_string_lossy());
+    }
+
+    #[test]
+    fn precheck_cwd_rejects_files() {
+        // A regular file is not a usable working directory — chdir(2) would
+        // fail. precheck_cwd must reject this too, not only outright-missing
+        // paths.
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let file = tmp.path().join("not-a-dir");
+        std::fs::write(&file, b"x").unwrap();
+        let err = precheck_cwd(&file).expect_err("should error");
+        assert!(err.starts_with(MISSING_CWD_PREFIX), "got {err:?}");
+    }
+
+    #[test]
+    fn parse_cwd_err_rejects_non_sentinel() {
+        assert_eq!(parse_cwd_err("Failed: nope"), None);
+        assert_eq!(parse_cwd_err("MISSING_CLI:claude"), None);
+    }
+
+    #[test]
+    fn is_sentinel_recognizes_both_kinds() {
+        assert!(is_sentinel("MISSING_CLI:claude"));
+        assert!(is_sentinel("MISSING_CWD:/tmp/gone"));
+        assert!(!is_sentinel("Some other error"));
+    }
 
     #[test]
     fn format_and_parse_roundtrip() {

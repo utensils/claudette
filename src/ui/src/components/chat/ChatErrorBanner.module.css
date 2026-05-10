@@ -1,0 +1,64 @@
+/* Inline "View install options →" link rendered inside the chat error
+   banner when the message is a known missing-CLI case. Reads as part of the
+   sentence, not a button — matches the user-selected "inline link" UX. */
+.inlineLink {
+  background: transparent;
+  border: 0;
+  padding: 0;
+  font: inherit;
+  color: var(--accent-primary);
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.inlineLink:hover {
+  color: var(--accent-dim);
+}
+
+.inlineLink:focus-visible {
+  outline: 2px solid var(--accent-primary);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+/* Action row for missing-worktree recovery (Archive / Recreate). Stacks
+   below the explanatory text since the action labels need full width on
+   narrow chat panels. */
+.actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+  flex-wrap: wrap;
+}
+
+.actionButton {
+  appearance: none;
+  background: var(--chat-input-bg);
+  border: 1px solid var(--error-border);
+  border-radius: 6px;
+  padding: 4px 10px;
+  font-size: 12px;
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.actionButton:hover:not(:disabled) {
+  background: var(--hover-bg);
+}
+
+.actionButton:focus-visible {
+  outline: 2px solid var(--accent-primary);
+  outline-offset: 2px;
+}
+
+.actionButton:disabled {
+  opacity: 0.6;
+  cursor: progress;
+}
+
+.actionError {
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--status-stopped);
+}

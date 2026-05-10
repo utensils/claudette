@@ -88,6 +88,33 @@ export interface UiSlice {
   openModal: (name: string, data?: Record<string, unknown>) => void;
   closeModal: () => void;
 
+  /** Latest missing-CLI guidance reported by the backend.
+   *
+   *  We deliberately do **not** auto-open the `missingCli` modal on every
+   *  `missing-dependency` event — the Claude CLI is *optional* for many
+   *  Claudette workflows (worktree management, diff viewing, terminal use)
+   *  and a full-screen modal popping repeatedly when a user just sends a
+   *  chat message turns a runtime error into a hard blocker.
+   *
+   *  Instead the latest guidance is cached here, and the surface that
+   *  produced the error (e.g. ChatPanel's inline error banner) renders an
+   *  on-demand "View install options" affordance that opens the modal via
+   *  [`openMissingCliModal`]. */
+  lastMissingCli: Record<string, unknown> | null;
+  setLastMissingCli: (data: Record<string, unknown> | null) => void;
+  /** Open `missingCli` modal using the cached guidance. No-op when none is
+   *  cached — e.g. user clicked the link before the backend emitted any
+   *  guidance, which shouldn't be reachable but is harmless. */
+  openMissingCliModal: () => void;
+
+  /** Latest missing-worktree path reported by the backend.
+   *
+   *  Mirrors `lastMissingCli` for the sibling `missing-worktree` event so
+   *  per-workspace surfaces (chat banner, sidebar warning) can render a
+   *  recovery affordance keyed to the path. */
+  lastMissingWorktree: string | null;
+  setLastMissingWorktree: (path: string | null) => void;
+
   // Chat input prefill (e.g. after rollback)
   chatInputPrefill: string | null;
   setChatInputPrefill: (text: string | null) => void;
@@ -296,6 +323,16 @@ export const createUiSlice: StateCreator<AppState, [], [], UiSlice> = (
   modalData: {},
   openModal: (name, data = {}) => set({ activeModal: name, modalData: data }),
   closeModal: () => set({ activeModal: null, modalData: {} }),
+  lastMissingCli: null,
+  setLastMissingCli: (data) => set({ lastMissingCli: data }),
+  openMissingCliModal: () =>
+    set((state) =>
+      state.lastMissingCli
+        ? { activeModal: "missingCli", modalData: state.lastMissingCli }
+        : {},
+    ),
+  lastMissingWorktree: null,
+  setLastMissingWorktree: (path) => set({ lastMissingWorktree: path }),
 
   // Chat input prefill
   chatInputPrefill: null,
