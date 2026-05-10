@@ -26,7 +26,7 @@
 # Env overrides (same names as dev.sh):
 #   $env:VITE_PORT_BASE             start port for Vite probe (default 14253)
 #   $env:CLAUDETTE_DEBUG_PORT_BASE  start port for debug probe (default 19432)
-#   $env:CARGO_TAURI_FEATURES       features (default devtools,server,alternative-backends)
+#   $env:CARGO_TAURI_FEATURES       features (default devtools,server,voice,alternative-backends — matches scripts/dev.sh)
 #
 # Flags:
 #   --clean              Run as a fresh user — points CLAUDETTE_HOME,
@@ -90,10 +90,13 @@ Env vars (each consulted at process start):
                        First debug-eval port to probe.      Default 19432
   `$env:CARGO_TAURI_FEATURES
                        Features to forward to ``cargo run``.
-                       Default: devtools,server,alternative-backends
-                       (voice is dropped from the Windows default — see the
-                       comment block lower in this script for the
-                       gemm-f16 / fullfp16 reason.)
+                       Default: devtools,server,voice,alternative-backends
+                       (matches scripts/dev.sh / Nix devshell exactly so a
+                       single muscle memory works on every host). On
+                       aarch64-pc-windows-msvc the dev script auto-adds
+                       ``-C target-feature=+fullfp16`` to RUSTFLAGS so
+                       ``gemm-f16``'s ARMv8.2 inline asm compiles — see
+                       the comment block lower in this script for why.
   `$env:CLAUDETTE_HOME Override the ~/.claudette/ tree (workspaces,
                        plugins, themes, logs, models, packs, apps.json).
   `$env:CLAUDETTE_DATA_DIR
@@ -361,12 +364,9 @@ Register-EngineEvent -SourceIdentifier PowerShell.Exiting -Action $cleanupAction
 #   * dev.sh uses `cargo tauri dev`, which on Windows is unusable here:
 #     tauri-cli 2.11.1 always merges the package's [features].default
 #     into the resulting `cargo run` invocation, even when -f is passed.
-#     That drags in `voice` → `candle-*` → `gemm-f16`, whose ARMv8.2
-#     inline asm (`fmla v0.8h, ..., fmul v0.8h, ...`) requires the
-#     `fullfp16` target feature that aarch64-pc-windows-msvc's
-#     baseline does not enable. Debug profile compile fails with
-#     `instruction requires: fullfp16`. We bypass tauri-cli by driving
-#     `bun run dev` + `cargo run` ourselves.
+#     We bypass tauri-cli by driving `bun run dev` + `cargo run` ourselves
+#     so we can drop `tauri/custom-protocol` (see the third bullet) and
+#     keep `--no-default-features` honored verbatim.
 #
 #   * Vite must bind on `127.0.0.1` (IPv4), not its default `localhost`
 #     which on Windows resolves to `::1` (IPv6). WebView2 navigates to
@@ -383,14 +383,31 @@ Register-EngineEvent -SourceIdentifier PowerShell.Exiting -Action $cleanupAction
 #     unset, breaking the `/claudette-debug` TCP eval server. We want
 #     hot-reload AND the eval server, so we keep Vite + dev URL.
 #
-# The Tauri binary is launched via `cargo run -p claudette-tauri
-# --no-default-features --features devtools,server,alternative-backends`
-# (no `--release`, no custom-protocol, no voice). With Vite already up
-# at 127.0.0.1:14253, the webview connects on first paint, the bundle
-# loads with `import.meta.env.DEV = true`, `__CLAUDETTE_INVOKE__` gets
-# set, and `/claudette-debug` works.
+# Feature parity with scripts/dev.sh: both default to
+# `devtools,server,voice,alternative-backends`. On aarch64-pc-windows-msvc
+# the `voice` feature pulls in `candle-*` → `gemm-f16`, whose ARMv8.2
+# inline asm (`fmla v0.8h, ..., fmul v0.8h, ...`) needs the `fullfp16`
+# target feature that the stock baseline doesn't enable. Compile fails
+# with `instruction requires: fullfp16` otherwise. We auto-add
+# `-C target-feature=+fullfp16` to RUSTFLAGS just below when the host
+# triple matches, so a fresh Windows ARM64 user can run `dev` with no
+# extra knobs and still get voice. x86_64 hosts and pre-set RUSTFLAGS
+# pass through unchanged.
 $features = if ($env:CARGO_TAURI_FEATURES) { $env:CARGO_TAURI_FEATURES }
-            else { 'devtools,server,alternative-backends' }
+            else { 'devtools,server,voice,alternative-backends' }
+
+# Auto-enable fullfp16 only when (a) we're on aarch64 Windows and (b) the
+# user hasn't already set RUSTFLAGS to something opinionated. Skipping the
+# inject when the user has their own RUSTFLAGS avoids silently overwriting
+# (e.g.) a `-Dwarnings` they wanted us to honor.
+if ($triple -eq 'aarch64-pc-windows-msvc' `
+        -and $features -match 'voice' `
+        -and -not $env:RUSTFLAGS) {
+    $env:RUSTFLAGS = '-C target-feature=+fullfp16'
+    Write-Host "▸ RUSTFLAGS:        $env:RUSTFLAGS  (auto-added for ARM64 voice build)"
+} elseif ($env:RUSTFLAGS) {
+    Write-Host "▸ RUSTFLAGS:        $env:RUSTFLAGS  (preserved from environment)"
+}
 
 Write-Host "▸ Features:         $features"
 Write-Host "▸ Starting Vite     (cd src/ui; bun run dev -- --host 127.0.0.1)"

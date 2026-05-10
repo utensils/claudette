@@ -18,7 +18,7 @@ use tokenizers::Tokenizer;
 use tokio::io::AsyncWriteExt;
 use tokio::task::AbortHandle;
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", windows))]
 use crate::platform_speech::PlatformSpeechAvailability;
 use crate::platform_speech::{
     DefaultPlatformSpeechEngine, PlatformSpeechAvailabilityStatus, PlatformSpeechEngine,
@@ -610,7 +610,14 @@ impl VoiceProviderRegistry {
 
     async fn cancel_platform_recording(&self) -> Result<(), String> {
         let _ = self.active_recording.lock().take();
+        // Each platform with a real engine bridge gets a chance to drop any
+        // in-flight recognition request. macOS forwards to the Speech
+        // framework's `taskHint` cancel API; the Windows bridge has no
+        // cooperative cancel hook, so it's a no-op there. Linux currently
+        // has no native bridge at all.
         #[cfg(target_os = "macos")]
+        crate::platform_speech::cancel_active_transcription();
+        #[cfg(windows)]
         crate::platform_speech::cancel_active_transcription();
         Ok(())
     }
@@ -763,12 +770,18 @@ impl VoiceProviderRegistry {
 
 struct PlatformVoiceProvider;
 
-#[cfg(target_os = "macos")]
+// The platform provider has a real native bridge on macOS (Apple Speech via
+// Swift FFI) and on Windows (System.Speech via PowerShell). Both platforms
+// ride the `Native` recording-mode path: cpal captures the audio, the trait
+// runs transcription on the captured WAV. Linux has no native bridge yet and
+// falls back to the webview Web Speech API, which is what the
+// `Webview` mode signals to the frontend.
+#[cfg(any(target_os = "macos", windows))]
 fn platform_recording_mode() -> VoiceRecordingMode {
     VoiceRecordingMode::Native
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", windows)))]
 fn platform_recording_mode() -> VoiceRecordingMode {
     VoiceRecordingMode::Webview
 }
@@ -778,7 +791,15 @@ fn platform_description() -> &'static str {
     "Uses native Apple Speech recognition through the operating system. Requires Microphone and Speech Recognition permission."
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(windows)]
+fn platform_description() -> &'static str {
+    "Uses Windows System.Speech recognition through the .NET Framework. \
+     Captured audio is transcribed locally — no network round-trip. Install the \
+     speech recognizer language pack via Settings → Time & language → Speech if \
+     transcription returns no text."
+}
+
+#[cfg(not(any(target_os = "macos", windows)))]
 fn platform_description() -> &'static str {
     "Uses the webview or operating system speech recognition surface when available. Requires microphone and speech recognition permission."
 }
@@ -788,7 +809,12 @@ fn platform_privacy_label() -> &'static str {
     "Uses Apple Speech services; offline behavior varies by OS language support"
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(windows)]
+fn platform_privacy_label() -> &'static str {
+    "Local Windows System.Speech recognition; audio stays on this machine"
+}
+
+#[cfg(not(any(target_os = "macos", windows)))]
 fn platform_privacy_label() -> &'static str {
     "Uses platform services; offline behavior varies by OS"
 }
@@ -798,12 +824,17 @@ fn platform_accelerator_label() -> &'static str {
     "Apple Speech"
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(windows)]
+fn platform_accelerator_label() -> &'static str {
+    "Windows System.Speech"
+}
+
+#[cfg(not(any(target_os = "macos", windows)))]
 fn platform_accelerator_label() -> &'static str {
     "No setup"
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", windows))]
 fn platform_status_from_availability(
     availability: PlatformSpeechAvailability,
 ) -> (VoiceProviderStatus, String, bool, Option<String>) {
@@ -861,7 +892,13 @@ impl VoiceProvider for PlatformVoiceProvider {
 
     fn status(&self, registry: &VoiceProviderRegistry, db: &Database) -> VoiceProviderInfo {
         let enabled = registry.enabled(db, self.id());
-        #[cfg(target_os = "macos")]
+        // macOS + Windows ride the same trait-based status path: the real
+        // engine reports Ready / NeedsSetup / EngineUnavailable from a
+        // platform-native check. Linux has no native bridge, so we keep
+        // the legacy "ready when the webview's Web Speech API is around"
+        // shape — the frontend's `useVoiceInput` sees this and falls
+        // through to `webkitSpeechRecognition`.
+        #[cfg(any(target_os = "macos", windows))]
         let (status, status_label, setup_required, error) = if !enabled {
             (
                 VoiceProviderStatus::Unavailable,
@@ -872,7 +909,7 @@ impl VoiceProvider for PlatformVoiceProvider {
         } else {
             platform_status_from_availability(registry.platform_speech.availability())
         };
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(not(any(target_os = "macos", windows)))]
         let (status, status_label, setup_required, error) = if enabled {
             (
                 VoiceProviderStatus::Ready,
@@ -907,7 +944,11 @@ impl VoiceProvider for PlatformVoiceProvider {
         _app: &AppHandle,
         db_path: &Path,
     ) -> Result<VoiceProviderInfo, String> {
-        #[cfg(target_os = "macos")]
+        // macOS uses prepare() to drive the TCC permission dialogs;
+        // Windows uses it as a (cheap) revalidation that PowerShell +
+        // System.Speech are still reachable. Both go through the trait so
+        // tests can substitute a fake engine. Linux has no engine here.
+        #[cfg(any(target_os = "macos", windows))]
         {
             let _ = registry.platform_speech.prepare();
         }
@@ -2219,13 +2260,13 @@ mod tests {
         }
     }
 
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", windows))]
     struct PrepareGate {
         entered: std::sync::mpsc::Sender<()>,
         release: Mutex<Option<std::sync::mpsc::Receiver<()>>>,
     }
 
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", windows))]
     struct FakePlatformSpeechEngine {
         availability: PlatformSpeechAvailability,
         prepare_availability: PlatformSpeechAvailability,
@@ -2235,7 +2276,7 @@ mod tests {
         calls: AtomicUsize,
     }
 
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", windows))]
     impl FakePlatformSpeechEngine {
         fn ready(engine_label: &str) -> Self {
             let availability = PlatformSpeechAvailability::ready(engine_label);
@@ -2289,7 +2330,7 @@ mod tests {
         }
     }
 
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", windows))]
     impl PlatformSpeechEngine for FakePlatformSpeechEngine {
         fn availability(&self) -> PlatformSpeechAvailability {
             self.availability.clone()
@@ -2366,7 +2407,7 @@ mod tests {
         assert!(!provider.setup_required);
     }
 
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", windows))]
     #[test]
     fn platform_provider_ready_when_native_engine_ready() {
         let (_dir, db_path) = test_db_path();
@@ -2375,7 +2416,7 @@ mod tests {
             PathBuf::from("/tmp/models"),
             Arc::new(FakeRecorder::new(vec![0.1])),
             Arc::new(FakeTranscriber::ok("ignored")),
-            Arc::new(FakePlatformSpeechEngine::ready("Apple SpeechAnalyzer")),
+            Arc::new(FakePlatformSpeechEngine::ready("Test Engine")),
         );
 
         let provider = registry
@@ -2388,10 +2429,10 @@ mod tests {
         assert!(provider.enabled);
         assert!(!provider.setup_required);
         assert_eq!(provider.metadata.recording_mode, VoiceRecordingMode::Native);
-        assert!(provider.status_label.contains("Apple SpeechAnalyzer"));
+        assert!(provider.status_label.contains("Test Engine"));
     }
 
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", windows))]
     #[test]
     fn platform_provider_reports_setup_required_for_speech_permission() {
         let (_dir, db_path) = test_db_path();
@@ -2595,7 +2636,7 @@ mod tests {
         assert_eq!(recorder.starts.load(Ordering::Relaxed), 1);
     }
 
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", windows))]
     #[tokio::test]
     async fn start_platform_recording_prepares_permission_on_user_action() {
         let (_db_dir, db_path) = test_db_path();
@@ -2628,7 +2669,7 @@ mod tests {
         assert_eq!(recorder.starts.load(Ordering::Relaxed), 1);
     }
 
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", windows))]
     #[tokio::test(flavor = "current_thread")]
     async fn start_platform_recording_prepares_permission_off_runtime_thread() {
         let (_db_dir, db_path) = test_db_path();
@@ -2688,11 +2729,11 @@ mod tests {
         watchdog.join().expect("watchdog joined");
     }
 
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", windows))]
     #[tokio::test]
     async fn start_then_stop_platform_recording_returns_transcript() {
         let (_db_dir, db_path) = test_db_path();
-        let platform_engine = Arc::new(FakePlatformSpeechEngine::ready("Apple Speech"));
+        let platform_engine = Arc::new(FakePlatformSpeechEngine::ready("Test Engine"));
         *platform_engine.transcript.lock() = Ok("spoken platform words".to_string());
         let registry = VoiceProviderRegistry::with_platform_runtime(
             PathBuf::from("/tmp/models"),
@@ -2714,11 +2755,11 @@ mod tests {
         assert_eq!(platform_engine.calls.load(Ordering::Relaxed), 1);
     }
 
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", windows))]
     #[tokio::test]
     async fn cancel_drops_active_platform_recording() {
         let (_db_dir, db_path) = test_db_path();
-        let platform_engine = Arc::new(FakePlatformSpeechEngine::ready("Apple Speech"));
+        let platform_engine = Arc::new(FakePlatformSpeechEngine::ready("Test Engine"));
         let registry = VoiceProviderRegistry::with_platform_runtime(
             PathBuf::from("/tmp/models"),
             Arc::new(FakeRecorder::new(vec![0.1, 0.2, 0.3])),

@@ -131,7 +131,7 @@ Both launchers do a few things `cargo tauri dev` doesn't:
 **Windows-only details** the PowerShell launcher handles for you:
 
 - Forces Vite to bind on `127.0.0.1` (IPv4). The default `localhost` resolves to `::1` first on Windows, but WebView2 navigates IPv4-first, so a mismatch surfaces as a blank webview with `HRESULT 0x80070057`.
-- Drops the `voice` feature from the default set. The `gemm-f16` crate's ARMv8.2 inline asm requires the `fullfp16` target feature that the stock `aarch64-pc-windows-msvc` baseline doesn't enable. Opt back in via `$env:CARGO_TAURI_FEATURES` and `$env:RUSTFLAGS`.
+- Defaults to the same feature set as `scripts/dev.sh` — `devtools,server,voice,alternative-backends`. On `aarch64-pc-windows-msvc` the launcher auto-injects `RUSTFLAGS=-C target-feature=+fullfp16` so the `gemm-f16` ARMv8.2 inline asm in the `voice` feature compiles; an existing `$env:RUSTFLAGS` is preserved.
 - Skips `tauri/custom-protocol`. With it on, `import.meta.env.DEV` is false in the webview, which leaves `window.__CLAUDETTE_INVOKE__` unset and breaks the [`/claudette-debug`](/claudette/) eval server.
 - Stages the `claudette-cli` sidecar at the path Tauri's `bundle.externalBin` expects — `tauri.conf.json`'s `beforeDevCommand` shell script can't run on Windows.
 

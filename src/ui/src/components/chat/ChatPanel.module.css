@@ -1513,7 +1513,17 @@
   color: var(--status-stopped);
   background: color-mix(in srgb, var(--status-stopped) 8%, transparent);
   border-color: var(--status-stopped);
-  max-width: min(280px, 32vw);
+  /* Wider + auto-height so multi-line .NET error chains
+     (`InvalidOperationException: ... :: AudioBitsPerSampleNotSupportedException: ...`)
+     stay readable without truncation. The flex parent governs the cap;
+     `min-content` keeps the row from blowing past its column when the
+     surrounding toolbar is narrow. */
+  max-width: min(520px, 60vw);
+  height: auto;
+  min-height: 28px;
+  align-items: flex-start;
+  padding-top: 4px;
+  padding-bottom: 4px;
   font-size: var(--fs-xs);
   animation: voice-error-fade-in 180ms ease-out;
 }
@@ -1524,13 +1534,46 @@
 
 .voiceErrorIcon {
   flex-shrink: 0;
+  /* Nudge down so the icon aligns with the first line of a wrapped error,
+     not vertically centered against the whole multi-line block. */
+  margin-top: 1px;
 }
 
 .voiceErrorText {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  /* Allow long error chains to wrap rather than ellipsize — the toolbar's
+     max-width above caps overall growth, and an unreadable truncated
+     "Exception calling ..." pill helps no one. */
+  white-space: normal;
+  overflow-wrap: anywhere;
   min-width: 0;
+  line-height: 1.35;
+}
+
+.voiceErrorActions {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+  /* Vertically center the chip-row against the first line of the error. */
+  margin-top: -1px;
+}
+
+.voiceErrorAction {
+  appearance: none;
+  border: 1px solid var(--divider);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: var(--fs-2xs);
+  line-height: 1;
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.voiceErrorAction:hover {
+  background: color-mix(in srgb, var(--status-stopped) 14%, transparent);
 }
 
 @keyframes voice-error-fade-in {
