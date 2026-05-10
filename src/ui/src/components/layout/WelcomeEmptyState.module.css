@@ -1,54 +1,66 @@
 /* Welcome card shown on the Dashboard when there are no active workspaces.
-   Mirrors the layout density of WorkspaceCard so dashboard → welcome → dashboard
-   transitions don't shuffle the surrounding chrome. */
+   The shell is also reused by WorkspaceEmptyTabs so the close-all-tabs
+   landing matches this card's typography and density. */
 
 .welcome {
   flex: 1;
   display: flex;
   align-items: flex-start;
   justify-content: center;
-  padding: 32px 20px 48px;
+  padding: 40px 24px 56px;
   min-height: 0;
 }
 
 .card {
   width: 100%;
-  max-width: 540px;
+  max-width: 760px;
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 20px;
   background: var(--hover-bg-subtle);
   border: 1px solid var(--divider);
-  border-radius: 12px;
-  padding: 28px 32px;
+  border-radius: 14px;
+  padding: 32px 36px;
   box-shadow: var(--shadow-md);
+}
+
+/* Header: bigger headline, looser line-height. The two text rows sit on
+   their own block so the card always opens with the same first-line
+   anchor regardless of subtitle length. */
+.header {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
 }
 
 .title {
   margin: 0;
-  font-size: 22px;
+  font-size: 24px;
   font-weight: 600;
   color: var(--text-primary);
   letter-spacing: -0.01em;
+  line-height: 1.2;
 }
 
 .subtitle {
   margin: 0;
   font-size: 13px;
-  line-height: 1.5;
+  line-height: 1.55;
   color: var(--text-muted);
+  max-width: 60ch;
 }
 
-/* Tappable chip showing the suggested project. Same color treatment as the
-   chat input container so it reads as the focal target. */
+/* Tappable chip showing the suggested project. Two-row layout: top row
+   is the headline (project / context), bottom row is metadata that
+   changes per use site (path on welcome, branch + status on empty-tabs). */
 .activeProject {
   display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 10px 12px;
-  background: rgba(var(--accent-primary-rgb), 0.08);
-  border: 1px solid rgba(var(--accent-primary-rgb), 0.25);
-  border-radius: 8px;
+  flex-direction: column;
+  gap: 4px;
+  padding: 14px 16px;
+  background: rgba(var(--accent-primary-rgb), 0.07);
+  border: 1px solid rgba(var(--accent-primary-rgb), 0.22);
+  border-radius: 10px;
   cursor: pointer;
   text-align: left;
   font-family: inherit;
@@ -59,13 +71,21 @@
 }
 
 .activeProject:hover:not(:disabled) {
-  background: rgba(var(--accent-primary-rgb), 0.14);
+  background: rgba(var(--accent-primary-rgb), 0.12);
   border-color: rgba(var(--accent-primary-rgb), 0.4);
 }
 
 .activeProject:disabled {
-  opacity: 0.6;
-  cursor: not-allowed;
+  opacity: 0.7;
+  cursor: default;
+}
+
+/* Top row of the chip — icon + name + path/branch */
+.activeProjectHead {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
 }
 
 .activeProjectIcon {
@@ -79,16 +99,33 @@
   color: var(--accent-primary);
   text-transform: uppercase;
   letter-spacing: 0.06em;
+  flex-shrink: 0;
 }
 
 .activeProjectPath {
   flex: 1;
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: 12px;
   color: var(--text-dim);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  min-width: 0;
+}
+
+.activeProjectMeta {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 11px;
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+}
+
+.activeProjectMeta > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
 }
 
 /* Action row */
@@ -103,11 +140,11 @@
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 8px 16px;
+  padding: 9px 18px;
   font-family: inherit;
   font-size: 13px;
   font-weight: 500;
-  border-radius: 6px;
+  border-radius: 7px;
   cursor: pointer;
   transition:
     background var(--transition-fast),
@@ -141,12 +178,13 @@
   border-color: var(--text-faint);
 }
 
-/* Section dividers */
+/* Section dividers — tighter top padding than before so the rows below
+   feel anchored to the section label rather than floating. */
 .section {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  padding-top: 8px;
+  gap: 10px;
+  padding-top: 16px;
   border-top: 1px solid var(--divider);
 }
 
@@ -159,24 +197,26 @@
   color: var(--text-muted);
 }
 
-/* Project list */
+/* Project / session list */
 .projectList {
   list-style: none;
   margin: 0;
   padding: 0;
   display: flex;
   flex-direction: column;
+  gap: 2px;
 }
 
 .projectRow {
   width: 100%;
-  display: flex;
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr) auto;
   align-items: center;
-  gap: 8px;
-  padding: 8px 10px;
+  gap: 10px;
+  padding: 10px 12px;
   background: transparent;
   border: 1px solid transparent;
-  border-radius: 6px;
+  border-radius: 8px;
   cursor: pointer;
   text-align: left;
   font-family: inherit;
@@ -201,19 +241,40 @@
   flex-shrink: 0;
 }
 
+/* Two-line content body of a row: name on top, secondary metadata below. */
+.projectRowBody {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
 .projectRowName {
   font-weight: 500;
   font-size: 13px;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .projectRowPath {
-  flex: 1;
   font-family: var(--font-mono);
   font-size: 11px;
   color: var(--text-dim);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.projectRowMeta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
 }
 
 .projectRowMissing {
@@ -224,14 +285,14 @@
   letter-spacing: 0.06em;
 }
 
-/* Tips */
+/* Tips: side-by-side on wider viewports, stacked when the card narrows. */
 .tips {
   list-style: none;
   margin: 0;
   padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 10px 16px;
 }
 
 .tips li {

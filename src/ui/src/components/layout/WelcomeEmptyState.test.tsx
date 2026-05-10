@@ -146,11 +146,16 @@ describe("WelcomeEmptyState", () => {
     expect(chip).toBeTruthy();
 
     // Project list rows render in recency order (bravo, alpha) followed by
-    // delta (no recency → falls back to sort_order).
+    // delta (no recency → falls back to sort_order). The row body now uses
+    // a two-line layout (name + path), so we read each row's <button> title
+    // attribute (`Create a workspace in <name>`) to recover the project
+    // name without depending on the inner DOM shape.
     const rowButtons = Array.from(
       container.querySelectorAll<HTMLButtonElement>("ul li button"),
     );
-    const rowNames = rowButtons.map((b) => b.querySelector("span")?.textContent ?? "");
+    const rowNames = rowButtons.map((b) =>
+      (b.getAttribute("title") ?? "").replace("Create a workspace in ", ""),
+    );
     expect(rowNames).toEqual(["bravo", "alpha", "delta"]);
 
     // Clicking a row dispatches that row's repo id, not the suggested one.

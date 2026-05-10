@@ -1180,13 +1180,16 @@ export const Sidebar = memo(function Sidebar() {
                 data-tooltip-placement="bottom"
                 onClick={() => {
                   if (didDragRef.current) return;
-                  // The header does double duty: toggle the workspace
-                  // collapse (existing behaviour) AND surface a project-
-                  // scoped view in the main pane. Selecting the repo
-                  // also clears any open workspace via the store, so the
-                  // welcome card swaps in immediately.
-                  toggleRepoCollapsed(repo.id);
+                  // Standard tree-view pattern: header click selects the
+                  // project (showing the project-scoped view) and ALWAYS
+                  // ensures the group is expanded so the user can see
+                  // what's inside. Toggling collapse on every click
+                  // (the previous behaviour) was bizarre because clicking
+                  // a project to "look at it" hid the very rows the user
+                  // wanted to look at. The chevron handles collapse on
+                  // its own — see the button below.
                   selectRepository(repo.id);
+                  if (collapsed) toggleRepoCollapsed(repo.id);
                 }}
                 onContextMenu={(e) => {
                   e.preventDefault();
@@ -1198,9 +1201,20 @@ export const Sidebar = memo(function Sidebar() {
                   });
                 }}
               >
-                <span className={styles.chevron}>
+                <button
+                  type="button"
+                  className={styles.chevron}
+                  onClick={(e) => {
+                    // Stop the parent header click — the chevron is the
+                    // dedicated collapse affordance, separate from select.
+                    e.stopPropagation();
+                    toggleRepoCollapsed(repo.id);
+                  }}
+                  aria-label={collapsed ? `Expand ${repo.name}` : `Collapse ${repo.name}`}
+                  aria-expanded={!collapsed}
+                >
                   {collapsed ? "›" : "⌄"}
-                </span>
+                </button>
                 <span className={styles.repoName}>
                   {repo.icon && <RepoIcon icon={repo.icon} className={styles.repoIcon} />}
                   <span className={styles.repoTitle}>{repo.name}</span>

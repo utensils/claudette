@@ -1,5 +1,13 @@
-import { memo, useEffect, useState } from "react";
-import { Plus, Command, FolderGit2, X, Clock } from "lucide-react";
+import { memo, useEffect, useMemo, useState } from "react";
+import {
+  Plus,
+  Command,
+  FolderGit2,
+  X,
+  Clock,
+  GitBranch,
+  MessageSquare,
+} from "lucide-react";
 import { executeNewTab } from "../../hotkeys/contextActions";
 import { useAppStore } from "../../stores/useAppStore";
 import { getHotkeyLabel } from "../../hotkeys/display";
@@ -20,10 +28,10 @@ export interface WorkspaceEmptyTabsProps {
   repository: Repository | undefined;
 }
 
-/** Format a UTC ISO timestamp as a compact relative label ("5m", "2h",
- *  "3d", "Apr 12"). Mirrors the Recent Sessions cadence in Aethon's
- *  reference design — short enough to fit in a meta column, precise
- *  enough to distinguish today's work from last week's. */
+/** Format a UTC ISO timestamp as a compact relative label ("just now", "5m
+ *  ago", "Apr 12"). Mirrors the Recent Sessions cadence in the reference
+ *  design — short enough to fit in a meta column, precise enough to
+ *  distinguish today's work from last week's. */
 function formatRelative(iso: string): string {
   const then = Date.parse(iso);
   if (Number.isNaN(then)) return "";
@@ -46,8 +54,10 @@ export const WorkspaceEmptyTabs = memo(function WorkspaceEmptyTabs({
 }: WorkspaceEmptyTabsProps) {
   const keybindings = useAppStore((s) => s.keybindings);
   const isMac = isMacHotkeyPlatform();
-  const newTabLabel = getHotkeyLabel("global.new-tab", keybindings, isMac) ?? "Cmd+T";
-  const closeTabLabel = getHotkeyLabel("global.close-tab", keybindings, isMac) ?? "Cmd+W";
+  const newTabLabel = getHotkeyLabel("global.new-tab", keybindings, isMac) ?? "⌘T";
+  const closeTabLabel = getHotkeyLabel("global.close-tab", keybindings, isMac) ?? "⌘W";
+  const fuzzyFinderLabel =
+    getHotkeyLabel("global.toggle-fuzzy-finder", keybindings, isMac) ?? "⌘K";
 
   const addChatSession = useAppStore((s) => s.addChatSession);
   const selectSession = useAppStore((s) => s.selectSession);
@@ -102,27 +112,64 @@ export const WorkspaceEmptyTabs = memo(function WorkspaceEmptyTabs({
     }
   };
 
+  // Workspace age — gives the chip a meaningful "still running" stat.
+  const workspaceAge = useMemo(
+    () => formatRelative(workspace.created_at),
+    [workspace.created_at],
+  );
+  const totalSessions = useMemo(
+    () =>
+      archivedSessions.length /* archived shown */ +
+      0, /* live sessions = 0 in this view by definition */
+    [archivedSessions.length],
+  );
+
   return (
     <div className={styles.welcome}>
       <div className={styles.card}>
-        <h1 className={styles.title}>Pick up {workspace.name}.</h1>
-        <p className={styles.subtitle}>
-          The workspace is still running — start a fresh chat session, or
-          resume one of your past sessions below.
-        </p>
+        <div className={styles.header}>
+          <h1 className={styles.title}>Pick up {workspace.name}.</h1>
+          <p className={styles.subtitle}>
+            The workspace is still running — start a fresh chat session, or
+            resume one of your past sessions below.
+          </p>
+        </div>
 
         {repository && (
           <div className={styles.activeProject} aria-disabled="true">
-            {repository.icon && (
-              <RepoIcon
-                icon={repository.icon}
-                size={14}
-                className={styles.activeProjectIcon}
-              />
-            )}
-            <span className={styles.activeProjectName}>{repository.name}</span>
-            <span className={styles.activeProjectPath}>
-              {workspace.branch_name}
+            <span className={styles.activeProjectHead}>
+              {repository.icon && (
+                <RepoIcon
+                  icon={repository.icon}
+                  size={14}
+                  className={styles.activeProjectIcon}
+                />
+              )}
+              <span className={styles.activeProjectName}>
+                {repository.name}
+              </span>
+              <span className={styles.activeProjectPath}>
+                {workspace.worktree_path ?? repository.path}
+              </span>
+            </span>
+            <span className={styles.activeProjectMeta}>
+              <span>
+                <GitBranch size={11} aria-hidden="true" />
+                {workspace.branch_name}
+              </span>
+              {workspaceAge && (
+                <span>
+                  <Clock size={11} aria-hidden="true" />
+                  created {workspaceAge}
+                </span>
+              )}
+              {totalSessions > 0 && (
+                <span>
+                  <MessageSquare size={11} aria-hidden="true" />
+                  {totalSessions} past{" "}
+                  {totalSessions === 1 ? "session" : "sessions"}
+                </span>
+              )}
             </span>
           </div>
         )}
@@ -152,16 +199,26 @@ export const WorkspaceEmptyTabs = memo(function WorkspaceEmptyTabs({
                     title={`Resume ${session.name}`}
                   >
                     <Clock
-                      size={13}
+                      size={14}
                       className={styles.projectRowIcon}
                       aria-hidden="true"
                     />
-                    <span className={styles.projectRowName}>
-                      {session.name}
+                    <span className={styles.projectRowBody}>
+                      <span className={styles.projectRowName}>
+                        {session.name}
+                      </span>
+                      <span className={styles.projectRowPath}>
+                        archived{" "}
+                        {formatRelative(
+                          session.archived_at ?? session.created_at,
+                        )}
+                      </span>
                     </span>
-                    <span className={styles.projectRowPath}>
-                      {formatRelative(session.archived_at ?? session.created_at)}
-                      {` · ${session.turn_count} ${session.turn_count === 1 ? "turn" : "turns"}`}
+                    <span className={styles.projectRowMeta}>
+                      <span>
+                        {session.turn_count}{" "}
+                        {session.turn_count === 1 ? "turn" : "turns"}
+                      </span>
                     </span>
                   </button>
                 </li>
@@ -184,15 +241,21 @@ export const WorkspaceEmptyTabs = memo(function WorkspaceEmptyTabs({
               <X size={12} className={styles.tipIcon} />
               <span>
                 <kbd className={styles.kbd}>{closeTabLabel}</kbd> closes the
-                active tab — handy when you want to clean up.
+                active tab.
               </span>
             </li>
             <li>
               <FolderGit2 size={12} className={styles.tipIcon} />
               <span>
-                Click the <strong>+</strong> in the tab strip above for the
-                same effect, plus a context menu for resumable Claude
-                sessions.
+                Click the <strong>+</strong> in the tab strip above for a
+                context menu with resumable Claude sessions.
+              </span>
+            </li>
+            <li>
+              <Clock size={12} className={styles.tipIcon} />
+              <span>
+                <kbd className={styles.kbd}>{fuzzyFinderLabel}</kbd> jumps to
+                another workspace via the fuzzy finder.
               </span>
             </li>
           </ul>
