@@ -36,10 +36,24 @@ export function setClaudettePluginSetting(
 }
 
 /**
- * Persist a **per-repo** override for a manifest-declared plugin
- * setting. Pass `null` to clear the override (reverts to the global
- * plugin setting / manifest default). Storage key in `app_settings`
- * is `repo:{repo_id}:plugin:{plugin_name}:setting:{key}`.
+ * Persist a per-repo plugin setting under
+ * `repo:{repo_id}:plugin:{plugin_name}:setting:{key}` in
+ * `app_settings`. Pass `null` to clear the override (reverts to the
+ * global plugin setting / manifest default).
+ *
+ * The plugin runtime merges per-repo entries on top of global
+ * overrides regardless of whether the key is declared in the
+ * manifest schema, so this endpoint is used both for:
+ * - **Manifest-declared settings** (e.g. `timeout_seconds`) — the
+ *   per-repo "Settings" drawer renders these as a form, with a
+ *   "Use global default" button to clear.
+ * - **Internal runtime keys** (e.g. `repo_trust = "allow"`) that
+ *   are intentionally NOT in the manifest schema and never appear
+ *   as a user-facing form field. The trust prompt is the sole
+ *   writer for those.
+ *
+ * Callers are responsible for not exposing internal keys as
+ * editable UI; the runtime applies whatever's stored.
  */
 export function setClaudettePluginRepoSetting(
   repoId: string,

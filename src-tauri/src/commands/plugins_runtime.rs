@@ -214,11 +214,12 @@ pub async fn set_claudette_plugin_repo_setting(
     Ok(())
 }
 
-/// Read the per-repo settings map for a plugin in the given repo.
-/// Returns the **per-repo overrides only** (not merged with global
-/// values), with manifest defaults filled in from the registry as
-/// `null` for keys with no override. Used by Repo Settings →
-/// Environment to render the form.
+/// Read the per-repo overrides for a plugin in the given repo.
+/// Returns ONLY the keys the user has set per-repo — keys without an
+/// override are omitted entirely (the caller falls back to the
+/// global plugin setting / manifest default for those). The form
+/// rendering UI uses this shape to distinguish "this field has a
+/// per-repo override" from "this field uses the global value".
 #[tauri::command]
 pub async fn get_claudette_plugin_repo_settings(
     repo_id: String,

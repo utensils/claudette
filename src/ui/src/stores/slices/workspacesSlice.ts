@@ -288,18 +288,19 @@ export const createWorkspacesSlice: StateCreator<
     }),
   setWorkspaceEnvironment: (id, status, error) =>
     set((s) => {
-      // Reaching a terminal state (ready / error / idle) means we're
-      // done resolving — drop the per-plugin progress fields so the
-      // sidebar/composer/terminal stop displaying a stale "loading
-      // env-direnv (Ns)…" hint.
-      const next: WorkspaceEnvironmentPreparation =
-        status === "preparing"
-          ? { status, error }
-          : { status, error };
+      // Always drop the per-plugin progress fields when the status is
+      // explicitly set: "preparing" is set at the start of a fresh
+      // resolve (any previous `current_plugin` / `started_at` belong
+      // to a stale resolve and shouldn't carry over), and terminal
+      // states (ready / error / idle) mean we're done so the sidebar/
+      // composer/terminal must stop showing the "loading env-direnv
+      // (Ns)…" hint. Live progress arrives via
+      // `setWorkspaceEnvironmentProgress`, which is the only writer
+      // that fills in those fields.
       return {
         workspaceEnvironment: {
           ...s.workspaceEnvironment,
-          [id]: next,
+          [id]: { status, error },
         },
       };
     }),

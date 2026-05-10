@@ -381,15 +381,23 @@ export function EnvPanel({ target }: EnvPanelProps) {
       setRunningTrust(pluginName);
       setTrustError(null);
       try {
-        // Per-repo trust persistence: when the user clicks "Trust
-        // [provider] for this repo" in the error card, remember that
-        // decision in `app_settings`. The plugin's Lua reads this
-        // value via `host.config("repo_trust")` on every subsequent
-        // resolve, so future workspaces in the same repo auto-run
-        // `direnv allow` / `mise trust` without re-prompting. Only
-        // applies in repo-mode targets — workspace-mode resolves
-        // skip persistence (no per-repo scope to attach trust to).
+        // Run the trust command FIRST so a failure (direnv hiccup,
+        // permissions issue, network blip on a remote worktree)
+        // doesn't leave the repo flagged as trusted while the
+        // underlying allow/trust never actually completed. If
+        // `runEnvTrust` throws, we hit the catch arm and the
+        // persistent `repo_trust` write below is skipped — the user
+        // can hit the Trust button again to retry without first
+        // having to clear stale state.
+        //
+        // Workspace-mode targets just run the one-shot trust
+        // command; there's no per-repo scope to persist into.
+        await runEnvTrust(target, pluginName);
         if (repoIdForOverrides) {
+          // Persist the decision so future workspaces in the same
+          // repo auto-run the trust command on first encounter.
+          // Plugins read this via `host.config("repo_trust")` on
+          // every resolve.
           await setClaudettePluginRepoSetting(
             repoIdForOverrides,
             pluginName,
@@ -397,7 +405,6 @@ export function EnvPanel({ target }: EnvPanelProps) {
             "allow",
           );
         }
-        await runEnvTrust(target, pluginName);
         await refresh();
       } catch (e) {
         setTrustError(String(e));

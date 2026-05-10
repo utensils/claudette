@@ -492,13 +492,36 @@ impl PluginRegistry {
             .or(manifest_default.filter(|v| v.is_finite() && *v > 0.0))
             .unwrap_or_else(|| DEFAULT_EXEC_TIMEOUT.as_secs() as f64);
 
+        // A malformed plugin manifest could declare `min > max` (e.g.
+        // a community plugin with `min: 600, max: 5`). `f64::clamp`
+        // panics in that case — and the dispatcher would crash the
+        // process every time it tried to invoke the plugin. Reject
+        // inverted manifest bounds and fall back to the global
+        // `[MIN_TIMEOUT_SECS, MAX_TIMEOUT_SECS]` floor/ceiling so the
+        // workspace stays usable even if the manifest is wrong.
         let (manifest_min, manifest_max) = manifest_min_max;
-        let lo = manifest_min
-            .map(|m| m.max(MIN_TIMEOUT_SECS as f64))
-            .unwrap_or(MIN_TIMEOUT_SECS as f64);
-        let hi = manifest_max
-            .map(|m| m.min(MAX_TIMEOUT_SECS as f64))
-            .unwrap_or(MAX_TIMEOUT_SECS as f64);
+        let manifest_bounds_valid = match (manifest_min, manifest_max) {
+            (Some(lo_m), Some(hi_m)) => lo_m <= hi_m,
+            _ => true,
+        };
+        let (lo, hi) = if manifest_bounds_valid {
+            let lo = manifest_min
+                .map(|m| m.max(MIN_TIMEOUT_SECS as f64))
+                .unwrap_or(MIN_TIMEOUT_SECS as f64);
+            let hi = manifest_max
+                .map(|m| m.min(MAX_TIMEOUT_SECS as f64))
+                .unwrap_or(MAX_TIMEOUT_SECS as f64);
+            (lo, hi)
+        } else {
+            tracing::warn!(
+                target: "claudette::plugin",
+                plugin = plugin_name,
+                manifest_min = ?manifest_min,
+                manifest_max = ?manifest_max,
+                "ignoring inverted timeout_seconds bounds; using global limits"
+            );
+            (MIN_TIMEOUT_SECS as f64, MAX_TIMEOUT_SECS as f64)
+        };
         let secs = resolved_secs.clamp(lo, hi).round() as u64;
         Duration::from_secs(secs)
     }
@@ -756,7 +779,12 @@ fn parse_timeout_value(value: serde_json::Value) -> Option<f64> {
     {
         return Some(v);
     }
-    tracing::debug!(
+    // A persisted timeout override that fails to parse means the
+    // user (or a misbehaving migration / external write) wrote an
+    // invalid value into `app_settings`. We don't want this to
+    // disappear silently — surface it at WARN so the diagnostics
+    // surface ("could not parse my timeout") matches the doc claim.
+    tracing::warn!(
         target: "claudette::plugin",
         value = ?value,
         "ignoring non-numeric / non-positive timeout override; using default"
@@ -1500,6 +1528,50 @@ mod tests {
         );
         let resolved = registry.effective_timeout("timeout-demo", None);
         assert_eq!(resolved, Duration::from_secs(5));
+    }
+
+    /// A malformed plugin manifest (community plugin, hand-edited
+    /// manifest, etc.) could declare `min > max` (e.g. `min: 600,
+    /// max: 5`). `f64::clamp` panics in that case, which would crash
+    /// the dispatcher. The resolver must detect inverted bounds and
+    /// fall back to the global limits instead.
+    #[test]
+    fn effective_timeout_does_not_panic_on_inverted_manifest_bounds() {
+        let dir = tempfile::tempdir().unwrap();
+        let plugin_dir = dir.path().join("inverted-bounds");
+        std::fs::create_dir(&plugin_dir).unwrap();
+        // Deliberately inverted: min=600, max=5. f64::clamp(_, 600, 5)
+        // would panic.
+        let manifest = r#"{
+            "name": "inverted-bounds",
+            "display_name": "Inverted Bounds",
+            "version": "1.0.0",
+            "description": "demo",
+            "operations": ["noop"],
+            "settings": [
+                {
+                    "type": "number",
+                    "key": "timeout_seconds",
+                    "label": "Timeout",
+                    "default": 90,
+                    "min": 600,
+                    "max": 5
+                }
+            ]
+        }"#;
+        std::fs::write(plugin_dir.join("plugin.json"), manifest).unwrap();
+        std::fs::write(
+            plugin_dir.join("init.lua"),
+            "local M = {} function M.noop() return {} end return M",
+        )
+        .unwrap();
+        let registry = PluginRegistry::discover(dir.path());
+
+        // Must not panic. The fallback uses the global
+        // `[MIN_TIMEOUT_SECS, MAX_TIMEOUT_SECS]` (5..=600) bounds, so
+        // a default of 90 stays in range and resolves to 90s.
+        let resolved = registry.effective_timeout("inverted-bounds", None);
+        assert_eq!(resolved, Duration::from_secs(90));
     }
 
     #[test]
