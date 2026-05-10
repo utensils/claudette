@@ -55,9 +55,15 @@ export const createRepositoriesSlice: StateCreator<
       const newDiffTabs = { ...s.diffTabsByWorkspace };
       const newDiffSelection = { ...s.diffSelectionByWorkspace };
       const newChatDrafts = { ...s.chatDrafts };
+      // Mirror `removeWorkspace`'s SCM cleanup so deleting a repository
+      // doesn't leave orphaned PR/CI cache entries pinned in the store.
+      const newScmSummary = { ...s.scmSummary };
+      const newScmDetails = { ...s.scmDetails };
       for (const wsId of removedWsIds) {
         delete newDiffTabs[wsId];
         delete newDiffSelection[wsId];
+        delete newScmSummary[wsId];
+        delete newScmDetails[wsId];
         for (const session of s.sessionsByWorkspace[wsId] ?? []) {
           delete newChatDrafts[session.id];
         }
@@ -80,6 +86,8 @@ export const createRepositoriesSlice: StateCreator<
         diffTabsByWorkspace: newDiffTabs,
         diffSelectionByWorkspace: newDiffSelection,
         chatDrafts: newChatDrafts,
+        scmSummary: newScmSummary,
+        scmDetails: newScmDetails,
       };
     }),
 });
