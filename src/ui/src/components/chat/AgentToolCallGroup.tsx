@@ -1,3 +1,4 @@
+import type { KeyboardEvent } from "react";
 import type { ToolActivity } from "../../stores/useAppStore";
 import { relativizePath } from "../../hooks/toolSummary";
 import { HighlightedPlainText } from "./HighlightedPlainText";
@@ -15,18 +16,55 @@ export function AgentToolCallGroup({
   searchQuery,
   worktreePath,
   inline = false,
+  collapsed,
+  onToggle,
 }: {
   activity: ToolActivity;
   searchQuery: string;
   worktreePath?: string | null;
   inline?: boolean;
+  /**
+   * Optional collapse state. When `onToggle` is provided alongside this,
+   * the header becomes interactive (chevron + click/keyboard) and the
+   * per-tool-call list is hidden while `collapsed` is true. Header
+   * label and progress row remain visible regardless — Agent invocations
+   * run for minutes and a fully-hidden live agent would feel dead. The
+   * `inline` mode (grouped-tool-calls setting OFF) ignores both props
+   * to preserve the original always-expanded behavior.
+   */
+  collapsed?: boolean;
+  onToggle?: () => void;
 }) {
   const summary = activitySummaryText(activity);
   const calls = activity.agentToolCalls ?? [];
+  // Inline mode is the legacy "show everything inline" rendering; do
+  // not let collapse semantics leak into it. Only when an explicit
+  // toggle has been wired (the new live-agent wrapper) do we render
+  // the chevron and gate the call list.
+  const collapsible = !inline && typeof onToggle === "function";
+  const isCollapsed = collapsible && collapsed === true;
+  const headerInteractiveProps = collapsible
+    ? {
+        role: "button" as const,
+        tabIndex: 0,
+        "aria-expanded": !isCollapsed,
+        "aria-label": `${isCollapsed ? "Expand" : "Collapse"} ${activity.toolName} tool call list`,
+        onClick: onToggle,
+        onKeyDown: (e: KeyboardEvent<HTMLDivElement>) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            onToggle();
+          }
+        },
+      }
+    : undefined;
 
   return (
     <div className={inline ? styles.agentToolGroupInline : styles.agentToolGroup}>
-      <div className={styles.agentToolGroupHeader}>
+      <div className={styles.agentToolGroupHeader} {...headerInteractiveProps}>
+        {collapsible && (
+          <span className={styles.toolChevron}>{isCollapsed ? "›" : "⌄"}</span>
+        )}
         <span
           className={styles.toolName}
           style={{ color: toolColor(activity.toolName) }}
@@ -60,39 +98,41 @@ export function AgentToolCallGroup({
           )}
         </div>
       )}
-      <div className={styles.agentToolCallList}>
-        {calls.map((call) => {
-          const callSummary = agentToolCallSummary(call);
-          const editSummary = summarizeAgentToolCallEdit(call);
-          return (
-            <div key={call.toolUseId} className={styles.agentToolCall}>
-              {editSummary ? (
-                <InlineEditSummary
-                  summary={editSummary}
-                  searchQuery={searchQuery}
-                  worktreePath={worktreePath}
-                />
-              ) : (
-                <span
-                  className={styles.agentToolCallName}
-                  style={{ color: toolColor(call.toolName) }}
-                >
-                  {call.toolName}
-                </span>
-              )}
-              {!editSummary && callSummary && (
-                <span className={styles.agentToolCallSummary}>
-                  <HighlightedPlainText
-                    text={relativizePath(callSummary, worktreePath)}
-                    query={searchQuery}
+      {!isCollapsed && (
+        <div className={styles.agentToolCallList}>
+          {calls.map((call) => {
+            const callSummary = agentToolCallSummary(call);
+            const editSummary = summarizeAgentToolCallEdit(call);
+            return (
+              <div key={call.toolUseId} className={styles.agentToolCall}>
+                {editSummary ? (
+                  <InlineEditSummary
+                    summary={editSummary}
+                    searchQuery={searchQuery}
+                    worktreePath={worktreePath}
                   />
-                </span>
-              )}
-              <span className={styles.agentToolCallStatus}>{call.status}</span>
-            </div>
-          );
-        })}
-      </div>
+                ) : (
+                  <span
+                    className={styles.agentToolCallName}
+                    style={{ color: toolColor(call.toolName) }}
+                  >
+                    {call.toolName}
+                  </span>
+                )}
+                {!editSummary && callSummary && (
+                  <span className={styles.agentToolCallSummary}>
+                    <HighlightedPlainText
+                      text={relativizePath(callSummary, worktreePath)}
+                      query={searchQuery}
+                    />
+                  </span>
+                )}
+                <span className={styles.agentToolCallStatus}>{call.status}</span>
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }
