@@ -278,9 +278,29 @@ Write-Host "▸ Discovery file:   $discoveryFile"
 #                       auth, or marketplaces writes those changes into
 #                       the user's real ~/.claude/, defeating the
 #                       "simulate a new user" purpose of the flag.
+#
+# Env-var lifetime: when this script is invoked from an interactive
+# PowerShell prompt (the common case via the `dev` profile function),
+# `$env:NAME = ...` mutates the *caller's* process environment because
+# `&` runs the script in the same process. Without restoring the
+# original values on exit, the user's shell would still have
+# CLAUDE_CONFIG_DIR / CLAUDETTE_HOME / CLAUDETTE_DATA_DIR pointing at
+# the now-deleted clean root after `dev --clean` completes — silently
+# affecting any subsequent Claudette CLI usage from that prompt. We
+# therefore snapshot the prior values (or absence) up front and put
+# the unset/restore in the same PowerShell.Exiting handler that
+# removes the temp tree.
 $cleanRoot = $null
+$prevClaudetteHome     = $null
+$prevClaudetteDataDir  = $null
+$prevClaudeConfigDir   = $null
+$cleanSandboxEnvVars   = $false
 if ($cleanSession) {
     $cleanRoot = Join-Path $discoveryDir "clean-$PID"
+    $prevClaudetteHome    = if (Test-Path Env:\CLAUDETTE_HOME)     { $env:CLAUDETTE_HOME }     else { $null }
+    $prevClaudetteDataDir = if (Test-Path Env:\CLAUDETTE_DATA_DIR) { $env:CLAUDETTE_DATA_DIR } else { $null }
+    $prevClaudeConfigDir  = if (Test-Path Env:\CLAUDE_CONFIG_DIR)  { $env:CLAUDE_CONFIG_DIR }  else { $null }
+    $cleanSandboxEnvVars  = $true
     $env:CLAUDETTE_HOME      = Join-Path $cleanRoot 'home'
     $env:CLAUDETTE_DATA_DIR  = Join-Path $cleanRoot 'data'
     $env:CLAUDE_CONFIG_DIR   = Join-Path $cleanRoot 'claude-config'
@@ -302,7 +322,18 @@ if ($cleanSession) {
 # `"@` with any leading whitespace, which fights `scripts/` indent).
 # Use a string fallback rather than `??` so the script parses in
 # Windows PowerShell 5.1 (no null-coalescing) as well as pwsh 7+.
+#
+# The env-var section restores each of the three sandbox vars to its
+# pre-launch value (or removes it entirely if it wasn't set), so the
+# caller's PowerShell session is left exactly as it was before
+# `dev --clean` ran. Sentinel literal `__UNSET__` rides through the
+# format string to distinguish "wasn't set" from "was set to empty
+# string" — both legal pre-states, but they need different handling.
 $cleanRootForCleanup = if ($null -eq $cleanRoot) { '' } else { $cleanRoot }
+$envScrubFlag        = if ($cleanSandboxEnvVars) { '1' } else { '' }
+$prevHomeForCleanup       = if ($null -eq $prevClaudetteHome)    { '__UNSET__' } else { $prevClaudetteHome }
+$prevDataDirForCleanup    = if ($null -eq $prevClaudetteDataDir) { '__UNSET__' } else { $prevClaudetteDataDir }
+$prevConfigDirForCleanup  = if ($null -eq $prevClaudeConfigDir)  { '__UNSET__' } else { $prevClaudeConfigDir }
 $cleanupBody = @'
 if (Test-Path -LiteralPath '{0}') {{
     Remove-Item -LiteralPath '{0}' -Force -ErrorAction SilentlyContinue
@@ -310,7 +341,16 @@ if (Test-Path -LiteralPath '{0}') {{
 if ('{1}' -ne '' -and (Test-Path -LiteralPath '{1}')) {{
     Remove-Item -LiteralPath '{1}' -Recurse -Force -ErrorAction SilentlyContinue
 }}
-'@ -f $discoveryFile, $cleanRootForCleanup
+if ('{2}' -ne '') {{
+    if ('{3}' -eq '__UNSET__') {{ Remove-Item Env:\CLAUDETTE_HOME -ErrorAction SilentlyContinue }}
+    else {{ $env:CLAUDETTE_HOME = '{3}' }}
+    if ('{4}' -eq '__UNSET__') {{ Remove-Item Env:\CLAUDETTE_DATA_DIR -ErrorAction SilentlyContinue }}
+    else {{ $env:CLAUDETTE_DATA_DIR = '{4}' }}
+    if ('{5}' -eq '__UNSET__') {{ Remove-Item Env:\CLAUDE_CONFIG_DIR -ErrorAction SilentlyContinue }}
+    else {{ $env:CLAUDE_CONFIG_DIR = '{5}' }}
+}}
+'@ -f $discoveryFile, $cleanRootForCleanup, $envScrubFlag,
+       $prevHomeForCleanup, $prevDataDirForCleanup, $prevConfigDirForCleanup
 $cleanupAction = [ScriptBlock]::Create($cleanupBody)
 Register-EngineEvent -SourceIdentifier PowerShell.Exiting -Action $cleanupAction | Out-Null
 

@@ -3,6 +3,8 @@ title: Diagnostics & Logging
 description: Where Claudette writes its logs, how to change verbosity, and how to capture frontend errors for bug reports.
 ---
 
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
 Claudette writes structured, daily-rotated logs to disk so user-reported bugs can be reconstructed from the file alone — without needing the user to reproduce while the app is attached to a debugger. The pipeline is on by default in every build.
 
 ## Where logs live
@@ -113,10 +115,18 @@ On startup, Claudette also scans `${TMPDIR}/claudette-dev/*.json` (the discovery
 
 For testing first-run UX (the welcome card, onboarding, plugin seeding) you can launch Claudette with a completely empty data tree:
 
-```bash
-./scripts/dev.sh --clean         # macOS / Linux
-.\scripts\dev.ps1 --clean        # Windows (PowerShell)
-```
+<Tabs>
+  <TabItem label="macOS / Linux">
+    ```bash
+    ./scripts/dev.sh --clean
+    ```
+  </TabItem>
+  <TabItem label="Windows">
+    ```powershell
+    .\scripts\dev.ps1 --clean
+    ```
+  </TabItem>
+</Tabs>
 
 The flag points three env vars at a per-PID directory under `${TMPDIR}/claudette-dev/clean-<pid>/` (`$env:TEMP\claudette-dev\clean-<pid>\` on Windows) and removes the tree on exit:
 
@@ -124,7 +134,26 @@ The flag points three env vars at a per-PID directory under `${TMPDIR}/claudette
 - **`CLAUDETTE_DATA_DIR`** overrides the OS data directory holding `claudette.db`.
 - **`CLAUDE_CONFIG_DIR`** overrides the **Claude CLI's** `~/.claude/` tree, which Claudette reads and writes for `settings.json`, `.credentials.json`, installed plugins, and marketplace registrations. Without this override, a `--clean` run that touches plugins or auth would write into the real `~/.claude/` and survive the sandbox tear-down — defeating the "simulate a new user" purpose of the flag.
 
-You can also set any of these env vars manually for a longer-lived sandbox — e.g. `CLAUDETTE_HOME=/tmp/claudette-demo CLAUDETTE_DATA_DIR=/tmp/claudette-demo/data CLAUDE_CONFIG_DIR=/tmp/claudette-demo/claude ./scripts/dev.sh` keeps the sandbox across restarts.
+You can also set any of these env vars manually for a longer-lived sandbox:
+
+<Tabs>
+  <TabItem label="macOS / Linux">
+    ```bash
+    CLAUDETTE_HOME=/tmp/claudette-demo \
+    CLAUDETTE_DATA_DIR=/tmp/claudette-demo/data \
+    CLAUDE_CONFIG_DIR=/tmp/claudette-demo/claude \
+      ./scripts/dev.sh
+    ```
+  </TabItem>
+  <TabItem label="Windows">
+    ```powershell
+    $env:CLAUDETTE_HOME      = "$env:TEMP\claudette-demo"
+    $env:CLAUDETTE_DATA_DIR  = "$env:TEMP\claudette-demo\data"
+    $env:CLAUDE_CONFIG_DIR   = "$env:TEMP\claudette-demo\claude"
+    .\scripts\dev.ps1
+    ```
+  </TabItem>
+</Tabs>
 
 ## Filing a bug report
 
