@@ -91,6 +91,9 @@ export const Sidebar = memo(function Sidebar() {
   const workspaces = useAppStore((s) => s.workspaces);
   const selectedWorkspaceId = useAppStore((s) => s.selectedWorkspaceId);
   const selectWorkspace = useAppStore((s) => s.selectWorkspace);
+  const selectedRepositoryId = useAppStore((s) => s.selectedRepositoryId);
+  const selectRepository = useAppStore((s) => s.selectRepository);
+  const goToDashboard = useAppStore((s) => s.goToDashboard);
   const sidebarGroupBy = useAppStore((s) => s.sidebarGroupBy);
   const setSidebarGroupBy = useAppStore((s) => s.setSidebarGroupBy);
   const sidebarRepoFilter = useAppStore((s) => s.sidebarRepoFilter);
@@ -180,7 +183,23 @@ export const Sidebar = memo(function Sidebar() {
   const creatingRef = useRef(false);
   const archivingRef = useRef<Set<string>>(new Set());
   const restoringRef = useRef<Set<string>>(new Set());
-  const [creatingWorkspace, setCreatingWorkspace] = useState<{ repoId: string } | null>(null);
+  // Store-backed optimistic-row state — replaces a local useState pair so
+  // that any caller of useCreateWorkspace (welcome card, project-scoped
+  // CTA, Cmd+Shift+N hotkey) lights up the same sidebar placeholder row
+  // as the inline `+` button does. The setter is still used below for
+  // the inline path, which doesn't yet route through the hook.
+  const creatingWorkspaceRepoId = useAppStore((s) => s.creatingWorkspaceRepoId);
+  const setCreatingWorkspaceRepoId = useAppStore(
+    (s) => s.setCreatingWorkspaceRepoId,
+  );
+  const creatingWorkspace = creatingWorkspaceRepoId
+    ? { repoId: creatingWorkspaceRepoId }
+    : null;
+  const setCreatingWorkspace = useCallback(
+    (v: { repoId: string } | null) =>
+      setCreatingWorkspaceRepoId(v?.repoId ?? null),
+    [setCreatingWorkspaceRepoId],
+  );
   const [repoContextMenu, setRepoContextMenu] = useState<{
     repoId: string;
     x: number;
@@ -224,6 +243,10 @@ export const Sidebar = memo(function Sidebar() {
       setCreatingWorkspace(null);
 
       addWorkspace(result.workspace);
+      // Mirror useCreateWorkspace's expand-on-create — the sidebar still
+      // has its own orchestration, but a collapsed parent group hiding a
+      // freshly created workspace is the same UX bug from either path.
+      useAppStore.getState().expandRepo(repoId);
       selectWorkspace(result.workspace.id);
       const sessionId = result.default_session_id;
       if (generated.message) {
@@ -298,7 +321,7 @@ export const Sidebar = memo(function Sidebar() {
     } finally {
       creatingRef.current = false;
     }
-  }, [addWorkspace, selectWorkspace, addChatMessage, openModal]);
+  }, [addWorkspace, selectWorkspace, addChatMessage, openModal, setCreatingWorkspace]);
 
   const filteredWorkspaces = useMemo(
     () => workspaces.filter((ws) => {
@@ -877,7 +900,7 @@ export const Sidebar = memo(function Sidebar() {
         <div className={styles.headerActions}>
           <button
             className={styles.dashboardBtn}
-            onClick={() => selectWorkspace(null)}
+            onClick={goToDashboard}
             title={t("back_to_dashboard")}
             aria-label={t("back_to_dashboard")}
           >
@@ -1168,10 +1191,22 @@ export const Sidebar = memo(function Sidebar() {
                 <div className={styles.dropIndicator} />
               )}
               <div
-                className={styles.repoHeader}
+                className={`${styles.repoHeader} ${selectedRepositoryId === repo.id && !selectedWorkspaceId ? styles.repoHeaderSelected : ""}`}
                 data-tooltip={jumpTooltip}
                 data-tooltip-placement="bottom"
-                onClick={() => { if (!didDragRef.current) toggleRepoCollapsed(repo.id); }}
+                onClick={() => {
+                  if (didDragRef.current) return;
+                  // Standard tree-view pattern: header click selects the
+                  // project (showing the project-scoped view) and ALWAYS
+                  // ensures the group is expanded so the user can see
+                  // what's inside. Toggling collapse on every click
+                  // (the previous behaviour) was bizarre because clicking
+                  // a project to "look at it" hid the very rows the user
+                  // wanted to look at. The chevron handles collapse on
+                  // its own — see the button below.
+                  selectRepository(repo.id);
+                  if (collapsed) toggleRepoCollapsed(repo.id);
+                }}
                 onContextMenu={(e) => {
                   e.preventDefault();
                   e.stopPropagation();
@@ -1182,9 +1217,24 @@ export const Sidebar = memo(function Sidebar() {
                   });
                 }}
               >
-                <span className={styles.chevron}>
+                <button
+                  type="button"
+                  className={styles.chevron}
+                  onClick={(e) => {
+                    // Stop the parent header click — the chevron is the
+                    // dedicated collapse affordance, separate from select.
+                    e.stopPropagation();
+                    toggleRepoCollapsed(repo.id);
+                  }}
+                  aria-label={
+                    collapsed
+                      ? t("expand_repo_aria", { name: repo.name })
+                      : t("collapse_repo_aria", { name: repo.name })
+                  }
+                  aria-expanded={!collapsed}
+                >
                   {collapsed ? "›" : "⌄"}
-                </span>
+                </button>
                 <span className={styles.repoName}>
                   {repo.icon && <RepoIcon icon={repo.icon} className={styles.repoIcon} />}
                   <span className={styles.repoTitle}>{repo.name}</span>

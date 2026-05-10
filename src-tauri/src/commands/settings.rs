@@ -328,10 +328,7 @@ pub fn run_notification_command(
 #[tauri::command]
 pub async fn list_user_themes() -> Result<Vec<ThemeDefinition>, String> {
     tauri::async_runtime::spawn_blocking(|| {
-        let themes_dir = dirs::home_dir()
-            .ok_or("Could not determine home directory")?
-            .join(".claudette")
-            .join("themes");
+        let themes_dir = claudette::path::claudette_home().join("themes");
 
         if !themes_dir.exists() {
             return Ok(Vec::new());

@@ -283,11 +283,11 @@ pub fn init_with_override(runtime_override: Option<&str>) -> Option<LogHandle> {
 ///
 /// 1. `CLAUDETTE_LOG_DIR` env var (used by `scripts/dev.sh` to give
 ///    parallel dev instances isolated log files when desired).
-/// 2. `~/.claudette/logs` — sibling to the existing `~/.claudette/workspaces`
-///    and `~/.claudette/plugins` directories so users have one tree to
-///    inspect when debugging.
-/// 3. `./logs` — last-resort fallback when `dirs::home_dir()` fails
-///    (extremely unusual; mostly affects sandboxed CI).
+/// 2. `<claudette_home>/logs` — sibling to the existing `workspaces`
+///    and `plugins` directories so users have one tree to inspect when
+///    debugging. `claudette_home` honors `$CLAUDETTE_HOME`, so a
+///    `dev --clean` session naturally lands its logs under the same
+///    sandbox as its workspaces and plugins.
 fn resolve_log_dir() -> PathBuf {
     if let Ok(custom) = std::env::var("CLAUDETTE_LOG_DIR") {
         let path = PathBuf::from(custom);
@@ -295,10 +295,7 @@ fn resolve_log_dir() -> PathBuf {
             return path;
         }
     }
-    if let Some(home) = dirs::home_dir() {
-        return home.join(".claudette").join("logs");
-    }
-    PathBuf::from("logs")
+    crate::path::claudette_home().join("logs")
 }
 
 /// Get the resolved log directory, if `init` has been called. Used by

@@ -214,12 +214,46 @@
   background: var(--hover-bg);
 }
 
+/* Highlight when the project-scoped view is active for this repo. The
+   selectedBg color matches the workspace-row selection so both selection
+   types read as the same affordance. */
+.repoHeaderSelected,
+.repoHeaderSelected:hover {
+  background: var(--selected-bg);
+}
+
 .chevron {
   font-size: 10px;
   color: var(--text-dim);
-  width: 12px;
+  width: 14px;
+  height: 14px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   font-family: var(--font-mono);
-  transition: transform var(--transition-fast);
+  /* Reset button defaults — chevron renders as a focusable affordance
+     so the collapse toggle is keyboard-accessible, but it must look
+     identical to the prior span so the sidebar visual cadence holds. */
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  padding: 0;
+  cursor: pointer;
+  transition:
+    background var(--transition-fast),
+    border-color var(--transition-fast),
+    color var(--transition-fast);
+}
+
+.chevron:hover {
+  background: var(--hover-bg);
+  border-color: var(--divider);
+  color: var(--text-primary);
+}
+
+.chevron:focus-visible {
+  outline: none;
+  border-color: var(--accent-primary);
 }
 
 .repoName {

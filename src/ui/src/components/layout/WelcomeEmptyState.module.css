@@ -1,0 +1,322 @@
+/* Welcome card shown on the Dashboard when there are no active workspaces.
+   The shell is also reused by WorkspaceEmptyTabs so the close-all-tabs
+   landing matches this card's typography and density. */
+
+.welcome {
+  flex: 1;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 40px 24px 56px;
+  min-height: 0;
+}
+
+.card {
+  width: 100%;
+  max-width: 760px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  background: var(--hover-bg-subtle);
+  border: 1px solid var(--divider);
+  border-radius: 14px;
+  padding: 32px 36px;
+  box-shadow: var(--shadow-md);
+}
+
+/* Header: bigger headline, looser line-height. The two text rows sit on
+   their own block so the card always opens with the same first-line
+   anchor regardless of subtitle length. */
+.header {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.title {
+  margin: 0;
+  font-size: 24px;
+  font-weight: 600;
+  color: var(--text-primary);
+  letter-spacing: -0.01em;
+  line-height: 1.2;
+}
+
+.subtitle {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--text-muted);
+  max-width: 60ch;
+}
+
+/* Tappable chip showing the suggested project. Two-row layout: top row
+   is the headline (project / context), bottom row is metadata that
+   changes per use site (path on welcome, branch + status on empty-tabs). */
+.activeProject {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 14px 16px;
+  background: rgba(var(--accent-primary-rgb), 0.07);
+  border: 1px solid rgba(var(--accent-primary-rgb), 0.22);
+  border-radius: 10px;
+  cursor: pointer;
+  text-align: left;
+  font-family: inherit;
+  color: var(--text-primary);
+  transition:
+    background var(--transition-fast),
+    border-color var(--transition-fast);
+}
+
+.activeProject:hover:not(:disabled) {
+  background: rgba(var(--accent-primary-rgb), 0.12);
+  border-color: rgba(var(--accent-primary-rgb), 0.4);
+}
+
+.activeProject:disabled {
+  opacity: 0.7;
+  cursor: default;
+}
+
+/* Top row of the chip — icon + name + path/branch */
+.activeProjectHead {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.activeProjectIcon {
+  color: var(--accent-primary);
+  flex-shrink: 0;
+}
+
+.activeProjectName {
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--accent-primary);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  flex-shrink: 0;
+}
+
+.activeProjectPath {
+  flex: 1;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.activeProjectMeta {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 11px;
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+}
+
+.activeProjectMeta > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* Action row */
+.actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.primary,
+.secondary {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 9px 18px;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  border-radius: 7px;
+  cursor: pointer;
+  transition:
+    background var(--transition-fast),
+    border-color var(--transition-fast),
+    color var(--transition-fast);
+}
+
+.primary {
+  background: var(--accent-primary);
+  color: var(--app-bg);
+  border: 1px solid var(--accent-primary);
+}
+
+.primary:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+
+.primary:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.secondary {
+  background: transparent;
+  color: var(--text-primary);
+  border: 1px solid var(--divider);
+}
+
+.secondary:hover {
+  background: var(--hover-bg);
+  border-color: var(--text-faint);
+}
+
+/* Section dividers — tighter top padding than before so the rows below
+   feel anchored to the section label rather than floating. */
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-top: 16px;
+  border-top: 1px solid var(--divider);
+}
+
+.sectionLabel {
+  margin: 0;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+/* Project / session list */
+.projectList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.projectRow {
+  width: 100%;
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  cursor: pointer;
+  text-align: left;
+  font-family: inherit;
+  color: var(--text-primary);
+  transition:
+    background var(--transition-fast),
+    border-color var(--transition-fast);
+}
+
+.projectRow:hover:not(:disabled) {
+  background: var(--hover-bg);
+  border-color: var(--divider);
+}
+
+.projectRow:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.projectRowIcon {
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+/* Two-line content body of a row: name on top, secondary metadata below. */
+.projectRowBody {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.projectRowName {
+  font-weight: 500;
+  font-size: 13px;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.projectRowPath {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.projectRowMeta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+}
+
+.projectRowMissing {
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--status-stopped);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+/* Tips: side-by-side on wider viewports, stacked when the card narrows. */
+.tips {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 10px 16px;
+}
+
+.tips li {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-dim);
+}
+
+.tipIcon {
+  color: var(--text-faint);
+  flex-shrink: 0;
+  margin-top: 3px;
+}
+
+.kbd {
+  display: inline-block;
+  padding: 1px 6px;
+  background: var(--hover-bg);
+  border: 1px solid var(--divider);
+  border-radius: 4px;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  color: var(--text-muted);
+}

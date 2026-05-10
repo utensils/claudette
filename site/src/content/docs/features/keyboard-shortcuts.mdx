@@ -23,9 +23,14 @@ The unified tab strip holds chat sessions, diff tabs, file tabs, and any other w
 
 | Shortcut | Action |
 |----------|--------|
+| `⌘/Ctrl + T` | New tab — chat session by default, or new file when a file is open |
+| `⌘/Ctrl + W` | Close the active tab |
 | `⌘/Ctrl + Shift + [` | Previous tab in the unified tab strip |
 | `⌘/Ctrl + Shift + ]` | Next tab in the unified tab strip |
 | `⌘/Ctrl + 1` – `⌘/Ctrl + 9` | Jump to project by index |
+| `⌘/Ctrl + Shift + N` | New workspace in the current project |
+
+`⌘/Ctrl + Shift + N` resolves which project to target in this order: the project-scoped view's pinned repo → the active workspace's repo → the first local repo. The new workspace is auto-named, the parent repo group is force-expanded in the sidebar, and the workspace is selected so you land in its chat view.
 
 To switch between workspaces in the same project, click them in the sidebar or use the fuzzy finder (`⌘/Ctrl + K`) — the bracket shortcuts no longer specifically cycle workspaces, since the unified tab strip subsumed that intent.
 

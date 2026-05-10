@@ -420,9 +420,7 @@ impl VoiceProviderRegistry {
     }
 
     pub fn default_model_root() -> PathBuf {
-        dirs::home_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join(".claudette")
+        claudette::path::claudette_home()
             .join("models")
             .join("voice")
     }

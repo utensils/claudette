@@ -30,10 +30,7 @@ pub fn validate_pack_name(name: &str) -> Result<(), String> {
 }
 
 pub fn packs_dir() -> PathBuf {
-    let base = dirs::home_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".claudette")
-        .join("packs");
+    let base = crate::path::claudette_home().join("packs");
     let _ = std::fs::create_dir_all(&base);
     base
 }

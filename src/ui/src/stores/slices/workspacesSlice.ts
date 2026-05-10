@@ -12,12 +12,30 @@ export interface WorkspaceEnvironmentPreparation {
 export interface WorkspacesSlice {
   workspaces: Workspace[];
   selectedWorkspaceId: string | null;
+  /** Repository "selected" at the project level — drives the project-scoped
+   *  view rendered when no workspace is selected. Mutually exclusive with
+   *  `selectedWorkspaceId`: setting one clears the other. */
+  selectedRepositoryId: string | null;
+  /** Repo id with a workspace creation currently in flight. Drives the
+   *  sidebar's optimistic "preparing workspace…" placeholder row so that
+   *  any caller (sidebar `+`, welcome card CTA, project-scoped CTA,
+   *  Cmd+Shift+N hotkey) gives the same visual feedback. */
+  creatingWorkspaceRepoId: string | null;
+  setCreatingWorkspaceRepoId: (repoId: string | null) => void;
   workspaceEnvironment: Record<string, WorkspaceEnvironmentPreparation>;
   setWorkspaces: (workspaces: Workspace[]) => void;
   addWorkspace: (ws: Workspace) => void;
   updateWorkspace: (id: string, updates: Partial<Workspace>) => void;
   removeWorkspace: (id: string) => void;
   selectWorkspace: (id: string | null) => void;
+  /** Select (or clear) the project-scoped view. Setting a non-null id also
+   *  clears any selected workspace so the project view replaces it. */
+  selectRepository: (id: string | null) => void;
+  /** Clear both workspace and repository selection in one shot. The global
+   *  Dashboard is Claudette's default view; navigating to it shouldn't read
+   *  as "back" because the dashboard isn't on a stack. Atomic so the UI
+   *  doesn't transition through an intermediate single-cleared state. */
+  goToDashboard: () => void;
   setWorkspaceEnvironment: (
     id: string,
     status: WorkspaceEnvironmentStatus,
@@ -33,6 +51,10 @@ export const createWorkspacesSlice: StateCreator<
 > = (set) => ({
   workspaces: [],
   selectedWorkspaceId: null,
+  selectedRepositoryId: null,
+  creatingWorkspaceRepoId: null,
+  setCreatingWorkspaceRepoId: (creatingWorkspaceRepoId) =>
+    set({ creatingWorkspaceRepoId }),
   workspaceEnvironment: {},
   setWorkspaces: (workspaces) => set({ workspaces }),
   // Idempotent by id: workspace creates can race between the Tauri
@@ -169,6 +191,11 @@ export const createWorkspacesSlice: StateCreator<
 
       const updates: Partial<AppState> = {
         selectedWorkspaceId: id,
+        // Selecting a workspace always wins over a project-scoped view.
+        // We only clear when a workspace is being selected so explicit
+        // `selectWorkspace(null)` (Back-to-Dashboard) preserves any
+        // selectedRepositoryId the user already navigated to.
+        selectedRepositoryId: id ? null : s.selectedRepositoryId,
         rightSidebarTab: "files",
         diffSelectionByWorkspace: selectionMap,
         diffSelectedFile: tabExists ? restored!.path : null,
@@ -205,6 +232,28 @@ export const createWorkspacesSlice: StateCreator<
         updates.unreadCompletions = next;
       }
       return updates;
+    }),
+  selectRepository: (id) =>
+    set((s) => {
+      if (id === s.selectedRepositoryId && (id === null || !s.selectedWorkspaceId)) {
+        // No-op when we're already in this exact state — avoids a needless
+        // store mutation that would re-render every subscriber.
+        return s;
+      }
+      return {
+        selectedRepositoryId: id,
+        // Picking a project clears any open workspace so the project-scoped
+        // view actually surfaces. Clearing the selection (id === null) leaves
+        // the workspace alone — that's just "exit project view" semantics.
+        selectedWorkspaceId: id ? null : s.selectedWorkspaceId,
+      };
+    }),
+  goToDashboard: () =>
+    set((s) => {
+      if (s.selectedWorkspaceId === null && s.selectedRepositoryId === null) {
+        return s;
+      }
+      return { selectedWorkspaceId: null, selectedRepositoryId: null };
     }),
   setWorkspaceEnvironment: (id, status, error) =>
     set((s) => ({

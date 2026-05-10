@@ -4,26 +4,56 @@
   flex-direction: column;
 }
 
-.toolbar {
+/* Header chrome lives in `PanelHeader.module.css`. The classes below are
+   the *content* slotted into PanelHeader's left side: the global
+   "Dashboard" label and the project-scoped repo breadcrumb. */
+
+/* Match the workspace + project-scoped header typography (mixed-case
+   monospace, primary text color) so the three views share a consistent
+   header voice. The previous uppercase chip treatment ("DASHBOARD")
+   read as a separate visual language and made nav transitions feel
+   unsettled. */
+.dashboardTitle {
+  font-size: 13px;
+  font-family: var(--font-mono);
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+/* Project-scoped header matches the chat workspace header's typography
+   (monospace, mixed case, repo name bold) so swapping between the two
+   views doesn't shuffle font metrics. The dashboard label uses the
+   same monospace 13px treatment via .dashboardTitle above — keep both
+   in sync if either changes. */
+.scopedHeader {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  padding: 10px 20px;
-  background: var(--chat-header-bg);
-  border-bottom: 1px solid var(--divider);
+  gap: 6px;
+  min-width: 0; /* let .headerPath ellipsize when the toolbar is tight */
+  font-size: 13px;
+  font-family: var(--font-mono);
+}
+
+.scopedRepoName {
+  font-weight: 600;
+  color: var(--text-primary);
+  white-space: nowrap;
+}
+
+.headerPath {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.repoIcon {
+  color: var(--text-muted);
   flex-shrink: 0;
 }
 
-.header {
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--text-dim);
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
 
 .headerCount {
   color: var(--accent-primary);
@@ -215,48 +245,94 @@
   font-style: italic;
 }
 
-/* Empty state */
-.empty {
-  height: 100%;
+/* Empty-state styling moved to WelcomeEmptyState.module.css; toolbar
+   chrome (drag-region, mac tint, traffic-light shift) moved to the
+   shared `PanelHeader.module.css`. Nothing toolbar-related lives here
+   anymore — kept the comment so future readers don't re-add styles
+   that already exist in the shared module. */
+
+/* Archived workspaces section on the project-scoped view. Renders below
+   the active workspace grid (or below the welcome card when there are
+   no active workspaces) so the project view is a complete summary of
+   work-in-the-fridge for the repo, not just live work. */
+
+.archivedIcon {
+  color: var(--text-faint);
+  flex-shrink: 0;
+}
+
+.archivedList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
   display: flex;
   flex-direction: column;
+  gap: 4px;
+}
+
+.archivedRow {
+  display: flex;
   align-items: center;
-  justify-content: center;
-  color: var(--text-muted);
   gap: 12px;
+  padding: 8px 12px;
+  background: var(--hover-bg-subtle);
+  border: 1px solid var(--divider);
+  border-radius: 6px;
 }
 
-.emptyIcon {
-  color: var(--accent-primary);
-  opacity: 0.4;
-  margin-bottom: 4px;
+.archivedBody {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  flex: 1;
 }
 
-:where([data-platform="mac"]) .toolbar {
-  background: color-mix(in srgb, var(--chat-header-bg) 88%, transparent);
+.archivedName {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.emptyTitle {
-  font-size: 16px;
-  font-weight: 600;
+.archivedBranch {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-dim);
+  flex-shrink: 0;
+}
+
+.archivedRestore {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 500;
+  background: transparent;
+  color: var(--text-muted);
+  border: 1px solid var(--divider);
+  border-radius: 5px;
+  cursor: pointer;
+  transition:
+    background var(--transition-fast),
+    border-color var(--transition-fast),
+    color var(--transition-fast);
+}
+
+.archivedRestore:hover:not(:disabled) {
+  background: var(--hover-bg);
+  border-color: var(--text-faint);
   color: var(--text-primary);
 }
 
-.hint {
-  color: var(--text-dim);
-  font-size: 13px;
-  max-width: 320px;
-  text-align: center;
-  line-height: 1.5;
-}
-
-.hintKey {
-  display: inline-block;
-  background: var(--hover-bg);
-  border: 1px solid var(--divider);
-  border-radius: 4px;
-  padding: 1px 6px;
-  font-size: 11px;
-  font-family: var(--font-mono);
-  color: var(--text-muted);
+.archivedRestore:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }

@@ -108,9 +108,32 @@ export function chatCloseConfirmKind(args: {
   session: ChatSession;
   activeSessions: readonly ChatSession[];
   isActiveSession: boolean;
+  /** Optional: caller passes the session's composer draft text so we can
+   *  preserve the close confirmation when there's unsent typing in the
+   *  box. Without this, the placeholder-skip rule below would silently
+   *  discard a user's in-progress prompt. */
+  draft?: string | null;
+  /** Optional: caller passes the session's pending-attachment count for
+   *  the same "don't lose unsent work" reason as `draft`. */
+  pendingAttachmentsCount?: number;
 }): ChatCloseConfirmKind {
-  const { session, activeSessions, isActiveSession } = args;
+  const {
+    session,
+    activeSessions,
+    isActiveSession,
+    draft,
+    pendingAttachmentsCount,
+  } = args;
   if (session.agent_status === "Running") return "running";
+  const hasUnsentDraft =
+    (draft != null && draft.trim().length > 0) ||
+    (pendingAttachmentsCount != null && pendingAttachmentsCount > 0);
+  // A fresh, untouched placeholder ("New chat" with zero turns, no live
+  // agent, no draft, no pending attachments) is safe to close without
+  // confirmation regardless of whether it's the active or last tab —
+  // there's nothing to lose. The unsent-draft guard prevents Cmd+W from
+  // silently discarding composer content the user typed but hasn't sent.
+  if (session.turn_count === 0 && !hasUnsentDraft) return "none";
   const activeCount = activeSessions.filter((s) => s.status === "Active").length;
   if (isActiveSession) return "active";
   if (activeCount <= 1) return "last";
@@ -154,6 +177,31 @@ export function executeNewTab(overrides?: Partial<ContextActionDeps>): void {
       post.selectSession(wsId, session.id);
     } catch (err) {
       console.error("[hotkey] executeNewTab failed:", err);
+    }
+  })();
+}
+
+/**
+ * Cmd/Ctrl+Shift+N — create a new workspace in the given project. Routes
+ * through the shared `createWorkspaceOrchestrated` so the hotkey path
+ * runs the FULL creation flow that the sidebar `+` button and the
+ * welcome-card CTA already use: generate slug, call createWorkspace,
+ * push into store, expand parent group, select the new workspace, surface
+ * the slug-rename rationale as a system message, and either auto-run
+ * the setup script or pop the confirmSetupScript modal. Earlier this
+ * helper had a reduced inline implementation that silently skipped the
+ * setup-script flow — that meant Cmd+Shift+N could land users in a
+ * workspace whose `.claudette.json` setup never ran.
+ */
+export function executeNewWorkspace(repoId: string): void {
+  void (async () => {
+    try {
+      const { createWorkspaceOrchestrated } = await import(
+        "../hooks/useCreateWorkspace"
+      );
+      await createWorkspaceOrchestrated(repoId);
+    } catch (err) {
+      console.error("[hotkey] executeNewWorkspace failed:", err);
     }
   })();
 }
@@ -211,6 +259,12 @@ export function executeCloseTab(overrides?: Partial<ContextActionDeps>): void {
     session,
     activeSessions: sessions,
     isActiveSession: true,
+    // Read draft + pending-attachment state so a fresh placeholder with
+    // an unsent prompt typed into the composer still trips the confirm
+    // dialog instead of being silently archived.
+    draft: store.chatDrafts[sessionId] ?? null,
+    pendingAttachmentsCount:
+      (store.pendingAttachmentsBySession[sessionId] ?? []).length,
   });
 
   // The whole flow is async because Tauri's native ask() returns a
@@ -243,7 +297,20 @@ export function executeCloseTab(overrides?: Partial<ContextActionDeps>): void {
     }
 
     try {
-      const autoCreated = await deps.archiveChatSession(sessionId);
+      // Mirror SessionTabs' close-button decision: skip the auto-replace
+      // only when this is the last tab across every kind, so Cmd+W on a
+      // workspace's final chat session lands on the empty-tabs view
+      // instead of churning a fresh placeholder under the user's cursor.
+      const stateNow = useAppStore.getState();
+      const activeSessions = (stateNow.sessionsByWorkspace[wsId] ?? []).filter(
+        (s) => s.status === "Active",
+      );
+      const diffTabs = stateNow.diffTabsByWorkspace[wsId] ?? [];
+      const fileTabs = stateNow.fileTabsByWorkspace[wsId] ?? [];
+      const isLastSession = activeSessions.length <= 1;
+      const noOtherTabs = diffTabs.length === 0 && fileTabs.length === 0;
+      const autoReplace = !(isLastSession && noOtherTabs);
+      const autoCreated = await deps.archiveChatSession(sessionId, autoReplace);
       const post = useAppStore.getState();
       post.removeChatSession(sessionId);
       if (autoCreated && post.selectedWorkspaceId === wsId) {

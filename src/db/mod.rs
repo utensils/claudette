@@ -950,4 +950,73 @@ mod tests {
         let actives = db.list_chat_sessions_for_workspace("w1", false).unwrap();
         assert_eq!(actives.len(), 1);
     }
+
+    /// `archive_chat_session_only` is the deliberate opt-out from the
+    /// always-≥1-active invariant — used by the "close last tab" path so
+    /// the workspace's empty-tabs view can surface. If a regression ever
+    /// re-introduces auto-replacement here, the welcome flow's whole
+    /// reason for existing collapses.
+    #[test]
+    fn test_archive_chat_session_only_leaves_workspace_empty() {
+        let db = Database::open_in_memory().unwrap();
+        db.insert_repository(&make_repo("r1", "/tmp/repo1", "repo1"))
+            .unwrap();
+        db.insert_workspace(&make_workspace("w1", "r1", "ws"))
+            .unwrap();
+        let only = db
+            .list_chat_sessions_for_workspace("w1", false)
+            .unwrap()
+            .into_iter()
+            .next()
+            .unwrap();
+
+        db.archive_chat_session_only(&only.id).unwrap();
+
+        let actives = db.list_chat_sessions_for_workspace("w1", false).unwrap();
+        assert!(
+            actives.is_empty(),
+            "archive_chat_session_only must NOT create a replacement",
+        );
+        let all = db.list_chat_sessions_for_workspace("w1", true).unwrap();
+        assert_eq!(all.len(), 1, "the archived row must still be queryable");
+        assert_eq!(all[0].id, only.id);
+    }
+
+    #[test]
+    fn test_restore_chat_session_reactivates_archived_session() {
+        let db = Database::open_in_memory().unwrap();
+        db.insert_repository(&make_repo("r1", "/tmp/repo1", "repo1"))
+            .unwrap();
+        db.insert_workspace(&make_workspace("w1", "r1", "ws"))
+            .unwrap();
+        let only = db
+            .list_chat_sessions_for_workspace("w1", false)
+            .unwrap()
+            .into_iter()
+            .next()
+            .unwrap();
+        db.archive_chat_session_only(&only.id).unwrap();
+        assert!(
+            db.list_chat_sessions_for_workspace("w1", false)
+                .unwrap()
+                .is_empty()
+        );
+
+        let restored = db.restore_chat_session(&only.id).unwrap();
+        assert_eq!(restored.id, only.id);
+        let actives = db.list_chat_sessions_for_workspace("w1", false).unwrap();
+        assert_eq!(actives.len(), 1);
+        assert_eq!(actives[0].id, only.id);
+    }
+
+    /// Restoring a session that doesn't exist must surface an error rather
+    /// than silently succeeding — the empty-tabs view's "resume previous
+    /// session" affordance relies on the returned row to populate the new
+    /// tab; a silent no-op would leave the UI in a broken state.
+    #[test]
+    fn test_restore_chat_session_errors_on_unknown_id() {
+        let db = Database::open_in_memory().unwrap();
+        let err = db.restore_chat_session("does-not-exist").unwrap_err();
+        assert!(matches!(err, rusqlite::Error::QueryReturnedNoRows));
+    }
 }

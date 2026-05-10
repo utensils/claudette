@@ -18,6 +18,30 @@ Each workspace in Claudette runs its own Claude Code subprocess. When you create
 
 This means you can have one agent building a new feature, another fixing a bug, and a third writing tests — all at the same time, all in the same repository, with zero conflicts.
 
+## Your First Workspace
+
+When the Dashboard has no active workspaces — typically the moment after you add your first repository — Claudette shows a **welcome card** instead of an empty grid. The card highlights your most recently used project as the suggested target and exposes:
+
+- A **Create Workspace** button that spins up a new workspace in the suggested project
+- An **Add Repository…** button (the same picker as the sidebar `+`)
+- A list of all your local projects — clicking any row creates a workspace in that repo
+
+If you don't have any repositories yet, the welcome card collapses to a single **Add Your First Repository…** action so the first-run path stays obvious.
+
+### Project-scoped view
+
+Click any project header in the sidebar (or press `⌘/Ctrl + N` for the Nth project) to open a **project-scoped view**: a card pre-targeted at that project, with the project's existing workspaces listed beneath it. Selecting a workspace from there leaves the project view; the **Dashboard** button in the toolbar (top-left) returns to the global view.
+
+The project-scoped view replaces the previous behavior where `⌘/Ctrl + N` was a no-op for projects with no workspaces — first-run users now have a discoverable landing pad for any project they jump to.
+
+### Empty-tabs view inside a workspace
+
+If you close every tab inside a workspace (chat sessions, diff tabs, file tabs), the workspace switches to a similar **No open tabs** card. Press `⌘/Ctrl + T` (or click the `+` in the tab strip) to open a fresh chat session — the workspace itself stays running, only its tabs were closed.
+
+### After creating a workspace
+
+Newly created workspaces always appear under an expanded project group in the sidebar — Claudette force-expands the parent on creation so a fresh workspace is never hidden inside a collapsed group.
+
 ## Creating Parallel Workspaces
 
 Click the **+** button next to any repository in the sidebar to create a new workspace. Each workspace appears as a separate entry under the repo, with its own:

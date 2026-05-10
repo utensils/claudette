@@ -305,9 +305,7 @@ fn main() {
     // `init_with_override` before the subscriber is built. Cheap
     // call: `dirs::data_dir()` is a syscall pair on macOS / a
     // registry read on Windows.
-    let early_data_dir = dirs::data_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("claudette");
+    let early_data_dir = claudette::path::data_dir();
     let early_db_path = early_data_dir.join("claudette.db");
     let persisted_log_level = commands::diagnostics::read_persisted_log_level(&early_db_path);
     let _log_handle = claudette::logging::init_with_override(persisted_log_level.as_deref());
@@ -364,10 +362,7 @@ fn main() {
 
     // Load worktree base dir from settings, or use default.
     let worktree_base_dir = {
-        let default = dirs::home_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join(".claudette")
-            .join("workspaces");
+        let default = claudette::path::claudette_home().join("workspaces");
         if let Ok(db) = Database::open(&db_path) {
             db.get_app_setting("worktree_base_dir")
                 .ok()
@@ -389,10 +384,7 @@ fn main() {
         .collect();
 
     // Initialize plugin registry: seed bundled plugins, then discover.
-    let plugin_dir = dirs::home_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".claudette")
-        .join("plugins");
+    let plugin_dir = claudette::path::claudette_home().join("plugins");
     let _ = std::fs::create_dir_all(&plugin_dir);
     let seed_warnings = claudette::plugin_runtime::seed::seed_bundled_plugins(&plugin_dir);
     for warning in &seed_warnings {
@@ -910,6 +902,7 @@ fn main() {
             commands::chat::session::set_session_cli_invocation,
             commands::chat::session::reorder_chat_sessions,
             commands::chat::session::archive_chat_session,
+            commands::chat::session::restore_chat_session,
             // Plan
             commands::plan::read_plan_file,
             // Metrics
