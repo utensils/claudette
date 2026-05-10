@@ -264,6 +264,212 @@ fn direnv_export_watches_list_tolerates_garbage_direnv_watches() {
     assert!(watched[0].ends_with(".envrc"));
 }
 
+/// Drive env-direnv's `export` with a caller-supplied env map and
+/// return the full `(env, watched)` shape the plugin returns. Used by
+/// the marker-strip regression tests to assert what the dispatcher
+/// would actually merge into the workspace env.
+fn direnv_export_returns(
+    env_in: serde_json::Value,
+) -> (
+    std::collections::HashMap<String, Option<String>>,
+    Vec<String>,
+    tempfile::TempDir,
+) {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(tmp.path().join(".envrc"), "export FOO=bar\n").unwrap();
+    let lua = make_vm("env-direnv", &["direnv"], tmp.path());
+
+    let env_json = serde_json::to_string(&env_in).unwrap();
+    let stub = format!(
+        r#"
+        host.exec = function(cmd, args)
+            if cmd ~= "direnv" then error("expected cmd='direnv', got: " .. tostring(cmd)) end
+            if type(args) ~= "table" or args[1] ~= "export" or args[2] ~= "json" or args[3] ~= nil then
+                error("expected args={{'export','json'}}")
+            end
+            return {{ stdout = [==[{env_json}]==], stderr = "", code = 0 }}
+        end
+        "#
+    );
+    lua.load(&stub).exec().unwrap();
+
+    let worktree = tmp.path().to_string_lossy().into_owned();
+    let script = format!(
+        r#"
+        local M = (function() {src} end)()
+        return M.export({{ worktree = "{path}" }})
+        "#,
+        src = DIRENV_SRC,
+        path = worktree.replace('\\', "\\\\"),
+    );
+    let result: mlua::Table = lua.load(&script).eval().expect("export");
+
+    let env_tbl: mlua::Table = result.get("env").expect("env field");
+    let mut env = std::collections::HashMap::new();
+    for pair in env_tbl.pairs::<String, mlua::Value>() {
+        let (k, v) = pair.unwrap();
+        // direnv encodes "unset this key" as a JSON null, which lands
+        // in Lua as `nil` (which `pairs` skips entirely) — so anything
+        // we see here is a real string value.
+        let s = match v {
+            mlua::Value::String(s) => Some(s.to_str().unwrap().to_string()),
+            mlua::Value::Nil => None,
+            other => panic!("unexpected env value type: {other:?}"),
+        };
+        env.insert(k, s);
+    }
+
+    let watched_tbl: mlua::Table = result.get("watched").expect("watched field");
+    let len = watched_tbl.len().expect("len") as usize;
+    let watched: Vec<String> = (1..=len)
+        .map(|i| watched_tbl.get::<String>(i).expect("string path"))
+        .collect();
+
+    (env, watched, tmp)
+}
+
+#[test]
+fn direnv_export_strips_internal_markers_from_returned_env() {
+    // Regression for the nightly-only direnv breakage: when the env
+    // dispatcher merged the plugin's output into a PTY env, leaking
+    // direnv's own `DIRENV_DIR` / `DIRENV_FILE` / `DIRENV_DIFF` /
+    // `DIRENV_WATCHES` markers tricked the in-shell `direnv hook`
+    // into concluding "already loaded for this dir" and skipping
+    // its first-prompt re-export. The user then never saw shell-side
+    // artifacts (numtide/devshell's `menu`, .envrc-defined functions),
+    // even though `direnv reload` from inside the same shell worked
+    // because that path bypasses the markers and re-evaluates the
+    // .envrc cleanly.
+    //
+    // Pin: `direnv export json` always emits DIRENV_* memos — even
+    // when the .envrc body fails to load (e.g. `use flake` couldn't
+    // find `nix`). The plugin must strip every `DIRENV_*` key from
+    // the returned env so the in-shell hook always does its own
+    // first-prompt evaluation.
+    let stubbed = serde_json::json!({
+        "FOO": "bar",
+        "PATH": "/bin:/usr/bin",
+        "DIRENV_DIR": "-/path/to/workspace",
+        "DIRENV_FILE": "/path/to/workspace/.envrc",
+        "DIRENV_DIFF": "eJxxxx",
+        "DIRENV_WATCHES": "eJyyyy",
+    });
+    let (env, _watched, _tmp) = direnv_export_returns(stubbed);
+
+    // Real exports survive.
+    assert_eq!(
+        env.get("FOO").and_then(|v| v.clone()),
+        Some("bar".to_string())
+    );
+    assert_eq!(
+        env.get("PATH").and_then(|v| v.clone()),
+        Some("/bin:/usr/bin".to_string())
+    );
+    // Every internal marker is gone — the in-shell hook will set
+    // these itself the first time it runs.
+    for key in ["DIRENV_DIR", "DIRENV_FILE", "DIRENV_DIFF", "DIRENV_WATCHES"] {
+        assert!(
+            !env.contains_key(key),
+            "expected {key} to be stripped from returned env, got keys = {:?}",
+            env.keys().collect::<Vec<_>>()
+        );
+    }
+}
+
+#[test]
+fn direnv_export_strips_markers_but_keeps_watches_decoded_into_watched() {
+    // The strip step happens AFTER the plugin reads `DIRENV_WATCHES`
+    // for the watch list. Regressing the order would silently lose
+    // user `watch_file` directives — the cache would only invalidate
+    // on `.envrc` changes, missing edits to files like `secret.env`
+    // sourced via `dotenv`.
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(tmp.path().join(".envrc"), "export FOO=bar\n").unwrap();
+    let worktree = tmp.path().to_string_lossy().into_owned();
+    let envrc_path = format!("{worktree}/.envrc");
+    let secret_path = format!("{worktree}/secret.env");
+    let encoded = encode_direnv_watches(&[&envrc_path, &secret_path]);
+
+    let lua = make_vm("env-direnv", &["direnv"], tmp.path());
+    let env_json = serde_json::to_string(&serde_json::json!({
+        "FOO": "bar",
+        "DIRENV_WATCHES": encoded,
+    }))
+    .unwrap();
+    let stub = format!(
+        r#"
+        host.exec = function(cmd, args)
+            if cmd ~= "direnv" then error("expected cmd='direnv', got: " .. tostring(cmd)) end
+            if type(args) ~= "table" or args[1] ~= "export" or args[2] ~= "json" or args[3] ~= nil then
+                error("expected args={{'export','json'}}")
+            end
+            return {{ stdout = [==[{env_json}]==], stderr = "", code = 0 }}
+        end
+        "#
+    );
+    lua.load(&stub).exec().unwrap();
+
+    let script = format!(
+        r#"
+        local M = (function() {src} end)()
+        return M.export({{ worktree = "{path}" }})
+        "#,
+        src = DIRENV_SRC,
+        path = worktree.replace('\\', "\\\\"),
+    );
+    let result: mlua::Table = lua.load(&script).eval().unwrap();
+
+    // Watch list still picks up the secret.env that DIRENV_WATCHES
+    // pointed at — the strip happens AFTER we decoded the watches.
+    let watched_tbl: mlua::Table = result.get("watched").unwrap();
+    let len = watched_tbl.len().unwrap() as usize;
+    let watched: Vec<String> = (1..=len)
+        .map(|i| watched_tbl.get::<String>(i).unwrap())
+        .collect();
+    assert!(
+        watched.contains(&secret_path),
+        "expected secret.env in watched after strip, got {watched:?}"
+    );
+
+    // But DIRENV_WATCHES is gone from the env we hand the dispatcher.
+    let env_tbl: mlua::Table = result.get("env").unwrap();
+    assert!(
+        env_tbl
+            .get::<mlua::Value>("DIRENV_WATCHES")
+            .map(|v| matches!(v, mlua::Value::Nil))
+            .unwrap_or(true),
+        "DIRENV_WATCHES must not survive into the returned env"
+    );
+    // FOO survives — the strip is not greedy across non-DIRENV keys.
+    assert_eq!(env_tbl.get::<String>("FOO").ok().as_deref(), Some("bar"));
+}
+
+#[test]
+fn direnv_export_strip_handles_failed_use_flake_payload() {
+    // Reproduces the exact wire-shape `direnv export json` returns
+    // when the .envrc body failed (e.g. `use flake` couldn't find
+    // `nix` because launchd-launched Claudette's host_exec PATH
+    // didn't recover the user's nix profile). direnv emits ONLY the
+    // four memos and no real env. Pre-fix, this leaked into the PTY,
+    // tricking the shell hook into a no-op. Post-fix, the dispatcher
+    // gets an empty env and the in-shell hook re-evaluates fresh.
+    let stubbed = serde_json::json!({
+        "DIRENV_DIR": "-/path/to/workspace",
+        "DIRENV_FILE": "/path/to/workspace/.envrc",
+        "DIRENV_DIFF": "eJxxxx",
+        "DIRENV_WATCHES": "eJyyyy",
+    });
+    let (env, watched, _tmp) = direnv_export_returns(stubbed);
+    assert!(
+        env.is_empty(),
+        "failed-payload export must contribute zero vars, got {env:?}"
+    );
+    // .envrc is still seeded into the watch list so editing it
+    // (e.g. fixing the `use flake` issue) still busts the cache.
+    assert_eq!(watched.len(), 1);
+    assert!(watched[0].ends_with(".envrc"));
+}
+
 // ---------------------------------------------------------------------------
 // env-mise
 // ---------------------------------------------------------------------------
@@ -622,6 +828,19 @@ async fn integration_direnv_export_returns_env() {
         Some("hello"),
         "expected CLAUDETTE_DIRENV_TEST=hello in merged env; full resolved = {resolved:#?}"
     );
+    // End-to-end strip pin: real `direnv export json` always emits
+    // DIRENV_DIR / DIRENV_FILE / DIRENV_DIFF / DIRENV_WATCHES memos.
+    // The plugin must drop them before they reach the merged env, or
+    // PTYs that inherit this env tell their `direnv hook zsh` to
+    // skip the first-prompt re-export and never load .envrc-defined
+    // shell functions.
+    for marker in ["DIRENV_DIR", "DIRENV_FILE", "DIRENV_DIFF", "DIRENV_WATCHES"] {
+        assert!(
+            !resolved.vars.contains_key(marker),
+            "expected {marker} stripped end-to-end, got {:?}",
+            resolved.vars.keys().collect::<Vec<_>>()
+        );
+    }
 }
 
 #[cfg(has_mise)]
