@@ -1,16 +1,46 @@
 use serde::Serialize;
 
+// `Bash`/`Zsh`/`Fish`/`Unknown` are only constructed on POSIX targets;
+// `PowerShell`/`Cmd` only on Windows. Both halves are part of the
+// `detect_user_shell` API though, so blanket `dead_code` keeps either
+// side of the cfg compiling under CI's `-Dwarnings` without scattering
+// `cfg_attr` markers across each variant.
+#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ShellType {
     Bash,
     Zsh,
     Fish,
+    /// PowerShell — either modern `pwsh.exe` (PowerShell 7+) or the
+    /// in-box `powershell.exe` (Windows PowerShell 5.1). Both auto-load
+    /// the user's `$PROFILE` when launched interactively in a ConPTY,
+    /// so spawning the bare exe is enough to get the user's prompt,
+    /// aliases, and module imports.
+    PowerShell,
+    /// `cmd.exe` — the last-resort Windows fallback when no PowerShell
+    /// is on PATH. Honours `HKCU\Software\Microsoft\Command Processor\AutoRun`
+    /// for any user-supplied init, so again no extra args needed.
+    Cmd,
     Unknown,
 }
 
 pub fn detect_user_shell() -> (String, ShellType) {
-    // Try $SHELL environment variable first
+    #[cfg(target_os = "windows")]
+    {
+        windows_detect_user_shell()
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        posix_detect_user_shell()
+    }
+}
+
+/// POSIX-side detection: `$SHELL` is the user's stated preference; fall
+/// back to a sensible per-platform default so a launchd / systemd-spawned
+/// release build (which inherits a stripped env) still gets a real shell.
+#[cfg(not(target_os = "windows"))]
+fn posix_detect_user_shell() -> (String, ShellType) {
     if let Ok(shell) = std::env::var("SHELL") {
         let shell_type = match shell.as_str() {
             s if s.contains("bash") => ShellType::Bash,
@@ -21,17 +51,71 @@ pub fn detect_user_shell() -> (String, ShellType) {
         return (shell, shell_type);
     }
 
-    // Fallback: use system default
     #[cfg(target_os = "macos")]
-    let default = ("/bin/zsh".to_string(), ShellType::Zsh);
-
+    {
+        ("/bin/zsh".to_string(), ShellType::Zsh)
+    }
     #[cfg(target_os = "linux")]
-    let default = ("/bin/bash".to_string(), ShellType::Bash);
-
+    {
+        ("/bin/bash".to_string(), ShellType::Bash)
+    }
     #[cfg(not(any(target_os = "macos", target_os = "linux")))]
-    let default = ("/bin/sh".to_string(), ShellType::Unknown);
+    {
+        ("/bin/sh".to_string(), ShellType::Unknown)
+    }
+}
 
-    default
+/// Windows-side detection. portable-pty's `new_default_prog()` falls
+/// back to `cmd.exe` here, which never loads any user-customizable
+/// profile — so an integrated terminal looks nothing like the user's
+/// regular Windows Terminal session. Pick the most modern PowerShell
+/// that's actually on PATH, then degrade gracefully.
+///
+/// Resolution order:
+///   1. `pwsh.exe` on PATH    — PowerShell 7+ (cross-platform, modern)
+///   2. `powershell.exe`      — in-box Windows PowerShell 5.1
+///   3. `%ComSpec%`           — user's deliberate cmd override, if set
+///   4. `%WINDIR%\System32\cmd.exe` — guaranteed-present last resort
+#[cfg(target_os = "windows")]
+fn windows_detect_user_shell() -> (String, ShellType) {
+    let path = std::env::var_os("PATH");
+    let comspec = std::env::var_os("ComSpec");
+    let windir = std::env::var_os("WINDIR");
+    detect_windows_shell_inner(path.as_deref(), comspec.as_deref(), windir.as_deref())
+}
+
+/// Pure-function core of `windows_detect_user_shell`, parameterised on
+/// the env values it consults so tests don't have to mutate the
+/// process-wide environment (which would race with parallel tests).
+#[cfg(target_os = "windows")]
+fn detect_windows_shell_inner(
+    path_env: Option<&std::ffi::OsStr>,
+    comspec: Option<&std::ffi::OsStr>,
+    windir: Option<&std::ffi::OsStr>,
+) -> (String, ShellType) {
+    if let Some(found) = find_in_path("pwsh.exe", path_env) {
+        return (found, ShellType::PowerShell);
+    }
+    if let Some(found) = find_in_path("powershell.exe", path_env) {
+        return (found, ShellType::PowerShell);
+    }
+    if let Some(cs) = comspec.and_then(|s| s.to_str()).filter(|s| !s.is_empty()) {
+        return (cs.to_string(), ShellType::Cmd);
+    }
+    let win = windir.and_then(|s| s.to_str()).unwrap_or(r"C:\Windows");
+    (format!(r"{win}\System32\cmd.exe"), ShellType::Cmd)
+}
+
+#[cfg(target_os = "windows")]
+fn find_in_path(name: &str, path_env: Option<&std::ffi::OsStr>) -> Option<String> {
+    let path_env = path_env?;
+    for dir in std::env::split_paths(path_env) {
+        let candidate = dir.join(name);
+        if candidate.is_file() {
+            return Some(candidate.to_string_lossy().into_owned());
+        }
+    }
+    None
 }
 
 #[tauri::command]
@@ -293,5 +377,133 @@ mod tests {
         // `C:foo` is a Windows-relative-to-current-dir-on-drive path —
         // unpredictable; reject.
         assert!(!is_acceptable_open_target("C:foo.csv"));
+    }
+
+    // ---------------------------------------------------------------------
+    // Windows shell detection
+    //
+    // These tests pin the resolution order pwsh → powershell → ComSpec →
+    // %WINDIR%\System32\cmd.exe so a regression that quietly drops back
+    // to `cmd.exe` (the symptom we just fixed) gets caught in CI. They
+    // call `detect_windows_shell_inner` directly with synthetic env
+    // values rather than mutating the process environment, so the tests
+    // are safe to run under cargo's default parallel test harness.
+    // ---------------------------------------------------------------------
+    #[cfg(target_os = "windows")]
+    mod windows_shell {
+        use super::super::{ShellType, detect_windows_shell_inner};
+        use std::ffi::{OsStr, OsString};
+        use std::fs::File;
+        use std::path::Path;
+        use tempfile::TempDir;
+
+        /// Drop an empty file at `<dir>/<name>` so `Path::is_file()`
+        /// returns true for it. Content is irrelevant — the lookup is a
+        /// pure existence check.
+        fn touch(dir: &Path, name: &str) {
+            File::create(dir.join(name)).expect("create stub exe");
+        }
+
+        /// Build a `PATH`-style OsString joining the supplied dirs with
+        /// the platform separator.
+        fn join_path<P: AsRef<Path>>(dirs: &[P]) -> OsString {
+            std::env::join_paths(dirs.iter().map(|p| p.as_ref())).expect("join_paths")
+        }
+
+        #[test]
+        fn prefers_pwsh_over_powershell_when_both_present() {
+            let pwsh_dir = TempDir::new().unwrap();
+            let ps_dir = TempDir::new().unwrap();
+            touch(pwsh_dir.path(), "pwsh.exe");
+            touch(ps_dir.path(), "powershell.exe");
+
+            let path = join_path(&[pwsh_dir.path(), ps_dir.path()]);
+            let (shell, kind) = detect_windows_shell_inner(Some(path.as_os_str()), None, None);
+
+            assert_eq!(kind, ShellType::PowerShell);
+            assert!(
+                shell.ends_with("pwsh.exe"),
+                "expected pwsh.exe to win the lookup, got {shell:?}"
+            );
+        }
+
+        #[test]
+        fn falls_back_to_powershell_when_pwsh_missing() {
+            let only_ps = TempDir::new().unwrap();
+            touch(only_ps.path(), "powershell.exe");
+
+            let path = join_path(&[only_ps.path()]);
+            let (shell, kind) = detect_windows_shell_inner(Some(path.as_os_str()), None, None);
+
+            assert_eq!(kind, ShellType::PowerShell);
+            assert!(
+                shell.ends_with("powershell.exe"),
+                "expected powershell.exe fallback, got {shell:?}"
+            );
+        }
+
+        #[test]
+        fn falls_back_to_comspec_when_no_powershell() {
+            let empty = TempDir::new().unwrap();
+            let path = join_path(&[empty.path()]);
+            let comspec: OsString = r"C:\Custom\cmd.exe".into();
+
+            let (shell, kind) =
+                detect_windows_shell_inner(Some(path.as_os_str()), Some(comspec.as_os_str()), None);
+
+            assert_eq!(kind, ShellType::Cmd);
+            assert_eq!(shell, r"C:\Custom\cmd.exe");
+        }
+
+        #[test]
+        fn ignores_empty_comspec() {
+            let empty = TempDir::new().unwrap();
+            let path = join_path(&[empty.path()]);
+            let blank_comspec: OsString = "".into();
+            let windir: OsString = r"D:\WindowsTest".into();
+
+            let (shell, kind) = detect_windows_shell_inner(
+                Some(path.as_os_str()),
+                Some(blank_comspec.as_os_str()),
+                Some(windir.as_os_str()),
+            );
+
+            assert_eq!(kind, ShellType::Cmd);
+            assert_eq!(shell, r"D:\WindowsTest\System32\cmd.exe");
+        }
+
+        #[test]
+        fn final_fallback_uses_windir_system32_cmd() {
+            let empty = TempDir::new().unwrap();
+            let path = join_path(&[empty.path()]);
+            let windir: OsString = r"D:\WindowsTest".into();
+
+            let (shell, kind) =
+                detect_windows_shell_inner(Some(path.as_os_str()), None, Some(windir.as_os_str()));
+
+            assert_eq!(kind, ShellType::Cmd);
+            assert_eq!(shell, r"D:\WindowsTest\System32\cmd.exe");
+        }
+
+        #[test]
+        fn missing_windir_uses_default_c_windows() {
+            let empty = TempDir::new().unwrap();
+            let path = join_path(&[empty.path()]);
+
+            let (shell, kind) = detect_windows_shell_inner(Some(path.as_os_str()), None, None);
+
+            assert_eq!(kind, ShellType::Cmd);
+            assert_eq!(shell, r"C:\Windows\System32\cmd.exe");
+        }
+
+        #[test]
+        fn missing_path_still_resolves_to_cmd() {
+            // No PATH at all (e.g. an exotic launchd-style minimal env)
+            // should still produce a runnable shell rather than panic.
+            let none: Option<&OsStr> = None;
+            let (shell, kind) = detect_windows_shell_inner(none, none, none);
+            assert_eq!(kind, ShellType::Cmd);
+            assert_eq!(shell, r"C:\Windows\System32\cmd.exe");
+        }
     }
 }
