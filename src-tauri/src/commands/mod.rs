@@ -5,6 +5,7 @@ pub mod agent_backends;
 pub mod agent_backends;
 pub mod apps;
 pub mod auth;
+pub mod boot;
 pub mod cesp;
 pub mod chat;
 pub mod claude_flags;

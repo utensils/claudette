@@ -36,6 +36,8 @@ set -euo pipefail
 #   *_arm64.deb.sig                  -> linux-aarch64-deb
 #   Claudette_x64.app.tar.gz.sig     -> darwin-x86_64, darwin-x86_64-app
 #   Claudette_aarch64.app.tar.gz.sig -> darwin-aarch64, darwin-aarch64-app
+#   Claudette_*_x64-setup.exe.sig    -> windows-x86_64, windows-x86_64-nsis
+#   Claudette_*_arm64-setup.exe.sig  -> windows-aarch64, windows-aarch64-nsis
 
 usage() {
   echo "usage: $0 <sig-dir> <version> <url-prefix>" >&2
@@ -80,6 +82,14 @@ for sig in "$SIG_DIR"/*.sig; do
       PLATFORMS[darwin-aarch64]="$asset"
       PLATFORMS[darwin-aarch64-app]="$asset"
       ;;
+    Claudette_*_x64-setup.exe)
+      PLATFORMS[windows-x86_64]="$asset"
+      PLATFORMS[windows-x86_64-nsis]="$asset"
+      ;;
+    Claudette_*_arm64-setup.exe | Claudette_*_aarch64-setup.exe)
+      PLATFORMS[windows-aarch64]="$asset"
+      PLATFORMS[windows-aarch64-nsis]="$asset"
+      ;;
     *)
       echo "warn: unrecognized .sig file: $asset" >&2
       ;;
@@ -104,6 +114,10 @@ declare -a REQUIRED=(
   "darwin-x86_64-app"
   "darwin-aarch64"
   "darwin-aarch64-app"
+  "windows-x86_64"
+  "windows-x86_64-nsis"
+  "windows-aarch64"
+  "windows-aarch64-nsis"
 )
 for key in "${REQUIRED[@]}"; do
   if [ -z "${PLATFORMS[$key]:-}" ]; then

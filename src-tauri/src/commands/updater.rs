@@ -5,6 +5,7 @@ use tauri::{AppHandle, Emitter, State};
 use tauri_plugin_updater::UpdaterExt;
 use url::Url;
 
+use crate::boot_probation;
 use crate::state::AppState;
 
 const STABLE_URL: &str =
@@ -266,6 +267,13 @@ pub async fn install_pending_update(
     let app_for_cb = app.clone();
     let mut total: u64 = 0;
     let mut downloaded: u64 = 0;
+
+    boot_probation::prepare_for_update(
+        &claudette::path::data_dir(),
+        &update.current_version,
+        &update.version,
+        update.download_url.as_str(),
+    )?;
 
     update
         .download_and_install(

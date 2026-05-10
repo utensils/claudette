@@ -3,6 +3,7 @@
 
 mod agent_mcp_sink;
 mod app_info;
+mod boot_probation;
 mod commands;
 mod ipc;
 mod mdns;
@@ -290,6 +291,14 @@ fn main() {
         return;
     }
 
+    if let Some(result) = boot_probation::run_helper_from_args(&args) {
+        if let Err(e) = result {
+            eprintln!("boot rollback helper failed: {e}");
+            std::process::exit(1);
+        }
+        return;
+    }
+
     // GUI path. Heavy init runs only here, after we've ruled out the
     // subsidiary entry points above.
     //
@@ -534,6 +543,12 @@ fn main() {
 
     let builder = builder
         .setup(move |app| {
+            let boot_state = std::sync::Arc::clone(
+                &app.state::<state::AppState>().boot_probation,
+            );
+            boot_probation::show_pending_report(app.handle(), &data_dir);
+            boot_probation::start_monitor(app.handle().clone(), boot_state, data_dir.clone());
+
             // Start mDNS browser to discover nearby claudette-server instances.
             if let Err(e) = mdns::start_mdns_browser(app.handle(), saved_fingerprints) {
                 tracing::warn!(target: "claudette::mdns", error = %e, "failed to start browser");
@@ -817,6 +832,8 @@ fn main() {
             commands::devtools::open_devtools,
             // Data
             commands::data::load_initial_data,
+            // Boot-health probation
+            commands::boot::boot_ok,
             // Repository
             commands::repository::add_repository,
             commands::repository::init_repository,

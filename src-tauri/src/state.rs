@@ -14,6 +14,7 @@ use claudette::plugin_runtime::PluginRegistry;
 use claudette::scm::types::{CiCheck, PullRequest};
 use serde::{Deserialize, Serialize};
 
+use crate::boot_probation::BootProbationState;
 use crate::commands::agent_backends::BackendGateway;
 use crate::commands::apps::DetectedApp;
 use crate::remote::DiscoveredServer;
@@ -528,6 +529,9 @@ pub struct AppState {
     /// call. The Update struct holds the downloaded payload + signature context
     /// and is not Serialize, so it lives here instead of crossing the IPC boundary.
     pub pending_update: tokio::sync::Mutex<Option<tauri_plugin_updater::Update>>,
+    /// Boot-health probation state used after an updater install. The frontend
+    /// clears the sentinel via `boot_ok`; otherwise the startup timer rolls back.
+    pub boot_probation: Arc<BootProbationState>,
     /// CESP sound pack playback state (no-repeat + debounce tracking).
     pub cesp_playback: Mutex<claudette::cesp::SoundPlaybackState>,
     /// Cached `claude --help` parse result. Populated by a background task
@@ -570,6 +574,7 @@ impl AppState {
             merge_base_cache: MergeBaseCache::new(),
             scm_semaphore: Arc::new(Semaphore::new(4)),
             pending_update: tokio::sync::Mutex::new(None),
+            boot_probation: Arc::new(BootProbationState::default()),
             cesp_playback: Mutex::new(claudette::cesp::SoundPlaybackState::new()),
             claude_flag_defs: Arc::new(RwLock::new(ClaudeFlagDiscovery::Loading)),
             auth_login_cancel: tokio::sync::Mutex::new(None),

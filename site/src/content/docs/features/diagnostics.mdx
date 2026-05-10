@@ -85,6 +85,7 @@ Established domains:
 | `claudette::remote` | remote-control commands |
 | `claudette::ui` | theme load, settings persistence |
 | `claudette::frontend` | events forwarded from the React webview |
+| `claudette::updater` | update checks, boot probation, and rollback |
 
 ## File format
 
@@ -110,6 +111,23 @@ Claudette has no single-instance lock — running `./scripts/dev.sh` twice gives
 If you'd rather isolate them, set `CLAUDETTE_LOG_DIR` to a per-instance path before launching. The dev launcher leaves this up to you so you can choose interleaved-in-one-file or separate-files based on what you're investigating.
 
 On startup, Claudette also scans `${TMPDIR}/claudette-dev/*.json` (the discovery files `scripts/dev.sh` writes) and emits a `WARN` if another live PID is already running against the same DB path. The warning fires once at boot and explains exactly why it can corrupt persisted state — useful when an old instance lingers and you didn't notice.
+
+## Update boot-health rollback
+
+After an in-app update, Claudette starts the new build on a short probation window. The React app sends a boot heartbeat after its first successful paint. If that heartbeat never arrives, Claudette treats the update as failed to start and tries to restore the previous self-contained install.
+
+When rollback succeeds, the next launch shows a native dialog saying which version failed and which version was restored. When rollback cannot be applied (for example, there was no usable previous-install backup or the install location could not be replaced), Claudette writes a no-loop failure report and shows a dialog with the failed version plus the release URL to download manually.
+
+Useful files for a rollback bug report:
+
+| File | Meaning |
+|------|---------|
+| `~/.claudette/updates/previous/<version>/` | Backup of the previous self-contained install, when one was available. |
+| OS data dir `boot-probation.json` | Internal sentinel for the update currently on probation. Cleared after a healthy boot. |
+| OS data dir `boot-rollback-report.json` | One-shot report consumed on next launch to show the native rollback dialog. |
+| `~/.claudette/logs/claudette.<DATE>.log` | Structured timeline under the `claudette::updater` target. |
+
+The OS data dir is `~/Library/Application Support/claudette/` on macOS, `$XDG_DATA_HOME/claudette/` on Linux, and `%APPDATA%/claudette/` on Windows unless `CLAUDETTE_DATA_DIR` overrides it.
 
 ## Sandboxed (fresh-user) sessions
 
