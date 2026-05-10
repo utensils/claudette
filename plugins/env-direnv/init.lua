@@ -56,9 +56,9 @@ function M.export(args)
 
     -- Empty stdout = no vars to export (e.g. `.envrc` exists but is
     -- empty, or direnv is silently allowing without any exports).
-    local env_map = {}
+    local raw_env = {}
     if result.stdout and #result.stdout > 0 then
-        env_map = host.json_decode(result.stdout)
+        raw_env = host.json_decode(result.stdout)
     end
 
     -- Seed with `.envrc` unconditionally — it's always a watch target.
@@ -76,15 +76,42 @@ function M.export(args)
         end
     end
     add(join(worktree_of(args), ".envrc"))
-    local direnv_watches = env_map["DIRENV_WATCHES"]
+    local direnv_watches = raw_env["DIRENV_WATCHES"]
     if type(direnv_watches) == "string" and #direnv_watches > 0 then
         for _, path in ipairs(host.direnv_decode_watches(direnv_watches)) do
             add(path)
         end
     end
 
+    -- Strip direnv's internal markers (DIRENV_DIR, DIRENV_FILE,
+    -- DIRENV_DIFF, DIRENV_WATCHES, etc.) before returning. These keys
+    -- are how direnv's shell hook (`eval "$(direnv hook zsh)"`) decides
+    -- "this directory is already loaded, skip re-export" — so leaking
+    -- them into a PTY env makes the user's interactive shell short-
+    -- circuit its first-prompt evaluation and never load the .envrc's
+    -- shell-side artifacts (numtide/devshell's `menu` command,
+    -- functions defined in the .envrc, etc.). The shell hook will
+    -- emit these markers itself the first time it runs against a
+    -- clean environment. They are also useless to the agent
+    -- subprocess, which doesn't run a direnv hook.
+    --
+    -- Worse: when `direnv export json` fails to load the .envrc body
+    -- (e.g. `use flake` couldn't find `nix` because Claudette was
+    -- launched from Finder with launchd's stripped PATH and the env-
+    -- provider host_exec couldn't recover it), direnv STILL emits the
+    -- four markers as a "you tried to load" memo. Without this strip
+    -- step, that failure surfaces as a silently broken interactive
+    -- shell — env-provider returns "ok", PTY starts, direnv hook
+    -- short-circuits on the markers, no real env ever loads.
+    local env = {}
+    for k, v in pairs(raw_env) do
+        if not string.match(k, "^DIRENV_") then
+            env[k] = v
+        end
+    end
+
     return {
-        env = env_map,
+        env = env,
         watched = watched,
     }
 end
