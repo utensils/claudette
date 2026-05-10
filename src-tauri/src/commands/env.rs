@@ -40,6 +40,16 @@ pub struct EnvCacheInvalidatedPayload {
 pub enum EnvProgressPhase {
     Started,
     Finished,
+    /// Emitted once after the resolve loop completes, regardless of
+    /// which Tauri command kicked it off (`prepare_workspace_environment`,
+    /// `spawn_pty`, agent spawn, EnvPanel reload, repo warmup). The
+    /// frontend uses this as the authoritative "all plugins are done"
+    /// signal so a stale "preparing" status set by an earlier
+    /// `Started` event can be cleared even when the command's own
+    /// response promise is dropped by WebView2 (the Windows IPC race
+    /// that originally locked the new-terminal-tab + chat composer
+    /// UI). Carries no plugin or ok field — pure terminator.
+    Complete,
 }
 
 #[derive(Clone, Serialize)]
@@ -98,6 +108,35 @@ impl claudette::env_provider::EnvProgressSink for TauriEnvProgressSink {
                 phase: EnvProgressPhase::Finished,
                 elapsed_ms: elapsed.as_millis() as u64,
                 ok: Some(ok),
+            },
+        );
+    }
+}
+
+/// Emit a `Complete` event whenever the sink is dropped. This is the
+/// authoritative terminator for the workspace's progress stream — fires
+/// after the resolve loop returns regardless of which command owned
+/// the sink and regardless of whether that command's Tauri response
+/// makes it back across the WebView2 IPC bridge.
+///
+/// Without this terminator, the symptom on Windows was: clicking the
+/// terminal new-tab button triggered a `spawn_pty` whose own env
+/// resolve emitted `Started`/`Finished` events that flipped the
+/// workspace's `workspaceEnvironment` slice to `"preparing"`, but no
+/// caller-side path then set it back to `"ready"` (the `+` click
+/// doesn't go through the dedicated `prepare_workspace_environment`
+/// command, so no `.then` fires on the JS side). The user stayed
+/// locked at "preparing" with no recovery.
+impl Drop for TauriEnvProgressSink {
+    fn drop(&mut self) {
+        let _ = self.app.emit(
+            "workspace_env_progress",
+            WorkspaceEnvProgressPayload {
+                workspace_id: self.workspace_id.clone(),
+                plugin: String::new(),
+                phase: EnvProgressPhase::Complete,
+                elapsed_ms: 0,
+                ok: None,
             },
         );
     }

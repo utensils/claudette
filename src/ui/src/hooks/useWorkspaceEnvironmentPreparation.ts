@@ -9,8 +9,13 @@ import { useAppStore } from "../stores/useAppStore";
  * for **every** env-resolve call site (workspace creation, selection,
  * agent spawn, PTY spawn, env-panel reload), so this listener has to
  * handle progress for workspaces other than the currently selected one.
+ *
+ * `complete` fires once at the end of every resolve (via Drop on the
+ * sink in Rust) and is the authoritative "all plugins are done"
+ * signal — see the long comment over `Drop for TauriEnvProgressSink`
+ * for the Windows IPC race it defends against.
  */
-type EnvProgressPhase = "started" | "finished";
+type EnvProgressPhase = "started" | "finished" | "complete";
 interface WorkspaceEnvProgressPayload {
   workspace_id: string;
   plugin: string;
@@ -48,8 +53,23 @@ export function useWorkspaceEnvironmentPreparation() {
       const { workspace_id, plugin, phase } = event.payload;
       if (phase === "started") {
         setWorkspaceEnvironmentProgress(workspace_id, plugin);
-      } else {
+      } else if (phase === "finished") {
         setWorkspaceEnvironmentProgress(workspace_id, null);
+      } else {
+        // phase === "complete" — fires once at end of every backend
+        // resolve. Clear the active-plugin display and, critically,
+        // transition any workspace stuck at "preparing" purely from
+        // the progress-driven status bumps back to "ready". This
+        // recovers the spawn_pty / agent-spawn paths where no
+        // dedicated `.then` handler exists to finalize the status.
+        setWorkspaceEnvironmentProgress(workspace_id, null);
+        const cur =
+          useAppStore.getState().workspaceEnvironment[workspace_id]?.status;
+        if (cur === "preparing") {
+          useAppStore
+            .getState()
+            .setWorkspaceEnvironment(workspace_id, "ready");
+        }
       }
     }).then((stop) => {
       if (!mounted) {
@@ -80,9 +100,19 @@ export function useWorkspaceEnvironmentPreparation() {
     let cancelled = false;
     setWorkspaceEnvironment(workspaceId, "preparing");
 
+    // The recovery path for a dropped Tauri response on Windows
+    // lives in the progress listener above: the `Complete` phase
+    // (emitted by Drop on the Rust-side sink) transitions any
+    // workspace stuck at "preparing" purely from progress events
+    // back to "ready". So this `.then` is no longer load-bearing
+    // for unlock — it's just the authoritative success update
+    // when the IPC response does make it back. `.catch` still
+    // respects `cancelled` so navigating away mid-flight doesn't
+    // surface a stale toast for a workspace the user already left.
     prepareWorkspaceEnvironment(workspaceId)
       .then(() => {
-        if (!cancelled) setWorkspaceEnvironment(workspaceId, "ready");
+        if (cancelled) return;
+        setWorkspaceEnvironment(workspaceId, "ready");
       })
       .catch((err) => {
         if (cancelled) return;
@@ -92,13 +122,13 @@ export function useWorkspaceEnvironmentPreparation() {
       });
 
     return () => {
+      // Don't mutate status here — the previous "set to idle on
+      // cleanup" behaviour combined with the gate's old loose check
+      // to permanently lock the UI when the second-invocation
+      // closure swallowed its own resolution. The `Complete` event
+      // (Rust-side Drop) is the recovery mechanism; nothing here
+      // needs to force an interim state.
       cancelled = true;
-      if (
-        useAppStore.getState().workspaceEnvironment[workspaceId]?.status ===
-        "preparing"
-      ) {
-        setWorkspaceEnvironment(workspaceId, "idle");
-      }
     };
   }, [
     selectedWorkspaceId,

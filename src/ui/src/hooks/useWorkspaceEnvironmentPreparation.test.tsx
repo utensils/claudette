@@ -136,7 +136,15 @@ describe("useWorkspaceEnvironmentPreparation", () => {
     expect(serviceMocks.prepareWorkspaceEnvironment).toHaveBeenCalledTimes(1);
   });
 
-  it("clears stale preparing state when selection changes before preparation finishes", async () => {
+  it("leaves status at 'preparing' when selection changes mid-flight; per-closure settled prevents stale resolution from updating state", async () => {
+    // Previously this test pinned cleanup-sets-idle behavior. That
+    // behavior was the source of a Windows-specific UI lock: when
+    // WebView2 dropped the Tauri response message, the second
+    // mount's `cancelled` guard swallowed any late resolution, and
+    // status stayed at "idle" / "preparing" forever with no path
+    // back to "ready". The cleanup no longer mutates status; a
+    // per-closure `settled` flag (and a 30s deadline, exercised in a
+    // separate test) provide the recovery guarantee instead.
     let resolvePreparation!: () => void;
     serviceMocks.prepareWorkspaceEnvironment.mockReturnValue(
       new Promise<void>((resolve) => {
@@ -157,8 +165,14 @@ describe("useWorkspaceEnvironmentPreparation", () => {
       useAppStore.setState({ selectedWorkspaceId: null });
     });
 
+    // Cleanup ran but does NOT touch status — the in-flight prep is
+    // either going to resolve (and settle for the live closure, which
+    // is now marked settled, so its .then is a no-op) or will time
+    // out on its own deadline. Leaving status as "preparing" here
+    // means a user who returns to this workspace before the deadline
+    // sees the actual in-flight state rather than a synthetic "idle".
     expect(useAppStore.getState().workspaceEnvironment["ws-1"]).toEqual({
-      status: "idle",
+      status: "preparing",
     });
 
     await act(async () => {
@@ -166,8 +180,68 @@ describe("useWorkspaceEnvironmentPreparation", () => {
       await Promise.resolve();
     });
 
+    // The closure's `settled` was set to true by the cleanup, so
+    // this late resolution is correctly ignored — no transition to
+    // "ready" for a workspace the user has navigated away from.
     expect(useAppStore.getState().workspaceEnvironment["ws-1"]).toEqual({
-      status: "idle",
+      status: "preparing",
+    });
+  });
+
+  it("recovers from a dropped Tauri response when a 'complete' progress event arrives", async () => {
+    // The Windows regression we're guarding against: WebView2
+    // occasionally drops the response message for a short Tauri
+    // async command, so the JS-side `invoke()` promise from
+    // `prepareWorkspaceEnvironment` never settles. The backend has
+    // long since finished, though — Drop on `TauriEnvProgressSink`
+    // emits a `complete` progress event as the resolve loop tears
+    // down. This test mimics that event and pins the recovery: any
+    // workspace still showing `"preparing"` flips to `"ready"`.
+    serviceMocks.prepareWorkspaceEnvironment.mockReturnValue(
+      new Promise<void>(() => undefined),
+    );
+    useAppStore.setState({
+      selectedWorkspaceId: "ws-1",
+      workspaces: [makeWorkspace()],
+    });
+
+    // Capture the listen callback so we can fire it manually below —
+    // the test harness mocks `@tauri-apps/api/event::listen` to a
+    // no-op, so we have to install our own handler this way.
+    const eventListeners: Array<(event: { payload: unknown }) => void> = [];
+    const eventMod = await import("@tauri-apps/api/event");
+    vi.mocked(eventMod.listen).mockImplementation((_name, cb) => {
+      eventListeners.push(cb as (event: { payload: unknown }) => void);
+      return Promise.resolve(() => undefined);
+    });
+
+    await renderHarness();
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(useAppStore.getState().workspaceEnvironment["ws-1"]).toEqual({
+      status: "preparing",
+    });
+
+    // Fire the `complete` event the Rust-side sink would emit at the
+    // end of every resolve, regardless of which Tauri command
+    // initiated it.
+    act(() => {
+      for (const cb of eventListeners) {
+        cb({
+          payload: {
+            workspace_id: "ws-1",
+            plugin: "",
+            phase: "complete",
+            elapsed_ms: 0,
+          },
+        });
+      }
+    });
+
+    expect(useAppStore.getState().workspaceEnvironment["ws-1"]).toEqual({
+      status: "ready",
     });
   });
 
