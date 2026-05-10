@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useAppStore } from "../../stores/useAppStore";
 import { useWorkspaceLifecycle } from "../../hooks/useWorkspaceLifecycle";
@@ -45,6 +45,22 @@ export function ChatErrorBanner({ message, workspaceId, onRecovered }: Props) {
   const [busy, setBusy] = useState<"archive" | "recreate" | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
 
+  // The Archive action deselects the workspace mid-await, which usually
+  // unmounts this banner before our `await archive(...)` resolves. Guard
+  // post-await `setBusy` / `setActionError` calls so React doesn't warn
+  // about state updates on an unmounted component (and so a slow rollback
+  // landing after the user navigated away doesn't briefly resurrect the
+  // error UI). Using a ref rather than the state itself because the
+  // reads happen inside async functions that already captured the
+  // component's render-time closures.
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
   const isMissingCli = / is not installed\./.test(message);
   const isMissingWorktree = /^Workspace directory is missing:/.test(message);
 
@@ -57,14 +73,20 @@ export function ChatErrorBanner({ message, workspaceId, onRecovered }: Props) {
     // the Sidebar's archive-script confirmation modal is intentionally
     // bypassed for this recovery surface (cf. useWorkspaceLifecycle docs).
     const result = await archive(workspaceId, { skipScript: true });
-    setBusy(null);
     if (result.ok) {
-      // `archive` already deselects the workspace, so the user lands on
-      // the "Start a workspace" empty state — same UX as clicking Archive
-      // in the sidebar context menu.
-      setLastMissingWorktree(null);
+      // The store-level `selectWorkspace(null)` inside `archive` will
+      // typically have already unmounted us — these calls are then
+      // best-effort no-ops, which is fine: the parent's `onRecovered`
+      // is the only side-effect that matters in the success path, and
+      // the empty-state mounted in our place doesn't care about our
+      // local `busy` / `actionError` state.
+      if (mountedRef.current) {
+        setBusy(null);
+        setLastMissingWorktree(null);
+      }
       onRecovered?.();
-    } else {
+    } else if (mountedRef.current) {
+      setBusy(null);
       setActionError(
         t("missing_worktree_archive_failed", { error: String(result.error) }),
       );
@@ -79,6 +101,7 @@ export function ChatErrorBanner({ message, workspaceId, onRecovered }: Props) {
     // branch and re-marks the workspace Active. Idempotent enough to
     // retry on transient failures.
     const result = await restore(workspaceId);
+    if (!mountedRef.current) return;
     setBusy(null);
     if (result.ok) {
       setLastMissingWorktree(null);

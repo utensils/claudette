@@ -7,6 +7,14 @@
 // reconcile or rollback, since that's where regressions break user-visible
 // behavior (e.g. archive button leaves the user staring at a stale chat
 // because we forgot to deselect).
+//
+// Note on the `act(async () => { result = await fn() })` pattern: we
+// capture the hook's return value into an outer `let result` rather than
+// relying on `act()`'s return value. React's typed `act` *does* forward
+// the callback's resolved value, but doing it this way removes any
+// ambiguity (Copilot review on PR #747 flagged the inline form as
+// potentially returning `undefined`) and the explicit binding is clearer
+// to read.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act } from "react";
@@ -73,7 +81,7 @@ const tauriApi = vi.hoisted(() => ({
 
 vi.mock("../services/tauri", () => tauriApi);
 
-import { useWorkspaceLifecycle } from "./useWorkspaceLifecycle";
+import { useWorkspaceLifecycle, type LifecycleResult } from "./useWorkspaceLifecycle";
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean })
   .IS_REACT_ACT_ENVIRONMENT = true;
@@ -144,7 +152,13 @@ describe("useWorkspaceLifecycle.archive", () => {
     stateRef.state.selectedWorkspaceId = "ws-1";
     const { archive } = await mountHook();
 
-    const result = await act(async () => archive("ws-1"));
+    // Capture the hook return via an outer binding rather than relying on
+    // `act`'s return value — see the file-header note about Copilot
+    // review feedback on PR #747.
+    let result: LifecycleResult | undefined;
+    await act(async () => {
+      result = await archive("ws-1");
+    });
 
     expect(result).toEqual({ ok: true });
     // Optimistic update first: status flips before the backend call returns.
@@ -181,7 +195,10 @@ describe("useWorkspaceLifecycle.archive", () => {
     const fail = new Error("boom");
     tauriApi.archiveWorkspace.mockRejectedValueOnce(fail);
     const { archive } = await mountHook();
-    const result = await act(async () => archive("ws-1"));
+    let result: LifecycleResult | undefined;
+    await act(async () => {
+      result = await archive("ws-1");
+    });
     expect(result).toEqual({ ok: false, error: fail });
     // Last updateWorkspace call should be the rollback to the snapshot.
     const updateCalls = stateRef.updateWorkspace.mock.calls;
@@ -250,7 +267,10 @@ describe("useWorkspaceLifecycle.restore", () => {
     seedWorkspace({ status: "Archived", worktree_path: null });
     tauriApi.restoreWorkspace.mockResolvedValueOnce("/abs/restored/lush-daisy");
     const { restore } = await mountHook();
-    const result = await act(async () => restore("ws-1"));
+    let result: LifecycleResult | undefined;
+    await act(async () => {
+      result = await restore("ws-1");
+    });
     expect(result).toEqual({ ok: true });
     expect(stateRef.updateWorkspace).toHaveBeenCalledWith("ws-1", {
       status: "Active",
@@ -263,7 +283,10 @@ describe("useWorkspaceLifecycle.restore", () => {
     const fail = new Error("worktree add failed");
     tauriApi.restoreWorkspace.mockRejectedValueOnce(fail);
     const { restore } = await mountHook();
-    const result = await act(async () => restore("ws-1"));
+    let result: LifecycleResult | undefined;
+    await act(async () => {
+      result = await restore("ws-1");
+    });
     expect(result).toEqual({ ok: false, error: fail });
     expect(stateRef.updateWorkspace).not.toHaveBeenCalled();
   });

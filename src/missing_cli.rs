@@ -122,14 +122,52 @@ pub fn is_sentinel(err: &str) -> bool {
 ///
 /// This **must** be called before spawning any subprocess that uses
 /// `current_dir(...)` — see the module docs for why.
+///
+/// We deliberately *don't* use `Path::is_dir()` here because it collapses
+/// every metadata error — `NotFound`, `PermissionDenied`, transient IO
+/// failures — into `false`. Treating a permission error as "worktree
+/// missing" would surface the wrong recovery UX (Archive / Recreate)
+/// for a workspace whose worktree exists but isn't readable. Instead we
+/// pull metadata explicitly and only emit the sentinel for `NotFound`
+/// (or for the case where the path exists but is not a directory —
+/// `chdir(2)` will fail with `ENOTDIR` for that, which we want to
+/// classify the same way). Other error kinds get a non-sentinel
+/// message so the calling surface falls through to its default error
+/// handler.
 pub fn precheck_cwd(path: &Path) -> Result<(), String> {
-    // `is_dir()` follows symlinks and returns false for broken symlinks,
-    // missing entries, and regular files alike — all of which would cause
-    // chdir to fail at spawn time.
-    if path.is_dir() {
-        Ok(())
-    } else {
-        Err(format_cwd_err(path))
+    match std::fs::symlink_metadata(path) {
+        Ok(meta) => {
+            // Follow symlinks for the dir check — `current_dir` accepts a
+            // symlink that resolves to a directory.
+            if meta.file_type().is_symlink() {
+                match std::fs::metadata(path) {
+                    Ok(m) if m.is_dir() => Ok(()),
+                    Ok(_) => Err(format_cwd_err(path)),
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                        // Broken symlink — chdir would ENOENT. Same UX as
+                        // a missing path.
+                        Err(format_cwd_err(path))
+                    }
+                    Err(e) => Err(format!(
+                        "Cannot stat working directory {}: {e}",
+                        path.display()
+                    )),
+                }
+            } else if meta.is_dir() {
+                Ok(())
+            } else {
+                // Regular file or other non-directory — chdir will ENOTDIR.
+                // From the user's perspective this is the same recovery
+                // case as "worktree missing": the path Claudette has
+                // recorded is no longer a usable working directory.
+                Err(format_cwd_err(path))
+            }
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Err(format_cwd_err(path)),
+        Err(e) => Err(format!(
+            "Cannot stat working directory {}: {e}",
+            path.display()
+        )),
     }
 }
 
@@ -332,6 +370,43 @@ mod tests {
         assert!(err.starts_with(MISSING_CWD_PREFIX), "got {err:?}");
         let parsed = parse_cwd_err(&err).expect("parses");
         assert_eq!(parsed, missing.to_string_lossy());
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn precheck_cwd_returns_non_sentinel_on_permission_denied() {
+        // Regression for Copilot review on PR #747: an unreadable worktree
+        // directory (mode 000) must NOT be classified as MISSING_CWD,
+        // because the recovery UX for a permission error is fundamentally
+        // different from "worktree was deleted" — there's no need to
+        // archive or recreate, the user just needs to fix permissions.
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let parent = tmp.path().join("locked");
+        std::fs::create_dir(&parent).unwrap();
+        // Make the *parent* unreadable so symlink_metadata on the child
+        // path returns PermissionDenied, not NotFound. Operating on the
+        // dir itself in 000 mode still lets stat succeed, which would
+        // mask the test.
+        let original = std::fs::metadata(&parent).unwrap().permissions();
+        std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o000)).unwrap();
+
+        let target = parent.join("inner");
+        let result = precheck_cwd(&target);
+
+        // Restore perms before any assertion that might panic, so the
+        // tempdir cleanup doesn't fail.
+        std::fs::set_permissions(&parent, original).unwrap();
+
+        let err = result.expect_err("permission-denied parent should produce an error");
+        assert!(
+            !err.starts_with(MISSING_CWD_PREFIX),
+            "permission errors must not produce MISSING_CWD sentinel: {err:?}"
+        );
+        assert!(
+            err.to_lowercase().contains("cannot stat"),
+            "expected non-sentinel error wording, got: {err:?}"
+        );
     }
 
     #[test]
