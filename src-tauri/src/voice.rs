@@ -18,7 +18,7 @@ use tokenizers::Tokenizer;
 use tokio::io::AsyncWriteExt;
 use tokio::task::AbortHandle;
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", windows))]
 use crate::platform_speech::PlatformSpeechAvailability;
 use crate::platform_speech::{
     DefaultPlatformSpeechEngine, PlatformSpeechAvailabilityStatus, PlatformSpeechEngine,
@@ -31,7 +31,21 @@ const DISTIL_ID: &str = "voice-distil-whisper-candle";
 const DISTIL_CACHE_DIR: &str = "distil-whisper-large-v3";
 const DISTIL_READY_MESSAGE: &str = "Ready for offline transcription";
 const TARGET_SAMPLE_RATE: u32 = whisper::SAMPLE_RATE as u32;
+// Hard ceiling on a single Distil-Whisper transcription pass. On macOS
+// Metal the 756M-param `distil-large-v3` model handles a 30 s clip in a
+// few seconds; on CPU (Linux + Windows, including ARM64) the same
+// workload is an order of magnitude slower because Candle loads weights
+// in F32 with no GPU acceleration. The previous 90 s blanket timeout
+// was tuned for Metal and routinely fired on CPU even for a single
+// segment of speech, surfacing as "Voice transcription timed out after
+// 90 seconds" with the recording silently discarded. Split the default
+// so each platform's actual hardware floor governs the cap, and the
+// CPU-side ceiling (5 min) gives breathing room for ARM64 Windows
+// users transcribing more than a sentence.
+#[cfg(target_os = "macos")]
 const DISTIL_TRANSCRIPTION_TIMEOUT: Duration = Duration::from_secs(90);
+#[cfg(not(target_os = "macos"))]
+const DISTIL_TRANSCRIPTION_TIMEOUT: Duration = Duration::from_secs(300);
 const MIN_SIGNAL_PEAK: f32 = 0.001;
 const DISTIL_MODEL_FILES: [(&str, Option<u64>); 5] = [
     ("config.json", None),
@@ -610,7 +624,14 @@ impl VoiceProviderRegistry {
 
     async fn cancel_platform_recording(&self) -> Result<(), String> {
         let _ = self.active_recording.lock().take();
+        // Each platform with a real engine bridge gets a chance to drop any
+        // in-flight recognition request. macOS forwards to the Speech
+        // framework's `taskHint` cancel API; the Windows bridge has no
+        // cooperative cancel hook, so it's a no-op there. Linux currently
+        // has no native bridge at all.
         #[cfg(target_os = "macos")]
+        crate::platform_speech::cancel_active_transcription();
+        #[cfg(windows)]
         crate::platform_speech::cancel_active_transcription();
         Ok(())
     }
@@ -686,12 +707,7 @@ impl VoiceProviderRegistry {
         }
 
         let transcript = result
-            .map_err(|_| {
-                format!(
-                    "Voice transcription timed out after {} seconds. Try a shorter recording or check the selected voice provider.",
-                    timeout.as_secs()
-                )
-            })?
+            .map_err(|_| timeout_error_message(timeout))?
             .map_err(|e| format!("Voice transcription task failed: {e}"))??;
         let transcript = transcript.trim().to_string();
         if transcript.is_empty() {
@@ -763,12 +779,18 @@ impl VoiceProviderRegistry {
 
 struct PlatformVoiceProvider;
 
-#[cfg(target_os = "macos")]
+// The platform provider has a real native bridge on macOS (Apple Speech via
+// Swift FFI) and on Windows (SAPI 5.4 via the `windows` crate's COM
+// bindings). Both platforms ride the `Native` recording-mode path: cpal
+// captures the audio, the trait runs transcription on the captured WAV.
+// Linux has no native bridge yet and falls back to the webview Web Speech
+// API, which is what the `Webview` mode signals to the frontend.
+#[cfg(any(target_os = "macos", windows))]
 fn platform_recording_mode() -> VoiceRecordingMode {
     VoiceRecordingMode::Native
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", windows)))]
 fn platform_recording_mode() -> VoiceRecordingMode {
     VoiceRecordingMode::Webview
 }
@@ -778,7 +800,15 @@ fn platform_description() -> &'static str {
     "Uses native Apple Speech recognition through the operating system. Requires Microphone and Speech Recognition permission."
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(windows)]
+fn platform_description() -> &'static str {
+    "Uses the Windows Speech API (SAPI 5.4) via in-process COM. \
+     Captured audio is transcribed locally — no network round-trip, no extra runtime. \
+     Install a Speech Recognizer language pack via Settings → Time & language → Speech \
+     if transcription returns no text."
+}
+
+#[cfg(not(any(target_os = "macos", windows)))]
 fn platform_description() -> &'static str {
     "Uses the webview or operating system speech recognition surface when available. Requires microphone and speech recognition permission."
 }
@@ -788,7 +818,12 @@ fn platform_privacy_label() -> &'static str {
     "Uses Apple Speech services; offline behavior varies by OS language support"
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(windows)]
+fn platform_privacy_label() -> &'static str {
+    "Local Windows SAPI recognition; audio stays on this machine"
+}
+
+#[cfg(not(any(target_os = "macos", windows)))]
 fn platform_privacy_label() -> &'static str {
     "Uses platform services; offline behavior varies by OS"
 }
@@ -798,12 +833,17 @@ fn platform_accelerator_label() -> &'static str {
     "Apple Speech"
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(windows)]
+fn platform_accelerator_label() -> &'static str {
+    "Windows SAPI"
+}
+
+#[cfg(not(any(target_os = "macos", windows)))]
 fn platform_accelerator_label() -> &'static str {
     "No setup"
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", windows))]
 fn platform_status_from_availability(
     availability: PlatformSpeechAvailability,
 ) -> (VoiceProviderStatus, String, bool, Option<String>) {
@@ -861,7 +901,13 @@ impl VoiceProvider for PlatformVoiceProvider {
 
     fn status(&self, registry: &VoiceProviderRegistry, db: &Database) -> VoiceProviderInfo {
         let enabled = registry.enabled(db, self.id());
-        #[cfg(target_os = "macos")]
+        // macOS + Windows ride the same trait-based status path: the real
+        // engine reports Ready / NeedsSetup / EngineUnavailable from a
+        // platform-native check. Linux has no native bridge, so we keep
+        // the legacy "ready when the webview's Web Speech API is around"
+        // shape — the frontend's `useVoiceInput` sees this and falls
+        // through to `webkitSpeechRecognition`.
+        #[cfg(any(target_os = "macos", windows))]
         let (status, status_label, setup_required, error) = if !enabled {
             (
                 VoiceProviderStatus::Unavailable,
@@ -872,7 +918,7 @@ impl VoiceProvider for PlatformVoiceProvider {
         } else {
             platform_status_from_availability(registry.platform_speech.availability())
         };
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(not(any(target_os = "macos", windows)))]
         let (status, status_label, setup_required, error) = if enabled {
             (
                 VoiceProviderStatus::Ready,
@@ -907,7 +953,11 @@ impl VoiceProvider for PlatformVoiceProvider {
         _app: &AppHandle,
         db_path: &Path,
     ) -> Result<VoiceProviderInfo, String> {
-        #[cfg(target_os = "macos")]
+        // macOS uses prepare() to drive the TCC permission dialogs;
+        // Windows uses it as a (cheap, no-op today) revalidation that
+        // SAPI is still reachable. Both go through the trait so tests
+        // can substitute a fake engine. Linux has no engine here.
+        #[cfg(any(target_os = "macos", windows))]
         {
             let _ = registry.platform_speech.prepare();
         }
@@ -1202,6 +1252,27 @@ fn probe_candle_whisper_op(
     run: impl FnOnce() -> candle_core::Result<()>,
 ) -> Result<(), String> {
     run().map_err(|e| format!("{op}: {e}"))
+}
+
+/// Format the user-visible message when Distil-Whisper hits its
+/// hard timeout. On CPU platforms (Linux + Windows) the ceiling is
+/// already 5× the macOS Metal default, so a timeout almost certainly
+/// means the workload is too big for CPU inference rather than a stuck
+/// worker — pivot the user toward the always-faster platform provider
+/// (SAPI on Windows, Apple Speech on macOS) instead of asking them to
+/// "try again."
+fn timeout_error_message(timeout: Duration) -> String {
+    #[cfg(target_os = "macos")]
+    let suggestion = "Try a shorter recording or switch to System dictation in Plugins settings.";
+    #[cfg(target_os = "windows")]
+    let suggestion = "On CPU this model is slow on long clips — try a shorter recording or switch to System dictation (Windows SAPI) in Plugins settings.";
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    let suggestion = "Try a shorter recording or check the selected voice provider.";
+    format!(
+        "Voice transcription timed out after {} seconds. {}",
+        timeout.as_secs(),
+        suggestion
+    )
 }
 
 fn validate_captured_audio(audio: &CapturedAudio) -> Result<(), String> {
@@ -2219,13 +2290,13 @@ mod tests {
         }
     }
 
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", windows))]
     struct PrepareGate {
         entered: std::sync::mpsc::Sender<()>,
         release: Mutex<Option<std::sync::mpsc::Receiver<()>>>,
     }
 
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", windows))]
     struct FakePlatformSpeechEngine {
         availability: PlatformSpeechAvailability,
         prepare_availability: PlatformSpeechAvailability,
@@ -2235,7 +2306,7 @@ mod tests {
         calls: AtomicUsize,
     }
 
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", windows))]
     impl FakePlatformSpeechEngine {
         fn ready(engine_label: &str) -> Self {
             let availability = PlatformSpeechAvailability::ready(engine_label);
@@ -2289,7 +2360,7 @@ mod tests {
         }
     }
 
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", windows))]
     impl PlatformSpeechEngine for FakePlatformSpeechEngine {
         fn availability(&self) -> PlatformSpeechAvailability {
             self.availability.clone()
@@ -2366,7 +2437,7 @@ mod tests {
         assert!(!provider.setup_required);
     }
 
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", windows))]
     #[test]
     fn platform_provider_ready_when_native_engine_ready() {
         let (_dir, db_path) = test_db_path();
@@ -2375,7 +2446,7 @@ mod tests {
             PathBuf::from("/tmp/models"),
             Arc::new(FakeRecorder::new(vec![0.1])),
             Arc::new(FakeTranscriber::ok("ignored")),
-            Arc::new(FakePlatformSpeechEngine::ready("Apple SpeechAnalyzer")),
+            Arc::new(FakePlatformSpeechEngine::ready("Test Engine")),
         );
 
         let provider = registry
@@ -2388,10 +2459,10 @@ mod tests {
         assert!(provider.enabled);
         assert!(!provider.setup_required);
         assert_eq!(provider.metadata.recording_mode, VoiceRecordingMode::Native);
-        assert!(provider.status_label.contains("Apple SpeechAnalyzer"));
+        assert!(provider.status_label.contains("Test Engine"));
     }
 
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", windows))]
     #[test]
     fn platform_provider_reports_setup_required_for_speech_permission() {
         let (_dir, db_path) = test_db_path();
@@ -2595,7 +2666,7 @@ mod tests {
         assert_eq!(recorder.starts.load(Ordering::Relaxed), 1);
     }
 
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", windows))]
     #[tokio::test]
     async fn start_platform_recording_prepares_permission_on_user_action() {
         let (_db_dir, db_path) = test_db_path();
@@ -2628,7 +2699,7 @@ mod tests {
         assert_eq!(recorder.starts.load(Ordering::Relaxed), 1);
     }
 
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", windows))]
     #[tokio::test(flavor = "current_thread")]
     async fn start_platform_recording_prepares_permission_off_runtime_thread() {
         let (_db_dir, db_path) = test_db_path();
@@ -2688,11 +2759,11 @@ mod tests {
         watchdog.join().expect("watchdog joined");
     }
 
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", windows))]
     #[tokio::test]
     async fn start_then_stop_platform_recording_returns_transcript() {
         let (_db_dir, db_path) = test_db_path();
-        let platform_engine = Arc::new(FakePlatformSpeechEngine::ready("Apple Speech"));
+        let platform_engine = Arc::new(FakePlatformSpeechEngine::ready("Test Engine"));
         *platform_engine.transcript.lock() = Ok("spoken platform words".to_string());
         let registry = VoiceProviderRegistry::with_platform_runtime(
             PathBuf::from("/tmp/models"),
@@ -2714,11 +2785,11 @@ mod tests {
         assert_eq!(platform_engine.calls.load(Ordering::Relaxed), 1);
     }
 
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", windows))]
     #[tokio::test]
     async fn cancel_drops_active_platform_recording() {
         let (_db_dir, db_path) = test_db_path();
-        let platform_engine = Arc::new(FakePlatformSpeechEngine::ready("Apple Speech"));
+        let platform_engine = Arc::new(FakePlatformSpeechEngine::ready("Test Engine"));
         let registry = VoiceProviderRegistry::with_platform_runtime(
             PathBuf::from("/tmp/models"),
             Arc::new(FakeRecorder::new(vec![0.1, 0.2, 0.3])),
@@ -2960,6 +3031,55 @@ mod tests {
             .expect_err("slow transcription should time out");
 
         assert!(err.contains("timed out"));
+        // Platform-aware suggestion: don't make CPU users blindly retry —
+        // route them to the platform provider that's actually fast on
+        // their hardware. The macOS variant already pointed at System
+        // dictation; bring Windows users along too.
+        #[cfg(target_os = "windows")]
+        assert!(
+            err.contains("Windows SAPI") || err.contains("System dictation"),
+            "Windows timeout must point at the SAPI provider: {err}",
+        );
+        #[cfg(target_os = "macos")]
+        assert!(
+            err.contains("System dictation"),
+            "macOS timeout must point at the platform provider: {err}",
+        );
+    }
+
+    #[test]
+    fn timeout_error_message_renders_platform_specific_hint() {
+        // Pin the contract directly — a refactor that drops the
+        // platform-specific suggestion would silently regress.
+        let msg = timeout_error_message(std::time::Duration::from_secs(300));
+        assert!(msg.starts_with("Voice transcription timed out after 300 seconds"));
+        #[cfg(target_os = "windows")]
+        {
+            assert!(msg.contains("CPU"));
+            assert!(msg.contains("System dictation"));
+        }
+        #[cfg(target_os = "macos")]
+        assert!(msg.contains("System dictation"));
+    }
+
+    #[test]
+    fn distil_transcription_timeout_default_matches_platform_hardware() {
+        // macOS hits Metal so the small ceiling is fine; CPU platforms
+        // need much more headroom for distil-whisper-large-v3 to chew
+        // through a multi-segment clip. Pin both so a future "let's just
+        // bump the macOS default to be safe" doesn't silently slow down
+        // failure detection on the platform that doesn't need it.
+        #[cfg(target_os = "macos")]
+        assert_eq!(
+            DISTIL_TRANSCRIPTION_TIMEOUT,
+            std::time::Duration::from_secs(90)
+        );
+        #[cfg(not(target_os = "macos"))]
+        assert!(
+            DISTIL_TRANSCRIPTION_TIMEOUT >= std::time::Duration::from_secs(180),
+            "CPU transcription timeout must be >= 180 s; was {:?}",
+            DISTIL_TRANSCRIPTION_TIMEOUT,
+        );
     }
 
     #[tokio::test]

@@ -259,6 +259,29 @@ describe("plugin settings routing", () => {
     expect(useAppStore.getState().settingsSection).toBe("plugins");
   });
 
+  it("openSettings('plugins') opens the Claudette plugins section even when plugin management is disabled", () => {
+    // Regression: voice-error → "Open Plugins settings" was rerouting to
+    // the Experimental pane when the user hadn't opted into plugin
+    // management, hiding the Distil-Whisper "Download model" row the
+    // error chip pointed them at. Only `claude-code-plugins` (the Claude
+    // CLI marketplace integration) should be gated behind that flag.
+    useAppStore.setState({ pluginManagementEnabled: false });
+
+    useAppStore.getState().openSettings("plugins");
+
+    const state = useAppStore.getState();
+    expect(state.settingsOpen).toBe(true);
+    expect(state.settingsSection).toBe("plugins");
+  });
+
+  it("openSettings('claude-code-plugins') still routes to experimental when management is disabled", () => {
+    useAppStore.setState({ pluginManagementEnabled: false });
+
+    useAppStore.getState().openSettings("claude-code-plugins");
+
+    expect(useAppStore.getState().settingsSection).toBe("experimental");
+  });
+
   it("stores a focused settings target and clears it on manual section changes", () => {
     useAppStore.getState().openSettings("general", "claude-auth");
 
