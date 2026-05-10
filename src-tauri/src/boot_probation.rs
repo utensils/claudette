@@ -463,7 +463,54 @@ fn is_pid_alive(pid: u32) -> bool {
     std::io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH)
 }
 
-#[cfg(not(unix))]
+/// Windows liveness probe for the rollback helper's parent-exit wait.
+///
+/// `wait_for_parent_exit` blocks the helper until the original
+/// `claudette-app.exe` has released its file locks on the install dir;
+/// without this, our `remove_path(&target_path)` would race the still-
+/// running parent and fail with `ERROR_ACCESS_DENIED`. The previous
+/// implementation was a stub that always returned `false`, so on
+/// Windows the helper would attempt the rollback immediately and the
+/// restore would (almost certainly) fail.
+///
+/// `OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION)` is the most narrowly
+/// scoped right that lets us call `GetExitCodeProcess`. A return of
+/// `STILL_ACTIVE` (259) means the process hasn't terminated yet; any
+/// other code (or `OpenProcess` failing because the PID has been
+/// recycled to nothing) counts as "exited". We deliberately do NOT
+/// treat `ERROR_ACCESS_DENIED` from `OpenProcess` as "alive" — that
+/// would stall the rollback indefinitely if the parent process
+/// happened to be in a security descriptor we can't probe; the timeout
+/// in `wait_for_parent_exit` is the safety net for that case.
+#[cfg(windows)]
+fn is_pid_alive(pid: u32) -> bool {
+    use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE, STILL_ACTIVE};
+    use windows_sys::Win32::System::Threading::{
+        GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+    };
+    if pid == 0 {
+        return false;
+    }
+    // SAFETY: OpenProcess with a non-null PID either returns a valid
+    // handle or NULL on failure. We always close a non-null handle.
+    let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
+    if handle.is_null() || handle == INVALID_HANDLE_VALUE {
+        return false;
+    }
+    let mut code: u32 = 0;
+    // SAFETY: handle is a valid process handle; code is a writable u32.
+    let ok = unsafe { GetExitCodeProcess(handle, &mut code) };
+    // SAFETY: handle is non-null and we own it.
+    unsafe {
+        CloseHandle(handle);
+    }
+    if ok == 0 {
+        return false;
+    }
+    code as i32 == STILL_ACTIVE
+}
+
+#[cfg(not(any(unix, windows)))]
 fn is_pid_alive(_pid: u32) -> bool {
     false
 }
@@ -1021,6 +1068,41 @@ mod tests {
             Duration::from_secs(DEFAULT_PROBATION_SECS)
         );
         unsafe { std::env::remove_var("CLAUDETTE_BOOT_PROBATION_SECS") };
+    }
+
+    /// Smoke for the parent-exit liveness probe. We always expect our
+    /// own PID to read alive; the Windows path uses `OpenProcess` +
+    /// `GetExitCodeProcess` and was previously a hardcoded `false`
+    /// that broke `wait_for_parent_exit` on the one platform where
+    /// waiting actually matters (Codex P1 review).
+    #[test]
+    fn is_pid_alive_reports_self_alive() {
+        assert!(
+            is_pid_alive(std::process::id()),
+            "current process must register as alive"
+        );
+    }
+
+    /// Confirm a freshly-reaped child reads as dead. Skipped on Windows
+    /// because the kernel briefly retains the process object after
+    /// `wait()` returns and `is_pid_alive` may legitimately still see
+    /// `STILL_ACTIVE` until the handle is fully released; the
+    /// `wait_for_parent_exit` deadline absorbs that case in production.
+    #[cfg(unix)]
+    #[test]
+    fn is_pid_alive_reports_reaped_child_dead() {
+        let mut child = std::process::Command::new("true")
+            .spawn()
+            .expect("spawn no-op child");
+        let pid = child.id();
+        let _ = child.wait();
+        // Tiny sleep to let the kernel drop the entry on slower CI
+        // hosts; locally this is consistently <1ms.
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        assert!(
+            !is_pid_alive(pid),
+            "reaped child PID {pid} must register as dead"
+        );
     }
 
     /// Regression: when we restore a backup over a destination that
