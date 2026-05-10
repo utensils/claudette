@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use base64::Engine as _;
+use futures_util::StreamExt;
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -346,6 +347,18 @@ pub async fn resolve_backend_runtime(
                 "1".to_string(),
             ),
         ];
+        // LM Studio benefits from the same KV-cache reuse fix Ollama gets:
+        // suppress Claude Code's rotating attribution header so identical
+        // request prefixes hit LM Studio's prefix cache turn after turn.
+        // (Routing-wise LM Studio still goes through our gateway because
+        // it returns HTTP 500 for context-overflow, which the SDK retries
+        // unless we demote it to 4xx. See `proxy_anthropic_messages`.)
+        if backend.kind == AgentBackendKind::LmStudio {
+            env.push((
+                "CLAUDE_CODE_ATTRIBUTION_HEADER".to_string(),
+                "0".to_string(),
+            ));
+        }
         append_custom_model_env(&mut env, &backend, model);
         return Ok(AgentBackendRuntime {
             backend_id: Some(backend.id),
@@ -354,51 +367,18 @@ pub async fn resolve_backend_runtime(
         });
     }
 
-    // LM Studio shares Ollama's direct-routing path now (it speaks
-    // /v1/messages natively in 0.4.1+) but defaults to a different
-    // localhost port and uses its own placeholder token. Ollama keeps
-    // 11434 + "ollama"; LM Studio takes 1234 + "lm-studio".
-    let (default_base, default_token) = match backend.kind {
-        AgentBackendKind::LmStudio => ("http://localhost:1234", "lm-studio"),
-        _ => ("http://localhost:11434", "ollama"),
-    };
     let base_url = backend
         .base_url
         .clone()
-        .unwrap_or_else(|| default_base.to_string());
-    // Refresh discovered models for LM Studio on every chat-send so the
-    // composer's loaded_context_length and the gateway-side hash match
-    // the live LM Studio server state. The user can change the context
-    // slider mid-session and we want that reflected immediately. Cheap:
-    // single GET to localhost. Errors are non-fatal — if discovery fails
-    // we keep whatever we already have rather than blocking the send.
-    if backend.kind == AgentBackendKind::LmStudio
-        && let Ok(discovered) = discover_models(&backend).await
-        && !discovered.is_empty()
-    {
-        let pre = backend_models_signature(&backend);
-        backend.discovered_models = discovered;
-        backend.manual_models.clear();
-        let post = backend_models_signature(&backend);
-        if pre != post
-            && let Ok(mut all) = load_backend_configs(&db)
-            && let Some(slot) = all.iter_mut().find(|item| item.id == backend.id)
-        {
-            *slot = backend.clone();
-            let _ = save_backend_configs(&db, &all);
-        }
-    }
+        .unwrap_or_else(|| "http://localhost:11434".to_string());
     let mut env = vec![
         ("ANTHROPIC_BASE_URL".to_string(), base_url),
         (
             "ANTHROPIC_AUTH_TOKEN".to_string(),
-            secret.clone().unwrap_or_else(|| default_token.to_string()),
+            secret.clone().unwrap_or_else(|| "ollama".to_string()),
         ),
     ];
-    if matches!(
-        backend.kind,
-        AgentBackendKind::Ollama | AgentBackendKind::LmStudio
-    ) {
+    if backend.kind == AgentBackendKind::Ollama {
         env.push(("ANTHROPIC_API_KEY".to_string(), String::new()));
         // Disable the per-request user-attribution header. Claude Code
         // adds it for usage attribution against api.anthropic.com, but
@@ -406,8 +386,11 @@ pub async fn resolve_backend_runtime(
         // and causes a documented ~90 % perf regression on local
         // backends (see github.com/anthropics/claude-code/issues/29230,
         // roborhythms.com/stop-claude-code-slowing-local-llm-by-90).
-        // Ollama/LM Studio don't bill anything, so the header is pure
-        // overhead.
+        // Ollama doesn't bill anything, so the header is pure overhead.
+        // LM Studio gets the same env via the gateway-routed path
+        // (where we forward this env via the spawned CLI's environment
+        // and the gateway itself strips the header from upstream
+        // requests).
         env.push((
             "CLAUDE_CODE_ATTRIBUTION_HEADER".to_string(),
             "0".to_string(),
@@ -1517,27 +1500,27 @@ async fn handle_gateway_connection(
         ("POST", "/v1/messages") => {
             let req = serde_json::from_slice::<Value>(body)
                 .map_err(|e| format!("invalid messages request: {e}"))?;
-            let response = call_openai_responses(&config, upstream_secret.as_deref(), req).await;
-            match response {
-                Ok(message) => write_json_or_sse_response(&mut stream, message).await,
-                Err(err) => {
-                    // Map the outbound status to the closest Anthropic
-                    // error-envelope type so the SDK's retry classifier
-                    // sees the right category — 401 stays an auth
-                    // error, 429 stays a rate-limit error (still
-                    // retryable with the appropriate backoff), generic
-                    // 4xx is `invalid_request_error` (no retry), 5xx
-                    // is `api_error` (retry).
-                    let error_type = anthropic_error_type_for(err.status);
-                    write_json_response(
-                        &mut stream,
-                        err.status,
-                        json!({
-                            "type":"error",
-                            "error":{"type":error_type,"message":err.message},
-                        }),
-                    )
-                    .await
+            // LM Studio speaks Anthropic's wire format natively — there's
+            // no OpenAI-Responses translation work to do, just forward
+            // bytes. The pass-through writes the response (including
+            // streaming SSE) directly to the client TCP stream so we
+            // preserve TTFT, and intercepts non-2xx upstream responses
+            // to apply the same status-demotion logic the gateway uses
+            // for OpenAI-shape backends (otherwise LM Studio's HTTP 500
+            // for context-overflow triggers the SDK's retry-with-backoff
+            // path and the user sees a multi-minute spinner instead of
+            // the actual error message).
+            if config.kind == AgentBackendKind::LmStudio {
+                match proxy_anthropic_messages(&config, &req, &mut stream).await {
+                    Ok(()) => Ok(()),
+                    Err(err) => write_anthropic_error_response(&mut stream, err).await,
+                }
+            } else {
+                let response =
+                    call_openai_responses(&config, upstream_secret.as_deref(), req).await;
+                match response {
+                    Ok(message) => write_json_or_sse_response(&mut stream, message).await,
+                    Err(err) => write_anthropic_error_response(&mut stream, err).await,
                 }
             }
         }
@@ -1634,6 +1617,145 @@ fn preflight_context_window_check(
             label = config.label,
         ),
     })
+}
+
+/// Forward an Anthropic Messages API request to LM Studio's native
+/// `/v1/messages` endpoint. Bypasses the OpenAI Responses translation
+/// `call_openai_responses` does — LM Studio 0.4.1+ implements Anthropic's
+/// wire format natively, so the only thing we need from the gateway is
+/// **status-code translation**: LM Studio returns HTTP 500 for hard
+/// input errors like context-window overflow, which the Anthropic SDK
+/// retries with backoff. The response body is in Anthropic shape
+/// (`{type: error, error: {type, message}}`) — we just need to fix the
+/// status before forwarding to the CLI.
+///
+/// Successful (2xx) responses are streamed through unchanged so the
+/// agent UI gets per-chunk SSE events as LM Studio produces them
+/// (preserving TTFT). The pass-through writes directly to `out_stream`
+/// rather than buffering into a `Value` like the OpenAI-Responses path.
+async fn proxy_anthropic_messages(
+    config: &AgentBackendConfig,
+    anthropic_req: &Value,
+    out_stream: &mut TcpStream,
+) -> Result<(), GatewayUpstreamError> {
+    let base = config
+        .base_url
+        .as_deref()
+        .unwrap_or("http://localhost:1234")
+        .trim_end_matches('/');
+    // LM Studio's `/v1/messages` accepts any bearer locally — but a user
+    // who fronts the server with an authenticating proxy would reject a
+    // missing Authorization header. Always send the placeholder so both
+    // setups work.
+    let bearer = load_secure_secret(SECRET_BUCKET, &config.id)
+        .ok()
+        .flatten()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "lm-studio".to_string());
+    // Pre-flight: same approximation we use for OpenAI-Responses-routed
+    // backends. LM Studio enforces its own context check too, but our
+    // pre-flight wins on UX (~1 ms vs ~40 s round-trip to LM Studio's
+    // tokenizer) and produces a tailored message that names the actual
+    // numbers.
+    let model = anthropic_req
+        .get("model")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    if !model.is_empty()
+        && let Some(err) = preflight_context_window_check(config, &model, anthropic_req)
+    {
+        return Err(err);
+    }
+
+    let stream_requested = anthropic_req
+        .get("stream")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+
+    let response = reqwest::Client::new()
+        .post(format!("{base}/v1/messages"))
+        .bearer_auth(&bearer)
+        .header(reqwest::header::CONTENT_TYPE, "application/json")
+        .header("anthropic-version", "2023-06-01")
+        .json(anthropic_req)
+        .send()
+        .await
+        .map_err(|e| GatewayUpstreamError::internal(format!("LM Studio request failed: {e}")))?;
+
+    let status = response.status();
+    if !status.is_success() {
+        let body = response.text().await.map_err(|e| {
+            GatewayUpstreamError::internal(format!("Invalid LM Studio response body: {e}"))
+        })?;
+        return Err(GatewayUpstreamError::from_upstream(status.as_u16(), &body));
+    }
+
+    // Forward the response. We mirror the upstream Content-Type so the
+    // CLI sees `text/event-stream` for streaming requests and JSON for
+    // non-streaming ones, then close the connection at end-of-body so
+    // we can stream without committing to a Content-Length. Same
+    // `Connection: close` pattern the OpenAI-Responses fallback uses.
+    let content_type = response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_string)
+        .unwrap_or_else(|| {
+            if stream_requested {
+                "text/event-stream".to_string()
+            } else {
+                "application/json".to_string()
+            }
+        });
+    let header_block = format!(
+        "HTTP/1.1 200 OK\r\n\
+         Content-Type: {content_type}\r\n\
+         Cache-Control: no-cache\r\n\
+         Connection: close\r\n\
+         \r\n"
+    );
+    out_stream
+        .write_all(header_block.as_bytes())
+        .await
+        .map_err(|e| GatewayUpstreamError::internal(format!("write headers failed: {e}")))?;
+
+    let mut body_stream = response.bytes_stream();
+    while let Some(chunk) = body_stream.next().await {
+        let chunk = chunk
+            .map_err(|e| GatewayUpstreamError::internal(format!("upstream stream error: {e}")))?;
+        out_stream
+            .write_all(&chunk)
+            .await
+            .map_err(|e| GatewayUpstreamError::internal(format!("write chunk failed: {e}")))?;
+    }
+    out_stream
+        .flush()
+        .await
+        .map_err(|e| GatewayUpstreamError::internal(format!("flush failed: {e}")))?;
+    Ok(())
+}
+
+/// Format a `GatewayUpstreamError` as the JSON error envelope the
+/// Anthropic CLI / SDK expect, picking the most accurate `error.type`
+/// for the outbound HTTP status. Centralized so every gateway code path
+/// (OpenAI-Responses translation, LM Studio pass-through) produces an
+/// identical shape.
+async fn write_anthropic_error_response(
+    stream: &mut TcpStream,
+    err: GatewayUpstreamError,
+) -> Result<(), String> {
+    let error_type = anthropic_error_type_for(err.status);
+    write_json_response(
+        stream,
+        err.status,
+        json!({
+            "type":"error",
+            "error":{"type":error_type,"message":err.message},
+        }),
+    )
+    .await
 }
 
 async fn call_openai_responses(
@@ -2397,16 +2519,18 @@ mod tests {
     }
 
     #[test]
-    fn lm_studio_routing_uses_anthropic_compatible_classification() {
-        // Pinned: LM Studio MUST stay on the direct (non-gateway) path.
-        // Flipping this back to needs_gateway() would re-introduce the
-        // OpenAI-Responses translation overhead and lose native
-        // streaming pass-through. There is no fallback — if a future
-        // LM Studio release breaks /v1/messages, fix discovery /
-        // surface a clear error rather than silently routing through
-        // the gateway with a different perf profile.
-        assert!(AgentBackendKind::LmStudio.is_anthropic_compatible());
-        assert!(!AgentBackendKind::LmStudio.needs_gateway());
+    fn lm_studio_routing_classification_pinned() {
+        // Pinned: LM Studio MUST stay on the gateway path. Direct
+        // routing (`is_anthropic_compatible() == true`) loses our
+        // status-code translation, and LM Studio's HTTP 500 for
+        // context-overflow ends up in the SDK's retry-with-backoff
+        // path — the user sees a multi-minute spinner instead of the
+        // actual error. The gateway uses `proxy_anthropic_messages`
+        // (not the OpenAI-Responses translator) so streaming
+        // pass-through is preserved; only error status codes get
+        // rewritten on the way back.
+        assert!(AgentBackendKind::LmStudio.needs_gateway());
+        assert!(!AgentBackendKind::LmStudio.is_anthropic_compatible());
         // Sanity-check the rest of the matrix to catch a copy-paste
         // misclassification of an unrelated kind.
         assert!(AgentBackendKind::Anthropic.is_anthropic_compatible());
@@ -2882,15 +3006,21 @@ data: [DONE]
         assert_eq!(backend.id, "lm-studio");
         assert_eq!(backend.kind, AgentBackendKind::LmStudio);
         assert!(
-            !backend.kind.needs_gateway(),
-            "LM Studio 0.4.1+ implements /v1/messages natively, so it takes \
-             the direct ANTHROPIC_BASE_URL path (like Ollama) instead of \
-             the OpenAI-Responses gateway"
+            backend.kind.needs_gateway(),
+            "LM Studio routes through our gateway so we can demote its \
+             HTTP 500 context-overflow responses to 4xx — without that \
+             the Anthropic SDK retries the error with backoff and the \
+             user sees a multi-minute spinner. Inside the gateway we use \
+             the `proxy_anthropic_messages` pass-through (no wire-format \
+             translation) since LM Studio 0.4.1+ speaks Anthropic /v1/messages \
+             natively."
         );
         assert!(
-            backend.kind.is_anthropic_compatible(),
-            "Direct routing requires the kind to be classified as \
-             Anthropic-compatible — same as Ollama and CustomAnthropic"
+            !backend.kind.is_anthropic_compatible(),
+            "is_anthropic_compatible() means the spawned CLI talks to the \
+             upstream directly with no in-process gateway. LM Studio is \
+             *wire-compatible* with Anthropic but still needs the gateway \
+             for status-code translation."
         );
         assert_eq!(
             backend.base_url.as_deref(),

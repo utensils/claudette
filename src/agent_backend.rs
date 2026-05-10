@@ -16,26 +16,32 @@ pub enum AgentBackendKind {
 
 impl AgentBackendKind {
     pub fn is_anthropic_compatible(self) -> bool {
-        // LM Studio 0.4.1+ implements `/v1/messages` natively — same
-        // Anthropic wire format Ollama uses — so we route the spawned
-        // claude CLI directly at it via ANTHROPIC_BASE_URL instead of
-        // running an in-process gateway that translates Anthropic ↔
-        // OpenAI Responses. The direct path is dramatically faster
-        // (native SSE streaming pass-through, no buffer-then-translate
-        // round trip, KV-cache prefix matching works) and doesn't need
-        // any of our gateway error-classification work — LM Studio
-        // already returns Anthropic-shaped errors. See lm-studio.mdx
-        // for the architecture comparison.
-        matches!(
-            self,
-            Self::Anthropic | Self::Ollama | Self::CustomAnthropic | Self::LmStudio
-        )
+        matches!(self, Self::Anthropic | Self::Ollama | Self::CustomAnthropic)
     }
 
     pub fn needs_gateway(self) -> bool {
+        // LM Studio 0.4.1+ implements `/v1/messages` natively (same
+        // Anthropic wire format Ollama uses), so we *could* point the
+        // spawned claude CLI directly at it. But LM Studio classifies
+        // hard input errors like context-window overflow as HTTP 500
+        // with an Anthropic-shaped body whose `error.type` is
+        // `api_error`. That's a transient classification — Anthropic's
+        // SDK retries it with exponential backoff — so a permanent
+        // input failure ends up as a multi-minute spinner with no
+        // surfaced error, even though the upstream message is right
+        // there.
+        //
+        // Routing LM Studio through our gateway gives us a place to
+        // demote those mis-classified 5xx responses to 4xx (via
+        // `GatewayUpstreamError::from_upstream` +
+        // `upstream_message_is_permanent_failure`). The gateway
+        // forwards 2xx bodies through unchanged so streaming events
+        // still flow without translation overhead — only the error
+        // path gets rewritten. See `proxy_anthropic_messages` and the
+        // matching test fixtures.
         matches!(
             self,
-            Self::OpenAiApi | Self::CodexSubscription | Self::CustomOpenAi
+            Self::OpenAiApi | Self::CodexSubscription | Self::CustomOpenAi | Self::LmStudio
         )
     }
 }
