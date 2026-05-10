@@ -288,7 +288,7 @@ describe("ToolActivitiesSection", () => {
   });
 
   it("lets the user expand a still-running group via header click", async () => {
-    // After PR #XXX flipped the default to collapsed-while-running,
+    // After PR #743 flipped the default to collapsed-while-running,
     // the click affordance now opens (instead of closes) a live group.
     const runningActivities = [
       activity("Bash", { resultText: "" }),
