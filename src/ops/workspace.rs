@@ -264,13 +264,36 @@ fn build_script_command(script: &str, worktree_path: &Path) -> TokioCommand {
         .stderr(std::process::Stdio::piped());
     // Process group on Unix so a timeout SIGKILL hits every grandchild
     // (e.g. `npm install` spawns workers that wouldn't exit otherwise).
-    // Windows has no process-group signal — `child.kill()` only terminates
-    // the immediate child there; the timeout path falls back to
-    // `subprocess_cleanup::kill_processes_with_descendants` for the
-    // subtree walk.
+    // Windows has no process-group signal — the timeout path runs
+    // `taskkill /T /F` on the child PID (see [`kill_script_subtree`])
+    // before falling through to `child.kill().await` as belt-and-
+    // suspenders.
     #[cfg(unix)]
     cmd.process_group(0);
     cmd
+}
+
+/// Best-effort termination of a hung setup / archive script and every
+/// descendant it spawned. Runs in the timeout arm of both
+/// [`resolve_and_run_setup`] and [`resolve_and_run_archive`] before the
+/// caller's `child.kill().await`.
+///
+/// On Unix the caller does the work itself with `kill(-pgid, SIGKILL)`
+/// — the spawn set `process_group(0)`, so a single syscall fells the
+/// whole tree. On Windows there is no equivalent: `child.kill()` is
+/// `TerminateProcess` on the immediate child only, so a hung
+/// `npm install` would leave its compiler/installer workers orphaned to
+/// the desktop session. `taskkill /T /F` walks the per-PID descendant
+/// tree the kernel already tracks and force-terminates everything in
+/// one call. Errors are ignored because `child.kill().await` is the
+/// fallback and we're already in a "we don't care, just kill it" path.
+#[cfg(windows)]
+async fn kill_script_subtree(pid: u32) {
+    let _ = TokioCommand::new("taskkill")
+        .no_console_window()
+        .args(["/PID", &pid.to_string(), "/T", "/F"])
+        .output()
+        .await;
 }
 
 /// Resolve the setup script (preferring `.claudette.json`, falling back to
@@ -355,7 +378,6 @@ pub async fn resolve_and_run_setup(
         }
     };
 
-    #[cfg(unix)]
     let pid = child.id();
 
     let stdout_handle = child.stdout.take();
@@ -413,6 +435,10 @@ pub async fn resolve_and_run_setup(
                 unsafe {
                     libc::kill(-(pgid as i32), libc::SIGKILL);
                 }
+            }
+            #[cfg(windows)]
+            if let Some(child_pid) = pid {
+                kill_script_subtree(child_pid).await;
             }
             let _ = child.kill().await;
             let _ = child.wait().await;
@@ -519,7 +545,6 @@ pub async fn resolve_and_run_archive(
         }
     };
 
-    #[cfg(unix)]
     let pid = child.id();
 
     let stdout_handle = child.stdout.take();
@@ -577,6 +602,10 @@ pub async fn resolve_and_run_archive(
                 unsafe {
                     libc::kill(-(pgid as i32), libc::SIGKILL);
                 }
+            }
+            #[cfg(windows)]
+            if let Some(child_pid) = pid {
+                kill_script_subtree(child_pid).await;
             }
             let _ = child.kill().await;
             let _ = child.wait().await;
@@ -1028,5 +1057,68 @@ mod tests {
             "hello",
             "expected `echo hello` stdout, got {stdout:?}",
         );
+    }
+
+    /// `kill_script_subtree` must terminate a hung script's full
+    /// descendant tree on Windows, not just the `cmd.exe` root. Spawn a
+    /// shell with a long-lived backgrounded child (`ping -n 30`) plus an
+    /// inline child (`ping -n 30`), call the helper against the root
+    /// PID, and assert both root and children are gone.
+    ///
+    /// This is the contract the setup/archive timeout arm relies on —
+    /// pre-fix the timeout only ran `child.kill()` (TerminateProcess on
+    /// the immediate child) so backgrounded `npm install` workers
+    /// orphaned to the desktop session.
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn kill_script_subtree_terminates_grandchildren() {
+        use std::time::Duration;
+
+        let mut child = TokioCommand::new("cmd.exe")
+            .no_console_window()
+            .args([
+                "/C",
+                "start /B ping -n 30 127.0.0.1 >NUL & ping -n 30 127.0.0.1 >NUL",
+            ])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("spawn cmd.exe");
+
+        let root_pid = child.id().expect("child pid");
+
+        // Give the shell a beat to fork its descendants.
+        tokio::time::sleep(Duration::from_millis(250)).await;
+
+        kill_script_subtree(root_pid).await;
+
+        // Wait the child handle so its in-process state matches reality.
+        // `taskkill /T /F` is fast (<100ms typical), but we still bound
+        // the wait so a misbehaving Windows host can't hang the suite.
+        let waited = tokio::time::timeout(Duration::from_secs(5), child.wait()).await;
+        assert!(
+            waited.is_ok(),
+            "child did not exit within 5 s after kill_script_subtree"
+        );
+
+        // Spot-check the root is dead. Use the same OpenProcess probe
+        // the CLI's discovery reader uses for stale-file detection so
+        // the assertion exercises a path we already test elsewhere.
+        use windows_sys::Win32::Foundation::{CloseHandle, STILL_ACTIVE};
+        use windows_sys::Win32::System::Threading::{
+            GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+        };
+        let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, root_pid) };
+        if !handle.is_null() {
+            let mut code: u32 = 0;
+            let ok = unsafe { GetExitCodeProcess(handle, &mut code) };
+            unsafe { CloseHandle(handle) };
+            assert!(
+                ok == 0 || code as i32 != STILL_ACTIVE,
+                "root pid {root_pid} still STILL_ACTIVE after kill_script_subtree"
+            );
+        }
+        // If OpenProcess returned NULL the PID is gone — that's the
+        // happy case, no further assertion needed.
     }
 }

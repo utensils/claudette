@@ -62,9 +62,16 @@ chrono = "0.4"
 # PATH updates made after claudette started (winget/installer edits) without
 # forcing the user to log out and back in.
 winreg = "0.55"
-# `PlaySoundW` for Windows notification audio (see `audio.rs`). Tiny —
-# we only enable the audio submodule and Foundation, no extra runtime.
-windows-sys = { version = "0.61", features = ["Win32_Media_Audio", "Win32_Foundation"] }
+# `PlaySoundW` for Windows notification audio (see `audio.rs`); plus
+# `OpenProcess + GetExitCodeProcess` used by `ops::workspace`'s
+# script-timeout test to assert the subtree-kill helper actually
+# terminated the root PID. Tiny — we only enable the bound submodules,
+# no extra runtime.
+windows-sys = { version = "0.61", features = [
+    "Win32_Media_Audio",
+    "Win32_Foundation",
+    "Win32_System_Threading",
+] }
 # Pure-Rust audio playback, Windows-only (macOS/Linux already shell out
 # to native players). Used for OpenPeon sound packs that ship MP3 / OGG
 # — `PlaySoundW` only handles PCM WAV. Default features pull in legacy
