@@ -27,6 +27,8 @@
   "add_repository": "リポジトリを追加",
   "add_remote": "リモートを追加",
   "back_to_dashboard": "ダッシュボードに戻る",
+  "expand_repo_aria": "{{name}} を展開",
+  "collapse_repo_aria": "{{name}} を折りたたむ",
   "filter_workspaces": "ワークスペースを絞り込む",
   "workspace_filters_aria": "ワークスペースフィルター",
   "rename_workspace_aria": "ワークスペースの名前を変更",

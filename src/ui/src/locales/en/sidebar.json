@@ -28,6 +28,8 @@
   "add_repository": "Add repository",
   "add_remote": "Add remote",
   "back_to_dashboard": "Back to dashboard",
+  "expand_repo_aria": "Expand {{name}}",
+  "collapse_repo_aria": "Collapse {{name}}",
   "filter_workspaces": "Filter workspaces",
   "workspace_filters_aria": "Workspace filters",
   "rename_workspace_aria": "Rename workspace",

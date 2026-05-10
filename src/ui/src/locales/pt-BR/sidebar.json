@@ -27,6 +27,8 @@
   "add_repository": "Adicionar repositório",
   "add_remote": "Adicionar remoto",
   "back_to_dashboard": "Voltar ao painel",
+  "expand_repo_aria": "Expandir {{name}}",
+  "collapse_repo_aria": "Recolher {{name}}",
   "filter_workspaces": "Filtrar workspaces",
   "workspace_filters_aria": "Filtros de workspace",
   "rename_workspace_aria": "Renomear workspace",

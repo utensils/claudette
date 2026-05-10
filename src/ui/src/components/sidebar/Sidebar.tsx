@@ -1226,7 +1226,11 @@ export const Sidebar = memo(function Sidebar() {
                     e.stopPropagation();
                     toggleRepoCollapsed(repo.id);
                   }}
-                  aria-label={collapsed ? `Expand ${repo.name}` : `Collapse ${repo.name}`}
+                  aria-label={
+                    collapsed
+                      ? t("expand_repo_aria", { name: repo.name })
+                      : t("collapse_repo_aria", { name: repo.name })
+                  }
                   aria-expanded={!collapsed}
                 >
                   {collapsed ? "›" : "⌄"}

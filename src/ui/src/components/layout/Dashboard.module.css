@@ -22,9 +22,9 @@
 
 /* Project-scoped header matches the chat workspace header's typography
    (monospace, mixed case, repo name bold) so swapping between the two
-   views doesn't shuffle font metrics. The dashboard's "DASHBOARD"
-   label keeps its own uppercase chip treatment because there's no
-   per-project slot competing with it there. */
+   views doesn't shuffle font metrics. The dashboard label uses the
+   same monospace 13px treatment via .dashboardTitle above — keep both
+   in sync if either changes. */
 .scopedHeader {
   display: flex;
   align-items: center;

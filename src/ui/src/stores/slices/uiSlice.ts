@@ -129,19 +129,28 @@ export const createUiSlice: StateCreator<AppState, [], [], UiSlice> = (
       return { manualWorkspaceOrderByRepo: next };
     }),
   toggleRepoCollapsed: (id) =>
-    set((s) => ({
-      repoCollapsed: {
-        ...s.repoCollapsed,
-        [id]: !s.repoCollapsed[id],
-      },
-    })),
+    set((s) => {
+      // Maintain the "absence === expanded" invariant by deleting the key
+      // when toggling back to expanded, instead of writing `false`. Without
+      // this the map accumulates stale `false` entries that expandRepo
+      // would otherwise need to clean up post-hoc.
+      if (s.repoCollapsed[id]) {
+        const next = { ...s.repoCollapsed };
+        delete next[id];
+        return { repoCollapsed: next };
+      }
+      return {
+        repoCollapsed: { ...s.repoCollapsed, [id]: true },
+      };
+    }),
   expandRepo: (id) =>
     set((s) => {
-      // No-op when already expanded so subscribers don't churn.
-      if (!s.repoCollapsed[id]) return s;
+      // No-op only when the key is truly absent (the canonical "expanded"
+      // state). A present-but-`false` entry is stale and gets cleaned up
+      // here so the map stays canonical regardless of how callers wrote
+      // it. Avoids subscriber churn when there's nothing to do.
+      if (!(id in s.repoCollapsed)) return s;
       const next = { ...s.repoCollapsed };
-      // Remove the key entirely rather than writing `false` — repoCollapsed
-      // treats absence as expanded, so this keeps the map small over time.
       delete next[id];
       return { repoCollapsed: next };
     }),

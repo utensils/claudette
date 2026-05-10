@@ -50,4 +50,40 @@ describe("uiSlice.expandRepo", () => {
     // Reference-equal: the slice short-circuits to keep subscribers calm.
     expect(useAppStore.getState()).toBe(before);
   });
+
+  it("cleans up a stale `false` entry instead of leaving it in the map", () => {
+    // Defensive: nothing in the codebase writes `false` to repoCollapsed
+    // anymore (toggleRepoCollapsed deletes on toggle-back), but expandRepo
+    // is the canonicalizer of last resort — if a stale entry ever sneaks
+    // in, the next expand call must purge it so the "absence === expanded"
+    // invariant holds for selectors that use `id in repoCollapsed`.
+    useAppStore.setState({ repoCollapsed: { "repo-a": false, "repo-b": true } });
+
+    useAppStore.getState().expandRepo("repo-a");
+
+    expect(useAppStore.getState().repoCollapsed).toEqual({ "repo-b": true });
+  });
+});
+
+describe("uiSlice.toggleRepoCollapsed", () => {
+  beforeEach(() => {
+    useAppStore.setState({ repoCollapsed: {} });
+  });
+
+  it("collapses an absent repo by writing `true`", () => {
+    useAppStore.getState().toggleRepoCollapsed("repo-a");
+    expect(useAppStore.getState().repoCollapsed).toEqual({ "repo-a": true });
+  });
+
+  it("expands a collapsed repo by deleting the key (not writing false)", () => {
+    // The map's invariant is "absence === expanded". Writing `false` would
+    // accumulate stale entries over time as repos churn through collapse
+    // cycles. Deleting on toggle-back keeps it canonical at the source.
+    useAppStore.setState({ repoCollapsed: { "repo-a": true, "repo-b": true } });
+
+    useAppStore.getState().toggleRepoCollapsed("repo-a");
+
+    expect(useAppStore.getState().repoCollapsed).toEqual({ "repo-b": true });
+    expect("repo-a" in useAppStore.getState().repoCollapsed).toBe(false);
+  });
 });
