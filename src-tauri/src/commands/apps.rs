@@ -44,6 +44,18 @@ pub struct AppEntry {
     #[serde(default)]
     #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     pub windows_exe_names: Vec<String>,
+    /// AppxPackage name (or prefix — `Get-AppxPackage -Name "<value>*"`)
+    /// for UWP/MSIX-packaged apps whose real binary sits inside
+    /// `%PROGRAMFILES%\WindowsApps` and is reached through a 0-byte
+    /// execution alias on PATH (e.g. Windows Terminal's `wt.exe`).
+    /// `IShellItemImageFactory` follows the alias to the console
+    /// subsystem and returns a generic glyph; the real vendor logo
+    /// lives in the package's `Assets/*Logo*.png` files. Setting this
+    /// triggers a manifest-aware lookup before the regular
+    /// `windows_exe_names` walk-up. Ignored on other platforms.
+    #[serde(default)]
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+    pub windows_appx_package: String,
     pub open_args: Vec<String>,
     #[serde(default)]
     pub needs_terminal: bool,
@@ -129,6 +141,9 @@ fn merge_missing_default_entries(mut user: AppsConfig, embedded: AppsConfig) -> 
         }
         if app.windows_exe_names.is_empty() && !default_entry.windows_exe_names.is_empty() {
             app.windows_exe_names = default_entry.windows_exe_names.clone();
+        }
+        if app.windows_appx_package.is_empty() && !default_entry.windows_appx_package.is_empty() {
+            app.windows_appx_package = default_entry.windows_appx_package.clone();
         }
     }
 
@@ -634,24 +649,30 @@ fn resolve_windows_icon_source(entry: &AppEntry, detected_path: &Path) -> PathBu
     detected_path.to_path_buf()
 }
 
-/// Inline C# helper compiled at PowerShell startup. Wraps two
-/// extraction paths so we can prefer the high-res shell-image API
-/// (`IShellItemImageFactory::GetImage`, the same one Explorer uses
-/// for its "Extra large icons" view) and fall back to
-/// `ExtractAssociatedIcon` when the shell can't produce a bitmap.
+/// Inline C# helper compiled at PowerShell startup. Three extraction
+/// paths in priority order:
 ///
-/// Why two: `ExtractAssociatedIcon` always returns the 32×32
-/// resource Windows registered with the file association — fast and
-/// reliable but visibly fuzzy in our menu when the macOS counterparts
-/// are pulling 256×256 from `.icns`. `IShellItemImageFactory` walks
-/// every icon group resource embedded in the `.exe` and synthesizes
-/// the requested size, so VS Code / Cursor / Sublime / IntelliJ end
-/// up at full vendor resolution. Some shimmed paths and
-/// `WindowsApps`-execution-alias targets fail the COM call though,
-/// hence the fallback.
+/// 1. **AppxPackage logo** (`windows_appx_package` set) — UWP/MSIX
+///    apps whose real binary is in `%PROGRAMFILES%\WindowsApps` and
+///    is reached through a 0-byte execution alias on PATH. The alias
+///    short-circuits `IShellItemImageFactory` to the console
+///    subsystem (Windows Terminal's `wt.exe` ends up indistinguishable
+///    from `cmd.exe`). `Get-AppxPackage` exposes the package's
+///    `InstallLocation`; the manifest's `Assets/*Logo*.png` files are
+///    the real vendor logos at full resolution. We pick the largest
+///    PNG by file size and skip variants that don't render in dark
+///    UIs (`*altform-unplated*`, `*contrast-*`).
+/// 2. **`IShellItemImageFactory::GetImage` at 256×256** — the same
+///    shell API Explorer uses for its "Extra large icons" view.
+///    `SIIGBF_ICONONLY` keeps us from accidentally getting a PE-header
+///    thumbnail; `SIIGBF_BIGGERSIZEOK` lets the shell hand back its
+///    largest cached variant if 256 isn't directly available.
+/// 3. **`ExtractAssociatedIcon`** — last-resort 32×32 grab. Some
+///    shimmed paths fail the COM call entirely; this keeps the menu
+///    from showing the lucide placeholder for them.
 ///
-/// The path is read from stdin (one line, UTF-16 native PowerShell
-/// handles backslashes / spaces / quotes natively) so we sidestep
+/// Input is read from stdin: line 1 is the AppxPackage name (empty
+/// string skips the UWP path), line 2 is the .exe path. Stdin avoids
 /// every PowerShell `-Command` quoting hazard.
 #[cfg(target_os = "windows")]
 const ICON_EXTRACT_PS1: &str = r#"
@@ -688,11 +709,6 @@ public class ClaudetteIcon {
         if (hr != 0) return null;
         IntPtr hbm;
         SIZE sz; sz.cx = size; sz.cy = size;
-        // SIIGBF_ICONONLY (0x4): never return a thumbnail of file
-        //   contents (we want the embedded icon resource, not e.g.
-        //   the PE-header preview of the executable).
-        // SIIGBF_BIGGERSIZEOK (0x1): if Windows only has a smaller
-        //   variant cached, return that instead of failing.
         hr = factory.GetImage(sz, 0x4 | 0x1, out hbm);
         if (hr != 0) return null;
         try {
@@ -720,7 +736,67 @@ public class ClaudetteIcon {
 }
 '@
 Add-Type -TypeDefinition $src -ReferencedAssemblies System.Drawing | Out-Null
+$pkg  = [Console]::In.ReadLine()
 $path = [Console]::In.ReadLine()
+
+# UWP path: read the AppxManifest to learn the *declared* logo
+# (any of the Square*Logo / Logo entries), then glob the same
+# directory for size-variant siblings (`Square44x44Logo.targetsize-256.png`,
+# `*.scale-400.png`, …) and keep the largest. The declared filename
+# rarely exists on disk by itself — Windows splits each logo into
+# one PNG per scale + target size at install time, leaving only the
+# variants. We filter out `altform-unplated` (transparent badges
+# that look wrong on a dark menu background) and `contrast-` (high-
+# contrast accessibility variants). File size is the biggest-icon
+# heuristic — UWP logos are anti-aliased PNGs whose byte count
+# scales with pixel count.
+#
+# `Get-AppxPackageManifest` works for unprivileged users, and
+# `Get-ChildItem` *can* enumerate per-package install dirs under
+# `%PROGRAMFILES%\WindowsApps` despite the parent being locked
+# down — each package's ACL grants the user list rights to its own
+# subtree.
+if (-not [string]::IsNullOrEmpty($pkg)) {
+    $appx = Get-AppxPackage -Name "${pkg}*" -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($appx) {
+        $manifest = $null
+        try { $manifest = Get-AppxPackageManifest -Package $appx.PackageFullName -ErrorAction Stop } catch { }
+        $logoRels = @()
+        if ($manifest) {
+            $vis = $manifest.Package.Applications.Application.VisualElements
+            if ($vis) {
+                foreach ($attr in 'Square150x150Logo','Square44x44Logo','Square71x71Logo','Logo') {
+                    $val = $vis.$attr
+                    if ($val) { $logoRels += $val }
+                }
+            }
+            $propLogo = $manifest.Package.Properties.Logo
+            if ($propLogo) { $logoRels += $propLogo }
+        }
+        # Last-resort guesses if the manifest didn't yield anything
+        # parseable. Most UWP packages put logos under one of these.
+        if ($logoRels.Count -eq 0) { $logoRels = @('Images\Logo.png','Assets\Logo.png') }
+        $best = $null
+        foreach ($rel in $logoRels) {
+            $fullRel = Join-Path $appx.InstallLocation $rel
+            $stem = [IO.Path]::GetFileNameWithoutExtension($fullRel)
+            $dir  = [IO.Path]::GetDirectoryName($fullRel)
+            if (-not (Test-Path $dir)) { continue }
+            $candidate = Get-ChildItem -Path $dir -Filter "$stem*.png" -ErrorAction SilentlyContinue |
+                Where-Object { $_.Name -notmatch '(?i)altform-unplated|contrast-' } |
+                Sort-Object Length -Descending |
+                Select-Object -First 1
+            if ($candidate -and (-not $best -or $candidate.Length -gt $best.Length)) {
+                $best = $candidate
+            }
+        }
+        if ($best) {
+            [Convert]::ToBase64String([IO.File]::ReadAllBytes($best.FullName))
+            exit 0
+        }
+    }
+}
+
 if ([string]::IsNullOrEmpty($path)) { exit 2 }
 $bytes = [ClaudetteIcon]::ShellImage($path, 256)
 if ($null -eq $bytes -or $bytes.Length -eq 0) {
@@ -730,18 +806,106 @@ if ($null -eq $bytes -or $bytes.Length -eq 0) { exit 3 }
 [Convert]::ToBase64String($bytes)
 "#;
 
+/// Where the icon disk cache lives. Same parent as `apps.json` so a
+/// `rm -rf ~/.claudette` (or a Windows equivalent) wipes both at
+/// once. Cache files are tiny base64 PNGs (~50KB max each) so a
+/// stale entry costs no real space.
+#[cfg(target_os = "windows")]
+fn icon_cache_dir() -> Option<PathBuf> {
+    dirs::home_dir().map(|h| h.join(".claudette").join("icon-cache"))
+}
+
+/// Build a stable cache key for a Windows icon source.
+///
+/// For .exe paths we mix the canonical path, file size, and modification
+/// time so an in-place upgrade (e.g. VS Code auto-updating `Code.exe`)
+/// invalidates the cache automatically — the cache filename changes,
+/// the new run misses, and the new icon is extracted and stored under
+/// a new key.
+///
+/// For UWP packages the .exe is the alias so the path is identical
+/// across versions; we use just the package-name field. AppxPackage
+/// upgrades therefore won't auto-refresh — but Windows Terminal's
+/// logo hasn't changed in years and the cost of a stale icon is
+/// purely cosmetic. If a user wants a refresh they can clear
+/// `~/.claudette/icon-cache/`.
+///
+/// `windows_appx_package` takes precedence to ensure we cache the
+/// UWP-resolved icon (which the .exe path can't produce) under a
+/// key that doesn't collide with the .exe-derived key.
+#[cfg(target_os = "windows")]
+fn icon_cache_key(appx_package: &str, icon_source: &Path) -> Option<String> {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+
+    let mut hasher = DefaultHasher::new();
+    if !appx_package.is_empty() {
+        "appx".hash(&mut hasher);
+        appx_package.hash(&mut hasher);
+    } else {
+        "exe".hash(&mut hasher);
+        icon_source.hash(&mut hasher);
+        if let Ok(meta) = std::fs::metadata(icon_source) {
+            meta.len().hash(&mut hasher);
+            if let Ok(mtime) = meta.modified()
+                && let Ok(dur) = mtime.duration_since(std::time::UNIX_EPOCH)
+            {
+                dur.as_secs().hash(&mut hasher);
+            }
+        } else {
+            // Missing source — refuse to cache so the next attempt
+            // re-runs extraction once the file appears.
+            return None;
+        }
+    }
+    Some(format!("{:016x}", hasher.finish()))
+}
+
+#[cfg(target_os = "windows")]
+fn read_icon_cache(key: &str) -> Option<String> {
+    let path = icon_cache_dir()?.join(format!("{key}.b64"));
+    let data = std::fs::read_to_string(&path).ok()?;
+    let trimmed = data.trim();
+    (!trimmed.is_empty() && trimmed.starts_with("data:image/")).then(|| trimmed.to_owned())
+}
+
+#[cfg(target_os = "windows")]
+fn write_icon_cache(key: &str, data_url: &str) {
+    let Some(dir) = icon_cache_dir() else { return };
+    let _ = std::fs::create_dir_all(&dir);
+    let _ = std::fs::write(dir.join(format!("{key}.b64")), data_url);
+}
+
 #[cfg(target_os = "windows")]
 fn app_icon_data_url(entry: &AppEntry, detected_path: &Path) -> Option<String> {
     let icon_source = resolve_windows_icon_source(entry, detected_path);
-    extract_windows_icon_data_url(&icon_source)
+
+    // Cache hit: the only case where extraction is *truly* free —
+    // no PowerShell startup, no Add-Type compile, no COM call. This
+    // is what makes "open the dropdown" feel instant on every launch
+    // after the first.
+    let cache_key = icon_cache_key(&entry.windows_appx_package, &icon_source);
+    if let Some(key) = cache_key.as_deref()
+        && let Some(cached) = read_icon_cache(key)
+    {
+        return Some(cached);
+    }
+
+    let data_url = extract_windows_icon_data_url(&entry.windows_appx_package, &icon_source)?;
+
+    if let Some(key) = cache_key.as_deref() {
+        write_icon_cache(key, &data_url);
+    }
+    Some(data_url)
 }
 
-/// Spawn a `powershell.exe` child, feed the target path on stdin, and
-/// parse the base64 PNG it prints. Lifted out of `app_icon_data_url`
-/// so the regression test can exercise the extractor directly without
-/// a synthesized `AppEntry` + `windows_exe_names` walk.
+/// Spawn a `powershell.exe` child, feed the AppxPackage name + target
+/// path on stdin (two newline-separated lines), and parse the base64
+/// PNG it prints. Lifted out of `app_icon_data_url` so the regression
+/// tests can exercise the extractor directly without manufacturing an
+/// `AppEntry` + invoking the cache.
 #[cfg(target_os = "windows")]
-fn extract_windows_icon_data_url(icon_source: &Path) -> Option<String> {
+fn extract_windows_icon_data_url(appx_package: &str, icon_source: &Path) -> Option<String> {
     use std::io::Write;
     use std::process::Stdio;
 
@@ -762,10 +926,11 @@ fn extract_windows_icon_data_url(icon_source: &Path) -> Option<String> {
 
     {
         let stdin = child.stdin.as_mut()?;
-        // Write the path literally followed by a newline. PowerShell's
-        // `[Console]::In.ReadLine()` reads one CRLF-terminated line,
-        // which is exactly what we want — no quoting, no -Command
-        // tokenization, no env-var pollution across siblings.
+        // Two lines: AppxPackage name (or empty) then path. Empty
+        // lines are deliberate — PowerShell's
+        // `[Console]::In.ReadLine()` returns `""` for them, which
+        // the script normalizes via `IsNullOrEmpty`.
+        let _ = writeln!(stdin, "{appx_package}");
         let _ = writeln!(stdin, "{}", icon_source.display());
     }
     let output = child.wait_with_output().ok()?;
@@ -1403,6 +1568,7 @@ mod tests {
                 bin_names: vec!["myeditor".into()],
                 mac_app_names: vec![],
                 windows_exe_names: vec![],
+                windows_appx_package: String::new(),
                 open_args: vec!["{}".into()],
                 needs_terminal: false,
             }],
@@ -1428,6 +1594,7 @@ mod tests {
                 bin_names: vec!["nonexistent-binary".into()],
                 mac_app_names: vec![],
                 windows_exe_names: vec![],
+                windows_appx_package: String::new(),
                 open_args: vec!["{}".into()],
                 needs_terminal: false,
             }],
@@ -1455,6 +1622,7 @@ mod tests {
                 bin_names: vec!["noexec".into()],
                 mac_app_names: vec![],
                 windows_exe_names: vec![],
+                windows_appx_package: String::new(),
                 open_args: vec!["{}".into()],
                 needs_terminal: false,
             }],
@@ -1486,6 +1654,7 @@ mod tests {
                     bin_names: vec!["zterm".into()],
                     mac_app_names: vec![],
                     windows_exe_names: vec![],
+                    windows_appx_package: String::new(),
                     open_args: vec!["{}".into()],
                     needs_terminal: false,
                 },
@@ -1496,6 +1665,7 @@ mod tests {
                     bin_names: vec!["beditor".into()],
                     mac_app_names: vec![],
                     windows_exe_names: vec![],
+                    windows_appx_package: String::new(),
                     open_args: vec!["{}".into()],
                     needs_terminal: false,
                 },
@@ -1506,6 +1676,7 @@ mod tests {
                     bin_names: vec!["aeditor".into()],
                     mac_app_names: vec![],
                     windows_exe_names: vec![],
+                    windows_appx_package: String::new(),
                     open_args: vec!["{}".into()],
                     needs_terminal: false,
                 },
@@ -1564,6 +1735,7 @@ mod tests {
                 bin_names: vec!["my-code".into()],
                 mac_app_names: vec![],
                 windows_exe_names: vec![],
+                windows_appx_package: String::new(),
                 open_args: vec!["--user".into(), "{}".into()],
                 needs_terminal: false,
             }],
@@ -1576,6 +1748,7 @@ mod tests {
                 bin_names: vec!["code".into()],
                 mac_app_names: vec!["Visual Studio Code.app".into()],
                 windows_exe_names: vec!["Code.exe".into()],
+                windows_appx_package: String::new(),
                 open_args: vec!["{}".into()],
                 needs_terminal: false,
             }],
@@ -1614,6 +1787,7 @@ mod tests {
                 bin_names: vec!["code".into()],
                 mac_app_names: vec![],
                 windows_exe_names: vec!["PortableCode.exe".into()],
+                windows_appx_package: String::new(),
                 open_args: vec!["{}".into()],
                 needs_terminal: false,
             }],
@@ -1626,6 +1800,7 @@ mod tests {
                 bin_names: vec!["code".into()],
                 mac_app_names: vec![],
                 windows_exe_names: vec!["Code.exe".into()],
+                windows_appx_package: String::new(),
                 open_args: vec!["{}".into()],
                 needs_terminal: false,
             }],
@@ -1675,7 +1850,7 @@ mod tests {
             cmd.display()
         );
 
-        let url = extract_windows_icon_data_url(&cmd)
+        let url = extract_windows_icon_data_url("", &cmd)
             .expect("icon extraction returned None for cmd.exe — extractor regression");
 
         let prefix = "data:image/png;base64,";
@@ -1716,11 +1891,164 @@ mod tests {
     #[test]
     fn extract_windows_icon_returns_none_for_missing_path() {
         let bogus = PathBuf::from(r"C:\does-not-exist\definitely-not-a-real-binary.exe");
-        let result = extract_windows_icon_data_url(&bogus);
+        let result = extract_windows_icon_data_url("", &bogus);
         assert!(
             result.is_none(),
             "expected None for missing path; got {:?}",
             result
+        );
+    }
+
+    /// Cache key must be stable for the same .exe (same path, size,
+    /// mtime) so a cold launch's extracted icon still hits on the
+    /// next launch — that's the whole point of disk caching.
+    /// `merge_*` and `resolve_windows_*` already pin the upstream
+    /// fields; this pins the downstream key derivation.
+    #[cfg(windows)]
+    #[test]
+    fn icon_cache_key_stable_for_same_exe() {
+        let tmp = tempfile::tempdir().unwrap();
+        let exe = tmp.path().join("stable.exe");
+        std::fs::write(&exe, b"MZ").unwrap();
+        let k1 = icon_cache_key("", &exe).expect("key");
+        let k2 = icon_cache_key("", &exe).expect("key");
+        assert_eq!(k1, k2);
+    }
+
+    /// Different paths must produce different keys, otherwise two
+    /// apps would clobber each other's cached icons.
+    #[cfg(windows)]
+    #[test]
+    fn icon_cache_key_differs_per_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        let a = tmp.path().join("a.exe");
+        let b = tmp.path().join("b.exe");
+        std::fs::write(&a, b"MZ").unwrap();
+        std::fs::write(&b, b"MZ").unwrap();
+        let ka = icon_cache_key("", &a).expect("key a");
+        let kb = icon_cache_key("", &b).expect("key b");
+        assert_ne!(ka, kb);
+    }
+
+    /// AppxPackage entries must key off the package name, not the
+    /// .exe path — `wt.exe` and `cmd.exe` both resolve to the same
+    /// system console alias if we only hashed the path, and the UWP
+    /// icon would never get cached separately. Passing different
+    /// packages with the same path must produce different keys.
+    #[cfg(windows)]
+    #[test]
+    fn icon_cache_key_separates_appx_from_exe() {
+        let tmp = tempfile::tempdir().unwrap();
+        let exe = tmp.path().join("alias.exe");
+        std::fs::write(&exe, b"MZ").unwrap();
+        let k_exe = icon_cache_key("", &exe).expect("exe key");
+        let k_uwp = icon_cache_key("Microsoft.WindowsTerminal", &exe).expect("uwp key");
+        assert_ne!(k_exe, k_uwp);
+    }
+
+    /// Cache miss must surface `None` so `app_icon_data_url` knows
+    /// to fall through to extraction. We exercise the read path with
+    /// a definitely-nonexistent key.
+    #[cfg(windows)]
+    #[test]
+    fn icon_cache_read_miss_returns_none() {
+        let key = "claudette-test-definitely-not-a-real-key-9q3jklm";
+        // Defensive: clean up if a prior test run left this lying.
+        if let Some(dir) = icon_cache_dir() {
+            let _ = std::fs::remove_file(dir.join(format!("{key}.b64")));
+        }
+        assert!(read_icon_cache(key).is_none());
+    }
+
+    /// Round-trip the cache: write then read must return the exact
+    /// same data URL. Pins the on-disk format so we don't accidentally
+    /// add a header / encoding step that breaks existing entries.
+    #[cfg(windows)]
+    #[test]
+    fn icon_cache_write_then_read_roundtrips() {
+        let key = format!("claudette-roundtrip-{}", std::process::id());
+        let value = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
+        write_icon_cache(&key, value);
+        let got = read_icon_cache(&key).expect("just-written cache must read back");
+        assert_eq!(got, value);
+        // Cleanup so the test is hermetic.
+        if let Some(dir) = icon_cache_dir() {
+            let _ = std::fs::remove_file(dir.join(format!("{key}.b64")));
+        }
+    }
+
+    /// Cache invalidation: changing the file's mtime must produce a
+    /// different cache key so a re-extract triggers next launch.
+    /// This is what makes VS Code's silent auto-update get a fresh
+    /// icon if the vendor ever changes it.
+    #[cfg(windows)]
+    #[test]
+    fn icon_cache_key_changes_on_mtime_change() {
+        let tmp = tempfile::tempdir().unwrap();
+        let exe = tmp.path().join("upgraded.exe");
+        std::fs::write(&exe, b"MZ").unwrap();
+        let k1 = icon_cache_key("", &exe).expect("key1");
+
+        // Bump the file's mtime by writing different content + waiting
+        // for filesystem timestamp granularity (NTFS = 100ns, but
+        // some toolchains coalesce same-second writes; sleep keeps it
+        // honest).
+        std::thread::sleep(std::time::Duration::from_secs(1));
+        std::fs::write(&exe, b"MZ\x90\x90").unwrap();
+        let k2 = icon_cache_key("", &exe).expect("key2");
+        assert_ne!(k1, k2, "cache key did not change after mtime + size delta");
+    }
+
+    /// End-to-end UWP regression: only meaningful on machines where
+    /// Windows Terminal is installed via Appx (default on Windows 11).
+    /// We skip cleanly otherwise so this can run unconditionally on
+    /// any Windows host.
+    ///
+    /// What's pinned: the AppxPackage path returns *something* high-
+    /// res (≥64×64 PNG) for `Microsoft.WindowsTerminal`. If a future
+    /// refactor drops the UWP branch, the icon would silently fall
+    /// back to the generic console glyph at 32×32 and this test
+    /// fails loudly.
+    #[cfg(windows)]
+    #[test]
+    fn extract_windows_icon_resolves_appx_package_logo_for_terminal() {
+        use base64::Engine as _;
+        use base64::engine::general_purpose::STANDARD;
+
+        // Quick gate: skip when WT isn't installed (e.g. Windows
+        // Server hosts without the optional component).
+        let pkg_check = std::process::Command::new("powershell.exe")
+            .args([
+                "-NoProfile",
+                "-Command",
+                "if (Get-AppxPackage -Name 'Microsoft.WindowsTerminal*' -ErrorAction SilentlyContinue) { 'yes' } else { 'no' }",
+            ])
+            .output();
+        let installed =
+            matches!(pkg_check, Ok(o) if String::from_utf8_lossy(&o.stdout).trim() == "yes");
+        if !installed {
+            eprintln!("skipping: Microsoft.WindowsTerminal not installed");
+            return;
+        }
+
+        // Empty path is fine — the AppxPackage branch fires before we
+        // ever look at line 2.
+        let url = extract_windows_icon_data_url("Microsoft.WindowsTerminal", Path::new(""))
+            .expect("Appx icon extraction returned None for installed package");
+
+        let prefix = "data:image/png;base64,";
+        assert!(url.starts_with(prefix), "missing png prefix: {url}");
+        let png = STANDARD
+            .decode(&url[prefix.len()..])
+            .expect("base64 decodes");
+        assert!(png.len() > 200, "PNG body too small ({} bytes)", png.len());
+        assert_eq!(&png[..8], b"\x89PNG\r\n\x1a\n");
+        let width = u32::from_be_bytes([png[16], png[17], png[18], png[19]]);
+        let height = u32::from_be_bytes([png[20], png[21], png[22], png[23]]);
+        assert!(
+            width >= 64 && height >= 64,
+            "Appx logo regressed below 64x64 ({width}x{height}) — \
+             ExtractAssociatedIcon fallback path may have taken over"
         );
     }
 
@@ -1774,6 +2102,7 @@ mod tests {
             bin_names: vec!["myapp".into()],
             mac_app_names: vec![],
             windows_exe_names: vec!["MyApp.exe".into()],
+            windows_appx_package: String::new(),
             open_args: vec!["{}".into()],
             needs_terminal: false,
         };
@@ -1803,6 +2132,7 @@ mod tests {
             bin_names: vec!["cursor".into()],
             mac_app_names: vec![],
             windows_exe_names: vec!["Cursor.exe".into()],
+            windows_appx_package: String::new(),
             open_args: vec!["{}".into()],
             needs_terminal: false,
         };
@@ -1829,6 +2159,7 @@ mod tests {
             bin_names: vec!["ghost".into()],
             mac_app_names: vec![],
             windows_exe_names: vec!["Nonexistent.exe".into()],
+            windows_appx_package: String::new(),
             open_args: vec!["{}".into()],
             needs_terminal: false,
         };
@@ -1853,6 +2184,7 @@ mod tests {
             bin_names: vec!["standalone".into()],
             mac_app_names: vec![],
             windows_exe_names: vec![],
+            windows_appx_package: String::new(),
             open_args: vec![],
             needs_terminal: false,
         };

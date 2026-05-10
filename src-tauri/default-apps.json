@@ -167,6 +167,7 @@
       "category": "terminal",
       "bin_names": ["wt"],
       "windows_exe_names": ["wt.exe", "WindowsTerminal.exe"],
+      "windows_appx_package": "Microsoft.WindowsTerminal",
       "open_args": ["-d", "{}"]
     },
     {
