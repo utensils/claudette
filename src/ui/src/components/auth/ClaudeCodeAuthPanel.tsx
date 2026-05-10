@@ -66,7 +66,9 @@ export function ClaudeCodeAuthPanel({
       )}
 
       {authState.status === "error" && (
-        <div className={styles.authPanelError}>{authState.error}</div>
+        <div className={styles.authPanelError}>
+          {cleanClaudeAuthError(authState.error)}
+        </div>
       )}
 
       <div className={styles.usageActions}>

@@ -34,7 +34,18 @@ export function isClaudeAuthError(error: string): boolean {
 }
 
 export function cleanClaudeAuthError(error: string): string {
-  return error.replace(/^ENV_AUTH:\s*/i, "").trim();
+  const cleaned = error
+    .replace(/^Error:\s*/i, "")
+    .replace(/^ENV_AUTH:\s*/i, "")
+    .trim();
+  const apiError = cleaned.match(
+    /^(?:Failed to authenticate\.\s*)?API Error:\s*(\d+)\s*(.+)$/i,
+  );
+  if (apiError) {
+    const [, status, message] = apiError;
+    return `${message.replace(/[.\s]+$/, "")} (${status})`;
+  }
+  return cleaned;
 }
 
 export function useClaudeAuthLogin({

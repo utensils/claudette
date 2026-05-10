@@ -12,7 +12,6 @@ export type { NativeSlashKind };
 export const CONFIG_SECTIONS = [
   "general",
   "models",
-  "authentication",
   "usage",
   "appearance",
   "notifications",

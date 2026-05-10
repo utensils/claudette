@@ -19,7 +19,7 @@ export function ChatAuthFailureCallout({ error }: { error: string }) {
         <div className={styles.error}>{cleanClaudeAuthError(error)}</div>
         <button
           className={styles.action}
-          onClick={() => openSettings("authentication")}
+          onClick={() => openSettings("general")}
         >
           {t("auth_open_settings")}
         </button>

@@ -1,7 +1,6 @@
 {
   "nav_general": "General",
   "nav_models": "Models",
-  "nav_authentication": "Authentication",
   "nav_appearance": "Appearance",
   "nav_notifications": "Notifications",
   "nav_git": "Git",
@@ -150,8 +149,8 @@
   "models_backend_status_saved": "Saved",
   "models_backend_status_refreshed": "Refreshed {{count}} model(s)",
 
-  "auth_title": "Authentication",
-  "auth_desc": "Claude Code authentication is owned by the official `claude` CLI. Claudette can launch the same sign-in flow when credentials are missing or invalid.",
+  "auth_setting_label": "Claude Code sign-in",
+  "auth_setting_desc": "Launch the official `claude auth login` flow when local Claude Code credentials are missing or invalid.",
   "auth_panel_title": "Claude Code sign-in",
   "auth_panel_desc": "Sign in with the official Claude Code CLI so agents can run with your local Claude Code credentials.",
   "auth_chat_failure_title": "Claude Code sign-in required",
@@ -160,7 +159,7 @@
   "auth_signing_in_hint": "Complete the flow in your browser. This panel will update when sign-in finishes.",
   "auth_manual_url": "If the browser didn't open, click here",
   "auth_sign_in": "Sign in",
-  "auth_open_settings": "Open Authentication",
+  "auth_open_settings": "Open Settings",
   "auth_cancel": "Cancel",
   "auth_success": "Signed in. Retry the action that needed authentication.",
   "auth_agent_note": "Agent runs continue to use the credentials managed by `claude`; Claudette does not copy OAuth tokens into chat subprocesses.",

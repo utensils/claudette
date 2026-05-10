@@ -178,7 +178,46 @@ describe("MessagesWithTurns edit summaries", () => {
     await act(async () => {
       button?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     });
-    expect(openSettings).toHaveBeenCalledWith("authentication");
+    expect(openSettings).toHaveBeenCalledWith("general");
+  });
+
+  it("shows only the latest repeated auth failure as the sign-in callout", async () => {
+    const messages = [
+      message("user-1", "User", "Explore this project"),
+      message(
+        "assistant-1",
+        "Assistant",
+        "Failed to authenticate. API Error: 401 Invalid authentication credentials",
+      ),
+      message("user-2", "User", "ping"),
+      message(
+        "assistant-2",
+        "Assistant",
+        "Failed to authenticate. API Error: 401 Invalid authentication credentials",
+      ),
+    ];
+
+    const container = await render(
+      <MessagesWithTurns
+        messages={messages}
+        workspaceId={WORKSPACE_ID}
+        sessionId={SESSION_ID}
+        isRunning={false}
+        searchQuery=""
+        toolDisplayMode="grouped"
+      />,
+    );
+
+    const authButtons = Array.from(container.querySelectorAll("button")).filter(
+      (button) => button.textContent?.includes("auth_open_settings"),
+    );
+    expect(authButtons).toHaveLength(1);
+    expect(
+      container.textContent?.match(/auth_chat_failure_title/g) ?? [],
+    ).toHaveLength(1);
+    expect(container.textContent).toContain(
+      "Invalid authentication credentials (401)",
+    );
   });
 
   it("still shows files parsed from this turn's own edit activity", async () => {

@@ -51,4 +51,12 @@ describe("cleanClaudeAuthError", () => {
       "Missing OAuth scope",
     );
   });
+
+  it("formats Claude API auth errors without repeating transport wrappers", () => {
+    expect(
+      cleanClaudeAuthError(
+        "Failed to authenticate. API Error: 401 Invalid authentication credentials",
+      ),
+    ).toBe("Invalid authentication credentials (401)");
+  });
 });

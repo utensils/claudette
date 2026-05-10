@@ -51,7 +51,7 @@ import { PdfThumbnail } from "./PdfThumbnail";
 import { MessageCopyButton } from "./MessageCopyButton";
 import { groupToolActivitiesForDisplay } from "./toolActivityGroups";
 import { ChatAuthFailureCallout } from "../auth/ChatAuthFailureCallout";
-import { isClaudeAuthError } from "../auth/claudeAuth";
+import { cleanClaudeAuthError, isClaudeAuthError } from "../auth/claudeAuth";
 import {
   EMPTY_ACTIVITIES,
   EMPTY_ATTACHMENTS,
@@ -153,6 +153,18 @@ export const MessagesWithTurns = memo(function MessagesWithTurns({
   const liveToolActivities = useAppStore(
     (s) => s.toolActivities[sessionId] ?? EMPTY_ACTIVITIES,
   );
+  const lastAuthFailureMessageId = useMemo(() => {
+    for (let i = messages.length - 1; i >= 0; i -= 1) {
+      const msg = messages[i];
+      if (
+        (msg.role === "Assistant" || msg.role === "System") &&
+        isClaudeAuthError(msg.content)
+      ) {
+        return msg.id;
+      }
+    }
+    return null;
+  }, [messages]);
 
   // Pre-build a Map keyed by message_id for O(1) lookup in the render loop.
   //
@@ -832,8 +844,14 @@ export const MessagesWithTurns = memo(function MessagesWithTurns({
                     </div>
                   )}
                   {(msg.role === "Assistant" || msg.role === "System") &&
-                  isClaudeAuthError(msg.content) ? (
+                  isClaudeAuthError(msg.content) &&
+                  msg.id === lastAuthFailureMessageId ? (
                     <ChatAuthFailureCallout error={msg.content} />
+                  ) : (msg.role === "Assistant" || msg.role === "System") &&
+                    isClaudeAuthError(msg.content) ? (
+                    <div className={styles.authFailureText}>
+                      {cleanClaudeAuthError(msg.content)}
+                    </div>
                   ) : shouldRenderAsMarkdown(msg.role) ? (
                     // Assistant + System: run through Markdown so plan-mode dumps,
                     // setup-script output, and other multi-line system notes

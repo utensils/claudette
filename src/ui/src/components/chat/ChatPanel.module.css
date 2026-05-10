@@ -239,6 +239,13 @@
   color: var(--text-primary);
 }
 
+.authFailureText {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
 /* Cmd/Ctrl+F search highlights. Scoped to .messages with :global() so the
    wrapper components in this folder (and the post-render DOM walker in
    HighlightedMessageMarkdown) can style raw <mark> tags without needing to

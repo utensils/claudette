@@ -12,6 +12,7 @@ import {
   installWhenIdle,
 } from "../../../hooks/useAutoUpdater";
 import i18n, { isSupportedLanguage } from "../../../i18n";
+import { ClaudeCodeAuthSetting } from "../../auth/ClaudeCodeAuthSetting";
 import { DefaultTerminalSetting } from "./DefaultTerminalSetting";
 import styles from "../Settings.module.css";
 
@@ -403,6 +404,8 @@ export function GeneralSettings() {
           </select>
         </div>
       </div>
+
+      <ClaudeCodeAuthSetting />
     </div>
   );
 }

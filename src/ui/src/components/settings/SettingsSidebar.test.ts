@@ -14,15 +14,6 @@ describe("getAppSections", () => {
     );
   });
 
-  it("always shows the Authentication section", () => {
-    expect(getAppSections(false, false).map((section) => section.id)).toContain(
-      "authentication",
-    );
-    expect(getAppSections(true, true).map((section) => section.id)).toContain(
-      "authentication",
-    );
-  });
-
   it("hides the Claude Code Plugins section when plugin management is disabled", () => {
     expect(
       getAppSections(false, false).map((section) => section.id),

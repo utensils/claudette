@@ -13,6 +13,7 @@ Open settings with `⌘/Ctrl + ,` or from the sidebar. Settings are organized in
 | Default terminal | Terminal app used by **Open in Terminal** from workspace menus. Choose **Auto** to use the first detected terminal, or pick a specific detected terminal app. | Auto |
 | System tray | Enable/disable system tray integration | Enabled |
 | Archive on merge | Automatically archive a workspace when its pull request is merged. See [SCM Providers](/claudette/features/scm-providers/). | Off |
+| Claude Code sign-in | Runs the official `claude auth login` flow and streams progress back into Claudette. Used by chat and Usage-panel auth failures. | — |
 
 ## Models
 
@@ -28,14 +29,6 @@ Default values applied to all new agent sessions. Per-workspace overrides are av
 | Default fast mode | Start new sessions in fast mode | Off |
 
 See [Agent Configuration](/claudette/features/agent-configuration/) for detailed descriptions of each option.
-
-## Authentication
-
-| Setting | Description | Default |
-|---------|-------------|---------|
-| Claude Code sign-in | Runs the official `claude auth login` flow and streams progress back into Claudette. Used by chat and Usage-panel auth failures. | — |
-
-Claudette does not maintain a separate sign-out control. Use `claude auth logout` in a terminal to sign out of Claude Code.
 
 ## Appearance
 

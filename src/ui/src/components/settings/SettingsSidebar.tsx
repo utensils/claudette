@@ -1,7 +1,6 @@
 import {
   SlidersHorizontal,
   Cpu,
-  KeyRound,
   Palette,
   Bell,
   FileCode,
@@ -29,7 +28,6 @@ export function getAppSections(
   return [
     { id: "general", icon: SlidersHorizontal },
     { id: "models", icon: Cpu },
-    { id: "authentication", icon: KeyRound },
     { id: "appearance", icon: Palette },
     { id: "notifications", icon: Bell },
     { id: "editor", icon: FileCode },
@@ -65,7 +63,6 @@ export function SettingsSidebar() {
   const sectionLabel = (id: string) => {
     if (id === "general") return t("settings:nav_general");
     if (id === "models") return t("settings:nav_models");
-    if (id === "authentication") return t("settings:nav_authentication");
     if (id === "appearance") return t("settings:nav_appearance");
     if (id === "notifications") return t("settings:nav_notifications");
     if (id === "editor") return t("settings:nav_editor");

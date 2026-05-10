@@ -1235,6 +1235,26 @@
   font-size: 13px;
 }
 
+.authInlineStatus,
+.authInlineSuccess,
+.authInlineError {
+  font-size: 12px;
+  line-height: 1.5;
+  margin-top: 6px;
+}
+
+.authInlineStatus {
+  color: var(--text-dim);
+}
+
+.authInlineSuccess {
+  color: var(--status-running);
+}
+
+.authInlineError {
+  color: var(--status-stopped);
+}
+
 .authNotes {
   color: var(--text-dim);
   display: flex;

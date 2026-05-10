@@ -13,11 +13,6 @@ const GeneralSettings = lazy(() =>
 const ModelSettings = lazy(() =>
   import("./sections/ModelSettings").then((m) => ({ default: m.ModelSettings })),
 );
-const AuthenticationSettings = lazy(() =>
-  import("./sections/AuthenticationSettings").then((m) => ({
-    default: m.AuthenticationSettings,
-  })),
-);
 const AppearanceSettings = lazy(() =>
   import("./sections/AppearanceSettings").then((m) => ({ default: m.AppearanceSettings })),
 );
@@ -86,7 +81,6 @@ function SectionContent({ section }: { section: string | null }) {
   );
   if (!section || section === "general") return <GeneralSettings />;
   if (section === "models") return <ModelSettings />;
-  if (section === "authentication") return <AuthenticationSettings />;
   if (section === "usage") return <UsageSettings />;
   if (section === "appearance") return <AppearanceSettings />;
   if (section === "notifications") return <NotificationsSettings />;
