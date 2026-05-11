@@ -467,6 +467,20 @@ fn clean_trust_error_excerpt(plugin_name: &str, raw: &str) -> CleanedTrustError 
     }
 }
 
+/// Extract the basename of a parsed config path for display in the
+/// modal headline. Splits on BOTH `/` and `\` so a Windows path like
+/// `C:\Users\…\mise.toml` produces `mise.toml`, not the whole path.
+/// `std::path::Path::file_name()` would also work on Windows but only
+/// because the runtime path separator is `\` there — using it on a
+/// Linux build against a Windows string still misclassifies. Manual
+/// split-on-either is platform-independent and matches what mise /
+/// direnv print.
+fn basename(path: &str) -> Option<&str> {
+    path.rsplit(|c: char| c == '/' || c == '\\')
+        .next()
+        .filter(|s| !s.is_empty())
+}
+
 /// Extract the path + a clean "X is not trusted" headline from mise's
 /// "Config files in <path> are not trusted" line. Falls back to the
 /// generic stderr-first-line behavior if the expected phrase isn't
@@ -478,7 +492,7 @@ fn clean_mise(body: &str) -> CleanedTrustError {
             // " <path> are not trusted. Trust them with `mise trust`. See https://..."
             if let Some(end) = rest.find(" are not trusted") {
                 let path = rest[..end].trim().to_string();
-                let filename = path.rsplit('/').next().unwrap_or("mise.toml");
+                let filename = basename(&path).unwrap_or("mise.toml");
                 return CleanedTrustError {
                     message: format!("{filename} is not trusted."),
                     config_path: Some(path),
@@ -511,7 +525,7 @@ fn clean_direnv(body: &str) -> CleanedTrustError {
             // "<path> is blocked. Run `direnv allow` ..."
             if let Some(end) = rest.find(" is blocked") {
                 let path = rest[..end].trim().to_string();
-                let filename = path.rsplit('/').next().unwrap_or(".envrc");
+                let filename = basename(&path).unwrap_or(".envrc");
                 return CleanedTrustError {
                     message: format!("{filename} is blocked."),
                     config_path: Some(path),
@@ -1304,6 +1318,48 @@ mod tests {
         assert_eq!(
             cleaned.config_path.as_deref(),
             Some("/Users/x/.claudette/workspaces/Claudette/grumpy-crocus/.envrc"),
+        );
+    }
+
+    #[test]
+    fn basename_handles_unix_and_windows_separators() {
+        assert_eq!(basename("/Users/jb/repo/mise.toml"), Some("mise.toml"));
+        assert_eq!(
+            basename("C:\\Users\\jb\\repo\\mise.toml"),
+            Some("mise.toml")
+        );
+        // Mixed separators (e.g. Cygwin / Git Bash on Windows passing a
+        // POSIX-style path with backslash inside it) still extract the
+        // final component.
+        assert_eq!(
+            basename("C:\\Users\\jb/mixed/path/mise.toml"),
+            Some("mise.toml")
+        );
+        // Trailing separator → no filename portion. Defensive: callers
+        // fall back to a hard-coded "mise.toml" / ".envrc" in that case.
+        assert_eq!(basename("/repo/"), None);
+        assert_eq!(basename(""), None);
+    }
+
+    #[test]
+    fn clean_trust_error_extracts_filename_on_windows_path() {
+        // Codex P3 finding regression guard: a Windows-style path must
+        // produce just `mise.toml` (or `.envrc`) in the modal headline,
+        // not the whole `C:\...` blob.
+        let raw = "Config files in C:\\Users\\jb\\repo\\mise.toml are not trusted. Trust them with `mise trust`.";
+        let cleaned = clean_trust_error_excerpt("env-mise", raw);
+        assert_eq!(cleaned.message, "mise.toml is not trusted.");
+        assert_eq!(
+            cleaned.config_path.as_deref(),
+            Some("C:\\Users\\jb\\repo\\mise.toml"),
+        );
+
+        let raw_dr = "direnv: error C:\\Users\\jb\\repo\\.envrc is blocked. Run `direnv allow` to approve its content";
+        let cleaned_dr = clean_trust_error_excerpt("env-direnv", raw_dr);
+        assert_eq!(cleaned_dr.message, ".envrc is blocked.");
+        assert_eq!(
+            cleaned_dr.config_path.as_deref(),
+            Some("C:\\Users\\jb\\repo\\.envrc"),
         );
     }
 

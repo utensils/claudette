@@ -5,6 +5,7 @@ import { Modal } from "./Modal";
 import {
   envTargetFromRepo,
   envTargetFromWorkspace,
+  getEnvSources,
   reloadEnv,
   runEnvTrust,
   setEnvProviderEnabled,
@@ -69,6 +70,75 @@ const PLUGIN_TRUST_COMMAND: Record<string, string> = {
   "env-mise": "mise trust",
   "env-direnv": "direnv allow",
 };
+
+/**
+ * Substrings the Rust `is_trust_error_str` heuristic matches in
+ * `src/env_provider/mod.rs`. Mirrored here so we can verify post-action
+ * that the plugin we just trusted / disabled actually unblocked — see
+ * `classifyPostActionError`. Keep in sync with the Rust list.
+ */
+const TRUST_ERROR_MARKERS = [
+  "not trusted",
+  "is blocked",
+  "is not allowed",
+  "untrusted",
+] as const;
+
+/**
+ * Classify what the post-action env source row tells us about the
+ * plugin's state. Pure — exported for tests; the live modal feeds it
+ * the result of `getEnvSources`.
+ *
+ *   `cleared` — plugin absent from sources, or present with no error,
+ *               or present with a non-trust error (the EnvPanel
+ *               surfaces those; the modal's job is done).
+ *   `still-blocked` — plugin is present and still has a trust-class
+ *                     error. The row should stay red so the user
+ *                     can retry, instead of going green and the
+ *                     modal auto-closing on an action that didn't
+ *                     actually take effect.
+ */
+export function classifyPostActionError(
+  source: { error: string | null } | undefined,
+): { kind: "cleared" } | { kind: "still-blocked"; error: string } {
+  if (!source || !source.error) return { kind: "cleared" };
+  const lower = source.error.toLowerCase();
+  if (TRUST_ERROR_MARKERS.some((m) => lower.includes(m))) {
+    return { kind: "still-blocked", error: source.error };
+  }
+  return { kind: "cleared" };
+}
+
+/**
+ * After a Trust/Disable action, re-query the workspace's env sources
+ * to confirm the plugin we acted on is no longer reporting a
+ * trust-class error. The backend split returns `Ok(())` from
+ * `prepare_workspace_environment` when only trust errors remain (they
+ * route through the event), so relying on the resolve's success/
+ * failure is not enough — we inspect sources directly. Codex P2
+ * finding (b365f01c review).
+ */
+async function verifyPluginCleared(
+  workspaceId: string,
+  pluginName: string,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  try {
+    const sources = await getEnvSources(envTargetFromWorkspace(workspaceId));
+    const result = classifyPostActionError(
+      sources.find((s) => s.plugin_name === pluginName),
+    );
+    return result.kind === "cleared"
+      ? { ok: true }
+      : { ok: false, error: result.error };
+  } catch {
+    // `get_env_sources` failure (IPC issue, transient cache problem)
+    // shouldn't block the user — fall through to "ok" and let the
+    // env-panel reflect any residual issue. Worst case: a green pill
+    // on a row that's still blocked, same as before this check
+    // existed. We do not regress the prior behavior.
+    return { ok: true };
+  }
+}
 
 export function isEnvTrustModalData(value: unknown): value is EnvTrustModalData {
   if (value === null || typeof value !== "object") return false;
@@ -177,7 +247,16 @@ export function EnvTrustModal() {
           // the row green — the env panel will reflect any residual
           // error separately.
         }
-        setRow(pluginName, { kind: "trusted" });
+        // Verify the trust command actually unblocked this worktree.
+        // The backend now returns Ok(()) for trust-only failures
+        // (they route through the event), so we can't infer success
+        // from the resolve's return value. See `verifyPluginCleared`.
+        const verify = await verifyPluginCleared(data.workspace_id, pluginName);
+        if (verify.ok) {
+          setRow(pluginName, { kind: "trusted" });
+        } else {
+          setRow(pluginName, { kind: "failed", error: verify.error });
+        }
       } catch (e) {
         setRow(pluginName, {
           kind: "failed",
@@ -207,7 +286,17 @@ export function EnvTrustModal() {
           // Same rationale as the trust path — non-trust residue
           // surfaces in the env panel, not here.
         }
-        setRow(pluginName, { kind: "disabled" });
+        // Same verification as the trust path: confirm the provider
+        // is actually gone from the trust-error set. For Disable,
+        // success is normally cheap to detect (the dispatcher filters
+        // out disabled plugins before resolve), but the check costs
+        // nothing extra and keeps the two paths symmetric.
+        const verify = await verifyPluginCleared(data.workspace_id, pluginName);
+        if (verify.ok) {
+          setRow(pluginName, { kind: "disabled" });
+        } else {
+          setRow(pluginName, { kind: "failed", error: verify.error });
+        }
       } catch (e) {
         setRow(pluginName, {
           kind: "failed",

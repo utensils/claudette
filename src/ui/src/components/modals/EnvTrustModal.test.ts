@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   allRowsResolved,
+  classifyPostActionError,
   isEnvTrustModalData,
 } from "./EnvTrustModal";
 
@@ -138,5 +139,58 @@ describe("isEnvTrustModalData", () => {
         ],
       }),
     ).toBe(false);
+  });
+});
+
+describe("classifyPostActionError — Codex P2 regression guard", () => {
+  // After a Trust/Disable action the modal re-queries getEnvSources
+  // and routes the matching row through this classifier. The bug
+  // codex caught: if the underlying trust command silently no-op'd,
+  // `prepare_workspace_environment` now returns Ok(()) (trust errors
+  // route through the event), so the old code marked the row trusted
+  // and auto-closed the modal on a still-blocked workspace.
+
+  it("treats an absent source as cleared (Disable hid it from the dispatcher)", () => {
+    expect(classifyPostActionError(undefined)).toEqual({ kind: "cleared" });
+  });
+
+  it("treats a source with no error as cleared (trust took effect)", () => {
+    expect(classifyPostActionError({ error: null })).toEqual({
+      kind: "cleared",
+    });
+  });
+
+  it("reports still-blocked for a 'not trusted' mise error", () => {
+    expect(
+      classifyPostActionError({ error: "mise.toml is not trusted." }),
+    ).toEqual({ kind: "still-blocked", error: "mise.toml is not trusted." });
+  });
+
+  it("reports still-blocked for a 'is blocked' direnv error", () => {
+    expect(
+      classifyPostActionError({
+        error: "direnv: error /repo/.envrc is blocked.",
+      }),
+    ).toEqual({
+      kind: "still-blocked",
+      error: "direnv: error /repo/.envrc is blocked.",
+    });
+  });
+
+  it("matches case-insensitively (mirrors Rust is_trust_error_str)", () => {
+    expect(
+      classifyPostActionError({ error: "FILE IS UNTRUSTED" }),
+    ).toEqual({ kind: "still-blocked", error: "FILE IS UNTRUSTED" });
+  });
+
+  it("treats a non-trust error as cleared (EnvPanel surfaces those)", () => {
+    // The modal is the wrong surface for broken TOML / parse errors;
+    // leaving the row green here lets the EnvPanel error card take
+    // over instead of double-prompting via the modal.
+    expect(
+      classifyPostActionError({
+        error: "TOML parse error at line 4",
+      }),
+    ).toEqual({ kind: "cleared" });
   });
 });
