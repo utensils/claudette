@@ -16,14 +16,26 @@ import shared from "./shared.module.css";
 import styles from "./EnvTrustModal.module.css";
 
 /**
+ * Trust/Disable can take 15-30s on a project with many worktrees —
+ * `run_env_trust` fans out the trust command (mise trust / direnv
+ * allow) to every existing worktree under the repo, then we re-resolve
+ * + verify. The phase string lets the modal show "Running `direnv
+ * allow`…" / "Re-resolving environment…" / "Verifying…" inline so the
+ * user sees what we're actually doing instead of a static "Trusting…".
+ */
+type ActionPhase = "running" | "reloading" | "verifying";
+
+/**
  * Per-plugin row state — the modal can have several rows in flight at
  * once (mise AND direnv both untrusted on a fresh worktree is common).
  * Each transitions independently as the user clicks Trust / Disable.
+ * `startedAt` is wall-clock milliseconds so the button label can show
+ * an elapsed-seconds counter (`Trusting… 5s`) ticking once per second.
  */
 type RowState =
   | { kind: "idle" }
-  | { kind: "trusting" }
-  | { kind: "disabling" }
+  | { kind: "trusting"; startedAt: number; phase: ActionPhase }
+  | { kind: "disabling"; startedAt: number; phase: ActionPhase }
   | { kind: "trusted" }
   | { kind: "disabled" }
   | { kind: "failed"; error: string };
@@ -239,10 +251,49 @@ export function EnvTrustModal() {
     return () => clearTimeout(id);
   }, [data, rowStates, closeModal]);
 
+  // 1Hz ticker that forces a re-render while any row is in flight so
+  // the elapsed-seconds counter on the button (and the long-running
+  // hint at 10s) update without each consumer wiring its own timer.
+  // No-op when nothing is busy — `setInterval` only runs while the
+  // user is actually waiting on us.
+  const [, tick] = useState(0);
+  const anyBusy = Object.values(rowStates).some(
+    (s) => s.kind === "trusting" || s.kind === "disabling",
+  );
+  useEffect(() => {
+    if (!anyBusy) return;
+    const id = setInterval(() => tick((n) => n + 1), 1000);
+    return () => clearInterval(id);
+  }, [anyBusy]);
+
+  /** Format elapsed time as `5s` / `1m 23s` for compact button label. */
+  const formatElapsed = (startedAt: number): string => {
+    const sec = Math.max(0, Math.floor((Date.now() - startedAt) / 1000));
+    if (sec < 60) return `${sec}s`;
+    return `${Math.floor(sec / 60)}m ${sec % 60}s`;
+  };
+
+  /** Phase string for the inline status line under the row actions. */
+  const phaseLabel = (
+    phase: ActionPhase,
+    command: string,
+  ): string => {
+    if (phase === "running")
+      return t("env_trust_progress_phase_running", { command });
+    if (phase === "reloading") return t("env_trust_progress_phase_reloading");
+    return t("env_trust_progress_phase_verifying");
+  };
+
   const handleTrust = useCallback(
     async (pluginName: string) => {
       if (!data) return;
-      setRow(pluginName, { kind: "trusting" });
+      const startedAt = Date.now();
+      // Phase transitions through `running` (trust command + fan-out)
+      // → `reloading` (re-prepare the failing workspace) → `verifying`
+      // (re-query sources to confirm the trust took effect). Each
+      // transition keeps the same startedAt so the elapsed counter
+      // reflects total wall-clock time, not per-phase.
+      setRow(pluginName, { kind: "trusting", startedAt, phase: "running" });
       try {
         const repoTarget = envTargetFromRepo(data.repo_id);
         // Run trust first — fan out to every existing worktree under
@@ -260,6 +311,11 @@ export function EnvTrustModal() {
           "allow",
         );
         if (data.workspace_id !== null) {
+          setRow(pluginName, {
+            kind: "trusting",
+            startedAt,
+            phase: "reloading",
+          });
           // Force the failing workspace to re-resolve so the spinner
           // clears and the user can immediately start a chat / terminal.
           await reloadEnv(
@@ -274,6 +330,11 @@ export function EnvTrustModal() {
             // error separately.
           }
         }
+        setRow(pluginName, {
+          kind: "trusting",
+          startedAt,
+          phase: "verifying",
+        });
         // Verify the trust command actually unblocked the affected
         // scope. The backend now returns Ok(()) for trust-only
         // failures (they route through the event), so we can't infer
@@ -303,7 +364,8 @@ export function EnvTrustModal() {
   const handleDisable = useCallback(
     async (pluginName: string) => {
       if (!data) return;
-      setRow(pluginName, { kind: "disabling" });
+      const startedAt = Date.now();
+      setRow(pluginName, { kind: "disabling", startedAt, phase: "running" });
       try {
         await setEnvProviderEnabled(
           envTargetFromRepo(data.repo_id),
@@ -311,6 +373,11 @@ export function EnvTrustModal() {
           false,
         );
         if (data.workspace_id !== null) {
+          setRow(pluginName, {
+            kind: "disabling",
+            startedAt,
+            phase: "reloading",
+          });
           // Re-resolve the failing workspace to drop the failure
           // status now that the provider is gated out of the
           // dispatcher entirely.
@@ -325,6 +392,11 @@ export function EnvTrustModal() {
             // surfaces in the env panel, not here.
           }
         }
+        setRow(pluginName, {
+          kind: "disabling",
+          startedAt,
+          phase: "verifying",
+        });
         // Same verification as the trust path: confirm the provider
         // is actually gone from the trust-error set. For Disable,
         // success is normally cheap to detect (the dispatcher filters
@@ -430,7 +502,15 @@ export function EnvTrustModal() {
                   onClick={() => void handleTrust(p.plugin_name)}
                 >
                   {state.kind === "trusting"
-                    ? t("env_trust_action_trusting")
+                    ? t("env_trust_action_trusting_progress", {
+                        seconds: formatElapsed(state.startedAt),
+                      })
+                    : // Settled rows hold the terminal "Trusted" label
+                    // instead of falling back to "Trust" — otherwise
+                    // the button flashes "Trusting…" → "Trust" → close
+                    // in the 600ms before auto-close. Same for Disable.
+                    state.kind === "trusted"
+                    ? t("env_trust_action_trusted")
                     : t("env_trust_action_trust")}
                 </button>
                 <button
@@ -440,13 +520,35 @@ export function EnvTrustModal() {
                   onClick={() => void handleDisable(p.plugin_name)}
                 >
                   {state.kind === "disabling"
-                    ? t("env_trust_action_disabling")
-                    : t("env_trust_action_disable")}
+                    ? t("env_trust_action_disabling_progress", {
+                        seconds: formatElapsed(state.startedAt),
+                      })
+                    : state.kind === "disabled"
+                      ? t("env_trust_action_disabled")
+                      : t("env_trust_action_disable")}
                 </button>
               </div>
-              <p className={styles.hint}>
-                {t("env_trust_trust_hint", { command })}
-              </p>
+              {isBusy ? (
+                <>
+                  {/* Replace the static "Runs `cmd` in every worktree"
+                      hint with a live phase indicator while busy. Same
+                      visual slot, so the row doesn't reflow. The hint
+                      reverts back to the static text once the user
+                      either retries (failed) or the row settles. */}
+                  <p className={styles.hint} aria-live="polite">
+                    {phaseLabel(state.phase, command)}
+                  </p>
+                  {Date.now() - state.startedAt > 10_000 && (
+                    <p className={styles.hint}>
+                      {t("env_trust_progress_long_running")}
+                    </p>
+                  )}
+                </>
+              ) : (
+                <p className={styles.hint}>
+                  {t("env_trust_trust_hint", { command })}
+                </p>
+              )}
               {state.kind === "failed" && (
                 <p className={styles.error}>{state.error}</p>
               )}
