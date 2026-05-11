@@ -13,6 +13,7 @@ import { ImportWorktreesModal } from "./ImportWorktreesModal";
 import { ConfirmNightlyChannelModal } from "./ConfirmNightlyChannelModal";
 import { MissingCliModal } from "./MissingCliModal";
 import { KeyboardShortcutsModal } from "./KeyboardShortcutsModal";
+import { EnvTrustModal } from "./EnvTrustModal";
 
 export function ModalRouter() {
   const activeModal = useAppStore((s) => s.activeModal);
@@ -46,6 +47,8 @@ export function ModalRouter() {
       return <MissingCliModal />;
     case "keyboard-shortcuts":
       return <KeyboardShortcutsModal />;
+    case "envTrust":
+      return <EnvTrustModal />;
     default:
       return null;
   }

@@ -49,9 +49,22 @@ function M.export(args)
 
     if result.code ~= 0 then
         -- Non-zero exit from `direnv export json` usually means the
-        -- `.envrc` hasn't been allowed yet. Propagate the stderr so the
-        -- UI can surface a "run direnv allow" hint.
-        error("direnv export failed: " .. (result.stderr or result.stdout or "unknown error"))
+        -- `.envrc` hasn't been allowed yet. For the trust case,
+        -- direnv's stderr is typically the single line
+        --   "direnv: error <path> is blocked. Run `direnv allow` ..."
+        -- preceded by setup chatter (loading messages, watch logs).
+        -- Surface just that one canonical line so the upstream display
+        -- (toast or trust modal) doesn't have to parse around the
+        -- noise. Rust's `clean_trust_error_excerpt` still handles
+        -- third-party plugins; this is a Claudette-bundled-plugin
+        -- presentation tightening.
+        local stderr = result.stderr or result.stdout or "unknown error"
+        local blocked_line = stderr:match("direnv: error [^\n]+ is blocked[^\n]*")
+        if blocked_line then
+            error(blocked_line)
+        else
+            error(stderr)
+        end
     end
 
     -- Empty stdout = no vars to export (e.g. `.envrc` exists but is

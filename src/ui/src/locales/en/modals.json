@@ -98,5 +98,22 @@
   "missing_cli_platform_pre": "Detected platform:",
   "missing_cli_no_guidance": "No installation guidance is available for this tool — please consult its documentation.",
   "missing_cli_copy": "Copy",
-  "missing_cli_copied": "Copied"
+  "missing_cli_copied": "Copied",
+
+  "env_trust_title": "Environment trust needed",
+  "env_trust_intro": "One or more env-provider plugins need your permission before they can run for this project. Until you decide, the agent will spawn without their tools and variables.",
+  "env_trust_repo_label": "Project",
+  "env_trust_action_trust": "Trust",
+  "env_trust_action_trusting": "Trusting…",
+  "env_trust_action_trusted": "Trusted",
+  "env_trust_action_disable": "Disable for project",
+  "env_trust_action_disabling": "Disabling…",
+  "env_trust_action_disabled": "Disabled",
+  "env_trust_action_failed": "Action failed",
+  "env_trust_trust_hint": "Runs `{{command}}` in every existing worktree and saves your choice so new workspaces in this project trust automatically.",
+  "env_trust_disable_hint": "Skip this provider for this project. You can re-enable it later in Repo Settings → Environment.",
+  "env_trust_details_show": "Show raw error",
+  "env_trust_details_hide": "Hide raw error",
+  "env_trust_cancel": "Decide later",
+  "env_trust_done": "Close"
 }

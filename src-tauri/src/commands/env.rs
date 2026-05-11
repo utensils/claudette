@@ -331,30 +331,259 @@ fn source_error_summary(source: &claudette::env_provider::ResolvedSource) -> Str
     )
 }
 
-fn prepare_workspace_error(resolved: &claudette::env_provider::ResolvedEnv) -> Option<String> {
-    let trust_errors = resolved.trust_errors();
-    if !trust_errors.is_empty() {
-        let summaries = trust_errors
-            .into_iter()
-            .map(source_error_summary)
-            .collect::<Vec<_>>()
-            .join("; ");
-        return Some(format!("Environment setup needed: {summaries}"));
-    }
+/// Per-plugin entry in [`WorkspaceEnvTrustNeededPayload`]. Carries
+/// just enough for the frontend modal to render a row and route the
+/// Trust / Disable buttons through the existing `run_env_trust` and
+/// `set_env_provider_enabled` commands without re-querying.
+#[derive(Clone, Serialize)]
+pub struct TrustNeededEntry {
+    pub plugin_name: String,
+    /// One-line human-readable summary of *why* the provider failed,
+    /// e.g. "mise.toml is not trusted." or ".envrc is blocked." Built
+    /// by [`clean_trust_error_excerpt`] from the raw plugin stderr so
+    /// the modal renders a presentable line instead of the Lua-wrapped
+    /// dump that ships up from `host.exec`.
+    pub message: String,
+    /// Absolute path to the offending config file, if we could parse
+    /// it out of the stderr. Surfaced as a sub-label so the user can
+    /// see exactly which mise.toml / .envrc is being trusted.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub config_path: Option<String>,
+    /// Original stderr / error text the plugin propagated up,
+    /// truncated to a reasonable size. Hidden behind a "Show details"
+    /// disclosure in the modal — useful for diagnosing a wedge where
+    /// the cleaner doesn't recognize a new error variant.
+    pub error_excerpt: String,
+}
 
-    // "disabled" = user toggled it off (per-repo or globally).
-    // "unavailable" = required CLI not on PATH; bundled env-providers
-    // ship for everyone, so most users won't have all of nix/mise/
-    // direnv installed and that is not a user-actionable error
-    // (issue #718). Both are silent skips at the toast layer.
+/// Payload for the `workspace_env_trust_needed` Tauri event. Emitted
+/// once per [`prepare_workspace_environment`] call that detected at
+/// least one trust-error source. The frontend opens the EnvTrustModal
+/// on receipt; the toast path is bypassed for trust-only failures so
+/// the user isn't double-prompted.
+#[derive(Clone, Serialize)]
+pub struct WorkspaceEnvTrustNeededPayload {
+    pub workspace_id: String,
+    pub repo_id: String,
+    pub plugins: Vec<TrustNeededEntry>,
+}
+
+/// Single-shot UTF-8-safe truncation used to keep stderr excerpts
+/// short enough to embed in the modal payload without dumping
+/// multi-screen mise/direnv diagnostics over IPC.
+fn truncate_excerpt(error: &str, max_bytes: usize) -> String {
+    let trimmed = error.trim_end();
+    if trimmed.len() <= max_bytes {
+        return trimmed.to_string();
+    }
+    let mut cut = max_bytes;
+    while cut > 0 && !trimmed.is_char_boundary(cut) {
+        cut -= 1;
+    }
+    format!("{}…", &trimmed[..cut])
+}
+
+/// Result of cleaning a raw plugin trust error for display.
+struct CleanedTrustError {
+    message: String,
+    config_path: Option<String>,
+}
+
+/// Strip the mlua `runtime error: [string "<plugin path>"]:<line>:`
+/// call-frame prefix (and the optional outer `export: Plugin script
+/// error: ` dispatcher wrapper) from a propagated Lua error. The
+/// remaining text is whatever string the plugin actually passed to
+/// `error()`. Tolerates either prefix being absent so this works on
+/// any error string — plain stderr passes through unchanged.
+fn strip_lua_wrapper(raw: &str) -> &str {
+    let s = raw
+        .strip_prefix("export: ")
+        .unwrap_or(raw)
+        .strip_prefix("Plugin script error: ")
+        .unwrap_or_else(|| raw.strip_prefix("export: ").unwrap_or(raw));
+    // After the outer wrapper, mlua surfaces:
+    //   runtime error: [string "<path>"]:<N>: <inner>
+    // We want just `<inner>`. The `]:N: ` segment varies (line number
+    // is dynamic), so find the closing `"]:` then skip to the next
+    // ": " which terminates the line-number suffix.
+    let after_runtime = s.strip_prefix("runtime error: ").unwrap_or(s);
+    if let Some(bracket_end) = after_runtime.find("\"]:") {
+        let after_bracket = &after_runtime[bracket_end + 3..];
+        // Skip `<digits>: ` — find the first ": " after the digits.
+        if let Some(colon_space) = after_bracket.find(": ") {
+            return &after_bracket[colon_space + 2..];
+        }
+    }
+    after_runtime
+}
+
+/// Strip the Lua-runtime wrapper, deduplicate path mentions, and drop
+/// `--verbose` hint footers from a plugin's trust-error stderr so the
+/// modal can show a presentable one-liner instead of a multi-line
+/// dump. Per plugin so we can recognize the actual error shape:
+///
+/// **mise** stderr looks like:
+/// ```text
+/// export: Plugin script error: runtime error: [string "plugins/env-mise/init.lua"]:52: mise env failed: mise ERROR error parsing config file: ~/...mise.toml
+/// mise ERROR Config files in ~/...mise.toml are not trusted. Trust them with `mise trust`. See https://...
+/// mise ERROR Run with --verbose or MISE_VERBOSE=1 for more information
+/// ```
+///
+/// **direnv** stderr looks like:
+/// ```text
+/// direnv: error /repo/.envrc is blocked. Run `direnv allow` to approve its content
+/// ```
+fn clean_trust_error_excerpt(plugin_name: &str, raw: &str) -> CleanedTrustError {
+    // Drop the Lua-runtime wrapper. mlua surfaces a Lua-side
+    // `error("...")` as the string
+    //   `runtime error: [string "<plugin path>"]:<line>: <inner>`
+    // optionally prefixed by `export: Plugin script error: ` from the
+    // env-provider dispatcher. The two bundled plugins also used to
+    // prefix the inner with `"mise env failed: " / "direnv export
+    // failed: "` before the Lua tightening landed; we still strip
+    // both prefixes for back-compat with any in-flight stderr that
+    // crossed plugin versions during an upgrade.
+    let body = strip_lua_wrapper(raw);
+    let body = body
+        .split_once("mise env failed: ")
+        .map(|(_, rest)| rest)
+        .or_else(|| {
+            body.split_once("direnv export failed: ")
+                .map(|(_, rest)| rest)
+        })
+        .unwrap_or(body);
+
+    match plugin_name {
+        "env-mise" => clean_mise(body),
+        "env-direnv" => clean_direnv(body),
+        _ => CleanedTrustError {
+            // Unknown plugin shape — leave the body as-is but capped
+            // to a single line so the modal still gets one summary
+            // line. The full stderr is still available via the
+            // disclosure.
+            message: body.lines().next().unwrap_or(body).trim().to_string(),
+            config_path: None,
+        },
+    }
+}
+
+/// Extract the path + a clean "X is not trusted" headline from mise's
+/// "Config files in <path> are not trusted" line. Falls back to the
+/// generic stderr-first-line behavior if the expected phrase isn't
+/// present (e.g. mise changed its error format).
+fn clean_mise(body: &str) -> CleanedTrustError {
+    for line in body.lines() {
+        let line = line.trim().trim_start_matches("mise ERROR").trim();
+        if let Some(rest) = line.strip_prefix("Config files in ") {
+            // " <path> are not trusted. Trust them with `mise trust`. See https://..."
+            if let Some(end) = rest.find(" are not trusted") {
+                let path = rest[..end].trim().to_string();
+                let filename = path.rsplit('/').next().unwrap_or("mise.toml");
+                return CleanedTrustError {
+                    message: format!("{filename} is not trusted."),
+                    config_path: Some(path),
+                };
+            }
+        }
+    }
+    CleanedTrustError {
+        message: body
+            .lines()
+            .map(|l| l.trim().trim_start_matches("mise ERROR").trim())
+            .find(|l| !l.is_empty() && !l.starts_with("Run with"))
+            .unwrap_or("mise config is not trusted.")
+            .to_string(),
+        config_path: None,
+    }
+}
+
+/// Extract the .envrc path + a clean "is blocked" headline from
+/// direnv's "error <path> is blocked" line.
+fn clean_direnv(body: &str) -> CleanedTrustError {
+    for line in body.lines() {
+        // direnv prefixes everything with `direnv: ` — strip it for the
+        // headline so the line reads cleanly.
+        let line = line
+            .trim()
+            .strip_prefix("direnv: ")
+            .unwrap_or_else(|| line.trim());
+        if let Some(rest) = line.strip_prefix("error ") {
+            // "<path> is blocked. Run `direnv allow` ..."
+            if let Some(end) = rest.find(" is blocked") {
+                let path = rest[..end].trim().to_string();
+                let filename = path.rsplit('/').next().unwrap_or(".envrc");
+                return CleanedTrustError {
+                    message: format!("{filename} is blocked."),
+                    config_path: Some(path),
+                };
+            }
+        }
+    }
+    CleanedTrustError {
+        message: body
+            .lines()
+            .next()
+            .unwrap_or(".envrc is blocked.")
+            .trim()
+            .to_string(),
+        config_path: None,
+    }
+}
+
+/// Build the trust-needed event payload from a resolved env, returning
+/// `None` when no source flagged a trust error. Pure — extracted so the
+/// command site stays small and the unit tests can assert payload
+/// shape without a Tauri AppHandle.
+fn build_trust_needed_payload(
+    workspace_id: &str,
+    repo_id: &str,
+    resolved: &claudette::env_provider::ResolvedEnv,
+) -> Option<WorkspaceEnvTrustNeededPayload> {
+    let trust_errors = resolved.trust_errors();
+    if trust_errors.is_empty() {
+        return None;
+    }
+    let plugins = trust_errors
+        .into_iter()
+        .map(|src| {
+            let raw = src.error.as_deref().unwrap_or("");
+            let cleaned = clean_trust_error_excerpt(&src.plugin_name, raw);
+            TrustNeededEntry {
+                plugin_name: src.plugin_name.clone(),
+                message: cleaned.message,
+                config_path: cleaned.config_path,
+                error_excerpt: truncate_excerpt(raw, 1200),
+            }
+        })
+        .collect();
+    Some(WorkspaceEnvTrustNeededPayload {
+        workspace_id: workspace_id.to_string(),
+        repo_id: repo_id.to_string(),
+        plugins,
+    })
+}
+
+/// Build a toast message string for non-trust provider errors only.
+/// Trust errors are intentionally excluded — they're routed through the
+/// `workspace_env_trust_needed` event + modal instead so the user isn't
+/// double-prompted. Returns `None` when there's nothing toast-worthy
+/// (clean resolve, or only trust/disabled/unavailable sources).
+///
+/// "disabled" = user toggled it off (per-repo or globally).
+/// "unavailable" = required CLI not on PATH; bundled env-providers
+/// ship for everyone, so most users won't have all of nix/mise/
+/// direnv installed and that is not a user-actionable error
+/// (issue #718). Both are silent skips at the toast layer.
+fn prepare_workspace_error(resolved: &claudette::env_provider::ResolvedEnv) -> Option<String> {
     let summaries = resolved
         .sources
         .iter()
         .filter(|source| {
-            source
-                .error
-                .as_deref()
-                .is_some_and(|error| error != "disabled" && error != "unavailable")
+            source.error.as_deref().is_some_and(|error| {
+                error != "disabled"
+                    && error != "unavailable"
+                    && !claudette::env_provider::is_trust_error_str(error)
+            })
         })
         .map(source_error_summary)
         .collect::<Vec<_>>();
@@ -370,6 +599,14 @@ fn prepare_workspace_error(resolved: &claudette::env_provider::ResolvedEnv) -> O
 
 /// Resolve env-providers for a workspace before the user can start a fresh
 /// agent process or terminal PTY.
+///
+/// When at least one source reports a trust-class error (mise / direnv
+/// config not yet allowed for this worktree), the
+/// `workspace_env_trust_needed` Tauri event is emitted carrying the
+/// repo id, workspace id, and per-plugin error excerpts so the
+/// frontend's `EnvTrustModal` can prompt the user without a toast. Any
+/// non-trust failures still surface via the `Err` return so the
+/// existing toast path stays unchanged for those cases.
 #[tauri::command]
 pub async fn prepare_workspace_environment(
     workspace_id: String,
@@ -385,7 +622,7 @@ pub async fn prepare_workspace_environment(
     // Snapshot — see `plugins_snapshot` doc; this command can run
     // ~120s on cold env-providers and must not stall the Plugins UI.
     let registry = state.plugins_snapshot().await;
-    let progress = TauriEnvProgressSink::new(app, ws_info.id.clone());
+    let progress = TauriEnvProgressSink::new(app.clone(), ws_info.id.clone());
     let resolved = claudette::env_provider::resolve_with_registry_and_progress(
         &registry,
         &state.env_cache,
@@ -396,6 +633,12 @@ pub async fn prepare_workspace_environment(
     )
     .await;
     register_resolved_with_watcher(&state, Path::new(&worktree), &resolved.sources).await;
+    if let Some(payload) = build_trust_needed_payload(&ws_info.id, &repo_id, &resolved) {
+        // Best-effort: the emit can fail if the Tauri app handle is
+        // shutting down, but we still want to fall through and surface
+        // any non-trust errors below.
+        let _ = app.emit("workspace_env_trust_needed", payload);
+    }
     if let Some(error) = prepare_workspace_error(&resolved) {
         return Err(error);
     }
@@ -916,7 +1159,12 @@ mod tests {
     }
 
     #[test]
-    fn prepare_workspace_error_surfaces_trust_errors() {
+    fn prepare_workspace_error_hides_pure_trust_errors() {
+        // Contract after the EnvTrustModal split: trust-class errors
+        // are routed through the `workspace_env_trust_needed` event,
+        // NOT through `prepare_workspace_error`'s toast string. So a
+        // resolve whose only failures are trust errors returns None
+        // (the command succeeds, the modal handles UX).
         let mut source = src("env-direnv");
         source.error = Some(
             "direnv: error /repo/.envrc is blocked. Run `direnv allow` to approve its content"
@@ -927,10 +1175,7 @@ mod tests {
             ..Default::default()
         };
 
-        let message = prepare_workspace_error(&resolved).unwrap();
-
-        assert!(message.starts_with("Environment setup needed: env-direnv:"));
-        assert!(message.contains("direnv allow"));
+        assert_eq!(prepare_workspace_error(&resolved), None);
     }
 
     #[test]
@@ -948,5 +1193,177 @@ mod tests {
             message,
             "Environment provider failed: env-mise: mise failed to export env"
         );
+    }
+
+    #[test]
+    fn prepare_workspace_error_surfaces_non_trust_when_mixed_with_trust() {
+        // If a resolve produces both a trust error (mise.toml not
+        // trusted) AND a generic failure (TOML parse error in another
+        // provider), the trust portion routes through the modal and
+        // the non-trust portion still surfaces via the toast. The user
+        // sees both signals — modal for the actionable trust prompt,
+        // toast for the truly broken provider.
+        let mut trust = src("env-mise");
+        trust.error = Some("mise.toml is not trusted".to_string());
+        let mut other = src("env-direnv");
+        other.error = Some("direnv export failed: unexpected EOF".to_string());
+        let resolved = ResolvedEnv {
+            sources: vec![trust, other],
+            ..Default::default()
+        };
+
+        let message = prepare_workspace_error(&resolved).unwrap();
+        assert!(message.starts_with("Environment provider failed:"));
+        assert!(message.contains("env-direnv"));
+        assert!(!message.contains("env-mise"));
+    }
+
+    #[test]
+    fn build_trust_needed_payload_lists_only_trust_sources() {
+        let mut trust = src("env-mise");
+        trust.error = Some("mise.toml is not trusted".to_string());
+        let mut other = src("env-direnv");
+        other.error = Some("direnv export failed".to_string());
+        let resolved = ResolvedEnv {
+            sources: vec![trust, other],
+            ..Default::default()
+        };
+
+        let payload = build_trust_needed_payload("ws-id", "repo-id", &resolved).unwrap();
+        assert_eq!(payload.workspace_id, "ws-id");
+        assert_eq!(payload.repo_id, "repo-id");
+        assert_eq!(payload.plugins.len(), 1);
+        assert_eq!(payload.plugins[0].plugin_name, "env-mise");
+        // The raw stderr is preserved in error_excerpt for the
+        // "Show details" disclosure even when the cleaner doesn't
+        // recognize the message shape.
+        assert!(payload.plugins[0].error_excerpt.contains("not trusted"));
+    }
+
+    #[test]
+    fn strip_lua_wrapper_handles_mlua_runtime_error_with_dispatcher_prefix() {
+        // What mlua actually surfaces when env-provider dispatcher
+        // catches a Lua `error("...")` and re-raises with its own
+        // `export: Plugin script error: ` prefix. This is the literal
+        // shape the EnvTrustModal screenshot was rendering as the
+        // headline — the cleaner must reduce it to just `<inner>`.
+        let raw = "export: Plugin script error: runtime error: [string \"plugins/env-mise/init.lua\"]:67: Config files in /repo/mise.toml are not trusted.";
+        assert_eq!(
+            strip_lua_wrapper(raw),
+            "Config files in /repo/mise.toml are not trusted."
+        );
+    }
+
+    #[test]
+    fn strip_lua_wrapper_is_a_noop_for_plain_strings() {
+        // A plugin that doesn't go through Lua (or a third-party plugin
+        // returning a clean error directly) must pass through untouched.
+        let raw = "Config files in /repo/mise.toml are not trusted.";
+        assert_eq!(strip_lua_wrapper(raw), raw);
+    }
+
+    #[test]
+    fn strip_lua_wrapper_strips_just_runtime_prefix_when_dispatcher_absent() {
+        // Lua-side `error()` without the `export: Plugin script error:`
+        // outer wrapper — happens in unit tests that drive the plugin
+        // VM directly. Still needs to land at the inner string.
+        let raw = "runtime error: [string \"plugins/env-mise/init.lua\"]:67: Config files in /repo/mise.toml are not trusted.";
+        assert_eq!(
+            strip_lua_wrapper(raw),
+            "Config files in /repo/mise.toml are not trusted."
+        );
+    }
+
+    #[test]
+    fn clean_trust_error_handles_tightened_lua_output_with_no_legacy_prefix() {
+        // After the env-mise plugin tightening, init.lua passes the
+        // `Config files in ... are not trusted` line directly to
+        // `error()` without the legacy `"mise env failed: "` prefix.
+        // The cleaner must produce the same final message + path as
+        // for the legacy shape — otherwise the modal renders the raw
+        // `[string "..."]:NN:` Luau wrapper as the headline (the bug
+        // from the user's screenshot).
+        let raw = "export: Plugin script error: runtime error: [string \"plugins/env-mise/init.lua\"]:67: Config files in /Users/x/.claudette/workspaces/Claudette/grumpy-crocus/mise.toml are not trusted. Trust them with `mise trust`. See https://mise.jdx.dev/cli/trust.html for more information.";
+        let cleaned = clean_trust_error_excerpt("env-mise", raw);
+        assert_eq!(cleaned.message, "mise.toml is not trusted.");
+        assert_eq!(
+            cleaned.config_path.as_deref(),
+            Some("/Users/x/.claudette/workspaces/Claudette/grumpy-crocus/mise.toml"),
+        );
+    }
+
+    #[test]
+    fn clean_trust_error_handles_tightened_direnv_output_with_no_legacy_prefix() {
+        // Mirror of the env-mise tightening test: env-direnv now
+        // passes the `direnv: error <path> is blocked` line directly
+        // to `error()` without the legacy `"direnv export failed: "`
+        // prefix.
+        let raw = "export: Plugin script error: runtime error: [string \"plugins/env-direnv/init.lua\"]:62: direnv: error /Users/x/.claudette/workspaces/Claudette/grumpy-crocus/.envrc is blocked. Run `direnv allow` to approve its content";
+        let cleaned = clean_trust_error_excerpt("env-direnv", raw);
+        assert_eq!(cleaned.message, ".envrc is blocked.");
+        assert_eq!(
+            cleaned.config_path.as_deref(),
+            Some("/Users/x/.claudette/workspaces/Claudette/grumpy-crocus/.envrc"),
+        );
+    }
+
+    #[test]
+    fn clean_trust_error_extracts_mise_path_and_filename() {
+        // Verbatim shape from the user-reported toast — Lua-runtime
+        // wrapper, two ERROR lines that re-print the same path, and
+        // the verbose-hint footer that should all collapse to one
+        // line.
+        let raw = "export: Plugin script error: runtime error: [string \"plugins/env-mise/init.lua\"]:52: mise env failed: mise ERROR error parsing config file: /Users/x/.claudette/workspaces/Claudette/stubborn-jasmine/mise.toml\nmise ERROR Config files in /Users/x/.claudette/workspaces/Claudette/stubborn-jasmine/mise.toml are not trusted. Trust them with `mise trust`. See https://mise.jdx.dev/cli/trust.html for more information.\nmise ERROR Run with --verbose or MISE_VERBOSE=1 for more information";
+        let cleaned = clean_trust_error_excerpt("env-mise", raw);
+        assert_eq!(cleaned.message, "mise.toml is not trusted.");
+        assert_eq!(
+            cleaned.config_path.as_deref(),
+            Some("/Users/x/.claudette/workspaces/Claudette/stubborn-jasmine/mise.toml"),
+        );
+    }
+
+    #[test]
+    fn clean_trust_error_extracts_direnv_path_and_filename() {
+        let raw = "direnv: error /Users/x/projects/foo/.envrc is blocked. Run `direnv allow` to approve its content";
+        let cleaned = clean_trust_error_excerpt("env-direnv", raw);
+        assert_eq!(cleaned.message, ".envrc is blocked.");
+        assert_eq!(
+            cleaned.config_path.as_deref(),
+            Some("/Users/x/projects/foo/.envrc"),
+        );
+    }
+
+    #[test]
+    fn clean_trust_error_falls_back_when_format_unfamiliar() {
+        // mise might emit something we don't recognize on a future
+        // version bump. We should still produce *some* message — just
+        // first non-empty line — and skip the verbose footer.
+        let raw = "mise ERROR Run with --verbose or MISE_VERBOSE=1 for more information\nmise ERROR something completely new";
+        let cleaned = clean_trust_error_excerpt("env-mise", raw);
+        assert_eq!(cleaned.message, "something completely new");
+        assert!(cleaned.config_path.is_none());
+    }
+
+    #[test]
+    fn build_trust_needed_payload_returns_none_when_clean() {
+        let resolved = ResolvedEnv {
+            sources: vec![src("env-mise")],
+            ..Default::default()
+        };
+        assert!(build_trust_needed_payload("ws", "repo", &resolved).is_none());
+    }
+
+    #[test]
+    fn truncate_excerpt_caps_long_stderr_at_utf8_boundary() {
+        // Build a >max payload that includes a multi-byte char near the
+        // cut point so we exercise the char-boundary backoff loop.
+        let mut input = "a".repeat(58);
+        input.push('é'); // 2 bytes; pushes past 60 if max=60
+        input.push_str("trailing");
+        let out = truncate_excerpt(&input, 60);
+        assert!(out.ends_with('…'));
+        // Ellipsis is one of [..3 bytes] depending on UTF-8 encoding;
+        // the truncated body is at most 60 bytes pre-ellipsis.
+        assert!(out.len() <= 60 + '…'.len_utf8());
     }
 }

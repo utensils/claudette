@@ -61,10 +61,13 @@ The most common reason to set a per-repo override is **timeout**: the default ca
 
 ### One-time per-repo trust prompt
 
-direnv and mise both refuse to evaluate config files that haven't been explicitly approved per worktree (`direnv allow` / `mise trust`). Claudette surfaces this as a "blocked" / "not trusted" error in the env panel with two buttons:
+direnv and mise both refuse to evaluate config files that haven't been explicitly approved per worktree (`direnv allow` / `mise trust`). The first time a workspace under a repo hits this, Claudette opens the **Environment trust needed** modal with one row per affected provider:
 
-- **Trust [provider] for this repo** — runs the trust command in the current worktree and remembers the decision in this repo's settings. Every workspace under the same repo auto-runs the trust command on first encounter from then on, without prompting again.
-- **Disable for this repo** — skips the provider for this repo entirely. Other env-providers still run. You can re-enable from the row's toggle if you change your mind.
+- **Trust** — runs the trust command (`mise trust` / `direnv allow`) in the repo's main checkout AND every existing worktree under it, then persists `repo_trust = "allow"` so any **future** workspace in this repo auto-trusts silently on first resolve via the env-provider plugin's retry path.
+- **Disable for project** — toggles the per-repo `enabled = false` flag so the dispatcher skips the provider entirely for any worktree under this repo. Other env-providers still run. You can re-enable from the row's toggle in Repo Settings → Environment.
+- **Decide later** — dismisses the modal without persisting a choice. The same prompt surfaces again the next time a workspace fails resolve.
+
+The same actions are also available without the modal from the env-panel error card in Repo Settings → Environment, for users who dismissed the prompt or want to revisit their decision.
 
 The decision is per-repo, not global, so trusting one project's `.envrc` doesn't affect any other. The pre-0.24 global `auto_allow` / `auto_trust` toggles have been removed; users who had them enabled are migrated automatically to per-repo `repo_trust = "allow"` for every repository they had at the time of upgrade.
 

@@ -48,8 +48,26 @@ function M.export(args)
 
     if result.code ~= 0 then
         -- Common causes: config not trusted (run `mise trust`) or
-        -- malformed TOML. Surface stderr verbatim.
-        error("mise env failed: " .. (result.stderr or result.stdout or "unknown error"))
+        -- malformed TOML.
+        --
+        -- For the trust case, mise's stderr is the verbose three-line
+        -- form: "error parsing config file: <path>" / "Config files in
+        -- <path> are not trusted." / "Run with --verbose…". The middle
+        -- line is the only one the user / UI cares about — pull just
+        -- that line up so the Lua `error()` doesn't blast all three
+        -- through the Luau call-frame wrapper. Rust's
+        -- `clean_trust_error_excerpt` still handles unknown variants
+        -- and third-party env-providers, but the bundled plugins
+        -- shouldn't depend on that to look presentable.
+        local stderr = result.stderr or result.stdout or "unknown error"
+        local trust_line = stderr:match(
+            "Config files in [^\n]+ are not trusted[^\n]*"
+        )
+        if trust_line then
+            error(trust_line)
+        else
+            error(stderr)
+        end
     end
 
     local env_map = host.json_decode(result.stdout)
