@@ -155,8 +155,14 @@ fn transcript_has_custom_title(path: &Path, session_id: &str) -> Result<bool, St
 
 /// Call Claude Haiku to generate a short branch name slug from the user's
 /// first prompt. Returns a sanitized branch slug (e.g. `fix-login-timeout`).
-/// `worktree_path` sets the subprocess CWD so the CLI picks up the correct
-/// project context (CLAUDE.md) for the user's workspace — not Claudette's own.
+///
+/// `worktree_path` is used as the subprocess CWD so the CLI picks up the
+/// user's git context. Project context (CLAUDE.md, `.mcp.json`, project
+/// `.claude/settings.json`) is intentionally suppressed via `--system-prompt`,
+/// `--setting-sources user`, and `--tools ""`. A user project's CLAUDE.md
+/// plus MCP tool catalog can easily exceed Haiku's input window, and slug
+/// generation doesn't need that context. (`ws_env` env vars are applied
+/// separately via `env.apply` — they don't depend on CWD.)
 pub async fn generate_branch_name(
     prompt_text: &str,
     worktree_path: &str,
@@ -176,7 +182,6 @@ pub async fn generate_branch_name(
     cmd.no_console_window();
     cmd.stdin(std::process::Stdio::null())
         .env("PATH", crate::env::enriched_path());
-    // Run in the user's worktree so the CLI loads *their* project context.
     cmd.current_dir(worktree_path);
     let user_message = format!(
         "Generate a short git branch name slug for the following task. \
@@ -200,7 +205,22 @@ pub async fn generate_branch_name(
         "text",
         "--model",
         "claude-haiku-4-5",
-        "--append-system-prompt",
+        // `--tools` is variadic (`<tools...>`) and greedily consumes every
+        // following arg until the next `--flag`. Place it *before* another
+        // option so the variadic terminates after the empty-string value;
+        // otherwise it eats the positional prompt and the CLI fails with
+        // "Input must be provided either through stdin or as a prompt
+        // argument when using --print".
+        "--tools",
+        "",
+        // Skip project + local settings so the CLI doesn't pull in
+        // `.mcp.json` tool catalogs or `.claude/settings.json` overrides.
+        "--setting-sources",
+        "user",
+        // Replace the default system prompt instead of appending so the CLI
+        // skips CLAUDE.md auto-discovery — user project context can exceed
+        // Haiku's input window, and slug generation doesn't need it.
+        "--system-prompt",
         &system_prompt,
         &user_message,
     ]);
@@ -266,13 +286,20 @@ pub async fn generate_session_name(
     let system_prompt = "You are a chat-session namer. Output ONLY a short \
          descriptive name — never answer or complete the task itself."
         .to_string();
+    // Same context-suppression flags as `generate_branch_name` above — see
+    // that function for the variadic-`--tools` ordering rationale and the
+    // overall context-stripping intent.
     cmd.args([
         "--print",
         "--output-format",
         "text",
         "--model",
         "claude-haiku-4-5",
-        "--append-system-prompt",
+        "--tools",
+        "",
+        "--setting-sources",
+        "user",
+        "--system-prompt",
         &system_prompt,
         &user_message,
     ]);
