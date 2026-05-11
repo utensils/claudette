@@ -545,6 +545,20 @@ pub struct AppState {
     pub merge_base_cache: MergeBaseCache,
     /// Limits concurrent SCM CLI invocations.
     pub scm_semaphore: Arc<Semaphore>,
+    /// The workspace the user is currently viewing. The polling loop reads
+    /// this to keep the focused workspace on a 30s cadence while other
+    /// workspaces back off. `None` when the user is on the dashboard or a
+    /// repository overview rather than a specific workspace.
+    pub selected_workspace_id: RwLock<Option<String>>,
+    /// Last-known activity instant per workspace. Written on workspace
+    /// selection and on agent turn start; read by the SCM polling loop to
+    /// compute the tier interval. Seeded at startup from `chat_sessions`
+    /// so workspaces with recent chat history don't all start as stale.
+    pub workspace_activity: RwLock<HashMap<String, Instant>>,
+    /// When each workspace was last successfully polled by the SCM loop.
+    /// Combined with `workspace_activity` to decide whether a workspace is
+    /// due for another poll on the current tick.
+    pub scm_last_polled: RwLock<HashMap<String, Instant>>,
     /// Pending updater handle from the most recent `check_for_updates_with_channel`
     /// call. The Update struct holds the downloaded payload + signature context
     /// and is not Serialize, so it lives here instead of crossing the IPC boundary.
@@ -593,6 +607,9 @@ impl AppState {
             scm_cache: ScmCache::new(),
             merge_base_cache: MergeBaseCache::new(),
             scm_semaphore: Arc::new(Semaphore::new(4)),
+            selected_workspace_id: RwLock::new(None),
+            workspace_activity: RwLock::new(HashMap::new()),
+            scm_last_polled: RwLock::new(HashMap::new()),
             pending_update: tokio::sync::Mutex::new(None),
             boot_probation: Arc::new(BootProbationState::default()),
             cesp_playback: Mutex::new(claudette::cesp::SoundPlaybackState::new()),

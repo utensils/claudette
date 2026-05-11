@@ -1,5 +1,6 @@
+use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use futures::stream::{self, StreamExt};
 use serde::Serialize;
@@ -830,11 +831,86 @@ async fn poll_workspace_scm(app_state: &AppState, workspace_id: &str) -> Option<
     })
 }
 
+/// Seed the per-workspace activity map from the most recent chat-message
+/// timestamp on each workspace. Without this, every workspace looks
+/// "infinitely idle" after an app restart and would land in the slowest
+/// polling tier even if the user was actively working in it five minutes
+/// before the restart.
+///
+/// Errors at any layer are logged and swallowed — a missing seed just
+/// means a workspace starts as stale and escalates back into the hot tier
+/// on its next selection or agent turn.
+async fn seed_workspace_activity_from_db(
+    db_path: &std::path::Path,
+    activity: &tokio::sync::RwLock<HashMap<String, Instant>>,
+) {
+    let db = match Database::open(db_path) {
+        Ok(db) => db,
+        Err(e) => {
+            tracing::warn!(target: "claudette::scm", error = %e, "failed to open DB for workspace activity seed");
+            return;
+        }
+    };
+    let rows = match db.workspace_last_activity_seconds_ago() {
+        Ok(rows) => rows,
+        Err(e) => {
+            tracing::warn!(target: "claudette::scm", error = %e, "workspace activity query failed");
+            return;
+        }
+    };
+
+    let now = Instant::now();
+    let mut map = activity.write().await;
+    for (workspace_id, seconds_ago) in rows {
+        let secs = seconds_ago.max(0) as u64;
+        let instant = now.checked_sub(Duration::from_secs(secs)).unwrap_or(now);
+        map.insert(workspace_id, instant);
+    }
+}
+
+/// How often a workspace should be polled, given its current focus and
+/// activity state. The smallest interval (30s) matches the outer poll
+/// loop's tick rate so the focused workspace polls every tick; longer
+/// intervals cause workspaces to be skipped on most ticks.
+///
+/// Tiers (from `workspace_activity` last-touch timestamp):
+/// - **Hot** (30s):  selected, agent running, or active within 1h
+/// - **Warm** (5m):  active within 24h
+/// - **Cold** (30m): active within 7d
+/// - **Stale** (1h): everything older, including never-seen workspaces
+fn tier_interval(
+    workspace_id: &str,
+    selected: Option<&str>,
+    agent_running: bool,
+    activity: &HashMap<String, Instant>,
+) -> Duration {
+    if selected == Some(workspace_id) || agent_running {
+        return Duration::from_secs(30);
+    }
+    // No activity entry → treat as fully stale rather than hot, so a fresh
+    // app with no chat history doesn't accidentally hammer every workspace.
+    let Some(last) = activity.get(workspace_id) else {
+        return Duration::from_secs(60 * 60);
+    };
+    let idle = last.elapsed();
+    if idle < Duration::from_secs(60 * 60) {
+        Duration::from_secs(30)
+    } else if idle < Duration::from_secs(60 * 60 * 24) {
+        Duration::from_secs(5 * 60)
+    } else if idle < Duration::from_secs(60 * 60 * 24 * 7) {
+        Duration::from_secs(30 * 60)
+    } else {
+        Duration::from_secs(60 * 60)
+    }
+}
+
 /// Start the background SCM polling loop.
 ///
-/// Runs every 30 seconds, iterating all active workspaces and emitting
-/// `scm-data-updated` events to the frontend so sidebar badges and the
-/// PR status banner stay fresh without user interaction.
+/// Ticks every 30s — the smallest tier interval — but only polls each
+/// workspace when its tier interval has elapsed since the last successful
+/// poll. The focused workspace and workspaces with running agents stay on
+/// the 30s cadence; everything else backs off to 5m/30m/1h based on
+/// `workspace_activity` recency. See [`tier_interval`].
 pub fn start_scm_polling(app_handle: tauri::AppHandle) {
     let handle = app_handle.clone();
     tauri::async_runtime::spawn(async move {
@@ -847,6 +923,8 @@ pub fn start_scm_polling(app_handle: tauri::AppHandle) {
         {
             let app_state = handle.state::<AppState>();
             seed_scm_cache_from_db(&app_state.db_path, &app_state.scm_cache).await;
+            seed_workspace_activity_from_db(&app_state.db_path, &app_state.workspace_activity)
+                .await;
         }
 
         // Small delay to let the app fully initialize
@@ -895,9 +973,53 @@ pub fn start_scm_polling(app_handle: tauri::AppHandle) {
                 (active, global, per_repo)
             };
 
-            // Poll all workspaces concurrently. The semaphore inside
+            // Snapshot the per-tick decision inputs once so all tier
+            // checks see a consistent view (no torn reads if a workspace
+            // is selected mid-cycle).
+            let selected_snapshot = app_state.selected_workspace_id.read().await.clone();
+            let activity_snapshot = app_state.workspace_activity.read().await.clone();
+            let last_polled_snapshot = app_state.scm_last_polled.read().await.clone();
+            let running_workspaces: std::collections::HashSet<String> = {
+                let agents = app_state.agents.read().await;
+                agents
+                    .values()
+                    .filter(|s| s.active_pid.is_some())
+                    .map(|s| s.workspace_id.clone())
+                    .collect()
+            };
+            let now = Instant::now();
+
+            // Filter down to workspaces that are actually due on this tick.
+            let due: Vec<(String, String)> = workspace_ids
+                .into_iter()
+                .filter(|(ws_id, _)| {
+                    let interval = tier_interval(
+                        ws_id,
+                        selected_snapshot.as_deref(),
+                        running_workspaces.contains(ws_id),
+                        &activity_snapshot,
+                    );
+                    match last_polled_snapshot.get(ws_id) {
+                        // Never polled in this app run → always due.
+                        None => true,
+                        Some(last) => now.duration_since(*last) >= interval,
+                    }
+                })
+                .collect();
+
+            if !due.is_empty() {
+                tracing::debug!(
+                    target: "claudette::scm",
+                    due_count = due.len(),
+                    selected = selected_snapshot.as_deref().unwrap_or("none"),
+                    running_count = running_workspaces.len(),
+                    "polling cycle"
+                );
+            }
+
+            // Poll due workspaces concurrently. The semaphore inside
             // poll_workspace_scm limits actual CLI invocations to 4 at a time.
-            let results: Vec<((String, String), Option<ScmDetail>)> = stream::iter(workspace_ids)
+            let results: Vec<((String, String), Option<ScmDetail>)> = stream::iter(due)
                 .map(|(ws_id, repo_id)| {
                     let state = &*app_state;
                     async move {
@@ -911,6 +1033,16 @@ pub fn start_scm_polling(app_handle: tauri::AppHandle) {
 
             for ((ws_id, repo_id), detail) in results {
                 if let Some(detail) = detail {
+                    // Stamp last-polled regardless of whether the poll
+                    // returned PR/CI data — even an empty result counts
+                    // as a successful "we checked, nothing's there" tick
+                    // and should respect the tier cadence.
+                    app_state
+                        .scm_last_polled
+                        .write()
+                        .await
+                        .insert(ws_id.clone(), Instant::now());
+
                     let _ = handle.emit("scm-data-updated", &detail);
 
                     let should_archive = per_repo_archive
@@ -1430,5 +1562,95 @@ mod tests {
             "null pr_json must hydrate as None, not panic",
         );
         assert!(entry.ci_checks.is_empty());
+    }
+
+    /// Helper: build an activity map where workspace `ws` was last active
+    /// `secs_ago` seconds in the past.
+    fn activity_with(ws: &str, secs_ago: u64) -> HashMap<String, Instant> {
+        let mut m = HashMap::new();
+        let when = Instant::now()
+            .checked_sub(Duration::from_secs(secs_ago))
+            .unwrap_or_else(Instant::now);
+        m.insert(ws.to_string(), when);
+        m
+    }
+
+    #[test]
+    fn tier_selected_is_hot() {
+        let activity = activity_with("ws1", 60 * 60 * 24 * 30); // 30 days idle
+        assert_eq!(
+            tier_interval("ws1", Some("ws1"), false, &activity),
+            Duration::from_secs(30),
+            "selected workspace must be hot even if activity is ancient",
+        );
+    }
+
+    #[test]
+    fn tier_agent_running_is_hot() {
+        let activity = activity_with("ws1", 60 * 60 * 24 * 30);
+        assert_eq!(
+            tier_interval("ws1", None, true, &activity),
+            Duration::from_secs(30),
+            "running agent must be hot even if activity is ancient",
+        );
+    }
+
+    #[test]
+    fn tier_recent_activity_under_1h_is_hot() {
+        let activity = activity_with("ws1", 60 * 30); // 30 min ago
+        assert_eq!(
+            tier_interval("ws1", None, false, &activity),
+            Duration::from_secs(30),
+        );
+    }
+
+    #[test]
+    fn tier_under_24h_is_warm() {
+        let activity = activity_with("ws1", 60 * 60 * 6); // 6h ago
+        assert_eq!(
+            tier_interval("ws1", None, false, &activity),
+            Duration::from_secs(5 * 60),
+        );
+    }
+
+    #[test]
+    fn tier_under_7d_is_cold() {
+        let activity = activity_with("ws1", 60 * 60 * 24 * 3); // 3 days ago
+        assert_eq!(
+            tier_interval("ws1", None, false, &activity),
+            Duration::from_secs(30 * 60),
+        );
+    }
+
+    #[test]
+    fn tier_older_than_7d_is_stale() {
+        let activity = activity_with("ws1", 60 * 60 * 24 * 30); // 30 days ago
+        assert_eq!(
+            tier_interval("ws1", None, false, &activity),
+            Duration::from_secs(60 * 60),
+        );
+    }
+
+    #[test]
+    fn tier_unknown_workspace_is_stale() {
+        let activity: HashMap<String, Instant> = HashMap::new();
+        assert_eq!(
+            tier_interval("ws1", None, false, &activity),
+            Duration::from_secs(60 * 60),
+            "workspace with no recorded activity should land in the stale tier, \
+             not the hot tier — otherwise a fresh app with empty maps would \
+             hammer every workspace on startup",
+        );
+    }
+
+    #[test]
+    fn tier_selected_vs_other_workspace() {
+        // A different workspace being selected should not affect ws1's tier.
+        let activity = activity_with("ws1", 60 * 60 * 24 * 3); // 3 days
+        assert_eq!(
+            tier_interval("ws1", Some("ws2"), false, &activity),
+            Duration::from_secs(30 * 60),
+            "selection of an unrelated workspace must not promote ws1 to hot",
+        );
     }
 }

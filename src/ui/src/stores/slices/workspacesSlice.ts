@@ -1,6 +1,16 @@
+import { invoke } from "@tauri-apps/api/core";
 import type { StateCreator } from "zustand";
 import type { Workspace } from "../../types";
 import type { AppState } from "../useAppStore";
+
+// Fire-and-forget: tell the Rust SCM polling loop which workspace the user
+// is viewing so it can keep that workspace on a 30s cadence while letting
+// idle workspaces back off. Errors are swallowed because selection is a
+// pure UI action — a failed notification just means the backend keeps
+// polling on its prior tier, which is fine.
+function notifyBackendSelection(workspaceId: string | null) {
+  invoke("notify_workspace_selected", { workspaceId }).catch(() => {});
+}
 
 export type WorkspaceEnvironmentStatus = "idle" | "preparing" | "ready" | "error";
 
@@ -190,6 +200,7 @@ export const createWorkspacesSlice: StateCreator<
   selectWorkspace: (id) =>
     set((s) => {
       if (id === s.selectedWorkspaceId) return s;
+      notifyBackendSelection(id);
 
       // Save the outgoing workspace's active diff selection, or clear it if
       // the user left that workspace in chat view (e.g. they clicked a chat
@@ -271,6 +282,9 @@ export const createWorkspacesSlice: StateCreator<
         // store mutation that would re-render every subscriber.
         return s;
       }
+      // Picking a repository clears any selected workspace, so the backend
+      // should drop its hot-tier focus too.
+      if (id && s.selectedWorkspaceId) notifyBackendSelection(null);
       return {
         selectedRepositoryId: id,
         // Picking a project clears any open workspace so the project-scoped
@@ -284,6 +298,7 @@ export const createWorkspacesSlice: StateCreator<
       if (s.selectedWorkspaceId === null && s.selectedRepositoryId === null) {
         return s;
       }
+      if (s.selectedWorkspaceId) notifyBackendSelection(null);
       return { selectedWorkspaceId: null, selectedRepositoryId: null };
     }),
   setWorkspaceEnvironment: (id, status, error) =>

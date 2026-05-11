@@ -1151,3 +1151,32 @@ fn now_iso() -> String {
         .unwrap_or_default();
     format!("{}", dur.as_secs())
 }
+
+/// Tell the backend which workspace the user is currently viewing.
+///
+/// The SCM polling loop reads this to keep the selected workspace on a
+/// 30s cadence while letting other workspaces fall into longer polling
+/// tiers. `workspace_id == None` means the user is on the dashboard or a
+/// repository overview rather than a specific workspace.
+///
+/// Also marks the workspace as freshly active and clears its last-polled
+/// stamp so the next polling tick picks it up immediately.
+#[tauri::command]
+pub async fn notify_workspace_selected(
+    workspace_id: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    *state.selected_workspace_id.write().await = workspace_id.clone();
+    if let Some(id) = workspace_id {
+        let now = std::time::Instant::now();
+        state
+            .workspace_activity
+            .write()
+            .await
+            .insert(id.clone(), now);
+        // Force the next polling tick to refresh this workspace even if it
+        // was polled within the previous 30s — the user just looked at it.
+        state.scm_last_polled.write().await.remove(&id);
+    }
+    Ok(())
+}
