@@ -204,19 +204,23 @@ pub async fn generate_branch_name(
         "text",
         "--model",
         "claude-haiku-4-5",
+        // `--tools` is variadic (`<tools...>`) and greedily consumes every
+        // following arg until the next `--flag`. Place it *before* another
+        // option so the variadic terminates after the empty-string value;
+        // otherwise it eats the positional prompt and the CLI fails with
+        // "Input must be provided either through stdin or as a prompt
+        // argument when using --print".
+        "--tools",
+        "",
+        // Skip project + local settings so the CLI doesn't pull in
+        // `.mcp.json` tool catalogs or `.claude/settings.json` overrides.
+        "--setting-sources",
+        "user",
         // Replace the default system prompt instead of appending so the CLI
         // skips CLAUDE.md auto-discovery — user project context can exceed
         // Haiku's input window, and slug generation doesn't need it.
         "--system-prompt",
         &system_prompt,
-        // Skip project + local settings so the CLI doesn't pull in
-        // `.mcp.json` tool catalogs or `.claude/settings.json` overrides.
-        "--setting-sources",
-        "user",
-        // No tools needed for a one-shot slug — keeps the system prompt
-        // free of tool definitions.
-        "--tools",
-        "",
         &user_message,
     ]);
 
@@ -277,21 +281,20 @@ pub async fn generate_session_name(
          descriptive name — never answer or complete the task itself."
         .to_string();
     // Same context-suppression flags as `generate_branch_name` above — see
-    // that function's doc comment for the rationale. A user project's
-    // CLAUDE.md + MCP tool catalog can overflow Haiku's input window and
-    // session-name generation doesn't need that context either.
+    // that function for the variadic-`--tools` ordering rationale and the
+    // overall context-stripping intent.
     cmd.args([
         "--print",
         "--output-format",
         "text",
         "--model",
         "claude-haiku-4-5",
-        "--system-prompt",
-        &system_prompt,
-        "--setting-sources",
-        "user",
         "--tools",
         "",
+        "--setting-sources",
+        "user",
+        "--system-prompt",
+        &system_prompt,
         &user_message,
     ]);
 
