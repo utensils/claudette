@@ -226,8 +226,24 @@ export function ChatPanel() {
       ? (s.fileTabsByWorkspace[selectedWorkspaceId] ?? []).length
       : 0,
   );
+  // Sessions are fetched lazily by SessionTabs' mount effect, so there's a
+  // ~50-150ms window between a workspace becoming selected and its sessions
+  // landing in the store. Without this flag, `noOpenTabs` reads `true` for
+  // that window and ChatPanel briefly renders `WorkspaceEmptyTabs` — which
+  // shares its visual chrome with the Welcome card, so the flash looks
+  // identical to "Start a workspace in X." on every workspace switch / app
+  // launch. Gate the empty-state branch on a confirmed load so we only show
+  // it when the list is genuinely empty.
+  const sessionsLoaded = useAppStore((s) =>
+    selectedWorkspaceId
+      ? s.sessionsLoadedByWorkspace[selectedWorkspaceId] === true
+      : false,
+  );
   const noOpenTabs =
-    activeSessionCount === 0 && diffTabCount === 0 && fileTabCount === 0;
+    sessionsLoaded &&
+    activeSessionCount === 0 &&
+    diffTabCount === 0 &&
+    fileTabCount === 0;
   const messages = activeSessionId
     ? chatMessages[activeSessionId] || []
     : [];
@@ -1287,7 +1303,15 @@ export function ChatPanel() {
       <WorkspacePanelHeader />
       {selectedWorkspaceId && <SessionTabs workspaceId={selectedWorkspaceId} />}
 
-      {noOpenTabs ? (
+      {selectedWorkspaceId && !sessionsLoaded ? (
+        // Loading window: sessions for this workspace haven't landed yet
+        // (see the `sessionsLoaded` comment above). Hold the layout open
+        // with a blank shell so neither `WorkspaceEmptyTabs` nor the
+        // "Send a message…" placard flashes during the transition. The
+        // header and tab strip above keep painting so the chrome stays
+        // anchored.
+        <div className={styles.loadingShell} aria-hidden="true" />
+      ) : noOpenTabs ? (
         // All chat sessions, diff tabs, and file tabs are closed. Skip the
         // chat content + composer entirely so the user lands on a clear
         // affordance for opening a new session instead of a blank pane.
