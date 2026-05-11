@@ -19,6 +19,7 @@ import type {
 import type { EnvSourceInfo, EnvTarget } from "../../../types/env";
 import { PluginSettingInput } from "../PluginSettingInput";
 import { classifyPostActionError } from "../../modals/EnvTrustModal";
+import { summarizeError } from "../../modals/envTrustFormat";
 import styles from "../Settings.module.css";
 
 interface EnvPanelProps {
@@ -100,34 +101,9 @@ function isTrustClassError(error: string | null | undefined): boolean {
   );
 }
 
-/**
- * Trim a raw plugin error string to a single readable line for the
- * EnvTrustModal's `message` field. Mirrors the backend's
- * `clean_trust_error_excerpt` / `strip_lua_wrapper` pipeline in
- * `src-tauri/src/commands/env.rs` so the proactive-from-Settings path
- * displays the same clean text as the event-driven path.
- *
- * Strips, in order:
- *   - ANSI SGR escape sequences (direnv tints its blocked-message red)
- *   - `export: ` (dispatcher prefix for `export` op failures)
- *   - `Plugin script error: runtime error: ` (mlua wrapper)
- *   - `[string "..."]:N: ` (Lua call-site location)
- *   - leading whitespace / first line / 240 chars
- *
- * If we drift from the backend cleaner, the proactive modal text and
- * the event modal text won't match — keep both in sync.
- */
-function summarizeError(error: string): string {
-  // eslint-disable-next-line no-control-regex
-  const ANSI = /\x1b\[[\d;]*m/g;
-  const cleaned = error
-    .replace(ANSI, "")
-    .replace(/^export:\s*/i, "")
-    .replace(/Plugin script error:\s*runtime error:\s*/i, "")
-    .replace(/\[string "[^"]*"\]:\d+:\s*/, "")
-    .trim();
-  return cleaned.split("\n")[0].slice(0, 240);
-}
+// summarizeError lives in ../../modals/envTrustFormat so both this
+// proactive entry point and the event-driven modal share the same
+// cleaner. See its module doc for the strip-order contract.
 
 /**
  * Environment providers panel for a workspace.

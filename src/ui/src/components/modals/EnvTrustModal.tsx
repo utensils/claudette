@@ -12,6 +12,7 @@ import {
 } from "../../services/env";
 import { setClaudettePluginRepoSetting } from "../../services/claudettePlugins";
 import { prepareWorkspaceEnvironment } from "../../services/tauri";
+import { formatElapsed } from "./envTrustFormat";
 import shared from "./shared.module.css";
 import styles from "./EnvTrustModal.module.css";
 
@@ -265,13 +266,6 @@ export function EnvTrustModal() {
     const id = setInterval(() => tick((n) => n + 1), 1000);
     return () => clearInterval(id);
   }, [anyBusy]);
-
-  /** Format elapsed time as `5s` / `1m 23s` for compact button label. */
-  const formatElapsed = (startedAt: number): string => {
-    const sec = Math.max(0, Math.floor((Date.now() - startedAt) / 1000));
-    if (sec < 60) return `${sec}s`;
-    return `${Math.floor(sec / 60)}m ${sec % 60}s`;
-  };
 
   /** Phase string for the inline status line under the row actions. */
   const phaseLabel = (
