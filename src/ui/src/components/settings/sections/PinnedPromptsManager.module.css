@@ -193,24 +193,56 @@
   background: var(--chat-input-bg);
 }
 
+/* Hide native radios visually but keep them in the tab order so the browser
+   handles roving-tabindex + Left/Right/Up/Down arrow navigation natively. */
+.segmentedRadioInput {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  border: 0;
+  clip: rect(0 0 0 0);
+  overflow: hidden;
+  white-space: nowrap;
+}
+
 .segmentedButton {
-  appearance: none;
-  background: none;
-  border: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   color: var(--text-muted);
   font-size: 11px;
   padding: 4px 10px;
   cursor: pointer;
+  user-select: none;
   transition: background 0.12s ease, color 0.12s ease;
 }
 
-.segmentedButton + .segmentedButton {
+.segmentedButton + .segmentedButton,
+.segmentedRadioInput + .segmentedButton,
+.segmentedRadioInput + .segmentedButtonActive {
   border-left: 1px solid var(--divider);
 }
 
-.segmentedButton:hover:not(:disabled) {
+.segmentedButton:hover {
   color: var(--text-primary);
   background: var(--hover-bg);
+}
+
+/* Radio focus ring lands on the associated label (the visible "button"). */
+.segmentedRadioInput:focus-visible + .segmentedButton,
+.segmentedRadioInput:focus-visible + .segmentedButtonActive {
+  outline: 2px solid color-mix(in srgb, var(--accent-primary) 60%, transparent);
+  outline-offset: -2px;
+}
+
+/* Disabled radio → make its label look and behave inert. */
+.segmentedRadioInput:disabled + .segmentedButton,
+.segmentedRadioInput:disabled + .segmentedButtonActive {
+  opacity: 0.5;
+  cursor: default;
+  pointer-events: none;
 }
 
 .segmentedButtonActive {
@@ -219,7 +251,7 @@
   color: var(--accent-primary);
 }
 
-.segmentedButtonActive:hover:not(:disabled) {
+.segmentedButtonActive:hover {
   background: color-mix(in srgb, var(--accent-primary) 24%, transparent);
   color: var(--accent-primary);
 }

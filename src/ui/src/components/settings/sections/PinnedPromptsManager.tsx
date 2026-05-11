@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { ChevronDown, ChevronUp, Pencil, Plus } from "lucide-react";
 import {
@@ -973,48 +973,61 @@ interface SegmentedTriStateProps {
   disabled?: boolean;
 }
 
+// Encode tri-state value as a radio `value` string (radios are string-only).
+type TriStateKey = "inherit" | "on" | "off";
+function encodeTriState(v: PinnedPromptToggleOverride): TriStateKey {
+  if (v === null) return "inherit";
+  return v ? "on" : "off";
+}
+function decodeTriState(s: TriStateKey): PinnedPromptToggleOverride {
+  if (s === "inherit") return null;
+  return s === "on";
+}
+
 function SegmentedTriState({ label, value, onChange, disabled }: SegmentedTriStateProps) {
   const { t } = useTranslation("settings");
+  // useId gives each instance a unique radio-group name, so two
+  // SegmentedTriState components on the same page don't share selection.
+  const groupName = useId();
   const buttonClass = (active: boolean) =>
     active ? styles.segmentedButtonActive : styles.segmentedButton;
+
+  // Native <input type="radio"> gives us roving-tabindex + Left/Right/Up/Down
+  // arrow navigation for free — handled by the browser, which is what
+  // `role="radiogroup"` promises to assistive tech. The visible "buttons"
+  // are <label>s associated with hidden radio inputs.
+  const options: { key: TriStateKey; label: string }[] = [
+    { key: "inherit", label: t("pinned_prompts_override_inherit") },
+    { key: "on", label: t("pinned_prompts_override_on") },
+    { key: "off", label: t("pinned_prompts_override_off") },
+  ];
+  const selected = encodeTriState(value);
+
   return (
     <div className={styles.overrideRow}>
       <span className={styles.overrideName}>{label}</span>
-      <div
-        className={styles.segmentedControl}
-        role="radiogroup"
-        aria-label={label}
-      >
-        <button
-          type="button"
-          className={buttonClass(value === null)}
-          onClick={() => onChange(null)}
-          disabled={disabled}
-          role="radio"
-          aria-checked={value === null}
-        >
-          {t("pinned_prompts_override_inherit")}
-        </button>
-        <button
-          type="button"
-          className={buttonClass(value === true)}
-          onClick={() => onChange(true)}
-          disabled={disabled}
-          role="radio"
-          aria-checked={value === true}
-        >
-          {t("pinned_prompts_override_on")}
-        </button>
-        <button
-          type="button"
-          className={buttonClass(value === false)}
-          onClick={() => onChange(false)}
-          disabled={disabled}
-          role="radio"
-          aria-checked={value === false}
-        >
-          {t("pinned_prompts_override_off")}
-        </button>
+      <div className={styles.segmentedControl} role="radiogroup" aria-label={label}>
+        {options.map((opt) => {
+          const id = `${groupName}-${opt.key}`;
+          const checked = selected === opt.key;
+          return (
+            <Fragment key={opt.key}>
+              <input
+                type="radio"
+                id={id}
+                name={groupName}
+                value={opt.key}
+                checked={checked}
+                onChange={() => onChange(decodeTriState(opt.key))}
+                disabled={disabled}
+                className={styles.segmentedRadioInput}
+              />
+              <label htmlFor={id} className={buttonClass(checked)}>
+                {opt.label}
+              </label>
+            </Fragment>
+          );
+        })}
       </div>
     </div>
   );
