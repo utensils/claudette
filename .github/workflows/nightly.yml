@@ -539,25 +539,86 @@ jobs:
 
           gh release delete nightly --yes --cleanup-tag --repo "$GITHUB_REPOSITORY" 2>/dev/null || true
 
-          # Retry the retag a few times to ride out transient API hiccups
-          # (rate limits, brief outages). If all retries fail, the workflow
-          # exits non-zero and a follow-up run can recover by re-promoting
-          # the still-intact `nightly-staging` release (which now carries
-          # the synthesized manifest).
+          # Promotion runs in three explicitly-verified stages because
+          # combining the tag rename and the draft flip in a single
+          # `gh release edit nightly-staging --tag nightly --draft=false
+          # --prerelease` call has intermittently landed only the rename
+          # server-side while the release stayed draft=true. The CLI
+          # prints the new release URL and exits 0 either way, so the
+          # workflow can't tell from the exit status alone. A draft
+          # release returns 404 on anonymous downloads, so the updater
+          # can't fetch `latest.json` and users silently miss the
+          # update. See: this PR's commit message + manual recovery of
+          # `0.24.0-dev.105.g68df742` on 2026-05-11.
+          #
+          # Stage 1: retag `nightly-staging` → `nightly` and mark
+          # prerelease. Independent retry loop.
           for attempt in 1 2 3; do
             if gh release edit nightly-staging \
               --repo "$GITHUB_REPOSITORY" \
               --tag nightly \
-              --draft=false \
               --prerelease; then
               break
             fi
             if [ "$attempt" -eq 3 ]; then
-              echo "::error::Failed to promote nightly-staging to nightly after 3 attempts"
+              echo "::error::Failed to retag nightly-staging→nightly after 3 attempts"
               exit 1
             fi
-            echo "Promotion attempt $attempt failed; retrying in 5s"
+            echo "Retag attempt $attempt failed; retrying in 5s"
             sleep 5
+          done
+
+          # Stage 2: un-draft the (now-renamed) release as a separate
+          # PATCH so the API can't drop the flip on the floor. Verify
+          # the post-state via `gh api releases/tags/nightly` rather
+          # than trusting `gh release edit`'s exit code — it has been
+          # observed to print the release URL and return 0 while
+          # `draft` stayed `true`.
+          for attempt in 1 2 3; do
+            gh release edit nightly --repo "$GITHUB_REPOSITORY" --draft=false || true
+            draft_state=$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/nightly" \
+              --jq '.draft' 2>/dev/null || echo "unknown")
+            if [ "$draft_state" = "false" ]; then
+              echo "nightly release is now draft=false"
+              break
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              # `unknown` here means the post-state query itself failed;
+              # "still draft" would be misleading in that case. Phrase
+              # the error so it differentiates the two without forcing
+              # the reader to remember the special sentinel.
+              echo "::error::nightly release is still not draft=false after 3 attempts (current state: $draft_state — \"unknown\" means the gh api query failed)"
+              exit 1
+            fi
+            echo "Un-draft attempt $attempt left draft=$draft_state; retrying in 5s"
+            sleep 5
+          done
+
+          # Stage 3: anonymous-fetch smoke. This is the actual contract
+          # the in-app updater relies on — a 200 here proves the release
+          # is reachable by clients that don't carry a GitHub auth
+          # token. A short CDN propagation lag after the un-draft is
+          # normal; retry a few times before failing.
+          MANIFEST_URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/nightly/latest.json"
+          for attempt in 1 2 3 4 5; do
+            # `set -e` is active for this step; `var=$(failing-cmd)`
+            # exits the script on transient curl failures (DNS, TLS,
+            # timeout) before the retry loop can even consider them.
+            # `|| echo "000"` makes the substitution always exit 0 and
+            # surfaces a non-2xx-shaped value to the next branch, which
+            # then drives the retry. Same pattern as stage 2's gh api
+            # fallback to "unknown".
+            http=$(curl -sIL -o /dev/null -w "%{http_code}" "$MANIFEST_URL" || echo "000")
+            if [ "$http" = "200" ]; then
+              echo "latest.json reachable at $MANIFEST_URL (HTTP 200)"
+              break
+            fi
+            if [ "$attempt" -eq 5 ]; then
+              echo "::error::latest.json at $MANIFEST_URL returned HTTP $http after promotion"
+              exit 1
+            fi
+            echo "latest.json HTTP $http (attempt $attempt); retrying in 10s"
+            sleep 10
           done
 
           # `gh release edit --tag` creates the new tag (`nightly`) at the
