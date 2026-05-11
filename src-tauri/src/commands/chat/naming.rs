@@ -29,14 +29,30 @@ pub(crate) async fn try_auto_rename(
     .await
     {
         Ok(s) => s,
-        Err(_) => return,
+        Err(e) => {
+            tracing::warn!(
+                target: "claudette::chat",
+                workspace_id = %ws_id,
+                error = %e,
+                "auto-rename: generate_branch_name failed",
+            );
+            return;
+        }
     };
 
     // Resolve the configured branch prefix.
     let prefix = {
         let db = match Database::open(db_path) {
             Ok(db) => db,
-            Err(_) => return,
+            Err(e) => {
+                tracing::warn!(
+                    target: "claudette::chat",
+                    workspace_id = %ws_id,
+                    error = %e,
+                    "auto-rename: Database::open failed (reading branch prefix)",
+                );
+                return;
+            }
         };
         let (mode, custom) = claudette::ops::workspace::read_branch_prefix_settings(&db);
         // Drop db before the async call (Database is not Sync).
@@ -51,7 +67,15 @@ pub(crate) async fn try_auto_rename(
 
         let db = match Database::open(db_path) {
             Ok(db) => db,
-            Err(_) => return,
+            Err(e) => {
+                tracing::warn!(
+                    target: "claudette::chat",
+                    workspace_id = %ws_id,
+                    error = %e,
+                    "auto-rename: Database::open failed (renaming workspace)",
+                );
+                return;
+            }
         };
 
         match db.rename_workspace(ws_id, candidate, &new_branch) {
@@ -65,6 +89,13 @@ pub(crate) async fn try_auto_rename(
                     if e.to_string().contains("already exists") {
                         continue;
                     }
+                    tracing::warn!(
+                        target: "claudette::chat",
+                        workspace_id = %ws_id,
+                        error = %e,
+                        new_branch = %new_branch,
+                        "auto-rename: git rename_branch failed",
+                    );
                     return;
                 }
 
@@ -81,10 +112,27 @@ pub(crate) async fn try_auto_rename(
                 if e.to_string().contains("UNIQUE constraint failed") {
                     continue;
                 }
+                tracing::warn!(
+                    target: "claudette::chat",
+                    workspace_id = %ws_id,
+                    error = %e,
+                    candidate = %candidate,
+                    "auto-rename: db.rename_workspace failed",
+                );
                 return;
             }
         }
     }
+
+    // All candidate slugs collided. Without this log the workspace silently
+    // stays on its placeholder name and the one-shot claim makes it
+    // unrecoverable on later turns.
+    tracing::warn!(
+        target: "claudette::chat",
+        workspace_id = %ws_id,
+        slug = %slug,
+        "auto-rename: all candidate slugs collided",
+    );
 }
 
 /// Background task: ask Haiku for a short session name and persist it. All

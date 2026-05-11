@@ -155,8 +155,13 @@ fn transcript_has_custom_title(path: &Path, session_id: &str) -> Result<bool, St
 
 /// Call Claude Haiku to generate a short branch name slug from the user's
 /// first prompt. Returns a sanitized branch slug (e.g. `fix-login-timeout`).
-/// `worktree_path` sets the subprocess CWD so the CLI picks up the correct
-/// project context (CLAUDE.md) for the user's workspace — not Claudette's own.
+///
+/// `worktree_path` is used as the subprocess CWD so the CLI picks up the
+/// user's git context and `ws_env`-resolved env vars, but project context
+/// (CLAUDE.md, `.mcp.json`, project `.claude/settings.json`) is intentionally
+/// suppressed via `--system-prompt`, `--setting-sources user`, and
+/// `--tools ""`. A user project's CLAUDE.md plus MCP tool catalog can easily
+/// exceed Haiku's input window, and slug generation doesn't need that context.
 pub async fn generate_branch_name(
     prompt_text: &str,
     worktree_path: &str,
@@ -200,8 +205,19 @@ pub async fn generate_branch_name(
         "text",
         "--model",
         "claude-haiku-4-5",
-        "--append-system-prompt",
+        // Replace the default system prompt instead of appending so the CLI
+        // skips CLAUDE.md auto-discovery — user project context can exceed
+        // Haiku's input window, and slug generation doesn't need it.
+        "--system-prompt",
         &system_prompt,
+        // Skip project + local settings so the CLI doesn't pull in
+        // `.mcp.json` tool catalogs or `.claude/settings.json` overrides.
+        "--setting-sources",
+        "user",
+        // No tools needed for a one-shot slug — keeps the system prompt
+        // free of tool definitions.
+        "--tools",
+        "",
         &user_message,
     ]);
 
@@ -261,14 +277,22 @@ pub async fn generate_session_name(
     let system_prompt = "You are a chat-session namer. Output ONLY a short \
          descriptive name — never answer or complete the task itself."
         .to_string();
+    // Same context-suppression flags as `generate_branch_name` above — see
+    // that function's doc comment for the rationale. A user project's
+    // CLAUDE.md + MCP tool catalog can overflow Haiku's input window and
+    // session-name generation doesn't need that context either.
     cmd.args([
         "--print",
         "--output-format",
         "text",
         "--model",
         "claude-haiku-4-5",
-        "--append-system-prompt",
+        "--system-prompt",
         &system_prompt,
+        "--setting-sources",
+        "user",
+        "--tools",
+        "",
         &user_message,
     ]);
 
