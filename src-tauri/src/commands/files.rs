@@ -1616,48 +1616,52 @@ fn write_owner_only(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
 }
 
 /// Create the staging directory with restrictive permissions on Unix
-/// (`0o700`) so other accounts can't list or read the staged files. If
-/// the path already exists we verify it's a real directory (not a file
-/// or symlink that could redirect writes elsewhere) and re-tighten the
-/// permissions on Unix in case a previous run created it with a wider
-/// umask.
+/// (`0o700`) so other accounts can't list or read the staged files.
+///
+/// Uses a try-then-verify approach instead of `exists()` + `create()` to
+/// avoid a TOCTOU window where a concurrent caller or attacker could
+/// replace the directory between the check and the create.
 fn create_staging_dir(dir: &Path) -> std::io::Result<()> {
-    if dir.exists() {
-        // `symlink_metadata` doesn't follow symlinks — it tells us
-        // whether the *path entry* is a directory, so a malicious link
-        // to /etc can't satisfy the check.
-        let meta = std::fs::symlink_metadata(dir)?;
-        if !meta.file_type().is_dir() {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::AlreadyExists,
-                format!(
-                    "staging path {} exists and is not a directory",
-                    dir.display()
-                ),
-            ));
-        }
+    let create_result = {
         #[cfg(unix)]
         {
-            use std::os::unix::fs::PermissionsExt as _;
-            let mode = meta.permissions().mode() & 0o777;
-            if mode != 0o700 {
-                std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))?;
-            }
+            use std::os::unix::fs::DirBuilderExt as _;
+            std::fs::DirBuilder::new().mode(0o700).create(dir)
         }
-        return Ok(());
+        #[cfg(not(unix))]
+        {
+            std::fs::create_dir(dir)
+        }
+    };
+    match create_result {
+        Ok(()) => return Ok(()),
+        Err(e) if e.kind() != std::io::ErrorKind::AlreadyExists => return Err(e),
+        Err(_) => {}
+    }
+    // Directory already existed — verify it is a real directory (not a
+    // file or symlink that could redirect writes elsewhere) and re-tighten
+    // the permissions on Unix in case a previous run used a wider umask.
+    // `symlink_metadata` does not follow symlinks, so a malicious symlink
+    // to /etc cannot satisfy the is_dir() check.
+    let meta = std::fs::symlink_metadata(dir)?;
+    if !meta.file_type().is_dir() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::AlreadyExists,
+            format!(
+                "staging path {} exists and is not a directory",
+                dir.display()
+            ),
+        ));
     }
     #[cfg(unix)]
     {
-        use std::os::unix::fs::DirBuilderExt as _;
-        std::fs::DirBuilder::new()
-            .recursive(true)
-            .mode(0o700)
-            .create(dir)
+        use std::os::unix::fs::PermissionsExt as _;
+        let mode = meta.permissions().mode() & 0o777;
+        if mode != 0o700 {
+            std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))?;
+        }
     }
-    #[cfg(not(unix))]
-    {
-        std::fs::create_dir_all(dir)
-    }
+    Ok(())
 }
 
 /// Remove staged attachments older than `max_age` from `dir`. Used to keep
@@ -1756,6 +1760,11 @@ pub async fn copy_image_to_clipboard(
     filename: String,
     media_type: String,
 ) -> Result<(), String> {
+    if !media_type.starts_with("image/") || media_type == "image/svg+xml" {
+        return Err(format!(
+            "copy_image_to_clipboard: expected a raster image media type, got {media_type:?}"
+        ));
+    }
     let dir = std::env::temp_dir().join("claudette-attachments");
     tokio::task::spawn_blocking(move || -> Result<(), String> {
         create_staging_dir(&dir).map_err(|e| format!("mkdir temp dir: {e}"))?;
