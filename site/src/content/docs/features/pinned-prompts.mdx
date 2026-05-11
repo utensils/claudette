@@ -27,6 +27,29 @@ Each pinned prompt has an **Auto-send when clicked** toggle (referred to as **Au
 
 Use auto-send for prompts you always want to run as-is. Leave it off for templates you customize each time.
 
+## Toolbar Overrides
+
+Each pinned prompt can also carry an opinion about the four chat-toolbar toggles:
+
+- **Plan mode**
+- **Fast mode**
+- **Thinking**
+- **Claude in Chrome**
+
+Each override is **tri-state**: `Inherit`, `On`, or `Off`.
+
+| Setting | Behavior on click |
+|---------|-------------------|
+| **Inherit** (default) | The toolbar toggle is left at whatever you've selected for the session |
+| **On** | The toolbar toggle is flipped on before the prompt runs |
+| **Off** | The toolbar toggle is flipped off before the prompt runs |
+
+Overrides are applied to the live toolbar — the change is **sticky**, not per-turn. After clicking the pinned prompt, the toolbar shows the new state and follow-up turns inherit it until you flip the toggle back yourself.
+
+A typical use: an "Incorporate feedback" prompt that must run outside plan mode can pin **Plan mode: Off**, so clicking the pill always disables plan mode before sending — even if you forgot the toolbar was still on plan.
+
+Overrides apply whether **Auto-send** is on or off. With auto-send off you'll see the toolbar update *before* you edit the inserted prompt.
+
 ## Using "/" in Prompt Bodies
 
 When creating or editing a pinned prompt, the prompt body field supports the same **/** slash command picker as the main chat composer. Type `/` to open the picker and select a command to insert it.

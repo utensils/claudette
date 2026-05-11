@@ -155,6 +155,94 @@
   accent-color: var(--accent-primary);
 }
 
+/* ----- Toolbar override controls (tri-state) ----- */
+
+.overridesGroup {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-top: 4px;
+  border-top: 1px dashed var(--divider);
+}
+
+.overridesLabel {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.overrideRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.overrideName {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.segmentedControl {
+  display: inline-flex;
+  border: 1px solid var(--divider);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  background: var(--chat-input-bg);
+}
+
+.segmentedButton {
+  appearance: none;
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 11px;
+  padding: 4px 10px;
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+
+.segmentedButton + .segmentedButton {
+  border-left: 1px solid var(--divider);
+}
+
+.segmentedButton:hover:not(:disabled) {
+  color: var(--text-primary);
+  background: var(--hover-bg);
+}
+
+.segmentedButtonActive {
+  composes: segmentedButton;
+  background: color-mix(in srgb, var(--accent-primary) 18%, transparent);
+  color: var(--accent-primary);
+}
+
+.segmentedButtonActive:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent-primary) 24%, transparent);
+  color: var(--accent-primary);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .segmentedButton {
+    transition: none;
+  }
+}
+
+.overrideSummaryChip {
+  display: inline-block;
+  margin-right: 6px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-size: 10px;
+  font-weight: 500;
+  background: color-mix(in srgb, var(--accent-primary) 14%, transparent);
+  color: var(--accent-primary);
+  text-transform: none;
+  letter-spacing: 0;
+}
+
 .actions {
   display: inline-flex;
   align-items: center;

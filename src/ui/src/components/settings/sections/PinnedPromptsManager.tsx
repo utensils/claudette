@@ -3,6 +3,8 @@ import { useTranslation } from "react-i18next";
 import { ChevronDown, ChevronUp, Pencil, Plus } from "lucide-react";
 import {
   type PinnedPrompt,
+  type PinnedPromptToggleOverride,
+  type PinnedPromptToggleOverrides,
   type SlashCommand,
   createPinnedPrompt,
   deletePinnedPrompt,
@@ -31,6 +33,34 @@ interface DraftRow {
   display_name: string;
   prompt: string;
   auto_send: boolean;
+  plan_mode: PinnedPromptToggleOverride;
+  fast_mode: PinnedPromptToggleOverride;
+  thinking_enabled: PinnedPromptToggleOverride;
+  chrome_enabled: PinnedPromptToggleOverride;
+}
+
+interface EditPayload {
+  display_name: string;
+  prompt: string;
+  auto_send: boolean;
+  plan_mode: PinnedPromptToggleOverride;
+  fast_mode: PinnedPromptToggleOverride;
+  thinking_enabled: PinnedPromptToggleOverride;
+  chrome_enabled: PinnedPromptToggleOverride;
+}
+
+function extractOverrides(p: {
+  plan_mode: PinnedPromptToggleOverride;
+  fast_mode: PinnedPromptToggleOverride;
+  thinking_enabled: PinnedPromptToggleOverride;
+  chrome_enabled: PinnedPromptToggleOverride;
+}): PinnedPromptToggleOverrides {
+  return {
+    planMode: p.plan_mode,
+    fastMode: p.fast_mode,
+    thinkingEnabled: p.thinking_enabled,
+    chromeEnabled: p.chrome_enabled,
+  };
 }
 
 function makeDraftId(): string {
@@ -117,6 +147,10 @@ export function PinnedPromptsManager({ scope, projectPath }: PinnedPromptsManage
         display_name: "",
         prompt: "",
         auto_send: false,
+        plan_mode: null,
+        fast_mode: null,
+        thinking_enabled: null,
+        chrome_enabled: null,
       },
     ]);
   }, []);
@@ -169,6 +203,7 @@ export function PinnedPromptsManager({ scope, projectPath }: PinnedPromptsManage
           trimmedName,
           draft.prompt,
           draft.auto_send,
+          extractOverrides(draft),
         );
         upsertPrompt(saved);
         removeDraft(draft.draftId);
@@ -192,7 +227,7 @@ export function PinnedPromptsManager({ scope, projectPath }: PinnedPromptsManage
   const commitEdit = useCallback(
     async (
       original: PinnedPrompt,
-      next: { display_name: string; prompt: string; auto_send: boolean },
+      next: EditPayload,
     ): Promise<boolean> => {
       const trimmedName = next.display_name.trim();
       const others = new Set(
@@ -214,7 +249,11 @@ export function PinnedPromptsManager({ scope, projectPath }: PinnedPromptsManage
       if (
         trimmedName === original.display_name &&
         next.prompt === original.prompt &&
-        next.auto_send === original.auto_send
+        next.auto_send === original.auto_send &&
+        next.plan_mode === original.plan_mode &&
+        next.fast_mode === original.fast_mode &&
+        next.thinking_enabled === original.thinking_enabled &&
+        next.chrome_enabled === original.chrome_enabled
       ) {
         setError(String(original.id), null);
         return true;
@@ -226,6 +265,7 @@ export function PinnedPromptsManager({ scope, projectPath }: PinnedPromptsManage
           trimmedName,
           next.prompt,
           next.auto_send,
+          extractOverrides(next),
         );
         upsertPrompt(saved);
         return true;
@@ -335,11 +375,7 @@ interface PromptRowProps {
   onMoveUp: () => void;
   onMoveDown: () => void;
   onDelete: () => void;
-  onCommit: (next: {
-    display_name: string;
-    prompt: string;
-    auto_send: boolean;
-  }) => Promise<boolean>;
+  onCommit: (next: EditPayload) => Promise<boolean>;
   clearError: () => void;
   slashCommands: SlashCommand[];
 }
@@ -361,6 +397,10 @@ function PromptRow({
   const [name, setName] = useState(prompt.display_name);
   const [body, setBody] = useState(prompt.prompt);
   const [autoSend, setAutoSend] = useState(prompt.auto_send);
+  const [planMode, setPlanMode] = useState<PinnedPromptToggleOverride>(prompt.plan_mode);
+  const [fastMode, setFastMode] = useState<PinnedPromptToggleOverride>(prompt.fast_mode);
+  const [thinking, setThinking] = useState<PinnedPromptToggleOverride>(prompt.thinking_enabled);
+  const [chromeEnabled, setChromeEnabled] = useState<PinnedPromptToggleOverride>(prompt.chrome_enabled);
   const [cursorPos, setCursorPos] = useState(0);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const nameInputRef = useRef<HTMLInputElement>(null);
@@ -371,7 +411,19 @@ function PromptRow({
     setName(prompt.display_name);
     setBody(prompt.prompt);
     setAutoSend(prompt.auto_send);
-  }, [prompt.display_name, prompt.prompt, prompt.auto_send]);
+    setPlanMode(prompt.plan_mode);
+    setFastMode(prompt.fast_mode);
+    setThinking(prompt.thinking_enabled);
+    setChromeEnabled(prompt.chrome_enabled);
+  }, [
+    prompt.display_name,
+    prompt.prompt,
+    prompt.auto_send,
+    prompt.plan_mode,
+    prompt.fast_mode,
+    prompt.thinking_enabled,
+    prompt.chrome_enabled,
+  ]);
 
   // Auto-focus when entering editing or confirm-delete modes.
   useEffect(() => {
@@ -379,26 +431,48 @@ function PromptRow({
     else if (mode === "confirm-delete") keepButtonRef.current?.focus();
   }, [mode]);
 
-  const enterEdit = useCallback(() => {
+  const resetLocalState = useCallback(() => {
     setName(prompt.display_name);
     setBody(prompt.prompt);
     setAutoSend(prompt.auto_send);
+    setPlanMode(prompt.plan_mode);
+    setFastMode(prompt.fast_mode);
+    setThinking(prompt.thinking_enabled);
+    setChromeEnabled(prompt.chrome_enabled);
+  }, [
+    prompt.display_name,
+    prompt.prompt,
+    prompt.auto_send,
+    prompt.plan_mode,
+    prompt.fast_mode,
+    prompt.thinking_enabled,
+    prompt.chrome_enabled,
+  ]);
+
+  const enterEdit = useCallback(() => {
+    resetLocalState();
     clearError();
     setMode("editing");
-  }, [prompt.display_name, prompt.prompt, prompt.auto_send, clearError]);
+  }, [resetLocalState, clearError]);
 
   const cancelEdit = useCallback(() => {
-    setName(prompt.display_name);
-    setBody(prompt.prompt);
-    setAutoSend(prompt.auto_send);
+    resetLocalState();
     clearError();
     setMode("display");
-  }, [prompt.display_name, prompt.prompt, prompt.auto_send, clearError]);
+  }, [resetLocalState, clearError]);
 
   const save = useCallback(async () => {
-    const ok = await onCommit({ display_name: name, prompt: body, auto_send: autoSend });
+    const ok = await onCommit({
+      display_name: name,
+      prompt: body,
+      auto_send: autoSend,
+      plan_mode: planMode,
+      fast_mode: fastMode,
+      thinking_enabled: thinking,
+      chrome_enabled: chromeEnabled,
+    });
     if (ok) setMode("display");
-  }, [onCommit, name, body, autoSend]);
+  }, [onCommit, name, body, autoSend, planMode, fastMode, thinking, chromeEnabled]);
 
   const onSlashInsert = useCallback(
     (replacement: string, start: number, end: number) => {
@@ -504,8 +578,11 @@ function PromptRow({
           </div>
         </div>
         <div className={styles.displayPreview}>{prompt.prompt}</div>
-        {prompt.auto_send && (
-          <div className={styles.displayMeta}>{t("pinned_prompts_auto_send")}</div>
+        {(prompt.auto_send || hasAnyOverride(prompt)) && (
+          <div className={styles.displayMeta}>
+            <OverrideSummary prompt={prompt} />
+            {prompt.auto_send && <span>{t("pinned_prompts_auto_send")}</span>}
+          </div>
         )}
       </div>
     );
@@ -567,6 +644,18 @@ function PromptRow({
         </label>
         {error && <span className={styles.errorText}>{error}</span>}
       </div>
+
+      <OverrideControls
+        disabled={mode === "confirm-delete"}
+        planMode={planMode}
+        fastMode={fastMode}
+        thinking={thinking}
+        chromeEnabled={chromeEnabled}
+        onPlanModeChange={setPlanMode}
+        onFastModeChange={setFastMode}
+        onThinkingChange={setThinking}
+        onChromeEnabledChange={setChromeEnabled}
+      />
 
       {mode === "editing" ? (
         <div className={styles.footer}>
@@ -754,6 +843,18 @@ function DraftRowView({
         </label>
         {error && <span className={styles.errorText}>{error}</span>}
       </div>
+
+      <OverrideControls
+        planMode={draft.plan_mode}
+        fastMode={draft.fast_mode}
+        thinking={draft.thinking_enabled}
+        chromeEnabled={draft.chrome_enabled}
+        onPlanModeChange={(v) => onChange({ plan_mode: v })}
+        onFastModeChange={(v) => onChange({ fast_mode: v })}
+        onThinkingChange={(v) => onChange({ thinking_enabled: v })}
+        onChromeEnabledChange={(v) => onChange({ chrome_enabled: v })}
+      />
+
       <div className={styles.footer}>
         <div className={styles.footerSpacer} />
         <button type="button" className={styles.btnGhost} onClick={onCancel}>
@@ -803,5 +904,170 @@ export function InheritedGlobalsList({
         );
       })}
     </div>
+  );
+}
+
+// ===== Toolbar override controls (tri-state segmented) =====
+
+interface OverrideControlsProps {
+  disabled?: boolean;
+  planMode: PinnedPromptToggleOverride;
+  fastMode: PinnedPromptToggleOverride;
+  thinking: PinnedPromptToggleOverride;
+  chromeEnabled: PinnedPromptToggleOverride;
+  onPlanModeChange: (v: PinnedPromptToggleOverride) => void;
+  onFastModeChange: (v: PinnedPromptToggleOverride) => void;
+  onThinkingChange: (v: PinnedPromptToggleOverride) => void;
+  onChromeEnabledChange: (v: PinnedPromptToggleOverride) => void;
+}
+
+function OverrideControls({
+  disabled,
+  planMode,
+  fastMode,
+  thinking,
+  chromeEnabled,
+  onPlanModeChange,
+  onFastModeChange,
+  onThinkingChange,
+  onChromeEnabledChange,
+}: OverrideControlsProps) {
+  const { t } = useTranslation("settings");
+  return (
+    <div className={styles.overridesGroup}>
+      <div className={styles.overridesLabel}>
+        {t("pinned_prompts_toggle_overrides_label")}
+      </div>
+      <SegmentedTriState
+        label={t("pinned_prompts_override_plan_mode")}
+        value={planMode}
+        onChange={onPlanModeChange}
+        disabled={disabled}
+      />
+      <SegmentedTriState
+        label={t("pinned_prompts_override_fast_mode")}
+        value={fastMode}
+        onChange={onFastModeChange}
+        disabled={disabled}
+      />
+      <SegmentedTriState
+        label={t("pinned_prompts_override_thinking")}
+        value={thinking}
+        onChange={onThinkingChange}
+        disabled={disabled}
+      />
+      <SegmentedTriState
+        label={t("pinned_prompts_override_chrome")}
+        value={chromeEnabled}
+        onChange={onChromeEnabledChange}
+        disabled={disabled}
+      />
+    </div>
+  );
+}
+
+interface SegmentedTriStateProps {
+  label: string;
+  value: PinnedPromptToggleOverride;
+  onChange: (v: PinnedPromptToggleOverride) => void;
+  disabled?: boolean;
+}
+
+function SegmentedTriState({ label, value, onChange, disabled }: SegmentedTriStateProps) {
+  const { t } = useTranslation("settings");
+  const buttonClass = (active: boolean) =>
+    active ? styles.segmentedButtonActive : styles.segmentedButton;
+  return (
+    <div className={styles.overrideRow}>
+      <span className={styles.overrideName}>{label}</span>
+      <div
+        className={styles.segmentedControl}
+        role="radiogroup"
+        aria-label={label}
+      >
+        <button
+          type="button"
+          className={buttonClass(value === null)}
+          onClick={() => onChange(null)}
+          disabled={disabled}
+          role="radio"
+          aria-checked={value === null}
+        >
+          {t("pinned_prompts_override_inherit")}
+        </button>
+        <button
+          type="button"
+          className={buttonClass(value === true)}
+          onClick={() => onChange(true)}
+          disabled={disabled}
+          role="radio"
+          aria-checked={value === true}
+        >
+          {t("pinned_prompts_override_on")}
+        </button>
+        <button
+          type="button"
+          className={buttonClass(value === false)}
+          onClick={() => onChange(false)}
+          disabled={disabled}
+          role="radio"
+          aria-checked={value === false}
+        >
+          {t("pinned_prompts_override_off")}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function hasAnyOverride(p: PinnedPrompt): boolean {
+  return (
+    p.plan_mode !== null ||
+    p.fast_mode !== null ||
+    p.thinking_enabled !== null ||
+    p.chrome_enabled !== null
+  );
+}
+
+function OverrideSummary({ prompt }: { prompt: PinnedPrompt }) {
+  const { t } = useTranslation("settings");
+  const chips: { key: string; label: string; on: boolean }[] = [];
+  if (prompt.plan_mode !== null) {
+    chips.push({
+      key: "plan",
+      label: t("pinned_prompts_override_plan_mode"),
+      on: prompt.plan_mode,
+    });
+  }
+  if (prompt.fast_mode !== null) {
+    chips.push({
+      key: "fast",
+      label: t("pinned_prompts_override_fast_mode"),
+      on: prompt.fast_mode,
+    });
+  }
+  if (prompt.thinking_enabled !== null) {
+    chips.push({
+      key: "thinking",
+      label: t("pinned_prompts_override_thinking"),
+      on: prompt.thinking_enabled,
+    });
+  }
+  if (prompt.chrome_enabled !== null) {
+    chips.push({
+      key: "chrome",
+      label: t("pinned_prompts_override_chrome"),
+      on: prompt.chrome_enabled,
+    });
+  }
+  if (chips.length === 0) return null;
+  return (
+    <>
+      {chips.map((c) => (
+        <span key={c.key} className={styles.overrideSummaryChip}>
+          {c.label}: {c.on ? t("pinned_prompts_override_on") : t("pinned_prompts_override_off")}
+        </span>
+      ))}
+    </>
   );
 }
