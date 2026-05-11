@@ -106,6 +106,29 @@ describe("BoundedScrollPane", () => {
     expect(ref.current).toBe(host.querySelector(".ref-target"));
   });
 
+  it("forwards a MutableRefObject and resets it to null on unmount", async () => {
+    // Object-style refs are the common idiom (`useRef<HTMLDivElement>(null)`),
+    // so the wrapper must support both function refs (above) and ref objects.
+    // The unmount half also pins the lifecycle contract: when the pane goes
+    // away, the caller's ref clears — without this, `useStickyScroll` etc.
+    // would hold a dangling node pointer after navigation.
+    const refObj: { current: HTMLDivElement | null } = { current: null };
+    const host = document.createElement("div");
+    document.body.appendChild(host);
+    const root = createRoot(host);
+    mountedRoots.push(root);
+    await act(async () => {
+      root.render(<BoundedScrollPane ref={refObj} className="forwarded" />);
+    });
+    const div = host.querySelector<HTMLDivElement>(".forwarded");
+    expect(refObj.current).toBe(div);
+
+    await act(async () => {
+      root.render(<></>);
+    });
+    expect(refObj.current).toBeNull();
+  });
+
   it("calls preventDefault on a wheel event when the pane is at its scroll boundary", async () => {
     const host = await mount(
       <BoundedScrollPane className="pane" data-testid="pane" />,

@@ -1,4 +1,11 @@
-import { forwardRef, useImperativeHandle, useRef, type HTMLAttributes } from "react";
+import {
+  forwardRef,
+  useCallback,
+  useRef,
+  type HTMLAttributes,
+  type MutableRefObject,
+  type Ref,
+} from "react";
 import { usePreventScrollBounce } from "../../hooks/usePreventScrollBounce";
 
 /**
@@ -29,12 +36,26 @@ export const BoundedScrollPane = forwardRef<
 >(function BoundedScrollPane({ children, ...rest }, forwardedRef) {
   const innerRef = useRef<HTMLDivElement>(null);
   usePreventScrollBounce(innerRef);
-  // `useImperativeHandle` lets callers pass a normal ref while we keep our
-  // own internal ref for the hook. Without this, consumers would have to
-  // choose between getting the DOM node and getting the bounce-prevention.
-  useImperativeHandle(forwardedRef, () => innerRef.current as HTMLDivElement);
+  // Fork the ref between our internal one (which the hook reads) and the
+  // forwarded one (which the caller may want for `useStickyScroll`, search
+  // scopes, etc.). React invokes a callback ref during commit, both on
+  // mount (with the node) and unmount (with `null`), so the forwarded
+  // ref's `.current` always stays in lockstep with our internal one —
+  // including the unmount case, which an earlier `useImperativeHandle`
+  // approach would have masked with a cast.
+  const setRefs = useCallback(
+    (node: HTMLDivElement | null) => {
+      innerRef.current = node;
+      if (typeof forwardedRef === "function") {
+        forwardedRef(node);
+      } else if (forwardedRef) {
+        (forwardedRef as MutableRefObject<HTMLDivElement | null>).current = node;
+      }
+    },
+    [forwardedRef],
+  ) satisfies Ref<HTMLDivElement>;
   return (
-    <div ref={innerRef} {...rest}>
+    <div ref={setRefs} {...rest}>
       {children}
     </div>
   );
