@@ -8,6 +8,7 @@ import { PanelHeader } from "../shared/PanelHeader";
 import { PanelToggles } from "../shared/PanelToggles";
 import { StatsStrip, AnalyticsSection, MicroStats } from "../metrics";
 import { SessionStatusIcon, type SessionStatusKind } from "../shared/SessionStatusIcon";
+import { resolveScmPrIcon } from "../shared/workspaceStatusIcon";
 import { formatElapsedSeconds } from "../chat/chatHelpers";
 import { WelcomeEmptyState } from "./WelcomeEmptyState";
 import { useCreateWorkspace } from "../../hooks/useCreateWorkspace";
@@ -51,6 +52,10 @@ const WorkspaceCard = memo(function WorkspaceCard({
   onClick: (id: string | null) => void;
   index: number;
 }) {
+  // Subscribe per-card so a PR/CI poll for one workspace doesn't
+  // re-render every other card. Sidebar reads the whole map because it
+  // also uses it for grouping; here we only need this row's slice.
+  const summary = useAppStore((s) => s.scmSummary[ws.id]);
   const isRunning = isAgentBusy(ws.agent_status);
   const promptStartTime = useAppStore((s) => s.promptStartTime[ws.id] ?? null);
   const [elapsed, setElapsed] = useState(0);
@@ -93,6 +98,12 @@ const WorkspaceCard = memo(function WorkspaceCard({
   const isStopped =
     ws.agent_status === "Stopped" || typeof ws.agent_status !== "string";
 
+  // PR-state icon takes over once attention badges and running spinner
+  // have been ruled out — keeps the Dashboard card in lock-step with the
+  // Sidebar row so a merged PR shows GitMerge in both places.
+  const showPrIcon = !badge && !isRunning;
+  const prIcon = showPrIcon ? resolveScmPrIcon(summary) : null;
+
   const statusKind: SessionStatusKind =
     badge === "ask"  ? { kind: "ask" } :
     badge === "plan" ? { kind: "plan" } :
@@ -105,6 +116,7 @@ const WorkspaceCard = memo(function WorkspaceCard({
     badge === "ask"  ? "Question requires attention" :
     badge === "plan" ? "Plan approval needed" :
     badge === "done" ? "Completed" :
+    prIcon           ? prIcon.title :
                        statusTitle;
 
   return (
@@ -134,7 +146,11 @@ const WorkspaceCard = memo(function WorkspaceCard({
             </span>
           )}
           <span title={statusIconTitle} aria-label={statusIconTitle} role="img">
-            <SessionStatusIcon status={statusKind} size={14} />
+            {prIcon ? (
+              <prIcon.Icon size={14} style={{ color: prIcon.color }} />
+            ) : (
+              <SessionStatusIcon status={statusKind} size={14} />
+            )}
           </span>
         </span>
       </div>

@@ -26,7 +26,8 @@ import {
   listChatSessions,
   interruptPtyForeground,
 } from "../../services/tauri";
-import { Settings, Link, X, Share2, Plus, Globe, Archive, Trash2, CircleCheck, CircleAlert, CircleQuestionMark, Cog, Filter, LayoutDashboard, CircleDashed, CircleStop, GitPullRequestArrow, GitPullRequestDraft, GitMerge, GitPullRequestClosed, ChevronRight, ChevronDown, ArrowDownAZ } from "lucide-react";
+import { Settings, Link, X, Share2, Plus, Globe, Archive, Trash2, CircleCheck, CircleAlert, CircleQuestionMark, Cog, Filter, LayoutDashboard, CircleDashed, CircleStop, ChevronRight, ChevronDown, ArrowDownAZ } from "lucide-react";
+import { resolveScmPrIcon } from "../shared/workspaceStatusIcon";
 import { RepoIcon } from "../shared/RepoIcon";
 import { WorkspaceEnvSpinner } from "./WorkspaceEnvSpinner";
 import { extractRemoteWorkspace } from "./remoteWorkspaceResponse";
@@ -721,24 +722,11 @@ export const Sidebar = memo(function Sidebar() {
               </span>
             );
           }
-          const summary = scmSummary[ws.id];
-          if (summary?.hasPr) {
-            const prState = summary.prState;
-            const ciState = summary.ciState;
-            const Icon = prState === "merged" ? GitMerge
-              : prState === "closed" ? GitPullRequestClosed
-              : prState === "draft" ? GitPullRequestDraft
-              : GitPullRequestArrow;
-            const color = prState === "merged" ? "var(--badge-plan)"
-              : prState === "closed" ? "var(--status-stopped)"
-              : prState === "draft" ? "var(--text-dim)"
-              : ciState === "failure" ? "var(--status-stopped)"
-              : ciState === "pending" ? "var(--badge-ask)"
-              : "var(--badge-done)";
-            const titleText = `PR: ${prState}${ciState ? `, CI: ${ciState}` : ""}`;
+          const prIcon = resolveScmPrIcon(scmSummary[ws.id]);
+          if (prIcon) {
             return (
-              <span className={styles.statusIcon} title={titleText}>
-                <Icon size={14} style={{ color }} />
+              <span className={styles.statusIcon} title={prIcon.title}>
+                <prIcon.Icon size={14} style={{ color: prIcon.color }} />
               </span>
             );
           }
