@@ -96,19 +96,29 @@ pub(crate) async fn create_workspace_inner(
     }
     .map_err(|e| e.to_string())?;
 
-    // Resolve env-provider output before the workspace is announced to the
-    // frontend. That makes a newly-created worktree wait for direnv/mise/etc.
-    // warmup (including env-direnv's optional auto-allow) before the user can
-    // launch an agent from the normal UI path. Setup scripts reuse the same
-    // resolved env below so they run in the exact environment the first agent
-    // process will inherit.
+    // Run the setup script BEFORE resolving the env-provider stack.
+    // Many `.claudette.json` setups exist precisely to prime that stack
+    // — `direnv allow`, `mise trust && mise install`, `nix flake check`,
+    // generating a `.env` from a template. If env-provider went first,
+    // those resolves would fire against an untrusted / unprimed
+    // worktree and either error or sit waiting for the user to allow
+    // them manually, defeating the whole point of a setup script.
+    //
+    // Tradeoff: the script runs with the system PATH (plus
+    // `enriched_path()`) instead of the env-provider-merged
+    // environment. Setup scripts in the wild assume this — they expect
+    // to be the thing that *installs* tool versions, not to consume
+    // them. The agent and terminal still get the merged env after
+    // resolve runs.
+    //
+    // The WS server (`src-server/handler.rs`) has always run setup
+    // with `resolved_env = None` (no plugin registry server-side), so
+    // this swap also brings the GUI closer to that contract.
     let repos = db.list_repositories().map_err(|e| e.to_string())?;
     let repo = repos
         .iter()
         .find(|r| r.id == repo_id)
         .ok_or("Repository not found")?;
-    let resolved_env =
-        resolve_env_for_workspace(state, &out.workspace, &repo.path, Some(app)).await;
 
     let setup_result = if skip_setup {
         None
@@ -120,10 +130,18 @@ pub(crate) async fn create_workspace_inner(
             repo.setup_script.as_deref(),
             repo.base_branch.as_deref(),
             repo.default_remote.as_deref(),
-            resolved_env.as_ref(),
+            None,
         )
         .await
     };
+
+    // Now resolve env-provider output — the setup script (if any) has
+    // already trusted/primed whatever the providers need to read. The
+    // frontend doesn't observe the workspace until this returns, so a
+    // newly-created worktree waits for direnv/mise/etc. warmup before
+    // the user can launch an agent from the normal UI path.
+    let _resolved_env =
+        resolve_env_for_workspace(state, &out.workspace, &repo.path, Some(app)).await;
 
     // The shared op intentionally writes the DB row before env/setup can run,
     // but the GUI should not observe the row until the environment is ready.
