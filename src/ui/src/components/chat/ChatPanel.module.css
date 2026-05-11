@@ -5,6 +5,18 @@
   position: relative;
 }
 
+/* Filler shown while a workspace's sessions are still loading from the
+   backend (typical window: 50-150ms on a sidebar click, longer on first
+   launch). Holds the content area open with the theme background so the
+   panel chrome above (workspace header + tab strip) doesn't reflow, and
+   no empty-state placard flashes between `selectedWorkspaceId` flipping
+   and the `setSessionsForWorkspace` response landing. See the
+   `sessionsLoaded` comment in ChatPanel.tsx for the load-order details. */
+.loadingShell {
+  flex: 1;
+  min-height: 0;
+}
+
 /* Messages area */
 /* Wraps the search bar + scrolling messages list. The bar is absolutely
    positioned over the top of this wrapper so opening Cmd+F doesn't push

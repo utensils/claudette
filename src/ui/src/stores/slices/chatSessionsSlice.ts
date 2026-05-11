@@ -5,6 +5,16 @@ import type { AppState } from "../useAppStore";
 export interface ChatSessionsSlice {
   sessionsByWorkspace: Record<string, ChatSession[]>;
   selectedSessionIdByWorkspaceId: Record<string, string>;
+  /** Set to `true` once `setSessionsForWorkspace` has resolved at least once
+   *  for a given workspace id, distinguishing "we just don't know yet" from
+   *  "we asked the backend and the list is genuinely empty". Without this,
+   *  ChatPanel's `noOpenTabs` empty-state placard flashes for ~50-150ms on
+   *  every workspace switch / app launch — sessions are loaded lazily by
+   *  `SessionTabs` mounting, but the empty-state branch fires the moment
+   *  `selectedWorkspaceId` flips, before that fetch lands. The flag is set
+   *  in `setSessionsForWorkspace` (and stays set across subsequent updates),
+   *  so a fresh page hydration is the only thing that can reset it. */
+  sessionsLoadedByWorkspace: Record<string, boolean>;
   setSessionsForWorkspace: (wsId: string, sessions: ChatSession[]) => void;
   addChatSession: (session: ChatSession) => void;
   updateChatSession: (
@@ -23,6 +33,7 @@ export const createChatSessionsSlice: StateCreator<
 > = (set) => ({
   sessionsByWorkspace: {},
   selectedSessionIdByWorkspaceId: {},
+  sessionsLoadedByWorkspace: {},
   setSessionsForWorkspace: (wsId, sessions) =>
     set((s) => {
       const next = { ...s.sessionsByWorkspace, [wsId]: sessions };
@@ -34,9 +45,16 @@ export const createChatSessionsSlice: StateCreator<
       if (!selectedIsActive && activeSessions.length > 0) {
         nextSelected[wsId] = activeSessions[0].id;
       }
+      // Reuse the existing record when the flag was already set, so callers
+      // subscribing only to `sessionsLoadedByWorkspace` don't re-render on
+      // every session-list refresh — only on the first transition.
+      const sessionsLoadedByWorkspace = s.sessionsLoadedByWorkspace[wsId]
+        ? s.sessionsLoadedByWorkspace
+        : { ...s.sessionsLoadedByWorkspace, [wsId]: true };
       return {
         sessionsByWorkspace: next,
         selectedSessionIdByWorkspaceId: nextSelected,
+        sessionsLoadedByWorkspace,
       };
     }),
   addChatSession: (session) =>
