@@ -84,6 +84,32 @@ describe("isEnvTrustModalData", () => {
     expect(isEnvTrustModalData(minimal)).toBe(true);
   });
 
+  it("accepts a null workspace_id (modal opened from Settings, no active workspace)", () => {
+    // The Settings panel opens this modal proactively when toggling a
+    // provider back on reveals a trust-class error. There is no
+    // workspace in that flow — the trust decision applies to the
+    // repo. The validator must accept null so the proactive payload
+    // round-trips through the `unknown` store boundary.
+    expect(
+      isEnvTrustModalData({ ...minimal, workspace_id: null }),
+    ).toBe(true);
+  });
+
+  it("rejects undefined workspace_id (must be explicit string|null)", () => {
+    // Explicit null is the proactive-Settings shape; missing the
+    // field entirely is malformed and should fail the guard so a
+    // partial-upgrade event payload doesn't crash the modal.
+    const { workspace_id: _omit, ...withoutWs } = minimal;
+    void _omit;
+    expect(isEnvTrustModalData(withoutWs)).toBe(false);
+  });
+
+  it("rejects a numeric workspace_id", () => {
+    expect(
+      isEnvTrustModalData({ ...minimal, workspace_id: 12345 }),
+    ).toBe(false);
+  });
+
   it("accepts the full new-shape payload (message + config_path present)", () => {
     expect(
       isEnvTrustModalData({

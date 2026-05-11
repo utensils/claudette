@@ -1,11 +1,10 @@
 import { useCallback, useEffect, useState } from "react";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import { useCopyToClipboard } from "../../../hooks/useCopyToClipboard";
+import { useAppStore } from "../../../stores/useAppStore";
 import {
   getEnvSources,
   getEnvTargetWorktree,
   reloadEnv,
-  runEnvTrust,
   setEnvProviderEnabled,
 } from "../../../services/env";
 import {
@@ -19,80 +18,11 @@ import type {
 } from "../../../types/claudettePlugins";
 import type { EnvSourceInfo, EnvTarget } from "../../../types/env";
 import { PluginSettingInput } from "../PluginSettingInput";
+import { classifyPostActionError } from "../../modals/EnvTrustModal";
 import styles from "../Settings.module.css";
-
-interface ErrorInsight {
-  summary: string;
-  suggestedCommand?: string;
-  suggestedDescription?: string;
-}
-
-/**
- * Extract a human summary + optional fix suggestion from a raw Lua runtime
- * error string. Handles the common remediable cases surfaced by bundled
- * env providers:
- *
- *   - mise: `are not trusted` → suggest `mise trust`
- *   - direnv: `.envrc is blocked` → suggest `direnv allow`
- *   - nix-devshell: flake eval failure → no suggestion, just the core message
- *
- * Falls back to the first meaningful line of the error with Lua traceback
- * boilerplate stripped, so users see a readable message even when we don't
- * have a canned hint.
- */
-function analyzeError(pluginName: string, err: string): ErrorInsight {
-  // Gate the canned "Run this to fix it" hints on the plugin id so a
-  // third-party plugin whose error text happens to contain "not trusted"
-  // or "is blocked" doesn't get a wrong mise/direnv suggestion.
-  if (pluginName === "env-mise" && /not trusted|mise trust/i.test(err)) {
-    return {
-      summary: "mise config files in this workspace are not trusted.",
-      suggestedCommand: "mise trust",
-      suggestedDescription: "Run in the workspace to authorize mise config:",
-    };
-  }
-  if (pluginName === "env-direnv" && /is blocked|direnv allow/i.test(err)) {
-    return {
-      summary: ".envrc is blocked — direnv needs explicit permission.",
-      suggestedCommand: "direnv allow",
-      suggestedDescription: "Run in the workspace to allow direnv:",
-    };
-  }
-  if (pluginName === "env-nix-devshell" && /flake|nix/i.test(err)) {
-    return {
-      summary: "`nix print-dev-env` failed to evaluate the devshell.",
-    };
-  }
-
-  const cleaned = err
-    .replace(/^\[string "[^"]*"\]:\d+:\s*/, "")
-    .replace(/^plugin script error:\s*runtime error:\s*/i, "")
-    .trim();
-  const afterFailed = /(?:failed|error):\s*(.+)/is.exec(cleaned);
-  const core = (afterFailed ? afterFailed[1] : cleaned).split("\n")[0];
-  return { summary: core.slice(0, 240) };
-}
 
 interface EnvPanelProps {
   target: EnvTarget;
-}
-
-/**
- * Pattern-match an error to a plugin name that supports the one-click
- * trust Run button. Returns `null` for plugins/errors we don't have a
- * canned fix for — the UI still shows the Copy button in those cases.
- */
-function trustablePluginFromError(
-  pluginName: string,
-  error: string,
-): "env-direnv" | "env-mise" | null {
-  if (pluginName === "env-mise" && /not trusted|mise trust/i.test(error)) {
-    return "env-mise";
-  }
-  if (pluginName === "env-direnv" && /is blocked|direnv allow/i.test(error)) {
-    return "env-direnv";
-  }
-  return null;
 }
 
 /**
@@ -158,6 +88,35 @@ function formatRelativeTime(ms: number): string {
   return new Date(ms).toLocaleDateString();
 }
 
+/** Detect whether a row's error string is a trust-class failure (one
+ *  the EnvTrustModal can actually resolve via mise trust / direnv allow).
+ *  Wraps `classifyPostActionError` so EnvPanel reuses the same matcher
+ *  the modal uses for post-action verification — keeps both surfaces
+ *  agreeing on what counts as "trust class". */
+function isTrustClassError(error: string | null | undefined): boolean {
+  if (!error) return false;
+  return (
+    classifyPostActionError({ error }).kind === "still-blocked"
+  );
+}
+
+/**
+ * Trim a raw plugin error string to a single readable line for the
+ * EnvTrustModal's `message` field. The bundled mise / direnv plugins
+ * already surface a one-line error after our recent tightening (e.g.
+ * `mise.toml is not trusted` or `direnv: error /repo/.envrc is blocked`)
+ * but third-party env providers or older builds can still emit
+ * Lua-traceback-prefixed multi-line text. Strip the `[string "..."]:N:`
+ * prefix and take the first line so the modal stays compact.
+ */
+function summarizeError(error: string): string {
+  const cleaned = error
+    .replace(/^\[string "[^"]*"\]:\d+:\s*/, "")
+    .replace(/^plugin script error:\s*runtime error:\s*/i, "")
+    .trim();
+  return cleaned.split("\n")[0].slice(0, 240);
+}
+
 /**
  * Environment providers panel for a workspace.
  *
@@ -166,6 +125,18 @@ function formatRelativeTime(ms: number): string {
  * env-provider plugin; users can toggle individual providers off (e.g. a
  * repo has both mise.toml and flake.nix but the user only wants the Nix
  * devshell active) without touching the others.
+ *
+ * Trust-class failures (mise untrusted, direnv blocked) route through
+ * the shared EnvTrustModal — same flow whether the failure was caught
+ * proactively by `prepare_workspace_environment` or surfaced by the
+ * user toggling a provider back on from this panel. Keeping the trust
+ * UI in one component (instead of inline-in-row buttons) avoids the
+ * "two paths that drift" problem we hit before this refactor.
+ *
+ * Non-trust errors (broken TOML, flake eval failure) still surface
+ * inline through a small "Details" disclosure — the modal isn't the
+ * right surface for those, and re-running the trust command wouldn't
+ * help anyway.
  *
  * The "Reload" footer button evicts the backend cache for every provider
  * in this workspace — useful after running `direnv allow` / `mise trust`
@@ -176,8 +147,6 @@ export function EnvPanel({ target }: EnvPanelProps) {
   const [loading, setLoading] = useState(false);
   const [fetchError, setFetchError] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
-  const [runningTrust, setRunningTrust] = useState<string | null>(null);
-  const [trustError, setTrustError] = useState<string | null>(null);
   // Becomes true after the first successful `getEnvSources` resolve for
   // the current target. While false, any rows we're showing came from
   // the cheap placeholder fetch and don't yet reflect per-repo toggle
@@ -202,23 +171,52 @@ export function EnvPanel({ target }: EnvPanelProps) {
   const [overridesLoaded, setOverridesLoaded] = useState<Set<string>>(
     new Set(),
   );
-  // Two independent expansion sets — errors and settings can be open
-  // simultaneously without one toggling the other.
-  const [expandedSettings, setExpandedSettings] = useState<Set<string>>(
-    new Set(),
-  );
-
   const repoIdForOverrides =
     target.kind === "repo" ? target.repo_id : null;
 
-  const toggleExpanded = useCallback((name: string) => {
-    setExpanded((prev) => {
-      const next = new Set(prev);
-      if (next.has(name)) next.delete(name);
-      else next.add(name);
-      return next;
-    });
-  }, []);
+  // Key the env-progress store lookup the same way the dispatcher
+  // emits events: workspace targets use the workspace_id; repo
+  // targets use a synthetic `repo:{id}` key. This matches what
+  // `prepare_workspace_environment` / `get_env_sources` send through
+  // `TauriEnvProgressSink` so the panel can render the same
+  // "Loading env-direnv (Ns)…" hint the sidebar shows.
+  const envProgressKey =
+    target.kind === "workspace"
+      ? target.workspace_id
+      : `repo:${target.repo_id}`;
+  const envProgress = useAppStore(
+    (s) => s.workspaceEnvironment?.[envProgressKey],
+  );
+  // Resolve the repo this panel is acting on so trust-modal callers
+  // always have a repo_id, even in workspace-target mode. The trust
+  // decision applies to the repository; the workspace is just the
+  // probe point. Falls back to null if we can't find the workspace
+  // (rare — would mean a stale settings panel referencing a deleted
+  // workspace), in which case the inline trust button is suppressed.
+  const repoIdForModal = useAppStore((s) => {
+    if (target.kind === "repo") return target.repo_id;
+    return (
+      s.workspaces.find((w) => w.id === target.workspace_id)?.repository_id ??
+      null
+    );
+  });
+  const openModal = useAppStore((s) => s.openModal);
+
+  // Tick once a second while a resolve is in flight so the elapsed
+  // counter updates without each render computing it on its own.
+  const [elapsedSec, setElapsedSec] = useState(0);
+  useEffect(() => {
+    if (envProgress?.status !== "preparing" || !envProgress.started_at) {
+      setElapsedSec(0);
+      return;
+    }
+    const startedAt = envProgress.started_at;
+    setElapsedSec(Math.floor((Date.now() - startedAt) / 1000));
+    const id = setInterval(() => {
+      setElapsedSec(Math.floor((Date.now() - startedAt) / 1000));
+    }, 1000);
+    return () => clearInterval(id);
+  }, [envProgress?.status, envProgress?.started_at]);
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -227,8 +225,10 @@ export function EnvPanel({ target }: EnvPanelProps) {
       const result = await getEnvSources(target);
       setSources(result);
       setResolvedOnce(true);
+      return result;
     } catch (e) {
       setFetchError(String(e));
+      return null;
     } finally {
       setLoading(false);
     }
@@ -241,14 +241,12 @@ export function EnvPanel({ target }: EnvPanelProps) {
   // Reset panel state whenever the target changes. Without this, rows
   // from the previous repo/workspace linger until refresh() resolves,
   // and the placeholder fetch won't replace them because it only fills
-  // when sources===null. Clearing expanded/trustError too avoids
-  // surfacing error details from a different target.
+  // when sources===null. Clearing expanded too avoids surfacing error
+  // details from a different target.
   useEffect(() => {
     setResolvedOnce(false);
     setSources(null);
     setExpanded(new Set());
-    setExpandedSettings(new Set());
-    setTrustError(null);
     setRepoOverrides({});
     setOverridesLoaded(new Set());
   }, [target]);
@@ -364,73 +362,66 @@ export function EnvPanel({ target }: EnvPanelProps) {
     }
   }, [target, refresh]);
 
+  /**
+   * Open the EnvTrustModal for one specific provider. Builds the same
+   * payload shape the `workspace_env_trust_needed` event would send,
+   * but with `workspace_id: null` so the modal verifies against the
+   * repo target instead of a (possibly missing) workspace. Caller is
+   * responsible for confirming `repoIdForModal` is non-null and that
+   * the source actually has a trust-class error.
+   */
+  const openTrustModalForPlugin = useCallback(
+    (source: EnvSourceInfo) => {
+      if (!repoIdForModal) return;
+      const errorText = source.error ?? "";
+      openModal("envTrust", {
+        // When the panel is viewing a workspace target we DO have a
+        // workspace_id, so wire it through — the modal can then
+        // re-resolve + re-prepare the failing workspace so the user
+        // gets immediate feedback in the chat composer. In repo mode
+        // we pass null and the modal degrades to repo-scope verify.
+        workspace_id:
+          target.kind === "workspace" ? target.workspace_id : null,
+        repo_id: repoIdForModal,
+        plugins: [
+          {
+            plugin_name: source.plugin_name,
+            message: summarizeError(errorText),
+            config_path: null,
+            error_excerpt: errorText,
+          },
+        ],
+      });
+    },
+    [openModal, repoIdForModal, target],
+  );
+
   const handleToggle = useCallback(
     async (pluginName: string, nextEnabled: boolean) => {
       try {
         await setEnvProviderEnabled(target, pluginName, nextEnabled);
-        await refresh();
-      } catch (e) {
-        setFetchError(String(e));
-      }
-    },
-    [target, refresh],
-  );
-
-  const handleRunTrust = useCallback(
-    async (pluginName: string) => {
-      setRunningTrust(pluginName);
-      setTrustError(null);
-      try {
-        // Run the trust command FIRST so a failure (direnv hiccup,
-        // permissions issue, network blip on a remote worktree)
-        // doesn't leave the repo flagged as trusted while the
-        // underlying allow/trust never actually completed. If
-        // `runEnvTrust` throws, we hit the catch arm and the
-        // persistent `repo_trust` write below is skipped — the user
-        // can hit the Trust button again to retry without first
-        // having to clear stale state.
-        //
-        // Workspace-mode targets just run the one-shot trust
-        // command; there's no per-repo scope to persist into.
-        await runEnvTrust(target, pluginName);
-        if (repoIdForOverrides) {
-          // Persist the decision so future workspaces in the same
-          // repo auto-run the trust command on first encounter.
-          // Plugins read this via `host.config("repo_trust")` on
-          // every resolve.
-          await setClaudettePluginRepoSetting(
-            repoIdForOverrides,
-            pluginName,
-            "repo_trust",
-            "allow",
-          );
+        // Re-fetch sources inline (rather than fire-and-forget
+        // `refresh()`) so we can immediately inspect whether the
+        // toggle-on revealed a trust error and prompt the user via
+        // the modal. The refresh() helper also updates panel state
+        // for us, so the toggle reflects reality the moment we return.
+        const fresh = await refresh();
+        if (nextEnabled && fresh && repoIdForModal) {
+          const row = fresh.find((s) => s.plugin_name === pluginName);
+          // Only open the modal when the row reports a trust-class
+          // error AND the provider's CLI is actually installed.
+          // "Unavailable" rows can't be resolved by trust — the user
+          // needs to install the tool first, and the modal would be
+          // misleading.
+          if (row && !row.unavailable && isTrustClassError(row.error)) {
+            openTrustModalForPlugin(row);
+          }
         }
-        await refresh();
-      } catch (e) {
-        setTrustError(String(e));
-      } finally {
-        setRunningTrust(null);
-      }
-    },
-    [target, refresh, repoIdForOverrides],
-  );
-
-  const handleDisableForRepo = useCallback(
-    async (pluginName: string) => {
-      // "Deny" semantic from the trust prompt: disable this provider
-      // for this repo only. Reuses the existing per-repo enable
-      // plumbing — the runtime filters denied providers out of the
-      // resolve before they ever run, so no `repo_trust` setting is
-      // needed in addition. The user can re-enable from the row's
-      // toggle if they change their mind.
-      try {
-        await setEnvProviderEnabled(target, pluginName, false);
-        await refresh();
       } catch (e) {
         setFetchError(String(e));
       }
     },
-    [target, refresh],
+    [target, refresh, repoIdForModal, openTrustModalForPlugin],
   );
 
   // Lazy-load a plugin's per-repo overrides on first expansion. Saves a
@@ -459,15 +450,17 @@ export function EnvPanel({ target }: EnvPanelProps) {
     [repoIdForOverrides, overridesLoaded],
   );
 
-  const toggleSettings = useCallback(
-    (pluginName: string) => {
-      setExpandedSettings((prev) => {
+  const toggleExpanded = useCallback(
+    (name: string) => {
+      setExpanded((prev) => {
         const next = new Set(prev);
-        if (next.has(pluginName)) {
-          next.delete(pluginName);
+        if (next.has(name)) {
+          next.delete(name);
         } else {
-          next.add(pluginName);
-          void ensureOverridesLoaded(pluginName);
+          next.add(name);
+          // Lazy-load per-repo override values for the plugin's
+          // settings form on first open.
+          void ensureOverridesLoaded(name);
         }
         return next;
       });
@@ -538,6 +531,28 @@ export function EnvPanel({ target }: EnvPanelProps) {
         <code>flake.lock</code>) change.
       </div>
 
+      {envProgress?.status === "preparing" && envProgress.current_plugin && (
+        <div
+          className={styles.settingDescription}
+          role="status"
+          aria-live="polite"
+        >
+          {/* Cold flakes (use_flake / nix print-dev-env) routinely run
+              60–120s on first hit. Without this inline hint, the
+              disabled toggles + tooltip ("Resolving environment
+              providers…") look indistinguishable from a hang — the
+              user reported exactly that mismatch. Surfacing the
+              active plugin + elapsed counter mirrors the sidebar's
+              loading hint so the same data shows up wherever a
+              resolve is visible. */}
+          Resolving <strong>{envProgress.current_plugin}</strong>… {elapsedSec}
+          s elapsed
+          {elapsedSec > 30 && (
+            <> · cold flakes can take 60–120 seconds on first run</>
+          )}
+        </div>
+      )}
+
       <div className={styles.mcpList}>
         {sources.map((source) => {
           // `unavailable` is a system-capability state — the plugin's
@@ -548,6 +563,7 @@ export function EnvPanel({ target }: EnvPanelProps) {
             !source.unavailable &&
             !!source.error &&
             source.error !== "disabled";
+          const trustError = hasError && isTrustClassError(source.error);
           const isOpen = expanded.has(source.plugin_name);
           // Treat the toggle as locked-off while unavailable: visually
           // off, non-actionable, and tooltip points at the fix
@@ -567,9 +583,7 @@ export function EnvPanel({ target }: EnvPanelProps) {
           //      sense scoped to a repository).
           //   2. The plugin is globally enabled — disabled plugins
           //      won't run regardless of any per-repo override, so
-          //      surfacing the form would mislead the user (matches
-          //      the rule the standalone RepoEnvProviderSettings
-          //      panel enforced before this UX merge).
+          //      surfacing the form would mislead the user.
           //   3. The manifest declares at least one user-facing
           //      setting; otherwise there's nothing to render.
           const info = pluginInfo[source.plugin_name];
@@ -578,7 +592,10 @@ export function EnvPanel({ target }: EnvPanelProps) {
             !!info &&
             info.enabled &&
             info.settings_schema.length > 0;
-          const settingsOpen = expandedSettings.has(source.plugin_name);
+          // Non-trust errors get an inline "Details" disclosure — the
+          // modal isn't the right surface for broken TOML / flake
+          // eval failures, and there's no canned fix to offer.
+          const showDetails = hasError && !trustError;
           return (
             <div key={source.plugin_name}>
               <div className={styles.mcpRow}>
@@ -617,24 +634,35 @@ export function EnvPanel({ target }: EnvPanelProps) {
                     )}
                 </div>
                 <div className={styles.mcpActions}>
-                  {showSettings && (
+                  {/* Trust-class error → primary action opens the
+                      shared EnvTrustModal. Same UX whether the error
+                      was surfaced by a failing workspace prepare or by
+                      toggling a provider back on with a stale untrust
+                      state. We only surface the button when we have a
+                      repo_id to scope the trust decision to (every
+                      target normally does; the guard is for safety). */}
+                  {trustError && repoIdForModal && (
                     <button
                       type="button"
                       className={styles.envDetailsBtn}
-                      onClick={() => toggleSettings(source.plugin_name)}
-                      aria-expanded={settingsOpen}
+                      onClick={() => openTrustModalForPlugin(source)}
+                      title="Open the trust prompt for this provider"
                     >
-                      {settingsOpen ? "Hide settings" : "Settings"}
+                      Resolve…
                     </button>
                   )}
-                  {hasError && (
+                  {(showSettings || showDetails) && (
                     <button
                       type="button"
                       className={styles.envDetailsBtn}
                       onClick={() => toggleExpanded(source.plugin_name)}
                       aria-expanded={isOpen}
                     >
-                      {isOpen ? "Hide details" : "Show details"}
+                      {isOpen
+                        ? "Hide"
+                        : showSettings
+                          ? "Settings"
+                          : "Details"}
                     </button>
                   )}
                   <button
@@ -653,25 +681,10 @@ export function EnvPanel({ target }: EnvPanelProps) {
                   </button>
                 </div>
               </div>
-              {hasError && isOpen && (
-                <ErrorCard
-                  pluginName={source.plugin_name}
-                  displayName={source.display_name}
-                  error={source.error!}
-                  trustablePlugin={trustablePluginFromError(
-                    source.plugin_name,
-                    source.error!,
-                  )}
-                  running={runningTrust === source.plugin_name}
-                  onRunTrust={() => handleRunTrust(source.plugin_name)}
-                  onDisableForRepo={
-                    repoIdForOverrides
-                      ? () => handleDisableForRepo(source.plugin_name)
-                      : undefined
-                  }
-                />
+              {isOpen && showDetails && (
+                <pre className={styles.envErrorPre}>{source.error}</pre>
               )}
-              {showSettings && settingsOpen && (
+              {isOpen && showSettings && (
                 <ProviderSettingsDrawer
                   schema={info!.settings_schema}
                   globalValues={info!.setting_values}
@@ -686,12 +699,6 @@ export function EnvPanel({ target }: EnvPanelProps) {
         })}
       </div>
 
-      {trustError && (
-        <div className={styles.mcpError} role="alert">
-          Trust command failed: {trustError}
-        </div>
-      )}
-
       <div className={styles.buttonRow}>
         <button
           type="button"
@@ -703,120 +710,6 @@ export function EnvPanel({ target }: EnvPanelProps) {
         </button>
       </div>
     </>
-  );
-}
-
-function ErrorCard({
-  pluginName,
-  displayName,
-  error,
-  trustablePlugin,
-  running,
-  onRunTrust,
-  onDisableForRepo,
-}: {
-  pluginName: string;
-  displayName: string;
-  error: string;
-  trustablePlugin: "env-direnv" | "env-mise" | null;
-  running: boolean;
-  onRunTrust: () => void;
-  /** When set, the user is in repo-mode and clicking the "Disable for
-   *  this repo" button denies the provider for the current repository
-   *  via the existing per-repo enable toggle. Absent in workspace mode
-   *  — there's no per-workspace deny semantic. */
-  onDisableForRepo?: () => void;
-}) {
-  const insight = analyzeError(pluginName, error);
-  // Two independent hook instances so the "Copied" flag tracks per button
-  // (the suggested command and the raw error each get their own timer).
-  const { copied: copiedCmd, copy: copyCmd } = useCopyToClipboard();
-  const { copied: copiedRaw, copy: copyRaw } = useCopyToClipboard();
-
-  return (
-    <div className={styles.envErrorCard} role="alert">
-      <div className={styles.envErrorSummary}>{insight.summary}</div>
-      {insight.suggestedCommand && (
-        <>
-          {insight.suggestedDescription && (
-            <div className={styles.envErrorHint}>
-              {insight.suggestedDescription}
-            </div>
-          )}
-          <div className={styles.envErrorCmdRow}>
-            <code className={styles.envErrorCmd}>
-              {insight.suggestedCommand}
-            </code>
-            {trustablePlugin && onDisableForRepo && (
-              // Per-repo trust prompt: the two-button "Trust /
-              // Disable for this repo" pair. "Trust" persists
-              // `repo_trust = "allow"` and runs the trust command
-              // once; future workspaces in the same repo auto-allow
-              // on first encounter. "Disable for this repo" reuses
-              // the existing per-repo enable toggle to skip the
-              // provider entirely. We render the pair only when we
-              // know the repo scope (onDisableForRepo set).
-              <>
-                <button
-                  type="button"
-                  className={styles.envErrorRunBtn}
-                  onClick={onRunTrust}
-                  disabled={running}
-                  title={`Allow ${displayName} for every workspace in this repository — runs ${insight.suggestedCommand} now and remembers the choice.`}
-                >
-                  {running
-                    ? "Trusting…"
-                    : `Trust ${displayName} for this repo`}
-                </button>
-                <button
-                  type="button"
-                  className={styles.envErrorCopyBtn}
-                  onClick={onDisableForRepo}
-                  disabled={running}
-                  title={`Skip ${displayName} for this repository. Other env providers still run.`}
-                >
-                  Disable for this repo
-                </button>
-              </>
-            )}
-            {trustablePlugin && !onDisableForRepo && (
-              // Workspace-mode fallback: only the one-shot run is
-              // available because per-repo persistence has no scope.
-              // Surfaces the same Run button as before so workspace-
-              // scoped EnvPanel mounts (no `repoIdForOverrides`)
-              // keep the original UX.
-              <button
-                type="button"
-                className={styles.envErrorRunBtn}
-                onClick={onRunTrust}
-                disabled={running}
-                title="Run this command in the workspace from Claudette"
-              >
-                {running ? "Running…" : "Run"}
-              </button>
-            )}
-            <button
-              type="button"
-              className={styles.envErrorCopyBtn}
-              onClick={() => void copyCmd(insight.suggestedCommand!)}
-            >
-              {copiedCmd ? "Copied" : "Copy"}
-            </button>
-          </div>
-        </>
-      )}
-      <details className={styles.envErrorDetails}>
-        <summary>Raw error output</summary>
-        <pre className={styles.envErrorPre}>{error}</pre>
-        <button
-          type="button"
-          className={styles.envErrorCopyBtn}
-          onClick={() => void copyRaw(error)}
-        >
-          {copiedRaw ? "Copied" : "Copy full error"}
-        </button>
-      </details>
-    </div>
   );
 }
 

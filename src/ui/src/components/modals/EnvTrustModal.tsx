@@ -39,7 +39,17 @@ interface PluginEntry {
 }
 
 export interface EnvTrustModalData {
-  workspace_id: string;
+  /**
+   * The workspace whose resolve hit the trust error, if there was one.
+   * Set when the modal is triggered by the `workspace_env_trust_needed`
+   * Tauri event (a workspace just failed to prepare its env). Null when
+   * the modal is triggered proactively from Settings — e.g. the user
+   * toggled mise back on at the repo scope and the resolve immediately
+   * reported a trust error. In the null case we skip the workspace-
+   * scoped reload + re-prepare path and verify success against the repo
+   * target instead.
+   */
+  workspace_id: string | null;
   repo_id: string;
   plugins: PluginEntry[];
 }
@@ -110,20 +120,28 @@ export function classifyPostActionError(
 }
 
 /**
- * After a Trust/Disable action, re-query the workspace's env sources
- * to confirm the plugin we acted on is no longer reporting a
- * trust-class error. The backend split returns `Ok(())` from
- * `prepare_workspace_environment` when only trust errors remain (they
- * route through the event), so relying on the resolve's success/
- * failure is not enough — we inspect sources directly. Codex P2
- * finding (b365f01c review).
+ * After a Trust/Disable action, re-query env sources to confirm the
+ * plugin we acted on is no longer reporting a trust-class error. The
+ * backend split returns `Ok(())` from `prepare_workspace_environment`
+ * when only trust errors remain (they route through the event), so
+ * relying on the resolve's success/failure is not enough — we inspect
+ * sources directly. Codex P2 finding (b365f01c review).
+ *
+ * When `workspaceId` is null (modal opened from Settings without an
+ * active workspace) we verify against the repo target — the trust
+ * decision applies to the repository, so this is the right scope.
  */
 async function verifyPluginCleared(
-  workspaceId: string,
+  workspaceId: string | null,
+  repoId: string,
   pluginName: string,
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   try {
-    const sources = await getEnvSources(envTargetFromWorkspace(workspaceId));
+    const target =
+      workspaceId !== null
+        ? envTargetFromWorkspace(workspaceId)
+        : envTargetFromRepo(repoId);
+    const sources = await getEnvSources(target);
     const result = classifyPostActionError(
       sources.find((s) => s.plugin_name === pluginName),
     );
@@ -144,7 +162,11 @@ export function isEnvTrustModalData(value: unknown): value is EnvTrustModalData 
   if (value === null || typeof value !== "object") return false;
   const v = value as Record<string, unknown>;
   return (
-    typeof v.workspace_id === "string" &&
+    // workspace_id is now optional: present + string when triggered by
+    // the trust-needed event, null when opened proactively from
+    // Settings. Reject `undefined` / wrong type so a malformed event
+    // payload still fails the guard.
+    (v.workspace_id === null || typeof v.workspace_id === "string") &&
     typeof v.repo_id === "string" &&
     Array.isArray(v.plugins) &&
     v.plugins.every((p): p is PluginEntry => {
@@ -237,21 +259,32 @@ export function EnvTrustModal() {
           "repo_trust",
           "allow",
         );
-        // Force the failing workspace to re-resolve so the spinner
-        // clears and the user can immediately start a chat / terminal.
-        await reloadEnv(envTargetFromWorkspace(data.workspace_id), pluginName);
-        try {
-          await prepareWorkspaceEnvironment(data.workspace_id);
-        } catch {
-          // Non-trust failures after a successful trust still leave
-          // the row green — the env panel will reflect any residual
-          // error separately.
+        if (data.workspace_id !== null) {
+          // Force the failing workspace to re-resolve so the spinner
+          // clears and the user can immediately start a chat / terminal.
+          await reloadEnv(
+            envTargetFromWorkspace(data.workspace_id),
+            pluginName,
+          );
+          try {
+            await prepareWorkspaceEnvironment(data.workspace_id);
+          } catch {
+            // Non-trust failures after a successful trust still leave
+            // the row green — the env panel will reflect any residual
+            // error separately.
+          }
         }
-        // Verify the trust command actually unblocked this worktree.
-        // The backend now returns Ok(()) for trust-only failures
-        // (they route through the event), so we can't infer success
-        // from the resolve's return value. See `verifyPluginCleared`.
-        const verify = await verifyPluginCleared(data.workspace_id, pluginName);
+        // Verify the trust command actually unblocked the affected
+        // scope. The backend now returns Ok(()) for trust-only
+        // failures (they route through the event), so we can't infer
+        // success from the resolve's return value. See
+        // `verifyPluginCleared` — it picks the right target based on
+        // whether we have a workspace.
+        const verify = await verifyPluginCleared(
+          data.workspace_id,
+          data.repo_id,
+          pluginName,
+        );
         if (verify.ok) {
           setRow(pluginName, { kind: "trusted" });
         } else {
@@ -277,21 +310,31 @@ export function EnvTrustModal() {
           pluginName,
           false,
         );
-        // Re-resolve to drop the failure status now that the provider
-        // is gated out of the dispatcher entirely.
-        await reloadEnv(envTargetFromWorkspace(data.workspace_id), pluginName);
-        try {
-          await prepareWorkspaceEnvironment(data.workspace_id);
-        } catch {
-          // Same rationale as the trust path — non-trust residue
-          // surfaces in the env panel, not here.
+        if (data.workspace_id !== null) {
+          // Re-resolve the failing workspace to drop the failure
+          // status now that the provider is gated out of the
+          // dispatcher entirely.
+          await reloadEnv(
+            envTargetFromWorkspace(data.workspace_id),
+            pluginName,
+          );
+          try {
+            await prepareWorkspaceEnvironment(data.workspace_id);
+          } catch {
+            // Same rationale as the trust path — non-trust residue
+            // surfaces in the env panel, not here.
+          }
         }
         // Same verification as the trust path: confirm the provider
         // is actually gone from the trust-error set. For Disable,
         // success is normally cheap to detect (the dispatcher filters
         // out disabled plugins before resolve), but the check costs
         // nothing extra and keeps the two paths symmetric.
-        const verify = await verifyPluginCleared(data.workspace_id, pluginName);
+        const verify = await verifyPluginCleared(
+          data.workspace_id,
+          data.repo_id,
+          pluginName,
+        );
         if (verify.ok) {
           setRow(pluginName, { kind: "disabled" });
         } else {
