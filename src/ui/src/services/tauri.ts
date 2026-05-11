@@ -298,6 +298,17 @@ export function deleteWorkspace(id: string): Promise<void> {
   return invoke("delete_workspace", { id });
 }
 
+/**
+ * Tell the Rust SCM polling loop which workspace the user is currently
+ * viewing. Pass `null` when navigating to the dashboard or a repository
+ * overview so the backend drops its hot-tier focus. Selection drives the
+ * 30 s polling cadence for the focused workspace and lets idle workspaces
+ * back off to longer tier intervals.
+ */
+export function notifyWorkspaceSelected(workspaceId: string | null): Promise<void> {
+  return invoke("notify_workspace_selected", { workspaceId });
+}
+
 export interface GeneratedWorkspaceName {
   slug: string;
   display: string;

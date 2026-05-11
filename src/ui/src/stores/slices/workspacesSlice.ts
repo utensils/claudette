@@ -1,15 +1,13 @@
-import { invoke } from "@tauri-apps/api/core";
 import type { StateCreator } from "zustand";
+import { notifyWorkspaceSelected } from "../../services/tauri";
 import type { Workspace } from "../../types";
 import type { AppState } from "../useAppStore";
 
-// Fire-and-forget: tell the Rust SCM polling loop which workspace the user
-// is viewing so it can keep that workspace on a 30s cadence while letting
-// idle workspaces back off. Errors are swallowed because selection is a
-// pure UI action — a failed notification just means the backend keeps
-// polling on its prior tier, which is fine.
+// Fire-and-forget wrapper around the typed service call. Errors are
+// swallowed because selection is a pure UI action — a failed notification
+// just means the backend keeps polling on its prior tier, which is fine.
 function notifyBackendSelection(workspaceId: string | null) {
-  invoke("notify_workspace_selected", { workspaceId }).catch(() => {});
+  notifyWorkspaceSelected(workspaceId).catch(() => {});
 }
 
 export type WorkspaceEnvironmentStatus = "idle" | "preparing" | "ready" | "error";

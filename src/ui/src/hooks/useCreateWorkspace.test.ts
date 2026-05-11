@@ -18,6 +18,11 @@ vi.mock("../services/tauri", () => ({
   createWorkspace: mockCreateWorkspace,
   getRepoConfig: mockGetRepoConfig,
   runWorkspaceSetup: mockRunWorkspaceSetup,
+  // Tests exercise `selectWorkspace` on the store, which now notifies the
+  // backend so the SCM polling loop can promote the new workspace into its
+  // hot tier. The notification is fire-and-forget — stub it so the mock
+  // surface stays complete.
+  notifyWorkspaceSelected: vi.fn(() => Promise.resolve()),
 }));
 
 import { createWorkspaceOrchestrated } from "./useCreateWorkspace";

@@ -552,8 +552,9 @@ pub struct AppState {
     pub selected_workspace_id: RwLock<Option<String>>,
     /// Last-known activity instant per workspace. Written on workspace
     /// selection and on agent turn start; read by the SCM polling loop to
-    /// compute the tier interval. Seeded at startup from `chat_sessions`
-    /// so workspaces with recent chat history don't all start as stale.
+    /// compute the tier interval. Seeded at startup from the most recent
+    /// `chat_messages.created_at` per workspace so workspaces with recent
+    /// chat history don't all start as stale.
     pub workspace_activity: RwLock<HashMap<String, Instant>>,
     /// When each workspace was last successfully polled by the SCM loop.
     /// Combined with `workspace_activity` to decide whether a workspace is
