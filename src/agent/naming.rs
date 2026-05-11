@@ -181,7 +181,6 @@ pub async fn generate_branch_name(
     cmd.no_console_window();
     cmd.stdin(std::process::Stdio::null())
         .env("PATH", crate::env::enriched_path());
-    // Run in the user's worktree so the CLI loads *their* project context.
     cmd.current_dir(worktree_path);
     let user_message = format!(
         "Generate a short git branch name slug for the following task. \
