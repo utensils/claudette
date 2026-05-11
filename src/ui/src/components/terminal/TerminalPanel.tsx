@@ -12,6 +12,7 @@ import {
 import { createPortal } from "react-dom";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
+import { Unicode11Addon } from "@xterm/addon-unicode11";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { listen } from "@tauri-apps/api/event";
 import { ask } from "@tauri-apps/plugin-dialog";
@@ -883,6 +884,10 @@ export const TerminalPanel = memo(function TerminalPanel() {
         fontSize: terminalFontSize * rootZoom,
         fontFamily: monoFont,
         theme: getTerminalTheme(),
+        // Unlock `term.unicode.activeVersion`, which the Unicode 11 addon
+        // below needs to register Unicode 11+ width rules. Required as of
+        // xterm.js v5+; without it, switching versions throws.
+        allowProposedApi: true,
       });
       const fit = new FitAddon();
       const links = new WebLinksAddon((_event, url) => {
@@ -890,6 +895,20 @@ export const TerminalPanel = memo(function TerminalPanel() {
       });
       term.loadAddon(fit);
       term.loadAddon(links);
+      // xterm.js defaults to Unicode 6 width tables, where most emoji
+      // (including starship's status glyphs — 💀, 🔋, etc.) are 1 cell.
+      // PSReadLine, ConPTY, Windows Terminal, iTerm2, and pretty much
+      // every modern shell consider those same emoji 2 cells. The
+      // disagreement shifts the cursor by 1 column for every wide-glyph
+      // prompt character; when PSReadLine then re-renders the input line
+      // after each keystroke (syntax highlight / predictive intellisense),
+      // the first re-render writes at the wrong column and leaves a
+      // 1-cell-shifted "ghost" copy of the first typed character — the
+      // user-visible symptom is "typing `clear` shows `cclear`" with
+      // PSReadLine's actual buffer unaffected. Activating Unicode 11 width
+      // rules makes xterm.js agree with PSReadLine on glyph widths.
+      term.loadAddon(new Unicode11Addon());
+      term.unicode.activeVersion = "11";
 
       const keyHandler = (ev: KeyboardEvent): boolean =>
         keyHandlerRef.current(ev);
