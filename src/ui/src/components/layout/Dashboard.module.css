@@ -66,6 +66,12 @@
   display: flex;
   flex-direction: column;
   min-height: 0;
+  /* CSS-level help against WKWebView's elastic overscroll. The
+     `BoundedScrollPane` wrapper that owns this class also runs the
+     `usePreventScrollBounce` hook for the case where macOS ignores the
+     CSS property (overlay scrollbars, trackpad inertia past the edge).
+     Mirrors `.messages` in `ChatPanel.module.css`. */
+  overscroll-behavior-y: none;
 }
 
 /* Active-workspaces section — mirrors the Analytics section treatment so

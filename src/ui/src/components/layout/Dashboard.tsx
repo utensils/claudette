@@ -6,6 +6,7 @@ import { isAgentBusy } from "../../utils/agentStatus";
 import { RepoIcon } from "../shared/RepoIcon";
 import { PanelHeader } from "../shared/PanelHeader";
 import { PanelToggles } from "../shared/PanelToggles";
+import { BoundedScrollPane } from "../shared/BoundedScrollPane";
 import { StatsStrip, AnalyticsSection, MicroStats } from "../metrics";
 import { SessionStatusIcon, type SessionStatusKind } from "../shared/SessionStatusIcon";
 import { resolveScmPrIcon } from "../shared/workspaceStatusIcon";
@@ -371,7 +372,7 @@ export function Dashboard() {
           }
           right={<PanelToggles />}
         />
-        <div className={styles.scrollBody}>
+        <BoundedScrollPane className={styles.scrollBody}>
           <WelcomeEmptyState
             repositories={[scopedRepo]}
             recentRepoIds={[scopedRepo.id]}
@@ -463,7 +464,7 @@ export function Dashboard() {
               )}
             </div>
           )}
-        </div>
+        </BoundedScrollPane>
       </div>
     );
   }
@@ -475,7 +476,7 @@ export function Dashboard() {
           left={<span className={styles.dashboardTitle}>Dashboard</span>}
           right={<PanelToggles />}
         />
-        <div className={styles.scrollBody}>
+        <BoundedScrollPane className={styles.scrollBody}>
           <StatsStrip />
           <AnalyticsSection />
           <WelcomeEmptyState
@@ -485,7 +486,7 @@ export function Dashboard() {
             onAddRepository={handleAddRepository}
             creating={creating}
           />
-        </div>
+        </BoundedScrollPane>
       </div>
     );
   }
@@ -500,7 +501,7 @@ export function Dashboard() {
         left={<span className={styles.dashboardTitle}>Dashboard</span>}
         right={<PanelToggles />}
       />
-      <div className={styles.scrollBody}>
+      <BoundedScrollPane className={styles.scrollBody}>
         <StatsStrip />
         <AnalyticsSection />
         <div className={styles.workspacesSection}>
@@ -539,7 +540,7 @@ export function Dashboard() {
             </div>
           )}
         </div>
-      </div>
+      </BoundedScrollPane>
     </div>
   );
 }
