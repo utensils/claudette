@@ -900,6 +900,7 @@ fn main() {
             commands::workspace::discover_worktrees,
             commands::workspace::import_worktrees,
             commands::workspace::open_workspace_in_terminal,
+            commands::workspace::notify_workspace_selected,
             // Slash commands
             commands::slash_commands::list_slash_commands,
             commands::slash_commands::record_slash_command_usage,

@@ -1333,6 +1333,15 @@ pub async fn send_chat_message(
     // supervision, broadcast emit) inherits both `chat_session_id` and
     // `workspace_id` without re-passing them through helpers.
     tracing::Span::current().record("workspace_id", workspace_id.as_str());
+    // Stamp this workspace as freshly active so the SCM polling loop keeps
+    // it on the 30s hot-tier cadence for ~1h past the last turn. (Workspaces
+    // with an in-flight agent are also hot, but this keeps them hot after
+    // the agent finishes too — exactly when CI/PR status churn matters most.)
+    state
+        .workspace_activity
+        .write()
+        .await
+        .insert(workspace_id.clone(), std::time::Instant::now());
     let _is_first_session = chat_session.sort_order == 0;
     let session_name_already_edited = chat_session.name_edited;
 

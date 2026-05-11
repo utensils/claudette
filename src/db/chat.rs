@@ -95,6 +95,25 @@ impl Database {
         "NOT (role = 'assistant' AND TRIM(content) = '' AND COALESCE(TRIM(thinking), '') = '')";
 
     #[allow(dead_code)]
+    /// For each workspace that has at least one chat message, return the
+    /// number of seconds elapsed since its most recent message. Used to
+    /// seed the SCM polling loop's per-workspace activity map after an
+    /// app restart so workspaces with recent chat history start in the
+    /// hot tier rather than the stale tier.
+    pub fn workspace_last_activity_seconds_ago(
+        &self,
+    ) -> Result<Vec<(String, i64)>, rusqlite::Error> {
+        let mut stmt = self.conn.prepare(
+            "SELECT workspace_id, \
+                    CAST(strftime('%s', 'now') - strftime('%s', MAX(created_at)) AS INTEGER) \
+             FROM chat_messages GROUP BY workspace_id",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+        })?;
+        rows.collect()
+    }
+
     pub fn list_chat_messages(
         &self,
         workspace_id: &str,
