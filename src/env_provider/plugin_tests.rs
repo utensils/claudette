@@ -458,10 +458,12 @@ fn direnv_export_watches_list_drops_direnv_allow_and_deny_stamps() {
     // a Nix flake). Stamps must be dropped from the watch list so
     // the cache stays warm across selects.
     //
-    // The plugin compares against the path substrings `/direnv/allow/`
-    // and `/direnv/deny/` so this works across XDG_DATA_HOME on Linux,
-    // `~/Library/Application Support` on macOS configurations where
-    // direnv lands there, and any non-default `$XDG_DATA_HOME`.
+    // The plugin's stamp predicate is two-part: it requires both an
+    // adjacent `/direnv/allow/` or `/direnv/deny/` path segment AND a
+    // 32+ lowercase hex basename (direnv writes SHA256 stamps). That
+    // pair holds across XDG_DATA_HOME on Linux, `~/Library/Application
+    // Support` on macOS configurations where direnv lands there, and
+    // any non-default `$XDG_DATA_HOME`.
     let tmp = tempfile::tempdir().unwrap();
     std::fs::write(tmp.path().join(".envrc"), "use flake\n").unwrap();
     let worktree = tmp.path().to_string_lossy().into_owned();
@@ -487,10 +489,16 @@ fn direnv_export_watches_list_drops_direnv_allow_and_deny_stamps() {
         "DIRENV_WATCHES": encoded,
     }))
     .unwrap();
+    // Assert args shape matches the rest of the env-direnv tests so
+    // an accidental change to how the plugin invokes direnv fails
+    // this regression test loudly instead of silently succeeding.
     let stub = format!(
         r#"
         host.exec = function(cmd, args)
             if cmd ~= "direnv" then error("expected cmd='direnv', got: " .. tostring(cmd)) end
+            if type(args) ~= "table" or args[1] ~= "export" or args[2] ~= "json" or args[3] ~= nil then
+                error("expected args={{'export','json'}}")
+            end
             return {{ stdout = [==[{env_json}]==], stderr = "", code = 0 }}
         end
         "#
@@ -566,10 +574,16 @@ fn direnv_export_stamp_filter_matches_xdg_and_macos_locations() {
         "DIRENV_WATCHES": encoded,
     }))
     .unwrap();
+    // Assert args shape matches the rest of the env-direnv tests so
+    // an accidental change to how the plugin invokes direnv fails
+    // this regression test loudly instead of silently succeeding.
     let stub = format!(
         r#"
         host.exec = function(cmd, args)
             if cmd ~= "direnv" then error("expected cmd='direnv', got: " .. tostring(cmd)) end
+            if type(args) ~= "table" or args[1] ~= "export" or args[2] ~= "json" or args[3] ~= nil then
+                error("expected args={{'export','json'}}")
+            end
             return {{ stdout = [==[{env_json}]==], stderr = "", code = 0 }}
         end
         "#
@@ -647,10 +661,16 @@ fn direnv_export_stamp_filter_keeps_legit_paths_containing_direnv_segments() {
         "DIRENV_WATCHES": encoded,
     }))
     .unwrap();
+    // Assert args shape matches the rest of the env-direnv tests so
+    // an accidental change to how the plugin invokes direnv fails
+    // this regression test loudly instead of silently succeeding.
     let stub = format!(
         r#"
         host.exec = function(cmd, args)
             if cmd ~= "direnv" then error("expected cmd='direnv', got: " .. tostring(cmd)) end
+            if type(args) ~= "table" or args[1] ~= "export" or args[2] ~= "json" or args[3] ~= nil then
+                error("expected args={{'export','json'}}")
+            end
             return {{ stdout = [==[{env_json}]==], stderr = "", code = 0 }}
         end
         "#
