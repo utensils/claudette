@@ -63,14 +63,33 @@ function M.export(args)
 
     -- Seed with `.envrc` unconditionally — it's always a watch target.
     -- Then merge in whatever direnv itself tracks via `DIRENV_WATCHES`
-    -- (user `watch_file` directives, files sourced by `dotenv ...`,
-    -- direnv's own allow/deny cache entries whose mtime flips when the
-    -- user runs `direnv allow`/`deny`). Dedupe so `.envrc` isn't listed
-    -- twice when direnv includes it too.
+    -- (user `watch_file` directives, files sourced by `dotenv ...`).
+    -- Dedupe so `.envrc` isn't listed twice when direnv includes it too.
+    --
+    -- We deliberately DROP direnv's own per-`.envrc` allow/deny stamps
+    -- (the `<data_dir>/direnv/allow/<sha>` / `<data_dir>/direnv/deny/<sha>`
+    -- files) from the watch list, even though direnv reports them in
+    -- `DIRENV_WATCHES` for its shell-hook's "re-evaluate on permission
+    -- change" semantics. The host watcher (`src/env_provider/watcher.rs`)
+    -- subscribes AFTER `cache.put` stores the entry, and on macOS
+    -- FSEvents reliably delivers the write event from the `direnv allow`
+    -- call we just made (when `repo_trust == "allow"` retries a blocked
+    -- export above) shortly after — which fires `on_change` and
+    -- evicts the cache entry we just populated. Net effect was a 5s
+    -- cold export on every workspace switch even when the underlying
+    -- `.envrc` / `flake.lock` hadn't changed. The "Reload env" UI action
+    -- and our own per-repo trust state cover the rare case where the
+    -- user revokes direnv permission manually; we don't need to react
+    -- to the stamp file's mtime to stay correct.
+    local function is_direnv_stamp(path)
+        if type(path) ~= "string" then return false end
+        return path:find("/direnv/allow/", 1, true) ~= nil
+            or path:find("/direnv/deny/", 1, true) ~= nil
+    end
     local watched = {}
     local seen = {}
     local function add(path)
-        if path and not seen[path] then
+        if path and not seen[path] and not is_direnv_stamp(path) then
             seen[path] = true
             table.insert(watched, path)
         end
