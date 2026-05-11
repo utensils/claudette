@@ -157,11 +157,12 @@ fn transcript_has_custom_title(path: &Path, session_id: &str) -> Result<bool, St
 /// first prompt. Returns a sanitized branch slug (e.g. `fix-login-timeout`).
 ///
 /// `worktree_path` is used as the subprocess CWD so the CLI picks up the
-/// user's git context and `ws_env`-resolved env vars, but project context
-/// (CLAUDE.md, `.mcp.json`, project `.claude/settings.json`) is intentionally
-/// suppressed via `--system-prompt`, `--setting-sources user`, and
-/// `--tools ""`. A user project's CLAUDE.md plus MCP tool catalog can easily
-/// exceed Haiku's input window, and slug generation doesn't need that context.
+/// user's git context. Project context (CLAUDE.md, `.mcp.json`, project
+/// `.claude/settings.json`) is intentionally suppressed via `--system-prompt`,
+/// `--setting-sources user`, and `--tools ""`. A user project's CLAUDE.md
+/// plus MCP tool catalog can easily exceed Haiku's input window, and slug
+/// generation doesn't need that context. (`ws_env` env vars are applied
+/// separately via `env.apply` — they don't depend on CWD.)
 pub async fn generate_branch_name(
     prompt_text: &str,
     worktree_path: &str,
