@@ -583,7 +583,11 @@ jobs:
               break
             fi
             if [ "$attempt" -eq 3 ]; then
-              echo "::error::nightly release is still draft after 3 attempts (current state: $draft_state)"
+              # `unknown` here means the post-state query itself failed;
+              # "still draft" would be misleading in that case. Phrase
+              # the error so it differentiates the two without forcing
+              # the reader to remember the special sentinel.
+              echo "::error::nightly release is still not draft=false after 3 attempts (current state: $draft_state — \"unknown\" means the gh api query failed)"
               exit 1
             fi
             echo "Un-draft attempt $attempt left draft=$draft_state; retrying in 5s"
@@ -597,7 +601,14 @@ jobs:
           # normal; retry a few times before failing.
           MANIFEST_URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/nightly/latest.json"
           for attempt in 1 2 3 4 5; do
-            http=$(curl -sIL -o /dev/null -w "%{http_code}" "$MANIFEST_URL")
+            # `set -e` is active for this step; `var=$(failing-cmd)`
+            # exits the script on transient curl failures (DNS, TLS,
+            # timeout) before the retry loop can even consider them.
+            # `|| echo "000"` makes the substitution always exit 0 and
+            # surfaces a non-2xx-shaped value to the next branch, which
+            # then drives the retry. Same pattern as stage 2's gh api
+            # fallback to "unknown".
+            http=$(curl -sIL -o /dev/null -w "%{http_code}" "$MANIFEST_URL" || echo "000")
             if [ "$http" = "200" ]; then
               echo "latest.json reachable at $MANIFEST_URL (HTTP 200)"
               break
