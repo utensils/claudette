@@ -124,6 +124,7 @@ export function SessionTabs({ workspaceId }: Props) {
     (s) => s.activeFileTabByWorkspace[workspaceId] ?? null,
   );
   const setSessionsForWorkspace = useAppStore((s) => s.setSessionsForWorkspace);
+  const markSessionsLoaded = useAppStore((s) => s.markSessionsLoaded);
   const addChatSession = useAppStore((s) => s.addChatSession);
   const updateChatSession = useAppStore((s) => s.updateChatSession);
   const removeChatSession = useAppStore((s) => s.removeChatSession);
@@ -199,8 +200,18 @@ export function SessionTabs({ workspaceId }: Props) {
       })
       .catch((err) => {
         console.error("[SessionTabs] Failed to load sessions:", err);
+        // Don't strand ChatPanel on the loading shell when the initial
+        // fetch fails — flip the loaded flag so the user falls through
+        // to `WorkspaceEmptyTabs` and can recover via "+ Open new session".
+        // We deliberately don't overwrite `sessionsByWorkspace` here: a
+        // racing `addChatSession` (e.g. an agent stream event mid-fetch)
+        // may have already populated the list, and that authoritative
+        // state must not be clobbered by the error path.
+        if (version === loadVersionRef.current) {
+          markSessionsLoaded(workspaceId);
+        }
       });
-  }, [workspaceId, setSessionsForWorkspace]);
+  }, [workspaceId, setSessionsForWorkspace, markSessionsLoaded]);
 
   // Memoized so navEntries / navigateTabs stay referentially stable when the
   // session list hasn't changed — without this, `sessions.filter` returns a

@@ -89,7 +89,7 @@ describe("sessionsLoadedByWorkspace", () => {
     expect(secondRef).toBe(firstRef);
   });
 
-  it("does not leak across removeChatSession", () => {
+  it("does not reset when removeChatSession archives the last session", () => {
     useAppStore
       .getState()
       .setSessionsForWorkspace("ws-1", [makeSession("s-1", "ws-1")]);
@@ -101,5 +101,59 @@ describe("sessionsLoadedByWorkspace", () => {
     // only session, which would feel like a regression.
     useAppStore.getState().removeChatSession("s-1");
     expect(useAppStore.getState().sessionsLoadedByWorkspace["ws-1"]).toBe(true);
+  });
+
+  // addChatSession is the writer for newly-created sessions and for stream
+  // events that materialize a session before the initial `listChatSessions`
+  // fetch resolves. If it didn't also mark the workspace loaded, ChatPanel
+  // would stay on the blank loading shell despite having tabs to render.
+  it("flips to true when addChatSession inserts the first session", () => {
+    useAppStore.getState().addChatSession(makeSession("s-1", "ws-1"));
+    expect(useAppStore.getState().sessionsLoadedByWorkspace["ws-1"]).toBe(true);
+  });
+
+  it("addChatSession reuses the record reference when already loaded", () => {
+    useAppStore.getState().setSessionsForWorkspace("ws-1", []);
+    const firstRef = useAppStore.getState().sessionsLoadedByWorkspace;
+
+    useAppStore.getState().addChatSession(makeSession("s-1", "ws-1"));
+    const secondRef = useAppStore.getState().sessionsLoadedByWorkspace;
+
+    expect(secondRef).toBe(firstRef);
+  });
+
+  // markSessionsLoaded is the recovery path for SessionTabs' load-error case:
+  // a failed `listChatSessions` would otherwise leave the chat surface on
+  // the blank loading shell with no way out. The flag flip lets the user
+  // fall through to WorkspaceEmptyTabs and create a session manually.
+  describe("markSessionsLoaded", () => {
+    it("flips the flag without touching the session list", () => {
+      useAppStore.getState().markSessionsLoaded("ws-1");
+
+      const state = useAppStore.getState();
+      expect(state.sessionsLoadedByWorkspace["ws-1"]).toBe(true);
+      // Critical: existing/racing session data must survive the recovery path.
+      expect(state.sessionsByWorkspace["ws-1"]).toBeUndefined();
+    });
+
+    it("does not clobber sessions inserted by a racing addChatSession", () => {
+      useAppStore.getState().addChatSession(makeSession("s-1", "ws-1"));
+      useAppStore.getState().markSessionsLoaded("ws-1");
+
+      const state = useAppStore.getState();
+      expect(state.sessionsByWorkspace["ws-1"]).toHaveLength(1);
+      expect(state.sessionsByWorkspace["ws-1"][0].id).toBe("s-1");
+      expect(state.sessionsLoadedByWorkspace["ws-1"]).toBe(true);
+    });
+
+    it("is a no-op when already loaded — preserves record reference", () => {
+      useAppStore.getState().setSessionsForWorkspace("ws-1", []);
+      const firstRef = useAppStore.getState().sessionsLoadedByWorkspace;
+
+      useAppStore.getState().markSessionsLoaded("ws-1");
+      const secondRef = useAppStore.getState().sessionsLoadedByWorkspace;
+
+      expect(secondRef).toBe(firstRef);
+    });
   });
 });
