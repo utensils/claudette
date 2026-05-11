@@ -102,17 +102,29 @@ function isTrustClassError(error: string | null | undefined): boolean {
 
 /**
  * Trim a raw plugin error string to a single readable line for the
- * EnvTrustModal's `message` field. The bundled mise / direnv plugins
- * already surface a one-line error after our recent tightening (e.g.
- * `mise.toml is not trusted` or `direnv: error /repo/.envrc is blocked`)
- * but third-party env providers or older builds can still emit
- * Lua-traceback-prefixed multi-line text. Strip the `[string "..."]:N:`
- * prefix and take the first line so the modal stays compact.
+ * EnvTrustModal's `message` field. Mirrors the backend's
+ * `clean_trust_error_excerpt` / `strip_lua_wrapper` pipeline in
+ * `src-tauri/src/commands/env.rs` so the proactive-from-Settings path
+ * displays the same clean text as the event-driven path.
+ *
+ * Strips, in order:
+ *   - ANSI SGR escape sequences (direnv tints its blocked-message red)
+ *   - `export: ` (dispatcher prefix for `export` op failures)
+ *   - `Plugin script error: runtime error: ` (mlua wrapper)
+ *   - `[string "..."]:N: ` (Lua call-site location)
+ *   - leading whitespace / first line / 240 chars
+ *
+ * If we drift from the backend cleaner, the proactive modal text and
+ * the event modal text won't match — keep both in sync.
  */
 function summarizeError(error: string): string {
+  // eslint-disable-next-line no-control-regex
+  const ANSI = /\x1b\[[\d;]*m/g;
   const cleaned = error
-    .replace(/^\[string "[^"]*"\]:\d+:\s*/, "")
-    .replace(/^plugin script error:\s*runtime error:\s*/i, "")
+    .replace(ANSI, "")
+    .replace(/^export:\s*/i, "")
+    .replace(/Plugin script error:\s*runtime error:\s*/i, "")
+    .replace(/\[string "[^"]*"\]:\d+:\s*/, "")
     .trim();
   return cleaned.split("\n")[0].slice(0, 240);
 }
@@ -201,6 +213,15 @@ export function EnvPanel({ target }: EnvPanelProps) {
     );
   });
   const openModal = useAppStore((s) => s.openModal);
+  // We watch this transition to know when EnvTrustModal closes (auto-
+  // close on resolve, Cancel, or user-driven Disable) so the panel can
+  // re-fetch sources — otherwise a successfully-trusted row keeps
+  // showing ERROR because runEnvTrust / setEnvProviderEnabled don't
+  // fire `env-cache-invalidated` themselves. Caught in UAT after the
+  // initial refactor: click Resolve → Trust → modal closes → click
+  // Resolve again on the same row → modal pops back up off stale
+  // data. Codex P2 flagged the same regression independently.
+  const activeModal = useAppStore((s) => s.activeModal);
 
   // Tick once a second while a resolve is in flight so the elapsed
   // counter updates without each render computing it on its own.
@@ -303,6 +324,21 @@ export function EnvPanel({ target }: EnvPanelProps) {
   useEffect(() => {
     void refresh();
   }, [refresh]);
+
+  // Refresh whenever EnvTrustModal closes. The effect's setup arm fires
+  // when activeModal becomes "envTrust"; the cleanup arm fires when it
+  // changes away from that — closing, switching to another modal, or
+  // unmounting EnvPanel. We refresh on cleanup so the user sees the
+  // updated row state (TRUSTED ⇒ "fresh"/"cached" pill, DISABLED ⇒
+  // "disabled" pill) the moment the modal disappears. Cheap — the
+  // dispatcher serves from cache when trust state didn't actually
+  // change (e.g. Cancel).
+  useEffect(() => {
+    if (activeModal !== "envTrust") return;
+    return () => {
+      void refresh();
+    };
+  }, [activeModal, refresh]);
 
   // Reactive invalidation: when the Rust-side fs watcher detects that
   // a plugin's watched file changed (user edited `.envrc`, ran
