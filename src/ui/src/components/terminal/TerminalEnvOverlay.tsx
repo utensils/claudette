@@ -3,8 +3,15 @@
  * provider layer is resolving. The previous `waitForWorkspaceEnvironment`
  * was a silent 30-second poll loop — users on slow Nix flakes would
  * see nothing happen and assume the terminal was broken. This surface
- * names the active plugin, ticks elapsed time, and says explicitly
- * that the prompt is held until env is ready.
+ * names the active plugin and ticks elapsed time so the user has a
+ * concrete signal that work is in flight.
+ *
+ * Copy is deliberately scenario-neutral: the same banner renders both
+ * when a brand-new workspace is preparing (no terminal mounted yet)
+ * and when an existing workspace reloads its env on selection
+ * (`workspacesSlice.selectWorkspace` flips status to `preparing` for
+ * any non-remote workspace, even with terminal tabs already open).
+ * A "terminal opens when ready" hint would lie in the second case.
  *
  * Returns `null` when the workspace isn't preparing so the parent can
  * mount it unconditionally.
@@ -40,12 +47,12 @@ export function TerminalEnvOverlay({ workspaceId }: TerminalEnvOverlayProps) {
   const message = plugin
     ? t(
         "terminal_env_overlay_with_plugin",
-        "Loading {{plugin}} environment ({{seconds}}s)… terminal opens when ready.",
+        "Loading {{plugin}} environment ({{seconds}}s)…",
         { plugin: displayName(plugin), seconds },
       )
     : t(
         "terminal_env_overlay_progress",
-        "Preparing workspace environment ({{seconds}}s)… terminal opens when ready.",
+        "Preparing workspace environment ({{seconds}}s)…",
         { seconds },
       );
   return (
