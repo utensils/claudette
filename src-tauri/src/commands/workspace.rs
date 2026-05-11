@@ -139,9 +139,11 @@ pub(crate) async fn create_workspace_inner(
     // already trusted/primed whatever the providers need to read. The
     // frontend doesn't observe the workspace until this returns, so a
     // newly-created worktree waits for direnv/mise/etc. warmup before
-    // the user can launch an agent from the normal UI path.
-    let _resolved_env =
-        resolve_env_for_workspace(state, &out.workspace, &repo.path, Some(app)).await;
+    // the user can launch an agent from the normal UI path. The merged
+    // env itself is intentionally discarded here: it lands in the
+    // env-provider mtime cache during resolve, and every subsequent
+    // spawn (terminal, agent, MCP) re-reads it from there.
+    let _ = resolve_env_for_workspace(state, &out.workspace, &repo.path, Some(app)).await;
 
     // The shared op intentionally writes the DB row before env/setup can run,
     // but the GUI should not observe the row until the environment is ready.
