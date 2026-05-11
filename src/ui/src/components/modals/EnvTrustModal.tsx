@@ -216,7 +216,6 @@ export function isEnvTrustModalData(value: unknown): value is EnvTrustModalData 
  */
 export function EnvTrustModal() {
   const { t } = useTranslation("modals");
-  const { t: tCommon } = useTranslation("common");
   const closeModal = useAppStore((s) => s.closeModal);
   const modalData = useAppStore((s) => s.modalData);
   const repositories = useAppStore((s) => s.repositories);
@@ -539,9 +538,19 @@ export function EnvTrustModal() {
                   )}
                 </>
               ) : (
-                <p className={styles.hint}>
-                  {t("env_trust_trust_hint", { command })}
-                </p>
+                <>
+                  {/* Two hints, one per action — without the disable
+                      hint the user has to infer that "Disable for
+                      project" sets a per-repo flag (not just dismisses
+                      the prompt). Copilot caught the unused locale
+                      key on the first review pass. */}
+                  <p className={styles.hint}>
+                    {t("env_trust_trust_hint", { command })}
+                  </p>
+                  <p className={styles.hint}>
+                    {t("env_trust_disable_hint")}
+                  </p>
+                </>
               )}
               {state.kind === "failed" && (
                 <p className={styles.error}>{state.error}</p>
@@ -552,11 +561,16 @@ export function EnvTrustModal() {
       </div>
       <div className={shared.actions}>
         <button className={shared.btn} onClick={closeModal}>
+          {/* "Decide later" is intentional — once a row settles the
+              button flips to "Close" via env_trust_done. We use the
+              dedicated env_trust_cancel key (not the generic common
+              "Cancel") because the docstring + i18n contract describe
+              this as a defer, not a cancellation. */}
           {Object.values(rowStates).some(
             (s) => s.kind === "trusted" || s.kind === "disabled",
           )
             ? t("env_trust_done")
-            : tCommon("cancel")}
+            : t("env_trust_cancel")}
         </button>
       </div>
     </Modal>

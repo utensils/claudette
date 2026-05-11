@@ -26,16 +26,29 @@ interface WorkspaceEnvProgressPayload {
 
 /**
  * Payload shape for the `workspace_env_trust_needed` Tauri event,
- * mirroring `WorkspaceEnvTrustNeededPayload` in src-tauri/src/commands/
- * env.rs. Emitted whenever `prepare_workspace_environment` detects an
- * untrusted mise / direnv config on the worktree; we route it into the
- * `envTrust` modal so the user gets a one-time per-project prompt
- * instead of an opaque toast.
+ * mirroring `WorkspaceEnvTrustNeededPayload` + `TrustNeededEntry` in
+ * src-tauri/src/commands/env.rs. Emitted whenever
+ * `prepare_workspace_environment` detects an untrusted mise / direnv
+ * config on the worktree; we route it into the `envTrust` modal so
+ * the user gets a one-time per-project prompt instead of an opaque
+ * toast.
+ *
+ * `message` is the human-readable one-liner the backend produces from
+ * the raw stderr (`clean_trust_error_excerpt` chain). `config_path`
+ * is the absolute file path the cleaner extracted — both can be
+ * null/missing on the wire from an older backend build, so the
+ * modal's `isEnvTrustModalData` validator and JSX render guards both
+ * tolerate absence.
  */
 interface WorkspaceEnvTrustNeededPayload {
   workspace_id: string;
   repo_id: string;
-  plugins: Array<{ plugin_name: string; error_excerpt: string }>;
+  plugins: Array<{
+    plugin_name: string;
+    message?: string | null;
+    config_path?: string | null;
+    error_excerpt: string;
+  }>;
 }
 
 /**

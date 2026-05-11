@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { useAppStore } from "../../../stores/useAppStore";
+import { useCopyToClipboard } from "../../../hooks/useCopyToClipboard";
 import {
   getEnvSources,
   getEnvTargetWorktree,
@@ -694,7 +695,7 @@ export function EnvPanel({ target }: EnvPanelProps) {
                 </div>
               </div>
               {isOpen && showDetails && (
-                <pre className={styles.envErrorPre}>{source.error}</pre>
+                <ErrorDisclosure error={source.error!} />
               )}
               {isOpen && showSettings && (
                 <ProviderSettingsDrawer
@@ -740,6 +741,31 @@ export function EnvPanel({ target }: EnvPanelProps) {
  * which duplicated the provider list and confused which scope each
  * toggle controlled.
  */
+/**
+ * Inline raw-error disclosure for non-trust env-provider failures
+ * (broken TOML, flake eval errors, etc.). The Copy button reuses the
+ * shared `useCopyToClipboard` hook so the user can paste the full
+ * stderr into a bug report without selecting + copy-pasting from the
+ * `<pre>`. Trust-class errors route through `EnvTrustModal` instead;
+ * the modal has its own raw-error disclosure with a copy affordance.
+ */
+function ErrorDisclosure({ error }: { error: string }) {
+  const { copied, copy } = useCopyToClipboard();
+  return (
+    <div className={styles.envErrorDisclosure}>
+      <pre className={styles.envErrorPre}>{error}</pre>
+      <button
+        type="button"
+        className={styles.envErrorCopyBtn}
+        onClick={() => void copy(error)}
+        title="Copy the full error text"
+      >
+        {copied ? "Copied" : "Copy"}
+      </button>
+    </div>
+  );
+}
+
 function ProviderSettingsDrawer({
   schema,
   globalValues,

@@ -67,7 +67,7 @@ direnv and mise both refuse to evaluate config files that haven't been explicitl
 - **Disable for project** — toggles the per-repo `enabled = false` flag so the dispatcher skips the provider entirely for any worktree under this repo. Other env-providers still run. You can re-enable from the row's toggle in Repo Settings → Environment.
 - **Decide later** — dismisses the modal without persisting a choice. The same prompt surfaces again the next time a workspace fails resolve.
 
-The same actions are also available without the modal from the env-panel error card in Repo Settings → Environment, for users who dismissed the prompt or want to revisit their decision.
+If you dismissed the prompt (or want to revisit the decision later), the same modal is reachable from **Repo Settings → Environment**: trust-blocked providers render a **Resolve…** button on their row that re-opens the same prompt. Toggling a disabled provider back on also re-runs the prompt automatically if the underlying config is still untrusted. Non-trust errors (broken TOML, flake eval failure) still surface inline via a **Details** disclosure — the modal isn't the right surface for those, and re-running the trust command wouldn't help.
 
 The decision is per-repo, not global, so trusting one project's `.envrc` doesn't affect any other. The pre-0.24 global `auto_allow` / `auto_trust` toggles have been removed; users who had them enabled are migrated automatically to per-repo `repo_trust = "allow"` for every repository they had at the time of upgrade.
 
