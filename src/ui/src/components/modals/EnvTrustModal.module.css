@@ -1,0 +1,138 @@
+.intro {
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 1.5;
+  margin: 0 0 16px;
+}
+
+.repoLabel {
+  display: flex;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-dim);
+  margin-bottom: 12px;
+}
+
+.repoName {
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+.rows {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.row {
+  border: 1px solid var(--divider);
+  border-radius: 8px;
+  padding: 12px;
+  background: var(--chat-input-bg);
+}
+
+.rowHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.pluginName {
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--text-primary);
+}
+
+.statusPill {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  background: var(--hover-bg);
+}
+
+.statusTrusted {
+  color: var(--badge-done);
+}
+
+.statusDisabled {
+  color: var(--text-dim);
+}
+
+.statusFailed {
+  color: var(--status-stopped);
+}
+
+.summary {
+  font-size: 13px;
+  line-height: 1.4;
+  color: var(--text-primary);
+  margin: 0 0 4px;
+}
+
+.configPath {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-dim);
+  margin: 0 0 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  /* Wrap the truncation rule to the row so very long paths get the
+     ellipsis instead of pushing the modal wider. */
+  max-width: 100%;
+}
+
+.detailsToggle {
+  background: none;
+  border: none;
+  padding: 0;
+  margin: 0 0 8px;
+  font-size: 11px;
+  color: var(--text-dim);
+  cursor: pointer;
+  text-decoration: underline dotted;
+  text-underline-offset: 2px;
+}
+
+.detailsToggle:hover {
+  color: var(--text-muted);
+}
+
+.excerpt {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.4;
+  background: var(--app-bg);
+  border: 1px solid var(--divider);
+  border-radius: 4px;
+  padding: 8px 10px;
+  margin: 0 0 10px;
+  color: var(--text-muted);
+  max-height: 160px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.rowActions {
+  display: flex;
+  gap: 8px;
+}
+
+.hint {
+  font-size: 11px;
+  color: var(--text-dim);
+  line-height: 1.4;
+  margin: 6px 0 0;
+}
+
+.error {
+  font-size: 12px;
+  color: var(--status-stopped);
+  margin: 6px 0 0;
+}

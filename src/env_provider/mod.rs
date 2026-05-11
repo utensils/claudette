@@ -240,11 +240,17 @@ fn excerpt_error(error: &str) -> String {
 /// notably "permission denied" is intentionally NOT matched, since it
 /// is too broad and would catch unrelated filesystem failures (e.g.
 /// the plugin couldn't read its own config because of POSIX perms).
-fn is_trust_error(error: &str) -> bool {
+pub fn is_trust_error_str(error: &str) -> bool {
     let lower = error.to_ascii_lowercase();
     ["not trusted", "is blocked", "is not allowed", "untrusted"]
         .iter()
         .any(|needle| lower.contains(needle))
+}
+
+/// Thin wrapper kept for symmetry with the other internal classifiers
+/// in this module. Prefer [`is_trust_error_str`] from external crates.
+fn is_trust_error(error: &str) -> bool {
+    is_trust_error_str(error)
 }
 
 fn display_name_for(plugin_name: &str) -> &str {

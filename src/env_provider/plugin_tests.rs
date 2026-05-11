@@ -1259,6 +1259,20 @@ async fn integration_direnv_untrusted_repo_surfaces_blocked_error() {
         err.contains("blocked") || err.contains("allow"),
         "error should describe a blocked .envrc; got: {err}"
     );
+    // Plugin tightening regression guard: the bundled init.lua now
+    // surfaces just the canonical `direnv: error <path> is blocked …`
+    // line, not the leading direnv loading-chatter or shell-hook
+    // setup logs. If a future direnv version changes the wording
+    // and the trimmer falls back to passing raw stderr, this
+    // assertion fires.
+    assert!(
+        !err.contains("Loading "),
+        "tightened plugin must drop direnv loading-chatter lines; got: {err}"
+    );
+    assert!(
+        err.contains("is blocked"),
+        "tightened plugin must keep the canonical 'is blocked' line; got: {err}"
+    );
     assert_eq!(direnv_source.vars_contributed, 0);
     assert!(
         !resolved.vars.contains_key("CLAUDETTE_DIRENV_DENY"),
@@ -1393,6 +1407,23 @@ async fn integration_mise_untrusted_repo_surfaces_untrusted_error() {
     assert!(
         err.contains("trust") || err.contains("not trusted"),
         "error should mention trust; got: {err}"
+    );
+    // Plugin tightening regression guard: the bundled init.lua now
+    // surfaces just the canonical "Config files in ... are not
+    // trusted" line. mise's verbose footer ("Run with --verbose or
+    // MISE_VERBOSE=1 ...") and the duplicate "error parsing config
+    // file: <path>" header must not reach the dispatcher. If a
+    // future mise version changes the wording and the trimmer falls
+    // back to passing raw stderr, this assertion fires and we know
+    // to update the trimmer instead of shipping a regressed
+    // EnvTrustModal.
+    assert!(
+        !err.contains("Run with --verbose"),
+        "tightened plugin must drop the verbose-mode footer; got: {err}"
+    );
+    assert!(
+        !err.contains("error parsing config file:"),
+        "tightened plugin must drop the duplicate parse-error header; got: {err}"
     );
     assert_eq!(mise_source.vars_contributed, 0);
     assert!(!resolved.vars.contains_key("CLAUDETTE_MISE_DENY"));

@@ -24,6 +24,52 @@ interface WorkspaceEnvProgressPayload {
   ok?: boolean;
 }
 
+/**
+ * Payload shape for the `workspace_env_trust_needed` Tauri event,
+ * mirroring `WorkspaceEnvTrustNeededPayload` + `TrustNeededEntry` in
+ * src-tauri/src/commands/env.rs. Emitted whenever
+ * `prepare_workspace_environment` detects an untrusted mise / direnv
+ * config on the worktree; we route it into the `envTrust` modal so
+ * the user gets a one-time per-project prompt instead of an opaque
+ * toast.
+ *
+ * `message` is the human-readable one-liner the backend produces from
+ * the raw stderr (`clean_trust_error_excerpt` chain). `config_path`
+ * is the absolute file path the cleaner extracted — both can be
+ * null/missing on the wire from an older backend build, so the
+ * modal's `isEnvTrustModalData` validator and JSX render guards both
+ * tolerate absence.
+ */
+interface WorkspaceEnvTrustNeededPayload {
+  workspace_id: string;
+  repo_id: string;
+  plugins: Array<{
+    plugin_name: string;
+    message?: string | null;
+    config_path?: string | null;
+    error_excerpt: string;
+  }>;
+}
+
+/**
+ * Heuristic match on the error string returned by
+ * `prepare_workspace_environment` to suppress the legacy toast for the
+ * trust-error case. The string itself is built in
+ * `prepare_workspace_error` in env.rs; the backend now filters trust
+ * errors out of that summary, so this guard is belt-and-suspenders for
+ * older builds whose IPC response is still in flight when the new
+ * frontend mounts.
+ */
+function looksLikeTrustError(message: string): boolean {
+  const lower = message.toLowerCase();
+  return (
+    lower.includes("environment setup needed") ||
+    lower.includes("not trusted") ||
+    lower.includes("is blocked") ||
+    lower.includes("is not allowed")
+  );
+}
+
 export function useWorkspaceEnvironmentPreparation() {
   const selectedWorkspaceId = useAppStore((s) => s.selectedWorkspaceId);
   const selectedWorkspaceRemoteConnectionId = useAppStore((s) => {
@@ -38,6 +84,7 @@ export function useWorkspaceEnvironmentPreparation() {
     (s) => s.setWorkspaceEnvironmentProgress,
   );
   const addToast = useAppStore((s) => s.addToast);
+  const openModal = useAppStore((s) => s.openModal);
 
   // Per-workspace flag: did any plugin emit `finished { ok: false }`
   // during the current resolve? Used by the Complete handler to
@@ -123,6 +170,39 @@ export function useWorkspaceEnvironmentPreparation() {
     };
   }, [setWorkspaceEnvironmentProgress]);
 
+  // Listener for the trust-needed signal from the Rust side. The
+  // backend emits this whenever env-provider resolve hits at least
+  // one source whose stderr matches the trust-error heuristic. The
+  // matching toast is suppressed below so the user sees only the
+  // modal, not both.
+  useEffect(() => {
+    let mounted = true;
+    let unlisten: (() => void) | undefined;
+    listen<WorkspaceEnvTrustNeededPayload>(
+      "workspace_env_trust_needed",
+      (event) => {
+        if (!mounted) return;
+        const { workspace_id, repo_id, plugins } = event.payload;
+        if (!plugins || plugins.length === 0) return;
+        openModal("envTrust", {
+          workspace_id,
+          repo_id,
+          plugins,
+        });
+      },
+    ).then((stop) => {
+      if (!mounted) {
+        stop();
+        return;
+      }
+      unlisten = stop;
+    });
+    return () => {
+      mounted = false;
+      unlisten?.();
+    };
+  }, [openModal]);
+
   // Per-selection prepare: when the user activates a local workspace,
   // kick off `prepare_workspace_environment` so the chat composer +
   // any opened terminal can wait on a definite "ready" signal. Remote
@@ -157,7 +237,14 @@ export function useWorkspaceEnvironmentPreparation() {
         if (cancelled) return;
         const message = String(err);
         setWorkspaceEnvironment(workspaceId, "error", message);
-        addToast(`Workspace environment failed: ${message}`);
+        // Trust-class failures are routed through the
+        // `workspace_env_trust_needed` event + EnvTrustModal — the
+        // modal is the actionable surface, the toast was a dead end
+        // before this feature landed. Skip the toast in that case so
+        // the user isn't double-prompted.
+        if (!looksLikeTrustError(message)) {
+          addToast(`Workspace environment failed: ${message}`);
+        }
       });
 
     return () => {
@@ -176,3 +263,7 @@ export function useWorkspaceEnvironmentPreparation() {
     addToast,
   ]);
 }
+
+// Internal: exposed for vitest. The hook is the only production
+// consumer.
+export const __TEST__ = { looksLikeTrustError };

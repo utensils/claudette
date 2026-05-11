@@ -1747,6 +1747,24 @@
   overflow-y: auto;
 }
 
+/* Wraps the inline raw-error <pre> + Copy button for non-trust
+   errors in EnvPanel. The Copy affordance was lost when we removed
+   the inline ErrorCard during the trust-modal refactor — Copilot
+   flagged the workflow regression on the trust-modal PR. Right-align
+   the copy button at the bottom of the pre so it doesn't push the
+   error text. */
+.envErrorDisclosure {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+}
+
+.envErrorDisclosure .envErrorPre {
+  width: 100%;
+  margin: 6px 0 0 0;
+}
+
 /* Group label for MCP source sections */
 .mcpGroupLabel {
   padding: 8px 8px 4px;
