@@ -1616,48 +1616,52 @@ fn write_owner_only(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
 }
 
 /// Create the staging directory with restrictive permissions on Unix
-/// (`0o700`) so other accounts can't list or read the staged files. If
-/// the path already exists we verify it's a real directory (not a file
-/// or symlink that could redirect writes elsewhere) and re-tighten the
-/// permissions on Unix in case a previous run created it with a wider
-/// umask.
+/// (`0o700`) so other accounts can't list or read the staged files.
+///
+/// Uses a try-then-verify approach instead of `exists()` + `create()` to
+/// avoid a TOCTOU window where a concurrent caller or attacker could
+/// replace the directory between the check and the create.
 fn create_staging_dir(dir: &Path) -> std::io::Result<()> {
-    if dir.exists() {
-        // `symlink_metadata` doesn't follow symlinks — it tells us
-        // whether the *path entry* is a directory, so a malicious link
-        // to /etc can't satisfy the check.
-        let meta = std::fs::symlink_metadata(dir)?;
-        if !meta.file_type().is_dir() {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::AlreadyExists,
-                format!(
-                    "staging path {} exists and is not a directory",
-                    dir.display()
-                ),
-            ));
-        }
+    let create_result = {
         #[cfg(unix)]
         {
-            use std::os::unix::fs::PermissionsExt as _;
-            let mode = meta.permissions().mode() & 0o777;
-            if mode != 0o700 {
-                std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))?;
-            }
+            use std::os::unix::fs::DirBuilderExt as _;
+            std::fs::DirBuilder::new().mode(0o700).create(dir)
         }
-        return Ok(());
+        #[cfg(not(unix))]
+        {
+            std::fs::create_dir(dir)
+        }
+    };
+    match create_result {
+        Ok(()) => return Ok(()),
+        Err(e) if e.kind() != std::io::ErrorKind::AlreadyExists => return Err(e),
+        Err(_) => {}
+    }
+    // Directory already existed — verify it is a real directory (not a
+    // file or symlink that could redirect writes elsewhere) and re-tighten
+    // the permissions on Unix in case a previous run used a wider umask.
+    // `symlink_metadata` does not follow symlinks, so a malicious symlink
+    // to /etc cannot satisfy the is_dir() check.
+    let meta = std::fs::symlink_metadata(dir)?;
+    if !meta.file_type().is_dir() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::AlreadyExists,
+            format!(
+                "staging path {} exists and is not a directory",
+                dir.display()
+            ),
+        ));
     }
     #[cfg(unix)]
     {
-        use std::os::unix::fs::DirBuilderExt as _;
-        std::fs::DirBuilder::new()
-            .recursive(true)
-            .mode(0o700)
-            .create(dir)
+        use std::os::unix::fs::PermissionsExt as _;
+        let mode = meta.permissions().mode() & 0o777;
+        if mode != 0o700 {
+            std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))?;
+        }
     }
-    #[cfg(not(unix))]
-    {
-        std::fs::create_dir_all(dir)
-    }
+    Ok(())
 }
 
 /// Remove staged attachments older than `max_age` from `dir`. Used to keep
@@ -1745,6 +1749,144 @@ pub async fn copy_attachment_file_to_clipboard(
     })
     .await
     .map_err(|e| format!("join error: {e}"))?
+}
+
+/// Copy raster image bytes to the system clipboard as image data. Bypasses
+/// the W3C ClipboardItem API, which WKWebView rejects after async IPC
+/// boundaries invalidate the user-activation gate.
+#[tauri::command]
+pub async fn copy_image_to_clipboard(
+    bytes: Vec<u8>,
+    filename: String,
+    media_type: String,
+) -> Result<(), String> {
+    if !media_type.starts_with("image/") || media_type == "image/svg+xml" {
+        return Err(format!(
+            "copy_image_to_clipboard: expected a raster image media type, got {media_type:?}"
+        ));
+    }
+    let dir = std::env::temp_dir().join("claudette-attachments");
+    tokio::task::spawn_blocking(move || -> Result<(), String> {
+        create_staging_dir(&dir).map_err(|e| format!("mkdir temp dir: {e}"))?;
+        cleanup_stale_attachments(&dir, std::time::Duration::from_secs(24 * 60 * 60));
+        copy_image_bytes_to_clipboard(&dir, &bytes, &filename, &media_type)
+    })
+    .await
+    .map_err(|e| format!("join error: {e}"))?
+}
+
+#[cfg(target_os = "macos")]
+fn copy_image_bytes_to_clipboard(
+    dir: &Path,
+    bytes: &[u8],
+    filename: &str,
+    media_type: &str,
+) -> Result<(), String> {
+    let path = write_attachment_to_temp_file(dir, filename, media_type, bytes)
+        .map_err(|e| format!("write attachment: {e}"))?;
+    // ASObjC bridge: create an NSImage from the file and write it to the
+    // general pasteboard as image data (not a Finder file reference).
+    // Error on nil NSImage (unsupported format) and on writeObjects: returning
+    // false — both would otherwise produce a silent success (exit 0).
+    let output = std::process::Command::new("osascript")
+        .args([
+            "-e",
+            "use framework \"AppKit\"",
+            "-e",
+            "use scripting additions",
+            "-e",
+            "on run argv",
+            "-e",
+            "set img to (current application's NSImage's alloc()'s initWithContentsOfFile:(item 1 of argv))",
+            "-e",
+            "if img is missing value then error \"Failed to load image from file\" number 1",
+            "-e",
+            "set pb to current application's NSPasteboard's generalPasteboard()",
+            "-e",
+            "pb's clearContents()",
+            "-e",
+            "if (pb's writeObjects:{img}) is false then error \"NSPasteboard writeObjects: failed\" number 1",
+            "-e",
+            "end run",
+        ])
+        .arg(&path)
+        .output()
+        .map_err(|e| format!("failed to run osascript: {e}"))?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        Err(format!("osascript failed: {}", stderr.trim()))
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn copy_image_bytes_to_clipboard(
+    _dir: &Path,
+    bytes: &[u8],
+    _filename: &str,
+    media_type: &str,
+) -> Result<(), String> {
+    let attempts: [(&str, &[&str]); 2] = [
+        ("wl-copy", &["--type", media_type]),
+        ("xclip", &["-selection", "clipboard", "-t", media_type]),
+    ];
+    let mut errors = Vec::new();
+    for (program, args) in attempts {
+        match pipe_to_command(program, args, bytes) {
+            Ok(()) => return Ok(()),
+            Err(e) => errors.push(format!("{program}: {e}")),
+        }
+    }
+    Err(format!(
+        "copying image requires wl-copy or xclip on Linux ({})",
+        errors.join("; ")
+    ))
+}
+
+#[cfg(windows)]
+fn copy_image_bytes_to_clipboard(
+    dir: &Path,
+    bytes: &[u8],
+    filename: &str,
+    media_type: &str,
+) -> Result<(), String> {
+    let path = write_attachment_to_temp_file(dir, filename, media_type, bytes)
+        .map_err(|e| format!("write attachment: {e}"))?;
+    let path_str = path.to_string_lossy().replace('\'', "''");
+    // Use WPF/WIC (PresentationCore) instead of System.Drawing — WIC handles
+    // more formats including WebP (Windows 10 v1903+) and HEIC.
+    let script = format!(
+        "Add-Type -AssemblyName PresentationCore; \
+         $fs = [System.IO.File]::OpenRead('{path_str}'); \
+         $dec = [System.Windows.Media.Imaging.BitmapDecoder]::Create($fs, \
+           [System.Windows.Media.Imaging.BitmapCreateOptions]::None, \
+           [System.Windows.Media.Imaging.BitmapCacheOption]::OnLoad); \
+         $fs.Dispose(); \
+         $frame = $dec.Frames[0]; \
+         $frame.Freeze(); \
+         [System.Windows.Clipboard]::SetImage($frame)"
+    );
+    let output = std::process::Command::new("powershell")
+        .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+        .output()
+        .map_err(|e| format!("failed to run powershell: {e}"))?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        Err(format!("powershell failed: {}", stderr.trim()))
+    }
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
+fn copy_image_bytes_to_clipboard(
+    _dir: &Path,
+    _bytes: &[u8],
+    _filename: &str,
+    _media_type: &str,
+) -> Result<(), String> {
+    Err("image clipboard copy is not supported on this platform".to_string())
 }
 
 /// Payload for the `workspace-file-changed` Tauri event. The frontend
