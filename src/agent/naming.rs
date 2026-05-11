@@ -248,6 +248,11 @@ pub async fn generate_session_name(
 
     let claude_path = resolve_claude_path().await;
     let mut cmd = Command::new(&claude_path);
+    // Without CREATE_NO_WINDOW the background `claude --print` spawn allocates
+    // a fresh console and a black cmd.exe window flashes on screen for the
+    // duration of the Haiku call. The sibling `generate_branch_name` already
+    // does this; keep them in sync.
+    cmd.no_console_window();
     cmd.stdin(std::process::Stdio::null())
         .env("PATH", crate::env::enriched_path());
     cmd.current_dir(worktree_path);
