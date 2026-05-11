@@ -83,9 +83,12 @@ pub struct CreateOutput {
 /// hooks.
 ///
 /// **Setup script execution is intentionally a separate concern** — see
-/// [`resolve_and_run_setup`]. Callers that have a plugin registry handy
-/// (the GUI) resolve env first, then run setup; callers that don't (the
-/// WS server today) can run setup with `resolved_env = None`.
+/// [`resolve_and_run_setup`]. The GUI's `create_workspace_inner` runs
+/// setup first with `resolved_env = None` (so the script can prime
+/// env-provider state: `direnv allow`, `mise trust`, generate a `.env`,
+/// etc.) and then resolves the env-provider stack. The WS server runs
+/// setup the same way today because it has no plugin registry to
+/// resolve env with.
 ///
 /// On any failure after the worktree is created, the worktree and branch are
 /// removed so we never leave orphan git state pointing at a workspace that
