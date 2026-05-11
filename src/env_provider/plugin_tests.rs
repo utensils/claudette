@@ -544,13 +544,17 @@ fn direnv_export_stamp_filter_matches_xdg_and_macos_locations() {
     std::fs::write(tmp.path().join(".envrc"), "use flake\n").unwrap();
     let worktree = tmp.path().to_string_lossy().into_owned();
     let envrc_path = format!("{worktree}/.envrc");
+    // Real direnv stamps are 64-char lowercase hex SHA256 of the .envrc
+    // path. The narrowed filter requires both adjacent
+    // `direnv/allow|deny/` segments AND a hex-hash basename, so each
+    // entry here must use a realistic 64-char hex name.
     let stamps = [
         // Linux default + macOS with XDG honored (the user's machine).
-        "/home/alice/.local/share/direnv/allow/abc123",
+        "/home/alice/.local/share/direnv/allow/fe1027c058958e4fa4ccd571e85ff9b21da87436db6bebdae55526e1c8a1a6ef",
         // macOS configurations that land direnv in Application Support.
-        "/Users/bob/Library/Application Support/direnv/allow/def456",
+        "/Users/bob/Library/Application Support/direnv/allow/0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
         // Non-default XDG_DATA_HOME.
-        "/srv/data/direnv/deny/789xyz",
+        "/srv/data/direnv/deny/fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210",
     ];
     let mut paths: Vec<&str> = vec![envrc_path.as_str()];
     paths.extend(stamps.iter().copied());
@@ -592,6 +596,92 @@ fn direnv_export_stamp_filter_matches_xdg_and_macos_locations() {
             "stamp {stamp} should be filtered out, watched = {watched:?}"
         );
     }
+    assert!(watched.contains(&envrc_path));
+}
+
+#[test]
+fn direnv_export_stamp_filter_keeps_legit_paths_containing_direnv_segments() {
+    // Regression for Codex peer-review P2: an earlier substring-only
+    // filter dropped *any* path with `/direnv/allow/` or `/direnv/deny/`
+    // anywhere in it, including legitimate watched files inside a user
+    // worktree that happened to contain those segments (e.g. someone
+    // working on direnv itself, or a `watch_file` target under such a
+    // directory). That regressed correctness: a dropped `.envrc` means
+    // the EnvCache no longer notices edits to it, leaving the user
+    // stuck with stale env values until they hit "Reload env".
+    //
+    // The narrowed predicate requires BOTH:
+    //   1. adjacent `/direnv/allow/` or `/direnv/deny/` segments, AND
+    //   2. a basename that looks like a direnv SHA256 stamp (32+ lowercase hex chars).
+    // The cases below exercise the narrowing: each path contains the
+    // gate substring, but their basenames are not hex-hash-shaped, so
+    // they MUST survive the filter.
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(tmp.path().join(".envrc"), "use flake\n").unwrap();
+    let worktree = tmp.path().to_string_lossy().into_owned();
+    let envrc_path = format!("{worktree}/.envrc");
+    let legit_paths = [
+        // A user working on direnv-the-tool, with the project itself
+        // under a `direnv/allow/` subdir.
+        "/home/alice/repos/direnv/allow/.envrc",
+        // A watch_file target with a human-readable basename living
+        // under a `direnv/deny/` directory in their worktree.
+        "/home/alice/repos/example/direnv/deny/policy.toml",
+        // Edge case: basename happens to be hex but well under the
+        // 32-char minimum (so cannot be a SHA256 stamp).
+        "/srv/data/direnv/allow/abcd",
+        // Edge case: basename has hex but also a non-hex char.
+        "/srv/data/direnv/allow/fe1027c058958e4fa4ccd571e85ff9b21da87436db6bebdae55526e1c8a1a6ef.bak",
+    ];
+    let mut paths: Vec<&str> = vec![envrc_path.as_str()];
+    paths.extend(legit_paths.iter().copied());
+    // Also include a real stamp so the test pins the WHOLE predicate:
+    // legit paths survive, the stamp gets dropped.
+    let real_stamp = "/home/alice/.local/share/direnv/allow/fe1027c058958e4fa4ccd571e85ff9b21da87436db6bebdae55526e1c8a1a6ef";
+    paths.push(real_stamp);
+    let encoded = encode_direnv_watches(&paths);
+
+    let lua = make_vm("env-direnv", &["direnv"], tmp.path());
+    let env_json = serde_json::to_string(&serde_json::json!({
+        "FOO": "bar",
+        "DIRENV_WATCHES": encoded,
+    }))
+    .unwrap();
+    let stub = format!(
+        r#"
+        host.exec = function(cmd, args)
+            if cmd ~= "direnv" then error("expected cmd='direnv', got: " .. tostring(cmd)) end
+            return {{ stdout = [==[{env_json}]==], stderr = "", code = 0 }}
+        end
+        "#
+    );
+    lua.load(&stub).exec().unwrap();
+
+    let script = format!(
+        r#"
+        local M = (function() {src} end)()
+        return M.export({{ worktree = "{path}" }})
+        "#,
+        src = DIRENV_SRC,
+        path = worktree.replace('\\', "\\\\"),
+    );
+    let result: mlua::Table = lua.load(&script).eval().unwrap();
+    let watched_tbl: mlua::Table = result.get("watched").unwrap();
+    let len = watched_tbl.len().unwrap() as usize;
+    let watched: Vec<String> = (1..=len)
+        .map(|i| watched_tbl.get::<String>(i).unwrap())
+        .collect();
+
+    for legit in legit_paths {
+        assert!(
+            watched.iter().any(|p| p == legit),
+            "legitimate path {legit} must survive the narrowed stamp filter; got {watched:?}"
+        );
+    }
+    assert!(
+        !watched.iter().any(|p| p == real_stamp),
+        "real stamp {real_stamp} must still be filtered; got {watched:?}"
+    );
     assert!(watched.contains(&envrc_path));
 }
 
