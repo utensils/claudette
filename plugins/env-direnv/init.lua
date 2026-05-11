@@ -63,14 +63,54 @@ function M.export(args)
 
     -- Seed with `.envrc` unconditionally — it's always a watch target.
     -- Then merge in whatever direnv itself tracks via `DIRENV_WATCHES`
-    -- (user `watch_file` directives, files sourced by `dotenv ...`,
-    -- direnv's own allow/deny cache entries whose mtime flips when the
-    -- user runs `direnv allow`/`deny`). Dedupe so `.envrc` isn't listed
-    -- twice when direnv includes it too.
+    -- (user `watch_file` directives, files sourced by `dotenv ...`).
+    -- Dedupe so `.envrc` isn't listed twice when direnv includes it too.
+    --
+    -- We deliberately DROP direnv's own per-`.envrc` allow/deny stamps
+    -- (the `<data_dir>/direnv/allow/<sha>` / `<data_dir>/direnv/deny/<sha>`
+    -- files) from the watch list, even though direnv reports them in
+    -- `DIRENV_WATCHES` for its shell-hook's "re-evaluate on permission
+    -- change" semantics. The host watcher (`src/env_provider/watcher.rs`)
+    -- subscribes AFTER `cache.put` stores the entry, and on macOS
+    -- FSEvents reliably delivers the write event from the `direnv allow`
+    -- call we just made (when `repo_trust == "allow"` retries a blocked
+    -- export above) shortly after — which fires `on_change` and
+    -- evicts the cache entry we just populated. Net effect was a 5s
+    -- cold export on every workspace switch even when the underlying
+    -- `.envrc` / `flake.lock` hadn't changed. The "Reload env" UI action
+    -- and our own per-repo trust state cover the rare case where the
+    -- user revokes direnv permission manually; we don't need to react
+    -- to the stamp file's mtime to stay correct.
+    -- Stamps live at `<direnv_data_dir>/allow/<sha>` or
+    -- `<direnv_data_dir>/deny/<sha>`. The basename is a SHA256 hash of
+    -- the `.envrc` path (64 hex chars in current direnv; we accept any
+    -- run of 32+ lowercase hex chars to stay tolerant if direnv ever
+    -- truncates or upgrades the hash). The two-part check — adjacent
+    -- `direnv/allow|deny/` segments AND a hex-hash basename — keeps
+    -- the filter scoped to direnv's own data dir even when a user has
+    -- a worktree path that contains the substring `/direnv/allow/`
+    -- (e.g. working on direnv itself, or a `watch_file` target that
+    -- lives under such a directory). Without the basename check, a
+    -- legitimate `<repo>/direnv/allow/.envrc` would be silently
+    -- dropped from `watched`, leaving the EnvCache unable to notice
+    -- .envrc edits until the user hit Reload — a worse failure mode
+    -- than the cache thrash this filter exists to prevent.
+    local function is_direnv_stamp(path)
+        if type(path) ~= "string" then return false end
+        local under_stamp_dir = path:find("/direnv/allow/", 1, true) ~= nil
+            or path:find("/direnv/deny/", 1, true) ~= nil
+        if not under_stamp_dir then return false end
+        local basename = path:match("([^/]+)$")
+        if not basename then return false end
+        -- 32+ lowercase hex characters, nothing else. Tight enough to
+        -- exclude human-readable filenames; loose enough to survive a
+        -- hash-format change in direnv.
+        return basename:match("^[0-9a-f]+$") ~= nil and #basename >= 32
+    end
     local watched = {}
     local seen = {}
     local function add(path)
-        if path and not seen[path] then
+        if path and not seen[path] and not is_direnv_stamp(path) then
             seen[path] = true
             table.insert(watched, path)
         end

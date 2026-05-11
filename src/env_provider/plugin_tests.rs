@@ -445,6 +445,267 @@ fn direnv_export_strips_markers_but_keeps_watches_decoded_into_watched() {
 }
 
 #[test]
+fn direnv_export_watches_list_drops_direnv_allow_and_deny_stamps() {
+    // Regression for the "constant direnv reloads when jumping
+    // workspaces" thrash: with `repo_trust = "allow"` set, the lua
+    // plugin runs `direnv allow` on a blocked .envrc, which writes
+    // `<data_dir>/direnv/allow/<sha>`. If we then included that
+    // path in `watched`, the host's FSEvents watcher (subscribed
+    // immediately after `cache.put`) would receive the buffered
+    // Create/Modify event for that very write and invalidate the
+    // cache entry we just populated — making every subsequent
+    // workspace select pay another full `direnv export json` (5s on
+    // a Nix flake). Stamps must be dropped from the watch list so
+    // the cache stays warm across selects.
+    //
+    // The plugin's stamp predicate is two-part: it requires both an
+    // adjacent `/direnv/allow/` or `/direnv/deny/` path segment AND a
+    // 32+ lowercase hex basename (direnv writes SHA256 stamps). That
+    // pair holds across XDG_DATA_HOME on Linux, `~/Library/Application
+    // Support` on macOS configurations where direnv lands there, and
+    // any non-default `$XDG_DATA_HOME`.
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(tmp.path().join(".envrc"), "use flake\n").unwrap();
+    let worktree = tmp.path().to_string_lossy().into_owned();
+    let envrc_path = format!("{worktree}/.envrc");
+    let flake_lock = format!("{worktree}/flake.lock");
+    let allow_stamp = format!(
+        "/Users/test/.local/share/direnv/allow/{}",
+        "fe1027c058958e4fa4ccd571e85ff9b21da87436db6bebdae55526e1c8a1a6ef"
+    );
+    let deny_stamp = format!(
+        "/Users/test/.local/share/direnv/deny/{}",
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+    );
+    // direnv's own DIRENV_WATCHES payload mirrors exactly what we saw
+    // on the bug-reporter's machine: the .envrc, the allow stamp, and
+    // the flake.lock. Add a deny stamp too so the regression covers
+    // both halves of the filter.
+    let encoded = encode_direnv_watches(&[&envrc_path, &allow_stamp, &deny_stamp, &flake_lock]);
+
+    let lua = make_vm("env-direnv", &["direnv"], tmp.path());
+    let env_json = serde_json::to_string(&serde_json::json!({
+        "FOO": "bar",
+        "DIRENV_WATCHES": encoded,
+    }))
+    .unwrap();
+    // Assert args shape matches the rest of the env-direnv tests so
+    // an accidental change to how the plugin invokes direnv fails
+    // this regression test loudly instead of silently succeeding.
+    let stub = format!(
+        r#"
+        host.exec = function(cmd, args)
+            if cmd ~= "direnv" then error("expected cmd='direnv', got: " .. tostring(cmd)) end
+            if type(args) ~= "table" or args[1] ~= "export" or args[2] ~= "json" or args[3] ~= nil then
+                error("expected args={{'export','json'}}")
+            end
+            return {{ stdout = [==[{env_json}]==], stderr = "", code = 0 }}
+        end
+        "#
+    );
+    lua.load(&stub).exec().unwrap();
+
+    let script = format!(
+        r#"
+        local M = (function() {src} end)()
+        return M.export({{ worktree = "{path}" }})
+        "#,
+        src = DIRENV_SRC,
+        path = worktree.replace('\\', "\\\\"),
+    );
+    let result: mlua::Table = lua.load(&script).eval().unwrap();
+    let watched_tbl: mlua::Table = result.get("watched").unwrap();
+    let len = watched_tbl.len().unwrap() as usize;
+    let watched: Vec<String> = (1..=len)
+        .map(|i| watched_tbl.get::<String>(i).unwrap())
+        .collect();
+
+    // Real user-visible paths survive — these are the legitimate cache
+    // invalidation triggers the watcher should react to.
+    assert!(
+        watched.contains(&envrc_path),
+        "envrc must survive the stamp filter, got {watched:?}"
+    );
+    assert!(
+        watched.contains(&flake_lock),
+        "flake.lock must survive the stamp filter, got {watched:?}"
+    );
+    // Stamps are filtered. A failure here means the cache will thrash
+    // on every workspace select for users with repo_trust = "allow".
+    assert!(
+        !watched.contains(&allow_stamp),
+        "direnv allow stamp leaked into watched; cache will thrash. got {watched:?}"
+    );
+    assert!(
+        !watched.contains(&deny_stamp),
+        "direnv deny stamp leaked into watched; cache will thrash. got {watched:?}"
+    );
+}
+
+#[test]
+fn direnv_export_stamp_filter_matches_xdg_and_macos_locations() {
+    // Belt-and-suspenders for the prior test: prove the substring
+    // match catches stamp paths from any direnv data-dir configuration
+    // we've observed in the wild. Failure means a user with an
+    // unusual `$XDG_DATA_HOME` still gets cache thrash.
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(tmp.path().join(".envrc"), "use flake\n").unwrap();
+    let worktree = tmp.path().to_string_lossy().into_owned();
+    let envrc_path = format!("{worktree}/.envrc");
+    // Real direnv stamps are 64-char lowercase hex SHA256 of the .envrc
+    // path. The narrowed filter requires both adjacent
+    // `direnv/allow|deny/` segments AND a hex-hash basename, so each
+    // entry here must use a realistic 64-char hex name.
+    let stamps = [
+        // Linux default + macOS with XDG honored (the user's machine).
+        "/home/alice/.local/share/direnv/allow/fe1027c058958e4fa4ccd571e85ff9b21da87436db6bebdae55526e1c8a1a6ef",
+        // macOS configurations that land direnv in Application Support.
+        "/Users/bob/Library/Application Support/direnv/allow/0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        // Non-default XDG_DATA_HOME.
+        "/srv/data/direnv/deny/fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210",
+    ];
+    let mut paths: Vec<&str> = vec![envrc_path.as_str()];
+    paths.extend(stamps.iter().copied());
+    let encoded = encode_direnv_watches(&paths);
+
+    let lua = make_vm("env-direnv", &["direnv"], tmp.path());
+    let env_json = serde_json::to_string(&serde_json::json!({
+        "FOO": "bar",
+        "DIRENV_WATCHES": encoded,
+    }))
+    .unwrap();
+    // Assert args shape matches the rest of the env-direnv tests so
+    // an accidental change to how the plugin invokes direnv fails
+    // this regression test loudly instead of silently succeeding.
+    let stub = format!(
+        r#"
+        host.exec = function(cmd, args)
+            if cmd ~= "direnv" then error("expected cmd='direnv', got: " .. tostring(cmd)) end
+            if type(args) ~= "table" or args[1] ~= "export" or args[2] ~= "json" or args[3] ~= nil then
+                error("expected args={{'export','json'}}")
+            end
+            return {{ stdout = [==[{env_json}]==], stderr = "", code = 0 }}
+        end
+        "#
+    );
+    lua.load(&stub).exec().unwrap();
+
+    let script = format!(
+        r#"
+        local M = (function() {src} end)()
+        return M.export({{ worktree = "{path}" }})
+        "#,
+        src = DIRENV_SRC,
+        path = worktree.replace('\\', "\\\\"),
+    );
+    let result: mlua::Table = lua.load(&script).eval().unwrap();
+    let watched_tbl: mlua::Table = result.get("watched").unwrap();
+    let len = watched_tbl.len().unwrap() as usize;
+    let watched: Vec<String> = (1..=len)
+        .map(|i| watched_tbl.get::<String>(i).unwrap())
+        .collect();
+    for stamp in stamps {
+        assert!(
+            !watched.iter().any(|p| p == stamp),
+            "stamp {stamp} should be filtered out, watched = {watched:?}"
+        );
+    }
+    assert!(watched.contains(&envrc_path));
+}
+
+#[test]
+fn direnv_export_stamp_filter_keeps_legit_paths_containing_direnv_segments() {
+    // Regression for Codex peer-review P2: an earlier substring-only
+    // filter dropped *any* path with `/direnv/allow/` or `/direnv/deny/`
+    // anywhere in it, including legitimate watched files inside a user
+    // worktree that happened to contain those segments (e.g. someone
+    // working on direnv itself, or a `watch_file` target under such a
+    // directory). That regressed correctness: a dropped `.envrc` means
+    // the EnvCache no longer notices edits to it, leaving the user
+    // stuck with stale env values until they hit "Reload env".
+    //
+    // The narrowed predicate requires BOTH:
+    //   1. adjacent `/direnv/allow/` or `/direnv/deny/` segments, AND
+    //   2. a basename that looks like a direnv SHA256 stamp (32+ lowercase hex chars).
+    // The cases below exercise the narrowing: each path contains the
+    // gate substring, but their basenames are not hex-hash-shaped, so
+    // they MUST survive the filter.
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(tmp.path().join(".envrc"), "use flake\n").unwrap();
+    let worktree = tmp.path().to_string_lossy().into_owned();
+    let envrc_path = format!("{worktree}/.envrc");
+    let legit_paths = [
+        // A user working on direnv-the-tool, with the project itself
+        // under a `direnv/allow/` subdir.
+        "/home/alice/repos/direnv/allow/.envrc",
+        // A watch_file target with a human-readable basename living
+        // under a `direnv/deny/` directory in their worktree.
+        "/home/alice/repos/example/direnv/deny/policy.toml",
+        // Edge case: basename happens to be hex but well under the
+        // 32-char minimum (so cannot be a SHA256 stamp).
+        "/srv/data/direnv/allow/abcd",
+        // Edge case: basename has hex but also a non-hex char.
+        "/srv/data/direnv/allow/fe1027c058958e4fa4ccd571e85ff9b21da87436db6bebdae55526e1c8a1a6ef.bak",
+    ];
+    let mut paths: Vec<&str> = vec![envrc_path.as_str()];
+    paths.extend(legit_paths.iter().copied());
+    // Also include a real stamp so the test pins the WHOLE predicate:
+    // legit paths survive, the stamp gets dropped.
+    let real_stamp = "/home/alice/.local/share/direnv/allow/fe1027c058958e4fa4ccd571e85ff9b21da87436db6bebdae55526e1c8a1a6ef";
+    paths.push(real_stamp);
+    let encoded = encode_direnv_watches(&paths);
+
+    let lua = make_vm("env-direnv", &["direnv"], tmp.path());
+    let env_json = serde_json::to_string(&serde_json::json!({
+        "FOO": "bar",
+        "DIRENV_WATCHES": encoded,
+    }))
+    .unwrap();
+    // Assert args shape matches the rest of the env-direnv tests so
+    // an accidental change to how the plugin invokes direnv fails
+    // this regression test loudly instead of silently succeeding.
+    let stub = format!(
+        r#"
+        host.exec = function(cmd, args)
+            if cmd ~= "direnv" then error("expected cmd='direnv', got: " .. tostring(cmd)) end
+            if type(args) ~= "table" or args[1] ~= "export" or args[2] ~= "json" or args[3] ~= nil then
+                error("expected args={{'export','json'}}")
+            end
+            return {{ stdout = [==[{env_json}]==], stderr = "", code = 0 }}
+        end
+        "#
+    );
+    lua.load(&stub).exec().unwrap();
+
+    let script = format!(
+        r#"
+        local M = (function() {src} end)()
+        return M.export({{ worktree = "{path}" }})
+        "#,
+        src = DIRENV_SRC,
+        path = worktree.replace('\\', "\\\\"),
+    );
+    let result: mlua::Table = lua.load(&script).eval().unwrap();
+    let watched_tbl: mlua::Table = result.get("watched").unwrap();
+    let len = watched_tbl.len().unwrap() as usize;
+    let watched: Vec<String> = (1..=len)
+        .map(|i| watched_tbl.get::<String>(i).unwrap())
+        .collect();
+
+    for legit in legit_paths {
+        assert!(
+            watched.iter().any(|p| p == legit),
+            "legitimate path {legit} must survive the narrowed stamp filter; got {watched:?}"
+        );
+    }
+    assert!(
+        !watched.iter().any(|p| p == real_stamp),
+        "real stamp {real_stamp} must still be filtered; got {watched:?}"
+    );
+    assert!(watched.contains(&envrc_path));
+}
+
+#[test]
 fn direnv_export_strip_is_prefix_based_for_future_markers() {
     // The strip matches `^DIRENV_` rather than a hardcoded deny-list,
     // so if direnv ships a new internal marker (e.g. `DIRENV_LAYOUT_*`
