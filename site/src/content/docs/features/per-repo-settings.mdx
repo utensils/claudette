@@ -75,6 +75,22 @@ The decision is per-repo, not global, so trusting one project's `.envrc` doesn't
 
 While an env-provider is resolving, Claudette surfaces the active plugin and elapsed time in three places: the workspace's row in the sidebar (spinner + tooltip), the chat composer placeholder, and an overlay above the integrated terminal. The terminal won't open a prompt and the agent won't spawn until the env layer is ready or fails.
 
+## Claude CLI Flag Overrides
+
+The **Claude CLI flags** section in repo settings lets you override the global flag defaults for workspaces in this repository. Each flag has three states:
+
+| State | Behavior |
+|-------|----------|
+| **Inherit** | Falls back to the global value from **Settings > Claude CLI flags** |
+| **Force on** | Flag is enabled for every workspace in this repo |
+| **Force off** | Flag is disabled for every workspace in this repo |
+
+Only flags explicitly set to **Force on** or **Force off** are active as overrides — flags left at **Inherit** are not stored and have no effect. This means a per-repo entry can never silently win over a global setting unless you intentionally set it.
+
+The **Inherited** section (read-only) shows which flags are currently coming from global defaults, along with their values, so you can see the full effective configuration without switching screens. Promote an inherited flag to a repo override by clicking the **Override** button on its row.
+
+See [Agent Configuration → Claude CLI Flags](/claudette/features/agent-configuration/#claude-cli-flags) for the full list of available flags and how global defaults work.
+
 ## Custom Instructions
 
 Text that is appended to the agent's system prompt at the start of every chat in this repository. Use this to give the agent context about your project:
