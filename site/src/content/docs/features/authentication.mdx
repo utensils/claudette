@@ -25,7 +25,7 @@ When Claudette triggers the sign-in flow, the CLI:
 
 1. Starts a localhost HTTP listener.
 2. Opens your browser to the OAuth URL.
-3. Captures the authorization code via the local callback.
+3. Captures the authorization code via the local callback, or asks you to paste the browser code into Claudette when Claude Code prompts for manual entry.
 4. Writes the resulting credentials to the keychain (or `.credentials.json` on Linux).
 
 Two events stream from the Tauri backend to the panel while this runs:

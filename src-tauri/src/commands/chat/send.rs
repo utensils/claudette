@@ -130,6 +130,14 @@ fn auth_failure_message_from_stderr(stderr_lines: &[String]) -> Option<String> {
         .or(Some(output))
 }
 
+fn auth_failure_message_from_assistant_text(text: &str) -> Option<String> {
+    let text = text.trim();
+    if text.is_empty() || !crate::commands::auth::looks_like_auth_failure(text) {
+        return None;
+    }
+    Some(text.to_string())
+}
+
 fn post_agent_auth_failure_message(
     app: &AppHandle,
     db_path: &std::path::Path,
@@ -168,6 +176,62 @@ fn post_agent_auth_failure_message(
             );
         }
     }
+}
+
+async fn reset_persistent_session_after_auth_failure(
+    app: &AppHandle,
+    db_path: &std::path::Path,
+    chat_session_id: &str,
+    spawned_pid: u32,
+) {
+    let app_state = app.state::<AppState>();
+    let (pid_to_stop, ended_sid) = {
+        let mut agents = app_state.agents.write().await;
+        let Some(session) = agents.get_mut(chat_session_id) else {
+            return;
+        };
+        let owns_spawned_process = session.active_pid == Some(spawned_pid)
+            || session
+                .persistent_session
+                .as_ref()
+                .is_some_and(|ps| ps.pid() == spawned_pid);
+        if !owns_spawned_process {
+            return;
+        }
+
+        let pid = session
+            .persistent_session
+            .as_ref()
+            .map(|ps| ps.pid())
+            .or(session.active_pid);
+        let ended_sid = (!session.session_id.is_empty()).then(|| session.session_id.clone());
+        session.active_pid = None;
+        session.persistent_session = None;
+        session.session_id = uuid::Uuid::new_v4().to_string();
+        session.turn_count = 0;
+        session.claude_remote_control = crate::state::ClaudeRemoteControlStatus::disabled();
+        session.claude_remote_control_monitor_pid = None;
+        session.mcp_bridge = None;
+        (pid, ended_sid)
+    };
+
+    if let Ok(db) = Database::open(db_path) {
+        if let Some(sid) = ended_sid.as_deref() {
+            let _ = db.end_agent_session(sid, false);
+        }
+        let _ = db.clear_chat_session_state(chat_session_id);
+    }
+    if let Some(pid) = pid_to_stop
+        && let Err(err) = agent::stop_agent(pid).await
+    {
+        tracing::warn!(
+            target: "claudette::chat",
+            pid,
+            error = %err,
+            "failed to stop Claude process after auth failure"
+        );
+    }
+    crate::tray::rebuild_tray(app);
 }
 
 fn first_user_message_text(messages: &[ChatMessage]) -> Option<String> {
@@ -2656,6 +2720,7 @@ pub async fn send_chat_message(
         let mut latest_usage: Option<claudette::agent::TokenUsage> = None;
         let mut stderr_lines: Vec<String> = Vec::new();
         let mut notified_via_result = false;
+        let mut assistant_auth_failure_seen = false;
         while let Some(event) = rx.recv().await {
             if let AgentEvent::Stderr(line) = &event {
                 stderr_lines.push(line.clone());
@@ -3297,6 +3362,17 @@ pub async fn send_chat_message(
                         chat_session_id_for_stream.clone(),
                     );
                 }
+                if assistant_auth_failure_seen {
+                    remote_control_reenable_after_result = None;
+                    reset_persistent_session_after_auth_failure(
+                        &app,
+                        &db_path,
+                        &chat_session_id_for_stream,
+                        spawned_pid,
+                    )
+                    .await;
+                    assistant_auth_failure_seen = false;
+                }
                 if let Some((ps, title)) = remote_control_reenable_after_result.take() {
                     super::remote_control::reenable_remote_control_after_respawn(
                         app.clone(),
@@ -3428,6 +3504,9 @@ pub async fn send_chat_message(
             // and only save when we have text content to attach it to.
             if let AgentEvent::Stream(StreamEvent::Assistant { ref message }) = event {
                 let full_text = extract_assistant_text(message);
+                if auth_failure_message_from_assistant_text(&full_text).is_some() {
+                    assistant_auth_failure_seen = true;
+                }
 
                 // Accumulate thinking from this event.
                 if let Some(t) = extract_event_thinking(message) {
@@ -3520,8 +3599,9 @@ pub async fn send_chat_message(
 #[cfg(test)]
 mod tests {
     use super::{
-        auth_failure_message_from_stderr, env_provider_drifted_parts, has_env_trust_warning,
-        remote_control_requested_or_active, remote_control_requested_or_active_for_turn,
+        auth_failure_message_from_assistant_text, auth_failure_message_from_stderr,
+        env_provider_drifted_parts, has_env_trust_warning, remote_control_requested_or_active,
+        remote_control_requested_or_active_for_turn,
         remote_control_should_defer_drift_teardown_for_turn,
         remote_control_should_restore_for_turn, remote_control_title, resolve_spawn_session_id,
         should_defer_persistent_restart_for_state,
@@ -3627,6 +3707,20 @@ mod tests {
         ];
 
         assert_eq!(auth_failure_message_from_stderr(&lines), None);
+    }
+
+    #[test]
+    fn auth_failure_message_detects_assistant_text() {
+        assert_eq!(
+            auth_failure_message_from_assistant_text(" Not logged in · Please run /login ")
+                .as_deref(),
+            Some("Not logged in · Please run /login")
+        );
+    }
+
+    #[test]
+    fn auth_failure_message_ignores_normal_assistant_text() {
+        assert_eq!(auth_failure_message_from_assistant_text("pong"), None);
     }
 
     #[test]

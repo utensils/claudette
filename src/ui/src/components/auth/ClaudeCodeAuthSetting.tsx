@@ -7,6 +7,7 @@ import {
   isClaudeAuthError,
   useClaudeAuthLogin,
 } from "./claudeAuth";
+import { ClaudeAuthCodeForm } from "./ClaudeAuthCodeForm";
 import { getClaudeAuthStatus, type ClaudeAuthStatus } from "../../services/tauri";
 import { useAppStore } from "../../stores/useAppStore";
 import styles from "../settings/Settings.module.css";
@@ -43,34 +44,59 @@ export function ClaudeCodeAuthSetting() {
     setResolvedClaudeAuthFailureMessageId,
   ]);
 
-  const refreshStatus = useCallback(async (validate = false) => {
-    setStatusCheck({ status: "checking" });
-    try {
-      const value = await getClaudeAuthStatus(validate);
-      if (value.state === "signed_in" && value.verified) {
-        markAuthRecovered();
-      } else if (
-        validate &&
-        value.message &&
-        (value.state === "signed_out" || isClaudeAuthError(value.message))
-      ) {
-        setClaudeAuthFailure({
-          messageId: claudeAuthFailureMessageId,
-          error: value.message,
-        });
+  const refreshStatus = useCallback(
+    async (validate = false): Promise<ClaudeAuthStatus | null> => {
+      setStatusCheck({ status: "checking" });
+      try {
+        const value = await getClaudeAuthStatus(validate);
+        if (value.state === "signed_in" && value.verified) {
+          markAuthRecovered();
+        } else if (
+          validate &&
+          value.message &&
+          (value.state === "signed_out" || isClaudeAuthError(value.message))
+        ) {
+          if (claudeAuthFailureMessageId) {
+            setResolvedClaudeAuthFailureMessageId(null);
+          }
+          setClaudeAuthFailure({
+            messageId: claudeAuthFailureMessageId,
+            error: value.message,
+          });
+        }
+        setStatusCheck({ status: "ready", value });
+        return value;
+      } catch (e) {
+        setStatusCheck({ status: "error", error: String(e) });
+        return null;
       }
-      setStatusCheck({ status: "ready", value });
-    } catch (e) {
-      setStatusCheck({ status: "error", error: String(e) });
-    }
-  }, [claudeAuthFailureMessageId, markAuthRecovered, setClaudeAuthFailure]);
-
-  const { authState, startAuthLogin, cancelAuthLogin } = useClaudeAuthLogin({
-    onSuccess: async () => {
-      markAuthRecovered();
-      await refreshStatus(true);
     },
-  });
+    [
+      claudeAuthFailureMessageId,
+      markAuthRecovered,
+      setClaudeAuthFailure,
+      setResolvedClaudeAuthFailureMessageId,
+    ],
+  );
+
+  const { authState, startAuthLogin, cancelAuthLogin, submitAuthCode } =
+    useClaudeAuthLogin({
+      onSuccess: async () => {
+        const value = await refreshStatus(true);
+        if (value?.state !== "signed_in" || !value.verified) {
+          throw new Error(
+            value?.message ?? "Claude Code sign-in could not be verified.",
+          );
+        }
+      },
+    });
+
+  const renderAuthCodeForm = () => {
+    if (authState.status !== "running" || !authState.manualUrl) {
+      return null;
+    }
+    return <ClaudeAuthCodeForm onSubmit={submitAuthCode} />;
+  };
 
   useEffect(() => {
     void refreshStatus();
@@ -108,6 +134,7 @@ export function ClaudeCodeAuthSetting() {
               </a>
             </>
           )}
+          {renderAuthCodeForm()}
         </div>
       );
     }

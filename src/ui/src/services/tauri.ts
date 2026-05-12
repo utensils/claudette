@@ -1599,6 +1599,10 @@ export function claudeAuthLogin(): Promise<void> {
   return invoke("claude_auth_login");
 }
 
+export function submitClaudeAuthCode(code: string): Promise<void> {
+  return invoke("submit_claude_auth_code", { code });
+}
+
 export function cancelClaudeAuthLogin(): Promise<void> {
   return invoke("cancel_claude_auth_login");
 }

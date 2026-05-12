@@ -7,6 +7,7 @@ vi.mock("@tauri-apps/api/event", () => ({
 vi.mock("../../services/tauri", () => ({
   claudeAuthLogin: vi.fn(() => Promise.resolve()),
   cancelClaudeAuthLogin: vi.fn(() => Promise.resolve()),
+  submitClaudeAuthCode: vi.fn(() => Promise.resolve()),
 }));
 
 import { cleanClaudeAuthError, isClaudeAuthError } from "./claudeAuth";

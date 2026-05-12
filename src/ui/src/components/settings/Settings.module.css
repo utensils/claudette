@@ -1266,6 +1266,18 @@
   font-size: 13px;
 }
 
+.authCodeForm {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.authCodeInput {
+  composes: input;
+  min-width: 220px;
+}
+
 .authPanelError {
   border: 1px solid var(--error-border);
   border-radius: var(--radius-md);

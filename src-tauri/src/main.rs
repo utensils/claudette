@@ -1088,6 +1088,7 @@ fn main() {
             // Auth
             commands::auth::get_claude_auth_status,
             commands::auth::claude_auth_login,
+            commands::auth::submit_claude_auth_code,
             commands::auth::cancel_claude_auth_login,
             // SCM Plugins
             commands::scm::list_scm_providers,

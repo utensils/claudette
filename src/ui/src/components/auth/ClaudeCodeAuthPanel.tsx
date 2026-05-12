@@ -4,6 +4,7 @@ import {
   cleanClaudeAuthError,
   useClaudeAuthLogin,
 } from "./claudeAuth";
+import { ClaudeAuthCodeForm } from "./ClaudeAuthCodeForm";
 import styles from "../settings/Settings.module.css";
 
 export function ClaudeCodeAuthPanel({
@@ -19,9 +20,10 @@ export function ClaudeCodeAuthPanel({
 }) {
   const { t } = useTranslation("settings");
   const { t: tCommon } = useTranslation("common");
-  const { authState, startAuthLogin, cancelAuthLogin } = useClaudeAuthLogin({
-    onSuccess: onAuthenticated,
-  });
+  const { authState, startAuthLogin, cancelAuthLogin, submitAuthCode } =
+    useClaudeAuthLogin({
+      onSuccess: onAuthenticated,
+    });
   const displayError = error ? cleanClaudeAuthError(error) : null;
 
   return (
@@ -58,6 +60,7 @@ export function ClaudeCodeAuthPanel({
               {t("auth_manual_url")}
             </a>
           )}
+          {authState.manualUrl && <ClaudeAuthCodeForm onSubmit={submitAuthCode} />}
         </div>
       )}
 

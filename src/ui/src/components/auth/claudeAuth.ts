@@ -3,6 +3,7 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import {
   cancelClaudeAuthLogin,
   claudeAuthLogin,
+  submitClaudeAuthCode,
 } from "../../services/tauri";
 
 export type ClaudeAuthLoginState =
@@ -99,15 +100,27 @@ export function useClaudeAuthLogin({
 
     listen<AuthLoginComplete>("auth://login-complete", (event) => {
       const { success, error } = event.payload;
-      if (success) {
-        setAuthState({ status: "success" });
-        void onSuccessRef.current?.();
-      } else {
+      if (!success) {
         setAuthState({
           status: "error",
           error: error ?? "Sign-in failed.",
         });
+        return;
       }
+
+      void Promise.resolve(onSuccessRef.current?.())
+        .then(() => {
+          setAuthState({ status: "success" });
+        })
+        .catch((err) => {
+          setAuthState({
+            status: "error",
+            error:
+              err instanceof Error
+                ? err.message
+                : String(err || "Sign-in could not be verified."),
+          });
+        });
     })
       .then((fn) => {
         if (cancelled) fn();
@@ -140,9 +153,18 @@ export function useClaudeAuthLogin({
     }
   }, []);
 
+  const submitAuthCode = useCallback(async (code: string) => {
+    try {
+      await submitClaudeAuthCode(code);
+    } catch (e) {
+      setAuthState({ status: "error", error: String(e) });
+    }
+  }, []);
+
   return {
     authState,
     startAuthLogin,
     cancelAuthLogin,
+    submitAuthCode,
   };
 }

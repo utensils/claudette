@@ -1,8 +1,9 @@
 use serde::{Deserialize, Serialize};
+use std::fs;
 use std::process::Stdio;
 use std::time::Duration;
 use tauri::{AppHandle, Emitter, State};
-use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{ChildStderr, ChildStdout, Command};
 use tokio::time::timeout;
 
@@ -166,26 +167,29 @@ async fn validate_claude_auth(
     claude_path: std::ffi::OsString,
     local_status: ClaudeAuthStatus,
 ) -> Result<ClaudeAuthStatus, String> {
+    let mcp_config_path =
+        std::env::temp_dir().join(format!("claudette-auth-mcp-{}.json", uuid::Uuid::new_v4()));
+    fs::write(&mcp_config_path, br#"{"mcpServers":{}}"#)
+        .map_err(|e| format!("Failed to write Claude Code auth validation MCP config: {e}"))?;
+
     let mut command = Command::new(&claude_path);
     command
         .no_console_window()
-        .args([
-            "-p",
-            "Reply with exactly: OK",
-            "--output-format",
-            "json",
-            "--no-session-persistence",
-            "--disable-slash-commands",
-            "--strict-mcp-config",
-            "--mcp-config",
-            "{}",
-            "--tools",
-            "",
-            "--model",
-            "haiku",
-            "--max-budget-usd",
-            "0.01",
-        ])
+        .arg("-p")
+        .arg("Reply with exactly: OK")
+        .arg("--output-format")
+        .arg("json")
+        .arg("--no-session-persistence")
+        .arg("--disable-slash-commands")
+        .arg("--strict-mcp-config")
+        .arg("--mcp-config")
+        .arg(&mcp_config_path)
+        .arg("--tools")
+        .arg("")
+        .arg("--model")
+        .arg("haiku")
+        .arg("--max-budget-usd")
+        .arg("0.01")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -194,6 +198,7 @@ async fn validate_claude_auth(
     sanitize_claude_subprocess_env(&mut command);
 
     let output = timeout(AUTH_VALIDATE_TIMEOUT, command.output()).await;
+    let _ = fs::remove_file(&mcp_config_path);
     let output = match output {
         Ok(Ok(output)) => output,
         Ok(Err(e)) => {
@@ -214,7 +219,7 @@ async fn validate_claude_auth(
         }
     };
 
-    if output.status.success() {
+    if output.status.success() || validation_reached_authenticated_model(&output.stdout) {
         return Ok(ClaudeAuthStatus {
             verified: true,
             message: None,
@@ -235,6 +240,16 @@ async fn validate_claude_auth(
         api_provider: local_status.api_provider,
         message: Some(message),
     })
+}
+
+fn validation_reached_authenticated_model(stdout: &[u8]) -> bool {
+    let Ok(value) = serde_json::from_slice::<serde_json::Value>(stdout) else {
+        return false;
+    };
+    value
+        .get("subtype")
+        .and_then(|subtype| subtype.as_str())
+        .is_some_and(|subtype| subtype == "error_max_budget_usd")
 }
 
 fn validation_failure_message(stdout: &[u8], stderr: &[u8]) -> String {
@@ -290,7 +305,7 @@ pub async fn claude_auth_login(app: AppHandle, state: State<'_, AppState>) -> Re
     command
         .no_console_window()
         .args(["auth", "login"])
-        .stdin(Stdio::null())
+        .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .env("PATH", claudette::env::enriched_path())
@@ -304,6 +319,10 @@ pub async fn claude_auth_login(app: AppHandle, state: State<'_, AppState>) -> Re
         crate::missing_cli::handle_err(&app, &err).unwrap_or(err)
     })?;
 
+    let child_stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| "claude auth login: missing stdin pipe".to_string())?;
     let stdout = child
         .stdout
         .take()
@@ -318,6 +337,7 @@ pub async fn claude_auth_login(app: AppHandle, state: State<'_, AppState>) -> Re
 
     let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel::<()>();
     *slot = Some(cancel_tx);
+    *state.auth_login_stdin.lock().await = Some(child_stdin);
     drop(slot);
 
     // Separate task owns the child + completion event so the command can return
@@ -351,6 +371,7 @@ pub async fn claude_auth_login(app: AppHandle, state: State<'_, AppState>) -> Re
         // took the sender — the slot is just set back to None either way.
         let state = app_exit.state::<AppState>();
         *state.auth_login_cancel.lock().await = None;
+        *state.auth_login_stdin.lock().await = None;
     });
 
     Ok(())
@@ -390,6 +411,31 @@ pub async fn cancel_claude_auth_login(
         // was already emitted.
         let _ = tx.send(());
     }
+    Ok(())
+}
+
+/// Submit the one-time browser code requested by `claude auth login`.
+#[tauri::command]
+pub async fn submit_claude_auth_code(
+    code: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let code = code.trim();
+    if code.is_empty() {
+        return Err("Auth code cannot be empty.".into());
+    }
+    let mut stdin = state.auth_login_stdin.lock().await;
+    let Some(stdin) = stdin.as_mut() else {
+        return Err("No Claude Code sign-in flow is waiting for a code.".into());
+    };
+    stdin
+        .write_all(format!("{code}\n").as_bytes())
+        .await
+        .map_err(|e| format!("Failed to submit Claude Code auth code: {e}"))?;
+    stdin
+        .flush()
+        .await
+        .map_err(|e| format!("Failed to flush Claude Code auth code: {e}"))?;
     Ok(())
 }
 
@@ -461,5 +507,21 @@ mod tests {
         ));
         assert!(looks_like_auth_failure("Not logged in · Please run /login"));
         assert!(!looks_like_auth_failure("Model haiku is unavailable"));
+    }
+
+    #[test]
+    fn validation_budget_error_confirms_auth_reached_model() {
+        let stdout = br#"{
+            "type":"result",
+            "subtype":"error_max_budget_usd",
+            "is_error":true,
+            "errors":["Reached maximum budget ($0.01)"]
+        }"#;
+
+        assert!(validation_reached_authenticated_model(stdout));
+        assert!(!validation_reached_authenticated_model(
+            br#"{"type":"result","subtype":"error_during_execution"}"#
+        ));
+        assert!(!validation_reached_authenticated_model(b"Not logged in"));
     }
 }

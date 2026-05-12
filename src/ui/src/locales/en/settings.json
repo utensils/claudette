@@ -158,6 +158,8 @@
   "auth_signing_in": "Signing in to Claude Code…",
   "auth_signing_in_hint": "Complete the flow in your browser. This panel will update when sign-in finishes.",
   "auth_manual_url": "If the browser didn't open, click here",
+  "auth_code_placeholder": "Paste browser code",
+  "auth_submit_code": "Submit code",
   "auth_status_checking": "Checking Claude Code sign-in status…",
   "auth_status_signed_in": "Claude Code credentials found locally.",
   "auth_status_verified": "Claude Code authentication verified.",
