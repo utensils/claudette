@@ -219,6 +219,41 @@ fn load_apps_config() -> AppsConfig {
 /// Well-known PATH prefixes that macOS GUI apps may not inherit.
 const EXTRA_PATH_DIRS: &[&str] = &["/opt/homebrew/bin", "/usr/local/bin", "/usr/local/sbin"];
 
+#[cfg(target_os = "macos")]
+fn jetbrains_toolbox_script_dirs(home: &Path) -> Vec<PathBuf> {
+    vec![
+        home.join("Library")
+            .join("Application Support")
+            .join("JetBrains")
+            .join("Toolbox")
+            .join("scripts"),
+    ]
+}
+
+#[cfg(target_os = "linux")]
+fn jetbrains_toolbox_script_dirs(home: &Path) -> Vec<PathBuf> {
+    vec![
+        home.join(".local")
+            .join("share")
+            .join("JetBrains")
+            .join("Toolbox")
+            .join("scripts"),
+    ]
+}
+
+#[cfg(windows)]
+fn jetbrains_toolbox_script_dirs(_home: &Path) -> Vec<PathBuf> {
+    dirs::data_local_dir()
+        .map(|dir| dir.join("JetBrains").join("Toolbox").join("scripts"))
+        .into_iter()
+        .collect()
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
+fn jetbrains_toolbox_script_dirs(_home: &Path) -> Vec<PathBuf> {
+    Vec::new()
+}
+
 /// Build the list of directories to scan for binaries.
 fn build_path_dirs() -> Vec<PathBuf> {
     let mut dirs = Vec::new();
@@ -228,6 +263,7 @@ fn build_path_dirs() -> Vec<PathBuf> {
     }
     if let Some(home) = dirs::home_dir() {
         dirs.push(home.join(".local/bin"));
+        dirs.extend(jetbrains_toolbox_script_dirs(&home));
     }
 
     if let Some(path_var) = std::env::var_os("PATH") {
@@ -1728,6 +1764,12 @@ mod tests {
         assert!(config.apps.iter().any(|a| a.id == "cursor"));
         assert!(config.apps.iter().any(|a| a.id == "windows-terminal"));
         assert!(config.apps.iter().any(|a| a.id == "cmd"));
+        for id in JETBRAINS_IDE_IDS {
+            assert!(
+                config.apps.iter().any(|a| a.id == *id),
+                "missing JetBrains IDE default entry for {id}"
+            );
+        }
     }
 
     /// Backfilling `windows_exe_names` on a user entry that lacks it
@@ -1821,6 +1863,91 @@ mod tests {
         assert_eq!(
             merged.apps[0].windows_exe_names,
             vec!["PortableCode.exe".to_string()]
+        );
+    }
+
+    const JETBRAINS_IDE_IDS: &[&str] = &[
+        "intellij",
+        "clion",
+        "datagrip",
+        "dataspell",
+        "goland",
+        "phpstorm",
+        "pycharm",
+        "rider",
+        "rubymine",
+        "rustrover",
+        "webstorm",
+    ];
+
+    #[test]
+    fn detect_finds_jetbrains_ides_from_default_config_when_launchers_are_on_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        for id in JETBRAINS_IDE_IDS {
+            let bin = tmp.path().join(default_bin_name_for_app(id));
+            std::fs::write(&bin, "#!/bin/sh\n").unwrap();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+            }
+        }
+
+        let config: AppsConfig =
+            serde_json::from_str(DEFAULT_APPS_JSON).expect("default-apps.json must parse");
+
+        let detected = detect_with_paths(&config, &[tmp.path().to_path_buf()]);
+        for id in JETBRAINS_IDE_IDS {
+            let app = detected
+                .iter()
+                .find(|app| app.id == *id)
+                .unwrap_or_else(|| panic!("{id} should be detected from the embedded defaults"));
+            assert_eq!(app.category, AppCategory::Ide);
+            assert_eq!(
+                app.detected_path,
+                tmp.path()
+                    .join(default_bin_name_for_app(id))
+                    .to_string_lossy()
+                    .to_string()
+            );
+        }
+    }
+
+    fn default_bin_name_for_app(id: &str) -> &str {
+        if id == "intellij" { "idea" } else { id }
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn jetbrains_toolbox_script_dirs_include_macos_toolbox_location() {
+        let home = Path::new("/Users/example");
+        assert_eq!(
+            jetbrains_toolbox_script_dirs(home),
+            vec![
+                PathBuf::from("/Users/example")
+                    .join("Library")
+                    .join("Application Support")
+                    .join("JetBrains")
+                    .join("Toolbox")
+                    .join("scripts")
+            ],
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn jetbrains_toolbox_script_dirs_include_linux_toolbox_location() {
+        let home = Path::new("/home/example");
+        assert_eq!(
+            jetbrains_toolbox_script_dirs(home),
+            vec![
+                PathBuf::from("/home/example")
+                    .join(".local")
+                    .join("share")
+                    .join("JetBrains")
+                    .join("Toolbox")
+                    .join("scripts")
+            ],
         );
     }
 
