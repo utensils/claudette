@@ -70,6 +70,8 @@ export function RepoSettings({ repoId }: RepoSettingsProps) {
   const [repoConfig, setRepoConfig] = useState<RepoConfigInfo | null>(null);
   const [mcpServers, setMcpServers] = useState<SavedMcpServer[]>([]);
   const [archiveOnMerge, setArchiveOnMerge] = useState<"inherit" | "true" | "false">("inherit");
+  const [ciAutoFix, setCiAutoFix] = useState<"inherit" | "true" | "false">("inherit");
+  const [ciAutoFixPrompt, setCiAutoFixPrompt] = useState("");
   const setDefaultBranches = useAppStore((s) => s.setDefaultBranches);
   const iconPopoverRef = useRef<HTMLDivElement>(null);
 
@@ -87,6 +89,8 @@ export function RepoSettings({ repoId }: RepoSettingsProps) {
       setBaseBranch(repo.base_branch ?? "");
       setDefaultRemote(repo.default_remote ?? "");
       setArchiveOnMerge("inherit");
+      setCiAutoFix("inherit");
+      setCiAutoFixPrompt("");
       setError(null);
     }
   }, [repoId]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -116,6 +120,16 @@ export function RepoSettings({ repoId }: RepoSettingsProps) {
         else setArchiveOnMerge("inherit");
       })
       .catch(() => setArchiveOnMerge("inherit"));
+    getAppSetting(`repo:${repoId}:ci_auto_fix_enabled`)
+      .then((val) => {
+        if (val === "true") setCiAutoFix("true");
+        else if (val === "false") setCiAutoFix("false");
+        else setCiAutoFix("inherit");
+      })
+      .catch(() => setCiAutoFix("inherit"));
+    getAppSetting(`repo:${repoId}:ci_auto_fix_prompt`)
+      .then((val) => { if (val) setCiAutoFixPrompt(val); })
+      .catch(() => {});
   }, [repoId]);
 
   const refreshMcpServers = useCallback(() => {
@@ -752,6 +766,69 @@ export function RepoSettings({ repoId }: RepoSettingsProps) {
           </select>
         </div>
       </div>
+
+      <div className={styles.settingRow}>
+        <div className={styles.settingInfo}>
+          <div className={styles.settingLabel}>Auto-fix CI failures</div>
+          <div className={styles.settingDescription}>
+            Automatically create a session to fix failing CI checks. Overrides
+            the global setting for this repository.
+          </div>
+        </div>
+        <div className={styles.settingControl}>
+          <select
+            className={styles.select}
+            value={ciAutoFix}
+            onChange={async (e) => {
+              const val = e.target.value as "inherit" | "true" | "false";
+              const prev = ciAutoFix;
+              setCiAutoFix(val);
+              try {
+                setError(null);
+                await setAppSetting(
+                  `repo:${repoId}:ci_auto_fix_enabled`,
+                  val === "inherit" ? "" : val,
+                );
+              } catch (err) {
+                setCiAutoFix(prev);
+                setError(String(err));
+              }
+            }}
+          >
+            <option value="inherit">Use global default</option>
+            <option value="true">Enabled</option>
+            <option value="false">Disabled</option>
+          </select>
+        </div>
+      </div>
+
+      {ciAutoFix !== "false" && (
+        <div className={styles.fieldGroup}>
+          <div className={styles.fieldLabel}>CI auto-fix prompt override</div>
+          <div className={`${styles.fieldHint} ${styles.fieldHintSpacedWide}`}>
+            Override the global prompt template for this repository. Leave empty
+            to use the global default.
+          </div>
+          <textarea
+            className={styles.textarea}
+            value={ciAutoFixPrompt}
+            onChange={(e) => setCiAutoFixPrompt(e.target.value)}
+            onBlur={async () => {
+              try {
+                setError(null);
+                await setAppSetting(
+                  `repo:${repoId}:ci_auto_fix_prompt`,
+                  ciAutoFixPrompt,
+                );
+              } catch (e) {
+                setError(String(e));
+              }
+            }}
+            placeholder="Leave empty to use global default"
+            rows={6}
+          />
+        </div>
+      )}
 
       <div className={styles.fieldGroup}>
         <div className={styles.fieldLabel}>{t("repo_worktree_discovery")}</div>

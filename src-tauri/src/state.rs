@@ -11,7 +11,7 @@ use claudette::claude_help::ClaudeFlagDef;
 use claudette::env_provider::{EnvCache, EnvWatcher};
 use claudette::file_watcher::FileWatcher;
 use claudette::plugin_runtime::PluginRegistry;
-use claudette::scm::types::{CiCheck, PullRequest};
+use claudette::scm::types::{CiCheck, CiOverallStatus, PullRequest};
 use serde::{Deserialize, Serialize};
 
 use crate::boot_probation::BootProbationState;
@@ -413,6 +413,12 @@ pub enum ClaudeFlagDiscovery {
     Err(String),
 }
 
+/// Per-workspace CI status for detecting failure transitions.
+pub struct CiTransitionState {
+    pub overall_status: Option<CiOverallStatus>,
+    pub last_auto_fix_triggered: Option<Instant>,
+}
+
 /// Cached SCM data for a specific (repo_id, branch) pair.
 pub struct ScmCacheEntry {
     pub pull_request: Option<PullRequest>,
@@ -560,6 +566,8 @@ pub struct AppState {
     /// Short-TTL cache for `git merge-base <base_branch> HEAD`, keyed by
     /// workspace_id. See `MergeBaseCache` doc comment for the full rationale.
     pub merge_base_cache: MergeBaseCache,
+    /// Per-workspace CI transition state for auto-fix triggering.
+    pub ci_last_status: RwLock<HashMap<String, CiTransitionState>>,
     /// Limits concurrent SCM CLI invocations.
     pub scm_semaphore: Arc<Semaphore>,
     /// The workspace the user is currently viewing. The polling loop reads
@@ -629,6 +637,7 @@ impl AppState {
             file_watcher: RwLock::new(None),
             scm_cache: ScmCache::new(),
             merge_base_cache: MergeBaseCache::new(),
+            ci_last_status: RwLock::new(HashMap::new()),
             scm_semaphore: Arc::new(Semaphore::new(4)),
             selected_workspace_id: RwLock::new(None),
             workspace_activity: RwLock::new(HashMap::new()),

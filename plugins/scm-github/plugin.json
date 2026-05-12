@@ -10,7 +10,8 @@
     "get_pull_request",
     "create_pull_request",
     "merge_pull_request",
-    "ci_status"
+    "ci_status",
+    "ci_failure_logs"
   ],
   "config_schema": {}
 }

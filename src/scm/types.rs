@@ -55,6 +55,26 @@ pub struct CiCheck {
     pub started_at: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CiFailureLog {
+    pub check_name: String,
+    pub log: String,
+    pub url: Option<String>,
+}
+
+pub fn derive_overall_ci_status(checks: &[CiCheck]) -> Option<CiOverallStatus> {
+    if checks.is_empty() {
+        return None;
+    }
+    if checks.iter().any(|c| c.status == CiCheckStatus::Pending) {
+        return Some(CiOverallStatus::Pending);
+    }
+    if checks.iter().any(|c| c.status == CiCheckStatus::Failure) {
+        return Some(CiOverallStatus::Failure);
+    }
+    Some(CiOverallStatus::Success)
+}
+
 /// Expected argument shape for create_pull_request operations.
 /// Used by Lua plugins — the Rust side passes args as serde_json::Value.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -72,12 +92,6 @@ mod tests {
 
     #[test]
     fn ci_check_status_serializes_to_snake_case_strings() {
-        // The Lua plugins return canonical lowercase strings; the
-        // Rust dispatcher round-trips through these snake_case names
-        // when materializing CiCheck rows. Pin every variant — adding
-        // a new one without updating Lua / frontend mappers leaves a
-        // hole at runtime, and this test gives us a fast feedback
-        // loop for the round-trip.
         let cases: &[(CiCheckStatus, &str)] = &[
             (CiCheckStatus::Pending, "\"pending\""),
             (CiCheckStatus::Success, "\"success\""),
@@ -91,5 +105,120 @@ mod tests {
             let round: CiCheckStatus = serde_json::from_str(&serialized).unwrap();
             assert_eq!(&round, status, "round-trip {status:?}");
         }
+    }
+
+    #[test]
+    fn derive_overall_empty() {
+        assert_eq!(derive_overall_ci_status(&[]), None);
+    }
+
+    #[test]
+    fn derive_overall_all_success() {
+        let checks = vec![
+            CiCheck {
+                name: "build".into(),
+                status: CiCheckStatus::Success,
+                url: None,
+                started_at: None,
+            },
+            CiCheck {
+                name: "test".into(),
+                status: CiCheckStatus::Success,
+                url: None,
+                started_at: None,
+            },
+        ];
+        assert_eq!(
+            derive_overall_ci_status(&checks),
+            Some(CiOverallStatus::Success)
+        );
+    }
+
+    #[test]
+    fn derive_overall_any_pending() {
+        let checks = vec![
+            CiCheck {
+                name: "build".into(),
+                status: CiCheckStatus::Success,
+                url: None,
+                started_at: None,
+            },
+            CiCheck {
+                name: "test".into(),
+                status: CiCheckStatus::Pending,
+                url: None,
+                started_at: None,
+            },
+        ];
+        assert_eq!(
+            derive_overall_ci_status(&checks),
+            Some(CiOverallStatus::Pending)
+        );
+    }
+
+    #[test]
+    fn derive_overall_failure_without_pending() {
+        let checks = vec![
+            CiCheck {
+                name: "build".into(),
+                status: CiCheckStatus::Failure,
+                url: None,
+                started_at: None,
+            },
+            CiCheck {
+                name: "test".into(),
+                status: CiCheckStatus::Success,
+                url: None,
+                started_at: None,
+            },
+        ];
+        assert_eq!(
+            derive_overall_ci_status(&checks),
+            Some(CiOverallStatus::Failure)
+        );
+    }
+
+    #[test]
+    fn derive_overall_pending_takes_precedence_over_failure() {
+        let checks = vec![
+            CiCheck {
+                name: "build".into(),
+                status: CiCheckStatus::Failure,
+                url: None,
+                started_at: None,
+            },
+            CiCheck {
+                name: "test".into(),
+                status: CiCheckStatus::Pending,
+                url: None,
+                started_at: None,
+            },
+        ];
+        assert_eq!(
+            derive_overall_ci_status(&checks),
+            Some(CiOverallStatus::Pending)
+        );
+    }
+
+    #[test]
+    fn derive_overall_cancelled_counts_as_success() {
+        let checks = vec![
+            CiCheck {
+                name: "build".into(),
+                status: CiCheckStatus::Cancelled,
+                url: None,
+                started_at: None,
+            },
+            CiCheck {
+                name: "test".into(),
+                status: CiCheckStatus::Success,
+                url: None,
+                started_at: None,
+            },
+        ];
+        assert_eq!(
+            derive_overall_ci_status(&checks),
+            Some(CiOverallStatus::Success)
+        );
     }
 }

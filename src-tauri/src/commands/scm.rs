@@ -10,7 +10,7 @@ use claudette::db::Database;
 use claudette::mcp_supervisor::McpSupervisor;
 use claudette::plugin_runtime::host_api::WorkspaceInfo;
 use claudette::scm::detect;
-use claudette::scm::types::{CiCheck, PullRequest};
+use claudette::scm::types::{CiCheck, CiCheckStatus, CiFailureLog, CiOverallStatus, PullRequest};
 
 use crate::state::{AppState, ScmCacheEntry};
 
@@ -935,8 +935,27 @@ pub fn start_scm_polling(app_handle: tauri::AppHandle) {
 
             // All DB reads for this poll cycle in one block.
             // Collect workspace IDs with their repo IDs so we can resolve
-            // per-repo archive_on_merge overrides after polling.
-            let (workspace_ids, global_archive, per_repo_archive) = {
+            // per-repo archive_on_merge and ci_auto_fix overrides after polling.
+            #[allow(clippy::type_complexity)]
+            let (
+                workspace_ids,
+                global_archive,
+                per_repo_archive,
+                global_ci_auto_fix,
+                per_repo_ci_auto_fix,
+                ci_auto_fix_prompt,
+                ci_auto_fix_cooldown,
+                ci_auto_fix_model,
+            ): (
+                Vec<(String, String)>,
+                bool,
+                std::collections::HashMap<String, bool>,
+                bool,
+                std::collections::HashMap<String, bool>,
+                String,
+                u64,
+                Option<String>,
+            ) = {
                 let db = match Database::open(&app_state.db_path) {
                     Ok(db) => db,
                     Err(_) => {
@@ -960,7 +979,7 @@ pub fn start_scm_polling(app_handle: tauri::AppHandle) {
                 let repo_ids: std::collections::HashSet<&str> =
                     active.iter().map(|(_, rid)| rid.as_str()).collect();
                 let per_repo: std::collections::HashMap<String, bool> = repo_ids
-                    .into_iter()
+                    .iter()
                     .filter_map(|rid| {
                         let key = format!("repo:{rid}:archive_on_merge");
                         let val = db.get_app_setting(&key).ok().flatten()?;
@@ -970,7 +989,58 @@ pub fn start_scm_polling(app_handle: tauri::AppHandle) {
                         Some((rid.to_string(), val == "true"))
                     })
                     .collect();
-                (active, global, per_repo)
+
+                let global_ci = db
+                    .get_app_setting("ci_auto_fix_enabled")
+                    .ok()
+                    .flatten()
+                    .as_deref()
+                    == Some("true");
+                let per_repo_ci: std::collections::HashMap<String, bool> = repo_ids
+                    .into_iter()
+                    .filter_map(|rid| {
+                        let key = format!("repo:{rid}:ci_auto_fix_enabled");
+                        let val = db.get_app_setting(&key).ok().flatten()?;
+                        if val.is_empty() {
+                            return None;
+                        }
+                        Some((rid.to_string(), val == "true"))
+                    })
+                    .collect();
+                let prompt = db
+                    .get_app_setting("ci_auto_fix_prompt")
+                    .ok()
+                    .flatten()
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or_else(|| DEFAULT_CI_AUTO_FIX_PROMPT.to_string());
+                let cooldown = db
+                    .get_app_setting("ci_auto_fix_cooldown_seconds")
+                    .ok()
+                    .flatten()
+                    .and_then(|s| s.parse::<u64>().ok())
+                    .unwrap_or(300);
+                let model = db
+                    .get_app_setting("ci_auto_fix_model")
+                    .ok()
+                    .flatten()
+                    .filter(|s| !s.is_empty())
+                    .or_else(|| {
+                        db.get_app_setting("default_model")
+                            .ok()
+                            .flatten()
+                            .filter(|s| !s.is_empty())
+                    });
+
+                (
+                    active,
+                    global,
+                    per_repo,
+                    global_ci,
+                    per_repo_ci,
+                    prompt,
+                    cooldown,
+                    model,
+                )
             };
 
             // Snapshot the per-tick decision inputs once so all tier
@@ -1060,12 +1130,256 @@ pub fn start_scm_polling(app_handle: tauri::AppHandle) {
                         let pr_number = detail.pull_request.as_ref().map(|pr| pr.number);
                         auto_archive_workspace(&handle, &app_state, &ws_id, pr_number).await;
                     }
+
+                    // CI auto-fix: detect failure transitions
+                    let ci_auto_fix_enabled = per_repo_ci_auto_fix
+                        .get(&repo_id)
+                        .copied()
+                        .unwrap_or(global_ci_auto_fix);
+
+                    if ci_auto_fix_enabled {
+                        let current_status =
+                            claudette::scm::types::derive_overall_ci_status(&detail.ci_checks);
+                        let mut ci_map = app_state.ci_last_status.write().await;
+                        let prev = ci_map.get(&ws_id);
+                        let prev_status = prev.and_then(|s| s.overall_status.clone());
+                        let prev_triggered = prev.and_then(|s| s.last_auto_fix_triggered);
+
+                        let is_failure_transition = current_status
+                            == Some(CiOverallStatus::Failure)
+                            && prev_status != Some(CiOverallStatus::Failure);
+
+                        let within_cooldown = prev_triggered
+                            .is_some_and(|t| t.elapsed().as_secs() < ci_auto_fix_cooldown);
+
+                        // Resolve per-repo prompt override
+                        let effective_prompt = Database::open(&app_state.db_path)
+                            .ok()
+                            .and_then(|db| {
+                                let key = format!("repo:{repo_id}:ci_auto_fix_prompt");
+                                db.get_app_setting(&key)
+                                    .ok()
+                                    .flatten()
+                                    .filter(|s| !s.is_empty())
+                            })
+                            .unwrap_or_else(|| ci_auto_fix_prompt.clone());
+
+                        ci_map.insert(
+                            ws_id.clone(),
+                            crate::state::CiTransitionState {
+                                overall_status: current_status,
+                                last_auto_fix_triggered: if is_failure_transition
+                                    && !within_cooldown
+                                {
+                                    Some(Instant::now())
+                                } else {
+                                    prev_triggered
+                                },
+                            },
+                        );
+                        drop(ci_map);
+
+                        if is_failure_transition && !within_cooldown {
+                            eprintln!(
+                                "[scm] CI failure detected for workspace {ws_id} — creating auto-fix session"
+                            );
+                            auto_create_ci_fix_session(
+                                &handle,
+                                &app_state,
+                                &ws_id,
+                                &detail,
+                                &effective_prompt,
+                                ci_auto_fix_model.as_deref(),
+                            )
+                            .await;
+                        }
+                    }
                 }
             }
 
             tokio::time::sleep(std::time::Duration::from_secs(30)).await;
         }
     });
+}
+
+const DEFAULT_CI_AUTO_FIX_PROMPT: &str = "\
+CI has failed on this branch. Please analyze the failures and fix the issues.
+
+## Failed checks
+{{failed_checks}}
+
+## Failure logs
+{{failure_logs}}
+
+Branch: {{branch}}
+PR: {{pr_title}} ({{pr_url}})
+
+Investigate the failing checks, identify the root cause, and make the necessary code changes to fix the CI failures.";
+
+fn format_failed_checks(checks: &[CiCheck]) -> String {
+    checks
+        .iter()
+        .filter(|c| c.status == CiCheckStatus::Failure)
+        .map(|c| {
+            let url_part = c.url.as_deref().unwrap_or("no URL");
+            format!("- **{}**: failure — {}", c.name, url_part)
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn format_all_checks(checks: &[CiCheck]) -> String {
+    checks
+        .iter()
+        .map(|c| {
+            let status = match c.status {
+                CiCheckStatus::Success => "success",
+                CiCheckStatus::Failure => "failure",
+                CiCheckStatus::Pending => "pending",
+                CiCheckStatus::Cancelled => "cancelled",
+            };
+            let url_part = c.url.as_deref().unwrap_or("no URL");
+            format!("- **{}**: {} — {}", c.name, status, url_part)
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn format_failure_logs(logs: &[CiFailureLog]) -> String {
+    if logs.is_empty() {
+        return "*(Log fetching not supported by this SCM plugin — check the URLs above for details.)*".to_string();
+    }
+    logs.iter()
+        .map(|l| format!("### {}\n```\n{}\n```", l.check_name, l.log))
+        .collect::<Vec<_>>()
+        .join("\n\n")
+}
+
+fn format_ci_auto_fix_prompt(
+    template: &str,
+    checks: &[CiCheck],
+    failure_logs: &[CiFailureLog],
+    branch: &str,
+    pr: Option<&PullRequest>,
+) -> String {
+    template
+        .replace("{{failed_checks}}", &format_failed_checks(checks))
+        .replace("{{all_checks}}", &format_all_checks(checks))
+        .replace("{{failure_logs}}", &format_failure_logs(failure_logs))
+        .replace("{{branch}}", branch)
+        .replace("{{pr_title}}", pr.map(|p| p.title.as_str()).unwrap_or(""))
+        .replace("{{pr_url}}", pr.map(|p| p.url.as_str()).unwrap_or(""))
+        .replace(
+            "{{pr_number}}",
+            &pr.map(|p| p.number.to_string()).unwrap_or_default(),
+        )
+}
+
+async fn auto_create_ci_fix_session(
+    handle: &tauri::AppHandle,
+    app_state: &AppState,
+    workspace_id: &str,
+    detail: &ScmDetail,
+    prompt_template: &str,
+    model: Option<&str>,
+) {
+    let failed_check_names: Vec<String> = detail
+        .ci_checks
+        .iter()
+        .filter(|c| c.status == CiCheckStatus::Failure)
+        .map(|c| c.name.clone())
+        .collect();
+
+    let mut failure_logs: Vec<CiFailureLog> = Vec::new();
+
+    if let Some(provider) = &detail.provider {
+        let ctx = match lookup_workspace_context(&app_state.db_path, workspace_id).await {
+            Ok(ctx) => ctx,
+            Err(e) => {
+                eprintln!("[scm] CI auto-fix: failed to lookup workspace context: {e}");
+                return;
+            }
+        };
+        let ws_info = make_workspace_info(&ctx.workspace, &ctx.repo);
+        let branch = &ctx.workspace.branch_name;
+        let args = serde_json::json!({
+            "branch": branch,
+            "failed_checks": failed_check_names,
+        });
+
+        let registry = app_state.plugins.read().await;
+        match registry
+            .call_operation(provider, "ci_failure_logs", args, ws_info)
+            .await
+        {
+            Ok(val) => {
+                if let Ok(logs) = serde_json::from_value::<Vec<CiFailureLog>>(val) {
+                    failure_logs = logs;
+                }
+            }
+            Err(claudette::plugin_runtime::PluginError::OperationNotSupported(_)) => {
+                eprintln!(
+                    "[scm] CI auto-fix: plugin '{provider}' does not support ci_failure_logs — degrading to check names only"
+                );
+            }
+            Err(e) => {
+                eprintln!("[scm] CI auto-fix: failed to fetch failure logs: {e}");
+            }
+        }
+    }
+
+    let branch = detail
+        .ci_checks
+        .first()
+        .and_then(|_| {
+            // Re-derive branch from DB for the template
+            Database::open(&app_state.db_path).ok().and_then(|db| {
+                db.list_workspaces()
+                    .ok()?
+                    .into_iter()
+                    .find(|w| w.id == workspace_id)
+                    .map(|w| w.branch_name)
+            })
+        })
+        .unwrap_or_default();
+
+    let prompt = format_ci_auto_fix_prompt(
+        prompt_template,
+        &detail.ci_checks,
+        &failure_logs,
+        &branch,
+        detail.pull_request.as_ref(),
+    );
+
+    let session_id = match Database::open(&app_state.db_path) {
+        Ok(db) => match db.create_chat_session(workspace_id) {
+            Ok(session) => session.id,
+            Err(e) => {
+                eprintln!("[scm] CI auto-fix: failed to create session: {e}");
+                return;
+            }
+        },
+        Err(e) => {
+            eprintln!("[scm] CI auto-fix: failed to open DB: {e}");
+            return;
+        }
+    };
+
+    let payload = serde_json::json!({
+        "workspace_id": workspace_id,
+        "session_id": session_id,
+        "prompt": prompt,
+        "failed_checks": detail.ci_checks.iter()
+            .filter(|c| c.status == CiCheckStatus::Failure)
+            .collect::<Vec<_>>(),
+        "model": model,
+    });
+
+    let _ = handle.emit("ci-auto-fix-session-created", payload);
+    eprintln!(
+        "[scm] CI auto-fix: created session {session_id} for workspace {workspace_id} ({} failed checks)",
+        failed_check_names.len()
+    );
 }
 
 /// Auto-archive a workspace when its PR is merged.
@@ -1652,5 +1966,104 @@ mod tests {
             Duration::from_secs(30 * 60),
             "selection of an unrelated workspace must not promote ws1 to hot",
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use claudette::scm::types::{CiCheck, CiCheckStatus, CiFailureLog, PrState, PullRequest};
+
+    fn make_check(name: &str, status: CiCheckStatus) -> CiCheck {
+        CiCheck {
+            name: name.to_string(),
+            status,
+            url: Some(format!("https://ci.example.com/{name}")),
+            started_at: None,
+        }
+    }
+
+    #[test]
+    fn format_failed_checks_filters_only_failures() {
+        let checks = vec![
+            make_check("build", CiCheckStatus::Failure),
+            make_check("lint", CiCheckStatus::Success),
+            make_check("test", CiCheckStatus::Failure),
+        ];
+        let result = format_failed_checks(&checks);
+        assert!(result.contains("**build**: failure"));
+        assert!(result.contains("**test**: failure"));
+        assert!(!result.contains("lint"));
+    }
+
+    #[test]
+    fn format_all_checks_includes_all() {
+        let checks = vec![
+            make_check("build", CiCheckStatus::Failure),
+            make_check("lint", CiCheckStatus::Success),
+        ];
+        let result = format_all_checks(&checks);
+        assert!(result.contains("**build**: failure"));
+        assert!(result.contains("**lint**: success"));
+    }
+
+    #[test]
+    fn format_failure_logs_empty_shows_degraded_message() {
+        let result = format_failure_logs(&[]);
+        assert!(result.contains("not supported"));
+    }
+
+    #[test]
+    fn format_failure_logs_renders_code_blocks() {
+        let logs = vec![CiFailureLog {
+            check_name: "build".to_string(),
+            log: "error: compilation failed".to_string(),
+            url: None,
+        }];
+        let result = format_failure_logs(&logs);
+        assert!(result.contains("### build"));
+        assert!(result.contains("error: compilation failed"));
+        assert!(result.contains("```"));
+    }
+
+    #[test]
+    fn format_ci_auto_fix_prompt_substitutes_all_variables() {
+        let checks = vec![
+            make_check("build", CiCheckStatus::Failure),
+            make_check("test", CiCheckStatus::Success),
+        ];
+        let logs = vec![CiFailureLog {
+            check_name: "build".to_string(),
+            log: "FAIL".to_string(),
+            url: None,
+        }];
+        let pr = PullRequest {
+            number: 42,
+            title: "Fix stuff".to_string(),
+            state: PrState::Open,
+            url: "https://github.com/org/repo/pull/42".to_string(),
+            author: "user".to_string(),
+            branch: "fix-branch".to_string(),
+            base: "main".to_string(),
+            draft: false,
+            ci_status: Some(CiOverallStatus::Failure),
+        };
+        let template = "Branch: {{branch}}, PR: {{pr_title}} {{pr_url}} #{{pr_number}}\n{{failed_checks}}\n{{failure_logs}}\n{{all_checks}}";
+        let result = format_ci_auto_fix_prompt(template, &checks, &logs, "fix-branch", Some(&pr));
+        assert!(result.contains("Branch: fix-branch"));
+        assert!(result.contains("PR: Fix stuff"));
+        assert!(result.contains("https://github.com/org/repo/pull/42"));
+        assert!(result.contains("#42"));
+        assert!(result.contains("**build**: failure"));
+        assert!(result.contains("### build"));
+        assert!(result.contains("**test**: success"));
+    }
+
+    #[test]
+    fn format_ci_auto_fix_prompt_no_pr() {
+        let checks = vec![make_check("build", CiCheckStatus::Failure)];
+        let template = "PR: {{pr_title}} ({{pr_url}})";
+        let result = format_ci_auto_fix_prompt(template, &checks, &[], "main", None);
+        assert_eq!(result, "PR:  ()");
     }
 }

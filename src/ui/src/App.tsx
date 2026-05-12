@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { getVersion } from "@tauri-apps/api/app";
 import { useAppStore } from "./stores/useAppStore";
-import { loadInitialData, getAppSetting, setAppSetting, getHostEnvFlags, listRemoteConnections, listDiscoveredServers, getLocalServerStatus, detectInstalledApps, listSystemFonts, deleteTerminalTab, listAppSettingsWithPrefix, listAgentBackends, refreshAgentBackendModels, bootOk } from "./services/tauri";
+import { loadInitialData, getAppSetting, setAppSetting, getHostEnvFlags, listRemoteConnections, listDiscoveredServers, getLocalServerStatus, detectInstalledApps, listSystemFonts, deleteTerminalTab, listAppSettingsWithPrefix, listAgentBackends, refreshAgentBackendModels, bootOk, getChatSession, sendChatMessage } from "./services/tauri";
 import { applyTheme, applyUserFonts, loadAllThemes, findTheme, cacheThemePreference, getThemeDataAttr } from "./utils/theme";
 import { DEFAULT_THEME_ID, DEFAULT_LIGHT_THEME_ID } from "./styles/themes";
 import type { ThemeDefinition } from "./types/theme";
@@ -664,6 +664,27 @@ function App() {
       },
     );
 
+    // Listen for CI auto-fix session creation events.
+    const unlistenCiAutoFix = listen<{ workspace_id: string; session_id: string; prompt: string; failed_checks: import("./types/plugin").CiCheck[]; model: string | null }>("ci-auto-fix-session-created", async (event) => {
+      const { workspace_id, session_id, prompt, model } = event.payload;
+      const store = useAppStore.getState();
+      try {
+        const session = await getChatSession(session_id);
+        store.addChatSession(session);
+        store.selectSession(workspace_id, session_id);
+        await sendChatMessage(
+          session_id,
+          prompt,
+          undefined,
+          undefined,
+          model ?? undefined,
+        );
+        store.addToast("CI failed — auto-fix session created");
+      } catch (e) {
+        console.error("CI auto-fix session creation failed:", e);
+      }
+    });
+
     // Listen for workspace auto-archived events (e.g. PR merged with archive_on_merge).
     // When `deleted` is true the workspace record was fully removed; otherwise it moved to Archived.
     // CLI- and remote-driven workspace mutations emit this event so the
@@ -839,6 +860,7 @@ function App() {
       unlistenWorkspacesChanged.then((fn) => fn());
       unlistenChatTurnSettings.then((fn) => fn());
       unlistenChatTurnStarted.then((fn) => fn());
+      unlistenCiAutoFix.then((fn) => fn());
       unlistenMissingCli.then((fn) => fn());
       unlistenMissingWorktree.then((fn) => fn());
     };
