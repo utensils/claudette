@@ -1,40 +1,65 @@
-import { KeyRound } from "lucide-react";
-import { useTranslation } from "react-i18next";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 import { useAppStore } from "../../stores/useAppStore";
-import { AUTH_SETTINGS_FOCUS, cleanClaudeAuthError } from "./claudeAuth";
-import styles from "./ChatAuthFailureCallout.module.css";
+import { ClaudeCodeAuthPanelView } from "./ClaudeCodeAuthPanel";
+import {
+  useClaudeAuthLogin,
+  useClaudeAuthRecovery,
+} from "./claudeAuth";
 
 export function ChatAuthFailureCallout({
   error,
   messageId,
+  autoStartKey = null,
 }: {
-  error: string;
-  messageId: string;
+  error?: string | null;
+  messageId?: string | null;
+  autoStartKey?: number | null;
 }) {
-  const { t } = useTranslation("settings");
-  const openSettings = useAppStore((s) => s.openSettings);
   const setClaudeAuthFailure = useAppStore((s) => s.setClaudeAuthFailure);
+  const { validateAuthLoginSuccess } = useClaudeAuthRecovery();
+  const controller = useClaudeAuthLogin({
+    onSuccess: async () => {
+      await validateAuthLoginSuccess();
+    },
+  });
+  const {
+    authState,
+    startAuthLogin: startControllerAuthLogin,
+    cancelAuthLogin,
+    submitAuthCode,
+  } = controller;
+  const startedKeyRef = useRef<number | null>(null);
+
+  const startAuthLogin = useCallback(async () => {
+    if (messageId && error) {
+      setClaudeAuthFailure({ messageId, error });
+    }
+    await startControllerAuthLogin();
+  }, [error, messageId, setClaudeAuthFailure, startControllerAuthLogin]);
+
+  useEffect(() => {
+    if (autoStartKey === null || startedKeyRef.current === autoStartKey) {
+      return;
+    }
+    startedKeyRef.current = autoStartKey;
+    void startAuthLogin();
+  }, [autoStartKey, startAuthLogin]);
+
+  const chatController = useMemo(
+    () => ({
+      authState,
+      cancelAuthLogin,
+      submitAuthCode,
+      startAuthLogin,
+    }),
+    [authState, cancelAuthLogin, startAuthLogin, submitAuthCode],
+  );
 
   return (
-    <div className={styles.callout}>
-      <div className={styles.icon} aria-hidden="true">
-        <KeyRound size={14} />
-      </div>
-      <div className={styles.body}>
-        <div className={styles.title}>{t("auth_chat_failure_title")}</div>
-        <div className={styles.description}>{t("auth_chat_failure_desc")}</div>
-        <div className={styles.error}>{cleanClaudeAuthError(error)}</div>
-        <button
-          type="button"
-          className={styles.action}
-          onClick={() => {
-            setClaudeAuthFailure({ messageId, error });
-            openSettings("general", AUTH_SETTINGS_FOCUS);
-          }}
-        >
-          {t("auth_open_settings")}
-        </button>
-      </div>
-    </div>
+    <ClaudeCodeAuthPanelView
+      controller={chatController}
+      error={error}
+      showDescription={false}
+    />
   );
 }

@@ -4,8 +4,8 @@ import { useTranslation } from "react-i18next";
 import {
   AUTH_SETTINGS_FOCUS,
   cleanClaudeAuthError,
-  isClaudeAuthError,
   useClaudeAuthLogin,
+  useClaudeAuthRecovery,
 } from "./claudeAuth";
 import { ClaudeAuthCodeForm } from "./ClaudeAuthCodeForm";
 import { getClaudeAuthStatus, type ClaudeAuthStatus } from "../../services/tauri";
@@ -22,48 +22,19 @@ export function ClaudeCodeAuthSetting() {
   const settingsFocus = useAppStore((s) => s.settingsFocus);
   const clearSettingsFocus = useAppStore((s) => s.clearSettingsFocus);
   const claudeAuthFailure = useAppStore((s) => s.claudeAuthFailure);
-  const setClaudeAuthFailure = useAppStore((s) => s.setClaudeAuthFailure);
-  const setResolvedClaudeAuthFailureMessageId = useAppStore(
-    (s) => s.setResolvedClaudeAuthFailureMessageId,
-  );
-  const claudeAuthFailureMessageId = claudeAuthFailure?.messageId ?? null;
+  const { applyAuthStatusRecovery } = useClaudeAuthRecovery();
   const rowRef = useRef<HTMLDivElement>(null);
   const [isFocused, setIsFocused] = useState(false);
   const [statusCheck, setStatusCheck] = useState<AuthStatusCheck>({
     status: "checking",
   });
 
-  const markAuthRecovered = useCallback(() => {
-    if (claudeAuthFailureMessageId) {
-      setResolvedClaudeAuthFailureMessageId(claudeAuthFailureMessageId);
-    }
-    setClaudeAuthFailure(null);
-  }, [
-    claudeAuthFailureMessageId,
-    setClaudeAuthFailure,
-    setResolvedClaudeAuthFailureMessageId,
-  ]);
-
   const refreshStatus = useCallback(
     async (validate = false): Promise<ClaudeAuthStatus | null> => {
       setStatusCheck({ status: "checking" });
       try {
         const value = await getClaudeAuthStatus(validate);
-        if (value.state === "signed_in" && value.verified) {
-          markAuthRecovered();
-        } else if (
-          validate &&
-          value.message &&
-          (value.state === "signed_out" || isClaudeAuthError(value.message))
-        ) {
-          if (claudeAuthFailureMessageId) {
-            setResolvedClaudeAuthFailureMessageId(null);
-          }
-          setClaudeAuthFailure({
-            messageId: claudeAuthFailureMessageId,
-            error: value.message,
-          });
-        }
+        applyAuthStatusRecovery(value, validate);
         setStatusCheck({ status: "ready", value });
         return value;
       } catch (e) {
@@ -71,12 +42,7 @@ export function ClaudeCodeAuthSetting() {
         return null;
       }
     },
-    [
-      claudeAuthFailureMessageId,
-      markAuthRecovered,
-      setClaudeAuthFailure,
-      setResolvedClaudeAuthFailureMessageId,
-    ],
+    [applyAuthStatusRecovery],
   );
 
   const { authState, startAuthLogin, cancelAuthLogin, submitAuthCode } =

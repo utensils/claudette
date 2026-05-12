@@ -1,6 +1,7 @@
 import { KeyRound, LogIn, RefreshCw, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import {
+  type ClaudeAuthLoginController,
   cleanClaudeAuthError,
   useClaudeAuthLogin,
 } from "./claudeAuth";
@@ -18,12 +19,35 @@ export function ClaudeCodeAuthPanel({
   onRetry?: () => void | Promise<void>;
   showDescription?: boolean;
 }) {
+  const controller = useClaudeAuthLogin({
+    onSuccess: onAuthenticated,
+  });
+
+  return (
+    <ClaudeCodeAuthPanelView
+      controller={controller}
+      error={error}
+      onRetry={onRetry}
+      showDescription={showDescription}
+    />
+  );
+}
+
+export function ClaudeCodeAuthPanelView({
+  controller,
+  error,
+  onRetry,
+  showDescription = true,
+}: {
+  controller: ClaudeAuthLoginController;
+  error?: string | null;
+  onRetry?: () => void | Promise<void>;
+  showDescription?: boolean;
+}) {
   const { t } = useTranslation("settings");
   const { t: tCommon } = useTranslation("common");
   const { authState, startAuthLogin, cancelAuthLogin, submitAuthCode } =
-    useClaudeAuthLogin({
-      onSuccess: onAuthenticated,
-    });
+    controller;
   const displayError = error ? cleanClaudeAuthError(error) : null;
 
   return (

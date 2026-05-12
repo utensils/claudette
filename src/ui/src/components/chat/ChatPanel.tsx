@@ -32,7 +32,6 @@ import {
   readPlanFile,
   loadDiffFiles,
   forkWorkspaceAtCheckpoint,
-  claudeAuthLogin,
 } from "../../services/tauri";
 import { applySelectedModel } from "./applySelectedModel";
 import { findLatestPlanFilePath } from "./planFilePath";
@@ -78,6 +77,7 @@ import { ScrollContext } from "./ScrollContext";
 import { StreamingThinkingBlock } from "./StreamingThinkingBlock";
 import { StreamingMessage } from "./StreamingMessage";
 import { MessagesWithTurns } from "./MessagesWithTurns";
+import { ChatAuthFailureCallout } from "../auth/ChatAuthFailureCallout";
 import { CliInvocationBanner } from "./CliInvocationBanner";
 import { CurrentTurnTaskProgress } from "./CurrentTurnTaskProgress";
 import { ChatInputArea } from "./ChatInputArea";
@@ -566,6 +566,12 @@ export function ChatPanel() {
   oldestMessageIdRef.current = oldestMessageId;
   const activeSessionIdRef = useRef<string | null>(null);
   activeSessionIdRef.current = activeSessionId;
+  const [showChatAuthLoginPanel, setShowChatAuthLoginPanel] = useState(false);
+  const [chatAuthLoginRequestId, setChatAuthLoginRequestId] = useState(0);
+  const startChatClaudeAuthLogin = useCallback(async () => {
+    setShowChatAuthLoginPanel(true);
+    setChatAuthLoginRequestId((value) => value + 1);
+  }, []);
 
   useEffect(() => {
     const container = messagesContainerRef.current;
@@ -1162,7 +1168,7 @@ export function ChatPanel() {
             openSettings,
             appVersion,
             addLocalMessage,
-            startClaudeAuthLogin: claudeAuthLogin,
+            startClaudeAuthLogin: startChatClaudeAuthLogin,
             openUsageSettingsExternal: () => {
               void openUsageSettings().catch((err) =>
                 console.error("Failed to open usage settings:", err),
@@ -1446,6 +1452,12 @@ export function ChatPanel() {
                       />
                     ) : null
                   }
+                />
+              )}
+
+              {showChatAuthLoginPanel && (
+                <ChatAuthFailureCallout
+                  autoStartKey={chatAuthLoginRequestId}
                 />
               )}
 
