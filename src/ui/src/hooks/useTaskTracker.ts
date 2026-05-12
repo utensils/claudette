@@ -23,12 +23,34 @@ export interface TaskTrackerResult {
   totalCount: number;
 }
 
+export interface TaskRun extends TaskTrackerResult {
+  id: string;
+  sequence: number;
+  startedAt?: string;
+  updatedAt?: string;
+  turnId?: string;
+}
+
+export interface TaskTrackerWithHistory {
+  current: TaskTrackerResult;
+  history: TaskRun[];
+}
+
+export interface TaskActivityTurn {
+  id: string;
+  activities: ToolActivity[];
+}
+
 const EMPTY_ACTIVITIES: ToolActivity[] = [];
 const EMPTY_TURNS: CompletedTurn[] = [];
 const EMPTY_RESULT: TaskTrackerResult = {
   tasks: [],
   completedCount: 0,
   totalCount: 0,
+};
+const EMPTY_WITH_HISTORY: TaskTrackerWithHistory = {
+  current: EMPTY_RESULT,
+  history: [],
 };
 
 /** Normalise status strings from Claude's TaskCreate/TaskUpdate/TodoWrite inputs. */
@@ -124,25 +146,34 @@ export function processActivities(
       case "TodoWrite": {
         const todos = input.todos;
         if (!Array.isArray(todos)) break;
-        // TodoWrite is a full replacement — clear all previous todo items
         todoMap.clear();
-        for (const item of todos) {
-          if (!item || typeof item !== "object") continue;
-          const id = String(
-            (item as Record<string, unknown>).id ?? `_d${nextSyntheticId.value++}`
-          );
-          todoMap.set(id, {
-            id,
-            description: String((item as Record<string, unknown>).content ?? ""),
-            status: normalizeStatus((item as Record<string, unknown>).status as string | undefined),
-            priority: normalizePriority((item as Record<string, unknown>).priority as string | undefined),
-            source: "todo",
-          });
+        for (const task of parseTodoTasks(todos, nextSyntheticId)) {
+          todoMap.set(task.id, task);
         }
         break;
       }
     }
   }
+}
+
+function parseTodoTasks(
+  todos: unknown[],
+  nextSyntheticId: { value: number },
+): TrackedTask[] {
+  const tasks: TrackedTask[] = [];
+  for (const item of todos) {
+    if (!item || typeof item !== "object") continue;
+    const raw = item as Record<string, unknown>;
+    const id = String(raw.id ?? `_d${nextSyntheticId.value++}`);
+    tasks.push({
+      id,
+      description: String(raw.content ?? ""),
+      status: normalizeStatus(raw.status as string | undefined),
+      priority: normalizePriority(raw.priority as string | undefined),
+      source: "todo",
+    });
+  }
+  return tasks;
 }
 
 function normalizePriority(
@@ -154,6 +185,148 @@ function normalizePriority(
   if (s === "low" || s === "l") return "low";
   if (s === "medium" || s === "m" || s === "med") return "medium";
   return undefined;
+}
+
+function taskResult(tasks: TrackedTask[]): TaskTrackerResult {
+  if (tasks.length === 0) return EMPTY_RESULT;
+  return {
+    tasks,
+    completedCount: tasks.filter((t) => t.status === "completed").length,
+    totalCount: tasks.length,
+  };
+}
+
+interface TodoRunDraft {
+  id: string;
+  sequence: number;
+  tasks: TrackedTask[];
+  startedAt?: string;
+  updatedAt?: string;
+  turnId?: string;
+}
+
+function normalizeTaskContent(value: string): string {
+  return value.trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+function taskContentSet(tasks: TrackedTask[]): Set<string> {
+  return new Set(
+    tasks
+      .map((task) => normalizeTaskContent(task.description))
+      .filter(Boolean),
+  );
+}
+
+function isReplacedTodoRun(previous: TrackedTask[], next: TrackedTask[]): boolean {
+  if (previous.length === 0 || next.length === 0) return false;
+
+  const previousSet = taskContentSet(previous);
+  const nextSet = taskContentSet(next);
+  if (previousSet.size === 0 || nextSet.size === 0) return false;
+
+  let intersection = 0;
+  for (const item of previousSet) {
+    if (nextSet.has(item)) intersection++;
+  }
+
+  if (Math.min(previousSet.size, nextSet.size) <= 1) {
+    return intersection === 0;
+  }
+
+  const union = new Set([...previousSet, ...nextSet]).size;
+  return union > 0 && intersection / union < 0.25;
+}
+
+function finalizeTodoRun(run: TodoRunDraft): TaskRun {
+  const result = taskResult(run.tasks);
+  return {
+    ...result,
+    id: run.id,
+    sequence: run.sequence,
+    startedAt: run.startedAt,
+    updatedAt: run.updatedAt,
+    turnId: run.turnId,
+  };
+}
+
+function deriveTaskStateFromEntries(
+  entries: { activities: ToolActivity[]; turnId?: string }[],
+): TaskTrackerWithHistory {
+  const taskMap = new Map<string, TrackedTask>();
+  const todoMap = new Map<string, TrackedTask>();
+  const nextSyntheticId = { value: 1 };
+  const history: TaskRun[] = [];
+  let todoRun: TodoRunDraft | null = null;
+  let runSequence = 1;
+
+  for (const entry of entries) {
+    for (const act of entry.activities) {
+      if (act.toolName !== "TodoWrite") {
+        processActivities([act], taskMap, todoMap, nextSyntheticId);
+        continue;
+      }
+
+      let input: Record<string, unknown>;
+      try {
+        input = JSON.parse(act.inputJson);
+      } catch {
+        continue;
+      }
+      const todos = input.todos;
+      if (!Array.isArray(todos)) continue;
+
+      const tasks = parseTodoTasks(todos, nextSyntheticId);
+      todoMap.clear();
+      for (const task of tasks) {
+        todoMap.set(task.id, task);
+      }
+
+      if (tasks.length === 0) {
+        if (todoRun) {
+          history.push(finalizeTodoRun(todoRun));
+          todoRun = null;
+        }
+        continue;
+      }
+
+      if (!todoRun) {
+        todoRun = {
+          id: `todo-run-${runSequence}`,
+          sequence: runSequence++,
+          tasks,
+          startedAt: act.startedAt,
+          updatedAt: act.startedAt,
+          turnId: entry.turnId,
+        };
+        continue;
+      }
+
+      if (isReplacedTodoRun(todoRun.tasks, tasks)) {
+        history.push(finalizeTodoRun(todoRun));
+        todoRun = {
+          id: `todo-run-${runSequence}`,
+          sequence: runSequence++,
+          tasks,
+          startedAt: act.startedAt,
+          updatedAt: act.startedAt,
+          turnId: entry.turnId,
+        };
+      } else {
+        todoRun = {
+          ...todoRun,
+          tasks,
+          updatedAt: act.startedAt ?? todoRun.updatedAt,
+          turnId: entry.turnId,
+        };
+      }
+    }
+  }
+
+  const tasks = [...taskMap.values(), ...todoMap.values()];
+  return {
+    current: taskResult(tasks),
+    history,
+  };
 }
 
 /**
@@ -174,10 +347,24 @@ export function deriveTasks(
   processActivities(toolActivities, taskMap, todoMap, nextSyntheticId);
 
   const tasks = [...taskMap.values(), ...todoMap.values()];
-  if (tasks.length === 0) return EMPTY_RESULT;
+  return taskResult(tasks);
+}
 
-  const completedCount = tasks.filter((t) => t.status === "completed").length;
-  return { tasks, completedCount, totalCount: tasks.length };
+export function deriveTaskState(
+  completedTurns: TaskActivityTurn[],
+  toolActivities: ToolActivity[],
+): TaskTrackerWithHistory {
+  if (completedTurns.length === 0 && toolActivities.length === 0) {
+    return EMPTY_WITH_HISTORY;
+  }
+
+  return deriveTaskStateFromEntries([
+    ...completedTurns.map((turn) => ({
+      activities: turn.activities,
+      turnId: turn.id,
+    })),
+    { activities: toolActivities },
+  ]);
 }
 
 const TASK_TOOL_NAMES = new Set([
@@ -203,6 +390,12 @@ export function hasTaskActivity(activities: ToolActivity[]): boolean {
  * TaskCreate, TaskUpdate, TaskStop, and TodoWrite tool calls.
  */
 export function useTaskTracker(sessionId: string | null): TaskTrackerResult {
+  return useTaskTrackerWithHistory(sessionId).current;
+}
+
+export function useTaskTrackerWithHistory(
+  sessionId: string | null,
+): TaskTrackerWithHistory {
   const completedTurns = useAppStore(
     (s) => (sessionId ? s.completedTurns[sessionId] : null) ?? EMPTY_TURNS
   );
@@ -211,7 +404,7 @@ export function useTaskTracker(sessionId: string | null): TaskTrackerResult {
   );
 
   return useMemo(
-    () => (sessionId ? deriveTasks(completedTurns, toolActivities) : EMPTY_RESULT),
+    () => (sessionId ? deriveTaskState(completedTurns, toolActivities) : EMPTY_WITH_HISTORY),
     [sessionId, completedTurns, toolActivities]
   );
 }

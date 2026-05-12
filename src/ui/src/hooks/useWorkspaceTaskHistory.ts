@@ -1,0 +1,256 @@
+import { useEffect, useMemo, useState } from "react";
+import { useAppStore } from "../stores/useAppStore";
+import type { AgentToolCall, ToolActivity } from "../stores/useAppStore";
+import {
+  loadCompletedTurns,
+  listChatSessions,
+  sendRemoteCommand,
+} from "../services/tauri";
+import type { ChatSession } from "../types/chat";
+import type { CompletedTurnData } from "../types/checkpoint";
+import {
+  deriveTaskState,
+  useTaskTrackerWithHistory,
+  type TaskActivityTurn,
+  type TaskRun,
+  type TaskTrackerResult,
+} from "./useTaskTracker";
+
+export interface SessionTaskHistory {
+  session: ChatSession;
+  runs: TaskRun[];
+}
+
+export interface WorkspaceTaskHistoryResult {
+  current: TaskTrackerResult;
+  sessions: SessionTaskHistory[];
+  historyRunCount: number;
+  totalBadgeCount: number;
+  loading: boolean;
+}
+
+const EMPTY_CURRENT: TaskTrackerResult = {
+  tasks: [],
+  completedCount: 0,
+  totalCount: 0,
+};
+
+const EMPTY_RESULT: WorkspaceTaskHistoryResult = {
+  current: EMPTY_CURRENT,
+  sessions: [],
+  historyRunCount: 0,
+  totalBadgeCount: 0,
+  loading: false,
+};
+const EMPTY_SESSIONS: ChatSession[] = [];
+
+function parseAgentToolCalls(value: string): AgentToolCall[] | undefined {
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? (parsed as AgentToolCall[]) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function turnFromData(data: CompletedTurnData): TaskActivityTurn {
+  return {
+    id: data.checkpoint_id,
+    activities: data.activities.map<ToolActivity>((activity) => ({
+      toolUseId: activity.tool_use_id,
+      toolName: activity.tool_name,
+      inputJson: activity.input_json,
+      resultText: activity.result_text,
+      collapsed: true,
+      summary: activity.summary,
+      assistantMessageOrdinal: activity.assistant_message_ordinal,
+      agentTaskId: activity.agent_task_id,
+      agentDescription: activity.agent_description,
+      agentLastToolName: activity.agent_last_tool_name,
+      agentToolUseCount: activity.agent_tool_use_count,
+      agentStatus: activity.agent_status,
+      agentToolCalls: parseAgentToolCalls(activity.agent_tool_calls_json),
+    })),
+  };
+}
+
+function mergeSessions(
+  fetched: ChatSession[],
+  storeSessions: ChatSession[],
+): ChatSession[] {
+  const byId = new Map<string, ChatSession>();
+  for (const session of fetched) byId.set(session.id, session);
+  for (const session of storeSessions) byId.set(session.id, session);
+  return [...byId.values()].sort((a, b) => {
+    if (a.status !== b.status) return a.status === "Active" ? -1 : 1;
+    return a.sort_order - b.sort_order;
+  });
+}
+
+async function loadSessionTurns(
+  sessionId: string,
+  remoteConnectionId: string | null,
+): Promise<TaskActivityTurn[]> {
+  const data = remoteConnectionId
+    ? await sendRemoteCommand(remoteConnectionId, "load_completed_turns", {
+        chat_session_id: sessionId,
+      })
+    : await loadCompletedTurns(sessionId);
+
+  if (!Array.isArray(data)) {
+    throw new Error("Remote completed turns response was not an array");
+  }
+
+  return data.map(turnFromData);
+}
+
+async function loadWorkspaceSessions(
+  workspaceId: string,
+  remoteConnectionId: string | null,
+): Promise<ChatSession[]> {
+  const data = remoteConnectionId
+    ? await sendRemoteCommand(remoteConnectionId, "list_chat_sessions", {
+        workspace_id: workspaceId,
+        include_archived: true,
+      })
+    : await listChatSessions(workspaceId, true);
+
+  if (!Array.isArray(data)) {
+    throw new Error("Remote chat sessions response was not an array");
+  }
+
+  return data;
+}
+
+export function useWorkspaceTaskHistory(
+  workspaceId: string | null,
+  activeSessionId: string | null,
+  historyEnabled = true,
+): WorkspaceTaskHistoryResult {
+  const workspace = useAppStore((s) =>
+    workspaceId ? s.workspaces.find((ws) => ws.id === workspaceId) : null,
+  );
+  const storeSessions = useAppStore((s) =>
+    workspaceId
+      ? (s.sessionsByWorkspace[workspaceId] ?? EMPTY_SESSIONS)
+      : EMPTY_SESSIONS,
+  );
+  const activeState = useTaskTrackerWithHistory(activeSessionId);
+  const [fetchedSessions, setFetchedSessions] = useState<ChatSession[]>([]);
+  const [turnsBySession, setTurnsBySession] = useState<
+    Record<string, TaskActivityTurn[]>
+  >({});
+  const [loadingSessions, setLoadingSessions] = useState(false);
+  const [loadingTurns, setLoadingTurns] = useState(false);
+
+  const remoteConnectionId = workspace?.remote_connection_id ?? null;
+
+  useEffect(() => {
+    let cancelled = false;
+    setFetchedSessions([]);
+    setTurnsBySession({});
+
+    if (!workspaceId || !historyEnabled) {
+      setLoadingSessions(false);
+      return;
+    }
+
+    setLoadingSessions(true);
+
+    loadWorkspaceSessions(workspaceId, remoteConnectionId)
+      .then((sessions) => {
+        if (!cancelled) setFetchedSessions(sessions);
+      })
+      .catch((err) => {
+        console.error("Failed to load task history sessions:", err);
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingSessions(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [workspaceId, remoteConnectionId, historyEnabled]);
+
+  const sessions = useMemo(
+    () => mergeSessions(fetchedSessions, storeSessions),
+    [fetchedSessions, storeSessions],
+  );
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!workspaceId || !historyEnabled || sessions.length === 0) {
+      setTurnsBySession({});
+      setLoadingTurns(false);
+      return;
+    }
+
+    const sessionsToLoad = sessions.filter(
+      (session) => session.id !== activeSessionId,
+    );
+    if (sessionsToLoad.length === 0) {
+      setTurnsBySession({});
+      setLoadingTurns(false);
+      return;
+    }
+
+    setLoadingTurns(true);
+    Promise.all(
+      sessionsToLoad.map(async (session) => {
+        try {
+          return [
+            session.id,
+            await loadSessionTurns(session.id, remoteConnectionId),
+          ] as const;
+        } catch (err) {
+          console.error("Failed to load task history turns:", err);
+          return null;
+        }
+      }),
+    )
+      .then((entries) => {
+        if (cancelled) return;
+        setTurnsBySession((prev) => {
+          const next = { ...prev };
+          for (const entry of entries) {
+            if (entry) next[entry[0]] = entry[1];
+          }
+          return next;
+        });
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingTurns(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [workspaceId, sessions, activeSessionId, remoteConnectionId, historyEnabled]);
+
+  if (!workspaceId) return EMPTY_RESULT;
+
+  const histories: SessionTaskHistory[] = [];
+  for (const session of sessions) {
+    const state =
+      session.id === activeSessionId
+        ? activeState
+        : deriveTaskState(turnsBySession[session.id] ?? [], []);
+    if (state.history.length > 0) {
+      histories.push({ session, runs: state.history });
+    }
+  }
+
+  const historyRunCount = histories.reduce(
+    (sum, session) => sum + session.runs.length,
+    0,
+  );
+
+  return {
+    current: activeState.current,
+    sessions: histories,
+    historyRunCount,
+    totalBadgeCount: activeState.current.totalCount + historyRunCount,
+    loading: loadingSessions || loadingTurns,
+  };
+}

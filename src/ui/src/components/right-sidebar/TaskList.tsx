@@ -1,6 +1,11 @@
-import { memo } from "react";
-import { useTaskTracker } from "../../hooks/useTaskTracker";
-import type { TrackedTask, TaskStatus } from "../../hooks/useTaskTracker";
+import { memo, useState } from "react";
+import { ChevronRight } from "lucide-react";
+import type {
+  TaskRun,
+  TaskStatus,
+  TrackedTask,
+} from "../../hooks/useTaskTracker";
+import type { WorkspaceTaskHistoryResult } from "../../hooks/useWorkspaceTaskHistory";
 import styles from "./TaskList.module.css";
 
 function statusIcon(status: TaskStatus): string {
@@ -66,26 +71,121 @@ function TaskItem({ task }: { task: TrackedTask }) {
   );
 }
 
-export const TaskList = memo(function TaskList({
-  sessionId,
-}: {
-  sessionId: string | null;
-}) {
-  const { tasks } = useTaskTracker(sessionId);
+function TaskRows({ tasks }: { tasks: TrackedTask[] }) {
+  return (
+    <>
+      {tasks.map((task) => (
+        <TaskItem key={`${task.source}-${task.id}-${task.description}`} task={task} />
+      ))}
+    </>
+  );
+}
 
-  if (tasks.length === 0) {
+function RunSummary({
+  run,
+  expanded,
+  onToggle,
+}: {
+  run: TaskRun;
+  expanded: boolean;
+  onToggle: () => void;
+}) {
+  return (
+    <div className={styles.run}>
+      <button
+        type="button"
+        className={styles.runHeader}
+        onClick={onToggle}
+        aria-expanded={expanded}
+      >
+        <ChevronRight
+          size={14}
+          className={`${styles.chevron} ${expanded ? styles.chevronOpen : ""}`}
+          aria-hidden="true"
+        />
+        <span className={styles.runTitle}>Run {run.sequence}</span>
+        <span className={styles.runMeta}>
+          {run.completedCount}/{run.totalCount}
+        </span>
+      </button>
+      {expanded && (
+        <div className={styles.runTasks}>
+          <TaskRows tasks={run.tasks} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+export const TaskList = memo(function TaskList({
+  taskHistory,
+}: {
+  taskHistory: WorkspaceTaskHistoryResult;
+}) {
+  const [expandedRuns, setExpandedRuns] = useState<Record<string, boolean>>({});
+  const { current, sessions, loading } = taskHistory;
+  const hasCurrent = current.tasks.length > 0;
+  const hasHistory = sessions.length > 0;
+
+  if (!hasCurrent && !hasHistory) {
     return (
       <div className={styles.list}>
-        <div className={styles.empty}>No tasks</div>
+        <div className={styles.empty}>{loading ? "Loading tasks..." : "No tasks"}</div>
       </div>
     );
   }
 
   return (
     <div className={styles.list}>
-      {tasks.map((task) => (
-        <TaskItem key={`${task.source}-${task.id}`} task={task} />
-      ))}
+      {hasCurrent && (
+        <section className={styles.section} aria-label="Current tasks">
+          <div className={styles.sectionHeader}>
+            <span>Current</span>
+            <span className={styles.sectionMeta}>
+              {current.completedCount}/{current.totalCount}
+            </span>
+          </div>
+          <TaskRows tasks={current.tasks} />
+        </section>
+      )}
+
+      {hasHistory && (
+        <section className={styles.section} aria-label="Task history">
+          <div className={styles.sectionHeader}>
+            <span>History</span>
+            <span className={styles.sectionMeta}>
+              {taskHistory.historyRunCount}
+            </span>
+          </div>
+          {sessions.map(({ session, runs }) => (
+            <div key={session.id} className={styles.sessionGroup}>
+              <div className={styles.sessionHeader}>
+                <span className={styles.sessionName}>{session.name}</span>
+                {session.status === "Archived" && (
+                  <span className={styles.archivedBadge}>Archived</span>
+                )}
+              </div>
+              {runs.map((run) => {
+                const key = `${session.id}:${run.id}`;
+                const expanded = expandedRuns[key] === true;
+                return (
+                  <RunSummary
+                    key={key}
+                    run={run}
+                    expanded={expanded}
+                    onToggle={() =>
+                      setExpandedRuns((prev) => ({
+                        ...prev,
+                        [key]: !(prev[key] === true),
+                      }))
+                    }
+                  />
+                );
+              })}
+            </div>
+          ))}
+        </section>
+      )}
     </div>
   );
 });

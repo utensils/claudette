@@ -6,7 +6,7 @@ import {
 } from "../../utils/pollingIntervals";
 import { ChevronRight, Undo2, Trash2, Plus, Minus, FilePenLine } from "lucide-react";
 import { useAppStore, selectActiveSessionId } from "../../stores/useAppStore";
-import { useTaskTracker } from "../../hooks/useTaskTracker";
+import { useWorkspaceTaskHistory } from "../../hooks/useWorkspaceTaskHistory";
 import {
   discardFile,
   discardFiles,
@@ -92,7 +92,12 @@ export const RightSidebar = memo(function RightSidebar() {
   const loadDiffInFlightCount = useRef(0);
 
   const activeSessionId = useAppStore(selectActiveSessionId);
-  const { totalCount: taskCount } = useTaskTracker(activeSessionId);
+  const taskHistory = useWorkspaceTaskHistory(
+    selectedWorkspaceId,
+    activeSessionId,
+    activeTab === "tasks",
+  );
+  const taskCount = taskHistory.totalBadgeCount;
 
   // Local-only stage/unstage/discard UI state. None of these git index
   // operations are bridged through the remote server (matches revert_file),
@@ -692,7 +697,7 @@ export const RightSidebar = memo(function RightSidebar() {
 
       {activeTab === "tasks" && (
         selectedWorkspaceId
-          ? <TaskList sessionId={activeSessionId} />
+          ? <TaskList taskHistory={taskHistory} />
           : <div className={styles.list}><div className={styles.empty}>No workspace selected</div></div>
       )}
 
