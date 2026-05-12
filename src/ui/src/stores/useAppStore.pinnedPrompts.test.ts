@@ -16,6 +16,10 @@ function makePrompt(
     display_name,
     prompt,
     auto_send,
+    plan_mode: null,
+    fast_mode: null,
+    thinking_enabled: null,
+    chrome_enabled: null,
     sort_order: id,
     created_at: "",
   };

@@ -29,29 +29,57 @@ pub async fn list_pinned_prompts_in_scope(
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn create_pinned_prompt(
     repo_id: Option<String>,
     display_name: String,
     prompt: String,
     auto_send: bool,
+    plan_mode: Option<bool>,
+    fast_mode: Option<bool>,
+    thinking_enabled: Option<bool>,
+    chrome_enabled: Option<bool>,
     state: State<'_, AppState>,
 ) -> Result<PinnedPrompt, String> {
     let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
-    db.insert_pinned_prompt(repo_id.as_deref(), &display_name, &prompt, auto_send)
-        .map_err(|e| e.to_string())
+    db.insert_pinned_prompt(
+        repo_id.as_deref(),
+        &display_name,
+        &prompt,
+        auto_send,
+        plan_mode,
+        fast_mode,
+        thinking_enabled,
+        chrome_enabled,
+    )
+    .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn update_pinned_prompt(
     id: i64,
     display_name: String,
     prompt: String,
     auto_send: bool,
+    plan_mode: Option<bool>,
+    fast_mode: Option<bool>,
+    thinking_enabled: Option<bool>,
+    chrome_enabled: Option<bool>,
     state: State<'_, AppState>,
 ) -> Result<PinnedPrompt, String> {
     let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
-    db.update_pinned_prompt(id, &display_name, &prompt, auto_send)
-        .map_err(|e| e.to_string())
+    db.update_pinned_prompt(
+        id,
+        &display_name,
+        &prompt,
+        auto_send,
+        plan_mode,
+        fast_mode,
+        thinking_enabled,
+        chrome_enabled,
+    )
+    .map_err(|e| e.to_string())
 }
 
 #[tauri::command]

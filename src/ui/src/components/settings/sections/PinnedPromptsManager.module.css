@@ -155,6 +155,129 @@
   accent-color: var(--accent-primary);
 }
 
+/* ----- Toolbar override controls (tri-state) ----- */
+
+.overridesGroup {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-top: 4px;
+  border-top: 1px dashed var(--divider);
+}
+
+.overridesLabel {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.overrideRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.overrideName {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.segmentedControl {
+  display: inline-flex;
+  border: 1px solid var(--divider);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  background: var(--chat-input-bg);
+}
+
+/* Hide native radios visually but keep them in the tab order so the browser
+   handles roving-tabindex + Left/Right/Up/Down arrow navigation natively. */
+.segmentedRadioInput {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  border: 0;
+  clip: rect(0 0 0 0);
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.segmentedButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+  font-size: 11px;
+  padding: 4px 10px;
+  cursor: pointer;
+  user-select: none;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+
+/* Inter-segment dividers only. Every label is immediately preceded by its
+   own radio input, so an adjacent-sibling rule would also border the first
+   segment (which already has the container's left edge) — target labels
+   after the first instead. The `label` element selector isn't hashed by
+   CSS modules; the scoping comes from `.segmentedControl`. */
+.segmentedControl > label:not(:first-of-type) {
+  border-left: 1px solid var(--divider);
+}
+
+.segmentedButton:hover {
+  color: var(--text-primary);
+  background: var(--hover-bg);
+}
+
+/* Radio focus ring lands on the associated label (the visible "button"). */
+.segmentedRadioInput:focus-visible + .segmentedButton,
+.segmentedRadioInput:focus-visible + .segmentedButtonActive {
+  outline: 2px solid color-mix(in srgb, var(--accent-primary) 60%, transparent);
+  outline-offset: -2px;
+}
+
+/* Disabled radio → make its label look and behave inert. */
+.segmentedRadioInput:disabled + .segmentedButton,
+.segmentedRadioInput:disabled + .segmentedButtonActive {
+  opacity: 0.5;
+  cursor: default;
+  pointer-events: none;
+}
+
+.segmentedButtonActive {
+  composes: segmentedButton;
+  background: color-mix(in srgb, var(--accent-primary) 18%, transparent);
+  color: var(--accent-primary);
+}
+
+.segmentedButtonActive:hover {
+  background: color-mix(in srgb, var(--accent-primary) 24%, transparent);
+  color: var(--accent-primary);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .segmentedButton {
+    transition: none;
+  }
+}
+
+.overrideSummaryChip {
+  display: inline-block;
+  margin-right: 6px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-size: 10px;
+  font-weight: 500;
+  background: color-mix(in srgb, var(--accent-primary) 14%, transparent);
+  color: var(--accent-primary);
+  text-transform: none;
+  letter-spacing: 0;
+}
+
 .actions {
   display: inline-flex;
   align-items: center;
