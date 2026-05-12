@@ -92,7 +92,11 @@ export const RightSidebar = memo(function RightSidebar() {
   const loadDiffInFlightCount = useRef(0);
 
   const activeSessionId = useAppStore(selectActiveSessionId);
-  const taskHistory = useWorkspaceTaskHistory(selectedWorkspaceId, activeSessionId);
+  const taskHistory = useWorkspaceTaskHistory(
+    selectedWorkspaceId,
+    activeSessionId,
+    activeTab === "tasks",
+  );
   const taskCount = taskHistory.totalBadgeCount;
 
   // Local-only stage/unstage/discard UI state. None of these git index

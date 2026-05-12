@@ -92,16 +92,40 @@ async function loadSessionTurns(
   remoteConnectionId: string | null,
 ): Promise<TaskActivityTurn[]> {
   const data = remoteConnectionId
-    ? ((await sendRemoteCommand(remoteConnectionId, "load_completed_turns", {
+    ? await sendRemoteCommand(remoteConnectionId, "load_completed_turns", {
         chat_session_id: sessionId,
-      })) as CompletedTurnData[])
+      })
     : await loadCompletedTurns(sessionId);
+
+  if (!Array.isArray(data)) {
+    throw new Error("Remote completed turns response was not an array");
+  }
+
   return data.map(turnFromData);
+}
+
+async function loadWorkspaceSessions(
+  workspaceId: string,
+  remoteConnectionId: string | null,
+): Promise<ChatSession[]> {
+  const data = remoteConnectionId
+    ? await sendRemoteCommand(remoteConnectionId, "list_chat_sessions", {
+        workspace_id: workspaceId,
+        include_archived: true,
+      })
+    : await listChatSessions(workspaceId, true);
+
+  if (!Array.isArray(data)) {
+    throw new Error("Remote chat sessions response was not an array");
+  }
+
+  return data;
 }
 
 export function useWorkspaceTaskHistory(
   workspaceId: string | null,
   activeSessionId: string | null,
+  historyEnabled = true,
 ): WorkspaceTaskHistoryResult {
   const workspace = useAppStore((s) =>
     workspaceId ? s.workspaces.find((ws) => ws.id === workspaceId) : null,
@@ -126,20 +150,14 @@ export function useWorkspaceTaskHistory(
     setFetchedSessions([]);
     setTurnsBySession({});
 
-    if (!workspaceId) {
+    if (!workspaceId || !historyEnabled) {
       setLoadingSessions(false);
       return;
     }
 
     setLoadingSessions(true);
-    const load = remoteConnectionId
-      ? sendRemoteCommand(remoteConnectionId, "list_chat_sessions", {
-          workspace_id: workspaceId,
-          include_archived: true,
-        }) as Promise<ChatSession[]>
-      : listChatSessions(workspaceId, true);
 
-    load
+    loadWorkspaceSessions(workspaceId, remoteConnectionId)
       .then((sessions) => {
         if (!cancelled) setFetchedSessions(sessions);
       })
@@ -153,7 +171,7 @@ export function useWorkspaceTaskHistory(
     return () => {
       cancelled = true;
     };
-  }, [workspaceId, remoteConnectionId]);
+  }, [workspaceId, remoteConnectionId, historyEnabled]);
 
   const sessions = useMemo(
     () => mergeSessions(fetchedSessions, storeSessions),
@@ -162,7 +180,7 @@ export function useWorkspaceTaskHistory(
 
   useEffect(() => {
     let cancelled = false;
-    if (!workspaceId || sessions.length === 0) {
+    if (!workspaceId || !historyEnabled || sessions.length === 0) {
       setTurnsBySession({});
       setLoadingTurns(false);
       return;
@@ -208,7 +226,7 @@ export function useWorkspaceTaskHistory(
     return () => {
       cancelled = true;
     };
-  }, [workspaceId, sessions, activeSessionId, remoteConnectionId]);
+  }, [workspaceId, sessions, activeSessionId, remoteConnectionId, historyEnabled]);
 
   if (!workspaceId) return EMPTY_RESULT;
 
