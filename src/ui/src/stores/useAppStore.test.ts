@@ -84,6 +84,71 @@ describe("experimental Claudette terminal setting", () => {
   });
 });
 
+describe("queued messages", () => {
+  beforeEach(() => {
+    useAppStore.setState({ queuedMessages: {} });
+  });
+
+  it("updates a queued message in place", () => {
+    useAppStore.getState().setQueuedMessage("session-1", "first", ["a.ts"]);
+    useAppStore.getState().setQueuedMessage("session-1", "second", ["b.ts"]);
+
+    const [first, second] = useAppStore.getState().queuedMessages["session-1"];
+    if (!first || !second) throw new Error("expected queued messages");
+    useAppStore.getState().updateQueuedMessage("session-1", first.id, {
+      content: "edited",
+      mentionedFiles: ["edited.ts"],
+    });
+
+    expect(useAppStore.getState().queuedMessages["session-1"]).toEqual([
+      { ...first, content: "edited", mentionedFiles: ["edited.ts"] },
+      second,
+    ]);
+  });
+
+  it("leaves the queue unchanged when the message id is missing", () => {
+    useAppStore.getState().setQueuedMessage("session-1", "first");
+    const before = useAppStore.getState().queuedMessages;
+
+    useAppStore.getState().updateQueuedMessage("session-1", "missing", {
+      content: "edited",
+    });
+
+    expect(useAppStore.getState().queuedMessages).toBe(before);
+  });
+
+  it("preserves mentioned files when a queued update omits mention metadata", () => {
+    useAppStore.getState().setQueuedMessage("session-1", "first", ["a.ts"]);
+    const [first] = useAppStore.getState().queuedMessages["session-1"];
+    if (!first) throw new Error("expected queued message");
+
+    useAppStore.getState().updateQueuedMessage("session-1", first.id, {
+      content: "edited",
+    });
+
+    expect(useAppStore.getState().queuedMessages["session-1"][0]).toEqual({
+      ...first,
+      content: "edited",
+    });
+  });
+
+  it("clears mentioned files when a queued update explicitly passes undefined", () => {
+    useAppStore.getState().setQueuedMessage("session-1", "first", ["a.ts"]);
+    const [first] = useAppStore.getState().queuedMessages["session-1"];
+    if (!first) throw new Error("expected queued message");
+
+    useAppStore.getState().updateQueuedMessage("session-1", first.id, {
+      content: "edited",
+      mentionedFiles: undefined,
+    });
+
+    expect(useAppStore.getState().queuedMessages["session-1"][0]).toEqual({
+      id: first.id,
+      content: "edited",
+    });
+  });
+});
+
 describe("streamingThinking (per-workspace)", () => {
   beforeEach(() => {
     useAppStore.setState({ streamingThinking: {}, showThinkingBlocks: {} });
