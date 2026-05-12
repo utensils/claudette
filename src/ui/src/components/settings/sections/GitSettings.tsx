@@ -1,11 +1,12 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
   getAppSetting,
   setAppSetting,
   getGitUsername,
 } from "../../../services/tauri";
-import { MODELS } from "../../chat/ModelSelector";
+import { useAppStore } from "../../../stores/useAppStore";
+import { buildModelRegistry, resolveModelSelection } from "../../chat/modelRegistry";
 import styles from "../Settings.module.css";
 
 type PrefixMode = "username" | "custom" | "none";
@@ -23,6 +24,16 @@ PR: {{pr_title}} ({{pr_url}})
 
 Investigate the failing checks, identify the root cause, and make the necessary code changes to fix the CI failures.`;
 
+const CI_PROMPT_TEMPLATE_VARIABLES = {
+  failed_checks: "{{failed_checks}}",
+  failure_logs: "{{failure_logs}}",
+  branch: "{{branch}}",
+  pr_title: "{{pr_title}}",
+  pr_url: "{{pr_url}}",
+  pr_number: "{{pr_number}}",
+  all_checks: "{{all_checks}}",
+};
+
 export function GitSettings() {
   const { t } = useTranslation("settings");
   const [prefixMode, setPrefixMode] = useState<PrefixMode>("username");
@@ -33,7 +44,19 @@ export function GitSettings() {
   const [ciPrompt, setCiPrompt] = useState("");
   const [ciCooldown, setCiCooldown] = useState("300");
   const [ciModel, setCiModel] = useState("");
+  const [ciModelProvider, setCiModelProvider] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const alternativeBackendsEnabled = useAppStore((s) => s.alternativeBackendsEnabled);
+  const agentBackends = useAppStore((s) => s.agentBackends);
+  const modelRegistry = useMemo(
+    () => buildModelRegistry(alternativeBackendsEnabled, agentBackends),
+    [alternativeBackendsEnabled, agentBackends],
+  );
+  const selectedCiModel = ciModel
+    ? ciModelProvider
+      ? `${ciModelProvider}/${ciModel}`
+      : ciModel
+    : "";
 
   useEffect(() => {
     getGitUsername()
@@ -65,6 +88,9 @@ export function GitSettings() {
       .catch(() => {});
     getAppSetting("ci_auto_fix_model")
       .then((val) => { if (val) setCiModel(val); })
+      .catch(() => {});
+    getAppSetting("ci_auto_fix_model_provider")
+      .then((val) => { if (val) setCiModelProvider(val); })
       .catch(() => {});
   }, []);
 
@@ -123,12 +149,40 @@ export function GitSettings() {
     }
   };
 
-  const handleCiModelChange = async (model: string) => {
-    setCiModel(model);
+  const handleCiModelChange = async (value: string) => {
+    const prevModel = ciModel;
+    const prevProvider = ciModelProvider;
+    if (!value) {
+      setCiModel("");
+      setCiModelProvider("");
+      try {
+        setError(null);
+        await Promise.all([
+          setAppSetting("ci_auto_fix_model", ""),
+          setAppSetting("ci_auto_fix_model_provider", ""),
+        ]);
+      } catch (e) {
+        setCiModel(prevModel);
+        setCiModelProvider(prevProvider);
+        setError(String(e));
+      }
+      return;
+    }
+
+    const selected = resolveModelSelection(modelRegistry, value);
+    if (!selected) return;
+    const nextProvider = selected.providerId ?? "";
+    setCiModel(selected.id);
+    setCiModelProvider(nextProvider);
     try {
       setError(null);
-      await setAppSetting("ci_auto_fix_model", model);
+      await Promise.all([
+        setAppSetting("ci_auto_fix_model", selected.id),
+        setAppSetting("ci_auto_fix_model_provider", nextProvider),
+      ]);
     } catch (e) {
+      setCiModel(prevModel);
+      setCiModelProvider(prevProvider);
       setError(String(e));
     }
   };
@@ -228,14 +282,13 @@ export function GitSettings() {
         </div>
       </div>
 
-      <h3 className={styles.subsectionTitle}>CI Automation</h3>
+      <h3 className={styles.subsectionTitle}>{t("git_ci_automation")}</h3>
 
       <div className={styles.settingRow}>
         <div className={styles.settingInfo}>
-          <div className={styles.settingLabel}>Auto-fix CI failures</div>
+          <div className={styles.settingLabel}>{t("git_ci_auto_fix")}</div>
           <div className={styles.settingDescription}>
-            Automatically create a new session with a prompt to fix failing CI
-            checks when all checks have completed and at least one has failed.
+            {t("git_ci_auto_fix_desc")}
           </div>
         </div>
         <div className={styles.settingControl}>
@@ -243,7 +296,7 @@ export function GitSettings() {
             className={styles.toggle}
             role="switch"
             aria-checked={ciAutoFix}
-            aria-label="Auto-fix CI failures"
+            aria-label={t("git_ci_auto_fix")}
             data-checked={ciAutoFix}
             onClick={handleCiAutoFixToggle}
           >
@@ -255,28 +308,28 @@ export function GitSettings() {
       {ciAutoFix && (
         <>
           <div className={styles.fieldGroup}>
-            <div className={styles.fieldLabel}>Model</div>
+            <div className={styles.fieldLabel}>{t("git_ci_model")}</div>
             <div className={`${styles.fieldHint} ${styles.fieldHintSpacedWide}`}>
-              Model used by auto-fix sessions. Defaults to your global default model when unset.
+              {t("git_ci_model_hint")}
             </div>
             <select
               className={styles.select}
-              value={ciModel}
+              value={selectedCiModel}
               onChange={(e) => handleCiModelChange(e.target.value)}
             >
-              <option value="">Use default model</option>
-              {MODELS.map((m) => (
-                <option key={m.id} value={m.id}>
-                  {m.label}
+              <option value="">{t("git_ci_model_default")}</option>
+              {modelRegistry.map((m) => (
+                <option key={m.providerQualifiedId ?? m.id} value={m.providerQualifiedId ?? m.id}>
+                  {m.providerLabel ? `${m.label} (${m.providerLabel})` : m.label}
                 </option>
               ))}
             </select>
           </div>
 
           <div className={styles.fieldGroup}>
-            <div className={styles.fieldLabel}>Prompt template</div>
+            <div className={styles.fieldLabel}>{t("git_ci_prompt_template")}</div>
             <div className={`${styles.fieldHint} ${styles.fieldHintSpacedWide}`}>
-              Template for the auto-fix prompt. Use {"{{failed_checks}}"}, {"{{failure_logs}}"}, {"{{branch}}"}, {"{{pr_title}}"}, {"{{pr_url}}"}, {"{{pr_number}}"}, and {"{{all_checks}}"} as variables.
+              {t("git_ci_prompt_template_hint", CI_PROMPT_TEMPLATE_VARIABLES)}
             </div>
             <textarea
               className={styles.textarea}
@@ -289,9 +342,9 @@ export function GitSettings() {
           </div>
 
           <div className={styles.fieldGroup}>
-            <div className={styles.fieldLabel}>Cooldown (seconds)</div>
+            <div className={styles.fieldLabel}>{t("git_ci_cooldown")}</div>
             <div className={`${styles.fieldHint} ${styles.fieldHintSpacedWide}`}>
-              Minimum time between auto-fix session creations per workspace (60–3600).
+              {t("git_ci_cooldown_hint")}
             </div>
             <input
               className={styles.input}

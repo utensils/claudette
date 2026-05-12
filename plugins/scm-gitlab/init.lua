@@ -146,9 +146,17 @@ function M.ci_failure_logs(args)
         return {}
     end
 
+    local wanted = {}
+    for _, name in ipairs(args.failed_checks or {}) do
+        wanted[name] = true
+    end
+    local has_wanted = next(wanted) ~= nil
+
     local logs = {}
     for _, job in ipairs(data.jobs or {}) do
-        if string.lower(job.status or "") == "failed" then
+        if string.lower(job.status or "") == "failed"
+            and ((not has_wanted) or wanted[job.name])
+        then
             local trace = host.exec("glab", {
                 "ci", "trace", tostring(job.id),
                 "--branch", args.branch,

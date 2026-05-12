@@ -104,6 +104,12 @@ Follow the existing code style — type hints on all function signatures.
 
 Custom instructions sent with the agent's first message to guide how it names the workspace branch. This only applies if the branch hasn't already been renamed.
 
+## CI Auto-Fix Overrides
+
+Each repository can inherit, enable, or disable the global **Auto-fix CI failures** setting. A repository can also provide its own prompt template, which overrides the global CI auto-fix prompt for workspaces in that repo.
+
+Leave the repo prompt override empty to use the global template. The same variables are available as in the global setting: `{{failed_checks}}`, `{{failure_logs}}`, `{{branch}}`, `{{pr_title}}`, `{{pr_url}}`, `{{pr_number}}`, and `{{all_checks}}`.
+
 ## `.claudette.json`
 
 You can also configure these settings via a `.claudette.json` file in your repository root. This is useful for sharing settings with your team via version control.

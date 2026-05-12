@@ -946,6 +946,7 @@ pub fn start_scm_polling(app_handle: tauri::AppHandle) {
                 ci_auto_fix_prompt,
                 ci_auto_fix_cooldown,
                 ci_auto_fix_model,
+                ci_auto_fix_model_provider,
             ): (
                 Vec<(String, String)>,
                 bool,
@@ -954,6 +955,7 @@ pub fn start_scm_polling(app_handle: tauri::AppHandle) {
                 std::collections::HashMap<String, bool>,
                 String,
                 u64,
+                Option<String>,
                 Option<String>,
             ) = {
                 let db = match Database::open(&app_state.db_path) {
@@ -1030,6 +1032,14 @@ pub fn start_scm_polling(app_handle: tauri::AppHandle) {
                             .flatten()
                             .filter(|s| !s.is_empty())
                     });
+                let model_provider = if model.is_some() {
+                    db.get_app_setting("ci_auto_fix_model_provider")
+                        .ok()
+                        .flatten()
+                        .filter(|s| !s.is_empty())
+                } else {
+                    None
+                };
 
                 (
                     active,
@@ -1040,6 +1050,7 @@ pub fn start_scm_polling(app_handle: tauri::AppHandle) {
                     prompt,
                     cooldown,
                     model,
+                    model_provider,
                 )
             };
 
@@ -1145,9 +1156,8 @@ pub fn start_scm_polling(app_handle: tauri::AppHandle) {
                         let prev_status = prev.and_then(|s| s.overall_status.clone());
                         let prev_triggered = prev.and_then(|s| s.last_auto_fix_triggered);
 
-                        let is_failure_transition = current_status
-                            == Some(CiOverallStatus::Failure)
-                            && prev_status != Some(CiOverallStatus::Failure);
+                        let is_failure_transition =
+                            is_ci_failure_transition(prev_status.clone(), current_status.clone());
 
                         let within_cooldown = prev_triggered
                             .is_some_and(|t| t.elapsed().as_secs() < ci_auto_fix_cooldown);
@@ -1190,6 +1200,7 @@ pub fn start_scm_polling(app_handle: tauri::AppHandle) {
                                 &detail,
                                 &effective_prompt,
                                 ci_auto_fix_model.as_deref(),
+                                ci_auto_fix_model_provider.as_deref(),
                             )
                             .await;
                         }
@@ -1237,12 +1248,23 @@ fn format_all_checks(checks: &[CiCheck]) -> String {
                 CiCheckStatus::Failure => "failure",
                 CiCheckStatus::Pending => "pending",
                 CiCheckStatus::Cancelled => "cancelled",
+                CiCheckStatus::Skipped => "skipped",
             };
             let url_part = c.url.as_deref().unwrap_or("no URL");
             format!("- **{}**: {} — {}", c.name, status, url_part)
         })
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+fn is_ci_failure_transition(
+    previous: Option<CiOverallStatus>,
+    current: Option<CiOverallStatus>,
+) -> bool {
+    matches!(
+        (previous, current),
+        (Some(prev), Some(CiOverallStatus::Failure)) if prev != CiOverallStatus::Failure
+    )
 }
 
 fn format_failure_logs(logs: &[CiFailureLog]) -> String {
@@ -1282,6 +1304,7 @@ async fn auto_create_ci_fix_session(
     detail: &ScmDetail,
     prompt_template: &str,
     model: Option<&str>,
+    model_provider: Option<&str>,
 ) {
     let failed_check_names: Vec<String> = detail
         .ci_checks
@@ -1373,6 +1396,7 @@ async fn auto_create_ci_fix_session(
             .filter(|c| c.status == CiCheckStatus::Failure)
             .collect::<Vec<_>>(),
         "model": model,
+        "backend_id": model_provider,
     });
 
     let _ = handle.emit("ci-auto-fix-session-created", payload);
@@ -1970,7 +1994,7 @@ mod tests {
 }
 
 #[cfg(test)]
-mod tests {
+mod ci_auto_fix_tests {
     use super::*;
     use claudette::scm::types::{CiCheck, CiCheckStatus, CiFailureLog, PrState, PullRequest};
 
@@ -2001,10 +2025,12 @@ mod tests {
         let checks = vec![
             make_check("build", CiCheckStatus::Failure),
             make_check("lint", CiCheckStatus::Success),
+            make_check("docs", CiCheckStatus::Skipped),
         ];
         let result = format_all_checks(&checks);
         assert!(result.contains("**build**: failure"));
         assert!(result.contains("**lint**: success"));
+        assert!(result.contains("**docs**: skipped"));
     }
 
     #[test]
@@ -2065,5 +2091,29 @@ mod tests {
         let template = "PR: {{pr_title}} ({{pr_url}})";
         let result = format_ci_auto_fix_prompt(template, &checks, &[], "main", None);
         assert_eq!(result, "PR:  ()");
+    }
+
+    #[test]
+    fn ci_auto_fix_only_triggers_on_observed_transition_to_failure() {
+        assert!(!is_ci_failure_transition(
+            None,
+            Some(CiOverallStatus::Failure),
+        ));
+        assert!(is_ci_failure_transition(
+            Some(CiOverallStatus::Pending),
+            Some(CiOverallStatus::Failure),
+        ));
+        assert!(is_ci_failure_transition(
+            Some(CiOverallStatus::Success),
+            Some(CiOverallStatus::Failure),
+        ));
+        assert!(!is_ci_failure_transition(
+            Some(CiOverallStatus::Failure),
+            Some(CiOverallStatus::Failure),
+        ));
+        assert!(!is_ci_failure_transition(
+            Some(CiOverallStatus::Pending),
+            Some(CiOverallStatus::Success),
+        ));
     }
 }

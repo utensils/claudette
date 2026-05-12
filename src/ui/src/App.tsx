@@ -13,6 +13,7 @@ import {
   TERMINAL_FONT_SIZE_MIN,
 } from "./utils/fontSettings";
 import { deriveScmCiState } from "./utils/scmChecks";
+import { shouldDisable1mContext } from "./components/chat/chatHelpers";
 import { KEYBINDING_SETTING_PREFIX } from "./hotkeys/bindings";
 import type { WorkspaceOrderModeByRepo } from "./utils/workspaceOrdering";
 import { useMcpStatus } from "./hooks/useMcpStatus";
@@ -665,21 +666,29 @@ function App() {
     );
 
     // Listen for CI auto-fix session creation events.
-    const unlistenCiAutoFix = listen<{ workspace_id: string; session_id: string; prompt: string; failed_checks: import("./types/plugin").CiCheck[]; model: string | null }>("ci-auto-fix-session-created", async (event) => {
-      const { workspace_id, session_id, prompt, model } = event.payload;
+    const unlistenCiAutoFix = listen<{ workspace_id: string; session_id: string; prompt: string; failed_checks: import("./types/plugin").CiCheck[]; model: string | null; backend_id: string | null }>("ci-auto-fix-session-created", async (event) => {
+      const { workspace_id, session_id, prompt, model, backend_id } = event.payload;
       const store = useAppStore.getState();
       try {
         const session = await getChatSession(session_id);
         store.addChatSession(session);
         store.selectSession(workspace_id, session_id);
+        const disable1mContext = shouldDisable1mContext(model);
         await sendChatMessage(
           session_id,
           prompt,
           undefined,
           undefined,
           model ?? undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          disable1mContext || undefined,
+          backend_id ?? undefined,
         );
-        store.addToast("CI failed — auto-fix session created");
+        store.addToast(i18n.t("settings:ci_auto_fix_session_created"));
       } catch (e) {
         console.error("CI auto-fix session creation failed:", e);
       }

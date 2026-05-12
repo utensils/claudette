@@ -204,22 +204,25 @@ function M.ci_failure_logs(args)
     for _, name in ipairs(args.failed_checks or {}) do
         wanted[name] = true
     end
+    local has_wanted = next(wanted) ~= nil
 
     local logs = {}
     for _, run in ipairs(runs) do
-        local result = host.exec("gh", {
-            "run", "view", tostring(run.databaseId), "--log-failed",
-        })
-        local log_text = result.stdout or ""
-        if #log_text > MAX_LOG_CHARS then
-            log_text = string.sub(log_text, -MAX_LOG_CHARS)
-        end
-        if #log_text > 0 then
-            table.insert(logs, {
-                check_name = run.name,
-                log = log_text,
-                url = run.url,
+        if (not has_wanted) or wanted[run.name] then
+            local result = host.exec("gh", {
+                "run", "view", tostring(run.databaseId), "--log-failed",
             })
+            local log_text = result.stdout or ""
+            if #log_text > MAX_LOG_CHARS then
+                log_text = string.sub(log_text, -MAX_LOG_CHARS)
+            end
+            if #log_text > 0 then
+                table.insert(logs, {
+                    check_name = run.name,
+                    log = log_text,
+                    url = run.url,
+                })
+            end
         end
     end
     return logs

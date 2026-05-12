@@ -201,7 +201,7 @@ mod tests {
     }
 
     #[test]
-    fn derive_overall_cancelled_counts_as_success() {
+    fn derive_overall_non_blocking_statuses_count_as_success() {
         let checks = vec![
             CiCheck {
                 name: "build".into(),
@@ -212,6 +212,12 @@ mod tests {
             CiCheck {
                 name: "test".into(),
                 status: CiCheckStatus::Success,
+                url: None,
+                started_at: None,
+            },
+            CiCheck {
+                name: "docs".into(),
+                status: CiCheckStatus::Skipped,
                 url: None,
                 started_at: None,
             },
