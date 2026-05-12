@@ -18,6 +18,8 @@ use tauri::{AppHandle, Emitter, Manager, State};
 
 use claudette::db::Database;
 use claudette::env_provider::EnvWatcher;
+use claudette::plugin_runtime::host_api::WorkspaceInfo;
+use claudette::plugin_runtime::manifest::PluginKind;
 
 use crate::state::AppState;
 
@@ -950,22 +952,23 @@ fn merge_approved_envrc_sha256s(
     existing
 }
 
-/// Build a [`WorkspaceInfo`] for the given target, returning
-/// `(worktree_path, ws_info, repo_id)`.
-async fn resolve_target(
-    state: &AppState,
-    target: &EnvTarget,
-) -> Result<
-    (
-        String,
-        claudette::plugin_runtime::host_api::WorkspaceInfo,
-        String,
-    ),
-    String,
-> {
+type EnvResolveTarget = (String, WorkspaceInfo, String);
+
+fn workspace_info_for_repo(repo: claudette::model::Repository) -> EnvResolveTarget {
+    let ws_info = WorkspaceInfo {
+        id: format!("repo:{}", repo.id),
+        name: repo.name.clone(),
+        branch: String::new(),
+        worktree_path: repo.path.clone(),
+        repo_path: repo.path.clone(),
+        repo_id: Some(repo.id.clone()),
+    };
+    (repo.path, ws_info, repo.id)
+}
+
+fn resolve_target_from_db(db: &Database, target: &EnvTarget) -> Result<EnvResolveTarget, String> {
     match target {
         EnvTarget::Workspace { workspace_id } => {
-            let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
             let ws = db
                 .list_workspaces()
                 .map_err(|e| e.to_string())?
@@ -981,7 +984,7 @@ async fn resolve_target(
                 .map_err(|e| e.to_string())?
                 .ok_or("Repository not found")?;
             let repo_id = ws.repository_id.clone();
-            let ws_info = claudette::plugin_runtime::host_api::WorkspaceInfo {
+            let ws_info = WorkspaceInfo {
                 id: ws.id.clone(),
                 name: ws.name.clone(),
                 branch: ws.branch_name.clone(),
@@ -992,7 +995,6 @@ async fn resolve_target(
             Ok((worktree, ws_info, repo_id))
         }
         EnvTarget::Repo { repo_id } => {
-            let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
             let repo = db
                 .get_repository(repo_id)
                 .map_err(|e| e.to_string())?
@@ -1002,16 +1004,119 @@ async fn resolve_target(
             // uses "repo:{id}" as id (guaranteed not to collide with
             // any real workspace id) and an empty branch string
             // (none of our plugins consume `args.branch`).
-            let ws_info = claudette::plugin_runtime::host_api::WorkspaceInfo {
-                id: format!("repo:{}", repo.id),
-                name: repo.name.clone(),
-                branch: String::new(),
-                worktree_path: repo.path.clone(),
-                repo_path: repo.path.clone(),
-                repo_id: Some(repo.id.clone()),
-            };
-            Ok((repo.path, ws_info, repo.id))
+            Ok(workspace_info_for_repo(repo))
         }
+    }
+}
+
+fn resolve_worktree_target_from_db(
+    db: &Database,
+    worktree: &Path,
+) -> Result<Option<EnvResolveTarget>, String> {
+    let worktree = worktree.to_string_lossy();
+    if let Some(ws) = db
+        .list_workspaces()
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .find(|w| w.worktree_path.as_deref() == Some(worktree.as_ref()))
+    {
+        let repo = db
+            .get_repository(&ws.repository_id)
+            .map_err(|e| e.to_string())?
+            .ok_or("Repository not found")?;
+        let worktree_path = ws
+            .worktree_path
+            .clone()
+            .ok_or("Workspace has no worktree")?;
+        let repo_id = ws.repository_id.clone();
+        let ws_info = WorkspaceInfo {
+            id: ws.id.clone(),
+            name: ws.name.clone(),
+            branch: ws.branch_name.clone(),
+            worktree_path: worktree_path.clone(),
+            repo_path: repo.path,
+            repo_id: Some(repo_id.clone()),
+        };
+        return Ok(Some((worktree_path, ws_info, repo_id)));
+    }
+
+    let repo = db
+        .list_repositories()
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .find(|repo| repo.path == worktree.as_ref());
+    Ok(repo.map(workspace_info_for_repo))
+}
+
+/// Build a [`WorkspaceInfo`] for the given target, returning
+/// `(worktree_path, ws_info, repo_id)`.
+async fn resolve_target(state: &AppState, target: &EnvTarget) -> Result<EnvResolveTarget, String> {
+    let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
+    resolve_target_from_db(&db, target)
+}
+
+async fn maybe_emit_trust_needed_for_changed_env(
+    app: AppHandle,
+    worktree: String,
+    plugin_name: String,
+) {
+    let state = app.state::<AppState>();
+    let target = {
+        let db = match Database::open(&state.db_path) {
+            Ok(db) => db,
+            Err(err) => {
+                tracing::warn!(
+                    target: "claudette::env-watcher",
+                    error = %err,
+                    "failed to open database after env invalidation"
+                );
+                return;
+            }
+        };
+        let Some((worktree, ws_info, repo_id)) =
+            (match resolve_worktree_target_from_db(&db, Path::new(&worktree)) {
+                Ok(target) => target,
+                Err(err) => {
+                    tracing::warn!(
+                        target: "claudette::env-watcher",
+                        error = %err,
+                        "failed to map changed env path to a workspace"
+                    );
+                    return;
+                }
+            })
+        else {
+            tracing::debug!(
+                target: "claudette::env-watcher",
+                worktree,
+                plugin = plugin_name,
+                "ignoring env invalidation for unknown worktree"
+            );
+            return;
+        };
+        let disabled = load_disabled_providers(&db, &repo_id);
+        (worktree, ws_info, repo_id, disabled)
+    };
+
+    let (worktree, ws_info, repo_id, mut disabled) = target;
+    let registry = state.plugins_snapshot().await;
+    for (name, plugin) in &registry.plugins {
+        if plugin.manifest.kind == PluginKind::EnvProvider && name != &plugin_name {
+            disabled.insert(name.clone());
+        }
+    }
+    let resolved = claudette::env_provider::resolve_with_registry_and_progress(
+        &registry,
+        &state.env_cache,
+        Path::new(&worktree),
+        &ws_info,
+        &disabled,
+        None,
+    )
+    .await;
+    register_resolved_with_watcher(&state, Path::new(&worktree), &resolved.sources).await;
+    if let Some(payload) = build_trust_needed_payload(&ws_info.id, &repo_id, &resolved) {
+        let _ = app.emit("workspace_env_trust_needed", payload);
     }
 }
 
@@ -1027,13 +1132,20 @@ pub fn setup_env_watcher(app: AppHandle) {
     let app_for_cb = app.clone();
     let watcher = match EnvWatcher::new(Arc::new(move |worktree, plugin| {
         cache.invalidate(worktree, Some(plugin));
+        let worktree_path = worktree.to_string_lossy().into_owned();
+        let plugin_name = plugin.to_string();
         let _ = app_for_cb.emit(
             "env-cache-invalidated",
             EnvCacheInvalidatedPayload {
-                worktree_path: worktree.to_string_lossy().into_owned(),
-                plugin_name: plugin.to_string(),
+                worktree_path: worktree_path.clone(),
+                plugin_name: plugin_name.clone(),
             },
         );
+        let app_for_check = app_for_cb.clone();
+        tauri::async_runtime::spawn(async move {
+            maybe_emit_trust_needed_for_changed_env(app_for_check, worktree_path, plugin_name)
+                .await;
+        });
     })) {
         Ok(w) => Arc::new(w),
         Err(err) => {
