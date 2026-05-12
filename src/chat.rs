@@ -190,6 +190,40 @@ pub struct BuildAssistantArgs<'a> {
     pub created_at: String,
 }
 
+/// Token fields to persist on an assistant message when the only available
+/// source is a `result.usage` event.
+pub struct AssistantUsageFields {
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub cache_read_input_tokens: Option<u64>,
+    pub cache_creation_input_tokens: Option<u64>,
+}
+
+/// Pick the per-call usage that should hydrate the ContextMeter on reload.
+///
+/// `result.usage` top-level fields are aggregates across internal tool-use
+/// iterations. Persisting those into `chat_messages` makes reload hydration
+/// over-report context until the live stream corrects it. When the CLI includes
+/// `iterations`, the first entry is the final API call's usage and matches what
+/// the live ContextMeter uses.
+pub fn assistant_usage_fields_from_result(usage: &TokenUsage) -> AssistantUsageFields {
+    if let Some(iteration) = usage.iterations.as_ref().and_then(|items| items.first()) {
+        return AssistantUsageFields {
+            input_tokens: iteration.input_tokens,
+            output_tokens: iteration.output_tokens,
+            cache_read_input_tokens: iteration.cache_read_input_tokens,
+            cache_creation_input_tokens: iteration.cache_creation_input_tokens,
+        };
+    }
+
+    AssistantUsageFields {
+        input_tokens: usage.input_tokens,
+        output_tokens: usage.output_tokens,
+        cache_read_input_tokens: usage.cache_read_input_tokens,
+        cache_creation_input_tokens: usage.cache_creation_input_tokens,
+    }
+}
+
 /// Build the `ChatMessage` row to persist for an assistant turn message.
 /// Maps `TokenUsage` into the four per-message token fields when present.
 pub fn build_assistant_chat_message(args: BuildAssistantArgs<'_>) -> ChatMessage {
@@ -345,6 +379,7 @@ pub async fn create_turn_checkpoint(args: CheckpointArgs<'_>) -> Option<Conversa
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agent::TokenUsageIteration;
     use serde_json::json;
 
     use std::path::PathBuf;
@@ -789,6 +824,45 @@ mod tests {
         assert_eq!(m.output_tokens, Some(7));
         assert_eq!(m.cache_creation_tokens, None);
         assert_eq!(m.cache_read_tokens, Some(99));
+    }
+
+    #[test]
+    fn assistant_usage_fields_from_result_prefers_iteration_usage() {
+        let usage = TokenUsage {
+            input_tokens: 62,
+            output_tokens: 41_322,
+            cache_creation_input_tokens: Some(153_239),
+            cache_read_input_tokens: Some(4_695_413),
+            iterations: Some(vec![TokenUsageIteration {
+                input_tokens: 1,
+                output_tokens: 611,
+                cache_creation_input_tokens: Some(573),
+                cache_read_input_tokens: Some(131_890),
+            }]),
+        };
+
+        let fields = assistant_usage_fields_from_result(&usage);
+        assert_eq!(fields.input_tokens, 1);
+        assert_eq!(fields.output_tokens, 611);
+        assert_eq!(fields.cache_creation_input_tokens, Some(573));
+        assert_eq!(fields.cache_read_input_tokens, Some(131_890));
+    }
+
+    #[test]
+    fn assistant_usage_fields_from_result_falls_back_to_aggregate() {
+        let usage = TokenUsage {
+            input_tokens: 100,
+            output_tokens: 20,
+            cache_creation_input_tokens: None,
+            cache_read_input_tokens: Some(5_000),
+            iterations: None,
+        };
+
+        let fields = assistant_usage_fields_from_result(&usage);
+        assert_eq!(fields.input_tokens, 100);
+        assert_eq!(fields.output_tokens, 20);
+        assert_eq!(fields.cache_creation_input_tokens, None);
+        assert_eq!(fields.cache_read_input_tokens, Some(5_000));
     }
 
     #[test]
