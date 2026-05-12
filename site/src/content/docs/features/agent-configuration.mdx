@@ -88,9 +88,9 @@ claudette chat steer <session-id> "Also update the integration tests"
 
 ## Claude CLI Flags
 
-The **Settings → Claude CLI flags** panel lets you configure which flags Claudette passes to the `claude` CLI on every turn. Flags are discovered at startup by parsing `claude --help`; flags that Claudette already controls internally (model, session ID, etc.) are filtered out so you can't accidentally double-set them.
+The **Settings > Claude CLI flags** panel lets you configure which flags Claudette passes to the `claude` CLI on every turn. Flags are discovered at startup by parsing `claude --help`; flags that Claudette already controls internally (model, session ID, etc.) are filtered out so you can't accidentally double-set them.
 
-<Image src={claudeCliFlags} alt="Settings → Claude CLI flags panel showing a list of available flags with enable toggles and value inputs" loading="lazy" />
+<Image src={claudeCliFlags} alt="Settings > Claude CLI flags panel showing a list of available flags with enable toggles and value inputs" loading="lazy" />
 
 ### Global defaults
 
@@ -103,7 +103,7 @@ Only enabled flags are appended to the `claude` invocation. Disabled flags are c
 
 ### Per-repo overrides
 
-Repo settings (**Settings → Repository → Claude CLI flags**) add a third state to each flag:
+Repo settings (**Settings > Repository > Claude CLI flags**) add a third state to each flag:
 
 | State | Behavior |
 |-------|----------|
