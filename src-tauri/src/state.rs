@@ -172,6 +172,12 @@ pub struct AgentSessionState {
     /// Stored as a plain map because `EnvMap` already is one; keeping a
     /// snapshot lets the comparison be a single equality check.
     pub session_resolved_env: claudette::env_provider::types::EnvMap,
+    /// Fingerprint of successful env-provider source evaluations baked
+    /// into the current persistent session. Complements
+    /// `session_resolved_env`: a provider can re-run and export the same
+    /// vars while still changing shell-side setup the agent process only
+    /// sees after a restart.
+    pub session_resolved_env_signature: String,
     /// Lifecycle handle for the in-process MCP server bridge that powers
     /// `mcp__claudette__send_to_user`. Created alongside `persistent_session`
     /// at spawn time; dropped when `persistent_session = None` so the listener

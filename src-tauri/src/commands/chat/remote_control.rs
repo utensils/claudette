@@ -330,6 +330,7 @@ async fn store_deferred_enable_status(
                 background_wake_active: false,
                 session_exited_plan: false,
                 session_resolved_env: Default::default(),
+                session_resolved_env_signature: String::new(),
                 mcp_bridge: None,
                 last_user_msg_id: None,
                 posted_env_trust_warning: false,
@@ -580,6 +581,7 @@ async fn ensure_persistent_session_for_remote_control(
                 background_wake_active: false,
                 session_exited_plan: false,
                 session_resolved_env: Default::default(),
+                session_resolved_env_signature: String::new(),
                 mcp_bridge: None,
                 last_user_msg_id: None,
                 posted_env_trust_warning: false,
@@ -602,6 +604,7 @@ async fn ensure_persistent_session_for_remote_control(
         session.session_backend_hash = agent_settings.backend_runtime.hash.clone();
         session.session_exited_plan = false;
         session.session_resolved_env = resolved_env.vars.clone();
+        session.session_resolved_env_signature = resolved_env.source_signature();
     }
     if let Ok(db) = Database::open(db_path) {
         let _ = db.save_chat_session_state(

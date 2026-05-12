@@ -30,21 +30,31 @@ function M.detect(args)
 end
 
 function M.export(args)
+    local envrc_path = join(worktree_of(args), ".envrc")
     local result = host.exec("direnv", { "export", "json" })
 
-    -- If the .envrc is blocked and the user has previously trusted
-    -- direnv for this repository (via the per-repo trust prompt), run
-    -- `direnv allow` once and retry. direnv hashes the .envrc path so
-    -- each worktree is approved independently; the repo-scoped trust
-    -- decision means Claudette automates that per-worktree approval
-    -- on the user's behalf, but ONLY for repos they explicitly
-    -- authorized. Retry once to avoid infinite loops if `allow`
-    -- fails to unblock for some reason.
-    if result.code ~= 0
-        and host.config("repo_trust") == "allow"
-        and (result.stderr or ""):match("is blocked") then
-        host.exec("direnv", { "allow" })
-        result = host.exec("direnv", { "export", "json" })
+    -- If the .envrc is blocked, auto-allow only when this exact file
+    -- content has already been approved for the repo. This preserves
+    -- the convenience of future worktrees with identical .envrc
+    -- content while still forcing a fresh review when the .envrc
+    -- changes. Retry once to avoid infinite loops if `allow` fails to
+    -- unblock for some reason.
+    if result.code ~= 0 and (result.stderr or ""):match("is blocked") then
+        local approved = host.config("approved_envrc_sha256s")
+        local current = host.sha256_file(envrc_path)
+        local allowed = false
+        if type(approved) == "table" then
+            for _, digest in ipairs(approved) do
+                if digest == current then
+                    allowed = true
+                    break
+                end
+            end
+        end
+        if allowed then
+            host.exec("direnv", { "allow" })
+            result = host.exec("direnv", { "export", "json" })
+        end
     end
 
     if result.code ~= 0 then
@@ -86,8 +96,8 @@ function M.export(args)
     -- change" semantics. The host watcher (`src/env_provider/watcher.rs`)
     -- subscribes AFTER `cache.put` stores the entry, and on macOS
     -- FSEvents reliably delivers the write event from the `direnv allow`
-    -- call we just made (when `repo_trust == "allow"` retries a blocked
-    -- export above) shortly after — which fires `on_change` and
+    -- call we just made (when an approved `.envrc` digest retries a
+    -- blocked export above) shortly after — which fires `on_change` and
     -- evicts the cache entry we just populated. Net effect was a 5s
     -- cold export on every workspace switch even when the underlying
     -- `.envrc` / `flake.lock` hadn't changed. The "Reload env" UI action
@@ -128,7 +138,7 @@ function M.export(args)
             table.insert(watched, path)
         end
     end
-    add(join(worktree_of(args), ".envrc"))
+    add(envrc_path)
     local direnv_watches = raw_env["DIRENV_WATCHES"]
     if type(direnv_watches) == "string" and #direnv_watches > 0 then
         for _, path in ipairs(host.direnv_decode_watches(direnv_watches)) do

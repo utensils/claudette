@@ -3,6 +3,7 @@ import {
   allRowsResolved,
   classifyPostActionError,
   isEnvTrustModalData,
+  shouldPersistRepoTrustAfterTrust,
 } from "./EnvTrustModal";
 
 describe("allRowsResolved", () => {
@@ -70,6 +71,16 @@ describe("allRowsResolved", () => {
     // for it too), but be defensive: an empty list shouldn't trigger
     // auto-close because the modal would close instantly on open.
     expect(allRowsResolved([], {})).toBe(false);
+  });
+});
+
+describe("shouldPersistRepoTrustAfterTrust", () => {
+  it("keeps repo_trust for mise", () => {
+    expect(shouldPersistRepoTrustAfterTrust("env-mise")).toBe(true);
+  });
+
+  it("does not persist broad repo_trust for direnv", () => {
+    expect(shouldPersistRepoTrustAfterTrust("env-direnv")).toBe(false);
   });
 });
 

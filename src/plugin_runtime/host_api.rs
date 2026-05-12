@@ -247,8 +247,47 @@ fn register_host_api(lua: &Lua, ctx: HostContext) -> LuaResult<()> {
         })?,
     )?;
 
+    // host.sha256_file(path) -> lowercase hex string
+    //
+    // Same workspace confinement as `host.read_file`, but reads bytes
+    // instead of UTF-8. Env providers use this to bind trust decisions
+    // to exact config-file content without leaking filesystem access
+    // outside the worktree.
+    let sha256_file_root = std::path::Path::new(&ctx.workspace_info.worktree_path)
+        .canonicalize()
+        .ok();
+    host.set(
+        "sha256_file",
+        lua.create_function(move |_, path: String| {
+            if path.contains('\0') {
+                return Err(LuaError::external("path must not contain null bytes"));
+            }
+            let canonical = resolve_inside_workspace(&path, sha256_file_root.as_deref())
+                .ok_or_else(|| {
+                    LuaError::external(format!(
+                        "path '{path}' is outside the workspace or does not exist"
+                    ))
+                })?;
+            let bytes = std::fs::read(&canonical)
+                .map_err(|e| LuaError::external(format!("failed to read '{path}': {e}")))?;
+            Ok(sha256_hex(&bytes))
+        })?,
+    )?;
+
     lua.globals().set("host", host)?;
     Ok(())
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+
+    let digest = Sha256::digest(bytes);
+    let mut out = String::with_capacity(digest.len() * 2);
+    for byte in digest {
+        use std::fmt::Write as _;
+        let _ = write!(&mut out, "{byte:02x}");
+    }
+    out
 }
 
 /// Resolve `path` (absolute or relative to `workspace_root`) into a
@@ -593,6 +632,7 @@ mod tests {
         assert!(host.get::<LuaValue>("json_encode").unwrap().is_function());
         assert!(host.get::<LuaValue>("workspace").unwrap().is_function());
         assert!(host.get::<LuaValue>("config").unwrap().is_function());
+        assert!(host.get::<LuaValue>("sha256_file").unwrap().is_function());
         assert!(host.get::<LuaValue>("log").unwrap().is_function());
     }
 
@@ -815,6 +855,62 @@ mod tests {
             .load(format!(r#"return host.read_file("{path}")"#))
             .eval();
         assert!(result.is_err(), "missing file should raise Lua error");
+    }
+
+    #[test]
+    fn test_sha256_file_returns_digest_for_workspace_file() {
+        let workspace = tempfile::tempdir().unwrap();
+        std::fs::write(workspace.path().join(".envrc"), b"export FOO=bar\n").unwrap();
+        let ctx = ctx_with_worktree(workspace.path());
+        let lua = create_lua_vm(ctx).unwrap();
+
+        let digest: String = lua
+            .load(r#"return host.sha256_file(".envrc")"#)
+            .eval()
+            .unwrap();
+
+        assert_eq!(digest, sha256_hex(b"export FOO=bar\n"));
+    }
+
+    #[test]
+    fn test_sha256_file_rejects_absolute_path_outside_workspace() {
+        let workspace = tempfile::tempdir().unwrap();
+        let ctx = ctx_with_worktree(workspace.path());
+        let lua = create_lua_vm(ctx).unwrap();
+
+        let outside = std::env::current_exe().unwrap();
+        let outside_s = lua_escape(&outside);
+        let result: LuaResult<String> = lua
+            .load(format!(r#"return host.sha256_file("{outside_s}")"#))
+            .eval();
+
+        assert!(
+            result.is_err(),
+            "sha256_file must reject path outside workspace"
+        );
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("outside the workspace"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_sha256_file_rejects_symlink_escaping_workspace() {
+        let workspace = tempfile::tempdir().unwrap();
+        let outside_dir = tempfile::tempdir().unwrap();
+        let secret = outside_dir.path().join("secret.txt");
+        std::fs::write(&secret, "sensitive").unwrap();
+
+        let link = workspace.path().join(".envrc");
+        std::os::unix::fs::symlink(&secret, &link).unwrap();
+
+        let ctx = ctx_with_worktree(workspace.path());
+        let lua = create_lua_vm(ctx).unwrap();
+        let result: LuaResult<String> = lua.load(r#"return host.sha256_file(".envrc")"#).eval();
+
+        assert!(result.is_err(), "sha256_file must reject symlink escapes");
     }
 
     #[test]

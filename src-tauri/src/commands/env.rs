@@ -9,15 +9,18 @@
 //! Nothing here mutates the workspace or database state — reload just
 //! evicts the in-memory cache, and the next spawn/resolve recomputes.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
 
 use claudette::db::Database;
 use claudette::env_provider::EnvWatcher;
+use claudette::plugin_runtime::host_api::WorkspaceInfo;
+use claudette::plugin_runtime::manifest::PluginKind;
 
 use crate::state::AppState;
 
@@ -781,13 +784,14 @@ pub async fn run_env_trust(
     // Collect every path we need to approve. For a Workspace target
     // it's just that workspace. For a Repo target it's repo.path +
     // every workspace.worktree_path that exists for that repo.
-    let paths = resolve_trust_paths(&state, &target).await?;
-    if paths.is_empty() {
+    let scope = resolve_trust_scope(&state, &target).await?;
+    if scope.paths.is_empty() {
         return Err("no worktrees to run trust against".to_string());
     }
 
     let mut errors: Vec<String> = Vec::new();
-    for path in &paths {
+    let mut approved_envrc_sha256s: Vec<String> = Vec::new();
+    for path in &scope.paths {
         let mut command = tokio::process::Command::new(cmd[0]);
         command.args(&cmd[1..]);
         command.current_dir(path);
@@ -819,9 +823,20 @@ pub async fn run_env_trust(
         state
             .env_cache
             .invalidate(Path::new(path), Some(&plugin_name));
+
+        if plugin_name == "env-direnv" {
+            let envrc = Path::new(path).join(".envrc");
+            if let Ok(digest) = sha256_file_hex(&envrc) {
+                approved_envrc_sha256s.push(digest);
+            }
+        }
     }
 
-    if !errors.is_empty() && errors.len() == paths.len() {
+    if plugin_name == "env-direnv" && !approved_envrc_sha256s.is_empty() {
+        persist_approved_envrc_sha256s(&state, &scope.repo_id, approved_envrc_sha256s).await?;
+    }
+
+    if !errors.is_empty() && errors.len() == scope.paths.len() {
         return Err(errors.join("; "));
     }
     // Partial success is fine — the caller's refresh will show which
@@ -829,10 +844,15 @@ pub async fn run_env_trust(
     Ok(())
 }
 
+struct TrustScope {
+    repo_id: String,
+    paths: Vec<String>,
+}
+
 /// Gather every on-disk path we should run the trust command against.
 /// `Workspace` → the workspace's worktree. `Repo` → repo.path plus
 /// every workspace.worktree_path that currently exists for the repo.
-async fn resolve_trust_paths(state: &AppState, target: &EnvTarget) -> Result<Vec<String>, String> {
+async fn resolve_trust_scope(state: &AppState, target: &EnvTarget) -> Result<TrustScope, String> {
     let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
     match target {
         EnvTarget::Workspace { workspace_id } => {
@@ -846,7 +866,10 @@ async fn resolve_trust_paths(state: &AppState, target: &EnvTarget) -> Result<Vec
                 .worktree_path
                 .clone()
                 .ok_or("Workspace has no worktree")?;
-            Ok(vec![worktree])
+            Ok(TrustScope {
+                repo_id: ws.repository_id,
+                paths: vec![worktree],
+            })
         }
         EnvTarget::Repo { repo_id } => {
             let repo = db
@@ -863,27 +886,91 @@ async fn resolve_trust_paths(state: &AppState, target: &EnvTarget) -> Result<Vec
                     paths.push(wt);
                 }
             }
-            Ok(paths)
+            Ok(TrustScope {
+                repo_id: repo_id.clone(),
+                paths,
+            })
         }
     }
 }
 
-/// Build a [`WorkspaceInfo`] for the given target, returning
-/// `(worktree_path, ws_info, repo_id)`.
-async fn resolve_target(
+const APPROVED_ENVRC_SHA256S_KEY: &str = "approved_envrc_sha256s";
+const TRUST_PROBE_DEBOUNCE_MS: u64 = 500;
+
+fn sha256_file_hex(path: &Path) -> std::io::Result<String> {
+    use sha2::{Digest, Sha256};
+
+    let bytes = std::fs::read(path)?;
+    let digest = Sha256::digest(&bytes);
+    let mut out = String::with_capacity(digest.len() * 2);
+    for byte in digest {
+        use std::fmt::Write as _;
+        let _ = write!(&mut out, "{byte:02x}");
+    }
+    Ok(out)
+}
+
+async fn persist_approved_envrc_sha256s(
     state: &AppState,
-    target: &EnvTarget,
-) -> Result<
-    (
-        String,
-        claudette::plugin_runtime::host_api::WorkspaceInfo,
-        String,
-    ),
-    String,
-> {
+    repo_id: &str,
+    new_digests: Vec<String>,
+) -> Result<(), String> {
+    let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
+    let storage_key =
+        format!("repo:{repo_id}:plugin:env-direnv:setting:{APPROVED_ENVRC_SHA256S_KEY}");
+    let mut merged: Vec<String> = db
+        .get_app_setting(&storage_key)
+        .map_err(|e| e.to_string())?
+        .and_then(|stored| serde_json::from_str::<Vec<String>>(&stored).ok())
+        .unwrap_or_default();
+    merged = merge_approved_envrc_sha256s(merged, new_digests);
+
+    let value = serde_json::json!(merged);
+    let serialized = serde_json::to_string(&value).map_err(|e| e.to_string())?;
+    db.set_app_setting(&storage_key, &serialized)
+        .map_err(|e| e.to_string())?;
+    drop(db);
+    state.plugins.read().await.set_repo_setting(
+        repo_id,
+        "env-direnv",
+        APPROVED_ENVRC_SHA256S_KEY,
+        Some(value),
+    );
+    state.env_cache.invalidate_plugin_everywhere("env-direnv");
+    Ok(())
+}
+
+fn merge_approved_envrc_sha256s(
+    mut existing: Vec<String>,
+    new_digests: Vec<String>,
+) -> Vec<String> {
+    for digest in new_digests {
+        if !existing.iter().any(|old| old == &digest) {
+            existing.push(digest);
+        }
+    }
+    existing.sort();
+    existing.dedup();
+    existing
+}
+
+type EnvResolveTarget = (String, WorkspaceInfo, String);
+
+fn workspace_info_for_repo(repo: claudette::model::Repository) -> EnvResolveTarget {
+    let ws_info = WorkspaceInfo {
+        id: format!("repo:{}", repo.id),
+        name: repo.name.clone(),
+        branch: String::new(),
+        worktree_path: repo.path.clone(),
+        repo_path: repo.path.clone(),
+        repo_id: Some(repo.id.clone()),
+    };
+    (repo.path, ws_info, repo.id)
+}
+
+fn resolve_target_from_db(db: &Database, target: &EnvTarget) -> Result<EnvResolveTarget, String> {
     match target {
         EnvTarget::Workspace { workspace_id } => {
-            let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
             let ws = db
                 .list_workspaces()
                 .map_err(|e| e.to_string())?
@@ -899,7 +986,7 @@ async fn resolve_target(
                 .map_err(|e| e.to_string())?
                 .ok_or("Repository not found")?;
             let repo_id = ws.repository_id.clone();
-            let ws_info = claudette::plugin_runtime::host_api::WorkspaceInfo {
+            let ws_info = WorkspaceInfo {
                 id: ws.id.clone(),
                 name: ws.name.clone(),
                 branch: ws.branch_name.clone(),
@@ -910,7 +997,6 @@ async fn resolve_target(
             Ok((worktree, ws_info, repo_id))
         }
         EnvTarget::Repo { repo_id } => {
-            let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
             let repo = db
                 .get_repository(repo_id)
                 .map_err(|e| e.to_string())?
@@ -920,17 +1006,124 @@ async fn resolve_target(
             // uses "repo:{id}" as id (guaranteed not to collide with
             // any real workspace id) and an empty branch string
             // (none of our plugins consume `args.branch`).
-            let ws_info = claudette::plugin_runtime::host_api::WorkspaceInfo {
-                id: format!("repo:{}", repo.id),
-                name: repo.name.clone(),
-                branch: String::new(),
-                worktree_path: repo.path.clone(),
-                repo_path: repo.path.clone(),
-                repo_id: Some(repo.id.clone()),
-            };
-            Ok((repo.path, ws_info, repo.id))
+            Ok(workspace_info_for_repo(repo))
         }
     }
+}
+
+fn resolve_worktree_target_from_db(
+    db: &Database,
+    worktree: &Path,
+) -> Result<Option<EnvResolveTarget>, String> {
+    let worktree = worktree.to_string_lossy();
+    if let Some(ws) = db
+        .list_workspaces()
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .find(|w| w.worktree_path.as_deref() == Some(worktree.as_ref()))
+    {
+        let repo = db
+            .get_repository(&ws.repository_id)
+            .map_err(|e| e.to_string())?
+            .ok_or("Repository not found")?;
+        let worktree_path = ws
+            .worktree_path
+            .clone()
+            .ok_or("Workspace has no worktree")?;
+        let repo_id = ws.repository_id.clone();
+        let ws_info = WorkspaceInfo {
+            id: ws.id.clone(),
+            name: ws.name.clone(),
+            branch: ws.branch_name.clone(),
+            worktree_path: worktree_path.clone(),
+            repo_path: repo.path,
+            repo_id: Some(repo_id.clone()),
+        };
+        return Ok(Some((worktree_path, ws_info, repo_id)));
+    }
+
+    let repo = db
+        .list_repositories()
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .find(|repo| repo.path == worktree.as_ref());
+    Ok(repo.map(workspace_info_for_repo))
+}
+
+/// Build a [`WorkspaceInfo`] for the given target, returning
+/// `(worktree_path, ws_info, repo_id)`.
+async fn resolve_target(state: &AppState, target: &EnvTarget) -> Result<EnvResolveTarget, String> {
+    let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
+    resolve_target_from_db(&db, target)
+}
+
+async fn maybe_emit_trust_needed_for_changed_env(
+    app: AppHandle,
+    worktree: String,
+    plugin_name: String,
+) {
+    let state = app.state::<AppState>();
+    let target = {
+        let db = match Database::open(&state.db_path) {
+            Ok(db) => db,
+            Err(err) => {
+                tracing::warn!(
+                    target: "claudette::env-watcher",
+                    error = %err,
+                    "failed to open database after env invalidation"
+                );
+                return;
+            }
+        };
+        let Some((worktree, ws_info, repo_id)) =
+            (match resolve_worktree_target_from_db(&db, Path::new(&worktree)) {
+                Ok(target) => target,
+                Err(err) => {
+                    tracing::warn!(
+                        target: "claudette::env-watcher",
+                        error = %err,
+                        "failed to map changed env path to a workspace"
+                    );
+                    return;
+                }
+            })
+        else {
+            tracing::debug!(
+                target: "claudette::env-watcher",
+                worktree,
+                plugin = plugin_name,
+                "ignoring env invalidation for unknown worktree"
+            );
+            return;
+        };
+        let disabled = load_disabled_providers(&db, &repo_id);
+        (worktree, ws_info, repo_id, disabled)
+    };
+
+    let (worktree, ws_info, repo_id, mut disabled) = target;
+    let registry = state.plugins_snapshot().await;
+    for (name, plugin) in &registry.plugins {
+        if plugin.manifest.kind == PluginKind::EnvProvider && name != &plugin_name {
+            disabled.insert(name.clone());
+        }
+    }
+    let resolved = claudette::env_provider::resolve_with_registry_and_progress(
+        &registry,
+        &state.env_cache,
+        Path::new(&worktree),
+        &ws_info,
+        &disabled,
+        None,
+    )
+    .await;
+    register_resolved_with_watcher(&state, Path::new(&worktree), &resolved.sources).await;
+    if let Some(payload) = build_trust_needed_payload(&ws_info.id, &repo_id, &resolved) {
+        let _ = app.emit("workspace_env_trust_needed", payload);
+    }
+}
+
+fn should_probe_trust_after_invalidation(plugin_name: &str) -> bool {
+    matches!(plugin_name, "env-direnv" | "env-mise")
 }
 
 /// Build the `EnvWatcher` and store it in `AppState`. Called once at
@@ -943,15 +1136,52 @@ pub fn setup_env_watcher(app: AppHandle) {
     let state = app.state::<AppState>();
     let cache = Arc::clone(&state.env_cache);
     let app_for_cb = app.clone();
+    let trust_probe_versions: Arc<Mutex<HashMap<(String, String), u64>>> =
+        Arc::new(Mutex::new(HashMap::new()));
     let watcher = match EnvWatcher::new(Arc::new(move |worktree, plugin| {
         cache.invalidate(worktree, Some(plugin));
+        let worktree_path = worktree.to_string_lossy().into_owned();
+        let plugin_name = plugin.to_string();
         let _ = app_for_cb.emit(
             "env-cache-invalidated",
             EnvCacheInvalidatedPayload {
-                worktree_path: worktree.to_string_lossy().into_owned(),
-                plugin_name: plugin.to_string(),
+                worktree_path: worktree_path.clone(),
+                plugin_name: plugin_name.clone(),
             },
         );
+        if !should_probe_trust_after_invalidation(&plugin_name) {
+            return;
+        }
+        let key = (worktree_path.clone(), plugin_name.clone());
+        let scheduled_version = {
+            let mut versions = trust_probe_versions.lock().unwrap();
+            let next = versions
+                .get(&key)
+                .copied()
+                .unwrap_or_default()
+                .wrapping_add(1);
+            versions.insert(key.clone(), next);
+            next
+        };
+        let app_for_check = app_for_cb.clone();
+        let versions_for_check = Arc::clone(&trust_probe_versions);
+        tauri::async_runtime::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(TRUST_PROBE_DEBOUNCE_MS)).await;
+            let should_run = {
+                let mut versions = versions_for_check.lock().unwrap();
+                if versions.get(&key).copied() == Some(scheduled_version) {
+                    versions.remove(&key);
+                    true
+                } else {
+                    false
+                }
+            };
+            if !should_run {
+                return;
+            }
+            maybe_emit_trust_needed_for_changed_env(app_for_check, worktree_path, plugin_name)
+                .await;
+        });
     })) {
         Ok(w) => Arc::new(w),
         Err(err) => {
@@ -1124,6 +1354,16 @@ mod tests {
     fn filter_globally_disabled_empty_passes_through() {
         let visible = filter_globally_disabled(Vec::new(), |_| true);
         assert!(visible.is_empty());
+    }
+
+    #[test]
+    fn merge_approved_envrc_sha256s_records_unique_sorted_digests() {
+        let merged = merge_approved_envrc_sha256s(
+            vec!["b".repeat(64), "a".repeat(64), "a".repeat(64)],
+            vec!["b".repeat(64), "c".repeat(64)],
+        );
+
+        assert_eq!(merged, vec!["a".repeat(64), "b".repeat(64), "c".repeat(64)]);
     }
 
     #[test]
@@ -1407,6 +1647,14 @@ mod tests {
             ..Default::default()
         };
         assert!(build_trust_needed_payload("ws", "repo", &resolved).is_none());
+    }
+
+    #[test]
+    fn trust_invalidation_probe_only_runs_for_trust_capable_providers() {
+        assert!(should_probe_trust_after_invalidation("env-direnv"));
+        assert!(should_probe_trust_after_invalidation("env-mise"));
+        assert!(!should_probe_trust_after_invalidation("env-dotenv"));
+        assert!(!should_probe_trust_after_invalidation("env-nix-devshell"));
     }
 
     #[test]

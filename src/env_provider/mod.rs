@@ -205,6 +205,35 @@ impl ResolvedEnv {
         );
         Some(body)
     }
+
+    /// Stable fingerprint of successful env-provider evaluations.
+    ///
+    /// The merged env map catches value changes, but an interactive shell
+    /// can still need a fresh process when a provider re-evaluates with the
+    /// same exported variables (for example direnv/Nix shell functions or
+    /// shell-side setup changed). Successful sources reuse the cache entry's
+    /// `evaluated_at` timestamp, so the signature stays stable across cache
+    /// hits and changes only after a real provider re-export.
+    pub fn source_signature(&self) -> String {
+        let mut parts = self
+            .sources
+            .iter()
+            .filter(|source| source.detected && source.error.is_none())
+            .map(|source| {
+                let evaluated_ms = source
+                    .evaluated_at
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_millis())
+                    .unwrap_or(0);
+                format!(
+                    "{}:{}:{}",
+                    source.plugin_name, source.vars_contributed, evaluated_ms
+                )
+            })
+            .collect::<Vec<_>>();
+        parts.sort();
+        parts.join("|")
+    }
 }
 
 /// Truncate and re-indent an error string for embedding inside a
@@ -471,7 +500,9 @@ async fn resolve_one(
     match backend.export(name, worktree, ws_info).await {
         Ok(export) => {
             let contributed = export.env.len();
-            cache.put(worktree, name, &export);
+            let evaluated_at = cache
+                .put(worktree, name, &export)
+                .unwrap_or_else(SystemTime::now);
             merge_into(merged, &export.env);
             emit_finished(true);
             ResolvedSource {
@@ -479,7 +510,7 @@ async fn resolve_one(
                 detected: true,
                 vars_contributed: contributed,
                 cached: false,
-                evaluated_at: SystemTime::now(),
+                evaluated_at,
                 error: None,
             }
         }
@@ -845,6 +876,43 @@ mod tests {
         }
     }
 
+    #[test]
+    fn source_signature_ignores_cache_hit_flag_but_tracks_evaluation_time() {
+        fn source_at(at: SystemTime) -> ResolvedSource {
+            ResolvedSource {
+                plugin_name: "env-direnv".to_string(),
+                detected: true,
+                vars_contributed: 1,
+                cached: false,
+                evaluated_at: at,
+                error: None,
+            }
+        }
+
+        let at = SystemTime::UNIX_EPOCH + std::time::Duration::from_millis(42);
+        let fresh = source_at(at);
+        let mut cached = fresh.clone();
+        cached.cached = true;
+
+        let fresh_env = ResolvedEnv {
+            sources: vec![fresh],
+            ..Default::default()
+        };
+        let cached_env = ResolvedEnv {
+            sources: vec![cached],
+            ..Default::default()
+        };
+
+        assert_eq!(fresh_env.source_signature(), cached_env.source_signature());
+
+        let rerun = source_at(at + std::time::Duration::from_millis(1));
+        let rerun_env = ResolvedEnv {
+            sources: vec![rerun],
+            ..Default::default()
+        };
+        assert_ne!(fresh_env.source_signature(), rerun_env.source_signature());
+    }
+
     #[tokio::test]
     async fn disabled_provider_is_skipped_and_cache_invalidated() {
         let tmp = tempfile::tempdir().unwrap();
@@ -853,7 +921,7 @@ mod tests {
 
         // Seed a cache entry as if direnv previously detected + exported.
         let cache = EnvCache::new();
-        cache.put(
+        let _ = cache.put(
             tmp.path(),
             "env-direnv",
             &export_of(&[("FOO", Some("bar"))], vec![envrc.clone()]),
@@ -922,7 +990,7 @@ mod tests {
 
         // Seed the cache as if direnv previously detected + exported.
         let cache = EnvCache::new();
-        cache.put(
+        let _ = cache.put(
             tmp.path(),
             "env-direnv",
             &export_of(&[("STALE", Some("yes"))], vec![envrc.clone()]),
@@ -969,7 +1037,7 @@ mod tests {
             },
             watched: vec![watched.clone()],
         };
-        cache.put(tmp.path(), "env-direnv", &export);
+        let _ = cache.put(tmp.path(), "env-direnv", &export);
         assert!(cache.get_fresh(tmp.path(), "env-direnv").is_some());
 
         let backend = MockBackend::new()
@@ -1168,7 +1236,7 @@ mod tests {
         let envrc = tmp.path().join(".envrc");
         std::fs::write(&envrc, "x").unwrap();
         let cache = EnvCache::new();
-        cache.put(
+        let _ = cache.put(
             tmp.path(),
             "env-direnv",
             &export_of(&[("STALE", Some("yes"))], vec![envrc.clone()]),

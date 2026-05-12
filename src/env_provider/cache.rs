@@ -68,9 +68,10 @@ impl EnvCache {
 
     /// Store (or overwrite) the cache entry for `(worktree, plugin)`.
     ///
-    /// Returns `true` if the entry was stored, `false` if it was dropped
-    /// because a watched file's mtime changed between the two snapshots
-    /// we take (before-store and after-store). The race we're guarding:
+    /// Returns `Some(evaluated_at)` if the entry was stored, or `None`
+    /// if it was dropped because a watched file's mtime changed between
+    /// the two snapshots we take (before-store and after-store). The
+    /// race we're guarding:
     ///
     ///   t0: plugin's `export()` captures env based on on-disk content
     ///   t1: we snapshot mtimes ("first")
@@ -85,7 +86,12 @@ impl EnvCache {
     /// small enough that not-caching-at-all would be more wasteful than
     /// the occasional stale turn. File-content hashing would fully close
     /// this and is v2 work.
-    pub fn put(&self, worktree: &Path, plugin: &str, export: &ProviderExport) -> bool {
+    pub fn put(
+        &self,
+        worktree: &Path,
+        plugin: &str,
+        export: &ProviderExport,
+    ) -> Option<SystemTime> {
         let first: Vec<(PathBuf, Option<SystemTime>)> = export
             .watched
             .iter()
@@ -93,17 +99,18 @@ impl EnvCache {
             .collect();
         let second: Vec<Option<SystemTime>> = export.watched.iter().map(|p| mtime(p)).collect();
         if first.iter().zip(second.iter()).any(|((_, a), b)| a != b) {
-            return false;
+            return None;
         }
 
         let key = (worktree.to_path_buf(), plugin.to_string());
+        let evaluated_at = SystemTime::now();
         let entry = CacheEntry {
             env: export.env.clone(),
             watched: first,
-            evaluated_at: SystemTime::now(),
+            evaluated_at,
         };
         self.entries.write().unwrap().insert(key, entry);
-        true
+        Some(evaluated_at)
     }
 
     /// Return the paths this `(worktree, plugin)` entry is watching,
@@ -187,7 +194,7 @@ mod tests {
 
         let cache = EnvCache::new();
         let export = export_with_watched(&file);
-        cache.put(tmp.path(), "env-direnv", &export);
+        assert!(cache.put(tmp.path(), "env-direnv", &export).is_some());
 
         let entry = cache.get_fresh(tmp.path(), "env-direnv").unwrap();
         assert_eq!(entry.env.get("FOO").unwrap().as_deref(), Some("bar"));
@@ -200,7 +207,11 @@ mod tests {
         std::fs::write(&file, "use flake").unwrap();
 
         let cache = EnvCache::new();
-        cache.put(tmp.path(), "env-direnv", &export_with_watched(&file));
+        assert!(
+            cache
+                .put(tmp.path(), "env-direnv", &export_with_watched(&file))
+                .is_some()
+        );
         assert!(cache.get_fresh(tmp.path(), "env-direnv").is_some());
 
         // Force a distinguishable mtime. Sleep is unavoidable on
@@ -222,7 +233,11 @@ mod tests {
         std::fs::write(&file, "use flake").unwrap();
 
         let cache = EnvCache::new();
-        cache.put(tmp.path(), "env-direnv", &export_with_watched(&file));
+        assert!(
+            cache
+                .put(tmp.path(), "env-direnv", &export_with_watched(&file))
+                .is_some()
+        );
         std::fs::remove_file(&file).unwrap();
 
         assert!(cache.get_fresh(tmp.path(), "env-direnv").is_none());
@@ -241,8 +256,16 @@ mod tests {
         let file = tmp.path().join(".envrc");
         std::fs::write(&file, "x").unwrap();
         let cache = EnvCache::new();
-        cache.put(tmp.path(), "env-direnv", &export_with_watched(&file));
-        cache.put(tmp.path(), "env-mise", &export_with_watched(&file));
+        assert!(
+            cache
+                .put(tmp.path(), "env-direnv", &export_with_watched(&file))
+                .is_some()
+        );
+        assert!(
+            cache
+                .put(tmp.path(), "env-mise", &export_with_watched(&file))
+                .is_some()
+        );
         assert_eq!(cache.len(), 2);
 
         cache.invalidate(tmp.path(), Some("env-direnv"));
@@ -261,9 +284,21 @@ mod tests {
         std::fs::write(&file_b, "x").unwrap();
 
         let cache = EnvCache::new();
-        cache.put(tmp_a.path(), "env-direnv", &export_with_watched(&file_a));
-        cache.put(tmp_a.path(), "env-mise", &export_with_watched(&file_a));
-        cache.put(tmp_b.path(), "env-direnv", &export_with_watched(&file_b));
+        assert!(
+            cache
+                .put(tmp_a.path(), "env-direnv", &export_with_watched(&file_a))
+                .is_some()
+        );
+        assert!(
+            cache
+                .put(tmp_a.path(), "env-mise", &export_with_watched(&file_a))
+                .is_some()
+        );
+        assert!(
+            cache
+                .put(tmp_b.path(), "env-direnv", &export_with_watched(&file_b))
+                .is_some()
+        );
         assert_eq!(cache.len(), 3);
 
         cache.invalidate_plugin_everywhere("env-direnv");
@@ -280,8 +315,16 @@ mod tests {
         let file = tmp.path().join(".envrc");
         std::fs::write(&file, "x").unwrap();
         let cache = EnvCache::new();
-        cache.put(tmp.path(), "env-direnv", &export_with_watched(&file));
-        cache.put(tmp.path(), "env-mise", &export_with_watched(&file));
+        assert!(
+            cache
+                .put(tmp.path(), "env-direnv", &export_with_watched(&file))
+                .is_some()
+        );
+        assert!(
+            cache
+                .put(tmp.path(), "env-mise", &export_with_watched(&file))
+                .is_some()
+        );
 
         cache.invalidate(tmp.path(), None);
         assert_eq!(cache.len(), 0);

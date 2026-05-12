@@ -47,9 +47,10 @@ export function setClaudettePluginSetting(
  * - **Manifest-declared settings** (e.g. `timeout_seconds`) — the
  *   per-repo "Settings" drawer renders these as a form, with a
  *   "Use global default" button to clear.
- * - **Internal runtime keys** (e.g. `repo_trust = "allow"`) that
- *   are intentionally NOT in the manifest schema and never appear
- *   as a user-facing form field. The trust prompt is the sole
+ * - **Internal runtime keys** (e.g. mise `repo_trust = "allow"` or
+ *   direnv approved `.envrc` digests) that are intentionally NOT in
+ *   the manifest schema and never appear as a user-facing form
+ *   field. The trust prompt/backend trust command path is the sole
  *   writer for those.
  *
  * Callers are responsible for not exposing internal keys as
