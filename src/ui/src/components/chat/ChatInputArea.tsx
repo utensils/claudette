@@ -665,8 +665,10 @@ export function ChatInputArea({
     const isImage = SUPPORTED_IMAGE_TYPES.has(file.type);
     const isText = isTextFile(file.type);
     const prepared = isImage
-      ? await import("../../utils/imageAttachment").then((m) => m.prepareImageAttachment(file))
-      : { blob: file, mediaType: file.type };
+      ? await import("../../utils/imageAttachment").then((m) =>
+          m.prepareImageAttachment(file, filename),
+        )
+      : { blob: file, mediaType: file.type, filename };
     const attachmentBlob = prepared.blob;
     const mediaType = prepared.mediaType;
     const sizeLimit = maxSizeFor(mediaType);
@@ -689,7 +691,7 @@ export function ChatInputArea({
     }
     const att: PendingAttachment = {
       id: crypto.randomUUID(),
-      filename,
+      filename: prepared.filename,
       media_type: mediaType,
       data_base64,
       preview_url,
