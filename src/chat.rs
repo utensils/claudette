@@ -23,7 +23,7 @@ use serde_json::Value;
 use crate::agent::{AssistantMessage, CompactMetadata, ContentBlock, TokenUsage};
 use crate::db::Database;
 use crate::model::{ChatMessage, ChatRole, ConversationCheckpoint};
-use crate::permissions::is_bypass_tools;
+use crate::permissions::{is_bypass_tools, tools_for_level};
 use crate::snapshot;
 
 // ---------------------------------------------------------------------------
@@ -100,8 +100,8 @@ pub fn persistent_session_flags_drifted(
 /// allowlist short-circuit catches up.
 ///
 /// Otherwise (unlisted tool, or plan-mode genuinely active) → deny with a
-/// message that names the escalation path; the model paraphrases this string
-/// to the user.
+/// message that names the minimum useful escalation path; the model
+/// paraphrases this string to the user.
 ///
 /// Auto-allow in bypass mode does not bypass an MCP server's own
 /// authorization — servers refuse at their layer via a normal tool_result,
@@ -124,13 +124,40 @@ pub fn build_permission_response(
             "updatedInput": original_input,
         })
     } else {
-        let msg = format!(
-            "{tool_name} isn't enabled at the current permission level. Switch to 'full' in the chat toolbar (or run /permissions full) to allow it."
-        );
+        let msg = permission_denial_message(plan_active, tool_name);
         serde_json::json!({
             "behavior": "deny",
             "message": msg,
         })
+    }
+}
+
+fn permission_denial_message(plan_active: bool, tool_name: &str) -> String {
+    if plan_active {
+        return format!(
+            "{tool_name} isn't enabled while plan mode is active. Approve or exit plan mode before retrying."
+        );
+    }
+
+    let level = minimum_permission_level_for_tool(tool_name);
+    format!(
+        "{tool_name} isn't enabled at the current permission level. Switch to '{level}' in the chat toolbar (or run /permissions {level}) to allow it."
+    )
+}
+
+fn minimum_permission_level_for_tool(tool_name: &str) -> &'static str {
+    if tools_for_level("readonly")
+        .iter()
+        .any(|tool| tool == tool_name)
+    {
+        "readonly"
+    } else if tools_for_level("standard")
+        .iter()
+        .any(|tool| tool == tool_name)
+    {
+        "standard"
+    } else {
+        "full"
     }
 }
 
@@ -645,16 +672,16 @@ mod tests {
     }
 
     #[test]
-    fn permission_response_denies_unlisted_standard_tool() {
+    fn permission_response_denies_unlisted_standard_tool_with_minimum_escalation() {
         let input = json!({});
-        let response =
-            build_permission_response(&s(&["Read", "Write"]), false, false, "Edit", &input);
+        let response = build_permission_response(&s(&["Read"]), false, false, "Edit", &input);
         assert_eq!(response["behavior"], "deny");
         let msg = response["message"].as_str().expect("message");
         assert!(
-            msg.contains("full"),
+            msg.contains("standard"),
             "message should name the escalation: {msg}"
         );
+        assert!(!msg.contains("full"), "message over-escalated: {msg}");
         assert!(
             msg.contains("/permissions"),
             "message should point at the slash command: {msg}"
@@ -667,6 +694,11 @@ mod tests {
         let response =
             build_permission_response(&s(&["Read", "Write"]), true, true, "Bash", &input);
         assert_eq!(response["behavior"], "deny");
+        let msg = response["message"].as_str().expect("message");
+        assert!(
+            msg.contains("full"),
+            "Bash should still require full escalation: {msg}"
+        );
     }
 
     #[test]
@@ -675,6 +707,15 @@ mod tests {
         let response =
             build_permission_response(&s(&["Agent", "Read"]), true, false, "Agent", &input);
         assert_eq!(response["behavior"], "deny");
+        let msg = response["message"].as_str().expect("message");
+        assert!(
+            msg.contains("plan mode"),
+            "message should explain plan-mode denial: {msg}"
+        );
+        assert!(
+            !msg.contains("/permissions"),
+            "plan-mode denial should not suggest permission escalation: {msg}"
+        );
     }
 
     #[test]

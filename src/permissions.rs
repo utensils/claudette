@@ -90,7 +90,7 @@ mod tests {
     }
 
     #[test]
-    fn ask_user_question_is_allowed_at_readonly_and_standard_levels() {
+    fn agent_and_user_interaction_tools_are_allowed_at_restricted_levels() {
         // `full` returns the wildcard sentinel `["*"]`, so the explicit
         // names only need to be present at the more restricted levels.
         for level in ["readonly", "standard"] {
