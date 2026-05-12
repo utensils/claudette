@@ -102,6 +102,16 @@ fn env_provider_drifted_parts(
     session_vars != resolved_vars || session_signature != resolved_signature
 }
 
+const ENV_TRUST_WARNING_PREFIX: &str = "**Environment setup needed.**";
+
+fn is_env_trust_warning_message(message: &ChatMessage) -> bool {
+    message.role == ChatRole::System && message.content.starts_with(ENV_TRUST_WARNING_PREFIX)
+}
+
+fn has_env_trust_warning(messages: &[ChatMessage]) -> bool {
+    messages.iter().any(is_env_trust_warning_message)
+}
+
 fn first_user_message_text(messages: &[ChatMessage]) -> Option<String> {
     messages.iter().find_map(|message| {
         if message.role == ChatRole::User {
@@ -2005,36 +2015,51 @@ pub async fn send_chat_message(
     // If any env-provider reported a trust/priming error (`mise trust`,
     // `direnv allow`, …) surface it inline as a System message. Without
     // this the agent spawns with a degraded env and the user sees no
-    // explanation for the resulting silent failure (#478). Dedupe via
-    // `posted_env_trust_warning` so we don't spam every turn while the
-    // user fixes it; the flag clears when the resolved env changes.
-    if !session.posted_env_trust_warning
-        && let Some(body) = resolved_env.format_trust_message()
-    {
-        let warning = ChatMessage {
-            id: uuid::Uuid::new_v4().to_string(),
-            workspace_id: workspace_id.clone(),
-            chat_session_id: chat_session_id.clone(),
-            role: ChatRole::System,
-            content: body,
-            cost_usd: None,
-            duration_ms: None,
-            created_at: now_iso(),
-            thinking: None,
-            input_tokens: None,
-            output_tokens: None,
-            cache_read_tokens: None,
-            cache_creation_tokens: None,
-        };
-        if let Err(err) = db.insert_chat_message(&warning) {
-            // Logging-only: a missing warning shouldn't block the turn.
-            tracing::warn!(target: "claudette::chat", error = %err, "failed to post env-trust warning");
-        } else {
+    // explanation for the resulting silent failure (#478). Dedupe against
+    // both memory and persisted history so spawn/auth failures that clear
+    // `state.agents` cannot repost the same warning on every retry in the
+    // same chat session.
+    if let Some(body) = resolved_env.format_trust_message() {
+        let already_posted = session.posted_env_trust_warning
+            || match db.list_chat_messages_for_session(&chat_session_id) {
+                Ok(messages) => has_env_trust_warning(&messages),
+                Err(err) => {
+                    tracing::warn!(
+                        target: "claudette::chat",
+                        error = %err,
+                        "failed to check env-trust warning history"
+                    );
+                    false
+                }
+            };
+        if already_posted {
             session.posted_env_trust_warning = true;
-            // Emit so the open chat panel can render the warning
-            // immediately without waiting for the failing turn to
-            // finalize and trigger a history reload.
-            let _ = app.emit("chat-system-message", &warning);
+        } else {
+            let warning = ChatMessage {
+                id: uuid::Uuid::new_v4().to_string(),
+                workspace_id: workspace_id.clone(),
+                chat_session_id: chat_session_id.clone(),
+                role: ChatRole::System,
+                content: body,
+                cost_usd: None,
+                duration_ms: None,
+                created_at: now_iso(),
+                thinking: None,
+                input_tokens: None,
+                output_tokens: None,
+                cache_read_tokens: None,
+                cache_creation_tokens: None,
+            };
+            if let Err(err) = db.insert_chat_message(&warning) {
+                // Logging-only: a missing warning shouldn't block the turn.
+                tracing::warn!(target: "claudette::chat", error = %err, "failed to post env-trust warning");
+            } else {
+                session.posted_env_trust_warning = true;
+                // Emit so the open chat panel can render the warning
+                // immediately without waiting for the failing turn to
+                // finalize and trigger a history reload.
+                let _ = app.emit("chat-system-message", &warning);
+            }
         }
     }
 
@@ -3423,7 +3448,7 @@ pub async fn send_chat_message(
 #[cfg(test)]
 mod tests {
     use super::{
-        env_provider_drifted_parts, remote_control_requested_or_active,
+        env_provider_drifted_parts, has_env_trust_warning, remote_control_requested_or_active,
         remote_control_requested_or_active_for_turn,
         remote_control_should_defer_drift_teardown_for_turn,
         remote_control_should_restore_for_turn, remote_control_title, resolve_spawn_session_id,
@@ -3476,6 +3501,37 @@ mod tests {
     #[test]
     fn terminal_text_normalizes_crlf_without_extra_clear() {
         assert_eq!(terminal_text("one\r\ntwo\r\n"), "one\r\ntwo\r\n");
+    }
+
+    #[test]
+    fn env_trust_warning_detection_is_system_message_only() {
+        let warning = test_chat_message(
+            ChatRole::System,
+            "**Environment setup needed.** One or more env-provider plugins reported a trust/priming error.",
+        );
+        assert!(has_env_trust_warning(&[warning]));
+
+        let assistant_same_text = test_chat_message(
+            ChatRole::Assistant,
+            "**Environment setup needed.** One or more env-provider plugins reported a trust/priming error.",
+        );
+        assert!(!has_env_trust_warning(&[assistant_same_text]));
+
+        let unrelated_system = test_chat_message(ChatRole::System, "Environment setup complete.");
+        assert!(!has_env_trust_warning(&[unrelated_system]));
+    }
+
+    #[test]
+    fn env_trust_warning_detection_pins_session_level_dedupe() {
+        let messages = vec![
+            test_chat_message(ChatRole::User, "ping"),
+            test_chat_message(
+                ChatRole::System,
+                "**Environment setup needed.** One or more env-provider plugins reported a trust/priming error.\n\n- **direnv**",
+            ),
+            test_chat_message(ChatRole::User, "ping again"),
+        ];
+        assert!(has_env_trust_warning(&messages));
     }
 
     #[test]
