@@ -1220,6 +1220,11 @@
   background: var(--hover-bg-subtle);
 }
 
+.queuedMessageEditing {
+  align-items: flex-start;
+  background: var(--hover-bg-subtle);
+}
+
 .queuedIcon {
   display: inline-flex;
   align-items: center;
@@ -1237,6 +1242,81 @@
   white-space: nowrap;
   color: var(--text-muted);
   min-width: 0;
+}
+
+.queuedEditForm {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+}
+
+.queuedEditTextarea {
+  flex: 1;
+  min-width: 0;
+  min-height: 54px;
+  max-height: 120px;
+  padding: 7px 9px;
+  resize: vertical;
+  border: 1px solid rgba(var(--accent-primary-rgb), 0.28);
+  border-radius: var(--radius-md);
+  background: var(--chat-input-bg);
+  color: var(--text-primary);
+  font: inherit;
+  line-height: 1.45;
+}
+
+.queuedEditTextarea:focus {
+  outline: 2px solid rgba(var(--accent-primary-rgb), 0.38);
+  outline-offset: 1px;
+}
+
+.queuedEditActions {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.queuedEdit,
+.queuedEditSave,
+.queuedEditCancel {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  color: var(--text-faint);
+}
+
+.queuedEdit:hover {
+  color: var(--text-primary);
+  background: var(--hover-bg-subtle);
+}
+
+.queuedEditSave {
+  color: var(--accent-primary);
+}
+
+.queuedEditSave:hover:not(:disabled) {
+  background: var(--accent-bg);
+  border-color: rgba(var(--accent-primary-rgb), 0.24);
+}
+
+.queuedEditSave:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
+.queuedEditCancel:hover {
+  color: var(--text-primary);
+  background: var(--hover-bg-subtle);
 }
 
 .queuedSteer {

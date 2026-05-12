@@ -79,6 +79,11 @@ export interface AgentInteractionSlice {
     mentionedFiles?: string[],
     attachments?: AttachmentInput[],
   ) => void;
+  updateQueuedMessage: (
+    sessionId: string,
+    queuedMessageId: string,
+    updates: { content: string; mentionedFiles?: string[] | undefined },
+  ) => void;
   removeQueuedMessage: (sessionId: string, queuedMessageId: string) => void;
   clearQueuedMessage: (sessionId: string) => void;
 }
@@ -186,6 +191,29 @@ export const createAgentInteractionSlice: StateCreator<
         ],
       },
     })),
+  updateQueuedMessage: (sessionId, queuedMessageId, updates) =>
+    set((s) => {
+      const messages = s.queuedMessages[sessionId];
+      if (!messages) return s;
+
+      let didUpdate = false;
+      const nextMessages = messages.map((message) => {
+        if (message.id !== queuedMessageId) return message;
+        didUpdate = true;
+        const { mentionedFiles: _, ...messageWithoutMentionedFiles } = message;
+        return updates.mentionedFiles
+          ? { ...messageWithoutMentionedFiles, ...updates }
+          : { ...messageWithoutMentionedFiles, content: updates.content };
+      });
+      if (!didUpdate) return s;
+
+      return {
+        queuedMessages: {
+          ...s.queuedMessages,
+          [sessionId]: nextMessages,
+        },
+      };
+    }),
   removeQueuedMessage: (sessionId, queuedMessageId) =>
     set((s) => {
       const remaining = (s.queuedMessages[sessionId] || []).filter(

@@ -84,6 +84,40 @@ describe("experimental Claudette terminal setting", () => {
   });
 });
 
+describe("queued messages", () => {
+  beforeEach(() => {
+    useAppStore.setState({ queuedMessages: {} });
+  });
+
+  it("updates a queued message in place", () => {
+    useAppStore.getState().setQueuedMessage("session-1", "first", ["a.ts"]);
+    useAppStore.getState().setQueuedMessage("session-1", "second", ["b.ts"]);
+
+    const [first, second] = useAppStore.getState().queuedMessages["session-1"];
+    if (!first || !second) throw new Error("expected queued messages");
+    useAppStore.getState().updateQueuedMessage("session-1", first.id, {
+      content: "edited",
+      mentionedFiles: ["edited.ts"],
+    });
+
+    expect(useAppStore.getState().queuedMessages["session-1"]).toEqual([
+      { ...first, content: "edited", mentionedFiles: ["edited.ts"] },
+      second,
+    ]);
+  });
+
+  it("leaves the queue unchanged when the message id is missing", () => {
+    useAppStore.getState().setQueuedMessage("session-1", "first");
+    const before = useAppStore.getState().queuedMessages;
+
+    useAppStore.getState().updateQueuedMessage("session-1", "missing", {
+      content: "edited",
+    });
+
+    expect(useAppStore.getState().queuedMessages).toBe(before);
+  });
+});
+
 describe("streamingThinking (per-workspace)", () => {
   beforeEach(() => {
     useAppStore.setState({ streamingThinking: {}, showThinkingBlocks: {} });

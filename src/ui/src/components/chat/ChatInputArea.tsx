@@ -135,7 +135,7 @@ function extractMentionQuery(text: string, cursorPos: number): string | null {
  * since those paths were never inserted via the file-mention picker and so
  * aren't tracked in `mentionedFilesRef`.
  */
-function extractMentionPaths(text: string): Set<string> {
+export function extractMentionPaths(text: string): Set<string> {
   const out = new Set<string>();
   const re = /(^|\s)@(\S+)/g;
   let m: RegExpExecArray | null;

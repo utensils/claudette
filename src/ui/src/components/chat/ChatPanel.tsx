@@ -1,10 +1,14 @@
 import { useEffect, useMemo, useRef, useState, useCallback } from "react";
+import type { KeyboardEvent } from "react";
 import { useTranslation } from "react-i18next";
 import {
+  Check,
   CornerDownRight,
   LoaderCircle,
+  Pencil,
   SendHorizontal,
   Trash2,
+  X,
 } from "lucide-react";
 import { ChatErrorBanner } from "./ChatErrorBanner";
 import { ChatSearchBar } from "./ChatSearchBar";
@@ -77,7 +81,7 @@ import { StreamingMessage } from "./StreamingMessage";
 import { MessagesWithTurns } from "./MessagesWithTurns";
 import { CliInvocationBanner } from "./CliInvocationBanner";
 import { CurrentTurnTaskProgress } from "./CurrentTurnTaskProgress";
-import { ChatInputArea } from "./ChatInputArea";
+import { ChatInputArea, extractMentionPaths } from "./ChatInputArea";
 import { EMPTY_ACTIVITIES } from "./chatConstants";
 
 const EMPTY_QUEUED_MESSAGES: QueuedMessage[] = [];
@@ -118,6 +122,9 @@ export function ChatPanel() {
   const [error, setError] = useState<string | null>(null);
   const [isSteeringQueued, setIsSteeringQueued] = useState(false);
   const [pendingSteerContent, setPendingSteerContent] = useState<string | null>(null);
+  const [editingQueuedMessageId, setEditingQueuedMessageId] = useState<string | null>(null);
+  const [queuedEditDraft, setQueuedEditDraft] = useState("");
+  const queuedEditRef = useRef<HTMLTextAreaElement>(null);
   const isMac = isMacHotkeyPlatform();
   const steerQueuedTooltip = tooltipWithHotkey(
     t("steer_queued"),
@@ -297,6 +304,7 @@ export function ChatPanel() {
         : EMPTY_QUEUED_MESSAGES,
   );
   const setQueuedMessage = useAppStore((s) => s.setQueuedMessage);
+  const updateQueuedMessage = useAppStore((s) => s.updateQueuedMessage);
   const removeQueuedMessage = useAppStore((s) => s.removeQueuedMessage);
   const clearQueuedMessage = useAppStore((s) => s.clearQueuedMessage);
   const addCheckpoint = useAppStore((s) => s.addCheckpoint);
@@ -317,6 +325,88 @@ export function ChatPanel() {
       : null,
   );
   const cliInvocation = activeChatSessionRecord?.cli_invocation ?? null;
+
+  useEffect(() => {
+    if (!editingQueuedMessageId) return;
+    if (queuedMessages.some((message) => message.id === editingQueuedMessageId)) return;
+    setEditingQueuedMessageId(null);
+    setQueuedEditDraft("");
+  }, [editingQueuedMessageId, queuedMessages]);
+
+  useEffect(() => {
+    if (!editingQueuedMessageId) return;
+    const textarea = queuedEditRef.current;
+    if (!textarea) return;
+    textarea.focus();
+    const cursor = textarea.value.length;
+    textarea.setSelectionRange(cursor, cursor);
+  }, [editingQueuedMessageId]);
+
+  const resolveQueuedMentionFiles = (
+    content: string,
+    previousMentionedFiles?: string[],
+  ): string[] | undefined => {
+    const nextFiles = extractMentionPaths(content);
+    for (const path of previousMentionedFiles ?? []) {
+      if (content.includes(`@${path}`)) nextFiles.add(path);
+    }
+    return nextFiles.size > 0 ? [...nextFiles] : undefined;
+  };
+
+  const cancelQueuedMessageEdit = () => {
+    setEditingQueuedMessageId(null);
+    setQueuedEditDraft("");
+  };
+
+  const startQueuedMessageEdit = (message: QueuedMessage) => {
+    setEditingQueuedMessageId(message.id);
+    setQueuedEditDraft(message.content);
+  };
+
+  const saveQueuedMessageEdit = () => {
+    if (!activeSessionId || !editingQueuedMessageId) return;
+    const queuedMessage = queuedMessages.find(
+      (message) => message.id === editingQueuedMessageId,
+    );
+    if (!queuedMessage) {
+      cancelQueuedMessageEdit();
+      return;
+    }
+
+    const hasAttachments = (queuedMessage.attachments?.length ?? 0) > 0;
+    if (queuedEditDraft.trim().length === 0 && !hasAttachments) return;
+
+    updateQueuedMessage(activeSessionId, queuedMessage.id, {
+      content: queuedEditDraft,
+      mentionedFiles: resolveQueuedMentionFiles(
+        queuedEditDraft,
+        queuedMessage.mentionedFiles,
+      ),
+    });
+    cancelQueuedMessageEdit();
+  };
+
+  const handleQueuedEditKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+      e.preventDefault();
+      saveQueuedMessageEdit();
+      return;
+    }
+    if (e.key === "Escape") {
+      e.preventDefault();
+      cancelQueuedMessageEdit();
+    }
+  };
+
+  const removeQueuedMessageAndCancelEdit = (sessionId: string, queuedMessageId: string) => {
+    removeQueuedMessage(sessionId, queuedMessageId);
+    if (editingQueuedMessageId === queuedMessageId) cancelQueuedMessageEdit();
+  };
+
+  const clearQueuedMessagesAndCancelEdit = (sessionId: string) => {
+    clearQueuedMessage(sessionId);
+    cancelQueuedMessageEdit();
+  };
 
   const isRemote = !!ws?.remote_connection_id;
 
@@ -743,6 +833,7 @@ export function ChatPanel() {
       isRunning ||
       !activeSessionId ||
       !nextQueuedMessage ||
+      editingQueuedMessageId ||
       autoDispatchQueuedIdRef.current
     ) {
       return;
@@ -757,7 +848,14 @@ export function ChatPanel() {
       handleSendRef.current?.(content, filesSet, attachments);
       autoDispatchQueuedIdRef.current = null;
     });
-  }, [isSteeringQueued, isRunning, activeSessionId, queuedMessages, removeQueuedMessage]);
+  }, [
+    isSteeringQueued,
+    isRunning,
+    activeSessionId,
+    queuedMessages,
+    editingQueuedMessageId,
+    removeQueuedMessage,
+  ]);
 
   if (!ws) return null;
 
@@ -1280,7 +1378,7 @@ export function ChatPanel() {
     if (!activeSessionId || !selectedWorkspaceId) return;
     const sessionId = activeSessionId;
     // Clear queued message — stopping means the user wants to take control.
-    clearQueuedMessage(sessionId);
+    clearQueuedMessagesAndCancelEdit(sessionId);
     try {
       if (ws?.remote_connection_id) {
         await sendRemoteCommand(ws.remote_connection_id, "stop_agent", {
@@ -1493,7 +1591,7 @@ export function ChatPanel() {
             </span>
             <button
               className={styles.queuedClearAll}
-              onClick={() => clearQueuedMessage(activeSessionId)}
+              onClick={() => clearQueuedMessagesAndCancelEdit(activeSessionId)}
               title={t("clear_queue")}
               aria-label={t("clear_queue")}
             >
@@ -1506,31 +1604,82 @@ export function ChatPanel() {
               const fallback = message.attachments?.length
                 ? message.attachments.map((attachment) => attachment.filename).join(", ")
                 : t("queued_attachment_fallback");
+              const isEditing = editingQueuedMessageId === message.id;
+              const canSaveEdit =
+                queuedEditDraft.trim().length > 0 || (message.attachments?.length ?? 0) > 0;
               return (
-                <div className={styles.queuedMessage} key={message.id}>
+                <div
+                  className={`${styles.queuedMessage}${isEditing ? ` ${styles.queuedMessageEditing}` : ""}`}
+                  key={message.id}
+                >
                   <span className={styles.queuedIcon} aria-hidden="true">
                     <CornerDownRight size={14} />
                   </span>
-                  <span className={styles.queuedContent}>{content || fallback}</span>
-                  {!ws?.remote_connection_id && (
-                    <button
-                      className={styles.queuedSteer}
-                      onClick={() => handleSteerQueuedMessage(message.id)}
-                      disabled={isSteeringQueued || !isRunning}
-                      data-tooltip={steerQueuedTooltip}
-                      aria-label={t("steer_queued")}
-                    >
-                      {isSteeringQueued ? (
-                        <LoaderCircle size={14} className={styles.queuedSteerSpinner} />
-                      ) : (
-                        <SendHorizontal size={14} />
+                  {isEditing ? (
+                    <div className={styles.queuedEditForm}>
+                      <textarea
+                        ref={queuedEditRef}
+                        className={styles.queuedEditTextarea}
+                        value={queuedEditDraft}
+                        rows={2}
+                        onChange={(e) => setQueuedEditDraft(e.target.value)}
+                        onKeyDown={handleQueuedEditKeyDown}
+                        placeholder={fallback}
+                        aria-label={t("edit_queued")}
+                        spellCheck={false}
+                      />
+                      <div className={styles.queuedEditActions}>
+                        <button
+                          className={styles.queuedEditSave}
+                          onClick={saveQueuedMessageEdit}
+                          disabled={!canSaveEdit}
+                          title={t("save_queued_edit")}
+                          aria-label={t("save_queued_edit")}
+                        >
+                          <Check size={14} />
+                        </button>
+                        <button
+                          className={styles.queuedEditCancel}
+                          onClick={cancelQueuedMessageEdit}
+                          title={t("cancel_queued_edit")}
+                          aria-label={t("cancel_queued_edit")}
+                        >
+                          <X size={14} />
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <>
+                      <span className={styles.queuedContent}>{content || fallback}</span>
+                      <button
+                        className={styles.queuedEdit}
+                        onClick={() => startQueuedMessageEdit(message)}
+                        title={t("edit_queued")}
+                        aria-label={t("edit_queued")}
+                      >
+                        <Pencil size={14} />
+                      </button>
+                      {!ws?.remote_connection_id && (
+                        <button
+                          className={styles.queuedSteer}
+                          onClick={() => handleSteerQueuedMessage(message.id)}
+                          disabled={isSteeringQueued || !isRunning}
+                          data-tooltip={steerQueuedTooltip}
+                          aria-label={t("steer_queued")}
+                        >
+                          {isSteeringQueued ? (
+                            <LoaderCircle size={14} className={styles.queuedSteerSpinner} />
+                          ) : (
+                            <SendHorizontal size={14} />
+                          )}
+                          <span>{t("steer_queued_short")}</span>
+                        </button>
                       )}
-                      <span>{t("steer_queued_short")}</span>
-                    </button>
+                    </>
                   )}
                   <button
                     className={styles.queuedCancel}
-                    onClick={() => removeQueuedMessage(activeSessionId, message.id)}
+                    onClick={() => removeQueuedMessageAndCancelEdit(activeSessionId, message.id)}
                     title={t("cancel_queued")}
                     aria-label={t("cancel_queued")}
                   >
