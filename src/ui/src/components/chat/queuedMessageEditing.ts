@@ -54,10 +54,11 @@ interface QueuedEditShortcutInput {
   key: string;
   metaKey: boolean;
   ctrlKey: boolean;
+  shiftKey?: boolean;
 }
 
 export function isQueuedEditSaveShortcut(e: QueuedEditShortcutInput): boolean {
-  return e.key === "Enter" && (e.metaKey || e.ctrlKey);
+  return e.key === "Enter" && !e.shiftKey;
 }
 
 export function isQueuedEditCancelShortcut(e: QueuedEditShortcutInput): boolean {

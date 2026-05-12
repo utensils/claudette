@@ -56,7 +56,8 @@ describe("queuedMessageEditing", () => {
   it("recognizes queued edit save and cancel shortcuts", () => {
     expect(isQueuedEditSaveShortcut({ key: "Enter", metaKey: true, ctrlKey: false })).toBe(true);
     expect(isQueuedEditSaveShortcut({ key: "Enter", metaKey: false, ctrlKey: true })).toBe(true);
-    expect(isQueuedEditSaveShortcut({ key: "Enter", metaKey: false, ctrlKey: false })).toBe(false);
+    expect(isQueuedEditSaveShortcut({ key: "Enter", metaKey: false, ctrlKey: false })).toBe(true);
+    expect(isQueuedEditSaveShortcut({ key: "Enter", metaKey: false, ctrlKey: false, shiftKey: true })).toBe(false);
     expect(isQueuedEditCancelShortcut({ key: "Escape", metaKey: false, ctrlKey: false })).toBe(true);
   });
 });
