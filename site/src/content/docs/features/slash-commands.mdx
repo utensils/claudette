@@ -27,6 +27,8 @@ Native commands ship with the app and always work. They split into two flavors:
 | `/release-notes` | Open the GitHub release notes. |
 | `/version` | Show app + protocol version. |
 
+Permission modes control which Claude Code tools Claudette pre-approves for the session. `readonly` allows read/search/web tools plus the `Agent` subagent tool, so exploratory fan-out can still run without granting edit or shell access. `standard` adds file editing tools. `full` uses Claude Code's bypass-permissions mode for the session.
+
 **Prompt expansions** — these seed pre-written prompts that flow through the agent:
 
 | Command | Effect |

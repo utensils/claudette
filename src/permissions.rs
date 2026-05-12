@@ -6,6 +6,7 @@
 // here is a correctness policy statement and a guard against future CLI
 // changes that might drop the requiresUserInteraction short-circuit.
 const TOOLS_STANDARD: &[&str] = &[
+    "Agent",
     "Read",
     "Write",
     "Edit",
@@ -18,6 +19,7 @@ const TOOLS_STANDARD: &[&str] = &[
 ];
 
 const TOOLS_READONLY: &[&str] = &[
+    "Agent",
     "Read",
     "Glob",
     "Grep",
@@ -93,6 +95,10 @@ mod tests {
         // names only need to be present at the more restricted levels.
         for level in ["readonly", "standard"] {
             let tools = tools_for_level(level);
+            assert!(
+                tools.contains(&"Agent".to_string()),
+                "Agent missing at level {level}"
+            );
             assert!(
                 tools.contains(&"AskUserQuestion".to_string()),
                 "AskUserQuestion missing at level {level}"

@@ -93,9 +93,15 @@ pub fn persistent_session_flags_drifted(
 /// that just had its plan approved would still deny every mutating tool
 /// for the remainder of the current turn.
 ///
-/// Otherwise (standard/readonly, or plan-mode genuinely active) → deny with
-/// a message that names the escalation path; the model paraphrases this
-/// string to the user.
+/// A tool explicitly present in the session's allowed-tools list is also
+/// allowed when plan mode is inactive. Normally the CLI should not ask for
+/// permission for pre-approved tools, but newer tool surfaces (for example
+/// `Agent`) can still route through the stdio prompt path before the CLI's
+/// allowlist short-circuit catches up.
+///
+/// Otherwise (unlisted tool, or plan-mode genuinely active) → deny with a
+/// message that names the escalation path; the model paraphrases this string
+/// to the user.
 ///
 /// Auto-allow in bypass mode does not bypass an MCP server's own
 /// authorization — servers refuse at their layer via a normal tool_result,
@@ -109,7 +115,10 @@ pub fn build_permission_response(
 ) -> Value {
     let bypass = is_bypass_tools(session_allowed_tools);
     let plan_active = session_plan_mode && !session_exited_plan;
-    if bypass && !plan_active {
+    let explicitly_allowed = session_allowed_tools
+        .iter()
+        .any(|allowed| allowed == tool_name);
+    if !plan_active && (bypass || explicitly_allowed) {
         serde_json::json!({
             "behavior": "allow",
             "updatedInput": original_input,
@@ -622,7 +631,21 @@ mod tests {
     }
 
     #[test]
-    fn permission_response_denies_standard_session() {
+    fn permission_response_allows_explicitly_allowed_standard_tool() {
+        let input = json!({ "description": "Find invoice period code" });
+        let response = build_permission_response(
+            &s(&["Agent", "Read", "Write"]),
+            false,
+            false,
+            "Agent",
+            &input,
+        );
+        assert_eq!(response["behavior"], "allow");
+        assert_eq!(response["updatedInput"], input);
+    }
+
+    #[test]
+    fn permission_response_denies_unlisted_standard_tool() {
         let input = json!({});
         let response =
             build_permission_response(&s(&["Read", "Write"]), false, false, "Edit", &input);
@@ -643,6 +666,14 @@ mod tests {
         let input = json!({});
         let response =
             build_permission_response(&s(&["Read", "Write"]), true, true, "Bash", &input);
+        assert_eq!(response["behavior"], "deny");
+    }
+
+    #[test]
+    fn permission_response_denies_allowed_tool_during_active_plan() {
+        let input = json!({ "description": "Investigate implementation" });
+        let response =
+            build_permission_response(&s(&["Agent", "Read"]), true, false, "Agent", &input);
         assert_eq!(response["behavior"], "deny");
     }
 
