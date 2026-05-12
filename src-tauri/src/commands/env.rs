@@ -629,7 +629,7 @@ pub async fn prepare_workspace_environment(
     workspace_id: String,
     app: AppHandle,
     state: State<'_, AppState>,
-) -> Result<(), String> {
+) -> Result<Option<WorkspaceEnvTrustNeededPayload>, String> {
     let target = EnvTarget::Workspace { workspace_id };
     let (worktree, ws_info, repo_id) = resolve_target(&state, &target).await?;
     let disabled = {
@@ -650,7 +650,8 @@ pub async fn prepare_workspace_environment(
     )
     .await;
     register_resolved_with_watcher(&state, Path::new(&worktree), &resolved.sources).await;
-    if let Some(payload) = build_trust_needed_payload(&ws_info.id, &repo_id, &resolved) {
+    let trust_payload = build_trust_needed_payload(&ws_info.id, &repo_id, &resolved);
+    if let Some(payload) = trust_payload.clone() {
         // Best-effort: the emit can fail if the Tauri app handle is
         // shutting down, but we still want to fall through and surface
         // any non-trust errors below.
@@ -659,7 +660,7 @@ pub async fn prepare_workspace_environment(
     if let Some(error) = prepare_workspace_error(&resolved) {
         return Err(error);
     }
-    Ok(())
+    Ok(trust_payload)
 }
 
 /// Toggle whether an env-provider plugin runs for the target's repo.

@@ -1,7 +1,8 @@
-import { useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { prepareWorkspaceEnvironment } from "../services/tauri";
 import { useAppStore } from "../stores/useAppStore";
+import type { WorkspaceEnvTrustNeededPayload } from "../types/env";
 
 /**
  * Phase + payload shape mirroring `WorkspaceEnvProgressPayload` in
@@ -40,17 +41,6 @@ interface WorkspaceEnvProgressPayload {
  * modal's `isEnvTrustModalData` validator and JSX render guards both
  * tolerate absence.
  */
-interface WorkspaceEnvTrustNeededPayload {
-  workspace_id: string;
-  repo_id: string;
-  plugins: Array<{
-    plugin_name: string;
-    message?: string | null;
-    config_path?: string | null;
-    error_excerpt: string;
-  }>;
-}
-
 /**
  * Heuristic match on the error string returned by
  * `prepare_workspace_environment` to suppress the legacy toast for the
@@ -70,6 +60,18 @@ function looksLikeTrustError(message: string): boolean {
   );
 }
 
+function trustPayloadSignature(payload: WorkspaceEnvTrustNeededPayload): string {
+  return JSON.stringify({
+    workspace_id: payload.workspace_id,
+    repo_id: payload.repo_id,
+    plugins: payload.plugins.map((plugin) => ({
+      plugin_name: plugin.plugin_name,
+      config_path: plugin.config_path ?? null,
+      error_excerpt: plugin.error_excerpt,
+    })),
+  });
+}
+
 export function useWorkspaceEnvironmentPreparation() {
   const selectedWorkspaceId = useAppStore((s) => s.selectedWorkspaceId);
   const selectedWorkspaceRemoteConnectionId = useAppStore((s) => {
@@ -85,6 +87,17 @@ export function useWorkspaceEnvironmentPreparation() {
   );
   const addToast = useAppStore((s) => s.addToast);
   const openModal = useAppStore((s) => s.openModal);
+  const promptedTrustSignaturesRef = useRef<Map<string, string>>(new Map());
+
+  const openTrustModalOnce = useCallback((payload: WorkspaceEnvTrustNeededPayload) => {
+    if (!payload.plugins?.length) return;
+    const signature = trustPayloadSignature(payload);
+    if (promptedTrustSignaturesRef.current.get(payload.workspace_id) === signature) {
+      return;
+    }
+    promptedTrustSignaturesRef.current.set(payload.workspace_id, signature);
+    openModal("envTrust", payload);
+  }, [openModal]);
 
   // Per-workspace flag: did any plugin emit `finished { ok: false }`
   // during the current resolve? Used by the Complete handler to
@@ -184,7 +197,7 @@ export function useWorkspaceEnvironmentPreparation() {
         if (!mounted) return;
         const { workspace_id, repo_id, plugins } = event.payload;
         if (!plugins || plugins.length === 0) return;
-        openModal("envTrust", {
+        openTrustModalOnce({
           workspace_id,
           repo_id,
           plugins,
@@ -201,7 +214,7 @@ export function useWorkspaceEnvironmentPreparation() {
       mounted = false;
       unlisten?.();
     };
-  }, [openModal]);
+  }, [openTrustModalOnce]);
 
   // Per-selection prepare: when the user activates a local workspace,
   // kick off `prepare_workspace_environment` so the chat composer +
@@ -229,8 +242,16 @@ export function useWorkspaceEnvironmentPreparation() {
     // respects `cancelled` so navigating away mid-flight doesn't
     // surface a stale toast for a workspace the user already left.
     prepareWorkspaceEnvironment(workspaceId)
-      .then(() => {
+      .then((payload) => {
         if (cancelled) return;
+        // The backend also emits `workspace_env_trust_needed`, but
+        // Tauri listener registration is async. On a fast cached
+        // resolve during app/workspace startup, the command can finish
+        // before the event subscription is live. Returning the same
+        // payload lets this selected-workspace prep path deterministically
+        // show the modal; the event remains useful for watcher-driven
+        // invalidations and other non-selected resolve sites.
+        if (payload) openTrustModalOnce(payload);
         setWorkspaceEnvironment(workspaceId, "ready");
       })
       .catch((err) => {
@@ -261,6 +282,7 @@ export function useWorkspaceEnvironmentPreparation() {
     selectedWorkspaceRemoteConnectionId,
     setWorkspaceEnvironment,
     addToast,
+    openTrustModalOnce,
   ]);
 }
 

@@ -41,3 +41,19 @@ export interface EnvSourceInfo {
   /** Set when detect or export errored (e.g. "direnv not allowed"). */
   error: string | null;
 }
+
+/**
+ * Payload emitted by the backend when an env-provider needs a one-time
+ * trust/allow action, and also returned from prepareWorkspaceEnvironment so
+ * startup races cannot drop the modal.
+ */
+export interface WorkspaceEnvTrustNeededPayload extends Record<string, unknown> {
+  workspace_id: string;
+  repo_id: string;
+  plugins: Array<{
+    plugin_name: string;
+    message?: string | null;
+    config_path?: string | null;
+    error_excerpt: string;
+  }>;
+}

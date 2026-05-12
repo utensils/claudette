@@ -65,6 +65,8 @@ describe("useWorkspaceEnvironmentPreparation", () => {
       selectedWorkspaceId: null,
       workspaces: [],
       workspaceEnvironment: {},
+      activeModal: null,
+      modalData: {},
       toasts: [],
     });
   });
@@ -95,6 +97,82 @@ describe("useWorkspaceEnvironmentPreparation", () => {
     expect(useAppStore.getState().workspaceEnvironment["ws-1"]).toEqual({
       status: "ready",
     });
+  });
+
+  it("opens the trust modal from the prepare response even if the event was missed", async () => {
+    serviceMocks.prepareWorkspaceEnvironment.mockResolvedValue({
+      workspace_id: "ws-1",
+      repo_id: "repo-1",
+      plugins: [
+        {
+          plugin_name: "env-direnv",
+          message: ".envrc is blocked.",
+          config_path: "/tmp/feature/.envrc",
+          error_excerpt: "direnv: error /tmp/feature/.envrc is blocked",
+        },
+      ],
+    });
+    useAppStore.setState({
+      selectedWorkspaceId: "ws-1",
+      workspaces: [makeWorkspace()],
+    });
+
+    await renderHarness();
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(useAppStore.getState().activeModal).toBe("envTrust");
+    expect(useAppStore.getState().modalData).toMatchObject({
+      workspace_id: "ws-1",
+      repo_id: "repo-1",
+      plugins: [{ plugin_name: "env-direnv" }],
+    });
+    expect(useAppStore.getState().workspaceEnvironment["ws-1"]).toEqual({
+      status: "ready",
+    });
+  });
+
+  it("does not reopen the same trust modal after Decide later and workspace reselection", async () => {
+    const payload = {
+      workspace_id: "ws-1",
+      repo_id: "repo-1",
+      plugins: [
+        {
+          plugin_name: "env-direnv",
+          message: ".envrc is blocked.",
+          config_path: "/tmp/feature/.envrc",
+          error_excerpt: "direnv: error /tmp/feature/.envrc is blocked",
+        },
+      ],
+    };
+    serviceMocks.prepareWorkspaceEnvironment.mockResolvedValue(payload);
+    useAppStore.setState({
+      selectedWorkspaceId: "ws-1",
+      workspaces: [makeWorkspace()],
+    });
+
+    await renderHarness();
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(useAppStore.getState().activeModal).toBe("envTrust");
+
+    act(() => {
+      useAppStore.getState().closeModal();
+      useAppStore.setState({ selectedWorkspaceId: null });
+    });
+    expect(useAppStore.getState().activeModal).toBeNull();
+
+    act(() => {
+      useAppStore.setState({ selectedWorkspaceId: "ws-1" });
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(serviceMocks.prepareWorkspaceEnvironment).toHaveBeenCalledTimes(2);
+    expect(useAppStore.getState().activeModal).toBeNull();
   });
 
   it("does not run local env providers for remote workspaces", async () => {
