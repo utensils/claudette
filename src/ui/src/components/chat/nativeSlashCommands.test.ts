@@ -28,6 +28,7 @@ function makeCtx(overrides: Partial<NativeCommandContext> = {}): NativeCommandCo
     openSettings: vi.fn<(section?: string) => void>(),
     appVersion: "1.2.3",
     addLocalMessage: vi.fn<(text: string) => void>(),
+    startClaudeAuthLogin: vi.fn(async () => {}),
     openUsageSettingsExternal: vi.fn<() => void>(),
     openReleaseNotes: vi.fn<() => void>(),
     workspaceId: "ws-1",
@@ -320,10 +321,11 @@ describe("native handler table", () => {
     }
   });
 
-  it("exposes config, usage, extra-usage, release-notes, and version entries", async () => {
+  it("exposes config, usage, login, extra-usage, release-notes, and version entries", async () => {
     const names = NATIVE_HANDLERS.map((h) => h.name);
     expect(names).toContain("config");
     expect(names).toContain("usage");
+    expect(names).toContain("login");
     expect(names).toContain("extra-usage");
     expect(names).toContain("release-notes");
     expect(names).toContain("version");
@@ -333,6 +335,7 @@ describe("native handler table", () => {
     const byName = new Map(NATIVE_HANDLERS.map((h) => [h.name, h]));
     expect(byName.get("config")?.kind).toBe("settings_route");
     expect(byName.get("usage")?.kind).toBe("settings_route");
+    expect(byName.get("login")?.kind).toBe("local_action");
     expect(byName.get("extra-usage")?.kind).toBe("settings_route");
     expect(byName.get("release-notes")?.kind).toBe("local_action");
     expect(byName.get("version")?.kind).toBe("local_action");
@@ -587,6 +590,44 @@ describe("usage native handler", () => {
     const handler = resolveNativeHandler("usage")!;
     await handler.execute(ctx, "");
     expect(ctx.openSettings).toHaveBeenCalledWith("experimental");
+  });
+});
+
+describe("login native handler", () => {
+  it("starts the Claude Code sign-in flow without sending anything to the agent", async () => {
+    const ctx = makeCtx();
+    const handler = resolveNativeHandler("login")!;
+    const result = await handler.execute(ctx, "");
+    expect(result).toEqual({ kind: "handled", canonicalName: "login" });
+    expect(ctx.startClaudeAuthLogin).toHaveBeenCalledTimes(1);
+    expect(ctx.addLocalMessage).toHaveBeenCalledWith(
+      "Claude Code sign-in started. Complete the browser flow, then retry the turn.",
+    );
+  });
+
+  it("rejects arguments before starting the sign-in flow", async () => {
+    const ctx = makeCtx();
+    const handler = resolveNativeHandler("login")!;
+    const result = await handler.execute(ctx, "--sso");
+    expect(result).toEqual({ kind: "handled", canonicalName: "login" });
+    expect(ctx.startClaudeAuthLogin).not.toHaveBeenCalled();
+    expect(ctx.addLocalMessage).toHaveBeenCalledWith(
+      "/login: does not accept arguments. Usage: /login",
+    );
+  });
+
+  it("surfaces login start failures as local messages", async () => {
+    const ctx = makeCtx({
+      startClaudeAuthLogin: vi.fn(async () => {
+        throw new Error("claude binary not found");
+      }),
+    });
+    const handler = resolveNativeHandler("login")!;
+    const result = await handler.execute(ctx, "");
+    expect(result).toEqual({ kind: "handled", canonicalName: "login" });
+    expect(ctx.addLocalMessage).toHaveBeenCalledWith(
+      "/login failed: claude binary not found",
+    );
   });
 });
 

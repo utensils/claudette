@@ -32,6 +32,7 @@ import {
   readPlanFile,
   loadDiffFiles,
   forkWorkspaceAtCheckpoint,
+  claudeAuthLogin,
 } from "../../services/tauri";
 import { applySelectedModel } from "./applySelectedModel";
 import { findLatestPlanFilePath } from "./planFilePath";
@@ -1157,6 +1158,7 @@ export function ChatPanel() {
             openSettings,
             appVersion,
             addLocalMessage,
+            startClaudeAuthLogin: claudeAuthLogin,
             openUsageSettingsExternal: () => {
               void openUsageSettings().catch((err) =>
                 console.error("Failed to open usage settings:", err),
