@@ -5,8 +5,9 @@ use claudette::agent::{
     UserEventMessage, UserMessageContent,
 };
 use claudette::chat::{
-    BuildAssistantArgs, CheckpointArgs, build_assistant_chat_message, create_turn_checkpoint,
-    extract_assistant_text, extract_event_thinking,
+    BuildAssistantArgs, CheckpointArgs, assistant_usage_fields_from_result,
+    build_assistant_chat_message, create_turn_checkpoint, extract_assistant_text,
+    extract_event_thinking,
 };
 use claudette::db::Database;
 use claudette::env::WorkspaceEnv;
@@ -1015,6 +1016,7 @@ async fn ensure_remote_control_monitor(
                     && let Some(ref msg_id) = last_assistant_msg_id
                 {
                     if let Some(usage) = usage {
+                        let usage = assistant_usage_fields_from_result(usage);
                         let _ = db.update_chat_message_usage_if_missing(
                             msg_id,
                             usage.input_tokens,

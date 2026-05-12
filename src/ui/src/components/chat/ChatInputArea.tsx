@@ -1362,6 +1362,7 @@ export function ChatInputArea({
             ref={meterRef}
             sessionId={sessionId}
             onClick={() => setContextPopoverOpen((v) => !v)}
+            suspended={workspaceEnvironmentPreparing}
           />
           {voice.state === "recording" && (
             <VoiceMeter
@@ -1452,7 +1453,7 @@ export function ChatInputArea({
           >
             {isRunning ? <Square size={16} /> : <Send size={16} />}
           </button>
-          {contextPopoverOpen && (
+          {contextPopoverOpen && !workspaceEnvironmentPreparing && (
             <ContextPopover
               sessionId={sessionId}
               onClose={() => setContextPopoverOpen(false)}
