@@ -990,10 +990,16 @@ export const TerminalPanel = memo(function TerminalPanel() {
         try {
           let ptyId: number | null = null;
           const earlyOutput: EarlyPtyOutputBuffer = new Map();
+          const existingPtyIds = new Set(
+            Array.from(instancesRef.current.values())
+              .map((existing) => existing.ptyId)
+              .filter((existingPtyId) => existingPtyId >= 0),
+          );
           const rawUnlisten = await listen<PtyOutputPayload>(
             "pty-output",
             (event) => {
               if (ptyId === null) {
+                if (existingPtyIds.has(event.payload.pty_id)) return;
                 bufferEarlyPtyOutput(earlyOutput, event.payload);
                 return;
               }

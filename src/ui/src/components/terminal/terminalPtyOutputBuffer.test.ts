@@ -31,4 +31,19 @@ describe("terminalPtyOutputBuffer", () => {
 
     expect(flushed).toEqual([[3, 4], [5]]);
   });
+
+  it("trims without shifting stored chunks on every eviction", () => {
+    const buffer: EarlyPtyOutputBuffer = new Map();
+    for (let i = 0; i < 40; i += 1) {
+      bufferEarlyPtyOutput(buffer, { pty_id: 1, data: [i] }, 40);
+    }
+    bufferEarlyPtyOutput(buffer, { pty_id: 1, data: [40] }, 40);
+
+    const flushed: number[][] = [];
+    flushEarlyPtyOutput(buffer, 1, (data) => flushed.push(data));
+
+    expect(flushed).toHaveLength(40);
+    expect(flushed[0]).toEqual([1]);
+    expect(flushed.at(-1)).toEqual([40]);
+  });
 });

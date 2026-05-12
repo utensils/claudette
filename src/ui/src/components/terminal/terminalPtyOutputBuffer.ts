@@ -8,6 +8,7 @@ export interface PtyOutputPayload {
 interface BufferedPtyOutput {
   chunks: number[][];
   bytes: number;
+  start: number;
 }
 
 export type EarlyPtyOutputBuffer = Map<number, BufferedPtyOutput>;
@@ -27,20 +28,24 @@ export function bufferEarlyPtyOutput(
 
   let entry = buffer.get(payload.pty_id);
   if (!entry) {
-    entry = { chunks: [], bytes: 0 };
+    entry = { chunks: [], bytes: 0, start: 0 };
     buffer.set(payload.pty_id, entry);
   }
 
   entry.chunks.push(payload.data);
   entry.bytes += payload.data.length;
 
-  while (entry.bytes > limitBytes && entry.chunks.length > 0) {
-    const removed = entry.chunks.shift();
+  while (entry.bytes > limitBytes && entry.start < entry.chunks.length) {
+    const removed = entry.chunks[entry.start];
     entry.bytes -= removed?.length ?? 0;
+    entry.start += 1;
   }
 
-  if (entry.chunks.length === 0) {
+  if (entry.start >= entry.chunks.length) {
     buffer.delete(payload.pty_id);
+  } else if (entry.start > 32 && entry.start * 2 > entry.chunks.length) {
+    entry.chunks = entry.chunks.slice(entry.start);
+    entry.start = 0;
   }
 }
 
@@ -52,7 +57,9 @@ export function flushEarlyPtyOutput(
   const entry = buffer.get(ptyId);
   if (!entry) return;
   buffer.delete(ptyId);
-  for (const chunk of entry.chunks) {
+  for (let i = entry.start; i < entry.chunks.length; i += 1) {
+    const chunk = entry.chunks[i];
+    if (!chunk) continue;
     write(chunk);
   }
 }
