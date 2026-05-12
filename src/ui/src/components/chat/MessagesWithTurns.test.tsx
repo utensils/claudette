@@ -187,6 +187,28 @@ describe("MessagesWithTurns edit summaries", () => {
     });
   });
 
+  it("renders Claude CLI slash-login failures as a sign-in callout", async () => {
+    const messages = [
+      message("user-1", "User", "ping"),
+      message("assistant-1", "Assistant", "Not logged in · Please run /login"),
+    ];
+
+    const container = await render(
+      <MessagesWithTurns
+        messages={messages}
+        workspaceId={WORKSPACE_ID}
+        sessionId={SESSION_ID}
+        isRunning={false}
+        searchQuery=""
+        toolDisplayMode="grouped"
+      />,
+    );
+
+    expect(container.textContent).toContain("auth_chat_failure_title");
+    expect(container.textContent).toContain("Not logged in");
+    expect(container.textContent).not.toContain("Please run /login");
+  });
+
   it("shows only the latest repeated auth failure as the sign-in callout", async () => {
     const messages = [
       message("user-1", "User", "Explore this project"),

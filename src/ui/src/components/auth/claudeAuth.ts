@@ -24,6 +24,9 @@ const AUTH_ERROR_PATTERNS = [
   "invalid authentication credentials",
   "token refresh failed",
   "credentials not found",
+  "not logged in",
+  "please run /login",
+  "run /login",
   "expired or been revoked",
   "run claude auth login",
   "failed to authenticate",
@@ -40,6 +43,13 @@ export function cleanClaudeAuthError(error: string): string {
     .replace(/^Error:\s*/i, "")
     .replace(/^ENV_AUTH:\s*/i, "")
     .trim();
+  const cliLoginHint = cleaned.match(/^(.+?)\s*[·-]\s*please run\s+\/login\.?$/i);
+  if (cliLoginHint) {
+    return cliLoginHint[1].trim();
+  }
+  if (/^please run\s+\/login\.?$/i.test(cleaned)) {
+    return "Not signed in";
+  }
   const apiError = cleaned.match(
     /^(?:Failed to authenticate\.\s*)?API Error:\s*(\d+)\s*(.+)$/i,
   );

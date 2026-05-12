@@ -133,6 +133,10 @@ fn parse_auth_status(stdout: &str) -> Result<ClaudeAuthStatus, String> {
 }
 
 fn auth_status_from_failed_output(stdout: &str, stderr: &str) -> ClaudeAuthStatus {
+    if let Ok(status) = parse_auth_status(stdout) {
+        return status;
+    }
+
     let message = [stderr.trim(), stdout.trim()]
         .into_iter()
         .find(|s| !s.is_empty())
@@ -431,6 +435,19 @@ mod tests {
         assert_eq!(status.state, ClaudeAuthState::SignedOut);
         assert!(!status.logged_in);
         assert!(!status.verified);
+    }
+
+    #[test]
+    fn parses_json_status_from_failed_output() {
+        let status = auth_status_from_failed_output(
+            r#"{"loggedIn":false,"authMethod":"none","apiProvider":"firstParty"}"#,
+            "",
+        );
+        assert_eq!(status.state, ClaudeAuthState::SignedOut);
+        assert!(!status.logged_in);
+        assert_eq!(status.auth_method.as_deref(), Some("none"));
+        assert_eq!(status.api_provider.as_deref(), Some("firstParty"));
+        assert_eq!(status.message, None);
     }
 
     #[test]
