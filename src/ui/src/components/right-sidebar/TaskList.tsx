@@ -176,7 +176,7 @@ export const TaskList = memo(function TaskList({
                     onToggle={() =>
                       setExpandedRuns((prev) => ({
                         ...prev,
-                        [key]: !expanded,
+                        [key]: !(prev[key] === true),
                       }))
                     }
                   />

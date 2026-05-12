@@ -36,6 +36,11 @@ export interface TaskTrackerWithHistory {
   history: TaskRun[];
 }
 
+export interface TaskActivityTurn {
+  id: string;
+  activities: ToolActivity[];
+}
+
 const EMPTY_ACTIVITIES: ToolActivity[] = [];
 const EMPTY_TURNS: CompletedTurn[] = [];
 const EMPTY_RESULT: TaskTrackerResult = {
@@ -346,7 +351,7 @@ export function deriveTasks(
 }
 
 export function deriveTaskState(
-  completedTurns: CompletedTurn[],
+  completedTurns: TaskActivityTurn[],
   toolActivities: ToolActivity[],
 ): TaskTrackerWithHistory {
   if (completedTurns.length === 0 && toolActivities.length === 0) {

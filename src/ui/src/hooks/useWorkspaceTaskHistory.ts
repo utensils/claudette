@@ -1,10 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useAppStore } from "../stores/useAppStore";
-import type {
-  AgentToolCall,
-  CompletedTurn,
-  ToolActivity,
-} from "../stores/useAppStore";
+import type { AgentToolCall, ToolActivity } from "../stores/useAppStore";
 import {
   loadCompletedTurns,
   listChatSessions,
@@ -15,6 +11,7 @@ import type { CompletedTurnData } from "../types/checkpoint";
 import {
   deriveTaskState,
   useTaskTrackerWithHistory,
+  type TaskActivityTurn,
   type TaskRun,
   type TaskTrackerResult,
 } from "./useTaskTracker";
@@ -56,7 +53,7 @@ function parseAgentToolCalls(value: string): AgentToolCall[] | undefined {
   }
 }
 
-function turnFromData(data: CompletedTurnData): CompletedTurn {
+function turnFromData(data: CompletedTurnData): TaskActivityTurn {
   return {
     id: data.checkpoint_id,
     activities: data.activities.map<ToolActivity>((activity) => ({
@@ -74,10 +71,6 @@ function turnFromData(data: CompletedTurnData): CompletedTurn {
       agentStatus: activity.agent_status,
       agentToolCalls: parseAgentToolCalls(activity.agent_tool_calls_json),
     })),
-    messageCount: data.message_count,
-    collapsed: true,
-    afterMessageIndex: data.turn_index,
-    commitHash: data.commit_hash,
   };
 }
 
@@ -97,7 +90,7 @@ function mergeSessions(
 async function loadSessionTurns(
   sessionId: string,
   remoteConnectionId: string | null,
-): Promise<CompletedTurn[]> {
+): Promise<TaskActivityTurn[]> {
   const data = remoteConnectionId
     ? ((await sendRemoteCommand(remoteConnectionId, "load_completed_turns", {
         chat_session_id: sessionId,
@@ -121,7 +114,7 @@ export function useWorkspaceTaskHistory(
   const activeState = useTaskTrackerWithHistory(activeSessionId);
   const [fetchedSessions, setFetchedSessions] = useState<ChatSession[]>([]);
   const [turnsBySession, setTurnsBySession] = useState<
-    Record<string, CompletedTurn[]>
+    Record<string, TaskActivityTurn[]>
   >({});
   const [loadingSessions, setLoadingSessions] = useState(false);
   const [loadingTurns, setLoadingTurns] = useState(false);
@@ -194,13 +187,19 @@ export function useWorkspaceTaskHistory(
           ] as const;
         } catch (err) {
           console.error("Failed to load task history turns:", err);
-          return [session.id, []] as const;
+          return null;
         }
       }),
     )
       .then((entries) => {
         if (cancelled) return;
-        setTurnsBySession(Object.fromEntries(entries));
+        setTurnsBySession((prev) => {
+          const next = { ...prev };
+          for (const entry of entries) {
+            if (entry) next[entry[0]] = entry[1];
+          }
+          return next;
+        });
       })
       .finally(() => {
         if (!cancelled) setLoadingTurns(false);
