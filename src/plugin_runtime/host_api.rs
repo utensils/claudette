@@ -247,8 +247,47 @@ fn register_host_api(lua: &Lua, ctx: HostContext) -> LuaResult<()> {
         })?,
     )?;
 
+    // host.sha256_file(path) -> lowercase hex string
+    //
+    // Same workspace confinement as `host.read_file`, but reads bytes
+    // instead of UTF-8. Env providers use this to bind trust decisions
+    // to exact config-file content without leaking filesystem access
+    // outside the worktree.
+    let sha256_file_root = std::path::Path::new(&ctx.workspace_info.worktree_path)
+        .canonicalize()
+        .ok();
+    host.set(
+        "sha256_file",
+        lua.create_function(move |_, path: String| {
+            if path.contains('\0') {
+                return Err(LuaError::external("path must not contain null bytes"));
+            }
+            let canonical = resolve_inside_workspace(&path, sha256_file_root.as_deref())
+                .ok_or_else(|| {
+                    LuaError::external(format!(
+                        "path '{path}' is outside the workspace or does not exist"
+                    ))
+                })?;
+            let bytes = std::fs::read(&canonical)
+                .map_err(|e| LuaError::external(format!("failed to read '{path}': {e}")))?;
+            Ok(sha256_hex(&bytes))
+        })?,
+    )?;
+
     lua.globals().set("host", host)?;
     Ok(())
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+
+    let digest = Sha256::digest(bytes);
+    let mut out = String::with_capacity(digest.len() * 2);
+    for byte in digest {
+        use std::fmt::Write as _;
+        let _ = write!(&mut out, "{byte:02x}");
+    }
+    out
 }
 
 /// Resolve `path` (absolute or relative to `workspace_root`) into a
@@ -593,6 +632,7 @@ mod tests {
         assert!(host.get::<LuaValue>("json_encode").unwrap().is_function());
         assert!(host.get::<LuaValue>("workspace").unwrap().is_function());
         assert!(host.get::<LuaValue>("config").unwrap().is_function());
+        assert!(host.get::<LuaValue>("sha256_file").unwrap().is_function());
         assert!(host.get::<LuaValue>("log").unwrap().is_function());
     }
 

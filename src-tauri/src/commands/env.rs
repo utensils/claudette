@@ -781,13 +781,14 @@ pub async fn run_env_trust(
     // Collect every path we need to approve. For a Workspace target
     // it's just that workspace. For a Repo target it's repo.path +
     // every workspace.worktree_path that exists for that repo.
-    let paths = resolve_trust_paths(&state, &target).await?;
-    if paths.is_empty() {
+    let scope = resolve_trust_scope(&state, &target).await?;
+    if scope.paths.is_empty() {
         return Err("no worktrees to run trust against".to_string());
     }
 
     let mut errors: Vec<String> = Vec::new();
-    for path in &paths {
+    let mut approved_envrc_sha256s: Vec<String> = Vec::new();
+    for path in &scope.paths {
         let mut command = tokio::process::Command::new(cmd[0]);
         command.args(&cmd[1..]);
         command.current_dir(path);
@@ -819,9 +820,20 @@ pub async fn run_env_trust(
         state
             .env_cache
             .invalidate(Path::new(path), Some(&plugin_name));
+
+        if plugin_name == "env-direnv" {
+            let envrc = Path::new(path).join(".envrc");
+            if let Ok(digest) = sha256_file_hex(&envrc) {
+                approved_envrc_sha256s.push(digest);
+            }
+        }
     }
 
-    if !errors.is_empty() && errors.len() == paths.len() {
+    if plugin_name == "env-direnv" && !approved_envrc_sha256s.is_empty() {
+        persist_approved_envrc_sha256s(&state, &scope.repo_id, approved_envrc_sha256s).await?;
+    }
+
+    if !errors.is_empty() && errors.len() == scope.paths.len() {
         return Err(errors.join("; "));
     }
     // Partial success is fine — the caller's refresh will show which
@@ -829,10 +841,15 @@ pub async fn run_env_trust(
     Ok(())
 }
 
+struct TrustScope {
+    repo_id: String,
+    paths: Vec<String>,
+}
+
 /// Gather every on-disk path we should run the trust command against.
 /// `Workspace` → the workspace's worktree. `Repo` → repo.path plus
 /// every workspace.worktree_path that currently exists for the repo.
-async fn resolve_trust_paths(state: &AppState, target: &EnvTarget) -> Result<Vec<String>, String> {
+async fn resolve_trust_scope(state: &AppState, target: &EnvTarget) -> Result<TrustScope, String> {
     let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
     match target {
         EnvTarget::Workspace { workspace_id } => {
@@ -846,7 +863,10 @@ async fn resolve_trust_paths(state: &AppState, target: &EnvTarget) -> Result<Vec
                 .worktree_path
                 .clone()
                 .ok_or("Workspace has no worktree")?;
-            Ok(vec![worktree])
+            Ok(TrustScope {
+                repo_id: ws.repository_id,
+                paths: vec![worktree],
+            })
         }
         EnvTarget::Repo { repo_id } => {
             let repo = db
@@ -863,9 +883,71 @@ async fn resolve_trust_paths(state: &AppState, target: &EnvTarget) -> Result<Vec
                     paths.push(wt);
                 }
             }
-            Ok(paths)
+            Ok(TrustScope {
+                repo_id: repo_id.clone(),
+                paths,
+            })
         }
     }
+}
+
+const APPROVED_ENVRC_SHA256S_KEY: &str = "approved_envrc_sha256s";
+
+fn sha256_file_hex(path: &Path) -> std::io::Result<String> {
+    use sha2::{Digest, Sha256};
+
+    let bytes = std::fs::read(path)?;
+    let digest = Sha256::digest(&bytes);
+    let mut out = String::with_capacity(digest.len() * 2);
+    for byte in digest {
+        use std::fmt::Write as _;
+        let _ = write!(&mut out, "{byte:02x}");
+    }
+    Ok(out)
+}
+
+async fn persist_approved_envrc_sha256s(
+    state: &AppState,
+    repo_id: &str,
+    new_digests: Vec<String>,
+) -> Result<(), String> {
+    let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
+    let storage_key =
+        format!("repo:{repo_id}:plugin:env-direnv:setting:{APPROVED_ENVRC_SHA256S_KEY}");
+    let mut merged: Vec<String> = db
+        .get_app_setting(&storage_key)
+        .ok()
+        .flatten()
+        .and_then(|stored| serde_json::from_str::<Vec<String>>(&stored).ok())
+        .unwrap_or_default();
+    merged = merge_approved_envrc_sha256s(merged, new_digests);
+
+    let value = serde_json::json!(merged);
+    let serialized = serde_json::to_string(&value).map_err(|e| e.to_string())?;
+    db.set_app_setting(&storage_key, &serialized)
+        .map_err(|e| e.to_string())?;
+    drop(db);
+    state.plugins.read().await.set_repo_setting(
+        repo_id,
+        "env-direnv",
+        APPROVED_ENVRC_SHA256S_KEY,
+        Some(value),
+    );
+    state.env_cache.invalidate_plugin_everywhere("env-direnv");
+    Ok(())
+}
+
+fn merge_approved_envrc_sha256s(
+    mut existing: Vec<String>,
+    new_digests: Vec<String>,
+) -> Vec<String> {
+    for digest in new_digests {
+        if !existing.iter().any(|old| old == &digest) {
+            existing.push(digest);
+        }
+    }
+    existing.sort();
+    existing
 }
 
 /// Build a [`WorkspaceInfo`] for the given target, returning
@@ -1124,6 +1206,16 @@ mod tests {
     fn filter_globally_disabled_empty_passes_through() {
         let visible = filter_globally_disabled(Vec::new(), |_| true);
         assert!(visible.is_empty());
+    }
+
+    #[test]
+    fn merge_approved_envrc_sha256s_records_unique_sorted_digests() {
+        let merged = merge_approved_envrc_sha256s(
+            vec!["b".repeat(64), "a".repeat(64)],
+            vec!["b".repeat(64), "c".repeat(64)],
+        );
+
+        assert_eq!(merged, vec!["a".repeat(64), "b".repeat(64), "c".repeat(64)]);
     }
 
     #[test]

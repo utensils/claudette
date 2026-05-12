@@ -63,13 +63,13 @@ The most common reason to set a per-repo override is **timeout**: the default ca
 
 direnv and mise both refuse to evaluate config files that haven't been explicitly approved per worktree (`direnv allow` / `mise trust`). The first time a workspace under a repo hits this, Claudette opens the **Environment trust needed** modal with one row per affected provider:
 
-- **Trust** — runs the trust command (`mise trust` / `direnv allow`) in the repo's main checkout AND every existing worktree under it, then persists `repo_trust = "allow"` so any **future** workspace in this repo auto-trusts silently on first resolve via the env-provider plugin's retry path.
+- **Trust** — runs the trust command (`mise trust` / `direnv allow`) in the repo's main checkout AND every existing worktree under it. For mise, Claudette persists `repo_trust = "allow"` so future workspaces in this repo can auto-trust on first resolve. For direnv, Claudette records approved `.envrc` SHA-256 digests instead: future worktrees auto-allow only when their `.envrc` content matches a digest you approved.
 - **Disable for project** — toggles the per-repo `enabled = false` flag so the dispatcher skips the provider entirely for any worktree under this repo. Other env-providers still run. You can re-enable from the row's toggle in Repo Settings → Environment.
 - **Decide later** — dismisses the modal without persisting a choice. The same prompt surfaces again the next time a workspace fails resolve.
 
 If you dismissed the prompt (or want to revisit the decision later), the same modal is reachable from **Repo Settings → Environment**: trust-blocked providers render a **Resolve…** button on their row that re-opens the same prompt. Toggling a disabled provider back on also re-runs the prompt automatically if the underlying config is still untrusted. Non-trust errors (broken TOML, flake eval failure) still surface inline via a **Details** disclosure — the modal isn't the right surface for those, and re-running the trust command wouldn't help.
 
-The decision is per-repo, not global, so trusting one project's `.envrc` doesn't affect any other. The pre-0.24 global `auto_allow` / `auto_trust` toggles have been removed; users who had them enabled are migrated automatically to per-repo `repo_trust = "allow"` for every repository they had at the time of upgrade.
+The decision is per-repo, not global, so trusting one project's `.envrc` doesn't affect any other. Direnv approvals are also content-aware: editing `.envrc` changes its digest and Claudette prompts again before using the changed environment. The pre-0.24 global `auto_allow` / `auto_trust` toggles have been removed; existing mise `auto_trust` opt-ins migrate to per-repo trust state, while direnv prompts again so each `.envrc` digest can be reviewed explicitly.
 
 ### Loading state
 

@@ -43,6 +43,18 @@ fn make_vm(plugin: &str, allowed: &[&str], worktree: &Path) -> Lua {
     create_lua_vm(ctx).expect("create vm")
 }
 
+fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+
+    let digest = Sha256::digest(bytes);
+    let mut out = String::with_capacity(digest.len() * 2);
+    for byte in digest {
+        use std::fmt::Write as _;
+        let _ = write!(&mut out, "{byte:02x}");
+    }
+    out
+}
+
 /// Run `detect(args)` against the given plugin source.
 fn run_detect(plugin: &str, src: &str, allowed: &[&str], worktree: &Path) -> bool {
     let lua = make_vm(plugin, allowed, worktree);
@@ -447,16 +459,16 @@ fn direnv_export_strips_markers_but_keeps_watches_decoded_into_watched() {
 #[test]
 fn direnv_export_watches_list_drops_direnv_allow_and_deny_stamps() {
     // Regression for the "constant direnv reloads when jumping
-    // workspaces" thrash: with `repo_trust = "allow"` set, the lua
-    // plugin runs `direnv allow` on a blocked .envrc, which writes
-    // `<data_dir>/direnv/allow/<sha>`. If we then included that
-    // path in `watched`, the host's FSEvents watcher (subscribed
+    // workspaces" thrash: after an approved digest auto-runs
+    // `direnv allow` on a blocked .envrc, direnv writes
+    // `<data_dir>/direnv/allow/<sha>`. If we then included that path
+    // in `watched`, the host's FSEvents watcher (subscribed
     // immediately after `cache.put`) would receive the buffered
-    // Create/Modify event for that very write and invalidate the
-    // cache entry we just populated — making every subsequent
-    // workspace select pay another full `direnv export json` (5s on
-    // a Nix flake). Stamps must be dropped from the watch list so
-    // the cache stays warm across selects.
+    // Create/Modify event for that write and invalidate the cache
+    // entry we just populated — making every subsequent workspace
+    // select pay another full `direnv export json` (5s on a Nix
+    // flake). Stamps must be dropped from the watch list so the cache
+    // stays warm across selects.
     //
     // The plugin's stamp predicate is two-part: it requires both an
     // adjacent `/direnv/allow/` or `/direnv/deny/` path segment AND a
@@ -531,7 +543,7 @@ fn direnv_export_watches_list_drops_direnv_allow_and_deny_stamps() {
         "flake.lock must survive the stamp filter, got {watched:?}"
     );
     // Stamps are filtered. A failure here means the cache will thrash
-    // on every workspace select for users with repo_trust = "allow".
+    // on every workspace select after an approved auto-allow.
     assert!(
         !watched.contains(&allow_stamp),
         "direnv allow stamp leaked into watched; cache will thrash. got {watched:?}"
@@ -1046,8 +1058,8 @@ impl Drop for ScopedHome {
 // `direnv export json` therefore exits 1 with only its own DIRENV_*
 // metadata in stdout — never the user's exports. The contract this test
 // pins (exported var flows through) cannot be met until direnv ships a
-// non-bash Windows runtime; the sibling `integration_direnv_auto_allow_
-// off_surfaces_blocked_error` test exercises the blocked-error path
+// non-bash Windows runtime; the sibling blocked-error test exercises
+// the blocked-error path
 // which doesn't depend on `.envrc` evaluation and is left un-gated so
 // it runs on every platform.
 #[cfg(all(has_direnv, unix))]
@@ -1199,12 +1211,10 @@ async fn integration_mise_export_returns_env() {
     );
 }
 
-/// repo_trust default (unset / "ask"): an unallowed .envrc must stay
+/// Without an approved `.envrc` digest, an unallowed .envrc must stay
 /// blocked. The plugin reports the error as-is; no retry is attempted,
-/// and no vars are contributed. This is the "safe by default" path that
-/// honors direnv's per-path trust model — Claudette only auto-runs
-/// `direnv allow` for repos the user has explicitly trusted via the
-/// per-repo prompt.
+/// and no vars are contributed. This is the "safe by default" path
+/// that honors direnv's per-path trust model.
 #[cfg(has_direnv)]
 #[tokio::test]
 async fn integration_direnv_untrusted_repo_surfaces_blocked_error() {
@@ -1222,8 +1232,8 @@ async fn integration_direnv_untrusted_repo_surfaces_blocked_error() {
     let plugin_dir = tempfile::tempdir().unwrap();
     crate::plugin_runtime::seed::seed_bundled_plugins(plugin_dir.path());
     let registry = crate::plugin_runtime::PluginRegistry::discover(plugin_dir.path());
-    // No `repo_trust` override set — matches a fresh repo where the
-    // user hasn't responded to the trust prompt yet.
+    // No approved digest set — matches a fresh repo where the user
+    // hasn't responded to the trust prompt yet.
 
     let backend = crate::env_provider::backend::PluginRegistryBackend::new(&registry);
     let cache = crate::env_provider::cache::EnvCache::new();
@@ -1280,9 +1290,9 @@ async fn integration_direnv_untrusted_repo_surfaces_blocked_error() {
     );
 }
 
-/// `repo_trust = "allow"` must retry after `direnv allow` when the
-/// .envrc is blocked. After the retry the plugin reports success and
-/// vars flow through.
+/// An approved `.envrc` content digest must retry after `direnv allow`
+/// when the .envrc is blocked. After the retry the plugin reports
+/// success and vars flow through.
 // Same Unix-only gate as `integration_direnv_export_returns_env`: this
 // test asserts that after `direnv allow` runs, the retried export
 // surfaces user-exported vars. On Windows direnv's bash-based .envrc
@@ -1295,24 +1305,21 @@ async fn integration_direnv_trusted_repo_retries_after_blocked() {
     let _scoped = ScopedHome::new();
 
     let tmp = tempfile::tempdir().unwrap();
-    std::fs::write(
-        tmp.path().join(".envrc"),
-        "export CLAUDETTE_DIRENV_AUTO=yes\n",
-    )
-    .unwrap();
+    let envrc = "export CLAUDETTE_DIRENV_AUTO=yes\n";
+    std::fs::write(tmp.path().join(".envrc"), envrc).unwrap();
 
     let plugin_dir = tempfile::tempdir().unwrap();
     crate::plugin_runtime::seed::seed_bundled_plugins(plugin_dir.path());
     let registry = crate::plugin_runtime::PluginRegistry::discover(plugin_dir.path());
-    // Per-repo trust: simulates the user clicking "Trust direnv for
-    // this repo" in the EnvPanel error card. The plugin's Lua sees
-    // `repo_trust = "allow"` via `host.config` and auto-runs
-    // `direnv allow` on first encounter with a blocked .envrc.
+    // Content-aware per-repo trust: simulates the user clicking
+    // "Trust direnv" for this exact .envrc body. Future worktrees
+    // with the same content can auto-allow, but changed content must
+    // prompt again.
     registry.set_repo_setting(
         "repo-trusted",
         "env-direnv",
-        "repo_trust",
-        Some(serde_json::json!("allow")),
+        "approved_envrc_sha256s",
+        Some(serde_json::json!([sha256_hex(envrc.as_bytes())])),
     );
 
     let backend = crate::env_provider::backend::PluginRegistryBackend::new(&registry);
@@ -1350,6 +1357,66 @@ async fn integration_direnv_trusted_repo_retries_after_blocked() {
             .get("CLAUDETTE_DIRENV_AUTO")
             .and_then(|v| v.as_deref()),
         Some("yes"),
+    );
+}
+
+#[cfg(has_direnv)]
+#[tokio::test]
+async fn integration_direnv_changed_envrc_digest_prompts_again() {
+    let _scoped = ScopedHome::new();
+
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(
+        tmp.path().join(".envrc"),
+        "export CLAUDETTE_DIRENV_CHANGED=yes\n",
+    )
+    .unwrap();
+
+    let plugin_dir = tempfile::tempdir().unwrap();
+    crate::plugin_runtime::seed::seed_bundled_plugins(plugin_dir.path());
+    let registry = crate::plugin_runtime::PluginRegistry::discover(plugin_dir.path());
+    registry.set_repo_setting(
+        "repo-trusted-old-content",
+        "env-direnv",
+        "approved_envrc_sha256s",
+        Some(serde_json::json!([sha256_hex(b"export OLD_VALUE=yes\n")])),
+    );
+
+    let backend = crate::env_provider::backend::PluginRegistryBackend::new(&registry);
+    let cache = crate::env_provider::cache::EnvCache::new();
+    let ws_info = WorkspaceInfo {
+        id: "ws-changed".into(),
+        name: "test".into(),
+        branch: "main".into(),
+        worktree_path: tmp.path().to_string_lossy().into_owned(),
+        repo_path: tmp.path().to_string_lossy().into_owned(),
+        repo_id: Some("repo-trusted-old-content".into()),
+    };
+
+    let resolved = crate::env_provider::resolve_for_workspace(
+        &backend,
+        &cache,
+        tmp.path(),
+        &ws_info,
+        &Default::default(),
+    )
+    .await;
+    let direnv_source = resolved
+        .sources
+        .iter()
+        .find(|s| s.plugin_name == "env-direnv")
+        .expect("env-direnv must appear in sources");
+    assert!(
+        direnv_source
+            .error
+            .as_deref()
+            .is_some_and(|e| e.contains("is blocked")),
+        "changed .envrc digest must prompt again; got {:?}",
+        direnv_source.error
+    );
+    assert!(
+        !resolved.vars.contains_key("CLAUDETTE_DIRENV_CHANGED"),
+        "vars must not leak from a changed unapproved .envrc"
     );
 }
 

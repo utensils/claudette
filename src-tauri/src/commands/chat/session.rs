@@ -294,6 +294,7 @@ mod tests {
             background_wake_active: false,
             session_exited_plan: false,
             session_resolved_env: Default::default(),
+            session_resolved_env_signature: String::new(),
             mcp_bridge: None,
             last_user_msg_id: None,
             posted_env_trust_warning: false,

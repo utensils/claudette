@@ -80,6 +80,27 @@ fn remote_control_requested_or_active_for_turn(
     feature_enabled && remote_control_requested_or_active(status)
 }
 
+fn env_provider_drifted(
+    session: &AgentSessionState,
+    resolved_env: &claudette::env_provider::ResolvedEnv,
+) -> bool {
+    env_provider_drifted_parts(
+        &session.session_resolved_env,
+        &session.session_resolved_env_signature,
+        &resolved_env.vars,
+        &resolved_env.source_signature(),
+    )
+}
+
+fn env_provider_drifted_parts(
+    session_vars: &claudette::env_provider::types::EnvMap,
+    session_signature: &str,
+    resolved_vars: &claudette::env_provider::types::EnvMap,
+    resolved_signature: &str,
+) -> bool {
+    session_vars != resolved_vars || session_signature != resolved_signature
+}
+
 fn first_user_message_text(messages: &[ChatMessage]) -> Option<String> {
     messages.iter().find_map(|message| {
         if message.role == ChatRole::User {
@@ -1453,6 +1474,7 @@ pub async fn send_chat_message(
                 background_wake_active: false,
                 session_exited_plan: false,
                 session_resolved_env: Default::default(),
+                session_resolved_env_signature: String::new(),
                 mcp_bridge: None,
                 last_user_msg_id: None,
                 posted_env_trust_warning: false,
@@ -1482,6 +1504,7 @@ pub async fn send_chat_message(
             background_wake_active: false,
             session_exited_plan: false,
             session_resolved_env: Default::default(),
+            session_resolved_env_signature: String::new(),
             mcp_bridge: None,
             last_user_msg_id: None,
             posted_env_trust_warning: false,
@@ -1911,8 +1934,8 @@ pub async fn send_chat_message(
     // snapshot stored at spawn and teardown on any divergence. The
     // mtime-keyed cache makes this re-resolve nearly free on quiet
     // turns, so the check costs nothing in the common case.
-    if should_defer_persistent_restart(session) && session.session_resolved_env != resolved_env.vars
-    {
+    let env_drifted = env_provider_drifted(session, &resolved_env);
+    if should_defer_persistent_restart(session) && env_drifted {
         tracing::info!(
             target: "claudette::chat",
             workspace_id = %workspace_id,
@@ -1922,7 +1945,7 @@ pub async fn send_chat_message(
         remote_control_feature_enabled,
         &session.claude_remote_control,
     ) && session.persistent_session.is_some()
-        && session.session_resolved_env != resolved_env.vars
+        && env_drifted
     {
         // Env-provider output can drift spuriously between turns when the
         // workspace files Claude touched bumped a watched mtime (e.g. a
@@ -1936,9 +1959,7 @@ pub async fn send_chat_message(
             workspace_id = %workspace_id,
             "env-provider output changed but Claude Remote Control is active — deferring persistent session restart"
         );
-    } else if session.persistent_session.is_some()
-        && session.session_resolved_env != resolved_env.vars
-    {
+    } else if session.persistent_session.is_some() && env_drifted {
         tracing::info!(
             target: "claudette::chat",
             workspace_id = %workspace_id,
@@ -2231,6 +2252,7 @@ pub async fn send_chat_message(
                 // respawns (including paths that skip the drift branch).
                 session.session_exited_plan = false;
                 session.session_resolved_env = resolved_env.vars.clone();
+                session.session_resolved_env_signature = resolved_env.source_signature();
                 handle
             }
         }
@@ -2360,6 +2382,7 @@ pub async fn send_chat_message(
         // See the sibling reset above — fresh process, fresh latch.
         session.session_exited_plan = false;
         session.session_resolved_env = resolved_env.vars.clone();
+        session.session_resolved_env_signature = resolved_env.source_signature();
         let _ = db.save_chat_session_state(&chat_session_id, &final_sid, session.turn_count);
         handle
     };
@@ -3397,7 +3420,8 @@ pub async fn send_chat_message(
 #[cfg(test)]
 mod tests {
     use super::{
-        remote_control_requested_or_active, remote_control_requested_or_active_for_turn,
+        env_provider_drifted_parts, remote_control_requested_or_active,
+        remote_control_requested_or_active_for_turn,
         remote_control_should_defer_drift_teardown_for_turn,
         remote_control_should_restore_for_turn, remote_control_title, resolve_spawn_session_id,
         should_defer_persistent_restart_for_state,
@@ -3457,6 +3481,17 @@ mod tests {
         assert!(!should_defer_persistent_restart_for_state(true, false));
         assert!(!should_defer_persistent_restart_for_state(false, true));
         assert!(!should_defer_persistent_restart_for_state(false, false));
+    }
+
+    #[test]
+    fn env_provider_drift_detects_source_signature_change_when_vars_match() {
+        let mut vars = claudette::env_provider::types::EnvMap::new();
+        vars.insert("PATH".to_string(), Some("/nix/store/bin".to_string()));
+
+        assert!(env_provider_drifted_parts(
+            &vars, "sig-old", &vars, "sig-new"
+        ));
+        assert!(!env_provider_drifted_parts(&vars, "sig", &vars, "sig"));
     }
 
     #[test]

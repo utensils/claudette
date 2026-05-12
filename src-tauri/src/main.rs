@@ -420,12 +420,11 @@ fn main() {
     // failure here is non-fatal: the registry just runs with defaults.
     if let Ok(db) = Database::open(&db_path) {
         // One-shot migration from the old global `auto_allow` /
-        // `auto_trust` toggles to per-repo `repo_trust = "allow"`. The
-        // old toggles were footguns: a single click bypassed direnv's
-        // / mise's per-path safety for *every* future workspace on the
-        // machine. The new model keeps the per-path safety intact,
-        // automating only the worktrees in repos the user explicitly
-        // trusted.
+        // `auto_trust` toggles. The old toggles were footguns: a
+        // single click bypassed direnv's / mise's per-path safety for
+        // *every* future workspace on the machine. The new model keeps
+        // mise scoped per repo and direnv scoped per approved .envrc
+        // content digest.
         //
         // Idempotent: once the legacy keys are removed, subsequent
         // startups skip this branch entirely. We don't write a "ran"
@@ -1155,8 +1154,8 @@ fn main() {
 
 /// One-shot migration from the legacy global trust toggles
 /// (`plugin:env-direnv:setting:auto_allow`,
-/// `plugin:env-mise:setting:auto_trust`) to the new per-repo
-/// `repo_trust = "allow"` model.
+/// `plugin:env-mise:setting:auto_trust`) to the current per-repo
+/// trust model.
 ///
 /// Idempotent. Subsequent startups find the source keys gone and
 /// skip the branch — no "ran" marker is needed because the source-
@@ -1167,11 +1166,13 @@ fn main() {
 ///   absent, malformed) means the user wasn't actively opted in, so
 ///   the new "ask once per repo" default is the correct behavior
 ///   for them.
-/// - When migrating, every repository in the database gets
-///   `repo:{id}:plugin:{name}:setting:repo_trust = "\"allow\""`. This
-///   preserves the user's prior intent (trust everywhere they used
-///   the plugin) without making them re-approve a stack of repos.
+/// - For mise, every repository in the database gets
+///   `repo:{id}:plugin:env-mise:setting:repo_trust = "\"allow\""`.
 ///   Repos created after the migration get the default ask flow.
+/// - For direnv, the broad legacy `auto_allow` key is deleted without
+///   writing `repo_trust`. Direnv trust is now content-aware and can
+///   only auto-allow `.envrc` bodies whose SHA-256 digest was approved
+///   through the current trust prompt.
 /// - The legacy key is deleted regardless of value, so a future
 ///   debug session doesn't see ghost settings that have no effect.
 fn migrate_legacy_env_provider_trust(db: &claudette::db::Database) {
@@ -1185,7 +1186,7 @@ fn migrate_legacy_env_provider_trust(db: &claudette::db::Database) {
             _ => continue,
         };
         let opted_in = stored.trim() == "true";
-        if opted_in {
+        if opted_in && plugin_name == "env-mise" {
             match db.list_repositories() {
                 Ok(repos) => {
                     for repo in repos {
@@ -1344,12 +1345,11 @@ mod tests {
         db
     }
 
-    /// `auto_allow = true` migrates to `repo_trust = "allow"` for every
-    /// repository in the database, AND deletes the legacy global key.
-    /// This preserves the user's prior intent (they had opted in) while
-    /// flipping to the new safer per-repo storage.
+    /// `auto_allow = true` no longer migrates to broad direnv repo trust.
+    /// Direnv approvals are content-aware and require an approved
+    /// `.envrc` digest, so the legacy key is only deleted.
     #[test]
-    fn migrate_auto_allow_sets_per_repo_trust_for_all_repos() {
+    fn migrate_auto_allow_deletes_legacy_key_without_broad_direnv_trust() {
         let dir = tempdir().unwrap();
         let db = db_with_repos(dir.path(), &["alpha", "beta", "gamma"]);
         // Legacy global toggle, opted in.
@@ -1358,13 +1358,12 @@ mod tests {
 
         migrate_legacy_env_provider_trust(&db);
 
-        // Every repo gets the new key set.
         for repo_id in ["alpha", "beta", "gamma"] {
             let key = format!("repo:{repo_id}:plugin:env-direnv:setting:repo_trust");
             assert_eq!(
                 db.get_app_setting(&key).unwrap(),
-                Some("\"allow\"".into()),
-                "repo {repo_id} must have repo_trust='allow' after migration"
+                None,
+                "direnv must not get broad repo_trust after migration"
             );
         }
         // Legacy key is gone — re-running migration is a no-op.
@@ -1376,10 +1375,8 @@ mod tests {
         );
     }
 
-    /// `auto_trust = true` (mise) follows the same migration shape as
-    /// auto_allow (direnv) — same code path, same expected outcome.
-    /// Keeps the two providers in lockstep so a future divergence
-    /// fails this test.
+    /// `auto_trust = true` (mise) still migrates to repo_trust because
+    /// mise keeps the broad per-repo trust model.
     #[test]
     fn migrate_auto_trust_writes_repo_trust_for_mise() {
         let dir = tempdir().unwrap();
@@ -1458,11 +1455,11 @@ mod tests {
             .unwrap();
 
         migrate_legacy_env_provider_trust(&db);
-        // After first run: trust set, legacy key gone.
+        // After first run: legacy key gone.
 
-        // Manually clear the migrated value so we can prove the second
-        // run doesn't rewrite it (it shouldn't even try — source key
-        // is missing).
+        // Manually clear a would-be migrated value so we can prove the
+        // second run doesn't rewrite it (it shouldn't even try —
+        // source key is missing).
         db.delete_app_setting("repo:alpha:plugin:env-direnv:setting:repo_trust")
             .unwrap();
 

@@ -72,12 +72,14 @@ Bundled env-providers:
 | `env-dotenv` | The worktree has a `.env` file | None (parsed in-process) |
 | `env-nix-devshell` | The worktree has a `flake.nix` with a default devshell | [`nix`](https://nixos.org/) |
 
-Toggle individual providers in **Settings > Plugins**. Each plugin's manifest declares any user-configurable settings — for example, `env-direnv` exposes `auto_allow` to skip the per-path `direnv allow` safeguard if you'd rather trust your own `.envrc` files automatically.
+Toggle individual providers in **Settings > Plugins**. Each plugin's manifest declares any user-configurable settings, including per-provider timeout caps for slow cold starts.
+
+For direnv, Claudette keeps the `direnv allow` safeguard content-aware. When you approve a blocked `.envrc`, Claudette records that file's SHA-256 digest and can auto-allow future worktrees only when their `.envrc` content matches an approved digest. Editing `.envrc` changes the digest, so the next resolve prompts again before agents or terminals receive that environment.
 
 If a bundled provider's required CLI isn't installed (e.g. `nix` missing on a non-Nix host), Claudette marks it **not installed** in the Environment panel and silently skips it on every workspace spawn — no toast, no error. The toggle is locked in this state. CLI availability is probed once at startup, so if you install the underlying tool while Claudette is running, restart the app to pick up the change.
 
 When Claudette **creates** a new workspace, the [repo setup script](/claudette/features/per-repo-settings/#setup-script) (if any) runs first with the system shell environment — deliberately, so a setup script can prime env-provider state itself (`direnv allow`, `mise trust && mise install`, generate a `.env` from a template, `nix flake check`) before any provider tries to read it. Claudette then resolves the env-providers, and only after that does the workspace appear as ready. Selecting an **existing** workspace performs the same env warmup but skips the setup script (it already ran on create). In both cases, terminal tabs, agent subprocesses, and MCP servers spawn into the merged environment once the warmup completes.
 
-The merged environment is computed once per worktree and reused across processes; if you change `.envrc` or `mise.toml`, terminate the running agent or terminal tab and Claudette picks up the new env on the next spawn.
+The merged environment is cached per worktree and invalidated when watched files such as `.envrc`, `mise.toml`, `.env`, or `flake.lock` change. New terminals spawn with the refreshed env. Persistent agent subprocesses re-check the env before each turn and restart when provider output or provider evaluation metadata changes, so the next agent turn sees the updated shell environment. Already-running terminal shells keep their original process environment.
 
 Drop your own env-provider into `~/.claudette/plugins/<name>/` (one `plugin.json` + one `init.lua`) and Claudette discovers it at startup.

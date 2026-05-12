@@ -108,6 +108,17 @@ const TRUST_ERROR_MARKERS = [
 ] as const;
 
 /**
+ * direnv trust is content-aware: the backend records approved .envrc
+ * SHA-256 digests after `direnv allow`, and the plugin auto-allows
+ * future worktrees only for matching content. mise still uses the
+ * older repo-level `repo_trust` switch because its trust model is
+ * config-path scoped and this modal is the only writer.
+ */
+export function shouldPersistRepoTrustAfterTrust(pluginName: string): boolean {
+  return pluginName === "env-mise";
+}
+
+/**
  * Classify what the post-action env source row tells us about the
  * plugin's state. Pure — exported for tests; the live modal feeds it
  * the result of `getEnvSources`.
@@ -206,8 +217,9 @@ export function isEnvTrustModalData(value: unknown): value is EnvTrustModalData 
  * by the `workspace_env_trust_needed` Tauri event whenever
  * `prepare_workspace_environment` detects an untrusted mise / direnv
  * config. Per-row Trust action calls `run_env_trust` (which fans out
- * to repo + every existing worktree) AND persists `repo_trust = allow`
- * so future workspaces in the same repo auto-heal. Per-row Disable
+ * to repo + every existing worktree). For mise it also persists
+ * `repo_trust = allow`; for direnv the backend records approved
+ * `.envrc` content digests instead. Per-row Disable
  * action calls `set_env_provider_enabled(false)` for the repo target,
  * which the dispatcher honors before the plugin even runs.
  *
@@ -294,15 +306,20 @@ export function EnvTrustModal() {
         // hiccup, permissions issue) we keep `repo_trust` unwritten so
         // the user can retry.
         await runEnvTrust(repoTarget, pluginName);
-        // Persist the user's decision so future workspaces auto-heal
-        // via init.lua's repo_trust=="allow" retry path, even if the
-        // worktree wasn't created yet when we fanned out above.
-        await setClaudettePluginRepoSetting(
-          data.repo_id,
-          pluginName,
-          "repo_trust",
-          "allow",
-        );
+        if (shouldPersistRepoTrustAfterTrust(pluginName)) {
+          // Persist the user's decision so future mise workspaces
+          // auto-heal via init.lua's repo_trust=="allow" retry path,
+          // even if the worktree wasn't created yet when we fanned
+          // out above. direnv deliberately does not use this broad
+          // switch anymore; the backend stores approved .envrc
+          // content digests during runEnvTrust.
+          await setClaudettePluginRepoSetting(
+            data.repo_id,
+            pluginName,
+            "repo_trust",
+            "allow",
+          );
+        }
         if (data.workspace_id !== null) {
           setRow(pluginName, {
             kind: "trusting",
