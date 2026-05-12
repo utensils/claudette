@@ -33,6 +33,55 @@ Before using Claudette, ensure you have **Claude Code** installed and authentica
 claude /login
 ```
 
+## macOS permission prompts
+
+After install, macOS may surface a few first-run permission prompts. Each is gated by Apple's TCC (Transparency, Consent, and Control) system and fires the first time Claudette exercises the underlying capability. Two of them — **Local Network** and **Notifications** — fire at or shortly after first launch, because the capabilities they gate (mDNS discovery, the notification subsystem) are initialized during app startup. The rest are deferred until you actually use the feature that needs them.
+
+### "Claudette wants permission to update or delete other applications."
+
+This is macOS's **App Management** prompt (Ventura 13+). It appears the first time Claudette installs its own update — the signed Tauri updater fetches a new build from the [GitHub release feed](https://github.com/utensils/Claudette/releases/latest), verifies the minisign signature against the public key embedded in the app, and replaces the `Claudette.app` bundle in `/Applications`. macOS sees one app modifying another app bundle on disk and requires you to grant the permission once.
+
+- **Grant it** to enable in-app auto-updates. The permission is scoped to Claudette — it does not let Claudette touch any other application.
+- **Deny it** and you'll need to update manually by downloading the latest `.dmg` from [Releases](https://github.com/utensils/Claudette/releases/latest) and replacing the bundle in `/Applications` yourself.
+- The choice can be changed at any time in **System Settings → Privacy & Security → App Management → Claudette**.
+
+If you installed Claudette outside `/Applications` (e.g. ran it directly from `~/Downloads`), the prompt may not appear until the first time the updater tries to swap the bundle.
+
+### "Claudette would like to find and connect to devices on your local network."
+
+This is macOS's **Local Network** prompt (Sonoma 14+). It appears shortly after first launch because Claudette runs an mDNS browser that discovers other Claudette instances on your LAN to populate the **Nearby** section of the sidebar (used by [remote workspaces](/claudette/features/remote-workspaces/)). The browser is read-only — Claudette doesn't advertise itself unless you run the standalone `claudette-server` binary.
+
+- **Grant it** to see nearby Claudette servers in the sidebar and use remote workspaces over the LAN.
+- **Deny it** and the app keeps working — the Nearby list just stays empty. Direct connections to a server by IP/hostname still work, since those don't need mDNS.
+- Toggle later in **System Settings → Privacy & Security → Local Network → Claudette**.
+
+### "Claudette would like to send you notifications."
+
+The standard macOS notification prompt. It fires at first launch so the app can post native banners later for events like *agent finished a turn*, *agent is asking a question*, and *plan needs review*. See [Notifications](/claudette/features/notifications/) for the per-event toggles inside the app.
+
+- **Grant it** for OS-level banners and click-to-navigate (clicking a banner focuses the relevant workspace and chat).
+- **Deny it** and in-app indicators (sidebar badges, tray tooltip, optional custom sound) still work — only the native banners are suppressed.
+- Toggle later in **System Settings → Notifications → Claudette**.
+
+### "Claudette wants to use the microphone" / "speech recognition"
+
+These fire the first time you click the chat composer's mic button. See [Voice Input → Apple Speech](/claudette/features/voice-input/#apple-speech) for the full setup.
+
+### "Claudette wants to control Terminal" (or "iTerm")
+
+This is macOS's **Automation** prompt. It fires the first time you launch a TUI editor or open a workspace path in an external Terminal.app or iTerm2 window — Claudette sends an Apple Event to ask the terminal app to open a new window `cd`'d into the worktree. Denying it disables that one launch target but doesn't affect anything else.
+
+All of these can be reviewed or changed later in **System Settings → Privacy & Security**.
+
+## Windows network prompt
+
+If you run the standalone `claudette-server` binary (used to share workspaces with another machine via [remote workspaces](/claudette/features/remote-workspaces/)), Windows Defender Firewall will ask whether to allow it to communicate on Private or Public networks. The Tauri GUI on its own does **not** trigger this prompt — it doesn't accept inbound LAN traffic. It exposes a local IPC named pipe for the [CLI client](/claudette/features/cli-client/), and any TCP sockets it opens (e.g. the dev-only debug eval server) bind to `127.0.0.1`, which Windows Firewall exempts from the network-access dialog.
+
+- Choose **Private networks** unless you intentionally want to expose the server on a public/coffee-shop network.
+- Change later in **Windows Security → Firewall & network protection → Allow an app through firewall**.
+
+Windows builds in CI are unsigned `.exe` files, so **Microsoft Defender SmartScreen** may also warn the first time you run Claudette — click **More info → Run anyway** to proceed.
+
 ## Build from Source
 
 If you prefer to build from source, you'll need:
