@@ -943,6 +943,7 @@ pub fn start_scm_polling(app_handle: tauri::AppHandle) {
                 per_repo_archive,
                 global_ci_auto_fix,
                 per_repo_ci_auto_fix,
+                per_repo_ci_auto_fix_prompts,
                 ci_auto_fix_prompt,
                 ci_auto_fix_cooldown,
                 ci_auto_fix_model,
@@ -953,6 +954,7 @@ pub fn start_scm_polling(app_handle: tauri::AppHandle) {
                 std::collections::HashMap<String, bool>,
                 bool,
                 std::collections::HashMap<String, bool>,
+                std::collections::HashMap<String, String>,
                 String,
                 u64,
                 Option<String>,
@@ -999,7 +1001,7 @@ pub fn start_scm_polling(app_handle: tauri::AppHandle) {
                     .as_deref()
                     == Some("true");
                 let per_repo_ci: std::collections::HashMap<String, bool> = repo_ids
-                    .into_iter()
+                    .iter()
                     .filter_map(|rid| {
                         let key = format!("repo:{rid}:ci_auto_fix_enabled");
                         let val = db.get_app_setting(&key).ok().flatten()?;
@@ -1007,6 +1009,17 @@ pub fn start_scm_polling(app_handle: tauri::AppHandle) {
                             return None;
                         }
                         Some((rid.to_string(), val == "true"))
+                    })
+                    .collect();
+                let per_repo_ci_prompts: std::collections::HashMap<String, String> = repo_ids
+                    .iter()
+                    .filter_map(|rid| {
+                        let key = format!("repo:{rid}:ci_auto_fix_prompt");
+                        let val = db.get_app_setting(&key).ok().flatten()?;
+                        if val.is_empty() {
+                            return None;
+                        }
+                        Some((rid.to_string(), val))
                     })
                     .collect();
                 let prompt = db
@@ -1047,6 +1060,7 @@ pub fn start_scm_polling(app_handle: tauri::AppHandle) {
                     per_repo,
                     global_ci,
                     per_repo_ci,
+                    per_repo_ci_prompts,
                     prompt,
                     cooldown,
                     model,
@@ -1162,38 +1176,29 @@ pub fn start_scm_polling(app_handle: tauri::AppHandle) {
                         let within_cooldown = prev_triggered
                             .is_some_and(|t| t.elapsed().as_secs() < ci_auto_fix_cooldown);
 
-                        // Resolve per-repo prompt override
-                        let effective_prompt = Database::open(&app_state.db_path)
-                            .ok()
-                            .and_then(|db| {
-                                let key = format!("repo:{repo_id}:ci_auto_fix_prompt");
-                                db.get_app_setting(&key)
-                                    .ok()
-                                    .flatten()
-                                    .filter(|s| !s.is_empty())
-                            })
+                        let should_create_auto_fix = is_failure_transition && !within_cooldown;
+
+                        let effective_prompt = per_repo_ci_auto_fix_prompts
+                            .get(&repo_id)
+                            .cloned()
                             .unwrap_or_else(|| ci_auto_fix_prompt.clone());
 
-                        ci_map.insert(
-                            ws_id.clone(),
-                            crate::state::CiTransitionState {
-                                overall_status: current_status,
-                                last_auto_fix_triggered: if is_failure_transition
-                                    && !within_cooldown
-                                {
-                                    Some(Instant::now())
-                                } else {
-                                    prev_triggered
+                        if !should_create_auto_fix {
+                            ci_map.insert(
+                                ws_id.clone(),
+                                crate::state::CiTransitionState {
+                                    overall_status: current_status.clone(),
+                                    last_auto_fix_triggered: prev_triggered,
                                 },
-                            },
-                        );
+                            );
+                        }
                         drop(ci_map);
 
-                        if is_failure_transition && !within_cooldown {
+                        if should_create_auto_fix {
                             eprintln!(
                                 "[scm] CI failure detected for workspace {ws_id} — creating auto-fix session"
                             );
-                            auto_create_ci_fix_session(
+                            let created = auto_create_ci_fix_session(
                                 &handle,
                                 &app_state,
                                 &ws_id,
@@ -1203,6 +1208,15 @@ pub fn start_scm_polling(app_handle: tauri::AppHandle) {
                                 ci_auto_fix_model_provider.as_deref(),
                             )
                             .await;
+                            if created {
+                                app_state.ci_last_status.write().await.insert(
+                                    ws_id.clone(),
+                                    crate::state::CiTransitionState {
+                                        overall_status: current_status,
+                                        last_auto_fix_triggered: Some(Instant::now()),
+                                    },
+                                );
+                            }
                         }
                     }
                 }
@@ -1305,7 +1319,7 @@ async fn auto_create_ci_fix_session(
     prompt_template: &str,
     model: Option<&str>,
     model_provider: Option<&str>,
-) {
+) -> bool {
     let failed_check_names: Vec<String> = detail
         .ci_checks
         .iter()
@@ -1313,18 +1327,18 @@ async fn auto_create_ci_fix_session(
         .map(|c| c.name.clone())
         .collect();
 
+    let ctx = match lookup_workspace_context(&app_state.db_path, workspace_id).await {
+        Ok(ctx) => ctx,
+        Err(e) => {
+            eprintln!("[scm] CI auto-fix: failed to lookup workspace context: {e}");
+            return false;
+        }
+    };
+    let ws_info = make_workspace_info(&ctx.workspace, &ctx.repo);
+    let branch = ctx.workspace.branch_name.as_str();
     let mut failure_logs: Vec<CiFailureLog> = Vec::new();
 
     if let Some(provider) = &detail.provider {
-        let ctx = match lookup_workspace_context(&app_state.db_path, workspace_id).await {
-            Ok(ctx) => ctx,
-            Err(e) => {
-                eprintln!("[scm] CI auto-fix: failed to lookup workspace context: {e}");
-                return;
-            }
-        };
-        let ws_info = make_workspace_info(&ctx.workspace, &ctx.repo);
-        let branch = &ctx.workspace.branch_name;
         let args = serde_json::json!({
             "branch": branch,
             "failed_checks": failed_check_names,
@@ -1351,26 +1365,11 @@ async fn auto_create_ci_fix_session(
         }
     }
 
-    let branch = detail
-        .ci_checks
-        .first()
-        .and_then(|_| {
-            // Re-derive branch from DB for the template
-            Database::open(&app_state.db_path).ok().and_then(|db| {
-                db.list_workspaces()
-                    .ok()?
-                    .into_iter()
-                    .find(|w| w.id == workspace_id)
-                    .map(|w| w.branch_name)
-            })
-        })
-        .unwrap_or_default();
-
     let prompt = format_ci_auto_fix_prompt(
         prompt_template,
         &detail.ci_checks,
         &failure_logs,
-        &branch,
+        branch,
         detail.pull_request.as_ref(),
     );
 
@@ -1379,12 +1378,12 @@ async fn auto_create_ci_fix_session(
             Ok(session) => session.id,
             Err(e) => {
                 eprintln!("[scm] CI auto-fix: failed to create session: {e}");
-                return;
+                return false;
             }
         },
         Err(e) => {
             eprintln!("[scm] CI auto-fix: failed to open DB: {e}");
-            return;
+            return false;
         }
     };
 
@@ -1399,11 +1398,15 @@ async fn auto_create_ci_fix_session(
         "backend_id": model_provider,
     });
 
-    let _ = handle.emit("ci-auto-fix-session-created", payload);
+    if let Err(e) = handle.emit("ci-auto-fix-session-created", payload) {
+        eprintln!("[scm] CI auto-fix: failed to emit created session event: {e}");
+        return false;
+    }
     eprintln!(
         "[scm] CI auto-fix: created session {session_id} for workspace {workspace_id} ({} failed checks)",
         failed_check_names.len()
     );
+    true
 }
 
 /// Auto-archive a workspace when its PR is merged.
