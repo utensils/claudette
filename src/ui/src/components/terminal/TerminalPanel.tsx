@@ -76,6 +76,12 @@ import {
   type TabDropPlacement,
 } from "./terminalPanelLogic";
 import {
+  bufferEarlyPtyOutput,
+  flushEarlyPtyOutput,
+  type EarlyPtyOutputBuffer,
+  type PtyOutputPayload,
+} from "./terminalPtyOutputBuffer";
+import {
   AttachmentContextMenu,
   type AttachmentContextMenuItem,
 } from "../chat/AttachmentContextMenu";
@@ -83,11 +89,6 @@ import { viewportToFixed } from "../../utils/zoom";
 import { reclaimScrollLines } from "./terminalReclaim";
 import "@xterm/xterm/css/xterm.css";
 import styles from "./TerminalPanel.module.css";
-
-interface PtyOutputPayload {
-  pty_id: number;
-  data: number[];
-}
 
 interface AgentTaskOutputPayload {
   tab_id: number;
@@ -987,6 +988,33 @@ export const TerminalPanel = memo(function TerminalPanel() {
       // by the time we resolve, close the PTY we just spawned and bail.
       (async () => {
         try {
+          let ptyId: number | null = null;
+          const earlyOutput: EarlyPtyOutputBuffer = new Map();
+          const rawUnlisten = await listen<PtyOutputPayload>(
+            "pty-output",
+            (event) => {
+              if (ptyId === null) {
+                bufferEarlyPtyOutput(earlyOutput, event.payload);
+                return;
+              }
+              if (event.payload.pty_id === ptyId) {
+                term.write(new Uint8Array(event.payload.data));
+              }
+            },
+          );
+          let disposed = false;
+          const unlistenFn = () => {
+            if (disposed) return;
+            disposed = true;
+            earlyOutput.clear();
+            rawUnlisten();
+          };
+          if (instancesRef.current.get(spec.leafId) !== inst) {
+            unlistenFn();
+            return;
+          }
+          inst.unlisten = unlistenFn;
+
           const state = useAppStore.getState();
           const currentWs = state.workspaces.find(
             (w) => w.id === spec.workspaceId,
@@ -996,7 +1024,7 @@ export const TerminalPanel = memo(function TerminalPanel() {
             : undefined;
           const defaults = state.defaultBranches;
           await waitForWorkspaceEnvironment(spec.workspaceId);
-          const ptyId = await spawnPty(
+          const spawnedPtyId = await spawnPty(
             spec.worktreePath,
             currentWs?.name ?? "",
             spec.workspaceId,
@@ -1006,30 +1034,29 @@ export const TerminalPanel = memo(function TerminalPanel() {
           );
           const stillExists = instancesRef.current.get(spec.leafId);
           if (stillExists !== inst) {
-            closePtyBestEffort(ptyId);
+            unlistenFn();
+            closePtyBestEffort(spawnedPtyId);
             return;
           }
-          inst.ptyId = ptyId;
-          setPanePtyId(spec.tabId, spec.leafId, ptyId);
-
-          const unlistenFn = await listen<PtyOutputPayload>(
-            "pty-output",
-            (event) => {
-              if (event.payload.pty_id === ptyId) {
-                term.write(new Uint8Array(event.payload.data));
-              }
-            },
+          const activePtyId = spawnedPtyId;
+          ptyId = activePtyId;
+          inst.ptyId = activePtyId;
+          setPanePtyId(spec.tabId, spec.leafId, activePtyId);
+          flushEarlyPtyOutput(
+            earlyOutput,
+            activePtyId,
+            (data) => term.write(new Uint8Array(data)),
           );
+          earlyOutput.clear();
           if (instancesRef.current.get(spec.leafId) !== inst) {
             unlistenFn();
-            closePtyBestEffort(ptyId);
+            closePtyBestEffort(activePtyId);
             return;
           }
-          inst.unlisten = unlistenFn;
 
           term.onData((data) => {
             const bytes = Array.from(terminalInputEncoder.encode(data));
-            writePty(ptyId, bytes);
+            writePty(activePtyId, bytes);
           });
           term.onResize(({ cols, rows }) => {
             forwardPtyResize(inst, { cols, rows });
@@ -1038,6 +1065,10 @@ export const TerminalPanel = memo(function TerminalPanel() {
           safeFit(inst);
           forwardPtyResize(inst);
         } catch (e) {
+          if (inst.ptyId < 0 && inst.unlisten) {
+            inst.unlisten();
+            inst.unlisten = null;
+          }
           console.error("Failed to spawn PTY:", e);
           const msg = e instanceof Error ? e.message : String(e);
           setPaneSpawnError(spec.tabId, spec.leafId, msg);
