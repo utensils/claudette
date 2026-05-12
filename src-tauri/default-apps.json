@@ -199,8 +199,136 @@
       "name": "IntelliJ IDEA",
       "category": "ide",
       "bin_names": ["idea"],
-      "mac_app_names": ["IntelliJ IDEA.app", "IntelliJ IDEA CE.app"],
+      "mac_app_names": [
+        "IntelliJ IDEA.app",
+        "IntelliJ IDEA Ultimate.app",
+        "IntelliJ IDEA CE.app",
+        "IntelliJ IDEA Community Edition.app"
+      ],
       "windows_exe_names": ["idea64.exe", "idea.exe"],
+      "open_args": ["{}"]
+    },
+    {
+      "id": "clion",
+      "name": "CLion",
+      "category": "ide",
+      "bin_names": ["clion"],
+      "mac_app_names": ["CLion.app"],
+      "windows_exe_names": ["clion64.exe", "clion.exe"],
+      "open_args": ["{}"]
+    },
+    {
+      "id": "aqua",
+      "name": "Aqua",
+      "category": "ide",
+      "bin_names": ["aqua"],
+      "mac_app_names": ["Aqua.app"],
+      "windows_exe_names": ["aqua64.exe", "aqua.exe"],
+      "open_args": ["{}"]
+    },
+    {
+      "id": "datagrip",
+      "name": "DataGrip",
+      "category": "ide",
+      "bin_names": ["datagrip"],
+      "mac_app_names": ["DataGrip.app"],
+      "windows_exe_names": ["datagrip64.exe", "datagrip.exe"],
+      "open_args": ["{}"]
+    },
+    {
+      "id": "dataspell",
+      "name": "DataSpell",
+      "category": "ide",
+      "bin_names": ["dataspell"],
+      "mac_app_names": ["DataSpell.app"],
+      "windows_exe_names": ["dataspell64.exe", "dataspell.exe"],
+      "open_args": ["{}"]
+    },
+    {
+      "id": "fleet",
+      "name": "Fleet",
+      "category": "ide",
+      "bin_names": ["fleet"],
+      "mac_app_names": ["Fleet.app"],
+      "windows_exe_names": ["fleet.exe"],
+      "open_args": ["{}"]
+    },
+    {
+      "id": "goland",
+      "name": "GoLand",
+      "category": "ide",
+      "bin_names": ["goland"],
+      "mac_app_names": ["GoLand.app"],
+      "windows_exe_names": ["goland64.exe", "goland.exe"],
+      "open_args": ["{}"]
+    },
+    {
+      "id": "phpstorm",
+      "name": "PhpStorm",
+      "category": "ide",
+      "bin_names": ["phpstorm"],
+      "mac_app_names": ["PhpStorm.app"],
+      "windows_exe_names": ["phpstorm64.exe", "phpstorm.exe"],
+      "open_args": ["{}"]
+    },
+    {
+      "id": "pycharm",
+      "name": "PyCharm",
+      "category": "ide",
+      "bin_names": ["pycharm"],
+      "mac_app_names": [
+        "PyCharm.app",
+        "PyCharm Professional.app",
+        "PyCharm Professional Edition.app",
+        "PyCharm CE.app",
+        "PyCharm Community Edition.app"
+      ],
+      "windows_exe_names": ["pycharm64.exe", "pycharm.exe"],
+      "open_args": ["{}"]
+    },
+    {
+      "id": "rider",
+      "name": "Rider",
+      "category": "ide",
+      "bin_names": ["rider"],
+      "mac_app_names": ["Rider.app"],
+      "windows_exe_names": ["rider64.exe", "rider.exe"],
+      "open_args": ["{}"]
+    },
+    {
+      "id": "rubymine",
+      "name": "RubyMine",
+      "category": "ide",
+      "bin_names": ["rubymine"],
+      "mac_app_names": ["RubyMine.app"],
+      "windows_exe_names": ["rubymine64.exe", "rubymine.exe"],
+      "open_args": ["{}"]
+    },
+    {
+      "id": "rustrover",
+      "name": "RustRover",
+      "category": "ide",
+      "bin_names": ["rustrover"],
+      "mac_app_names": ["RustRover.app"],
+      "windows_exe_names": ["rustrover64.exe", "rustrover.exe"],
+      "open_args": ["{}"]
+    },
+    {
+      "id": "webstorm",
+      "name": "WebStorm",
+      "category": "ide",
+      "bin_names": ["webstorm"],
+      "mac_app_names": ["WebStorm.app"],
+      "windows_exe_names": ["webstorm64.exe", "webstorm.exe"],
+      "open_args": ["{}"]
+    },
+    {
+      "id": "writerside",
+      "name": "Writerside",
+      "category": "ide",
+      "bin_names": ["writerside"],
+      "mac_app_names": ["Writerside.app"],
+      "windows_exe_names": ["writerside64.exe", "writerside.exe"],
       "open_args": ["{}"]
     },
     {
