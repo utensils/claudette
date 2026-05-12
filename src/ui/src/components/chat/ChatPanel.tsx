@@ -57,6 +57,10 @@ import {
   parseSlashInput,
   resolveNativeHandler,
 } from "./nativeSlashCommands";
+import {
+  buildSendFailureSystemMessage,
+  shouldRecordSendFailureInChat,
+} from "./chatSendFailure";
 import { resolveUltrathinkEffort } from "./ultrathink";
 import { extractCompactionEvents } from "../../utils/compactionSentinel";
 import { WorkspacePanelHeader } from "../shared/WorkspacePanelHeader";
@@ -1306,7 +1310,23 @@ export function ChatPanel() {
       console.error("sendChatMessage failed:", errMsg);
       setError(errMsg);
       updateWorkspace(selectedWorkspaceId, { agent_status: "Idle" });
+      useAppStore.getState().updateChatSession(sessionId, {
+        agent_status: "Idle",
+      });
       useAppStore.getState().clearPromptStartTime(selectedWorkspaceId);
+      if (shouldRecordSendFailureInChat(errMsg)) {
+        addChatMessage(
+          sessionId,
+          buildSendFailureSystemMessage({
+            error: errMsg,
+            workspaceId: selectedWorkspaceId,
+            sessionId,
+            id: crypto.randomUUID(),
+            createdAt: new Date().toISOString(),
+          }),
+          { persisted: false },
+        );
+      }
     }
   };
 
