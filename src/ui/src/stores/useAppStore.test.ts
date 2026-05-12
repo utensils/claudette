@@ -219,6 +219,8 @@ describe("finishTypewriterDrain (per-workspace)", () => {
 });
 
 describe("queued message auto-dispatch pause", () => {
+  const SESSION_ID = "test-session";
+
   beforeEach(() => {
     useAppStore.setState({
       queuedMessages: {},
@@ -228,38 +230,38 @@ describe("queued message auto-dispatch pause", () => {
 
   it("can pause queued auto-dispatch without dropping queued messages", () => {
     const store = useAppStore.getState();
-    store.setQueuedMessage(WS_ID, "follow up");
-    store.setQueuedMessageAutoDispatchPaused(WS_ID, true);
+    store.setQueuedMessage(SESSION_ID, "follow up");
+    store.setQueuedMessageAutoDispatchPaused(SESSION_ID, true);
 
     const state = useAppStore.getState();
-    expect(state.queuedMessages[WS_ID]).toHaveLength(1);
-    expect(state.queuedMessages[WS_ID]?.[0]?.content).toBe("follow up");
-    expect(state.queuedMessageAutoDispatchPaused[WS_ID]).toBe(true);
+    expect(state.queuedMessages[SESSION_ID]).toHaveLength(1);
+    expect(state.queuedMessages[SESSION_ID]?.[0]?.content).toBe("follow up");
+    expect(state.queuedMessageAutoDispatchPaused[SESSION_ID]).toBe(true);
   });
 
   it("clears the pause when the queued session is emptied", () => {
     const store = useAppStore.getState();
-    store.setQueuedMessage(WS_ID, "follow up");
-    store.setQueuedMessageAutoDispatchPaused(WS_ID, true);
+    store.setQueuedMessage(SESSION_ID, "follow up");
+    store.setQueuedMessageAutoDispatchPaused(SESSION_ID, true);
 
-    const queuedId = useAppStore.getState().queuedMessages[WS_ID]?.[0]?.id;
+    const queuedId = useAppStore.getState().queuedMessages[SESSION_ID]?.[0]?.id;
     expect(queuedId).toBeTruthy();
-    store.removeQueuedMessage(WS_ID, queuedId!);
+    store.removeQueuedMessage(SESSION_ID, queuedId!);
 
     const state = useAppStore.getState();
-    expect(state.queuedMessages[WS_ID]).toBeUndefined();
-    expect(state.queuedMessageAutoDispatchPaused[WS_ID]).toBeUndefined();
+    expect(state.queuedMessages[SESSION_ID]).toBeUndefined();
+    expect(state.queuedMessageAutoDispatchPaused[SESSION_ID]).toBeUndefined();
   });
 
   it("clears the pause when the queue is cleared", () => {
     const store = useAppStore.getState();
-    store.setQueuedMessage(WS_ID, "follow up");
-    store.setQueuedMessageAutoDispatchPaused(WS_ID, true);
-    store.clearQueuedMessage(WS_ID);
+    store.setQueuedMessage(SESSION_ID, "follow up");
+    store.setQueuedMessageAutoDispatchPaused(SESSION_ID, true);
+    store.clearQueuedMessage(SESSION_ID);
 
     const state = useAppStore.getState();
-    expect(state.queuedMessages[WS_ID]).toBeUndefined();
-    expect(state.queuedMessageAutoDispatchPaused[WS_ID]).toBeUndefined();
+    expect(state.queuedMessages[SESSION_ID]).toBeUndefined();
+    expect(state.queuedMessageAutoDispatchPaused[SESSION_ID]).toBeUndefined();
   });
 });
 
