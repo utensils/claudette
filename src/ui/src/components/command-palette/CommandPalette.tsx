@@ -324,7 +324,14 @@ export function CommandPalette() {
         setEffortLevel,
         selectedModel,
         persistSetting: (key: string, value: string) => setAppSetting(key, value).catch(console.error),
-        stopAgent: (sessionId: string) => stopAgent(sessionId),
+        stopAgent: (sessionId: string) => {
+          const state = useAppStore.getState();
+          const queue = state.queuedMessages[sessionId];
+          if (queue && queue.length > 0) {
+            state.setQueuedMessageAutoDispatchPaused(sessionId, true);
+          }
+          return stopAgent(sessionId);
+        },
         resetAgentSession: (sessionId: string) => resetAgentSession(sessionId),
         clearAgentQuestion: (sessionId: string) => clearAgentQuestion(sessionId),
         clearPlanApproval: (sessionId: string) => clearPlanApproval(sessionId),

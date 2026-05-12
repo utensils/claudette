@@ -73,6 +73,7 @@ export interface AgentInteractionSlice {
   setChatSearchMatchIndex: (wsId: string, idx: number) => void;
 
   queuedMessages: Record<string, QueuedMessage[]>;
+  queuedMessageAutoDispatchPaused: Record<string, boolean>;
   setQueuedMessage: (
     sessionId: string,
     content: string,
@@ -86,6 +87,7 @@ export interface AgentInteractionSlice {
   ) => void;
   removeQueuedMessage: (sessionId: string, queuedMessageId: string) => void;
   clearQueuedMessage: (sessionId: string) => void;
+  setQueuedMessageAutoDispatchPaused: (sessionId: string, paused: boolean) => void;
 }
 
 export const createAgentInteractionSlice: StateCreator<
@@ -181,6 +183,7 @@ export const createAgentInteractionSlice: StateCreator<
     }),
 
   queuedMessages: {},
+  queuedMessageAutoDispatchPaused: {},
   setQueuedMessage: (sessionId, content, mentionedFiles, attachments) =>
     set((s) => ({
       queuedMessages: {
@@ -224,7 +227,14 @@ export const createAgentInteractionSlice: StateCreator<
       );
       if (remaining.length === 0) {
         const { [sessionId]: _, ...rest } = s.queuedMessages;
-        return { queuedMessages: rest };
+        const {
+          [sessionId]: _paused,
+          ...pausedRest
+        } = s.queuedMessageAutoDispatchPaused;
+        return {
+          queuedMessages: rest,
+          queuedMessageAutoDispatchPaused: pausedRest,
+        };
       }
       return {
         queuedMessages: {
@@ -236,6 +246,31 @@ export const createAgentInteractionSlice: StateCreator<
   clearQueuedMessage: (sessionId) =>
     set((s) => {
       const { [sessionId]: _, ...rest } = s.queuedMessages;
-      return { queuedMessages: rest };
+      const {
+        [sessionId]: _paused,
+        ...pausedRest
+      } = s.queuedMessageAutoDispatchPaused;
+      return {
+        queuedMessages: rest,
+        queuedMessageAutoDispatchPaused: pausedRest,
+      };
+    }),
+  setQueuedMessageAutoDispatchPaused: (sessionId, paused) =>
+    set((s) => {
+      const current = s.queuedMessageAutoDispatchPaused[sessionId] === true;
+      if (current === paused) return s;
+      if (!paused) {
+        const {
+          [sessionId]: _,
+          ...rest
+        } = s.queuedMessageAutoDispatchPaused;
+        return { queuedMessageAutoDispatchPaused: rest };
+      }
+      return {
+        queuedMessageAutoDispatchPaused: {
+          ...s.queuedMessageAutoDispatchPaused,
+          [sessionId]: true,
+        },
+      };
     }),
 });

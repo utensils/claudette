@@ -39,6 +39,21 @@ describe("queuedMessageEditing", () => {
         activeSessionId: "session-1",
         hasNextQueuedMessage: true,
         isEditingQueuedMessage: true,
+        isAutoDispatchPaused: false,
+        autoDispatchQueuedId: null,
+      }),
+    ).toBe(false);
+  });
+
+  it("does not auto-dispatch while queued auto-dispatch is manually paused", () => {
+    expect(
+      shouldAutoDispatchQueuedMessage({
+        isSteeringQueued: false,
+        isRunning: false,
+        activeSessionId: "session-1",
+        hasNextQueuedMessage: true,
+        isEditingQueuedMessage: false,
+        isAutoDispatchPaused: true,
         autoDispatchQueuedId: null,
       }),
     ).toBe(false);
@@ -52,6 +67,7 @@ describe("queuedMessageEditing", () => {
         activeSessionId: "session-1",
         hasNextQueuedMessage: true,
         isEditingQueuedMessage: false,
+        isAutoDispatchPaused: false,
         autoDispatchQueuedId: null,
       }),
     ).toBe(true);
