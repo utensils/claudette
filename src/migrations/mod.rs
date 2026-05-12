@@ -219,4 +219,9 @@ pub const MIGRATIONS: &[Migration] = &[
         sql: include_str!("20260509000540_rename_close_file_tab_keybinding.sql"),
         legacy_version: None,
     },
+    Migration {
+        id: "20260511131643_pinned_prompts_toggle_overrides",
+        sql: include_str!("20260511131643_pinned_prompts_toggle_overrides.sql"),
+        legacy_version: None,
+    },
 ];

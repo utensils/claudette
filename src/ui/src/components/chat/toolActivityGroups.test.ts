@@ -3,6 +3,7 @@ import type { ToolActivity } from "../../stores/useAppStore";
 import {
   groupHasRunningActivity,
   groupToolActivitiesForDisplay,
+  skillActivationName,
 } from "./toolActivityGroups";
 
 function activity(
@@ -88,6 +89,50 @@ describe("toolActivityGroups", () => {
   it("labels unnamed agents without a duplicated fallback", () => {
     expect(groupToolActivitiesForDisplay([activity("Agent")])[0]?.label).toBe(
       "Agent",
+    );
+  });
+
+  it("breaks a run of direct tools out around a skill, like an agent", () => {
+    const groups = groupToolActivitiesForDisplay([
+      activity("Bash"),
+      activity("Skill", {
+        inputJson: JSON.stringify({ skill: "commit-changes" }),
+      }),
+      activity("Read"),
+    ]);
+
+    expect(groups.map((g) => g.kind)).toEqual(["tools", "skill", "tools"]);
+    expect(groups.map((g) => g.label)).toEqual([
+      "1 tool call",
+      "commit-changes",
+      "1 tool call",
+    ]);
+    expect(groups[1]?.activities.map((a) => a.toolName)).toEqual(["Skill"]);
+  });
+
+  it("gives each skill its own group in inline mode", () => {
+    const groups = groupToolActivitiesForDisplay(
+      [
+        activity("Skill", { inputJson: JSON.stringify({ skill: "rebase-on-main" }) }),
+      ],
+      "inline",
+    );
+    expect(groups).toHaveLength(1);
+    expect(groups[0]?.kind).toBe("skill");
+    expect(groups[0]?.label).toBe("rebase-on-main");
+  });
+
+  it("derives the skill name from input, then summary, then a default", () => {
+    expect(
+      skillActivationName(
+        activity("Skill", { inputJson: JSON.stringify({ skill: "  pull-request  " }) }),
+      ),
+    ).toBe("pull-request");
+    expect(
+      skillActivationName(activity("Skill", { inputJson: "{}", summary: "commit-changes wip" })),
+    ).toBe("commit-changes");
+    expect(skillActivationName(activity("Skill", { inputJson: "not json", summary: "" }))).toBe(
+      "Skill",
     );
   });
 });

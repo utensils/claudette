@@ -408,6 +408,23 @@ export function ChatInputArea({
 
   const handleUsePinnedPrompt = useCallback(
     (pin: PinnedPrompt) => {
+      // Apply any tri-state toolbar overrides BEFORE sending. Each null
+      // override means "inherit current session value"; a `true`/`false`
+      // forces the toolbar toggle, which is sticky — ChatPanel.handleSend
+      // reads these out of the store at send time, so the override is in
+      // effect for this turn and also visible in the toolbar for any
+      // follow-up turns.
+      //
+      // We use getState() rather than subscribing — this component should
+      // not re-render every time a toolbar toggle changes.
+      const store = useAppStore.getState();
+      if (pin.plan_mode !== null) store.setPlanMode(sessionId, pin.plan_mode);
+      if (pin.fast_mode !== null) store.setFastMode(sessionId, pin.fast_mode);
+      if (pin.thinking_enabled !== null)
+        store.setThinkingEnabled(sessionId, pin.thinking_enabled);
+      if (pin.chrome_enabled !== null)
+        store.setChromeEnabled(sessionId, pin.chrome_enabled);
+
       if (pin.auto_send) {
         // Cancel any in-flight voice recording before submitting, mirroring
         // handleSend — otherwise an auto-send click leaves the recorder
@@ -449,7 +466,7 @@ export function ChatInputArea({
       setChatInput((prev) => pin.prompt + (prev ? " " + prev : ""));
       textareaRef.current?.focus();
     },
-    [onSend, pendingAttachments, voice],
+    [onSend, pendingAttachments, voice, sessionId, setPendingAttachmentsBoth],
   );
 
   // Don't subscribe to chatDrafts — drafts are read inside the session-switch

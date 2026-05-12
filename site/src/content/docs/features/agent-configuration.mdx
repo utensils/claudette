@@ -3,6 +3,9 @@ title: Agent Configuration
 description: Configure models, reasoning effort, thinking blocks, and other agent settings.
 ---
 
+import { Image } from 'astro:assets';
+import claudeCliFlags from '../../../assets/screenshots/claude-cli-flags.png';
+
 Each workspace runs its own Claude Code agent session. You can configure agent behavior per-workspace or set defaults for all new sessions.
 
 ## Model Selection
@@ -87,7 +90,34 @@ claudette chat steer <session-id> "Also update the integration tests"
 
 ## Claude CLI Flags
 
-The **Settings > Claude CLI flags** panel exposes the underlying `claude` command flags Claudette is passing for each turn — useful for diagnosing "why didn't this work like I expected" issues. The chat header banner above each turn shows the model, effort, and any non-default flags in a structured chip so the active configuration is always visible.
+The **Settings > Claude CLI flags** panel lets you configure which flags Claudette passes to the `claude` CLI on every turn. Flags are discovered at startup by parsing `claude --help`; flags that Claudette already controls internally (model, session ID, etc.) are filtered out so you can't accidentally double-set them.
+
+<Image src={claudeCliFlags} alt="Settings > Claude CLI flags panel showing a list of available flags with enable toggles and value inputs" loading="lazy" />
+
+### Global defaults
+
+Each flag row shows:
+
+- **Toggle** — enable or disable the flag for every turn in every workspace.
+- **Value field** (value-taking flags only) — the argument to pass, e.g. a permission scope string for `--permission`.
+
+Only enabled flags are appended to the `claude` invocation. Disabled flags are omitted entirely — Claudette never synthesizes a `--no-*` form on your behalf. If you need to pass an explicit negation (e.g., `--no-foo`), enable that negation flag directly from the list if the Claude CLI exposes it as a distinct flag.
+
+### Per-repo overrides
+
+Repo settings (**Settings > Repository > Claude CLI flags**) add a third state to each flag:
+
+| State | Behavior |
+|-------|----------|
+| **Inherit** | Uses the global default for this flag |
+| **Force on** | Flag is enabled for all workspaces in this repo, regardless of global |
+| **Force off** | Flag is disabled for all workspaces in this repo, regardless of global |
+
+An override only takes effect when explicitly set — unset repo fields fall through to the global value. See [Per-Repo Settings](/claudette/features/per-repo-settings/#claude-cli-flag-overrides) for details.
+
+### Chat header chip
+
+The turn banner in the chat timeline shows the model, effort level, and any non-default CLI flags as structured chips, so the active configuration for each turn is always visible without opening settings.
 
 ## Alternative Providers
 

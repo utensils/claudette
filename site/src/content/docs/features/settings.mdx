@@ -30,6 +30,19 @@ Default values applied to all new agent sessions. Per-workspace overrides are av
 
 See [Agent Configuration](/claudette/features/agent-configuration/) for detailed descriptions of each option.
 
+## Claude CLI Flags
+
+| Setting | Description | Default |
+|---------|-------------|---------|
+| Per-flag toggle | Enable or disable a specific `claude` CLI flag for all turns | Off |
+| Per-flag value | Argument passed to value-taking flags (e.g. `--permission`) | — |
+
+Flags are discovered at startup from `claude --help`. Claudette's own reserved flags (model, session ID, etc.) are excluded from the list. Enabled flags are appended to every `claude` invocation; disabled flags are omitted entirely.
+
+Per-repo overrides are configured in **Settings > Repository > Claude CLI flags** and documented in [Per-Repo Settings → Claude CLI Flag Overrides](/claudette/features/per-repo-settings/#claude-cli-flag-overrides).
+
+See [Agent Configuration → Claude CLI Flags](/claudette/features/agent-configuration/#claude-cli-flags) for full details and the chat-header chip display.
+
 ## Appearance
 
 | Setting | Description | Default |
