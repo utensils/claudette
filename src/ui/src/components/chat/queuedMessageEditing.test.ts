@@ -16,6 +16,10 @@ describe("queuedMessageEditing", () => {
     expect([...extractMentionPaths("email@domain.test @src/lib.rs")]).toEqual([
       "src/lib.rs",
     ]);
+    expect([...extractMentionPaths("see @README.md, then @src/main.ts.")]).toEqual([
+      "README.md",
+      "src/main.ts",
+    ]);
   });
 
   it("preserves picker-tracked mentions that still appear in edited content", () => {

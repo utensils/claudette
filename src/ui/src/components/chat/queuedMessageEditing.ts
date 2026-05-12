@@ -7,7 +7,8 @@ export function extractMentionPaths(text: string): Set<string> {
   const re = /(^|\s)@(\S+)/g;
   let m: RegExpExecArray | null;
   while ((m = re.exec(text)) !== null) {
-    out.add(m[2]);
+    const path = m[2].replace(/[),.;:!?]+$/g, "");
+    if (path) out.add(path);
   }
   return out;
 }

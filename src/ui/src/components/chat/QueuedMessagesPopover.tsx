@@ -54,15 +54,16 @@ export function QueuedMessagesPopover({
   const queuedEditRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
-    onEditingChange(!!editingQueuedMessageId);
-  }, [editingQueuedMessageId, onEditingChange]);
+    return () => onEditingChange(false);
+  }, [onEditingChange]);
 
   useEffect(() => {
     if (!editingQueuedMessageId) return;
     if (queuedMessages.some((message) => message.id === editingQueuedMessageId)) return;
     setEditingQueuedMessageId(null);
     setQueuedEditDraft("");
-  }, [editingQueuedMessageId, queuedMessages]);
+    onEditingChange(false);
+  }, [editingQueuedMessageId, queuedMessages, onEditingChange]);
 
   useEffect(() => {
     if (!editingQueuedMessageId) return;
@@ -74,11 +75,13 @@ export function QueuedMessagesPopover({
   }, [editingQueuedMessageId]);
 
   const cancelQueuedMessageEdit = () => {
+    onEditingChange(false);
     setEditingQueuedMessageId(null);
     setQueuedEditDraft("");
   };
 
   const startQueuedMessageEdit = (message: QueuedMessage) => {
+    onEditingChange(true);
     setEditingQueuedMessageId(message.id);
     setQueuedEditDraft(message.content);
   };
