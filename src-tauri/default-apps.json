@@ -218,6 +218,15 @@
       "open_args": ["{}"]
     },
     {
+      "id": "aqua",
+      "name": "Aqua",
+      "category": "ide",
+      "bin_names": ["aqua"],
+      "mac_app_names": ["Aqua.app"],
+      "windows_exe_names": ["aqua64.exe", "aqua.exe"],
+      "open_args": ["{}"]
+    },
+    {
       "id": "datagrip",
       "name": "DataGrip",
       "category": "ide",
@@ -233,6 +242,15 @@
       "bin_names": ["dataspell"],
       "mac_app_names": ["DataSpell.app"],
       "windows_exe_names": ["dataspell64.exe", "dataspell.exe"],
+      "open_args": ["{}"]
+    },
+    {
+      "id": "fleet",
+      "name": "Fleet",
+      "category": "ide",
+      "bin_names": ["fleet"],
+      "mac_app_names": ["Fleet.app"],
+      "windows_exe_names": ["fleet.exe"],
       "open_args": ["{}"]
     },
     {
@@ -302,6 +320,15 @@
       "bin_names": ["webstorm"],
       "mac_app_names": ["WebStorm.app"],
       "windows_exe_names": ["webstorm64.exe", "webstorm.exe"],
+      "open_args": ["{}"]
+    },
+    {
+      "id": "writerside",
+      "name": "Writerside",
+      "category": "ide",
+      "bin_names": ["writerside"],
+      "mac_app_names": ["Writerside.app"],
+      "windows_exe_names": ["writerside64.exe", "writerside.exe"],
       "open_args": ["{}"]
     },
     {
