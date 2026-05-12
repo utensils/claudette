@@ -3,12 +3,17 @@
    landing matches this card's typography and density. */
 
 .welcome {
-  flex: 1;
+  flex: 1 0 auto;
   display: flex;
   align-items: flex-start;
   justify-content: center;
   padding: 40px 24px 56px;
-  min-height: 0;
+  /*
+    This panel often has siblings in Dashboard, including the project-scoped
+    archived workspace list. It should expand into spare vertical space, but
+    it must not shrink below the card's own height or the card will paint over
+    the following sections inside the scroll pane.
+  */
 }
 
 .card {
