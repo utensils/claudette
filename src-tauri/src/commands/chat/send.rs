@@ -13,9 +13,10 @@ use claudette::agent::{
 };
 use claudette::base64_decode;
 use claudette::chat::{
-    BuildAssistantArgs, CheckpointArgs, RequestedFlags, SessionFlags, build_assistant_chat_message,
-    build_compaction_sentinel, build_permission_response, create_turn_checkpoint,
-    extract_assistant_text, extract_event_thinking, persistent_session_flags_drifted,
+    BuildAssistantArgs, CheckpointArgs, RequestedFlags, SessionFlags,
+    assistant_usage_fields_from_result, build_assistant_chat_message, build_compaction_sentinel,
+    build_permission_response, create_turn_checkpoint, extract_assistant_text,
+    extract_event_thinking, persistent_session_flags_drifted,
 };
 use claudette::db::{CLAUDETTE_TERMINAL_TITLE, Database};
 use claudette::env::WorkspaceEnv;
@@ -814,6 +815,7 @@ fn schedule_background_task_wake(
                 && let Some(ref msg_id) = last_assistant_msg_id
             {
                 if let Some(usage) = usage {
+                    let usage = assistant_usage_fields_from_result(usage);
                     let _ = db.update_chat_message_usage_if_missing(
                         msg_id,
                         usage.input_tokens,
@@ -3372,6 +3374,7 @@ pub async fn send_chat_message(
                     && let Some(ref msg_id) = last_assistant_msg_id
                 {
                     if let Some(usage) = usage {
+                        let usage = assistant_usage_fields_from_result(usage);
                         let _ = db.update_chat_message_usage_if_missing(
                             msg_id,
                             usage.input_tokens,
