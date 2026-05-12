@@ -116,6 +116,37 @@ describe("queued messages", () => {
 
     expect(useAppStore.getState().queuedMessages).toBe(before);
   });
+
+  it("preserves mentioned files when a queued update omits mention metadata", () => {
+    useAppStore.getState().setQueuedMessage("session-1", "first", ["a.ts"]);
+    const [first] = useAppStore.getState().queuedMessages["session-1"];
+    if (!first) throw new Error("expected queued message");
+
+    useAppStore.getState().updateQueuedMessage("session-1", first.id, {
+      content: "edited",
+    });
+
+    expect(useAppStore.getState().queuedMessages["session-1"][0]).toEqual({
+      ...first,
+      content: "edited",
+    });
+  });
+
+  it("clears mentioned files when a queued update explicitly passes undefined", () => {
+    useAppStore.getState().setQueuedMessage("session-1", "first", ["a.ts"]);
+    const [first] = useAppStore.getState().queuedMessages["session-1"];
+    if (!first) throw new Error("expected queued message");
+
+    useAppStore.getState().updateQueuedMessage("session-1", first.id, {
+      content: "edited",
+      mentionedFiles: undefined,
+    });
+
+    expect(useAppStore.getState().queuedMessages["session-1"][0]).toEqual({
+      id: first.id,
+      content: "edited",
+    });
+  });
 });
 
 describe("streamingThinking (per-workspace)", () => {

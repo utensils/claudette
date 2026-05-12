@@ -45,6 +45,7 @@ import { SegmentedMeter } from "./composer/SegmentedMeter";
 import { AttachMenu } from "./AttachMenu";
 import { FileMentionPicker, matchFiles } from "./FileMentionPicker";
 import { PinnedPromptsBar } from "./PinnedPromptsBar";
+import { extractMentionPaths } from "./queuedMessageEditing";
 import { SlashCommandPicker, filterSlashCommands } from "./SlashCommandPicker";
 import { describeSlashQuery } from "./nativeSlashCommands";
 import { hasUltrathink, renderUltrathinkText } from "./ultrathink";
@@ -126,23 +127,6 @@ function extractMentionQuery(text: string, cursorPos: number): string | null {
   // If query contains whitespace, the mention is "closed".
   if (/\s/.test(query)) return null;
   return query;
-}
-
-/**
- * Extract every closed `@path` token from `text` — i.e. an `@` at start of
- * string or preceded by whitespace, followed by a non-whitespace path. Used to
- * forward mentions baked into a pinned prompt to the backend on auto-send,
- * since those paths were never inserted via the file-mention picker and so
- * aren't tracked in `mentionedFilesRef`.
- */
-export function extractMentionPaths(text: string): Set<string> {
-  const out = new Set<string>();
-  const re = /(^|\s)@(\S+)/g;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(text)) !== null) {
-    out.add(m[2]);
-  }
-  return out;
 }
 
 /** Convert a File/Blob to a base64 string (without the data: prefix). */

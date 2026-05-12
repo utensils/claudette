@@ -200,6 +200,9 @@ export const createAgentInteractionSlice: StateCreator<
       const nextMessages = messages.map((message) => {
         if (message.id !== queuedMessageId) return message;
         didUpdate = true;
+        if (!Object.prototype.hasOwnProperty.call(updates, "mentionedFiles")) {
+          return { ...message, content: updates.content };
+        }
         const { mentionedFiles: _, ...messageWithoutMentionedFiles } = message;
         return updates.mentionedFiles
           ? { ...messageWithoutMentionedFiles, ...updates }
