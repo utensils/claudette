@@ -99,7 +99,7 @@ Each flag row shows:
 - **Toggle** — enable or disable the flag for every turn in every workspace.
 - **Value field** (value-taking flags only) — the argument to pass, e.g. a permission scope string for `--permission`.
 
-Only enabled flags are appended to the `claude` invocation. Disabled flags are completely omitted; they don't get a `--no-*` equivalent unless an explicit negation flag exists in the Claude CLI.
+Only enabled flags are appended to the `claude` invocation. Disabled flags are omitted entirely — Claudette never synthesizes a `--no-*` form on your behalf. If you need to pass an explicit negation (e.g., `--no-foo`), enable that negation flag directly from the list if the Claude CLI exposes it as a distinct flag.
 
 ### Per-repo overrides
 
