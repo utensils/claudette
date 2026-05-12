@@ -664,32 +664,37 @@ export function ChatInputArea({
     const isPdf = SUPPORTED_DOCUMENT_TYPES.has(file.type);
     const isImage = SUPPORTED_IMAGE_TYPES.has(file.type);
     const isText = isTextFile(file.type);
-    const sizeLimit = maxSizeFor(file.type);
-    if (file.size > sizeLimit) {
+    const prepared = isImage
+      ? await import("../../utils/imageAttachment").then((m) => m.prepareImageAttachment(file))
+      : { blob: file, mediaType: file.type };
+    const attachmentBlob = prepared.blob;
+    const mediaType = prepared.mediaType;
+    const sizeLimit = maxSizeFor(mediaType);
+    if (attachmentBlob.size > sizeLimit) {
       console.warn(
-        `File too large: ${(file.size / 1024 / 1024).toFixed(1)} MB (max ${(sizeLimit / 1024 / 1024).toFixed(1)} MB)`,
+        `File too large: ${(attachmentBlob.size / 1024 / 1024).toFixed(1)} MB (max ${(sizeLimit / 1024 / 1024).toFixed(1)} MB)`,
       );
       return;
     }
-    const data_base64 = await fileToBase64(file);
+    const data_base64 = await fileToBase64(attachmentBlob);
     let preview_url: string;
     if (isPdf) {
       const { generatePdfThumbnail } = await import("../../utils/pdfThumbnail");
-      preview_url = await generatePdfThumbnail(await file.arrayBuffer()).catch(() => "");
+      preview_url = await generatePdfThumbnail(await attachmentBlob.arrayBuffer()).catch(() => "");
       if (!preview_url) return;
     } else if (isImage) {
-      preview_url = URL.createObjectURL(file);
+      preview_url = URL.createObjectURL(attachmentBlob);
     } else {
       preview_url = "";
     }
     const att: PendingAttachment = {
       id: crypto.randomUUID(),
       filename,
-      media_type: file.type,
+      media_type: mediaType,
       data_base64,
       preview_url,
-      size_bytes: file.size,
-      text_content: isText ? (textContent ?? await file.text()) : null,
+      size_bytes: attachmentBlob.size,
+      text_content: isText ? (textContent ?? await attachmentBlob.text()) : null,
     };
     setPendingAttachmentsBoth(sessionId, (prev) => {
       if (prev.length >= MAX_ATTACHMENTS) {
