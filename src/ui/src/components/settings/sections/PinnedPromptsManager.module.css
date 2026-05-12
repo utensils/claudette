@@ -219,9 +219,12 @@
   transition: background 0.12s ease, color 0.12s ease;
 }
 
-.segmentedButton + .segmentedButton,
-.segmentedRadioInput + .segmentedButton,
-.segmentedRadioInput + .segmentedButtonActive {
+/* Inter-segment dividers only. Every label is immediately preceded by its
+   own radio input, so an adjacent-sibling rule would also border the first
+   segment (which already has the container's left edge) — target labels
+   after the first instead. The `label` element selector isn't hashed by
+   CSS modules; the scoping comes from `.segmentedControl`. */
+.segmentedControl > label:not(:first-of-type) {
   border-left: 1px solid var(--divider);
 }
 
