@@ -44,7 +44,17 @@ export const ToolActivitiesSection = memo(function ToolActivitiesSection({
       aria-atomic="true"
     >
       {displayGroups.map((group) =>
-        group.kind === "agent" && group.activities[0] ? (
+        group.kind === "skill" && group.activities[0] ? (
+          // Skills aren't tool calls — render the flat "<skill> activated"
+          // marker directly, never inside a collapsible group.
+          <ToolActivityRow
+            key={group.activities[0].toolUseId}
+            activity={group.activities[0]}
+            searchQuery={searchQuery}
+            worktreePath={worktreePath}
+            inline={toolDisplayMode === "inline"}
+          />
+        ) : group.kind === "agent" && group.activities[0] ? (
           // Inline mode keeps the legacy always-expanded Agent rendering;
           // grouped mode wraps the same component with a chevron+toggle
           // and a default-collapsed-while-running stance so live Agent

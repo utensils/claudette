@@ -77,6 +77,8 @@ A "skill" is a slash command backed by a directory rather than a single file —
 
 The skill's directory name is the command name; `SKILL.md` provides the seeded prompt and frontmatter.
 
+When the agent pulls in a skill mid-turn, the chat transcript shows a `✦ <skill name> activated` marker (wand icon) as its own entry — not bundled into the collapsible "N tool calls" group, the same way agent runs and thinking blocks stand on their own — so you can see which skills shaped a response at a glance.
+
 ## Plugin-contributed commands
 
 Enabled Claude Code plugins (managed via the **Plugins** settings panel) can ship their own commands and skills. They appear in the picker tagged with their plugin's name. See the Claude Code documentation for plugin authoring; Claudette discovers them automatically once installed.
