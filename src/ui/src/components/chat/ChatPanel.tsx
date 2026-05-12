@@ -58,6 +58,7 @@ import { extractCompactionEvents } from "../../utils/compactionSentinel";
 import { WorkspacePanelHeader } from "../shared/WorkspacePanelHeader";
 import { Spinner } from "../shared/Spinner";
 import { SessionTabs } from "./SessionTabs";
+import { AgentActivityIndicator } from "./AgentActivityIndicator";
 import { AgentQuestionCard } from "./AgentQuestionCard";
 import { PlanApprovalCard } from "./PlanApprovalCard";
 import { ScrollToBottomPill } from "./ScrollToBottomPill";
@@ -1493,7 +1494,7 @@ export function ChatPanel() {
                       : t("processing_aria", { elapsed: formatElapsed(elapsed) })
                   }
                 >
-                  <Spinner />
+                  <AgentActivityIndicator />
                   {ws?.agent_status === "Compacting" && (
                     <span className={styles.compactingLabel}>{t("compacting_label")}</span>
                   )}
