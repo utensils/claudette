@@ -68,9 +68,10 @@ impl EnvCache {
 
     /// Store (or overwrite) the cache entry for `(worktree, plugin)`.
     ///
-    /// Returns `true` if the entry was stored, `false` if it was dropped
-    /// because a watched file's mtime changed between the two snapshots
-    /// we take (before-store and after-store). The race we're guarding:
+    /// Returns `Some(evaluated_at)` if the entry was stored, or `None`
+    /// if it was dropped because a watched file's mtime changed between
+    /// the two snapshots we take (before-store and after-store). The
+    /// race we're guarding:
     ///
     ///   t0: plugin's `export()` captures env based on on-disk content
     ///   t1: we snapshot mtimes ("first")

@@ -920,8 +920,7 @@ async fn persist_approved_envrc_sha256s(
         format!("repo:{repo_id}:plugin:env-direnv:setting:{APPROVED_ENVRC_SHA256S_KEY}");
     let mut merged: Vec<String> = db
         .get_app_setting(&storage_key)
-        .ok()
-        .flatten()
+        .map_err(|e| e.to_string())?
         .and_then(|stored| serde_json::from_str::<Vec<String>>(&stored).ok())
         .unwrap_or_default();
     merged = merge_approved_envrc_sha256s(merged, new_digests);
@@ -951,6 +950,7 @@ fn merge_approved_envrc_sha256s(
         }
     }
     existing.sort();
+    existing.dedup();
     existing
 }
 
@@ -1359,7 +1359,7 @@ mod tests {
     #[test]
     fn merge_approved_envrc_sha256s_records_unique_sorted_digests() {
         let merged = merge_approved_envrc_sha256s(
-            vec!["b".repeat(64), "a".repeat(64)],
+            vec!["b".repeat(64), "a".repeat(64), "a".repeat(64)],
             vec!["b".repeat(64), "c".repeat(64)],
         );
 

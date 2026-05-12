@@ -858,6 +858,62 @@ mod tests {
     }
 
     #[test]
+    fn test_sha256_file_returns_digest_for_workspace_file() {
+        let workspace = tempfile::tempdir().unwrap();
+        std::fs::write(workspace.path().join(".envrc"), b"export FOO=bar\n").unwrap();
+        let ctx = ctx_with_worktree(workspace.path());
+        let lua = create_lua_vm(ctx).unwrap();
+
+        let digest: String = lua
+            .load(r#"return host.sha256_file(".envrc")"#)
+            .eval()
+            .unwrap();
+
+        assert_eq!(digest, sha256_hex(b"export FOO=bar\n"));
+    }
+
+    #[test]
+    fn test_sha256_file_rejects_absolute_path_outside_workspace() {
+        let workspace = tempfile::tempdir().unwrap();
+        let ctx = ctx_with_worktree(workspace.path());
+        let lua = create_lua_vm(ctx).unwrap();
+
+        let outside = std::env::current_exe().unwrap();
+        let outside_s = lua_escape(&outside);
+        let result: LuaResult<String> = lua
+            .load(format!(r#"return host.sha256_file("{outside_s}")"#))
+            .eval();
+
+        assert!(
+            result.is_err(),
+            "sha256_file must reject path outside workspace"
+        );
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("outside the workspace"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_sha256_file_rejects_symlink_escaping_workspace() {
+        let workspace = tempfile::tempdir().unwrap();
+        let outside_dir = tempfile::tempdir().unwrap();
+        let secret = outside_dir.path().join("secret.txt");
+        std::fs::write(&secret, "sensitive").unwrap();
+
+        let link = workspace.path().join(".envrc");
+        std::os::unix::fs::symlink(&secret, &link).unwrap();
+
+        let ctx = ctx_with_worktree(workspace.path());
+        let lua = create_lua_vm(ctx).unwrap();
+        let result: LuaResult<String> = lua.load(r#"return host.sha256_file(".envrc")"#).eval();
+
+        assert!(result.is_err(), "sha256_file must reject symlink escapes");
+    }
+
+    #[test]
     fn test_host_read_file_rejects_null_byte_in_path() {
         let ctx = make_test_ctx();
         let lua = create_lua_vm(ctx).unwrap();
