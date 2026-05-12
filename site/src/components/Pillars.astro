@@ -26,12 +26,16 @@ const pillars = [
     flip: true,
   },
 ];
+
+const NUMBER_WORDS = ['Zero', 'One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight', 'Nine'];
+const pillarCount = NUMBER_WORDS[pillars.length] ?? String(pillars.length);
+const eyebrow = `${pillarCount} thing${pillars.length === 1 ? '' : 's'} you won't find elsewhere`;
 ---
 
 <section class="pillars-section" id="pillars">
   <div class="container">
     <header class="section-head">
-      <span class="eyebrow">Two things you won't find elsewhere</span>
+      <span class="eyebrow">{eyebrow}</span>
       <h2>Built for how you actually work with Claude Code.</h2>
       <p>One app, multiple agents on the same repo, and real visibility into what the model is doing.</p>
     </header>
