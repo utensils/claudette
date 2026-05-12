@@ -202,6 +202,38 @@ describe("ToolActivityRow", () => {
     expect(container.innerHTML).toContain('data-highlight-lang="json"');
   });
 
+  it("renders Skill invocations as a '<skill> activated' marker without a chevron", async () => {
+    const container = await render(
+      <ToolActivityRow
+        activity={activity("Skill", {
+          inputJson: JSON.stringify({ skill: "commit-changes", args: "wip" }),
+          summary: "commit-changes wip",
+        })}
+        searchQuery=""
+      />,
+    );
+
+    expect(container.textContent).toContain("commit-changes");
+    expect(container.textContent).toContain("activated");
+    // No expand affordance and no raw "Skill" tool-name label.
+    expect(container.querySelector("button[aria-expanded]")).toBeNull();
+    expect(container.querySelector("pre")).toBeNull();
+  });
+
+  it("falls back to the summary's first token when Skill input lacks a skill field", async () => {
+    const container = await render(
+      <ToolActivityRow
+        activity={activity("Skill", {
+          inputJson: "{}",
+          summary: "rebase-on-main",
+        })}
+        searchQuery=""
+      />,
+    );
+
+    expect(container.textContent).toContain("rebase-on-main activated");
+  });
+
   it("renders edit details with real multiline strings instead of JSON escapes", async () => {
     const input = {
       file_path: "/repo/src/types.rs",

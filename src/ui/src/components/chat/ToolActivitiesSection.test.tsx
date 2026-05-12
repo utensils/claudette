@@ -220,6 +220,34 @@ describe("ToolActivitiesSection", () => {
     expect(container.textContent).toContain("Read");
   });
 
+  it("renders skill activations as a flat marker, never inside the collapsed tool group", async () => {
+    const container = await render(
+      <ToolActivitiesSection
+        sessionId="session-1"
+        toolDisplayMode="grouped"
+        searchQuery=""
+        activities={[
+          activity("Skill", {
+            toolUseId: "Skill-1",
+            inputJson: JSON.stringify({ skill: "commit-changes" }),
+          }),
+          activity("Bash", { toolUseId: "Bash-1", resultText: "done" }),
+          activity("Read", { toolUseId: "Read-1", resultText: "done" }),
+        ]}
+      />,
+    );
+
+    // The skill breaks the run of direct tools (like an agent does): the
+    // two tools collapse into the pill, the skill marker stays visible.
+    expect(container.textContent).toContain("2 tool calls");
+    expect(container.textContent).toContain("commit-changes");
+    expect(container.textContent).toContain("activated");
+    expect(container.textContent).not.toContain("Bash");
+    expect(container.textContent).not.toContain("Read");
+    // No collapsible wrapper around the skill marker itself.
+    expect(container.querySelector(`.${styles.skillActivation}`)).toBeTruthy();
+  });
+
   it("collapses grouped live calls by default — even while still running", async () => {
     // Intentional behavior change: with grouped tool calls on (the
     // default for new users), live tool groups start collapsed

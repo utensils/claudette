@@ -41,6 +41,7 @@ import type { TaskTrackerResult, TrackedTask } from "../../hooks/useTaskTracker"
 import { debugChat } from "../../utils/chatDebug";
 import styles from "./ChatPanel.module.css";
 import { TurnSummary } from "./TurnSummary";
+import { ToolActivityRow } from "./ToolActivityRow";
 import { ToolActivitiesSection } from "./ToolActivitiesSection";
 import { TurnFooter } from "./TurnFooter";
 import { TurnEditSummaryCard } from "./EditChangeSummary";
@@ -49,7 +50,10 @@ import {
 } from "./editActivitySummary";
 import { PdfThumbnail } from "./PdfThumbnail";
 import { MessageCopyButton } from "./MessageCopyButton";
-import { groupToolActivitiesForDisplay } from "./toolActivityGroups";
+import {
+  groupToolActivitiesForDisplay,
+  type ToolActivityDisplayGroup,
+} from "./toolActivityGroups";
 import { ChatAuthFailureCallout } from "../auth/ChatAuthFailureCallout";
 import { cleanClaudeAuthError, isClaudeAuthError } from "../auth/claudeAuth";
 import {
@@ -253,6 +257,7 @@ export const MessagesWithTurns = memo(function MessagesWithTurns({
         globalIdx: number;
         activities: CompletedTurn["activities"];
         label: string;
+        kind: ToolActivityDisplayGroup["kind"];
         showFooter: boolean;
       }>
     > = {};
@@ -301,8 +306,18 @@ export const MessagesWithTurns = memo(function MessagesWithTurns({
           activities,
           toolDisplayMode,
         );
-        const finalGroupIndex =
-          position === turn.afterMessageIndex ? displayGroups.length - 1 : -1;
+        // The turn footer attaches to the last display group at the
+        // turn's final position — unless that group is a skill marker.
+        // Skills aren't tool calls; they render flat and flush, so the
+        // footer falls through to the standalone path (below) and stays
+        // at the bottom of the turn instead of landing above the marker.
+        let finalGroupIndex = -1;
+        if (position === turn.afterMessageIndex) {
+          const last = displayGroups.length - 1;
+          if (last >= 0 && displayGroups[last].kind !== "skill") {
+            finalGroupIndex = last;
+          }
+        }
         hasFinalGroup ||= finalGroupIndex >= 0;
         displayGroups.forEach((group, groupIndex) => {
           (groupsByPosition[position] ??= []).push({
@@ -310,6 +325,7 @@ export const MessagesWithTurns = memo(function MessagesWithTurns({
             globalIdx,
             activities: group.activities,
             label: group.label,
+            kind: group.kind,
             showFooter: groupIndex === finalGroupIndex,
           });
         });
@@ -578,7 +594,21 @@ export const MessagesWithTurns = memo(function MessagesWithTurns({
     if (groupEntries.length === 0 && footerEntries.length === 0) return null;
     return (
       <>
-        {groupEntries.map(({ turn, globalIdx, activities, label, showFooter }) => {
+        {groupEntries.map(({ turn, globalIdx, activities, label, kind, showFooter }) => {
+          // Skills aren't tool calls — render the flat "<skill> activated"
+          // marker, never a collapsible TurnSummary. (`showFooter` is
+          // always false for skill groups; see the layout builder.)
+          if (kind === "skill" && activities[0]) {
+            return (
+              <ToolActivityRow
+                key={`${turn.id}:${position}:skill:${activities[0].toolUseId}`}
+                activity={activities[0]}
+                searchQuery={searchQuery}
+                worktreePath={worktreePath}
+                inline={toolDisplayMode === "inline"}
+              />
+            );
+          }
           // A single turn can produce multiple display groups when
           // chronologically-interleaved messages split its activities;
           // each group needs its own collapse state so clicking one
@@ -747,7 +777,13 @@ export const MessagesWithTurns = memo(function MessagesWithTurns({
             {renderTurns(globalOffset + idx)}
             {renderLiveToolActivity(globalOffset + idx)}
             {msg.id === pendingMessageId ? streamingMessageNode : (
-              <div className={`${styles.message} ${styles[roleClassKey(msg.role, msg.content)]}`}>
+              <div
+                className={`${styles.message} ${styles[roleClassKey(msg.role, msg.content)]}${
+                  msg.role === "Assistant" && msg.thinking && showThinkingBlocks
+                    ? ` ${styles.messageLeadingThinking}`
+                    : ""
+                }`}
+              >
                 {msg.role === "User" && (
                   <div className={styles.roleLabel}>{t("you_label")}</div>
                 )}

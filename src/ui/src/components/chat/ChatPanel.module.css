@@ -168,6 +168,15 @@
   padding: 6px 2px;
 }
 
+/* When the message leads with a Thinking block, that block already
+   carries its own 4px top margin — don't stack the message's 6px top
+   padding on top of it, or the Thinking box ends up farther below the
+   preceding entry (skill marker, tool-call group, …) than those
+   entries sit from one another. */
+.messageLeadingThinking {
+  padding-top: 0;
+}
+
 /* System messages — subtle inline pill */
 .role_System {
   background: var(--chat-system-bg);
@@ -1009,6 +1018,65 @@
 
 .toolSummary::before {
   content: "  ";
+  color: var(--text-faint);
+}
+
+/* "<skill> activated" marker — its own transcript entry, sized to match
+   the tool-group and thinking blocks it sits among (mirrors `.turnSummary`
+   + `.turnHeader` / ThinkingBlock `.container` + `.header`). Non-interactive,
+   so no pointer cursor or expand chevron. */
+.skillBlock {
+  border: 1px solid var(--divider);
+  border-radius: 6px;
+  margin: 4px 0;
+  overflow: hidden;
+  flex-shrink: 0;
+  transition: border-color var(--transition-fast);
+}
+
+.skillBlock:hover {
+  border-color: var(--text-faint);
+}
+
+/* Inline tool-display mode: shed the box so the marker sits flush with
+   the compact, borderless rows around it (mirrors `.containerInline` /
+   `.inlineTurnActivities .toolActivity`). */
+.skillBlockInline {
+  border: none;
+  border-radius: 0;
+  margin: 0;
+}
+
+.skillBlockInline:hover {
+  border-color: transparent;
+}
+
+.skillActivation {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.skillActivationInline {
+  padding: 2px 8px;
+}
+
+.skillActivationIcon {
+  flex-shrink: 0;
+  color: var(--accent-primary);
+}
+
+.skillActivationName {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-muted);
+}
+
+.skillActivationSuffix {
   color: var(--text-faint);
 }
 

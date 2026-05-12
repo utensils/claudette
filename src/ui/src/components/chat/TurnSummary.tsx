@@ -118,6 +118,7 @@ export function TurnSummary({
         activity={act}
         searchQuery={searchQuery}
         worktreePath={worktreePath}
+        inline={inline}
       />
     );
   });

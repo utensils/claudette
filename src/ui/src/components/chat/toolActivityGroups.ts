@@ -3,7 +3,7 @@ import type { ToolActivity } from "../../stores/useAppStore";
 
 export type ToolActivityDisplayGroup = {
   key: string;
-  kind: "tools" | "agent";
+  kind: "tools" | "agent" | "skill";
   label: string;
   activities: ToolActivity[];
 };
@@ -31,7 +31,11 @@ export function groupToolActivitiesForDisplay(
   };
 
   for (const activity of activities) {
-    if (isAgentActivity(activity)) {
+    // Agents and skills are first-class transcript entries, not tool
+    // calls — they break a run of direct tools and render on their own
+    // (agents as a collapsible group, skills as a flat "activated"
+    // marker) rather than getting bundled into the "N tool calls" pill.
+    if (isAgentActivity(activity) || isSkillActivity(activity)) {
       flushDirectTools();
       groups.push(activityDisplayGroup(activity));
       continue;
@@ -45,6 +49,32 @@ export function groupToolActivitiesForDisplay(
 
 export function isAgentActivity(activity: ToolActivity): boolean {
   return activity.toolName === "Agent";
+}
+
+export function isSkillActivity(activity: ToolActivity): boolean {
+  return activity.toolName === "Skill";
+}
+
+/** Skill name from the `Skill` tool input (`{ "skill": "..." }`), falling
+ *  back to the first token of the activity summary, then "Skill". Shared by
+ *  the group label and the rendered "<skill> activated" marker. */
+export function skillActivationName(activity: ToolActivity): string {
+  try {
+    const parsed = JSON.parse(activity.inputJson || "{}") as unknown;
+    if (
+      parsed &&
+      typeof parsed === "object" &&
+      !Array.isArray(parsed) &&
+      typeof (parsed as { skill?: unknown }).skill === "string"
+    ) {
+      const skill = (parsed as { skill: string }).skill.trim();
+      if (skill) return skill;
+    }
+  } catch {
+    // Fall through to the summary-derived fallback below.
+  }
+  const fromSummary = activity.summary?.trim().split(/\s+/)[0] ?? "";
+  return fromSummary || "Skill";
 }
 
 export function groupHasRunningActivity(
@@ -66,11 +96,26 @@ function toolCallLabel(count: number): string {
 }
 
 function activityDisplayGroup(activity: ToolActivity): ToolActivityDisplayGroup {
-  const agent = isAgentActivity(activity);
+  if (isAgentActivity(activity)) {
+    return {
+      key: `agent:${activity.toolUseId}`,
+      kind: "agent",
+      label: agentGroupLabel(activity),
+      activities: [activity],
+    };
+  }
+  if (isSkillActivity(activity)) {
+    return {
+      key: `skill:${activity.toolUseId}`,
+      kind: "skill",
+      label: skillActivationName(activity),
+      activities: [activity],
+    };
+  }
   return {
-    key: `${agent ? "agent" : "tool"}:${activity.toolUseId}`,
-    kind: agent ? "agent" : "tools",
-    label: agent ? agentGroupLabel(activity) : activity.toolName,
+    key: `tool:${activity.toolUseId}`,
+    kind: "tools",
+    label: activity.toolName,
     activities: [activity],
   };
 }

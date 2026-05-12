@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useReducer, type MouseEvent } from "react";
-import { ChevronRight } from "lucide-react";
+import { ChevronRight, WandSparkles } from "lucide-react";
 import type { ToolActivity } from "../../stores/useAppStore";
 import { useAppStore } from "../../stores/useAppStore";
 import { extractToolSummary, relativizePath } from "../../hooks/toolSummary";
@@ -11,11 +11,18 @@ import { CodeBlock } from "./CodeBlock";
 import { InlineEditSummary } from "./EditChangeSummary";
 import { summarizeToolActivityEdit } from "./editActivitySummary";
 import { resolveToolSummary } from "./toolMetadata";
+import { isSkillActivity, skillActivationName } from "./toolActivityGroups";
 
 interface ToolActivityRowProps {
   activity: ToolActivity;
   searchQuery: string;
   worktreePath?: string | null;
+  /** Inline tool-display mode: drop the boxed chrome (border / outer
+   *  margin / generous padding) so the row sits flush like its
+   *  neighbours. Only consumed by the skill marker — generic tool rows
+   *  pick up the compact treatment from a `.inlineTurnActivities`
+   *  ancestor instead. */
+  inline?: boolean;
 }
 
 interface ToolDetails {
@@ -23,7 +30,60 @@ interface ToolDetails {
   lang: string | null;
 }
 
-export function ToolActivityRow({
+export function ToolActivityRow(props: ToolActivityRowProps) {
+  // Skill invocations get a distinct, non-expandable presentation — a
+  // "<skill> activated" marker with the wand icon — instead of the
+  // generic tool row, so a glance at the transcript shows which skills
+  // the agent pulled in. Dispatched here (rather than an early return
+  // inside the body) so the generic row's hooks stay unconditional.
+  if (isSkillActivity(props.activity)) {
+    return (
+      <SkillActivationRow
+        activity={props.activity}
+        searchQuery={props.searchQuery}
+        inline={props.inline}
+      />
+    );
+  }
+  return <GenericToolActivityRow {...props} />;
+}
+
+function SkillActivationRow({
+  activity,
+  searchQuery,
+  inline,
+}: {
+  activity: ToolActivity;
+  searchQuery: string;
+  inline?: boolean;
+}) {
+  const skillName = skillActivationName(activity);
+  return (
+    <div
+      className={inline ? `${styles.skillBlock} ${styles.skillBlockInline}` : styles.skillBlock}
+    >
+      <div
+        className={
+          inline
+            ? `${styles.skillActivation} ${styles.skillActivationInline}`
+            : styles.skillActivation
+        }
+      >
+        <WandSparkles
+          size={13}
+          aria-hidden="true"
+          className={styles.skillActivationIcon}
+        />
+        <span className={styles.skillActivationName}>
+          <HighlightedPlainText text={skillName} query={searchQuery} />
+        </span>
+        <span className={styles.skillActivationSuffix}> activated</span>
+      </div>
+    </div>
+  );
+}
+
+function GenericToolActivityRow({
   activity,
   searchQuery,
   worktreePath,
