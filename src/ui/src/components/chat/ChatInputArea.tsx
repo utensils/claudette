@@ -303,6 +303,12 @@ export function ChatInputArea({
   const pluginRefreshToken = useAppStore((s) => s.pluginRefreshToken);
   const openSettings = useAppStore((s) => s.openSettings);
 
+  useEffect(() => {
+    if (workspaceEnvironmentPreparing) {
+      setContextPopoverOpen(false);
+    }
+  }, [workspaceEnvironmentPreparing]);
+
   const insertTranscript = useCallback((transcript: string) => {
     const ta = textareaRef.current;
     const start = ta?.selectionStart ?? cursorPos;
