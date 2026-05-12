@@ -43,6 +43,7 @@ fn make_vm(plugin: &str, allowed: &[&str], worktree: &Path) -> Lua {
     create_lua_vm(ctx).expect("create vm")
 }
 
+#[cfg(has_direnv)]
 fn sha256_hex(bytes: &[u8]) -> String {
     use sha2::{Digest, Sha256};
 
