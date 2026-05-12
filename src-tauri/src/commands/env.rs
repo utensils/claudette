@@ -9,9 +9,10 @@
 //! Nothing here mutates the workspace or database state — reload just
 //! evicts the in-memory cache, and the next spawn/resolve recomputes.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -894,6 +895,7 @@ async fn resolve_trust_scope(state: &AppState, target: &EnvTarget) -> Result<Tru
 }
 
 const APPROVED_ENVRC_SHA256S_KEY: &str = "approved_envrc_sha256s";
+const TRUST_PROBE_DEBOUNCE_MS: u64 = 500;
 
 fn sha256_file_hex(path: &Path) -> std::io::Result<String> {
     use sha2::{Digest, Sha256};
@@ -1120,6 +1122,10 @@ async fn maybe_emit_trust_needed_for_changed_env(
     }
 }
 
+fn should_probe_trust_after_invalidation(plugin_name: &str) -> bool {
+    matches!(plugin_name, "env-direnv" | "env-mise")
+}
+
 /// Build the `EnvWatcher` and store it in `AppState`. Called once at
 /// Tauri setup time. The change callback invalidates the cache entry
 /// and emits `env-cache-invalidated` so any live UI can refetch. On
@@ -1130,6 +1136,8 @@ pub fn setup_env_watcher(app: AppHandle) {
     let state = app.state::<AppState>();
     let cache = Arc::clone(&state.env_cache);
     let app_for_cb = app.clone();
+    let trust_probe_versions: Arc<Mutex<HashMap<(String, String), u64>>> =
+        Arc::new(Mutex::new(HashMap::new()));
     let watcher = match EnvWatcher::new(Arc::new(move |worktree, plugin| {
         cache.invalidate(worktree, Some(plugin));
         let worktree_path = worktree.to_string_lossy().into_owned();
@@ -1141,8 +1149,36 @@ pub fn setup_env_watcher(app: AppHandle) {
                 plugin_name: plugin_name.clone(),
             },
         );
+        if !should_probe_trust_after_invalidation(&plugin_name) {
+            return;
+        }
+        let key = (worktree_path.clone(), plugin_name.clone());
+        let scheduled_version = {
+            let mut versions = trust_probe_versions.lock().unwrap();
+            let next = versions
+                .get(&key)
+                .copied()
+                .unwrap_or_default()
+                .wrapping_add(1);
+            versions.insert(key.clone(), next);
+            next
+        };
         let app_for_check = app_for_cb.clone();
+        let versions_for_check = Arc::clone(&trust_probe_versions);
         tauri::async_runtime::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(TRUST_PROBE_DEBOUNCE_MS)).await;
+            let should_run = {
+                let mut versions = versions_for_check.lock().unwrap();
+                if versions.get(&key).copied() == Some(scheduled_version) {
+                    versions.remove(&key);
+                    true
+                } else {
+                    false
+                }
+            };
+            if !should_run {
+                return;
+            }
             maybe_emit_trust_needed_for_changed_env(app_for_check, worktree_path, plugin_name)
                 .await;
         });
@@ -1611,6 +1647,14 @@ mod tests {
             ..Default::default()
         };
         assert!(build_trust_needed_payload("ws", "repo", &resolved).is_none());
+    }
+
+    #[test]
+    fn trust_invalidation_probe_only_runs_for_trust_capable_providers() {
+        assert!(should_probe_trust_after_invalidation("env-direnv"));
+        assert!(should_probe_trust_after_invalidation("env-mise"));
+        assert!(!should_probe_trust_after_invalidation("env-dotenv"));
+        assert!(!should_probe_trust_after_invalidation("env-nix-devshell"));
     }
 
     #[test]
