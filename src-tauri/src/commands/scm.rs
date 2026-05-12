@@ -1198,7 +1198,7 @@ pub fn start_scm_polling(app_handle: tauri::AppHandle) {
                             eprintln!(
                                 "[scm] CI failure detected for workspace {ws_id} — creating auto-fix session"
                             );
-                            let created = auto_create_ci_fix_session(
+                            let handled = auto_create_ci_fix_session(
                                 &handle,
                                 &app_state,
                                 &ws_id,
@@ -1208,7 +1208,7 @@ pub fn start_scm_polling(app_handle: tauri::AppHandle) {
                                 ci_auto_fix_model_provider.as_deref(),
                             )
                             .await;
-                            if created {
+                            if handled {
                                 app_state.ci_last_status.write().await.insert(
                                     ws_id.clone(),
                                     crate::state::CiTransitionState {
@@ -1400,7 +1400,21 @@ async fn auto_create_ci_fix_session(
 
     if let Err(e) = handle.emit("ci-auto-fix-session-created", payload) {
         eprintln!("[scm] CI auto-fix: failed to emit created session event: {e}");
-        return false;
+        match Database::open(&app_state.db_path)
+            .and_then(|db| db.archive_chat_session_only(&session_id))
+        {
+            Ok(()) => {
+                eprintln!("[scm] CI auto-fix: archived session {session_id} after emit failure");
+            }
+            Err(archive_err) => {
+                eprintln!(
+                    "[scm] CI auto-fix: failed to archive session {session_id} after emit failure: {archive_err}"
+                );
+            }
+        }
+        // The DB row already existed, so treat the attempt as handled for
+        // cooldown/dedup even though the frontend never received the event.
+        return true;
     }
     eprintln!(
         "[scm] CI auto-fix: created session {session_id} for workspace {workspace_id} ({} failed checks)",
