@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { deriveTasks, extractTaskId } from "./useTaskTracker";
+import { deriveTasks, deriveTaskState, extractTaskId } from "./useTaskTracker";
 import type { ToolActivity, CompletedTurn } from "../stores/useAppStore";
 
 /** Helper to build a minimal ToolActivity. */
@@ -245,5 +245,114 @@ describe("deriveTasks", () => {
     expect(result.totalCount).toBe(2);
     expect(result.tasks[0].id).toBe("_t1");
     expect(result.tasks[1].id).toBe("_t2");
+  });
+});
+
+// ── deriveTaskState history ──────────────────────────────────
+
+describe("deriveTaskState", () => {
+  it("archives a replaced TodoWrite run", () => {
+    const first = turn([
+      activity("TodoWrite", {
+        todos: [
+          { content: "Inspect auth flow", status: "completed" },
+          { content: "Patch token refresh", status: "completed" },
+        ],
+      }),
+    ]);
+    const second = [
+      activity("TodoWrite", {
+        todos: [
+          { content: "Write release notes", status: "in_progress" },
+          { content: "Update screenshots", status: "pending" },
+        ],
+      }),
+    ];
+
+    const result = deriveTaskState([first], second);
+
+    expect(result.history).toHaveLength(1);
+    expect(result.history[0]).toMatchObject({
+      completedCount: 2,
+      totalCount: 2,
+    });
+    expect(result.history[0].tasks.map((task) => task.description)).toEqual([
+      "Inspect auth flow",
+      "Patch token refresh",
+    ]);
+    expect(result.current.tasks.map((task) => task.description)).toEqual([
+      "Write release notes",
+      "Update screenshots",
+    ]);
+  });
+
+  it("does not archive status-only TodoWrite updates", () => {
+    const first = turn([
+      activity("TodoWrite", {
+        todos: [
+          { content: "Build UI", status: "pending" },
+          { content: "Run tests", status: "pending" },
+        ],
+      }),
+    ]);
+    const second = [
+      activity("TodoWrite", {
+        todos: [
+          { content: "Run tests", status: "pending" },
+          { content: "Build UI", status: "completed" },
+        ],
+      }),
+    ];
+
+    const result = deriveTaskState([first], second);
+
+    expect(result.history).toHaveLength(0);
+    expect(result.current.completedCount).toBe(1);
+    expect(result.current.tasks.map((task) => task.description)).toEqual([
+      "Run tests",
+      "Build UI",
+    ]);
+  });
+
+  it("keeps completed todos current until a replacement arrives", () => {
+    const completed = [
+      activity("TodoWrite", {
+        todos: [
+          { content: "Edit files", status: "completed" },
+          { content: "Verify build", status: "completed" },
+        ],
+      }),
+    ];
+
+    const result = deriveTaskState([turn(completed)], []);
+
+    expect(result.history).toHaveLength(0);
+    expect(result.current.completedCount).toBe(2);
+    expect(result.current.totalCount).toBe(2);
+  });
+
+  it("archives the current run when Claude clears todos with an empty list", () => {
+    const first = turn([
+      activity("TodoWrite", {
+        todos: [
+          { content: "Implement feature", status: "completed" },
+          { content: "Verify feature", status: "completed" },
+        ],
+      }),
+    ]);
+    const clear = [
+      activity("TodoWrite", {
+        todos: [],
+      }),
+    ];
+
+    const result = deriveTaskState([first], clear);
+
+    expect(result.history).toHaveLength(1);
+    expect(result.history[0].tasks.map((task) => task.description)).toEqual([
+      "Implement feature",
+      "Verify feature",
+    ]);
+    expect(result.current.tasks).toEqual([]);
   });
 });

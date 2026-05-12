@@ -33,6 +33,10 @@ pub async fn handle_request(
             let chat_session_id = param_chat_session_id(&params);
             handle_load_chat_history(state, &chat_session_id).await
         }
+        "load_completed_turns" => {
+            let chat_session_id = param_chat_session_id(&params);
+            handle_load_completed_turns(state, &chat_session_id)
+        }
         "send_chat_message" => {
             let chat_session_id = param_chat_session_id(&params);
             let content = param_str(&params, "content");
@@ -1184,6 +1188,17 @@ fn handle_list_chat_sessions(
         .list_chat_sessions_for_workspace(workspace_id, include_archived)
         .map_err(|e| e.to_string())?;
     serde_json::to_value(sessions).map_err(|e| e.to_string())
+}
+
+fn handle_load_completed_turns(
+    state: &ServerState,
+    chat_session_id: &str,
+) -> Result<serde_json::Value, String> {
+    let db = open_db(state)?;
+    let turns = db
+        .list_completed_turns_for_session(chat_session_id)
+        .map_err(|e| e.to_string())?;
+    serde_json::to_value(turns).map_err(|e| e.to_string())
 }
 
 fn handle_get_chat_session(
