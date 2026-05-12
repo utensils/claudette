@@ -297,10 +297,19 @@ export function ChatPanel() {
         ? s.queuedMessages[activeSessionId] ?? EMPTY_QUEUED_MESSAGES
         : EMPTY_QUEUED_MESSAGES,
   );
+  const queuedMessageAutoDispatchPaused = useAppStore(
+    (s) =>
+      activeSessionId
+        ? s.queuedMessageAutoDispatchPaused[activeSessionId] === true
+        : false,
+  );
   const setQueuedMessage = useAppStore((s) => s.setQueuedMessage);
   const updateQueuedMessage = useAppStore((s) => s.updateQueuedMessage);
   const removeQueuedMessage = useAppStore((s) => s.removeQueuedMessage);
   const clearQueuedMessage = useAppStore((s) => s.clearQueuedMessage);
+  const setQueuedMessageAutoDispatchPaused = useAppStore(
+    (s) => s.setQueuedMessageAutoDispatchPaused,
+  );
   const addCheckpoint = useAppStore((s) => s.addCheckpoint);
   const addWorkspace = useAppStore((s) => s.addWorkspace);
   const selectWorkspace = useAppStore((s) => s.selectWorkspace);
@@ -751,6 +760,7 @@ export function ChatPanel() {
       activeSessionId,
       hasNextQueuedMessage: !!nextQueuedMessage,
       isEditingQueuedMessage,
+      isAutoDispatchPaused: queuedMessageAutoDispatchPaused,
       autoDispatchQueuedId: autoDispatchQueuedIdRef.current,
     })) {
       return;
@@ -773,6 +783,7 @@ export function ChatPanel() {
     activeSessionId,
     queuedMessages,
     isEditingQueuedMessage,
+    queuedMessageAutoDispatchPaused,
     removeQueuedMessage,
   ]);
 
@@ -890,15 +901,19 @@ export function ChatPanel() {
       setError("Mid-turn steering is not yet supported for remote workspaces");
       return;
     }
-    if (!isRunning) {
-      setError("No running agent turn to steer");
-      return;
-    }
 
     const sessionId = activeSessionId;
     const { content, mentionedFiles, attachments } = queuedMessage;
     const messageId = crypto.randomUUID();
     setError(null);
+
+    if (!isRunning) {
+      const filesSet = mentionedFiles?.length ? new Set(mentionedFiles) : undefined;
+      removeQueuedMessage(sessionId, queuedMessage.id);
+      await handleSend(content, filesSet, attachments);
+      return;
+    }
+
     setIsSteeringQueued(true);
     setPendingSteerContent(content.trim() || null);
     removeQueuedMessage(sessionId, queuedMessage.id);
@@ -1199,6 +1214,8 @@ export function ChatPanel() {
       return;
     }
 
+    setQueuedMessageAutoDispatchPaused(sessionId, false);
+
     // Clear any pending agent question or plan approval — the user is sending
     // a new message (answer from a card or manual override). Also release any
     // stuck typewriter drain from the previous turn so the completed message
@@ -1296,8 +1313,12 @@ export function ChatPanel() {
   const handleStop = async () => {
     if (!activeSessionId || !selectedWorkspaceId) return;
     const sessionId = activeSessionId;
-    // Clear queued message — stopping means the user wants to take control.
-    clearQueuedMessagesAndCancelEdit(sessionId);
+    // A manual stop means the user wants control of the next turn. Keep the
+    // queue visible, but stop the idle auto-drain from consuming it.
+    if (queuedMessages.length > 0) {
+      setQueuedMessageAutoDispatchPaused(sessionId, true);
+      setIsEditingQueuedMessage(false);
+    }
     try {
       if (ws?.remote_connection_id) {
         await sendRemoteCommand(ws.remote_connection_id, "stop_agent", {

@@ -77,6 +77,8 @@ While an agent turn is running, you can queue follow-up messages. Type into the 
 
 Use the **Steer** action in the queue popover to send any queued item into the currently running turn instead of waiting for the queue to drain. Pressing **Cmd/Ctrl + Enter** steers the freshly typed composer text when the composer has text or attachments; when the composer is empty, the shortcut steers the top queued item. This is the lowest-friction way to course-correct without stopping the agent.
 
+If you stop the running agent with **Escape** or the stop button, queued messages stay in the popover and stop auto-draining. You can send a fresh prompt from the composer, send one queued message manually, cancel individual queued messages, or clear the queue.
+
 From the [CLI](/claudette/features/cli-client/):
 
 ```sh

@@ -30,6 +30,7 @@ interface AutoDispatchQueuedMessageArgs {
   activeSessionId: string | null;
   hasNextQueuedMessage: boolean;
   isEditingQueuedMessage: boolean;
+  isAutoDispatchPaused: boolean;
   autoDispatchQueuedId: string | null;
 }
 
@@ -39,6 +40,7 @@ export function shouldAutoDispatchQueuedMessage({
   activeSessionId,
   hasNextQueuedMessage,
   isEditingQueuedMessage,
+  isAutoDispatchPaused,
   autoDispatchQueuedId,
 }: AutoDispatchQueuedMessageArgs): boolean {
   return (
@@ -47,6 +49,7 @@ export function shouldAutoDispatchQueuedMessage({
     !!activeSessionId &&
     hasNextQueuedMessage &&
     !isEditingQueuedMessage &&
+    !isAutoDispatchPaused &&
     !autoDispatchQueuedId
   );
 }

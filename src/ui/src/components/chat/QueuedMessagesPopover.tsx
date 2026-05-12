@@ -206,16 +206,16 @@ export function QueuedMessagesPopover({
                     <button
                       className={styles.queuedSteer}
                       onClick={() => onSteerMessage(message.id)}
-                      disabled={isSteeringQueued || !isRunning}
-                      data-tooltip={steerQueuedTooltip}
-                      aria-label={t("steer_queued")}
+                      disabled={isSteeringQueued}
+                      data-tooltip={isRunning ? steerQueuedTooltip : t("send_message")}
+                      aria-label={isRunning ? t("steer_queued") : t("send_message")}
                     >
                       {isSteeringQueued ? (
                         <LoaderCircle size={14} className={styles.queuedSteerSpinner} />
                       ) : (
                         <SendHorizontal size={14} />
                       )}
-                      <span>{t("steer_queued_short")}</span>
+                      <span>{isRunning ? t("steer_queued_short") : t("agent_question_send")}</span>
                     </button>
                   )}
                 </>

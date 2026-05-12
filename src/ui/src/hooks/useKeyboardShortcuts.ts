@@ -83,8 +83,14 @@ export function useKeyboardShortcuts() {
                 selectedWorkspaceId
               ];
             if (sessionId) {
-              // Clear queued message — user is taking manual control.
-              useAppStore.getState().clearQueuedMessage(sessionId);
+              const queue = useAppStore.getState().queuedMessages[sessionId];
+              if (queue && queue.length > 0) {
+                // A manual stop means the user wants control of the next turn.
+                // Keep queued prompts visible, but prevent idle auto-drain.
+                useAppStore
+                  .getState()
+                  .setQueuedMessageAutoDispatchPaused(sessionId, true);
+              }
               // Route through remote or local stop path. `stop_agent` is a
               // per-session command now — pass the active session id.
               const stopPromise = ws.remote_connection_id
