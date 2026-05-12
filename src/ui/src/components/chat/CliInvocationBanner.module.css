@@ -133,18 +133,7 @@
   font-family: var(--font-mono);
   /* Match existing design language: fade in expanded content rather than
      a hard pop. Keeps the banner feeling like a single surface. */
-  animation: cliBannerReveal 140ms ease-out;
-}
-
-@keyframes cliBannerReveal {
-  from {
-    opacity: 0;
-    transform: translateY(-2px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
+  animation: var(--motion-fade-down-2) 140ms ease-out;
 }
 
 .binaryRow {

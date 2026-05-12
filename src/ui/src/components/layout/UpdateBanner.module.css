@@ -5,7 +5,7 @@
   padding: 8px 12px;
   background: var(--accent-bg);
   border-top: 1px solid var(--sidebar-border);
-  animation: slideUp 0.2s ease;
+  animation: var(--motion-slide-up-full) 0.2s ease;
 }
 
 .message {
@@ -90,15 +90,4 @@
   font-size: 11px;
   color: var(--text-muted);
   font-style: italic;
-}
-
-@keyframes slideUp {
-  from {
-    opacity: 0;
-    transform: translateY(100%);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
 }

@@ -21,7 +21,7 @@
   font-size: 12px;
   color: var(--text-primary);
   pointer-events: auto;
-  animation: toastIn 0.2s ease;
+  animation: var(--motion-toast-in) 0.2s ease;
   max-width: 360px;
 }
 
@@ -43,15 +43,4 @@
 
 .dismiss:hover {
   color: var(--text-primary);
-}
-
-@keyframes toastIn {
-  from {
-    opacity: 0;
-    transform: translateY(8px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
 }

@@ -10,6 +10,7 @@
  */
 import { useTranslation } from "react-i18next";
 import { useEnvElapsedSeconds } from "../../hooks/useEnvElapsedSeconds";
+import { Spinner } from "../shared/Spinner";
 import styles from "./Sidebar.module.css";
 
 interface WorkspaceEnvSpinnerProps {
@@ -49,8 +50,6 @@ export function WorkspaceEnvSpinner({ workspaceId }: WorkspaceEnvSpinnerProps) {
         seconds,
       });
   return (
-    <span className={styles.statusSpinner} aria-label={label} title={label}>
-      <span className={styles.statusSpinnerRing} />
-    </span>
+    <Spinner className={styles.statusSpinner} label={label} title={label} />
   );
 }

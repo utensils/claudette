@@ -9,7 +9,7 @@
   padding: 16px;
   box-shadow: var(--shadow-lg);
   z-index: 50;
-  animation: fadeUp 160ms var(--ease-out-quick);
+  animation: var(--motion-fade-up-4) 160ms var(--ease-out-quick);
 }
 
 .header {
@@ -154,9 +154,4 @@
 
 .actionBtn:hover {
   background: var(--hover-bg);
-}
-
-@keyframes fadeUp {
-  from { opacity: 0; transform: translateY(4px); }
-  to { opacity: 1; transform: translateY(0); }
 }

@@ -20,7 +20,7 @@
   border-radius: var(--radius-lg);
   padding: 6px;
   box-shadow: var(--shadow-lg);
-  animation: helpMenuIn 140ms var(--ease-out-quick);
+  animation: var(--motion-fade-up-4) 140ms var(--ease-out-quick);
 }
 
 .item {
@@ -97,15 +97,4 @@
   font-size: 11px;
   font-family: var(--font-mono);
   text-align: left;
-}
-
-@keyframes helpMenuIn {
-  from {
-    opacity: 0;
-    transform: translateY(4px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
 }

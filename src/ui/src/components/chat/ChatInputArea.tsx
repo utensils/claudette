@@ -1,8 +1,9 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { AlertCircle, FileText, LoaderCircle, Mic, Plus, Send, Square, Terminal as TerminalIcon, X } from "lucide-react";
+import { AlertCircle, FileText, Mic, Plus, Send, Square, Terminal as TerminalIcon, X } from "lucide-react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { VoiceMeter } from "./VoiceMeter";
+import { Spinner } from "../shared/Spinner";
 import { useAppStore } from "../../stores/useAppStore";
 import { useEnvElapsedSeconds } from "../../hooks/useEnvElapsedSeconds";
 import {
@@ -1378,21 +1379,13 @@ export function ChatInputArea({
           )}
           {voice.state === "starting" && (
             <div className={styles.voiceStatusText} aria-live="polite">
-              <LoaderCircle
-                size={12}
-                className={styles.voiceStatusSpinner}
-                aria-hidden="true"
-              />
+              <Spinner size={12} duration="medium" className={styles.voiceStatusSpinner} />
               <span>{t("voice_starting")}</span>
             </div>
           )}
           {voice.state === "transcribing" && (
             <div className={styles.voiceStatusText} aria-live="polite">
-              <LoaderCircle
-                size={12}
-                className={styles.voiceStatusSpinner}
-                aria-hidden="true"
-              />
+              <Spinner size={12} duration="medium" className={styles.voiceStatusSpinner} />
               <span>
                 {voice.activeProvider?.name
                   ? t("voice_transcribing_with", { provider: voice.activeProvider.name })
@@ -1442,7 +1435,7 @@ export function ChatInputArea({
             {voice.state === "transcribing" ? (
               <X size={16} />
             ) : voice.state === "starting" ? (
-              <LoaderCircle size={16} className={styles.voiceStatusSpinner} />
+              <Spinner size={16} duration="medium" className={styles.voiceStatusSpinner} />
             ) : (
               <Mic size={16} />
             )}

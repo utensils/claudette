@@ -2,7 +2,7 @@ import type { ReactNode } from "react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
-import { Copy, ExternalLink, Globe, LoaderCircle, Power, Radio, Zap } from "lucide-react";
+import { Copy, ExternalLink, Globe, Power, Radio, Zap } from "lucide-react";
 import { useAppStore } from "../../../stores/useAppStore";
 import {
   getClaudeRemoteControlStatus,
@@ -14,6 +14,7 @@ import {
 } from "../../../services/tauri";
 import { shouldDisable1mContext } from "../chatHelpers";
 import { isFastSupported } from "../modelCapabilities";
+import { Spinner } from "../../shared/Spinner";
 import styles from "./OverflowMenu.module.css";
 
 interface OverflowMenuProps {
@@ -285,7 +286,7 @@ function RemoteControlMenuItem({
         title={detail ?? "Claude Remote Control"}
       >
         <span className={styles.itemIcon}>
-          {busy ? <LoaderCircle size={14} className={styles.spin} /> : <Radio size={14} />}
+          {busy ? <Spinner size={14} duration="medium" className={styles.spin} /> : <Radio size={14} />}
         </span>
         <span className={styles.itemText}>
           <span className={styles.itemLabel}>Claude Remote Control</span>

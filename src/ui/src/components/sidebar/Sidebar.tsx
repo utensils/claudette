@@ -29,6 +29,7 @@ import {
 import { Settings, Link, X, Share2, Plus, Globe, Archive, Trash2, CircleCheck, CircleAlert, CircleQuestionMark, Cog, Filter, LayoutDashboard, CircleDashed, CircleStop, ChevronRight, ChevronDown, ArrowDownAZ } from "lucide-react";
 import { resolveScmPrIcon } from "../shared/workspaceStatusIcon";
 import { RepoIcon } from "../shared/RepoIcon";
+import { Spinner } from "../shared/Spinner";
 import { WorkspaceEnvSpinner } from "./WorkspaceEnvSpinner";
 import { extractRemoteWorkspace } from "./remoteWorkspaceResponse";
 import { HelpMenu } from "./HelpMenu";
@@ -707,13 +708,10 @@ export const Sidebar = memo(function Sidebar() {
           // sessions in background workspaces.
           <WorkspaceEnvSpinner workspaceId={ws.id} />
         ) : ws.agent_status === "Running" || ws.agent_status === "Compacting" ? (
-          <span
+          <Spinner
             className={styles.statusSpinner}
-            aria-hidden="true"
             title={ws.agent_status === "Compacting" ? t("status_compacting") : t("status_running")}
-          >
-            <span className={styles.statusSpinnerRing} />
-          </span>
+          />
         ) : (() => {
           if (ws.status === "Archived") {
             return (
@@ -809,7 +807,9 @@ export const Sidebar = memo(function Sidebar() {
                   aria-controls={listId}
                 >
                   <span className={styles.iconWrap} aria-label={t("command_running")}>
-                    <Cog size={12} className={styles.runningIcon} />
+                    <Spinner size={12} duration="slow" className={styles.runningIcon}>
+                      <Cog size={12} />
+                    </Spinner>
                   </span>
                   <span className={styles.commandText}>
                     {t("command_count_running", { count })}
@@ -1312,9 +1312,7 @@ export const Sidebar = memo(function Sidebar() {
               {/* Show loading workspace while creating */}
               {!collapsed && creatingWorkspace && creatingWorkspace.repoId === repo.id && (
                 <div className={`${styles.wsItem} ${styles.wsItemLoading}`}>
-                  <span className={styles.statusSpinner} aria-hidden="true">
-                    <span className={styles.statusSpinnerRing} />
-                  </span>
+                  <Spinner className={styles.statusSpinner} />
                   <div className={styles.wsInfo}>
                     <span className={`${styles.wsName} ${styles.wsNamePlaceholder}`}>
                       {t("creating_workspace")}
@@ -1726,9 +1724,7 @@ function RemoteConnectionGroup({
                     }}
                   >
                     {isAgentBusy(ws.agent_status) ? (
-                      <span className={styles.statusSpinner} aria-hidden="true">
-                        <span className={styles.statusSpinnerRing} />
-                      </span>
+                        <Spinner className={styles.statusSpinner} />
                     ) : (
                       <span
                         className={`${styles.statusDot} ${

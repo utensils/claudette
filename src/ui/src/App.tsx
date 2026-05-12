@@ -20,6 +20,7 @@ import { findLeafByPtyId } from "./stores/terminalPaneTree";
 import type { CommandEvent } from "./types";
 import i18n, { isSupportedLanguage } from "./i18n";
 import "./styles/theme.css";
+import "./styles/motion.css";
 
 function workspaceOrderModesFromRepoIds(
   repoIds: readonly string[],

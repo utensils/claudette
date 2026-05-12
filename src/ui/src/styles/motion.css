@@ -1,0 +1,44 @@
+:root {
+  --motion-fade-up-4: claudette-fade-up-4;
+  --motion-fade-down-2: claudette-fade-down-2;
+  --motion-fade-down-3: claudette-fade-down-3;
+  --motion-fade-down-4: claudette-fade-down-4;
+  --motion-toast-in: claudette-toast-in;
+  --motion-slide-up-full: claudette-slide-up-full;
+  --motion-pulse-badge: claudette-pulse-badge;
+}
+
+@keyframes claudette-fade-up-4 {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes claudette-fade-down-2 {
+  from { opacity: 0; transform: translateY(-2px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes claudette-fade-down-3 {
+  from { opacity: 0; transform: translateY(-3px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes claudette-fade-down-4 {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes claudette-toast-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes claudette-slide-up-full {
+  from { opacity: 0; transform: translateY(100%); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes claudette-pulse-badge {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}

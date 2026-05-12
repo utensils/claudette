@@ -1,4 +1,5 @@
 import { CircleCheck, CircleDashed, CircleQuestionMark, CircleAlert, CircleStop } from "lucide-react";
+import { Spinner } from "./Spinner";
 import styles from "./SessionStatusIcon.module.css";
 
 export type SessionStatusKind =
@@ -17,14 +18,7 @@ interface Props {
 export function SessionStatusIcon({ status, size = 14 }: Props) {
   switch (status.kind) {
     case "running":
-      return (
-        <span
-          className={styles.spinnerWrap}
-          style={{ width: size, height: size }}
-        >
-          <span className={styles.spinner} />
-        </span>
-      );
+      return <Spinner size={size} />;
     case "ask":
       return (
         <span className={styles.pulse}>

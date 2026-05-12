@@ -74,11 +74,6 @@
   border-color: var(--divider);
 }
 
-@keyframes fadeIn {
-  from { opacity: 0; }
-  to { opacity: 1; }
-}
-
 .prPill {
   display: flex;
   align-items: center;
@@ -175,7 +170,7 @@
   background: var(--checks-panel-bg, var(--chat-header-bg));
   border-bottom: 1px solid var(--divider);
   box-shadow: var(--shadow-md);
-  animation: dropdownIn 0.12s ease;
+  animation: var(--motion-fade-down-3) 0.12s ease;
 }
 
 .checksHeader {
@@ -272,9 +267,8 @@
 }
 
 .checkIconPending {
-  color: var(--badge-ask);
+  --spinner-color: var(--badge-ask);
   justify-self: center;
-  animation: spin 1s linear infinite;
 }
 
 /* Skipped: deliberately not run. Match `checkIconCancelled`'s muted tone
@@ -283,13 +277,4 @@
 .checkIconSkipped {
   color: var(--text-dim);
   justify-self: center;
-}
-
-@keyframes spin {
-  to { transform: rotate(360deg); }
-}
-
-@keyframes dropdownIn {
-  from { opacity: 0; transform: translateY(-3px); }
-  to { opacity: 1; transform: translateY(0); }
 }

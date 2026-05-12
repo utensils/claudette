@@ -63,18 +63,7 @@
   background: var(--sidebar-bg);
   box-shadow: var(--shadow-lg);
   user-select: none;
-  animation: menuIn var(--transition-fast);
-}
-
-@keyframes menuIn {
-  from {
-    opacity: 0;
-    transform: translateY(-4px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
+  animation: var(--motion-fade-down-4) var(--transition-fast);
 }
 
 .utilityGroup {

@@ -17,8 +17,8 @@
  * mount it unconditionally.
  */
 import { useTranslation } from "react-i18next";
-import { LoaderCircle } from "lucide-react";
 import { useEnvElapsedSeconds } from "../../hooks/useEnvElapsedSeconds";
+import { Spinner } from "../shared/Spinner";
 import styles from "./TerminalPanel.module.css";
 
 interface TerminalEnvOverlayProps {
@@ -57,7 +57,7 @@ export function TerminalEnvOverlay({ workspaceId }: TerminalEnvOverlayProps) {
       );
   return (
     <div className={styles.envOverlay} role="status" aria-live="polite">
-      <LoaderCircle className={styles.envOverlaySpinner} size={14} />
+      <Spinner className={styles.envOverlaySpinner} size={14} />
       <span>{message}</span>
     </div>
   );

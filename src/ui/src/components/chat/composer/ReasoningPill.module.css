@@ -134,7 +134,7 @@
   padding: 6px;
   box-shadow: var(--shadow-lg);
   z-index: 40;
-  animation: fadeUp 160ms var(--ease-out-quick);
+  animation: var(--motion-fade-up-4) 160ms var(--ease-out-quick);
 }
 
 .sectionLabel {
@@ -205,9 +205,4 @@
   height: 6px;
   border-radius: 3px;
   flex-shrink: 0;
-}
-
-@keyframes fadeUp {
-  from { opacity: 0; transform: translateY(4px); }
-  to { opacity: 1; transform: translateY(0); }
 }

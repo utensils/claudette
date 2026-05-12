@@ -1,9 +1,6 @@
 import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { useTranslation } from "react-i18next";
-import {
-  LoaderCircle,
-  SendHorizontal,
-} from "lucide-react";
+import { SendHorizontal } from "lucide-react";
 import { ChatErrorBanner } from "./ChatErrorBanner";
 import { ChatSearchBar } from "./ChatSearchBar";
 import { OverlayScrollbar } from "./OverlayScrollbar";
@@ -59,6 +56,7 @@ import {
 import { resolveUltrathinkEffort } from "./ultrathink";
 import { extractCompactionEvents } from "../../utils/compactionSentinel";
 import { WorkspacePanelHeader } from "../shared/WorkspacePanelHeader";
+import { Spinner } from "../shared/Spinner";
 import { SessionTabs } from "./SessionTabs";
 import { AgentQuestionCard } from "./AgentQuestionCard";
 import { PlanApprovalCard } from "./PlanApprovalCard";
@@ -1384,7 +1382,7 @@ export function ChatPanel() {
             <>
               {isLoadingMore && (
                 <div className={styles.loadingOlder}>
-                  <LoaderCircle size={14} className={styles.loadingOlderSpinner} />
+                  <Spinner size={14} duration="relaxed" />
                   Loading older messages…
                 </div>
               )}
@@ -1495,9 +1493,7 @@ export function ChatPanel() {
                       : t("processing_aria", { elapsed: formatElapsed(elapsed) })
                   }
                 >
-                  <span className={styles.spinnerWrap} aria-hidden="true">
-                    <span className={styles.spinner} />
-                  </span>
+                  <Spinner />
                   {ws?.agent_status === "Compacting" && (
                     <span className={styles.compactingLabel}>{t("compacting_label")}</span>
                   )}

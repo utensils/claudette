@@ -9,9 +9,9 @@ import {
   GitMerge,
   GitPullRequestClosed,
   ExternalLink,
-  LoaderCircle,
 } from "lucide-react";
 import { openUrl } from "../../services/tauri";
+import { Spinner } from "../shared/Spinner";
 import { usePrBannerData, type BannerStatus } from "../../hooks/usePrBannerData";
 import type { CiCheck } from "../../types/plugin";
 import {
@@ -192,7 +192,7 @@ function CheckStatusIcon({ status }: { status: CiCheck["status"] }) {
     case "cancelled":
       return <Circle size={10} className={styles.checkIconCancelled} aria-hidden="true" />;
     case "pending":
-      return <LoaderCircle size={14} className={styles.checkIconPending} aria-hidden="true" />;
+      return <Spinner size={14} duration="relaxed" className={styles.checkIconPending} />;
     case "skipped":
       // CircleSlash reads as "didn't run" at a glance; the
       // checkIconSkipped class tints it neutral / muted so it doesn't

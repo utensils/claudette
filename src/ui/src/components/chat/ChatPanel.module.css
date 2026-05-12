@@ -328,37 +328,6 @@
   margin-top: 4px;
 }
 
-.spinnerWrap {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 14px;
-  height: 14px;
-  color: var(--accent-primary);
-  filter: drop-shadow(0 0 3px rgba(var(--accent-primary-rgb), 0.4));
-}
-
-.spinner {
-  width: 100%;
-  height: 100%;
-  border-radius: 50%;
-  background: conic-gradient(currentColor 225deg, transparent 225deg);
-  mask: radial-gradient(circle closest-side, transparent calc(100% - 2px), black calc(100% - 2px));
-  -webkit-mask: radial-gradient(circle closest-side, transparent calc(100% - 2px), black calc(100% - 2px));
-  animation: spin 0.8s linear infinite;
-}
-
-@keyframes spin {
-  from { transform: rotate(0deg); }
-  to { transform: rotate(360deg); }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .spinner {
-    animation: none;
-  }
-}
-
 /* Pending steering prompt indicator */
 .pendingSteer {
   display: flex;
@@ -1414,10 +1383,6 @@
   opacity: 0.55;
 }
 
-.queuedSteerSpinner {
-  animation: spin 0.8s linear infinite;
-}
-
 .queuedCancel {
   display: inline-flex;
   align-items: center;
@@ -1718,8 +1683,7 @@
 }
 
 .voiceStatusSpinner {
-  flex-shrink: 0;
-  animation: voice-spin 0.9s linear infinite;
+  --spinner-filter: none;
 }
 
 .voiceErrorBtn {
@@ -1766,18 +1730,6 @@
   min-height: 4px;
   border-radius: 2px;
   background: var(--accent-primary);
-}
-
-@keyframes voice-spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .voiceStatusSpinner {
-    animation: none;
-  }
 }
 
 /* -- Attachment UI -- */
@@ -1937,19 +1889,4 @@
   padding: 8px 16px;
   font-size: 12px;
   color: var(--text-muted);
-}
-
-.loadingOlderSpinner {
-  animation: spin 1s linear infinite;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .loadingOlderSpinner {
-    animation: none;
-  }
-}
-
-@keyframes spin {
-  from { transform: rotate(0deg); }
-  to { transform: rotate(360deg); }
 }
