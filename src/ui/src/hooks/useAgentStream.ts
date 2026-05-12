@@ -166,8 +166,8 @@ export function useAgentStream() {
         return;
       }
 
+      if (!("Stream" in agentEvent)) return;
       const streamEvent = agentEvent.Stream;
-      if (!streamEvent) return;
 
       // Handle different stream event types based on the Rust enum serialization
       if ("type" in streamEvent) {

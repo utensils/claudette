@@ -247,13 +247,17 @@ fn validation_failure_message(stdout: &[u8], stderr: &[u8]) -> String {
         .to_string()
 }
 
-fn looks_like_auth_failure(message: &str) -> bool {
+pub(crate) fn looks_like_auth_failure(message: &str) -> bool {
     let lower = message.to_lowercase();
     lower.contains("api error: 401")
         || lower.contains("401 invalid authentication credentials")
         || lower.contains("invalid authentication credentials")
         || lower.contains("failed to authenticate")
         || lower.contains("token refresh failed")
+        || lower.contains("not logged in")
+        || lower.contains("please run /login")
+        || lower.contains("run /login")
+        || lower.contains("credentials not found")
         || lower.contains("expired or been revoked")
 }
 
@@ -455,6 +459,7 @@ mod tests {
         assert!(looks_like_auth_failure(
             "Failed to authenticate. API Error: 401 Invalid authentication credentials",
         ));
+        assert!(looks_like_auth_failure("Not logged in · Please run /login"));
         assert!(!looks_like_auth_failure("Model haiku is unavailable"));
     }
 }

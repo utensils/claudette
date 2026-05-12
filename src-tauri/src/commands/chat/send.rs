@@ -112,6 +112,64 @@ fn has_env_trust_warning(messages: &[ChatMessage]) -> bool {
     messages.iter().any(is_env_trust_warning_message)
 }
 
+fn auth_failure_message_from_stderr(stderr_lines: &[String]) -> Option<String> {
+    let output = stderr_lines
+        .iter()
+        .map(|line| line.trim())
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n");
+    if !crate::commands::auth::looks_like_auth_failure(&output) {
+        return None;
+    }
+    stderr_lines
+        .iter()
+        .map(|line| line.trim())
+        .find(|line| crate::commands::auth::looks_like_auth_failure(line))
+        .map(ToOwned::to_owned)
+        .or(Some(output))
+}
+
+fn post_agent_auth_failure_message(
+    app: &AppHandle,
+    db_path: &std::path::Path,
+    workspace_id: &str,
+    chat_session_id: &str,
+    stderr_lines: &[String],
+) {
+    let Some(content) = auth_failure_message_from_stderr(stderr_lines) else {
+        return;
+    };
+    let message = ChatMessage {
+        id: uuid::Uuid::new_v4().to_string(),
+        workspace_id: workspace_id.to_string(),
+        chat_session_id: chat_session_id.to_string(),
+        role: ChatRole::System,
+        content,
+        cost_usd: None,
+        duration_ms: None,
+        created_at: now_iso(),
+        thinking: None,
+        input_tokens: None,
+        output_tokens: None,
+        cache_read_tokens: None,
+        cache_creation_tokens: None,
+    };
+
+    match Database::open(db_path).and_then(|db| db.insert_chat_message(&message)) {
+        Ok(()) => {
+            let _ = app.emit("chat-system-message", &message);
+        }
+        Err(err) => {
+            tracing::warn!(
+                target: "claudette::chat",
+                error = %err,
+                "failed to post Claude auth failure message"
+            );
+        }
+    }
+}
+
 fn first_user_message_text(messages: &[ChatMessage]) -> Option<String> {
     messages.iter().find_map(|message| {
         if message.role == ChatRole::User {
@@ -2596,8 +2654,13 @@ pub async fn send_chat_message(
         // to None after each persistence so per-message counts stay distinct
         // across multi-message turns.
         let mut latest_usage: Option<claudette::agent::TokenUsage> = None;
+        let mut stderr_lines: Vec<String> = Vec::new();
         let mut notified_via_result = false;
         while let Some(event) = rx.recv().await {
+            if let AgentEvent::Stderr(line) = &event {
+                stderr_lines.push(line.clone());
+            }
+
             // Track whether the CLI initialized successfully.
             if let AgentEvent::Stream(StreamEvent::System {
                 subtype,
@@ -3333,6 +3396,15 @@ pub async fn send_chat_message(
                     )
                     .await;
                 }
+                if exit_code != Some(0) && !notified_via_result {
+                    post_agent_auth_failure_message(
+                        &app,
+                        &db_path,
+                        &ws_id,
+                        &chat_session_id_for_stream,
+                        &stderr_lines,
+                    );
+                }
                 let needs_attention_now = agents
                     .get(&chat_session_id_for_stream)
                     .is_some_and(|s| s.needs_attention);
@@ -3448,8 +3520,8 @@ pub async fn send_chat_message(
 #[cfg(test)]
 mod tests {
     use super::{
-        env_provider_drifted_parts, has_env_trust_warning, remote_control_requested_or_active,
-        remote_control_requested_or_active_for_turn,
+        auth_failure_message_from_stderr, env_provider_drifted_parts, has_env_trust_warning,
+        remote_control_requested_or_active, remote_control_requested_or_active_for_turn,
         remote_control_should_defer_drift_teardown_for_turn,
         remote_control_should_restore_for_turn, remote_control_title, resolve_spawn_session_id,
         should_defer_persistent_restart_for_state,
@@ -3532,6 +3604,29 @@ mod tests {
             test_chat_message(ChatRole::User, "ping again"),
         ];
         assert!(has_env_trust_warning(&messages));
+    }
+
+    #[test]
+    fn auth_failure_message_picks_matching_stderr_line() {
+        let lines = vec![
+            "debug: starting Claude".to_string(),
+            "Not logged in · Please run /login".to_string(),
+        ];
+
+        assert_eq!(
+            auth_failure_message_from_stderr(&lines).as_deref(),
+            Some("Not logged in · Please run /login")
+        );
+    }
+
+    #[test]
+    fn auth_failure_message_ignores_unrelated_stderr() {
+        let lines = vec![
+            "warning: mcp server timed out".to_string(),
+            "model haiku is unavailable".to_string(),
+        ];
+
+        assert_eq!(auth_failure_message_from_stderr(&lines), None);
     }
 
     #[test]

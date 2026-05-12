@@ -7,6 +7,7 @@ export interface AgentStreamPayload {
 
 export type AgentEvent =
   | { Stream: StreamEvent }
+  | { Stderr: string }
   | { ProcessExited: number | null };
 
 export type StreamEvent =
