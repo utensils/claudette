@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { __TEST__ } from "./useWorkspaceEnvironmentPreparation";
 
-const { looksLikeTrustError } = __TEST__;
+const { looksLikeTrustError, looksLikeMissingWorkspace } = __TEST__;
 
 describe("looksLikeTrustError", () => {
   it("matches the legacy mise-not-trusted error string", () => {
@@ -34,5 +34,29 @@ describe("looksLikeTrustError", () => {
 
   it("matches case-insensitively", () => {
     expect(looksLikeTrustError("FILE IS NOT TRUSTED")).toBe(true);
+  });
+});
+
+describe("looksLikeMissingWorkspace", () => {
+  it("matches the backend's 'Workspace not found' error verbatim", () => {
+    // The exact string `resolve_target_from_db` returns in
+    // `src-tauri/src/commands/env.rs` when the workspace id has no DB row.
+    expect(looksLikeMissingWorkspace("Workspace not found")).toBe(true);
+  });
+
+  it("matches case-insensitively and when wrapped in other text", () => {
+    expect(looksLikeMissingWorkspace("error: workspace not found")).toBe(true);
+  });
+
+  it("returns false for unrelated env-provider errors", () => {
+    expect(
+      looksLikeMissingWorkspace(
+        "Environment provider failed: env-mise: TOML parse error",
+      ),
+    ).toBe(false);
+  });
+
+  it("does not match a generic 'not found' that isn't about the workspace", () => {
+    expect(looksLikeMissingWorkspace("Repository not found")).toBe(false);
   });
 });

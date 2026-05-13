@@ -594,6 +594,11 @@ pub async fn delete_workspace(
 
     let workspaces = db.list_workspaces().map_err(|e| e.to_string())?;
     let Some(ws) = workspaces.iter().find(|w| w.id == id) else {
+        // The row is already gone — delete is idempotent. Still announce
+        // it: a sidebar row can outlive its DB row (a prior delete whose
+        // IPC response WebView2 dropped), and this `workspaces-changed`
+        // event is the backstop that reconciles that ghost away.
+        TauriHooks::new(app.clone()).workspace_changed(&id, WorkspaceChangeKind::Deleted);
         return Ok(());
     };
 
@@ -655,7 +660,16 @@ pub async fn delete_workspace(
         let _ = app.emit("mcp-status-cleared", &repo_id);
     }
 
-    crate::tray::rebuild_tray(&app);
+    // Announce the delete through the shared hooks (rebuilds the tray and
+    // emits `workspaces-changed { kind: "deleted" }`). This was previously
+    // a bare `rebuild_tray` call, leaving the frontend's `removeWorkspace`
+    // entirely dependent on the IPC response to this command making it
+    // back — if it was dropped (WebView2 occasionally does this) the
+    // sidebar row became a ghost with no event-based backstop, unlike the
+    // archive path which already routes through `OpsHooks`. The event is
+    // idempotent on the frontend (`removeWorkspace` filters by id), so the
+    // common case where the `.then` handler also fires is harmless.
+    TauriHooks::new(app.clone()).workspace_changed(&id, WorkspaceChangeKind::Deleted);
 
     Ok(())
 }
