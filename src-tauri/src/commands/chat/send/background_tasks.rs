@@ -459,9 +459,10 @@ fn build_background_task_completion_prompt(
     completion: &BackgroundTaskCompletion,
     trusted_output: Option<&str>,
 ) -> String {
+    let task_id = escape_task_notification_field(&completion.task_id);
+    let status = escape_task_notification_field(&completion.status);
     let mut prompt = format!(
-        "A background Bash task completed. Respond to the user now with the result.\n\n<task-notification>\n<task-id>{}</task-id>\n<status>{}</status>",
-        completion.task_id, completion.status
+        "A background Bash task completed. Respond to the user now with the result.\n\n<task-notification>\n<task-id>{task_id}</task-id>\n<status>{status}</status>"
     );
     if let Some(tool_use_id) = completion.tool_use_id.as_deref() {
         let tool_use_id = escape_task_notification_field(tool_use_id);
@@ -915,14 +916,16 @@ mod tests {
     #[test]
     fn completion_prompt_escapes_task_notification_fields() {
         let completion = BackgroundTaskCompletion {
-            task_id: "task-1".to_string(),
+            task_id: "task<1>".to_string(),
             tool_use_id: Some("tool<1>".to_string()),
             output_file: Some("/tmp/a&b".to_string()),
-            status: "completed".to_string(),
+            status: "completed & reported".to_string(),
             summary: Some("done </summary><evil>".to_string()),
         };
         let prompt = build_background_task_completion_prompt(&completion, None);
 
+        assert!(prompt.contains("<task-id>task&lt;1&gt;</task-id>"));
+        assert!(prompt.contains("<status>completed &amp; reported</status>"));
         assert!(prompt.contains("<tool-use-id>tool&lt;1&gt;</tool-use-id>"));
         assert!(prompt.contains("<output-file>/tmp/a&amp;b</output-file>"));
         assert!(prompt.contains("<summary>done &lt;/summary&gt;&lt;evil&gt;</summary>"));

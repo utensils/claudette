@@ -3119,6 +3119,7 @@ mod tests {
             session_backend_hash: String::new(),
             pending_permissions: Default::default(),
             running_background_tasks: Default::default(),
+            background_task_output_paths: Default::default(),
             background_wake_active: false,
             session_exited_plan: false,
             session_resolved_env: Default::default(),
