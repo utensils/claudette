@@ -1,4 +1,11 @@
-import React, { createElement, useContext, useEffect, useMemo, useReducer } from "react";
+import React, {
+  createContext,
+  createElement,
+  useContext,
+  useEffect,
+  useMemo,
+  useReducer,
+} from "react";
 import type { PluggableList } from "unified";
 import type { Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -170,6 +177,26 @@ export const REMARK_PLUGINS: PluggableList = [remarkGfm];
 // Schemes that should open in the system browser rather than navigate the webview.
 export const EXTERNAL_SCHEMES = /^https?:|^mailto:/i;
 
+export interface MarkdownFileOpenContextValue {
+  openFile: (path: string) => boolean;
+}
+
+export const MarkdownFileOpenContext =
+  createContext<MarkdownFileOpenContextValue | null>(null);
+
+const ABSOLUTE_FILE_PATH_REGEX = /^(?:[A-Za-z]:[\\/]|[\\/]|~[\\/]|~$)/;
+
+export function normalizeExternalHref(href: string): string | null {
+  const trimmed = href.trim();
+  if (!trimmed) return null;
+  if (/^mailto:/i.test(trimmed)) return trimmed;
+  if (/^https?:\/\//i.test(trimmed)) return trimmed;
+  if (/^www\.[^\s/$.?#].[^\s]*$/i.test(trimmed)) {
+    return `https://${trimmed}`;
+  }
+  return null;
+}
+
 /**
  * URL transform that runs *inside* react-markdown after rehype but before
  * each `<a>`/`<img>` is rendered. react-markdown's `defaultUrlTransform`
@@ -330,43 +357,63 @@ export function HighlightedCode({
   return createElement("code", { ...props, className }, children);
 }
 
-// Override <a> to open external links in the system browser instead of
-// navigating the webview, and to route `claudettepath:` links — produced
-// by the file-path autolinker — through the OS default-app handler.
-export const MARKDOWN_COMPONENTS: Components = {
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  a: ({ node, href, children, ...props }) => {
-    const filePath = href ? decodeFilePathHref(href) : null;
-    return createElement(
-      "a",
-      {
-        ...props,
-        href,
-        // Tooltip the actual path so a user hovering can see exactly
-        // what the click will open — the visible text is the path
-        // already, but title= adds redundancy on long paths that get
-        // visually truncated by surrounding wrap/ellipsis rules.
-        title: filePath ?? (props as { title?: string }).title,
-        onClick: (e: React.MouseEvent<HTMLAnchorElement>) => {
-          if (filePath) {
-            e.preventDefault();
-            void invoke("open_in_editor", { path: filePath }).catch(
-              (err) =>
-                console.error("Failed to open path:", filePath, err),
-            );
+const MarkdownLink: NonNullable<Components["a"]> = ({
+  node: _node,
+  href,
+  children,
+  ...props
+}) => {
+  const fileOpen = useContext(MarkdownFileOpenContext);
+  const filePath = href ? decodeFilePathHref(href) : null;
+  return createElement(
+    "a",
+    {
+      ...props,
+      href,
+      // Tooltip the actual path so a user hovering can see exactly
+      // what the click will open — the visible text is the path
+      // already, but title= adds redundancy on long paths that get
+      // visually truncated by surrounding wrap/ellipsis rules.
+      title: filePath ?? (props as { title?: string }).title,
+      onClick: (e: React.MouseEvent<HTMLAnchorElement>) => {
+        if (filePath) {
+          e.preventDefault();
+          if (fileOpen) {
+            try {
+              if (fileOpen.openFile(filePath)) return;
+            } catch (err) {
+              console.error("Failed to open file link in Monaco:", filePath, err);
+              return;
+            }
+          }
+          if (!ABSOLUTE_FILE_PATH_REGEX.test(filePath)) {
+            console.warn("No workspace file opener available for relative path:", filePath);
             return;
           }
-          if (href && EXTERNAL_SCHEMES.test(href)) {
-            e.preventDefault();
-            void openUrl(href).catch((err) =>
-              console.error("Failed to open URL:", href, err),
-            );
-          }
-        },
+          void invoke("open_in_editor", { path: filePath }).catch(
+            (err) =>
+              console.error("Failed to open path:", filePath, err),
+          );
+          return;
+        }
+        const externalHref = href ? normalizeExternalHref(href) : null;
+        if (externalHref) {
+          e.preventDefault();
+          void openUrl(externalHref).catch((err) =>
+            console.error("Failed to open URL:", externalHref, err),
+          );
+        }
       },
-      children,
-    );
-  },
+    },
+    children,
+  );
+};
+
+// Override <a> to open external links in the system browser instead of
+// navigating the webview, and to route `claudettepath:` links — produced
+// by the file-path autolinker — through the Monaco opener when possible.
+export const MARKDOWN_COMPONENTS: Components = {
+  a: MarkdownLink,
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   pre: ({ node, children, ...props }) => {
     // Detect ```mermaid fences and route them to MermaidBlock instead of

@@ -1,6 +1,7 @@
-import { memo, useContext, useEffect } from "react";
+import { memo, useCallback, useContext, useEffect } from "react";
 import { useAppStore } from "../../stores/useAppStore";
 import { useTypewriter } from "../../hooks/useTypewriter";
+import { relativizePath } from "../../hooks/toolSummary";
 import { HighlightedMessageMarkdown } from "./HighlightedMessageMarkdown";
 import { StreamingContext } from "./StreamingContext";
 import { ScrollContext } from "./ScrollContext";
@@ -16,10 +17,12 @@ import caretStyles from "./caret.module.css";
  */
 export const StreamingMessage = memo(function StreamingMessage({
   sessionId,
+  workspaceId,
   isStreaming,
   searchQuery,
 }: {
   sessionId: string;
+  workspaceId: string;
   isStreaming: boolean;
   searchQuery: string;
 }) {
@@ -28,6 +31,10 @@ export const StreamingMessage = memo(function StreamingMessage({
     (s) => s.pendingTypewriter[sessionId]?.text ?? "",
   );
   const finishTypewriterDrain = useAppStore((s) => s.finishTypewriterDrain);
+  const openFileTab = useAppStore((s) => s.openFileTab);
+  const worktreePath = useAppStore(
+    (s) => s.workspaces.find((w) => w.id === workspaceId)?.worktree_path,
+  );
   const { handleContentChanged } = useContext(ScrollContext);
 
   const fullText = streaming || pendingText;
@@ -47,6 +54,24 @@ export const StreamingMessage = memo(function StreamingMessage({
     }
   }, [showCaret, streaming, pendingText, sessionId, finishTypewriterDrain]);
 
+  const openFileInMonaco = useCallback(
+    (filePath: string) => {
+      const rel = relativizePath(filePath, worktreePath);
+      if (
+        /^([a-zA-Z]:[\\/]|[\\/])/.test(rel) ||
+        rel === "." ||
+        rel === ".." ||
+        rel.startsWith("../") ||
+        rel.startsWith("..\\")
+      ) {
+        return false;
+      }
+      openFileTab(workspaceId, rel.replace(/^\.[\\/]/, ""));
+      return true;
+    },
+    [openFileTab, workspaceId, worktreePath],
+  );
+
   if (!displayed) return null;
 
   return (
@@ -57,7 +82,11 @@ export const StreamingMessage = memo(function StreamingMessage({
     >
       <div className={styles.content}>
         <StreamingContext.Provider value={isStreaming || pendingText.length > 0}>
-          <HighlightedMessageMarkdown content={displayed} query={searchQuery} />
+          <HighlightedMessageMarkdown
+            content={displayed}
+            query={searchQuery}
+            onOpenFile={openFileInMonaco}
+          />
         </StreamingContext.Provider>
         {showCaret && <span className={caretStyles.caret} aria-hidden="true" />}
       </div>

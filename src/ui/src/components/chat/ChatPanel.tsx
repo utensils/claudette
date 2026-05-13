@@ -1466,6 +1466,7 @@ export function ChatPanel() {
                     hasStreaming || hasPendingTypewriter ? (
                       <StreamingMessage
                         sessionId={activeSessionId}
+                        workspaceId={selectedWorkspaceId}
                         isStreaming={isRunning ?? false}
                         searchQuery={searchQuery}
                       />

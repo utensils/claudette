@@ -1,7 +1,24 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+// @vitest-environment happy-dom
+
+import { act } from "react";
+import { createRoot, type Root } from "react-dom/client";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { createElement } from "react";
-import type { ReactElement } from "react";
+import type { ReactElement, ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
+
+const tauriMocks = vi.hoisted(() => ({
+  invoke: vi.fn(() => Promise.resolve()),
+  openUrl: vi.fn(() => Promise.resolve()),
+}));
+
+vi.mock("@tauri-apps/api/core", () => ({
+  invoke: tauriMocks.invoke,
+}));
+
+vi.mock("../services/tauri", () => ({
+  openUrl: tauriMocks.openUrl,
+}));
 
 vi.mock("./highlight", () => ({
   getCachedHighlight: vi.fn(),
@@ -11,11 +28,40 @@ vi.mock("./highlight", () => ({
 import {
   EXTERNAL_SCHEMES,
   MARKDOWN_COMPONENTS,
+  MarkdownFileOpenContext,
+  normalizeExternalHref,
   SANITIZE_SCHEMA,
   HighlightedCode,
   safeUrlTransform,
 } from "./markdown";
 import { getCachedHighlight, highlightCode } from "./highlight";
+
+(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean })
+  .IS_REACT_ACT_ENVIRONMENT = true;
+
+const mountedRoots: Root[] = [];
+const mountedContainers: HTMLElement[] = [];
+
+async function render(node: ReactNode): Promise<HTMLElement> {
+  const container = document.createElement("div");
+  document.body.appendChild(container);
+  const root = createRoot(container);
+  mountedRoots.push(root);
+  mountedContainers.push(container);
+  await act(async () => {
+    root.render(node);
+  });
+  return container;
+}
+
+afterEach(async () => {
+  for (const root of mountedRoots.splice(0)) {
+    await act(async () => root.unmount());
+  }
+  for (const container of mountedContainers.splice(0)) {
+    container.remove();
+  }
+});
 
 describe("EXTERNAL_SCHEMES", () => {
   it("matches http URLs", () => {
@@ -121,6 +167,98 @@ describe("safeUrlTransform", () => {
     expect(SANITIZE_SCHEMA.attributes.source).toEqual(
       expect.arrayContaining(["srcSet", "media"]),
     );
+  });
+});
+
+describe("normalizeExternalHref", () => {
+  it("keeps explicit http, https, and mailto links", () => {
+    expect(normalizeExternalHref("https://example.com/path")).toBe(
+      "https://example.com/path",
+    );
+    expect(normalizeExternalHref("http://example.com")).toBe("http://example.com");
+    expect(normalizeExternalHref("mailto:user@example.com")).toBe(
+      "mailto:user@example.com",
+    );
+  });
+
+  it("upgrades www links that GFM can emit without a scheme", () => {
+    expect(normalizeExternalHref("www.example.com/docs")).toBe(
+      "https://www.example.com/docs",
+    );
+  });
+
+  it("rejects relative files and unsafe schemes", () => {
+    expect(normalizeExternalHref("README.md")).toBeNull();
+    expect(normalizeExternalHref("javascript:alert(1)")).toBeNull();
+  });
+});
+
+describe("MARKDOWN_COMPONENTS.a click handling", () => {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const LinkOverride = MARKDOWN_COMPONENTS.a as (props: any) => ReactElement;
+
+  beforeEach(() => {
+    tauriMocks.invoke.mockClear();
+    tauriMocks.openUrl.mockClear();
+  });
+
+  it("routes claudettepath links through the Monaco file opener context", async () => {
+    const openFile = vi.fn(() => true);
+    const container = await render(
+      createElement(
+        MarkdownFileOpenContext.Provider,
+        { value: { openFile } },
+        createElement(LinkOverride, {
+          href: "claudettepath:README.md",
+          children: "README.md",
+        }),
+      ),
+    );
+
+    container.querySelector("a")?.dispatchEvent(
+      new MouseEvent("click", { bubbles: true, cancelable: true }),
+    );
+
+    expect(openFile).toHaveBeenCalledWith("README.md");
+    expect(tauriMocks.invoke).not.toHaveBeenCalled();
+  });
+
+  it("falls back to the native opener for absolute file paths outside Monaco", async () => {
+    const openFile = vi.fn(() => false);
+    const container = await render(
+      createElement(
+        MarkdownFileOpenContext.Provider,
+        { value: { openFile } },
+        createElement(LinkOverride, {
+          href: "claudettepath:/tmp/report.md",
+          children: "/tmp/report.md",
+        }),
+      ),
+    );
+
+    container.querySelector("a")?.dispatchEvent(
+      new MouseEvent("click", { bubbles: true, cancelable: true }),
+    );
+
+    expect(openFile).toHaveBeenCalledWith("/tmp/report.md");
+    expect(tauriMocks.invoke).toHaveBeenCalledWith("open_in_editor", {
+      path: "/tmp/report.md",
+    });
+  });
+
+  it("opens scheme-less www links through open_url with an https URL", async () => {
+    const container = await render(
+      createElement(LinkOverride, {
+        href: "www.example.com/docs",
+        children: "www.example.com/docs",
+      }),
+    );
+
+    container.querySelector("a")?.dispatchEvent(
+      new MouseEvent("click", { bubbles: true, cancelable: true }),
+    );
+
+    expect(tauriMocks.openUrl).toHaveBeenCalledWith("https://www.example.com/docs");
   });
 });
 

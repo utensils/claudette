@@ -2,9 +2,11 @@ import { describe, it, expect } from "vitest";
 
 import {
   decodeFilePathHref,
+  detectFileReferences,
   detectFilePaths,
   encodeFilePathHref,
   FILE_PATH_SCHEME,
+  isLikelyRelativeFileReference,
 } from "./filePathLinks";
 
 describe("detectFilePaths — POSIX", () => {
@@ -92,6 +94,37 @@ describe("detectFilePaths — non-matches and false-positive guards", () => {
   it("ignores leading char that suggests middle-of-token", () => {
     // Preceded by a word char → not a path start
     expect(detectFilePaths("abc/def/ghi")).toEqual([]);
+  });
+});
+
+describe("relative file references", () => {
+  it("recognizes common bare filenames agents mention in prose", () => {
+    expect(detectFileReferences("Edit README.md next")).toEqual([
+      { start: 5, end: 14, path: "README.md" },
+    ]);
+    expect(detectFileReferences("Create CLAUDETTE_TEST.md")).toEqual([
+      { start: 7, end: 24, path: "CLAUDETTE_TEST.md" },
+    ]);
+  });
+
+  it("recognizes nested workspace-relative source paths", () => {
+    expect(detectFileReferences("open src/ui/src/utils/markdown.ts")).toEqual([
+      {
+        start: 5,
+        end: 33,
+        path: "src/ui/src/utils/markdown.ts",
+      },
+    ]);
+  });
+
+  it("does not mistake domain-like text for a workspace file", () => {
+    expect(detectFileReferences("visit example.com today")).toEqual([]);
+    expect(isLikelyRelativeFileReference("example.com")).toBe(false);
+  });
+
+  it("does not match relative file references inside URLs or emails", () => {
+    expect(detectFileReferences("https://example.com/README.md")).toEqual([]);
+    expect(detectFileReferences("email dev@example.com")).toEqual([]);
   });
 });
 

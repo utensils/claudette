@@ -47,6 +47,51 @@ describe("rehypeFilePathLinks", () => {
     expect(p.children[2]).toEqual({ type: "text", value: " now" });
   });
 
+  it("wraps a bare workspace file reference inside a paragraph", () => {
+    const tree = root(paragraph(text("Edit README.md next")));
+    run(tree);
+
+    const p = tree.children[0] as Element;
+    expect(p.children[0]).toEqual({ type: "text", value: "Edit " });
+    const link = p.children[1] as Element;
+    expect(link.tagName).toBe("a");
+    expect(link.properties?.href).toBe("claudettepath:README.md");
+    expect(link.children).toEqual([{ type: "text", value: "README.md" }]);
+    expect(p.children[2]).toEqual({ type: "text", value: " next" });
+  });
+
+  it("converts GFM domain-autolinked file names back into file links", () => {
+    const autolink: Element = {
+      type: "element",
+      tagName: "a",
+      properties: { href: "http://README.md" },
+      children: [text("README.md")],
+    };
+    const tree = root(paragraph(text("Edit "), autolink));
+    run(tree);
+
+    const p = tree.children[0] as Element;
+    const link = p.children[1] as Element;
+    expect(link.properties?.href).toBe("claudettepath:README.md");
+    expect(link.properties?.className).toEqual(["cc-file-path-link"]);
+  });
+
+  it("keeps real GFM autolinked URLs as URLs", () => {
+    const autolink: Element = {
+      type: "element",
+      tagName: "a",
+      properties: { href: "http://example.com" },
+      children: [text("example.com")],
+    };
+    const tree = root(paragraph(autolink));
+    run(tree);
+
+    const p = tree.children[0] as Element;
+    const link = p.children[0] as Element;
+    expect(link.properties?.href).toBe("http://example.com");
+    expect(link.properties?.className).toBeUndefined();
+  });
+
   it("leaves paths inside <code> alone", () => {
     const code: Element = {
       type: "element",

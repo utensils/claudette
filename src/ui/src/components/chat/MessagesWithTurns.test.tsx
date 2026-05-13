@@ -253,6 +253,39 @@ describe("MessagesWithTurns edit summaries", () => {
     });
   });
 
+  it("opens agent-mentioned file names in the Monaco file tab", async () => {
+    const messages = [
+      message("user-1", "User", "what changed?"),
+      message("assistant-1", "Assistant", "I updated README.md for you."),
+    ];
+
+    const container = await render(
+      <MessagesWithTurns
+        messages={messages}
+        workspaceId={WORKSPACE_ID}
+        sessionId={SESSION_ID}
+        isRunning={false}
+        searchQuery=""
+        toolDisplayMode="grouped"
+      />,
+    );
+
+    const link = Array.from(container.querySelectorAll("a")).find(
+      (item) => item.textContent === "README.md",
+    );
+    expect(link).toBeTruthy();
+
+    await act(async () => {
+      link?.dispatchEvent(
+        new MouseEvent("click", { bubbles: true, cancelable: true }),
+      );
+    });
+
+    const state = useAppStore.getState();
+    expect(state.fileTabsByWorkspace[WORKSPACE_ID]).toEqual(["README.md"]);
+    expect(state.activeFileTabByWorkspace[WORKSPACE_ID]).toBe("README.md");
+  });
+
   it("renders Claude CLI slash-login failures as a sign-in callout", async () => {
     const messages = [
       message("user-1", "User", "ping"),

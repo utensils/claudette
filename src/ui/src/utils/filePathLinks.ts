@@ -1,9 +1,9 @@
 /**
- * Detect absolute file paths inside a plain-text string so a markdown
+ * Detect file paths inside a plain-text string so a markdown
  * post-processor can wrap them in clickable links. The link target uses
  * a custom `claudettepath:` URI so the markdown `<a>` override knows to
- * route the click into a Tauri command instead of treating it as a web
- * URL — and so rehype-sanitize doesn't strip it as an unsafe protocol
+ * route the click into the workspace file opener instead of treating it as
+ * a web URL — and so rehype-sanitize doesn't strip it as an unsafe protocol
  * (we extend the allowed-scheme list in `markdown.ts`).
  *
  * Recognized:
@@ -11,13 +11,13 @@
  *  - POSIX home          `~/Downloads/foo.csv`
  *  - Windows drive       `C:\Users\foo\bar.csv`, `C:/Users/foo/bar.csv`
  *  - Windows UNC         `\\server\share\file.txt`
+ *  - Relative files      `README.md`, `src/main.rs`, `package.json`
  *
  * Deliberately ignored:
- *  - Bare relative paths (`foo/bar.csv`) — too ambiguous, false-positives
- *    with sentence fragments, and we have no anchor to resolve them
- *    against on the host side.
  *  - URLs (`https://...`) — the leading `://` lookbehind keeps the regex
  *    from matching the `/example.com/...` substring inside one.
+ *  - Domain-like prose (`example.com`) — common URL-ish hostnames are not
+ *    workspace files.
  */
 
 export interface FilePathMatch {
@@ -50,13 +50,16 @@ export interface FilePathMatch {
 const PATH_REGEX =
   /(?:[A-Za-z]:[\\/][^\s<>"|*?]+|\\\\[^\s<>"|*?\\/]+\\[^\s<>"|*?\\/]+(?:\\[^\s<>"|*?\\/]+)*|~?\/[^\s<>"|*?]+)/g;
 
+const RELATIVE_FILE_REGEX =
+  /(?:\.{1,2}[\\/])?(?:[A-Za-z0-9_$@.+-]+[\\/])*[A-Za-z0-9_$@.+-]+(?:\.[A-Za-z0-9][A-Za-z0-9+-]{0,15})+/g;
+
 /**
  * Characters that, if they sit immediately before a regex match, indicate
  * the match started in the middle of an existing token (URL scheme tail,
  * another path, hyphenated word). Mirrors the old lookbehind's character
  * class: word chars, colon, dot, both slash kinds, hyphen.
  */
-const FORBIDDEN_PREV_CHAR_REGEX = /[\w:.\\/-]/;
+const FORBIDDEN_PREV_CHAR_REGEX = /[\w:.\\/@-]/;
 
 /**
  * Sentence-final characters that tend to follow a path in prose but are
@@ -72,6 +75,110 @@ const TRAILING_PUNCT_REGEX = /[.,;:!?)\]'"`]+$/;
  *  enforcing the presence of an additional inner separator — that would
  *  reject legitimate two-segment paths like `/etc` or `~/foo`. */
 const MIN_PATH_LENGTH = 3;
+
+const COMMON_HOSTLIKE_EXTENSIONS = new Set([
+  "app",
+  "biz",
+  "co",
+  "com",
+  "dev",
+  "io",
+  "net",
+  "org",
+]);
+
+const KNOWN_FILE_EXTENSIONS = new Set([
+  "astro",
+  "bash",
+  "c",
+  "cc",
+  "cfg",
+  "clj",
+  "cljs",
+  "cmake",
+  "conf",
+  "cpp",
+  "cs",
+  "css",
+  "csv",
+  "cts",
+  "cu",
+  "cxx",
+  "dart",
+  "diff",
+  "dockerignore",
+  "env",
+  "erb",
+  "fish",
+  "go",
+  "graphql",
+  "h",
+  "hpp",
+  "hs",
+  "html",
+  "java",
+  "jl",
+  "js",
+  "json",
+  "jsx",
+  "kt",
+  "kts",
+  "less",
+  "lua",
+  "m",
+  "md",
+  "mdx",
+  "mjs",
+  "mm",
+  "mts",
+  "nix",
+  "patch",
+  "php",
+  "pl",
+  "plist",
+  "proto",
+  "py",
+  "r",
+  "rb",
+  "rs",
+  "sass",
+  "scala",
+  "scss",
+  "sh",
+  "sql",
+  "svelte",
+  "swift",
+  "toml",
+  "tsx",
+  "ts",
+  "txt",
+  "vue",
+  "xml",
+  "yaml",
+  "yml",
+  "zig",
+  "zsh",
+]);
+
+const KNOWN_FILENAMES = new Set([
+  ".env",
+  ".gitignore",
+  ".npmrc",
+  ".prettierrc",
+  "cargo.lock",
+  "cargo.toml",
+  "dockerfile",
+  "justfile",
+  "makefile",
+  "package-lock.json",
+  "package.json",
+  "pnpm-lock.yaml",
+  "readme",
+  "readme.md",
+  "tsconfig.json",
+  "vite.config.ts",
+  "yarn.lock",
+]);
 
 export function detectFilePaths(text: string): FilePathMatch[] {
   const matches: FilePathMatch[] = [];
@@ -93,6 +200,68 @@ export function detectFilePaths(text: string): FilePathMatch[] {
     });
   }
   return matches;
+}
+
+export function isLikelyRelativeFileReference(value: string): boolean {
+  const candidate = value.trim().replace(TRAILING_PUNCT_REGEX, "");
+  if (!candidate || candidate.length < MIN_PATH_LENGTH) return false;
+  if (/^[a-z][a-z0-9+.-]*:/i.test(candidate)) return false;
+  if (/^[\\/]|^[A-Za-z]:[\\/]/.test(candidate)) return false;
+  if (candidate.includes("://") || candidate.includes("@")) return false;
+
+  const normalized = candidate.replace(/\\/g, "/");
+  if (
+    normalized === "." ||
+    normalized === ".." ||
+    normalized.startsWith("../") ||
+    normalized.includes("/../")
+  ) {
+    return false;
+  }
+
+  const parts = normalized.split("/");
+  if (parts.some((part) => !part || part === "." || part === "..")) {
+    return false;
+  }
+
+  const basename = parts[parts.length - 1].toLowerCase();
+  if (KNOWN_FILENAMES.has(basename)) return true;
+
+  const dot = basename.lastIndexOf(".");
+  if (dot <= 0 || dot === basename.length - 1) return false;
+  const ext = basename.slice(dot + 1);
+  if (COMMON_HOSTLIKE_EXTENSIONS.has(ext) && parts.length === 1) return false;
+  return KNOWN_FILE_EXTENSIONS.has(ext);
+}
+
+export function detectFileReferences(text: string): FilePathMatch[] {
+  const absoluteMatches = detectFilePaths(text);
+  const matches: FilePathMatch[] = [...absoluteMatches];
+
+  for (const m of text.matchAll(RELATIVE_FILE_REGEX)) {
+    if (m.index === undefined) continue;
+    if (m.index > 0 && FORBIDDEN_PREV_CHAR_REGEX.test(text[m.index - 1])) {
+      continue;
+    }
+    if (
+      absoluteMatches.some(
+        (absolute) => m.index! >= absolute.start && m.index! < absolute.end,
+      )
+    ) {
+      continue;
+    }
+
+    const raw = m[0];
+    const stripped = raw.replace(TRAILING_PUNCT_REGEX, "");
+    if (!isLikelyRelativeFileReference(stripped)) continue;
+    matches.push({
+      start: m.index,
+      end: m.index + stripped.length,
+      path: stripped,
+    });
+  }
+
+  return matches.sort((a, b) => a.start - b.start);
 }
 
 /** URI scheme used by the markdown autolinker to mark its synthesized

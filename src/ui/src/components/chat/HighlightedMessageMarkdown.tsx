@@ -23,11 +23,13 @@ const SEARCH_MARK_CLASS = "cc-search-match";
 interface Props {
   content: string;
   query: string;
+  onOpenFile?: (path: string) => boolean;
 }
 
 export const HighlightedMessageMarkdown = memo(function HighlightedMessageMarkdown({
   content,
   query,
+  onOpenFile,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -47,7 +49,7 @@ export const HighlightedMessageMarkdown = memo(function HighlightedMessageMarkdo
 
   return (
     <div ref={containerRef} className="cc-highlight-wrap">
-      <MessageMarkdown content={content} />
+      <MessageMarkdown content={content} onOpenFile={onOpenFile} />
     </div>
   );
 });

@@ -477,8 +477,17 @@ export const MessagesWithTurns = memo(function MessagesWithTurns({
   const openFileInMonaco = useCallback(
     (filePath: string) => {
       const rel = relativizePath(filePath, worktreePath);
-      if (/^([a-zA-Z]:[\\/]|[\\/])/.test(rel)) return;
-      openFileTab(workspaceId, rel);
+      if (
+        /^([a-zA-Z]:[\\/]|[\\/])/.test(rel) ||
+        rel === "." ||
+        rel === ".." ||
+        rel.startsWith("../") ||
+        rel.startsWith("..\\")
+      ) {
+        return false;
+      }
+      openFileTab(workspaceId, rel.replace(/^\.[\\/]/, ""));
+      return true;
     },
     [openFileTab, workspaceId, worktreePath],
   );
@@ -927,7 +936,11 @@ export const MessagesWithTurns = memo(function MessagesWithTurns({
                     // setup-script output, and other multi-line system notes
                     // preserve headings, lists, and code blocks instead of
                     // collapsing newlines into a single paragraph.
-                    <HighlightedMessageMarkdown content={msg.content} query={searchQuery} />
+                    <HighlightedMessageMarkdown
+                      content={msg.content}
+                      query={searchQuery}
+                      onOpenFile={openFileInMonaco}
+                    />
                   ) : searchQuery ? (
                     // While the search bar is open, render user messages as plain
                     // highlighted text so matches inside them get marked. The
