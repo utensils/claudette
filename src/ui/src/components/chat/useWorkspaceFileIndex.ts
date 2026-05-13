@@ -49,6 +49,10 @@ export function useWorkspaceFileIndex(
         if (!cancelled) setData(next);
       })
       .catch((err) => {
+        const current = dataCache.get(workspaceId);
+        if (current?.promise === promise) {
+          dataCache.delete(workspaceId);
+        }
         if (cancelled) return;
         console.error("Failed to load workspace file index:", err);
         setData(null);

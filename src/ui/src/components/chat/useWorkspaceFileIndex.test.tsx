@@ -101,4 +101,26 @@ describe("useWorkspaceFileIndex", () => {
 
     expect(serviceMocks.listWorkspaceFiles).toHaveBeenCalledTimes(2);
   });
+
+  it("does not cache rejected workspace file loads", async () => {
+    serviceMocks.listWorkspaceFiles
+      .mockRejectedValueOnce(new Error("temporary failure"))
+      .mockResolvedValueOnce([
+        { path: "README.md", is_directory: false },
+      ]);
+
+    await render("ws-d");
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(latestResolve?.("README.md")).toBeNull();
+
+    await render("ws-d");
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(serviceMocks.listWorkspaceFiles).toHaveBeenCalledTimes(2);
+    expect(latestResolve?.("README.md")).toBe("README.md");
+  });
 });
