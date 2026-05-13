@@ -158,9 +158,9 @@
   - `cd src/ui && bun run test -- codexBackendMigration`
   - `cd src/ui && bunx tsc -b`
   - `nix develop -c cargo fmt --all`
+- 2026-05-13: Synced with `origin/main` (already current), committed and pushed the gate persistence/migration fixes as `087082eb` (`fix: preserve codex gate selections`), replied to the latest Copilot threads, resolved them, verified no unresolved Copilot reviewer threads remained, and confirmed PR checks were green with deploy skipped as expected.
 
 ## Next Stage
 
-- Rebase on `origin/main`, commit, push, reply to and resolve the latest Copilot threads, then verify zero unresolved Copilot threads remain.
 - Add fake app-server/chat lifecycle coverage around native Codex send, steer, stop, and failure persistence without spawning a real CLI.
 - Expand Codex notification mapping for MCP calls and file changes once the app-server payload shapes are confirmed against the reference clone.
