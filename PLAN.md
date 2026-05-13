@@ -178,15 +178,20 @@
   - `nix develop -c cargo test -p claudette agent::codex_app_server --all-features`
   - `nix develop -c cargo test -p claudette-tauri agent_backends --all-features`
   - `nix develop -c cargo test -p claudette-tauri chat::lifecycle --all-features`
+- 2026-05-13: Committed and pushed native Codex auth/model surfacing as `7c65a30f` (`feat: surface native codex auth and models`) after rebasing with `origin/main`.
+- 2026-05-13: Ran the next Copilot review pass on PR #786. Valid findings addressed:
+  - Claude Remote Control now refuses non-Claude persistent harness sessions instead of handing a Codex app-server session to the Claude-only protocol.
+  - Persistent-session and stop lifecycle comments now describe harness-neutral behavior and scope Claude `--resume` details to Claude Code.
+  - Frontend backend error tests now pin that `codex_native` has no synthetic Base URL for CLI transport failures.
+- 2026-05-13: Verified the Copilot fixes with:
+  - `nix develop -c cargo test -p claudette-tauri chat::remote_control --all-features`
+  - `nix develop -c cargo test -p claudette-tauri chat::lifecycle --all-features`
+  - `cd src/ui && bun run test -- backendSettingsErrors`
+  - `cd src/ui && bunx tsc -b`
+  - `nix develop -c cargo fmt --all --check`
+  - `git diff --check`
 
 ## Next Stage
 
-- Run a final native Codex-focused regression pass after this milestone commit:
-  - `nix develop -c cargo test -p claudette agent::harness --all-features`
-  - `nix develop -c cargo test -p claudette agent::codex_app_server --all-features`
-  - `nix develop -c cargo test -p claudette-tauri agent_backends --all-features`
-  - `nix develop -c cargo test -p claudette-tauri chat::lifecycle --all-features`
-  - `nix develop -c cargo fmt --all --check`
-  - `git diff --check`
-- Rebase with `origin/main`, commit/push this milestone, then run the Copilot review skill and resolve any valid new findings.
-- After the Copilot pass, plan the remaining PR-hardening stage from review feedback and broader CI results.
+- Commit/push the Copilot fixes, reply to and resolve the four Copilot threads, re-query unresolved threads, and check PR status.
+- Plan the remaining PR-hardening stage from review feedback and broader CI results.

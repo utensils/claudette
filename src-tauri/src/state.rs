@@ -113,9 +113,11 @@ pub struct AgentSessionState {
     /// (i.e. when the user responds). Prevents repeated banner/sound when
     /// multiple `can_use_tool` prompts queue inside a single cycle.
     pub attention_notification_sent: bool,
-    /// Long-lived process that persists MCP servers across turns.
-    /// When present, subsequent turns write to this process's stdin instead of
-    /// spawning new processes.
+    /// Long-lived agent process handle reused across turns when the selected
+    /// harness supports persistent sessions.
+    ///
+    /// Claude Code sessions also use this to keep CLI-side MCP servers alive
+    /// across turns; other harnesses may persist different protocol state.
     pub persistent_session: Option<Arc<AgentSession>>,
     /// Ephemeral Claude Code Remote Control status for the current persistent
     /// process. This is intentionally not persisted across app restarts.

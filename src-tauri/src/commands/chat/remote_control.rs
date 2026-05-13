@@ -120,7 +120,7 @@ pub async fn set_claude_remote_control(
     drop(db);
 
     let (ps, pid) = if enabled {
-        if let Some((ps, pid)) = existing_persistent_session(&state, &chat_session_id).await {
+        if let Some((ps, pid)) = existing_remote_control_session(&state, &chat_session_id).await? {
             let enabling = ClaudeRemoteControlStatus {
                 state: ClaudeRemoteControlLifecycle::Enabling,
                 detail: Some("Starting Claude Remote Control.".to_string()),
@@ -153,7 +153,9 @@ pub async fn set_claude_remote_control(
             .await?
         }
     } else {
-        let Some((ps, pid)) = existing_persistent_session(&state, &chat_session_id).await else {
+        let Some((ps, pid)) =
+            existing_remote_control_session_if_supported(&state, &chat_session_id).await
+        else {
             let disabled = ClaudeRemoteControlStatus::disabled();
             store_remote_control_status(&app, &state, &workspace_id, &chat_session_id, disabled)
                 .await;
@@ -289,6 +291,35 @@ async fn existing_persistent_session(
     Some((ps, pid))
 }
 
+async fn existing_remote_control_session(
+    state: &State<'_, AppState>,
+    chat_session_id: &str,
+) -> Result<Option<(Arc<AgentSession>, u32)>, String> {
+    let Some((ps, pid)) = existing_persistent_session(state, chat_session_id).await else {
+        return Ok(None);
+    };
+    if ps.capabilities().remote_control {
+        Ok(Some((ps, pid)))
+    } else {
+        Err(unsupported_remote_control_session_error(&ps))
+    }
+}
+
+async fn existing_remote_control_session_if_supported(
+    state: &State<'_, AppState>,
+    chat_session_id: &str,
+) -> Option<(Arc<AgentSession>, u32)> {
+    let (ps, pid) = existing_persistent_session(state, chat_session_id).await?;
+    ps.capabilities().remote_control.then_some((ps, pid))
+}
+
+fn unsupported_remote_control_session_error(ps: &AgentSession) -> String {
+    format!(
+        "Claude Remote Control is only supported for Claude Code sessions; current session uses {:?}.",
+        ps.kind()
+    )
+}
+
 async fn store_deferred_enable_status(
     app: &AppHandle,
     state: &State<'_, AppState>,
@@ -366,7 +397,10 @@ async fn ensure_persistent_session_for_remote_control(
             };
             if let Some(ps) = session.persistent_session.clone() {
                 let pid = ps.pid();
-                return Ok((ps, pid));
+                if ps.capabilities().remote_control {
+                    return Ok((ps, pid));
+                }
+                return Err(unsupported_remote_control_session_error(&ps));
             }
         }
     }

@@ -22,15 +22,17 @@ type StopSnapshot = (
 
 /// Mutations performed on an agent session when the user clicks Stop.
 ///
-/// Stop interrupts the in-flight turn — it takes `active_pid` so the caller
-/// can kill the process and drains pending permission requests so the caller
-/// can deny them. It deliberately does NOT clear `session_id`, `turn_count`,
-/// or `persistent_session`: those are owned by `reset_agent_session` and
-/// `clear_conversation`. Preserving them is what lets the next
-/// `send_chat_message` resume via `--resume` instead of spawning a fresh
-/// conversation. The now-dead `persistent_session` handle is fine — on the
-/// next turn `send_turn` detects the broken pipe and respawns with
-/// `--resume <session_id>`.
+/// Stop interrupts the in-flight turn through the persistent harness handle
+/// when available, then falls back to process termination for harnesses or
+/// failure modes that still need it. It also drains pending permission
+/// requests so the caller can deny them.
+///
+/// This deliberately does NOT clear `session_id`, `turn_count`, or
+/// `persistent_session`: those are owned by `reset_agent_session` and
+/// `clear_conversation`. Preserving them lets each harness keep its own
+/// continuation contract. For Claude Code specifically, the next
+/// `send_chat_message` can resume via `--resume` if the stopped process had to
+/// be respawned.
 fn take_stop_snapshot(session: &mut AgentSessionState) -> StopSnapshot {
     let drained = drain_pending_permissions(session);
     let interrupt_session = session.persistent_session.clone();
