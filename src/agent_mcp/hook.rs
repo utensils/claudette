@@ -73,7 +73,7 @@ fn enrich_subagent_stop(input: &mut serde_json::Value) {
     if obj
         .get("last_assistant_message")
         .and_then(serde_json::Value::as_str)
-        .is_none_or(str::is_empty)
+        .is_none_or(|message| message.trim().is_empty())
         && let Some(result) = snapshot.final_result
     {
         obj.insert(
@@ -237,6 +237,26 @@ mod tests {
             serde_json::json!(["plan"])
         );
         assert!(input.get("claudette_agent_final_result").is_none());
+    }
+
+    #[test]
+    fn enriches_subagent_stop_overwrites_blank_cli_result() {
+        let mut file = tempfile::NamedTempFile::new().unwrap();
+        writeln!(
+            file,
+            r#"{{"type":"assistant","message":{{"content":[{{"type":"text","text":"from transcript"}}]}}}}"#
+        )
+        .unwrap();
+        let mut input = serde_json::json!({
+            "hook_event_name": "SubagentStop",
+            "agent_transcript_path": file.path().to_string_lossy(),
+            "last_assistant_message": "   "
+        });
+
+        enrich_subagent_stop(&mut input);
+
+        assert_eq!(input["last_assistant_message"], "   ");
+        assert_eq!(input["claudette_agent_final_result"], "from transcript");
     }
 
     #[test]

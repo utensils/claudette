@@ -54,7 +54,7 @@ export function AgentToolCallGroup({
         role: "button" as const,
         tabIndex: 0,
         "aria-expanded": !isCollapsed,
-        "aria-label": `${isCollapsed ? "Expand" : "Collapse"} ${activity.toolName} tool call list`,
+        "aria-label": `${isCollapsed ? "Expand" : "Collapse"} ${activity.toolName} transcript details`,
         onClick: onToggle,
         onKeyDown: (e: KeyboardEvent<HTMLDivElement>) => {
           if (e.key === "Enter" || e.key === " ") {

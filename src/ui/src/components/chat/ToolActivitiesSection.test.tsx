@@ -154,6 +154,25 @@ describe("AgentToolCallGroup", () => {
     expect(container.textContent).toContain("Read");
   });
 
+  it("describes the collapsible Agent transcript accurately", async () => {
+    const container = await render(
+      <AgentToolCallGroup
+        activity={activity("Agent", { agentDescription: "Audit UI" })}
+        searchQuery=""
+        collapsed
+        onToggle={() => {}}
+      />,
+    );
+
+    const header = container.querySelector(
+      `.${styles.agentToolGroupHeader}[role="button"]`,
+    ) as HTMLElement;
+    expect(header.getAttribute("aria-expanded")).toBe("false");
+    expect(header.getAttribute("aria-label")).toBe(
+      "Expand Agent transcript details",
+    );
+  });
+
   it("renders nested edit calls as editing rows with churn stats", async () => {
     const container = await render(
       <AgentToolCallGroup
@@ -1112,6 +1131,8 @@ describe("TurnSummary", () => {
     const header = container.querySelector(
       `.${styles.turnHeader}[role="button"]`,
     ) as HTMLElement;
+    expect(header.getAttribute("aria-expanded")).toBe("true");
+    expect(header.getAttribute("aria-controls")).toBe(activities.id);
     await act(async () => {
       header.click();
     });
@@ -1158,6 +1179,8 @@ describe("TurnSummary", () => {
     const header = container.querySelector(
       `.${styles.turnHeader}[role="button"]`,
     ) as HTMLElement;
+    expect(header.getAttribute("aria-expanded")).toBe("true");
+    expect(header.getAttribute("aria-controls")).toBeTruthy();
     await act(async () => {
       header.click();
     });
