@@ -4,7 +4,7 @@ use tauri::{AppHandle, Emitter, Manager, State};
 
 use claudette::agent::background::{
     AgentBackgroundTaskEventKind, agent_bash_output_path, parse_background_task_binding,
-    parse_bash_start, parse_task_notification,
+    parse_task_notification,
 };
 use claudette::agent::{
     self, AgentEvent, AgentSession, AgentSettings, ClaudeCodeHarness, CodexAppServerOptions,
@@ -43,10 +43,9 @@ mod background_tasks;
 mod team_agents;
 
 use self::background_tasks::{
-    append_agent_bash_output, apply_task_notification_status, emit_agent_background_task_event,
-    get_or_create_agent_shell_terminal_tab, mirror_background_task_output,
-    schedule_background_task_wake, should_defer_persistent_restart, terminal_text,
-    truncate_agent_bash_output,
+    BackgroundTaskInputTracker, append_agent_bash_output, apply_task_notification_status,
+    emit_agent_background_task_event, mirror_background_task_output, schedule_background_task_wake,
+    should_defer_persistent_restart, terminal_text,
 };
 use self::team_agents::TeamAgentInputTracker;
 pub(super) use self::team_agents::team_agent_session_tabs_enabled;
@@ -2228,11 +2227,7 @@ pub async fn send_chat_message(
         // MCP monitoring: map tool_use_id → tool_name for MCP error detection.
         let mut mcp_tool_names: std::collections::HashMap<String, String> =
             std::collections::HashMap::new();
-        // Bash detection: map content-block index → (tool_use_id,
-        // accumulated input JSON). The CLI streams tool input in deltas, so we
-        // only know command details once the block stops.
-        let mut bash_inputs: std::collections::HashMap<usize, (String, String)> =
-            std::collections::HashMap::new();
+        let mut background_task_inputs = BackgroundTaskInputTracker::default();
         let mut team_agent_inputs = TeamAgentInputTracker::default();
         // Track the last assistant message inserted in THIS turn. Falls back
         // to the user message ID for tool-only turns (AskUserQuestion, plan
@@ -2332,101 +2327,17 @@ pub async fn send_chat_message(
                 .await;
             }
 
-            if let AgentEvent::Stream(StreamEvent::Stream {
-                event:
-                    InnerStreamEvent::ContentBlockStart {
-                        index,
-                        content_block: Some(StartContentBlock::ToolUse { id, name }),
-                    },
-            }) = &event
-            {
-                if name == "Bash" {
-                    bash_inputs.insert(*index, (id.clone(), String::new()));
-                }
-            }
-
-            if let AgentEvent::Stream(StreamEvent::Stream {
-                event: InnerStreamEvent::ContentBlockDelta { index, delta },
-            }) = &event
-            {
-                if let Some((_tool_use_id, input)) = bash_inputs.get_mut(index) {
-                    match delta {
-                        claudette::agent::Delta::ToolUse {
-                            partial_json: Some(part),
-                        }
-                        | claudette::agent::Delta::InputJson {
-                            partial_json: Some(part),
-                        } => input.push_str(part),
-                        _ => {}
-                    }
-                }
-            }
-
+            background_task_inputs.observe_bash_input_delta(&event);
             team_agent_inputs.observe_event(&event, team_agent_tabs_enabled, &app, &ws_id);
-
-            if let AgentEvent::Stream(StreamEvent::Stream {
-                event: InnerStreamEvent::ContentBlockStop { index },
-            }) = &event
-                && let Some((tool_use_id, input_json)) = bash_inputs.remove(index)
-                && let Some(start) = parse_bash_start(&input_json)
-            {
-                let command = start.command.as_deref();
-                let had_running_background_tasks = {
-                    let app_state = app.state::<AppState>();
-                    let agents = app_state.agents.read().await;
-                    agents
-                        .get(&chat_session_id_for_stream)
-                        .is_some_and(|s| !s.running_background_tasks.is_empty())
-                };
-                if start.run_in_background {
-                    let app_state = app.state::<AppState>();
-                    let mut agents = app_state.agents.write().await;
-                    if let Some(session) = agents.get_mut(&chat_session_id_for_stream) {
-                        session.running_background_tasks.insert(tool_use_id.clone());
-                    }
-                }
-                let path = agent_bash_output_path(&chat_session_id_for_stream);
-                if !had_running_background_tasks && let Err(err) = truncate_agent_bash_output(&path)
-                {
-                    tracing::warn!(target: "claudette::chat", error = %err, "failed to reset agent bash output");
-                }
-                let echo = command
-                    .map(|cmd| format!("\r\n$ {}\r\n", terminal_text(cmd)))
-                    .unwrap_or_else(|| "\r\n$ Bash\r\n".to_string());
-                if let Err(err) = append_agent_bash_output(&path, &echo) {
-                    tracing::warn!(target: "claudette::chat", error = %err, "failed to write agent bash output");
-                }
-                if get_or_create_agent_shell_terminal_tab(
+            background_task_inputs
+                .observe_bash_input_stop(
+                    &event,
+                    &app,
                     &db_path,
                     &ws_id,
                     &chat_session_id_for_stream,
                 )
-                .is_some()
-                    && let Ok(db) = Database::open(&db_path)
-                {
-                    let _ = db.update_agent_shell_terminal_tab_status(
-                        &chat_session_id_for_stream,
-                        None,
-                        if start.run_in_background {
-                            "running"
-                        } else {
-                            "starting"
-                        },
-                        command,
-                    );
-                    if let Ok(Some(tab)) =
-                        db.get_agent_shell_terminal_tab(&chat_session_id_for_stream)
-                    {
-                        emit_agent_background_task_event(
-                            &app,
-                            AgentBackgroundTaskEventKind::Starting,
-                            &ws_id,
-                            &chat_session_id_for_stream,
-                            tab,
-                        );
-                    }
-                }
-            }
+                .await;
 
             // Compaction boundary event: the CLI emits this after context
             // compaction completes. Persist a structured sentinel system

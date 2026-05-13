@@ -1,12 +1,12 @@
-use std::time::Duration;
+use std::{collections::HashMap, path::Path, time::Duration};
 
 use tauri::{AppHandle, Emitter, Manager};
 
 use claudette::agent::background::{
     AgentBackgroundTaskEvent, AgentBackgroundTaskEventKind, agent_bash_output_path,
-    parse_task_notification,
+    parse_bash_start, parse_task_notification,
 };
-use claudette::agent::{AgentEvent, InnerStreamEvent, StreamEvent};
+use claudette::agent::{AgentEvent, InnerStreamEvent, StartContentBlock, StreamEvent};
 use claudette::chat::{
     BuildAssistantArgs, assistant_usage_fields_from_result, build_assistant_chat_message,
     extract_assistant_text, extract_event_thinking,
@@ -179,6 +179,114 @@ fn should_defer_persistent_restart_for_state(
     has_running_background_tasks: bool,
 ) -> bool {
     has_persistent_session && has_running_background_tasks
+}
+
+#[derive(Default)]
+pub(super) struct BackgroundTaskInputTracker {
+    bash_inputs: HashMap<usize, (String, String)>,
+}
+
+impl BackgroundTaskInputTracker {
+    pub(super) fn observe_bash_input_delta(&mut self, event: &AgentEvent) {
+        if let AgentEvent::Stream(StreamEvent::Stream {
+            event:
+                InnerStreamEvent::ContentBlockStart {
+                    index,
+                    content_block: Some(StartContentBlock::ToolUse { id, name }),
+                },
+        }) = event
+            && name == "Bash"
+        {
+            self.bash_inputs.insert(*index, (id.clone(), String::new()));
+        }
+
+        if let AgentEvent::Stream(StreamEvent::Stream {
+            event: InnerStreamEvent::ContentBlockDelta { index, delta },
+        }) = event
+            && let Some((_tool_use_id, input)) = self.bash_inputs.get_mut(index)
+        {
+            match delta {
+                claudette::agent::Delta::ToolUse {
+                    partial_json: Some(part),
+                }
+                | claudette::agent::Delta::InputJson {
+                    partial_json: Some(part),
+                } => input.push_str(part),
+                _ => {}
+            }
+        }
+    }
+
+    pub(super) async fn observe_bash_input_stop(
+        &mut self,
+        event: &AgentEvent,
+        app: &AppHandle,
+        db_path: &Path,
+        workspace_id: &str,
+        chat_session_id: &str,
+    ) {
+        let AgentEvent::Stream(StreamEvent::Stream {
+            event: InnerStreamEvent::ContentBlockStop { index },
+        }) = event
+        else {
+            return;
+        };
+        let Some((tool_use_id, input_json)) = self.bash_inputs.remove(index) else {
+            return;
+        };
+        let Some(start) = parse_bash_start(&input_json) else {
+            return;
+        };
+
+        let command = start.command.as_deref();
+        let had_running_background_tasks = {
+            let app_state = app.state::<AppState>();
+            let agents = app_state.agents.read().await;
+            agents
+                .get(chat_session_id)
+                .is_some_and(|s| !s.running_background_tasks.is_empty())
+        };
+        if start.run_in_background {
+            let app_state = app.state::<AppState>();
+            let mut agents = app_state.agents.write().await;
+            if let Some(session) = agents.get_mut(chat_session_id) {
+                session.running_background_tasks.insert(tool_use_id.clone());
+            }
+        }
+        let path = agent_bash_output_path(chat_session_id);
+        if !had_running_background_tasks && let Err(err) = truncate_agent_bash_output(&path) {
+            tracing::warn!(target: "claudette::chat", error = %err, "failed to reset agent bash output");
+        }
+        let echo = command
+            .map(|cmd| format!("\r\n$ {}\r\n", terminal_text(cmd)))
+            .unwrap_or_else(|| "\r\n$ Bash\r\n".to_string());
+        if let Err(err) = append_agent_bash_output(&path, &echo) {
+            tracing::warn!(target: "claudette::chat", error = %err, "failed to write agent bash output");
+        }
+        if get_or_create_agent_shell_terminal_tab(db_path, workspace_id, chat_session_id).is_some()
+            && let Ok(db) = Database::open(db_path)
+        {
+            let _ = db.update_agent_shell_terminal_tab_status(
+                chat_session_id,
+                None,
+                if start.run_in_background {
+                    "running"
+                } else {
+                    "starting"
+                },
+                command,
+            );
+            if let Ok(Some(tab)) = db.get_agent_shell_terminal_tab(chat_session_id) {
+                emit_agent_background_task_event(
+                    app,
+                    AgentBackgroundTaskEventKind::Starting,
+                    workspace_id,
+                    chat_session_id,
+                    tab,
+                );
+            }
+        }
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
