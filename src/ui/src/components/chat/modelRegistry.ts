@@ -204,6 +204,7 @@ export function buildModelRegistry(
           .get(entry.parsed.prefix)
           ?.has(entry.parsed.versionKey)
         : false;
+      const isNativeCodex = backend.kind === "codex_native";
       const target = models ??= [...MODELS];
       target.push({
         id: model.id,
@@ -215,9 +216,9 @@ export function buildModelRegistry(
         providerLabel: backend.label,
         providerKind: backend.kind,
         providerQualifiedId: `${backend.id}/${model.id}`,
-        supportsThinking: backend.capabilities.thinking,
-        supportsEffort: backend.capabilities.effort,
-        supportsFastMode: backend.capabilities.fast_mode,
+        supportsThinking: isNativeCodex || backend.capabilities.thinking,
+        supportsEffort: isNativeCodex || backend.capabilities.effort,
+        supportsFastMode: isNativeCodex || backend.capabilities.fast_mode,
         contextWindowTokens: model.context_window_tokens,
       });
     }

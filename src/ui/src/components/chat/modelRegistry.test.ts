@@ -152,7 +152,7 @@ describe("modelRegistry", () => {
       expect(registry.find((model) => model.providerQualifiedId === "openai-api/manual-fallback")).toBeUndefined();
     });
 
-    it("exposes native Codex models through the Codex gate without alternative backends", () => {
+    it("exposes native Codex models and normalizes stale capability metadata", () => {
       const registry = buildModelRegistry(false, [
         {
           id: "experimental-codex",
@@ -160,9 +160,9 @@ describe("modelRegistry", () => {
           kind: "codex_native",
           enabled: true,
           capabilities: {
-            thinking: true,
+            thinking: false,
             effort: false,
-            fast_mode: true,
+            fast_mode: false,
           },
           manual_models: [
             {
@@ -177,6 +177,8 @@ describe("modelRegistry", () => {
 
       const codex = registry.find((model) => model.providerQualifiedId === "experimental-codex/gpt-5.4");
       expect(codex).toBeDefined();
+      expect(codex?.supportsThinking).toBe(true);
+      expect(codex?.supportsEffort).toBe(true);
       expect(codex?.supportsFastMode).toBe(true);
     });
 

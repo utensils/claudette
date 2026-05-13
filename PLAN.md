@@ -388,6 +388,7 @@
     - `cd src/ui && bun run lint` (warnings only; no errors)
 - 2026-05-13: Updated Codex reasoning controls to match the Codex app's intelligence menu:
   - Codex-facing controls now show **Intelligence** with `Low`, `Medium`, `High`, and `Extra High`, using the same dropdown layout as Claude effort levels.
+  - Native Codex model registry entries now force-enable thinking, intelligence, and fast-mode support even if older stored backend capability metadata still says those features are unavailable.
   - Stale protocol-shaped Codex values (`auto`, `default`, `none`, `minimal`, `max`, or empty) normalize to `high`; selected levels still map to app-server `effort` values.
   - Updated settings copy and provider docs to describe Codex intelligence instead of Codex reasoning effort.
   - Verified the intelligence controls with:
