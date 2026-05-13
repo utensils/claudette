@@ -480,7 +480,7 @@ fn build_background_task_completion_prompt(
     prompt
 }
 
-async fn take_trusted_background_output_path(
+async fn clone_trusted_background_output_path(
     app_state: &AppState,
     chat_session_id: &str,
     completion: &BackgroundTaskCompletion,
@@ -608,7 +608,7 @@ pub(super) fn schedule_background_task_wake(
         };
 
         let trusted_output_file =
-            take_trusted_background_output_path(&app_state, &chat_session_id, &completion).await;
+            clone_trusted_background_output_path(&app_state, &chat_session_id, &completion).await;
 
         apply_task_notification_status(
             &app,
