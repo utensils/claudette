@@ -197,6 +197,7 @@ pub async fn stop_agent_background_task(
         let mut agents = state.agents.write().await;
         if let Some(session) = agents.get_mut(&chat_session_id) {
             session.running_background_tasks.remove(&task_id);
+            session.background_task_output_paths.remove(&task_id);
         }
     }
 

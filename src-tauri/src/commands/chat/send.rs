@@ -1040,6 +1040,7 @@ pub async fn send_chat_message(
                 pending_permissions: std::collections::HashMap::new(),
                 running_background_tasks: std::collections::HashSet::new(),
                 background_wake_active: false,
+                background_task_output_paths: std::collections::HashMap::new(),
                 session_exited_plan: false,
                 session_resolved_env: Default::default(),
                 session_resolved_env_signature: String::new(),
@@ -1071,6 +1072,7 @@ pub async fn send_chat_message(
             pending_permissions: std::collections::HashMap::new(),
             running_background_tasks: std::collections::HashSet::new(),
             background_wake_active: false,
+            background_task_output_paths: std::collections::HashMap::new(),
             session_exited_plan: false,
             session_resolved_env: Default::default(),
             session_resolved_env_signature: String::new(),
@@ -2602,6 +2604,10 @@ pub async fn send_chat_message(
                                                 session
                                                     .running_background_tasks
                                                     .insert(binding.task_id.clone());
+                                                session.background_task_output_paths.insert(
+                                                    binding.task_id.clone(),
+                                                    binding.output_path.clone(),
+                                                );
                                             }
                                         }
                                         let aggregate_path =
