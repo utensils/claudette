@@ -71,8 +71,10 @@ export function AgentQuestionCard({
                 const isSelected = currentSelections.has(optIdx);
                 return (
                   <button
+                    type="button"
                     key={optIdx}
                     className={`${styles.option} ${isSelected ? styles.optionSelected : ""}`}
+                    aria-pressed={isMulti ? isSelected : undefined}
                     onClick={() => toggleSingle(optIdx)}
                   >
                     <span className={styles.optionLabel}>{opt.label}</span>
@@ -254,8 +256,10 @@ export function AgentQuestionCard({
               const isSelected = currentSelections.has(optIdx);
               return (
                 <button
+                  type="button"
                   key={optIdx}
                   className={`${styles.option} ${isSelected ? styles.optionSelected : ""}`}
+                  aria-pressed={isMultiSelect ? isSelected : undefined}
                   onClick={() => handleOptionClick(optIdx)}
                 >
                   <span className={styles.optionLabel}>{opt.label}</span>
