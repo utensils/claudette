@@ -57,6 +57,7 @@ function makeContext(overrides: Partial<CommandContext> = {}): CommandContext {
     resetAgentSession: vi.fn(),
     clearAgentQuestion: vi.fn(),
     clearPlanApproval: vi.fn(),
+    clearAgentApproval: vi.fn(),
     updateWorkspace: vi.fn(),
     ...overrides,
   };

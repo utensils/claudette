@@ -104,6 +104,7 @@ export function CommandPalette() {
   const setEffortLevel = useAppStore((s) => s.setEffortLevel);
   const clearAgentQuestion = useAppStore((s) => s.clearAgentQuestion);
   const clearPlanApproval = useAppStore((s) => s.clearPlanApproval);
+  const clearAgentApproval = useAppStore((s) => s.clearAgentApproval);
   const openFileTab = useAppStore((s) => s.openFileTab);
   const keybindings = useAppStore((s) => s.keybindings);
   const commandPaletteInitialMode = useAppStore((s) => s.commandPaletteInitialMode);
@@ -328,10 +329,11 @@ export function CommandPalette() {
         resetAgentSession: (sessionId: string) => resetAgentSession(sessionId),
         clearAgentQuestion: (sessionId: string) => clearAgentQuestion(sessionId),
         clearPlanApproval: (sessionId: string) => clearPlanApproval(sessionId),
+        clearAgentApproval: (sessionId: string) => clearAgentApproval(sessionId),
         updateWorkspace: (id: string, updates: Record<string, unknown>) => updateWorkspace(id, updates),
       }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [themes, selectedWorkspaceId, selectedSessionId, currentRepoId, thinkingEnabled, planMode, fastMode, effortLevel, selectedModel, keybindings, enterThemeMode, enterFileMode, applyThemeById, handleCreateWorkspace],
+    [themes, selectedWorkspaceId, selectedSessionId, currentRepoId, thinkingEnabled, planMode, fastMode, effortLevel, selectedModel, keybindings, enterThemeMode, enterFileMode, applyThemeById, handleCreateWorkspace, clearAgentApproval],
   );
 
   // Build sub-menu command lists

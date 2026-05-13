@@ -44,7 +44,7 @@ impl AgentHarnessCapabilities {
         Self {
             persistent_sessions: true,
             steer_turn: true,
-            host_permission_prompts: false,
+            host_permission_prompts: true,
             remote_control: false,
             mcp_config: false,
             attachments: false,
@@ -173,8 +173,8 @@ impl AgentSession {
     ) -> Result<(), String> {
         match self {
             Self::ClaudeCode(session) => session.send_control_response(request_id, response).await,
-            Self::CodexAppServer(_) => {
-                Err("Codex app-server permissions are not wired yet".to_string())
+            Self::CodexAppServer(session) => {
+                session.send_control_response(request_id, response).await
             }
         }
     }
@@ -235,7 +235,7 @@ mod tests {
             AgentHarnessCapabilities {
                 persistent_sessions: true,
                 steer_turn: true,
-                host_permission_prompts: false,
+                host_permission_prompts: true,
                 remote_control: false,
                 mcp_config: false,
                 attachments: false,

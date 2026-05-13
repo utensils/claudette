@@ -66,6 +66,7 @@ import { WorkspacePanelHeader } from "../shared/WorkspacePanelHeader";
 import { SessionTabs } from "./SessionTabs";
 import { AgentQuestionCard } from "./AgentQuestionCard";
 import { PlanApprovalCard } from "./PlanApprovalCard";
+import { AgentApprovalCard } from "./AgentApprovalCard";
 import { ScrollToBottomPill } from "./ScrollToBottomPill";
 import { useStickyScroll } from "../../hooks/useStickyScroll";
 import { tooltipWithHotkey } from "../../hotkeys/display";
@@ -299,6 +300,10 @@ export function ChatPanel() {
     (s) => (activeSessionId ? s.planApprovals[activeSessionId] ?? null : null)
   );
   const clearPlanApproval = useAppStore((s) => s.clearPlanApproval);
+  const pendingApproval = useAppStore(
+    (s) => (activeSessionId ? s.agentApprovals[activeSessionId] ?? null : null)
+  );
+  const clearAgentApproval = useAppStore((s) => s.clearAgentApproval);
   const setPlanMode = useAppStore((s) => s.setPlanMode);
   const queuedMessages = useAppStore(
     (s) =>
@@ -740,10 +745,10 @@ export function ChatPanel() {
   }, [messages.length, activeSessionId, handleContentChanged]);
 
   useEffect(() => {
-    if (completedTurnsCount > 0 || activitiesCount > 0 || pendingQuestion || pendingPlan) {
+    if (completedTurnsCount > 0 || activitiesCount > 0 || pendingQuestion || pendingPlan || pendingApproval) {
       handleContentChanged();
     }
-  }, [completedTurnsCount, activitiesCount, pendingQuestion, pendingPlan, handleContentChanged]);
+  }, [completedTurnsCount, activitiesCount, pendingQuestion, pendingPlan, pendingApproval, handleContentChanged]);
 
   useEffect(() => {
     if (!activeSessionId) return;
@@ -1238,13 +1243,14 @@ export function ChatPanel() {
 
     setQueuedMessageAutoDispatchPaused(sessionId, false);
 
-    // Clear any pending agent question or plan approval — the user is sending
+    // Clear any pending agent question or approval — the user is sending
     // a new message (answer from a card or manual override). Also release any
     // stuck typewriter drain from the previous turn so the completed message
     // doesn't stay hidden behind pendingTypewriter across turns (the
     // drain-complete effect cannot fire while isStreaming flips back to true).
     clearAgentQuestion(sessionId);
     clearPlanApproval(sessionId);
+    clearAgentApproval(sessionId);
     finishTypewriterDrainTop(sessionId);
 
     setError(null);
@@ -1527,6 +1533,24 @@ export function ChatPanel() {
                 />
               )}
 
+              {pendingApproval && (
+                <AgentApprovalCard
+                  approval={pendingApproval}
+                  onRespond={async (approved, reason) => {
+                    if (!activeSessionId) return;
+                    const sid = activeSessionId;
+                    const toolUseId = pendingApproval.toolUseId;
+                    try {
+                      await submitPlanApproval(sid, toolUseId, approved, reason);
+                      clearAgentApproval(sid);
+                    } catch (e) {
+                      console.error("Failed to submit agent approval:", e);
+                      setError(String(e));
+                    }
+                  }}
+                />
+              )}
+
               {isSteeringQueued && (
                 <div className={styles.pendingSteer} aria-live="polite" aria-label={t("steer_pending_aria")}>
                   <span className={styles.pendingSteerIcon} aria-hidden="true">
@@ -1541,7 +1565,7 @@ export function ChatPanel() {
                 </div>
               )}
 
-              {isRunning && !pendingQuestion && !pendingPlan && (
+              {isRunning && !pendingQuestion && !pendingPlan && !pendingApproval && (
                 <div
                   ref={processingRef}
                   className={styles.processing}

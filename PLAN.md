@@ -52,6 +52,17 @@
   - `site/src/content/docs/features/settings.mdx`
   - sidebar registration only if a page split becomes necessary.
 
+### Phase 4: Native Codex Approval UX And Completion Hardening
+
+- Replace the temporary non-stalling approval fallback with real host prompts for Codex app-server server requests:
+  - `item/commandExecution/requestApproval`
+  - `item/fileChange/requestApproval`
+  - `item/permissions/requestApproval`
+- Route those requests through the harness-neutral `control_request` path so the Tauri state layer can persist pending approvals before the UI can respond.
+- Add a dedicated in-chat Codex approval card and keep attention badges, tray notifications, cleanup denial, rollbacks, model/backend changes, and session resets in sync.
+- Answer approved/denied Codex requests with app-server `response` JSON-RPC messages rather than Claude Code `control_response` payloads.
+- Update docs to describe native Codex interactive approvals.
+
 ## Test Plan
 
 - `nix develop -c cargo test -p claudette --all-features`
@@ -208,8 +219,27 @@
   - `nix develop -c cargo test -p claudette agent::codex_app_server --all-features`
   - `nix develop -c cargo fmt --all --check`
   - `git diff --check`
+- 2026-05-13: Reopened the completion bar after identifying that blanket app-server approval declines were only a temporary non-stalling fallback, not complete native Codex support.
+- 2026-05-13: Implemented interactive native Codex approval routing:
+  - app-server approval server requests now become harness-neutral `ControlRequest` events instead of immediate declines.
+  - `AgentSession::send_control_response` writes Codex app-server `response` JSON-RPC messages for native Codex sessions.
+  - Tauri pending-permission cleanup now denies Codex approvals using Codex-shaped response payloads.
+  - The UI now renders Codex command/file/permission approval cards, keeps workspace attention badges in sync, and clears them during reset/rollback/model/backend changes.
+  - Provider docs now mention native Codex approval prompts.
+- 2026-05-13: Verified the focused approval milestone with:
+  - `nix develop -c cargo test -p claudette agent::codex_app_server --all-features`
+  - `nix develop -c cargo test -p claudette agent::harness --all-features`
+  - `nix develop -c cargo test -p claudette-tauri chat::interaction --all-features`
+  - `nix develop -c cargo test -p claudette-tauri chat::lifecycle --all-features`
+  - `nix develop -c cargo test -p claudette-tauri agent_backends --all-features`
+  - `cd src/ui && bunx tsc -b`
+  - `cd src/ui && bun run test -- useAppStore`
+  - `cd src/ui && bun run lint`
+  - `cd src/ui && bun run lint:css`
+  - `nix develop -c cargo fmt --all --check`
+  - `git diff --check`
 
 ## Next Stage
 
-- Commit/push the Copilot fixes, reply to and resolve the two Copilot threads, then re-query Copilot and PR checks.
-- If no new Copilot findings or CI failures appear, the native Codex implementation is ready for final human review while still in draft PR form.
+- Rebase with `origin/main`, commit and push the approval milestone, then run the Copilot review pass and address any valid findings.
+- After Copilot and CI are green, run a final completion audit against this plan before calling native Codex complete.

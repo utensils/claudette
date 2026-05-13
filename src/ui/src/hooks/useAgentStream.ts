@@ -7,7 +7,11 @@ import {
   setSessionCliInvocation,
 } from "../services/tauri";
 import type { AgentStreamPayload } from "../types/agent-events";
-import type { AgentToolCall } from "../stores/useAppStore";
+import type {
+  AgentApproval,
+  AgentApprovalKind,
+  AgentToolCall,
+} from "../stores/useAppStore";
 import type { ChatMessage } from "../types/chat";
 import type { ConversationCheckpoint } from "../types/checkpoint";
 import type { TerminalTab } from "../types/terminal";
@@ -26,6 +30,88 @@ import { pickMeterUsageFromResult } from "./pickMeterUsageFromResult";
 import { applyCommandLineEvent } from "./useAgentStreamLogic";
 
 const ASK_USER_QUESTION_TOOL = "AskUserQuestion";
+const CODEX_COMMAND_APPROVAL_TOOL = "CodexCommandApproval";
+const CODEX_FILE_CHANGE_APPROVAL_TOOL = "CodexFileChangeApproval";
+const CODEX_PERMISSIONS_APPROVAL_TOOL = "CodexPermissionsApproval";
+
+function isCodexApprovalTool(toolName: string): boolean {
+  return (
+    toolName === CODEX_COMMAND_APPROVAL_TOOL ||
+    toolName === CODEX_FILE_CHANGE_APPROVAL_TOOL ||
+    toolName === CODEX_PERMISSIONS_APPROVAL_TOOL
+  );
+}
+
+function stringField(input: Record<string, unknown>, key: string): string | null {
+  const value = input[key];
+  return typeof value === "string" && value.trim() ? value : null;
+}
+
+function addDetail(
+  details: AgentApproval["details"],
+  label: string,
+  value: unknown,
+) {
+  if (typeof value === "string" && value.trim()) {
+    details.push({ label, value });
+  } else if (value !== null && value !== undefined && typeof value !== "function") {
+    const serialized = JSON.stringify(value);
+    if (serialized) details.push({ label, value: serialized });
+  }
+}
+
+function parseCodexApproval(
+  sessionId: string,
+  toolUseId: string,
+  toolName: string,
+  input: Record<string, unknown>,
+): AgentApproval | null {
+  const kind = stringField(input, "codexApprovalKind") as AgentApprovalKind | null;
+  const details: AgentApproval["details"] = [];
+
+  if (toolName === CODEX_COMMAND_APPROVAL_TOOL && kind === "commandExecution") {
+    addDetail(details, "Command", input.command);
+    addDetail(details, "Working directory", input.cwd);
+    addDetail(details, "Reason", input.reason);
+    return {
+      sessionId,
+      toolUseId,
+      kind,
+      title: "Run command",
+      description: stringField(input, "command") ?? "Codex wants to run a command.",
+      details,
+    };
+  }
+
+  if (toolName === CODEX_FILE_CHANGE_APPROVAL_TOOL && kind === "fileChange") {
+    addDetail(details, "Path", input.path ?? input.filePath ?? input.grantRoot);
+    addDetail(details, "Reason", input.reason);
+    return {
+      sessionId,
+      toolUseId,
+      kind,
+      title: "Apply file change",
+      description: "Codex wants approval before changing files.",
+      details,
+    };
+  }
+
+  if (toolName === CODEX_PERMISSIONS_APPROVAL_TOOL && kind === "permissions") {
+    addDetail(details, "Working directory", input.cwd);
+    addDetail(details, "Permissions", input.permissions);
+    addDetail(details, "Reason", input.reason);
+    return {
+      sessionId,
+      toolUseId,
+      kind,
+      title: "Grant Codex permissions",
+      description: "Codex wants broader permissions for this turn.",
+      details,
+    };
+  }
+
+  return null;
+}
 
 function stringFromUnknown(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
@@ -73,6 +159,7 @@ export function useAgentStream() {
   const updateChatSession = useAppStore((s) => s.updateChatSession);
   const setAgentQuestion = useAppStore((s) => s.setAgentQuestion);
   const setPlanApproval = useAppStore((s) => s.setPlanApproval);
+  const setAgentApproval = useAppStore((s) => s.setAgentApproval);
   const finalizeTurn = useAppStore((s) => s.finalizeTurn);
   const setPlanMode = useAppStore((s) => s.setPlanMode);
   const addCompactionEvent = useAppStore((s) => s.addCompactionEvent);
@@ -795,13 +882,29 @@ export function useAgentStream() {
           needs_attention: true,
           attention_kind: "Plan",
         });
+      } else if (isCodexApprovalTool(toolName)) {
+        if (input && typeof input === "object") {
+          const approval = parseCodexApproval(
+            sessionId,
+            toolUseId,
+            toolName,
+            input as Record<string, unknown>,
+          );
+          if (approval) {
+            setAgentApproval(approval);
+            updateChatSession(sessionId, {
+              needs_attention: true,
+              attention_kind: "Ask",
+            });
+          }
+        }
       }
     });
     return () => {
       active = false;
       unlisten.then((fn) => fn());
     };
-  }, [setAgentQuestion, setPlanApproval, setPlanMode, updateChatSession]);
+  }, [setAgentApproval, setAgentQuestion, setPlanApproval, setPlanMode, updateChatSession]);
 
   // Listen for checkpoint-created events from the backend.
   const addCheckpoint = useAppStore((s) => s.addCheckpoint);

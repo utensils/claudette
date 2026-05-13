@@ -32,6 +32,7 @@ export async function applySelectedModel(
   await resetAgentSession(sessionId);
   store.clearAgentQuestion(sessionId);
   store.clearPlanApproval(sessionId);
+  store.clearAgentApproval(sessionId);
 
   const prevFastMode = store.fastMode[sessionId] ?? false;
   if (prevFastMode && !isFastSupported(model)) {

@@ -11,6 +11,7 @@ use claudette::agent::{
     self, AgentEvent, AgentSession, AgentSettings, ClaudeCodeHarness, CodexAppServerOptions,
     CodexAppServerSession, CodexPermissionLevel, ControlRequestInner, FileAttachment,
     InnerStreamEvent, PersistentSessionStart, StartContentBlock, StreamEvent,
+    is_codex_approval_tool_name,
 };
 use claudette::agent_backend::AgentBackendRuntimeHarness;
 use claudette::base64_decode;
@@ -2994,7 +2995,9 @@ pub async fn send_chat_message(
                     },
             }) = &event
             {
-                if matches!(tool_name.as_str(), "AskUserQuestion" | "ExitPlanMode") {
+                if matches!(tool_name.as_str(), "AskUserQuestion" | "ExitPlanMode")
+                    || is_codex_approval_tool_name(tool_name)
+                {
                     let app_state = app.state::<AppState>();
                     let mut agents = app_state.agents.write().await;
                     if let Some(session) = agents.get_mut(&chat_session_id_for_stream) {
@@ -3034,10 +3037,10 @@ pub async fn send_chat_message(
                     //   - If a different pending prompt in the same cycle has
                     //     already triggered the notification, dedupe via
                     //     `attention_notification_sent`.
-                    let kind = if tool_name == "AskUserQuestion" {
-                        crate::state::AttentionKind::Ask
-                    } else {
+                    let kind = if tool_name == "ExitPlanMode" {
                         crate::state::AttentionKind::Plan
+                    } else {
+                        crate::state::AttentionKind::Ask
                     };
                     let app_for_notify = app.clone();
                     let ws_id_for_notify = ws_id.clone();

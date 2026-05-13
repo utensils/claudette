@@ -104,6 +104,12 @@
   "plan_approval_or_feedback": "或在下方提供反馈",
   "plan_approval_feedback_placeholder": "请求修改或要求修订…",
   "plan_approval_send": "发送",
+  "agent_approval_label": "需要批准",
+  "agent_approval_details": "详情",
+  "agent_approval_approve": "批准",
+  "agent_approval_or_deny": "或在下方拒绝",
+  "agent_approval_feedback_placeholder": "可选的拒绝原因…",
+  "agent_approval_deny": "拒绝",
 
   "session_new": "新建会话",
   "session_close": "关闭会话",

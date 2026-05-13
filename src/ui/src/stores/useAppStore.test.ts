@@ -459,6 +459,7 @@ describe("agentQuestion lifecycle (per-workspace)", () => {
   beforeEach(() => {
     useAppStore.setState({
       agentQuestions: {},
+      agentApprovals: {},
       toolActivities: {},
       completedTurns: {},
       chatMessages: {},
@@ -509,6 +510,35 @@ describe("agentQuestion lifecycle (per-workspace)", () => {
 
     expect(useAppStore.getState().agentQuestions["ws-a"]).toEqual(qa);
     expect(useAppStore.getState().agentQuestions["ws-b"]).toEqual(qb);
+  });
+
+  it("setAgentApproval stores approval keyed by session", () => {
+    const approval = {
+      sessionId: WS_ID,
+      toolUseId: "approval-1",
+      kind: "commandExecution" as const,
+      title: "Run command",
+      description: "echo hi",
+      details: [{ label: "Command", value: "echo hi" }],
+    };
+    useAppStore.getState().setAgentApproval(approval);
+    expect(useAppStore.getState().agentApprovals[WS_ID]).toEqual(approval);
+  });
+
+  it("clearAgentApproval removes approval for that session only", () => {
+    const makeApproval = (sessionId: string) => ({
+      sessionId,
+      toolUseId: `${sessionId}-approval`,
+      kind: "fileChange" as const,
+      title: "Apply file change",
+      description: "Codex wants approval before changing files.",
+      details: [],
+    });
+    useAppStore.getState().setAgentApproval(makeApproval(WS_ID));
+    useAppStore.getState().setAgentApproval(makeApproval("other-ws"));
+    useAppStore.getState().clearAgentApproval(WS_ID);
+    expect(useAppStore.getState().agentApprovals[WS_ID]).toBeUndefined();
+    expect(useAppStore.getState().agentApprovals["other-ws"]).toBeDefined();
   });
 });
 
@@ -1038,6 +1068,7 @@ describe("rollbackConversation", () => {
       streamingContent: {},
       agentQuestions: {},
       planApprovals: {},
+      agentApprovals: {},
       checkpoints: {},
     });
   });
@@ -1675,6 +1706,7 @@ describe("rollbackConversation re-derives compactionEvents", () => {
       lastMessages: {},
       agentQuestions: {},
       planApprovals: {},
+      agentApprovals: {},
       streamingContent: {},
       streamingThinking: {},
       checkpoints: {},
@@ -1756,6 +1788,7 @@ describe("rollbackConversation updates latestTurnUsage", () => {
       lastMessages: {},
       agentQuestions: {},
       planApprovals: {},
+      agentApprovals: {},
       streamingContent: {},
       streamingThinking: {},
       checkpoints: {},

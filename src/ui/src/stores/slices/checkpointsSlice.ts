@@ -39,6 +39,7 @@ export const createCheckpointsSlice: StateCreator<
     set((s) => {
       const { [sessionId]: _q, ...restQuestions } = s.agentQuestions;
       const { [sessionId]: _p, ...restApprovals } = s.planApprovals;
+      const { [sessionId]: _a, ...restAgentApprovals } = s.agentApprovals;
       const { [workspaceId]: _cs, ...restChatSearch } = s.chatSearch;
       // Update lastMessages so workspace preview cards stay in sync.
       const lastMsg =
@@ -90,6 +91,7 @@ export const createCheckpointsSlice: StateCreator<
         streamingThinking: { ...s.streamingThinking, [sessionId]: "" },
         agentQuestions: restQuestions,
         planApprovals: restApprovals,
+        agentApprovals: restAgentApprovals,
         chatSearch: restChatSearch,
         checkpoints: {
           ...s.checkpoints,

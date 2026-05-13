@@ -14,8 +14,8 @@ use tokio::sync::oneshot;
 use crate::process::CommandWindowExt as _;
 
 use super::{
-    AgentEvent, Delta, FileAttachment, InnerStreamEvent, StartContentBlock, StreamEvent,
-    TokenUsage, TurnHandle,
+    AgentEvent, ControlRequestInner, Delta, FileAttachment, InnerStreamEvent, StartContentBlock,
+    StreamEvent, TokenUsage, TurnHandle,
 };
 
 type CodexStdin = Arc<tokio::sync::Mutex<ChildStdin>>;
@@ -302,6 +302,21 @@ impl CodexAppServerSession {
         Ok(models)
     }
 
+    pub async fn send_control_response(
+        &self,
+        request_id: &str,
+        response: Value,
+    ) -> Result<(), String> {
+        let server_response =
+            build_codex_server_response_from_control_response(request_id, response)?;
+        let stdin = self
+            .stdin
+            .as_ref()
+            .ok_or_else(|| "Codex app-server stdin is not available".to_string())?;
+        let mut stdin = stdin.lock().await;
+        write_jsonrpc_message(&mut *stdin, &server_response).await
+    }
+
     async fn initialize(&self, client_version: &str) -> Result<(), String> {
         let request = build_initialize_request(self.next_id(), client_version);
         self.send_request(request).await?;
@@ -547,45 +562,67 @@ async fn route_app_server_message(
         }
         JsonRpcMessage::Request(request) => {
             let method = request.method.clone();
-            if let Some(stdin) = stdin {
-                let mut stdin = stdin.lock().await;
-                let result = if let Some(response) = build_codex_server_request_response(&request) {
-                    write_jsonrpc_message(&mut *stdin, &response).await
-                } else {
-                    let error = JsonRpcMessage::Error(JsonRpcError {
-                        id: Some(request.id),
-                        error: JsonRpcErrorBody {
-                            code: -32601,
-                            message: format!(
-                                "Codex app-server request `{method}` is not implemented"
-                            ),
-                            data: None,
-                        },
-                    });
-                    write_jsonrpc_message(&mut *stdin, &error).await
-                };
-                if let Err(err) = result {
+            match codex_server_request_to_control_event(&request) {
+                Ok(Some(event)) => {
+                    let _ = event_tx.send(event);
+                    tracing::debug!(
+                        target: "claudette::agent",
+                        subsystem = "codex-app-server",
+                        pid,
+                        method = %method,
+                        "routed codex app-server server request to host approval prompt"
+                    );
+                }
+                Ok(None) => {
+                    if let Some(stdin) = stdin {
+                        let mut stdin = stdin.lock().await;
+                        let error = JsonRpcMessage::Error(JsonRpcError {
+                            id: Some(request.id),
+                            error: JsonRpcErrorBody {
+                                code: -32601,
+                                message: format!(
+                                    "Codex app-server request `{method}` is not implemented"
+                                ),
+                                data: None,
+                            },
+                        });
+                        if let Err(err) = write_jsonrpc_message(&mut *stdin, &error).await {
+                            tracing::warn!(
+                                target: "claudette::agent",
+                                subsystem = "codex-app-server",
+                                pid,
+                                error = %err,
+                                "failed to write codex server-request error response"
+                            );
+                        }
+                    }
+                    let _ = event_tx.send(AgentEvent::Stderr(format!(
+                        "Codex app-server request `{}` is not handled yet.",
+                        method
+                    )));
+                }
+                Err(err) => {
                     tracing::warn!(
                         target: "claudette::agent",
                         subsystem = "codex-app-server",
                         pid,
                         error = %err,
-                        "failed to write codex server-request error response"
+                        method = %method,
+                        "failed to route codex app-server server request"
                     );
+                    if let Some(stdin) = stdin {
+                        let mut stdin = stdin.lock().await;
+                        let error = JsonRpcMessage::Error(JsonRpcError {
+                            id: Some(request.id),
+                            error: JsonRpcErrorBody {
+                                code: -32603,
+                                message: err,
+                                data: None,
+                            },
+                        });
+                        let _ = write_jsonrpc_message(&mut *stdin, &error).await;
+                    }
                 }
-            }
-            tracing::warn!(
-                target: "claudette::agent",
-                subsystem = "codex-app-server",
-                pid,
-                method = %method,
-                "handled codex app-server server request without user prompt"
-            );
-            if !is_supported_codex_server_request(&method) {
-                let _ = event_tx.send(AgentEvent::Stderr(format!(
-                    "Codex app-server request `{}` is not handled yet.",
-                    method
-                )));
             }
         }
     }
@@ -851,32 +888,170 @@ where
     Ok(())
 }
 
-fn is_supported_codex_server_request(method: &str) -> bool {
+pub const CODEX_COMMAND_APPROVAL_TOOL: &str = "CodexCommandApproval";
+pub const CODEX_FILE_CHANGE_APPROVAL_TOOL: &str = "CodexFileChangeApproval";
+pub const CODEX_PERMISSIONS_APPROVAL_TOOL: &str = "CodexPermissionsApproval";
+
+pub fn is_codex_approval_tool_name(tool_name: &str) -> bool {
     matches!(
-        method,
-        "item/commandExecution/requestApproval"
-            | "item/fileChange/requestApproval"
-            | "item/permissions/requestApproval"
+        tool_name,
+        CODEX_COMMAND_APPROVAL_TOOL
+            | CODEX_FILE_CHANGE_APPROVAL_TOOL
+            | CODEX_PERMISSIONS_APPROVAL_TOOL
     )
+}
+
+fn codex_server_request_tool(method: &str) -> Option<(&'static str, &'static str)> {
+    match method {
+        "item/commandExecution/requestApproval" => {
+            Some((CODEX_COMMAND_APPROVAL_TOOL, "commandExecution"))
+        }
+        "item/fileChange/requestApproval" => Some((CODEX_FILE_CHANGE_APPROVAL_TOOL, "fileChange")),
+        "item/permissions/requestApproval" => {
+            Some((CODEX_PERMISSIONS_APPROVAL_TOOL, "permissions"))
+        }
+        _ => None,
+    }
+}
+
+pub fn is_supported_codex_server_request(method: &str) -> bool {
+    codex_server_request_tool(method).is_some()
+}
+
+fn codex_request_id_as_control_id(id: &JsonRpcId) -> Result<String, String> {
+    serde_json::to_string(id).map_err(|e| format!("Failed to encode Codex request id: {e}"))
+}
+
+fn codex_tool_use_id(request: &JsonRpcRequest, request_id: &str) -> String {
+    request
+        .params
+        .as_ref()
+        .and_then(Value::as_object)
+        .and_then(|params| {
+            params
+                .get("itemId")
+                .or_else(|| params.get("approvalId"))
+                .or_else(|| params.get("id"))
+                .and_then(Value::as_str)
+        })
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| format!("codex-approval-{request_id}"))
+}
+
+pub fn codex_server_request_to_control_event(
+    request: &JsonRpcRequest,
+) -> Result<Option<AgentEvent>, String> {
+    let Some((tool_name, approval_kind)) = codex_server_request_tool(&request.method) else {
+        return Ok(None);
+    };
+    let request_id = codex_request_id_as_control_id(&request.id)?;
+    let mut input = request
+        .params
+        .as_ref()
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    input.insert(
+        "codexMethod".to_string(),
+        Value::String(request.method.clone()),
+    );
+    input.insert(
+        "codexApprovalKind".to_string(),
+        Value::String(approval_kind.to_string()),
+    );
+    let tool_use_id = codex_tool_use_id(request, &request_id);
+    Ok(Some(AgentEvent::Stream(StreamEvent::ControlRequest {
+        request_id,
+        request: ControlRequestInner::CanUseTool {
+            tool_name: tool_name.to_string(),
+            tool_use_id,
+            input: Value::Object(input),
+        },
+    })))
+}
+
+pub fn build_codex_server_response_from_control_response(
+    request_id: &str,
+    response: Value,
+) -> Result<JsonRpcServerResponse, String> {
+    let id = serde_json::from_str::<JsonRpcId>(request_id)
+        .map_err(|e| format!("Invalid Codex server request id `{request_id}`: {e}"))?;
+    let method = response
+        .get("codexMethod")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "Codex control response is missing codexMethod".to_string())?;
+    if !is_supported_codex_server_request(method) {
+        return Err(format!("Unsupported Codex server request `{method}`"));
+    }
+    let payload = response
+        .get("response")
+        .cloned()
+        .ok_or_else(|| "Codex control response is missing response payload".to_string())?;
+    Ok(JsonRpcServerResponse {
+        id,
+        method: method.to_string(),
+        response: payload,
+    })
+}
+
+pub fn build_codex_approval_response_payload(
+    tool_name: &str,
+    original_input: &Value,
+    approved: bool,
+) -> Result<Value, String> {
+    let method = original_input
+        .get("codexMethod")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "Codex approval input is missing codexMethod".to_string())?;
+    match tool_name {
+        CODEX_COMMAND_APPROVAL_TOOL | CODEX_FILE_CHANGE_APPROVAL_TOOL => Ok(json!({
+            "codexMethod": method,
+            "response": {
+                "decision": if approved { "accept" } else { "decline" },
+            },
+        })),
+        CODEX_PERMISSIONS_APPROVAL_TOOL => {
+            let permissions = if approved {
+                original_input
+                    .get("permissions")
+                    .cloned()
+                    .unwrap_or_else(|| json!({}))
+            } else {
+                json!({})
+            };
+            Ok(json!({
+                "codexMethod": method,
+                "response": {
+                    "permissions": permissions,
+                    "scope": "turn",
+                },
+            }))
+        }
+        _ => Err(format!(
+            "Pending tool `{tool_name}` is not a Codex approval"
+        )),
+    }
 }
 
 pub fn build_codex_server_request_response(
     request: &JsonRpcRequest,
 ) -> Option<JsonRpcServerResponse> {
-    let response = match request.method.as_str() {
-        "item/commandExecution/requestApproval" => json!({ "decision": "decline" }),
-        "item/fileChange/requestApproval" => json!({ "decision": "decline" }),
-        "item/permissions/requestApproval" => json!({
-            "permissions": {},
-            "scope": "turn",
-        }),
-        _ => return None,
-    };
-    Some(JsonRpcServerResponse {
-        id: request.id.clone(),
-        method: request.method.clone(),
-        response,
-    })
+    let (tool_name, _) = codex_server_request_tool(&request.method)?;
+    let mut original_input = request
+        .params
+        .as_ref()
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    original_input.insert(
+        "codexMethod".to_string(),
+        Value::String(request.method.clone()),
+    );
+    let response =
+        build_codex_approval_response_payload(tool_name, &Value::Object(original_input), false)
+            .ok()?;
+    let request_id = codex_request_id_as_control_id(&request.id).ok()?;
+    build_codex_server_response_from_control_response(&request_id, response).ok()
 }
 
 pub fn codex_app_server_args() -> [&'static str; 3] {
@@ -1659,6 +1834,54 @@ mod tests {
                 "response": {
                     "decision": "decline"
                 }
+            })
+        );
+    }
+
+    #[test]
+    fn builds_codex_control_response_for_approved_command() {
+        let response = build_codex_approval_response_payload(
+            CODEX_COMMAND_APPROVAL_TOOL,
+            &json!({
+                "codexMethod": "item/commandExecution/requestApproval",
+                "command": "cargo test",
+            }),
+            true,
+        )
+        .expect("response payload");
+        let server_response =
+            build_codex_server_response_from_control_response("8", response).expect("response");
+
+        assert_eq!(server_response.id, JsonRpcId::Integer(8));
+        assert_eq!(
+            server_response.method,
+            "item/commandExecution/requestApproval"
+        );
+        assert_eq!(server_response.response, json!({ "decision": "accept" }));
+    }
+
+    #[test]
+    fn builds_codex_control_response_for_denied_permission_grant() {
+        let response = build_codex_approval_response_payload(
+            CODEX_PERMISSIONS_APPROVAL_TOOL,
+            &json!({
+                "codexMethod": "item/permissions/requestApproval",
+                "permissions": { "sandbox": "workspace-write" },
+            }),
+            false,
+        )
+        .expect("response payload");
+        let server_response =
+            build_codex_server_response_from_control_response("\"perm-1\"", response)
+                .expect("response");
+
+        assert_eq!(server_response.id, JsonRpcId::String("perm-1".to_string()));
+        assert_eq!(server_response.method, "item/permissions/requestApproval");
+        assert_eq!(
+            server_response.response,
+            json!({
+                "permissions": {},
+                "scope": "turn"
             })
         );
     }
@@ -2509,7 +2732,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn app_server_router_declines_command_approval_requests() {
+    async fn app_server_router_routes_command_approval_requests_to_control_prompt() {
         let pending: PendingRequests = Arc::new(tokio::sync::Mutex::new(BTreeMap::new()));
         let (event_tx, mut rx) = broadcast::channel(8);
 
@@ -2531,10 +2754,26 @@ mod tests {
         )
         .await;
 
-        assert!(
-            rx.try_recv().is_err(),
-            "handled approval should not emit stderr"
+        let AgentEvent::Stream(StreamEvent::ControlRequest {
+            request_id,
+            request:
+                ControlRequestInner::CanUseTool {
+                    tool_name,
+                    tool_use_id,
+                    input,
+                },
+        }) = rx.recv().await.expect("control event")
+        else {
+            panic!("expected control request");
+        };
+        assert_eq!(request_id, "42");
+        assert_eq!(tool_name, CODEX_COMMAND_APPROVAL_TOOL);
+        assert_eq!(tool_use_id, "cmd-1");
+        assert_eq!(
+            input["codexMethod"],
+            "item/commandExecution/requestApproval"
         );
+        assert_eq!(input["codexApprovalKind"], "commandExecution");
     }
 
     #[tokio::test]

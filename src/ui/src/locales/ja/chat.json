@@ -104,6 +104,12 @@
   "plan_approval_or_feedback": "または下にフィードバックを入力",
   "plan_approval_feedback_placeholder": "変更をリクエストするか修正を依頼…",
   "plan_approval_send": "送信",
+  "agent_approval_label": "承認が必要です",
+  "agent_approval_details": "詳細",
+  "agent_approval_approve": "承認",
+  "agent_approval_or_deny": "または下で拒否",
+  "agent_approval_feedback_placeholder": "拒否理由（任意）…",
+  "agent_approval_deny": "拒否",
 
   "session_new": "新規セッション",
   "session_close": "セッションを閉じる",

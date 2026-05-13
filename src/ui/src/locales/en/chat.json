@@ -104,6 +104,12 @@
   "plan_approval_or_feedback": "Or provide feedback below",
   "plan_approval_feedback_placeholder": "Request changes or ask for a revision…",
   "plan_approval_send": "Send",
+  "agent_approval_label": "Approval Required",
+  "agent_approval_details": "Details",
+  "agent_approval_approve": "Approve",
+  "agent_approval_or_deny": "Or deny below",
+  "agent_approval_feedback_placeholder": "Optional reason for denying…",
+  "agent_approval_deny": "Deny",
 
   "session_new": "New session",
   "session_close": "Close session",

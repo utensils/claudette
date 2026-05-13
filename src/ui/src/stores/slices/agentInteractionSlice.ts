@@ -23,6 +23,22 @@ export interface PlanApproval {
   allowedPrompts: Array<{ tool: string; prompt: string }>;
 }
 
+export type AgentApprovalKind = "commandExecution" | "fileChange" | "permissions";
+
+export interface AgentApprovalDetail {
+  label: string;
+  value: string;
+}
+
+export interface AgentApproval {
+  sessionId: string;
+  toolUseId: string;
+  kind: AgentApprovalKind;
+  title: string;
+  description: string;
+  details: AgentApprovalDetail[];
+}
+
 /**
  * Per-workspace state for the in-chat Cmd/Ctrl+F search bar.
  * `query` is preserved when the bar is closed so re-opening with the same
@@ -65,6 +81,10 @@ export interface AgentInteractionSlice {
   planApprovals: Record<string, PlanApproval>;
   setPlanApproval: (p: PlanApproval) => void;
   clearPlanApproval: (sessionId: string) => void;
+
+  agentApprovals: Record<string, AgentApproval>;
+  setAgentApproval: (approval: AgentApproval) => void;
+  clearAgentApproval: (sessionId: string) => void;
 
   chatSearch: Record<string, ChatSearchState>;
   openChatSearch: (wsId: string) => void;
@@ -121,6 +141,18 @@ export const createAgentInteractionSlice: StateCreator<
       const { [sessionId]: _, ...rest } = s.planApprovals;
       const nextSessions = clearSessionAttention(s.sessionsByWorkspace, sessionId);
       return { planApprovals: rest, sessionsByWorkspace: nextSessions };
+    }),
+
+  agentApprovals: {},
+  setAgentApproval: (approval) =>
+    set((s) => ({
+      agentApprovals: { ...s.agentApprovals, [approval.sessionId]: approval },
+    })),
+  clearAgentApproval: (sessionId) =>
+    set((s) => {
+      const { [sessionId]: _, ...rest } = s.agentApprovals;
+      const nextSessions = clearSessionAttention(s.sessionsByWorkspace, sessionId);
+      return { agentApprovals: rest, sessionsByWorkspace: nextSessions };
     }),
 
   chatSearch: {},

@@ -69,6 +69,7 @@ Native Codex does not start the Claude Code CLI or the OpenAI gateway. Instead:
 2. Claudette initializes the app-server over JSON-RPC.
 3. New turns use `thread/start` and `turn/start`; mid-turn steering uses `turn/steer`; stop requests use `turn/interrupt`.
 4. Codex notifications are adapted into Claudette chat events for assistant text, reasoning summaries, command execution, MCP tool calls, file changes, token usage, turn completion, failures, and process exit.
+5. Codex app-server approval requests for command execution, file changes, and permission escalation render as in-chat approval cards and are answered back to Codex over JSON-RPC.
 
 Permission levels map to Codex approval and sandbox settings:
 

@@ -39,6 +39,7 @@ export function ChatToolbar({ sessionId, disabled }: ChatToolbarProps) {
   const setModelSelectorOpen = useAppStore((s) => s.setModelSelectorOpen);
   const clearAgentQuestion = useAppStore((s) => s.clearAgentQuestion);
   const clearPlanApproval = useAppStore((s) => s.clearPlanApproval);
+  const clearAgentApproval = useAppStore((s) => s.clearAgentApproval);
   const metaKeyHeld = useAppStore((s) => s.metaKeyHeld);
   const keybindings = useAppStore((s) => s.keybindings);
   const { t } = useTranslation("chat");
@@ -144,7 +145,8 @@ export function ChatToolbar({ sessionId, disabled }: ChatToolbarProps) {
     await resetAgentSession(sessionId);
     clearAgentQuestion(sessionId);
     clearPlanApproval(sessionId);
-  }, [sessionId, chromeEnabled, setChromeEnabled, clearAgentQuestion, clearPlanApproval]);
+    clearAgentApproval(sessionId);
+  }, [sessionId, chromeEnabled, setChromeEnabled, clearAgentQuestion, clearPlanApproval, clearAgentApproval]);
 
   // The Cmd/Ctrl+T thinking-mode hotkey lived here as a raw
   // `window.addEventListener("keydown")` listener. It's been removed —

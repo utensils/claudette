@@ -155,6 +155,7 @@ export function ExperimentalSettings() {
       await resetAgentSession(sessionId);
       store.clearAgentQuestion(sessionId);
       store.clearPlanApproval(sessionId);
+      store.clearAgentApproval(sessionId);
     }
   };
 
@@ -216,6 +217,7 @@ export function ExperimentalSettings() {
       await resetAgentSession(sessionId);
       store.clearAgentQuestion(sessionId);
       store.clearPlanApproval(sessionId);
+      store.clearAgentApproval(sessionId);
     }
   };
 

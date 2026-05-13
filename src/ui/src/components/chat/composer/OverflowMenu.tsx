@@ -47,6 +47,7 @@ export function OverflowMenu({ sessionId, disabled, isRemote }: OverflowMenuProp
   const setChromeEnabled = useAppStore((s) => s.setChromeEnabled);
   const clearAgentQuestion = useAppStore((s) => s.clearAgentQuestion);
   const clearPlanApproval = useAppStore((s) => s.clearPlanApproval);
+  const clearAgentApproval = useAppStore((s) => s.clearAgentApproval);
   const claudeRemoteControlEnabled = useAppStore(
     (s) => s.claudeRemoteControlEnabled,
   );
@@ -129,7 +130,8 @@ export function OverflowMenu({ sessionId, disabled, isRemote }: OverflowMenuProp
     await resetAgentSession(sessionId);
     clearAgentQuestion(sessionId);
     clearPlanApproval(sessionId);
-  }, [sessionId, chromeEnabled, setChromeEnabled, clearAgentQuestion, clearPlanApproval]);
+    clearAgentApproval(sessionId);
+  }, [sessionId, chromeEnabled, setChromeEnabled, clearAgentQuestion, clearPlanApproval, clearAgentApproval]);
 
   return (
     <div ref={containerRef} className={styles.wrap}>
