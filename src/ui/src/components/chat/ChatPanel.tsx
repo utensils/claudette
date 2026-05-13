@@ -90,14 +90,6 @@ import { QueuedMessagesPopover } from "./QueuedMessagesPopover";
 import { shouldAutoDispatchQueuedMessage } from "./queuedMessageEditing";
 
 const EMPTY_QUEUED_MESSAGES: QueuedMessage[] = [];
-const chatScrollState = globalThis as typeof globalThis & {
-  __CLAUDETTE_CHAT_SCROLL_TOP__?: Map<string, number>;
-  __CLAUDETTE_CHAT_SCROLL_RESTORING__?: Set<string>;
-};
-const chatScrollTopBySession =
-  chatScrollState.__CLAUDETTE_CHAT_SCROLL_TOP__ ??= new Map<string, number>();
-const restoringChatScrollSessions =
-  chatScrollState.__CLAUDETTE_CHAT_SCROLL_RESTORING__ ??= new Set<string>();
 
 export function ChatPanel() {
   const { t } = useTranslation("chat");
@@ -109,6 +101,13 @@ export function ChatPanel() {
     s.selectedWorkspaceId
       ? s.selectedSessionIdByWorkspaceId[s.selectedWorkspaceId] ?? null
       : null,
+  );
+  const activeSessionIdsKey = useAppStore((s) =>
+    selectedWorkspaceId
+      ? (s.sessionsByWorkspace[selectedWorkspaceId] ?? [])
+          .map((session) => session.id)
+          .join("\0")
+      : "",
   );
   const workspaces = useAppStore((s) => s.workspaces);
   const repositories = useAppStore((s) => s.repositories);
@@ -135,6 +134,8 @@ export function ChatPanel() {
   const setSlashCommandsCache = useAppStore((s) => s.setSlashCommands);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const processingRef = useRef<HTMLDivElement>(null);
+  const chatScrollTopBySessionRef = useRef(new Map<string, number>());
+  const restoringChatScrollSessionsRef = useRef(new Set<string>());
   const [error, setError] = useState<string | null>(null);
   const [isSteeringQueued, setIsSteeringQueued] = useState(false);
   const [pendingSteerContent, setPendingSteerContent] = useState<string | null>(null);
@@ -393,6 +394,22 @@ export function ChatPanel() {
     [handleContentChanged, suppressNextAutoScrollRef],
   );
 
+  useEffect(() => {
+    const activeSessionIds = new Set(
+      activeSessionIdsKey ? activeSessionIdsKey.split("\0") : [],
+    );
+    for (const sessionId of chatScrollTopBySessionRef.current.keys()) {
+      if (!activeSessionIds.has(sessionId)) {
+        chatScrollTopBySessionRef.current.delete(sessionId);
+      }
+    }
+    for (const sessionId of restoringChatScrollSessionsRef.current.keys()) {
+      if (!activeSessionIds.has(sessionId)) {
+        restoringChatScrollSessionsRef.current.delete(sessionId);
+      }
+    }
+  }, [activeSessionIdsKey]);
+
   // Elapsed timer for running agent.
   const promptStartTime = useAppStore(
     (s) => (selectedWorkspaceId ? s.promptStartTime[selectedWorkspaceId] ?? null : null)
@@ -576,17 +593,17 @@ export function ChatPanel() {
     };
   }, [activeSessionId, selectedWorkspaceId, setChatMessages, setChatPagination, hydrateCompletedTurns]);
 
-  // Preserve the chat position while Monaco/diff views temporarily unmount
-  // this panel. Without this, opening a file link snaps long chats to bottom.
+  // Preserve chat position while moving between chat, Monaco, and diff views.
+  // Without this, opening a file link can snap long chats back to bottom.
   useEffect(() => {
     if (!activeSessionId) return;
-    const savedScrollTop = chatScrollTopBySession.get(activeSessionId);
+    const savedScrollTop = chatScrollTopBySessionRef.current.get(activeSessionId);
     if (savedScrollTop == null) {
-      restoringChatScrollSessions.delete(activeSessionId);
+      restoringChatScrollSessionsRef.current.delete(activeSessionId);
       scrollToBottom();
       return;
     }
-    restoringChatScrollSessions.add(activeSessionId);
+    restoringChatScrollSessionsRef.current.add(activeSessionId);
     let cancelled = false;
     let frameId: number | null = null;
     let attempts = 0;
@@ -606,13 +623,13 @@ export function ChatPanel() {
       ) {
         frameId = requestAnimationFrame(restore);
       } else {
-        restoringChatScrollSessions.delete(activeSessionId);
+        restoringChatScrollSessionsRef.current.delete(activeSessionId);
       }
     };
     frameId = requestAnimationFrame(restore);
     return () => {
       cancelled = true;
-      restoringChatScrollSessions.delete(activeSessionId);
+      restoringChatScrollSessionsRef.current.delete(activeSessionId);
       if (frameId !== null) cancelAnimationFrame(frameId);
     };
   }, [activeSessionId, restoreScrollPosition, scrollToBottom]);
@@ -621,9 +638,12 @@ export function ChatPanel() {
     if (!activeSessionId) return;
     const container = messagesContainerRef.current;
     return () => {
-      if (container && !restoringChatScrollSessions.has(activeSessionId)) {
-        chatScrollTopBySession.set(activeSessionId, container.scrollTop);
-        restoringChatScrollSessions.add(activeSessionId);
+      if (
+        container &&
+        !restoringChatScrollSessionsRef.current.has(activeSessionId)
+      ) {
+        chatScrollTopBySessionRef.current.set(activeSessionId, container.scrollTop);
+        restoringChatScrollSessionsRef.current.add(activeSessionId);
       }
     };
   }, [activeSessionId]);
@@ -632,8 +652,8 @@ export function ChatPanel() {
     if (!activeSessionId) return;
     const container = messagesContainerRef.current;
     if (!container) return;
-    chatScrollTopBySession.set(activeSessionId, container.scrollTop);
-    restoringChatScrollSessions.add(activeSessionId);
+    chatScrollTopBySessionRef.current.set(activeSessionId, container.scrollTop);
+    restoringChatScrollSessionsRef.current.add(activeSessionId);
   }, [activeSessionId]);
 
   // Load older messages when the user scrolls to the top of the message list.
@@ -665,9 +685,9 @@ export function ChatPanel() {
     const onScroll = () => {
       if (
         activeSessionIdRef.current &&
-        !restoringChatScrollSessions.has(activeSessionIdRef.current)
+        !restoringChatScrollSessionsRef.current.has(activeSessionIdRef.current)
       ) {
-        chatScrollTopBySession.set(
+        chatScrollTopBySessionRef.current.set(
           activeSessionIdRef.current,
           container.scrollTop,
         );

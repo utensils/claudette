@@ -282,6 +282,32 @@ describe("MARKDOWN_COMPONENTS.a click handling", () => {
     expect(openFile).toHaveBeenCalledWith("docs/README.md");
   });
 
+  it("routes bare file links only when the workspace index resolves them", async () => {
+    const openFile = vi.fn(() => true);
+    const resolveFilePath = vi.fn((path: string) =>
+      path === "README.md" ? "docs/README.md" : null,
+    );
+    const container = await render(
+      createElement(
+        MarkdownFileOpenContext.Provider,
+        { value: { openFile, resolveFilePath } },
+        createElement(LinkOverride, {
+          href: "claudettepath:README.md",
+          children: "README.md",
+        }),
+      ),
+    );
+
+    const button = container.querySelector("button");
+    expect(button?.textContent).toBe("README.md");
+    button?.dispatchEvent(
+      new MouseEvent("click", { bubbles: true, cancelable: true }),
+    );
+
+    expect(resolveFilePath).toHaveBeenCalledWith("README.md");
+    expect(openFile).toHaveBeenCalledWith("docs/README.md");
+  });
+
   it("leaves unresolved at-sign mentions as plain text", async () => {
     const openFile = vi.fn(() => true);
     const container = await render(
@@ -297,6 +323,24 @@ describe("MARKDOWN_COMPONENTS.a click handling", () => {
 
     expect(container.querySelector("button")).toBeNull();
     expect(container.textContent).toBe("@README.md");
+    expect(openFile).not.toHaveBeenCalled();
+  });
+
+  it("leaves unresolved bare file links as plain text when a resolver is available", async () => {
+    const openFile = vi.fn(() => true);
+    const container = await render(
+      createElement(
+        MarkdownFileOpenContext.Provider,
+        { value: { openFile, resolveFilePath: () => null } },
+        createElement(LinkOverride, {
+          href: "claudettepath:README.md",
+          children: "README.md",
+        }),
+      ),
+    );
+
+    expect(container.querySelector("button")).toBeNull();
+    expect(container.textContent).toBe("README.md");
     expect(openFile).not.toHaveBeenCalled();
   });
 
@@ -394,6 +438,41 @@ describe("MARKDOWN_COMPONENTS.a click handling", () => {
     );
 
     expect(openFile).toHaveBeenCalledWith("/Users/me/project/CLAUDETTE_TEST.md:1");
+  });
+
+  it("routes localhost file URLs through the workspace-resolved display path when available", async () => {
+    const openFile = vi.fn(() => true);
+    const resolveFilePath = vi.fn((path: string) =>
+      path === "website/guide/quickstart.md:6"
+        ? "website/guide/quickstart.md:6"
+        : null,
+    );
+    const href =
+      "http://localhost:14255/Users/jamesbrink/.claudette/workspaces/claudex/copper-ginger/website/guide/quickstart.md:6";
+    const container = await render(
+      createElement(
+        MarkdownFileOpenContext.Provider,
+        { value: { openFile, resolveFilePath } },
+        createElement(LinkOverride, {
+          href,
+          children: href,
+        }),
+      ),
+    );
+
+    const button = container.querySelector("button");
+    expect(button).toBeTruthy();
+    expect(button?.textContent).toBe("website/guide/quickstart.md:6");
+    button?.dispatchEvent(
+      new MouseEvent("click", { bubbles: true, cancelable: true }),
+    );
+
+    expect(resolveFilePath).toHaveBeenCalledWith(
+      "/Users/jamesbrink/.claudette/workspaces/claudex/copper-ginger/website/guide/quickstart.md:6",
+    );
+    expect(resolveFilePath).toHaveBeenCalledWith("website/guide/quickstart.md:6");
+    expect(openFile).toHaveBeenCalledWith("website/guide/quickstart.md:6");
+    expect(tauriMocks.openUrl).not.toHaveBeenCalled();
   });
 
   it("routes localhost SVG file URLs through the Monaco file opener", async () => {

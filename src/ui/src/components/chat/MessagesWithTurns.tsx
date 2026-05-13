@@ -982,8 +982,7 @@ function renderFileLinkedPlainText(
   },
 ): React.ReactNode {
   const matches = detectFileReferences(text).flatMap((match) => {
-    const isMention = match.text?.startsWith("@") === true;
-    const resolvedPath = isMention ? options.resolveFilePath(match.path) : match.path;
+    const resolvedPath = options.resolveFilePath(match.path);
     return resolvedPath ? [{ ...match, resolvedPath }] : [];
   });
   if (matches.length === 0) {

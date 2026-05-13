@@ -267,6 +267,12 @@ describe("MessagesWithTurns edit summaries", () => {
   });
 
   it("opens agent-mentioned file names in the Monaco file tab", async () => {
+    serviceMocks.listWorkspaceFiles.mockResolvedValue([
+      { path: "README.md", is_directory: false },
+    ] as never);
+    useAppStore.setState({
+      fileTreeRefreshNonceByWorkspace: { [WORKSPACE_ID]: 1 },
+    });
     const messages = [
       message("user-1", "User", "what changed?"),
       message("assistant-1", "Assistant", "I updated README.md for you."),
@@ -282,6 +288,9 @@ describe("MessagesWithTurns edit summaries", () => {
         toolDisplayMode="grouped"
       />,
     );
+    await act(async () => {
+      await Promise.resolve();
+    });
 
     const link = Array.from(container.querySelectorAll("button")).find(
       (item) => item.textContent === "README.md",
@@ -297,6 +306,39 @@ describe("MessagesWithTurns edit summaries", () => {
     const state = useAppStore.getState();
     expect(state.fileTabsByWorkspace[WORKSPACE_ID]).toEqual(["README.md"]);
     expect(state.activeFileTabByWorkspace[WORKSPACE_ID]).toBe("README.md");
+  });
+
+  it("does not link unresolved agent-mentioned file names", async () => {
+    serviceMocks.listWorkspaceFiles.mockResolvedValue([
+      { path: "CHANGELOG.md", is_directory: false },
+    ] as never);
+    useAppStore.setState({
+      fileTreeRefreshNonceByWorkspace: { [WORKSPACE_ID]: 2 },
+    });
+    const messages = [
+      message("user-1", "User", "what changed?"),
+      message("assistant-1", "Assistant", "I updated README.md for you."),
+    ];
+
+    const container = await render(
+      <MessagesWithTurns
+        messages={messages}
+        workspaceId={WORKSPACE_ID}
+        sessionId={SESSION_ID}
+        isRunning={false}
+        searchQuery=""
+        toolDisplayMode="grouped"
+      />,
+    );
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    const link = Array.from(container.querySelectorAll("button")).find(
+      (item) => item.textContent === "README.md",
+    );
+    expect(link).toBeUndefined();
+    expect(container.textContent).toContain("README.md");
   });
 
   it("opens resolved at-sign file mentions in user messages", async () => {
@@ -388,7 +430,7 @@ describe("MessagesWithTurns edit summaries", () => {
     const link = Array.from(container.querySelectorAll("button")).find(
       (item) => item.textContent === "~/Downloads/report.md",
     );
-    expect(link).toBeTruthy();
+    expect(link).toBeUndefined();
 
     await act(async () => {
       link?.dispatchEvent(
@@ -406,9 +448,13 @@ describe("MessagesWithTurns edit summaries", () => {
   });
 
   it("opens localhost file URLs from agent output in Monaco without navigating", async () => {
+    serviceMocks.listWorkspaceFiles.mockResolvedValue([
+      { path: "README.md", is_directory: false },
+    ] as never);
     const worktreePath =
       "/Users/jamesbrink/.claudette/workspaces/claudex/copper-ginger";
     useAppStore.setState({
+      fileTreeRefreshNonceByWorkspace: { [WORKSPACE_ID]: 3 },
       workspaces: [
         {
           ...useAppStore.getState().workspaces[0],
@@ -435,6 +481,9 @@ describe("MessagesWithTurns edit summaries", () => {
         toolDisplayMode="grouped"
       />,
     );
+    await act(async () => {
+      await Promise.resolve();
+    });
 
     const fileButton = Array.from(container.querySelectorAll("button")).find(
       (item) => item.textContent?.includes("README.md"),
@@ -460,9 +509,14 @@ describe("MessagesWithTurns edit summaries", () => {
   });
 
   it("opens multiple file links from one agent message without dropping prior tabs", async () => {
+    serviceMocks.listWorkspaceFiles.mockResolvedValue([
+      { path: "README.md", is_directory: false },
+      { path: "simple-wave.svg", is_directory: false },
+    ] as never);
     const worktreePath =
       "/Users/jamesbrink/.claudette/workspaces/claudex/copper-ginger";
     useAppStore.setState({
+      fileTreeRefreshNonceByWorkspace: { [WORKSPACE_ID]: 4 },
       workspaces: [
         {
           ...useAppStore.getState().workspaces[0],
@@ -488,6 +542,9 @@ describe("MessagesWithTurns edit summaries", () => {
         toolDisplayMode="grouped"
       />,
     );
+    await act(async () => {
+      await Promise.resolve();
+    });
 
     const readmeButton = Array.from(container.querySelectorAll("button")).find(
       (item) => item.textContent === "README.md:8",

@@ -400,12 +400,17 @@ const MarkdownLink: NonNullable<Components["a"]> = ({
   const filePath = href
     ? (encodedFilePath ?? localhostFilePath ?? hrefFilePath)
     : null;
-  const linkText = extractText(children).trim();
-  const requiresFileResolution =
-    !!encodedFilePath && linkText.startsWith("@");
+  const hasFileResolver = typeof fileOpen?.resolveFilePath === "function";
+  const compactFilePath = localhostFilePath ?? hrefFilePath;
+  const compactFilePathLabel = compactFilePath
+    ? formatFilePathDisplayLabel(compactFilePath)
+    : null;
   const verifiedFilePath =
-    filePath && requiresFileResolution
-      ? (fileOpen?.resolveFilePath?.(filePath) ?? null)
+    filePath && hasFileResolver
+      ? (fileOpen?.resolveFilePath?.(filePath) ??
+        (compactFilePathLabel
+          ? fileOpen?.resolveFilePath?.(compactFilePathLabel)
+          : null))
       : null;
   const externalHref = href ? normalizeExternalHref(href) : null;
   const openExternalHref = (target: string) => {
@@ -427,27 +432,12 @@ const MarkdownLink: NonNullable<Components["a"]> = ({
           );
         }
       }
-      const displayFilePath = localhostFilePath ?? hrefFilePath;
-      const resolvedDisplayFilePath = displayFilePath
-        ? fileOpen.resolveFilePath?.(
-            formatFilePathDisplayLabel(displayFilePath),
-          )
-        : null;
-      if (resolvedDisplayFilePath) {
+      if (!hasFileResolver) {
         try {
-          if (fileOpen.openFile(resolvedDisplayFilePath)) return;
+          if (fileOpen.openFile(filePath)) return;
         } catch (err) {
-          console.error(
-            "Failed to open resolved file link in Monaco:",
-            resolvedDisplayFilePath,
-            err,
-          );
+          console.error("Failed to open file link in Monaco:", filePath, err);
         }
-      }
-      try {
-        if (fileOpen.openFile(filePath)) return;
-      } catch (err) {
-        console.error("Failed to open file link in Monaco:", filePath, err);
       }
     }
     if (localhostFilePath || hrefFilePath) {
@@ -463,13 +453,10 @@ const MarkdownLink: NonNullable<Components["a"]> = ({
     );
   };
   if (filePath) {
-    if (requiresFileResolution && !verifiedFilePath) {
+    if (hasFileResolver && !verifiedFilePath) {
       return createElement("span", props, children);
     }
-    const compactFilePath = localhostFilePath ?? hrefFilePath;
-    const filePathLabel = compactFilePath
-      ? formatFilePathDisplayLabel(compactFilePath)
-      : children;
+    const filePathLabel = compactFilePathLabel ?? children;
     return createElement(
       "button",
       {
