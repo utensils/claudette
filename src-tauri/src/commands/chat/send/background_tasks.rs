@@ -309,8 +309,10 @@ pub(super) async fn apply_task_notification_status(
         let mut agents = app_state.agents.write().await;
         if let Some(session) = agents.get_mut(chat_session_id) {
             session.running_background_tasks.remove(task_id);
+            session.background_task_output_paths.remove(task_id);
             if let Some(tool_use_id) = tool_use_id {
                 session.running_background_tasks.remove(tool_use_id);
+                session.background_task_output_paths.remove(tool_use_id);
             }
         }
     }
