@@ -5,6 +5,7 @@
 - Codex CLI reference clone: `/tmp/claudette-codex-cli-reference`
 - Upstream: `https://github.com/openai/codex.git`
 - Reference commit: `d1430fd61e4a8189e6669dce31bc9b9ea19a3148`
+- Draft PR: `https://github.com/utensils/claudette/pull/786`
 - Selected integration surface: `codex app-server --listen stdio://`
 - Reason: app-server exposes persistent threads, turn start/steer/interrupt, typed notifications, permission profiles, token usage, and richer future harness compatibility than `codex exec --json`.
 
@@ -71,32 +72,38 @@
 - 2026-05-13: Verified focused Rust tests:
   - `nix develop -c cargo test -p claudette agent::harness --all-features`
   - `nix develop -c cargo test -p claudette agent::codex_app_server --all-features`
-- 2026-05-13: Committed and pushed milestone 1 as `ee05f21d` (`feat: add native codex harness foundation`).
+- 2026-05-13: Committed and pushed milestone 1 as `b26831fc` after the `origin/main` rebase (`feat: add native codex harness foundation`).
 - 2026-05-13: Added `AgentSession`, a harness-neutral session handle, and moved Tauri chat/session ownership from `PersistentSession` to `AgentSession` while keeping the Claude Code variant delegated to the existing implementation.
 - 2026-05-13: Verified the neutral session handle with:
   - `nix develop -c cargo test -p claudette agent::harness --all-features`
   - `nix develop -c cargo test -p claudette-tauri --all-features --no-run`
   - `nix develop -c cargo fmt --all`
-- 2026-05-13: Committed and pushed milestone 2 as `2bcb3f07` (`refactor: store agent sessions behind harness handle`).
+- 2026-05-13: Committed and pushed milestone 2 as `8c7127fe` after the `origin/main` rebase (`refactor: store agent sessions behind harness handle`).
 - 2026-05-13: Added the hidden `CodexAppServerSession` variant skeleton and mapped Codex app-server notifications into Claudette `AgentEvent` values for assistant text, reasoning deltas, command output, token usage, and turn completion/failure.
 - 2026-05-13: Verified Codex mapping and session skeleton tests with:
   - `nix develop -c cargo test -p claudette agent::harness --all-features`
   - `nix develop -c cargo test -p claudette agent::codex_app_server --all-features`
   - `nix develop -c cargo fmt --all`
-- 2026-05-13: Committed and pushed milestone 3 as `078baa53` (`feat: add codex app-server event adapter`).
+- 2026-05-13: Committed and pushed milestone 3 as `b9e1f331` after the `origin/main` rebase (`feat: add codex app-server event adapter`).
 - 2026-05-13: Added newline-delimited Codex app-server JSON-RPC read/write helpers, locked the `codex app-server --listen stdio://` argv in tests, and verified fake stdio request/response parsing.
 - 2026-05-13: Verified the Codex JSON-RPC codec with:
   - `nix develop -c cargo test -p claudette agent::codex_app_server --all-features`
   - `nix develop -c cargo fmt --all`
-- 2026-05-13: Committed and pushed milestone 4 as `6472f4a0` (`feat: add codex app-server jsonrpc codec`).
+- 2026-05-13: Committed and pushed milestone 4 as `5dadc542` after the `origin/main` rebase (`feat: add codex app-server jsonrpc codec`).
 - 2026-05-13: Added Codex response routing for request/response correlation, notification decoding, orphan response detection, and server request preservation for future approval handling.
 - 2026-05-13: Verified the response router with:
   - `nix develop -c cargo test -p claudette agent::codex_app_server --all-features`
   - `nix develop -c cargo fmt --all`
+- 2026-05-13: Committed and pushed milestone 5 as `589d3758` after the `origin/main` rebase (`feat: add codex app-server response router`) and opened draft PR #786 for incremental Copilot review.
+- 2026-05-13: Added hidden Codex app-server spawn/handshake scaffolding, stdout/stderr/exit tasks, pending-response delivery, and notification routing tests.
+- 2026-05-13: Verified the spawn/router scaffold with:
+  - `nix develop -c cargo test -p claudette agent::codex_app_server --all-features`
+  - `nix develop -c cargo fmt --all`
+- 2026-05-13: Synced branch with `origin/main` before the spawn/router scaffold commit using `git fetch origin main` and `git rebase origin/main`; rebase completed cleanly.
 
 ## Next Stage
 
-- Open a draft PR after the response-router checkpoint so Copilot can review this long-running branch incrementally.
-- Add the Codex app-server process spawn/wire-up behind the `AgentSession` wrapper, including initialize/initialized handshake and fake process tests where possible.
+- Begin regular Copilot review passes on draft PR #786 after pushed checkpoints.
+- Wire `CodexAppServerSession` turn start/steer/interrupt methods and then select it from backend runtime only under the native Codex experimental gate.
 - Add fake-harness tests around chat send lifecycle seams before selecting the native Codex runtime from backend settings.
 - Keep `codex-subscription` hidden/replaced only after the native `Experimental Codex` backend has a real harness path.

@@ -1,23 +1,97 @@
 use std::collections::BTreeMap;
 use std::path::Path;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicI64, Ordering};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncWrite, AsyncWriteExt};
+use tokio::process::{ChildStdin, Command};
 use tokio::sync::broadcast;
+use tokio::sync::oneshot;
+
+use crate::process::CommandWindowExt as _;
 
 use super::{AgentEvent, Delta, InnerStreamEvent, StartContentBlock, StreamEvent, TokenUsage};
 
+type CodexStdin = Arc<tokio::sync::Mutex<ChildStdin>>;
+type PendingRequests = Arc<tokio::sync::Mutex<BTreeMap<JsonRpcId, PendingCodexRequest>>>;
+
+struct PendingCodexRequest {
+    method: String,
+    tx: oneshot::Sender<Result<JsonRpcResponse, JsonRpcError>>,
+}
+
 pub struct CodexAppServerSession {
     pid: u32,
+    stdin: Option<CodexStdin>,
     event_tx: broadcast::Sender<AgentEvent>,
+    pending: PendingRequests,
+    next_request_id: AtomicI64,
 }
 
 impl CodexAppServerSession {
+    pub async fn start(working_dir: &Path, client_version: &str) -> Result<Self, String> {
+        crate::missing_cli::precheck_cwd(working_dir)?;
+
+        let mut cmd = Command::new("codex");
+        cmd.no_console_window();
+        cmd.args(codex_app_server_args())
+            .current_dir(working_dir)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .env("PATH", crate::env::enriched_path());
+
+        let mut child = cmd.spawn().map_err(|e| {
+            crate::missing_cli::map_spawn_err(&e, "codex", || {
+                format!("Failed to spawn Codex app-server: {e}")
+            })
+        })?;
+        let pid = child
+            .id()
+            .ok_or_else(|| "Codex app-server exited immediately".to_string())?;
+        let stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| "Failed to capture Codex app-server stdin".to_string())?;
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| "Failed to capture Codex app-server stdout".to_string())?;
+        let stderr = child
+            .stderr
+            .take()
+            .ok_or_else(|| "Failed to capture Codex app-server stderr".to_string())?;
+
+        let (event_tx, _) = broadcast::channel(2048);
+        let session = Self {
+            pid,
+            stdin: Some(Arc::new(tokio::sync::Mutex::new(stdin))),
+            event_tx,
+            pending: Arc::new(tokio::sync::Mutex::new(BTreeMap::new())),
+            next_request_id: AtomicI64::new(1),
+        };
+
+        session.spawn_stdout_reader(stdout);
+        session.spawn_stderr_reader(stderr);
+        session.spawn_exit_watcher(child);
+        let _ = session.event_tx.send(codex_command_line_event());
+        session.initialize(client_version).await?;
+
+        Ok(session)
+    }
+
     #[cfg(test)]
     pub fn new_for_test(pid: u32) -> Self {
         let (event_tx, _) = broadcast::channel(128);
-        Self { pid, event_tx }
+        Self {
+            pid,
+            stdin: None,
+            event_tx,
+            pending: Arc::new(tokio::sync::Mutex::new(BTreeMap::new())),
+            next_request_id: AtomicI64::new(1),
+        }
     }
 
     pub fn pid(&self) -> u32 {
@@ -31,6 +105,197 @@ impl CodexAppServerSession {
     pub fn publish_notification_event(&self, event: CodexNotificationEvent) {
         for event in map_notification_to_agent_events(event) {
             let _ = self.event_tx.send(event);
+        }
+    }
+
+    async fn initialize(&self, client_version: &str) -> Result<(), String> {
+        let request = build_initialize_request(self.next_id(), client_version);
+        self.send_request(request).await?;
+        self.send_notification(build_initialized_notification())
+            .await
+    }
+
+    async fn send_request(&self, request: JsonRpcRequest) -> Result<JsonRpcResponse, String> {
+        let stdin = self
+            .stdin
+            .as_ref()
+            .ok_or_else(|| "Codex app-server stdin is not available".to_string())?;
+        let (tx, rx) = oneshot::channel();
+        {
+            let mut pending = self.pending.lock().await;
+            pending.insert(
+                request.id.clone(),
+                PendingCodexRequest {
+                    method: request.method.clone(),
+                    tx,
+                },
+            );
+        }
+        let write_result = {
+            let mut stdin = stdin.lock().await;
+            write_jsonrpc_message(&mut *stdin, &JsonRpcMessage::Request(request.clone())).await
+        };
+        if let Err(err) = write_result {
+            let mut pending = self.pending.lock().await;
+            pending.remove(&request.id);
+            return Err(err);
+        }
+        match rx.await.map_err(|_| {
+            format!(
+                "Codex app-server response channel closed for `{}`",
+                request.method
+            )
+        })? {
+            Ok(response) => Ok(response),
+            Err(error) => Err(format!(
+                "Codex app-server `{}` failed: {}",
+                request.method, error.error.message
+            )),
+        }
+    }
+
+    async fn send_notification(&self, notification: JsonRpcNotification) -> Result<(), String> {
+        let stdin = self
+            .stdin
+            .as_ref()
+            .ok_or_else(|| "Codex app-server stdin is not available".to_string())?;
+        let mut stdin = stdin.lock().await;
+        write_jsonrpc_message(&mut *stdin, &JsonRpcMessage::Notification(notification)).await
+    }
+
+    fn next_id(&self) -> i64 {
+        self.next_request_id.fetch_add(1, Ordering::Relaxed)
+    }
+
+    fn spawn_stdout_reader(&self, stdout: tokio::process::ChildStdout) {
+        let event_tx = self.event_tx.clone();
+        let pending = self.pending.clone();
+        let pid = self.pid;
+        tokio::spawn(async move {
+            let mut reader = tokio::io::BufReader::new(stdout);
+            while let Ok(Some(message)) = read_jsonrpc_message(&mut reader).await {
+                route_app_server_message(pid, &event_tx, &pending, message).await;
+            }
+        });
+    }
+
+    fn spawn_stderr_reader(&self, stderr: tokio::process::ChildStderr) {
+        let event_tx = self.event_tx.clone();
+        let pid = self.pid;
+        tokio::spawn(async move {
+            let mut reader = tokio::io::BufReader::new(stderr);
+            let mut line = String::new();
+            loop {
+                line.clear();
+                match reader.read_line(&mut line).await {
+                    Ok(0) => break,
+                    Ok(_) => {
+                        let line = line.trim();
+                        if !line.is_empty() {
+                            tracing::warn!(
+                                target: "claudette::agent",
+                                subsystem = "codex-app-server",
+                                pid,
+                                line,
+                                "codex stderr"
+                            );
+                            let _ = event_tx.send(AgentEvent::Stderr(line.to_string()));
+                        }
+                    }
+                    Err(err) => {
+                        tracing::warn!(
+                            target: "claudette::agent",
+                            subsystem = "codex-app-server",
+                            pid,
+                            error = %err,
+                            "failed to read codex stderr"
+                        );
+                        break;
+                    }
+                }
+            }
+        });
+    }
+
+    fn spawn_exit_watcher(&self, mut child: tokio::process::Child) {
+        let event_tx = self.event_tx.clone();
+        tokio::spawn(async move {
+            let status = child.wait().await.ok().and_then(|status| status.code());
+            let _ = event_tx.send(AgentEvent::ProcessExited(status));
+        });
+    }
+}
+
+async fn route_app_server_message(
+    pid: u32,
+    event_tx: &broadcast::Sender<AgentEvent>,
+    pending: &PendingRequests,
+    message: JsonRpcMessage,
+) {
+    match message {
+        JsonRpcMessage::Response(response) => {
+            let request = pending.lock().await.remove(&response.id);
+            if let Some(request) = request {
+                let method = request.method.clone();
+                if request.tx.send(Ok(response)).is_err() {
+                    tracing::warn!(
+                        target: "claudette::agent",
+                        subsystem = "codex-app-server",
+                        pid,
+                        method,
+                        "codex response receiver dropped"
+                    );
+                }
+            } else {
+                tracing::warn!(
+                    target: "claudette::agent",
+                    subsystem = "codex-app-server",
+                    pid,
+                    id = ?response.id,
+                    "orphan codex response"
+                );
+            }
+        }
+        JsonRpcMessage::Error(error) => {
+            let request = pending.lock().await.remove(&error.id);
+            if let Some(request) = request {
+                let method = request.method.clone();
+                if request.tx.send(Err(error)).is_err() {
+                    tracing::warn!(
+                        target: "claudette::agent",
+                        subsystem = "codex-app-server",
+                        pid,
+                        method,
+                        "codex error receiver dropped"
+                    );
+                }
+            } else {
+                tracing::warn!(
+                    target: "claudette::agent",
+                    subsystem = "codex-app-server",
+                    pid,
+                    id = ?error.id,
+                    "orphan codex error"
+                );
+            }
+        }
+        JsonRpcMessage::Notification(notification) => {
+            for event in map_notification_to_agent_events(decode_notification(notification)) {
+                let _ = event_tx.send(event);
+            }
+        }
+        JsonRpcMessage::Request(request) => {
+            tracing::warn!(
+                target: "claudette::agent",
+                subsystem = "codex-app-server",
+                pid,
+                method = %request.method,
+                "codex app-server request handling is not wired yet"
+            );
+            let _ = event_tx.send(AgentEvent::Stderr(format!(
+                "Codex app-server request `{}` is not handled yet.",
+                request.method
+            )));
         }
     }
 }
@@ -1057,5 +1322,71 @@ mod tests {
         };
         assert_eq!(text, "hi");
         assert_eq!(session.pid(), 4321);
+    }
+
+    #[tokio::test]
+    async fn app_server_router_delivers_pending_response() {
+        let (tx, rx) = oneshot::channel();
+        let pending: PendingRequests = Arc::new(tokio::sync::Mutex::new(BTreeMap::from([(
+            JsonRpcId::Integer(11),
+            PendingCodexRequest {
+                method: "turn/start".to_string(),
+                tx,
+            },
+        )])));
+        let (event_tx, _) = broadcast::channel(8);
+
+        route_app_server_message(
+            1,
+            &event_tx,
+            &pending,
+            JsonRpcMessage::Response(JsonRpcResponse {
+                id: JsonRpcId::Integer(11),
+                result: json!({"turn":{"id":"turn-1"}}),
+            }),
+        )
+        .await;
+
+        let response = rx
+            .await
+            .expect("response delivered")
+            .expect("response is ok");
+        assert_eq!(response.result["turn"]["id"], "turn-1");
+        assert!(pending.lock().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn app_server_router_emits_notification_events() {
+        let pending: PendingRequests = Arc::new(tokio::sync::Mutex::new(BTreeMap::new()));
+        let (event_tx, mut rx) = broadcast::channel(8);
+
+        route_app_server_message(
+            1,
+            &event_tx,
+            &pending,
+            JsonRpcMessage::Notification(JsonRpcNotification {
+                method: "item/agentMessage/delta".to_string(),
+                params: Some(json!({
+                    "threadId": "thread-1",
+                    "turnId": "turn-1",
+                    "itemId": "message-1",
+                    "delta": "hello"
+                })),
+            }),
+        )
+        .await;
+
+        let event = rx.recv().await.expect("event emitted");
+        let AgentEvent::Stream(StreamEvent::Stream {
+            event:
+                InnerStreamEvent::ContentBlockDelta {
+                    delta: Delta::Text { text },
+                    ..
+                },
+        }) = event
+        else {
+            panic!("expected text delta");
+        };
+        assert_eq!(text, "hello");
     }
 }
