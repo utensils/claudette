@@ -252,6 +252,12 @@
 - 2026-05-13: Committed and pushed the Copilot approval follow-up as `35e7ab89` (`fix: persist native codex assistant output`) after rebasing with `origin/main`.
 - 2026-05-13: Replied to and resolved the three latest Copilot threads, then re-queried Copilot and confirmed zero unresolved Copilot reviewer threads.
 - 2026-05-13: Latest PR checks for `35e7ab89` passed: Cargo Version Sync, Commit messages, Format, Frontend, Frontend Bundle Smoke, Lint, Migration guard, PR title, Test, Updater Manifest, build, codecov/patch, and codecov/project. Deploy was skipped as expected for this draft PR.
+- 2026-05-13: Ran one more Copilot pass after the final plan-status commit. Valid finding addressed:
+  - Codex command output deltas are now buffered per command item and emitted to Claudette as cumulative tool-result text so the UI no longer overwrites prior chunks with only the latest delta.
+- 2026-05-13: Verified the command-output buffering fix with:
+  - `nix develop -c cargo test -p claudette agent::codex_app_server --all-features`
+  - `nix develop -c cargo fmt --all --check`
+  - `git diff --check`
 - 2026-05-13: Final implementation audit against this plan:
   - Harness abstraction is in place and Claude behavior remains routed through the existing Claude Code implementation.
   - Native Codex app-server spawn, initialization, persistent thread/turn lifecycle, steering, interrupt, auth check, model list, notification mapping, command/file/MCP event mapping, token usage, failed turns, and process cleanup are implemented behind the experimental gate.

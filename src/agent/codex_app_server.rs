@@ -31,6 +31,7 @@ struct PendingCodexRequest {
 struct CodexTurnOutput {
     text: String,
     thinking: String,
+    command_outputs: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone)]
@@ -578,7 +579,9 @@ async fn route_app_server_message(
             {
                 let _ = event_tx.send(event);
             }
-            for event in map_notification_to_agent_events(notification) {
+            let events =
+                map_notification_to_agent_events_for_route(notification, turn_output).await;
+            for event in events {
                 let _ = event_tx.send(event);
             }
         }
@@ -1402,6 +1405,7 @@ async fn drain_turn_output_buffer(buffer: &TurnOutputBuffer) -> Option<AgentEven
     if buffer.text.trim().is_empty() && buffer.thinking.trim().is_empty() {
         buffer.text.clear();
         buffer.thinking.clear();
+        buffer.command_outputs.clear();
         return None;
     }
 
@@ -1418,10 +1422,40 @@ async fn drain_turn_output_buffer(buffer: &TurnOutputBuffer) -> Option<AgentEven
     } else {
         buffer.text.clear();
     }
+    buffer.command_outputs.clear();
 
     Some(AgentEvent::Stream(StreamEvent::Assistant {
         message: AssistantMessage { content },
     }))
+}
+
+async fn map_notification_to_agent_events_for_route(
+    event: CodexNotificationEvent,
+    buffer: Option<&TurnOutputBuffer>,
+) -> Vec<AgentEvent> {
+    if let (CodexNotificationEvent::CommandOutputDelta { item_id, delta, .. }, Some(buffer)) =
+        (&event, buffer)
+        && !delta.is_empty()
+    {
+        let mut buffer = buffer.lock().await;
+        let output = buffer.command_outputs.entry(item_id.clone()).or_default();
+        output.push_str(delta);
+        return vec![AgentEvent::Stream(StreamEvent::User {
+            message: super::UserEventMessage {
+                content: super::UserMessageContent::Blocks(vec![
+                    super::UserContentBlock::ToolResult {
+                        tool_use_id: item_id.clone(),
+                        content: Value::String(output.clone()),
+                    },
+                ]),
+            },
+            uuid: None,
+            is_replay: false,
+            is_synthetic: true,
+        })];
+    }
+
+    map_notification_to_agent_events(event)
 }
 
 pub fn decode_notification(notification: JsonRpcNotification) -> CodexNotificationEvent {
@@ -1831,6 +1865,21 @@ fn token_usage_from_params(params: &Value) -> TokenUsage {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn tool_result_text(event: AgentEvent) -> String {
+        let AgentEvent::Stream(StreamEvent::User { message, .. }) = event else {
+            panic!("expected user tool result event");
+        };
+        let crate::agent::UserMessageContent::Blocks(blocks) = message.content else {
+            panic!("expected structured user blocks");
+        };
+        let Some(crate::agent::UserContentBlock::ToolResult { content, .. }) =
+            blocks.into_iter().next()
+        else {
+            panic!("expected tool result block");
+        };
+        content.as_str().expect("string content").to_string()
+    }
 
     #[test]
     fn initialize_request_matches_codex_app_server_shape() {
@@ -2852,6 +2901,39 @@ mod tests {
             rx.recv().await.expect("result event"),
             AgentEvent::Stream(StreamEvent::Result { subtype, .. }) if subtype == "success"
         ));
+    }
+
+    #[tokio::test]
+    async fn app_server_router_emits_cumulative_command_output_deltas() {
+        let pending: PendingRequests = Arc::new(tokio::sync::Mutex::new(BTreeMap::new()));
+        let turn_output = Arc::new(tokio::sync::Mutex::new(CodexTurnOutput::default()));
+        let (event_tx, mut rx) = broadcast::channel(8);
+
+        for delta in ["hello ", "world"] {
+            route_app_server_message(
+                1,
+                &event_tx,
+                &pending,
+                None,
+                None,
+                Some(&turn_output),
+                JsonRpcMessage::Notification(JsonRpcNotification {
+                    method: "item/commandExecution/outputDelta".to_string(),
+                    params: Some(json!({
+                        "threadId": "thread-1",
+                        "turnId": "turn-1",
+                        "itemId": "cmd-1",
+                        "delta": delta
+                    })),
+                }),
+            )
+            .await;
+        }
+
+        let first = rx.recv().await.expect("first output");
+        let second = rx.recv().await.expect("second output");
+        assert_eq!(tool_result_text(first), "hello ");
+        assert_eq!(tool_result_text(second), "hello world");
     }
 
     #[tokio::test]
