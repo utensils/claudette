@@ -49,23 +49,27 @@ pub(super) fn terminal_text(text: &str) -> String {
     rendered
 }
 
-pub(super) fn append_agent_bash_output(path: &std::path::Path, text: &str) -> std::io::Result<()> {
+pub(super) async fn append_agent_bash_output(
+    path: &std::path::Path,
+    text: &str,
+) -> std::io::Result<()> {
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
+        tokio::fs::create_dir_all(parent).await?;
     }
-    use std::io::Write;
-    let mut file = std::fs::OpenOptions::new()
+    use tokio::io::AsyncWriteExt;
+    let mut file = tokio::fs::OpenOptions::new()
         .create(true)
         .append(true)
-        .open(path)?;
-    file.write_all(text.as_bytes())
+        .open(path)
+        .await?;
+    file.write_all(text.as_bytes()).await
 }
 
-pub(super) fn truncate_agent_bash_output(path: &std::path::Path) -> std::io::Result<()> {
+pub(super) async fn truncate_agent_bash_output(path: &std::path::Path) -> std::io::Result<()> {
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
+        tokio::fs::create_dir_all(parent).await?;
     }
-    std::fs::File::create(path).map(|_| ())
+    tokio::fs::File::create(path).await.map(|_| ())
 }
 
 pub(super) fn mirror_background_task_output(
@@ -107,7 +111,9 @@ pub(super) fn mirror_background_task_output(
                         if let Err(err) = append_agent_bash_output(
                             &destination,
                             &terminal_text(&String::from_utf8_lossy(&buf[..n])),
-                        ) {
+                        )
+                        .await
+                        {
                             tracing::warn!(target: "claudette::chat", error = %err, "failed to mirror background output");
                         }
                     }
@@ -266,13 +272,13 @@ impl BackgroundTaskInputTracker {
             }
         }
         let path = agent_bash_output_path(chat_session_id);
-        if !had_running_background_tasks && let Err(err) = truncate_agent_bash_output(&path) {
+        if !had_running_background_tasks && let Err(err) = truncate_agent_bash_output(&path).await {
             tracing::warn!(target: "claudette::chat", error = %err, "failed to reset agent bash output");
         }
         let echo = command
             .map(|cmd| format!("\r\n$ {}\r\n", terminal_text(cmd)))
             .unwrap_or_else(|| "\r\n$ Bash\r\n".to_string());
-        if let Err(err) = append_agent_bash_output(&path, &echo) {
+        if let Err(err) = append_agent_bash_output(&path, &echo).await {
             tracing::warn!(target: "claudette::chat", error = %err, "failed to write agent bash output");
         }
         if get_or_create_agent_shell_terminal_tab(db_path, workspace_id, chat_session_id).is_some()
@@ -316,24 +322,40 @@ pub(super) async fn apply_task_notification_status(
     let Ok(db) = Database::open(db_path) else {
         return;
     };
-    if is_terminal_task_status(status) {
+    let trusted_output_file = {
         let app_state = app.state::<AppState>();
         let mut agents = app_state.agents.write().await;
-        if let Some(session) = agents.get_mut(chat_session_id) {
-            session.running_background_tasks.remove(task_id);
-            session.background_task_output_paths.remove(task_id);
-            if let Some(tool_use_id) = tool_use_id {
-                session.running_background_tasks.remove(tool_use_id);
-                session.background_task_output_paths.remove(tool_use_id);
+        agents.get_mut(chat_session_id).and_then(|session| {
+            let trusted = session
+                .background_task_output_paths
+                .get(task_id)
+                .or_else(|| {
+                    tool_use_id.and_then(|tool_use_id| {
+                        session.background_task_output_paths.get(tool_use_id)
+                    })
+                })
+                .cloned();
+            let output_file = output_file
+                .filter(|path| trusted.as_deref() == Some(path.trim()))
+                .map(str::trim)
+                .map(ToOwned::to_owned);
+            if is_terminal_task_status(status) {
+                session.running_background_tasks.remove(task_id);
+                session.background_task_output_paths.remove(task_id);
+                if let Some(tool_use_id) = tool_use_id {
+                    session.running_background_tasks.remove(tool_use_id);
+                    session.background_task_output_paths.remove(tool_use_id);
+                }
             }
-        }
-    }
+            output_file
+        })
+    };
     let _ = db.update_agent_task_terminal_tab_status(
         chat_session_id,
         task_id,
         status,
         summary.filter(|s| !s.trim().is_empty()),
-        output_file.filter(|s| !s.trim().is_empty()),
+        trusted_output_file.as_deref(),
     );
     let _ = db.update_agent_shell_terminal_tab_status(
         chat_session_id,
@@ -467,13 +489,14 @@ async fn take_trusted_background_output_path(
     let session = agents.get_mut(chat_session_id)?;
     let output_path = session
         .background_task_output_paths
-        .remove(&completion.task_id)
+        .get(&completion.task_id)
         .or_else(|| {
             completion
                 .tool_use_id
                 .as_deref()
-                .and_then(|tool_use_id| session.background_task_output_paths.remove(tool_use_id))
-        });
+                .and_then(|tool_use_id| session.background_task_output_paths.get(tool_use_id))
+        })
+        .cloned();
     if output_path.is_some() {
         return output_path;
     }

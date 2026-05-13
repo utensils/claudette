@@ -2591,7 +2591,24 @@ pub async fn send_chat_message(
                                     content,
                                 } => {
                                     let text = tool_result_content_text(content);
-                                    if let Some(binding) = parse_background_task_binding(&text) {
+                                    let background_binding = parse_background_task_binding(&text);
+                                    let is_trusted_background_binding =
+                                        if background_binding.is_some() {
+                                            let app_state = app.state::<AppState>();
+                                            let agents = app_state.agents.read().await;
+                                            agents.get(&chat_session_id_for_stream).is_some_and(
+                                                |session| {
+                                                    session
+                                                        .running_background_tasks
+                                                        .contains(tool_use_id)
+                                                },
+                                            )
+                                        } else {
+                                            false
+                                        };
+                                    if let Some(binding) = background_binding
+                                        && is_trusted_background_binding
+                                    {
                                         {
                                             let app_state = app.state::<AppState>();
                                             let mut agents = app_state.agents.write().await;
@@ -2644,7 +2661,9 @@ pub async fn send_chat_message(
                                         if let Err(err) = append_agent_bash_output(
                                             &path,
                                             &format!("{text}{suffix}"),
-                                        ) {
+                                        )
+                                        .await
+                                        {
                                             tracing::warn!(
                                                 target: "claudette::chat",
                                                 error = %err,
