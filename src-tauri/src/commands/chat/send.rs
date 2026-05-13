@@ -120,6 +120,38 @@ fn has_env_trust_warning(messages: &[ChatMessage]) -> bool {
     messages.iter().any(is_env_trust_warning_message)
 }
 
+fn control_prompt_attention_kind(tool_name: &str) -> crate::state::AttentionKind {
+    if tool_name == "ExitPlanMode" {
+        crate::state::AttentionKind::Plan
+    } else {
+        crate::state::AttentionKind::Ask
+    }
+}
+
+fn queue_control_prompt(
+    session: &mut AgentSessionState,
+    request_id: String,
+    tool_name: String,
+    tool_use_id: String,
+    input: serde_json::Value,
+) -> crate::state::AttentionKind {
+    let kind = control_prompt_attention_kind(&tool_name);
+    session.needs_attention = true;
+    session.attention_kind = Some(kind);
+    if tool_name == "ExitPlanMode" {
+        session.session_exited_plan = true;
+    }
+    session.pending_permissions.insert(
+        tool_use_id,
+        PendingPermission {
+            request_id,
+            tool_name,
+            original_input: input,
+        },
+    );
+    kind
+}
+
 fn auth_failure_message_from_stderr(stderr_lines: &[String]) -> Option<String> {
     let output = stderr_lines
         .iter()
@@ -3024,16 +3056,17 @@ pub async fn send_chat_message(
                 {
                     let app_state = app.state::<AppState>();
                     let mut agents = app_state.agents.write().await;
-                    if let Some(session) = agents.get_mut(&chat_session_id_for_stream) {
-                        session.pending_permissions.insert(
+                    let kind = if let Some(session) = agents.get_mut(&chat_session_id_for_stream) {
+                        queue_control_prompt(
+                            session,
+                            request_id.clone(),
+                            tool_name.clone(),
                             tool_use_id.clone(),
-                            PendingPermission {
-                                request_id: request_id.clone(),
-                                tool_name: tool_name.clone(),
-                                original_input: input.clone(),
-                            },
-                        );
-                    }
+                            input.clone(),
+                        )
+                    } else {
+                        control_prompt_attention_kind(tool_name)
+                    };
                     drop(agents);
                     let payload = serde_json::json!({
                         "workspace_id": &ws_id,
@@ -3061,11 +3094,6 @@ pub async fn send_chat_message(
                     //   - If a different pending prompt in the same cycle has
                     //     already triggered the notification, dedupe via
                     //     `attention_notification_sent`.
-                    let kind = if tool_name == "ExitPlanMode" {
-                        crate::state::AttentionKind::Plan
-                    } else {
-                        crate::state::AttentionKind::Ask
-                    };
                     let app_for_notify = app.clone();
                     let ws_id_for_notify = ws_id.clone();
                     let session_id_for_notify = chat_session_id_for_stream.clone();
@@ -3683,15 +3711,17 @@ pub async fn send_chat_message(
 mod tests {
     use super::{
         auth_failure_message_from_assistant_text, auth_failure_message_from_stderr,
-        env_provider_drifted_parts, has_env_trust_warning, remote_control_requested_or_active,
-        remote_control_requested_or_active_for_turn,
+        env_provider_drifted_parts, has_env_trust_warning, queue_control_prompt,
+        remote_control_requested_or_active, remote_control_requested_or_active_for_turn,
         remote_control_should_defer_drift_teardown_for_turn,
         remote_control_should_restore_for_turn, remote_control_title, resolve_spawn_session_id,
         should_defer_persistent_restart_for_state,
         should_reenable_remote_control_after_turn_result, should_resume_persistent_session,
         should_run_auto_naming, terminal_text,
     };
-    use crate::state::{ClaudeRemoteControlLifecycle, ClaudeRemoteControlStatus};
+    use crate::state::{
+        AgentSessionState, AttentionKind, ClaudeRemoteControlLifecycle, ClaudeRemoteControlStatus,
+    };
     use claudette::model::{ChatMessage, ChatRole};
 
     fn test_chat_message(role: ChatRole, content: &str) -> ChatMessage {
@@ -3710,6 +3740,79 @@ mod tests {
             cache_read_tokens: None,
             cache_creation_tokens: None,
         }
+    }
+
+    fn test_agent_session_state() -> AgentSessionState {
+        AgentSessionState {
+            workspace_id: "workspace-1".to_string(),
+            session_id: "session-1".to_string(),
+            turn_count: 1,
+            active_pid: None,
+            custom_instructions: None,
+            needs_attention: false,
+            attention_kind: None,
+            attention_notification_sent: false,
+            persistent_session: None,
+            claude_remote_control: ClaudeRemoteControlStatus::disabled(),
+            claude_remote_control_monitor_pid: None,
+            local_user_message_uuids: Default::default(),
+            mcp_config_dirty: false,
+            session_plan_mode: false,
+            session_allowed_tools: Vec::new(),
+            session_fast_mode: false,
+            session_disable_1m_context: false,
+            session_backend_hash: String::new(),
+            pending_permissions: Default::default(),
+            running_background_tasks: Default::default(),
+            background_wake_active: false,
+            session_exited_plan: false,
+            session_resolved_env: Default::default(),
+            session_resolved_env_signature: String::new(),
+            mcp_bridge: None,
+            last_user_msg_id: None,
+            posted_env_trust_warning: false,
+        }
+    }
+
+    #[test]
+    fn queue_control_prompt_sets_attention_for_codex_approval() {
+        let mut session = test_agent_session_state();
+
+        let kind = queue_control_prompt(
+            &mut session,
+            "request-1".to_string(),
+            "CodexCommandApproval".to_string(),
+            "tool-1".to_string(),
+            serde_json::json!({"command": "cargo test"}),
+        );
+
+        assert_eq!(kind, AttentionKind::Ask);
+        assert!(session.needs_attention);
+        assert_eq!(session.attention_kind, Some(AttentionKind::Ask));
+        assert!(!session.session_exited_plan);
+        let pending = session.pending_permissions.get("tool-1").unwrap();
+        assert_eq!(pending.request_id, "request-1");
+        assert_eq!(pending.tool_name, "CodexCommandApproval");
+        assert_eq!(pending.original_input["command"], "cargo test");
+    }
+
+    #[test]
+    fn queue_control_prompt_sets_plan_attention_for_exit_plan_mode() {
+        let mut session = test_agent_session_state();
+
+        let kind = queue_control_prompt(
+            &mut session,
+            "request-2".to_string(),
+            "ExitPlanMode".to_string(),
+            "tool-2".to_string(),
+            serde_json::json!({"plan": "ship it"}),
+        );
+
+        assert_eq!(kind, AttentionKind::Plan);
+        assert!(session.needs_attention);
+        assert_eq!(session.attention_kind, Some(AttentionKind::Plan));
+        assert!(session.session_exited_plan);
+        assert!(session.pending_permissions.contains_key("tool-2"));
     }
 
     #[test]
