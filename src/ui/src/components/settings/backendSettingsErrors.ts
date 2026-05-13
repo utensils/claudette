@@ -1,7 +1,7 @@
 import type { AgentBackendConfig } from "../../services/tauri";
 
 function backendBaseUrl(backend: AgentBackendConfig): string | null {
-  if (backend.kind === "codex_subscription") return null;
+  if (backend.kind === "codex_subscription" || backend.kind === "codex_native") return null;
   if (backend.base_url?.trim()) return backend.base_url.trim();
   if (backend.kind === "ollama") return "http://localhost:11434";
   if (backend.kind === "openai_api") return "https://api.openai.com";

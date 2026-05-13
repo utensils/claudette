@@ -130,10 +130,24 @@
   - `nix develop -c cargo test -p claudette agent::codex_app_server --all-features`
   - `nix develop -c cargo test -p claudette agent::harness --all-features`
   - `nix develop -c cargo fmt --all`
+- 2026-05-13: Added the gated `experimental-codex` backend row (`CodexNative`) and runtime harness selection so native Codex resolves to `CodexAppServer` while existing OpenAI API and legacy gateway backends stay on the Claude Code harness.
+- 2026-05-13: Added the **Experimental Codex** settings gate. When enabled, backend loading hides the legacy `codex-subscription` row and aliases stale subscription selections to `experimental-codex`; when disabled, OpenAI API and the legacy subscription gateway remain unchanged.
+- 2026-05-13: Wired chat spawning to start `CodexAppServerSession::start_with_options` for the native Codex runtime, including model and permission-level mapping, while skipping Claude-only MCP hook injection for Codex sessions.
+- 2026-05-13: Updated docs and settings copy for native Codex vs OpenAI API gateway behavior:
+  - `site/src/content/docs/features/providers/openai-codex.mdx`
+  - `site/src/content/docs/features/providers/index.mdx`
+  - `site/src/content/docs/features/settings.mdx`
+- 2026-05-13: Verified the gated backend selection milestone with:
+  - `nix develop -c cargo test -p claudette agent_backend --all-features`
+  - `nix develop -c cargo test -p claudette-tauri agent_backends --all-features`
+  - `nix develop -c cargo test -p claudette agent::harness --all-features`
+  - `cd src/ui && bunx tsc -b`
+  - `cd src/ui && bun run test -- modelRegistry alternativeBackendCleanup`
+  - `git diff --check`
 
 ## Next Stage
 
-- Begin regular Copilot review passes on draft PR #786 after pushed checkpoints.
-- Select native Codex from backend runtime only under the native Codex experimental gate.
-- Add fake-harness tests around chat send lifecycle seams before selecting the native Codex runtime from backend settings.
-- Keep `codex-subscription` hidden/replaced only after the native `Experimental Codex` backend has a real harness path.
+- Rebase on `origin/main`, commit, push, and run the regular Copilot review pass for this checkpoint.
+- Add fake app-server/chat lifecycle coverage around native Codex send, steer, stop, and failure persistence without spawning a real CLI.
+- Expand Codex notification mapping for MCP calls and file changes once the app-server payload shapes are confirmed against the reference clone.
+- Harden gate-off cleanup for live sessions that were selected on `experimental-codex`.

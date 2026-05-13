@@ -36,8 +36,22 @@ Default values applied to all new agent sessions. Per-workspace overrides are av
 | Default plan mode | Start new sessions in plan mode | Off |
 | Default fast mode | Start new sessions in fast mode | Off |
 | Team agents as session tabs | Open Claude Code team agents (`TeamCreate` + `Agent` with a team name) as separate Claudette chat session tabs. | On |
+| Default backend | Provider used for new chats when alternative backends are enabled. | `anthropic` |
+| Agent backend cards | Enable, test, authenticate, and refresh model lists for built-in providers such as Ollama, LM Studio, OpenAI API, and Experimental Codex. | Provider-specific |
 
 See [Agent Configuration](/claudette/features/agent-configuration/) for detailed descriptions of each option.
+
+## Experimental
+
+| Setting | Description | Default |
+|---------|-------------|---------|
+| Claudette Terminal | Show a read-only terminal tab that mirrors agent shell commands and background task output. | Off |
+| Alternative Claude Code backends | Expose non-default providers in Settings > Models and the chat model picker. | Off |
+| Experimental Codex | Replace the legacy `codex-subscription` gateway backend with native `codex app-server --listen stdio://` support. Requires alternative backends to be compiled in. | Off |
+| Plugin Management | Show the Claude Code Plugins settings section and plugin-management slash commands. | Off |
+| Claude Remote Control | Show the local chat Remote Control toggle and allow Claudette to attach live Claude sessions to claude.ai. | On |
+| Community Registry | Show the Community settings section for themes, plugins, and language grammars. | Off |
+| Usage Insights | Show Claude subscription usage data. | Off |
 
 ## Claude CLI Flags
 

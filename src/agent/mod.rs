@@ -15,6 +15,7 @@ use crate::agent_backend::AgentBackendRuntime;
 
 pub use args::{build_claude_args, build_stdin_message};
 pub use binary::{resolve_claude_path, resolve_claude_path_blocking};
+pub use codex_app_server::{CodexAppServerOptions, CodexAppServerSession, CodexPermissionLevel};
 pub use harness::{
     AgentHarnessCapabilities, AgentHarnessKind, AgentSession, ClaudeCodeHarness,
     PersistentSessionStart,

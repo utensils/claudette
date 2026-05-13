@@ -245,11 +245,8 @@ mod tests {
 
     #[test]
     fn agent_session_capabilities_stay_explicit_per_variant() {
-        assert_eq!(AgentHarnessCapabilities::claude_code().remote_control, true);
-        assert_eq!(
-            AgentHarnessCapabilities::codex_app_server().remote_control,
-            false
-        );
+        assert!(AgentHarnessCapabilities::claude_code().remote_control);
+        assert!(!AgentHarnessCapabilities::codex_app_server().remote_control);
     }
 
     #[test]

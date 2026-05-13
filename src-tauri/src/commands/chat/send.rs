@@ -8,9 +8,11 @@ use claudette::agent::background::{
     parse_background_task_binding, parse_bash_start, parse_task_notification,
 };
 use claudette::agent::{
-    self, AgentEvent, AgentSession, AgentSettings, ClaudeCodeHarness, ControlRequestInner,
-    FileAttachment, InnerStreamEvent, PersistentSessionStart, StartContentBlock, StreamEvent,
+    self, AgentEvent, AgentSession, AgentSettings, ClaudeCodeHarness, CodexAppServerOptions,
+    CodexAppServerSession, CodexPermissionLevel, ControlRequestInner, FileAttachment,
+    InnerStreamEvent, PersistentSessionStart, StartContentBlock, StreamEvent,
 };
+use claudette::agent_backend::AgentBackendRuntimeHarness;
 use claudette::base64_decode;
 use claudette::chat::{
     BuildAssistantArgs, CheckpointArgs, RequestedFlags, SessionFlags,
@@ -1540,6 +1542,7 @@ pub async fn send_chat_message(
         );
     }
     let allowed_tools = tools_for_level(level);
+    let codex_permission_level = CodexPermissionLevel::from_claudette_level(level);
 
     // Resolve custom instructions: .claudette.json > repo settings > none.
     // Only resolved on the first turn — cached in the session for subsequent turns.
@@ -2207,6 +2210,7 @@ pub async fn send_chat_message(
     // surface-the-structured-error before any event emission happens.
     let ws_env_for_persistent = ws_env.clone();
     let resolved_env_for_persistent = resolved_env.clone();
+    let codex_permission_level_for_persistent = codex_permission_level;
     let start_persistent = move |worktree: String,
                                  sid: String,
                                  is_resume: bool,
@@ -2226,18 +2230,38 @@ pub async fn send_chat_message(
             // `handle_err` themselves, which keeps event emission attributed
             // to the actual decision-to-fail rather than to the speculative
             // first attempt of a resume.
-            let started = ClaudeCodeHarness::start_persistent(PersistentSessionStart {
-                working_dir: std::path::Path::new(&worktree),
-                session_id: &sid,
-                is_resume,
-                allowed_tools: &tools,
-                custom_instructions: instructions.as_deref(),
-                settings: &settings,
-                workspace_env: Some(&env),
-                resolved_env: Some(&resolved),
-            })
-            .await?;
-            Ok::<Arc<AgentSession>, String>(Arc::new(AgentSession::from_claude_code(started)))
+            match settings.backend_runtime.harness {
+                AgentBackendRuntimeHarness::ClaudeCode => {
+                    let started = ClaudeCodeHarness::start_persistent(PersistentSessionStart {
+                        working_dir: std::path::Path::new(&worktree),
+                        session_id: &sid,
+                        is_resume,
+                        allowed_tools: &tools,
+                        custom_instructions: instructions.as_deref(),
+                        settings: &settings,
+                        workspace_env: Some(&env),
+                        resolved_env: Some(&resolved),
+                    })
+                    .await?;
+                    Ok::<Arc<AgentSession>, String>(Arc::new(AgentSession::from_claude_code(
+                        started,
+                    )))
+                }
+                AgentBackendRuntimeHarness::CodexAppServer => {
+                    let started = CodexAppServerSession::start_with_options(
+                        std::path::Path::new(&worktree),
+                        env!("CARGO_PKG_VERSION"),
+                        CodexAppServerOptions {
+                            model: settings.model.clone(),
+                            permission_level: codex_permission_level_for_persistent,
+                        },
+                    )
+                    .await?;
+                    Ok::<Arc<AgentSession>, String>(Arc::new(AgentSession::from_codex_app_server(
+                        started,
+                    )))
+                }
+            }
         }
     };
 
@@ -2279,21 +2303,31 @@ pub async fn send_chat_message(
                 drop(agents);
 
                 let mut respawn_settings = agent_settings.clone();
-                let bridge = if send_to_user_enabled {
-                    let (b, mcp_with_claudette) = start_bridge_and_inject_mcp(
-                        &app,
-                        &state.db_path,
-                        &workspace_id,
-                        &chat_session_id,
-                        agent_settings.mcp_config.clone(),
-                    )
-                    .await?;
-                    respawn_settings.mcp_config = mcp_with_claudette;
-                    b
+                let bridge = if matches!(
+                    respawn_settings.backend_runtime.harness,
+                    AgentBackendRuntimeHarness::ClaudeCode
+                ) {
+                    Some(if send_to_user_enabled {
+                        let (b, mcp_with_claudette) = start_bridge_and_inject_mcp(
+                            &app,
+                            &state.db_path,
+                            &workspace_id,
+                            &chat_session_id,
+                            agent_settings.mcp_config.clone(),
+                        )
+                        .await?;
+                        respawn_settings.mcp_config = mcp_with_claudette;
+                        b
+                    } else {
+                        start_chat_bridge(&app, &state.db_path, &workspace_id, &chat_session_id)
+                            .await?
+                    })
                 } else {
-                    start_chat_bridge(&app, &state.db_path, &workspace_id, &chat_session_id).await?
+                    None
                 };
-                respawn_settings.hook_bridge = Some(build_agent_hook_bridge(&bridge)?);
+                if let Some(bridge) = bridge.as_ref() {
+                    respawn_settings.hook_bridge = Some(build_agent_hook_bridge(bridge)?);
+                }
 
                 let is_resume = should_resume_persistent_session(
                     &saved_session_id,
@@ -2397,7 +2431,7 @@ pub async fn send_chat_message(
                 agents = state.agents.write().await;
                 let session = agents.get_mut(&chat_session_id).ok_or("Session lost")?;
                 session.persistent_session = Some(ps);
-                session.mcp_bridge = Some(bridge);
+                session.mcp_bridge = bridge;
                 session.session_id = final_sid;
                 session.session_plan_mode = agent_settings.plan_mode;
                 session.session_allowed_tools = allowed_tools.clone();
@@ -2438,21 +2472,30 @@ pub async fn send_chat_message(
         // on the session below so it lives exactly as long as the
         // persistent CLI process.
         let mut spawn_settings = agent_settings.clone();
-        let bridge = if send_to_user_enabled {
-            let (b, mcp_with_claudette) = start_bridge_and_inject_mcp(
-                &app,
-                &state.db_path,
-                &workspace_id,
-                &chat_session_id,
-                agent_settings.mcp_config.clone(),
-            )
-            .await?;
-            spawn_settings.mcp_config = mcp_with_claudette;
-            b
+        let bridge = if matches!(
+            spawn_settings.backend_runtime.harness,
+            AgentBackendRuntimeHarness::ClaudeCode
+        ) {
+            Some(if send_to_user_enabled {
+                let (b, mcp_with_claudette) = start_bridge_and_inject_mcp(
+                    &app,
+                    &state.db_path,
+                    &workspace_id,
+                    &chat_session_id,
+                    agent_settings.mcp_config.clone(),
+                )
+                .await?;
+                spawn_settings.mcp_config = mcp_with_claudette;
+                b
+            } else {
+                start_chat_bridge(&app, &state.db_path, &workspace_id, &chat_session_id).await?
+            })
         } else {
-            start_chat_bridge(&app, &state.db_path, &workspace_id, &chat_session_id).await?
+            None
         };
-        spawn_settings.hook_bridge = Some(build_agent_hook_bridge(&bridge)?);
+        if let Some(bridge) = bridge.as_ref() {
+            spawn_settings.hook_bridge = Some(build_agent_hook_bridge(bridge)?);
+        }
 
         let (ps, final_sid) = match start_persistent(
             worktree_path.clone(),
@@ -2530,7 +2573,7 @@ pub async fn send_chat_message(
         agents = state.agents.write().await;
         let session = agents.get_mut(&chat_session_id).ok_or("Session lost")?;
         session.persistent_session = Some(ps);
-        session.mcp_bridge = Some(bridge);
+        session.mcp_bridge = bridge;
         session.session_id = final_sid.clone();
         session.session_plan_mode = agent_settings.plan_mode;
         session.session_allowed_tools = allowed_tools.clone();

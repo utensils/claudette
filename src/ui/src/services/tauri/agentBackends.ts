@@ -5,6 +5,7 @@ export type AgentBackendKind =
   | "ollama"
   | "openai_api"
   | "codex_subscription"
+  | "codex_native"
   | "custom_anthropic"
   | "custom_openai"
   | "lm_studio";

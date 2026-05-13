@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { useAppStore } from "../../../stores/useAppStore";
 import {
   getAppSetting,
+  listAgentBackends,
   listAppSettingsWithPrefix,
   resetAgentSession,
   setAppSetting,
@@ -43,6 +44,13 @@ export function ExperimentalSettings() {
   const setAlternativeBackendsEnabled = useAppStore(
     (s) => s.setAlternativeBackendsEnabled,
   );
+  const experimentalCodexEnabled = useAppStore(
+    (s) => s.experimentalCodexEnabled,
+  );
+  const setExperimentalCodexEnabled = useAppStore(
+    (s) => s.setExperimentalCodexEnabled,
+  );
+  const setAgentBackends = useAppStore((s) => s.setAgentBackends);
   const setDefaultAgentBackendId = useAppStore(
     (s) => s.setDefaultAgentBackendId,
   );
@@ -166,6 +174,23 @@ export function ExperimentalSettings() {
     }
   };
 
+  const handleExperimentalCodexToggle = async () => {
+    if (!alternativeBackendsAvailable) return;
+    const next = !experimentalCodexEnabled;
+    const previous = experimentalCodexEnabled;
+    setExperimentalCodexEnabled(next);
+    try {
+      setError(null);
+      await setAppSetting("experimental_codex_enabled", next ? "true" : "false");
+      const data = await listAgentBackends();
+      setAgentBackends(data.backends);
+      setDefaultAgentBackendId(data.default_backend_id);
+    } catch (e) {
+      setExperimentalCodexEnabled(previous);
+      setError(String(e));
+    }
+  };
+
   return (
     <div>
       <h2 className={styles.sectionTitle}>{t("experimental_title")}</h2>
@@ -213,6 +238,30 @@ export function ExperimentalSettings() {
             data-checked={alternativeBackendsEnabled}
             disabled={!alternativeBackendsAvailable}
             onClick={handleAlternativeBackendsToggle}
+          >
+            <div className={styles.toggleKnob} />
+          </button>
+        </div>
+      </div>
+
+      <div className={styles.settingRow}>
+        <div className={styles.settingInfo}>
+          <div className={styles.settingLabel}>
+            {t("experimental_codex")}
+          </div>
+          <div className={styles.settingDescription}>
+            {t("experimental_codex_desc")}
+          </div>
+        </div>
+        <div className={styles.settingControl}>
+          <button
+            className={styles.toggle}
+            role="switch"
+            aria-checked={experimentalCodexEnabled}
+            aria-label={t("experimental_codex_aria")}
+            data-checked={experimentalCodexEnabled}
+            disabled={!alternativeBackendsAvailable}
+            onClick={handleExperimentalCodexToggle}
           >
             <div className={styles.toggleKnob} />
           </button>

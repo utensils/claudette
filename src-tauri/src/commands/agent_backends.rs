@@ -15,6 +15,7 @@ use tokio::sync::{Notify, RwLock};
 
 use claudette::agent_backend::{
     AgentBackendConfig, AgentBackendKind, AgentBackendModel, AgentBackendRuntime,
+    AgentBackendRuntimeHarness,
 };
 use claudette::db::Database;
 use claudette::plugin::{delete_secure_secret, load_secure_secret, save_secure_secret};
@@ -26,6 +27,7 @@ const SECRET_BUCKET: &str = "agentBackendSecrets";
 const BACKEND_RUNTIME_ENV_VERSION: u8 = 2;
 const CODEX_DEFAULT_BASE_URL: &str = "https://chatgpt.com/backend-api";
 const CODEX_JWT_AUTH_CLAIM: &str = "https://api.openai.com/auth";
+const NATIVE_CODEX_SETTING_KEY: &str = "experimental_codex_enabled";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BackendStatus {
@@ -193,6 +195,10 @@ pub async fn list_agent_backends(
     // recognize the kind will pick it up unchanged.
     let default_backend_id = if loaded.backends.iter().any(|b| b.id == stored_default) {
         stored_default
+    } else if stored_default == "codex-subscription"
+        && loaded.backends.iter().any(|b| b.id == "experimental-codex")
+    {
+        "experimental-codex".to_string()
     } else {
         loaded.warnings.push(format!(
             "Default backend `{stored_default}` is not available in this build; \
@@ -239,7 +245,12 @@ pub async fn delete_agent_backend(
 ) -> Result<Vec<AgentBackendConfig>, String> {
     if matches!(
         backend_id.as_str(),
-        "anthropic" | "ollama" | "openai-api" | "codex-subscription" | "lm-studio"
+        "anthropic"
+            | "ollama"
+            | "openai-api"
+            | "codex-subscription"
+            | "experimental-codex"
+            | "lm-studio"
     ) {
         return Err("Built-in backends can be disabled but not deleted".to_string());
     }
@@ -333,12 +344,22 @@ pub async fn resolve_backend_runtime(
     if backend.kind == AgentBackendKind::Anthropic {
         return Ok(AgentBackendRuntime {
             backend_id: Some(backend.id),
+            harness: AgentBackendRuntimeHarness::ClaudeCode,
             env: Vec::new(),
             hash: String::new(),
         });
     }
     if !backend.enabled {
         return Err(format!("Backend `{}` is disabled", backend.label));
+    }
+
+    if backend.kind == AgentBackendKind::CodexNative {
+        return Ok(AgentBackendRuntime {
+            backend_id: Some(backend.id.clone()),
+            harness: AgentBackendRuntimeHarness::CodexAppServer,
+            env: Vec::new(),
+            hash: runtime_hash(&backend, None, model),
+        });
     }
 
     let secret = if backend.kind == AgentBackendKind::CodexSubscription {
@@ -394,6 +415,7 @@ pub async fn resolve_backend_runtime(
         append_custom_model_env(&mut env, &backend, model);
         return Ok(AgentBackendRuntime {
             backend_id: Some(backend.id),
+            harness: AgentBackendRuntimeHarness::ClaudeCode,
             env,
             hash,
         });
@@ -439,6 +461,7 @@ pub async fn resolve_backend_runtime(
     append_custom_model_env(&mut env, &backend, model);
     Ok(AgentBackendRuntime {
         backend_id: Some(backend.id.clone()),
+        harness: AgentBackendRuntimeHarness::ClaudeCode,
         env,
         hash: runtime_hash(&backend, secret.as_deref(), model),
     })
@@ -472,9 +495,10 @@ pub fn resolve_backend_request_defaults(
     }
 
     if let Some(backend_id) = requested_backend.as_deref() {
+        let backend_id = backend_request_alias(&backends, backend_id);
         let backend = backends
             .iter()
-            .find(|backend| backend.id == backend_id)
+            .find(|backend| backend.id == backend_id.as_str())
             .ok_or_else(|| format!("Unknown backend `{backend_id}`"))?;
         let model = if backend.kind == AgentBackendKind::Anthropic {
             None
@@ -487,7 +511,7 @@ pub fn resolve_backend_request_defaults(
                     .map(|model| model.id.clone())
             })
         };
-        return Ok((requested_backend, model));
+        return Ok((Some(backend.id.clone()), model));
     }
 
     let default_backend_id = db
@@ -499,6 +523,7 @@ pub fn resolve_backend_request_defaults(
         .get_app_setting("default_model")
         .map_err(|e| e.to_string())?
         .filter(|model| !model.trim().is_empty());
+    let default_backend_id = backend_request_alias(&backends, &default_backend_id);
     let Some(backend) = backends
         .iter()
         .find(|backend| backend.id == default_backend_id)
@@ -628,6 +653,7 @@ fn apply_discovered_models(backend: &mut AgentBackendConfig, discovered: Vec<Age
         AgentBackendKind::Ollama
             | AgentBackendKind::OpenAiApi
             | AgentBackendKind::CodexSubscription
+            | AgentBackendKind::CodexNative
             | AgentBackendKind::LmStudio
     ) && !discovered.is_empty()
     {
@@ -670,7 +696,8 @@ struct LoadedBackends {
 ///      unknown entry back on the next write so a downgrade-then-
 ///      upgrade cycle is non-destructive.
 fn load_backend_configs_tolerant(db: &Database) -> Result<LoadedBackends, String> {
-    let mut backends = default_backends();
+    let native_codex_enabled = native_codex_enabled(db)?;
+    let mut backends = default_backends_for_gate(native_codex_enabled);
     let mut warnings: Vec<String> = Vec::new();
 
     if let Some(raw) = db
@@ -682,6 +709,11 @@ fn load_backend_configs_tolerant(db: &Database) -> Result<LoadedBackends, String
                 for entry in entries {
                     match serde_json::from_value::<AgentBackendConfig>(entry.clone()) {
                         Ok(saved) => {
+                            if native_codex_enabled
+                                && saved.kind == AgentBackendKind::CodexSubscription
+                            {
+                                continue;
+                            }
                             if let Some(existing) = backends.iter_mut().find(|b| b.id == saved.id) {
                                 *existing = normalize_backend(saved);
                             } else {
@@ -784,23 +816,36 @@ fn save_backend_configs(db: &Database, backends: &[AgentBackendConfig]) -> Resul
         .map_err(|e| e.to_string())
 }
 
-fn default_backends() -> Vec<AgentBackendConfig> {
+fn default_backends_for_gate(native_codex_enabled: bool) -> Vec<AgentBackendConfig> {
+    let codex = if native_codex_enabled {
+        AgentBackendConfig::builtin_experimental_codex()
+    } else {
+        AgentBackendConfig::builtin_codex_subscription()
+    };
     vec![
         AgentBackendConfig::builtin_anthropic(),
         AgentBackendConfig::builtin_ollama(),
         AgentBackendConfig::builtin_openai_api(),
-        AgentBackendConfig::builtin_codex_subscription(),
+        codex,
         AgentBackendConfig::builtin_lm_studio(),
     ]
+}
+
+fn native_codex_enabled(db: &Database) -> Result<bool, String> {
+    db.get_app_setting(NATIVE_CODEX_SETTING_KEY)
+        .map_err(|e| e.to_string())
+        .map(|value| value.as_deref() == Some("true"))
 }
 
 fn find_backend(db: &Database, backend_id: Option<&str>) -> Result<AgentBackendConfig, String> {
     let id = backend_id
         .filter(|id| !id.trim().is_empty())
         .unwrap_or("anthropic");
-    load_backend_configs(db)?
+    let backends = load_backend_configs(db)?;
+    let id = backend_request_alias(&backends, id);
+    backends
         .into_iter()
-        .find(|backend| backend.id == id)
+        .find(|backend| backend.id == id.as_str())
         .ok_or_else(|| format!("Unknown backend `{id}`"))
 }
 
@@ -814,6 +859,7 @@ fn select_backend_for_request(
         .map(str::trim)
         .filter(|id| !id.is_empty())
         .unwrap_or("anthropic");
+    let requested = backend_request_alias(backends, requested);
     let should_infer = requested == "anthropic" || backend_id.is_none();
     if should_infer
         && let Some(model) = model.map(str::trim).filter(|model| !model.is_empty())
@@ -823,9 +869,17 @@ fn select_backend_for_request(
     }
     backends
         .iter()
-        .find(|backend| backend.id == requested)
+        .find(|backend| backend.id == requested.as_str())
         .cloned()
         .ok_or_else(|| format!("Unknown backend `{requested}`"))
+}
+
+fn backend_request_alias(backends: &[AgentBackendConfig], requested: &str) -> String {
+    if requested == "codex-subscription" && backends.iter().any(|b| b.id == "experimental-codex") {
+        "experimental-codex".to_string()
+    } else {
+        requested.to_string()
+    }
 }
 
 fn infer_backend_for_model<'a>(
@@ -861,9 +915,13 @@ fn normalize_backend(mut backend: AgentBackendConfig) -> AgentBackendConfig {
         AgentBackendKind::Ollama
             | AgentBackendKind::OpenAiApi
             | AgentBackendKind::CodexSubscription
+            | AgentBackendKind::CodexNative
             | AgentBackendKind::LmStudio
     ) {
         backend.model_discovery = true;
+    }
+    if backend.kind == AgentBackendKind::CodexNative {
+        backend.model_discovery = false;
     }
     for model in backend
         .manual_models
@@ -956,6 +1014,7 @@ async fn discover_models(backend: &AgentBackendConfig) -> Result<Vec<AgentBacken
         }
         AgentBackendKind::OpenAiApi => discover_openai_api_models(backend).await,
         AgentBackendKind::CodexSubscription => discover_codex_models().await,
+        AgentBackendKind::CodexNative => Ok(backend.manual_models.clone()),
         AgentBackendKind::LmStudio => discover_lm_studio_models(backend).await,
         _ => Ok(backend.manual_models.clone()),
     }
@@ -975,6 +1034,10 @@ async fn test_backend_connectivity(backend: &AgentBackendConfig) -> Result<Backe
                 format!("{status}. Found {} model(s).", models.len()),
             ))
         }
+        AgentBackendKind::CodexNative => Ok(BackendStatus::new(
+            true,
+            "Experimental Codex will use the native Codex CLI app-server",
+        )),
         AgentBackendKind::OpenAiApi => discover_openai_api_models(backend).await.map(|models| {
             BackendStatus::new(
                 true,
@@ -1348,6 +1411,7 @@ fn backend_kind_hash_key(kind: AgentBackendKind) -> &'static str {
         AgentBackendKind::Ollama => "ollama",
         AgentBackendKind::OpenAiApi => "openai_api",
         AgentBackendKind::CodexSubscription => "codex_subscription",
+        AgentBackendKind::CodexNative => "codex_native",
         AgentBackendKind::CustomAnthropic => "custom_anthropic",
         AgentBackendKind::CustomOpenAi => "custom_openai",
         AgentBackendKind::LmStudio => "lm_studio",
@@ -2699,6 +2763,58 @@ mod tests {
             warning.contains("future-thing") && warning.contains("totally_new_backend"),
             "warning should name the offending entry: {warning}"
         );
+    }
+
+    #[test]
+    fn native_codex_gate_replaces_subscription_builtin() {
+        let db = Database::open_in_memory().expect("test db should open");
+        db.set_app_setting(NATIVE_CODEX_SETTING_KEY, "true")
+            .expect("setting should save");
+
+        let loaded = load_backend_configs(&db).expect("backends should load");
+
+        assert!(loaded.iter().any(|b| b.id == "experimental-codex"));
+        assert!(!loaded.iter().any(|b| b.id == "codex-subscription"));
+        let codex = loaded
+            .iter()
+            .find(|b| b.id == "experimental-codex")
+            .expect("native codex backend should be present");
+        assert_eq!(codex.kind, AgentBackendKind::CodexNative);
+        assert!(!codex.model_discovery);
+    }
+
+    #[test]
+    fn native_codex_gate_hides_stored_subscription_backend() {
+        let db = Database::open_in_memory().expect("test db should open");
+        db.set_app_setting(NATIVE_CODEX_SETTING_KEY, "true")
+            .expect("setting should save");
+        let mut legacy = AgentBackendConfig::builtin_codex_subscription();
+        legacy.enabled = true;
+        save_backend_configs(&db, &[legacy]).expect("legacy backend config should save");
+
+        let loaded = load_backend_configs(&db).expect("backends should load");
+
+        assert!(loaded.iter().any(|b| b.id == "experimental-codex"));
+        assert!(!loaded.iter().any(|b| b.id == "codex-subscription"));
+    }
+
+    #[test]
+    fn native_codex_gate_aliases_legacy_subscription_requests() {
+        let db = Database::open_in_memory().expect("test db should open");
+        db.set_app_setting(NATIVE_CODEX_SETTING_KEY, "true")
+            .expect("setting should save");
+        db.set_app_setting("alternative_backends_enabled", "true")
+            .expect("setting should save");
+        let mut native = AgentBackendConfig::builtin_experimental_codex();
+        native.enabled = true;
+        save_backend_configs(&db, &[native]).expect("native backend config should save");
+
+        let (backend_id, resolved_model) =
+            resolve_backend_request_defaults(&db, Some("codex-subscription"), None)
+                .expect("legacy codex request should resolve");
+
+        assert_eq!(backend_id.as_deref(), Some("experimental-codex"));
+        assert_eq!(resolved_model.as_deref(), Some("gpt-5.4"));
     }
 
     #[test]

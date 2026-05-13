@@ -78,6 +78,7 @@ function App() {
   const setDisable1mContext = useAppStore((s) => s.setDisable1mContext);
   const setAlternativeBackendsAvailable = useAppStore((s) => s.setAlternativeBackendsAvailable);
   const setAlternativeBackendsEnabled = useAppStore((s) => s.setAlternativeBackendsEnabled);
+  const setExperimentalCodexEnabled = useAppStore((s) => s.setExperimentalCodexEnabled);
   const setAgentBackends = useAppStore((s) => s.setAgentBackends);
   const setDefaultAgentBackendId = useAppStore((s) => s.setDefaultAgentBackendId);
   // Read for the LM Studio polling effect below. We deliberately do
@@ -365,8 +366,12 @@ function App() {
     getAppSetting("community_registry_enabled")
       .then((val) => { if (val === "true") setCommunityRegistryEnabled(true); })
       .catch(() => {});
-    Promise.allSettled([getAppSetting("alternative_backends_enabled"), getHostEnvFlags()])
-      .then(([settingResult, flagsResult]) => {
+    Promise.allSettled([
+      getAppSetting("alternative_backends_enabled"),
+      getAppSetting("experimental_codex_enabled"),
+      getHostEnvFlags(),
+    ])
+      .then(([settingResult, codexSettingResult, flagsResult]) => {
         const flags =
           flagsResult.status === "fulfilled"
             ? flagsResult.value
@@ -383,6 +388,14 @@ function App() {
         } else {
           console.error("Failed to load alternative backend setting:", settingResult.reason);
           setAlternativeBackendsEnabled(false);
+        }
+        if (codexSettingResult.status === "fulfilled") {
+          setExperimentalCodexEnabled(
+            codexSettingResult.value === "true" && flags.alternative_backends_compiled,
+          );
+        } else {
+          console.error("Failed to load experimental Codex setting:", codexSettingResult.reason);
+          setExperimentalCodexEnabled(false);
         }
       })
       .catch(() => {});
@@ -804,7 +817,7 @@ function App() {
       unlistenMissingCli.then((fn) => fn());
       unlistenMissingWorktree.then((fn) => fn());
     };
-  }, [setRepositories, setWorkspaces, setWorktreeBaseDir, setDefaultTerminalAppId, setDefaultBranches, setTerminalFontSize, setLastMessages, setRemoteConnections, setDiscoveredServers, setLocalServerRunning, setLocalServerConnectionString, setCurrentThemeId, setThemeMode, setThemeDark, setThemeLight, setUiFontSize, setFontFamilySans, setFontFamilyMono, setSystemFonts, setDetectedApps, setUsageInsightsEnabled, setClaudetteTerminalEnabled, setShowSidebarRunningCommands, setToolDisplayMode, setExtendedToolCallOutput, setPluginManagementEnabled, setClaudeRemoteControlEnabled, setCommunityRegistryEnabled, setAlternativeBackendsAvailable, setAlternativeBackendsEnabled, setAgentBackends, setDefaultAgentBackendId, setEditorGitGutterBase, setEditorMinimapEnabled, setDisable1mContext, setAppVersion, setVoiceToggleHotkey, setVoiceHoldHotkey, setKeybindings, setManualWorkspaceOrderByRepo]);
+  }, [setRepositories, setWorkspaces, setWorktreeBaseDir, setDefaultTerminalAppId, setDefaultBranches, setTerminalFontSize, setLastMessages, setRemoteConnections, setDiscoveredServers, setLocalServerRunning, setLocalServerConnectionString, setCurrentThemeId, setThemeMode, setThemeDark, setThemeLight, setUiFontSize, setFontFamilySans, setFontFamilyMono, setSystemFonts, setDetectedApps, setUsageInsightsEnabled, setClaudetteTerminalEnabled, setShowSidebarRunningCommands, setToolDisplayMode, setExtendedToolCallOutput, setPluginManagementEnabled, setClaudeRemoteControlEnabled, setCommunityRegistryEnabled, setAlternativeBackendsAvailable, setAlternativeBackendsEnabled, setExperimentalCodexEnabled, setAgentBackends, setDefaultAgentBackendId, setEditorGitGutterBase, setEditorMinimapEnabled, setDisable1mContext, setAppVersion, setVoiceToggleHotkey, setVoiceHoldHotkey, setKeybindings, setManualWorkspaceOrderByRepo]);
 
   // Live freshness for LM Studio's `loaded_context_length`.
   //

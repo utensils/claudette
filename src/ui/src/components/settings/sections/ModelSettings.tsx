@@ -435,8 +435,9 @@ function BackendCard({
   const modelOptions = dedupeBackendModels([...discoveredModels, ...manualModels]);
   const manualModelText = manualModels.map((m) => m.id).join(", ");
   const discoveryBackend = isDiscoveryBackend(draft);
-  const showBaseUrl = draft.kind !== "codex_subscription";
-  const showSecret = draft.kind !== "codex_subscription";
+  const usesCodexCliAuth = draft.kind === "codex_subscription" || draft.kind === "codex_native";
+  const showBaseUrl = !usesCodexCliAuth;
+  const showSecret = !usesCodexCliAuth;
   const showManualModels = draft.kind === "custom_anthropic" || draft.kind === "custom_openai";
   const actualModelCount = countBackendModels(draft);
   const displayModelCount = actualModelCount > 0 ? actualModelCount : statusModelCount ?? 0;
@@ -681,7 +682,7 @@ function BackendCard({
           {discoveryBackend && (
             <button className={styles.iconBtn} onClick={refresh} disabled={busy}>{t("models_backend_refresh")}</button>
           )}
-          {draft.kind === "codex_subscription" && (
+          {usesCodexCliAuth && (
             <button className={styles.iconBtn} onClick={() => void launchCodexLogin()} disabled={busy}>
               {t("models_backend_login")}
             </button>
