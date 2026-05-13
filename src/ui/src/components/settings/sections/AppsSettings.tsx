@@ -2,11 +2,9 @@ import { useMemo, useState } from "react";
 import { ChevronDown, ChevronUp, Minus, Plus } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { useAppStore } from "../../../stores/useAppStore";
-import {
-  deleteAppSetting,
-  setAppSetting,
-} from "../../../services/tauri";
-import { AppIcon, splitMenuApps } from "../../chat/WorkspaceActions";
+import { deleteAppSetting, setAppSetting } from "../../../services/tauri";
+import { splitMenuApps } from "../../../utils/workspaceAppsMenu";
+import { AppIcon } from "../../chat/WorkspaceActions";
 import { DefaultTerminalSetting } from "./DefaultTerminalSetting";
 import settings from "../Settings.module.css";
 import styles from "./AppsSettings.module.css";
@@ -56,8 +54,7 @@ export function AppsSettings() {
   const removeFromMenu = (id: string) =>
     void persist(currentShownIds().filter((appId) => appId !== id));
 
-  const addToMenu = (id: string) =>
-    void persist([...currentShownIds(), id]);
+  const addToMenu = (id: string) => void persist([...currentShownIds(), id]);
 
   const moveBy = (index: number, delta: number) => {
     const ids = currentShownIds();
@@ -68,6 +65,10 @@ export function AppsSettings() {
   };
 
   const resetToDefault = () => void persist(null);
+
+  // Show the reset affordance whenever there's something to reset (apps
+  // detected, or a stale customization persisted from a run where there were).
+  const showResetRow = detectedApps.length > 0 || customized;
 
   return (
     <div>
@@ -86,104 +87,102 @@ export function AppsSettings() {
         {detectedApps.length === 0 ? (
           <div className={styles.listEmpty}>{t("apps_menu_empty")}</div>
         ) : (
-          <>
-            <div className={styles.lists}>
-              <div className={styles.list}>
-                <div className={styles.listHeader}>
-                  {t("apps_menu_shown_heading")}
-                </div>
-                <div className={styles.listBody}>
-                  {shown.length === 0 && (
-                    <div className={styles.listEmpty}>
-                      {t("apps_menu_shown_empty")}
-                    </div>
-                  )}
-                  {shown.map((app, index) => (
-                    <div className={styles.appRow} key={app.id}>
-                      <AppIcon app={app} />
-                      <span className={styles.appRowName}>{app.name}</span>
-                      <div className={styles.rowActions}>
-                        <button
-                          type="button"
-                          className={styles.iconButton}
-                          disabled={pending || index === 0}
-                          aria-label={t("apps_menu_move_up", { app: app.name })}
-                          title={t("apps_menu_move_up", { app: app.name })}
-                          onClick={() => moveBy(index, -1)}
-                        >
-                          <ChevronUp size={14} />
-                        </button>
-                        <button
-                          type="button"
-                          className={styles.iconButton}
-                          disabled={pending || index === shown.length - 1}
-                          aria-label={t("apps_menu_move_down", {
-                            app: app.name,
-                          })}
-                          title={t("apps_menu_move_down", { app: app.name })}
-                          onClick={() => moveBy(index, 1)}
-                        >
-                          <ChevronDown size={14} />
-                        </button>
-                        <button
-                          type="button"
-                          className={styles.iconButton}
-                          disabled={pending}
-                          aria-label={t("apps_menu_remove", { app: app.name })}
-                          title={t("apps_menu_remove", { app: app.name })}
-                          onClick={() => removeFromMenu(app.id)}
-                        >
-                          <Minus size={14} />
-                        </button>
-                      </div>
-                    </div>
-                  ))}
-                </div>
+          <div className={styles.lists}>
+            <div className={styles.list}>
+              <div className={styles.listHeader}>
+                {t("apps_menu_shown_heading")}
               </div>
-
-              <div className={styles.list}>
-                <div className={styles.listHeader}>
-                  {t("apps_menu_more_heading")}
-                </div>
-                <div className={styles.listBody}>
-                  {more.length === 0 && (
-                    <div className={styles.listEmpty}>
-                      {t("apps_menu_more_empty")}
+              <div className={styles.listBody}>
+                {shown.length === 0 && (
+                  <div className={styles.listEmpty}>
+                    {t("apps_menu_shown_empty")}
+                  </div>
+                )}
+                {shown.map((app, index) => (
+                  <div className={styles.appRow} key={app.id}>
+                    <AppIcon app={app} />
+                    <span className={styles.appRowName}>{app.name}</span>
+                    <div className={styles.rowActions}>
+                      <button
+                        type="button"
+                        className={styles.iconButton}
+                        disabled={pending || index === 0}
+                        aria-label={t("apps_menu_move_up", { app: app.name })}
+                        title={t("apps_menu_move_up", { app: app.name })}
+                        onClick={() => moveBy(index, -1)}
+                      >
+                        <ChevronUp size={14} />
+                      </button>
+                      <button
+                        type="button"
+                        className={styles.iconButton}
+                        disabled={pending || index === shown.length - 1}
+                        aria-label={t("apps_menu_move_down", { app: app.name })}
+                        title={t("apps_menu_move_down", { app: app.name })}
+                        onClick={() => moveBy(index, 1)}
+                      >
+                        <ChevronDown size={14} />
+                      </button>
+                      <button
+                        type="button"
+                        className={styles.iconButton}
+                        disabled={pending}
+                        aria-label={t("apps_menu_remove", { app: app.name })}
+                        title={t("apps_menu_remove", { app: app.name })}
+                        onClick={() => removeFromMenu(app.id)}
+                      >
+                        <Minus size={14} />
+                      </button>
                     </div>
-                  )}
-                  {more.map((app) => (
-                    <div className={styles.appRow} key={app.id}>
-                      <AppIcon app={app} />
-                      <span className={styles.appRowName}>{app.name}</span>
-                      <div className={styles.rowActions}>
-                        <button
-                          type="button"
-                          className={styles.iconButton}
-                          disabled={pending}
-                          aria-label={t("apps_menu_add", { app: app.name })}
-                          title={t("apps_menu_add", { app: app.name })}
-                          onClick={() => addToMenu(app.id)}
-                        >
-                          <Plus size={14} />
-                        </button>
-                      </div>
-                    </div>
-                  ))}
-                </div>
+                  </div>
+                ))}
               </div>
             </div>
 
-            <div className={styles.resetRow}>
-              <button
-                type="button"
-                className={styles.resetButton}
-                disabled={pending || !customized}
-                onClick={resetToDefault}
-              >
-                {t("apps_menu_reset")}
-              </button>
+            <div className={styles.list}>
+              <div className={styles.listHeader}>
+                {t("apps_menu_more_heading")}
+              </div>
+              <div className={styles.listBody}>
+                {more.length === 0 && (
+                  <div className={styles.listEmpty}>
+                    {t("apps_menu_more_empty")}
+                  </div>
+                )}
+                {more.map((app) => (
+                  <div className={styles.appRow} key={app.id}>
+                    <AppIcon app={app} />
+                    <span className={styles.appRowName}>{app.name}</span>
+                    <div className={styles.rowActions}>
+                      <button
+                        type="button"
+                        className={styles.iconButton}
+                        disabled={pending}
+                        aria-label={t("apps_menu_add", { app: app.name })}
+                        title={t("apps_menu_add", { app: app.name })}
+                        onClick={() => addToMenu(app.id)}
+                      >
+                        <Plus size={14} />
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
             </div>
-          </>
+          </div>
+        )}
+
+        {showResetRow && (
+          <div className={styles.resetRow}>
+            <button
+              type="button"
+              className={styles.resetButton}
+              disabled={pending || !customized}
+              onClick={resetToDefault}
+            >
+              {t("apps_menu_reset")}
+            </button>
+          </div>
         )}
       </div>
     </div>

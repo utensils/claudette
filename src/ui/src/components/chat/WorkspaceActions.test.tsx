@@ -31,7 +31,7 @@ vi.mock("react-i18next", () => ({
   }),
 }));
 
-import { WorkspaceActions, splitMenuApps } from "./WorkspaceActions";
+import { WorkspaceActions } from "./WorkspaceActions";
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean })
   .IS_REACT_ACT_ENVIRONMENT = true;
@@ -180,53 +180,45 @@ describe("WorkspaceActions", () => {
     expect(labels).toContain("Zed");
     expect(labels).toContain("VS Code");
   });
-});
 
-describe("splitMenuApps", () => {
-  const apps = [
-    app("vscode", "VS Code", "editor"),
-    app("zed", "Zed", "editor"),
-    app("finder", "Finder", "file_manager"),
-    app("ghostty", "Ghostty", "terminal"),
-  ];
+  it("Escape collapses the More flyout first, then the whole menu", async () => {
+    appStore.detectedApps = [
+      app("vscode", "VS Code", "editor"),
+      app("ghostty", "Ghostty", "terminal"),
+    ];
+    appStore.workspaceAppsMenuShown = ["vscode"];
 
-  it("shows everything in category order when uncurated", () => {
-    const { shown, more } = splitMenuApps(apps, null);
-    expect(shown.map((a) => a.id)).toEqual([
-      "vscode",
-      "zed",
-      "finder",
-      "ghostty",
-    ]);
-    expect(more).toEqual([]);
-  });
+    const container = await renderWorkspaceActions();
+    await act(async () => {
+      container
+        .querySelector('button[aria-label="workspace_actions_menu"]')
+        ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    const more = Array.from(
+      container.querySelectorAll('[role="menuitem"]'),
+    ).find((el) =>
+      el.textContent?.includes("workspace_actions_more"),
+    ) as HTMLButtonElement | undefined;
+    await act(async () => {
+      more?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    expect(container.textContent).toContain("Ghostty");
 
-  it("respects the curated order and folds the rest into More", () => {
-    const { shown, more } = splitMenuApps(apps, ["ghostty", "vscode"]);
-    expect(shown.map((a) => a.id)).toEqual(["ghostty", "vscode"]);
-    // "More" stays in category order regardless of the curated order.
-    expect(more.map((a) => a.id)).toEqual(["zed", "finder"]);
-  });
+    // First Escape: only the flyout closes — the menu (and its More row) stay.
+    await act(async () => {
+      window.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+      );
+    });
+    expect(container.textContent).not.toContain("Ghostty");
+    expect(container.querySelector('[role="menu"]')).not.toBeNull();
 
-  it("drops stale IDs and never duplicates", () => {
-    const { shown, more } = splitMenuApps(apps, [
-      "missing",
-      "zed",
-      "zed",
-      "ghostty",
-    ]);
-    expect(shown.map((a) => a.id)).toEqual(["zed", "ghostty"]);
-    expect(more.map((a) => a.id)).toEqual(["vscode", "finder"]);
-  });
-
-  it("allows an empty top level (everything under More)", () => {
-    const { shown, more } = splitMenuApps(apps, []);
-    expect(shown).toEqual([]);
-    expect(more.map((a) => a.id)).toEqual([
-      "vscode",
-      "zed",
-      "finder",
-      "ghostty",
-    ]);
+    // Second Escape: the whole menu closes.
+    await act(async () => {
+      window.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+      );
+    });
+    expect(container.querySelector('[role="menu"]')).toBeNull();
   });
 });

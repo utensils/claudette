@@ -14,6 +14,10 @@ import {
 import { useAppStore } from "../../stores/useAppStore";
 import { openWorkspaceInApp } from "../../services/tauri";
 import type { AppCategory, DetectedApp } from "../../types/apps";
+import {
+  preferredPrimaryApp,
+  splitMenuApps,
+} from "../../utils/workspaceAppsMenu";
 import styles from "./WorkspaceActions.module.css";
 
 interface WorkspaceActionsProps {
@@ -21,64 +25,9 @@ interface WorkspaceActionsProps {
   disabled?: boolean;
 }
 
-const CATEGORY_ORDER: AppCategory[] = [
-  "editor",
-  "file_manager",
-  "terminal",
-  "ide",
-];
-
 // Time the pointer is allowed to travel between the "More" row and its
 // flyout (or back) before the flyout closes — covers diagonal mouse paths.
 const SUBMENU_GRACE_MS = 140;
-
-export function appsInCategoryOrder(apps: DetectedApp[]): DetectedApp[] {
-  return CATEGORY_ORDER.flatMap((category) =>
-    apps.filter((app) => app.category === category),
-  );
-}
-
-export interface MenuApps {
-  /** Apps surfaced directly in the top level of the menu, in display order. */
-  shown: DetectedApp[];
-  /** Apps reachable via the "More" flyout, in category order. */
-  more: DetectedApp[];
-}
-
-/**
- * Split detected apps into the top-level list and the "More" overflow.
- *
- * `shownIds === null` (the default, unconfigured state) means "show every
- * detected app" — `more` is empty and the menu behaves exactly as before.
- * Once curated, `shownIds` is an ordered allowlist; stale IDs are dropped and
- * any detected app not in the list (including newly-installed ones) lands in
- * `more`, keeping the curated top level stable.
- */
-export function splitMenuApps(
-  detectedApps: DetectedApp[],
-  shownIds: string[] | null,
-): MenuApps {
-  const ordered = appsInCategoryOrder(detectedApps);
-  if (!Array.isArray(shownIds)) {
-    return { shown: ordered, more: [] };
-  }
-  const byId = new Map(detectedApps.map((app) => [app.id, app]));
-  const shown: DetectedApp[] = [];
-  const seen = new Set<string>();
-  for (const id of shownIds) {
-    const app = byId.get(id);
-    if (app && !seen.has(id)) {
-      shown.push(app);
-      seen.add(id);
-    }
-  }
-  const more = ordered.filter((app) => !seen.has(app.id));
-  return { shown, more };
-}
-
-export function preferredPrimaryApp(menu: MenuApps): DetectedApp | null {
-  return menu.shown[0] ?? menu.more[0] ?? null;
-}
 
 // Render the icon directly rather than returning the lucide component
 // constructor — `react-hooks/static-components` rejects assigning a
@@ -169,8 +118,16 @@ export function WorkspaceActions({
     };
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
+        // This listener runs in the capture phase, ahead of the submenu's
+        // own onKeyDown — so Escape has to peel back one layer at a time
+        // here: collapse the "More" flyout first, then the whole menu.
         event.stopPropagation();
-        setOpen(false);
+        if (moreOpen) {
+          clearCloseSubmenuTimer();
+          setMoreOpen(false);
+        } else {
+          setOpen(false);
+        }
       }
     };
     window.addEventListener("mousedown", handlePointerDown, true);
@@ -179,7 +136,7 @@ export function WorkspaceActions({
       window.removeEventListener("mousedown", handlePointerDown, true);
       window.removeEventListener("keydown", handleKeyDown, true);
     };
-  }, [open]);
+  }, [open, moreOpen, clearCloseSubmenuTimer]);
 
   // Closing the outer menu (or losing the worktree) must also tear down the
   // "More" flyout and any pending close timer.
@@ -322,9 +279,12 @@ export function WorkspaceActions({
                   onMouseEnter={openSubmenu}
                   onMouseLeave={scheduleCloseSubmenu}
                   onKeyDown={(event) => {
-                    if (event.key === "ArrowLeft" || event.key === "Escape") {
+                    // Escape is handled by the capture-phase window listener
+                    // above; ArrowLeft collapses just the flyout.
+                    if (event.key === "ArrowLeft") {
                       event.preventDefault();
                       event.stopPropagation();
+                      clearCloseSubmenuTimer();
                       setMoreOpen(false);
                     }
                   }}
