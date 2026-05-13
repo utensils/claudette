@@ -1,10 +1,10 @@
 import { memo, useCallback, useContext, useEffect } from "react";
 import { useAppStore } from "../../stores/useAppStore";
 import { useTypewriter } from "../../hooks/useTypewriter";
-import { relativizePath } from "../../hooks/toolSummary";
 import { HighlightedMessageMarkdown } from "./HighlightedMessageMarkdown";
 import { StreamingContext } from "./StreamingContext";
 import { ScrollContext } from "./ScrollContext";
+import { monacoFileLinkPath } from "./chatFileLinks";
 import styles from "./ChatPanel.module.css";
 import caretStyles from "./caret.module.css";
 
@@ -56,17 +56,9 @@ export const StreamingMessage = memo(function StreamingMessage({
 
   const openFileInMonaco = useCallback(
     (filePath: string) => {
-      const rel = relativizePath(filePath, worktreePath);
-      if (
-        /^([a-zA-Z]:[\\/]|[\\/])/.test(rel) ||
-        rel === "." ||
-        rel === ".." ||
-        rel.startsWith("../") ||
-        rel.startsWith("..\\")
-      ) {
-        return false;
-      }
-      openFileTab(workspaceId, rel.replace(/^\.[\\/]/, ""));
+      const rel = monacoFileLinkPath(filePath, worktreePath);
+      if (!rel) return false;
+      openFileTab(workspaceId, rel);
       return true;
     },
     [openFileTab, workspaceId, worktreePath],

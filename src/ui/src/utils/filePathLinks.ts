@@ -59,7 +59,11 @@ const RELATIVE_FILE_REGEX =
  * another path, hyphenated word). Mirrors the old lookbehind's character
  * class: word chars, colon, dot, both slash kinds, hyphen.
  */
-const FORBIDDEN_PREV_CHAR_REGEX = /[\w:.\\/@-]/;
+const FORBIDDEN_PREV_CHAR_REGEX = /[\w:.\\@-]/;
+
+function isForbiddenPreviousChar(char: string): boolean {
+  return char === "/" || FORBIDDEN_PREV_CHAR_REGEX.test(char);
+}
 
 /**
  * Sentence-final characters that tend to follow a path in prose but are
@@ -187,7 +191,7 @@ export function detectFilePaths(text: string): FilePathMatch[] {
     // Lookbehind-equivalent guard: skip matches that started in the
     // middle of another token. See PATH_REGEX comment for why this is
     // a JS check rather than a regex lookbehind.
-    if (m.index > 0 && FORBIDDEN_PREV_CHAR_REGEX.test(text[m.index - 1])) {
+    if (m.index > 0 && isForbiddenPreviousChar(text[m.index - 1])) {
       continue;
     }
     const raw = m[0];
@@ -240,7 +244,7 @@ export function detectFileReferences(text: string): FilePathMatch[] {
 
   for (const m of text.matchAll(RELATIVE_FILE_REGEX)) {
     if (m.index === undefined) continue;
-    if (m.index > 0 && FORBIDDEN_PREV_CHAR_REGEX.test(text[m.index - 1])) {
+    if (m.index > 0 && isForbiddenPreviousChar(text[m.index - 1])) {
       continue;
     }
     if (

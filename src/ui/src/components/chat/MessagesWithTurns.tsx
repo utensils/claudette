@@ -8,7 +8,6 @@ import type { ChatMessage, ChatAttachment } from "../../types/chat";
 import { roleClassKey, shouldRenderAsMarkdown } from "./messageRendering";
 import { HighlightedMessageMarkdown } from "./HighlightedMessageMarkdown";
 import { HighlightedPlainText } from "./HighlightedPlainText";
-import { relativizePath } from "../../hooks/toolSummary";
 import { ThinkingBlock } from "./ThinkingBlock";
 import { collapsedToolGroupKey } from "./collapsedToolGroupKey";
 import { CompactionDivider } from "./CompactionDivider";
@@ -58,6 +57,7 @@ import {
 } from "./toolActivityGroups";
 import { ChatAuthFailureCallout } from "../auth/ChatAuthFailureCallout";
 import { cleanClaudeAuthError, isClaudeAuthError } from "../auth/claudeAuth";
+import { monacoFileLinkPath } from "./chatFileLinks";
 import {
   EMPTY_ACTIVITIES,
   EMPTY_ATTACHMENTS,
@@ -469,24 +469,15 @@ export const MessagesWithTurns = memo(function MessagesWithTurns({
   // Activity-derived edits use absolute paths (the agent's full path
   // including the worktree prefix); the file-tab store keys by repo-
   // relative path, so strip the worktree prefix when present.
-  // `relativizePath` handles both `/` and `\` so this works on Windows
-  // worktrees too. If the result still looks absolute (POSIX `/...`
-  // or Windows `C:\...` / `C:/...`), the file isn't reachable via the
-  // current worktree — bail rather than passing a bad key into the
-  // file-tab store.
+  // The helper handles both `/` and `\` so this works on Windows
+  // worktrees too. If the result still looks absolute or home-relative,
+  // the file isn't reachable via the current worktree — bail rather than
+  // passing a bad key into the file-tab store.
   const openFileInMonaco = useCallback(
     (filePath: string) => {
-      const rel = relativizePath(filePath, worktreePath);
-      if (
-        /^([a-zA-Z]:[\\/]|[\\/])/.test(rel) ||
-        rel === "." ||
-        rel === ".." ||
-        rel.startsWith("../") ||
-        rel.startsWith("..\\")
-      ) {
-        return false;
-      }
-      openFileTab(workspaceId, rel.replace(/^\.[\\/]/, ""));
+      const rel = monacoFileLinkPath(filePath, worktreePath);
+      if (!rel) return false;
+      openFileTab(workspaceId, rel);
       return true;
     },
     [openFileTab, workspaceId, worktreePath],

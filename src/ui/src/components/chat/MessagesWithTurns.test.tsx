@@ -9,6 +9,7 @@ import type { ChatMessage } from "../../types/chat";
 import { MessagesWithTurns } from "./MessagesWithTurns";
 
 const serviceMocks = vi.hoisted(() => ({
+  invoke: vi.fn(() => Promise.resolve()),
   loadAttachmentData: vi.fn(),
   getClaudeAuthStatus: vi.fn(() =>
     Promise.resolve({
@@ -27,6 +28,10 @@ const serviceMocks = vi.hoisted(() => ({
 
 vi.mock("@tauri-apps/api/event", () => ({
   listen: vi.fn(() => Promise.resolve(() => {})),
+}));
+
+vi.mock("@tauri-apps/api/core", () => ({
+  invoke: serviceMocks.invoke,
 }));
 
 vi.mock("../../services/tauri", async (importOriginal) => {
@@ -102,6 +107,7 @@ async function render(node: React.ReactNode): Promise<HTMLElement> {
 }
 
 beforeEach(() => {
+  serviceMocks.invoke.mockClear();
   serviceMocks.claudeAuthLogin.mockClear();
   serviceMocks.getClaudeAuthStatus.mockClear();
   serviceMocks.getClaudeAuthStatus.mockResolvedValue({
@@ -139,6 +145,8 @@ beforeEach(() => {
     resolvedClaudeAuthFailureMessageId: null,
     diffFiles: [],
     diffMergeBase: "base-sha",
+    fileTabsByWorkspace: {},
+    activeFileTabByWorkspace: {},
   });
 });
 
@@ -284,6 +292,41 @@ describe("MessagesWithTurns edit summaries", () => {
     const state = useAppStore.getState();
     expect(state.fileTabsByWorkspace[WORKSPACE_ID]).toEqual(["README.md"]);
     expect(state.activeFileTabByWorkspace[WORKSPACE_ID]).toBe("README.md");
+  });
+
+  it("does not open home-relative file links as Monaco tabs", async () => {
+    const messages = [
+      message("user-1", "User", "where is it?"),
+      message("assistant-1", "Assistant", "Saved to ~/Downloads/report.md."),
+    ];
+
+    const container = await render(
+      <MessagesWithTurns
+        messages={messages}
+        workspaceId={WORKSPACE_ID}
+        sessionId={SESSION_ID}
+        isRunning={false}
+        searchQuery=""
+        toolDisplayMode="grouped"
+      />,
+    );
+
+    const link = Array.from(container.querySelectorAll("a")).find(
+      (item) => item.textContent === "~/Downloads/report.md",
+    );
+    expect(link).toBeTruthy();
+
+    await act(async () => {
+      link?.dispatchEvent(
+        new MouseEvent("click", { bubbles: true, cancelable: true }),
+      );
+    });
+
+    const state = useAppStore.getState();
+    expect(state.fileTabsByWorkspace[WORKSPACE_ID]).toBeUndefined();
+    expect(serviceMocks.invoke).toHaveBeenCalledWith("open_in_editor", {
+      path: "~/Downloads/report.md",
+    });
   });
 
   it("renders Claude CLI slash-login failures as a sign-in callout", async () => {
