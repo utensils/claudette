@@ -17,6 +17,7 @@ export function ModelSettings() {
   const [defaultPlanMode, setDefaultPlanMode] = useState(false);
   const [defaultFastMode, setDefaultFastMode] = useState(false);
   const [defaultChrome, setDefaultChrome] = useState(false);
+  const [teamAgentSessionTabs, setTeamAgentSessionTabs] = useState(true);
   const [defaultEffort, setDefaultEffort] = useState("auto");
   const [defaultShowThinking, setDefaultShowThinking] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -70,6 +71,9 @@ export function ModelSettings() {
       .catch(() => {});
     getAppSetting("default_chrome")
       .then((val) => setDefaultChrome(val === "true"))
+      .catch(() => {});
+    getAppSetting("team_agent_session_tabs_enabled")
+      .then((val) => setTeamAgentSessionTabs(val !== "false"))
       .catch(() => {});
     getAppSetting("default_effort")
       .then((val) => { if (val) setDefaultEffort(val); })
@@ -305,6 +309,31 @@ export function ModelSettings() {
             data-checked={defaultFastMode && !fastDisabled}
             disabled={fastDisabled}
             onClick={handleToggle(defaultFastMode, setDefaultFastMode, "default_fast_mode")}
+          >
+            <div className={styles.toggleKnob} />
+          </button>
+        </div>
+      </div>
+
+      <div className={styles.settingRow}>
+        <div className={styles.settingInfo}>
+          <div className={styles.settingLabel}>{t("models_team_agent_session_tabs")}</div>
+          <div className={styles.settingDescription}>
+            {t("models_team_agent_session_tabs_desc")}
+          </div>
+        </div>
+        <div className={styles.settingControl}>
+          <button
+            className={styles.toggle}
+            role="switch"
+            aria-checked={teamAgentSessionTabs}
+            aria-label={t("models_team_agent_session_tabs")}
+            data-checked={teamAgentSessionTabs}
+            onClick={handleToggle(
+              teamAgentSessionTabs,
+              setTeamAgentSessionTabs,
+              "team_agent_session_tabs_enabled",
+            )}
           >
             <div className={styles.toggleKnob} />
           </button>

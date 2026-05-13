@@ -434,9 +434,12 @@ async fn ensure_persistent_session_for_remote_control(
             .map_err(|e| e.to_string())?
     };
     let mcp_config = claudette::mcp::cli_config_from_rows(&db_rows);
-    let send_to_user_enabled = {
+    let (send_to_user_enabled, team_agent_session_tabs_enabled) = {
         let db = Database::open(db_path).map_err(|e| e.to_string())?;
-        claudette::agent_mcp::is_builtin_plugin_enabled(&db, "send_to_user")
+        (
+            claudette::agent_mcp::is_builtin_plugin_enabled(&db, "send_to_user"),
+            super::send::team_agent_session_tabs_enabled(&db),
+        )
     };
     let instructions = {
         let from_config = repo.as_ref().and_then(|r| {
@@ -512,6 +515,7 @@ async fn ensure_persistent_session_for_remote_control(
         chrome_enabled: launch_options.chrome_enabled.unwrap_or(false),
         mcp_config,
         disable_1m_context: launch_options.disable_1m_context.unwrap_or(false),
+        team_agent_session_tabs_enabled,
         backend_runtime,
         hook_bridge: None,
         extra_claude_flags,

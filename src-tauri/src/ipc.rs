@@ -41,7 +41,7 @@ use interprocess::local_socket::{ListenerOptions, Name};
 use rand::RngCore;
 use serde::Serialize;
 use serde_json::json;
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
@@ -808,6 +808,7 @@ async fn handle_create_chat_session(
         .to_string();
     let state = app_state(app)?;
     let session = crate::commands::chat::session::create_chat_session(workspace_id, state).await?;
+    let _ = app.emit("chat-session-created", &session);
     serde_json::to_value(session).map_err(|e| e.to_string())
 }
 
@@ -822,7 +823,19 @@ async fn handle_rename_chat_session(
         .ok_or("missing name")?
         .to_string();
     let state = app_state(app)?;
-    crate::commands::chat::session::rename_chat_session(chat_session_id, name, state).await?;
+    crate::commands::chat::session::rename_chat_session(
+        chat_session_id.clone(),
+        name.clone(),
+        state,
+    )
+    .await?;
+    let _ = app.emit(
+        "session-renamed",
+        json!({
+            "session_id": chat_session_id,
+            "name": name,
+        }),
+    );
     Ok(json!({ "ok": true }))
 }
 

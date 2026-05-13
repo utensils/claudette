@@ -4,6 +4,19 @@ use tokio::process::Command;
 
 use crate::env_provider::ResolvedEnv;
 
+const CLAUDE_CODE_TEAMMATE_COMMAND: &str = "CLAUDE_CODE_TEAMMATE_COMMAND";
+
+/// Point Claude Code agent-team teammate launches back at the current
+/// Claudette executable. Claude Code invokes this command with its teammate
+/// identity flags (`--agent-id`, `--agent-name`, `--team-name`); the Tauri
+/// binary recognizes that argv shape and redirects the teammate into a
+/// Claudette workspace/session instead of spawning another Claude Code process.
+pub(crate) fn apply_teammate_command_override(cmd: &mut Command, enabled: bool) {
+    if enabled && let Ok(exe) = std::env::current_exe() {
+        cmd.env(CLAUDE_CODE_TEAMMATE_COMMAND, exe);
+    }
+}
+
 /// Apply workspace provider env to Claude Code without letting provider PATH
 /// output break the CLI wrapper itself. Providers keep precedence, but the
 /// app's enriched PATH is appended so `/usr/bin/env bash` and other system
@@ -54,5 +67,13 @@ mod tests {
     #[test]
     fn agent_path_ignores_provider_path_removal() {
         assert_eq!(agent_path(Some(&None)), crate::env::enriched_path());
+    }
+
+    #[test]
+    fn teammate_command_env_var_name_matches_claude_code() {
+        assert_eq!(
+            super::CLAUDE_CODE_TEAMMATE_COMMAND,
+            "CLAUDE_CODE_TEAMMATE_COMMAND"
+        );
     }
 }

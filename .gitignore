@@ -78,3 +78,6 @@ tags
 # consume. Built per-target by CI (and by scripts/stage-cli-sidecar.sh
 # locally) before each bundle; never checked in.
 /src-tauri/binaries/
+
+# Local pi agent skills/tools
+.pi/

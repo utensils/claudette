@@ -4,6 +4,7 @@
 mod agent_mcp_sink;
 mod app_info;
 mod boot_probation;
+mod claude_teammate_bridge;
 mod commands;
 mod ipc;
 mod mdns;
@@ -261,6 +262,8 @@ fn main() {
         "--server" => Some("--server"),
         "--agent-mcp" => Some("--agent-mcp"),
         "--agent-hook" => Some("--agent-hook"),
+        _ if claude_teammate_bridge::is_send_chat_launch(&args) => Some("--claudette-send-chat"),
+        _ if claude_teammate_bridge::is_teammate_launch(&args) => Some("--claude-teammate-bridge"),
         _ => None,
     });
     if let Some(mode) = child_mode {
@@ -285,6 +288,20 @@ fn main() {
             "--agent-hook" => rt.block_on(async {
                 if let Err(e) = claudette::agent_mcp::hook::run_stdin().await {
                     tracing::error!(target: "claudette::startup", error = %e, "agent-hook child exited with error");
+                    std::process::exit(1);
+                }
+            }),
+            "--claudette-send-chat" => rt.block_on(async {
+                if let Err(e) = claude_teammate_bridge::run_send_chat_from_args(args).await {
+                    tracing::error!(target: "claudette::startup", error = %e, "claudette send-chat child exited with error");
+                    eprintln!("claudette send-chat failed: {e}");
+                    std::process::exit(1);
+                }
+            }),
+            "--claude-teammate-bridge" => rt.block_on(async {
+                if let Err(e) = claude_teammate_bridge::run_from_args(args).await {
+                    tracing::error!(target: "claudette::startup", error = %e, "claude teammate bridge exited with error");
+                    eprintln!("claude teammate bridge failed: {e}");
                     std::process::exit(1);
                 }
             }),

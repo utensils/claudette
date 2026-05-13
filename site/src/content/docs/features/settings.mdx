@@ -35,6 +35,7 @@ Default values applied to all new agent sessions. Per-workspace overrides are av
 | Show thinking blocks | Display thinking blocks in the chat UI | Off |
 | Default plan mode | Start new sessions in plan mode | Off |
 | Default fast mode | Start new sessions in fast mode | Off |
+| Team agents as session tabs | Open Claude Code team agents (`TeamCreate` + `Agent` with a team name) as separate Claudette chat session tabs. | On |
 
 See [Agent Configuration](/claudette/features/agent-configuration/) for detailed descriptions of each option.
 
@@ -115,6 +116,17 @@ When the workspace is checked out on the base branch itself, "Workspace branch b
 When `RUST_LOG` is set in the process's environment, the **Log level** select is disabled — the env var always wins. Uncaught browser errors and unhandled promise rejections are forwarded regardless of the **Frontend log verbosity** setting; the verbosity only gates the explicit `console.*` calls.
 
 See [Diagnostics & Logging](/claudette/features/diagnostics/) for the full pipeline (where logs go, JSON output, per-domain `RUST_LOG` filtering, multi-instance behavior, bug-report workflow).
+
+## Experimental
+
+| Setting | Description | Default |
+|---------|-------------|---------|
+| Claudette Terminal | Show a read-only terminal tab that mirrors agent shell commands and background task output. | Off |
+| Alternative Claude Code backends | Expose Ollama, LM Studio, OpenAI-compatible, and custom backends through the Claude Code harness. | Off |
+| Plugin Management | Show Claude Code plugin marketplace management. | Off |
+| Claude Remote Control | Show the local chat Remote Control toggle and allow Claudette to attach live Claude sessions to claude.ai. | On |
+| Community Registry | Browse and install community-contributed themes, plugins, and language grammars. | Off |
+| Usage Insights | Show usage data from a Claude Code subscription. | Off |
 
 ## Git
 
