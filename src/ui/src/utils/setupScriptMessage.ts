@@ -1,10 +1,11 @@
 import type { ChatMessage } from "../types/chat";
 import type { SetupResult } from "../types/repository";
 
-/** Outcome of a setup-script run, reconstructed from the `System` chat
- *  message the run is persisted as. `output` is the combined stdout/stderr
- *  the script produced (possibly empty). */
-export type SetupScriptStatus = "completed" | "failed" | "timed-out";
+/** State of a setup-script run, reconstructed from the `System` chat message
+ *  it's represented by. `running` is the in-flight placeholder; the rest are
+ *  terminal. `output` is the combined stdout/stderr (empty while `running`,
+ *  and often empty for a `completed` run that printed nothing). */
+export type SetupScriptStatus = "running" | "completed" | "failed" | "timed-out";
 
 export interface SetupScriptOutcome {
   /** `.claudette.json` (repo config) or `settings` (repo-level setting), or
@@ -18,6 +19,14 @@ export interface SetupScriptOutcome {
  *  builders and the parser agree on exactly one spelling. */
 function sourceLabel(source: string): string {
   return source === "repo" ? ".claudette.json" : "settings";
+}
+
+/** Content for the in-flight placeholder, posted before the script is spawned
+ *  and swapped in place once it finishes. `source` is the frontend's guess
+ *  (`"repo"` / `"settings"`); the result message uses the authoritative
+ *  `SetupResult.source`. */
+export function buildSetupScriptRunningContent(source: string): string {
+  return `Setup script (${sourceLabel(source)}) running`;
 }
 
 /** Build the `System` message content string for a finished setup run. This
@@ -35,16 +44,17 @@ export function buildSetupScriptErrorContent(err: unknown): string {
   return `Setup script failed: ${err}`;
 }
 
-const COMPLETED_RE = /^Setup script \((.+?)\) (completed|failed|timed out)(?::\n([\s\S]*))?$/;
+const SETUP_RE = /^Setup script \((.+?)\) (completed|failed|timed out|running)(?::\n([\s\S]*))?$/;
 const ERROR_RE = /^Setup script failed: ([\s\S]*)$/;
 
 /** Parse a setup-script `System` message back into structured form. Returns
- *  `null` for any content that isn't one of the two setup-script shapes, so
- *  callers can fall through to generic message rendering. */
+ *  `null` for any content that isn't one of these shapes, so callers can fall
+ *  through to generic message rendering. */
 export function parseSetupScriptMessage(content: string): SetupScriptOutcome | null {
-  const m = COMPLETED_RE.exec(content);
+  const m = SETUP_RE.exec(content);
   if (m) {
-    const status: SetupScriptStatus = m[2] === "timed out" ? "timed-out" : (m[2] as SetupScriptStatus);
+    const raw = m[2];
+    const status: SetupScriptStatus = raw === "timed out" ? "timed-out" : (raw as SetupScriptStatus);
     return { source: m[1], status, output: m[3] ?? "" };
   }
   const e = ERROR_RE.exec(content);
@@ -58,9 +68,10 @@ function blankSystemMessage(
   sessionId: string,
   workspaceId: string,
   content: string,
+  id: string,
 ): ChatMessage {
   return {
-    id: crypto.randomUUID(),
+    id,
     workspace_id: workspaceId,
     chat_session_id: sessionId,
     role: "System",
@@ -77,10 +88,20 @@ function blankSystemMessage(
 }
 
 /** Store hooks the recorder needs. Passed in rather than importing the store
- *  here so this module stays a leaf (parse/build are pure and trivially
+ *  here so this module stays a leaf (`parse`/`build` are pure and trivially
  *  testable; no Zustand wiring pulled into util tests). */
 export interface SetupScriptRecorderDeps {
-  addChatMessage: (sessionId: string, message: ChatMessage) => void;
+  addChatMessage: (
+    sessionId: string,
+    message: ChatMessage,
+    options?: { persisted?: boolean },
+  ) => void;
+  updateChatMessage: (
+    sessionId: string,
+    messageId: string,
+    updates: Partial<ChatMessage>,
+  ) => void;
+  removeChatMessage: (sessionId: string, messageId: string) => void;
   addToast: (message: string) => void;
   /** Display name of the workspace, for the failure toast. */
   workspaceName?: string | null;
@@ -91,29 +112,50 @@ function failureToast(deps: SetupScriptRecorderDeps): void {
   deps.addToast(`Setup script for ${where} failed — see the transcript`);
 }
 
-/** Append the `System` message for a finished setup run to its chat session,
- *  and — if the run failed or timed out — raise a one-time toast so the
- *  failure isn't missed when it scrolls past in the transcript. Shared by all
- *  four sites that kick off a setup script (workspace creation, the sidebar,
- *  the command palette, and the confirm-setup modal). */
-export function recordSetupScriptResult(
-  sessionId: string,
-  workspaceId: string,
-  sr: SetupResult,
-  deps: SetupScriptRecorderDeps,
-): void {
-  deps.addChatMessage(sessionId, blankSystemMessage(sessionId, workspaceId, buildSetupScriptContent(sr)));
-  if (!sr.success) failureToast(deps);
-}
-
-/** Append the catch-path `System` message (the run threw) and raise the
- *  failure toast. */
-export function recordSetupScriptError(
-  sessionId: string,
-  workspaceId: string,
-  err: unknown,
-  deps: SetupScriptRecorderDeps,
-): void {
-  deps.addChatMessage(sessionId, blankSystemMessage(sessionId, workspaceId, buildSetupScriptErrorContent(err)));
-  failureToast(deps);
+/**
+ * Post a "Setup script (…) running" placeholder to the chat session, kick off
+ * `run()` (typically `() => runWorkspaceSetup(workspaceId)`), and when it
+ * settles swap the placeholder *in place* for the result message — or the
+ * catch-path error, or simply remove it if nothing actually ran. A failed or
+ * timed-out run also raises a one-time toast. Fire-and-forget: callers don't
+ * await. Shared by all four sites that start a setup script (workspace
+ * creation, the sidebar, the command palette, and the confirm-setup modal).
+ *
+ * The placeholder is client-only (`persisted: false`) — setup-script messages
+ * aren't written to the DB, and the placeholder must not bump pagination
+ * counts.
+ */
+export function runAndRecordSetupScript(opts: {
+  sessionId: string;
+  workspaceId: string;
+  /** `"repo"` (`.claudette.json`) or `"settings"` — drives the placeholder label. */
+  source: string;
+  run: () => Promise<SetupResult | null>;
+  deps: SetupScriptRecorderDeps;
+}): void {
+  const { sessionId, workspaceId, source, run, deps } = opts;
+  const placeholderId = crypto.randomUUID();
+  deps.addChatMessage(
+    sessionId,
+    blankSystemMessage(sessionId, workspaceId, buildSetupScriptRunningContent(source), placeholderId),
+    { persisted: false },
+  );
+  run()
+    .then((sr) => {
+      if (!sr) {
+        // No script actually resolved on the backend — drop the placeholder.
+        deps.removeChatMessage(sessionId, placeholderId);
+        return;
+      }
+      deps.updateChatMessage(sessionId, placeholderId, {
+        content: buildSetupScriptContent(sr),
+      });
+      if (!sr.success) failureToast(deps);
+    })
+    .catch((err) => {
+      deps.updateChatMessage(sessionId, placeholderId, {
+        content: buildSetupScriptErrorContent(err),
+      });
+      failureToast(deps);
+    });
 }

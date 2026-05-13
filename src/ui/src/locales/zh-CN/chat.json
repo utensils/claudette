@@ -144,6 +144,7 @@
   "cli_invocation_prompt_label": "提示",
 
   "setup_script_label": "安装脚本",
+  "setup_script_status_running": "运行中",
   "setup_script_status_completed": "已完成",
   "setup_script_status_failed": "失败",
   "setup_script_status_timed_out": "已超时",

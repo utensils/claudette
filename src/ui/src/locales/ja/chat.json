@@ -144,6 +144,7 @@
   "cli_invocation_prompt_label": "プロンプト",
 
   "setup_script_label": "セットアップスクリプト",
+  "setup_script_status_running": "実行中",
   "setup_script_status_completed": "完了",
   "setup_script_status_failed": "失敗",
   "setup_script_status_timed_out": "タイムアウト",

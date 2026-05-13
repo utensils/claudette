@@ -56,6 +56,22 @@ describe("SetupScriptBanner", () => {
     mountedContainers.length = 0;
   });
 
+  it("renders the running placeholder with a spinner and no toggle/copy/output", async () => {
+    const container = await render({ source: "settings", status: "running", output: "" });
+    const b = banner(container);
+    expect(b.dataset.status).toBe("running");
+    // Not a failure — no danger class while running.
+    expect(b.className).not.toMatch(/failed/);
+    expect(b.className).toMatch(/running/);
+    // Nothing to expand or copy yet.
+    expect(container.querySelector("button[aria-expanded]")).toBeNull();
+    expect(container.querySelector("[data-testid='copy-button']")).toBeNull();
+    expect(container.querySelector("pre")).toBeNull();
+    // Spinner icon is present (lucide renders an <svg>); the running label too.
+    expect(container.querySelector("svg")).not.toBeNull();
+    expect(container.textContent).toContain("setup_script_status_running");
+  });
+
   it("renders a completed run collapsed (no output body, no toggle button)", async () => {
     const container = await render({
       source: "settings",

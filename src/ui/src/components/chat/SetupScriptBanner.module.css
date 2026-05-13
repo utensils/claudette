@@ -28,6 +28,12 @@
   background: var(--chat-input-bg);
 }
 
+/* In-flight: a quiet accent border so the chip reads as "working", paired
+   with the spinning icon below. */
+.running {
+  border-color: rgba(var(--accent-primary-rgb), 0.35);
+}
+
 /* Danger treatment for failed / timed-out runs — kept on the collapsed chip
    too so the failure draws the eye even after the user collapses it. */
 .failed {
@@ -107,6 +113,31 @@
 
 .failed .statusIcon {
   color: var(--status-stopped);
+}
+
+/* Spinning loader icon for the in-flight state. */
+.spinner {
+  animation: setupBannerSpin 0.8s linear infinite;
+}
+
+@keyframes setupBannerSpin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .spinner {
+    animation: none;
+  }
+}
+
+/* Elapsed-seconds counter shown next to the "running" label. */
+.elapsed {
+  font-family: var(--font-mono);
+  color: var(--text-faint);
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .summary {

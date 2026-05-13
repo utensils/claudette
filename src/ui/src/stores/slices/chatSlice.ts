@@ -142,6 +142,21 @@ export interface ChatSlice {
     message: ChatMessage,
     options?: { persisted?: boolean },
   ) => void;
+  /** Patch fields on an already-appended message, matched by `id`. No-op if
+   *  the id isn't present. Used for client-only messages that mutate in place
+   *  (e.g. the setup-script "running" placeholder flipping to its result).
+   *  Does not touch pagination — only `persisted` messages affect that, and a
+   *  patch never changes a message's persisted-ness. */
+  updateChatMessage: (
+    sessionId: string,
+    messageId: string,
+    updates: Partial<ChatMessage>,
+  ) => void;
+  /** Drop a message by `id`. Intended for client-only placeholders that turn
+   *  out to have nothing to show; never call this for a `persisted` message —
+   *  `totalCount` is left untouched, so removing a DB-backed message would
+   *  desync `globalOffset`. */
+  removeChatMessage: (sessionId: string, messageId: string) => void;
   setStreamingContent: (sessionId: string, content: string) => void;
   appendStreamingContent: (sessionId: string, text: string) => void;
   setPendingTypewriter: (sessionId: string, messageId: string, text: string) => void;
@@ -353,6 +368,39 @@ export const createChatSlice: StateCreator<AppState, [], [], ChatSlice> = (
             }
           : {}),
       };
+    }),
+  updateChatMessage: (sessionId, messageId, updates) =>
+    set((s) => {
+      const list = s.chatMessages[sessionId];
+      if (!list) return {};
+      const idx = list.findIndex((m) => m.id === messageId);
+      if (idx === -1) return {};
+      const patched = { ...list[idx], ...updates };
+      const next = [...list];
+      next[idx] = patched;
+      return {
+        chatMessages: { ...s.chatMessages, [sessionId]: next },
+        ...(s.lastMessages[sessionId]?.id === messageId
+          ? { lastMessages: { ...s.lastMessages, [sessionId]: patched } }
+          : {}),
+      };
+    }),
+  removeChatMessage: (sessionId, messageId) =>
+    set((s) => {
+      const list = s.chatMessages[sessionId];
+      if (!list || !list.some((m) => m.id === messageId)) return {};
+      const next = list.filter((m) => m.id !== messageId);
+      const partial: Partial<typeof s> = {
+        chatMessages: { ...s.chatMessages, [sessionId]: next },
+      };
+      if (s.lastMessages[sessionId]?.id === messageId) {
+        const lastMessages = { ...s.lastMessages };
+        const newLast = next[next.length - 1];
+        if (newLast) lastMessages[sessionId] = newLast;
+        else delete lastMessages[sessionId];
+        partial.lastMessages = lastMessages;
+      }
+      return partial;
     }),
   setStreamingContent: (sessionId, content) =>
     set((s) => ({

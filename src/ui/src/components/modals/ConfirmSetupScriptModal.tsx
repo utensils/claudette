@@ -2,10 +2,7 @@ import { useState } from "react";
 import { Trans, useTranslation } from "react-i18next";
 import { useAppStore } from "../../stores/useAppStore";
 import { runWorkspaceSetup, setSetupScriptAutoRun } from "../../services/tauri";
-import {
-  recordSetupScriptError,
-  recordSetupScriptResult,
-} from "../../utils/setupScriptMessage";
+import { runAndRecordSetupScript } from "../../utils/setupScriptMessage";
 import { Modal } from "./Modal";
 import shared from "./shared.module.css";
 
@@ -28,31 +25,34 @@ export function ConfirmSetupScriptModal() {
 
   const handleRun = async () => {
     setLoading(true);
-    const workspaceName = useAppStore
-      .getState()
-      .workspaces.find((w) => w.id === workspaceId)?.name;
-    try {
-      if (alwaysRun && repoId) {
+    const store = useAppStore.getState();
+    if (alwaysRun && repoId) {
+      try {
         await setSetupScriptAutoRun(repoId, true);
         updateRepository(repoId, { setup_script_auto_run: true });
+      } catch (e) {
+        // Persisting the auto-run preference failed — log it, but still run
+        // the script the user just confirmed.
+        console.error("Failed to persist setup-script auto-run preference:", e);
       }
-      const sr = await runWorkspaceSetup(workspaceId);
-      if (sr) {
-        recordSetupScriptResult(sessionId, workspaceId, sr, {
-          addChatMessage,
-          addToast,
-          workspaceName,
-        });
-      }
-      closeModal();
-    } catch (e) {
-      recordSetupScriptError(sessionId, workspaceId, e, {
-        addChatMessage,
-        addToast,
-        workspaceName,
-      });
-      closeModal();
     }
+    // Fire-and-forget: the run posts a "running" placeholder to the transcript
+    // right away and swaps it for the result when it finishes, so there's no
+    // need to keep the modal open blocking on it.
+    runAndRecordSetupScript({
+      sessionId,
+      workspaceId,
+      source,
+      run: () => runWorkspaceSetup(workspaceId),
+      deps: {
+        addChatMessage,
+        updateChatMessage: store.updateChatMessage,
+        removeChatMessage: store.removeChatMessage,
+        addToast,
+        workspaceName: store.workspaces.find((w) => w.id === workspaceId)?.name,
+      },
+    });
+    closeModal();
   };
 
   const label = source === "repo" ? ".claudette.json" : t("setup_script_source_repo_settings");

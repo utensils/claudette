@@ -146,6 +146,7 @@
   "cli_invocation_prompt_label": "prompt",
 
   "setup_script_label": "script de configuración",
+  "setup_script_status_running": "ejecutándose",
   "setup_script_status_completed": "completado",
   "setup_script_status_failed": "falló",
   "setup_script_status_timed_out": "tiempo agotado",

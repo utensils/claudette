@@ -2,9 +2,10 @@ import { describe, it, expect, vi } from "vitest";
 import {
   buildSetupScriptContent,
   buildSetupScriptErrorContent,
+  buildSetupScriptRunningContent,
   parseSetupScriptMessage,
-  recordSetupScriptResult,
-  recordSetupScriptError,
+  runAndRecordSetupScript,
+  type SetupScriptRecorderDeps,
 } from "./setupScriptMessage";
 import type { SetupResult } from "../types/repository";
 
@@ -20,7 +21,17 @@ function result(over: Partial<SetupResult> = {}): SetupResult {
   };
 }
 
-describe("buildSetupScriptContent / parseSetupScriptMessage", () => {
+function makeDeps(over: Partial<SetupScriptRecorderDeps> = {}): SetupScriptRecorderDeps {
+  return {
+    addChatMessage: vi.fn(),
+    updateChatMessage: vi.fn(),
+    removeChatMessage: vi.fn(),
+    addToast: vi.fn(),
+    ...over,
+  };
+}
+
+describe("build / parse setup-script content", () => {
   it("round-trips a completed run with output", () => {
     const sr = result({ output: "Resolved 1657 packages\ndone" });
     const content = buildSetupScriptContent(sr);
@@ -70,6 +81,16 @@ describe("buildSetupScriptContent / parseSetupScriptMessage", () => {
     });
   });
 
+  it("round-trips the running placeholder", () => {
+    expect(buildSetupScriptRunningContent("settings")).toBe("Setup script (settings) running");
+    expect(buildSetupScriptRunningContent("repo")).toBe("Setup script (.claudette.json) running");
+    expect(parseSetupScriptMessage("Setup script (settings) running")).toEqual({
+      source: "settings",
+      status: "running",
+      output: "",
+    });
+  });
+
   it("parses the catch-path error message", () => {
     const content = buildSetupScriptErrorContent(new Error("spawn failed"));
     expect(content).toBe("Setup script failed: Error: spawn failed");
@@ -84,46 +105,93 @@ describe("buildSetupScriptContent / parseSetupScriptMessage", () => {
     expect(parseSetupScriptMessage("")).toBeNull();
     expect(parseSetupScriptMessage("Just a regular system note")).toBeNull();
     expect(parseSetupScriptMessage("COMPACTION:manual:1:2:3")).toBeNull();
-    expect(parseSetupScriptMessage("Setup script (settings) is running")).toBeNull();
+    expect(parseSetupScriptMessage("Setup script (settings) is queued")).toBeNull();
   });
 });
 
-describe("recordSetupScriptResult / recordSetupScriptError", () => {
-  it("appends a System message and no toast on success", () => {
-    const addChatMessage = vi.fn();
-    const addToast = vi.fn();
-    recordSetupScriptResult("sess", "ws", result({ output: "ok" }), { addChatMessage, addToast });
-    expect(addChatMessage).toHaveBeenCalledTimes(1);
-    const [sessionId, msg] = addChatMessage.mock.calls[0];
-    expect(sessionId).toBe("sess");
-    expect(msg).toMatchObject({
+describe("runAndRecordSetupScript", () => {
+  it("posts a client-only running placeholder, then swaps it for the result", async () => {
+    const deps = makeDeps();
+    let resolveRun!: (v: SetupResult | null) => void;
+    runAndRecordSetupScript({
+      sessionId: "sess",
+      workspaceId: "ws",
+      source: "settings",
+      run: () => new Promise<SetupResult | null>((res) => { resolveRun = res; }),
+      deps,
+    });
+
+    // Placeholder posted immediately, not persisted.
+    expect(deps.addChatMessage).toHaveBeenCalledTimes(1);
+    const [, placeholderMsg, options] = (deps.addChatMessage as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(placeholderMsg).toMatchObject({
       role: "System",
-      workspace_id: "ws",
-      chat_session_id: "sess",
+      content: "Setup script (settings) running",
+    });
+    expect(options).toEqual({ persisted: false });
+
+    resolveRun(result({ output: "ok" }));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(deps.updateChatMessage).toHaveBeenCalledWith("sess", placeholderMsg.id, {
       content: "Setup script (settings) completed:\nok",
     });
-    expect(addToast).not.toHaveBeenCalled();
+    expect(deps.removeChatMessage).not.toHaveBeenCalled();
+    expect(deps.addToast).not.toHaveBeenCalled();
   });
 
-  it("raises a failure toast when the run did not succeed", () => {
-    const addChatMessage = vi.fn();
-    const addToast = vi.fn();
-    recordSetupScriptResult("sess", "ws", result({ success: false, exit_code: 1, output: "boom" }), {
-      addChatMessage,
-      addToast,
-      workspaceName: "twisted-tarragon",
+  it("raises a failure toast and swaps to the failed content", async () => {
+    const deps = makeDeps({ workspaceName: "twisted-tarragon" });
+    runAndRecordSetupScript({
+      sessionId: "sess",
+      workspaceId: "ws",
+      source: "settings",
+      run: async () => result({ success: false, exit_code: 1, output: "boom" }),
+      deps,
     });
-    expect(addChatMessage).toHaveBeenCalledTimes(1);
-    expect(addToast).toHaveBeenCalledTimes(1);
-    expect(addToast.mock.calls[0][0]).toContain("twisted-tarragon");
+    await Promise.resolve();
+    await Promise.resolve();
+    const placeholderId = (deps.addChatMessage as ReturnType<typeof vi.fn>).mock.calls[0][1].id;
+    expect(deps.updateChatMessage).toHaveBeenCalledWith("sess", placeholderId, {
+      content: "Setup script (settings) failed:\nboom",
+    });
+    expect(deps.addToast).toHaveBeenCalledTimes(1);
+    expect((deps.addToast as ReturnType<typeof vi.fn>).mock.calls[0][0]).toContain("twisted-tarragon");
   });
 
-  it("records the catch-path message and a toast", () => {
-    const addChatMessage = vi.fn();
-    const addToast = vi.fn();
-    recordSetupScriptError("sess", "ws", new Error("nope"), { addChatMessage, addToast });
-    expect(addChatMessage).toHaveBeenCalledTimes(1);
-    expect(addChatMessage.mock.calls[0][1].content).toBe("Setup script failed: Error: nope");
-    expect(addToast).toHaveBeenCalledTimes(1);
+  it("swaps to the catch-path content and toasts when run() rejects", async () => {
+    const deps = makeDeps();
+    runAndRecordSetupScript({
+      sessionId: "sess",
+      workspaceId: "ws",
+      source: "repo",
+      run: async () => { throw new Error("nope"); },
+      deps,
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    const placeholderId = (deps.addChatMessage as ReturnType<typeof vi.fn>).mock.calls[0][1].id;
+    expect(deps.updateChatMessage).toHaveBeenCalledWith("sess", placeholderId, {
+      content: "Setup script failed: Error: nope",
+    });
+    expect(deps.addToast).toHaveBeenCalledTimes(1);
+  });
+
+  it("removes the placeholder when no script actually ran", async () => {
+    const deps = makeDeps();
+    runAndRecordSetupScript({
+      sessionId: "sess",
+      workspaceId: "ws",
+      source: "settings",
+      run: async () => null,
+      deps,
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    const placeholderId = (deps.addChatMessage as ReturnType<typeof vi.fn>).mock.calls[0][1].id;
+    expect(deps.removeChatMessage).toHaveBeenCalledWith("sess", placeholderId);
+    expect(deps.updateChatMessage).not.toHaveBeenCalled();
+    expect(deps.addToast).not.toHaveBeenCalled();
   });
 });

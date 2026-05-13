@@ -6,10 +6,7 @@ import {
   getRepoConfig,
   runWorkspaceSetup,
 } from "../services/tauri";
-import {
-  recordSetupScriptError,
-  recordSetupScriptResult,
-} from "../utils/setupScriptMessage";
+import { runAndRecordSetupScript } from "../utils/setupScriptMessage";
 
 /** Outcome surfaced to callers so they can show toasts or chain follow-up work
  *  without prying into the store. The orchestration still performs the core
@@ -107,19 +104,20 @@ export async function createWorkspaceOrchestrated(
       if (script) {
         if (repo?.setup_script_auto_run) {
           const wsId = result.workspace.id;
-          const recorderDeps = {
-            addChatMessage: useAppStore.getState().addChatMessage,
-            addToast: useAppStore.getState().addToast,
-            workspaceName: result.workspace.name,
-          };
-          runWorkspaceSetup(wsId)
-            .then((sr) => {
-              if (!sr) return;
-              recordSetupScriptResult(sessionId, wsId, sr, recorderDeps);
-            })
-            .catch((err) => {
-              recordSetupScriptError(sessionId, wsId, err, recorderDeps);
-            });
+          const store = useAppStore.getState();
+          runAndRecordSetupScript({
+            sessionId,
+            workspaceId: wsId,
+            source,
+            run: () => runWorkspaceSetup(wsId),
+            deps: {
+              addChatMessage: store.addChatMessage,
+              updateChatMessage: store.updateChatMessage,
+              removeChatMessage: store.removeChatMessage,
+              addToast: store.addToast,
+              workspaceName: result.workspace.name,
+            },
+          });
         } else {
           useAppStore.getState().openModal("confirmSetupScript", {
             workspaceId: result.workspace.id,

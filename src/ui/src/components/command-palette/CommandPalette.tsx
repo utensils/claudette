@@ -15,10 +15,7 @@ import {
 } from "../../services/tauri";
 import { applySelectedModel } from "../chat/applySelectedModel";
 import { buildModelRegistry } from "../chat/modelRegistry";
-import {
-  recordSetupScriptError,
-  recordSetupScriptResult,
-} from "../../utils/setupScriptMessage";
+import { runAndRecordSetupScript } from "../../utils/setupScriptMessage";
 import type { ThemeDefinition } from "../../types/theme";
 import { scoreCommand } from "./searchScore";
 import {
@@ -188,15 +185,18 @@ export function CommandPalette() {
         if (script) {
           if (repo?.setup_script_auto_run) {
             const wsId = result.workspace.id;
-            const recorderDeps = {
-              addChatMessage,
-              addToast,
-              workspaceName: result.workspace.name,
-            };
-            runWorkspaceSetup(wsId).then((sr) => {
-              if (sr) recordSetupScriptResult(sessionId, wsId, sr, recorderDeps);
-            }).catch((err) => {
-              recordSetupScriptError(sessionId, wsId, err, recorderDeps);
+            runAndRecordSetupScript({
+              sessionId,
+              workspaceId: wsId,
+              source,
+              run: () => runWorkspaceSetup(wsId),
+              deps: {
+                addChatMessage,
+                updateChatMessage: useAppStore.getState().updateChatMessage,
+                removeChatMessage: useAppStore.getState().removeChatMessage,
+                addToast,
+                workspaceName: result.workspace.name,
+              },
             });
           } else {
             openModal("confirmSetupScript", {
