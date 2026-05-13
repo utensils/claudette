@@ -77,9 +77,15 @@
   - `nix develop -c cargo test -p claudette agent::harness --all-features`
   - `nix develop -c cargo test -p claudette-tauri --all-features --no-run`
   - `nix develop -c cargo fmt --all`
+- 2026-05-13: Committed and pushed milestone 2 as `2bcb3f07` (`refactor: store agent sessions behind harness handle`).
+- 2026-05-13: Added the hidden `CodexAppServerSession` variant skeleton and mapped Codex app-server notifications into Claudette `AgentEvent` values for assistant text, reasoning deltas, command output, token usage, and turn completion/failure.
+- 2026-05-13: Verified Codex mapping and session skeleton tests with:
+  - `nix develop -c cargo test -p claudette agent::harness --all-features`
+  - `nix develop -c cargo test -p claudette agent::codex_app_server --all-features`
+  - `nix develop -c cargo fmt --all`
 
 ## Next Stage
 
+- Add the Codex app-server process/client request loop behind the `AgentSession` wrapper, with fake stdio tests before any UI/backend selection changes.
 - Add fake-harness tests around chat send lifecycle seams before selecting the native Codex runtime from backend settings.
-- Add the Codex app-server process/client skeleton behind the `AgentSession` wrapper, with fake stdio tests before any UI/backend selection changes.
 - Keep `codex-subscription` hidden/replaced only after the native `Experimental Codex` backend has a real harness path.

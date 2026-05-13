@@ -3,6 +3,7 @@ use std::path::Path;
 use crate::env::WorkspaceEnv;
 use crate::env_provider::ResolvedEnv;
 
+use super::codex_app_server::CodexAppServerSession;
 use super::{
     AgentEvent, AgentSettings, ControlResponsePayload, FileAttachment, PersistentSession,
     TurnHandle,
@@ -98,6 +99,7 @@ impl ClaudeCodeHarness {
 /// still the only production variant.
 pub enum AgentSession {
     ClaudeCode(PersistentSession),
+    CodexAppServer(CodexAppServerSession),
 }
 
 impl AgentSession {
@@ -105,21 +107,28 @@ impl AgentSession {
         Self::ClaudeCode(session)
     }
 
+    pub fn from_codex_app_server(session: CodexAppServerSession) -> Self {
+        Self::CodexAppServer(session)
+    }
+
     pub fn kind(&self) -> AgentHarnessKind {
         match self {
             Self::ClaudeCode(_) => AgentHarnessKind::ClaudeCode,
+            Self::CodexAppServer(_) => AgentHarnessKind::CodexAppServer,
         }
     }
 
     pub fn capabilities(&self) -> AgentHarnessCapabilities {
         match self {
             Self::ClaudeCode(_) => AgentHarnessCapabilities::claude_code(),
+            Self::CodexAppServer(_) => AgentHarnessCapabilities::codex_app_server(),
         }
     }
 
     pub fn pid(&self) -> u32 {
         match self {
             Self::ClaudeCode(session) => session.pid(),
+            Self::CodexAppServer(session) => session.pid(),
         }
     }
 
@@ -135,6 +144,7 @@ impl AgentSession {
                     .send_turn_with_uuid(prompt, attachments, user_message_uuid)
                     .await
             }
+            Self::CodexAppServer(_) => Err("Codex app-server turns are not wired yet".to_string()),
         }
     }
 
@@ -145,12 +155,16 @@ impl AgentSession {
     ) -> Result<(), String> {
         match self {
             Self::ClaudeCode(session) => session.steer_user_message(prompt, attachments).await,
+            Self::CodexAppServer(_) => {
+                Err("Codex app-server steering is not wired yet".to_string())
+            }
         }
     }
 
     pub fn subscribe(&self) -> tokio::sync::broadcast::Receiver<AgentEvent> {
         match self {
             Self::ClaudeCode(session) => session.subscribe(),
+            Self::CodexAppServer(session) => session.subscribe(),
         }
     }
 
@@ -161,12 +175,18 @@ impl AgentSession {
     ) -> Result<(), String> {
         match self {
             Self::ClaudeCode(session) => session.send_control_response(request_id, response).await,
+            Self::CodexAppServer(_) => {
+                Err("Codex app-server permissions are not wired yet".to_string())
+            }
         }
     }
 
     pub async fn send_task_stop(&self, task_id: &str) -> Result<(), String> {
         match self {
             Self::ClaudeCode(session) => session.send_task_stop(task_id).await,
+            Self::CodexAppServer(_) => {
+                Err(format!("Codex app-server cannot stop task `{task_id}` yet"))
+            }
         }
     }
 
@@ -176,6 +196,9 @@ impl AgentSession {
     ) -> Result<ControlResponsePayload, String> {
         match self {
             Self::ClaudeCode(session) => session.set_remote_control(enabled).await,
+            Self::CodexAppServer(_) => {
+                Err("Codex app-server does not support Claude Remote Control".to_string())
+            }
         }
     }
 }
@@ -221,6 +244,19 @@ mod tests {
         assert_eq!(
             AgentHarnessCapabilities::codex_app_server().remote_control,
             false
+        );
+    }
+
+    #[test]
+    fn codex_agent_session_reports_native_kind_and_capabilities() {
+        let session =
+            AgentSession::from_codex_app_server(CodexAppServerSession::new_for_test(1234));
+
+        assert_eq!(session.kind(), AgentHarnessKind::CodexAppServer);
+        assert_eq!(session.pid(), 1234);
+        assert_eq!(
+            session.capabilities(),
+            AgentHarnessCapabilities::codex_app_server()
         );
     }
 }

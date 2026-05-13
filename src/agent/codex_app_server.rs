@@ -2,8 +2,36 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use tokio::sync::broadcast;
 
-use super::TokenUsage;
+use super::{AgentEvent, Delta, InnerStreamEvent, StartContentBlock, StreamEvent, TokenUsage};
+
+pub struct CodexAppServerSession {
+    pid: u32,
+    event_tx: broadcast::Sender<AgentEvent>,
+}
+
+impl CodexAppServerSession {
+    #[cfg(test)]
+    pub fn new_for_test(pid: u32) -> Self {
+        let (event_tx, _) = broadcast::channel(128);
+        Self { pid, event_tx }
+    }
+
+    pub fn pid(&self) -> u32 {
+        self.pid
+    }
+
+    pub fn subscribe(&self) -> broadcast::Receiver<AgentEvent> {
+        self.event_tx.subscribe()
+    }
+
+    pub fn publish_notification_event(&self, event: CodexNotificationEvent) {
+        for event in map_notification_to_agent_events(event) {
+            let _ = self.event_tx.send(event);
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(untagged)]
@@ -254,6 +282,20 @@ pub enum CodexNotificationEvent {
         item_id: String,
         delta: String,
     },
+    ReasoningSummaryDelta {
+        thread_id: String,
+        turn_id: String,
+        item_id: String,
+        delta: String,
+        summary_index: i64,
+    },
+    ReasoningTextDelta {
+        thread_id: String,
+        turn_id: String,
+        item_id: String,
+        delta: String,
+        content_index: i64,
+    },
     CommandOutputDelta {
         thread_id: String,
         turn_id: String,
@@ -289,6 +331,28 @@ pub fn decode_notification(notification: JsonRpcNotification) -> CodexNotificati
             turn_id: string_field(params, "turnId"),
             item_id: string_field(params, "itemId"),
             delta: string_field(params, "delta"),
+        },
+        ("item/reasoning/summaryTextDelta", Some(params)) => {
+            CodexNotificationEvent::ReasoningSummaryDelta {
+                thread_id: string_field(params, "threadId"),
+                turn_id: string_field(params, "turnId"),
+                item_id: string_field(params, "itemId"),
+                delta: string_field(params, "delta"),
+                summary_index: params
+                    .get("summaryIndex")
+                    .and_then(Value::as_i64)
+                    .unwrap_or_default(),
+            }
+        }
+        ("item/reasoning/textDelta", Some(params)) => CodexNotificationEvent::ReasoningTextDelta {
+            thread_id: string_field(params, "threadId"),
+            turn_id: string_field(params, "turnId"),
+            item_id: string_field(params, "itemId"),
+            delta: string_field(params, "delta"),
+            content_index: params
+                .get("contentIndex")
+                .and_then(Value::as_i64)
+                .unwrap_or_default(),
         },
         ("item/commandExecution/outputDelta", Some(params)) => {
             CodexNotificationEvent::CommandOutputDelta {
@@ -328,6 +392,101 @@ pub fn decode_notification(notification: JsonRpcNotification) -> CodexNotificati
             params: params.cloned(),
         },
     }
+}
+
+pub fn map_notification_to_agent_events(event: CodexNotificationEvent) -> Vec<AgentEvent> {
+    match event {
+        CodexNotificationEvent::AgentMessageDelta { delta, .. } if !delta.is_empty() => {
+            vec![AgentEvent::Stream(StreamEvent::Stream {
+                event: InnerStreamEvent::ContentBlockDelta {
+                    index: 0,
+                    delta: Delta::Text { text: delta },
+                },
+            })]
+        }
+        CodexNotificationEvent::ReasoningSummaryDelta { delta, .. }
+        | CodexNotificationEvent::ReasoningTextDelta { delta, .. }
+            if !delta.is_empty() =>
+        {
+            vec![AgentEvent::Stream(StreamEvent::Stream {
+                event: InnerStreamEvent::ContentBlockDelta {
+                    index: 1,
+                    delta: Delta::Thinking { thinking: delta },
+                },
+            })]
+        }
+        CodexNotificationEvent::CommandOutputDelta { item_id, delta, .. } if !delta.is_empty() => {
+            vec![AgentEvent::Stream(StreamEvent::User {
+                message: super::UserEventMessage {
+                    content: super::UserMessageContent::Blocks(vec![
+                        super::UserContentBlock::ToolResult {
+                            tool_use_id: item_id,
+                            content: Value::String(delta),
+                        },
+                    ]),
+                },
+                uuid: None,
+                is_replay: false,
+                is_synthetic: true,
+            })]
+        }
+        CodexNotificationEvent::TokenUsageUpdated { usage, .. } => {
+            vec![AgentEvent::Stream(StreamEvent::Stream {
+                event: InnerStreamEvent::MessageDelta { usage: Some(usage) },
+            })]
+        }
+        CodexNotificationEvent::TurnCompleted { duration_ms, .. } => {
+            vec![AgentEvent::Stream(StreamEvent::Result {
+                subtype: "success".to_string(),
+                result: None,
+                total_cost_usd: None,
+                duration_ms,
+                usage: None,
+            })]
+        }
+        CodexNotificationEvent::TurnFailed { message, .. } => {
+            vec![AgentEvent::Stream(StreamEvent::Result {
+                subtype: "error".to_string(),
+                result: Some(message),
+                total_cost_usd: None,
+                duration_ms: None,
+                usage: None,
+            })]
+        }
+        CodexNotificationEvent::AgentMessageDelta { .. }
+        | CodexNotificationEvent::ReasoningSummaryDelta { .. }
+        | CodexNotificationEvent::ReasoningTextDelta { .. }
+        | CodexNotificationEvent::CommandOutputDelta { .. }
+        | CodexNotificationEvent::Unknown { .. } => Vec::new(),
+    }
+}
+
+pub fn codex_invocation_line() -> String {
+    "codex app-server --listen stdio://".to_string()
+}
+
+pub fn codex_command_line_event() -> AgentEvent {
+    AgentEvent::Stream(StreamEvent::system_command_line(codex_invocation_line()))
+}
+
+pub fn codex_turn_start_events() -> Vec<AgentEvent> {
+    vec![
+        AgentEvent::Stream(StreamEvent::Stream {
+            event: InnerStreamEvent::MessageStart {},
+        }),
+        AgentEvent::Stream(StreamEvent::Stream {
+            event: InnerStreamEvent::ContentBlockStart {
+                index: 0,
+                content_block: Some(StartContentBlock::Text {}),
+            },
+        }),
+        AgentEvent::Stream(StreamEvent::Stream {
+            event: InnerStreamEvent::ContentBlockStart {
+                index: 1,
+                content_block: Some(StartContentBlock::Thinking {}),
+            },
+        }),
+    ]
 }
 
 fn string_field(value: &Value, key: &str) -> String {
@@ -506,5 +665,142 @@ mod tests {
                 },
             }
         );
+    }
+
+    #[test]
+    fn parses_reasoning_summary_delta_notification() {
+        let event = decode_notification(JsonRpcNotification {
+            method: "item/reasoning/summaryTextDelta".to_string(),
+            params: Some(json!({
+                "threadId": "thread-1",
+                "turnId": "turn-1",
+                "itemId": "reasoning-1",
+                "delta": "checking",
+                "summaryIndex": 2
+            })),
+        });
+
+        assert_eq!(
+            event,
+            CodexNotificationEvent::ReasoningSummaryDelta {
+                thread_id: "thread-1".to_string(),
+                turn_id: "turn-1".to_string(),
+                item_id: "reasoning-1".to_string(),
+                delta: "checking".to_string(),
+                summary_index: 2,
+            }
+        );
+    }
+
+    #[test]
+    fn maps_agent_message_delta_to_claudette_text_delta() {
+        let events = map_notification_to_agent_events(CodexNotificationEvent::AgentMessageDelta {
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-1".to_string(),
+            item_id: "message-1".to_string(),
+            delta: "hello".to_string(),
+        });
+
+        let [
+            AgentEvent::Stream(StreamEvent::Stream {
+                event:
+                    InnerStreamEvent::ContentBlockDelta {
+                        index,
+                        delta: Delta::Text { text },
+                    },
+            }),
+        ] = events.as_slice()
+        else {
+            panic!("expected text delta event");
+        };
+        assert_eq!(*index, 0);
+        assert_eq!(text, "hello");
+    }
+
+    #[test]
+    fn maps_reasoning_delta_to_claudette_thinking_delta() {
+        let events = map_notification_to_agent_events(CodexNotificationEvent::ReasoningTextDelta {
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-1".to_string(),
+            item_id: "reasoning-1".to_string(),
+            delta: "because".to_string(),
+            content_index: 0,
+        });
+
+        let [
+            AgentEvent::Stream(StreamEvent::Stream {
+                event:
+                    InnerStreamEvent::ContentBlockDelta {
+                        index,
+                        delta: Delta::Thinking { thinking },
+                    },
+            }),
+        ] = events.as_slice()
+        else {
+            panic!("expected thinking delta event");
+        };
+        assert_eq!(*index, 1);
+        assert_eq!(thinking, "because");
+    }
+
+    #[test]
+    fn maps_turn_completed_to_success_result() {
+        let events = map_notification_to_agent_events(CodexNotificationEvent::TurnCompleted {
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-1".to_string(),
+            duration_ms: Some(42),
+        });
+
+        let [
+            AgentEvent::Stream(StreamEvent::Result {
+                subtype,
+                duration_ms,
+                ..
+            }),
+        ] = events.as_slice()
+        else {
+            panic!("expected result event");
+        };
+        assert_eq!(subtype, "success");
+        assert_eq!(*duration_ms, Some(42));
+    }
+
+    #[test]
+    fn codex_start_events_prime_message_and_content_blocks() {
+        let events = codex_turn_start_events();
+        assert!(matches!(
+            events.first(),
+            Some(AgentEvent::Stream(StreamEvent::Stream {
+                event: InnerStreamEvent::MessageStart {}
+            }))
+        ));
+        assert_eq!(events.len(), 3);
+    }
+
+    #[tokio::test]
+    async fn codex_session_publishes_mapped_notifications() {
+        let session = CodexAppServerSession::new_for_test(4321);
+        let mut rx = session.subscribe();
+
+        session.publish_notification_event(CodexNotificationEvent::AgentMessageDelta {
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-1".to_string(),
+            item_id: "message-1".to_string(),
+            delta: "hi".to_string(),
+        });
+
+        let event = rx.recv().await.expect("event published");
+        let AgentEvent::Stream(StreamEvent::Stream {
+            event:
+                InnerStreamEvent::ContentBlockDelta {
+                    delta: Delta::Text { text },
+                    ..
+                },
+        }) = event
+        else {
+            panic!("expected text delta");
+        };
+        assert_eq!(text, "hi");
+        assert_eq!(session.pid(), 4321);
     }
 }
