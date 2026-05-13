@@ -142,7 +142,7 @@ export const MonacoEditor = memo(function MonacoEditor({
           isWholeLine: true,
           className: "claudette-reveal-line",
           overviewRuler: {
-            color: "rgba(255, 203, 107, 0.65)",
+            color: "rgba(var(--accent-primary-rgb), 0.65)",
             position: monacoInstance.editor.OverviewRulerLane.Center,
           },
         },
