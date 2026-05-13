@@ -1,7 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
-  Repository,
-  Workspace,
   ChatMessage,
   ChatAttachment,
   ChatHistoryPage,
@@ -11,10 +9,6 @@ import type {
   FileDiff,
   TerminalTab,
 } from "../types";
-import type {
-  CreateWorkspaceResult,
-  RepoConfigInfo,
-} from "../types/repository";
 import type {
   RemoteConnectionInfo,
   DiscoveredServer,
@@ -36,29 +30,22 @@ import type {
   GitFileLayer,
   StagedDiffFiles,
 } from "../types/diff";
-import type { WorkspaceEnvTrustNeededPayload } from "../types/env";
 
 export * from "./tauri/apps";
 export * from "./tauri/auth";
 export * from "./tauri/debug";
+export * from "./tauri/initialData";
 export * from "./tauri/metrics";
 export * from "./tauri/notifications";
 export * from "./tauri/settings";
 export * from "./tauri/shell";
 export * from "./tauri/updater";
 export * from "./tauri/usage";
+export * from "./tauri/worktrees";
+export * from "./tauri/workspace";
+export * from "./tauri/repository";
 
-// -- Data --
-
-export interface InitialData {
-  repositories: Repository[];
-  workspaces: Workspace[];
-  worktree_base_dir: string;
-  default_branches: Record<string, string>;
-  last_messages: ChatMessage[];
-  scm_cache: ScmStatusCacheRow[];
-  manual_workspace_order_repo_ids: string[];
-}
+// -- Agent Backends --
 
 export type AgentBackendKind =
   | "anthropic"
@@ -128,10 +115,6 @@ export interface BackendStatus {
   backends?: AgentBackendConfig[];
 }
 
-export function loadInitialData(): Promise<InitialData> {
-  return invoke("load_initial_data");
-}
-
 export function listAgentBackends(): Promise<AgentBackendListResponse> {
   return invoke("list_agent_backends");
 }
@@ -166,208 +149,6 @@ export function testAgentBackend(backendId: string): Promise<BackendStatus> {
 
 export function launchCodexLogin(): Promise<void> {
   return invoke("launch_codex_login");
-}
-
-// -- Repository --
-
-export function addRepository(path: string): Promise<Repository> {
-  return invoke("add_repository", { path });
-}
-
-export function initRepository(parentPath: string, name: string): Promise<Repository> {
-  return invoke("init_repository", { parentPath, name });
-}
-
-export function updateRepositorySettings(
-  id: string,
-  name: string,
-  icon: string | null,
-  setupScript: string | null,
-  archiveScript: string | null,
-  customInstructions: string | null,
-  branchRenamePreferences: string | null,
-  setupScriptAutoRun: boolean,
-  archiveScriptAutoRun: boolean,
-  baseBranch: string | null,
-  defaultRemote: string | null
-): Promise<void> {
-  return invoke("update_repository_settings", {
-    id,
-    name,
-    icon,
-    setupScript,
-    archiveScript,
-    customInstructions,
-    branchRenamePreferences,
-    setupScriptAutoRun,
-    archiveScriptAutoRun,
-    baseBranch,
-    defaultRemote,
-  });
-}
-
-export function relinkRepository(id: string, path: string): Promise<void> {
-  return invoke("relink_repository", { id, path });
-}
-
-export function removeRepository(id: string): Promise<void> {
-  return invoke("remove_repository", { id });
-}
-
-export function getRepoConfig(repoId: string): Promise<RepoConfigInfo> {
-  return invoke("get_repo_config", { repoId });
-}
-
-export function getDefaultBranch(repoId: string): Promise<string | null> {
-  return invoke("get_default_branch", { repoId });
-}
-
-export function listGitRemotes(repoId: string): Promise<string[]> {
-  return invoke("list_git_remotes", { repoId });
-}
-
-export function listGitRemoteBranches(repoId: string): Promise<string[]> {
-  return invoke("list_git_remote_branches", { repoId });
-}
-
-export function reorderRepositories(ids: string[]): Promise<void> {
-  return invoke("reorder_repositories", { ids });
-}
-
-export function setSetupScriptAutoRun(repoId: string, enabled: boolean): Promise<void> {
-  return invoke("set_setup_script_auto_run", { repoId, enabled });
-}
-
-export function setArchiveScriptAutoRun(repoId: string, enabled: boolean): Promise<void> {
-  return invoke("set_archive_script_auto_run", { repoId, enabled });
-}
-
-// -- Workspace --
-
-export function createWorkspace(
-  repoId: string,
-  name: string,
-  skipSetup?: boolean
-): Promise<CreateWorkspaceResult> {
-  return invoke("create_workspace", { repoId, name, skipSetup: skipSetup ?? false });
-}
-
-export interface ForkWorkspaceResult {
-  workspace: Workspace;
-  session_resumed: boolean;
-}
-
-export function forkWorkspaceAtCheckpoint(
-  workspaceId: string,
-  checkpointId: string
-): Promise<ForkWorkspaceResult> {
-  return invoke("fork_workspace_at_checkpoint", { workspaceId, checkpointId });
-}
-
-export function runWorkspaceSetup(
-  workspaceId: string
-): Promise<import("../types/repository").SetupResult | null> {
-  return invoke("run_workspace_setup", { workspaceId });
-}
-
-export function prepareWorkspaceEnvironment(
-  workspaceId: string
-): Promise<WorkspaceEnvTrustNeededPayload | null> {
-  return invoke("prepare_workspace_environment", { workspaceId });
-}
-
-export function archiveWorkspace(id: string, skipArchiveScript?: boolean): Promise<boolean> {
-  return invoke("archive_workspace", { id, skipArchiveScript: skipArchiveScript ?? false });
-}
-
-export function restoreWorkspace(id: string): Promise<string> {
-  return invoke("restore_workspace", { id });
-}
-
-export function renameWorkspace(id: string, newName: string): Promise<void> {
-  return invoke("rename_workspace", { id, newName });
-}
-
-/**
- * Reassign per-repository workspace sort_order to match the supplied id
- * sequence. Backend ignores ids that don't belong to `repositoryId`, so a
- * client bug can't move workspaces across repos.
- */
-export function reorderWorkspaces(
-  repositoryId: string,
-  workspaceIds: string[],
-): Promise<void> {
-  return invoke("reorder_workspaces", { repositoryId, workspaceIds });
-}
-
-export function deleteWorkspace(id: string): Promise<void> {
-  return invoke("delete_workspace", { id });
-}
-
-/**
- * Tell the Rust SCM polling loop which workspace the user is currently
- * viewing. Pass `null` when navigating to the dashboard or a repository
- * overview so the backend drops its hot-tier focus. Selection drives the
- * 30 s polling cadence for the focused workspace and lets idle workspaces
- * back off to longer tier intervals.
- */
-export function notifyWorkspaceSelected(workspaceId: string | null): Promise<void> {
-  return invoke("notify_workspace_selected", { workspaceId });
-}
-
-export interface GeneratedWorkspaceName {
-  slug: string;
-  display: string;
-  message: string | null;
-}
-
-export function generateWorkspaceName(): Promise<GeneratedWorkspaceName> {
-  return invoke("generate_workspace_name");
-}
-
-export function refreshBranches(): Promise<[string, string][]> {
-  return invoke("refresh_branches");
-}
-
-export function refreshWorkspaceBranch(
-  workspaceId: string,
-): Promise<string | null> {
-  return invoke("refresh_workspace_branch", { workspaceId });
-}
-
-export function openWorkspaceInTerminal(worktreePath: string): Promise<void> {
-  return invoke("open_workspace_in_terminal", { worktreePath });
-}
-
-export function openInEditor(path: string): Promise<void> {
-  return invoke("open_in_editor", { path });
-}
-
-// -- Worktree Discovery --
-
-export interface DiscoveredWorktree {
-  path: string;
-  branch_name: string;
-  head_sha: string;
-  suggested_name: string;
-  name_valid: boolean;
-}
-
-export function discoverWorktrees(repoId: string): Promise<DiscoveredWorktree[]> {
-  return invoke("discover_worktrees", { repoId });
-}
-
-export interface WorktreeImport {
-  path: string;
-  branch_name: string;
-  name: string;
-}
-
-export function importWorktrees(
-  repoId: string,
-  imports: WorktreeImport[]
-): Promise<Workspace[]> {
-  return invoke("import_worktrees", { repoId, imports });
 }
 
 // -- Slash Commands --
@@ -1454,7 +1235,7 @@ export function getLocalServerStatus(): Promise<LocalServerInfo> {
 
 // -- SCM Plugins --
 
-import type { PluginInfo, ScmDetail, PullRequest, ScmStatusCacheRow } from "../types/plugin";
+import type { PluginInfo, ScmDetail, PullRequest } from "../types/plugin";
 
 export function listScmProviders(): Promise<PluginInfo[]> {
   return invoke("list_scm_providers");
