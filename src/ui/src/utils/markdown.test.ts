@@ -215,7 +215,9 @@ describe("MARKDOWN_COMPONENTS.a click handling", () => {
       ),
     );
 
-    container.querySelector("a")?.dispatchEvent(
+    const button = container.querySelector("button");
+    expect(button?.getAttribute("href")).toBeNull();
+    button?.dispatchEvent(
       new MouseEvent("click", { bubbles: true, cancelable: true }),
     );
 
@@ -236,7 +238,7 @@ describe("MARKDOWN_COMPONENTS.a click handling", () => {
       ),
     );
 
-    container.querySelector("a")?.dispatchEvent(
+    container.querySelector("button")?.dispatchEvent(
       new MouseEvent("click", { bubbles: true, cancelable: true }),
     );
 
@@ -244,6 +246,29 @@ describe("MARKDOWN_COMPONENTS.a click handling", () => {
     expect(tauriMocks.invoke).toHaveBeenCalledWith("open_in_editor", {
       path: "/tmp/report.md",
     });
+  });
+
+  it("routes localhost file URLs through the Monaco file opener without rendering a navigable href", async () => {
+    const openFile = vi.fn(() => true);
+    const container = await render(
+      createElement(
+        MarkdownFileOpenContext.Provider,
+        { value: { openFile } },
+        createElement(LinkOverride, {
+          href: "http://localhost:14254/Users/me/project/CLAUDETTE_TEST.md:1",
+          children: "http://localhost:14254/Users/me/project/CLAUDETTE_TEST.md:1",
+        }),
+      ),
+    );
+
+    const button = container.querySelector("button");
+    expect(button).toBeTruthy();
+    expect(container.querySelector("a")).toBeNull();
+    button?.dispatchEvent(
+      new MouseEvent("click", { bubbles: true, cancelable: true }),
+    );
+
+    expect(openFile).toHaveBeenCalledWith("/Users/me/project/CLAUDETTE_TEST.md");
   });
 
   it("opens scheme-less www links through open_url with an https URL", async () => {

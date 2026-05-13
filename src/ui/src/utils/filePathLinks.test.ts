@@ -2,11 +2,13 @@ import { describe, it, expect } from "vitest";
 
 import {
   decodeFilePathHref,
+  decodeLocalhostFileUrl,
   detectFileReferences,
   detectFilePaths,
   encodeFilePathHref,
   FILE_PATH_SCHEME,
   isLikelyRelativeFileReference,
+  stripFileLineSuffix,
 } from "./filePathLinks";
 
 describe("detectFilePaths — POSIX", () => {
@@ -125,6 +127,37 @@ describe("relative file references", () => {
   it("does not match relative file references inside URLs or emails", () => {
     expect(detectFileReferences("https://example.com/README.md")).toEqual([]);
     expect(detectFileReferences("email dev@example.com")).toEqual([]);
+  });
+});
+
+describe("localhost file URL decoding", () => {
+  it("decodes Codex-style localhost URLs to file paths and strips line suffixes", () => {
+    expect(
+      decodeLocalhostFileUrl(
+        "http://localhost:14254/Users/jamesbrink/project/CLAUDETTE_TEST.md:1",
+      ),
+    ).toBe("/Users/jamesbrink/project/CLAUDETTE_TEST.md");
+  });
+
+  it("decodes loopback Windows paths", () => {
+    expect(
+      decodeLocalhostFileUrl("http://127.0.0.1:14254/C:/Users/me/project/app.ts:12:3"),
+    ).toBe("C:/Users/me/project/app.ts");
+  });
+
+  it("does not treat normal localhost app routes as file paths", () => {
+    expect(decodeLocalhostFileUrl("http://localhost:14254/workspaces/current")).toBeNull();
+  });
+
+  it("does not decode non-localhost URLs as files", () => {
+    expect(
+      decodeLocalhostFileUrl("https://example.com/Users/me/project/app.ts:1"),
+    ).toBeNull();
+  });
+
+  it("strips line and column suffixes from file targets", () => {
+    expect(stripFileLineSuffix("/tmp/file.ts:10")).toBe("/tmp/file.ts");
+    expect(stripFileLineSuffix("/tmp/file.ts:10:2")).toBe("/tmp/file.ts");
   });
 });
 

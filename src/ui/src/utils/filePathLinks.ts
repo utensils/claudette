@@ -238,6 +238,58 @@ export function isLikelyRelativeFileReference(value: string): boolean {
   return KNOWN_FILE_EXTENSIONS.has(ext);
 }
 
+export function stripFileLineSuffix(path: string): string {
+  return path.replace(/:\d+(?::\d+)?$/, "");
+}
+
+export function isLikelyFilePathTarget(value: string): boolean {
+  const candidate = stripFileLineSuffix(value.trim().replace(TRAILING_PUNCT_REGEX, ""));
+  if (!candidate || candidate.length < MIN_PATH_LENGTH) return false;
+  if (isLikelyRelativeFileReference(candidate)) return true;
+
+  const normalized = candidate.replace(/\\/g, "/");
+  const absoluteish =
+    normalized.startsWith("/") ||
+    normalized.startsWith("~/") ||
+    /^[A-Za-z]:\//.test(normalized);
+  if (!absoluteish) return false;
+  const basename = normalized.split("/").pop()?.toLowerCase() ?? "";
+  if (KNOWN_FILENAMES.has(basename)) return true;
+  const dot = basename.lastIndexOf(".");
+  if (dot <= 0 || dot === basename.length - 1) return false;
+  return KNOWN_FILE_EXTENSIONS.has(basename.slice(dot + 1));
+}
+
+export function decodeLocalhostFileUrl(href: string): string | null {
+  let parsed: URL;
+  try {
+    parsed = new URL(href);
+  } catch {
+    return null;
+  }
+  if (!/^https?:$/.test(parsed.protocol)) return null;
+  const hostname = parsed.hostname.toLowerCase();
+  if (
+    hostname !== "localhost" &&
+    hostname !== "127.0.0.1" &&
+    hostname !== "[::1]" &&
+    hostname !== "::1"
+  ) {
+    return null;
+  }
+
+  let pathname: string;
+  try {
+    pathname = decodeURI(parsed.pathname);
+  } catch {
+    pathname = parsed.pathname;
+  }
+  const withoutLine = stripFileLineSuffix(pathname);
+  const candidate =
+    /^\/[A-Za-z]:[\\/]/.test(withoutLine) ? withoutLine.slice(1) : withoutLine;
+  return isLikelyFilePathTarget(candidate) ? candidate : null;
+}
+
 export function detectFileReferences(text: string): FilePathMatch[] {
   const absoluteMatches = detectFilePaths(text);
   const matches: FilePathMatch[] = [...absoluteMatches];

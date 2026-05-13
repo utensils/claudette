@@ -278,7 +278,7 @@ describe("MessagesWithTurns edit summaries", () => {
       />,
     );
 
-    const link = Array.from(container.querySelectorAll("a")).find(
+    const link = Array.from(container.querySelectorAll("button")).find(
       (item) => item.textContent === "README.md",
     );
     expect(link).toBeTruthy();
@@ -311,7 +311,7 @@ describe("MessagesWithTurns edit summaries", () => {
       />,
     );
 
-    const link = Array.from(container.querySelectorAll("a")).find(
+    const link = Array.from(container.querySelectorAll("button")).find(
       (item) => item.textContent === "~/Downloads/report.md",
     );
     expect(link).toBeTruthy();
@@ -327,6 +327,44 @@ describe("MessagesWithTurns edit summaries", () => {
     expect(serviceMocks.invoke).toHaveBeenCalledWith("open_in_editor", {
       path: "~/Downloads/report.md",
     });
+  });
+
+  it("opens localhost file URLs from agent output in Monaco without navigating", async () => {
+    const messages = [
+      message("user-1", "User", "where did you write?"),
+      message(
+        "assistant-1",
+        "Assistant",
+        "Wrote http://localhost:14254/repo/CLAUDETTE_TEST.md:1",
+      ),
+    ];
+
+    const container = await render(
+      <MessagesWithTurns
+        messages={messages}
+        workspaceId={WORKSPACE_ID}
+        sessionId={SESSION_ID}
+        isRunning={false}
+        searchQuery=""
+        toolDisplayMode="grouped"
+      />,
+    );
+
+    const fileButton = Array.from(container.querySelectorAll("button")).find(
+      (item) => item.textContent?.includes("CLAUDETTE_TEST.md"),
+    );
+    expect(fileButton).toBeTruthy();
+    expect(container.querySelector('a[href^="http://localhost:14254/repo"]')).toBeNull();
+
+    await act(async () => {
+      fileButton?.dispatchEvent(
+        new MouseEvent("click", { bubbles: true, cancelable: true }),
+      );
+    });
+
+    const state = useAppStore.getState();
+    expect(state.fileTabsByWorkspace[WORKSPACE_ID]).toEqual(["CLAUDETTE_TEST.md"]);
+    expect(state.activeFileTabByWorkspace[WORKSPACE_ID]).toBe("CLAUDETTE_TEST.md");
   });
 
   it("renders Claude CLI slash-login failures as a sign-in callout", async () => {

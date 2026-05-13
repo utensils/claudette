@@ -17,7 +17,11 @@ import { openUrl } from "../services/tauri";
 import { CodeBlock } from "../components/chat/CodeBlock";
 import { MermaidBlock } from "../components/chat/MermaidBlock";
 import { StreamingContext } from "../components/chat/StreamingContext";
-import { decodeFilePathHref, FILE_PATH_SCHEME } from "./filePathLinks";
+import {
+  decodeFilePathHref,
+  decodeLocalhostFileUrl,
+  FILE_PATH_SCHEME,
+} from "./filePathLinks";
 import { getCachedHighlight, highlightCode } from "./highlight";
 import { rehypeFilePathLinks } from "./rehypeFilePathLinks";
 
@@ -364,38 +368,49 @@ const MarkdownLink: NonNullable<Components["a"]> = ({
   ...props
 }) => {
   const fileOpen = useContext(MarkdownFileOpenContext);
-  const filePath = href ? decodeFilePathHref(href) : null;
+  const filePath = href
+    ? (decodeFilePathHref(href) ?? decodeLocalhostFileUrl(href))
+    : null;
+  const openFilePath = () => {
+    if (!filePath) return;
+    if (fileOpen) {
+      try {
+        if (fileOpen.openFile(filePath)) return;
+      } catch (err) {
+        console.error("Failed to open file link in Monaco:", filePath, err);
+        return;
+      }
+    }
+    if (!ABSOLUTE_FILE_PATH_REGEX.test(filePath)) {
+      console.warn("No workspace file opener available for relative path:", filePath);
+      return;
+    }
+    void invoke("open_in_editor", { path: filePath }).catch(
+      (err) =>
+        console.error("Failed to open path:", filePath, err),
+    );
+  };
+  if (filePath) {
+    return createElement(
+      "button",
+      {
+        type: "button",
+        className: classNames(
+          "cc-file-path-link",
+          typeof props.className === "string" ? props.className : undefined,
+        ),
+        title: filePath,
+        onClick: openFilePath,
+      },
+      children,
+    );
+  }
   return createElement(
     "a",
     {
       ...props,
       href,
-      // Tooltip the actual path so a user hovering can see exactly
-      // what the click will open — the visible text is the path
-      // already, but title= adds redundancy on long paths that get
-      // visually truncated by surrounding wrap/ellipsis rules.
-      title: filePath ?? (props as { title?: string }).title,
       onClick: (e: React.MouseEvent<HTMLAnchorElement>) => {
-        if (filePath) {
-          e.preventDefault();
-          if (fileOpen) {
-            try {
-              if (fileOpen.openFile(filePath)) return;
-            } catch (err) {
-              console.error("Failed to open file link in Monaco:", filePath, err);
-              return;
-            }
-          }
-          if (!ABSOLUTE_FILE_PATH_REGEX.test(filePath)) {
-            console.warn("No workspace file opener available for relative path:", filePath);
-            return;
-          }
-          void invoke("open_in_editor", { path: filePath }).catch(
-            (err) =>
-              console.error("Failed to open path:", filePath, err),
-          );
-          return;
-        }
         const externalHref = href ? normalizeExternalHref(href) : null;
         if (externalHref) {
           e.preventDefault();
@@ -408,6 +423,10 @@ const MarkdownLink: NonNullable<Components["a"]> = ({
     children,
   );
 };
+
+function classNames(...values: Array<string | undefined>): string {
+  return values.filter(Boolean).join(" ");
+}
 
 // Override <a> to open external links in the system browser instead of
 // navigating the webview, and to route `claudettepath:` links — produced
