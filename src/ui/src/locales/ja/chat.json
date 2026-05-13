@@ -143,6 +143,16 @@
   "cli_invocation_copied": "コピーしました",
   "cli_invocation_prompt_label": "プロンプト",
 
+  "setup_script_label": "セットアップスクリプト",
+  "setup_script_status_running": "実行中",
+  "setup_script_status_completed": "完了",
+  "setup_script_status_failed": "失敗",
+  "setup_script_status_timed_out": "タイムアウト",
+  "setup_script_expand": "セットアップスクリプトの出力を表示",
+  "setup_script_collapse": "セットアップスクリプトの出力を隠す",
+  "setup_script_copy": "セットアップスクリプトの出力をコピー",
+  "setup_script_copied": "コピーしました",
+
   "mcp_unknown_error": "不明",
 
   "diff_loading": "差分を読み込み中...",

@@ -2,6 +2,10 @@ import { useState } from "react";
 import { Trans, useTranslation } from "react-i18next";
 import { useAppStore } from "../../stores/useAppStore";
 import { runWorkspaceSetup, setSetupScriptAutoRun } from "../../services/tauri";
+import {
+  runAndRecordSetupScript,
+  type SetupScriptSource,
+} from "../../utils/setupScriptMessage";
 import { Modal } from "./Modal";
 import shared from "./shared.module.css";
 
@@ -11,6 +15,7 @@ export function ConfirmSetupScriptModal() {
   const closeModal = useAppStore((s) => s.closeModal);
   const modalData = useAppStore((s) => s.modalData);
   const addChatMessage = useAppStore((s) => s.addChatMessage);
+  const addToast = useAppStore((s) => s.addToast);
   const updateRepository = useAppStore((s) => s.updateRepository);
   const [loading, setLoading] = useState(false);
   const [alwaysRun, setAlwaysRun] = useState(false);
@@ -18,59 +23,38 @@ export function ConfirmSetupScriptModal() {
   const workspaceId = modalData.workspaceId as string;
   const sessionId = modalData.sessionId as string;
   const script = modalData.script as string;
-  const source = modalData.source as string;
+  const source = modalData.source as SetupScriptSource;
   const repoId = modalData.repoId as string;
 
   const handleRun = async () => {
     setLoading(true);
-    try {
-      if (alwaysRun && repoId) {
+    const store = useAppStore.getState();
+    if (alwaysRun && repoId) {
+      try {
         await setSetupScriptAutoRun(repoId, true);
         updateRepository(repoId, { setup_script_auto_run: true });
+      } catch (e) {
+        // Persisting the auto-run preference failed — log it, but still run
+        // the script the user just confirmed.
+        console.error("Failed to persist setup-script auto-run preference:", e);
       }
-      const sr = await runWorkspaceSetup(workspaceId);
-      if (sr) {
-        const label = sr.source === "repo" ? ".claudette.json" : "settings";
-        const status = sr.success
-          ? "completed"
-          : sr.timed_out
-            ? "timed out"
-            : "failed";
-        addChatMessage(sessionId, {
-          id: crypto.randomUUID(),
-          workspace_id: workspaceId,
-          chat_session_id: sessionId,
-          role: "System",
-          content: `Setup script (${label}) ${status}${sr.output ? `:\n${sr.output}` : ""}`,
-          cost_usd: null,
-          duration_ms: null,
-          created_at: new Date().toISOString(),
-          thinking: null,
-          input_tokens: null,
-          output_tokens: null,
-          cache_read_tokens: null,
-          cache_creation_tokens: null,
-        });
-      }
-      closeModal();
-    } catch (e) {
-      addChatMessage(sessionId, {
-        id: crypto.randomUUID(),
-        workspace_id: workspaceId,
-        chat_session_id: sessionId,
-        role: "System",
-        content: `Setup script failed: ${e}`,
-        cost_usd: null,
-        duration_ms: null,
-        created_at: new Date().toISOString(),
-        thinking: null,
-        input_tokens: null,
-        output_tokens: null,
-        cache_read_tokens: null,
-        cache_creation_tokens: null,
-      });
-      closeModal();
     }
+    // Fire-and-forget: the run flags the session as "setup running" (ChatPanel
+    // shows the spinner banner) and appends the result when it finishes, so
+    // there's no need to keep the modal open blocking on it.
+    runAndRecordSetupScript({
+      sessionId,
+      workspaceId,
+      source,
+      run: () => runWorkspaceSetup(workspaceId),
+      deps: {
+        addChatMessage,
+        setRunningSetupScript: store.setRunningSetupScript,
+        addToast,
+        workspaceName: store.workspaces.find((w) => w.id === workspaceId)?.name,
+      },
+    });
+    closeModal();
   };
 
   const label = source === "repo" ? ".claudette.json" : t("setup_script_source_repo_settings");

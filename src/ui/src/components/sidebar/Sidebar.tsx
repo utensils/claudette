@@ -48,6 +48,7 @@ import {
   buildWorkspaceContextMenuItems,
   type WorkspaceContextMenuLabels,
 } from "./workspaceContextMenu";
+import { runAndRecordSetupScript } from "../../utils/setupScriptMessage";
 import type { ChatSession } from "../../types";
 import styles from "./Sidebar.module.css";
 
@@ -275,34 +276,17 @@ export const Sidebar = memo(function Sidebar() {
         if (script) {
           if (repo?.setup_script_auto_run) {
             const wsId = result.workspace.id;
-            runWorkspaceSetup(wsId).then((sr) => {
-              if (sr) {
-                const lbl = sr.source === "repo" ? ".claudette.json" : "settings";
-                const status = sr.success ? "completed" : sr.timed_out ? "timed out" : "failed";
-                addChatMessage(sessionId, {
-                  id: crypto.randomUUID(),
-                  workspace_id: wsId,
-                  chat_session_id: sessionId,
-                  role: "System",
-                  content: `Setup script (${lbl}) ${status}${sr.output ? `:\n${sr.output}` : ""}`,
-                  cost_usd: null, duration_ms: null,
-                  created_at: new Date().toISOString(),
-                  thinking: null,
-                  input_tokens: null, output_tokens: null, cache_read_tokens: null, cache_creation_tokens: null,
-                });
-              }
-            }).catch((err) => {
-              addChatMessage(sessionId, {
-                id: crypto.randomUUID(),
-                workspace_id: wsId,
-                chat_session_id: sessionId,
-                role: "System",
-                content: `Setup script failed: ${err}`,
-                cost_usd: null, duration_ms: null,
-                created_at: new Date().toISOString(),
-                thinking: null,
-                input_tokens: null, output_tokens: null, cache_read_tokens: null, cache_creation_tokens: null,
-              });
+            runAndRecordSetupScript({
+              sessionId,
+              workspaceId: wsId,
+              source,
+              run: () => runWorkspaceSetup(wsId),
+              deps: {
+                addChatMessage,
+                setRunningSetupScript: useAppStore.getState().setRunningSetupScript,
+                addToast,
+                workspaceName: result.workspace.name,
+              },
             });
           } else {
             openModal("confirmSetupScript", {
@@ -324,7 +308,7 @@ export const Sidebar = memo(function Sidebar() {
     } finally {
       creatingRef.current = false;
     }
-  }, [addWorkspace, selectWorkspace, addChatMessage, openModal, setCreatingWorkspace]);
+  }, [addWorkspace, selectWorkspace, addChatMessage, addToast, openModal, setCreatingWorkspace]);
 
   const filteredWorkspaces = useMemo(
     () => workspaces.filter((ws) => {

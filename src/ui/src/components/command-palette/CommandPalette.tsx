@@ -15,6 +15,7 @@ import {
 } from "../../services/tauri";
 import { applySelectedModel } from "../chat/applySelectedModel";
 import { buildModelRegistry } from "../chat/modelRegistry";
+import { runAndRecordSetupScript } from "../../utils/setupScriptMessage";
 import type { ThemeDefinition } from "../../types/theme";
 import { scoreCommand } from "./searchScore";
 import {
@@ -57,6 +58,7 @@ export function CommandPalette() {
   const addWorkspace = useAppStore((s) => s.addWorkspace);
   const selectWorkspace = useAppStore((s) => s.selectWorkspace);
   const addChatMessage = useAppStore((s) => s.addChatMessage);
+  const addToast = useAppStore((s) => s.addToast);
   const updateWorkspace = useAppStore((s) => s.updateWorkspace);
   const currentThemeId = useAppStore((s) => s.currentThemeId);
   const setCurrentThemeId = useAppStore((s) => s.setCurrentThemeId);
@@ -183,34 +185,17 @@ export function CommandPalette() {
         if (script) {
           if (repo?.setup_script_auto_run) {
             const wsId = result.workspace.id;
-            runWorkspaceSetup(wsId).then((sr) => {
-              if (sr) {
-                const lbl = sr.source === "repo" ? ".claudette.json" : "settings";
-                const status = sr.success ? "completed" : sr.timed_out ? "timed out" : "failed";
-                addChatMessage(sessionId, {
-                  id: crypto.randomUUID(),
-                  workspace_id: wsId,
-                  chat_session_id: sessionId,
-                  role: "System",
-                  content: `Setup script (${lbl}) ${status}${sr.output ? `:\n${sr.output}` : ""}`,
-                  cost_usd: null, duration_ms: null,
-                  created_at: new Date().toISOString(),
-                  thinking: null,
-                  input_tokens: null, output_tokens: null, cache_read_tokens: null, cache_creation_tokens: null,
-                });
-              }
-            }).catch((err) => {
-              addChatMessage(sessionId, {
-                id: crypto.randomUUID(),
-                workspace_id: wsId,
-                chat_session_id: sessionId,
-                role: "System",
-                content: `Setup script failed: ${err}`,
-                cost_usd: null, duration_ms: null,
-                created_at: new Date().toISOString(),
-                thinking: null,
-                input_tokens: null, output_tokens: null, cache_read_tokens: null, cache_creation_tokens: null,
-              });
+            runAndRecordSetupScript({
+              sessionId,
+              workspaceId: wsId,
+              source,
+              run: () => runWorkspaceSetup(wsId),
+              deps: {
+                addChatMessage,
+                setRunningSetupScript: useAppStore.getState().setRunningSetupScript,
+                addToast,
+                workspaceName: result.workspace.name,
+              },
             });
           } else {
             openModal("confirmSetupScript", {
@@ -228,7 +213,7 @@ export function CommandPalette() {
     } catch (e) {
       console.error("Failed to create workspace:", e);
     }
-  }, [addWorkspace, selectWorkspace, addChatMessage, openModal]);
+  }, [addWorkspace, selectWorkspace, addChatMessage, addToast, openModal]);
 
   const enterThemeMode = useCallback(() => {
     setMode("theme");

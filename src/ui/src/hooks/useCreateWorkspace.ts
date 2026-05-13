@@ -6,6 +6,7 @@ import {
   getRepoConfig,
   runWorkspaceSetup,
 } from "../services/tauri";
+import { runAndRecordSetupScript } from "../utils/setupScriptMessage";
 
 /** Outcome surfaced to callers so they can show toasts or chain follow-up work
  *  without prying into the store. The orchestration still performs the core
@@ -103,48 +104,19 @@ export async function createWorkspaceOrchestrated(
       if (script) {
         if (repo?.setup_script_auto_run) {
           const wsId = result.workspace.id;
-          runWorkspaceSetup(wsId)
-            .then((sr) => {
-              if (!sr) return;
-              const lbl = sr.source === "repo" ? ".claudette.json" : "settings";
-              const status = sr.success
-                ? "completed"
-                : sr.timed_out
-                  ? "timed out"
-                  : "failed";
-              useAppStore.getState().addChatMessage(sessionId, {
-                id: crypto.randomUUID(),
-                workspace_id: wsId,
-                chat_session_id: sessionId,
-                role: "System",
-                content: `Setup script (${lbl}) ${status}${sr.output ? `:\n${sr.output}` : ""}`,
-                cost_usd: null,
-                duration_ms: null,
-                created_at: new Date().toISOString(),
-                thinking: null,
-                input_tokens: null,
-                output_tokens: null,
-                cache_read_tokens: null,
-                cache_creation_tokens: null,
-              });
-            })
-            .catch((err) => {
-              useAppStore.getState().addChatMessage(sessionId, {
-                id: crypto.randomUUID(),
-                workspace_id: wsId,
-                chat_session_id: sessionId,
-                role: "System",
-                content: `Setup script failed: ${err}`,
-                cost_usd: null,
-                duration_ms: null,
-                created_at: new Date().toISOString(),
-                thinking: null,
-                input_tokens: null,
-                output_tokens: null,
-                cache_read_tokens: null,
-                cache_creation_tokens: null,
-              });
-            });
+          const store = useAppStore.getState();
+          runAndRecordSetupScript({
+            sessionId,
+            workspaceId: wsId,
+            source,
+            run: () => runWorkspaceSetup(wsId),
+            deps: {
+              addChatMessage: store.addChatMessage,
+              setRunningSetupScript: store.setRunningSetupScript,
+              addToast: store.addToast,
+              workspaceName: result.workspace.name,
+            },
+          });
         } else {
           useAppStore.getState().openModal("confirmSetupScript", {
             workspaceId: result.workspace.id,
