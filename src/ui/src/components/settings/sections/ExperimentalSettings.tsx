@@ -230,16 +230,18 @@ export function ExperimentalSettings() {
     if (!alternativeBackendsAvailable) return;
     const next = !experimentalCodexEnabled;
     const previous = experimentalCodexEnabled;
+    let persistedToggle = false;
     setExperimentalCodexEnabled(next);
     try {
       setError(null);
-      await migrateExperimentalCodexSelections(next);
       await setAppSetting("experimental_codex_enabled", next ? "true" : "false");
+      persistedToggle = true;
+      await migrateExperimentalCodexSelections(next);
       const data = await listAgentBackends();
       setAgentBackends(data.backends);
       setDefaultAgentBackendId(data.default_backend_id);
     } catch (e) {
-      setExperimentalCodexEnabled(previous);
+      setExperimentalCodexEnabled(persistedToggle ? next : previous);
       setError(String(e));
     }
   };

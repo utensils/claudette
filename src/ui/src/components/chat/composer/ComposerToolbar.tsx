@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { CircleDollarSign, Sparkles, BookOpen } from "lucide-react";
 import { useAppStore } from "../../../stores/useAppStore";
 import { getAppSetting } from "../../../services/tauri";
@@ -71,6 +71,10 @@ export function ComposerToolbar({
     () => buildModelRegistry(alternativeBackendsEnabled, agentBackends, experimentalCodexEnabled),
     [alternativeBackendsEnabled, agentBackends, experimentalCodexEnabled],
   );
+  const registryRef = useRef(registry);
+  useEffect(() => {
+    registryRef.current = registry;
+  }, [registry]);
 
   useEffect(() => {
     let cancelled = false;
@@ -95,7 +99,7 @@ export function ComposerToolbar({
       if (cancelled) return;
       const loadedModel = model ?? defModel ?? "opus";
       const loadedProvider = provider ?? defProvider ?? "anthropic";
-      const loadedEntry = findModelInRegistry(registry, loadedModel, loadedProvider);
+      const loadedEntry = findModelInRegistry(registryRef.current, loadedModel, loadedProvider);
       const supportsFast = loadedEntry?.supportsFastMode ?? isFastSupported(loadedModel);
       const supportsEffort = loadedEntry?.supportsEffort ?? isEffortSupported(loadedModel);
       setSelectedModel(sessionId, loadedModel, loadedProvider);
@@ -121,7 +125,7 @@ export function ComposerToolbar({
     }
     load();
     return () => { cancelled = true; };
-  }, [sessionId, registry, setSelectedModel, setFastMode, setThinkingEnabled, setEffortLevel, setShowThinkingBlocks, setChromeEnabled]);
+  }, [sessionId, setSelectedModel, setFastMode, setThinkingEnabled, setEffortLevel, setShowThinkingBlocks, setChromeEnabled]);
 
   const handleModelSelect = useCallback(
     async (model: string, providerId = "anthropic") => {

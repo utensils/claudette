@@ -337,3 +337,11 @@
     - `cd src/ui && bun run lint:css`
     - `nix develop -c cargo fmt --all --check`
     - `git diff --check`
+- 2026-05-13: Ran the Copilot review loop after the Codex reasoning-effort push. Valid findings addressed:
+  - Chat toolbar and composer persisted-settings effects no longer depend on the live model registry object, avoiding repeated settings reloads when backend model lists refresh.
+  - The Experimental Codex toggle now persists the runtime setting before migrating selections and only rolls the in-memory toggle back when persistence itself fails.
+  - Verified the Copilot follow-up with:
+    - `cd src/ui && bun run test -- reasoningControls EffortSelector modelRegistry codexBackendMigration`
+    - `cd src/ui && bunx tsc -b`
+    - `cd src/ui && bun run lint` (warnings only; no errors)
+    - `git diff --check`
