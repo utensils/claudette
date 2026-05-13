@@ -76,11 +76,18 @@ pub(super) fn mirror_background_task_output(
         use tokio::io::{AsyncReadExt, AsyncSeekExt};
 
         let mut offset = 0_u64;
-        let mut idle_ticks_after_output = 0_u8;
+        let mut idle_ticks = 0_u32;
+        const MAX_INITIAL_IDLE_TICKS: u32 = 6_000; // 10 minutes at 100ms/tick.
+        const MAX_IDLE_TICKS_AFTER_OUTPUT: u32 = 20;
         let mut buf = vec![0_u8; 8192];
         loop {
             tokio::time::sleep(Duration::from_millis(100)).await;
             let Ok(mut file) = tokio::fs::File::open(&source).await else {
+                idle_ticks = idle_ticks.saturating_add(1);
+                if idle_ticks >= MAX_INITIAL_IDLE_TICKS {
+                    tracing::debug!(target: "claudette::chat", source = %source.display(), "stopping idle background output mirror before source file appeared");
+                    break;
+                }
                 continue;
             };
             let len = file.metadata().await.ok().map(|m| m.len()).unwrap_or(0);
@@ -108,10 +115,15 @@ pub(super) fn mirror_background_task_output(
                 }
             }
             if wrote {
-                idle_ticks_after_output = 0;
-            } else if offset > 0 {
-                idle_ticks_after_output = idle_ticks_after_output.saturating_add(1);
-                if idle_ticks_after_output >= 20 {
+                idle_ticks = 0;
+            } else {
+                idle_ticks = idle_ticks.saturating_add(1);
+                let max_idle_ticks = if offset > 0 {
+                    MAX_IDLE_TICKS_AFTER_OUTPUT
+                } else {
+                    MAX_INITIAL_IDLE_TICKS
+                };
+                if idle_ticks >= max_idle_ticks {
                     break;
                 }
             }
@@ -374,21 +386,21 @@ fn task_completion_from_notification(
     })
 }
 
-fn read_background_output_for_prompt(output_file: Option<&str>) -> Option<String> {
-    use std::io::{Read, Seek};
+async fn read_background_output_for_prompt(output_file: Option<&str>) -> Option<String> {
+    use tokio::io::{AsyncReadExt, AsyncSeekExt};
 
     let output_file = output_file?.trim();
     if output_file.is_empty() {
         return None;
     }
-    let mut file = std::fs::File::open(output_file).ok()?;
+    let mut file = tokio::fs::File::open(output_file).await.ok()?;
     const MAX_OUTPUT_BYTES: u64 = 24_000;
-    let len = file.metadata().ok()?.len();
+    let len = file.metadata().await.ok()?.len();
     let start = len.saturating_sub(MAX_OUTPUT_BYTES);
-    file.seek(std::io::SeekFrom::Start(start)).ok()?;
+    file.seek(std::io::SeekFrom::Start(start)).await.ok()?;
 
     let mut bytes = Vec::new();
-    file.read_to_end(&mut bytes).ok()?;
+    file.read_to_end(&mut bytes).await.ok()?;
     let mut text = String::from_utf8_lossy(&bytes).to_string();
     if start > 0 {
         text.insert_str(0, "[output truncated to last 24000 bytes]\n");
@@ -416,7 +428,7 @@ fn markdown_code_fence_for(text: &str) -> String {
 
 fn build_background_task_completion_prompt(
     completion: &BackgroundTaskCompletion,
-    trusted_output_file: Option<&str>,
+    trusted_output: Option<&str>,
 ) -> String {
     let mut prompt = format!(
         "A background Bash task completed. Respond to the user now with the result.\n\n<task-notification>\n<task-id>{}</task-id>\n<status>{}</status>",
@@ -432,12 +444,12 @@ fn build_background_task_completion_prompt(
         prompt.push_str(&format!("\n<summary>{summary}</summary>"));
     }
     prompt.push_str("\n</task-notification>");
-    if let Some(output) = read_background_output_for_prompt(trusted_output_file) {
-        let fence = markdown_code_fence_for(&output);
+    if let Some(output) = trusted_output {
+        let fence = markdown_code_fence_for(output);
         prompt.push_str("\n\nOutput:\n");
         prompt.push_str(&fence);
         prompt.push_str("text\n");
-        prompt.push_str(&output);
+        prompt.push_str(output);
         if !output.ends_with('\n') {
             prompt.push('\n');
         }
@@ -588,8 +600,10 @@ pub(super) fn schedule_background_task_wake(
         )
         .await;
 
+        let trusted_output =
+            read_background_output_for_prompt(trusted_output_file.as_deref()).await;
         let prompt =
-            build_background_task_completion_prompt(&completion, trusted_output_file.as_deref());
+            build_background_task_completion_prompt(&completion, trusted_output.as_deref());
         let local_user_message_uuid = uuid::Uuid::new_v4().to_string();
         let ps_pid = ps.pid();
         {
@@ -866,15 +880,31 @@ mod tests {
             status: "completed".to_string(),
             summary: None,
         };
-        let prompt = build_background_task_completion_prompt(
-            &completion,
-            Some(trusted_path.to_string_lossy().as_ref()),
-        );
+        let prompt =
+            build_background_task_completion_prompt(&completion, Some("trusted task output\n"));
 
         assert!(prompt.contains("trusted task output"));
         assert!(!prompt.contains("should not be read"));
 
         let _ = std::fs::remove_file(arbitrary_path);
+        let _ = std::fs::remove_file(trusted_path);
+    }
+
+    #[tokio::test]
+    async fn prompt_output_reader_reads_tail_of_trusted_file() {
+        let trusted_path =
+            std::env::temp_dir().join(format!("claudette-trusted-{}.txt", uuid::Uuid::new_v4()));
+        let output = format!("{}tail output\n", "x".repeat(24_100));
+        std::fs::write(&trusted_path, output).unwrap();
+
+        let text =
+            super::read_background_output_for_prompt(Some(trusted_path.to_string_lossy().as_ref()))
+                .await
+                .unwrap();
+
+        assert!(text.starts_with("[output truncated to last 24000 bytes]"));
+        assert!(text.contains("tail output"));
+
         let _ = std::fs::remove_file(trusted_path);
     }
 }
