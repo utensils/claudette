@@ -234,7 +234,7 @@ async fn open_claudette_session_for_team_agent(
         let _ = app.emit(
             "session-renamed",
             serde_json::json!({
-                "session_id": session.id,
+                "session_id": &session.id,
                 "name": dispatch.session_name,
             }),
         );
