@@ -114,7 +114,15 @@
 }
 
 .optionLabel {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   font-weight: 500;
+}
+
+.optionLabel::before {
+  content: "";
+  display: none;
 }
 
 .optionDesc {
@@ -122,10 +130,29 @@
   color: var(--text-dim);
 }
 
-.optionSelected {
+.option.optionSelected,
+.option.optionSelected:hover {
   border-color: var(--accent-primary);
-  background: rgba(var(--accent-primary-rgb), 0.08);
-  box-shadow: 0 0 0 1px rgba(var(--accent-primary-rgb), 0.1);
+  background: rgba(var(--accent-primary-rgb), 0.16);
+  box-shadow: 0 0 0 1px rgba(var(--accent-primary-rgb), 0.3);
+}
+
+.option.optionSelected .optionLabel {
+  color: var(--accent-primary);
+}
+
+.option.optionSelected .optionLabel::before {
+  content: "\2713";
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--accent-primary);
+  color: var(--on-accent);
+  font-size: 10px;
+  line-height: 1;
 }
 
 .confirmBtn {

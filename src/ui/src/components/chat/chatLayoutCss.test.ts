@@ -89,3 +89,21 @@ describe("ThinkingBlock.module.css invariants", () => {
     expect(body).toMatch(/overflow-y:\s*auto\s*;/);
   });
 });
+
+describe("AgentQuestionCard.module.css invariants", () => {
+  it("selected question options keep their selected styling while hovered", () => {
+    const css = readCss("AgentQuestionCard.module.css");
+    const hoverBody = ruleBody(css, ".option:hover");
+    const selectedHoverMatch = css.match(
+      /\.option\.optionSelected,\s*\.option\.optionSelected:hover\s*{([^}]*)}/,
+    );
+    if (!selectedHoverMatch) {
+      throw new Error("selected option hover rule not found in CSS");
+    }
+    const selectedHoverBody = selectedHoverMatch[1];
+
+    expect(hoverBody).toMatch(/background:\s*rgba\(var\(--accent-primary-rgb\),\s*0\.05\)\s*;/);
+    expect(selectedHoverBody).toMatch(/border-color:\s*var\(--accent-primary\)\s*;/);
+    expect(selectedHoverBody).toMatch(/background:\s*rgba\(var\(--accent-primary-rgb\),\s*0\.16\)\s*;/);
+  });
+});
