@@ -46,8 +46,8 @@ impl AgentHarnessCapabilities {
             steer_turn: true,
             host_permission_prompts: true,
             remote_control: false,
-            mcp_config: false,
-            attachments: false,
+            mcp_config: true,
+            attachments: true,
         }
     }
 }
@@ -237,8 +237,8 @@ mod tests {
                 steer_turn: true,
                 host_permission_prompts: true,
                 remote_control: false,
-                mcp_config: false,
-                attachments: false,
+                mcp_config: true,
+                attachments: true,
             }
         );
     }

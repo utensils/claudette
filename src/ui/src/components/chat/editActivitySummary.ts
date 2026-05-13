@@ -108,22 +108,22 @@ function summarizeEditToolInput(
 
   if (normalized === "edit") {
     const direct = statFromReplacement(
-      stringField(input, "file_path"),
-      stringField(input, "old_string"),
-      stringField(input, "new_string"),
+      stringFieldAny(input, ["file_path", "path"]),
+      stringFieldAny(input, ["old_string", "old_str"]),
+      stringFieldAny(input, ["new_string", "new_str"]),
     );
     if (direct) return direct;
   }
 
   if (normalized === "multiedit") {
-    const filePath = stringField(input, "file_path");
+    const filePath = stringFieldAny(input, ["file_path", "path"]);
     const edits = Array.isArray(input.edits) ? input.edits : [];
     const stats = edits
       .map((edit) =>
         statFromReplacement(
           filePath,
-          stringField(recordFromUnknown(edit), "old_string"),
-          stringField(recordFromUnknown(edit), "new_string"),
+          stringFieldAny(recordFromUnknown(edit), ["old_string", "old_str"]),
+          stringFieldAny(recordFromUnknown(edit), ["new_string", "new_str"]),
         ),
       )
       .flatMap((summary) => summary?.files ?? []);
@@ -132,7 +132,7 @@ function summarizeEditToolInput(
   }
 
   if (normalized === "write") {
-    const filePath = stringField(input, "file_path");
+    const filePath = stringFieldAny(input, ["file_path", "path"]);
     const content = stringField(input, "content");
     if (filePath && content !== null) {
       return mergeStats([
@@ -426,4 +426,12 @@ function recordFromUnknown(value: unknown): JsonRecord | null {
 function stringField(record: JsonRecord | null, field: string): string | null {
   const value = record?.[field];
   return typeof value === "string" ? value : null;
+}
+
+function stringFieldAny(record: JsonRecord | null, fields: readonly string[]): string | null {
+  for (const field of fields) {
+    const value = stringField(record, field);
+    if (value !== null) return value;
+  }
+  return null;
 }

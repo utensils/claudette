@@ -45,6 +45,25 @@ describe("editActivitySummary", () => {
     ]);
   });
 
+  it("summarizes Codex-style Edit aliases with the shared file edit stats", () => {
+    const summary = summarizeTurnEdits([
+      activity({
+        toolName: "Edit",
+        inputJson: JSON.stringify({
+          path: "simple-wave.svg",
+          old_str: "<text>SVG test</text>\n",
+          new_str: "<path d=\"M0 4 C 8 0 16 8 24 4\" />\n<text>SVG edited</text>\n",
+        }),
+      }),
+    ]);
+
+    expect(summary).toMatchObject({
+      added: 2,
+      removed: 1,
+      files: [{ filePath: "simple-wave.svg", added: 2, removed: 1 }],
+    });
+  });
+
   it("aggregates MultiEdit and nested agent edit calls by file", () => {
     const summary = summarizeTurnEdits([
       activity({

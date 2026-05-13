@@ -42,6 +42,7 @@ pub struct CodexAppServerOptions {
     pub reasoning_effort: Option<String>,
     pub resume_thread_id: Option<String>,
     pub custom_instructions: Option<String>,
+    pub mcp_config: Option<String>,
     pub workspace_env: Option<crate::env::WorkspaceEnv>,
     pub resolved_env: Option<crate::env_provider::ResolvedEnv>,
 }
@@ -55,6 +56,7 @@ impl Default for CodexAppServerOptions {
             reasoning_effort: None,
             resume_thread_id: None,
             custom_instructions: None,
+            mcp_config: None,
             workspace_env: None,
             resolved_env: None,
         }
@@ -74,6 +76,7 @@ pub struct CodexAppServerSession {
     reasoning_effort: Option<String>,
     resume_thread_id: Option<String>,
     custom_instructions: Option<String>,
+    mcp_config: Option<String>,
     thread_id: Arc<tokio::sync::Mutex<Option<String>>>,
     active_turn_id: Arc<tokio::sync::Mutex<Option<String>>>,
     turn_output: TurnOutputBuffer,
@@ -148,6 +151,7 @@ impl CodexAppServerSession {
             reasoning_effort: normalize_codex_reasoning_effort(options.reasoning_effort.as_deref()),
             resume_thread_id: options.resume_thread_id,
             custom_instructions: options.custom_instructions,
+            mcp_config: options.mcp_config,
             thread_id: Arc::new(tokio::sync::Mutex::new(None)),
             active_turn_id: Arc::new(tokio::sync::Mutex::new(None)),
             turn_output: Arc::new(tokio::sync::Mutex::new(CodexTurnOutput::default())),
@@ -205,6 +209,7 @@ impl CodexAppServerSession {
             reasoning_effort: None,
             resume_thread_id: None,
             custom_instructions: None,
+            mcp_config: None,
             thread_id: Arc::new(tokio::sync::Mutex::new(None)),
             active_turn_id: Arc::new(tokio::sync::Mutex::new(None)),
             turn_output: Arc::new(tokio::sync::Mutex::new(CodexTurnOutput::default())),
@@ -411,6 +416,7 @@ impl CodexAppServerSession {
             fast_mode: self.fast_mode,
             reasoning_effort: self.reasoning_effort.as_deref(),
             custom_instructions: self.custom_instructions.as_deref(),
+            mcp_config: self.mcp_config.as_deref(),
         }
     }
 
@@ -1280,16 +1286,13 @@ pub struct CodexThreadRequestParams<'a> {
     pub fast_mode: bool,
     pub reasoning_effort: Option<&'a str>,
     pub custom_instructions: Option<&'a str>,
+    pub mcp_config: Option<&'a str>,
 }
 
 pub fn build_thread_start_request(id: i64, params: CodexThreadRequestParams<'_>) -> JsonRpcRequest {
     let mapping = params.permission_level.mapping();
     let service_tier = params.fast_mode.then_some("priority");
-    let config = params.reasoning_effort.map(|effort| {
-        json!({
-            "model_reasoning_effort": effort,
-        })
-    });
+    let config = codex_thread_config(params.reasoning_effort, params.mcp_config);
     JsonRpcRequest {
         id: JsonRpcId::Integer(id),
         method: "thread/start".to_string(),
@@ -1315,11 +1318,7 @@ pub fn build_thread_resume_request(
 ) -> JsonRpcRequest {
     let mapping = params.permission_level.mapping();
     let service_tier = params.fast_mode.then_some("priority");
-    let config = params.reasoning_effort.map(|effort| {
-        json!({
-            "model_reasoning_effort": effort,
-        })
-    });
+    let config = codex_thread_config(params.reasoning_effort, params.mcp_config);
     JsonRpcRequest {
         id: JsonRpcId::Integer(id),
         method: "thread/resume".to_string(),
@@ -1336,6 +1335,34 @@ pub fn build_thread_resume_request(
             "developerInstructions": params.custom_instructions,
         })),
     }
+}
+
+fn codex_thread_config(reasoning_effort: Option<&str>, mcp_config: Option<&str>) -> Option<Value> {
+    let mut config = serde_json::Map::new();
+    if let Some(effort) = reasoning_effort {
+        config.insert("model_reasoning_effort".to_string(), json!(effort));
+    }
+    if let Some(servers) = mcp_config.and_then(codex_mcp_servers_from_claude_config) {
+        config.insert("mcp_servers".to_string(), servers);
+    }
+    (!config.is_empty()).then_some(Value::Object(config))
+}
+
+fn codex_mcp_servers_from_claude_config(mcp_config: &str) -> Option<Value> {
+    let parsed: Value = serde_json::from_str(mcp_config).ok()?;
+    let servers = parsed
+        .get("mcpServers")
+        .or_else(|| parsed.get("mcp_servers"))?
+        .as_object()?;
+    let mut codex_servers = serde_json::Map::new();
+    for (name, server) in servers {
+        let mut server = server.clone();
+        if let Value::Object(ref mut object) = server {
+            object.remove("type");
+        }
+        codex_servers.insert(name.clone(), server);
+    }
+    Some(Value::Object(codex_servers))
 }
 
 pub struct CodexTurnStartRequest<'a> {
@@ -1891,33 +1918,46 @@ fn map_codex_item_started_to_agent_events(item: &Value) -> Vec<AgentEvent> {
         return Vec::new();
     };
     let index = codex_item_index(&item_id);
-    vec![
-        AgentEvent::Stream(StreamEvent::Stream {
-            event: InnerStreamEvent::ContentBlockStart {
-                index,
-                content_block: Some(StartContentBlock::ToolUse {
-                    id: item_id,
-                    name: tool_name,
-                }),
-            },
-        }),
-        AgentEvent::Stream(StreamEvent::Stream {
+    let item_type = item.get("type").and_then(Value::as_str);
+    let mut events = vec![AgentEvent::Stream(StreamEvent::Stream {
+        event: InnerStreamEvent::ContentBlockStart {
+            index,
+            content_block: Some(StartContentBlock::ToolUse {
+                id: item_id,
+                name: tool_name,
+            }),
+        },
+    })];
+    if item_type != Some("fileChange") {
+        events.push(AgentEvent::Stream(StreamEvent::Stream {
             event: InnerStreamEvent::ContentBlockDelta {
                 index,
                 delta: Delta::ToolUse {
                     partial_json: Some(input.to_string()),
                 },
             },
-        }),
-    ]
+        }));
+    }
+    events
 }
 
 fn map_codex_item_completed_to_agent_events(item: &Value) -> Vec<AgentEvent> {
-    let Some((item_id, _tool_name, _input)) = codex_item_tool_use(item) else {
+    let Some((item_id, _tool_name, input)) = codex_item_tool_use(item) else {
         return Vec::new();
     };
     let index = codex_item_index(&item_id);
-    vec![
+    let mut events = Vec::new();
+    if item.get("type").and_then(Value::as_str) == Some("fileChange") {
+        events.push(AgentEvent::Stream(StreamEvent::Stream {
+            event: InnerStreamEvent::ContentBlockDelta {
+                index,
+                delta: Delta::ToolUse {
+                    partial_json: Some(input.to_string()),
+                },
+            },
+        }));
+    }
+    events.extend([
         AgentEvent::Stream(StreamEvent::Stream {
             event: InnerStreamEvent::ContentBlockStop { index },
         }),
@@ -1934,7 +1974,8 @@ fn map_codex_item_completed_to_agent_events(item: &Value) -> Vec<AgentEvent> {
             is_replay: false,
             is_synthetic: true,
         }),
-    ]
+    ]);
+    events
 }
 
 fn codex_item_tool_use(item: &Value) -> Option<(String, String, Value)> {
@@ -2740,6 +2781,7 @@ mod tests {
                 fast_mode: false,
                 reasoning_effort: Some("high"),
                 custom_instructions: Some("Follow repo instructions."),
+                mcp_config: None,
             },
         );
         let value = serde_json::to_value(request).unwrap();
@@ -2750,6 +2792,32 @@ mod tests {
             value["params"]["developerInstructions"],
             "Follow repo instructions."
         );
+    }
+
+    #[test]
+    fn thread_start_request_translates_claude_mcp_config_for_codex() {
+        let request = build_thread_start_request(
+            8,
+            CodexThreadRequestParams {
+                model: Some("gpt-5.4"),
+                cwd: Path::new("/tmp/work"),
+                permission_level: CodexPermissionLevel::Readonly,
+                fast_mode: false,
+                reasoning_effort: Some("high"),
+                custom_instructions: None,
+                mcp_config: Some(
+                    r#"{"mcpServers":{"claudette":{"type":"stdio","command":"/app","args":["--agent-mcp"],"env":{"CLAUDETTE_AGENT_MCP_TOKEN":"secret"}}}}"#,
+                ),
+            },
+        );
+        let value = serde_json::to_value(request).unwrap();
+
+        let server = &value["params"]["config"]["mcp_servers"]["claudette"];
+        assert_eq!(server["command"], "/app");
+        assert_eq!(server["args"][0], "--agent-mcp");
+        assert_eq!(server["env"]["CLAUDETTE_AGENT_MCP_TOKEN"], "secret");
+        assert!(server.get("type").is_none());
+        assert_eq!(value["params"]["config"]["model_reasoning_effort"], "high");
     }
 
     #[test]
@@ -2764,6 +2832,7 @@ mod tests {
                 fast_mode: true,
                 reasoning_effort: Some("xhigh"),
                 custom_instructions: Some("Use the repo conventions."),
+                mcp_config: None,
             },
         );
         let value = serde_json::to_value(request).unwrap();
@@ -3193,8 +3262,23 @@ mod tests {
             }),
         });
 
-        assert_eq!(events.len(), 2);
-        let AgentEvent::Stream(StreamEvent::User { message, .. }) = &events[1] else {
+        assert_eq!(events.len(), 3);
+        let AgentEvent::Stream(StreamEvent::Stream {
+            event:
+                InnerStreamEvent::ContentBlockDelta {
+                    delta: Delta::ToolUse { partial_json },
+                    ..
+                },
+        }) = &events[0]
+        else {
+            panic!("expected completed file change input delta");
+        };
+        assert!(
+            partial_json
+                .as_deref()
+                .is_some_and(|input| input.contains("/tmp/a.rs"))
+        );
+        let AgentEvent::Stream(StreamEvent::User { message, .. }) = &events[2] else {
             panic!("expected tool result");
         };
         let super::super::UserMessageContent::Blocks(blocks) = &message.content else {

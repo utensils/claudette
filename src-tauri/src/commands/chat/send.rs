@@ -2307,6 +2307,7 @@ pub async fn send_chat_message(
                             reasoning_effort: settings.effort.clone(),
                             resume_thread_id: is_resume.then(|| sid.clone()),
                             custom_instructions: instructions.clone(),
+                            mcp_config: settings.mcp_config.clone(),
                             workspace_env: Some(env.clone()),
                             resolved_env: Some(resolved.clone()),
                         },
@@ -2358,11 +2359,8 @@ pub async fn send_chat_message(
                 drop(agents);
 
                 let mut respawn_settings = agent_settings.clone();
-                let bridge = if matches!(
-                    respawn_settings.backend_runtime.harness,
-                    AgentBackendRuntimeHarness::ClaudeCode
-                ) {
-                    Some(if send_to_user_enabled {
+                let bridge = match respawn_settings.backend_runtime.harness {
+                    AgentBackendRuntimeHarness::ClaudeCode => Some(if send_to_user_enabled {
                         let (b, mcp_with_claudette) = start_bridge_and_inject_mcp(
                             &app,
                             &state.db_path,
@@ -2376,11 +2374,27 @@ pub async fn send_chat_message(
                     } else {
                         start_chat_bridge(&app, &state.db_path, &workspace_id, &chat_session_id)
                             .await?
-                    })
-                } else {
-                    None
+                    }),
+                    AgentBackendRuntimeHarness::CodexAppServer if send_to_user_enabled => {
+                        let (b, mcp_with_claudette) = start_bridge_and_inject_mcp(
+                            &app,
+                            &state.db_path,
+                            &workspace_id,
+                            &chat_session_id,
+                            agent_settings.mcp_config.clone(),
+                        )
+                        .await?;
+                        respawn_settings.mcp_config = mcp_with_claudette;
+                        Some(b)
+                    }
+                    AgentBackendRuntimeHarness::CodexAppServer => None,
                 };
-                if let Some(bridge) = bridge.as_ref() {
+                if let Some(bridge) = bridge.as_ref()
+                    && matches!(
+                        respawn_settings.backend_runtime.harness,
+                        AgentBackendRuntimeHarness::ClaudeCode
+                    )
+                {
                     respawn_settings.hook_bridge = Some(build_agent_hook_bridge(bridge)?);
                 }
 
@@ -2528,11 +2542,8 @@ pub async fn send_chat_message(
         // on the session below so it lives exactly as long as the
         // persistent CLI process.
         let mut spawn_settings = agent_settings.clone();
-        let bridge = if matches!(
-            spawn_settings.backend_runtime.harness,
-            AgentBackendRuntimeHarness::ClaudeCode
-        ) {
-            Some(if send_to_user_enabled {
+        let bridge = match spawn_settings.backend_runtime.harness {
+            AgentBackendRuntimeHarness::ClaudeCode => Some(if send_to_user_enabled {
                 let (b, mcp_with_claudette) = start_bridge_and_inject_mcp(
                     &app,
                     &state.db_path,
@@ -2545,11 +2556,27 @@ pub async fn send_chat_message(
                 b
             } else {
                 start_chat_bridge(&app, &state.db_path, &workspace_id, &chat_session_id).await?
-            })
-        } else {
-            None
+            }),
+            AgentBackendRuntimeHarness::CodexAppServer if send_to_user_enabled => {
+                let (b, mcp_with_claudette) = start_bridge_and_inject_mcp(
+                    &app,
+                    &state.db_path,
+                    &workspace_id,
+                    &chat_session_id,
+                    agent_settings.mcp_config.clone(),
+                )
+                .await?;
+                spawn_settings.mcp_config = mcp_with_claudette;
+                Some(b)
+            }
+            AgentBackendRuntimeHarness::CodexAppServer => None,
         };
-        if let Some(bridge) = bridge.as_ref() {
+        if let Some(bridge) = bridge.as_ref()
+            && matches!(
+                spawn_settings.backend_runtime.harness,
+                AgentBackendRuntimeHarness::ClaudeCode
+            )
+        {
             spawn_settings.hook_bridge = Some(build_agent_hook_bridge(bridge)?);
         }
 
