@@ -49,7 +49,20 @@ const serviceMocks = vi.hoisted(() => ({
     }),
   ),
   claudeAuthLogin: vi.fn(() => Promise.resolve()),
+  submitClaudeAuthCode: vi.fn(() => Promise.resolve()),
   cancelClaudeAuthLogin: vi.fn(() => Promise.resolve()),
+}));
+
+const eventMocks = vi.hoisted(() => ({
+  listeners: new Map<string, Array<(event: { payload: unknown }) => void>>(),
+  emit(event: string, payload: unknown) {
+    for (const listener of this.listeners.get(event) ?? []) {
+      listener({ payload });
+    }
+  },
+  reset() {
+    this.listeners.clear();
+  },
 }));
 
 vi.mock("../../../stores/useAppStore", () => ({
@@ -60,7 +73,18 @@ vi.mock("../../../stores/useAppStore", () => ({
 vi.mock("../../../services/tauri", () => serviceMocks);
 
 vi.mock("@tauri-apps/api/event", () => ({
-  listen: vi.fn(() => Promise.resolve(() => {})),
+  listen: vi.fn((event: string, callback: (event: { payload: unknown }) => void) => {
+    const listeners = eventMocks.listeners.get(event) ?? [];
+    listeners.push(callback);
+    eventMocks.listeners.set(event, listeners);
+    return Promise.resolve(() => {
+      const current = eventMocks.listeners.get(event) ?? [];
+      eventMocks.listeners.set(
+        event,
+        current.filter((listener) => listener !== callback),
+      );
+    });
+  }),
 }));
 
 vi.mock("../../../hooks/useAutoUpdater", () => ({
@@ -124,7 +148,11 @@ describe("GeneralSettings", () => {
     appStore.claudeAuthFailure = null;
     appStore.setClaudeAuthFailure.mockClear();
     appStore.setResolvedClaudeAuthFailureMessageId.mockClear();
+    eventMocks.reset();
     serviceMocks.getClaudeAuthStatus.mockClear();
+    serviceMocks.claudeAuthLogin.mockClear();
+    serviceMocks.submitClaudeAuthCode.mockClear();
+    serviceMocks.cancelClaudeAuthLogin.mockClear();
     serviceMocks.getClaudeAuthStatus.mockResolvedValue({
       state: "signed_out",
       loggedIn: false,
@@ -253,5 +281,104 @@ describe("GeneralSettings", () => {
     expect(serviceMocks.getClaudeAuthStatus).toHaveBeenCalledTimes(2);
     expect(serviceMocks.getClaudeAuthStatus).toHaveBeenLastCalledWith(true);
     expect(appStore.setClaudeAuthFailure).not.toHaveBeenCalled();
+  });
+
+  it("does not resolve a chat auth failure until sign-in validates", async () => {
+    appStore.claudeAuthFailure = {
+      messageId: "assistant-1",
+      error: "Not logged in · Please run /login",
+    };
+    serviceMocks.getClaudeAuthStatus
+      .mockResolvedValueOnce({
+        state: "signed_in",
+        loggedIn: true,
+        verified: false,
+        authMethod: "oauth_token",
+        apiProvider: "firstParty",
+        message: null,
+      })
+      .mockResolvedValueOnce({
+        state: "signed_out",
+        loggedIn: false,
+        verified: false,
+        authMethod: null,
+        apiProvider: null,
+        message: "Not logged in · Please run /login",
+      });
+
+    const container = await renderGeneralSettings();
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    const signIn = Array.from(container.querySelectorAll("button")).find((button) =>
+      button.textContent?.includes("auth_reauthenticate"),
+    );
+    expect(signIn).not.toBeUndefined();
+    await act(async () => {
+      signIn?.click();
+      await Promise.resolve();
+    });
+    await act(async () => {
+      eventMocks.emit("auth://login-complete", { success: true, error: null });
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(serviceMocks.getClaudeAuthStatus).toHaveBeenLastCalledWith(true);
+    expect(appStore.setResolvedClaudeAuthFailureMessageId).not.toHaveBeenCalledWith(
+      "assistant-1",
+    );
+    expect(appStore.setResolvedClaudeAuthFailureMessageId).toHaveBeenCalledWith(null);
+    expect(appStore.setClaudeAuthFailure).toHaveBeenCalledWith({
+      messageId: "assistant-1",
+      error: "Not logged in · Please run /login",
+    });
+  });
+
+  it("submits pasted Claude auth codes to the running login process", async () => {
+    const container = await renderGeneralSettings();
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    const signIn = Array.from(container.querySelectorAll("button")).find((button) =>
+      button.textContent?.includes("auth_sign_in"),
+    );
+    expect(signIn).not.toBeUndefined();
+    await act(async () => {
+      signIn?.click();
+      await Promise.resolve();
+    });
+    await act(async () => {
+      eventMocks.emit("auth://login-progress", {
+        stream: "stdout",
+        line: "If the browser didn't open, visit: https://claude.ai/auth/code",
+      });
+      await Promise.resolve();
+    });
+
+    const codeInput = container.querySelector<HTMLInputElement>(
+      'input[placeholder="auth_code_placeholder"]',
+    );
+    expect(codeInput).not.toBeNull();
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(
+        codeInput,
+        "  abc-123  ",
+      );
+      codeInput!.dispatchEvent(new Event("input", { bubbles: true }));
+      await Promise.resolve();
+    });
+    const submit = Array.from(container.querySelectorAll("button")).find((button) =>
+      button.textContent?.includes("auth_submit_code"),
+    );
+    expect(submit?.disabled).toBe(false);
+    await act(async () => {
+      submit?.click();
+      await Promise.resolve();
+    });
+
+    expect(serviceMocks.submitClaudeAuthCode).toHaveBeenCalledWith("abc-123");
   });
 });

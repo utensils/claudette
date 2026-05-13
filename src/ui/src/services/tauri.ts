@@ -43,6 +43,7 @@ import type {
   GitFileLayer,
   StagedDiffFiles,
 } from "../types/diff";
+import type { WorkspaceEnvTrustNeededPayload } from "../types/env";
 
 // -- Data --
 
@@ -266,7 +267,9 @@ export function runWorkspaceSetup(
   return invoke("run_workspace_setup", { workspaceId });
 }
 
-export function prepareWorkspaceEnvironment(workspaceId: string): Promise<void> {
+export function prepareWorkspaceEnvironment(
+  workspaceId: string
+): Promise<WorkspaceEnvTrustNeededPayload | null> {
   return invoke("prepare_workspace_environment", { workspaceId });
 }
 
@@ -1594,6 +1597,10 @@ export function getClaudeAuthStatus(validate = false): Promise<ClaudeAuthStatus>
 
 export function claudeAuthLogin(): Promise<void> {
   return invoke("claude_auth_login");
+}
+
+export function submitClaudeAuthCode(code: string): Promise<void> {
+  return invoke("submit_claude_auth_code", { code });
 }
 
 export function cancelClaudeAuthLogin(): Promise<void> {

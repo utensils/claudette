@@ -167,6 +167,8 @@
   "notifications_sound_error_desc": "当智能体遇到错误时播放的声音",
   "notifications_sound_session_start_label": "会话开始",
   "notifications_sound_session_start_desc": "当新会话开始时播放的声音",
+  "auth_code_placeholder": "粘贴浏览器代码",
+  "auth_submit_code": "提交代码",
   "nav_editor": "Editor",
   "editor_title": "Editor",
   "editor_gutter_base_label": "Git gutter base",

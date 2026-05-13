@@ -158,6 +158,7 @@
   "diff_mode_preview": "プレビュー",
 
   "auth_resolved_label": "解決済み",
+  "auth_resolved_message": "このチャットの Claude Code サインインが復元されました。",
 
   "terminal_failed_to_start": "シェルの起動に失敗しました"
 }

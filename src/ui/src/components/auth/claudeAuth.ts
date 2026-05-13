@@ -3,13 +3,24 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import {
   cancelClaudeAuthLogin,
   claudeAuthLogin,
+  getClaudeAuthStatus,
+  submitClaudeAuthCode,
+  type ClaudeAuthStatus,
 } from "../../services/tauri";
+import { useAppStore } from "../../stores/useAppStore";
 
 export type ClaudeAuthLoginState =
   | { status: "idle" }
   | { status: "running"; manualUrl: string | null }
   | { status: "success" }
   | { status: "error"; error: string };
+
+export interface ClaudeAuthLoginController {
+  authState: ClaudeAuthLoginState;
+  startAuthLogin: () => Promise<void>;
+  cancelAuthLogin: () => Promise<void>;
+  submitAuthCode: (code: string) => Promise<void>;
+}
 
 type AuthLoginProgress = { stream: "stdout" | "stderr"; line: string };
 type AuthLoginComplete = { success: boolean; error: string | null };
@@ -24,6 +35,9 @@ const AUTH_ERROR_PATTERNS = [
   "invalid authentication credentials",
   "token refresh failed",
   "credentials not found",
+  "not logged in",
+  "please run /login",
+  "run /login",
   "expired or been revoked",
   "run claude auth login",
   "failed to authenticate",
@@ -40,6 +54,13 @@ export function cleanClaudeAuthError(error: string): string {
     .replace(/^Error:\s*/i, "")
     .replace(/^ENV_AUTH:\s*/i, "")
     .trim();
+  const cliLoginHint = cleaned.match(/^(.+?)\s*[·-]\s*please run\s+\/login\.?$/i);
+  if (cliLoginHint) {
+    return cliLoginHint[1].trim();
+  }
+  if (/^please run\s+\/login\.?$/i.test(cleaned)) {
+    return "Not signed in";
+  }
   const apiError = cleaned.match(
     /^(?:Failed to authenticate\.\s*)?API Error:\s*(\d+)\s*(.+)$/i,
   );
@@ -48,6 +69,73 @@ export function cleanClaudeAuthError(error: string): string {
     return `${message.replace(/[.\s]+$/, "")} (${status})`;
   }
   return cleaned;
+}
+
+export function useClaudeAuthRecovery() {
+  const claudeAuthFailureMessageId = useAppStore(
+    (s) => s.claudeAuthFailure?.messageId ?? null,
+  );
+  const setClaudeAuthFailure = useAppStore((s) => s.setClaudeAuthFailure);
+  const setResolvedClaudeAuthFailureMessageId = useAppStore(
+    (s) => s.setResolvedClaudeAuthFailureMessageId,
+  );
+
+  const markAuthRecovered = useCallback(() => {
+    if (claudeAuthFailureMessageId) {
+      setResolvedClaudeAuthFailureMessageId(claudeAuthFailureMessageId);
+    }
+    setClaudeAuthFailure(null);
+  }, [
+    claudeAuthFailureMessageId,
+    setClaudeAuthFailure,
+    setResolvedClaudeAuthFailureMessageId,
+  ]);
+
+  const applyAuthStatusRecovery = useCallback(
+    (value: ClaudeAuthStatus, validate = false) => {
+      if (value.state === "signed_in" && value.verified) {
+        markAuthRecovered();
+        return;
+      }
+
+      if (
+        validate &&
+        value.message &&
+        (value.state === "signed_out" || isClaudeAuthError(value.message))
+      ) {
+        if (claudeAuthFailureMessageId) {
+          setResolvedClaudeAuthFailureMessageId(null);
+        }
+        setClaudeAuthFailure({
+          messageId: claudeAuthFailureMessageId,
+          error: value.message,
+        });
+      }
+    },
+    [
+      claudeAuthFailureMessageId,
+      markAuthRecovered,
+      setClaudeAuthFailure,
+      setResolvedClaudeAuthFailureMessageId,
+    ],
+  );
+
+  const validateAuthLoginSuccess = useCallback(async () => {
+    const value = await getClaudeAuthStatus(true);
+    applyAuthStatusRecovery(value, true);
+    if (value.state !== "signed_in" || !value.verified) {
+      throw new Error(
+        value.message ?? "Claude Code sign-in could not be verified.",
+      );
+    }
+    return value;
+  }, [applyAuthStatusRecovery]);
+
+  return {
+    applyAuthStatusRecovery,
+    markAuthRecovered,
+    validateAuthLoginSuccess,
+  };
 }
 
 export function useClaudeAuthLogin({
@@ -89,15 +177,27 @@ export function useClaudeAuthLogin({
 
     listen<AuthLoginComplete>("auth://login-complete", (event) => {
       const { success, error } = event.payload;
-      if (success) {
-        setAuthState({ status: "success" });
-        void onSuccessRef.current?.();
-      } else {
+      if (!success) {
         setAuthState({
           status: "error",
           error: error ?? "Sign-in failed.",
         });
+        return;
       }
+
+      void Promise.resolve(onSuccessRef.current?.())
+        .then(() => {
+          setAuthState({ status: "success" });
+        })
+        .catch((err) => {
+          setAuthState({
+            status: "error",
+            error:
+              err instanceof Error
+                ? err.message
+                : String(err || "Sign-in could not be verified."),
+          });
+        });
     })
       .then((fn) => {
         if (cancelled) fn();
@@ -130,9 +230,19 @@ export function useClaudeAuthLogin({
     }
   }, []);
 
+  const submitAuthCode = useCallback(async (code: string) => {
+    try {
+      await submitClaudeAuthCode(code);
+    } catch (e) {
+      setAuthState({ status: "error", error: String(e) });
+      throw e;
+    }
+  }, []);
+
   return {
     authState,
     startAuthLogin,
     cancelAuthLogin,
-  };
+    submitAuthCode,
+  } satisfies ClaudeAuthLoginController;
 }

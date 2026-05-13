@@ -42,6 +42,7 @@ export interface NativeCommandContext {
   openSettings: (section?: string) => void;
   appVersion: string | null;
   addLocalMessage: (text: string) => void;
+  startClaudeAuthLogin: () => Promise<void>;
   openUsageSettingsExternal: () => void;
   openReleaseNotes: () => void;
 
@@ -348,6 +349,32 @@ const usageHandler: NativeHandler = {
     // Mirror `/config usage` — route to Experimental when the gate is off.
     ctx.openSettings(ctx.usageInsightsEnabled ? "usage" : "experimental");
     return { kind: "handled", canonicalName: "usage" };
+  },
+};
+
+function formatCommandError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+const loginHandler: NativeHandler = {
+  name: "login",
+  aliases: [],
+  kind: "local_action",
+  execute: async (ctx, args) => {
+    const handled = { kind: "handled" as const, canonicalName: "login" };
+    if (args.trim() !== "") {
+      ctx.addLocalMessage("/login: does not accept arguments. Usage: /login");
+      return handled;
+    }
+    try {
+      await ctx.startClaudeAuthLogin();
+      ctx.addLocalMessage(
+        "Claude Code sign-in opened. Complete the browser flow, then retry the turn.",
+      );
+    } catch (error) {
+      ctx.addLocalMessage(`/login failed: ${formatCommandError(error)}`);
+    }
+    return handled;
   },
 };
 
@@ -823,6 +850,7 @@ export const NATIVE_HANDLERS: NativeHandler[] = [
   reviewHandler("pr-comments", PR_COMMENTS_PROMPT),
   configHandler,
   usageHandler,
+  loginHandler,
   extraUsageHandler,
   releaseNotesHandler,
   versionHandler,

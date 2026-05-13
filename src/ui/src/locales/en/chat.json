@@ -194,6 +194,7 @@
   "file_external_change_reload_aria": "Reload from disk",
 
   "auth_resolved_label": "Resolved",
+  "auth_resolved_message": "Claude Code sign-in was restored for this chat.",
 
   "terminal_failed_to_start": "Failed to start shell"
 }

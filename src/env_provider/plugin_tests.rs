@@ -958,6 +958,216 @@ fn nix_detect_skips_plain_repo() {
     ));
 }
 
+/// Drive env-nix-devshell's `export` with a stubbed `host.exec` that
+/// returns a `nix print-dev-env --json`-shaped payload built from
+/// `variables` (a map of `NAME -> {type, value}`). Returns the env_map
+/// the plugin produced.
+///
+/// Mirrors the direnv `*_returns` helpers above so we can pin what the
+/// dispatcher would actually merge into the workspace env, not just
+/// detection.
+fn nix_export_returns(
+    variables: serde_json::Value,
+) -> (std::collections::HashMap<String, String>, tempfile::TempDir) {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(tmp.path().join("flake.nix"), "{}").unwrap();
+    let lua = make_vm("env-nix-devshell", &["nix"], tmp.path());
+
+    let payload = serde_json::json!({ "variables": variables });
+    let payload_json = serde_json::to_string(&payload).unwrap();
+    let stub = format!(
+        r#"
+        host.exec = function(cmd, args)
+            if cmd ~= "nix" then error("expected cmd='nix', got: " .. tostring(cmd)) end
+            if type(args) ~= "table" or args[1] ~= "print-dev-env" or args[2] ~= "--json" then
+                error("expected args[1..2]={{'print-dev-env','--json'}}")
+            end
+            return {{ stdout = [==[{payload_json}]==], stderr = "", code = 0 }}
+        end
+        "#
+    );
+    lua.load(&stub).exec().expect("install stub");
+
+    let worktree = tmp.path().to_string_lossy().into_owned();
+    let script = format!(
+        r#"
+        local M = (function() {src} end)()
+        return M.export({{ worktree = "{path}" }})
+        "#,
+        src = NIX_SRC,
+        path = worktree.replace('\\', "\\\\"),
+    );
+    let result: mlua::Table = lua.load(&script).eval().expect("export");
+    let env_tbl: mlua::Table = result.get("env").expect("env field");
+    let mut env = std::collections::HashMap::new();
+    for pair in env_tbl.pairs::<String, mlua::Value>() {
+        let (k, v) = pair.unwrap();
+        if let mlua::Value::String(s) = v {
+            env.insert(k, s.to_str().unwrap().to_string());
+        }
+    }
+    (env, tmp)
+}
+
+/// `nix print-dev-env --json` emits sandbox / bash-builtin defaults
+/// (HOME=/homeless-shelter, PATH=/path-not-set, SHELL=/sbin/nologin,
+/// TMPDIR=/private/tmp/nix-build-…, plus a pile of derivation-attr
+/// leaks). Pre-fix these flowed straight onto the chat agent spawn and
+/// broke `claude` auth because the subprocess saw a HOME that didn't
+/// contain `~/.claude/.credentials.json`. Pin the denylist so the
+/// regression cannot return silently: if any of these names re-appear
+/// in the exported env, this test fails before the user does.
+#[test]
+fn nix_export_drops_sandbox_and_bash_builtin_vars() {
+    // Mirror the real payload shape — everything is type=exported with
+    // a string value. We mix a single legitimate var ("LANG") in to
+    // assert the filter is a denylist and not a blanket strip.
+    let variables = serde_json::json!({
+        "HOME":              { "type": "exported", "value": "/homeless-shelter" },
+        "PATH":              { "type": "exported", "value": "/path-not-set" },
+        "SHELL":             { "type": "exported", "value": "/sbin/nologin" },
+        "TMPDIR":            { "type": "exported", "value": "/private/tmp/nix-build-x.drv-0" },
+        "TMP":               { "type": "exported", "value": "/private/tmp/nix-build-x.drv-0" },
+        "TEMP":              { "type": "exported", "value": "/private/tmp/nix-build-x.drv-0" },
+        "TEMPDIR":           { "type": "exported", "value": "/private/tmp/nix-build-x.drv-0" },
+        "PWD":               { "type": "exported", "value": "/build" },
+        "OLDPWD":            { "type": "exported", "value": "/build" },
+        "IFS":               { "type": "var",      "value": " \t\n" },
+        "BASH":              { "type": "exported", "value": "/nix/store/.../bash" },
+        "BASHOPTS":          { "type": "var",      "value": "cmdhist" },
+        "SHELLOPTS":         { "type": "var",      "value": "braceexpand" },
+        "SHLVL":             { "type": "exported", "value": "1" },
+        "PPID":              { "type": "var",      "value": "1234" },
+        "PS1":               { "type": "var",      "value": "$ " },
+        "PS2":               { "type": "var",      "value": "> " },
+        "PS3":               { "type": "var",      "value": "?# " },
+        "PS4":               { "type": "var",      "value": "+ " },
+        "TERM":              { "type": "exported", "value": "xterm" },
+        "HOSTTYPE":          { "type": "var",      "value": "aarch64" },
+        "MACHTYPE":          { "type": "var",      "value": "aarch64-apple-darwin" },
+        "OSTYPE":            { "type": "var",      "value": "darwin25" },
+        "OPTERR":            { "type": "var",      "value": "1" },
+        "LINENO":            { "type": "var",      "value": "0" },
+        "NIX_BUILD_CORES":   { "type": "exported", "value": "8" },
+        "NIX_BUILD_TOP":     { "type": "exported", "value": "/private/tmp/nix-build-x.drv-0" },
+        "NIX_ENFORCE_PURITY": { "type": "exported", "value": "1" },
+        "NIX_LOG_FD":        { "type": "exported", "value": "2" },
+        "NIX_STORE":         { "type": "exported", "value": "/nix/store" },
+        "builder":           { "type": "var",      "value": "/nix/store/.../bash" },
+        "dontAddDisableDepTrack": { "type": "var", "value": "1" },
+        "name":              { "type": "var",      "value": "devshell-env" },
+        "out":               { "type": "var",      "value": "/nix/store/.../out" },
+        "outputs":           { "type": "var",      "value": "out" },
+        "shellHook":         { "type": "var",      "value": "" },
+        "stdenv":            { "type": "var",      "value": "/nix/store/.../stdenv" },
+        "system":            { "type": "var",      "value": "aarch64-darwin" },
+        // Non-sandbox var that *should* pass through.
+        "LANG":              { "type": "exported", "value": "en_US.UTF-8" },
+    });
+
+    let (env, _tmp) = nix_export_returns(variables);
+
+    // None of the sandbox / bash-builtin / derivation-attr names may
+    // appear in the merged env — they would override the caller's
+    // real values in the agent subprocess.
+    let banned = [
+        "HOME",
+        "PATH",
+        "SHELL",
+        "TMPDIR",
+        "TMP",
+        "TEMP",
+        "TEMPDIR",
+        "PWD",
+        "OLDPWD",
+        "IFS",
+        "BASH",
+        "BASHOPTS",
+        "SHELLOPTS",
+        "SHLVL",
+        "PPID",
+        "PS1",
+        "PS2",
+        "PS3",
+        "PS4",
+        "TERM",
+        "HOSTTYPE",
+        "MACHTYPE",
+        "OSTYPE",
+        "OPTERR",
+        "LINENO",
+        "NIX_BUILD_CORES",
+        "NIX_BUILD_TOP",
+        "NIX_ENFORCE_PURITY",
+        "NIX_LOG_FD",
+        "NIX_STORE",
+        "builder",
+        "dontAddDisableDepTrack",
+        "name",
+        "out",
+        "outputs",
+        "shellHook",
+        "stdenv",
+        "system",
+    ];
+    for key in banned {
+        assert!(
+            !env.contains_key(key),
+            "{key} leaked into agent env from nix print-dev-env; \
+             this would clobber the caller's value and (for HOME) \
+             break `claude` auth. exported keys: {:?}",
+            env.keys().collect::<Vec<_>>(),
+        );
+    }
+
+    // Non-sandbox vars must pass through — otherwise the filter is too
+    // wide and would silently break real devshell exports.
+    assert_eq!(env.get("LANG").map(String::as_str), Some("en_US.UTF-8"));
+}
+
+/// Filter is a denylist of names — values are not inspected. A
+/// flake that happens to export `HOME` to something sane (e.g. via
+/// `mkShell { env.HOME = "/Users/me"; }`) is still dropped, which is
+/// the conservative choice: leaking *any* HOME from a nix derivation
+/// onto the agent subprocess loses the caller's real HOME. Pin the
+/// name-based behavior so a future refactor doesn't accidentally
+/// switch to value-shape matching.
+#[test]
+fn nix_export_filter_matches_by_name_not_value() {
+    let variables = serde_json::json!({
+        "HOME": { "type": "exported", "value": "/Users/me" },
+        "OK":   { "type": "exported", "value": "/homeless-shelter" },
+    });
+    let (env, _tmp) = nix_export_returns(variables);
+    assert!(
+        !env.contains_key("HOME"),
+        "HOME must be filtered regardless of value to keep the rule simple; got {env:?}"
+    );
+    assert_eq!(
+        env.get("OK").map(String::as_str),
+        Some("/homeless-shelter"),
+        "filter must not match by value — only by name"
+    );
+}
+
+/// Non-scalar entries (Bash arrays / associatives) and unknown
+/// `type` values must be skipped without errors. Pinned so the
+/// scalar-only contract survives mlua / serde-json refactors.
+#[test]
+fn nix_export_skips_non_scalar_and_unknown_types() {
+    let variables = serde_json::json!({
+        "ARR":     { "type": "array",        "value": ["a", "b"] },
+        "ASSOC":   { "type": "associative",  "value": { "k": "v" } },
+        "WEIRD":   { "type": "exported" },                                // missing value
+        "GOOD":    { "type": "exported", "value": "yes" },
+    });
+    let (env, _tmp) = nix_export_returns(variables);
+    assert_eq!(env.get("GOOD").map(String::as_str), Some("yes"));
+    assert!(!env.contains_key("ARR"));
+    assert!(!env.contains_key("ASSOC"));
+    assert!(!env.contains_key("WEIRD"));
+}
+
 // ---------------------------------------------------------------------------
 // Integration: real CLIs (gated behind build.rs probes)
 // ---------------------------------------------------------------------------

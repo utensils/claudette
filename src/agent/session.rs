@@ -16,6 +16,7 @@ use super::args::{
     build_settings_json, build_stdin_message_with_uuid, build_steering_stdin_message,
 };
 use super::binary::resolve_claude_path;
+use super::environment::apply_resolved_env_to_command;
 use super::process::{AgentEvent, TurnHandle};
 use super::types::{ControlResponsePayload, FileAttachment, StreamEvent, parse_stream_line};
 
@@ -105,7 +106,7 @@ impl PersistentSession {
         // See run_turn for layering rationale — env-provider output under
         // the CLAUDETTE_* markers, under the settings-driven context toggle.
         if let Some(env) = resolved_env {
-            env.apply(&mut cmd);
+            apply_resolved_env_to_command(&mut cmd, env);
         }
         settings.backend_runtime.apply_to_command(&mut cmd);
 
@@ -195,9 +196,12 @@ impl PersistentSession {
             }
         });
 
-        // Background stderr reader.
+        // Background stderr reader. Auth and transport failures can be
+        // stderr-only, so forward lines through the same broadcast channel the
+        // per-turn receiver already consumes.
         let stderr_pid = pid;
-        tokio::spawn(async move {
+        let tx_stderr = event_tx.clone();
+        let stderr_task = tokio::spawn(async move {
             let reader = BufReader::new(stderr);
             let mut lines = reader.lines();
             while let Ok(Some(line)) = lines.next_line().await {
@@ -209,6 +213,7 @@ impl PersistentSession {
                         line = %line,
                         "claude stderr"
                     );
+                    let _ = tx_stderr.send(AgentEvent::Stderr(line));
                 }
             }
         });
@@ -219,6 +224,7 @@ impl PersistentSession {
         let tx_exit = event_tx.clone();
         tokio::spawn(async move {
             let status = child.wait().await.ok().and_then(|s| s.code());
+            let _ = stderr_task.await;
             let _ = tx_exit.send(AgentEvent::ProcessExited(status));
         });
 

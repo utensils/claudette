@@ -57,13 +57,22 @@ pub fn sanitize_claude_subprocess_env(cmd: &mut tokio::process::Command) {
     {
         cmd.env_remove("ANTHROPIC_API_KEY");
     }
+    cmd.env_remove("ANTHROPIC_AUTH_TOKEN");
+    cmd.env_remove("ANTHROPIC_FOUNDRY_API_KEY");
+    cmd.env_remove("ANTHROPIC_UNIX_SOCKET");
+    cmd.env_remove("AWS_BEARER_TOKEN_BEDROCK");
+    cmd.env_remove("CLAUDE_BRIDGE_OAUTH_TOKEN");
+    cmd.env_remove("CLAUDE_SESSION_INGRESS_TOKEN_FILE");
+    cmd.env_remove("CLAUDE_TRUSTED_DEVICE_TOKEN");
     cmd.env_remove("CLAUDECODE");
+    cmd.env_remove("CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR");
     cmd.env_remove("CLAUDE_CODE_ENTRYPOINT");
+    cmd.env_remove("CLAUDE_CODE_OAUTH_REFRESH_TOKEN");
+    cmd.env_remove("CLAUDE_CODE_OAUTH_SCOPES");
     cmd.env_remove("CLAUDE_CODE_OAUTH_TOKEN");
     cmd.env_remove("CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR");
-    cmd.env_remove("CLAUDE_CODE_OAUTH_TOKEN_PRIMARY");
-    cmd.env_remove("CLAUDE_CODE_OAUTH_TOKEN_SECONDARY");
-    cmd.env_remove("CLAUDE_CURRENT_PROFILE");
+    cmd.env_remove("CLAUDE_CODE_SESSION_ACCESS_TOKEN");
+    cmd.env_remove("CLAUDE_CODE_WEBSOCKET_AUTH_FILE_DESCRIPTOR");
 }
 
 #[cfg(windows)]

@@ -12,6 +12,7 @@ use crate::process::{CommandWindowExt as _, sanitize_claude_subprocess_env};
 use super::AgentSettings;
 use super::args::{build_claude_args, build_stdin_message};
 use super::binary::resolve_claude_path;
+use super::environment::apply_resolved_env_to_command;
 use super::types::{FileAttachment, StreamEvent, parse_stream_line};
 
 /// Events emitted by an agent turn (stream events + process lifecycle).
@@ -25,6 +26,8 @@ use super::types::{FileAttachment, StreamEvent, parse_stream_line};
 pub enum AgentEvent {
     /// A parsed stream event from stdout.
     Stream(StreamEvent),
+    /// A raw stderr line from the agent process.
+    Stderr(String),
     /// The agent process has exited.
     ProcessExited(Option<i32>),
 }
@@ -108,7 +111,7 @@ pub async fn run_turn(
     // and BEFORE the settings-driven 1M-context toggle so the UI choice
     // cannot be overridden by a provider that happens to export the same key.
     if let Some(env) = resolved_env {
-        env.apply(&mut cmd);
+        apply_resolved_env_to_command(&mut cmd, env);
     }
     settings.backend_runtime.apply_to_command(&mut cmd);
 
@@ -203,13 +206,19 @@ pub async fn run_turn(
         }
     });
 
-    // Stderr reader task — log stderr lines
-    tokio::spawn(async move {
+    // Stderr reader task — log stderr lines and forward them to the turn
+    // bridge. Some Claude Code failures, including auth failures, only appear
+    // on stderr before the process exits.
+    let tx_stderr = event_tx.clone();
+    let stderr_task = tokio::spawn(async move {
         let reader = BufReader::new(stderr);
         let mut lines = reader.lines();
         while let Ok(Some(line)) = lines.next_line().await {
             if !line.trim().is_empty() {
                 tracing::warn!(target: "claudette::agent", line = %line, "claude stderr");
+                if tx_stderr.send(AgentEvent::Stderr(line)).await.is_err() {
+                    break;
+                }
             }
         }
     });
@@ -218,6 +227,7 @@ pub async fn run_turn(
     let tx_exit = event_tx;
     tokio::spawn(async move {
         let status = child.wait().await.ok().and_then(|s| s.code());
+        let _ = stderr_task.await;
         let _ = tx_exit.send(AgentEvent::ProcessExited(status)).await;
     });
 

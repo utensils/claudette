@@ -160,6 +160,7 @@
   "diff_mode_preview": "Pré-visualização",
 
   "auth_resolved_label": "Resolvido",
+  "auth_resolved_message": "O login do Claude Code foi restaurado para este chat.",
 
   "terminal_failed_to_start": "Falha ao iniciar o shell"
 }

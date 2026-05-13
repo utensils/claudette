@@ -56,6 +56,10 @@ import {
   parseSlashInput,
   resolveNativeHandler,
 } from "./nativeSlashCommands";
+import {
+  buildSendFailureSystemMessage,
+  shouldRecordSendFailureInChat,
+} from "./chatSendFailure";
 import { resolveUltrathinkEffort } from "./ultrathink";
 import { extractCompactionEvents } from "../../utils/compactionSentinel";
 import { WorkspacePanelHeader } from "../shared/WorkspacePanelHeader";
@@ -73,6 +77,7 @@ import { ScrollContext } from "./ScrollContext";
 import { StreamingThinkingBlock } from "./StreamingThinkingBlock";
 import { StreamingMessage } from "./StreamingMessage";
 import { MessagesWithTurns } from "./MessagesWithTurns";
+import { ChatAuthFailureCallout } from "../auth/ChatAuthFailureCallout";
 import { CliInvocationBanner } from "./CliInvocationBanner";
 import { CurrentTurnTaskProgress } from "./CurrentTurnTaskProgress";
 import { ChatInputArea } from "./ChatInputArea";
@@ -561,6 +566,18 @@ export function ChatPanel() {
   oldestMessageIdRef.current = oldestMessageId;
   const activeSessionIdRef = useRef<string | null>(null);
   activeSessionIdRef.current = activeSessionId;
+  const showChatAuthLoginPanel = useAppStore((s) => s.chatAuthLoginPanelOpen);
+  const chatAuthLoginRequestId = useAppStore((s) => s.chatAuthLoginRequestId);
+  const chatAuthLoginStartedRequestId = useAppStore(
+    (s) => s.chatAuthLoginStartedRequestId,
+  );
+  const openChatAuthLoginPanel = useAppStore((s) => s.openChatAuthLoginPanel);
+  const setChatAuthLoginStartedRequestId = useAppStore(
+    (s) => s.setChatAuthLoginStartedRequestId,
+  );
+  const startChatClaudeAuthLogin = useCallback(async () => {
+    openChatAuthLoginPanel();
+  }, [openChatAuthLoginPanel]);
 
   useEffect(() => {
     const container = messagesContainerRef.current;
@@ -1157,6 +1174,7 @@ export function ChatPanel() {
             openSettings,
             appVersion,
             addLocalMessage,
+            startClaudeAuthLogin: startChatClaudeAuthLogin,
             openUsageSettingsExternal: () => {
               void openUsageSettings().catch((err) =>
                 console.error("Failed to open usage settings:", err),
@@ -1304,7 +1322,23 @@ export function ChatPanel() {
       console.error("sendChatMessage failed:", errMsg);
       setError(errMsg);
       updateWorkspace(selectedWorkspaceId, { agent_status: "Idle" });
+      useAppStore.getState().updateChatSession(sessionId, {
+        agent_status: "Idle",
+      });
       useAppStore.getState().clearPromptStartTime(selectedWorkspaceId);
+      if (shouldRecordSendFailureInChat(errMsg)) {
+        addChatMessage(
+          sessionId,
+          buildSendFailureSystemMessage({
+            error: errMsg,
+            workspaceId: selectedWorkspaceId,
+            sessionId,
+            id: crypto.randomUUID(),
+            createdAt: new Date().toISOString(),
+          }),
+          { persisted: false },
+        );
+      }
     }
   };
 
@@ -1424,6 +1458,14 @@ export function ChatPanel() {
                       />
                     ) : null
                   }
+                />
+              )}
+
+              {showChatAuthLoginPanel && (
+                <ChatAuthFailureCallout
+                  autoStartKey={chatAuthLoginRequestId}
+                  autoStartedKey={chatAuthLoginStartedRequestId}
+                  onAutoStarted={setChatAuthLoginStartedRequestId}
                 />
               )}
 

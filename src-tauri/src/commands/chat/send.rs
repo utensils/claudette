@@ -102,6 +102,138 @@ fn env_provider_drifted_parts(
     session_vars != resolved_vars || session_signature != resolved_signature
 }
 
+const ENV_TRUST_WARNING_PREFIX: &str = "**Environment setup needed.**";
+
+fn is_env_trust_warning_message(message: &ChatMessage) -> bool {
+    message.role == ChatRole::System && message.content.starts_with(ENV_TRUST_WARNING_PREFIX)
+}
+
+fn has_env_trust_warning(messages: &[ChatMessage]) -> bool {
+    messages.iter().any(is_env_trust_warning_message)
+}
+
+fn auth_failure_message_from_stderr(stderr_lines: &[String]) -> Option<String> {
+    let output = stderr_lines
+        .iter()
+        .map(|line| line.trim())
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n");
+    if !crate::commands::auth::looks_like_auth_failure(&output) {
+        return None;
+    }
+    stderr_lines
+        .iter()
+        .map(|line| line.trim())
+        .find(|line| crate::commands::auth::looks_like_auth_failure(line))
+        .map(ToOwned::to_owned)
+        .or(Some(output))
+}
+
+fn auth_failure_message_from_assistant_text(text: &str) -> Option<String> {
+    let text = text.trim();
+    if text.is_empty() || !crate::commands::auth::looks_like_auth_failure(text) {
+        return None;
+    }
+    Some(text.to_string())
+}
+
+fn post_agent_auth_failure_message(
+    app: &AppHandle,
+    db_path: &std::path::Path,
+    workspace_id: &str,
+    chat_session_id: &str,
+    stderr_lines: &[String],
+) {
+    let Some(content) = auth_failure_message_from_stderr(stderr_lines) else {
+        return;
+    };
+    let message = ChatMessage {
+        id: uuid::Uuid::new_v4().to_string(),
+        workspace_id: workspace_id.to_string(),
+        chat_session_id: chat_session_id.to_string(),
+        role: ChatRole::System,
+        content,
+        cost_usd: None,
+        duration_ms: None,
+        created_at: now_iso(),
+        thinking: None,
+        input_tokens: None,
+        output_tokens: None,
+        cache_read_tokens: None,
+        cache_creation_tokens: None,
+    };
+
+    match Database::open(db_path).and_then(|db| db.insert_chat_message(&message)) {
+        Ok(()) => {
+            let _ = app.emit("chat-system-message", &message);
+        }
+        Err(err) => {
+            tracing::warn!(
+                target: "claudette::chat",
+                error = %err,
+                "failed to post Claude auth failure message"
+            );
+        }
+    }
+}
+
+async fn reset_persistent_session_after_auth_failure(
+    app: &AppHandle,
+    db_path: &std::path::Path,
+    chat_session_id: &str,
+    spawned_pid: u32,
+) {
+    let app_state = app.state::<AppState>();
+    let (pid_to_stop, ended_sid) = {
+        let mut agents = app_state.agents.write().await;
+        let Some(session) = agents.get_mut(chat_session_id) else {
+            return;
+        };
+        let owns_spawned_process = session.active_pid == Some(spawned_pid)
+            || session
+                .persistent_session
+                .as_ref()
+                .is_some_and(|ps| ps.pid() == spawned_pid);
+        if !owns_spawned_process {
+            return;
+        }
+
+        let pid = session
+            .persistent_session
+            .as_ref()
+            .map(|ps| ps.pid())
+            .or(session.active_pid);
+        let ended_sid = (!session.session_id.is_empty()).then(|| session.session_id.clone());
+        session.active_pid = None;
+        session.persistent_session = None;
+        session.session_id = uuid::Uuid::new_v4().to_string();
+        session.turn_count = 0;
+        session.claude_remote_control = crate::state::ClaudeRemoteControlStatus::disabled();
+        session.claude_remote_control_monitor_pid = None;
+        session.mcp_bridge = None;
+        (pid, ended_sid)
+    };
+
+    if let Ok(db) = Database::open(db_path) {
+        if let Some(sid) = ended_sid.as_deref() {
+            let _ = db.end_agent_session(sid, false);
+        }
+        let _ = db.clear_chat_session_state(chat_session_id);
+    }
+    if let Some(pid) = pid_to_stop
+        && let Err(err) = agent::stop_agent(pid).await
+    {
+        tracing::warn!(
+            target: "claudette::chat",
+            pid,
+            error = %err,
+            "failed to stop Claude process after auth failure"
+        );
+    }
+    crate::tray::rebuild_tray(app);
+}
+
 fn first_user_message_text(messages: &[ChatMessage]) -> Option<String> {
     messages.iter().find_map(|message| {
         if message.role == ChatRole::User {
@@ -2005,36 +2137,51 @@ pub async fn send_chat_message(
     // If any env-provider reported a trust/priming error (`mise trust`,
     // `direnv allow`, …) surface it inline as a System message. Without
     // this the agent spawns with a degraded env and the user sees no
-    // explanation for the resulting silent failure (#478). Dedupe via
-    // `posted_env_trust_warning` so we don't spam every turn while the
-    // user fixes it; the flag clears when the resolved env changes.
-    if !session.posted_env_trust_warning
-        && let Some(body) = resolved_env.format_trust_message()
-    {
-        let warning = ChatMessage {
-            id: uuid::Uuid::new_v4().to_string(),
-            workspace_id: workspace_id.clone(),
-            chat_session_id: chat_session_id.clone(),
-            role: ChatRole::System,
-            content: body,
-            cost_usd: None,
-            duration_ms: None,
-            created_at: now_iso(),
-            thinking: None,
-            input_tokens: None,
-            output_tokens: None,
-            cache_read_tokens: None,
-            cache_creation_tokens: None,
-        };
-        if let Err(err) = db.insert_chat_message(&warning) {
-            // Logging-only: a missing warning shouldn't block the turn.
-            tracing::warn!(target: "claudette::chat", error = %err, "failed to post env-trust warning");
-        } else {
+    // explanation for the resulting silent failure (#478). Dedupe against
+    // both memory and persisted history so spawn/auth failures that clear
+    // `state.agents` cannot repost the same warning on every retry in the
+    // same chat session.
+    if let Some(body) = resolved_env.format_trust_message() {
+        let already_posted = session.posted_env_trust_warning
+            || match db.list_chat_messages_for_session(&chat_session_id) {
+                Ok(messages) => has_env_trust_warning(&messages),
+                Err(err) => {
+                    tracing::warn!(
+                        target: "claudette::chat",
+                        error = %err,
+                        "failed to check env-trust warning history"
+                    );
+                    false
+                }
+            };
+        if already_posted {
             session.posted_env_trust_warning = true;
-            // Emit so the open chat panel can render the warning
-            // immediately without waiting for the failing turn to
-            // finalize and trigger a history reload.
-            let _ = app.emit("chat-system-message", &warning);
+        } else {
+            let warning = ChatMessage {
+                id: uuid::Uuid::new_v4().to_string(),
+                workspace_id: workspace_id.clone(),
+                chat_session_id: chat_session_id.clone(),
+                role: ChatRole::System,
+                content: body,
+                cost_usd: None,
+                duration_ms: None,
+                created_at: now_iso(),
+                thinking: None,
+                input_tokens: None,
+                output_tokens: None,
+                cache_read_tokens: None,
+                cache_creation_tokens: None,
+            };
+            if let Err(err) = db.insert_chat_message(&warning) {
+                // Logging-only: a missing warning shouldn't block the turn.
+                tracing::warn!(target: "claudette::chat", error = %err, "failed to post env-trust warning");
+            } else {
+                session.posted_env_trust_warning = true;
+                // Emit so the open chat panel can render the warning
+                // immediately without waiting for the failing turn to
+                // finalize and trigger a history reload.
+                let _ = app.emit("chat-system-message", &warning);
+            }
         }
     }
 
@@ -2571,8 +2718,14 @@ pub async fn send_chat_message(
         // to None after each persistence so per-message counts stay distinct
         // across multi-message turns.
         let mut latest_usage: Option<claudette::agent::TokenUsage> = None;
+        let mut stderr_lines: Vec<String> = Vec::new();
         let mut notified_via_result = false;
+        let mut assistant_auth_failure_seen = false;
         while let Some(event) = rx.recv().await {
+            if let AgentEvent::Stderr(line) = &event {
+                stderr_lines.push(line.clone());
+            }
+
             // Track whether the CLI initialized successfully.
             if let AgentEvent::Stream(StreamEvent::System {
                 subtype,
@@ -3209,6 +3362,17 @@ pub async fn send_chat_message(
                         chat_session_id_for_stream.clone(),
                     );
                 }
+                if assistant_auth_failure_seen {
+                    remote_control_reenable_after_result = None;
+                    reset_persistent_session_after_auth_failure(
+                        &app,
+                        &db_path,
+                        &chat_session_id_for_stream,
+                        spawned_pid,
+                    )
+                    .await;
+                    assistant_auth_failure_seen = false;
+                }
                 if let Some((ps, title)) = remote_control_reenable_after_result.take() {
                     super::remote_control::reenable_remote_control_after_respawn(
                         app.clone(),
@@ -3308,6 +3472,15 @@ pub async fn send_chat_message(
                     )
                     .await;
                 }
+                if exit_code != Some(0) && !notified_via_result {
+                    post_agent_auth_failure_message(
+                        &app,
+                        &db_path,
+                        &ws_id,
+                        &chat_session_id_for_stream,
+                        &stderr_lines,
+                    );
+                }
                 let needs_attention_now = agents
                     .get(&chat_session_id_for_stream)
                     .is_some_and(|s| s.needs_attention);
@@ -3331,6 +3504,9 @@ pub async fn send_chat_message(
             // and only save when we have text content to attach it to.
             if let AgentEvent::Stream(StreamEvent::Assistant { ref message }) = event {
                 let full_text = extract_assistant_text(message);
+                if auth_failure_message_from_assistant_text(&full_text).is_some() {
+                    assistant_auth_failure_seen = true;
+                }
 
                 // Accumulate thinking from this event.
                 if let Some(t) = extract_event_thinking(message) {
@@ -3423,7 +3599,8 @@ pub async fn send_chat_message(
 #[cfg(test)]
 mod tests {
     use super::{
-        env_provider_drifted_parts, remote_control_requested_or_active,
+        auth_failure_message_from_assistant_text, auth_failure_message_from_stderr,
+        env_provider_drifted_parts, has_env_trust_warning, remote_control_requested_or_active,
         remote_control_requested_or_active_for_turn,
         remote_control_should_defer_drift_teardown_for_turn,
         remote_control_should_restore_for_turn, remote_control_title, resolve_spawn_session_id,
@@ -3476,6 +3653,74 @@ mod tests {
     #[test]
     fn terminal_text_normalizes_crlf_without_extra_clear() {
         assert_eq!(terminal_text("one\r\ntwo\r\n"), "one\r\ntwo\r\n");
+    }
+
+    #[test]
+    fn env_trust_warning_detection_is_system_message_only() {
+        let warning = test_chat_message(
+            ChatRole::System,
+            "**Environment setup needed.** One or more env-provider plugins reported a trust/priming error.",
+        );
+        assert!(has_env_trust_warning(&[warning]));
+
+        let assistant_same_text = test_chat_message(
+            ChatRole::Assistant,
+            "**Environment setup needed.** One or more env-provider plugins reported a trust/priming error.",
+        );
+        assert!(!has_env_trust_warning(&[assistant_same_text]));
+
+        let unrelated_system = test_chat_message(ChatRole::System, "Environment setup complete.");
+        assert!(!has_env_trust_warning(&[unrelated_system]));
+    }
+
+    #[test]
+    fn env_trust_warning_detection_pins_session_level_dedupe() {
+        let messages = vec![
+            test_chat_message(ChatRole::User, "ping"),
+            test_chat_message(
+                ChatRole::System,
+                "**Environment setup needed.** One or more env-provider plugins reported a trust/priming error.\n\n- **direnv**",
+            ),
+            test_chat_message(ChatRole::User, "ping again"),
+        ];
+        assert!(has_env_trust_warning(&messages));
+    }
+
+    #[test]
+    fn auth_failure_message_picks_matching_stderr_line() {
+        let lines = vec![
+            "debug: starting Claude".to_string(),
+            "Not logged in · Please run /login".to_string(),
+        ];
+
+        assert_eq!(
+            auth_failure_message_from_stderr(&lines).as_deref(),
+            Some("Not logged in · Please run /login")
+        );
+    }
+
+    #[test]
+    fn auth_failure_message_ignores_unrelated_stderr() {
+        let lines = vec![
+            "warning: mcp server timed out".to_string(),
+            "model haiku is unavailable".to_string(),
+        ];
+
+        assert_eq!(auth_failure_message_from_stderr(&lines), None);
+    }
+
+    #[test]
+    fn auth_failure_message_detects_assistant_text() {
+        assert_eq!(
+            auth_failure_message_from_assistant_text(" Not logged in · Please run /login ")
+                .as_deref(),
+            Some("Not logged in · Please run /login")
+        );
+    }
+
+    #[test]
+    fn auth_failure_message_ignores_normal_assistant_text() {
+        assert_eq!(auth_failure_message_from_assistant_text("pong"), None);
     }
 
     #[test]

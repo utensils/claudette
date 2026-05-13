@@ -15,8 +15,63 @@
 -- `{ variables: { NAME: { type, value } } }`. We keep only
 -- `exported`/`var`-typed string values — array and associative types
 -- (Bash-specific) don't round-trip cleanly to a child process env.
+--
+-- We also drop a denylist of nix-build sandbox / bash-internal vars
+-- (HOME=/homeless-shelter, PATH=/path-not-set, SHELL=/sbin/nologin,
+-- TMPDIR=/private/tmp/nix-build-..., etc.) that `nix print-dev-env`
+-- emits before the stdenv setup hook fills them in. Propagating these
+-- to subprocesses breaks tools that read the user's HOME (notably
+-- `claude` looking up `~/.claude/.credentials.json`) and replaces PATH
+-- with a placeholder. nix-direnv solves this by sourcing the dev-env
+-- in bash and then restoring the caller's HOME/PATH; we can't, so we
+-- filter instead.
 
 local M = {}
+
+-- Vars that `nix print-dev-env` populates with sandbox / bash-builtin
+-- defaults. Keeping them would clobber the caller's real env. Mirrors
+-- nix-direnv's hidden_vars list.
+local SANDBOX_VARS = {
+    BASH = true,
+    BASHOPTS = true,
+    HOME = true,
+    HOSTTYPE = true,
+    IFS = true,
+    LINENO = true,
+    MACHTYPE = true,
+    NIX_BUILD_CORES = true,
+    NIX_BUILD_TOP = true,
+    NIX_ENFORCE_PURITY = true,
+    NIX_LOG_FD = true,
+    NIX_STORE = true,
+    OLDPWD = true,
+    OPTERR = true,
+    OSTYPE = true,
+    PATH = true,
+    PPID = true,
+    PS1 = true,
+    PS2 = true,
+    PS3 = true,
+    PS4 = true,
+    PWD = true,
+    SHELL = true,
+    SHELLOPTS = true,
+    SHLVL = true,
+    TEMP = true,
+    TEMPDIR = true,
+    TERM = true,
+    TMP = true,
+    TMPDIR = true,
+    -- Derivation attrs leaked through `nix print-dev-env` as vars.
+    builder = true,
+    dontAddDisableDepTrack = true,
+    name = true,
+    out = true,
+    outputs = true,
+    shellHook = true,
+    stdenv = true,
+    system = true,
+}
 
 local function join(dir, name)
     return dir .. "/" .. name
@@ -64,9 +119,13 @@ function M.export(args)
         for name, info in pairs(parsed.variables) do
             -- Only scalar strings — skip Bash arrays and associatives,
             -- which can't be represented as plain env vars anyway.
+            -- Also skip nix-build sandbox / bash-builtin defaults
+            -- whose placeholder values (e.g. HOME=/homeless-shelter,
+            -- PATH=/path-not-set) would break subprocesses.
             if type(info) == "table"
                 and type(info.value) == "string"
                 and (info.type == "exported" or info.type == "var")
+                and not SANDBOX_VARS[name]
             then
                 env_map[name] = info.value
             end

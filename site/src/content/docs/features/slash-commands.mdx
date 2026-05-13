@@ -21,6 +21,7 @@ Native commands ship with the app and always work. They split into two flavors:
 | `/status` | Show session/permission status. |
 | `/help` | Show available commands. |
 | `/init` | Generate a `CLAUDE.md` for the current repo. |
+| `/login` | Start the Claude Code sign-in flow in chat to sign in, refresh, or switch accounts. Shows the same browser/manual-code controls as Settings. |
 | `/config` `[section]` | Open Claudette settings (optional section: `general`, `models`, `usage`, `appearance`, `notifications`, `git`, `plugins`, `experimental`). |
 | `/usage` | Open the Claude Code usage panel. |
 | `/extra-usage` | Open the extra-usage view. |
@@ -87,7 +88,7 @@ Enabled Claude Code plugins (managed via the **Plugins** settings panel) can shi
 
 When the same command name is contributed by multiple sources, the highest-priority one wins:
 
-1. **Built-ins** for `/plugin` and `/marketplace` — reserved; never shadowable.
+1. **Built-ins** for `/login`, `/plugin`, and `/marketplace` — reserved; never shadowable.
 2. **Project commands** (`<repo>/.claude/commands/`) — your repo's customizations.
 3. **User commands** (`~/.claude/commands/`).
 4. **Plugin commands**.

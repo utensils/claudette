@@ -1,6 +1,7 @@
 mod args;
 pub mod background;
 mod binary;
+mod environment;
 mod naming;
 mod process;
 mod session;

@@ -585,6 +585,11 @@ pub struct AppState {
     /// the waiter to kill the process and emit a cancelled completion event.
     /// `Some` while a flow is running, `None` otherwise.
     pub auth_login_cancel: tokio::sync::Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
+    /// Writable stdin for the in-flight `claude auth login` subprocess.
+    /// Claude Code's browser flow may ask the user to paste a one-time code;
+    /// the frontend forwards that code here so clean profiles can complete
+    /// login without an attached terminal.
+    pub auth_login_stdin: tokio::sync::Mutex<Option<tokio::process::ChildStdin>>,
 }
 
 impl AppState {
@@ -622,6 +627,7 @@ impl AppState {
             cesp_playback: Mutex::new(claudette::cesp::SoundPlaybackState::new()),
             claude_flag_defs: Arc::new(RwLock::new(ClaudeFlagDiscovery::Loading)),
             auth_login_cancel: tokio::sync::Mutex::new(None),
+            auth_login_stdin: tokio::sync::Mutex::new(None),
         }
     }
 

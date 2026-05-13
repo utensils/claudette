@@ -8,6 +8,35 @@ import { useAppStore, type CompletedTurn, type ToolActivity } from "../../stores
 import type { ChatMessage } from "../../types/chat";
 import { MessagesWithTurns } from "./MessagesWithTurns";
 
+const serviceMocks = vi.hoisted(() => ({
+  loadAttachmentData: vi.fn(),
+  getClaudeAuthStatus: vi.fn(() =>
+    Promise.resolve({
+      state: "signed_out",
+      loggedIn: false,
+      verified: false,
+      authMethod: null,
+      apiProvider: null,
+      message: "Not logged in",
+    }),
+  ),
+  claudeAuthLogin: vi.fn(() => Promise.resolve()),
+  cancelClaudeAuthLogin: vi.fn(() => Promise.resolve()),
+  submitClaudeAuthCode: vi.fn(() => Promise.resolve()),
+}));
+
+vi.mock("@tauri-apps/api/event", () => ({
+  listen: vi.fn(() => Promise.resolve(() => {})),
+}));
+
+vi.mock("../../services/tauri", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../services/tauri")>();
+  return {
+    ...actual,
+    ...serviceMocks,
+  };
+});
+
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean })
   .IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -73,6 +102,16 @@ async function render(node: React.ReactNode): Promise<HTMLElement> {
 }
 
 beforeEach(() => {
+  serviceMocks.claudeAuthLogin.mockClear();
+  serviceMocks.getClaudeAuthStatus.mockClear();
+  serviceMocks.getClaudeAuthStatus.mockResolvedValue({
+    state: "signed_out",
+    loggedIn: false,
+    verified: false,
+    authMethod: null,
+    apiProvider: null,
+    message: "Not logged in",
+  });
   useAppStore.setState({
     workspaces: [
       {
@@ -150,9 +189,7 @@ describe("MessagesWithTurns edit summaries", () => {
     expect(container.textContent).not.toContain("dirty-from-other-session.ts");
   });
 
-  it("renders auth failures as a sign-in callout", async () => {
-    const openSettings = vi.fn();
-    useAppStore.setState({ openSettings });
+  it("renders auth failures as an inline sign-in panel", async () => {
     const messages = [
       message("user-1", "User", "ping"),
       message(
@@ -173,18 +210,43 @@ describe("MessagesWithTurns edit summaries", () => {
       />,
     );
 
-    expect(container.textContent).toContain("auth_chat_failure_title");
+    expect(container.textContent).toContain("auth_panel_title");
+    expect(container.textContent).toContain(
+      "Invalid authentication credentials (401)",
+    );
     const button = Array.from(container.querySelectorAll("button")).find(
-      (item) => item.textContent?.includes("auth_open_settings"),
+      (item) => item.textContent?.includes("auth_sign_in"),
     );
     await act(async () => {
       button?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     });
-    expect(openSettings).toHaveBeenCalledWith("general", "claude-auth");
+    expect(serviceMocks.claudeAuthLogin).toHaveBeenCalledTimes(1);
     expect(useAppStore.getState().claudeAuthFailure).toEqual({
       messageId: "assistant-1",
       error: "Failed to authenticate. API Error: 401 Invalid authentication credentials",
     });
+  });
+
+  it("renders Claude CLI slash-login failures as a sign-in callout", async () => {
+    const messages = [
+      message("user-1", "User", "ping"),
+      message("assistant-1", "Assistant", "Not logged in · Please run /login"),
+    ];
+
+    const container = await render(
+      <MessagesWithTurns
+        messages={messages}
+        workspaceId={WORKSPACE_ID}
+        sessionId={SESSION_ID}
+        isRunning={false}
+        searchQuery=""
+        toolDisplayMode="grouped"
+      />,
+    );
+
+    expect(container.textContent).toContain("auth_panel_title");
+    expect(container.textContent).toContain("Not logged in");
+    expect(container.textContent).not.toContain("Please run /login");
   });
 
   it("shows only the latest repeated auth failure as the sign-in callout", async () => {
@@ -215,18 +277,18 @@ describe("MessagesWithTurns edit summaries", () => {
     );
 
     const authButtons = Array.from(container.querySelectorAll("button")).filter(
-      (button) => button.textContent?.includes("auth_open_settings"),
+      (button) => button.textContent?.includes("auth_sign_in"),
     );
     expect(authButtons).toHaveLength(1);
     expect(
-      container.textContent?.match(/auth_chat_failure_title/g) ?? [],
+      container.textContent?.match(/auth_panel_title/g) ?? [],
     ).toHaveLength(1);
     expect(container.textContent).toContain(
       "Invalid authentication credentials (401)",
     );
   });
 
-  it("renders a resolved auth failure as the original error with a resolved marker", async () => {
+  it("renders a resolved auth failure as a recovery marker without stale error text", async () => {
     useAppStore.setState({
       resolvedClaudeAuthFailureMessageId: "assistant-1",
     });
@@ -251,10 +313,11 @@ describe("MessagesWithTurns edit summaries", () => {
     );
 
     expect(container.textContent).toContain("auth_resolved_label");
-    expect(container.textContent).toContain(
+    expect(container.textContent).toContain("auth_resolved_message");
+    expect(container.textContent).not.toContain(
       "Invalid authentication credentials (401)",
     );
-    expect(container.textContent).not.toContain("auth_chat_failure_title");
+    expect(container.textContent).not.toContain("auth_panel_title");
   });
 
   it("still shows files parsed from this turn's own edit activity", async () => {

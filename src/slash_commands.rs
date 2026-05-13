@@ -127,6 +127,14 @@ pub fn native_command_registry(plugin_management_enabled: bool) -> Vec<SlashComm
         kind: Some(NativeKind::SettingsRoute),
     });
     commands.push(SlashCommand {
+        name: "login".to_string(),
+        description: "Start Claude Code sign-in".to_string(),
+        source: "builtin".to_string(),
+        aliases: Vec::new(),
+        argument_hint: None,
+        kind: Some(NativeKind::LocalAction),
+    });
+    commands.push(SlashCommand {
         name: "release-notes".to_string(),
         description: "Open Claudette release notes".to_string(),
         source: "builtin".to_string(),
@@ -290,7 +298,7 @@ struct PluginCommandSpec {
 /// use plausible names that users may already have defined as local markdown
 /// commands, so they yield to file-based entries when a collision exists.
 fn is_reserved_native_name(name: &str) -> bool {
-    matches!(name, "plugin" | "plugins" | "marketplace")
+    matches!(name, "plugin" | "plugins" | "marketplace" | "login")
 }
 
 fn collect_native_commands(commands: &mut Vec<SlashCommand>, plugin_management_enabled: bool) {
@@ -786,6 +794,7 @@ mod tests {
         // Non-plugin native settings/version commands are still registered.
         assert!(names.contains(&"config"));
         assert!(names.contains(&"usage"));
+        assert!(names.contains(&"login"));
         assert!(names.contains(&"extra-usage"));
         assert!(names.contains(&"release-notes"));
         assert!(names.contains(&"version"));
@@ -920,6 +929,11 @@ mod tests {
             assert_eq!(usage.kind, Some(NativeKind::SettingsRoute));
             assert!(usage.aliases.is_empty());
 
+            let login = by_name.get("login").expect("login registered");
+            assert_eq!(login.kind, Some(NativeKind::LocalAction));
+            assert!(login.aliases.is_empty());
+            assert!(login.argument_hint.is_none());
+
             let extra = by_name.get("extra-usage").expect("extra-usage registered");
             assert_eq!(extra.kind, Some(NativeKind::SettingsRoute));
 
@@ -1001,7 +1015,7 @@ mod tests {
     #[test]
     fn test_collect_native_commands_yields_to_user_commands_for_non_reserved_slots() {
         // A user-defined `config`/`review` command should take priority over the
-        // built-in natives — unlike plugin/marketplace, generic names like
+        // built-in natives — unlike plugin/marketplace/login, generic names like
         // `config`/`usage`/`version`/`review` must not silently displace
         // pre-existing custom workflows.
         let mut commands = vec![
@@ -1024,6 +1038,21 @@ mod tests {
         assert!(names.contains(&"version"));
         assert!(names.contains(&"security-review"));
         assert!(names.contains(&"pr-comments"));
+    }
+
+    #[test]
+    fn test_collect_native_commands_reserves_login() {
+        let mut commands = vec![SlashCommand::file_based(
+            "login".into(),
+            "User custom login".into(),
+            "user",
+        )];
+        collect_native_commands(&mut commands, false);
+
+        let login = commands.iter().find(|c| c.name == "login").unwrap();
+        assert_eq!(login.source, "builtin");
+        assert_eq!(login.description, "Start Claude Code sign-in");
+        assert_eq!(login.kind, Some(NativeKind::LocalAction));
     }
 
     #[test]
