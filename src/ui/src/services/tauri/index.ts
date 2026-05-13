@@ -1,3 +1,6 @@
+// Domain barrel for Tauri IPC service modules. During the incremental split,
+// `../tauri.ts` remains the compatibility entrypoint for existing imports;
+// once extraction is complete, that shim re-exports this barrel.
 export * from "./apps";
 export * from "./auth";
 export * from "./chat";
