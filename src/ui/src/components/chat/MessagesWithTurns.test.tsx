@@ -288,7 +288,7 @@ describe("MessagesWithTurns edit summaries", () => {
     );
   });
 
-  it("renders a resolved auth failure as the original error with a resolved marker", async () => {
+  it("renders a resolved auth failure as a recovery marker without stale error text", async () => {
     useAppStore.setState({
       resolvedClaudeAuthFailureMessageId: "assistant-1",
     });
@@ -313,7 +313,8 @@ describe("MessagesWithTurns edit summaries", () => {
     );
 
     expect(container.textContent).toContain("auth_resolved_label");
-    expect(container.textContent).toContain(
+    expect(container.textContent).toContain("auth_resolved_message");
+    expect(container.textContent).not.toContain(
       "Invalid authentication credentials (401)",
     );
     expect(container.textContent).not.toContain("auth_panel_title");

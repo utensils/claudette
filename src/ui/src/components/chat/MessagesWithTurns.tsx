@@ -900,11 +900,15 @@ export const MessagesWithTurns = memo(function MessagesWithTurns({
                       }
                     >
                       {msg.id === resolvedClaudeAuthFailureMessageId && (
-                        <span className={styles.authResolvedLabel}>
-                          {t("auth_resolved_label")}
-                        </span>
+                        <>
+                          <span className={styles.authResolvedLabel}>
+                            {t("auth_resolved_label")}
+                          </span>
+                          {t("auth_resolved_message")}
+                        </>
                       )}
-                      {cleanClaudeAuthError(msg.content)}
+                      {msg.id !== resolvedClaudeAuthFailureMessageId &&
+                        cleanClaudeAuthError(msg.content)}
                     </div>
                   ) : shouldRenderAsMarkdown(msg.role) ? (
                     // Assistant + System: run through Markdown so plan-mode dumps,
