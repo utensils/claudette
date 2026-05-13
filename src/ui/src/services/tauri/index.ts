@@ -2,6 +2,11 @@
 // `../tauri.ts` remains the compatibility entrypoint for existing imports;
 // once extraction is complete, that shim re-exports this barrel.
 export * from "./apps";
+export * from "./localServer";
+export * from "./remote";
+export * from "./scm";
+export * from "./plugins";
+export * from "./agentBackends";
 export * from "./auth";
 export * from "./chat";
 export * from "./chatSessions";
