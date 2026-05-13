@@ -117,6 +117,45 @@
   font-size: var(--fs-base);
 }
 
+.moreItemWrap {
+  position: relative;
+}
+
+.menuItemMore {
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.menuItemMore > svg {
+  flex: 0 0 auto;
+  color: var(--text-muted);
+}
+
+.menuItemMoreLabel {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.submenu {
+  position: absolute;
+  top: 0;
+  right: calc(100% + var(--space-1));
+  z-index: 1001;
+  min-width: 224px;
+  max-width: min(280px, calc(100vw - var(--space-4)));
+  max-height: min(60vh, 480px);
+  overflow-y: auto;
+  padding: var(--space-2);
+  border: 1px solid var(--sidebar-border);
+  border-radius: var(--radius-lg);
+  background: var(--sidebar-bg);
+  box-shadow: var(--shadow-lg);
+  user-select: none;
+  animation: menuIn var(--transition-fast);
+}
+
 .appIconImage,
 .appIconFallback,
 .utilityIcon {

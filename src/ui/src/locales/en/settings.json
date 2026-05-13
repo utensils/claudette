@@ -1,5 +1,6 @@
 {
   "nav_general": "General",
+  "nav_apps": "Apps",
   "nav_models": "Models",
   "nav_appearance": "Appearance",
   "nav_notifications": "Notifications",
@@ -73,6 +74,20 @@
   "workspace_apps_terminal_auto": "Auto",
   "workspace_apps_terminal_auto_desc": "Use the first detected terminal app.",
   "workspace_apps_no_terminals": "No terminal apps detected.",
+
+  "apps_title": "Apps",
+  "apps_menu_label": "Open-in menu",
+  "apps_menu_desc": "Choose which detected apps appear directly in a workspace's \"Open in app\" menu, and in what order. The rest stay reachable under \"More\". Newly-installed apps are added under \"More\" once you've customized this list.",
+  "apps_menu_shown_heading": "Shown in menu",
+  "apps_menu_more_heading": "Under \"More\"",
+  "apps_menu_shown_empty": "No apps in the menu — every detected app lives under \"More\".",
+  "apps_menu_more_empty": "Every detected app is shown in the menu.",
+  "apps_menu_empty": "No apps detected on this machine.",
+  "apps_menu_move_up": "Move {{app}} up",
+  "apps_menu_move_down": "Move {{app}} down",
+  "apps_menu_remove": "Move {{app}} under \"More\"",
+  "apps_menu_add": "Show {{app}} in the menu",
+  "apps_menu_reset": "Reset to default",
 
   "appearance_title": "Appearance",
   "appearance_follow_system": "Follow system",

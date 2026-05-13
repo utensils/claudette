@@ -3,6 +3,7 @@ import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { useTranslation } from "react-i18next";
 import {
   ChevronDown,
+  ChevronRight,
   Code2,
   Copy,
   FolderOpen,
@@ -13,6 +14,10 @@ import {
 import { useAppStore } from "../../stores/useAppStore";
 import { openWorkspaceInApp } from "../../services/tauri";
 import type { AppCategory, DetectedApp } from "../../types/apps";
+import {
+  preferredPrimaryApp,
+  splitMenuApps,
+} from "../../utils/workspaceAppsMenu";
 import styles from "./WorkspaceActions.module.css";
 
 interface WorkspaceActionsProps {
@@ -20,20 +25,9 @@ interface WorkspaceActionsProps {
   disabled?: boolean;
 }
 
-const CATEGORY_ORDER: AppCategory[] = [
-  "editor",
-  "file_manager",
-  "terminal",
-  "ide",
-];
-
-function preferredPrimaryApp(apps: DetectedApp[]): DetectedApp | null {
-  for (const category of CATEGORY_ORDER) {
-    const app = apps.find((candidate) => candidate.category === category);
-    if (app) return app;
-  }
-  return null;
-}
+// Time the pointer is allowed to travel between the "More" row and its
+// flyout (or back) before the flyout closes — covers diagonal mouse paths.
+const SUBMENU_GRACE_MS = 140;
 
 // Render the icon directly rather than returning the lucide component
 // constructor — `react-hooks/static-components` rejects assigning a
@@ -79,20 +73,41 @@ export function WorkspaceActions({
 }: WorkspaceActionsProps) {
   const { t } = useTranslation("chat");
   const detectedApps = useAppStore((s) => s.detectedApps);
+  const workspaceAppsMenuShown = useAppStore((s) => s.workspaceAppsMenuShown);
   const addToast = useAppStore((s) => s.addToast);
   const [open, setOpen] = useState(false);
+  const [moreOpen, setMoreOpen] = useState(false);
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const submenuRef = useRef<HTMLDivElement>(null);
+  const closeSubmenuTimer = useRef<number | null>(null);
 
-  const apps = useMemo(
-    () =>
-      CATEGORY_ORDER.flatMap((category) =>
-        detectedApps.filter((app) => app.category === category),
-      ),
-    [detectedApps],
+  const menuApps = useMemo(
+    () => splitMenuApps(detectedApps, workspaceAppsMenuShown),
+    [detectedApps, workspaceAppsMenuShown],
   );
-  const primaryApp = useMemo(() => preferredPrimaryApp(apps), [apps]);
+  const primaryApp = useMemo(() => preferredPrimaryApp(menuApps), [menuApps]);
   const unavailable = disabled || !worktreePath;
+
+  const clearCloseSubmenuTimer = useCallback(() => {
+    if (closeSubmenuTimer.current !== null) {
+      window.clearTimeout(closeSubmenuTimer.current);
+      closeSubmenuTimer.current = null;
+    }
+  }, []);
+
+  const scheduleCloseSubmenu = useCallback(() => {
+    clearCloseSubmenuTimer();
+    closeSubmenuTimer.current = window.setTimeout(() => {
+      setMoreOpen(false);
+      closeSubmenuTimer.current = null;
+    }, SUBMENU_GRACE_MS);
+  }, [clearCloseSubmenuTimer]);
+
+  const openSubmenu = useCallback(() => {
+    clearCloseSubmenuTimer();
+    setMoreOpen(true);
+  }, [clearCloseSubmenuTimer]);
 
   useEffect(() => {
     if (!open) return;
@@ -103,8 +118,16 @@ export function WorkspaceActions({
     };
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
+        // This listener runs in the capture phase, ahead of the submenu's
+        // own onKeyDown — so Escape has to peel back one layer at a time
+        // here: collapse the "More" flyout first, then the whole menu.
         event.stopPropagation();
-        setOpen(false);
+        if (moreOpen) {
+          clearCloseSubmenuTimer();
+          setMoreOpen(false);
+        } else {
+          setOpen(false);
+        }
       }
     };
     window.addEventListener("mousedown", handlePointerDown, true);
@@ -113,7 +136,18 @@ export function WorkspaceActions({
       window.removeEventListener("mousedown", handlePointerDown, true);
       window.removeEventListener("keydown", handleKeyDown, true);
     };
-  }, [open]);
+  }, [open, moreOpen, clearCloseSubmenuTimer]);
+
+  // Closing the outer menu (or losing the worktree) must also tear down the
+  // "More" flyout and any pending close timer.
+  useEffect(() => {
+    if (!open) {
+      setMoreOpen(false);
+      clearCloseSubmenuTimer();
+    }
+  }, [open, clearCloseSubmenuTimer]);
+
+  useEffect(() => clearCloseSubmenuTimer, [clearCloseSubmenuTimer]);
 
   useEffect(() => {
     if (unavailable) setOpen(false);
@@ -156,6 +190,20 @@ export function WorkspaceActions({
     : t("workspace_actions_no_apps");
   const menuDisabled = unavailable;
 
+  const renderAppItem = (app: DetectedApp) => (
+    <button
+      className={styles.menuItem}
+      type="button"
+      role="menuitem"
+      key={app.id}
+      disabled={busyAction !== null}
+      onClick={() => void openApp(app)}
+    >
+      <AppIcon app={app} />
+      <span className={styles.menuItemLabel}>{app.name}</span>
+    </button>
+  );
+
   return (
     <div className={styles.container} ref={containerRef}>
       <div className={styles.splitButton}>
@@ -186,19 +234,66 @@ export function WorkspaceActions({
       </div>
       {open && (
         <div className={styles.menu} role="menu">
-          {apps.map((app) => (
-            <button
-              className={styles.menuItem}
-              type="button"
-              role="menuitem"
-              key={app.id}
-              disabled={busyAction !== null}
-              onClick={() => void openApp(app)}
+          {menuApps.shown.map(renderAppItem)}
+          {menuApps.more.length > 0 && (
+            <div
+              className={styles.moreItemWrap}
+              onMouseEnter={openSubmenu}
+              onMouseLeave={scheduleCloseSubmenu}
             >
-              <AppIcon app={app} />
-              <span className={styles.menuItemLabel}>{app.name}</span>
-            </button>
-          ))}
+              <button
+                className={`${styles.menuItem} ${styles.menuItemMore}`}
+                type="button"
+                role="menuitem"
+                aria-haspopup="menu"
+                aria-expanded={moreOpen}
+                disabled={busyAction !== null}
+                onClick={() => setMoreOpen((value) => !value)}
+                onKeyDown={(event) => {
+                  if (event.key === "ArrowRight" || event.key === "Enter") {
+                    event.preventDefault();
+                    openSubmenu();
+                    const first =
+                      submenuRef.current?.querySelector<HTMLButtonElement>(
+                        "button",
+                      );
+                    first?.focus();
+                  }
+                }}
+              >
+                <span className={styles.menuItemMoreLabel}>
+                  <span className={styles.utilityIcon} aria-hidden="true">
+                    <SquareMenu size={14} strokeWidth={2.2} />
+                  </span>
+                  <span className={styles.menuItemLabel}>
+                    {t("workspace_actions_more")}
+                  </span>
+                </span>
+                <ChevronRight size={14} aria-hidden="true" />
+              </button>
+              {moreOpen && (
+                <div
+                  className={styles.submenu}
+                  role="menu"
+                  ref={submenuRef}
+                  onMouseEnter={openSubmenu}
+                  onMouseLeave={scheduleCloseSubmenu}
+                  onKeyDown={(event) => {
+                    // Escape is handled by the capture-phase window listener
+                    // above; ArrowLeft collapses just the flyout.
+                    if (event.key === "ArrowLeft") {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      clearCloseSubmenuTimer();
+                      setMoreOpen(false);
+                    }
+                  }}
+                >
+                  {menuApps.more.map(renderAppItem)}
+                </div>
+              )}
+            </div>
+          )}
           <div className={styles.utilityGroup}>
             <button
               className={styles.menuItem}

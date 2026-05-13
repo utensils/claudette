@@ -10,10 +10,18 @@ Open settings with `⌘/Ctrl + ,` or from the sidebar. Settings are organized in
 | Setting | Description | Default |
 |---------|-------------|---------|
 | Worktree base directory | Directory where new workspaces are created | `~/.claudette/workspaces` |
-| Default terminal | Terminal app used by **Open in Terminal** from workspace menus. Choose **Auto** to use the first detected terminal, or pick a specific detected terminal app. | Auto |
 | System tray | Enable/disable system tray integration | Enabled |
 | Archive on merge | Automatically archive a workspace when its pull request is merged. See [SCM Providers](/claudette/features/scm-providers/). | Off |
 | Claude Code sign-in | Checks local Claude Code sign-in state with the official CLI. The refresh button performs an authenticated CLI validation request; sign-in runs `claude auth login`, streams progress back into Claudette, and accepts the pasted browser code when Claude Code asks for one. Used by chat and Usage-panel auth failures. | — |
+
+## Apps
+
+Controls for the workspace toolbar's **Open in app** menu (the split button that opens the workspace in an editor, file manager, terminal, or IDE). Claudette auto-detects installed apps; these settings tune how they're surfaced.
+
+| Setting | Description | Default |
+|---------|-------------|---------|
+| Default terminal | Terminal app used by **Open in Terminal** from workspace menus. Choose **Auto** to use the first detected terminal, or pick a specific detected terminal app. | Auto |
+| Open-in menu | Choose which detected apps appear directly in the **Open in app** menu, and reorder them. Apps moved out stay reachable under the menu's **More** flyout. Until you customize this, every detected app is shown; once customized, newly-installed apps are added under **More**. Use **Reset to default** to go back to showing everything. | Show all detected apps |
 
 ## Models
 

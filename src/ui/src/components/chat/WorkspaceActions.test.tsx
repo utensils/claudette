@@ -8,6 +8,7 @@ import type { DetectedApp } from "../../types/apps";
 const appStore = vi.hoisted(() => ({
   addToast: vi.fn(),
   detectedApps: [] as DetectedApp[],
+  workspaceAppsMenuShown: null as string[] | null,
 }));
 
 vi.mock("../../stores/useAppStore", () => ({
@@ -38,6 +39,14 @@ import { WorkspaceActions } from "./WorkspaceActions";
 const mountedRoots: Root[] = [];
 const mountedContainers: HTMLElement[] = [];
 
+function app(
+  id: string,
+  name: string,
+  category: DetectedApp["category"],
+): DetectedApp {
+  return { id, name, category, detected_path: `/usr/bin/${id}` };
+}
+
 async function renderWorkspaceActions(): Promise<HTMLElement> {
   const container = document.createElement("div");
   document.body.appendChild(container);
@@ -54,6 +63,7 @@ describe("WorkspaceActions", () => {
   beforeEach(() => {
     appStore.addToast.mockReset();
     appStore.detectedApps = [];
+    appStore.workspaceAppsMenuShown = null;
     document.body.innerHTML = "";
   });
 
@@ -109,5 +119,106 @@ describe("WorkspaceActions", () => {
     );
     expect(primaryButton?.querySelector("img")).toBeNull();
     expect(primaryButton?.querySelector("svg")).not.toBeNull();
+  });
+
+  it("shows no More row when the menu is uncurated", async () => {
+    appStore.detectedApps = [
+      app("vscode", "VS Code", "editor"),
+      app("zed", "Zed", "editor"),
+    ];
+
+    const container = await renderWorkspaceActions();
+    await act(async () => {
+      container
+        .querySelector('button[aria-label="workspace_actions_menu"]')
+        ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+
+    const labels = Array.from(
+      container.querySelectorAll('[role="menuitem"]'),
+    ).map((el) => el.textContent);
+    expect(labels).toContain("VS Code");
+    expect(labels).toContain("Zed");
+    expect(labels.some((l) => l?.includes("workspace_actions_more"))).toBe(
+      false,
+    );
+  });
+
+  it("surfaces hidden apps under the More flyout when curated", async () => {
+    appStore.detectedApps = [
+      app("vscode", "VS Code", "editor"),
+      app("zed", "Zed", "editor"),
+      app("ghostty", "Ghostty", "terminal"),
+    ];
+    appStore.workspaceAppsMenuShown = ["vscode"];
+
+    const container = await renderWorkspaceActions();
+    await act(async () => {
+      container
+        .querySelector('button[aria-label="workspace_actions_menu"]')
+        ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+
+    const more = Array.from(
+      container.querySelectorAll('[role="menuitem"]'),
+    ).find((el) =>
+      el.textContent?.includes("workspace_actions_more"),
+    ) as HTMLButtonElement | undefined;
+    expect(more).toBeTruthy();
+
+    // Flyout is closed until the More row is activated.
+    expect(container.textContent).not.toContain("Ghostty");
+    await act(async () => {
+      more?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+
+    const labels = Array.from(
+      container.querySelectorAll('[role="menuitem"]'),
+    ).map((el) => el.textContent);
+    // Hidden apps are now reachable; the curated app stays at the top level.
+    expect(labels).toContain("Ghostty");
+    expect(labels).toContain("Zed");
+    expect(labels).toContain("VS Code");
+  });
+
+  it("Escape collapses the More flyout first, then the whole menu", async () => {
+    appStore.detectedApps = [
+      app("vscode", "VS Code", "editor"),
+      app("ghostty", "Ghostty", "terminal"),
+    ];
+    appStore.workspaceAppsMenuShown = ["vscode"];
+
+    const container = await renderWorkspaceActions();
+    await act(async () => {
+      container
+        .querySelector('button[aria-label="workspace_actions_menu"]')
+        ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    const more = Array.from(
+      container.querySelectorAll('[role="menuitem"]'),
+    ).find((el) =>
+      el.textContent?.includes("workspace_actions_more"),
+    ) as HTMLButtonElement | undefined;
+    await act(async () => {
+      more?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    expect(container.textContent).toContain("Ghostty");
+
+    // First Escape: only the flyout closes — the menu (and its More row) stay.
+    await act(async () => {
+      window.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+      );
+    });
+    expect(container.textContent).not.toContain("Ghostty");
+    expect(container.querySelector('[role="menu"]')).not.toBeNull();
+
+    // Second Escape: the whole menu closes.
+    await act(async () => {
+      window.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+      );
+    });
+    expect(container.querySelector('[role="menu"]')).toBeNull();
   });
 });

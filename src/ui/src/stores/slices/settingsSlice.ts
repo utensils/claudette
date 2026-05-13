@@ -11,6 +11,13 @@ export interface SettingsSlice {
   setWorktreeBaseDir: (dir: string) => void;
   defaultTerminalAppId: string | null;
   setDefaultTerminalAppId: (appId: string | null) => void;
+  /// Ordered list of app IDs surfaced at the top level of the workspace
+  /// "Open in app" menu. `null` (the default) means "show all detected apps"
+  /// — the existing behavior. Once curated, anything not in this list is
+  /// reachable under the menu's "More" flyout. Persisted as the
+  /// `workspace_apps_menu` app setting (`{ "shown": [...] }`).
+  workspaceAppsMenuShown: string[] | null;
+  setWorkspaceAppsMenuShown: (ids: string[] | null) => void;
   defaultBranches: Record<string, string>;
   setDefaultBranches: (branches: Record<string, string>) => void;
   terminalFontSize: number;
@@ -101,6 +108,8 @@ export const createSettingsSlice: StateCreator<
   setWorktreeBaseDir: (dir) => set({ worktreeBaseDir: dir }),
   defaultTerminalAppId: null,
   setDefaultTerminalAppId: (appId) => set({ defaultTerminalAppId: appId }),
+  workspaceAppsMenuShown: null,
+  setWorkspaceAppsMenuShown: (ids) => set({ workspaceAppsMenuShown: ids }),
   defaultBranches: {},
   setDefaultBranches: (branches) => set({ defaultBranches: branches }),
   terminalFontSize: 11,
