@@ -1190,11 +1190,9 @@ pub fn build_turn_start_request(params: CodexTurnStartRequest<'_>) -> JsonRpcReq
 
 pub fn normalize_codex_reasoning_effort(effort: Option<&str>) -> Option<String> {
     match effort.map(str::trim).filter(|effort| !effort.is_empty()) {
-        Some(value @ ("none" | "minimal" | "low" | "medium" | "high" | "xhigh")) => {
-            Some(value.to_string())
-        }
-        Some("max") => Some("high".to_string()),
-        _ => None,
+        Some(value @ ("low" | "medium" | "high" | "xhigh")) => Some(value.to_string()),
+        Some("auto" | "default" | "none" | "minimal" | "max") | None => Some("high".to_string()),
+        Some(_) => None,
     }
 }
 
@@ -2255,7 +2253,7 @@ mod tests {
             model: Some("gpt-5.1-codex"),
             permission_level: CodexPermissionLevel::Standard,
             fast_mode: true,
-            reasoning_effort: Some("minimal"),
+            reasoning_effort: Some("xhigh"),
         });
         let value = serde_json::to_value(request).unwrap();
 
@@ -2265,7 +2263,7 @@ mod tests {
         assert_eq!(value["params"]["input"][0]["text"], "hello");
         assert_eq!(value["params"]["model"], "gpt-5.1-codex");
         assert_eq!(value["params"]["serviceTier"], "priority");
-        assert_eq!(value["params"]["effort"], "minimal");
+        assert_eq!(value["params"]["effort"], "xhigh");
         assert_eq!(value["params"]["approvalPolicy"], "on-request");
         assert_eq!(value["params"]["sandboxPolicy"]["type"], "workspaceWrite");
         assert_eq!(value["params"]["sandboxPolicy"]["networkAccess"], false);
@@ -2313,18 +2311,25 @@ mod tests {
     #[test]
     fn codex_reasoning_effort_normalization_matches_app_server_enum() {
         assert_eq!(
-            normalize_codex_reasoning_effort(Some(" minimal ")).as_deref(),
-            Some("minimal")
-        );
-        assert_eq!(
-            normalize_codex_reasoning_effort(Some("none")).as_deref(),
-            Some("none")
+            normalize_codex_reasoning_effort(Some(" xhigh ")).as_deref(),
+            Some("xhigh")
         );
         assert_eq!(
             normalize_codex_reasoning_effort(Some("max")).as_deref(),
             Some("high")
         );
-        assert_eq!(normalize_codex_reasoning_effort(Some("auto")), None);
+        assert_eq!(
+            normalize_codex_reasoning_effort(Some("auto")).as_deref(),
+            Some("high")
+        );
+        assert_eq!(
+            normalize_codex_reasoning_effort(Some("minimal")).as_deref(),
+            Some("high")
+        );
+        assert_eq!(
+            normalize_codex_reasoning_effort(None).as_deref(),
+            Some("high")
+        );
     }
 
     #[test]

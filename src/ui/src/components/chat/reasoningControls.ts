@@ -25,9 +25,6 @@ export const CLAUDE_EFFORT_LEVELS: readonly ReasoningLevel[] = [
 ] as const;
 
 export const CODEX_REASONING_LEVELS: readonly ReasoningLevel[] = [
-  { id: "auto", label: "Default" },
-  { id: "none", label: "None" },
-  { id: "minimal", label: "Minimal" },
   { id: "low", label: "Low" },
   { id: "medium", label: "Medium" },
   { id: "high", label: "High" },
@@ -62,12 +59,16 @@ export function normalizeReasoningLevel(
   model: string,
   variant: ReasoningControlVariant,
 ): string {
-  const value = level?.trim() || "auto";
+  const value = level?.trim() || (variant === "codex" ? "high" : "auto");
+  if (variant === "codex" && (value === "auto" || value === "default")) {
+    return "high";
+  }
   if (getReasoningLevels(model, variant).some((candidate) => candidate.id === value)) {
     return value;
   }
   if (value === "max") return "high";
   if (value === "xhigh") return "high";
+  if (variant === "codex") return "high";
   return "auto";
 }
 

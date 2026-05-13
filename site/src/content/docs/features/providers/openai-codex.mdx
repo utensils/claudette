@@ -69,7 +69,7 @@ Native Codex does not start the Claude Code CLI or the OpenAI gateway. Instead:
 2. Claudette initializes the app-server over JSON-RPC.
 3. New turns use `thread/start` and `turn/start`; mid-turn steering uses `turn/steer`; stop requests use `turn/interrupt`.
 4. Fast mode maps to Codex's priority service tier through app-server `serviceTier`.
-5. Codex reasoning effort uses Codex terminology and levels (`default`, `none`, `minimal`, `low`, `medium`, `high`, `xhigh`) rather than Claude's effort labels. Claudette sends it as app-server `turn/start.effort` and seeds new threads with `config.model_reasoning_effort`.
+5. Codex intelligence uses the same user-facing shape as Codex: `Low`, `Medium`, `High`, and `Extra High`. Claudette maps those levels to app-server `turn/start.effort` values (`low`, `medium`, `high`, `xhigh`) and seeds new threads with `config.model_reasoning_effort`. Empty or stale Codex effort values normalize to `High`.
 6. Codex notifications are adapted into Claudette chat events for assistant text, reasoning summaries, command execution, MCP tool calls, file changes, token usage, turn completion, failures, and process exit.
 7. Codex app-server approval requests for command execution, file changes, and permission escalation are answered over JSON-RPC while the richer in-chat approval UX is still being hardened.
 

@@ -386,3 +386,16 @@
     - `cd src/ui && bun run test -- modelRegistry`
     - `cd src/ui && bunx tsc -b`
     - `cd src/ui && bun run lint` (warnings only; no errors)
+- 2026-05-13: Updated Codex reasoning controls to match the Codex app's intelligence menu:
+  - Codex-facing controls now show **Intelligence** with `Low`, `Medium`, `High`, and `Extra High`, using the same dropdown layout as Claude effort levels.
+  - Stale protocol-shaped Codex values (`auto`, `default`, `none`, `minimal`, `max`, or empty) normalize to `high`; selected levels still map to app-server `effort` values.
+  - Updated settings copy and provider docs to describe Codex intelligence instead of Codex reasoning effort.
+  - Verified the intelligence controls with:
+    - `nix develop -c cargo test -p claudette agent::codex_app_server --all-features`
+    - `nix develop -c cargo clippy -p claudette --all-targets --all-features`
+    - `cd src/ui && bun run test -- reasoningControls EffortSelector modelRegistry`
+    - `cd src/ui && bunx tsc -b`
+    - `cd src/ui && bun run lint` (warnings only; no errors)
+    - `cd src/ui && bun run lint:css`
+    - `nix develop -c cargo fmt --all --check`
+    - `git diff --check`
