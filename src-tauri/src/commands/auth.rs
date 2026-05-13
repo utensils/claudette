@@ -90,14 +90,18 @@ pub async fn get_claude_auth_status(
             return Err(crate::missing_cli::handle_err(&app, &err).unwrap_or(err));
         }
         Err(_) => {
-            return Ok(ClaudeAuthStatus {
+            let status = ClaudeAuthStatus {
                 state: ClaudeAuthState::Unknown,
                 logged_in: false,
                 verified: false,
                 auth_method: None,
                 api_provider: None,
                 message: Some("Claude Code auth status check timed out.".into()),
-            });
+            };
+            if validate == Some(true) {
+                return validate_claude_auth(app, claude_path, status).await;
+            }
+            return Ok(status);
         }
     };
 
@@ -109,7 +113,7 @@ pub async fn get_claude_auth_status(
         auth_status_from_failed_output(&stdout, &stderr)
     };
 
-    if validate == Some(true) && status.state == ClaudeAuthState::SignedIn {
+    if validate == Some(true) {
         return validate_claude_auth(app, claude_path, status).await;
     }
 
@@ -220,11 +224,7 @@ async fn validate_claude_auth(
     };
 
     if output.status.success() || validation_reached_authenticated_model(&output.stdout) {
-        return Ok(ClaudeAuthStatus {
-            verified: true,
-            message: None,
-            ..local_status
-        });
+        return Ok(validated_auth_success_status(local_status));
     }
 
     let message = validation_failure_message(&output.stdout, &output.stderr);
@@ -240,6 +240,16 @@ async fn validate_claude_auth(
         api_provider: local_status.api_provider,
         message: Some(message),
     })
+}
+
+fn validated_auth_success_status(local_status: ClaudeAuthStatus) -> ClaudeAuthStatus {
+    ClaudeAuthStatus {
+        state: ClaudeAuthState::SignedIn,
+        logged_in: true,
+        verified: true,
+        message: None,
+        ..local_status
+    }
 }
 
 fn validation_reached_authenticated_model(stdout: &[u8]) -> bool {
@@ -523,5 +533,23 @@ mod tests {
             br#"{"type":"result","subtype":"error_during_execution"}"#
         ));
         assert!(!validation_reached_authenticated_model(b"Not logged in"));
+    }
+
+    #[test]
+    fn validation_success_promotes_local_unknown_to_verified_signed_in() {
+        let status = validated_auth_success_status(ClaudeAuthStatus {
+            state: ClaudeAuthState::Unknown,
+            logged_in: false,
+            verified: false,
+            auth_method: None,
+            api_provider: Some("firstParty".to_string()),
+            message: Some("Claude Code auth status check timed out.".to_string()),
+        });
+
+        assert_eq!(status.state, ClaudeAuthState::SignedIn);
+        assert!(status.logged_in);
+        assert!(status.verified);
+        assert_eq!(status.api_provider.as_deref(), Some("firstParty"));
+        assert_eq!(status.message, None);
     }
 }
