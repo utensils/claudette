@@ -70,6 +70,7 @@ tags
 
 # Documentation
 /docs
+/PLAN.md
 
 # Claudette devshell runtime state (aws-win-* sidecars, etc.)
 /.claudette/
