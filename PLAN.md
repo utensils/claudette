@@ -2,9 +2,12 @@
 
 ## Reference
 
-- Codex CLI reference clone: `/tmp/claudette-codex-cli-reference`
+- Codex CLI reference clone for this implementation machine: `/tmp/claudette-codex-cli-reference`
 - Upstream: `https://github.com/openai/codex.git`
 - Reference commit: `d1430fd61e4a8189e6669dce31bc9b9ea19a3148`
+- Reproduce the reference elsewhere with:
+  - `git clone https://github.com/openai/codex.git <temp-dir>/claudette-codex-cli-reference`
+  - `git -C <temp-dir>/claudette-codex-cli-reference checkout d1430fd61e4a8189e6669dce31bc9b9ea19a3148`
 - Draft PR: `https://github.com/utensils/claudette/pull/786`
 - Selected integration surface: `codex app-server --listen stdio://`
 - Reason: app-server exposes persistent threads, turn start/steer/interrupt, typed notifications, permission profiles, token usage, and richer future harness compatibility than `codex exec --json`.
@@ -100,6 +103,12 @@
   - `nix develop -c cargo test -p claudette agent::codex_app_server --all-features`
   - `nix develop -c cargo fmt --all`
 - 2026-05-13: Synced branch with `origin/main` before the spawn/router scaffold commit using `git fetch origin main` and `git rebase origin/main`; rebase completed cleanly.
+- 2026-05-13: Started regular Copilot review pass on draft PR #786. Valid findings addressed:
+  - JSON-RPC responses/errors now tolerate `id: null` and route them as orphan/unroutable.
+  - Reference clone path is now labeled implementation-local with reproducible clone/checkout steps.
+- 2026-05-13: Verified Copilot fixes with:
+  - `nix develop -c cargo test -p claudette agent::codex_app_server --all-features`
+  - `nix develop -c cargo fmt --all`
 
 ## Next Stage
 

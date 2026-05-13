@@ -234,7 +234,10 @@ async fn route_app_server_message(
 ) {
     match message {
         JsonRpcMessage::Response(response) => {
-            let request = pending.lock().await.remove(&response.id);
+            let request = {
+                let mut pending = pending.lock().await;
+                response.id.as_ref().and_then(|id| pending.remove(id))
+            };
             if let Some(request) = request {
                 let method = request.method.clone();
                 if request.tx.send(Ok(response)).is_err() {
@@ -251,13 +254,16 @@ async fn route_app_server_message(
                     target: "claudette::agent",
                     subsystem = "codex-app-server",
                     pid,
-                    id = ?response.id,
+                id = ?response.id,
                     "orphan codex response"
                 );
             }
         }
         JsonRpcMessage::Error(error) => {
-            let request = pending.lock().await.remove(&error.id);
+            let request = {
+                let mut pending = pending.lock().await;
+                error.id.as_ref().and_then(|id| pending.remove(id))
+            };
             if let Some(request) = request {
                 let method = request.method.clone();
                 if request.tx.send(Err(error)).is_err() {
@@ -274,7 +280,7 @@ async fn route_app_server_message(
                     target: "claudette::agent",
                     subsystem = "codex-app-server",
                     pid,
-                    id = ?error.id,
+                id = ?error.id,
                     "orphan codex error"
                 );
             }
@@ -333,13 +339,13 @@ pub struct JsonRpcNotification {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct JsonRpcResponse {
-    pub id: JsonRpcId,
+    pub id: Option<JsonRpcId>,
     pub result: Value,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct JsonRpcError {
-    pub id: JsonRpcId,
+    pub id: Option<JsonRpcId>,
     pub error: JsonRpcErrorBody,
 }
 
@@ -384,14 +390,20 @@ impl CodexResponseRouter {
 
     pub fn route(&mut self, message: JsonRpcMessage) -> CodexRoutedMessage {
         match message {
-            JsonRpcMessage::Response(response) => match self.pending.remove(&response.id) {
-                Some(method) => CodexRoutedMessage::Response { method, response },
-                None => CodexRoutedMessage::OrphanResponse(response),
-            },
-            JsonRpcMessage::Error(error) => match self.pending.remove(&error.id) {
-                Some(method) => CodexRoutedMessage::Error { method, error },
-                None => CodexRoutedMessage::OrphanError(error),
-            },
+            JsonRpcMessage::Response(response) => {
+                let request = response.id.as_ref().and_then(|id| self.pending.remove(id));
+                match request {
+                    Some(method) => CodexRoutedMessage::Response { method, response },
+                    None => CodexRoutedMessage::OrphanResponse(response),
+                }
+            }
+            JsonRpcMessage::Error(error) => {
+                let request = error.id.as_ref().and_then(|id| self.pending.remove(id));
+                match request {
+                    Some(method) => CodexRoutedMessage::Error { method, error },
+                    None => CodexRoutedMessage::OrphanError(error),
+                }
+            }
             JsonRpcMessage::Notification(notification) => {
                 CodexRoutedMessage::Notification(decode_notification(notification))
             }
@@ -967,7 +979,7 @@ mod tests {
         assert!(matches!(
             second,
             JsonRpcMessage::Response(JsonRpcResponse {
-                id: JsonRpcId::Integer(7),
+                id: Some(JsonRpcId::Integer(7)),
                 ..
             })
         ));
@@ -995,7 +1007,7 @@ mod tests {
         assert_eq!(router.pending_len(), 1);
 
         let routed = router.route(JsonRpcMessage::Response(JsonRpcResponse {
-            id: JsonRpcId::Integer(9),
+            id: Some(JsonRpcId::Integer(9)),
             result: json!({"turn":{"id":"turn-1"}}),
         }));
 
@@ -1050,17 +1062,32 @@ mod tests {
     fn router_surfaces_orphan_responses() {
         let mut router = CodexResponseRouter::default();
         let routed = router.route(JsonRpcMessage::Response(JsonRpcResponse {
-            id: JsonRpcId::Integer(404),
+            id: Some(JsonRpcId::Integer(404)),
             result: json!({"late": true}),
         }));
 
         assert!(matches!(
             routed,
             CodexRoutedMessage::OrphanResponse(JsonRpcResponse {
-                id: JsonRpcId::Integer(404),
+                id: Some(JsonRpcId::Integer(404)),
                 ..
             })
         ));
+    }
+
+    #[test]
+    fn parses_null_id_error_as_orphan_error() {
+        let message =
+            parse_jsonrpc_line(r#"{"id":null,"error":{"code":-32700,"message":"Parse error"}}"#)
+                .expect("null-id error parses");
+        let mut router = CodexResponseRouter::default();
+        let routed = router.route(message);
+
+        let CodexRoutedMessage::OrphanError(JsonRpcError { id: None, error }) = routed else {
+            panic!("expected null-id orphan error");
+        };
+        assert_eq!(error.code, -32700);
+        assert_eq!(error.message, "Parse error");
     }
 
     #[test]
@@ -1341,7 +1368,7 @@ mod tests {
             &event_tx,
             &pending,
             JsonRpcMessage::Response(JsonRpcResponse {
-                id: JsonRpcId::Integer(11),
+                id: Some(JsonRpcId::Integer(11)),
                 result: json!({"turn":{"id":"turn-1"}}),
             }),
         )
