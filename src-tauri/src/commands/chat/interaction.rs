@@ -3,7 +3,8 @@ use std::sync::Arc;
 use tauri::State;
 
 use claudette::agent::{
-    AgentSession, build_codex_approval_response_payload, is_codex_approval_tool_name,
+    AgentSession, build_codex_approval_response_payload, build_codex_user_input_response_payload,
+    is_codex_approval_tool_name,
 };
 
 use crate::state::{AgentSessionState, AppState, PendingPermission};
@@ -105,10 +106,19 @@ pub async fn submit_agent_answer(
         }
     }
 
-    let response = serde_json::json!({
-        "behavior": "allow",
-        "updatedInput": updated_input,
-    });
+    let response = if pending
+        .original_input
+        .get("codexMethod")
+        .and_then(serde_json::Value::as_str)
+        .is_some()
+    {
+        build_codex_user_input_response_payload(&pending.original_input, &answers)?
+    } else {
+        serde_json::json!({
+            "behavior": "allow",
+            "updatedInput": updated_input,
+        })
+    };
     ps.send_control_response(&pending.request_id, response)
         .await
 }

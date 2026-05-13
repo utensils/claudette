@@ -40,6 +40,10 @@ pub struct CodexAppServerOptions {
     pub permission_level: CodexPermissionLevel,
     pub fast_mode: bool,
     pub reasoning_effort: Option<String>,
+    pub resume_thread_id: Option<String>,
+    pub custom_instructions: Option<String>,
+    pub workspace_env: Option<crate::env::WorkspaceEnv>,
+    pub resolved_env: Option<crate::env_provider::ResolvedEnv>,
 }
 
 impl Default for CodexAppServerOptions {
@@ -49,6 +53,10 @@ impl Default for CodexAppServerOptions {
             permission_level: CodexPermissionLevel::Readonly,
             fast_mode: false,
             reasoning_effort: None,
+            resume_thread_id: None,
+            custom_instructions: None,
+            workspace_env: None,
+            resolved_env: None,
         }
     }
 }
@@ -64,6 +72,8 @@ pub struct CodexAppServerSession {
     permission_level: CodexPermissionLevel,
     fast_mode: bool,
     reasoning_effort: Option<String>,
+    resume_thread_id: Option<String>,
+    custom_instructions: Option<String>,
     thread_id: Arc<tokio::sync::Mutex<Option<String>>>,
     active_turn_id: Arc<tokio::sync::Mutex<Option<String>>>,
     turn_output: TurnOutputBuffer,
@@ -86,7 +96,8 @@ impl CodexAppServerSession {
     ) -> Result<Self, String> {
         crate::missing_cli::precheck_cwd(working_dir)?;
 
-        let mut cmd = Command::new("codex");
+        let codex_path = super::binary::resolve_codex_path().await;
+        let mut cmd = Command::new(codex_path);
         cmd.no_console_window();
         cmd.args(codex_app_server_args())
             .current_dir(working_dir)
@@ -94,6 +105,13 @@ impl CodexAppServerSession {
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .env("PATH", crate::env::enriched_path());
+
+        if let Some(env) = options.resolved_env.as_ref() {
+            env.apply(&mut cmd);
+        }
+        if let Some(env) = options.workspace_env.as_ref() {
+            env.apply(&mut cmd);
+        }
 
         let mut child = cmd.spawn().map_err(|e| {
             crate::missing_cli::map_spawn_err(&e, "codex", || {
@@ -128,6 +146,8 @@ impl CodexAppServerSession {
             permission_level: options.permission_level,
             fast_mode: options.fast_mode,
             reasoning_effort: normalize_codex_reasoning_effort(options.reasoning_effort.as_deref()),
+            resume_thread_id: options.resume_thread_id,
+            custom_instructions: options.custom_instructions,
             thread_id: Arc::new(tokio::sync::Mutex::new(None)),
             active_turn_id: Arc::new(tokio::sync::Mutex::new(None)),
             turn_output: Arc::new(tokio::sync::Mutex::new(CodexTurnOutput::default())),
@@ -150,6 +170,21 @@ impl CodexAppServerSession {
             }
             return Err(err);
         }
+        if session.resume_thread_id.is_some()
+            && let Err(err) = session.ensure_thread().await
+        {
+            fail_pending_requests(&session.pending, "Codex app-server resume failed").await;
+            if let Err(stop_err) = super::process::stop_agent_graceful(pid).await {
+                tracing::warn!(
+                    target: "claudette::agent",
+                    subsystem = "codex-app-server",
+                    pid,
+                    error = %stop_err,
+                    "failed to stop codex app-server after resume failure"
+                );
+            }
+            return Err(err);
+        }
 
         Ok(session)
     }
@@ -168,6 +203,8 @@ impl CodexAppServerSession {
             permission_level: CodexPermissionLevel::Readonly,
             fast_mode: false,
             reasoning_effort: None,
+            resume_thread_id: None,
+            custom_instructions: None,
             thread_id: Arc::new(tokio::sync::Mutex::new(None)),
             active_turn_id: Arc::new(tokio::sync::Mutex::new(None)),
             turn_output: Arc::new(tokio::sync::Mutex::new(CodexTurnOutput::default())),
@@ -212,7 +249,7 @@ impl CodexAppServerSession {
             .await?;
         let turn_id = turn_id_from_response(&response)?;
         *self.active_turn_id.lock().await = Some(turn_id);
-        for event in codex_turn_start_events() {
+        for event in codex_turn_start_events(&thread_id) {
             let _ = self.event_tx.send(event);
         }
 
@@ -351,19 +388,32 @@ impl CodexAppServerSession {
         if let Some(thread_id) = self.thread_id.lock().await.clone() {
             return Ok(thread_id);
         }
-        let response = self
-            .send_request(build_thread_start_request(
+        let params = self.thread_request_params();
+        let response = if let Some(resume_thread_id) = self.resume_thread_id.as_deref() {
+            self.send_request(build_thread_resume_request(
                 self.next_id(),
-                self.model.as_deref(),
-                &self.working_dir,
-                self.permission_level,
-                self.fast_mode,
-                self.reasoning_effort.as_deref(),
+                resume_thread_id,
+                params,
             ))
-            .await?;
+            .await?
+        } else {
+            self.send_request(build_thread_start_request(self.next_id(), params))
+                .await?
+        };
         let thread_id = thread_id_from_response(&response)?;
         *self.thread_id.lock().await = Some(thread_id.clone());
         Ok(thread_id)
+    }
+
+    fn thread_request_params(&self) -> CodexThreadRequestParams<'_> {
+        CodexThreadRequestParams {
+            model: self.model.as_deref(),
+            cwd: &self.working_dir,
+            permission_level: self.permission_level,
+            fast_mode: self.fast_mode,
+            reasoning_effort: self.reasoning_effort.as_deref(),
+            custom_instructions: self.custom_instructions.as_deref(),
+        }
     }
 
     async fn send_request(&self, request: JsonRpcRequest) -> Result<JsonRpcResponse, String> {
@@ -738,8 +788,7 @@ pub struct JsonRpcErrorBody {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct JsonRpcServerResponse {
     pub id: JsonRpcId,
-    pub method: String,
-    pub response: Value,
+    pub result: Value,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -949,6 +998,8 @@ fn codex_server_request_tool(method: &str) -> Option<(&'static str, &'static str
         "item/permissions/requestApproval" => {
             Some((CODEX_PERMISSIONS_APPROVAL_TOOL, "permissions"))
         }
+        "item/tool/requestUserInput" => Some(("AskUserQuestion", "userInput")),
+        "mcpServer/elicitation/request" => Some(("AskUserQuestion", "mcpElicitation")),
         _ => None,
     }
 }
@@ -990,6 +1041,9 @@ pub fn codex_server_request_to_control_event(
         .and_then(Value::as_object)
         .cloned()
         .unwrap_or_default();
+    if request.method == "mcpServer/elicitation/request" {
+        input = codex_mcp_elicitation_as_question_input(&input);
+    }
     input.insert(
         "codexMethod".to_string(),
         Value::String(request.method.clone()),
@@ -1007,6 +1061,38 @@ pub fn codex_server_request_to_control_event(
             input: Value::Object(input),
         },
     })))
+}
+
+fn codex_mcp_elicitation_as_question_input(
+    params: &serde_json::Map<String, Value>,
+) -> serde_json::Map<String, Value> {
+    let request = params.get("request").and_then(Value::as_object);
+    let message = request
+        .and_then(|request| request.get("message"))
+        .and_then(Value::as_str)
+        .filter(|message| !message.trim().is_empty())
+        .unwrap_or("Codex is requesting additional input from an MCP server.");
+    let header = params
+        .get("serverName")
+        .and_then(Value::as_str)
+        .filter(|server_name| !server_name.trim().is_empty())
+        .map(|server_name| format!("MCP server: {server_name}"))
+        .unwrap_or_else(|| "MCP server request".to_string());
+    let mut input = params.clone();
+    input.insert(
+        "questions".to_string(),
+        json!([{
+            "id": "action",
+            "header": header,
+            "question": message,
+            "options": [
+                { "label": "Accept", "description": "Allow Codex to continue with this MCP request." },
+                { "label": "Decline", "description": "Deny this MCP request." },
+                { "label": "Cancel", "description": "Cancel the pending MCP request." }
+            ]
+        }]),
+    );
+    input
 }
 
 pub fn build_codex_server_response_from_control_response(
@@ -1028,9 +1114,69 @@ pub fn build_codex_server_response_from_control_response(
         .ok_or_else(|| "Codex control response is missing response payload".to_string())?;
     Ok(JsonRpcServerResponse {
         id,
-        method: method.to_string(),
-        response: payload,
+        result: payload,
     })
+}
+
+pub fn build_codex_user_input_response_payload(
+    original_input: &Value,
+    answers: &std::collections::HashMap<String, String>,
+) -> Result<Value, String> {
+    let method = original_input
+        .get("codexMethod")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "Codex user-input payload is missing codexMethod".to_string())?;
+
+    match method {
+        "item/tool/requestUserInput" => {
+            let mut by_id = serde_json::Map::new();
+            if let Some(questions) = original_input.get("questions").and_then(Value::as_array) {
+                for question in questions {
+                    let Some(id) = question.get("id").and_then(Value::as_str) else {
+                        continue;
+                    };
+                    let Some(question_text) = question.get("question").and_then(Value::as_str)
+                    else {
+                        continue;
+                    };
+                    if let Some(answer) = answers.get(question_text) {
+                        let values = answer
+                            .split(',')
+                            .map(str::trim)
+                            .filter(|value| !value.is_empty())
+                            .map(|value| Value::String(value.to_string()))
+                            .collect::<Vec<_>>();
+                        by_id.insert(id.to_string(), json!({ "answers": values }));
+                    }
+                }
+            }
+            Ok(json!({
+                "codexMethod": method,
+                "response": {
+                    "answers": by_id,
+                },
+            }))
+        }
+        "mcpServer/elicitation/request" => {
+            let action = answers
+                .values()
+                .next()
+                .map(|answer| answer.trim().to_ascii_lowercase())
+                .filter(|answer| answer == "accept" || answer == "cancel")
+                .unwrap_or_else(|| "decline".to_string());
+            Ok(json!({
+                "codexMethod": method,
+                "response": {
+                    "action": action,
+                    "content": null,
+                    "_meta": null,
+                },
+            }))
+        }
+        _ => Err(format!(
+            "Pending Codex request `{method}` is not a user-input request"
+        )),
+    }
 }
 
 pub fn build_codex_approval_response_payload(
@@ -1086,9 +1232,16 @@ pub fn build_codex_server_request_response(
         "codexMethod".to_string(),
         Value::String(request.method.clone()),
     );
-    let response =
+    let response = if is_codex_approval_tool_name(tool_name) {
         build_codex_approval_response_payload(tool_name, &Value::Object(original_input), false)
-            .ok()?;
+            .ok()?
+    } else {
+        build_codex_user_input_response_payload(
+            &Value::Object(original_input),
+            &std::collections::HashMap::new(),
+        )
+        .ok()?
+    };
     let request_id = codex_request_id_as_control_id(&request.id).ok()?;
     build_codex_server_response_from_control_response(&request_id, response).ok()
 }
@@ -1121,17 +1274,20 @@ pub fn build_initialized_notification() -> JsonRpcNotification {
     }
 }
 
-pub fn build_thread_start_request(
-    id: i64,
-    model: Option<&str>,
-    cwd: &Path,
-    permission_level: CodexPermissionLevel,
-    fast_mode: bool,
-    reasoning_effort: Option<&str>,
-) -> JsonRpcRequest {
-    let mapping = permission_level.mapping();
-    let service_tier = fast_mode.then_some("priority");
-    let config = reasoning_effort.map(|effort| {
+#[derive(Debug, Clone, Copy)]
+pub struct CodexThreadRequestParams<'a> {
+    pub model: Option<&'a str>,
+    pub cwd: &'a Path,
+    pub permission_level: CodexPermissionLevel,
+    pub fast_mode: bool,
+    pub reasoning_effort: Option<&'a str>,
+    pub custom_instructions: Option<&'a str>,
+}
+
+pub fn build_thread_start_request(id: i64, params: CodexThreadRequestParams<'_>) -> JsonRpcRequest {
+    let mapping = params.permission_level.mapping();
+    let service_tier = params.fast_mode.then_some("priority");
+    let config = params.reasoning_effort.map(|effort| {
         json!({
             "model_reasoning_effort": effort,
         })
@@ -1140,15 +1296,46 @@ pub fn build_thread_start_request(
         id: JsonRpcId::Integer(id),
         method: "thread/start".to_string(),
         params: Some(json!({
-            "model": model,
+            "model": params.model,
             "modelProvider": "openai",
             "serviceTier": service_tier,
-            "cwd": cwd,
+            "cwd": params.cwd,
             "approvalPolicy": mapping.approval_policy,
             "approvalsReviewer": "user",
             "sandbox": mapping.thread_sandbox,
             "threadSource": "user",
             "config": config,
+            "developerInstructions": params.custom_instructions,
+        })),
+    }
+}
+
+pub fn build_thread_resume_request(
+    id: i64,
+    thread_id: &str,
+    params: CodexThreadRequestParams<'_>,
+) -> JsonRpcRequest {
+    let mapping = params.permission_level.mapping();
+    let service_tier = params.fast_mode.then_some("priority");
+    let config = params.reasoning_effort.map(|effort| {
+        json!({
+            "model_reasoning_effort": effort,
+        })
+    });
+    JsonRpcRequest {
+        id: JsonRpcId::Integer(id),
+        method: "thread/resume".to_string(),
+        params: Some(json!({
+            "threadId": thread_id,
+            "model": params.model,
+            "modelProvider": "openai",
+            "serviceTier": service_tier,
+            "cwd": params.cwd,
+            "approvalPolicy": mapping.approval_policy,
+            "approvalsReviewer": "user",
+            "sandbox": mapping.thread_sandbox,
+            "config": config,
+            "developerInstructions": params.custom_instructions,
         })),
     }
 }
@@ -1813,8 +2000,25 @@ pub fn codex_command_line_event() -> AgentEvent {
     AgentEvent::Stream(StreamEvent::system_command_line(codex_invocation_line()))
 }
 
-pub fn codex_turn_start_events() -> Vec<AgentEvent> {
+pub fn codex_turn_start_events(thread_id: &str) -> Vec<AgentEvent> {
     vec![
+        AgentEvent::Stream(StreamEvent::System {
+            subtype: "init".to_string(),
+            session_id: Some(thread_id.to_string()),
+            state: None,
+            detail: None,
+            task_id: None,
+            tool_use_id: None,
+            output_file: None,
+            summary: None,
+            description: None,
+            last_tool_name: None,
+            usage: None,
+            status: None,
+            compact_result: None,
+            compact_metadata: None,
+            command_line: None,
+        }),
         AgentEvent::Stream(StreamEvent::Stream {
             event: InnerStreamEvent::MessageStart {},
         }),
@@ -1970,7 +2174,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn writes_codex_server_response_with_response_field() {
+    async fn writes_codex_server_response_as_jsonrpc_result() {
         let request = JsonRpcRequest {
             id: JsonRpcId::Integer(8),
             method: "item/commandExecution/requestApproval".to_string(),
@@ -1989,8 +2193,7 @@ mod tests {
             value,
             json!({
                 "id": 8,
-                "method": "item/commandExecution/requestApproval",
-                "response": {
+                "result": {
                     "decision": "decline"
                 }
             })
@@ -2012,11 +2215,12 @@ mod tests {
             build_codex_server_response_from_control_response("8", response).expect("response");
 
         assert_eq!(server_response.id, JsonRpcId::Integer(8));
+        assert_eq!(server_response.result, json!({ "decision": "accept" }));
+        let value = serde_json::to_value(&server_response).unwrap();
         assert_eq!(
-            server_response.method,
-            "item/commandExecution/requestApproval"
+            value,
+            json!({ "id": 8, "result": { "decision": "accept" } })
         );
-        assert_eq!(server_response.response, json!({ "decision": "accept" }));
     }
 
     #[test]
@@ -2035,12 +2239,119 @@ mod tests {
                 .expect("response");
 
         assert_eq!(server_response.id, JsonRpcId::String("perm-1".to_string()));
-        assert_eq!(server_response.method, "item/permissions/requestApproval");
         assert_eq!(
-            server_response.response,
+            server_response.result,
             json!({
                 "permissions": {},
                 "scope": "turn"
+            })
+        );
+    }
+
+    #[test]
+    fn builds_codex_user_input_response_by_question_id() {
+        let mut answers = std::collections::HashMap::new();
+        answers.insert("Pick checks".to_string(), "Lint, Typecheck".to_string());
+        answers.insert("Ship it?".to_string(), "Yes".to_string());
+
+        let response = build_codex_user_input_response_payload(
+            &json!({
+                "codexMethod": "item/tool/requestUserInput",
+                "questions": [
+                    { "id": "checks", "question": "Pick checks" },
+                    { "id": "ship", "question": "Ship it?" }
+                ],
+            }),
+            &answers,
+        )
+        .expect("response payload");
+        let server_response =
+            build_codex_server_response_from_control_response("\"ask-1\"", response)
+                .expect("server response");
+
+        assert_eq!(
+            server_response.result,
+            json!({
+                "answers": {
+                    "checks": { "answers": ["Lint", "Typecheck"] },
+                    "ship": { "answers": ["Yes"] }
+                }
+            })
+        );
+    }
+
+    #[test]
+    fn routes_codex_user_input_to_existing_question_tool() {
+        let event = codex_server_request_to_control_event(&JsonRpcRequest {
+            id: JsonRpcId::String("ask-1".to_string()),
+            method: "item/tool/requestUserInput".to_string(),
+            params: Some(json!({
+                "itemId": "item-1",
+                "questions": [{
+                    "id": "q1",
+                    "header": "Decision",
+                    "question": "Proceed?",
+                    "options": [{ "label": "Yes", "description": "Continue" }]
+                }]
+            })),
+        })
+        .expect("route")
+        .expect("event");
+
+        let AgentEvent::Stream(StreamEvent::ControlRequest {
+            request:
+                ControlRequestInner::CanUseTool {
+                    tool_name,
+                    tool_use_id,
+                    input,
+                },
+            ..
+        }) = event
+        else {
+            panic!("expected control request");
+        };
+        assert_eq!(tool_name, "AskUserQuestion");
+        assert_eq!(tool_use_id, "item-1");
+        assert_eq!(input["codexMethod"], "item/tool/requestUserInput");
+        assert_eq!(input["questions"][0]["id"], "q1");
+    }
+
+    #[test]
+    fn routes_mcp_elicitation_to_question_and_decline_response() {
+        let request = JsonRpcRequest {
+            id: JsonRpcId::String("mcp-1".to_string()),
+            method: "mcpServer/elicitation/request".to_string(),
+            params: Some(json!({
+                "serverName": "linear",
+                "request": {
+                    "message": "Open auth URL?"
+                }
+            })),
+        };
+        let event = codex_server_request_to_control_event(&request)
+            .expect("route")
+            .expect("event");
+        let AgentEvent::Stream(StreamEvent::ControlRequest {
+            request:
+                ControlRequestInner::CanUseTool {
+                    tool_name, input, ..
+                },
+            ..
+        }) = event
+        else {
+            panic!("expected control request");
+        };
+        assert_eq!(tool_name, "AskUserQuestion");
+        assert_eq!(input["questions"][0]["header"], "MCP server: linear");
+        assert_eq!(input["questions"][0]["question"], "Open auth URL?");
+
+        let response = build_codex_server_request_response(&request).expect("auto response");
+        assert_eq!(
+            response.result,
+            json!({
+                "action": "decline",
+                "content": null,
+                "_meta": null
             })
         );
     }
@@ -2301,16 +2612,50 @@ mod tests {
     fn thread_start_request_carries_reasoning_effort_config() {
         let request = build_thread_start_request(
             8,
-            Some("gpt-5.4"),
-            Path::new("/tmp/work"),
-            CodexPermissionLevel::Readonly,
-            false,
-            Some("high"),
+            CodexThreadRequestParams {
+                model: Some("gpt-5.4"),
+                cwd: Path::new("/tmp/work"),
+                permission_level: CodexPermissionLevel::Readonly,
+                fast_mode: false,
+                reasoning_effort: Some("high"),
+                custom_instructions: Some("Follow repo instructions."),
+            },
         );
         let value = serde_json::to_value(request).unwrap();
 
         assert_eq!(value["method"], "thread/start");
         assert_eq!(value["params"]["config"]["model_reasoning_effort"], "high");
+        assert_eq!(
+            value["params"]["developerInstructions"],
+            "Follow repo instructions."
+        );
+    }
+
+    #[test]
+    fn thread_resume_request_carries_saved_thread_and_context_overrides() {
+        let request = build_thread_resume_request(
+            9,
+            "thread-existing",
+            CodexThreadRequestParams {
+                model: Some("gpt-5.4"),
+                cwd: Path::new("/tmp/work"),
+                permission_level: CodexPermissionLevel::Standard,
+                fast_mode: true,
+                reasoning_effort: Some("xhigh"),
+                custom_instructions: Some("Use the repo conventions."),
+            },
+        );
+        let value = serde_json::to_value(request).unwrap();
+
+        assert_eq!(value["method"], "thread/resume");
+        assert_eq!(value["params"]["threadId"], "thread-existing");
+        assert_eq!(
+            value["params"]["developerInstructions"],
+            "Use the repo conventions."
+        );
+        assert_eq!(value["params"]["config"]["model_reasoning_effort"], "xhigh");
+        assert_eq!(value["params"]["serviceTier"], "priority");
+        assert_eq!(value["params"]["approvalPolicy"], "on-request");
     }
 
     #[test]
@@ -2770,14 +3115,22 @@ mod tests {
 
     #[test]
     fn codex_start_events_prime_message_and_content_blocks() {
-        let events = codex_turn_start_events();
+        let events = codex_turn_start_events("thread-1");
         assert!(matches!(
             events.first(),
+            Some(AgentEvent::Stream(StreamEvent::System {
+                subtype,
+                session_id: Some(session_id),
+                ..
+            })) if subtype == "init" && session_id == "thread-1"
+        ));
+        assert!(matches!(
+            events.get(1),
             Some(AgentEvent::Stream(StreamEvent::Stream {
                 event: InnerStreamEvent::MessageStart {}
             }))
         ));
-        assert_eq!(events.len(), 3);
+        assert_eq!(events.len(), 4);
     }
 
     #[tokio::test]
@@ -3065,7 +3418,7 @@ mod tests {
             None,
             JsonRpcMessage::Request(JsonRpcRequest {
                 id: JsonRpcId::String("req-1".to_string()),
-                method: "item/tool/requestUserInput".to_string(),
+                method: "item/tool/notImplemented".to_string(),
                 params: None,
             }),
         )
@@ -3074,7 +3427,7 @@ mod tests {
         let AgentEvent::Stderr(line) = rx.recv().await.expect("stderr event") else {
             panic!("expected stderr event");
         };
-        assert!(line.contains("request `item/tool/requestUserInput`"));
+        assert!(line.contains("request `item/tool/notImplemented`"));
     }
 
     #[tokio::test]

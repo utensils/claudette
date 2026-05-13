@@ -13,7 +13,9 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{Notify, RwLock};
 
-use claudette::agent::{CodexAppServerOptions, CodexAppServerSession, stop_agent_graceful};
+use claudette::agent::{
+    CodexAppServerOptions, CodexAppServerSession, resolve_codex_path, stop_agent_graceful,
+};
 use claudette::agent_backend::{
     AgentBackendConfig, AgentBackendKind, AgentBackendModel, AgentBackendRuntime,
     AgentBackendRuntimeHarness,
@@ -319,7 +321,8 @@ pub async fn test_agent_backend(
 pub async fn launch_codex_login(state: State<'_, AppState>) -> Result<(), String> {
     let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
     ensure_native_codex_enabled(&db)?;
-    let mut child = tokio::process::Command::new("codex")
+    let codex_path = resolve_codex_path().await;
+    let mut child = tokio::process::Command::new(codex_path)
         .arg("login")
         .spawn()
         .map_err(|e| format!("Failed to launch `codex login`: {e}"))?;
@@ -1289,7 +1292,8 @@ async fn discover_codex_models() -> Result<Vec<AgentBackendModel>, String> {
     // Codex does not currently expose a stable model-list API for ChatGPT
     // subscription auth. This experimental backend depends on the CLI debug
     // catalog until Codex publishes a supported discovery surface.
-    let output = tokio::process::Command::new("codex")
+    let codex_path = resolve_codex_path().await;
+    let output = tokio::process::Command::new(codex_path)
         .args(["debug", "models"])
         .output()
         .await
@@ -1437,7 +1441,8 @@ async fn start_codex_native_control_session() -> Result<CodexAppServerSession, S
 }
 
 async fn codex_login_status() -> Result<String, String> {
-    let output = tokio::process::Command::new("codex")
+    let codex_path = resolve_codex_path().await;
+    let output = tokio::process::Command::new(codex_path)
         .args(["login", "status"])
         .output()
         .await

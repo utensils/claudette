@@ -2273,6 +2273,10 @@ pub async fn send_chat_message(
                             permission_level: codex_permission_level_for_persistent,
                             fast_mode: settings.fast_mode,
                             reasoning_effort: settings.effort.clone(),
+                            resume_thread_id: is_resume.then(|| sid.clone()),
+                            custom_instructions: instructions.clone(),
+                            workspace_env: Some(env.clone()),
+                            resolved_env: Some(resolved.clone()),
                         },
                     )
                     .await?;

@@ -42,6 +42,8 @@ bun install -g @openai/codex
 
 Confirm it is on `PATH`: `codex --version` should print a version.
 
+Claudette resolves `codex` from the app's enriched PATH plus common user install locations on macOS, Linux, and Windows, including npm shims and native `codex.exe` installs.
+
 ### Sign in
 
 In **Settings > Models**, find **Codex** and click **Run codex login**. Claudette runs `codex login` for you, which:
@@ -71,7 +73,7 @@ Native Codex does not start the Claude Code CLI or the OpenAI gateway. Instead:
 4. Fast mode maps to Codex's priority service tier through app-server `serviceTier`.
 5. Codex intelligence uses the same user-facing shape as Codex: `Low`, `Medium`, `High`, and `Extra High`. Claudette maps those levels to app-server `turn/start.effort` values (`low`, `medium`, `high`, `xhigh`) and seeds new threads with `config.model_reasoning_effort`. Empty or stale Codex effort values normalize to `High`. Codex does not expose a model reasoning on/off toggle in the picker metadata, so Claudette only offers the intelligence levels plus a display-only **Show Codex reasoning** toggle for reasoning summaries.
 6. Codex notifications are adapted into Claudette chat events for assistant text, reasoning summaries, command execution, MCP tool calls, file changes, token usage, turn completion, failures, and process exit.
-7. Codex app-server approval requests for command execution, file changes, and permission escalation are answered over JSON-RPC. Denying one of these Codex approvals sends only a decline decision to Codex; freeform denial feedback is reserved for approval flows that can forward it.
+7. Codex app-server approval requests for command execution, file changes, permission escalation, `request_user_input`, and MCP elicitations are answered over JSON-RPC. Denying one of these Codex approvals sends only a decline decision to Codex; freeform denial feedback is reserved for approval flows that can forward it.
 
 Permission levels map to Codex approval and sandbox settings:
 

@@ -45,6 +45,29 @@ pub async fn resolve_claude_path() -> OsString {
     resolved
 }
 
+/// Resolve the full path to the `codex` CLI binary (async-safe).
+///
+/// Mirrors [`resolve_claude_path`] but uses Codex-specific binary names and
+/// install locations. Native Codex support needs an absolute executable path
+/// because GUI launches on Windows and Linux can miss user-level npm shims
+/// even when the child process later receives an enriched `PATH`.
+pub async fn resolve_codex_path() -> OsString {
+    if let Some(cached) = RESOLVED_CODEX_PATH.get() {
+        return cached.clone();
+    }
+    #[cfg(unix)]
+    let resolved = tokio::task::spawn_blocking(resolve_codex_path_sync)
+        .await
+        .unwrap_or_else(|_| OsString::from(codex_bare_name()));
+    #[cfg(not(unix))]
+    let resolved = resolve_codex_path_sync();
+
+    if Path::new(&resolved).is_absolute() {
+        let _ = RESOLVED_CODEX_PATH.set(resolved.clone());
+    }
+    resolved
+}
+
 /// Resolve the `claude` CLI path from a synchronous (non-async) context.
 ///
 /// Mirrors [`crate::git::resolve_git_path_blocking`] so callers that can't
@@ -96,16 +119,58 @@ pub fn resolve_claude_path_blocking() -> OsString {
     resolved
 }
 
+/// Resolve the `codex` CLI path from a synchronous (non-async) context.
+pub fn resolve_codex_path_blocking() -> OsString {
+    if let Some(cached) = RESOLVED_CODEX_PATH.get() {
+        return cached.clone();
+    }
+    let path = if crate::env::shell_path_is_cached() {
+        Some(crate::env::enriched_path())
+    } else {
+        std::env::var_os("PATH")
+    };
+    let resolved = resolve_codex_path_inner(
+        dirs::home_dir(),
+        path,
+        || {
+            if crate::env::shell_path_is_cached() {
+                login_shell_path()
+            } else {
+                None
+            }
+        },
+        is_executable_file,
+    );
+    if Path::new(&resolved).is_absolute() {
+        let _ = RESOLVED_CODEX_PATH.set(resolved.clone());
+    }
+    resolved
+}
+
 /// Shared cache for [`resolve_claude_path`] and [`resolve_claude_path_blocking`].
 /// Only populated for absolute paths — the bare-`claude` fallback stays
 /// uncached so the next call gets a chance to find a real install.
 static RESOLVED_CLAUDE_PATH: OnceLock<OsString> = OnceLock::new();
+
+/// Shared cache for [`resolve_codex_path`] and [`resolve_codex_path_blocking`].
+/// Only populated for absolute paths so installing Codex during a running
+/// Claudette session can still be picked up on a later retry.
+static RESOLVED_CODEX_PATH: OnceLock<OsString> = OnceLock::new();
 
 /// Synchronous core of [`resolve_claude_path`]. Extracted so it can run
 /// inside `tokio::task::spawn_blocking` on Unix without juggling async
 /// boundaries inside the resolver itself.
 fn resolve_claude_path_sync() -> OsString {
     resolve_claude_path_inner(
+        dirs::home_dir(),
+        Some(crate::env::enriched_path()),
+        login_shell_path,
+        is_executable_file,
+    )
+}
+
+fn resolve_codex_path_sync() -> OsString {
+    resolve_codex_path_inner(
         dirs::home_dir(),
         Some(crate::env::enriched_path()),
         login_shell_path,
@@ -183,6 +248,33 @@ fn resolve_claude_path_inner(
     OsString::from(claude_bare_name())
 }
 
+fn resolve_codex_path_inner(
+    home: Option<PathBuf>,
+    process_path: Option<OsString>,
+    shell_path_probe: impl FnOnce() -> Option<OsString>,
+    exists: impl Fn(&Path) -> bool,
+) -> OsString {
+    if let Some(process_path) = process_path
+        && let Some(found) = search_path_dirs_for(&process_path, codex_binary_variants(), &exists)
+    {
+        return found;
+    }
+
+    if let Some(shell_path) = shell_path_probe()
+        && let Some(found) = search_path_dirs_for(&shell_path, codex_binary_variants(), &exists)
+    {
+        return found;
+    }
+
+    for p in codex_fallback_paths(home.as_deref()) {
+        if exists(&p) {
+            return p.into_os_string();
+        }
+    }
+
+    OsString::from(codex_bare_name())
+}
+
 /// Binary filename variants for the `claude` CLI on the current target.
 ///
 /// On Windows, the official Anthropic native installer ships `claude.exe`,
@@ -200,6 +292,16 @@ fn claude_binary_variants() -> &'static [&'static str] {
 }
 
 #[cfg(windows)]
+fn codex_binary_variants() -> &'static [&'static str] {
+    &["codex.exe", "codex.cmd", "codex.ps1"]
+}
+
+#[cfg(not(windows))]
+fn codex_binary_variants() -> &'static [&'static str] {
+    &["codex"]
+}
+
+#[cfg(windows)]
 fn claude_bare_name() -> &'static str {
     "claude.exe"
 }
@@ -207,6 +309,16 @@ fn claude_bare_name() -> &'static str {
 #[cfg(not(windows))]
 fn claude_bare_name() -> &'static str {
     "claude"
+}
+
+#[cfg(windows)]
+fn codex_bare_name() -> &'static str {
+    "codex.exe"
+}
+
+#[cfg(not(windows))]
+fn codex_bare_name() -> &'static str {
+    "codex"
 }
 
 /// Well-known install locations for the `claude` CLI on the current target.
@@ -278,6 +390,52 @@ fn claude_fallback_paths(home: Option<&Path>) -> Vec<PathBuf> {
     out
 }
 
+/// Well-known install locations for the `codex` CLI on the current target.
+fn codex_fallback_paths(home: Option<&Path>) -> Vec<PathBuf> {
+    let mut out: Vec<PathBuf> = Vec::new();
+
+    #[cfg(windows)]
+    {
+        if let Some(home) = home {
+            out.push(home.join(".local").join("bin").join("codex.exe"));
+            out.push(
+                home.join("AppData")
+                    .join("Roaming")
+                    .join("npm")
+                    .join("codex.cmd"),
+            );
+            out.push(
+                home.join("AppData")
+                    .join("Roaming")
+                    .join("npm")
+                    .join("codex.ps1"),
+            );
+            out.push(
+                home.join("AppData")
+                    .join("Local")
+                    .join("Programs")
+                    .join("codex")
+                    .join("codex.exe"),
+            );
+        }
+    }
+
+    #[cfg(not(windows))]
+    {
+        if let Some(home) = home {
+            out.push(home.join(".local/bin/codex"));
+            out.push(home.join(".codex/bin/codex"));
+            out.push(home.join(".nix-profile/bin/codex"));
+        }
+        out.push(PathBuf::from("/usr/local/bin/codex"));
+        out.push(PathBuf::from("/opt/homebrew/bin/codex"));
+        out.push(PathBuf::from("/run/current-system/sw/bin/codex"));
+        out.push(PathBuf::from("/nix/var/nix/profiles/default/bin/codex"));
+    }
+
+    out
+}
+
 /// Search PATH directories for a `claude` binary, trying each platform
 /// filename variant (`claude.exe`/`claude.cmd`/`claude.ps1` on Windows,
 /// bare `claude` elsewhere).
@@ -296,11 +454,19 @@ fn claude_fallback_paths(home: Option<&Path>) -> Vec<PathBuf> {
 /// and `--settings` trip the check and surface as
 /// `"batch file arguments are invalid"` at spawn time.
 fn search_path_dirs(path: &std::ffi::OsStr, exists: &impl Fn(&Path) -> bool) -> Option<OsString> {
+    search_path_dirs_for(path, claude_binary_variants(), exists)
+}
+
+fn search_path_dirs_for(
+    path: &std::ffi::OsStr,
+    variants: &[&str],
+    exists: &impl Fn(&Path) -> bool,
+) -> Option<OsString> {
     for dir in std::env::split_paths(path) {
         if !dir.is_absolute() {
             continue;
         }
-        for name in claude_binary_variants() {
+        for name in variants {
             let candidate = dir.join(name);
             if !exists(&candidate) {
                 continue;
@@ -363,6 +529,23 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn test_resolve_codex_process_path_wins() {
+        let home = PathBuf::from("/home/user");
+        let result = resolve_codex_path_inner(
+            Some(home.clone()),
+            Some(OsString::from("/custom/bin")),
+            no_shell,
+            |p| {
+                p == Path::new("/custom/bin/codex")
+                    || p == home.join(".local/bin/codex")
+                    || p == Path::new("/usr/local/bin/codex")
+            },
+        );
+        assert_eq!(result, OsString::from("/custom/bin/codex"));
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn test_resolve_shell_path_before_well_known() {
         let shell_path = OsString::from("/shell/bin");
         let result = resolve_claude_path_inner(
@@ -406,6 +589,15 @@ mod tests {
         let home = PathBuf::from("/home/user");
         let expected = home.join(".claude/local/claude");
         let result = resolve_claude_path_inner(Some(home), None, no_shell, |p| p == expected);
+        assert_eq!(result, expected.into_os_string());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_resolve_codex_falls_back_to_codex_home_bin() {
+        let home = PathBuf::from("/home/user");
+        let expected = home.join(".codex/bin/codex");
+        let result = resolve_codex_path_inner(Some(home), None, no_shell, |p| p == expected);
         assert_eq!(result, expected.into_os_string());
     }
 
@@ -461,6 +653,13 @@ mod tests {
     fn test_resolve_bare_fallback() {
         let result = resolve_claude_path_inner(None, None, no_shell, |_| false);
         assert_eq!(result, OsString::from("claude"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_resolve_codex_bare_fallback() {
+        let result = resolve_codex_path_inner(None, None, no_shell, |_| false);
+        assert_eq!(result, OsString::from("codex"));
     }
 
     #[cfg(unix)]
@@ -546,11 +745,45 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
+    fn test_resolve_codex_falls_back_to_npm_shim_windows() {
+        let home = PathBuf::from(r"C:\Users\user");
+        let expected = home.join(r"AppData\Roaming\npm\codex.cmd");
+        let expected_clone = expected.clone();
+        let result =
+            resolve_codex_path_inner(Some(home), None, || None, move |p| p == expected_clone);
+        assert_eq!(result, expected.into_os_string());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn test_resolve_codex_falls_back_to_native_exe_windows() {
+        let home = PathBuf::from(r"C:\Users\user");
+        let expected = home.join(r"AppData\Local\Programs\codex\codex.exe");
+        let expected_clone = expected.clone();
+        let result =
+            resolve_codex_path_inner(Some(home), None, || None, move |p| p == expected_clone);
+        assert_eq!(result, expected.into_os_string());
+    }
+
+    #[cfg(windows)]
+    #[test]
     fn test_search_path_dirs_tries_each_variant_windows() {
         let path = OsString::from(r"C:\tools\npm");
         let expected = PathBuf::from(r"C:\tools\npm\claude.cmd");
         let expected_clone = expected.clone();
         let result = search_path_dirs(path.as_os_str(), &move |p| p == expected_clone);
+        assert_eq!(result, Some(expected.into_os_string()));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn test_codex_search_path_dirs_tries_each_variant_windows() {
+        let path = OsString::from(r"C:\tools\npm");
+        let expected = PathBuf::from(r"C:\tools\npm\codex.cmd");
+        let expected_clone = expected.clone();
+        let result = search_path_dirs_for(path.as_os_str(), codex_binary_variants(), &move |p| {
+            p == expected_clone
+        });
         assert_eq!(result, Some(expected.into_os_string()));
     }
 
@@ -607,5 +840,11 @@ mod tests {
     #[test]
     fn test_bare_name_is_exe_on_windows() {
         assert_eq!(claude_bare_name(), "claude.exe");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn test_codex_bare_name_is_exe_on_windows() {
+        assert_eq!(codex_bare_name(), "codex.exe");
     }
 }

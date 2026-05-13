@@ -58,6 +58,7 @@ tags
 # Claude Code
 .claude/worktrees/
 .claude/scheduled_tasks.lock
+.claude/settings.local.json
 # Per-session scratch dir for Claude Code agents — long-running build
 # logs, monitor output, debug-eval transcripts. Never committed.
 /.claude-tmp/
