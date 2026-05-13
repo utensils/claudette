@@ -73,8 +73,13 @@ export interface UiSlice {
   clearSettingsFocus: () => void;
   claudeAuthFailure: ClaudeAuthFailureState | null;
   resolvedClaudeAuthFailureMessageId: string | null;
+  chatAuthLoginPanelOpen: boolean;
+  chatAuthLoginRequestId: number;
+  chatAuthLoginStartedRequestId: number | null;
   setClaudeAuthFailure: (failure: ClaudeAuthFailureState | null) => void;
   setResolvedClaudeAuthFailureMessageId: (messageId: string | null) => void;
+  openChatAuthLoginPanel: () => void;
+  setChatAuthLoginStartedRequestId: (requestId: number | null) => void;
   pluginSettingsTab: PluginSettingsTab;
   pluginSettingsRepoId: string | null;
   pluginSettingsIntent: PluginSettingsIntent | null;
@@ -236,6 +241,9 @@ export const createUiSlice: StateCreator<AppState, [], [], UiSlice> = (
   settingsFocus: null,
   claudeAuthFailure: null,
   resolvedClaudeAuthFailureMessageId: null,
+  chatAuthLoginPanelOpen: false,
+  chatAuthLoginRequestId: 0,
+  chatAuthLoginStartedRequestId: null,
   openSettings: (section = "general", focus = null) =>
     set((state) => {
       // Only `claude-code-plugins` (the Claude CLI marketplace integration)
@@ -304,6 +312,13 @@ export const createUiSlice: StateCreator<AppState, [], [], UiSlice> = (
   setClaudeAuthFailure: (failure) => set({ claudeAuthFailure: failure }),
   setResolvedClaudeAuthFailureMessageId: (messageId) =>
     set({ resolvedClaudeAuthFailureMessageId: messageId }),
+  openChatAuthLoginPanel: () =>
+    set((state) => ({
+      chatAuthLoginPanelOpen: true,
+      chatAuthLoginRequestId: state.chatAuthLoginRequestId + 1,
+    })),
+  setChatAuthLoginStartedRequestId: (requestId) =>
+    set({ chatAuthLoginStartedRequestId: requestId }),
   pluginSettingsTab: "available",
   pluginSettingsRepoId: null,
   pluginSettingsIntent: null,

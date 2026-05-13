@@ -566,12 +566,18 @@ export function ChatPanel() {
   oldestMessageIdRef.current = oldestMessageId;
   const activeSessionIdRef = useRef<string | null>(null);
   activeSessionIdRef.current = activeSessionId;
-  const [showChatAuthLoginPanel, setShowChatAuthLoginPanel] = useState(false);
-  const [chatAuthLoginRequestId, setChatAuthLoginRequestId] = useState(0);
+  const showChatAuthLoginPanel = useAppStore((s) => s.chatAuthLoginPanelOpen);
+  const chatAuthLoginRequestId = useAppStore((s) => s.chatAuthLoginRequestId);
+  const chatAuthLoginStartedRequestId = useAppStore(
+    (s) => s.chatAuthLoginStartedRequestId,
+  );
+  const openChatAuthLoginPanel = useAppStore((s) => s.openChatAuthLoginPanel);
+  const setChatAuthLoginStartedRequestId = useAppStore(
+    (s) => s.setChatAuthLoginStartedRequestId,
+  );
   const startChatClaudeAuthLogin = useCallback(async () => {
-    setShowChatAuthLoginPanel(true);
-    setChatAuthLoginRequestId((value) => value + 1);
-  }, []);
+    openChatAuthLoginPanel();
+  }, [openChatAuthLoginPanel]);
 
   useEffect(() => {
     const container = messagesContainerRef.current;
@@ -1458,6 +1464,8 @@ export function ChatPanel() {
               {showChatAuthLoginPanel && (
                 <ChatAuthFailureCallout
                   autoStartKey={chatAuthLoginRequestId}
+                  autoStartedKey={chatAuthLoginStartedRequestId}
+                  onAutoStarted={setChatAuthLoginStartedRequestId}
                 />
               )}
 

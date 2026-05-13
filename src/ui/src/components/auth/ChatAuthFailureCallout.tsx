@@ -10,10 +10,14 @@ export function ChatAuthFailureCallout({
   error,
   messageId,
   autoStartKey = null,
+  autoStartedKey = null,
+  onAutoStarted,
 }: {
   error?: string | null;
   messageId?: string | null;
   autoStartKey?: number | null;
+  autoStartedKey?: number | null;
+  onAutoStarted?: (key: number) => void;
 }) {
   const setClaudeAuthFailure = useAppStore((s) => s.setClaudeAuthFailure);
   const { validateAuthLoginSuccess } = useClaudeAuthRecovery();
@@ -38,12 +42,17 @@ export function ChatAuthFailureCallout({
   }, [error, messageId, setClaudeAuthFailure, startControllerAuthLogin]);
 
   useEffect(() => {
-    if (autoStartKey === null || startedKeyRef.current === autoStartKey) {
+    if (
+      autoStartKey === null ||
+      autoStartedKey === autoStartKey ||
+      startedKeyRef.current === autoStartKey
+    ) {
       return;
     }
     startedKeyRef.current = autoStartKey;
+    onAutoStarted?.(autoStartKey);
     void startAuthLogin();
-  }, [autoStartKey, startAuthLogin]);
+  }, [autoStartedKey, autoStartKey, onAutoStarted, startAuthLogin]);
 
   const chatController = useMemo(
     () => ({
