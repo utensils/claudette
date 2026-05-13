@@ -41,9 +41,13 @@ export function computeMeterState(
   if (!usage) return null;
   if (!Number.isFinite(usage.inputTokens)) return null;
   if (!Number.isFinite(usage.outputTokens)) return null;
-  if (!Number.isFinite(capacity) || (capacity as number) <= 0) return null;
+  const runtimeCapacity = Number.isFinite(usage.modelContextWindow)
+    ? usage.modelContextWindow
+    : undefined;
+  const resolvedCapacity = runtimeCapacity ?? capacity;
+  if (!Number.isFinite(resolvedCapacity) || (resolvedCapacity as number) <= 0) return null;
 
-  const cap = capacity as number;
+  const cap = resolvedCapacity as number;
   const input = usage.inputTokens as number;
   const output = usage.outputTokens as number;
   // `?? 0` only replaces null/undefined — NaN would pass through and
@@ -51,7 +55,9 @@ export function computeMeterState(
   // treats undefined, null, and NaN uniformly as "missing".
   const cacheRead = Number.isFinite(usage.cacheReadTokens) ? (usage.cacheReadTokens as number) : 0;
   const cacheCreation = Number.isFinite(usage.cacheCreationTokens) ? (usage.cacheCreationTokens as number) : 0;
-  const totalTokens = input + cacheRead + cacheCreation + output;
+  const totalTokens = Number.isFinite(usage.totalTokens)
+    ? usage.totalTokens as number
+    : input + cacheRead + cacheCreation + output;
   const ratio = totalTokens / cap;
   const fillPercent = Math.min(ratio, 1) * 100;
   const percentRounded = Math.round(ratio * 100);

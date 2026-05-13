@@ -169,6 +169,7 @@ export function useAgentStream() {
   const turnMessageCountRef = useRef<Record<string, number>>({});
   const turnFinalizedRef = useRef<Record<string, boolean>>({});
   const turnCheckpointIdRef = useRef<Record<string, string | undefined>>({});
+  const turnSawUsageRef = useRef<Record<string, boolean>>({});
   const planFilePathRef = useRef<Record<string, string>>({});
   const thinkingBlocksRef = useRef<Record<string, Set<number>>>({});
   const pendingAgentToolCallsRef = useRef<Record<string, AgentToolCall[]>>({});
@@ -241,6 +242,7 @@ export function useAgentStream() {
         turnMessageCountRef.current[sessionId] = 0;
         turnFinalizedRef.current[sessionId] = false;
         turnCheckpointIdRef.current[sessionId] = undefined;
+        turnSawUsageRef.current[sessionId] = false;
         // Natural completion emits a `result` event (wasFinalized=true) → Idle.
         // User stop or crash has no prior `result` → Stopped.
         updateChatSession(sessionId, { agent_status: wasFinalized ? "Idle" : "Stopped" });
@@ -411,13 +413,17 @@ export function useAgentStream() {
                   // fills the gap in between so the meter doesn't sit stale.
                   if (inner.usage) {
                     const { setLatestTurnUsage } = useAppStore.getState();
+                    turnSawUsageRef.current[sessionId] = true;
                     setLatestTurnUsage(sessionId, {
+                      totalTokens: inner.usage.total_tokens ?? undefined,
                       inputTokens: inner.usage.input_tokens,
                       outputTokens: inner.usage.output_tokens,
                       cacheReadTokens:
                         inner.usage.cache_read_input_tokens ?? undefined,
                       cacheCreationTokens:
                         inner.usage.cache_creation_input_tokens ?? undefined,
+                      modelContextWindow:
+                        inner.usage.model_context_window ?? undefined,
                     });
                   }
                   break;
@@ -639,9 +645,10 @@ export function useAgentStream() {
             const { setLatestTurnUsage, clearLatestTurnUsage } =
               useAppStore.getState();
             if (meterUsage) setLatestTurnUsage(sessionId, meterUsage);
-            else clearLatestTurnUsage(sessionId);
+            else if (!turnSawUsageRef.current[sessionId]) clearLatestTurnUsage(sessionId);
             turnMessageCountRef.current[sessionId] = 0;
             turnFinalizedRef.current[sessionId] = true;
+            turnSawUsageRef.current[sessionId] = false;
             updateChatSession(sessionId, { agent_status: "Idle" });
             syncWorkspaceAgentStatus(wsId);
             useAppStore.getState().clearPromptStartTime(wsId);

@@ -28,35 +28,43 @@ describe("pickMeterUsageFromResult", () => {
         cache_read_input_tokens: 4_695_413,
         iterations: [
           {
+            total_tokens: 133_074,
             input_tokens: 1,
             output_tokens: 611,
             cache_read_input_tokens: 131_890,
             cache_creation_input_tokens: 573,
+            model_context_window: 272_000,
           },
         ],
       }),
     );
     expect(usage).toEqual({
+      totalTokens: 133_074,
       inputTokens: 1,
       outputTokens: 611,
       cacheReadTokens: 131_890,
       cacheCreationTokens: 573,
+      modelContextWindow: 272_000,
     });
   });
 
   it("falls back to the top-level aggregate when iterations is absent", () => {
     const usage = pickMeterUsageFromResult(
       make({
+        total_tokens: 5_300,
         input_tokens: 100,
         output_tokens: 200,
         cache_read_input_tokens: 5_000,
+        model_context_window: 128_000,
       }),
     );
     expect(usage).toEqual({
+      totalTokens: 5_300,
       inputTokens: 100,
       outputTokens: 200,
       cacheReadTokens: 5_000,
       cacheCreationTokens: undefined,
+      modelContextWindow: 128_000,
     });
   });
 

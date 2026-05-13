@@ -1125,7 +1125,12 @@ async fn test_codex_native_connectivity(
     let result = async {
         let account = session.read_account(true).await?;
         ensure_codex_native_authenticated(&account)?;
-        let models = codex_native_models_from_app_server(backend, session.list_models().await?);
+        let catalog_models = discover_codex_models().await.unwrap_or_default();
+        let models = codex_native_models_from_app_server(
+            backend,
+            session.list_models().await?,
+            &catalog_models,
+        );
         let account_label = account
             .email
             .as_deref()
@@ -1299,6 +1304,10 @@ async fn discover_codex_models() -> Result<Vec<AgentBackendModel>, String> {
     }
     let value = serde_json::from_slice::<Value>(&output.stdout)
         .map_err(|e| format!("Invalid Codex model catalog: {e}"))?;
+    codex_models_from_debug_catalog(&value)
+}
+
+fn codex_models_from_debug_catalog(value: &Value) -> Result<Vec<AgentBackendModel>, String> {
     let models = value
         .get("models")
         .and_then(Value::as_array)
@@ -1313,11 +1322,11 @@ async fn discover_codex_models() -> Result<Vec<AgentBackendModel>, String> {
                 .and_then(Value::as_str)
                 .unwrap_or(id);
             let context = model
-                .get("max_context_window")
-                .or_else(|| model.get("context_window"))
+                .get("context_window")
+                .or_else(|| model.get("max_context_window"))
                 .and_then(Value::as_u64)
                 .and_then(|n| u32::try_from(n).ok())
-                .unwrap_or(400_000);
+                .unwrap_or(272_000);
             Some(AgentBackendModel {
                 id: id.to_string(),
                 label: label.to_string(),
@@ -1336,9 +1345,11 @@ async fn discover_codex_native_models(
     let result = async {
         let account = session.read_account(false).await?;
         ensure_codex_native_authenticated(&account)?;
+        let catalog_models = discover_codex_models().await.unwrap_or_default();
         Ok(codex_native_models_from_app_server(
             backend,
             session.list_models().await?,
+            &catalog_models,
         ))
     }
     .await;
@@ -1349,18 +1360,27 @@ async fn discover_codex_native_models(
 fn codex_native_models_from_app_server(
     backend: &AgentBackendConfig,
     models: Vec<claudette::agent::codex_app_server::CodexAppServerModel>,
+    catalog_models: &[AgentBackendModel],
 ) -> Vec<AgentBackendModel> {
     let mut seen = HashSet::new();
+    let context_by_id: HashMap<&str, u32> = catalog_models
+        .iter()
+        .map(|model| (model.id.as_str(), model.context_window_tokens))
+        .collect();
     let mut converted: Vec<_> = models
         .into_iter()
         .filter(|model| !model.hidden)
         .filter(|model| seen.insert(model.id.clone()))
         .map(|model| {
+            let context_window_tokens = context_by_id
+                .get(model.id.as_str())
+                .copied()
+                .unwrap_or(backend.context_window_default);
             (
                 AgentBackendModel {
                     id: model.id,
                     label: model.label,
-                    context_window_tokens: backend.context_window_default,
+                    context_window_tokens,
                     discovered: true,
                 },
                 model.is_default,
@@ -2913,26 +2933,72 @@ mod tests {
                     is_default: true,
                 },
             ],
+            &[
+                AgentBackendModel {
+                    id: "gpt-5.4".to_string(),
+                    label: "gpt-5.4".to_string(),
+                    context_window_tokens: 272_000,
+                    discovered: true,
+                },
+                AgentBackendModel {
+                    id: "gpt-5.3-codex".to_string(),
+                    label: "gpt-5.3-codex".to_string(),
+                    context_window_tokens: 128_000,
+                    discovered: true,
+                },
+            ],
         );
 
         assert_eq!(models.len(), 2);
         assert_eq!(models[0].id, "gpt-5.4");
         assert_eq!(models[0].label, "GPT-5.4");
         assert!(models.iter().all(|model| model.discovered));
-        assert!(
-            models
-                .iter()
-                .all(|model| model.context_window_tokens == 400_000)
-        );
+        assert_eq!(models[0].context_window_tokens, 272_000);
+        assert_eq!(models[1].context_window_tokens, 128_000);
     }
 
     #[test]
     fn codex_native_models_leave_seed_models_untouched_when_server_returns_none() {
         let backend = AgentBackendConfig::builtin_experimental_codex();
 
-        let models = codex_native_models_from_app_server(&backend, Vec::new());
+        let models = codex_native_models_from_app_server(&backend, Vec::new(), &[]);
 
         assert!(models.is_empty());
+    }
+
+    #[test]
+    fn codex_debug_catalog_prefers_effective_context_window() {
+        let models = codex_models_from_debug_catalog(&json!({
+            "models": [
+                {
+                    "slug": "gpt-5.4",
+                    "display_name": "GPT-5.4",
+                    "visibility": "list",
+                    "context_window": 272000,
+                    "max_context_window": 1000000
+                },
+                {
+                    "slug": "gpt-5.3-codex-spark",
+                    "display_name": "GPT-5.3-Codex-Spark",
+                    "visibility": "list",
+                    "context_window": 128000,
+                    "max_context_window": 128000
+                },
+                {
+                    "slug": "hidden",
+                    "display_name": "Hidden",
+                    "visibility": "hidden",
+                    "context_window": 1
+                }
+            ]
+        }))
+        .expect("catalog parses");
+
+        assert_eq!(models.len(), 2);
+        assert_eq!(models[0].id, "gpt-5.4");
+        assert_eq!(models[0].context_window_tokens, 272_000);
+        assert_eq!(models[1].id, "gpt-5.3-codex-spark");
+        assert_eq!(models[1].context_window_tokens, 128_000);
     }
 
     #[test]

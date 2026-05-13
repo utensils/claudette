@@ -400,3 +400,13 @@
     - `cd src/ui && bun run lint:css`
     - `nix develop -c cargo fmt --all --check`
     - `git diff --check`
+- 2026-05-13: Corrected native Codex context accounting:
+  - Native Codex model discovery now keeps app-server as the availability source while supplementing context windows from `codex debug models`; it prefers `context_window` over `max_context_window` and falls back to 272k instead of 400k.
+  - Codex `thread/tokenUsage/updated` now maps the `last` usage snapshot, carries `last.totalTokens`, and forwards `modelContextWindow` through the stream payload.
+  - The ContextMeter now prefers runtime `modelContextWindow` and authoritative `totalTokens` when present, and a Codex `turn/completed` result without `usage` no longer clears the live token usage emitted moments earlier.
+  - Verified focused context fixes with:
+    - `nix develop -c cargo test -p claudette codex --all-features`
+    - `nix develop -c cargo test -p claudette agent_backend --all-features`
+    - `nix develop -c cargo test -p claudette-tauri agent_backends::tests::codex --all-features`
+    - `cd src/ui && bun run test -- contextMeterLogic pickMeterUsageFromResult`
+    - `cd src/ui && bunx tsc -b`

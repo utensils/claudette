@@ -217,20 +217,20 @@ impl AgentBackendConfig {
                 AgentBackendModel {
                     id: "gpt-5.4".to_string(),
                     label: "GPT-5.4".to_string(),
-                    context_window_tokens: 400_000,
+                    context_window_tokens: 272_000,
                     discovered: false,
                 },
                 AgentBackendModel {
                     id: "gpt-5.3-codex".to_string(),
                     label: "GPT-5.3 Codex".to_string(),
-                    context_window_tokens: 400_000,
+                    context_window_tokens: 272_000,
                     discovered: false,
                 },
             ],
             discovered_models: Vec::new(),
             auth_ref: Some("codex-cli".to_string()),
             capabilities: AgentBackendCapabilities::codex_native(),
-            context_window_default: 400_000,
+            context_window_default: 272_000,
             model_discovery: true,
             has_secret: false,
         }
@@ -310,7 +310,14 @@ mod tests {
         assert!(backend.capabilities.effort);
         assert!(backend.capabilities.fast_mode);
         assert!(!backend.capabilities.vision);
+        assert_eq!(backend.context_window_default, 272_000);
         assert!(!backend.manual_models.is_empty());
+        assert!(
+            backend
+                .manual_models
+                .iter()
+                .all(|model| model.context_window_tokens == 272_000)
+        );
     }
 
     #[test]

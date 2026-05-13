@@ -81,20 +81,24 @@ export type StreamEvent =
       // can likewise be `null` when the CLI doesn't emit them.
       usage?:
         | {
+            total_tokens?: number | null;
             input_tokens: number;
             output_tokens: number;
             cache_creation_input_tokens?: number | null;
             cache_read_input_tokens?: number | null;
+            model_context_window?: number | null;
             // Per-iteration breakdown. The CLI emits a single-entry array
             // containing the FINAL iteration's per-call usage, regardless
             // of how many backend API calls the Claudette-level turn
             // contained. The ContextMeter uses this (not the top-level
             // aggregate) to reflect actual end-of-turn context size.
             iterations?: Array<{
+              total_tokens?: number | null;
               input_tokens: number;
               output_tokens: number;
               cache_read_input_tokens?: number | null;
               cache_creation_input_tokens?: number | null;
+              model_context_window?: number | null;
             }>;
           }
         | null;
@@ -119,10 +123,12 @@ export type InnerStreamEvent =
       // this — only `Result.usage` drives the TurnFooter readout — but
       // the type mirrors what the bridge actually emits.
       usage?: {
+        total_tokens?: number | null;
         input_tokens: number;
         output_tokens: number;
         cache_creation_input_tokens?: number | null;
         cache_read_input_tokens?: number | null;
+        model_context_window?: number | null;
       } | null;
     }
   | { type: "message_stop" }

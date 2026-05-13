@@ -139,6 +139,35 @@ describe("computeMeterState", () => {
     expect(state!.cacheCreation).toBe(1_250);
   });
 
+  it("prefers runtime model context window from usage over registry capacity", () => {
+    const turn = {
+      ...makeTurn({
+        inputTokens: 100_000,
+        outputTokens: 36_000,
+      }),
+      modelContextWindow: 272_000,
+    };
+    const state = computeMeterState(turn, 400_000);
+    expect(state).not.toBeNull();
+    expect(state!.capacity).toBe(272_000);
+    expect(state!.percentRounded).toBe(50);
+  });
+
+  it("prefers authoritative total tokens when backend provides them", () => {
+    const turn = {
+      ...makeTurn({
+        inputTokens: 80_000,
+        cacheReadTokens: 20_000,
+        outputTokens: 10_000,
+      }),
+      totalTokens: 105_000,
+    };
+    const state = computeMeterState(turn, 200_000);
+    expect(state).not.toBeNull();
+    expect(state!.totalTokens).toBe(105_000);
+    expect(state!.percentRounded).toBe(53);
+  });
+
   it("treats missing cache tokens as zero", () => {
     const turn = makeTurn({ inputTokens: 1_000, outputTokens: 200 });
     const state = computeMeterState(turn, 200_000);

@@ -29,9 +29,11 @@ export function pickMeterUsageFromResult(
     return null;
   }
   return {
+    totalTokens: source.total_tokens ?? undefined,
     inputTokens: source.input_tokens,
     outputTokens: source.output_tokens,
     cacheReadTokens: source.cache_read_input_tokens ?? undefined,
     cacheCreationTokens: source.cache_creation_input_tokens ?? undefined,
+    modelContextWindow: source.model_context_window ?? undefined,
   };
 }

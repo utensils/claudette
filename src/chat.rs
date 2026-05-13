@@ -811,10 +811,12 @@ mod tests {
     #[test]
     fn build_assistant_message_populates_token_fields_when_usage_present() {
         let usage = TokenUsage {
+            total_tokens: None,
             input_tokens: 10,
             output_tokens: 20,
             cache_creation_input_tokens: Some(30),
             cache_read_input_tokens: Some(40),
+            model_context_window: None,
             iterations: None,
         };
         let m = build_assistant_chat_message(args("hello", Some(usage)));
@@ -848,10 +850,12 @@ mod tests {
     fn build_assistant_message_handles_partial_cache_fields() {
         // Older CLI / fallback responses may omit one of the cache_* fields.
         let usage = TokenUsage {
+            total_tokens: None,
             input_tokens: 5,
             output_tokens: 7,
             cache_creation_input_tokens: None,
             cache_read_input_tokens: Some(99),
+            model_context_window: None,
             iterations: None,
         };
         let m = build_assistant_chat_message(args("x", Some(usage)));
@@ -864,15 +868,19 @@ mod tests {
     #[test]
     fn assistant_usage_fields_from_result_prefers_iteration_usage() {
         let usage = TokenUsage {
+            total_tokens: None,
             input_tokens: 62,
             output_tokens: 41_322,
             cache_creation_input_tokens: Some(153_239),
             cache_read_input_tokens: Some(4_695_413),
+            model_context_window: Some(272_000),
             iterations: Some(vec![TokenUsageIteration {
+                total_tokens: None,
                 input_tokens: 1,
                 output_tokens: 611,
                 cache_creation_input_tokens: Some(573),
                 cache_read_input_tokens: Some(131_890),
+                model_context_window: Some(272_000),
             }]),
         };
 
@@ -886,10 +894,12 @@ mod tests {
     #[test]
     fn assistant_usage_fields_from_result_falls_back_to_aggregate() {
         let usage = TokenUsage {
+            total_tokens: None,
             input_tokens: 100,
             output_tokens: 20,
             cache_creation_input_tokens: None,
             cache_read_input_tokens: Some(5_000),
+            model_context_window: None,
             iterations: None,
         };
 

@@ -1872,31 +1872,36 @@ fn response_id_from_response(
 }
 
 fn token_usage_from_params(params: &Value) -> TokenUsage {
-    let total = params
-        .get("tokenUsage")
-        .and_then(|usage| usage.get("total"))
-        .unwrap_or(&Value::Null);
-    let input_tokens = total
+    let token_usage = params.get("tokenUsage").unwrap_or(&Value::Null);
+    let total = token_usage.get("total").unwrap_or(&Value::Null);
+    let last = token_usage.get("last").unwrap_or(total);
+    let input_tokens = last
         .get("inputTokens")
         .and_then(Value::as_u64)
         .unwrap_or_default();
-    let cached_input_tokens = total
+    let cached_input_tokens = last
         .get("cachedInputTokens")
         .and_then(Value::as_u64)
         .unwrap_or_default();
-    let output_tokens = total
+    let output_tokens = last
         .get("outputTokens")
         .and_then(Value::as_u64)
         .unwrap_or_default();
-    let reasoning_output_tokens = total
+    let reasoning_output_tokens = last
         .get("reasoningOutputTokens")
         .and_then(Value::as_u64)
         .unwrap_or_default();
+    let total_tokens = last.get("totalTokens").and_then(Value::as_u64);
+    let model_context_window = token_usage
+        .get("modelContextWindow")
+        .and_then(Value::as_u64);
     TokenUsage {
-        input_tokens,
+        total_tokens,
+        input_tokens: input_tokens.saturating_sub(cached_input_tokens),
         output_tokens: output_tokens + reasoning_output_tokens,
         cache_creation_input_tokens: None,
         cache_read_input_tokens: Some(cached_input_tokens),
+        model_context_window,
         iterations: None,
     }
 }
@@ -2511,12 +2516,14 @@ mod tests {
                 "turnId": "turn-1",
                 "tokenUsage": {
                     "total": {
+                        "totalTokens": 200,
                         "inputTokens": 100,
                         "cachedInputTokens": 20,
                         "outputTokens": 7,
                         "reasoningOutputTokens": 3
                     },
                     "last": {
+                        "totalTokens": 110,
                         "inputTokens": 100,
                         "cachedInputTokens": 20,
                         "outputTokens": 7,
@@ -2533,10 +2540,12 @@ mod tests {
                 thread_id: "thread-1".to_string(),
                 turn_id: "turn-1".to_string(),
                 usage: TokenUsage {
-                    input_tokens: 100,
+                    total_tokens: Some(110),
+                    input_tokens: 80,
                     output_tokens: 10,
                     cache_creation_input_tokens: None,
                     cache_read_input_tokens: Some(20),
+                    model_context_window: Some(400_000),
                     iterations: None,
                 },
             }
