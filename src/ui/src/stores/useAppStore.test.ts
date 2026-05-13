@@ -517,9 +517,7 @@ describe("agentQuestion lifecycle (per-workspace)", () => {
       sessionId: WS_ID,
       toolUseId: "approval-1",
       kind: "commandExecution" as const,
-      title: "Run command",
-      description: "echo hi",
-      details: [{ label: "Command", value: "echo hi" }],
+      details: [{ labelKey: "command" as const, value: "echo hi" }],
     };
     useAppStore.getState().setAgentApproval(approval);
     expect(useAppStore.getState().agentApprovals[WS_ID]).toEqual(approval);
@@ -530,8 +528,6 @@ describe("agentQuestion lifecycle (per-workspace)", () => {
       sessionId,
       toolUseId: `${sessionId}-approval`,
       kind: "fileChange" as const,
-      title: "Apply file change",
-      description: "Codex wants approval before changing files.",
       details: [],
     });
     useAppStore.getState().setAgentApproval(makeApproval(WS_ID));

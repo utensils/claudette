@@ -26,7 +26,7 @@ export interface PlanApproval {
 export type AgentApprovalKind = "commandExecution" | "fileChange" | "permissions";
 
 export interface AgentApprovalDetail {
-  label: string;
+  labelKey: "command" | "cwd" | "path" | "permissions" | "reason";
   value: string;
 }
 
@@ -34,8 +34,6 @@ export interface AgentApproval {
   sessionId: string;
   toolUseId: string;
   kind: AgentApprovalKind;
-  title: string;
-  description: string;
   details: AgentApprovalDetail[];
 }
 

@@ -11,6 +11,8 @@ interface AgentApprovalCardProps {
 export function AgentApprovalCard({ approval, onRespond }: AgentApprovalCardProps) {
   const { t } = useTranslation("chat");
   const [feedback, setFeedback] = useState("");
+  const title = t(`agent_approval_${approval.kind}_title`);
+  const description = t(`agent_approval_${approval.kind}_description`);
   const deny = () => {
     const reason = feedback.trim();
     onRespond(false, reason || undefined);
@@ -21,18 +23,23 @@ export function AgentApprovalCard({ approval, onRespond }: AgentApprovalCardProp
       <div className={styles.label}>{t("agent_approval_label")}</div>
 
       <div className={styles.description}>
-        <strong>{approval.title}</strong>
+        <strong>{title}</strong>
         <br />
-        {approval.description}
+        {description}
       </div>
 
       {approval.details.length > 0 && (
         <div className={styles.permissions}>
           <div className={styles.permLabel}>{t("agent_approval_details")}</div>
           <div className={styles.permList}>
-            {approval.details.map((detail) => (
-              <div key={detail.label} className={styles.permItem}>
-                <span className={styles.permTool}>{detail.label}</span>
+            {approval.details.map((detail, index) => (
+              <div
+                key={`${detail.labelKey}:${detail.value}:${index}`}
+                className={styles.permItem}
+              >
+                <span className={styles.permTool}>
+                  {t(`agent_approval_detail_${detail.labelKey}`)}
+                </span>
                 <span>{detail.value}</span>
               </div>
             ))}

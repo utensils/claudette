@@ -238,8 +238,19 @@
   - `cd src/ui && bun run lint:css`
   - `nix develop -c cargo fmt --all --check`
   - `git diff --check`
+- 2026-05-13: Ran the next Copilot review pass after `a4b7b1e3`. Valid findings addressed:
+  - Codex streamed assistant text/thinking is now buffered per turn and emitted as a synthesized `StreamEvent::Assistant` before the terminal result so chat persistence and streaming cleanup follow the existing Claude path.
+  - The native Codex approval card now uses unique detail-row keys.
+  - Native Codex approval card titles, descriptions, and detail labels now use locale keys instead of hard-coded English strings.
+- 2026-05-13: Verified the Copilot approval follow-up with:
+  - `nix develop -c cargo test -p claudette agent::codex_app_server --all-features`
+  - `nix develop -c cargo fmt --all --check`
+  - `cd src/ui && bunx tsc -b`
+  - `cd src/ui && bun run test -- useAppStore`
+  - `cd src/ui && bun run lint`
+  - `git diff --check`
 
 ## Next Stage
 
-- Rebase with `origin/main`, commit and push the approval milestone, then run the Copilot review pass and address any valid findings.
+- Rebase with `origin/main`, commit and push the Copilot approval follow-up, reply to and resolve the three Copilot threads, then re-query Copilot and PR checks.
 - After Copilot and CI are green, run a final completion audit against this plan before calling native Codex complete.

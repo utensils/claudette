@@ -14,16 +14,23 @@ use tokio::sync::oneshot;
 use crate::process::CommandWindowExt as _;
 
 use super::{
-    AgentEvent, ControlRequestInner, Delta, FileAttachment, InnerStreamEvent, StartContentBlock,
-    StreamEvent, TokenUsage, TurnHandle,
+    AgentEvent, AssistantMessage, ContentBlock, ControlRequestInner, Delta, FileAttachment,
+    InnerStreamEvent, StartContentBlock, StreamEvent, TokenUsage, TurnHandle,
 };
 
 type CodexStdin = Arc<tokio::sync::Mutex<ChildStdin>>;
 type PendingRequests = Arc<tokio::sync::Mutex<BTreeMap<JsonRpcId, PendingCodexRequest>>>;
+type TurnOutputBuffer = Arc<tokio::sync::Mutex<CodexTurnOutput>>;
 
 struct PendingCodexRequest {
     method: String,
     tx: oneshot::Sender<Result<JsonRpcResponse, JsonRpcError>>,
+}
+
+#[derive(Debug, Default)]
+struct CodexTurnOutput {
+    text: String,
+    thinking: String,
 }
 
 #[derive(Debug, Clone)]
@@ -52,6 +59,7 @@ pub struct CodexAppServerSession {
     permission_level: CodexPermissionLevel,
     thread_id: Arc<tokio::sync::Mutex<Option<String>>>,
     active_turn_id: Arc<tokio::sync::Mutex<Option<String>>>,
+    turn_output: TurnOutputBuffer,
 }
 
 impl CodexAppServerSession {
@@ -113,6 +121,7 @@ impl CodexAppServerSession {
             permission_level: options.permission_level,
             thread_id: Arc::new(tokio::sync::Mutex::new(None)),
             active_turn_id: Arc::new(tokio::sync::Mutex::new(None)),
+            turn_output: Arc::new(tokio::sync::Mutex::new(CodexTurnOutput::default())),
         };
 
         session.spawn_stdout_reader(stdout);
@@ -150,6 +159,7 @@ impl CodexAppServerSession {
             permission_level: CodexPermissionLevel::Readonly,
             thread_id: Arc::new(tokio::sync::Mutex::new(None)),
             active_turn_id: Arc::new(tokio::sync::Mutex::new(None)),
+            turn_output: Arc::new(tokio::sync::Mutex::new(CodexTurnOutput::default())),
         }
     }
 
@@ -398,6 +408,7 @@ impl CodexAppServerSession {
         let pending = self.pending.clone();
         let stdin = self.stdin.clone();
         let active_turn_id = self.active_turn_id.clone();
+        let turn_output = self.turn_output.clone();
         let pid = self.pid;
         tokio::spawn(async move {
             let mut reader = tokio::io::BufReader::new(stdout);
@@ -410,6 +421,7 @@ impl CodexAppServerSession {
                             &pending,
                             stdin.as_ref(),
                             Some(&active_turn_id),
+                            Some(&turn_output),
                             message,
                         )
                         .await;
@@ -494,6 +506,7 @@ async fn route_app_server_message(
     pending: &PendingRequests,
     stdin: Option<&CodexStdin>,
     active_turn_id: Option<&Arc<tokio::sync::Mutex<Option<String>>>>,
+    turn_output: Option<&TurnOutputBuffer>,
     message: JsonRpcMessage,
 ) {
     match message {
@@ -551,10 +564,19 @@ async fn route_app_server_message(
         }
         JsonRpcMessage::Notification(notification) => {
             let notification = decode_notification(notification);
+            if let Some(turn_output) = turn_output {
+                update_turn_output_buffer(turn_output, &notification).await;
+            }
             if notification_finishes_turn(&notification)
                 && let Some(active_turn_id) = active_turn_id
             {
                 *active_turn_id.lock().await = None;
+            }
+            if notification_finishes_turn(&notification)
+                && let Some(turn_output) = turn_output
+                && let Some(event) = drain_turn_output_buffer(turn_output).await
+            {
+                let _ = event_tx.send(event);
             }
             for event in map_notification_to_agent_events(notification) {
                 let _ = event_tx.send(event);
@@ -1356,6 +1378,50 @@ fn notification_finishes_turn(event: &CodexNotificationEvent) -> bool {
         event,
         CodexNotificationEvent::TurnCompleted { .. } | CodexNotificationEvent::TurnFailed { .. }
     )
+}
+
+async fn update_turn_output_buffer(
+    buffer: &TurnOutputBuffer,
+    notification: &CodexNotificationEvent,
+) {
+    let mut buffer = buffer.lock().await;
+    match notification {
+        CodexNotificationEvent::AgentMessageDelta { delta, .. } => {
+            buffer.text.push_str(delta);
+        }
+        CodexNotificationEvent::ReasoningSummaryDelta { delta, .. }
+        | CodexNotificationEvent::ReasoningTextDelta { delta, .. } => {
+            buffer.thinking.push_str(delta);
+        }
+        _ => {}
+    }
+}
+
+async fn drain_turn_output_buffer(buffer: &TurnOutputBuffer) -> Option<AgentEvent> {
+    let mut buffer = buffer.lock().await;
+    if buffer.text.trim().is_empty() && buffer.thinking.trim().is_empty() {
+        buffer.text.clear();
+        buffer.thinking.clear();
+        return None;
+    }
+
+    let mut content = Vec::new();
+    if !buffer.thinking.trim().is_empty() {
+        content.push(ContentBlock::Thinking {
+            thinking: std::mem::take(&mut buffer.thinking),
+        });
+    }
+    if !buffer.text.trim().is_empty() {
+        content.push(ContentBlock::Text {
+            text: std::mem::take(&mut buffer.text),
+        });
+    } else {
+        buffer.text.clear();
+    }
+
+    Some(AgentEvent::Stream(StreamEvent::Assistant {
+        message: AssistantMessage { content },
+    }))
 }
 
 pub fn decode_notification(notification: JsonRpcNotification) -> CodexNotificationEvent {
@@ -2624,6 +2690,7 @@ mod tests {
             &pending,
             None,
             None,
+            None,
             JsonRpcMessage::Response(JsonRpcResponse {
                 id: Some(JsonRpcId::Integer(11)),
                 result: json!({"turn":{"id":"turn-1"}}),
@@ -2648,6 +2715,7 @@ mod tests {
             1,
             &event_tx,
             &pending,
+            None,
             None,
             None,
             JsonRpcMessage::Notification(JsonRpcNotification {
@@ -2688,6 +2756,7 @@ mod tests {
             &pending,
             None,
             Some(&active_turn_id),
+            None,
             JsonRpcMessage::Notification(JsonRpcNotification {
                 method: "turn/completed".to_string(),
                 params: Some(json!({
@@ -2707,6 +2776,85 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn app_server_router_synthesizes_assistant_message_on_turn_completion() {
+        let pending: PendingRequests = Arc::new(tokio::sync::Mutex::new(BTreeMap::new()));
+        let turn_output = Arc::new(tokio::sync::Mutex::new(CodexTurnOutput::default()));
+        let (event_tx, mut rx) = broadcast::channel(8);
+
+        route_app_server_message(
+            1,
+            &event_tx,
+            &pending,
+            None,
+            None,
+            Some(&turn_output),
+            JsonRpcMessage::Notification(JsonRpcNotification {
+                method: "item/reasoning/textDelta".to_string(),
+                params: Some(json!({
+                    "threadId": "thread-1",
+                    "turnId": "turn-1",
+                    "itemId": "reasoning-1",
+                    "delta": "thinking"
+                })),
+            }),
+        )
+        .await;
+        route_app_server_message(
+            1,
+            &event_tx,
+            &pending,
+            None,
+            None,
+            Some(&turn_output),
+            JsonRpcMessage::Notification(JsonRpcNotification {
+                method: "item/agentMessage/delta".to_string(),
+                params: Some(json!({
+                    "threadId": "thread-1",
+                    "turnId": "turn-1",
+                    "itemId": "message-1",
+                    "delta": "hello"
+                })),
+            }),
+        )
+        .await;
+        route_app_server_message(
+            1,
+            &event_tx,
+            &pending,
+            None,
+            None,
+            Some(&turn_output),
+            JsonRpcMessage::Notification(JsonRpcNotification {
+                method: "turn/completed".to_string(),
+                params: Some(json!({
+                    "threadId": "thread-1",
+                    "turnId": "turn-1"
+                })),
+            }),
+        )
+        .await;
+
+        let _thinking_delta = rx.recv().await.expect("thinking delta");
+        let _text_delta = rx.recv().await.expect("text delta");
+        let AgentEvent::Stream(StreamEvent::Assistant { message }) =
+            rx.recv().await.expect("assistant event")
+        else {
+            panic!("expected synthesized assistant event");
+        };
+        assert!(matches!(
+            &message.content[..],
+            [
+                ContentBlock::Thinking { thinking },
+                ContentBlock::Text { text },
+            ] if thinking == "thinking" && text == "hello"
+        ));
+        assert!(matches!(
+            rx.recv().await.expect("result event"),
+            AgentEvent::Stream(StreamEvent::Result { subtype, .. }) if subtype == "success"
+        ));
+    }
+
+    #[tokio::test]
     async fn app_server_router_surfaces_unknown_server_request() {
         let pending: PendingRequests = Arc::new(tokio::sync::Mutex::new(BTreeMap::new()));
         let (event_tx, mut rx) = broadcast::channel(8);
@@ -2715,6 +2863,7 @@ mod tests {
             1,
             &event_tx,
             &pending,
+            None,
             None,
             None,
             JsonRpcMessage::Request(JsonRpcRequest {
@@ -2740,6 +2889,7 @@ mod tests {
             1,
             &event_tx,
             &pending,
+            None,
             None,
             None,
             JsonRpcMessage::Request(JsonRpcRequest {

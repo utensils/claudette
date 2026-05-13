@@ -9,6 +9,7 @@ import {
 import type { AgentStreamPayload } from "../types/agent-events";
 import type {
   AgentApproval,
+  AgentApprovalDetail,
   AgentApprovalKind,
   AgentToolCall,
 } from "../stores/useAppStore";
@@ -49,14 +50,14 @@ function stringField(input: Record<string, unknown>, key: string): string | null
 
 function addDetail(
   details: AgentApproval["details"],
-  label: string,
+  labelKey: AgentApprovalDetail["labelKey"],
   value: unknown,
 ) {
   if (typeof value === "string" && value.trim()) {
-    details.push({ label, value });
+    details.push({ labelKey, value });
   } else if (value !== null && value !== undefined && typeof value !== "function") {
     const serialized = JSON.stringify(value);
-    if (serialized) details.push({ label, value: serialized });
+    if (serialized) details.push({ labelKey, value: serialized });
   }
 }
 
@@ -70,42 +71,36 @@ function parseCodexApproval(
   const details: AgentApproval["details"] = [];
 
   if (toolName === CODEX_COMMAND_APPROVAL_TOOL && kind === "commandExecution") {
-    addDetail(details, "Command", input.command);
-    addDetail(details, "Working directory", input.cwd);
-    addDetail(details, "Reason", input.reason);
+    addDetail(details, "command", input.command);
+    addDetail(details, "cwd", input.cwd);
+    addDetail(details, "reason", input.reason);
     return {
       sessionId,
       toolUseId,
       kind,
-      title: "Run command",
-      description: stringField(input, "command") ?? "Codex wants to run a command.",
       details,
     };
   }
 
   if (toolName === CODEX_FILE_CHANGE_APPROVAL_TOOL && kind === "fileChange") {
-    addDetail(details, "Path", input.path ?? input.filePath ?? input.grantRoot);
-    addDetail(details, "Reason", input.reason);
+    addDetail(details, "path", input.path ?? input.filePath ?? input.grantRoot);
+    addDetail(details, "reason", input.reason);
     return {
       sessionId,
       toolUseId,
       kind,
-      title: "Apply file change",
-      description: "Codex wants approval before changing files.",
       details,
     };
   }
 
   if (toolName === CODEX_PERMISSIONS_APPROVAL_TOOL && kind === "permissions") {
-    addDetail(details, "Working directory", input.cwd);
-    addDetail(details, "Permissions", input.permissions);
-    addDetail(details, "Reason", input.reason);
+    addDetail(details, "cwd", input.cwd);
+    addDetail(details, "permissions", input.permissions);
+    addDetail(details, "reason", input.reason);
     return {
       sessionId,
       toolUseId,
       kind,
-      title: "Grant Codex permissions",
-      description: "Codex wants broader permissions for this turn.",
       details,
     };
   }
