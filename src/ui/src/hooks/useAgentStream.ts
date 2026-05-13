@@ -32,6 +32,7 @@ import {
   applyCommandLineEvent,
   approvalDetailValue,
   extractAssistantMessageParts,
+  firstApprovalDetailString,
 } from "./useAgentStreamLogic";
 
 const ASK_USER_QUESTION_TOOL = "AskUserQuestion";
@@ -89,7 +90,11 @@ function parseCodexApproval(
   }
 
   if (toolName === CODEX_FILE_CHANGE_APPROVAL_TOOL && kind === "fileChange") {
-    addDetail(details, "path", input.path ?? input.filePath ?? input.grantRoot);
+    addDetail(
+      details,
+      "path",
+      firstApprovalDetailString(input, ["path", "filePath", "grantRoot"]),
+    );
     addDetail(details, "reason", input.reason);
     return {
       ...baseApproval,

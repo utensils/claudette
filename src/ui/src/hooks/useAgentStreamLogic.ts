@@ -45,8 +45,7 @@ export function applyCommandLineEvent(
 
 export function approvalDetailValue(value: unknown): string | null {
   if (typeof value === "string") {
-    const trimmed = value.trim();
-    return trimmed ? trimmed : null;
+    return approvalDetailString(value);
   }
   if (Array.isArray(value) && value.every((item) => typeof item === "string")) {
     const joined = value
@@ -54,6 +53,23 @@ export function approvalDetailValue(value: unknown): string | null {
       .filter(Boolean)
       .join(", ");
     return joined || null;
+  }
+  return null;
+}
+
+function approvalDetailString(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return trimmed ? trimmed : null;
+}
+
+export function firstApprovalDetailString(
+  input: Record<string, unknown>,
+  keys: readonly string[],
+): string | null {
+  for (const key of keys) {
+    const value = approvalDetailString(input[key]);
+    if (value) return value;
   }
   return null;
 }

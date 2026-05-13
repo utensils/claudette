@@ -960,6 +960,7 @@ fn main() {
             commands::chat::lifecycle::reset_agent_session,
             commands::chat::interaction::clear_attention,
             commands::chat::interaction::submit_agent_answer,
+            commands::chat::interaction::submit_agent_approval,
             commands::chat::interaction::submit_plan_approval,
             commands::chat::remote_control::get_claude_remote_control_status,
             commands::chat::remote_control::set_claude_remote_control,

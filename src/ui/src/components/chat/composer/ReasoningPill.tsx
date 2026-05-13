@@ -45,6 +45,8 @@ export function ReasoningPill({ sessionId, disabled }: ReasoningPillProps) {
     reasoningVariant,
   );
   const canToggleReasoning = !isCodex;
+  // Codex reasoning is model-provided; its active styling tracks whether
+  // the UI is currently showing the streamed reasoning summaries.
   const isActive = isCodex ? showThinkingBlocks : thinkingEnabled;
 
   const openDropdown = useCallback(() => {

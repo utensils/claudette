@@ -21,6 +21,25 @@ export interface CodexBackendGateMigrationPlan {
   sessionIds: string[];
 }
 
+export interface CodexBackendMigrationModel {
+  id: string;
+}
+
+export interface CodexBackendMigrationBackend {
+  id: string;
+  default_model: string | null;
+  manual_models: readonly CodexBackendMigrationModel[];
+  discovered_models: readonly CodexBackendMigrationModel[];
+}
+
+export interface CodexBackendMigrationModelInput {
+  plan: Pick<CodexBackendGateMigrationPlan, "toBackend" | "toModel">;
+  sessionId: string;
+  persistedModels: ReadonlyMap<string, string>;
+  selectedModels: Readonly<Record<string, string>>;
+  backends: readonly CodexBackendMigrationBackend[];
+}
+
 export interface ExperimentalBackendGateLoadInput {
   alternativeBackendsCompiled: boolean;
   alternativeBackendsSetting: string | null;
@@ -34,6 +53,26 @@ export interface ExperimentalBackendGateLoadPlan {
 
 function settingSessionId(key: string, prefix: string): string | null {
   return key.startsWith(prefix) ? key.slice(prefix.length) : null;
+}
+
+function modelsForBackend(
+  backend: CodexBackendMigrationBackend | undefined,
+): readonly CodexBackendMigrationModel[] {
+  if (!backend) return [];
+  return backend.discovered_models.length > 0
+    ? backend.discovered_models
+    : backend.manual_models;
+}
+
+function fallbackModelForBackend(
+  backend: CodexBackendMigrationBackend | undefined,
+): string | null {
+  const models = modelsForBackend(backend);
+  if (!backend) return null;
+  if (backend.default_model && models.some((model) => model.id === backend.default_model)) {
+    return backend.default_model;
+  }
+  return models[0]?.id ?? null;
 }
 
 export function planExperimentalBackendGateLoad({
@@ -79,4 +118,23 @@ export function planCodexBackendGateMigration({
     resetDefault: defaultBackend === fromBackend,
     sessionIds: [...sessionIds].sort(),
   };
+}
+
+export function resolveCodexBackendMigrationModel({
+  plan,
+  sessionId,
+  persistedModels,
+  selectedModels,
+  backends,
+}: CodexBackendMigrationModelInput): string | null {
+  if (plan.toModel) return plan.toModel;
+
+  const backend = backends.find((candidate) => candidate.id === plan.toBackend);
+  const models = modelsForBackend(backend);
+  const candidate = persistedModels.get(sessionId) ?? selectedModels[sessionId] ?? null;
+  if (candidate && models.some((model) => model.id === candidate)) {
+    return candidate;
+  }
+
+  return fallbackModelForBackend(backend);
 }

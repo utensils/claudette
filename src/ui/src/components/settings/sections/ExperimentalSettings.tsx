@@ -9,7 +9,11 @@ import {
   setAppSetting,
 } from "../../../services/tauri";
 import { planAlternativeBackendDisableCleanup } from "../alternativeBackendCleanup";
-import { planCodexBackendGateMigration } from "../codexBackendMigration";
+import {
+  planCodexBackendGateMigration,
+  resolveCodexBackendMigrationModel,
+} from "../codexBackendMigration";
+import type { AgentBackendConfig } from "../../../services/tauri/agentBackends";
 import styles from "../Settings.module.css";
 
 export function ExperimentalSettings() {
@@ -176,7 +180,10 @@ export function ExperimentalSettings() {
     }
   };
 
-  const migrateExperimentalCodexSelections = async (enableNative: boolean) => {
+  const migrateExperimentalCodexSelections = async (
+    enableNative: boolean,
+    backends: readonly AgentBackendConfig[],
+  ) => {
     const [
       defaultBackend,
       sessionModels,
@@ -210,8 +217,13 @@ export function ExperimentalSettings() {
     }
 
     for (const sessionId of plan.sessionIds) {
-      const model =
-        plan.toModel ?? persistedModels.get(sessionId) ?? store.selectedModel[sessionId];
+      const model = resolveCodexBackendMigrationModel({
+        plan,
+        sessionId,
+        persistedModels,
+        selectedModels: store.selectedModel,
+        backends,
+      });
       if (model) {
         store.setSelectedModel(sessionId, model, plan.toBackend);
         await setAppSetting(`model:${sessionId}`, model);
@@ -236,10 +248,10 @@ export function ExperimentalSettings() {
       setError(null);
       await setAppSetting("experimental_codex_enabled", next ? "true" : "false");
       persistedToggle = true;
-      await migrateExperimentalCodexSelections(next);
       const data = await listAgentBackends();
       setAgentBackends(data.backends);
       setDefaultAgentBackendId(data.default_backend_id);
+      await migrateExperimentalCodexSelections(next, data.backends);
     } catch (e) {
       setExperimentalCodexEnabled(persistedToggle ? next : previous);
       setError(String(e));

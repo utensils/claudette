@@ -3,6 +3,7 @@ import {
   applyCommandLineEvent,
   approvalDetailValue,
   extractAssistantMessageParts,
+  firstApprovalDetailString,
   type CommandLineApplyDeps,
 } from "./useAgentStreamLogic";
 
@@ -110,5 +111,33 @@ describe("approvalDetailValue", () => {
     expect(approvalDetailValue({ foo: "bar" })).toBeNull();
     expect(approvalDetailValue(42)).toBeNull();
     expect(approvalDetailValue(["read", 42])).toBeNull();
+  });
+});
+
+describe("firstApprovalDetailString", () => {
+  it("skips empty and unsupported candidates before using a fallback path", () => {
+    expect(
+      firstApprovalDetailString(
+        {
+          path: "",
+          filePath: 42,
+          grantRoot: "  /repo/src/app.ts  ",
+        },
+        ["path", "filePath", "grantRoot"],
+      ),
+    ).toBe("/repo/src/app.ts");
+  });
+
+  it("returns null when no string candidate can be displayed", () => {
+    expect(
+      firstApprovalDetailString(
+        {
+          path: "",
+          filePath: ["not", "a", "path"],
+          grantRoot: null,
+        },
+        ["path", "filePath", "grantRoot"],
+      ),
+    ).toBeNull();
   });
 });

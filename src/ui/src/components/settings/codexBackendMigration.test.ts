@@ -8,6 +8,7 @@ import {
   NATIVE_CODEX_BACKEND,
   planCodexBackendGateMigration,
   planExperimentalBackendGateLoad,
+  resolveCodexBackendMigrationModel,
 } from "./codexBackendMigration";
 
 describe("planExperimentalBackendGateLoad", () => {
@@ -101,5 +102,66 @@ describe("planCodexBackendGateMigration", () => {
     expect(plan.defaultBackend).toBe("ollama");
     expect(plan.resetDefault).toBe(false);
     expect(plan.sessionIds).toEqual([]);
+  });
+});
+
+describe("resolveCodexBackendMigrationModel", () => {
+  const nativeBackend = {
+    id: NATIVE_CODEX_BACKEND,
+    default_model: "gpt-5.2-codex",
+    manual_models: [
+      {
+        id: "gpt-5.2-codex",
+      },
+      {
+        id: "gpt-5.3-codex",
+      },
+    ],
+    discovered_models: [],
+  };
+
+  it("preserves a persisted model only when the destination backend supports it", () => {
+    const model = resolveCodexBackendMigrationModel({
+      plan: {
+        toBackend: NATIVE_CODEX_BACKEND,
+        toModel: null,
+      },
+      sessionId: "sess-1",
+      persistedModels: new Map([["sess-1", "gpt-5.3-codex"]]),
+      selectedModels: {},
+      backends: [nativeBackend],
+    });
+
+    expect(model).toBe("gpt-5.3-codex");
+  });
+
+  it("falls back to the destination backend default for unsupported persisted models", () => {
+    const model = resolveCodexBackendMigrationModel({
+      plan: {
+        toBackend: NATIVE_CODEX_BACKEND,
+        toModel: null,
+      },
+      sessionId: "sess-1",
+      persistedModels: new Map([["sess-1", "claude-opus-4-5"]]),
+      selectedModels: {},
+      backends: [nativeBackend],
+    });
+
+    expect(model).toBe("gpt-5.2-codex");
+  });
+
+  it("uses the explicit plan model for migrations back to Claude", () => {
+    const model = resolveCodexBackendMigrationModel({
+      plan: {
+        toBackend: DEFAULT_CLAUDE_BACKEND,
+        toModel: DEFAULT_CLAUDE_MODEL,
+      },
+      sessionId: "sess-1",
+      persistedModels: new Map([["sess-1", "gpt-5.3-codex"]]),
+      selectedModels: {},
+      backends: [],
+    });
+
+    expect(model).toBe(DEFAULT_CLAUDE_MODEL);
   });
 });

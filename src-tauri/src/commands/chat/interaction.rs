@@ -162,13 +162,7 @@ fn is_user_approval_tool(tool_name: &str) -> bool {
 /// `call()` will save the plan and emit the real tool_result for Claude plan
 /// approvals, while Codex receives an app-server protocol response).
 /// `approved=false` → deny with the given reason (or a sensible default).
-#[tauri::command]
-#[tracing::instrument(
-    target = "claudette::chat",
-    skip(reason, state),
-    fields(chat_session_id = %session_id, tool_use_id = %tool_use_id, approved),
-)]
-pub async fn submit_plan_approval(
+async fn submit_approval_response(
     session_id: String,
     tool_use_id: String,
     approved: bool,
@@ -211,6 +205,38 @@ pub async fn submit_plan_approval(
     let response = build_attention_response(&pending, approved, reason)?;
     ps.send_control_response(&pending.request_id, response)
         .await
+}
+
+#[tauri::command]
+#[tracing::instrument(
+    target = "claudette::chat",
+    skip(reason, state),
+    fields(chat_session_id = %session_id, tool_use_id = %tool_use_id, approved),
+)]
+pub async fn submit_plan_approval(
+    session_id: String,
+    tool_use_id: String,
+    approved: bool,
+    reason: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    submit_approval_response(session_id, tool_use_id, approved, reason, state).await
+}
+
+#[tauri::command]
+#[tracing::instrument(
+    target = "claudette::chat",
+    skip(reason, state),
+    fields(chat_session_id = %session_id, tool_use_id = %tool_use_id, approved),
+)]
+pub async fn submit_agent_approval(
+    session_id: String,
+    tool_use_id: String,
+    approved: bool,
+    reason: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    submit_approval_response(session_id, tool_use_id, approved, reason, state).await
 }
 
 /// Synchronously drain any pending permission requests from `session` and

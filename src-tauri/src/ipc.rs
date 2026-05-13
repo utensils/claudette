@@ -80,6 +80,7 @@ const METHODS: &[&str] = &[
     "reset_agent_session",
     "clear_attention",
     "submit_agent_answer",
+    "submit_agent_approval",
     "submit_plan_approval",
     "plugin.list",
     "plugin.invoke",
@@ -414,6 +415,7 @@ async fn dispatch(app: &AppHandle, req: RpcRequest) -> RpcResponse {
         "reset_agent_session" => handle_reset_agent_session(app, &req.params).await,
         "clear_attention" => handle_clear_attention(app, &req.params).await,
         "submit_agent_answer" => handle_submit_agent_answer(app, &req.params).await,
+        "submit_agent_approval" => handle_submit_agent_approval(app, &req.params).await,
         "submit_plan_approval" => handle_submit_plan_approval(app, &req.params).await,
         "plugin.list" => handle_plugin_list(app).await,
         "plugin.invoke" => handle_plugin_invoke(app, &req.params).await,
@@ -1083,6 +1085,13 @@ async fn handle_submit_plan_approval(
     Ok(json!({ "ok": true }))
 }
 
+async fn handle_submit_agent_approval(
+    app: &AppHandle,
+    params: &serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    handle_submit_plan_approval(app, params).await
+}
+
 /// Delegates to the shared `commands::workspace::archive_workspace_inner`
 /// helper so CLI-driven archives perform the same agent process
 /// teardown, env-watcher cleanup, and MCP supervisor shutdown the GUI
@@ -1418,6 +1427,7 @@ mod tests {
             "reset_agent_session",
             "clear_attention",
             "submit_agent_answer",
+            "submit_agent_approval",
             "submit_plan_approval",
             "steer_queued_chat_message",
         ] {

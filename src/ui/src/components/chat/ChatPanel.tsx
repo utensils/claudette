@@ -25,6 +25,7 @@ import {
   steerQueuedChatMessage,
   stopAgent,
   submitAgentAnswer,
+  submitAgentApproval,
   submitPlanApproval,
   getAppSetting,
   setAppSetting,
@@ -1543,7 +1544,7 @@ export function ChatPanel() {
                     const sid = activeSessionId;
                     const toolUseId = pendingApproval.toolUseId;
                     try {
-                      await submitPlanApproval(sid, toolUseId, approved, reason);
+                      await submitAgentApproval(sid, toolUseId, approved, reason);
                       clearAgentApproval(sid);
                     } catch (e) {
                       console.error("Failed to submit agent approval:", e);
