@@ -460,6 +460,56 @@ pub fn run_notification_command(
     Ok(())
 }
 
+/// Parse a single user-theme JSON file. Tries the native Claudette shape first
+/// (id/name/colors), then falls back to a permissive shape that accepts
+/// Base16 schemes: any JSON object whose top-level string fields include the
+/// 16 `base00`–`base0F` keys is captured as `colors`, with `id` synthesized
+/// from `file_stem` and `name` from the `scheme`/`name` field. Conversion to
+/// Claudette tokens happens in the frontend (see utils/theme.ts).
+///
+/// Returns `None` if the file is neither parseable nor a recognizable base16
+/// scheme — callers log and skip in that case.
+fn parse_theme_file(content: &str, file_stem: &str) -> Option<ThemeDefinition> {
+    if let Ok(theme) = serde_json::from_str::<ThemeDefinition>(content) {
+        return Some(theme);
+    }
+
+    let raw: HashMap<String, serde_json::Value> = serde_json::from_str(content).ok()?;
+    const BASE16_KEYS: [&str; 16] = [
+        "base00", "base01", "base02", "base03", "base04", "base05", "base06", "base07", "base08",
+        "base09", "base0A", "base0B", "base0C", "base0D", "base0E", "base0F",
+    ];
+    let has_full_base16 = BASE16_KEYS
+        .iter()
+        .all(|k| raw.get(*k).and_then(|v| v.as_str()).is_some());
+    if !has_full_base16 {
+        return None;
+    }
+
+    // Capture every string-valued top-level field so the frontend converter
+    // can read `variant`, `scheme`, etc. alongside the base16 hex values.
+    let colors: HashMap<String, String> = raw
+        .iter()
+        .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
+        .collect();
+
+    let name = colors
+        .get("scheme")
+        .or_else(|| colors.get("name"))
+        .cloned()
+        .unwrap_or_else(|| file_stem.to_string());
+    let author = colors.get("author").cloned();
+    let description = colors.get("description").cloned();
+
+    Some(ThemeDefinition {
+        id: file_stem.to_string(),
+        name,
+        author,
+        description,
+        colors,
+    })
+}
+
 #[tauri::command]
 pub async fn list_user_themes() -> Result<Vec<ThemeDefinition>, String> {
     tauri::async_runtime::spawn_blocking(|| {
@@ -522,13 +572,17 @@ pub async fn list_user_themes() -> Result<Vec<ThemeDefinition>, String> {
                 }
             };
 
-            match serde_json::from_str::<ThemeDefinition>(&content) {
-                Ok(theme) => themes.push(theme),
-                Err(e) => tracing::warn!(
+            let file_stem = path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("unnamed");
+
+            match parse_theme_file(&content, file_stem) {
+                Some(theme) => themes.push(theme),
+                None => tracing::warn!(
                     target: "claudette::ui",
                     path = %path.display(),
-                    error = %e,
-                    "skipping theme file: parse failed"
+                    "skipping theme file: not a Claudette or base16 scheme"
                 ),
             }
         }
@@ -549,6 +603,83 @@ mod tests {
         assert!(sounds.len() >= 2);
         assert_eq!(sounds[0], "Default");
         assert_eq!(sounds[1], "None");
+    }
+
+    #[test]
+    fn parse_theme_file_native_claudette_shape() {
+        let content = r##"{
+            "id": "my-theme",
+            "name": "My Theme",
+            "author": "alice",
+            "colors": {
+                "accent-primary": "#ff00aa",
+                "app-bg": "#111111"
+            }
+        }"##;
+        let theme = parse_theme_file(content, "my-theme").expect("should parse");
+        assert_eq!(theme.id, "my-theme");
+        assert_eq!(theme.name, "My Theme");
+        assert_eq!(theme.author.as_deref(), Some("alice"));
+        assert_eq!(
+            theme.colors.get("accent-primary").map(|s| s.as_str()),
+            Some("#ff00aa")
+        );
+    }
+
+    #[test]
+    fn parse_theme_file_canonical_base16() {
+        // Canonical Base16 Tomorrow Night (top-level baseXX keys, no `colors` wrapper).
+        let content = r#"{
+            "scheme": "Tomorrow Night",
+            "author": "Chris Kempson",
+            "base00": "1d1f21", "base01": "282a2e", "base02": "373b41", "base03": "969896",
+            "base04": "b4b7b4", "base05": "c5c8c6", "base06": "e0e0e0", "base07": "ffffff",
+            "base08": "cc6666", "base09": "de935f", "base0A": "f0c674", "base0B": "b5bd68",
+            "base0C": "8abeb7", "base0D": "81a2be", "base0E": "b294bb", "base0F": "a3685a"
+        }"#;
+        let theme = parse_theme_file(content, "tomorrow-night").expect("should parse");
+        assert_eq!(theme.id, "tomorrow-night");
+        assert_eq!(theme.name, "Tomorrow Night"); // from `scheme`
+        assert_eq!(theme.author.as_deref(), Some("Chris Kempson"));
+        // All 16 base keys preserved as-is for the frontend to convert.
+        for key in [
+            "base00", "base01", "base02", "base03", "base04", "base05", "base06", "base07",
+            "base08", "base09", "base0A", "base0B", "base0C", "base0D", "base0E", "base0F",
+        ] {
+            assert!(theme.colors.contains_key(key), "missing base16 key: {key}");
+        }
+    }
+
+    #[test]
+    fn parse_theme_file_base16_falls_back_to_stem_when_no_scheme() {
+        let content = r#"{
+            "base00": "000000", "base01": "111111", "base02": "222222", "base03": "333333",
+            "base04": "444444", "base05": "555555", "base06": "666666", "base07": "777777",
+            "base08": "880000", "base09": "990000", "base0A": "aa0000", "base0B": "bb0000",
+            "base0C": "cc0000", "base0D": "dd0000", "base0E": "ee0000", "base0F": "ff0000"
+        }"#;
+        let theme = parse_theme_file(content, "anon-scheme").expect("should parse");
+        assert_eq!(theme.id, "anon-scheme");
+        assert_eq!(theme.name, "anon-scheme");
+        assert!(theme.author.is_none());
+    }
+
+    #[test]
+    fn parse_theme_file_skips_partial_base16() {
+        // Missing base0F — not a complete base16 scheme, and not native Claudette.
+        let content = r#"{
+            "base00": "000000", "base01": "111111", "base02": "222222", "base03": "333333",
+            "base04": "444444", "base05": "555555", "base06": "666666", "base07": "777777",
+            "base08": "880000", "base09": "990000", "base0A": "aa0000", "base0B": "bb0000",
+            "base0C": "cc0000", "base0D": "dd0000", "base0E": "ee0000"
+        }"#;
+        assert!(parse_theme_file(content, "partial").is_none());
+    }
+
+    #[test]
+    fn parse_theme_file_skips_malformed_json() {
+        assert!(parse_theme_file("{ not valid json", "broken").is_none());
+        assert!(parse_theme_file("", "empty").is_none());
     }
 
     #[test]

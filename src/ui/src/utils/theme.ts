@@ -45,6 +45,28 @@ const THEMEABLE_VARS = [
   "badge-done",
   "badge-plan",
   "badge-ask",
+  "accent-success",
+  "accent-success-rgb",
+  "accent-success-bg",
+  "accent-warning",
+  "accent-warning-rgb",
+  "accent-warning-bg",
+  "accent-error",
+  "accent-error-rgb",
+  "accent-error-bg",
+  "accent-info",
+  "accent-info-rgb",
+  "accent-info-bg",
+  "accent-neutral",
+  "accent-secondary",
+  "syntax-keyword",
+  "syntax-string",
+  "syntax-number",
+  "syntax-comment",
+  "syntax-function",
+  "syntax-type",
+  "syntax-variable",
+  "syntax-operator",
   "diff-added-bg",
   "diff-removed-bg",
   "diff-added-text",
@@ -231,6 +253,174 @@ export function cacheThemePreference(
   }
 }
 
+// ---- Base16 import support ------------------------------------------------
+//
+// Claudette accepts user themes in `~/.claudette/themes/*.json` either in
+// Claudette's native shape (id/name/colors with `--*` keys) or as a canonical
+// Base16 scheme (`base00`–`base0F` keys). Base16 files are detected and
+// converted into Claudette tokens at load time.
+
+const BASE16_KEYS = [
+  "base00", "base01", "base02", "base03",
+  "base04", "base05", "base06", "base07",
+  "base08", "base09", "base0A", "base0B",
+  "base0C", "base0D", "base0E", "base0F",
+] as const;
+
+type Base16Key = (typeof BASE16_KEYS)[number];
+
+// Accept #rrggbb, rrggbb, #rgb, rgb (case-insensitive). Return canonical #rrggbb.
+function normalizeHex(value: string): string | null {
+  const v = value.trim().replace(/^#/, "");
+  if (/^[0-9a-fA-F]{6}$/.test(v)) return `#${v.toLowerCase()}`;
+  if (/^[0-9a-fA-F]{3}$/.test(v)) {
+    const [r, g, b] = v;
+    return `#${r}${r}${g}${g}${b}${b}`.toLowerCase();
+  }
+  return null;
+}
+
+function hexToRgbTriplet(hex: string): string {
+  const v = hex.replace(/^#/, "");
+  const r = parseInt(v.slice(0, 2), 16);
+  const g = parseInt(v.slice(2, 4), 16);
+  const b = parseInt(v.slice(4, 6), 16);
+  return `${r}, ${g}, ${b}`;
+}
+
+function hexLuminance(hex: string): number {
+  const v = hex.replace(/^#/, "");
+  const r = parseInt(v.slice(0, 2), 16);
+  const g = parseInt(v.slice(2, 4), 16);
+  const b = parseInt(v.slice(4, 6), 16);
+  return (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+}
+
+/**
+ * A theme payload is base16 iff its `colors` map contains all 16 baseXX keys
+ * (case-insensitive on the hex digit) AND it does not already declare a
+ * recognized Claudette token. The latter check makes hybrid files unambiguous:
+ * if a file ships both `accent-primary` and a full base16 palette, treat it
+ * as Claudette (the author already mapped what they wanted).
+ */
+export function detectBase16(colors: Record<string, string>): boolean {
+  const claudetteSignals = ["accent-primary", "app-bg", "text-primary"];
+  if (claudetteSignals.some((k) => k in colors)) return false;
+  for (const key of BASE16_KEYS) {
+    const value = colors[key];
+    if (typeof value !== "string") return false;
+    if (normalizeHex(value) === null) return false;
+  }
+  return true;
+}
+
+/**
+ * Map a base16 palette onto Claudette tokens following the canonical Tinted
+ * Theming role spec: base00=bg, base05=fg, base08=red, base0A=yellow,
+ * base0B=green, base0D=blue, base0E=purple, etc. `-rgb` companions are
+ * co-emitted from each accent hex so `rgba(var(--*-rgb), alpha)` consumers
+ * keep working.
+ *
+ * `color-scheme` is read from a `variant` field if present (some base16
+ * files declare `"variant": "light"`); otherwise derived from base00's
+ * relative luminance.
+ */
+export function convertBase16ToClaudette(theme: ThemeDefinition): ThemeDefinition {
+  const src = theme.colors;
+  const palette = {} as Record<Base16Key, string>;
+  for (const key of BASE16_KEYS) {
+    const norm = normalizeHex(src[key] ?? "");
+    if (norm === null) {
+      // detectBase16 should have caught this; bail out and return the input
+      // unchanged so applyTheme treats it as a plain Claudette theme.
+      return theme;
+    }
+    palette[key] = norm;
+  }
+
+  const variant = (src["variant"] ?? "").toLowerCase();
+  const scheme: "light" | "dark" =
+    variant === "light" || variant === "dark"
+      ? (variant as "light" | "dark")
+      : hexLuminance(palette.base00) < 0.5
+        ? "dark"
+        : "light";
+
+  const out: Record<string, string> = {
+    "color-scheme": scheme,
+
+    // Surfaces
+    "app-bg": palette.base00,
+    "sidebar-bg": palette.base01,
+    "sidebar-border": palette.base02,
+    "chat-input-bg": palette.base01,
+    "chat-header-bg": palette.base01,
+    "chat-user-bg": palette.base01,
+    "terminal-bg": palette.base00,
+    "terminal-tab-bg": palette.base01,
+    "terminal-tab-active-bg": palette.base02,
+
+    // Text ramp — base05 is default fg, then dimmer down through base04/03.
+    // base06 (light fg) maps to muted so it stays readable on the bg ramp.
+    "text-primary": palette.base05,
+    "text-muted": palette.base06,
+    "text-dim": palette.base04,
+    "text-faint": palette.base03,
+    "text-separator": palette.base02,
+    "on-accent": palette.base07,
+    "divider": palette.base02,
+    "selected-bg": palette.base02,
+
+    // Status / semantic accents
+    "status-running": palette.base0B,
+    "status-stopped": palette.base08,
+    "badge-done": palette.base0B,
+    "badge-plan": palette.base0D,
+    "badge-ask": palette.base0A,
+
+    "accent-success": palette.base0B,
+    "accent-success-rgb": hexToRgbTriplet(palette.base0B),
+    "accent-warning": palette.base09,
+    "accent-warning-rgb": hexToRgbTriplet(palette.base09),
+    "accent-error": palette.base08,
+    "accent-error-rgb": hexToRgbTriplet(palette.base08),
+    "accent-info": palette.base0D,
+    "accent-info-rgb": hexToRgbTriplet(palette.base0D),
+
+    "accent-neutral": palette.base04,
+    "accent-secondary": palette.base0F,
+
+    // Brand accent uses base0E (purple) per the Tinted Theming convention.
+    "accent-primary": palette.base0E,
+    "accent-primary-rgb": hexToRgbTriplet(palette.base0E),
+    "accent-dim": palette.base0F,
+
+    // Diff
+    "diff-added-text": palette.base0B,
+    "diff-removed-text": palette.base08,
+    "diff-hunk-header": palette.base0D,
+    "diff-line-number": palette.base03,
+
+    // Syntax — direct base08-base0F mapping per spec.
+    "syntax-variable": palette.base08,
+    "syntax-number": palette.base09,
+    "syntax-type": palette.base0A,
+    "syntax-string": palette.base0B,
+    "syntax-operator": palette.base0C,
+    "syntax-function": palette.base0D,
+    "syntax-keyword": palette.base0E,
+    "syntax-comment": palette.base03,
+  };
+
+  return {
+    id: theme.id,
+    name: theme.name,
+    author: theme.author,
+    description: theme.description,
+    colors: out,
+  };
+}
+
 export async function loadAllThemes(): Promise<ThemeDefinition[]> {
   let userThemes: ThemeDefinition[] = [];
   try {
@@ -254,7 +444,10 @@ export async function loadAllThemes(): Promise<ThemeDefinition[]> {
     });
   }
   for (const theme of userThemes) {
-    themesById.set(theme.id, theme);
+    const resolved = detectBase16(theme.colors)
+      ? convertBase16ToClaudette(theme)
+      : theme;
+    themesById.set(resolved.id, resolved);
   }
   return Array.from(themesById.values());
 }
