@@ -86,4 +86,19 @@ describe("useWorkspaceFileIndex", () => {
 
     expect(serviceMocks.listWorkspaceFiles).toHaveBeenCalledTimes(1);
   });
+
+  it("reloads the index when the workspace file tree refreshes", async () => {
+    await render("ws-c");
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    useAppStore.setState({ fileTreeRefreshNonceByWorkspace: { "ws-c": 1 } });
+    await render("ws-c");
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(serviceMocks.listWorkspaceFiles).toHaveBeenCalledTimes(2);
+  });
 });

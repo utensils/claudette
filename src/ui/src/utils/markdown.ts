@@ -390,6 +390,7 @@ const MarkdownLink: NonNullable<Components["a"]> = ({
   const filePath = href
     ? (decodeFilePathHref(href) ?? decodeLocalhostFileUrlTarget(href))
     : null;
+  const externalHref = href ? normalizeExternalHref(href) : null;
   const openFilePath = () => {
     if (!filePath) return;
     if (fileOpen) {
@@ -428,9 +429,8 @@ const MarkdownLink: NonNullable<Components["a"]> = ({
     "a",
     {
       ...props,
-      href,
+      href: externalHref ?? href,
       onClick: (e: React.MouseEvent<HTMLAnchorElement>) => {
-        const externalHref = href ? normalizeExternalHref(href) : null;
         if (externalHref) {
           e.preventDefault();
           void openUrl(externalHref).catch((err) =>

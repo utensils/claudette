@@ -36,6 +36,7 @@ interface MonacoEditorProps {
   readOnly: boolean;
   /** Optional one-shot reveal target from chat file links. */
   revealTarget?: FileRevealTarget | null;
+  onRevealTargetApplied?: (nonce: number) => void;
   /** Fired on every document change. The parent compares against the
    *  baseline to update the per-tab dirty flag. The `@monaco-editor/react`
    *  wrapper internally suppresses this callback while it's applying a
@@ -52,6 +53,7 @@ export const MonacoEditor = memo(function MonacoEditor({
   value,
   filename,
   revealTarget,
+  onRevealTargetApplied,
   readOnly,
   onChange,
   onSave,
@@ -148,7 +150,8 @@ export const MonacoEditor = memo(function MonacoEditor({
         },
       },
     ]);
-  }, [revealTarget]);
+    onRevealTargetApplied?.(revealTarget.nonce);
+  }, [onRevealTargetApplied, revealTarget]);
 
   // Define the 'claudette' theme before the editor instance is created so
   // the theme prop resolves immediately and there's no flash of vs-dark.

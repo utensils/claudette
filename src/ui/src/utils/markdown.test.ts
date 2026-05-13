@@ -6,6 +6,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { createElement } from "react";
 import type { ReactElement, ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
+import type { Components } from "react-markdown";
 
 const tauriMocks = vi.hoisted(() => ({
   invoke: vi.fn(() => Promise.resolve()),
@@ -233,8 +234,7 @@ describe("normalizeExternalHref", () => {
 });
 
 describe("MARKDOWN_COMPONENTS.a click handling", () => {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const LinkOverride = MARKDOWN_COMPONENTS.a as (props: any) => ReactElement;
+  const LinkOverride = MARKDOWN_COMPONENTS.a as NonNullable<Components["a"]>;
 
   beforeEach(() => {
     tauriMocks.invoke.mockClear();
@@ -340,7 +340,9 @@ describe("MARKDOWN_COMPONENTS.a click handling", () => {
       }),
     );
 
-    container.querySelector("a")?.dispatchEvent(
+    const link = container.querySelector("a");
+    expect(link?.getAttribute("href")).toBe("https://www.example.com/docs");
+    link?.dispatchEvent(
       new MouseEvent("click", { bubbles: true, cancelable: true }),
     );
 

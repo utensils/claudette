@@ -14,7 +14,13 @@ interface FileIndexData {
   uniqueBasenames: Map<string, string | null>;
 }
 
-const dataCache = new Map<string, Promise<FileIndexData>>();
+interface FileIndexCacheEntry {
+  refreshNonce: number;
+  promise: Promise<FileIndexData>;
+}
+
+const MAX_CACHED_WORKSPACES = 20;
+const dataCache = new Map<string, FileIndexCacheEntry>();
 
 export function useWorkspaceFileIndex(
   workspaceId: string | null | undefined,
@@ -30,11 +36,13 @@ export function useWorkspaceFileIndex(
       return;
     }
     let cancelled = false;
-    const cacheKey = `${workspaceId}:${refreshNonce}`;
-    let promise = dataCache.get(cacheKey);
+    const cached = dataCache.get(workspaceId);
+    let promise =
+      cached?.refreshNonce === refreshNonce ? cached.promise : undefined;
     if (!promise) {
       promise = listWorkspaceFiles(workspaceId).then(buildFileIndex);
-      dataCache.set(cacheKey, promise);
+      dataCache.set(workspaceId, { refreshNonce, promise });
+      trimFileIndexCache();
     }
     promise
       .then((next) => {
@@ -65,6 +73,14 @@ export function useWorkspaceFileIndex(
       },
     };
   }, [data]);
+}
+
+function trimFileIndexCache(): void {
+  while (dataCache.size > MAX_CACHED_WORKSPACES) {
+    const oldestKey = dataCache.keys().next().value;
+    if (!oldestKey) return;
+    dataCache.delete(oldestKey);
+  }
 }
 
 function formatLineSuffix(parsed: ReturnType<typeof parseFilePathTarget>): string {

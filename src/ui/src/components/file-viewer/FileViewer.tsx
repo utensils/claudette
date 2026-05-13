@@ -85,6 +85,7 @@ function FileViewerInner({ workspaceId, path, t }: FileViewerInnerProps) {
   const setDiffFiles = useAppStore((s) => s.setDiffFiles);
   const setFileTabPreview = useAppStore((s) => s.setFileTabPreview);
   const closeFileTab = useAppStore((s) => s.closeFileTab);
+  const clearFileRevealTarget = useAppStore((s) => s.clearFileRevealTarget);
   const requestFileTreeRefresh = useAppStore((s) => s.requestFileTreeRefresh);
   const addToast = useAppStore((s) => s.addToast);
   const keybindings = useAppStore((s) => s.keybindings);
@@ -189,6 +190,12 @@ function FileViewerInner({ workspaceId, path, t }: FileViewerInnerProps) {
       setFileBufferContent(workspaceId, path, next);
     },
     [workspaceId, path, setFileBufferContent],
+  );
+  const handleRevealTargetApplied = useCallback(
+    (nonce: number) => {
+      clearFileRevealTarget(workspaceId, nonce);
+    },
+    [clearFileRevealTarget, workspaceId],
   );
 
   const copySource = useCallback((): string | null => {
@@ -509,6 +516,7 @@ function FileViewerInner({ workspaceId, path, t }: FileViewerInnerProps) {
               value={bufferState.buffer}
               filename={path}
               revealTarget={revealTarget}
+              onRevealTargetApplied={handleRevealTargetApplied}
               readOnly={editDisabled}
               onChange={handleBufferChange}
               onSave={handleSave}

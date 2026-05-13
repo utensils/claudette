@@ -73,6 +73,23 @@ describe("file path store updates", () => {
     });
   });
 
+  it("clears a reveal target only when the consumed nonce still matches", () => {
+    useAppStore.getState().openFileTab(WS, "README.md", {
+      startLine: 4,
+      endLine: 4,
+    });
+    useAppStore.getState().clearFileRevealTarget(WS, 0);
+    expect(useAppStore.getState().fileRevealTargetByWorkspace[WS]).toEqual({
+      path: "README.md",
+      startLine: 4,
+      endLine: 4,
+      nonce: 1,
+    });
+
+    useAppStore.getState().clearFileRevealTarget(WS, 1);
+    expect(useAppStore.getState().fileRevealTargetByWorkspace[WS]).toBeNull();
+  });
+
   it("renames child file tabs when a folder is renamed", () => {
     openLoadedFile("src/components/Button.tsx");
     openLoadedFile("src/components/Card.tsx");

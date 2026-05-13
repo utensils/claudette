@@ -209,6 +209,7 @@ export interface FileTreeSlice {
     path: string,
     revealTarget?: Omit<FileRevealTarget, "path" | "nonce">,
   ) => void;
+  clearFileRevealTarget: (workspaceId: string, nonce?: number) => void;
   /** Switch to an already-open tab (no-op if not in the workspace's tabs). */
   selectFileTab: (workspaceId: string, path: string) => void;
   /** Close a tab. Caller is responsible for any "discard unsaved?" prompt;
@@ -434,6 +435,18 @@ export const createFileTreeSlice: StateCreator<AppState, [], [], FileTreeSlice> 
             }
           : s.fileRevealTargetByWorkspace,
         fileBuffers: nextBuffers,
+      };
+    }),
+
+  clearFileRevealTarget: (workspaceId, nonce) =>
+    set((s) => {
+      const current = s.fileRevealTargetByWorkspace[workspaceId];
+      if (!current || (nonce !== undefined && current.nonce !== nonce)) return s;
+      return {
+        fileRevealTargetByWorkspace: {
+          ...s.fileRevealTargetByWorkspace,
+          [workspaceId]: null,
+        },
       };
     }),
 
