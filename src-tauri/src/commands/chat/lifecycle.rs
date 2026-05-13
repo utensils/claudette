@@ -11,8 +11,8 @@ use crate::state::{AgentSessionState, AppState, PendingPermission};
 use super::interaction::{deny_drained_permissions, drain_pending_permissions};
 use super::now_iso;
 
-/// What `take_stop_snapshot` hands back: permissions to deny, pid to kill,
-/// and the session id to mark ended in the DB.
+/// What `take_stop_snapshot` hands back: permissions to deny, optional harness
+/// interrupt handle, pid fallback, and the session id to mark ended in the DB.
 type StopSnapshot = (
     Option<(Arc<AgentSession>, Vec<PendingPermission>)>,
     Option<Arc<AgentSession>>,
@@ -35,9 +35,13 @@ type StopSnapshot = (
 /// be respawned.
 fn take_stop_snapshot(session: &mut AgentSessionState) -> StopSnapshot {
     let drained = drain_pending_permissions(session);
-    let interrupt_session = session.persistent_session.clone();
     let ended_sid = Some(session.session_id.clone());
     let pid = session.active_pid.take();
+    let interrupt_session = if pid.is_some() {
+        session.persistent_session.clone()
+    } else {
+        None
+    };
     // Stop interrupts the cycle outright — make sure a future prompt on the
     // same session can still fire its notification (full reset, not just
     // `needs_attention=false`).
@@ -265,6 +269,20 @@ mod tests {
                 .kind(),
             AgentHarnessKind::CodexAppServer
         );
+        assert!(session.persistent_session.is_some());
+    }
+
+    #[test]
+    fn take_stop_snapshot_does_not_interrupt_idle_persistent_session() {
+        let mut session = fresh_session("sess-codex", 2, None);
+        session.persistent_session = Some(Arc::new(AgentSession::from_codex_app_server(
+            CodexAppServerSession::new_for_test(4321),
+        )));
+
+        let (_, interrupt_session, pid, _) = take_stop_snapshot(&mut session);
+
+        assert!(interrupt_session.is_none());
+        assert!(pid.is_none());
         assert!(session.persistent_session.is_some());
     }
 

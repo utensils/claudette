@@ -192,9 +192,14 @@
   - `git diff --check`
 - 2026-05-13: Committed and pushed the Copilot fixes as `388ed967` (`fix: keep remote control claude only`), replied to all four Copilot threads, resolved them, and verified zero unresolved Copilot reviewer threads remain.
 - 2026-05-13: PR checks after `388ed967` were partially complete: commit-message/PR-title/version/format/migration checks passed; build, lint, frontend, and test were still pending.
+- 2026-05-13: Ran the next Copilot review pass after `a80f1604`; CI was green except pending bundle smoke, and Copilot found one valid stop regression risk.
+- 2026-05-13: Addressed the stop regression risk by only capturing a protocol interrupt handle when an in-flight `active_pid` exists, preserving idle persistent sessions.
+- 2026-05-13: Verified the idle-stop fix with:
+  - `nix develop -c cargo test -p claudette-tauri chat::lifecycle --all-features`
+  - `nix develop -c cargo fmt --all --check`
+  - `git diff --check`
 
 ## Next Stage
 
-- Monitor the pending PR checks for `388ed967` and address any failures.
-- Re-run Copilot review after CI settles because new review comments can appear after fresh pushes.
+- Commit/push the idle-stop fix, reply to and resolve the new Copilot thread, then re-query Copilot and PR checks.
 - If CI and Copilot stay clean, run one broader local confidence pass from the Test Plan before marking the native Codex implementation ready for final review.
