@@ -386,7 +386,7 @@ function App() {
           console.error("Failed to load alternative backend setting:", settingResult.reason);
         }
         if (codexSettingResult.status === "rejected") {
-          console.error("Failed to load experimental Codex setting:", codexSettingResult.reason);
+          console.error("Failed to load Codex setting:", codexSettingResult.reason);
         }
         const gatePlan = planExperimentalBackendGateLoad({
           alternativeBackendsCompiled: flags.alternative_backends_compiled,

@@ -208,7 +208,7 @@ impl AgentBackendConfig {
     pub fn builtin_experimental_codex() -> Self {
         Self {
             id: "experimental-codex".to_string(),
-            label: "Experimental Codex".to_string(),
+            label: "Codex".to_string(),
             kind: AgentBackendKind::CodexNative,
             base_url: None,
             enabled: true,
@@ -300,7 +300,7 @@ mod tests {
         let backend = AgentBackendConfig::builtin_experimental_codex();
 
         assert_eq!(backend.id, "experimental-codex");
-        assert_eq!(backend.label, "Experimental Codex");
+        assert_eq!(backend.label, "Codex");
         assert_eq!(backend.kind, AgentBackendKind::CodexNative);
         assert!(backend.enabled);
         assert!(!backend.kind.needs_gateway());

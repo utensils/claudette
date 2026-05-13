@@ -70,12 +70,12 @@ describe("formatBackendError", () => {
       "error sending request for url",
       backend({
         id: "experimental-codex",
-        label: "Experimental Codex",
+        label: "Codex",
         kind: "codex_native",
         base_url: null,
       }),
     );
 
-    expect(message).toBe("Experimental Codex is not reachable. Check the provider and try again.");
+    expect(message).toBe("Codex is not reachable. Check the provider and try again.");
   });
 });

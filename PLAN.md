@@ -16,8 +16,8 @@
 
 - Preserve the existing OpenAI API gateway backend.
 - Supersede only the current `codex-subscription` gateway backend with native Codex when the new experimental gate is enabled.
-- Use the UI label `Experimental Codex` for native Codex.
-- Keep **Experimental Codex** independent from **Alternative Claude Code backends**. Alternative backend runtime exposure stays off by default for new users and only gates Ollama, LM Studio, OpenAI API, and future non-Codex providers.
+- Use the UI label `Codex` for native Codex; the setting remains under Experimental, so users already understand the feature status from its location.
+- Keep **Codex** independent from **Alternative Claude Code backends**. Alternative backend runtime exposure stays off by default for new users and only gates Ollama, LM Studio, OpenAI API, and future non-Codex providers.
 - Map Claudette fast mode to Codex app-server `serviceTier: "priority"` for native Codex turns and thread starts.
 - Keep Claude Remote Control Claude-only in this first Codex implementation.
 - Refactor Claude Code into a behavior-preserving harness adapter before adding native Codex behavior.
@@ -47,7 +47,7 @@
 - Add a tightly scoped experimental gate for native Codex.
 - Replace or hide `codex-subscription` when the native Codex gate is active.
 - Keep `openai-api` visible and functional.
-- Update Settings UI copy and types for `Experimental Codex`.
+- Update Settings UI copy and types for `Codex`.
 - Update docs:
   - `site/src/content/docs/features/providers/openai-codex.mdx`
   - `site/src/content/docs/features/providers/index.mdx`
@@ -144,7 +144,7 @@
   - `nix develop -c cargo test -p claudette agent::harness --all-features`
   - `nix develop -c cargo fmt --all`
 - 2026-05-13: Added the gated `experimental-codex` backend row (`CodexNative`) and runtime harness selection so native Codex resolves to `CodexAppServer` while existing OpenAI API and legacy gateway backends stay on the Claude Code harness.
-- 2026-05-13: Added the **Experimental Codex** settings gate. When enabled, backend loading hides the legacy `codex-subscription` row and aliases stale subscription selections to `experimental-codex`; when disabled, OpenAI API and the legacy subscription gateway remain unchanged.
+- 2026-05-13: Added the **Codex** settings gate. When enabled, backend loading hides the legacy `codex-subscription` row and aliases stale subscription selections to `experimental-codex`; when disabled, OpenAI API and the legacy subscription gateway remain unchanged.
 - 2026-05-13: Wired chat spawning to start `CodexAppServerSession::start_with_options` for the native Codex runtime, including model and permission-level mapping, while skipping Claude-only MCP hook injection for Codex sessions.
 - 2026-05-13: Updated docs and settings copy for native Codex vs OpenAI API gateway behavior:
   - `site/src/content/docs/features/providers/openai-codex.mdx`
@@ -165,7 +165,7 @@
 - 2026-05-13: Ran the next Copilot review pass. Valid findings addressed:
   - Hidden Codex gate configs now survive unrelated backend saves in both directions, so customized `codex-subscription` and `experimental-codex` rows are not lost while hidden.
   - Backend request/default aliasing now works both ways between `codex-subscription` and `experimental-codex` depending on the active gate.
-  - Toggling **Experimental Codex** now migrates persisted default and per-session backend selections in both directions and resets affected live sessions.
+  - Toggling **Codex** now migrates persisted default and per-session backend selections in both directions and resets affected live sessions.
 - 2026-05-13: Verified the Codex gate persistence/migration fixes with:
   - `nix develop -c cargo test -p claudette-tauri agent_backends --all-features`
   - `cd src/ui && bun run test -- codexBackendMigration`
@@ -222,7 +222,7 @@
   - `nix develop -c cargo fmt --all --check`
 - 2026-05-13: Corrected the feature-gate split after live app testing:
   - **Alternative Claude Code backends** is again disabled by default and no longer includes, enables, or exposes Codex.
-  - **Experimental Codex** independently exposes the native `experimental-codex` backend and seeded/refreshed Codex models.
+  - **Codex** independently exposes the native `experimental-codex` backend and seeded/refreshed Codex models.
   - Legacy `codex-subscription` remains hidden from Settings/model pickers and never reappears through the Alternative backend gate.
 - 2026-05-13: Implemented native Codex fast mode:
   - Codex app-server `thread/start` and `turn/start` now send `serviceTier: "priority"` when Claudette fast mode is enabled.
@@ -291,7 +291,7 @@
 - Native Codex implementation is complete for this branch's planned scope and ready for final human review in draft PR #786.
 - Keep monitoring the draft PR for any new Copilot or CI feedback after this final plan-status commit.
 - 2026-05-13: Superseded the earlier surfacing approach after live dev-app validation:
-  - The native Codex models still surface when **Experimental Codex** is enabled, but they do so through a Codex-specific registry path rather than by enabling or depending on **Alternative Claude Code backends**.
+  - The native Codex models still surface when **Codex** is enabled, but they do so through a Codex-specific registry path rather than by enabling or depending on **Alternative Claude Code backends**.
   - **Alternative Claude Code backends** is disabled by default for new users and no longer controls or reveals Codex.
   - The Tauri `alternative-backends` compile feature remains enabled in dev/release build feature sets so the code is available, but the runtime setting is independent and default-off.
   - `dev.sh` continues to append the compile feature when a local override omits it; this does not enable the user-facing runtime setting.
@@ -300,7 +300,7 @@
 ## Current Next Stage
 
 - Rebase with `origin/main`, commit, push, and run the regular Copilot review loop for the fast-mode/gate-separation fix.
-- After push, verify the dev app can select an `experimental-codex/*` model with **Experimental Codex** on and **Alternative Claude Code backends** off.
+- After push, verify the dev app can select an `experimental-codex/*` model with **Codex** on and **Alternative Claude Code backends** off.
 - 2026-05-13: Ran the Copilot review loop after `79321da8`. Valid finding addressed:
   - Clearing one pending prompt source now preserves tab/sidebar attention when another agent question, plan approval, or native Codex approval remains pending.
   - The stale Alternative-backends default-on comment was declined because the corrected requirement is runtime default-off.
@@ -310,10 +310,10 @@
   - `cd src/ui && bun run lint` (warnings only; no errors)
   - `git diff --check`
 - 2026-05-13: Ran the next Copilot pass after the rebased push. Valid finding addressed:
-  - `site/src/content/docs/features/settings.mdx` now has a single authoritative **Experimental** settings table with the Experimental Codex row included.
+  - `site/src/content/docs/features/settings.mdx` now has a single authoritative **Experimental** settings table with the Codex row included.
 - 2026-05-13: Tightened the Codex feature gate after the branch audit:
   - Native Codex command entry points (`codex login`, backend save/test/refresh, runtime resolution, and request-default resolution) now refuse Codex-native paths unless `experimental_codex_enabled` is on.
-  - The old `codex-subscription` backend is no longer seeded into active backend lists when Experimental Codex is off, so Alternative Claude Code backends cannot reveal or infer Codex through the legacy gateway path.
+  - The old `codex-subscription` backend is no longer seeded into active backend lists when Codex is off, so Alternative Claude Code backends cannot reveal or infer Codex through the legacy gateway path.
   - Stored hidden native/legacy Codex backend JSON is still preserved on unrelated saves, but inactive Codex selections are reset to Claude defaults instead of aliasing back to the legacy subscription backend.
   - Verified focused gate coverage with:
     - `nix develop -c cargo test -p claudette-tauri agent_backends --all-features`
@@ -339,7 +339,7 @@
     - `git diff --check`
 - 2026-05-13: Ran the Copilot review loop after the Codex reasoning-effort push. Valid findings addressed:
   - Chat toolbar and composer persisted-settings effects no longer depend on the live model registry object, avoiding repeated settings reloads when backend model lists refresh.
-  - The Experimental Codex toggle now persists the runtime setting before migrating selections and only rolls the in-memory toggle back when persistence itself fails.
+  - The Codex toggle now persists the runtime setting before migrating selections and only rolls the in-memory toggle back when persistence itself fails.
   - Verified the Copilot follow-up with:
     - `cd src/ui && bun run test -- reasoningControls EffortSelector modelRegistry codexBackendMigration`
     - `cd src/ui && bunx tsc -b`
@@ -358,11 +358,23 @@
     - `cd src/ui && bun run lint:css`
     - `git diff --check`
 - 2026-05-13: Polished the model selector rendering for native Codex models:
-  - Redundant provider badges are hidden when the row is already inside the same provider group, so the **Experimental Codex** section no longer repeats the same label on every model row.
+  - Redundant provider badges are hidden when the row is already inside the same provider group, so the **Codex** section no longer repeats the same label on every model row.
   - Model labels now stay on one line with ellipsis and the menu has a wider, stable width for long model names such as Codex variants.
   - Verified the model selector polish with:
     - `cd src/ui && bunx tsc -b`
     - `cd src/ui && bun run test -- modelRegistry`
     - `cd src/ui && bun run lint` (warnings only; no errors)
     - `cd src/ui && bun run lint:css`
+    - `git diff --check`
+- 2026-05-13: Simplified user-facing native Codex wording:
+  - Settings, model picker provider labels, backend errors, docs, and tests now use the concise **Codex** label.
+  - Internal ids and settings keys remain `experimental-codex` / `experimental_codex_enabled` for compatibility; the user-facing feature status is conveyed by the Experimental settings section.
+  - Verified the wording cleanup with:
+    - `nix develop -c cargo test -p claudette agent_backend --all-features`
+    - `nix develop -c cargo test -p claudette-tauri agent_backends --all-features`
+    - `cd src/ui && bun run test -- modelRegistry backendSettingsErrors codexBackendMigration`
+    - `cd src/ui && bunx tsc -b`
+    - `cd src/ui && bun run lint` (warnings only; no errors)
+    - `cd src/ui && bun run lint:css`
+    - `nix develop -c cargo fmt --all --check`
     - `git diff --check`

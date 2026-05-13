@@ -6,13 +6,13 @@ description: Run Claudette agents through the OpenAI API gateway or through the 
 OpenAI API and Codex now use different execution paths:
 
 - **OpenAI API** — Claudette keeps the gateway path. It starts a local HTTP listener that translates Claude's wire format into the OpenAI Responses API (`/v1/responses`) so the official `claude` CLI can talk to OpenAI-shaped endpoints.
-- **Experimental Codex** — Claudette uses the native `codex` CLI app-server (`codex app-server --listen stdio://`) and talks JSON-RPC to that process. This path supersedes the old `codex-subscription` gateway row when the **Experimental Codex** gate is enabled.
+- **Codex** — Claudette uses the native `codex` CLI app-server (`codex app-server --listen stdio://`) and talks JSON-RPC to that process. This path supersedes the old `codex-subscription` gateway row when the **Codex** gate is enabled.
 
 ## Prerequisites
 
 For the OpenAI API backend, make sure the [Alternative Claude Code backends experimental flag](/claudette/features/providers/#enabling-the-feature) is on.
 
-For native Codex, enable **Settings > Experimental > Experimental Codex**. Codex is independent from Alternative Claude Code backends: when the Codex flag is on, **Settings > Models** shows `experimental-codex` and the chat model picker includes the seeded Codex models immediately.
+For native Codex, enable **Settings > Experimental > Codex**. Codex is independent from Alternative Claude Code backends: when the Codex flag is on, **Settings > Models** shows Codex and the chat model picker includes the seeded Codex models immediately.
 
 ## OpenAI API
 
@@ -28,9 +28,9 @@ For users who specifically want `gpt-*` or OpenAI reasoning models, or who have 
 
 The OpenAI API provider appears in the chat header picker alongside Claude.
 
-## Experimental Codex
+## Codex
 
-Experimental Codex reuses the `codex` CLI's ChatGPT subscription auth instead of an API key. It is useful if you have a ChatGPT Plus / Pro / Team subscription that includes Codex access and want Claudette to drive Codex natively.
+Codex reuses the `codex` CLI's ChatGPT subscription auth instead of an API key. It is useful if you have a ChatGPT Plus / Pro / Team subscription that includes Codex access and want Claudette to drive Codex natively.
 
 ### Install the codex CLI
 
@@ -44,7 +44,7 @@ Confirm it is on `PATH`: `codex --version` should print a version.
 
 ### Sign in
 
-In **Settings > Models**, find `experimental-codex` and click **Run codex login**. Claudette runs `codex login` for you, which:
+In **Settings > Models**, find **Codex** and click **Run codex login**. Claudette runs `codex login` for you, which:
 
 1. Opens your browser to OpenAI's OAuth page.
 2. Has you sign in with your ChatGPT account.
@@ -54,8 +54,8 @@ You can also run `codex login` yourself in any terminal.
 
 ### Configure
 
-1. In **Settings > Experimental**, enable **Experimental Codex**.
-2. In **Settings > Models**, find `experimental-codex`.
+1. In **Settings > Experimental**, enable **Codex**.
+2. In **Settings > Models**, find **Codex**.
 3. Click **Test**. Claudette starts a short-lived `codex app-server`, calls `account/read`, and confirms the Codex CLI is authenticated.
 4. Click **Refresh models**. Claudette calls `model/list` on the native app-server and updates the picker with the models Codex exposes for your account.
 5. Set a default model if desired.
@@ -85,7 +85,7 @@ Native Codex currently does not expose Claude Remote Control, Claude MCP config 
 
 ## Legacy Codex Gateway
 
-The old `codex-subscription` backend routed ChatGPT subscription auth through Claudette's OpenAI Responses gateway. It is no longer user-facing in Settings; native `experimental-codex` is the Codex path.
+The old `codex-subscription` backend routed ChatGPT subscription auth through Claudette's OpenAI Responses gateway. It is no longer user-facing in Settings; native Codex is the Codex path.
 
 ## Custom OpenAI-shaped endpoints
 
@@ -95,7 +95,7 @@ The `CustomOpenAi` backend kind exists in the data model but is not yet exposed 
 
 **Test fails on OpenAI API** — the API key is invalid or rate-limited. Re-paste it; check the dashboard at `platform.openai.com/usage`.
 
-**Experimental Codex fails to start** — confirm `codex --version` works from the same shell environment and run `codex login` again.
+**Codex fails to start** — confirm `codex --version` works from the same shell environment and run `codex login` again.
 
 **Agent immediately errors with no model** — set a default model in **Settings > Models** for the selected backend.
 

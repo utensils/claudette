@@ -365,9 +365,9 @@
   "experimental_alternative_backends": "Alternative Claude Code backends",
   "experimental_alternative_backends_desc": "Expose Ollama, LM Studio, OpenAI API, and custom agent backends.",
   "experimental_alternative_backends_aria": "Alternative Claude Code backends",
-  "experimental_codex": "Experimental Codex",
+  "experimental_codex": "Codex",
   "experimental_codex_desc": "Enable native Codex CLI app-server support and show Codex models in the picker.",
-  "experimental_codex_aria": "Experimental Codex",
+  "experimental_codex_aria": "Codex",
 
   "plugins_title": "Plugins",
   "plugins_loading": "Loading…",

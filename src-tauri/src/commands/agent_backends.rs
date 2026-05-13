@@ -881,7 +881,7 @@ fn ensure_native_codex_enabled(db: &Database) -> Result<(), String> {
         Ok(())
     } else {
         Err(
-            "Experimental Codex is disabled. Enable Settings → Experimental → Experimental Codex to use native Codex."
+            "Codex is disabled. Enable Settings → Experimental → Codex to use native Codex."
                 .to_string(),
         )
     }
@@ -1393,13 +1393,12 @@ fn ensure_codex_native_authenticated(
     if account.authenticated {
         Ok(())
     } else if account.requires_openai_auth {
+        Err("Codex is not authenticated. Click Login for Codex or run `codex login`.".to_string())
+    } else {
         Err(
-            "Codex is not authenticated. Click Login for Experimental Codex or run `codex login`."
+            "Codex account status is unavailable. Click Login for Codex or run `codex login`."
                 .to_string(),
         )
-    } else {
-        Err("Codex account status is unavailable. Click Login for Experimental Codex or run `codex login`."
-            .to_string())
     }
 }
 
@@ -2989,7 +2988,7 @@ mod tests {
 
         let err = ensure_backend_allowed_by_gate(&db, &native)
             .expect_err("native codex should be blocked while gate is off");
-        assert!(err.contains("Experimental Codex is disabled"));
+        assert!(err.contains("Codex is disabled"));
 
         db.set_app_setting(NATIVE_CODEX_SETTING_KEY, "true")
             .expect("setting should save");
@@ -3189,7 +3188,7 @@ mod tests {
         let err = resolve_backend_request_defaults(&db, Some("experimental-codex"), None)
             .expect_err("native codex request should require the gate");
 
-        assert!(err.contains("Experimental Codex is disabled"));
+        assert!(err.contains("Codex is disabled"));
     }
 
     #[test]

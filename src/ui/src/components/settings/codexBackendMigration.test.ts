@@ -34,7 +34,7 @@ describe("planExperimentalBackendGateLoad", () => {
     expect(plan.experimentalCodexEnabled).toBe(false);
   });
 
-  it("loads Experimental Codex without enabling the alternative backend gate", () => {
+  it("loads Codex without enabling the alternative backend gate", () => {
     const plan = planExperimentalBackendGateLoad({
       alternativeBackendsCompiled: true,
       alternativeBackendsSetting: "false",
