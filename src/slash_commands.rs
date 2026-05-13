@@ -128,7 +128,7 @@ pub fn native_command_registry(plugin_management_enabled: bool) -> Vec<SlashComm
     });
     commands.push(SlashCommand {
         name: "login".to_string(),
-        description: "Start Claude Code sign-in".to_string(),
+        description: "Start sign-in for the active model provider".to_string(),
         source: "builtin".to_string(),
         aliases: Vec::new(),
         argument_hint: None,
@@ -1051,7 +1051,7 @@ mod tests {
 
         let login = commands.iter().find(|c| c.name == "login").unwrap();
         assert_eq!(login.source, "builtin");
-        assert_eq!(login.description, "Start Claude Code sign-in");
+        assert_eq!(login.description, "Start sign-in for the active model provider");
         assert_eq!(login.kind, Some(NativeKind::LocalAction));
     }
 

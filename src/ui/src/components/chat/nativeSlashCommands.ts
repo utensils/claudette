@@ -43,6 +43,7 @@ export interface NativeCommandContext {
   appVersion: string | null;
   addLocalMessage: (text: string) => void;
   startClaudeAuthLogin: () => Promise<void>;
+  startCodexLogin: () => Promise<void>;
   openUsageSettingsExternal: () => void;
   openReleaseNotes: () => void;
 
@@ -356,6 +357,12 @@ function formatCommandError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+function loginTargetForProvider(providerId: string): "claude" | "codex" {
+  return providerId === "experimental-codex" || providerId === "codex-subscription"
+    ? "codex"
+    : "claude";
+}
+
 const loginHandler: NativeHandler = {
   name: "login",
   aliases: [],
@@ -366,11 +373,19 @@ const loginHandler: NativeHandler = {
       ctx.addLocalMessage("/login: does not accept arguments. Usage: /login");
       return handled;
     }
+    const target = loginTargetForProvider(ctx.selectedModelProvider);
     try {
-      await ctx.startClaudeAuthLogin();
-      ctx.addLocalMessage(
-        "Claude Code sign-in opened. Complete the browser flow, then retry the turn.",
-      );
+      if (target === "codex") {
+        await ctx.startCodexLogin();
+        ctx.addLocalMessage(
+          "Codex sign-in opened. Complete the browser flow, then retry the turn.",
+        );
+      } else {
+        await ctx.startClaudeAuthLogin();
+        ctx.addLocalMessage(
+          "Claude Code sign-in opened. Complete the browser flow, then retry the turn.",
+        );
+      }
     } catch (error) {
       ctx.addLocalMessage(`/login failed: ${formatCommandError(error)}`);
     }

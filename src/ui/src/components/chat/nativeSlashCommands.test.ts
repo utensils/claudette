@@ -29,6 +29,7 @@ function makeCtx(overrides: Partial<NativeCommandContext> = {}): NativeCommandCo
     appVersion: "1.2.3",
     addLocalMessage: vi.fn<(text: string) => void>(),
     startClaudeAuthLogin: vi.fn(async () => {}),
+    startCodexLogin: vi.fn(async () => {}),
     openUsageSettingsExternal: vi.fn<() => void>(),
     openReleaseNotes: vi.fn<() => void>(),
     workspaceId: "ws-1",
@@ -600,6 +601,7 @@ describe("login native handler", () => {
     const result = await handler.execute(ctx, "");
     expect(result).toEqual({ kind: "handled", canonicalName: "login" });
     expect(ctx.startClaudeAuthLogin).toHaveBeenCalledTimes(1);
+    expect(ctx.startCodexLogin).not.toHaveBeenCalled();
     expect(ctx.addLocalMessage).toHaveBeenCalledWith(
       "Claude Code sign-in opened. Complete the browser flow, then retry the turn.",
     );
@@ -611,9 +613,30 @@ describe("login native handler", () => {
     const result = await handler.execute(ctx, "--sso");
     expect(result).toEqual({ kind: "handled", canonicalName: "login" });
     expect(ctx.startClaudeAuthLogin).not.toHaveBeenCalled();
+    expect(ctx.startCodexLogin).not.toHaveBeenCalled();
     expect(ctx.addLocalMessage).toHaveBeenCalledWith(
       "/login: does not accept arguments. Usage: /login",
     );
+  });
+
+  it("starts the Codex sign-in flow for native Codex models", async () => {
+    const ctx = makeCtx({ selectedModelProvider: "experimental-codex" });
+    const handler = resolveNativeHandler("login")!;
+    const result = await handler.execute(ctx, "");
+    expect(result).toEqual({ kind: "handled", canonicalName: "login" });
+    expect(ctx.startCodexLogin).toHaveBeenCalledTimes(1);
+    expect(ctx.startClaudeAuthLogin).not.toHaveBeenCalled();
+    expect(ctx.addLocalMessage).toHaveBeenCalledWith(
+      "Codex sign-in opened. Complete the browser flow, then retry the turn.",
+    );
+  });
+
+  it("starts the Codex sign-in flow for legacy Codex subscription models", async () => {
+    const ctx = makeCtx({ selectedModelProvider: "codex-subscription" });
+    const handler = resolveNativeHandler("login")!;
+    await handler.execute(ctx, "");
+    expect(ctx.startCodexLogin).toHaveBeenCalledTimes(1);
+    expect(ctx.startClaudeAuthLogin).not.toHaveBeenCalled();
   });
 
   it("surfaces login start failures as local messages", async () => {

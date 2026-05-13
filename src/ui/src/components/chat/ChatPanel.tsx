@@ -32,6 +32,7 @@ import {
   readPlanFile,
   loadDiffFiles,
   forkWorkspaceAtCheckpoint,
+  launchCodexLogin,
 } from "../../services/tauri";
 import { applySelectedModel } from "./applySelectedModel";
 import { findLatestPlanFilePath } from "./planFilePath";
@@ -1184,6 +1185,7 @@ export function ChatPanel() {
             appVersion,
             addLocalMessage,
             startClaudeAuthLogin: startChatClaudeAuthLogin,
+            startCodexLogin: launchCodexLogin,
             openUsageSettingsExternal: () => {
               void openUsageSettings().catch((err) =>
                 console.error("Failed to open usage settings:", err),

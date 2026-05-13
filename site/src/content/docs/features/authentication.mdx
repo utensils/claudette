@@ -19,16 +19,16 @@ If you sign in or out of Claude Code outside Claudette, Claudette picks it up au
 
 ## Signing in from inside Claudette
 
-The **Settings > General > Claude Code sign-in** row checks `claude auth status --json` with the same resolved Claude binary and sanitized subprocess environment used for agent runs, then triggers `claude auth login` from inside Claudette when you need to sign in again. You can also run `/login` in chat to start the same sign-in flow without opening settings, which is useful when you need to refresh credentials or switch Claude Code accounts. The row's refresh button performs a small authenticated Claude CLI validation request, so it can catch a revoked token that still exists locally. Chat auth failures route you to that row and carry the latest failure message with them, so a revoked token or 401 stays visible even if the CLI still has local credentials. Usage-panel credential failures reuse the same sign-in flow, so sign-in is available even when Usage Insights is disabled. There is no automatic workspace-creation login flow; if you create a workspace before signing in, the agent's first turn shows a credentials callout and you'll need to authenticate via **Settings > General**, `/login` in chat, or `claude auth login` in any terminal.
+The **Settings > General > Claude Code sign-in** row checks `claude auth status --json` with the same resolved Claude binary and sanitized subprocess environment used for agent runs, then triggers `claude auth login` from inside Claudette when you need to sign in again. You can also run `/login` in chat to start the sign-in flow for the active model provider without opening settings: Claude models open the same Claude Code browser/manual-code controls, while Codex models launch `codex login`. The row's refresh button performs a small authenticated Claude CLI validation request, so it can catch a revoked token that still exists locally. Chat auth failures route you to that row and carry the latest failure message with them, so a revoked token or 401 stays visible even if the CLI still has local credentials. Usage-panel credential failures reuse the same sign-in flow, so sign-in is available even when Usage Insights is disabled. There is no automatic workspace-creation login flow; if you create a workspace before signing in, the agent's first turn shows a credentials callout and you'll need to authenticate via **Settings > General**, `/login` in chat, or `claude auth login` in any terminal.
 
-When Claudette triggers the sign-in flow, the CLI:
+When Claudette triggers the Claude Code sign-in flow, the CLI:
 
 1. Starts a localhost HTTP listener.
 2. Opens your browser to the OAuth URL.
 3. Captures the authorization code via the local callback, or asks you to paste the browser code into Claudette when Claude Code prompts for manual entry.
 4. Writes the resulting credentials to the keychain (or `.credentials.json` on Linux).
 
-Two events stream from the Tauri backend to the panel while this runs:
+Two events stream from the Tauri backend to the Claude Code sign-in panel while this runs:
 
 - `auth://login-progress` — one entry per line of stdout/stderr from the CLI subprocess.
 - `auth://login-complete` — fired once when the process exits, indicating success or the error message.
