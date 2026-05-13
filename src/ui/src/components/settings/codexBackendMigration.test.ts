@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
+  DEFAULT_CLAUDE_BACKEND,
+  DEFAULT_CLAUDE_MODEL,
+} from "./alternativeBackendCleanup";
+import {
   LEGACY_CODEX_BACKEND,
   NATIVE_CODEX_BACKEND,
   planCodexBackendGateMigration,
@@ -66,13 +70,14 @@ describe("planCodexBackendGateMigration", () => {
     expect(plan).toEqual({
       fromBackend: LEGACY_CODEX_BACKEND,
       toBackend: NATIVE_CODEX_BACKEND,
+      toModel: null,
       defaultBackend: NATIVE_CODEX_BACKEND,
       resetDefault: true,
       sessionIds: ["sess-1", "sess-2"],
     });
   });
 
-  it("maps native Codex defaults and sessions back to legacy Codex when disabled", () => {
+  it("resets native Codex defaults and sessions to Claude when disabled", () => {
     const plan = planCodexBackendGateMigration({
       enableNative: false,
       defaultBackend: NATIVE_CODEX_BACKEND,
@@ -80,7 +85,9 @@ describe("planCodexBackendGateMigration", () => {
       selectedProviders: { "sess-2": NATIVE_CODEX_BACKEND },
     });
 
-    expect(plan.defaultBackend).toBe(LEGACY_CODEX_BACKEND);
+    expect(plan.toBackend).toBe(DEFAULT_CLAUDE_BACKEND);
+    expect(plan.toModel).toBe(DEFAULT_CLAUDE_MODEL);
+    expect(plan.defaultBackend).toBe(DEFAULT_CLAUDE_BACKEND);
     expect(plan.resetDefault).toBe(true);
     expect(plan.sessionIds).toEqual(["sess-1", "sess-2"]);
   });

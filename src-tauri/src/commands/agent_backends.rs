@@ -229,6 +229,7 @@ pub async fn save_agent_backend(
         return Err("The built-in Claude Code backend cannot be overwritten".to_string());
     }
     let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
+    ensure_backend_allowed_by_gate(&db, &backend)?;
     let mut backends = load_backend_configs(&db)?;
     if let Some(existing) = backends.iter_mut().find(|b| b.id == backend.id) {
         *existing = normalize_backend(backend);
@@ -279,11 +280,13 @@ pub async fn refresh_agent_backend_models(
     state: State<'_, AppState>,
 ) -> Result<Vec<AgentBackendConfig>, String> {
     let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
+    ensure_backend_id_allowed_by_gate(&db, &backend_id)?;
     let mut backends = load_backend_configs(&db)?;
     let idx = backends
         .iter()
         .position(|backend| backend.id == backend_id)
         .ok_or_else(|| format!("Unknown backend `{backend_id}`"))?;
+    ensure_backend_allowed_by_gate(&db, &backends[idx])?;
     let discovered = discover_models(&backends[idx]).await?;
     apply_discovered_models(&mut backends[idx], discovered);
     save_backend_configs(&db, &backends)?;
@@ -296,7 +299,9 @@ pub async fn test_agent_backend(
     state: State<'_, AppState>,
 ) -> Result<BackendStatus, String> {
     let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
+    ensure_backend_id_allowed_by_gate(&db, &backend_id)?;
     let backend = find_backend(&db, Some(&backend_id))?;
+    ensure_backend_allowed_by_gate(&db, &backend)?;
     let mut status = test_backend_connectivity(&backend).await?;
     if status.ok && backend.model_discovery {
         let mut backends = load_backend_configs(&db)?;
@@ -311,7 +316,9 @@ pub async fn test_agent_backend(
 }
 
 #[tauri::command]
-pub async fn launch_codex_login() -> Result<(), String> {
+pub async fn launch_codex_login(state: State<'_, AppState>) -> Result<(), String> {
+    let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
+    ensure_native_codex_enabled(&db)?;
     let mut child = tokio::process::Command::new("codex")
         .arg("login")
         .spawn()
@@ -335,6 +342,7 @@ pub async fn resolve_backend_runtime(
         .map_err(|e| e.to_string())?;
     let mut backend =
         select_backend_for_request(&backends, backend_id, model, default_backend_id.as_deref())?;
+    ensure_backend_allowed_by_gate(&db, &backend)?;
     if !alternative_backends_enabled && backend.kind != AgentBackendKind::CodexNative {
         return Ok(AgentBackendRuntime::default());
     }
@@ -484,6 +492,7 @@ pub fn resolve_backend_request_defaults(
     let alternative_backends_enabled = alternative_backends_enabled(db)?;
 
     if let Some(backend_id) = requested_backend.as_deref() {
+        ensure_backend_id_allowed_by_gate(db, backend_id)?;
         let backend_id = backend_request_alias(&backends, backend_id);
         let backend = backends
             .iter()
@@ -792,8 +801,7 @@ fn is_codex_gate_backend_id(id: &str) -> bool {
 }
 
 fn codex_backend_hidden_by_gate(native_codex_enabled: bool, id: &str) -> bool {
-    (native_codex_enabled && id == "codex-subscription")
-        || (!native_codex_enabled && id == "experimental-codex")
+    id == "codex-subscription" || (!native_codex_enabled && id == "experimental-codex")
 }
 
 /// Re-read the stored JSON and return hidden Codex-gate backends that this
@@ -850,24 +858,50 @@ fn save_backend_configs(db: &Database, backends: &[AgentBackendConfig]) -> Resul
 }
 
 fn default_backends_for_gate(native_codex_enabled: bool) -> Vec<AgentBackendConfig> {
-    let codex = if native_codex_enabled {
-        AgentBackendConfig::builtin_experimental_codex()
-    } else {
-        AgentBackendConfig::builtin_codex_subscription()
-    };
-    vec![
+    let mut backends = vec![
         AgentBackendConfig::builtin_anthropic(),
         AgentBackendConfig::builtin_ollama(),
         AgentBackendConfig::builtin_openai_api(),
-        codex,
         AgentBackendConfig::builtin_lm_studio(),
-    ]
+    ];
+    if native_codex_enabled {
+        backends.insert(3, AgentBackendConfig::builtin_experimental_codex());
+    }
+    backends
 }
 
 fn native_codex_enabled(db: &Database) -> Result<bool, String> {
     db.get_app_setting(NATIVE_CODEX_SETTING_KEY)
         .map_err(|e| e.to_string())
         .map(|value| value.as_deref() == Some("true"))
+}
+
+fn ensure_native_codex_enabled(db: &Database) -> Result<(), String> {
+    if native_codex_enabled(db)? {
+        Ok(())
+    } else {
+        Err(
+            "Experimental Codex is disabled. Enable Settings → Experimental → Experimental Codex to use native Codex."
+                .to_string(),
+        )
+    }
+}
+
+fn ensure_backend_id_allowed_by_gate(db: &Database, backend_id: &str) -> Result<(), String> {
+    if matches!(backend_id, "experimental-codex" | "codex-subscription") {
+        ensure_native_codex_enabled(db)?;
+    }
+    Ok(())
+}
+
+fn ensure_backend_allowed_by_gate(
+    db: &Database,
+    backend: &AgentBackendConfig,
+) -> Result<(), String> {
+    if backend.kind == AgentBackendKind::CodexNative || is_codex_gate_backend_id(&backend.id) {
+        ensure_native_codex_enabled(db)?;
+    }
+    Ok(())
 }
 
 fn alternative_backends_enabled(db: &Database) -> Result<bool, String> {
@@ -916,10 +950,6 @@ fn select_backend_for_request(
 fn backend_request_alias(backends: &[AgentBackendConfig], requested: &str) -> String {
     if requested == "codex-subscription" && backends.iter().any(|b| b.id == "experimental-codex") {
         "experimental-codex".to_string()
-    } else if requested == "experimental-codex"
-        && backends.iter().any(|b| b.id == "codex-subscription")
-    {
-        "codex-subscription".to_string()
     } else {
         requested.to_string()
     }
@@ -2953,6 +2983,20 @@ mod tests {
     }
 
     #[test]
+    fn native_codex_command_guard_requires_experimental_gate() {
+        let db = Database::open_in_memory().expect("test db should open");
+        let native = AgentBackendConfig::builtin_experimental_codex();
+
+        let err = ensure_backend_allowed_by_gate(&db, &native)
+            .expect_err("native codex should be blocked while gate is off");
+        assert!(err.contains("Experimental Codex is disabled"));
+
+        db.set_app_setting(NATIVE_CODEX_SETTING_KEY, "true")
+            .expect("setting should save");
+        ensure_backend_allowed_by_gate(&db, &native).expect("gate should allow native codex");
+    }
+
+    #[test]
     fn alternative_backends_can_still_be_disabled_without_experimental_codex() {
         let db = Database::open_in_memory().expect("test db should open");
         db.set_app_setting(ALTERNATIVE_BACKENDS_SETTING_KEY, "false")
@@ -3092,7 +3136,7 @@ mod tests {
         save_backend_configs(&db, &[native]).expect("native backend config should save");
 
         let loaded = load_backend_configs(&db).expect("backends should load");
-        assert!(loaded.iter().any(|b| b.id == "codex-subscription"));
+        assert!(!loaded.iter().any(|b| b.id == "codex-subscription"));
         assert!(!loaded.iter().any(|b| b.id == "experimental-codex"));
 
         save_backend_configs(&db, &loaded).expect("active backends should save");
@@ -3132,7 +3176,7 @@ mod tests {
     }
 
     #[test]
-    fn legacy_codex_gate_aliases_native_requests() {
+    fn disabled_codex_gate_rejects_native_requests_instead_of_aliasing_legacy() {
         let db = Database::open_in_memory().expect("test db should open");
         db.set_app_setting("alternative_backends_enabled", "true")
             .expect("setting should save");
@@ -3142,12 +3186,10 @@ mod tests {
         legacy.discovered_models = vec![model("gpt-5.3-codex")];
         save_backend_configs(&db, &[legacy]).expect("legacy backend config should save");
 
-        let (backend_id, resolved_model) =
-            resolve_backend_request_defaults(&db, Some("experimental-codex"), None)
-                .expect("native codex request should resolve");
+        let err = resolve_backend_request_defaults(&db, Some("experimental-codex"), None)
+            .expect_err("native codex request should require the gate");
 
-        assert_eq!(backend_id.as_deref(), Some("codex-subscription"));
-        assert_eq!(resolved_model.as_deref(), Some("gpt-5.3-codex"));
+        assert!(err.contains("Experimental Codex is disabled"));
     }
 
     #[test]
@@ -3591,25 +3633,25 @@ mod tests {
     }
 
     #[test]
-    fn backend_defaults_resolve_codex_default_model_for_empty_request() {
+    fn backend_defaults_resolve_openai_default_model_for_empty_request() {
         let db = Database::open_in_memory().expect("test db should open");
         db.set_app_setting("alternative_backends_enabled", "true")
             .expect("setting should save");
-        db.set_app_setting("default_agent_backend", "codex-subscription")
+        db.set_app_setting("default_agent_backend", "openai-api")
             .expect("setting should save");
         db.set_app_setting("default_model", "gpt-5.4")
             .expect("setting should save");
 
-        let mut codex = AgentBackendConfig::builtin_codex_subscription();
-        codex.enabled = true;
-        codex.default_model = Some("gpt-5.3-codex".to_string());
-        codex.discovered_models = vec![model("gpt-5.3-codex"), model("gpt-5.4")];
-        save_backend_configs(&db, &[codex]).expect("backend config should save");
+        let mut openai = AgentBackendConfig::builtin_openai_api();
+        openai.enabled = true;
+        openai.default_model = Some("gpt-5.3-codex".to_string());
+        openai.discovered_models = vec![model("gpt-5.3-codex"), model("gpt-5.4")];
+        save_backend_configs(&db, &[openai]).expect("backend config should save");
 
         let (backend_id, resolved_model) =
             resolve_backend_request_defaults(&db, None, None).expect("defaults should resolve");
 
-        assert_eq!(backend_id.as_deref(), Some("codex-subscription"));
+        assert_eq!(backend_id.as_deref(), Some("openai-api"));
         assert_eq!(resolved_model.as_deref(), Some("gpt-5.4"));
     }
 
@@ -3618,21 +3660,21 @@ mod tests {
         let db = Database::open_in_memory().expect("test db should open");
         db.set_app_setting("alternative_backends_enabled", "true")
             .expect("setting should save");
-        db.set_app_setting("default_agent_backend", "codex-subscription")
+        db.set_app_setting("default_agent_backend", "openai-api")
             .expect("setting should save");
         db.set_app_setting("default_model", "claude-opus-4-7")
             .expect("setting should save");
 
-        let mut codex = AgentBackendConfig::builtin_codex_subscription();
-        codex.enabled = true;
-        codex.default_model = Some("gpt-5.3-codex".to_string());
-        codex.discovered_models = vec![model("gpt-5.3-codex"), model("gpt-5.4")];
-        save_backend_configs(&db, &[codex]).expect("backend config should save");
+        let mut openai = AgentBackendConfig::builtin_openai_api();
+        openai.enabled = true;
+        openai.default_model = Some("gpt-5.3-codex".to_string());
+        openai.discovered_models = vec![model("gpt-5.3-codex"), model("gpt-5.4")];
+        save_backend_configs(&db, &[openai]).expect("backend config should save");
 
         let (backend_id, resolved_model) =
             resolve_backend_request_defaults(&db, None, None).expect("defaults should resolve");
 
-        assert_eq!(backend_id.as_deref(), Some("codex-subscription"));
+        assert_eq!(backend_id.as_deref(), Some("openai-api"));
         assert_eq!(resolved_model.as_deref(), Some("gpt-5.3-codex"));
     }
 

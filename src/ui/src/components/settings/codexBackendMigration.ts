@@ -1,3 +1,5 @@
+import { DEFAULT_CLAUDE_BACKEND, DEFAULT_CLAUDE_MODEL } from "./alternativeBackendCleanup";
+
 export const LEGACY_CODEX_BACKEND = "codex-subscription";
 export const NATIVE_CODEX_BACKEND = "experimental-codex";
 
@@ -13,6 +15,7 @@ export interface CodexBackendGateMigrationInput {
 export interface CodexBackendGateMigrationPlan {
   fromBackend: string;
   toBackend: string;
+  toModel: string | null;
   defaultBackend: string | null;
   resetDefault: boolean;
   sessionIds: string[];
@@ -58,7 +61,8 @@ export function planCodexBackendGateMigration({
   selectedProviders,
 }: CodexBackendGateMigrationInput): CodexBackendGateMigrationPlan {
   const fromBackend = enableNative ? LEGACY_CODEX_BACKEND : NATIVE_CODEX_BACKEND;
-  const toBackend = enableNative ? NATIVE_CODEX_BACKEND : LEGACY_CODEX_BACKEND;
+  const toBackend = enableNative ? NATIVE_CODEX_BACKEND : DEFAULT_CLAUDE_BACKEND;
+  const toModel = enableNative ? null : DEFAULT_CLAUDE_MODEL;
   const sessionIds = new Set<string>();
 
   for (const [key, value] of sessionProviders) {
@@ -72,6 +76,7 @@ export function planCodexBackendGateMigration({
   return {
     fromBackend,
     toBackend,
+    toModel,
     defaultBackend: defaultBackend === fromBackend ? toBackend : defaultBackend,
     resetDefault: defaultBackend === fromBackend,
     sessionIds: [...sessionIds].sort(),

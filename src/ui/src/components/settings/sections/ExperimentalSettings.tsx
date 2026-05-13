@@ -196,6 +196,9 @@ export function ExperimentalSettings() {
 
     if (plan.resetDefault && plan.defaultBackend) {
       await setAppSetting("default_agent_backend", plan.defaultBackend);
+      if (plan.toModel) {
+        await setAppSetting("default_model", plan.toModel);
+      }
       setDefaultAgentBackendId(plan.defaultBackend);
     }
 
@@ -207,9 +210,11 @@ export function ExperimentalSettings() {
     }
 
     for (const sessionId of plan.sessionIds) {
-      const model = persistedModels.get(sessionId) ?? store.selectedModel[sessionId];
+      const model =
+        plan.toModel ?? persistedModels.get(sessionId) ?? store.selectedModel[sessionId];
       if (model) {
         store.setSelectedModel(sessionId, model, plan.toBackend);
+        await setAppSetting(`model:${sessionId}`, model);
       } else {
         store.setSelectedModelProvider(sessionId, plan.toBackend);
       }

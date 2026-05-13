@@ -311,3 +311,14 @@
   - `git diff --check`
 - 2026-05-13: Ran the next Copilot pass after the rebased push. Valid finding addressed:
   - `site/src/content/docs/features/settings.mdx` now has a single authoritative **Experimental** settings table with the Experimental Codex row included.
+- 2026-05-13: Tightened the Codex feature gate after the branch audit:
+  - Native Codex command entry points (`codex login`, backend save/test/refresh, runtime resolution, and request-default resolution) now refuse Codex-native paths unless `experimental_codex_enabled` is on.
+  - The old `codex-subscription` backend is no longer seeded into active backend lists when Experimental Codex is off, so Alternative Claude Code backends cannot reveal or infer Codex through the legacy gateway path.
+  - Stored hidden native/legacy Codex backend JSON is still preserved on unrelated saves, but inactive Codex selections are reset to Claude defaults instead of aliasing back to the legacy subscription backend.
+  - Verified focused gate coverage with:
+    - `nix develop -c cargo test -p claudette-tauri agent_backends --all-features`
+    - `cd src/ui && bun run test -- codexBackendMigration alternativeBackendCleanup`
+    - `cd src/ui && bunx tsc -b`
+    - `cd src/ui && bun run lint` (warnings only; no errors)
+    - `nix develop -c cargo fmt --all --check`
+    - `git diff --check`
