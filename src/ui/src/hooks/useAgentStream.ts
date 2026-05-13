@@ -48,7 +48,27 @@ function isCodexApprovalTool(toolName: string): boolean {
 
 function stringField(input: Record<string, unknown>, key: string): string | null {
   const value = input[key];
-  return typeof value === "string" && value.trim() ? value : null;
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return trimmed ? trimmed : null;
+}
+
+function approvalDetailValue(value: unknown): string | null {
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    return trimmed ? trimmed : null;
+  }
+  if (Array.isArray(value) && value.every((item) => typeof item === "string")) {
+    const joined = value
+      .map((item) => item.trim())
+      .filter(Boolean)
+      .join(", ");
+    return joined || null;
+  }
+  if (value !== null && value !== undefined && typeof value !== "function") {
+    return JSON.stringify(value) ?? null;
+  }
+  return null;
 }
 
 function addDetail(
@@ -56,12 +76,8 @@ function addDetail(
   labelKey: AgentApprovalDetail["labelKey"],
   value: unknown,
 ) {
-  if (typeof value === "string" && value.trim()) {
-    details.push({ labelKey, value });
-  } else if (value !== null && value !== undefined && typeof value !== "function") {
-    const serialized = JSON.stringify(value);
-    if (serialized) details.push({ labelKey, value: serialized });
-  }
+  const formatted = approvalDetailValue(value);
+  if (formatted) details.push({ labelKey, value: formatted });
 }
 
 function parseCodexApproval(

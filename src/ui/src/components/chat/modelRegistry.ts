@@ -95,6 +95,10 @@ const PRIMARY_BACKEND_VERSION_BANDS = 2;
 
 function parseModelVersion(model: BackendRegistryModel): ParsedModelVersion | undefined {
   const text = `${model.id} ${model.label}`.toLowerCase();
+  // Heuristic for provider-supplied model ids, not a strict semantic-version
+  // parser. We intentionally keep variant suffixes inside the same prefix band
+  // so API-family lists (for example gpt-5.x plus codex/spark variants) do not
+  // promote every cosmetic suffix into the primary group.
   const match = text.match(/\b([a-z][a-z0-9]*)(?:[-\s]?)(\d+(?:[.-]\d+)*)([a-z0-9-]*)\b/);
   if (!match) return undefined;
   const versionParts = match[2]

@@ -3,8 +3,6 @@ import { useAppStore } from "../../stores/useAppStore";
 import {
   isEffortSupported,
   isFastSupported,
-  isMaxEffortAllowed,
-  isXhighEffortAllowed,
 } from "./modelCapabilities";
 import {
   buildModelRegistry,
@@ -65,11 +63,7 @@ export async function applySelectedModel(
   } else {
     const variant = reasoningVariantForModel(selectedEntry);
     const normalizedEffort = normalizeReasoningLevel(prevEffort, model, variant);
-    if (
-      normalizedEffort !== prevEffort ||
-      (variant === "claude" && normalizedEffort === "xhigh" && !isXhighEffortAllowed(model)) ||
-      (variant === "claude" && normalizedEffort === "max" && !isMaxEffortAllowed(model))
-    ) {
+    if (normalizedEffort !== prevEffort) {
       store.setEffortLevel(sessionId, normalizedEffort);
       await setAppSetting(`effort_level:${sessionId}`, normalizedEffort);
     }
