@@ -69,14 +69,18 @@ function parseCodexApproval(
 ): AgentApproval | null {
   const kind = stringField(input, "codexApprovalKind") as AgentApprovalKind | null;
   const details: AgentApproval["details"] = [];
+  const baseApproval = {
+    sessionId,
+    toolUseId,
+    supportsDenyReason: false,
+  };
 
   if (toolName === CODEX_COMMAND_APPROVAL_TOOL && kind === "commandExecution") {
     addDetail(details, "command", input.command);
     addDetail(details, "cwd", input.cwd);
     addDetail(details, "reason", input.reason);
     return {
-      sessionId,
-      toolUseId,
+      ...baseApproval,
       kind,
       details,
     };
@@ -86,8 +90,7 @@ function parseCodexApproval(
     addDetail(details, "path", input.path ?? input.filePath ?? input.grantRoot);
     addDetail(details, "reason", input.reason);
     return {
-      sessionId,
-      toolUseId,
+      ...baseApproval,
       kind,
       details,
     };
@@ -98,8 +101,7 @@ function parseCodexApproval(
     addDetail(details, "permissions", input.permissions);
     addDetail(details, "reason", input.reason);
     return {
-      sessionId,
-      toolUseId,
+      ...baseApproval,
       kind,
       details,
     };

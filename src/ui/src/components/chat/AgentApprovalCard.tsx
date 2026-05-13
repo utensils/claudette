@@ -11,10 +11,11 @@ interface AgentApprovalCardProps {
 export function AgentApprovalCard({ approval, onRespond }: AgentApprovalCardProps) {
   const { t } = useTranslation("chat");
   const [feedback, setFeedback] = useState("");
+  const supportsDenyReason = approval.supportsDenyReason ?? true;
   const title = t(`agent_approval_${approval.kind}_title`);
   const description = t(`agent_approval_${approval.kind}_description`);
   const deny = () => {
-    const reason = feedback.trim();
+    const reason = supportsDenyReason ? feedback.trim() : "";
     onRespond(false, reason || undefined);
   };
 
@@ -53,24 +54,30 @@ export function AgentApprovalCard({ approval, onRespond }: AgentApprovalCardProp
 
       <div className={styles.divider}>{t("agent_approval_or_deny")}</div>
 
-      <div className={styles.freeformRow}>
-        <textarea
-          className={styles.freeformInput}
-          value={feedback}
-          onChange={(e) => setFeedback(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" && !e.shiftKey) {
-              e.preventDefault();
-              deny();
-            }
-          }}
-          placeholder={t("agent_approval_feedback_placeholder")}
-          rows={1}
-        />
-        <button className={styles.feedbackBtn} onClick={deny}>
+      {supportsDenyReason ? (
+        <div className={styles.freeformRow}>
+          <textarea
+            className={styles.freeformInput}
+            value={feedback}
+            onChange={(e) => setFeedback(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
+                deny();
+              }
+            }}
+            placeholder={t("agent_approval_feedback_placeholder")}
+            rows={1}
+          />
+          <button className={styles.feedbackBtn} onClick={deny}>
+            {t("agent_approval_deny")}
+          </button>
+        </div>
+      ) : (
+        <button className={styles.denyBtn} onClick={deny}>
           {t("agent_approval_deny")}
         </button>
-      </div>
+      )}
     </div>
   );
 }

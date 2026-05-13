@@ -35,6 +35,7 @@ export interface AgentApproval {
   toolUseId: string;
   kind: AgentApprovalKind;
   details: AgentApprovalDetail[];
+  supportsDenyReason?: boolean;
 }
 
 /**

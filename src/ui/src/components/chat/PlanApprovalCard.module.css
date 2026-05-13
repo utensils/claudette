@@ -356,3 +356,22 @@
   opacity: 0.3;
   cursor: not-allowed;
 }
+
+.denyBtn {
+  display: block;
+  width: 100%;
+  padding: 10px 14px;
+  background: transparent;
+  border: 1px solid rgba(var(--accent-primary-rgb), 0.25);
+  border-radius: 8px;
+  color: var(--accent-dim);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background var(--transition-fast), color var(--transition-fast);
+}
+
+.denyBtn:hover {
+  background: rgba(var(--accent-primary-rgb), 0.08);
+  color: var(--accent-primary);
+}
