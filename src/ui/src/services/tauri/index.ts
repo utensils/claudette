@@ -4,6 +4,8 @@ export * from "./chat";
 export * from "./chatSessions";
 export * from "./checkpoints";
 export * from "./debug";
+export * from "./files";
+export * from "./diff";
 export * from "./fileMentions";
 export * from "./initialData";
 export * from "./metrics";
