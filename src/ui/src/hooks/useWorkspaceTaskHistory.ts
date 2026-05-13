@@ -53,6 +53,17 @@ function parseAgentToolCalls(value: string): AgentToolCall[] | undefined {
   }
 }
 
+function parseStringArray(value: string): string[] | undefined {
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed)
+      ? parsed.filter((item): item is string => typeof item === "string")
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 function turnFromData(data: CompletedTurnData): TaskActivityTurn {
   return {
     id: data.checkpoint_id,
@@ -70,6 +81,8 @@ function turnFromData(data: CompletedTurnData): TaskActivityTurn {
       agentToolUseCount: activity.agent_tool_use_count,
       agentStatus: activity.agent_status,
       agentToolCalls: parseAgentToolCalls(activity.agent_tool_calls_json),
+      agentThinkingBlocks: parseStringArray(activity.agent_thinking_blocks_json),
+      agentResultText: activity.agent_result_text,
     })),
   };
 }

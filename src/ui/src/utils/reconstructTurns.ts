@@ -92,6 +92,8 @@ export function reconstructCompletedTurns(
         agentToolUseCount: a.agent_tool_use_count,
         agentStatus: a.agent_status,
         agentToolCalls: parseAgentToolCalls(a.agent_tool_calls_json),
+        agentThinkingBlocks: parseStringArray(a.agent_thinking_blocks_json),
+        agentResultText: a.agent_result_text,
       })),
       messageCount: td.message_count,
       collapsed: true,
@@ -111,6 +113,18 @@ function parseAgentToolCalls(value: string | null | undefined) {
   try {
     const parsed = JSON.parse(value);
     return Array.isArray(parsed) ? parsed : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function parseStringArray(value: string | null | undefined) {
+  if (!value) return undefined;
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed)
+      ? parsed.filter((item): item is string => typeof item === "string")
+      : undefined;
   } catch {
     return undefined;
   }

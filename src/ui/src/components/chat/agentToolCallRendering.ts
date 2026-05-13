@@ -14,6 +14,22 @@ export function activityMatchesSearch(
   const normalizedQuery = query.toLowerCase();
   const summary = relativizePath(activitySummaryText(activity), worktreePath);
   if (summary.toLowerCase().includes(normalizedQuery)) return true;
+  const prompt = relativizePath(agentPromptText(activity), worktreePath);
+  if (prompt.toLowerCase().includes(normalizedQuery)) return true;
+  if (
+    (activity.agentResultText ?? activity.resultText)
+      .toLowerCase()
+      .includes(normalizedQuery)
+  ) {
+    return true;
+  }
+  if (
+    (activity.agentThinkingBlocks ?? []).some((block) =>
+      block.toLowerCase().includes(normalizedQuery),
+    )
+  ) {
+    return true;
+  }
   return (activity.agentToolCalls ?? []).some((call) =>
     relativizePath(agentToolCallSummary(call), worktreePath)
       .toLowerCase()
@@ -30,11 +46,33 @@ export function activitySummaryText(activity: ToolActivity): string {
   );
 }
 
+export function agentPromptText(activity: ToolActivity): string {
+  try {
+    const parsed = JSON.parse(activity.inputJson || "{}") as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return "";
+    }
+    const input = parsed as Record<string, unknown>;
+    return (
+      stringField(input.prompt) ||
+      stringField(input.description) ||
+      stringField(input.task) ||
+      ""
+    );
+  } catch {
+    return "";
+  }
+}
+
 export function agentToolCallSummary(call: AgentToolCall): string {
   const inputSummary = extractToolSummary(call.toolName, safeJson(call.input));
   if (inputSummary) return inputSummary;
   if (call.error) return call.error;
   return valuePreview(call.input ?? call.response);
+}
+
+function stringField(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
 function safeJson(value: unknown): string {

@@ -263,9 +263,10 @@ impl Database {
                     id, checkpoint_id, tool_use_id, tool_name, input_json,
                     result_text, summary, sort_order, assistant_message_ordinal,
                     agent_task_id, agent_description, agent_last_tool_name,
-                    agent_tool_use_count, agent_status, agent_tool_calls_json
+                    agent_tool_use_count, agent_status, agent_tool_calls_json,
+                    agent_thinking_blocks_json, agent_result_text
                  )
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
             )?;
             for a in activities {
                 stmt.execute(params![
@@ -284,6 +285,8 @@ impl Database {
                     a.agent_tool_use_count,
                     a.agent_status,
                     a.agent_tool_calls_json,
+                    a.agent_thinking_blocks_json,
+                    a.agent_result_text,
                 ])?;
             }
         }
@@ -321,9 +324,10 @@ impl Database {
                     id, checkpoint_id, tool_use_id, tool_name, input_json,
                     result_text, summary, sort_order, assistant_message_ordinal,
                     agent_task_id, agent_description, agent_last_tool_name,
-                    agent_tool_use_count, agent_status, agent_tool_calls_json
+                    agent_tool_use_count, agent_status, agent_tool_calls_json,
+                    agent_thinking_blocks_json, agent_result_text
                  )
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
             )?;
             for a in activities {
                 stmt.execute(params![
@@ -342,6 +346,8 @@ impl Database {
                     a.agent_tool_use_count,
                     a.agent_status,
                     a.agent_tool_calls_json,
+                    a.agent_thinking_blocks_json,
+                    a.agent_result_text,
                 ])?;
             }
         }
@@ -364,7 +370,8 @@ impl Database {
                     ta.input_json, ta.result_text, ta.summary, ta.sort_order,
                     ta.assistant_message_ordinal, ta.agent_task_id,
                     ta.agent_description, ta.agent_last_tool_name,
-                    ta.agent_tool_use_count, ta.agent_status, ta.agent_tool_calls_json
+                    ta.agent_tool_use_count, ta.agent_status, ta.agent_tool_calls_json,
+                    ta.agent_thinking_blocks_json, ta.agent_result_text
              FROM turn_tool_activities ta
              JOIN conversation_checkpoints cp ON ta.checkpoint_id = cp.id
              WHERE cp.workspace_id = ?1
@@ -388,6 +395,8 @@ impl Database {
                     agent_tool_use_count: row.get(12)?,
                     agent_status: row.get(13)?,
                     agent_tool_calls_json: row.get(14)?,
+                    agent_thinking_blocks_json: row.get(15)?,
+                    agent_result_text: row.get(16)?,
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;
@@ -468,7 +477,8 @@ impl Database {
                     ta.input_json, ta.result_text, ta.summary, ta.sort_order,
                     ta.assistant_message_ordinal, ta.agent_task_id,
                     ta.agent_description, ta.agent_last_tool_name,
-                    ta.agent_tool_use_count, ta.agent_status, ta.agent_tool_calls_json
+                    ta.agent_tool_use_count, ta.agent_status, ta.agent_tool_calls_json,
+                    ta.agent_thinking_blocks_json, ta.agent_result_text
              FROM turn_tool_activities ta
              JOIN conversation_checkpoints cp ON ta.checkpoint_id = cp.id
              WHERE cp.chat_session_id = ?1
@@ -492,6 +502,8 @@ impl Database {
                     agent_tool_use_count: row.get(12)?,
                     agent_status: row.get(13)?,
                     agent_tool_calls_json: row.get(14)?,
+                    agent_thinking_blocks_json: row.get(15)?,
+                    agent_result_text: row.get(16)?,
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;
@@ -574,6 +586,8 @@ mod tests {
             agent_tool_use_count: None,
             agent_status: None,
             agent_tool_calls_json: "[]".into(),
+            agent_thinking_blocks_json: "[]".into(),
+            agent_result_text: None,
         }
     }
 

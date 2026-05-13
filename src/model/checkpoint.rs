@@ -44,6 +44,14 @@ pub struct TurnToolActivity {
     pub agent_tool_use_count: Option<i32>,
     pub agent_status: Option<String>,
     pub agent_tool_calls_json: String,
+    #[serde(default = "empty_json_array")]
+    pub agent_thinking_blocks_json: String,
+    #[serde(default)]
+    pub agent_result_text: Option<String>,
+}
+
+fn empty_json_array() -> String {
+    "[]".to_string()
 }
 
 /// Grouped checkpoint + activities for loading completed turns.

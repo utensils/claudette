@@ -183,6 +183,42 @@ describe("AgentToolCallGroup", () => {
     expect(container.textContent).toContain("+3");
     expect(container.textContent).toContain("-2");
   });
+
+  it("renders an expanded Agent block as a nested mini-chat", async () => {
+    const container = await render(
+      <AgentToolCallGroup
+        activity={activity("Agent", {
+          inputJson: JSON.stringify({
+            description: "Audit UI",
+            prompt: "Check the toolbar state handling.",
+          }),
+          agentThinkingBlocks: ["Read the relevant toolbar code first."],
+          agentToolCalls: [
+            {
+              toolUseId: "nested-chat-1",
+              toolName: "Read",
+              agentId: "agent-1",
+              status: "completed",
+              startedAt: "2026-05-08T00:00:00Z",
+            },
+          ],
+          agentResultText: "The toolbar state handling is consistent.",
+        })}
+        searchQuery="relevant"
+        collapsed={false}
+        onToggle={() => {}}
+      />,
+    );
+
+    expect(container.textContent).toContain("Prompt");
+    expect(container.textContent).toContain("Check the toolbar state handling.");
+    expect(container.textContent).toContain("Thinking");
+    expect(container.textContent).toContain("Read the relevant toolbar code first.");
+    expect(container.textContent).toContain("Tool calls");
+    expect(container.textContent).toContain("Read");
+    expect(container.textContent).toContain("Result");
+    expect(container.textContent).toContain("The toolbar state handling is consistent.");
+  });
 });
 
 describe("ToolActivitiesSection", () => {
