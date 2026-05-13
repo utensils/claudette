@@ -65,6 +65,7 @@
   "tool_calls_in_progress": " 进行中",
   "share": "分享…",
   "workspace_actions_menu": "打开工作区...",
+  "workspace_actions_more": "更多",
   "workspace_actions_open_in": "在 {{app}} 中打开",
   "workspace_actions_no_apps": "未检测到工作区应用",
   "workspace_actions_copy_path": "复制路径",

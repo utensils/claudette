@@ -65,6 +65,7 @@
   "tool_calls_in_progress": " 進行中",
   "share": "共有…",
   "workspace_actions_menu": "ワークスペースを開く...",
+  "workspace_actions_more": "その他",
   "workspace_actions_open_in": "{{app}} で開く",
   "workspace_actions_no_apps": "ワークスペース用アプリが見つかりません",
   "workspace_actions_copy_path": "パスをコピー",

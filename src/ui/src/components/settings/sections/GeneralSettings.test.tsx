@@ -147,28 +147,9 @@ describe("GeneralSettings", () => {
     }
   });
 
-  it("renders the default terminal picker in General", async () => {
-    appStore.detectedApps = [
-      {
-        id: "ghostty",
-        name: "Ghostty",
-        category: "terminal",
-        detected_path: "/usr/bin/ghostty",
-      },
-    ];
-
+  it("renders the General section header", async () => {
     const container = await renderGeneralSettings();
-
     expect(container.textContent).toContain("general_title");
-    expect(container.textContent).toContain("workspace_apps_default_terminal");
-    expect(container.textContent).toContain(
-      "workspace_apps_default_terminal_desc",
-    );
-    expect(
-      container.querySelector(
-        'button[aria-label="workspace_apps_default_terminal"]',
-      ),
-    ).not.toBeNull();
   });
 
   it("checks Claude Code auth status in General", async () => {

@@ -36,6 +36,9 @@ function App() {
   const setWorkspaces = useAppStore((s) => s.setWorkspaces);
   const setWorktreeBaseDir = useAppStore((s) => s.setWorktreeBaseDir);
   const setDefaultTerminalAppId = useAppStore((s) => s.setDefaultTerminalAppId);
+  const setWorkspaceAppsMenuShown = useAppStore(
+    (s) => s.setWorkspaceAppsMenuShown,
+  );
   const setDefaultBranches = useAppStore((s) => s.setDefaultBranches);
   const setTerminalFontSize = useAppStore((s) => s.setTerminalFontSize);
   const setLastMessages = useAppStore((s) => s.setLastMessages);
@@ -299,6 +302,25 @@ function App() {
       .catch((err) => console.error("Failed to detect installed apps:", err));
     getAppSetting("default_terminal_app_id")
       .then((val) => setDefaultTerminalAppId(val && val.trim() ? val : null))
+      .catch(() => {});
+    getAppSetting("workspace_apps_menu")
+      .then((val) => {
+        if (!val) return;
+        try {
+          const parsed: unknown = JSON.parse(val);
+          const shown =
+            parsed && typeof parsed === "object" && "shown" in parsed
+              ? (parsed as { shown: unknown }).shown
+              : undefined;
+          if (Array.isArray(shown)) {
+            setWorkspaceAppsMenuShown(
+              shown.filter((x): x is string => typeof x === "string"),
+            );
+          }
+        } catch {
+          /* ignore malformed value — fall back to "show all" */
+        }
+      })
       .catch(() => {});
 
     listSystemFonts()

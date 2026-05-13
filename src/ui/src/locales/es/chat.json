@@ -65,6 +65,7 @@
   "tool_calls_in_progress": " en progreso",
   "share": "Compartir…",
   "workspace_actions_menu": "Abrir workspace en...",
+  "workspace_actions_more": "Más",
   "workspace_actions_open_in": "Abrir en {{app}}",
   "workspace_actions_no_apps": "No se detectaron apps para workspace",
   "workspace_actions_copy_path": "Copiar ruta",

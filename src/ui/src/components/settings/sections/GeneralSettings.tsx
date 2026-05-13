@@ -13,7 +13,6 @@ import {
 } from "../../../hooks/useAutoUpdater";
 import i18n, { isSupportedLanguage } from "../../../i18n";
 import { ClaudeCodeAuthSetting } from "../../auth/ClaudeCodeAuthSetting";
-import { DefaultTerminalSetting } from "./DefaultTerminalSetting";
 import styles from "../Settings.module.css";
 
 export function GeneralSettings() {
@@ -300,8 +299,6 @@ export function GeneralSettings() {
           </div>
         </div>
       </div>
-
-      <DefaultTerminalSetting />
 
       <div className={styles.settingRow}>
         <div className={styles.settingInfo}>

@@ -10,6 +10,9 @@ import styles from "./Settings.module.css";
 const GeneralSettings = lazy(() =>
   import("./sections/GeneralSettings").then((m) => ({ default: m.GeneralSettings })),
 );
+const AppsSettings = lazy(() =>
+  import("./sections/AppsSettings").then((m) => ({ default: m.AppsSettings })),
+);
 const ModelSettings = lazy(() =>
   import("./sections/ModelSettings").then((m) => ({ default: m.ModelSettings })),
 );
@@ -80,6 +83,7 @@ function SectionContent({ section }: { section: string | null }) {
     (s) => s.communityRegistryEnabled,
   );
   if (!section || section === "general") return <GeneralSettings />;
+  if (section === "apps") return <AppsSettings />;
   if (section === "models") return <ModelSettings />;
   if (section === "usage") return <UsageSettings />;
   if (section === "appearance") return <AppearanceSettings />;

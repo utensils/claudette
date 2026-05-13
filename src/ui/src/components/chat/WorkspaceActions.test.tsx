@@ -8,6 +8,7 @@ import type { DetectedApp } from "../../types/apps";
 const appStore = vi.hoisted(() => ({
   addToast: vi.fn(),
   detectedApps: [] as DetectedApp[],
+  workspaceAppsMenuShown: null as string[] | null,
 }));
 
 vi.mock("../../stores/useAppStore", () => ({
@@ -30,13 +31,21 @@ vi.mock("react-i18next", () => ({
   }),
 }));
 
-import { WorkspaceActions } from "./WorkspaceActions";
+import { WorkspaceActions, splitMenuApps } from "./WorkspaceActions";
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean })
   .IS_REACT_ACT_ENVIRONMENT = true;
 
 const mountedRoots: Root[] = [];
 const mountedContainers: HTMLElement[] = [];
+
+function app(
+  id: string,
+  name: string,
+  category: DetectedApp["category"],
+): DetectedApp {
+  return { id, name, category, detected_path: `/usr/bin/${id}` };
+}
 
 async function renderWorkspaceActions(): Promise<HTMLElement> {
   const container = document.createElement("div");
@@ -54,6 +63,7 @@ describe("WorkspaceActions", () => {
   beforeEach(() => {
     appStore.addToast.mockReset();
     appStore.detectedApps = [];
+    appStore.workspaceAppsMenuShown = null;
     document.body.innerHTML = "";
   });
 
@@ -109,5 +119,114 @@ describe("WorkspaceActions", () => {
     );
     expect(primaryButton?.querySelector("img")).toBeNull();
     expect(primaryButton?.querySelector("svg")).not.toBeNull();
+  });
+
+  it("shows no More row when the menu is uncurated", async () => {
+    appStore.detectedApps = [
+      app("vscode", "VS Code", "editor"),
+      app("zed", "Zed", "editor"),
+    ];
+
+    const container = await renderWorkspaceActions();
+    await act(async () => {
+      container
+        .querySelector('button[aria-label="workspace_actions_menu"]')
+        ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+
+    const labels = Array.from(
+      container.querySelectorAll('[role="menuitem"]'),
+    ).map((el) => el.textContent);
+    expect(labels).toContain("VS Code");
+    expect(labels).toContain("Zed");
+    expect(labels.some((l) => l?.includes("workspace_actions_more"))).toBe(
+      false,
+    );
+  });
+
+  it("surfaces hidden apps under the More flyout when curated", async () => {
+    appStore.detectedApps = [
+      app("vscode", "VS Code", "editor"),
+      app("zed", "Zed", "editor"),
+      app("ghostty", "Ghostty", "terminal"),
+    ];
+    appStore.workspaceAppsMenuShown = ["vscode"];
+
+    const container = await renderWorkspaceActions();
+    await act(async () => {
+      container
+        .querySelector('button[aria-label="workspace_actions_menu"]')
+        ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+
+    const more = Array.from(
+      container.querySelectorAll('[role="menuitem"]'),
+    ).find((el) =>
+      el.textContent?.includes("workspace_actions_more"),
+    ) as HTMLButtonElement | undefined;
+    expect(more).toBeTruthy();
+
+    // Flyout is closed until the More row is activated.
+    expect(container.textContent).not.toContain("Ghostty");
+    await act(async () => {
+      more?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+
+    const labels = Array.from(
+      container.querySelectorAll('[role="menuitem"]'),
+    ).map((el) => el.textContent);
+    // Hidden apps are now reachable; the curated app stays at the top level.
+    expect(labels).toContain("Ghostty");
+    expect(labels).toContain("Zed");
+    expect(labels).toContain("VS Code");
+  });
+});
+
+describe("splitMenuApps", () => {
+  const apps = [
+    app("vscode", "VS Code", "editor"),
+    app("zed", "Zed", "editor"),
+    app("finder", "Finder", "file_manager"),
+    app("ghostty", "Ghostty", "terminal"),
+  ];
+
+  it("shows everything in category order when uncurated", () => {
+    const { shown, more } = splitMenuApps(apps, null);
+    expect(shown.map((a) => a.id)).toEqual([
+      "vscode",
+      "zed",
+      "finder",
+      "ghostty",
+    ]);
+    expect(more).toEqual([]);
+  });
+
+  it("respects the curated order and folds the rest into More", () => {
+    const { shown, more } = splitMenuApps(apps, ["ghostty", "vscode"]);
+    expect(shown.map((a) => a.id)).toEqual(["ghostty", "vscode"]);
+    // "More" stays in category order regardless of the curated order.
+    expect(more.map((a) => a.id)).toEqual(["zed", "finder"]);
+  });
+
+  it("drops stale IDs and never duplicates", () => {
+    const { shown, more } = splitMenuApps(apps, [
+      "missing",
+      "zed",
+      "zed",
+      "ghostty",
+    ]);
+    expect(shown.map((a) => a.id)).toEqual(["zed", "ghostty"]);
+    expect(more.map((a) => a.id)).toEqual(["vscode", "finder"]);
+  });
+
+  it("allows an empty top level (everything under More)", () => {
+    const { shown, more } = splitMenuApps(apps, []);
+    expect(shown).toEqual([]);
+    expect(more.map((a) => a.id)).toEqual([
+      "vscode",
+      "zed",
+      "finder",
+      "ghostty",
+    ]);
   });
 });
