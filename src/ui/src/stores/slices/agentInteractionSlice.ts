@@ -71,6 +71,38 @@ function createQueuedMessageId(): string {
   return `queued-${Date.now()}-${queuedMessageFallbackCounter}`;
 }
 
+function syncSessionAttention(
+  state: AppState,
+  sessionId: string,
+  nextSources: {
+    agentQuestions?: Record<string, AgentQuestion>;
+    planApprovals?: Record<string, PlanApproval>;
+    agentApprovals?: Record<string, AgentApproval>;
+  },
+) {
+  const agentQuestions = nextSources.agentQuestions ?? state.agentQuestions;
+  const planApprovals = nextSources.planApprovals ?? state.planApprovals;
+  const agentApprovals = nextSources.agentApprovals ?? state.agentApprovals;
+  const hasPlan = Boolean(planApprovals[sessionId]);
+  const hasAsk = Boolean(agentQuestions[sessionId] || agentApprovals[sessionId]);
+  if (!hasPlan && !hasAsk) {
+    return clearSessionAttention(state.sessionsByWorkspace, sessionId);
+  }
+  for (const [wsId, sessions] of Object.entries(state.sessionsByWorkspace)) {
+    const idx = sessions.findIndex((session) => session.id === sessionId);
+    if (idx >= 0) {
+      const updated = [...sessions];
+      updated[idx] = {
+        ...updated[idx],
+        needs_attention: true,
+        attention_kind: hasPlan ? "Plan" : "Ask",
+      };
+      return { ...state.sessionsByWorkspace, [wsId]: updated };
+    }
+  }
+  return state.sessionsByWorkspace;
+}
+
 export interface AgentInteractionSlice {
   agentQuestions: Record<string, AgentQuestion>;
   setAgentQuestion: (q: AgentQuestion) => void;
@@ -122,10 +154,9 @@ export const createAgentInteractionSlice: StateCreator<
   clearAgentQuestion: (sessionId) =>
     set((s) => {
       const { [sessionId]: _, ...rest } = s.agentQuestions;
-      // Also clear the corresponding ChatSession attention flag so the tab
-      // icon + sidebar aggregate update immediately, without waiting for a
-      // list_chat_sessions refresh.
-      const nextSessions = clearSessionAttention(s.sessionsByWorkspace, sessionId);
+      const nextSessions = syncSessionAttention(s, sessionId, {
+        agentQuestions: rest,
+      });
       return { agentQuestions: rest, sessionsByWorkspace: nextSessions };
     }),
 
@@ -137,7 +168,9 @@ export const createAgentInteractionSlice: StateCreator<
   clearPlanApproval: (sessionId) =>
     set((s) => {
       const { [sessionId]: _, ...rest } = s.planApprovals;
-      const nextSessions = clearSessionAttention(s.sessionsByWorkspace, sessionId);
+      const nextSessions = syncSessionAttention(s, sessionId, {
+        planApprovals: rest,
+      });
       return { planApprovals: rest, sessionsByWorkspace: nextSessions };
     }),
 
@@ -149,7 +182,9 @@ export const createAgentInteractionSlice: StateCreator<
   clearAgentApproval: (sessionId) =>
     set((s) => {
       const { [sessionId]: _, ...rest } = s.agentApprovals;
-      const nextSessions = clearSessionAttention(s.sessionsByWorkspace, sessionId);
+      const nextSessions = syncSessionAttention(s, sessionId, {
+        agentApprovals: rest,
+      });
       return { agentApprovals: rest, sessionsByWorkspace: nextSessions };
     }),
 

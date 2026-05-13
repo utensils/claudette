@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { useAppStore } from "./useAppStore";
-import type { AgentQuestion } from "./useAppStore";
-import type { ChatMessage } from "../types/chat";
+import type { AgentApproval, AgentQuestion, PlanApproval } from "./useAppStore";
+import type { ChatMessage, ChatSession } from "../types/chat";
 import type { ConversationCheckpoint } from "../types/checkpoint";
 import type { Workspace } from "../types/workspace";
 import { applyPlanModeMountDefault } from "../components/chat/applyPlanModeMountDefault";
@@ -21,6 +21,24 @@ function makeQuestion(sessionId: string = WS_ID): AgentQuestion {
   };
 }
 
+function makePlanApproval(sessionId: string = WS_ID): PlanApproval {
+  return {
+    sessionId,
+    toolUseId: `${sessionId}-plan`,
+    planFilePath: null,
+    allowedPrompts: [],
+  };
+}
+
+function makeApproval(sessionId: string = WS_ID): AgentApproval {
+  return {
+    sessionId,
+    toolUseId: `${sessionId}-approval`,
+    kind: "fileChange",
+    details: [],
+  };
+}
+
 function addToolActivities(wsId: string = WS_ID) {
   useAppStore.setState({
     toolActivities: {
@@ -36,6 +54,29 @@ function addToolActivities(wsId: string = WS_ID) {
       ],
     },
   });
+}
+
+function makeChatSession(
+  sessionId: string = WS_ID,
+  overrides: Partial<ChatSession> = {},
+): ChatSession {
+  return {
+    id: sessionId,
+    workspace_id: "workspace-1",
+    session_id: null,
+    name: "Session",
+    name_edited: false,
+    turn_count: 0,
+    sort_order: 0,
+    status: "Active",
+    created_at: "2026-05-13T00:00:00Z",
+    archived_at: null,
+    cli_invocation: null,
+    agent_status: "Idle",
+    needs_attention: false,
+    attention_kind: null,
+    ...overrides,
+  };
 }
 
 describe("effortLevel (per-workspace)", () => {
@@ -460,6 +501,8 @@ describe("agentQuestion lifecycle (per-workspace)", () => {
     useAppStore.setState({
       agentQuestions: {},
       agentApprovals: {},
+      planApprovals: {},
+      sessionsByWorkspace: {},
       toolActivities: {},
       completedTurns: {},
       chatMessages: {},
@@ -524,17 +567,64 @@ describe("agentQuestion lifecycle (per-workspace)", () => {
   });
 
   it("clearAgentApproval removes approval for that session only", () => {
-    const makeApproval = (sessionId: string) => ({
-      sessionId,
-      toolUseId: `${sessionId}-approval`,
-      kind: "fileChange" as const,
-      details: [],
-    });
     useAppStore.getState().setAgentApproval(makeApproval(WS_ID));
     useAppStore.getState().setAgentApproval(makeApproval("other-ws"));
     useAppStore.getState().clearAgentApproval(WS_ID);
     expect(useAppStore.getState().agentApprovals[WS_ID]).toBeUndefined();
     expect(useAppStore.getState().agentApprovals["other-ws"]).toBeDefined();
+  });
+
+  it("clearAgentApproval preserves attention when another prompt remains", () => {
+    useAppStore.setState({
+      sessionsByWorkspace: {
+        "workspace-1": [
+          makeChatSession(WS_ID, { needs_attention: true, attention_kind: "Ask" }),
+        ],
+      },
+      agentQuestions: { [WS_ID]: makeQuestion(WS_ID) },
+      agentApprovals: { [WS_ID]: makeApproval(WS_ID) },
+    });
+
+    useAppStore.getState().clearAgentApproval(WS_ID);
+
+    const session = useAppStore.getState().sessionsByWorkspace["workspace-1"][0];
+    expect(session.needs_attention).toBe(true);
+    expect(session.attention_kind).toBe("Ask");
+  });
+
+  it("clearAgentQuestion keeps plan attention when a plan approval remains", () => {
+    useAppStore.setState({
+      sessionsByWorkspace: {
+        "workspace-1": [
+          makeChatSession(WS_ID, { needs_attention: true, attention_kind: "Ask" }),
+        ],
+      },
+      agentQuestions: { [WS_ID]: makeQuestion(WS_ID) },
+      planApprovals: { [WS_ID]: makePlanApproval(WS_ID) },
+    });
+
+    useAppStore.getState().clearAgentQuestion(WS_ID);
+
+    const session = useAppStore.getState().sessionsByWorkspace["workspace-1"][0];
+    expect(session.needs_attention).toBe(true);
+    expect(session.attention_kind).toBe("Plan");
+  });
+
+  it("clearPlanApproval clears attention when it removes the last prompt", () => {
+    useAppStore.setState({
+      sessionsByWorkspace: {
+        "workspace-1": [
+          makeChatSession(WS_ID, { needs_attention: true, attention_kind: "Plan" }),
+        ],
+      },
+      planApprovals: { [WS_ID]: makePlanApproval(WS_ID) },
+    });
+
+    useAppStore.getState().clearPlanApproval(WS_ID);
+
+    const session = useAppStore.getState().sessionsByWorkspace["workspace-1"][0];
+    expect(session.needs_attention).toBe(false);
+    expect(session.attention_kind).toBeNull();
   });
 });
 

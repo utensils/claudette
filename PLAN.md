@@ -301,3 +301,11 @@
 
 - Rebase with `origin/main`, commit, push, and run the regular Copilot review loop for the fast-mode/gate-separation fix.
 - After push, verify the dev app can select an `experimental-codex/*` model with **Experimental Codex** on and **Alternative Claude Code backends** off.
+- 2026-05-13: Ran the Copilot review loop after `79321da8`. Valid finding addressed:
+  - Clearing one pending prompt source now preserves tab/sidebar attention when another agent question, plan approval, or native Codex approval remains pending.
+  - The stale Alternative-backends default-on comment was declined because the corrected requirement is runtime default-off.
+- 2026-05-13: Verified the attention cleanup fix with:
+  - `cd src/ui && bun run test -- useAppStore`
+  - `cd src/ui && bunx tsc -b`
+  - `cd src/ui && bun run lint` (warnings only; no errors)
+  - `git diff --check`
