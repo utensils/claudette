@@ -29,6 +29,14 @@ export interface FilePathMatch {
   path: string;
 }
 
+export interface FilePathTarget {
+  path: string;
+  startLine?: number;
+  startColumn?: number;
+  endLine?: number;
+  endColumn?: number;
+}
+
 /**
  * The path body uses `[^\s<>"|*?]` rather than a stricter set so:
  *  - paths with spaces would still split on whitespace (we don't try to
@@ -238,8 +246,25 @@ export function isLikelyRelativeFileReference(value: string): boolean {
   return KNOWN_FILE_EXTENSIONS.has(ext);
 }
 
+export function parseFilePathTarget(path: string): FilePathTarget {
+  const match = path.match(/:(\d+)(?::(\d+))?(?:-(\d+)(?::(\d+))?)?$/);
+  if (!match) return { path };
+  const startLine = Number.parseInt(match[1], 10);
+  const startColumn = match[2] ? Number.parseInt(match[2], 10) : undefined;
+  const endLine = match[3] ? Number.parseInt(match[3], 10) : startLine;
+  const endColumn = match[4] ? Number.parseInt(match[4], 10) : undefined;
+  if (!Number.isFinite(startLine) || startLine < 1) return { path };
+  return {
+    path: path.slice(0, match.index),
+    startLine,
+    startColumn,
+    endLine,
+    endColumn,
+  };
+}
+
 export function stripFileLineSuffix(path: string): string {
-  return path.replace(/:\d+(?::\d+)?$/, "");
+  return parseFilePathTarget(path).path;
 }
 
 export function isLikelyFilePathTarget(value: string): boolean {
@@ -261,6 +286,11 @@ export function isLikelyFilePathTarget(value: string): boolean {
 }
 
 export function decodeLocalhostFileUrl(href: string): string | null {
+  const target = decodeLocalhostFileUrlTarget(href);
+  return target ? stripFileLineSuffix(target) : null;
+}
+
+export function decodeLocalhostFileUrlTarget(href: string): string | null {
   let parsed: URL;
   try {
     parsed = new URL(href);
@@ -284,9 +314,8 @@ export function decodeLocalhostFileUrl(href: string): string | null {
   } catch {
     pathname = parsed.pathname;
   }
-  const withoutLine = stripFileLineSuffix(pathname);
   const candidate =
-    /^\/[A-Za-z]:[\\/]/.test(withoutLine) ? withoutLine.slice(1) : withoutLine;
+    /^\/[A-Za-z]:[\\/]/.test(pathname) ? pathname.slice(1) : pathname;
   return isLikelyFilePathTarget(candidate) ? candidate : null;
 }
 

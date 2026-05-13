@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { monacoFileLinkPath } from "./chatFileLinks";
+import { monacoFileLinkPath, monacoFileLinkTarget } from "./chatFileLinks";
 
 describe("monacoFileLinkPath", () => {
   it("keeps workspace-relative files for Monaco", () => {
@@ -10,6 +10,18 @@ describe("monacoFileLinkPath", () => {
 
   it("relativizes absolute paths inside the worktree", () => {
     expect(monacoFileLinkPath("/repo/src/main.rs", "/repo")).toBe("src/main.rs");
+  });
+
+  it("preserves line and range targets separately from the file tab path", () => {
+    expect(monacoFileLinkTarget("/repo/src/main.rs:7:2-9:4", "/repo")).toEqual({
+      path: "src/main.rs",
+      revealTarget: {
+        startLine: 7,
+        startColumn: 2,
+        endLine: 9,
+        endColumn: 4,
+      },
+    });
   });
 
   it("rejects absolute and home-relative paths so native fallback can handle them", () => {

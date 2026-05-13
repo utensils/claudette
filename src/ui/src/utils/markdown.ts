@@ -19,8 +19,9 @@ import { MermaidBlock } from "../components/chat/MermaidBlock";
 import { StreamingContext } from "../components/chat/StreamingContext";
 import {
   decodeFilePathHref,
-  decodeLocalhostFileUrl,
+  decodeLocalhostFileUrlTarget,
   FILE_PATH_SCHEME,
+  parseFilePathTarget,
 } from "./filePathLinks";
 import { getCachedHighlight, highlightCode } from "./highlight";
 import { rehypeFilePathLinks } from "./rehypeFilePathLinks";
@@ -369,7 +370,7 @@ const MarkdownLink: NonNullable<Components["a"]> = ({
 }) => {
   const fileOpen = useContext(MarkdownFileOpenContext);
   const filePath = href
-    ? (decodeFilePathHref(href) ?? decodeLocalhostFileUrl(href))
+    ? (decodeFilePathHref(href) ?? decodeLocalhostFileUrlTarget(href))
     : null;
   const openFilePath = () => {
     if (!filePath) return;
@@ -381,11 +382,12 @@ const MarkdownLink: NonNullable<Components["a"]> = ({
         return;
       }
     }
-    if (!ABSOLUTE_FILE_PATH_REGEX.test(filePath)) {
+    const nativeTarget = parseFilePathTarget(filePath);
+    if (!ABSOLUTE_FILE_PATH_REGEX.test(nativeTarget.path)) {
       console.warn("No workspace file opener available for relative path:", filePath);
       return;
     }
-    void invoke("open_in_editor", { path: filePath }).catch(
+    void invoke("open_in_editor", { path: nativeTarget.path }).catch(
       (err) =>
         console.error("Failed to open path:", filePath, err),
     );

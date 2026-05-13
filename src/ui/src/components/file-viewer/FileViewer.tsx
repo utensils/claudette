@@ -74,6 +74,10 @@ interface FileViewerInnerProps {
 function FileViewerInner({ workspaceId, path, t }: FileViewerInnerProps) {
   const bufferKey = fileBufferKey(workspaceId, path);
   const bufferState = useAppStore((s) => s.fileBuffers[bufferKey]);
+  const revealTarget = useAppStore((s) => {
+    const target = s.fileRevealTargetByWorkspace[workspaceId];
+    return target?.path === path ? target : null;
+  });
   const setFileBufferLoaded = useAppStore((s) => s.setFileBufferLoaded);
   const setFileBufferLoadError = useAppStore((s) => s.setFileBufferLoadError);
   const setFileBufferContent = useAppStore((s) => s.setFileBufferContent);
@@ -504,6 +508,7 @@ function FileViewerInner({ workspaceId, path, t }: FileViewerInnerProps) {
               // `executeEdits` (preserves cursor + undo).
               value={bufferState.buffer}
               filename={path}
+              revealTarget={revealTarget}
               readOnly={editDisabled}
               onChange={handleBufferChange}
               onSave={handleSave}

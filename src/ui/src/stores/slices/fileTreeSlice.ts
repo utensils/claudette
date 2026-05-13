@@ -4,6 +4,15 @@ import type { UnifiedTabEntry } from "../../components/chat/sessionTabsLogic";
 
 export type FileViewerPreviewMode = "source" | "preview";
 
+export interface FileRevealTarget {
+  path: string;
+  startLine: number;
+  startColumn?: number;
+  endLine: number;
+  endColumn?: number;
+  nonce: number;
+}
+
 /** Per-tab buffer + UI state. Lives in the store keyed by `${wsId}:${path}`
  *  so that switching tabs preserves unsaved edits across the FileViewer's
  *  remounts. The tab strip drives selection; the FileViewer is just a view
@@ -160,6 +169,7 @@ export interface FileTreeSlice {
    *  active for that workspace; the workspace falls back to its diff or
    *  chat. */
   activeFileTabByWorkspace: Record<string, string | null>;
+  fileRevealTargetByWorkspace: Record<string, FileRevealTarget | null>;
 
   /** Per-`${wsId}:${path}` buffer + UI state for every open file tab. */
   fileBuffers: Record<string, FileBufferState>;
@@ -194,7 +204,11 @@ export interface FileTreeSlice {
    *  the new list. */
   setFileTabsForWorkspace: (workspaceId: string, paths: string[]) => void;
   /** Open a file tab and make it active. If already open, just selects it. */
-  openFileTab: (workspaceId: string, path: string) => void;
+  openFileTab: (
+    workspaceId: string,
+    path: string,
+    revealTarget?: Omit<FileRevealTarget, "path" | "nonce">,
+  ) => void;
   /** Switch to an already-open tab (no-op if not in the workspace's tabs). */
   selectFileTab: (workspaceId: string, path: string) => void;
   /** Close a tab. Caller is responsible for any "discard unsaved?" prompt;
@@ -317,6 +331,7 @@ export const createFileTreeSlice: StateCreator<AppState, [], [], FileTreeSlice> 
   requestCloseFileTabNonceByWorkspace: {},
   fileTabsByWorkspace: {},
   activeFileTabByWorkspace: {},
+  fileRevealTargetByWorkspace: {},
   fileBuffers: {},
   filePathUndoStackByWorkspace: {},
 
@@ -384,7 +399,7 @@ export const createFileTreeSlice: StateCreator<AppState, [], [], FileTreeSlice> 
       },
     })),
 
-  openFileTab: (workspaceId, path) =>
+  openFileTab: (workspaceId, path, revealTarget) =>
     set((s) => {
       const existing = s.fileTabsByWorkspace[workspaceId] ?? [];
       const alreadyOpen = existing.includes(path);
@@ -407,6 +422,17 @@ export const createFileTreeSlice: StateCreator<AppState, [], [], FileTreeSlice> 
           ...s.activeFileTabByWorkspace,
           [workspaceId]: path,
         },
+        fileRevealTargetByWorkspace: revealTarget
+          ? {
+              ...s.fileRevealTargetByWorkspace,
+              [workspaceId]: {
+                ...revealTarget,
+                path,
+                nonce:
+                  (s.fileRevealTargetByWorkspace[workspaceId]?.nonce ?? 0) + 1,
+              },
+            }
+          : s.fileRevealTargetByWorkspace,
         fileBuffers: nextBuffers,
       };
     }),

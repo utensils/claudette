@@ -57,7 +57,7 @@ import {
 } from "./toolActivityGroups";
 import { ChatAuthFailureCallout } from "../auth/ChatAuthFailureCallout";
 import { cleanClaudeAuthError, isClaudeAuthError } from "../auth/claudeAuth";
-import { monacoFileLinkPath } from "./chatFileLinks";
+import { monacoFileLinkTarget } from "./chatFileLinks";
 import {
   EMPTY_ACTIVITIES,
   EMPTY_ATTACHMENTS,
@@ -475,9 +475,9 @@ export const MessagesWithTurns = memo(function MessagesWithTurns({
   // passing a bad key into the file-tab store.
   const openFileInMonaco = useCallback(
     (filePath: string) => {
-      const rel = monacoFileLinkPath(filePath, worktreePath);
-      if (!rel) return false;
-      openFileTab(workspaceId, rel);
+      const target = monacoFileLinkTarget(filePath, worktreePath);
+      if (!target) return false;
+      openFileTab(workspaceId, target.path, target.revealTarget);
       return true;
     },
     [openFileTab, workspaceId, worktreePath],

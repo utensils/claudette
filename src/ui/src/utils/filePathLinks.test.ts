@@ -3,11 +3,13 @@ import { describe, it, expect } from "vitest";
 import {
   decodeFilePathHref,
   decodeLocalhostFileUrl,
+  decodeLocalhostFileUrlTarget,
   detectFileReferences,
   detectFilePaths,
   encodeFilePathHref,
   FILE_PATH_SCHEME,
   isLikelyRelativeFileReference,
+  parseFilePathTarget,
   stripFileLineSuffix,
 } from "./filePathLinks";
 
@@ -137,6 +139,11 @@ describe("localhost file URL decoding", () => {
         "http://localhost:14254/Users/jamesbrink/project/CLAUDETTE_TEST.md:1",
       ),
     ).toBe("/Users/jamesbrink/project/CLAUDETTE_TEST.md");
+    expect(
+      decodeLocalhostFileUrlTarget(
+        "http://localhost:14254/Users/jamesbrink/project/CLAUDETTE_TEST.md:1",
+      ),
+    ).toBe("/Users/jamesbrink/project/CLAUDETTE_TEST.md:1");
   });
 
   it("decodes loopback Windows paths", () => {
@@ -158,6 +165,23 @@ describe("localhost file URL decoding", () => {
   it("strips line and column suffixes from file targets", () => {
     expect(stripFileLineSuffix("/tmp/file.ts:10")).toBe("/tmp/file.ts");
     expect(stripFileLineSuffix("/tmp/file.ts:10:2")).toBe("/tmp/file.ts");
+  });
+
+  it("parses line and range suffixes into file targets", () => {
+    expect(parseFilePathTarget("src/main.ts:10")).toEqual({
+      path: "src/main.ts",
+      startLine: 10,
+      endLine: 10,
+      startColumn: undefined,
+      endColumn: undefined,
+    });
+    expect(parseFilePathTarget("src/main.ts:10:2-12:8")).toEqual({
+      path: "src/main.ts",
+      startLine: 10,
+      startColumn: 2,
+      endLine: 12,
+      endColumn: 8,
+    });
   });
 });
 

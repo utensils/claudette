@@ -365,6 +365,11 @@ describe("MessagesWithTurns edit summaries", () => {
     const state = useAppStore.getState();
     expect(state.fileTabsByWorkspace[WORKSPACE_ID]).toEqual(["CLAUDETTE_TEST.md"]);
     expect(state.activeFileTabByWorkspace[WORKSPACE_ID]).toBe("CLAUDETTE_TEST.md");
+    expect(state.fileRevealTargetByWorkspace[WORKSPACE_ID]).toMatchObject({
+      path: "CLAUDETTE_TEST.md",
+      startLine: 1,
+      endLine: 1,
+    });
   });
 
   it("renders Claude CLI slash-login failures as a sign-in callout", async () => {

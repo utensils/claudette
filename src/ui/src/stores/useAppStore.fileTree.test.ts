@@ -8,6 +8,7 @@ function reset() {
   useAppStore.setState({
     fileTabsByWorkspace: {},
     activeFileTabByWorkspace: {},
+    fileRevealTargetByWorkspace: {},
     fileBuffers: {},
     allFilesExpandedDirsByWorkspace: {},
     allFilesSelectedPathByWorkspace: {},
@@ -49,6 +50,27 @@ describe("file path store updates", () => {
     expect(state.tabOrderByWorkspace[WS]).toEqual([
       { kind: "file", path: "src/main.ts" },
     ]);
+  });
+
+  it("stores a one-shot reveal target when opening a file tab with a line range", () => {
+    useAppStore.getState().openFileTab(WS, "README.md", {
+      startLine: 4,
+      endLine: 8,
+      startColumn: 2,
+      endColumn: 5,
+    });
+
+    const state = useAppStore.getState();
+    expect(state.fileTabsByWorkspace[WS]).toEqual(["README.md"]);
+    expect(state.activeFileTabByWorkspace[WS]).toBe("README.md");
+    expect(state.fileRevealTargetByWorkspace[WS]).toEqual({
+      path: "README.md",
+      startLine: 4,
+      endLine: 8,
+      startColumn: 2,
+      endColumn: 5,
+      nonce: 1,
+    });
   });
 
   it("renames child file tabs when a folder is renamed", () => {

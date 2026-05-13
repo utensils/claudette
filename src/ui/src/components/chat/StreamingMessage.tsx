@@ -4,7 +4,7 @@ import { useTypewriter } from "../../hooks/useTypewriter";
 import { HighlightedMessageMarkdown } from "./HighlightedMessageMarkdown";
 import { StreamingContext } from "./StreamingContext";
 import { ScrollContext } from "./ScrollContext";
-import { monacoFileLinkPath } from "./chatFileLinks";
+import { monacoFileLinkTarget } from "./chatFileLinks";
 import styles from "./ChatPanel.module.css";
 import caretStyles from "./caret.module.css";
 
@@ -56,9 +56,9 @@ export const StreamingMessage = memo(function StreamingMessage({
 
   const openFileInMonaco = useCallback(
     (filePath: string) => {
-      const rel = monacoFileLinkPath(filePath, worktreePath);
-      if (!rel) return false;
-      openFileTab(workspaceId, rel);
+      const target = monacoFileLinkTarget(filePath, worktreePath);
+      if (!target) return false;
+      openFileTab(workspaceId, target.path, target.revealTarget);
       return true;
     },
     [openFileTab, workspaceId, worktreePath],

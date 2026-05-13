@@ -268,7 +268,7 @@ describe("MARKDOWN_COMPONENTS.a click handling", () => {
       new MouseEvent("click", { bubbles: true, cancelable: true }),
     );
 
-    expect(openFile).toHaveBeenCalledWith("/Users/me/project/CLAUDETTE_TEST.md");
+    expect(openFile).toHaveBeenCalledWith("/Users/me/project/CLAUDETTE_TEST.md:1");
   });
 
   it("opens scheme-less www links through open_url with an https URL", async () => {

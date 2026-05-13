@@ -5,6 +5,7 @@ import { applyMonacoTheme, initMonacoThemeSync } from "./monacoTheme";
 import { DEFAULT_MONO_STACK } from "../../styles/fonts";
 import { useAppStore } from "../../stores/useAppStore";
 import { executeCloseTab, executeNewTab } from "../../hotkeys/contextActions";
+import type { FileRevealTarget } from "../../stores/slices/fileTreeSlice";
 import {
   useGitGutter,
   type DecorationsCollection,
@@ -33,6 +34,8 @@ interface MonacoEditorProps {
   /** Read-only mode. Toggled at runtime via `updateOptions` so flipping
    *  view/edit doesn't lose cursor position or undo stack. */
   readOnly: boolean;
+  /** Optional one-shot reveal target from chat file links. */
+  revealTarget?: FileRevealTarget | null;
   /** Fired on every document change. The parent compares against the
    *  baseline to update the per-tab dirty flag. The `@monaco-editor/react`
    *  wrapper internally suppresses this callback while it's applying a
@@ -48,6 +51,7 @@ export const MonacoEditor = memo(function MonacoEditor({
   workspaceId,
   value,
   filename,
+  revealTarget,
   readOnly,
   onChange,
   onSave,
@@ -74,6 +78,7 @@ export const MonacoEditor = memo(function MonacoEditor({
   // `[]`-deps effect inside the hook would run *before* the lazy-loaded
   // editor mounts, so the collection has to be initialized here.
   const gutterCollectionRef = useRef<DecorationsCollection | null>(null);
+  const revealCollectionRef = useRef<DecorationsCollection | null>(null);
 
   // Mirror the editor's text into React state so the git-gutter hook can
   // recompute on every change. Seeded from `value`; user typing updates
@@ -106,10 +111,44 @@ export const MonacoEditor = memo(function MonacoEditor({
     () => () => {
       cleanupThemeSyncRef.current?.();
       gutterCollectionRef.current?.clear();
+      revealCollectionRef.current?.clear();
       gutterCollectionRef.current = null;
+      revealCollectionRef.current = null;
     },
     [],
   );
+
+  useEffect(() => {
+    const editor = editorRef.current;
+    const monacoInstance = monacoRef.current;
+    if (!editor || !monacoInstance || !revealTarget) return;
+    const model = editor.getModel();
+    const lineCount = model?.getLineCount() ?? revealTarget.startLine;
+    const startLine = clampLine(revealTarget.startLine, lineCount);
+    const endLine = clampLine(revealTarget.endLine, lineCount);
+    const rangeEndLine = Math.max(startLine, endLine);
+    const range = new monacoInstance.Range(
+      startLine,
+      revealTarget.startColumn ?? 1,
+      rangeEndLine,
+      revealTarget.endColumn ?? model?.getLineMaxColumn(rangeEndLine) ?? 1,
+    );
+    editor.setSelection(range);
+    editor.revealRangeInCenter(range);
+    revealCollectionRef.current?.set([
+      {
+        range,
+        options: {
+          isWholeLine: true,
+          className: "claudette-reveal-line",
+          overviewRuler: {
+            color: "rgba(255, 203, 107, 0.65)",
+            position: monacoInstance.editor.OverviewRulerLane.Center,
+          },
+        },
+      },
+    ]);
+  }, [revealTarget]);
 
   // Define the 'claudette' theme before the editor instance is created so
   // the theme prop resolves immediately and there's no flash of vs-dark.
@@ -126,6 +165,7 @@ export const MonacoEditor = memo(function MonacoEditor({
     // switches via `key={path}`, so a fresh collection is created per
     // file.
     gutterCollectionRef.current = editor.createDecorationsCollection();
+    revealCollectionRef.current = editor.createDecorationsCollection();
     // Start live theme sync: re-derives the Monaco theme whenever the
     // Claudette theme changes (data-theme attribute or inline CSS vars).
     cleanupThemeSyncRef.current = initMonacoThemeSync(monacoInstance);
@@ -207,3 +247,7 @@ export const MonacoEditor = memo(function MonacoEditor({
     </div>
   );
 });
+
+function clampLine(line: number, lineCount: number): number {
+  return Math.max(1, Math.min(line, Math.max(1, lineCount)));
+}
