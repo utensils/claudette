@@ -342,11 +342,37 @@ impl CodexAppServerSession {
     fn spawn_stdout_reader(&self, stdout: tokio::process::ChildStdout) {
         let event_tx = self.event_tx.clone();
         let pending = self.pending.clone();
+        let stdin = self.stdin.clone();
         let pid = self.pid;
         tokio::spawn(async move {
             let mut reader = tokio::io::BufReader::new(stdout);
-            while let Ok(Some(message)) = read_jsonrpc_message(&mut reader).await {
-                route_app_server_message(pid, &event_tx, &pending, message).await;
+            loop {
+                match read_jsonrpc_message(&mut reader).await {
+                    Ok(Some(message)) => {
+                        route_app_server_message(pid, &event_tx, &pending, stdin.as_ref(), message)
+                            .await;
+                    }
+                    Ok(None) => {
+                        fail_pending_requests(
+                            &pending,
+                            "Codex app-server stdout closed before responding",
+                        )
+                        .await;
+                        break;
+                    }
+                    Err(err) => {
+                        tracing::warn!(
+                            target: "claudette::agent",
+                            subsystem = "codex-app-server",
+                            pid,
+                            error = %err,
+                            "failed to read codex stdout"
+                        );
+                        let _ = event_tx.send(AgentEvent::Stderr(err.clone()));
+                        fail_pending_requests(&pending, &err).await;
+                        break;
+                    }
+                }
             }
         });
     }
@@ -391,8 +417,10 @@ impl CodexAppServerSession {
 
     fn spawn_exit_watcher(&self, mut child: tokio::process::Child) {
         let event_tx = self.event_tx.clone();
+        let pending = self.pending.clone();
         tokio::spawn(async move {
             let status = child.wait().await.ok().and_then(|status| status.code());
+            fail_pending_requests(&pending, "Codex app-server process exited").await;
             let _ = event_tx.send(AgentEvent::ProcessExited(status));
         });
     }
@@ -402,6 +430,7 @@ async fn route_app_server_message(
     pid: u32,
     event_tx: &broadcast::Sender<AgentEvent>,
     pending: &PendingRequests,
+    stdin: Option<&CodexStdin>,
     message: JsonRpcMessage,
 ) {
     match message {
@@ -463,18 +492,56 @@ async fn route_app_server_message(
             }
         }
         JsonRpcMessage::Request(request) => {
+            let method = request.method.clone();
+            if let Some(stdin) = stdin {
+                let error = JsonRpcMessage::Error(JsonRpcError {
+                    id: Some(request.id),
+                    error: JsonRpcErrorBody {
+                        code: -32601,
+                        message: format!("Codex app-server request `{method}` is not implemented"),
+                        data: None,
+                    },
+                });
+                let mut stdin = stdin.lock().await;
+                if let Err(err) = write_jsonrpc_message(&mut *stdin, &error).await {
+                    tracing::warn!(
+                        target: "claudette::agent",
+                        subsystem = "codex-app-server",
+                        pid,
+                        error = %err,
+                        "failed to write codex server-request error response"
+                    );
+                }
+            }
             tracing::warn!(
                 target: "claudette::agent",
                 subsystem = "codex-app-server",
                 pid,
-                method = %request.method,
+                method = %method,
                 "codex app-server request handling is not wired yet"
             );
             let _ = event_tx.send(AgentEvent::Stderr(format!(
                 "Codex app-server request `{}` is not handled yet.",
-                request.method
+                method
             )));
         }
+    }
+}
+
+async fn fail_pending_requests(pending: &PendingRequests, reason: &str) {
+    let drained = {
+        let mut pending = pending.lock().await;
+        std::mem::take(&mut *pending)
+    };
+    for (id, request) in drained {
+        let _ = request.tx.send(Err(JsonRpcError {
+            id: Some(id),
+            error: JsonRpcErrorBody {
+                code: -32000,
+                message: reason.to_string(),
+                data: Some(json!({ "method": request.method })),
+            },
+        }));
     }
 }
 
@@ -1617,6 +1684,7 @@ mod tests {
             1,
             &event_tx,
             &pending,
+            None,
             JsonRpcMessage::Response(JsonRpcResponse {
                 id: Some(JsonRpcId::Integer(11)),
                 result: json!({"turn":{"id":"turn-1"}}),
@@ -1641,6 +1709,7 @@ mod tests {
             1,
             &event_tx,
             &pending,
+            None,
             JsonRpcMessage::Notification(JsonRpcNotification {
                 method: "item/agentMessage/delta".to_string(),
                 params: Some(json!({
@@ -1665,5 +1734,51 @@ mod tests {
             panic!("expected text delta");
         };
         assert_eq!(text, "hello");
+    }
+
+    #[tokio::test]
+    async fn app_server_router_surfaces_unhandled_server_request() {
+        let pending: PendingRequests = Arc::new(tokio::sync::Mutex::new(BTreeMap::new()));
+        let (event_tx, mut rx) = broadcast::channel(8);
+
+        route_app_server_message(
+            1,
+            &event_tx,
+            &pending,
+            None,
+            JsonRpcMessage::Request(JsonRpcRequest {
+                id: JsonRpcId::String("req-1".to_string()),
+                method: "item/commandExecution/requestApproval".to_string(),
+                params: None,
+            }),
+        )
+        .await;
+
+        let AgentEvent::Stderr(line) = rx.recv().await.expect("stderr event") else {
+            panic!("expected stderr event");
+        };
+        assert!(line.contains("request `item/commandExecution/requestApproval`"));
+    }
+
+    #[tokio::test]
+    async fn fail_pending_requests_resolves_all_waiters() {
+        let (tx, rx) = oneshot::channel();
+        let pending: PendingRequests = Arc::new(tokio::sync::Mutex::new(BTreeMap::from([(
+            JsonRpcId::Integer(99),
+            PendingCodexRequest {
+                method: "initialize".to_string(),
+                tx,
+            },
+        )])));
+
+        fail_pending_requests(&pending, "gone").await;
+
+        let error = rx
+            .await
+            .expect("waiter resolved")
+            .expect_err("waiter failed");
+        assert_eq!(error.id, Some(JsonRpcId::Integer(99)));
+        assert_eq!(error.error.message, "gone");
+        assert!(pending.lock().await.is_empty());
     }
 }

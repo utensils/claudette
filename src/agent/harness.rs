@@ -44,10 +44,10 @@ impl AgentHarnessCapabilities {
         Self {
             persistent_sessions: true,
             steer_turn: true,
-            host_permission_prompts: true,
+            host_permission_prompts: false,
             remote_control: false,
-            mcp_config: true,
-            attachments: true,
+            mcp_config: false,
+            attachments: false,
         }
     }
 }
@@ -235,10 +235,10 @@ mod tests {
             AgentHarnessCapabilities {
                 persistent_sessions: true,
                 steer_turn: true,
-                host_permission_prompts: true,
+                host_permission_prompts: false,
                 remote_control: false,
-                mcp_config: true,
-                attachments: true,
+                mcp_config: false,
+                attachments: false,
             }
         );
     }

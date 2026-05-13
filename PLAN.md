@@ -121,6 +121,15 @@
   - `nix develop -c cargo test -p claudette agent::codex_app_server --all-features`
   - `nix develop -c cargo test -p claudette agent::harness --all-features`
   - `nix develop -c cargo fmt --all`
+- 2026-05-13: Committed and pushed interrupt scaffolding as `437519a8` (`feat: add codex app-server interrupt hook`).
+- 2026-05-13: Ran another Copilot review pass on PR #786. Valid findings addressed:
+  - stdout parse/IO termination and process exit now drain pending Codex requests so waiters do not hang.
+  - unimplemented app-server server-to-client requests now receive a JSON-RPC method-not-found response when stdin is available.
+  - Codex capabilities now advertise only currently wired features (`persistent_sessions` and `steer_turn`; prompts, MCP config, attachments remain false).
+- 2026-05-13: Verified Copilot follow-up fixes with:
+  - `nix develop -c cargo test -p claudette agent::codex_app_server --all-features`
+  - `nix develop -c cargo test -p claudette agent::harness --all-features`
+  - `nix develop -c cargo fmt --all`
 
 ## Next Stage
 
