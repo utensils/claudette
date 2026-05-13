@@ -15,6 +15,7 @@ use super::now_iso;
 /// and the session id to mark ended in the DB.
 type StopSnapshot = (
     Option<(Arc<AgentSession>, Vec<PendingPermission>)>,
+    Option<Arc<AgentSession>>,
     Option<u32>,
     Option<String>,
 );
@@ -32,13 +33,14 @@ type StopSnapshot = (
 /// `--resume <session_id>`.
 fn take_stop_snapshot(session: &mut AgentSessionState) -> StopSnapshot {
     let drained = drain_pending_permissions(session);
+    let interrupt_session = session.persistent_session.clone();
     let ended_sid = Some(session.session_id.clone());
     let pid = session.active_pid.take();
     // Stop interrupts the cycle outright — make sure a future prompt on the
     // same session can still fire its notification (full reset, not just
     // `needs_attention=false`).
     session.reset_attention();
-    (drained, pid, ended_sid)
+    (drained, interrupt_session, pid, ended_sid)
 }
 
 #[tauri::command]
@@ -63,18 +65,29 @@ pub async fn stop_agent(
     // Drain pending permissions and snapshot the cleanup state synchronously
     // under the lock; deny sends, the kill, and the DB session-end happen
     // after we release it.
-    let (to_deny_stop, pid_to_kill, ended_sid) = {
+    let (to_deny_stop, interrupt_session, pid_to_kill, ended_sid) = {
         let mut agents = state.agents.write().await;
         match agents.get_mut(&chat_session_id) {
             Some(session) => take_stop_snapshot(session),
-            None => (None, None, None),
+            None => (None, None, None, None),
         }
     };
 
     if let Some((ref ps, drained)) = to_deny_stop {
         deny_drained_permissions(drained, ps, "Session stopped by user.").await;
     }
-    if let Some(pid) = pid_to_kill {
+    if let Some(ps) = interrupt_session {
+        if let Err(err) = ps.interrupt_turn().await {
+            tracing::warn!(
+                target: "claudette::chat",
+                error = %err,
+                "agent protocol interrupt failed; falling back to process kill"
+            );
+            if let Some(pid) = pid_to_kill {
+                agent::stop_agent(pid).await?;
+            }
+        }
+    } else if let Some(pid) = pid_to_kill {
         agent::stop_agent(pid).await?;
     }
 
@@ -160,7 +173,9 @@ pub async fn reset_agent_session(
 mod tests {
     use super::take_stop_snapshot;
     use crate::state::AgentSessionState;
+    use claudette::agent::{AgentHarnessKind, AgentSession, CodexAppServerSession};
     use std::collections::HashMap;
+    use std::sync::Arc;
 
     fn fresh_session(session_id: &str, turn_count: u32, pid: Option<u32>) -> AgentSessionState {
         AgentSessionState {
@@ -201,10 +216,11 @@ mod tests {
         // can spawn the CLI with --resume <session_id>.
         let mut session = fresh_session("sess-abc", 7, Some(12345));
 
-        let (drained, pid, ended_sid) = take_stop_snapshot(&mut session);
+        let (drained, interrupt_session, pid, ended_sid) = take_stop_snapshot(&mut session);
 
         // Caller receives the pid to kill and the sid to log.
         assert!(drained.is_none(), "no pending permissions to drain");
+        assert!(interrupt_session.is_none());
         assert_eq!(pid, Some(12345));
         assert_eq!(ended_sid.as_deref(), Some("sess-abc"));
 
@@ -222,12 +238,32 @@ mod tests {
         // A double-stop (e.g. user clicks Stop twice) must not corrupt state.
         let mut session = fresh_session("sess-abc", 7, None);
 
-        let (_, pid, ended_sid) = take_stop_snapshot(&mut session);
+        let (_, interrupt_session, pid, ended_sid) = take_stop_snapshot(&mut session);
 
+        assert!(interrupt_session.is_none());
         assert!(pid.is_none());
         assert_eq!(ended_sid.as_deref(), Some("sess-abc"));
         assert_eq!(session.session_id, "sess-abc");
         assert_eq!(session.turn_count, 7);
+    }
+
+    #[test]
+    fn take_stop_snapshot_preserves_persistent_session_for_protocol_interrupt() {
+        let mut session = fresh_session("sess-codex", 2, Some(4321));
+        session.persistent_session = Some(Arc::new(AgentSession::from_codex_app_server(
+            CodexAppServerSession::new_for_test(4321),
+        )));
+
+        let (_, interrupt_session, pid, _) = take_stop_snapshot(&mut session);
+
+        assert_eq!(pid, Some(4321));
+        assert_eq!(
+            interrupt_session
+                .expect("interrupt session should be captured")
+                .kind(),
+            AgentHarnessKind::CodexAppServer
+        );
+        assert!(session.persistent_session.is_some());
     }
 
     #[test]

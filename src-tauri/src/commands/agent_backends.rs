@@ -13,6 +13,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{Notify, RwLock};
 
+use claudette::agent::{CodexAppServerOptions, CodexAppServerSession, stop_agent_graceful};
 use claudette::agent_backend::{
     AgentBackendConfig, AgentBackendKind, AgentBackendModel, AgentBackendRuntime,
     AgentBackendRuntimeHarness,
@@ -961,9 +962,6 @@ fn normalize_backend(mut backend: AgentBackendConfig) -> AgentBackendConfig {
     ) {
         backend.model_discovery = true;
     }
-    if backend.kind == AgentBackendKind::CodexNative {
-        backend.model_discovery = false;
-    }
     for model in backend
         .manual_models
         .iter_mut()
@@ -1055,7 +1053,7 @@ async fn discover_models(backend: &AgentBackendConfig) -> Result<Vec<AgentBacken
         }
         AgentBackendKind::OpenAiApi => discover_openai_api_models(backend).await,
         AgentBackendKind::CodexSubscription => discover_codex_models().await,
-        AgentBackendKind::CodexNative => Ok(backend.manual_models.clone()),
+        AgentBackendKind::CodexNative => discover_codex_native_models(backend).await,
         AgentBackendKind::LmStudio => discover_lm_studio_models(backend).await,
         _ => Ok(backend.manual_models.clone()),
     }
@@ -1075,10 +1073,7 @@ async fn test_backend_connectivity(backend: &AgentBackendConfig) -> Result<Backe
                 format!("{status}. Found {} model(s).", models.len()),
             ))
         }
-        AgentBackendKind::CodexNative => Ok(BackendStatus::new(
-            true,
-            "Experimental Codex will use the native Codex CLI app-server",
-        )),
+        AgentBackendKind::CodexNative => test_codex_native_connectivity(backend).await,
         AgentBackendKind::OpenAiApi => discover_openai_api_models(backend).await.map(|models| {
             BackendStatus::new(
                 true,
@@ -1089,6 +1084,33 @@ async fn test_backend_connectivity(backend: &AgentBackendConfig) -> Result<Backe
             BackendStatus::new(true, format!("Connected. Found {} model(s).", models.len()))
         }),
     }
+}
+
+async fn test_codex_native_connectivity(
+    backend: &AgentBackendConfig,
+) -> Result<BackendStatus, String> {
+    let session = start_codex_native_control_session().await?;
+    let pid = session.pid();
+    let result = async {
+        let account = session.read_account(true).await?;
+        ensure_codex_native_authenticated(&account)?;
+        let models = codex_native_models_from_app_server(backend, session.list_models().await?);
+        let account_label = account
+            .email
+            .as_deref()
+            .or(account.account_type.as_deref())
+            .unwrap_or("Codex");
+        Ok(BackendStatus::new(
+            true,
+            format!(
+                "Codex app-server authenticated as {account_label}. Found {} model(s).",
+                models.len()
+            ),
+        ))
+    }
+    .await;
+    let _ = stop_agent_graceful(pid).await;
+    result
 }
 
 async fn discover_openai_api_models(
@@ -1273,6 +1295,95 @@ async fn discover_codex_models() -> Result<Vec<AgentBackendModel>, String> {
             })
         })
         .collect())
+}
+
+async fn discover_codex_native_models(
+    backend: &AgentBackendConfig,
+) -> Result<Vec<AgentBackendModel>, String> {
+    let session = start_codex_native_control_session().await?;
+    let pid = session.pid();
+    let result = async {
+        let account = session.read_account(false).await?;
+        ensure_codex_native_authenticated(&account)?;
+        Ok(codex_native_models_from_app_server(
+            backend,
+            session.list_models().await?,
+        ))
+    }
+    .await;
+    let _ = stop_agent_graceful(pid).await;
+    result
+}
+
+fn codex_native_models_from_app_server(
+    backend: &AgentBackendConfig,
+    models: Vec<claudette::agent::codex_app_server::CodexAppServerModel>,
+) -> Vec<AgentBackendModel> {
+    let mut seen = HashSet::new();
+    let mut converted: Vec<_> = models
+        .into_iter()
+        .filter(|model| !model.hidden)
+        .filter(|model| seen.insert(model.id.clone()))
+        .map(|model| {
+            (
+                AgentBackendModel {
+                    id: model.id,
+                    label: model.label,
+                    context_window_tokens: backend.context_window_default,
+                    discovered: true,
+                },
+                model.is_default,
+            )
+        })
+        .collect();
+    converted.sort_by(|a, b| {
+        let a_default = models_backend_default_rank(backend, &a.0.id, a.1);
+        let b_default = models_backend_default_rank(backend, &b.0.id, b.1);
+        a_default.cmp(&b_default).then_with(|| a.0.id.cmp(&b.0.id))
+    });
+    converted.into_iter().map(|(model, _)| model).collect()
+}
+
+fn models_backend_default_rank(
+    backend: &AgentBackendConfig,
+    model_id: &str,
+    is_default: bool,
+) -> u8 {
+    if backend.default_model.as_deref() == Some(model_id) || is_default {
+        0
+    } else {
+        1
+    }
+}
+
+fn ensure_codex_native_authenticated(
+    account: &claudette::agent::codex_app_server::CodexAppServerAccountStatus,
+) -> Result<(), String> {
+    if account.authenticated {
+        Ok(())
+    } else if account.requires_openai_auth {
+        Err(
+            "Codex is not authenticated. Click Login for Experimental Codex or run `codex login`."
+                .to_string(),
+        )
+    } else {
+        Err("Codex account status is unavailable. Click Login for Experimental Codex or run `codex login`."
+            .to_string())
+    }
+}
+
+async fn start_codex_native_control_session() -> Result<CodexAppServerSession, String> {
+    let cwd = std::env::current_dir()
+        .ok()
+        .filter(|path| path.exists())
+        .or_else(dirs::home_dir)
+        .unwrap_or_else(std::env::temp_dir);
+    CodexAppServerSession::start_with_options(
+        &cwd,
+        env!("CARGO_PKG_VERSION"),
+        CodexAppServerOptions::default(),
+    )
+    .await
 }
 
 async fn codex_login_status() -> Result<String, String> {
@@ -2748,6 +2859,81 @@ mod tests {
     }
 
     #[test]
+    fn codex_native_models_from_app_server_surface_picker_models() {
+        let backend = AgentBackendConfig::builtin_experimental_codex();
+        let models = codex_native_models_from_app_server(
+            &backend,
+            vec![
+                claudette::agent::codex_app_server::CodexAppServerModel {
+                    id: "gpt-hidden".to_string(),
+                    label: "Hidden".to_string(),
+                    hidden: true,
+                    is_default: false,
+                },
+                claudette::agent::codex_app_server::CodexAppServerModel {
+                    id: "gpt-5.3-codex".to_string(),
+                    label: "GPT-5.3 Codex".to_string(),
+                    hidden: false,
+                    is_default: false,
+                },
+                claudette::agent::codex_app_server::CodexAppServerModel {
+                    id: "gpt-5.4".to_string(),
+                    label: "GPT-5.4".to_string(),
+                    hidden: false,
+                    is_default: true,
+                },
+            ],
+        );
+
+        assert_eq!(models.len(), 2);
+        assert_eq!(models[0].id, "gpt-5.4");
+        assert_eq!(models[0].label, "GPT-5.4");
+        assert!(models.iter().all(|model| model.discovered));
+        assert!(
+            models
+                .iter()
+                .all(|model| model.context_window_tokens == 400_000)
+        );
+    }
+
+    #[test]
+    fn codex_native_models_leave_seed_models_untouched_when_server_returns_none() {
+        let backend = AgentBackendConfig::builtin_experimental_codex();
+
+        let models = codex_native_models_from_app_server(&backend, Vec::new());
+
+        assert!(models.is_empty());
+    }
+
+    #[test]
+    fn codex_native_auth_requires_openai_account() {
+        let account = claudette::agent::codex_app_server::CodexAppServerAccountStatus {
+            authenticated: false,
+            requires_openai_auth: true,
+            account_type: None,
+            email: None,
+            plan_type: None,
+        };
+
+        let err = ensure_codex_native_authenticated(&account).expect_err("auth should fail");
+
+        assert!(err.contains("codex login"));
+    }
+
+    #[test]
+    fn codex_native_auth_accepts_chatgpt_account_requiring_openai_auth() {
+        let account = claudette::agent::codex_app_server::CodexAppServerAccountStatus {
+            authenticated: true,
+            requires_openai_auth: true,
+            account_type: Some("chatgpt".to_string()),
+            email: Some("dev@example.com".to_string()),
+            plan_type: Some("pro".to_string()),
+        };
+
+        ensure_codex_native_authenticated(&account).expect("chatgpt account is authenticated");
+    }
+
+    #[test]
     fn tolerant_load_skips_unknown_kind_and_preserves_passthrough() {
         // Simulates the reported breakage: a newer build wrote a
         // `lm_studio` entry, an older build is now reading it. The
@@ -2821,7 +3007,7 @@ mod tests {
             .find(|b| b.id == "experimental-codex")
             .expect("native codex backend should be present");
         assert_eq!(codex.kind, AgentBackendKind::CodexNative);
-        assert!(!codex.model_discovery);
+        assert!(codex.model_discovery);
     }
 
     #[test]

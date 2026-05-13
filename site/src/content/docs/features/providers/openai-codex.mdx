@@ -56,9 +56,10 @@ You can also run `codex login` yourself in any terminal.
 
 1. In **Settings > Experimental**, enable **Experimental Codex**.
 2. In **Settings > Models**, find `experimental-codex`.
-3. Click **Test** to confirm the native provider row is available.
-4. Set a default model if desired.
-5. Toggle **Enabled** on.
+3. Click **Test**. Claudette starts a short-lived `codex app-server`, calls `account/read`, and confirms the Codex CLI is authenticated.
+4. Click **Refresh models**. Claudette calls `model/list` on the native app-server and updates the picker with the models Codex exposes for your account.
+5. Set a default model if desired.
+6. Toggle **Enabled** on.
 
 ### Runtime behavior
 
@@ -67,7 +68,7 @@ Native Codex does not start the Claude Code CLI or the OpenAI gateway. Instead:
 1. Claudette spawns `codex app-server --listen stdio://` in the workspace.
 2. Claudette initializes the app-server over JSON-RPC.
 3. New turns use `thread/start` and `turn/start`; mid-turn steering uses `turn/steer`; stop requests use `turn/interrupt`.
-4. Codex notifications are adapted into Claudette chat events for assistant text, reasoning summaries, command output, token usage, turn completion, failures, and process exit.
+4. Codex notifications are adapted into Claudette chat events for assistant text, reasoning summaries, command execution, MCP tool calls, file changes, token usage, turn completion, failures, and process exit.
 
 Permission levels map to Codex approval and sandbox settings:
 

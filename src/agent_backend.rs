@@ -231,7 +231,7 @@ impl AgentBackendConfig {
             auth_ref: Some("codex-cli".to_string()),
             capabilities: AgentBackendCapabilities::codex_native(),
             context_window_default: 400_000,
-            model_discovery: false,
+            model_discovery: true,
             has_secret: false,
         }
     }
@@ -304,7 +304,7 @@ mod tests {
         assert_eq!(backend.kind, AgentBackendKind::CodexNative);
         assert!(!backend.kind.needs_gateway());
         assert!(!backend.kind.is_anthropic_compatible());
-        assert!(!backend.model_discovery);
+        assert!(backend.model_discovery);
         assert!(backend.capabilities.thinking);
         assert!(!backend.capabilities.vision);
         assert!(!backend.manual_models.is_empty());

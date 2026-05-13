@@ -124,7 +124,7 @@ impl CodexAppServerSession {
         Ok(session)
     }
 
-    #[cfg(test)]
+    #[doc(hidden)]
     pub fn new_for_test(pid: u32) -> Self {
         let (event_tx, _) = broadcast::channel(128);
         Self {
@@ -261,6 +261,33 @@ impl CodexAppServerSession {
         .await?;
         *self.active_turn_id.lock().await = None;
         Ok(())
+    }
+
+    pub async fn read_account(
+        &self,
+        refresh_token: bool,
+    ) -> Result<CodexAppServerAccountStatus, String> {
+        let response = self
+            .send_request(build_account_read_request(self.next_id(), refresh_token))
+            .await?;
+        account_status_from_response(&response)
+    }
+
+    pub async fn list_models(&self) -> Result<Vec<CodexAppServerModel>, String> {
+        let mut cursor: Option<String> = None;
+        let mut models = Vec::new();
+        loop {
+            let response = self
+                .send_request(build_model_list_request(self.next_id(), cursor.as_deref()))
+                .await?;
+            let page = model_list_from_response(&response)?;
+            models.extend(page.models);
+            cursor = page.next_cursor;
+            if cursor.is_none() {
+                break;
+            }
+        }
+        Ok(models)
     }
 
     async fn initialize(&self, client_version: &str) -> Result<(), String> {
@@ -908,6 +935,129 @@ pub fn build_turn_interrupt_request(id: i64, thread_id: &str, turn_id: &str) -> 
     }
 }
 
+pub fn build_account_read_request(id: i64, refresh_token: bool) -> JsonRpcRequest {
+    JsonRpcRequest {
+        id: JsonRpcId::Integer(id),
+        method: "account/read".to_string(),
+        params: Some(json!({
+            "refreshToken": refresh_token,
+        })),
+    }
+}
+
+pub fn build_model_list_request(id: i64, cursor: Option<&str>) -> JsonRpcRequest {
+    JsonRpcRequest {
+        id: JsonRpcId::Integer(id),
+        method: "model/list".to_string(),
+        params: Some(json!({
+            "cursor": cursor,
+            "limit": 100,
+            "includeHidden": false,
+        })),
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CodexAppServerAccountStatus {
+    pub authenticated: bool,
+    pub requires_openai_auth: bool,
+    pub account_type: Option<String>,
+    pub email: Option<String>,
+    pub plan_type: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CodexAppServerModel {
+    pub id: String,
+    pub label: String,
+    pub hidden: bool,
+    pub is_default: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CodexAppServerModelPage {
+    pub models: Vec<CodexAppServerModel>,
+    pub next_cursor: Option<String>,
+}
+
+pub fn account_status_from_response(
+    response: &JsonRpcResponse,
+) -> Result<CodexAppServerAccountStatus, String> {
+    let account = response.result.get("account").unwrap_or(&Value::Null);
+    let requires_openai_auth = response
+        .result
+        .get("requiresOpenaiAuth")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let account_type = account
+        .get("type")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    Ok(CodexAppServerAccountStatus {
+        authenticated: account_type.is_some(),
+        requires_openai_auth,
+        account_type,
+        email: account
+            .get("email")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        plan_type: account
+            .get("planType")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+    })
+}
+
+pub fn model_list_from_response(
+    response: &JsonRpcResponse,
+) -> Result<CodexAppServerModelPage, String> {
+    let data = response
+        .result
+        .get("data")
+        .and_then(Value::as_array)
+        .ok_or("Codex app-server model/list response did not include `data`")?;
+    let models = data
+        .iter()
+        .filter_map(|model| {
+            let raw_id = model
+                .get("model")
+                .or_else(|| model.get("id"))
+                .and_then(Value::as_str)?;
+            let id = raw_id.trim();
+            if id.is_empty() {
+                return None;
+            }
+            let label = model
+                .get("displayName")
+                .and_then(Value::as_str)
+                .filter(|label| !label.trim().is_empty())
+                .unwrap_or(id);
+            Some(CodexAppServerModel {
+                id: id.to_string(),
+                label: label.to_string(),
+                hidden: model
+                    .get("hidden")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false),
+                is_default: model
+                    .get("isDefault")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false),
+            })
+        })
+        .collect();
+    let next_cursor = response
+        .result
+        .get("nextCursor")
+        .and_then(Value::as_str)
+        .filter(|cursor| !cursor.trim().is_empty())
+        .map(str::to_string);
+    Ok(CodexAppServerModelPage {
+        models,
+        next_cursor,
+    })
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum CodexNotificationEvent {
     AgentMessageDelta {
@@ -950,6 +1100,21 @@ pub enum CodexNotificationEvent {
         thread_id: String,
         turn_id: Option<String>,
         message: String,
+    },
+    ItemStarted {
+        thread_id: String,
+        turn_id: String,
+        item: Value,
+    },
+    ItemCompleted {
+        thread_id: String,
+        turn_id: String,
+        item: Value,
+    },
+    TurnDiffUpdated {
+        thread_id: String,
+        turn_id: String,
+        diff: String,
     },
     Unknown {
         method: String,
@@ -1022,12 +1187,32 @@ pub fn decode_notification(notification: JsonRpcNotification) -> CodexNotificati
                 .and_then(|turn| turn.get("error"))
                 .or_else(|| params.get("error"))
                 .unwrap_or(&Value::Null);
+            let message = string_field(error, "message");
             CodexNotificationEvent::TurnFailed {
                 thread_id: string_field(params, "threadId"),
                 turn_id: turn.map(|turn| string_field(turn, "id")),
-                message: string_field(error, "message"),
+                message: if message.is_empty() {
+                    "Codex turn failed".to_string()
+                } else {
+                    message
+                },
             }
         }
+        ("item/started", Some(params)) => CodexNotificationEvent::ItemStarted {
+            thread_id: string_field(params, "threadId"),
+            turn_id: string_field(params, "turnId"),
+            item: params.get("item").cloned().unwrap_or(Value::Null),
+        },
+        ("item/completed", Some(params)) => CodexNotificationEvent::ItemCompleted {
+            thread_id: string_field(params, "threadId"),
+            turn_id: string_field(params, "turnId"),
+            item: params.get("item").cloned().unwrap_or(Value::Null),
+        },
+        ("turn/diff/updated", Some(params)) => CodexNotificationEvent::TurnDiffUpdated {
+            thread_id: string_field(params, "threadId"),
+            turn_id: string_field(params, "turnId"),
+            diff: string_field(params, "diff"),
+        },
         (method, params) => CodexNotificationEvent::Unknown {
             method: method.to_string(),
             params: params.cloned(),
@@ -1094,11 +1279,161 @@ pub fn map_notification_to_agent_events(event: CodexNotificationEvent) -> Vec<Ag
                 usage: None,
             })]
         }
+        CodexNotificationEvent::ItemStarted { item, .. } => {
+            map_codex_item_started_to_agent_events(&item)
+        }
+        CodexNotificationEvent::ItemCompleted { item, .. } => {
+            map_codex_item_completed_to_agent_events(&item)
+        }
         CodexNotificationEvent::AgentMessageDelta { .. }
         | CodexNotificationEvent::ReasoningSummaryDelta { .. }
         | CodexNotificationEvent::ReasoningTextDelta { .. }
         | CodexNotificationEvent::CommandOutputDelta { .. }
+        | CodexNotificationEvent::TurnDiffUpdated { .. }
         | CodexNotificationEvent::Unknown { .. } => Vec::new(),
+    }
+}
+
+fn map_codex_item_started_to_agent_events(item: &Value) -> Vec<AgentEvent> {
+    let Some((item_id, tool_name, input)) = codex_item_tool_use(item) else {
+        return Vec::new();
+    };
+    let index = codex_item_index(&item_id);
+    vec![
+        AgentEvent::Stream(StreamEvent::Stream {
+            event: InnerStreamEvent::ContentBlockStart {
+                index,
+                content_block: Some(StartContentBlock::ToolUse {
+                    id: item_id,
+                    name: tool_name,
+                }),
+            },
+        }),
+        AgentEvent::Stream(StreamEvent::Stream {
+            event: InnerStreamEvent::ContentBlockDelta {
+                index,
+                delta: Delta::ToolUse {
+                    partial_json: Some(input.to_string()),
+                },
+            },
+        }),
+    ]
+}
+
+fn map_codex_item_completed_to_agent_events(item: &Value) -> Vec<AgentEvent> {
+    let Some((item_id, _tool_name, _input)) = codex_item_tool_use(item) else {
+        return Vec::new();
+    };
+    let index = codex_item_index(&item_id);
+    vec![
+        AgentEvent::Stream(StreamEvent::Stream {
+            event: InnerStreamEvent::ContentBlockStop { index },
+        }),
+        AgentEvent::Stream(StreamEvent::User {
+            message: super::UserEventMessage {
+                content: super::UserMessageContent::Blocks(vec![
+                    super::UserContentBlock::ToolResult {
+                        tool_use_id: item_id,
+                        content: codex_item_result_content(item),
+                    },
+                ]),
+            },
+            uuid: None,
+            is_replay: false,
+            is_synthetic: true,
+        }),
+    ]
+}
+
+fn codex_item_tool_use(item: &Value) -> Option<(String, String, Value)> {
+    let item_type = item.get("type").and_then(Value::as_str)?;
+    let item_id = string_field(item, "id");
+    if item_id.is_empty() {
+        return None;
+    }
+    match item_type {
+        "commandExecution" => Some((
+            item_id,
+            "Bash".to_string(),
+            json!({
+                "command": item.get("command").and_then(Value::as_str).unwrap_or_default(),
+                "cwd": item.get("cwd").and_then(Value::as_str),
+            }),
+        )),
+        "fileChange" => Some((
+            item_id,
+            "Edit".to_string(),
+            json!({
+                "changes": item.get("changes").cloned().unwrap_or_else(|| json!([])),
+            }),
+        )),
+        "mcpToolCall" => {
+            let server = string_field(item, "server");
+            let tool = string_field(item, "tool");
+            Some((
+                item_id,
+                format!(
+                    "mcp__{}__{}",
+                    sanitize_tool_segment(&server),
+                    sanitize_tool_segment(&tool)
+                ),
+                item.get("arguments").cloned().unwrap_or(Value::Null),
+            ))
+        }
+        _ => None,
+    }
+}
+
+fn codex_item_result_content(item: &Value) -> Value {
+    match item.get("type").and_then(Value::as_str) {
+        Some("commandExecution") => item
+            .get("aggregatedOutput")
+            .filter(|value| !value.is_null())
+            .cloned()
+            .unwrap_or_else(|| {
+                json!({
+                    "status": item.get("status").cloned().unwrap_or(Value::Null),
+                    "exitCode": item.get("exitCode").cloned().unwrap_or(Value::Null),
+                })
+            }),
+        Some("fileChange") => json!({
+            "status": item.get("status").cloned().unwrap_or(Value::Null),
+            "changes": item.get("changes").cloned().unwrap_or_else(|| json!([])),
+        }),
+        Some("mcpToolCall") => item
+            .get("result")
+            .filter(|value| !value.is_null())
+            .cloned()
+            .or_else(|| item.get("error").filter(|value| !value.is_null()).cloned())
+            .unwrap_or_else(
+                || json!({ "status": item.get("status").cloned().unwrap_or(Value::Null) }),
+            ),
+        _ => Value::Null,
+    }
+}
+
+fn codex_item_index(item_id: &str) -> usize {
+    let hash = item_id.bytes().fold(0_usize, |acc, byte| {
+        acc.wrapping_mul(31).wrapping_add(byte as usize)
+    });
+    2 + (hash % 10_000)
+}
+
+fn sanitize_tool_segment(segment: &str) -> String {
+    let sanitized = segment
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '_' || ch == '-' {
+                ch
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>();
+    if sanitized.is_empty() {
+        "unknown".to_string()
+    } else {
+        sanitized
     }
 }
 
@@ -1482,6 +1817,145 @@ mod tests {
     }
 
     #[test]
+    fn account_read_request_can_request_token_refresh() {
+        let request = build_account_read_request(12, true);
+        let value = serde_json::to_value(request).unwrap();
+
+        assert_eq!(value["method"], "account/read");
+        assert_eq!(value["params"]["refreshToken"], true);
+    }
+
+    #[test]
+    fn model_list_request_uses_default_picker_shape() {
+        let request = build_model_list_request(13, Some("100"));
+        let value = serde_json::to_value(request).unwrap();
+
+        assert_eq!(value["method"], "model/list");
+        assert_eq!(value["params"]["cursor"], "100");
+        assert_eq!(value["params"]["limit"], 100);
+        assert_eq!(value["params"]["includeHidden"], false);
+    }
+
+    #[test]
+    fn parses_account_read_response() {
+        let response = JsonRpcResponse {
+            id: Some(JsonRpcId::Integer(12)),
+            result: json!({
+                "account": {
+                    "type": "chatgpt",
+                    "email": "dev@example.com",
+                    "planType": "plus"
+                },
+                "requiresOpenaiAuth": false
+            }),
+        };
+
+        assert_eq!(
+            account_status_from_response(&response).expect("account parses"),
+            CodexAppServerAccountStatus {
+                authenticated: true,
+                requires_openai_auth: false,
+                account_type: Some("chatgpt".to_string()),
+                email: Some("dev@example.com".to_string()),
+                plan_type: Some("plus".to_string()),
+            }
+        );
+    }
+
+    #[test]
+    fn parses_openai_required_chatgpt_account_as_authenticated() {
+        let response = JsonRpcResponse {
+            id: Some(JsonRpcId::Integer(12)),
+            result: json!({
+                "account": {
+                    "type": "chatgpt",
+                    "email": "dev@example.com",
+                    "planType": "pro"
+                },
+                "requiresOpenaiAuth": true
+            }),
+        };
+
+        let status = account_status_from_response(&response).expect("account parses");
+
+        assert!(status.authenticated);
+        assert!(status.requires_openai_auth);
+        assert_eq!(status.account_type.as_deref(), Some("chatgpt"));
+        assert_eq!(status.email.as_deref(), Some("dev@example.com"));
+        assert_eq!(status.plan_type.as_deref(), Some("pro"));
+    }
+
+    #[test]
+    fn parses_unauthenticated_account_read_response() {
+        let response = JsonRpcResponse {
+            id: Some(JsonRpcId::Integer(12)),
+            result: json!({
+                "account": null,
+                "requiresOpenaiAuth": true
+            }),
+        };
+
+        assert_eq!(
+            account_status_from_response(&response).expect("account parses"),
+            CodexAppServerAccountStatus {
+                authenticated: false,
+                requires_openai_auth: true,
+                account_type: None,
+                email: None,
+                plan_type: None,
+            }
+        );
+    }
+
+    #[test]
+    fn parses_model_list_response() {
+        let response = JsonRpcResponse {
+            id: Some(JsonRpcId::Integer(13)),
+            result: json!({
+                "data": [
+                    {
+                        "id": "model-id",
+                        "model": "gpt-5.4",
+                        "displayName": "GPT-5.4",
+                        "hidden": false,
+                        "isDefault": true
+                    },
+                    {
+                        "id": "fallback-id",
+                        "displayName": "",
+                        "hidden": false,
+                        "isDefault": false
+                    }
+                ],
+                "nextCursor": "200"
+            }),
+        };
+
+        let page = model_list_from_response(&response).expect("models parse");
+
+        assert_eq!(
+            page,
+            CodexAppServerModelPage {
+                models: vec![
+                    CodexAppServerModel {
+                        id: "gpt-5.4".to_string(),
+                        label: "GPT-5.4".to_string(),
+                        hidden: false,
+                        is_default: true,
+                    },
+                    CodexAppServerModel {
+                        id: "fallback-id".to_string(),
+                        label: "fallback-id".to_string(),
+                        hidden: false,
+                        is_default: false,
+                    },
+                ],
+                next_cursor: Some("200".to_string()),
+            }
+        );
+    }
+
+    #[test]
     fn parses_agent_message_delta_notification() {
         let message = parse_jsonrpc_line(
             r#"{"method":"item/agentMessage/delta","params":{"threadId":"t","turnId":"u","itemId":"i","delta":"hi"}}"#,
@@ -1569,6 +2043,62 @@ mod tests {
     }
 
     #[test]
+    fn parses_item_lifecycle_notifications() {
+        let item = json!({
+            "type": "mcpToolCall",
+            "id": "mcp-1",
+            "server": "github",
+            "tool": "search_issues",
+            "status": "inProgress",
+            "arguments": {"query": "codex"}
+        });
+
+        assert_eq!(
+            decode_notification(JsonRpcNotification {
+                method: "item/started".to_string(),
+                params: Some(json!({
+                    "threadId": "thread-1",
+                    "turnId": "turn-1",
+                    "item": item,
+                    "startedAtMs": 1
+                })),
+            }),
+            CodexNotificationEvent::ItemStarted {
+                thread_id: "thread-1".to_string(),
+                turn_id: "turn-1".to_string(),
+                item: json!({
+                    "type": "mcpToolCall",
+                    "id": "mcp-1",
+                    "server": "github",
+                    "tool": "search_issues",
+                    "status": "inProgress",
+                    "arguments": {"query": "codex"}
+                }),
+            }
+        );
+    }
+
+    #[test]
+    fn parses_turn_failed_with_default_message() {
+        let event = decode_notification(JsonRpcNotification {
+            method: "turn/failed".to_string(),
+            params: Some(json!({
+                "threadId": "thread-1",
+                "turn": {"id": "turn-1", "error": {}}
+            })),
+        });
+
+        assert_eq!(
+            event,
+            CodexNotificationEvent::TurnFailed {
+                thread_id: "thread-1".to_string(),
+                turn_id: Some("turn-1".to_string()),
+                message: "Codex turn failed".to_string(),
+            }
+        );
+    }
+
+    #[test]
     fn maps_agent_message_delta_to_claudette_text_delta() {
         let events = map_notification_to_agent_events(CodexNotificationEvent::AgentMessageDelta {
             thread_id: "thread-1".to_string(),
@@ -1617,6 +2147,68 @@ mod tests {
         };
         assert_eq!(*index, 1);
         assert_eq!(thinking, "because");
+    }
+
+    #[test]
+    fn maps_mcp_item_started_to_tool_use_block() {
+        let events = map_notification_to_agent_events(CodexNotificationEvent::ItemStarted {
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-1".to_string(),
+            item: json!({
+                "type": "mcpToolCall",
+                "id": "mcp-1",
+                "server": "github",
+                "tool": "search_issues",
+                "status": "inProgress",
+                "arguments": {"query": "codex"}
+            }),
+        });
+
+        assert_eq!(events.len(), 2);
+        let AgentEvent::Stream(StreamEvent::Stream {
+            event:
+                InnerStreamEvent::ContentBlockStart {
+                    content_block: Some(StartContentBlock::ToolUse { id, name }),
+                    ..
+                },
+        }) = &events[0]
+        else {
+            panic!("expected tool-use start");
+        };
+        assert_eq!(id, "mcp-1");
+        assert_eq!(name, "mcp__github__search_issues");
+    }
+
+    #[test]
+    fn maps_file_change_completed_to_tool_result() {
+        let events = map_notification_to_agent_events(CodexNotificationEvent::ItemCompleted {
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-1".to_string(),
+            item: json!({
+                "type": "fileChange",
+                "id": "file-1",
+                "status": "completed",
+                "changes": [{"path": "/tmp/a.rs", "kind": "update", "diff": "@@"}]
+            }),
+        });
+
+        assert_eq!(events.len(), 2);
+        let AgentEvent::Stream(StreamEvent::User { message, .. }) = &events[1] else {
+            panic!("expected tool result");
+        };
+        let super::super::UserMessageContent::Blocks(blocks) = &message.content else {
+            panic!("expected block content");
+        };
+        let super::super::UserContentBlock::ToolResult {
+            tool_use_id,
+            content,
+        } = &blocks[0]
+        else {
+            panic!("expected tool result block");
+        };
+        assert_eq!(tool_use_id, "file-1");
+        assert_eq!(content["status"], "completed");
+        assert_eq!(content["changes"][0]["path"], "/tmp/a.rs");
     }
 
     #[test]

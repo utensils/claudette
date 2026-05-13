@@ -159,8 +159,34 @@
   - `cd src/ui && bunx tsc -b`
   - `nix develop -c cargo fmt --all`
 - 2026-05-13: Synced with `origin/main` (already current), committed and pushed the gate persistence/migration fixes as `087082eb` (`fix: preserve codex gate selections`), replied to the latest Copilot threads, resolved them, verified no unresolved Copilot reviewer threads remained, and confirmed PR checks were green with deploy skipped as expected.
+- 2026-05-13: Added native Codex app-server account/model RPC support:
+  - `account/read` powers **Test** for `experimental-codex` and surfaces missing `codex login` auth.
+  - `model/list` powers **Refresh models** for `experimental-codex` and keeps the static seed list only as a pre-refresh fallback.
+  - Native Codex backend cards now advertise model discovery through Settings.
+- 2026-05-13: Expanded Codex notification mapping for app-server item lifecycle events:
+  - `commandExecution` starts map to Claudette `Bash` tool-use events and command output/result events.
+  - `mcpToolCall` starts map to Claudette `mcp__server__tool` tool-use events and completion result events.
+  - `fileChange` starts/completions map to Claudette edit-style tool-use/result events.
+  - Empty `turn/failed` errors now surface a stable fallback message.
+- 2026-05-13: Updated stop behavior so persistent native Codex sessions receive protocol-level `turn/interrupt` before falling back to process kill, preserving the app-server/thread when possible.
+- 2026-05-13: Updated docs for native Codex auth/model refresh and MCP/file-change event mapping:
+  - `site/src/content/docs/features/providers/openai-codex.mdx`
+  - `site/src/content/docs/features/experimental-features.mdx`
+- 2026-05-13: Smoke-tested the local `codex app-server --listen stdio://` against `initialize`, `account/read`, and `model/list` with Codex CLI `0.130.0`; the live response confirmed ChatGPT auth and surfaced the app-server nuance that `requiresOpenaiAuth: true` can still accompany an authenticated ChatGPT account.
+- 2026-05-13: Adjusted native Codex auth parsing so an account-bearing `account/read` response is treated as authenticated while preserving `requiresOpenaiAuth` as provider metadata.
+- 2026-05-13: Verified the native Codex model/auth and lifecycle milestone with:
+  - `nix develop -c cargo test -p claudette agent::codex_app_server --all-features`
+  - `nix develop -c cargo test -p claudette-tauri agent_backends --all-features`
+  - `nix develop -c cargo test -p claudette-tauri chat::lifecycle --all-features`
 
 ## Next Stage
 
-- Add fake app-server/chat lifecycle coverage around native Codex send, steer, stop, and failure persistence without spawning a real CLI.
-- Expand Codex notification mapping for MCP calls and file changes once the app-server payload shapes are confirmed against the reference clone.
+- Run a final native Codex-focused regression pass after this milestone commit:
+  - `nix develop -c cargo test -p claudette agent::harness --all-features`
+  - `nix develop -c cargo test -p claudette agent::codex_app_server --all-features`
+  - `nix develop -c cargo test -p claudette-tauri agent_backends --all-features`
+  - `nix develop -c cargo test -p claudette-tauri chat::lifecycle --all-features`
+  - `nix develop -c cargo fmt --all --check`
+  - `git diff --check`
+- Rebase with `origin/main`, commit/push this milestone, then run the Copilot review skill and resolve any valid new findings.
+- After the Copilot pass, plan the remaining PR-hardening stage from review feedback and broader CI results.
