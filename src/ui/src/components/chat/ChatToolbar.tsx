@@ -1,11 +1,17 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { CircleDollarSign, Sparkles, Zap, Brain, BookOpen, Gauge, Eye, EyeOff, Globe } from "lucide-react";
 import { useAppStore } from "../../stores/useAppStore";
 import { resetAgentSession, setAppSetting, getAppSetting } from "../../services/tauri";
 import { ModelSelector } from "./ModelSelector";
-import { EffortSelector, EFFORT_LEVELS } from "./EffortSelector";
-import { isFastSupported, isEffortSupported, isXhighEffortAllowed, isMaxEffortAllowed } from "./modelCapabilities";
+import { EffortSelector } from "./EffortSelector";
+import { isFastSupported, isEffortSupported } from "./modelCapabilities";
+import {
+  normalizeReasoningLevel,
+  reasoningLevelLabel,
+  reasoningVariantForModel,
+} from "./reasoningControls";
+import { buildModelRegistry, findModelInRegistry } from "./modelRegistry";
 import { applySelectedModel } from "./applySelectedModel";
 import { applyPlanModeMountDefault } from "./applyPlanModeMountDefault";
 import { ContextMeter } from "./ContextMeter";
@@ -28,6 +34,9 @@ export function ChatToolbar({ sessionId, disabled }: ChatToolbarProps) {
   const effortLevel = useAppStore((s) => s.effortLevel[sessionId] ?? "auto");
   const chromeEnabled = useAppStore((s) => s.chromeEnabled[sessionId] ?? false);
   const modelSelectorOpen = useAppStore((s) => s.modelSelectorOpen);
+  const alternativeBackendsEnabled = useAppStore((s) => s.alternativeBackendsEnabled);
+  const experimentalCodexEnabled = useAppStore((s) => s.experimentalCodexEnabled);
+  const agentBackends = useAppStore((s) => s.agentBackends);
   const setSelectedModel = useAppStore((s) => s.setSelectedModel);
   const setFastMode = useAppStore((s) => s.setFastMode);
   const setThinkingEnabled = useAppStore((s) => s.setThinkingEnabled);
@@ -39,12 +48,21 @@ export function ChatToolbar({ sessionId, disabled }: ChatToolbarProps) {
   const setModelSelectorOpen = useAppStore((s) => s.setModelSelectorOpen);
   const clearAgentQuestion = useAppStore((s) => s.clearAgentQuestion);
   const clearPlanApproval = useAppStore((s) => s.clearPlanApproval);
+  const clearAgentApproval = useAppStore((s) => s.clearAgentApproval);
   const metaKeyHeld = useAppStore((s) => s.metaKeyHeld);
   const keybindings = useAppStore((s) => s.keybindings);
   const { t } = useTranslation("chat");
 
   const [loaded, setLoaded] = useState(false);
   const [effortSelectorOpen, setEffortSelectorOpen] = useState(false);
+  const registry = useMemo(
+    () => buildModelRegistry(alternativeBackendsEnabled, agentBackends, experimentalCodexEnabled),
+    [alternativeBackendsEnabled, agentBackends, experimentalCodexEnabled],
+  );
+  const registryRef = useRef(registry);
+  useEffect(() => {
+    registryRef.current = registry;
+  }, [registry]);
 
   // Load persisted settings on mount / session change.
   useEffect(() => {
@@ -69,8 +87,12 @@ export function ChatToolbar({ sessionId, disabled }: ChatToolbarProps) {
       ]);
       if (cancelled) return;
       const loadedModel = model ?? defModel ?? "opus";
-      setSelectedModel(sessionId, loadedModel, provider ?? defProvider ?? "anthropic");
-      const effectiveFast = isFastSupported(loadedModel) && (fast === "true" || (!fast && defFast === "true"));
+      const loadedProvider = provider ?? defProvider ?? "anthropic";
+      const loadedEntry = findModelInRegistry(registryRef.current, loadedModel, loadedProvider);
+      const supportsFast = loadedEntry?.supportsFastMode ?? isFastSupported(loadedModel);
+      const supportsEffort = loadedEntry?.supportsEffort ?? isEffortSupported(loadedModel);
+      setSelectedModel(sessionId, loadedModel, loadedProvider);
+      const effectiveFast = supportsFast && (fast === "true" || (!fast && defFast === "true"));
       const effectiveThinking = thinking === "true" || (!thinking && defThinking === "true");
       setFastMode(sessionId, effectiveFast);
       setThinkingEnabled(sessionId, effectiveThinking);
@@ -78,13 +100,13 @@ export function ChatToolbar({ sessionId, disabled }: ChatToolbarProps) {
       // Normalize effort against the loaded model to prevent stale values.
       const effectiveEffort = effort ?? defEffort;
       if (effectiveEffort) {
-        const normalized = !isEffortSupported(loadedModel)
+        const normalized = !supportsEffort
           ? "auto"
-          : effectiveEffort === "xhigh" && !isXhighEffortAllowed(loadedModel)
-            ? "high"
-            : effectiveEffort === "max" && !isMaxEffortAllowed(loadedModel)
-              ? "high"
-              : effectiveEffort;
+          : normalizeReasoningLevel(
+              effectiveEffort,
+              loadedModel,
+              reasoningVariantForModel(loadedEntry),
+            );
         setEffortLevel(sessionId, normalized);
       }
       setShowThinkingBlocks(sessionId, showThinking === "true" || (!showThinking && defShowThinking === "true"));
@@ -144,21 +166,34 @@ export function ChatToolbar({ sessionId, disabled }: ChatToolbarProps) {
     await resetAgentSession(sessionId);
     clearAgentQuestion(sessionId);
     clearPlanApproval(sessionId);
-  }, [sessionId, chromeEnabled, setChromeEnabled, clearAgentQuestion, clearPlanApproval]);
+    clearAgentApproval(sessionId);
+  }, [sessionId, chromeEnabled, setChromeEnabled, clearAgentQuestion, clearPlanApproval, clearAgentApproval]);
 
   // The Cmd/Ctrl+T thinking-mode hotkey lived here as a raw
   // `window.addEventListener("keydown")` listener. It's been removed —
   // Cmd+T is now the registered `global.new-tab` action (see
-  // `useKeyboardShortcuts`), and thinking remains toggleable via the
-  // chip click + the command palette ("Toggle thinking").
+  // `useKeyboardShortcuts`), and Claude thinking remains toggleable via
+  // the chip click + the command palette ("Toggle thinking").
 
   const currentModel = useSelectedModelEntry(sessionId);
+  const supportsFast = currentModel?.supportsFastMode ?? isFastSupported(selectedModel);
+  const supportsEffort = currentModel?.supportsEffort ?? isEffortSupported(selectedModel);
+  const reasoningVariant = reasoningVariantForModel(currentModel);
+  const isCodex = reasoningVariant === "codex";
   const modelLabel = currentModel?.providerLabel
     ? `${currentModel.providerLabel} / ${currentModel.label}`
     : currentModel?.label ?? selectedModel;
   const isExtraUsage = currentModel?.extraUsage ?? false;
-  const effortLabel =
-    EFFORT_LEVELS.find((l) => l.id === effortLevel)?.label ?? effortLevel;
+  const normalizedEffort = normalizeReasoningLevel(
+    effortLevel,
+    selectedModel,
+    reasoningVariant,
+  );
+  const effortLabel = reasoningLevelLabel(
+    normalizedEffort,
+    selectedModel,
+    reasoningVariant,
+  );
   const isMac = isMacHotkeyPlatform();
   const planShortcut = getHotkeyLabel("global.toggle-plan-mode", keybindings, isMac);
 
@@ -179,7 +214,7 @@ export function ChatToolbar({ sessionId, disabled }: ChatToolbarProps) {
 
       <ContextMeter sessionId={sessionId} />
 
-      {isFastSupported(selectedModel) && (
+      {supportsFast && (
         <button
           className={`${styles.chip} ${fastMode ? styles.chipActive : ""}`}
           onClick={toggleFast}
@@ -191,32 +226,36 @@ export function ChatToolbar({ sessionId, disabled }: ChatToolbarProps) {
         </button>
       )}
 
-      <button
-        className={`${styles.chip} ${thinkingEnabled ? styles.chipActive : ""}`}
-        onClick={toggleThinking}
-        disabled={disabled}
-        title={thinkingEnabled ? t("thinking_disable") : t("thinking_enable")}
-        aria-pressed={thinkingEnabled}
-      >
-        <Brain size={14} />
-        <span className={styles.chipLabel}>{t("thinking_chip")}</span>
-      </button>
+      {!isCodex && (
+        <button
+          className={`${styles.chip} ${thinkingEnabled ? styles.chipActive : ""}`}
+          onClick={toggleThinking}
+          disabled={disabled}
+          title={thinkingEnabled ? t("thinking_disable") : t("thinking_enable")}
+          aria-pressed={thinkingEnabled}
+        >
+          <Brain size={14} />
+          <span className={styles.chipLabel}>{t("thinking_chip")}</span>
+        </button>
+      )}
 
       <button
         className={`${styles.chip} ${showThinkingBlocks ? styles.chipActive : ""}`}
         onClick={toggleShowThinking}
-        title={showThinkingBlocks ? t("hide_thinking") : t("show_thinking")}
+        title={showThinkingBlocks
+          ? isCodex ? t("codex_hide_reasoning") : t("hide_thinking")
+          : isCodex ? t("codex_show_reasoning") : t("show_thinking")}
         aria-pressed={showThinkingBlocks}
       >
         {showThinkingBlocks ? <Eye size={14} /> : <EyeOff size={14} />}
       </button>
 
-      {isEffortSupported(selectedModel) && (
+      {supportsEffort && (
         <button
           className={styles.chip}
           onClick={() => setEffortSelectorOpen(!effortSelectorOpen)}
           disabled={disabled}
-          title={t("set_effort")}
+          title={isCodex ? t("codex_set_reasoning_effort") : t("set_effort")}
         >
           <Gauge size={14} />
           <span className={styles.chipLabel}>{effortLabel}</span>
@@ -262,10 +301,12 @@ export function ChatToolbar({ sessionId, disabled }: ChatToolbarProps) {
         />
       )}
 
-      {effortSelectorOpen && isEffortSupported(selectedModel) && (
+      {effortSelectorOpen && supportsEffort && (
         <EffortSelector
-          selected={effortLevel}
+          selected={normalizedEffort}
           selectedModel={selectedModel}
+          variant={reasoningVariant}
+          label={isCodex ? t("codex_reasoning_effort") : t("effort")}
           onSelect={handleEffortSelect}
           onClose={() => setEffortSelectorOpen(false)}
         />

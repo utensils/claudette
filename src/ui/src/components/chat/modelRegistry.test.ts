@@ -116,9 +116,9 @@ describe("modelRegistry", () => {
     it("exposes discovered backend models and prefers them over manual fallbacks", () => {
       const registry = buildModelRegistry(true, [
         {
-          id: "codex-subscription",
-          label: "Codex",
-          kind: "codex_subscription",
+          id: "openai-api",
+          label: "OpenAI API",
+          kind: "openai_api",
           enabled: true,
           capabilities: {
             thinking: false,
@@ -147,9 +147,138 @@ describe("modelRegistry", () => {
         },
       ]);
 
-      expect(registry.find((model) => model.providerQualifiedId === "codex-subscription/gpt-5.4")).toBeDefined();
-      expect(registry.find((model) => model.providerQualifiedId === "codex-subscription/gpt-5.3-codex")).toBeDefined();
-      expect(registry.find((model) => model.providerQualifiedId === "codex-subscription/manual-fallback")).toBeUndefined();
+      expect(registry.find((model) => model.providerQualifiedId === "openai-api/gpt-5.4")).toBeDefined();
+      expect(registry.find((model) => model.providerQualifiedId === "openai-api/gpt-5.3-codex")).toBeDefined();
+      expect(registry.find((model) => model.providerQualifiedId === "openai-api/manual-fallback")).toBeUndefined();
+    });
+
+    it("exposes native Codex models and normalizes stale capability metadata", () => {
+      const registry = buildModelRegistry(false, [
+        {
+          id: "experimental-codex",
+          label: "Experimental Codex",
+          kind: "codex_native",
+          enabled: true,
+          capabilities: {
+            thinking: false,
+            effort: false,
+            fast_mode: false,
+          },
+          manual_models: [
+            {
+              id: "gpt-5.4",
+              label: "GPT-5.4",
+              context_window_tokens: 400_000,
+            },
+          ],
+          discovered_models: [],
+        },
+      ], true);
+
+      const codex = registry.find((model) => model.providerQualifiedId === "experimental-codex/gpt-5.4");
+      expect(codex).toBeDefined();
+      expect(codex?.group).toBe("Codex");
+      expect(codex?.providerLabel).toBe("Codex");
+      expect(codex?.supportsThinking).toBe(true);
+      expect(codex?.supportsEffort).toBe(true);
+      expect(codex?.supportsFastMode).toBe(true);
+    });
+
+    it("does not expose legacy Codex through alternative backends", () => {
+      const registry = buildModelRegistry(true, [
+        {
+          id: "codex-subscription",
+          label: "Codex",
+          kind: "codex_subscription",
+          enabled: true,
+          capabilities: {
+            thinking: false,
+            effort: false,
+            fast_mode: false,
+          },
+          manual_models: [],
+          discovered_models: [
+            {
+              id: "gpt-5.4",
+              label: "gpt-5.4",
+              context_window_tokens: 272_000,
+            },
+          ],
+        },
+      ]);
+
+      expect(registry.find((model) => model.providerQualifiedId === "codex-subscription/gpt-5.4")).toBeUndefined();
+    });
+
+    it("orders versioned backend models newest first and moves older bands to More", () => {
+      const registry = buildModelRegistry(false, [
+        {
+          id: "experimental-codex",
+          label: "Codex",
+          kind: "codex_native",
+          enabled: true,
+          capabilities: {
+            thinking: true,
+            effort: true,
+            fast_mode: true,
+          },
+          manual_models: [],
+          discovered_models: [
+            {
+              id: "gpt-5.4",
+              label: "gpt-5.4",
+              context_window_tokens: 400_000,
+            },
+            {
+              id: "gpt-5.2",
+              label: "gpt-5.2",
+              context_window_tokens: 400_000,
+            },
+            {
+              id: "gpt-5.3-codex",
+              label: "gpt-5.3-codex",
+              context_window_tokens: 400_000,
+            },
+            {
+              id: "gpt-5.5",
+              label: "GPT-5.5",
+              context_window_tokens: 400_000,
+            },
+            {
+              id: "gpt-5.3-codex-spark",
+              label: "GPT-5.3-Codex-Spark",
+              context_window_tokens: 400_000,
+            },
+            {
+              id: "gpt-5.4-mini",
+              label: "GPT-5.4-Mini",
+              context_window_tokens: 400_000,
+            },
+          ],
+        },
+      ], true);
+
+      const codexModels = registry.filter(
+        (model) => model.providerId === "experimental-codex",
+      );
+      expect(codexModels.map((model) => model.id)).toEqual([
+        "gpt-5.5",
+        "gpt-5.4",
+        "gpt-5.4-mini",
+        "gpt-5.3-codex",
+        "gpt-5.3-codex-spark",
+        "gpt-5.2",
+      ]);
+      expect(
+        codexModels
+          .filter((model) => !model.legacy)
+          .map((model) => model.id),
+      ).toEqual(["gpt-5.5", "gpt-5.4", "gpt-5.4-mini"]);
+      expect(
+        codexModels
+          .filter((model) => model.legacy)
+          .map((model) => model.id),
+      ).toEqual(["gpt-5.3-codex", "gpt-5.3-codex-spark", "gpt-5.2"]);
     });
   });
 
@@ -176,14 +305,14 @@ describe("modelRegistry", () => {
           ],
         },
         {
-          id: "codex-subscription",
+          id: "experimental-codex",
           label: "Codex",
-          kind: "codex_subscription",
+          kind: "codex_native",
           enabled: true,
           capabilities: {
-            thinking: false,
+            thinking: true,
             effort: false,
-            fast_mode: false,
+            fast_mode: true,
           },
           manual_models: [],
           discovered_models: [
@@ -194,10 +323,10 @@ describe("modelRegistry", () => {
             },
           ],
         },
-      ]);
+      ], true);
 
       expect(
-        findModelInRegistry(registry, "gpt-5.4", "codex-subscription")
+        findModelInRegistry(registry, "gpt-5.4", "experimental-codex")
           ?.contextWindowTokens,
       ).toBe(1_000_000);
       expect(

@@ -1,6 +1,9 @@
 import { create } from "zustand";
 import {
   createAgentInteractionSlice,
+  type AgentApproval,
+  type AgentApprovalDetail,
+  type AgentApprovalKind,
   type AgentInteractionSlice,
   type AgentQuestion,
   type AgentQuestionItem,
@@ -73,6 +76,9 @@ import {
 } from "./slices/workspaceClaudeFlagsSlice";
 
 export type {
+  AgentApproval,
+  AgentApprovalDetail,
+  AgentApprovalKind,
   AgentQuestion,
   AgentQuestionItem,
   AgentToolCall,

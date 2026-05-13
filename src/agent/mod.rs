@@ -1,7 +1,9 @@
 mod args;
 pub mod background;
 mod binary;
+pub mod codex_app_server;
 mod environment;
+pub mod harness;
 mod naming;
 mod process;
 mod session;
@@ -12,7 +14,19 @@ use serde::{Deserialize, Serialize};
 use crate::agent_backend::AgentBackendRuntime;
 
 pub use args::{build_claude_args, build_stdin_message};
-pub use binary::{resolve_claude_path, resolve_claude_path_blocking};
+pub use binary::{
+    resolve_claude_path, resolve_claude_path_blocking, resolve_codex_path,
+    resolve_codex_path_blocking,
+};
+pub use codex_app_server::{
+    CodexAppServerOptions, CodexAppServerSession, CodexPermissionLevel,
+    build_codex_approval_response_payload, build_codex_user_input_response_payload,
+    is_codex_approval_tool_name, normalize_codex_reasoning_effort,
+};
+pub use harness::{
+    AgentHarnessCapabilities, AgentHarnessKind, AgentSession, ClaudeCodeHarness,
+    PersistentSessionStart,
+};
 pub use naming::{
     generate_branch_name, generate_session_name, persist_claude_custom_title, sanitize_branch_name,
 };

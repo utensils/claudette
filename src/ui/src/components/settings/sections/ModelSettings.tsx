@@ -2,9 +2,16 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { getAppSetting, setAppSetting, listAgentBackends, saveAgentBackend, saveAgentBackendSecret, refreshAgentBackendModels, testAgentBackend, launchCodexLogin } from "../../../services/tauri";
 import type { AgentBackendConfig } from "../../../services/tauri";
-import { EFFORT_LEVELS } from "../../chat/EffortSelector";
-import { isFastSupported, isEffortSupported, isXhighEffortAllowed, isMaxEffortAllowed } from "../../chat/modelCapabilities";
-import { buildModelRegistry, resolveModelSelection } from "../../chat/modelRegistry";
+import { isFastSupported, isEffortSupported } from "../../chat/modelCapabilities";
+import {
+  getReasoningLevels,
+  normalizeReasoningLevel,
+  reasoningVariantForModel,
+} from "../../chat/reasoningControls";
+import {
+  buildModelRegistry,
+  resolveModelSelection,
+} from "../../chat/modelRegistry";
 import { useAppStore } from "../../../stores/useAppStore";
 import { formatBackendError } from "../backendSettingsErrors";
 import styles from "../Settings.module.css";
@@ -28,6 +35,7 @@ export function ModelSettings() {
   // to know they aren't active in this session.
   const [backendWarnings, setBackendWarnings] = useState<string[]>([]);
   const alternativeBackendsEnabled = useAppStore((s) => s.alternativeBackendsEnabled);
+  const experimentalCodexEnabled = useAppStore((s) => s.experimentalCodexEnabled);
   const agentBackends = useAppStore((s) => s.agentBackends);
   const setAgentBackends = useAppStore((s) => s.setAgentBackends);
   const setDefaultAgentBackendId = useAppStore((s) => s.setDefaultAgentBackendId);
@@ -93,8 +101,17 @@ export function ModelSettings() {
   };
 
   const registry = useMemo(
-    () => buildModelRegistry(alternativeBackendsEnabled, agentBackends),
-    [alternativeBackendsEnabled, agentBackends],
+    () => buildModelRegistry(alternativeBackendsEnabled, agentBackends, experimentalCodexEnabled),
+    [alternativeBackendsEnabled, agentBackends, experimentalCodexEnabled],
+  );
+  const visibleBackends = useMemo(
+    () =>
+      agentBackends.filter((backend) => {
+        if (backend.id === "anthropic" || backend.kind === "codex_subscription") return false;
+        if (backend.kind === "codex_native") return experimentalCodexEnabled;
+        return alternativeBackendsEnabled;
+      }),
+    [agentBackends, alternativeBackendsEnabled, experimentalCodexEnabled],
   );
   const defaultModelValue = `${defaultBackend}/${defaultModel}`;
 
@@ -111,20 +128,24 @@ export function ModelSettings() {
     await saveSetting("default_model", model);
     await saveSetting("default_agent_backend", nextBackend);
     // Normalize fast mode when model changes
-    if (defaultFastMode && !isFastSupported(model)) {
+    if (defaultFastMode && !(match?.supportsFastMode ?? isFastSupported(model))) {
       setDefaultFastMode(false);
       await saveSetting("default_fast_mode", "false");
     }
     // Normalize effort when model changes
-    if (!isEffortSupported(model)) {
+    if (!(match?.supportsEffort ?? isEffortSupported(model))) {
       setDefaultEffort("auto");
       await saveSetting("default_effort", "auto");
-    } else if (defaultEffort === "xhigh" && !isXhighEffortAllowed(model)) {
-      setDefaultEffort("high");
-      await saveSetting("default_effort", "high");
-    } else if (defaultEffort === "max" && !isMaxEffortAllowed(model)) {
-      setDefaultEffort("high");
-      await saveSetting("default_effort", "high");
+    } else {
+      const normalized = normalizeReasoningLevel(
+        defaultEffort,
+        model,
+        reasoningVariantForModel(match),
+      );
+      if (normalized !== defaultEffort) {
+        setDefaultEffort(normalized);
+        await saveSetting("default_effort", normalized);
+      }
     }
   };
 
@@ -159,13 +180,16 @@ export function ModelSettings() {
   const selectedDefaultModel = registry.find(
     (m) => (m.providerId ?? "anthropic") === defaultBackend && m.id === defaultModel,
   );
+  const reasoningVariant = reasoningVariantForModel(selectedDefaultModel);
+  const isCodex = reasoningVariant === "codex";
   const supportsEffort = selectedDefaultModel?.supportsEffort ?? isEffortSupported(defaultModel);
   const supportsFast = selectedDefaultModel?.supportsFastMode ?? isFastSupported(defaultModel);
-  const availableEffortLevels = isXhighEffortAllowed(defaultModel)
-    ? EFFORT_LEVELS
-    : isMaxEffortAllowed(defaultModel)
-      ? EFFORT_LEVELS.filter((l) => l.id !== "xhigh")
-      : EFFORT_LEVELS.filter((l) => l.id !== "xhigh" && l.id !== "max");
+  const availableEffortLevels = getReasoningLevels(defaultModel, reasoningVariant);
+  const selectedEffort = normalizeReasoningLevel(
+    defaultEffort,
+    defaultModel,
+    reasoningVariant,
+  );
   const effortDisabled = !supportsEffort;
   const fastDisabled = !supportsFast;
 
@@ -214,30 +238,34 @@ export function ModelSettings() {
                 </option>
               ))}
             </select>
-            <select
-              className={`${styles.select} ${styles.selectWide}`}
-              value={defaultThinking ? "true" : "false"}
-              onChange={(e) => handleThinkingChange(e.target.value)}
-            >
-              <option value="false">{t("models_thinking_off")}</option>
-              <option value="true">{t("models_thinking_on")}</option>
-            </select>
+            {!isCodex && (
+              <select
+                className={`${styles.select} ${styles.selectWide}`}
+                value={defaultThinking ? "true" : "false"}
+                onChange={(e) => handleThinkingChange(e.target.value)}
+              >
+                <option value="false">{t("models_thinking_off")}</option>
+                <option value="true">{t("models_thinking_on")}</option>
+              </select>
+            )}
           </div>
         </div>
       </div>
 
       <div className={styles.settingRow}>
         <div className={styles.settingInfo}>
-          <div className={styles.settingLabel}>{t("models_default_effort")}</div>
+          <div className={styles.settingLabel}>
+            {isCodex ? t("models_default_codex_reasoning_effort") : t("models_default_effort")}
+          </div>
           <div className={styles.settingDescription}>
-            {t("models_default_effort_desc")}
+            {isCodex ? t("models_default_codex_reasoning_effort_desc") : t("models_default_effort_desc")}
             {effortDisabled && t("models_effort_not_supported")}
           </div>
         </div>
         <div className={styles.settingControl}>
           <select
             className={`${styles.select}${effortDisabled ? ` ${styles.selectDim}` : ""}`}
-            value={defaultEffort}
+            value={selectedEffort}
             onChange={(e) => handleEffortChange(e.target.value)}
             disabled={effortDisabled}
           >
@@ -252,9 +280,11 @@ export function ModelSettings() {
 
       <div className={styles.settingRow}>
         <div className={styles.settingInfo}>
-          <div className={styles.settingLabel}>{t("models_show_thinking")}</div>
+          <div className={styles.settingLabel}>
+            {isCodex ? t("models_show_codex_reasoning") : t("models_show_thinking")}
+          </div>
           <div className={styles.settingDescription}>
-            {t("models_show_thinking_desc")}
+            {isCodex ? t("models_show_codex_reasoning_desc") : t("models_show_thinking_desc")}
           </div>
         </div>
         <div className={styles.settingControl}>
@@ -262,7 +292,7 @@ export function ModelSettings() {
             className={styles.toggle}
             role="switch"
             aria-checked={defaultShowThinking}
-            aria-label={t("models_show_thinking")}
+            aria-label={isCodex ? t("models_show_codex_reasoning") : t("models_show_thinking")}
             data-checked={defaultShowThinking}
             onClick={handleToggle(defaultShowThinking, setDefaultShowThinking, "default_show_thinking")}
           >
@@ -361,9 +391,9 @@ export function ModelSettings() {
         </div>
       </div>
 
-      {alternativeBackendsEnabled && (
+      {visibleBackends.length > 0 && (
         <BackendSettingsPanel
-          backends={agentBackends}
+          backends={visibleBackends}
           onBackends={setAgentBackends}
         />
       )}
@@ -435,8 +465,9 @@ function BackendCard({
   const modelOptions = dedupeBackendModels([...discoveredModels, ...manualModels]);
   const manualModelText = manualModels.map((m) => m.id).join(", ");
   const discoveryBackend = isDiscoveryBackend(draft);
-  const showBaseUrl = draft.kind !== "codex_subscription";
-  const showSecret = draft.kind !== "codex_subscription";
+  const usesCodexCliAuth = draft.kind === "codex_subscription" || draft.kind === "codex_native";
+  const showBaseUrl = !usesCodexCliAuth;
+  const showSecret = !usesCodexCliAuth;
   const showManualModels = draft.kind === "custom_anthropic" || draft.kind === "custom_openai";
   const actualModelCount = countBackendModels(draft);
   const displayModelCount = actualModelCount > 0 ? actualModelCount : statusModelCount ?? 0;
@@ -681,7 +712,7 @@ function BackendCard({
           {discoveryBackend && (
             <button className={styles.iconBtn} onClick={refresh} disabled={busy}>{t("models_backend_refresh")}</button>
           )}
-          {draft.kind === "codex_subscription" && (
+          {usesCodexCliAuth && (
             <button className={styles.iconBtn} onClick={() => void launchCodexLogin()} disabled={busy}>
               {t("models_backend_login")}
             </button>
@@ -715,7 +746,7 @@ function isDiscoveryBackend(backend: AgentBackendConfig) {
     backend.model_discovery ||
     backend.kind === "ollama" ||
     backend.kind === "openai_api" ||
-    backend.kind === "codex_subscription" ||
+    backend.kind === "codex_native" ||
     backend.kind === "lm_studio"
   );
 }

@@ -81,10 +81,18 @@ export interface CompletedTurn {
  * `result.usage` block the CLI emits on every turn end.
  */
 export interface TurnUsage {
+  /** Authoritative total tokens currently in the model context when the
+   *  backend reports one. Native Codex sends `last.totalTokens`; falling
+   *  back to field sums keeps Claude behavior unchanged. */
+  totalTokens?: number;
   inputTokens?: number;
   outputTokens?: number;
   cacheReadTokens?: number;
   cacheCreationTokens?: number;
+  /** Runtime model context window reported by the agent backend. Native
+   *  Codex sends this with token usage and it is more authoritative than
+   *  static registry defaults for context-meter percentage math. */
+  modelContextWindow?: number;
 }
 
 export interface ChatSlice {

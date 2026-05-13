@@ -9,7 +9,10 @@ import styles from "./ChatPanel.module.css";
 import { toolColor } from "./chatHelpers";
 import { CodeBlock } from "./CodeBlock";
 import { InlineEditSummary } from "./EditChangeSummary";
-import { summarizeToolActivityEdit } from "./editActivitySummary";
+import {
+  patchTextFromToolInput,
+  summarizeToolActivityEdit,
+} from "./editActivitySummary";
 import { resolveToolSummary } from "./toolMetadata";
 import { isSkillActivity, skillActivationName } from "./toolActivityGroups";
 
@@ -234,63 +237,67 @@ function readableToolInput(
   const normalized = toolName.toLowerCase();
 
   if (normalized === "edit") {
-    return replacementDetails(input, {
+    const details = replacementDetails(input, {
       pathFields: ["file_path"],
       oldFields: ["old_string"],
       newFields: ["new_string"],
       oldLabel: "old_string",
       newLabel: "new_string",
     });
+    if (details) return details;
   }
 
   if (normalized === "multiedit") {
     const filePath = stringField(input, "file_path");
     const edits = Array.isArray(input.edits) ? input.edits : [];
-    if (!filePath || edits.length === 0) return null;
-
-    const lines = [`file_path: ${yamlScalar(filePath)}`, "edits:"];
-    edits.forEach((edit, index) => {
-      const record = recordFromUnknown(edit);
-      if (!record) return;
-      const oldString = stringField(record, "old_string");
-      const newString = stringField(record, "new_string");
-      lines.push(`  - index: ${index + 1}`);
-      if (oldString !== null) appendBlock(lines, "    ", "old_string", oldString);
-      if (newString !== null) appendBlock(lines, "    ", "new_string", newString);
-    });
-    return { content: lines.join("\n"), lang: "yaml" };
+    if (filePath && edits.length > 0) {
+      const lines = [`file_path: ${yamlScalar(filePath)}`, "edits:"];
+      edits.forEach((edit, index) => {
+        const record = recordFromUnknown(edit);
+        if (!record) return;
+        const oldString = stringField(record, "old_string");
+        const newString = stringField(record, "new_string");
+        lines.push(`  - index: ${index + 1}`);
+        if (oldString !== null) appendBlock(lines, "    ", "old_string", oldString);
+        if (newString !== null) appendBlock(lines, "    ", "new_string", newString);
+      });
+      return { content: lines.join("\n"), lang: "yaml" };
+    }
   }
 
   if (normalized === "write") {
     const filePath = stringField(input, "file_path");
     const content = stringField(input, "content");
-    if (!filePath || content === null) return null;
-    const lines = [`file_path: ${yamlScalar(filePath)}`];
-    appendBlock(lines, "", "content", content);
-    return { content: lines.join("\n"), lang: "yaml" };
+    if (filePath && content !== null) {
+      const lines = [`file_path: ${yamlScalar(filePath)}`];
+      appendBlock(lines, "", "content", content);
+      return { content: lines.join("\n"), lang: "yaml" };
+    }
   }
 
   if (normalized === "notebookedit") {
-    return replacementDetails(input, {
+    const details = replacementDetails(input, {
       pathFields: ["notebook_path"],
       oldFields: ["old_source", "source"],
       newFields: ["new_source"],
       oldLabel: "old_source",
       newLabel: "new_source",
     });
+    if (details) return details;
   }
 
   if (normalized.includes("str_replace")) {
-    return replacementDetails(input, {
+    const details = replacementDetails(input, {
       pathFields: ["path", "file_path"],
       oldFields: ["old_str", "old_string"],
       newFields: ["new_str", "new_string"],
       oldLabel: "old_str",
       newLabel: "new_str",
     });
+    if (details) return details;
   }
 
-  const patch = patchTextFromInput(input);
+  const patch = patchTextFromToolInput(input);
   if (patch) return { content: patch, lang: "diff" };
 
   return null;
@@ -315,16 +322,6 @@ function replacementDetails(
   if (oldString !== null) appendBlock(lines, "", options.oldLabel, oldString);
   if (newString !== null) appendBlock(lines, "", options.newLabel, newString);
   return { content: lines.join("\n"), lang: "yaml" };
-}
-
-function patchTextFromInput(input: Record<string, unknown>): string | null {
-  for (const field of ["patch", "input", "cmd", "command"] as const) {
-    const value = stringField(input, field);
-    if (value && value.includes("\n") && /(?:^|\n)(diff --git|@@ |\+\+\+ |--- )/.test(value)) {
-      return value;
-    }
-  }
-  return null;
 }
 
 function appendBlock(

@@ -197,6 +197,7 @@ export function Dashboard() {
   const selectWorkspace = useAppStore((s) => s.selectWorkspace);
   const agentQuestions = useAppStore((s) => s.agentQuestions);
   const planApprovals = useAppStore((s) => s.planApprovals);
+  const agentApprovals = useAppStore((s) => s.agentApprovals);
   const unreadCompletions = useAppStore((s) => s.unreadCompletions);
   const sessionsByWorkspace = useAppStore((s) => s.sessionsByWorkspace);
   const openModal = useAppStore((s) => s.openModal);
@@ -258,9 +259,10 @@ export function Dashboard() {
     const rows = activeWorkspaces.map((ws) => {
       const wsSessions = sessionsByWorkspace[ws.id] ?? [];
       const hasQuestion = wsSessions.some((s) => agentQuestions[s.id]);
+      const hasAgentApproval = wsSessions.some((s) => agentApprovals[s.id]);
       const hasPlan = wsSessions.some((s) => planApprovals[s.id]);
       const badge: "ask" | "plan" | "done" | null =
-        hasQuestion ? "ask" :
+        hasQuestion || hasAgentApproval ? "ask" :
         hasPlan ? "plan" :
         unreadCompletions.has(ws.id) && !isAgentBusy(ws.agent_status) ? "done" :
         null;
@@ -273,7 +275,7 @@ export function Dashboard() {
       return b.lastUsed.localeCompare(a.lastUsed);
     });
     return rows;
-  }, [activeWorkspaces, agentQuestions, planApprovals, unreadCompletions, lastMessages, sessionsByWorkspace]);
+  }, [activeWorkspaces, agentApprovals, agentQuestions, planApprovals, unreadCompletions, lastMessages, sessionsByWorkspace]);
 
   // Repo IDs ranked by most-recent activity (last message anywhere in any workspace
   // for that repo). Drives which project the welcome screen highlights as the

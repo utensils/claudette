@@ -154,6 +154,32 @@ afterEach(async () => {
 });
 
 describe("MessagesWithTurns edit summaries", () => {
+  it("renders persisted thinking blocks with the shared ThinkingBlock surface", async () => {
+    const assistant = message("assistant-1", "Assistant", "Done.");
+    assistant.thinking = "I should check the existing renderer first.";
+    useAppStore.setState({
+      showThinkingBlocks: { [SESSION_ID]: true },
+    });
+
+    const container = await render(
+      <MessagesWithTurns
+        messages={[message("user-1", "User", "Update it"), assistant]}
+        workspaceId={WORKSPACE_ID}
+        sessionId={SESSION_ID}
+        isRunning={false}
+        searchQuery=""
+        toolDisplayMode="grouped"
+      />,
+    );
+
+    expect(container.textContent).toContain("Thinking");
+    expect(container.textContent).toContain("Done.");
+    const thinkingToggle = container.querySelector(
+      "button[aria-expanded]",
+    ) as HTMLButtonElement | null;
+    expect(thinkingToggle?.textContent).toContain("Thinking");
+  });
+
   it("does not show workspace dirty files for a non-editing session turn", async () => {
     const messages = [
       message("user-1", "User", "Query production data"),

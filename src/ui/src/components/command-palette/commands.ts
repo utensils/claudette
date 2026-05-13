@@ -30,6 +30,7 @@ import { isMacHotkeyPlatform } from "../../hotkeys/platform";
 import { MODELS } from "../chat/ModelSelector";
 import type { Model } from "../chat/modelRegistry";
 import { isFastSupported, isEffortSupported, isXhighEffortAllowed, isMaxEffortAllowed } from "../chat/modelCapabilities";
+import { CODEX_REASONING_LEVELS } from "../chat/reasoningControls";
 
 export type CommandCategory =
   | "general"
@@ -49,6 +50,11 @@ export interface Command {
   shortcut?: string;
   keywords?: string[];
   execute: () => void;
+}
+
+export interface EffortCommandLabels {
+  codexReasoningEffort?: string;
+  codexSetReasoningEffort?: string;
 }
 
 export const CATEGORY_LABELS: Record<CommandCategory, string> = {
@@ -115,11 +121,13 @@ export interface CommandContext {
   effortLevel: string;
   setEffortLevel: (sessionId: string, level: string) => void;
   selectedModel: string;
+  selectedModelProvider: string;
   persistSetting: (key: string, value: string) => void;
   stopAgent: (sessionId: string) => Promise<void>;
   resetAgentSession: (sessionId: string) => Promise<void>;
   clearAgentQuestion: (sessionId: string) => void;
   clearPlanApproval: (sessionId: string) => void;
+  clearAgentApproval: (sessionId: string) => void;
   updateWorkspace: (id: string, updates: Record<string, unknown>) => void;
 }
 
@@ -165,7 +173,31 @@ export function buildEffortCommands(
   currentEffort: string,
   onSelect: (level: string) => void,
   close: () => void,
+  selectedProvider = "anthropic",
+  labels: EffortCommandLabels = {},
 ): Command[] {
+  if (selectedProvider === "experimental-codex") {
+    const effortLabel = labels.codexReasoningEffort ?? "Intelligence";
+    const setEffortLabel = labels.codexSetReasoningEffort ?? "Set Codex intelligence";
+    const selectedEffort = CODEX_REASONING_LEVELS.some((level) => level.id === currentEffort)
+      ? currentEffort
+      : "high";
+    return CODEX_REASONING_LEVELS.map((level) => ({
+      id: `effort:${level.id}`,
+      name: `${level.label}${level.id === selectedEffort ? " ✓" : ""}`,
+      description: `${effortLabel}: ${level.label}`,
+      category: "agent" as const,
+      icon: Gauge,
+      keywords: [
+        effortLabel.toLowerCase(),
+        setEffortLabel.toLowerCase(),
+        "reasoning",
+        level.label.toLowerCase(),
+      ],
+      execute: () => { onSelect(level.id); close(); },
+    }));
+  }
+
   const all = [
     { id: "auto", label: "Auto", description: "Let CLI decide" },
     { id: "low", label: "Low", description: "Fast, minimal reasoning" },
@@ -317,19 +349,21 @@ export function buildCommands(ctx: CommandContext): Command[] {
   const wsId = ctx.selectedWorkspaceId;
   const sessId = ctx.selectedSessionId;
   if (wsId && sessId) {
-    cmds.push({
-      id: "toggle-thinking",
-      name: `${ctx.thinkingEnabled ? "Disable" : "Enable"} Thinking Mode`,
-      category: "agent",
-      icon: Brain,
-      keywords: ["think", "reasoning", "extended"],
-      execute: () => {
-        const next = !ctx.thinkingEnabled;
-        ctx.setThinkingEnabled(sessId, next);
-        ctx.persistSetting(`thinking_enabled:${sessId}`, String(next));
-        ctx.close();
-      },
-    });
+    if (ctx.selectedModelProvider !== "experimental-codex") {
+      cmds.push({
+        id: "toggle-thinking",
+        name: `${ctx.thinkingEnabled ? "Disable" : "Enable"} Thinking Mode`,
+        category: "agent",
+        icon: Brain,
+        keywords: ["think", "reasoning", "extended"],
+        execute: () => {
+          const next = !ctx.thinkingEnabled;
+          ctx.setThinkingEnabled(sessId, next);
+          ctx.persistSetting(`thinking_enabled:${sessId}`, String(next));
+          ctx.close();
+        },
+      });
+    }
     cmds.push({
       id: "toggle-plan",
       name: `${ctx.planMode ? "Disable" : "Enable"} Plan Mode`,
@@ -397,7 +431,13 @@ export function buildCommands(ctx: CommandContext): Command[] {
       category: "agent",
       icon: RotateCcw,
       keywords: ["restart", "new", "clear"],
-      execute: () => { ctx.resetAgentSession(sessId); ctx.clearAgentQuestion(sessId); ctx.clearPlanApproval(sessId); ctx.close(); },
+      execute: () => {
+        ctx.resetAgentSession(sessId);
+        ctx.clearAgentQuestion(sessId);
+        ctx.clearPlanApproval(sessId);
+        ctx.clearAgentApproval(sessId);
+        ctx.close();
+      },
     });
   }
 

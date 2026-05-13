@@ -1,23 +1,26 @@
 ---
 title: Alternative Providers
-description: Run Claudette agents against Ollama, LM Studio, OpenAI, or OpenAI Codex instead of the default Claude Code path — architecture and capability differences, with deeper setup pages for each.
+description: Run Claudette agents against Ollama, LM Studio, OpenAI, or native Codex instead of the default Claude Code path — architecture and capability differences, with deeper setup pages for each.
 ---
 
-By default Claudette spawns the official `claude` CLI authenticated against Anthropic. Behind the **Alternative Claude Code backends** experimental flag (the UI keeps that wording for the toggle) you can also point agents at:
+By default Claudette spawns the official `claude` CLI authenticated against Anthropic. With the **Alternative Claude Code backends** experimental flag you can also point agents at:
 
 - **[Ollama](/claudette/features/providers/ollama/)** — local LLMs running on your own machine, talking Claude's wire format directly.
 - **[LM Studio](/claudette/features/providers/lm-studio/)** — local LLMs loaded in LM Studio's desktop app, served via LM Studio 0.4.1+'s native `/v1/messages`. Routed through the in-process gateway with an Anthropic-shape pass-through (no translation, just status-code correction on errors).
-- **[OpenAI & Codex](/claudette/features/providers/openai-codex/)** — `gpt-*` models via the OpenAI API, or your ChatGPT subscription via the `codex` CLI's auth, both routed through the in-process gateway with full Anthropic ↔ OpenAI Responses translation.
+- **[OpenAI](/claudette/features/providers/openai-codex/#openai-api)** — `gpt-*` models via the OpenAI API gateway.
 
-The data model also defines `CustomAnthropic` and `CustomOpenAi` kinds for self-hosted / proxied endpoints, but the Settings panel currently only renders the five built-in backends — there is no in-GUI flow to add a custom provider yet.
+Native Codex is a separate gate: **[Codex](/claudette/features/providers/openai-codex/#codex)** uses your ChatGPT subscription through the native `codex app-server` harness and does not depend on Alternative Claude Code backends.
 
-This is **experimental** because some Claude-specific features (extended thinking, effort levels, fast mode, the 1M-context auto-upgrade) only have meaningful equivalents on the official Anthropic backend.
+The data model also defines `CustomAnthropic` and `CustomOpenAi` kinds for self-hosted / proxied endpoints, but the Settings panel currently only renders the built-in backends — there is no in-GUI flow to add a custom provider yet.
+
+This is **experimental** because some Claude-specific features only have clean equivalents on particular backends. Claudette hides or disables unsupported controls instead of sending ignored settings.
 
 ## Enabling the feature
 
-1. Open **Settings > Experimental** and toggle on **Alternative Claude Code backends**.
-2. Open **Settings > Models** and configure each provider you want to use (URL, secret, models).
-3. Pick a default in **Settings > Models > Default backend**, or override per session from the chat header.
+1. Confirm **Settings > Experimental > Alternative Claude Code backends** is on. It is off by default for new users; turning it off hides Ollama, LM Studio, OpenAI API, and custom providers.
+2. For native Codex, toggle on **Codex** instead. This separate gate shows Codex and seeds Codex models into the picker without enabling Alternative Claude Code backends.
+3. Open **Settings > Models** and configure each provider you want to use (URL, secret, models).
+4. Pick a default in **Settings > Models > Default backend**, or override per session from the chat header.
 
 When the feature is off, only the built-in `Anthropic` backend is exposed — every workspace runs `claude` as before.
 
@@ -29,18 +32,21 @@ When the feature is off, only the built-in `Anthropic` backend is exposed — ev
 | `ollama` | `Ollama` | `http://localhost:11434` | None (or optional bearer token) | [Ollama](/claudette/features/providers/ollama/) |
 | `lm-studio` | `LmStudio` | `http://localhost:1234` | None (or optional bearer token) | [LM Studio](/claudette/features/providers/lm-studio/) |
 | `openai-api` | `OpenAiApi` | `https://api.openai.com` | API key (required) | [OpenAI & Codex](/claudette/features/providers/openai-codex/) |
-| `codex-subscription` | `CodexSubscription` | `https://chatgpt.com/backend-api` | `codex login` (managed by `codex` CLI) | [OpenAI & Codex](/claudette/features/providers/openai-codex/) |
+| `experimental-codex` | `CodexNative` | (uses `codex app-server`) | `codex login` (managed by `codex` CLI) | [OpenAI & Codex](/claudette/features/providers/openai-codex/) |
+| `codex-subscription` | `CodexSubscription` | `https://chatgpt.com/backend-api` | `codex login` (managed by `codex` CLI) | Legacy internal row; not user-facing in Settings |
 
 ## Two execution paths: direct vs gateway
 
 Claudette splits providers into two architectural categories:
 
-**Direct** (`Anthropic`, `Ollama`, `CustomAnthropic`) — speak Claude's wire format natively *and* return errors with HTTP status codes the Anthropic SDK already classifies correctly. The spawned `claude` CLI just gets a different base URL and auth token; there is no in-process translation layer.
+**Direct Claude wire format** (`Anthropic`, `Ollama`, `CustomAnthropic`) — speak Claude's wire format natively *and* return errors with HTTP status codes the Anthropic SDK already classifies correctly. The spawned `claude` CLI just gets a different base URL and auth token; there is no in-process translation layer.
 
-**Gateway** (`OpenAiApi`, `CodexSubscription`, `CustomOpenAi`, `LmStudio`) — Claudette spawns a tiny in-process HTTP listener that the spawned `claude` process is pointed at instead of `api.anthropic.com`. The gateway has two flavors of work depending on backend kind:
+**Gateway** (`OpenAiApi`, `CustomOpenAi`, `LmStudio`, plus the legacy internal CodexSubscription path) — Claudette spawns a tiny in-process HTTP listener that the spawned `claude` process is pointed at instead of `api.anthropic.com`. The gateway has two flavors of work depending on backend kind:
 
-- **OpenAI-Responses translation** (OpenAI / Codex / CustomOpenAi): full Anthropic ↔ OpenAI `/v1/responses` translation in both directions, since these backends don't speak Anthropic.
+- **OpenAI-Responses translation** (OpenAI / legacy Codex / CustomOpenAi): full Anthropic ↔ OpenAI `/v1/responses` translation in both directions, since these backends don't speak Anthropic.
 - **Anthropic pass-through** (LM Studio): forward the Anthropic body verbatim to upstream `/v1/messages`, stream 2xx responses through unchanged, intercept non-2xx to fix LM Studio's HTTP 500 mis-classification of context-overflow errors. Wire format is already correct; we only translate status codes on the error path.
+
+**Native harness** (`CodexNative`) — Claudette spawns `codex app-server --listen stdio://` and speaks JSON-RPC to Codex directly. This path does not run `claude` or the OpenAI gateway.
 
 > **Heads up if you ever configure a custom OpenAI endpoint**: Claudette posts to `/v1/responses`, not `/v1/chat/completions`. Providers that only implement Chat Completions won't work behind the gateway.
 
@@ -48,16 +54,16 @@ Claudette splits providers into two architectural categories:
 
 The per-turn capabilities differ by provider (`AgentBackendCapabilities` in `src/agent_backend.rs`). The chat-header toggles for unsupported capabilities are hidden / disabled automatically:
 
-| Capability | Anthropic | Ollama | LM Studio | Gateway (OpenAI / Codex) |
-|---|---|---|---|---|
-| Extended thinking | ✅ | ✅ (when model supports) | ❌ | ❌ |
-| Effort levels | ✅ | ❌ | ❌ | ❌ |
-| Fast mode | ✅ | ❌ | ❌ | ❌ |
-| 1M-context auto-upgrade | ✅ | ❌ | ❌ | ❌ |
-| Tool use | ✅ | ✅ | ✅ (model-dependent) | ✅ |
-| Vision | ✅ | ✅ | ✅ (model-dependent) | ✅ |
+| Capability | Anthropic | Ollama | LM Studio | Gateway OpenAI | Codex |
+|---|---|---|---|---|---|
+| Extended thinking | ✅ | ✅ (when model supports) | ❌ | ❌ | ✅ (reasoning summaries) |
+| Reasoning / effort levels | ✅ (Claude effort) | ❌ | ❌ | ❌ | ✅ (Codex intelligence) |
+| Fast mode | ✅ | ❌ | ❌ | ❌ | ✅ |
+| 1M-context auto-upgrade | ✅ | ❌ | ❌ | ❌ | ❌ |
+| Tool use | ✅ | ✅ | ✅ (model-dependent) | ✅ | ✅ |
+| Vision | ✅ | ✅ | ✅ (model-dependent) | ✅ | ❌ |
 
-LM Studio is on the same direct path as Ollama, but its capability profile mirrors the gateway providers' (no extended-thinking / effort / fast / 1M toggles) — local models implement those Anthropic-specific knobs inconsistently or not at all, so the chat header hides them. Switching a session to any non-Anthropic provider visibly disables the toggles that don't apply.
+LM Studio is on the same direct path as Ollama, but its capability profile mirrors the gateway providers' (no extended-thinking / effort / fast / 1M toggles) — local models implement those Anthropic-specific knobs inconsistently or not at all, so the chat header hides them. Codex exposes fast mode and Codex intelligence through Codex app-server settings. Switching a session to a provider visibly disables or relabels the toggles that don't apply.
 
 ## How the gateway runtime works
 
@@ -67,7 +73,7 @@ For gateway providers, Claudette spins up an HTTP listener on `127.0.0.1:0` (ran
 - `ANTHROPIC_AUTH_TOKEN` — the auth token. Cached for the gateway server's lifetime (keyed by backend id + runtime hash) and reused across turns; rotates only when the gateway restarts (e.g., after config or model changes).
 - `CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1` — tells the CLI to query the gateway for available models.
 
-The gateway translates Claude's request into the OpenAI Responses API (`POST /v1/responses` for OpenAI; `POST /codex/responses` for the Codex subscription path — the unversioned form is intentional, since the upstream Codex Responses endpoint lives directly under `https://chatgpt.com/backend-api/codex/responses` with no `/v1/` segment) and translates the streaming response back. It's an in-process tokio task; no external service.
+The gateway translates Claude's request into the OpenAI Responses API (`POST /v1/responses` for OpenAI; `POST /codex/responses` for the legacy Codex subscription path — the unversioned form is intentional, since the upstream Codex Responses endpoint lives directly under `https://chatgpt.com/backend-api/codex/responses` with no `/v1/` segment) and translates the streaming response back. It's an in-process tokio task; no external service.
 
 If the provider config or model changes, the gateway restarts on the next agent turn. There's no manual lifecycle to manage.
 
@@ -83,7 +89,7 @@ Per-session model selection is persisted in `app_settings` as `model:<session_id
 - **[Ollama](/claudette/features/providers/ollama/)** — air-gapped work, privacy-sensitive code, or offline travel. Quality varies wildly by model.
 - **[LM Studio](/claudette/features/providers/lm-studio/)** — same air-gapped use cases as Ollama, but if you already manage your local model library through LM Studio's desktop app and want to keep it as the single source of truth.
 - **[OpenAI API](/claudette/features/providers/openai-codex/#openai-api)** — if you specifically want `gpt-*` or OpenAI reasoning models, or have prepaid OpenAI credit you'd rather burn than your Claude quota.
-- **[Codex](/claudette/features/providers/openai-codex/#codex-openai-subscription)** — if you're already paying for ChatGPT Plus/Pro/Team and want to reuse that quota.
+- **[Codex](/claudette/features/providers/openai-codex/#codex)** — if you're already paying for ChatGPT Plus/Pro/Team and want to reuse that quota through the native Codex CLI.
 
 ## Caveats
 

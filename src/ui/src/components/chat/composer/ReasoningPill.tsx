@@ -1,9 +1,16 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { Brain, Eye, EyeOff, ChevronDown } from "lucide-react";
 import { useAppStore } from "../../../stores/useAppStore";
 import { setAppSetting } from "../../../services/tauri";
-import { isEffortSupported, isXhighEffortAllowed, isMaxEffortAllowed } from "../modelCapabilities";
-import { EFFORT_LEVELS } from "../EffortSelector";
+import { isEffortSupported } from "../modelCapabilities";
+import {
+  getReasoningLevels,
+  normalizeReasoningLevel,
+  reasoningLevelLabel,
+  reasoningVariantForModel,
+} from "../reasoningControls";
+import { useSelectedModelEntry } from "../useSelectedModelEntry";
 import styles from "./ReasoningPill.module.css";
 
 interface ReasoningPillProps {
@@ -11,13 +18,8 @@ interface ReasoningPillProps {
   disabled: boolean;
 }
 
-function getAvailableLevels(model: string) {
-  if (isXhighEffortAllowed(model)) return EFFORT_LEVELS;
-  if (isMaxEffortAllowed(model)) return EFFORT_LEVELS.filter((l) => l.id !== "xhigh");
-  return EFFORT_LEVELS.filter((l) => l.id !== "xhigh" && l.id !== "max");
-}
-
 export function ReasoningPill({ sessionId, disabled }: ReasoningPillProps) {
+  const { t } = useTranslation("chat");
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -28,9 +30,24 @@ export function ReasoningPill({ sessionId, disabled }: ReasoningPillProps) {
   const setThinkingEnabled = useAppStore((s) => s.setThinkingEnabled);
   const setShowThinkingBlocks = useAppStore((s) => s.setShowThinkingBlocks);
   const setEffortLevel = useAppStore((s) => s.setEffortLevel);
-  const showEffort = isEffortSupported(selectedModel);
-  const effortLabel = EFFORT_LEVELS.find((l) => l.id === effortLevel)?.label ?? effortLevel;
-  const isActive = thinkingEnabled;
+  const currentModel = useSelectedModelEntry(sessionId);
+  const reasoningVariant = reasoningVariantForModel(currentModel);
+  const isCodex = reasoningVariant === "codex";
+  const showEffort = currentModel?.supportsEffort ?? isEffortSupported(selectedModel);
+  const normalizedEffort = normalizeReasoningLevel(
+    effortLevel,
+    selectedModel,
+    reasoningVariant,
+  );
+  const effortLabel = reasoningLevelLabel(
+    normalizedEffort,
+    selectedModel,
+    reasoningVariant,
+  );
+  const canToggleReasoning = !isCodex;
+  // Codex reasoning is model-provided; its active styling tracks whether
+  // the UI is currently showing the streamed reasoning summaries.
+  const isActive = isCodex ? showThinkingBlocks : thinkingEnabled;
 
   const openDropdown = useCallback(() => {
     if (!disabled) setDropdownOpen(true);
@@ -80,7 +97,14 @@ export function ReasoningPill({ sessionId, disabled }: ReasoningPillProps) {
     return () => document.removeEventListener("mousedown", handleClick);
   }, [dropdownOpen]);
 
-  const levels = getAvailableLevels(selectedModel);
+  const levels = getReasoningLevels(selectedModel, reasoningVariant);
+  const reasoningSettingsLabel = isCodex
+    ? t("codex_reasoning_settings")
+    : t("reasoning_settings");
+  const thinkingLabel = isCodex ? t("codex_reasoning_chip") : t("thinking_chip");
+  const showThinkingLabel = isCodex ? t("codex_show_reasoning") : t("show_thinking");
+  const effortGroupLabel = isCodex ? t("codex_reasoning_effort") : t("effort");
+  const setEffortLabel = isCodex ? t("codex_set_reasoning_effort") : t("set_effort");
 
   return (
     <div ref={containerRef} className={styles.wrap}>
@@ -90,13 +114,13 @@ export function ReasoningPill({ sessionId, disabled }: ReasoningPillProps) {
           className={styles.segment}
           onClick={openDropdown}
           disabled={disabled}
-          title="Reasoning settings"
+          title={reasoningSettingsLabel}
           aria-expanded={dropdownOpen}
-          aria-label="Reasoning settings"
+          aria-label={reasoningSettingsLabel}
         >
           <span className={styles.shortcutContent}>
             <Brain size={14} />
-            <span className={styles.segmentLabel}>Thinking</span>
+            <span className={styles.segmentLabel}>{thinkingLabel}</span>
           </span>
         </button>
 
@@ -107,7 +131,7 @@ export function ReasoningPill({ sessionId, disabled }: ReasoningPillProps) {
           className={styles.segment}
           onClick={openDropdown}
           disabled={disabled}
-          title="Reasoning settings"
+          title={reasoningSettingsLabel}
           aria-expanded={dropdownOpen}
         >
           {showThinkingBlocks ? <Eye size={13} /> : <EyeOff size={13} />}
@@ -121,7 +145,7 @@ export function ReasoningPill({ sessionId, disabled }: ReasoningPillProps) {
               className={styles.segment}
               onClick={openDropdown}
               disabled={disabled}
-              title="Set effort level"
+              title={setEffortLabel}
               aria-expanded={dropdownOpen}
             >
               <span className={styles.effortLabel}>{effortLabel.toLowerCase()}</span>
@@ -135,16 +159,18 @@ export function ReasoningPill({ sessionId, disabled }: ReasoningPillProps) {
 
       {dropdownOpen && (
         <div className={styles.dropdown}>
-          <div className={styles.sectionLabel}>Reasoning</div>
-          <button
-            type="button"
-            className={`${styles.menuItem} ${thinkingEnabled ? styles.menuItemActive : ""}`}
-            onClick={toggleThinking}
-          >
-            <span className={styles.menuIcon}><Brain size={14} /></span>
-            <span className={styles.menuLabel}>Thinking</span>
-            <span className={styles.menuMeta}>{thinkingEnabled ? "on" : "off"}</span>
-          </button>
+          <div className={styles.sectionLabel}>{thinkingLabel}</div>
+          {canToggleReasoning && (
+            <button
+              type="button"
+              className={`${styles.menuItem} ${thinkingEnabled ? styles.menuItemActive : ""}`}
+              onClick={toggleThinking}
+            >
+              <span className={styles.menuIcon}><Brain size={14} /></span>
+              <span className={styles.menuLabel}>{thinkingLabel}</span>
+              <span className={styles.menuMeta}>{thinkingEnabled ? "on" : "off"}</span>
+            </button>
+          )}
           <button
             type="button"
             className={`${styles.menuItem} ${showThinkingBlocks ? styles.menuItemActive : ""}`}
@@ -153,31 +179,31 @@ export function ReasoningPill({ sessionId, disabled }: ReasoningPillProps) {
             <span className={styles.menuIcon}>
               {showThinkingBlocks ? <Eye size={14} /> : <EyeOff size={14} />}
             </span>
-            <span className={styles.menuLabel}>Show thinking</span>
+            <span className={styles.menuLabel}>{showThinkingLabel}</span>
             <span className={styles.menuMeta}>{showThinkingBlocks ? "on" : "off"}</span>
           </button>
 
           {showEffort && (
             <>
               <div className={styles.sectionDivider} />
-              <div className={styles.sectionLabel}>Effort</div>
+              <div className={styles.sectionLabel}>{effortGroupLabel}</div>
               {levels.map((level) => (
                 <button
                   key={level.id}
                   type="button"
-                  className={`${styles.menuItem} ${level.id === effortLevel ? styles.menuItemActive : ""}`}
+                  className={`${styles.menuItem} ${level.id === normalizedEffort ? styles.menuItemActive : ""}`}
                   onClick={() => handleEffortSelect(level.id)}
                 >
                   <span
                     className={styles.effortDot}
                     style={{
-                      background: level.id === effortLevel
+                      background: level.id === normalizedEffort
                         ? "var(--accent-primary)"
                         : "var(--text-dim)",
                     }}
                   />
                   <span className={styles.menuLabel}>{level.label}</span>
-                  {level.id === effortLevel && (
+                  {level.id === normalizedEffort && (
                     <span className={styles.menuMeta}>&#x2713;</span>
                   )}
                 </button>

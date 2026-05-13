@@ -9,11 +9,12 @@
   bottom: 100%;
   left: 0;
   margin-bottom: 4px;
-  min-width: 210px;
+  width: min(360px, calc(100vw - 24px));
+  min-width: 240px;
   background: var(--sidebar-bg);
   border: 1px solid var(--sidebar-border);
   border-radius: 8px;
-  padding: 4px;
+  padding: 6px;
   z-index: 100;
   box-shadow: var(--shadow-lg);
 }
@@ -41,6 +42,7 @@
   cursor: pointer;
   text-align: left;
   transition: background var(--transition-fast);
+  min-height: 34px;
 }
 
 .item:hover {
@@ -65,18 +67,33 @@
   cursor: help;
   position: relative;
   top: -1px;
+  flex-shrink: 0;
+}
+
+.modelLabel {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .providerBadge {
   margin-left: auto;
   color: var(--text-dim);
   font-size: 11px;
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .check {
-  margin-left: auto;
+  margin-left: 4px;
   color: var(--accent-primary);
   font-size: 14px;
+  flex-shrink: 0;
 }
 
 .shortcut {

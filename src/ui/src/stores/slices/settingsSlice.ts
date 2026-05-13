@@ -70,6 +70,8 @@ export interface SettingsSlice {
   setAlternativeBackendsAvailable: (available: boolean) => void;
   alternativeBackendsEnabled: boolean;
   setAlternativeBackendsEnabled: (enabled: boolean) => void;
+  experimentalCodexEnabled: boolean;
+  setExperimentalCodexEnabled: (enabled: boolean) => void;
   agentBackends: AgentBackendConfig[];
   setAgentBackends: (backends: AgentBackendConfig[]) => void;
   defaultAgentBackendId: string;
@@ -178,11 +180,17 @@ export const createSettingsSlice: StateCreator<
     set((state) => ({
       alternativeBackendsAvailable: available,
       alternativeBackendsEnabled: available ? state.alternativeBackendsEnabled : false,
+      experimentalCodexEnabled: available ? state.experimentalCodexEnabled : false,
     })),
   alternativeBackendsEnabled: false,
   setAlternativeBackendsEnabled: (enabled) =>
     set((state) => ({
       alternativeBackendsEnabled: state.alternativeBackendsAvailable && enabled,
+    })),
+  experimentalCodexEnabled: false,
+  setExperimentalCodexEnabled: (enabled) =>
+    set((state) => ({
+      experimentalCodexEnabled: state.alternativeBackendsAvailable && enabled,
     })),
   agentBackends: [],
   setAgentBackends: (backends) => set({ agentBackends: backends }),

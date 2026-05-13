@@ -14,7 +14,7 @@ import { afterAll } from "vitest";
 vi.stubGlobal("navigator", { platform: "MacIntel", userAgentData: undefined });
 afterAll(() => { vi.unstubAllGlobals(); });
 
-const { buildCommands, buildModelCommands, buildFileCommands } = await import("./commands");
+const { buildCommands, buildModelCommands, buildEffortCommands, buildFileCommands } = await import("./commands");
 
 /** Minimal CommandContext stub — only the fields buildCommands needs. */
 function makeContext(overrides: Partial<CommandContext> = {}): CommandContext {
@@ -52,11 +52,13 @@ function makeContext(overrides: Partial<CommandContext> = {}): CommandContext {
     effortLevel: "auto",
     setEffortLevel: vi.fn(),
     selectedModel: "opus",
+    selectedModelProvider: "anthropic",
     persistSetting: vi.fn(),
     stopAgent: vi.fn(),
     resetAgentSession: vi.fn(),
     clearAgentQuestion: vi.fn(),
     clearPlanApproval: vi.fn(),
+    clearAgentApproval: vi.fn(),
     updateWorkspace: vi.fn(),
     ...overrides,
   };
@@ -167,6 +169,28 @@ describe("buildCommands — zoom commands", () => {
   });
 });
 
+describe("buildCommands — provider-specific reasoning commands", () => {
+  it("hides the thinking toggle for Codex sessions", () => {
+    const cmds = buildCommands(makeContext({
+      selectedWorkspaceId: "ws-1",
+      selectedSessionId: "sess-1",
+      selectedModel: "gpt-5.5",
+      selectedModelProvider: "experimental-codex",
+    }));
+
+    expect(cmds.find((c) => c.id === "toggle-thinking")).toBeUndefined();
+  });
+
+  it("keeps the thinking toggle for Claude sessions", () => {
+    const cmds = buildCommands(makeContext({
+      selectedWorkspaceId: "ws-1",
+      selectedSessionId: "sess-1",
+    }));
+
+    expect(cmds.find((c) => c.id === "toggle-thinking")).toBeDefined();
+  });
+});
+
 describe("buildModelCommands — extraUsage icon and description", () => {
   const onSelect = vi.fn();
   const close = vi.fn();
@@ -202,6 +226,36 @@ describe("buildModelCommands — extraUsage icon and description", () => {
     expect(selected.name).toContain("✓");
     const notSelected = cmds.find((c) => c.id === "model:claude-opus-4-7")!;
     expect(notSelected.name).not.toContain("✓");
+  });
+});
+
+describe("buildEffortCommands", () => {
+  it("uses Codex intelligence levels without Claude-only auto or max levels", () => {
+    const cmds = buildEffortCommands(
+      "gpt-5.5",
+      "high",
+      vi.fn(),
+      vi.fn(),
+      "experimental-codex",
+      {
+        codexReasoningEffort: "Inteligencia",
+        codexSetReasoningEffort: "Establecer inteligencia de Codex",
+      },
+    );
+
+    expect(cmds.map((cmd) => cmd.id)).toEqual([
+      "effort:low",
+      "effort:medium",
+      "effort:high",
+      "effort:xhigh",
+    ]);
+    expect(cmds.find((cmd) => cmd.id === "effort:high")?.name).toContain("✓");
+    expect(cmds.find((cmd) => cmd.id === "effort:high")?.description).toBe(
+      "Inteligencia: High",
+    );
+    expect(cmds.find((cmd) => cmd.id === "effort:high")?.keywords).toContain(
+      "establecer inteligencia de codex",
+    );
   });
 });
 

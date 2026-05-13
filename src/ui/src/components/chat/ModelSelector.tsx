@@ -23,10 +23,11 @@ export function ModelSelector({
   const { t } = useTranslation("chat");
   const disable1mContext = useAppStore((s) => s.disable1mContext);
   const alternativeBackendsEnabled = useAppStore((s) => s.alternativeBackendsEnabled);
+  const experimentalCodexEnabled = useAppStore((s) => s.experimentalCodexEnabled);
   const agentBackends = useAppStore((s) => s.agentBackends);
   const registry = useMemo(
-    () => buildModelRegistry(alternativeBackendsEnabled, agentBackends),
-    [alternativeBackendsEnabled, agentBackends],
+    () => buildModelRegistry(alternativeBackendsEnabled, agentBackends, experimentalCodexEnabled),
+    [alternativeBackendsEnabled, agentBackends, experimentalCodexEnabled],
   );
   const visibleModels = useMemo(
     () =>
@@ -72,6 +73,7 @@ export function ModelSelector({
                 model={model}
                 selected={model.id === selected && (model.providerId ?? "anthropic") === selectedProvider}
                 onSelect={onSelect}
+                showProviderBadge={model.providerLabel !== group}
               />
             ))}
           </div>
@@ -98,6 +100,7 @@ export function ModelSelector({
                     model={model}
                     selected={model.id === selected && (model.providerId ?? "anthropic") === selectedProvider}
                     onSelect={onSelect}
+                    showProviderBadge={Boolean(model.providerLabel)}
                   />
                 ))}
               </div>
@@ -113,12 +116,15 @@ function ModelRow({
   model,
   selected,
   onSelect,
+  showProviderBadge,
 }: {
   model: Model;
   selected: boolean;
   onSelect: (id: string, providerId?: string) => void;
+  showProviderBadge?: boolean;
 }) {
   const { t } = useTranslation("chat");
+  const shouldShowProviderBadge = Boolean(showProviderBadge && model.providerLabel);
   return (
     <button
       type="button"
@@ -126,8 +132,8 @@ function ModelRow({
       onClick={() => onSelect(model.id, model.providerId)}
     >
       <span className={styles.dot} />
-      {model.label}
-      {model.providerLabel && (
+      <span className={styles.modelLabel} title={model.label}>{model.label}</span>
+      {shouldShowProviderBadge && (
         <span className={styles.providerBadge}>{model.providerLabel}</span>
       )}
       {model.extraUsage && (

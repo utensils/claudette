@@ -64,4 +64,18 @@ describe("formatBackendError", () => {
       "LM Studio is not reachable at http://localhost:1234. Run `lms server start` or update the Base URL.",
     );
   });
+
+  it("does not invent a Base URL for native Codex CLI transport failures", () => {
+    const message = formatBackendError(
+      "error sending request for url",
+      backend({
+        id: "experimental-codex",
+        label: "Codex",
+        kind: "codex_native",
+        base_url: null,
+      }),
+    );
+
+    expect(message).toBe("Codex is not reachable. Check the provider and try again.");
+  });
 });

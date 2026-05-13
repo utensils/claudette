@@ -10,10 +10,13 @@ export function useSelectedModelEntry(sessionId: string): Model | undefined {
   const alternativeBackendsEnabled = useAppStore(
     (s) => s.alternativeBackendsEnabled,
   );
+  const experimentalCodexEnabled = useAppStore(
+    (s) => s.experimentalCodexEnabled,
+  );
   const agentBackends = useAppStore((s) => s.agentBackends);
   const registry = useMemo(
-    () => buildModelRegistry(alternativeBackendsEnabled, agentBackends),
-    [alternativeBackendsEnabled, agentBackends],
+    () => buildModelRegistry(alternativeBackendsEnabled, agentBackends, experimentalCodexEnabled),
+    [alternativeBackendsEnabled, agentBackends, experimentalCodexEnabled],
   );
   return findModelInRegistry(registry, selectedModel, selectedProvider);
 }

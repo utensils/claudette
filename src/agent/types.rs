@@ -12,12 +12,19 @@ use serde::{Deserialize, Serialize};
 /// iteration's own usage block.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 pub struct TokenUsage {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub total_tokens: Option<u64>,
     pub input_tokens: u64,
     pub output_tokens: u64,
     #[serde(default)]
     pub cache_creation_input_tokens: Option<u64>,
     #[serde(default)]
     pub cache_read_input_tokens: Option<u64>,
+    /// Runtime context window reported by native providers. Codex app-server
+    /// sends this on `thread/tokenUsage/updated`; when present it is more
+    /// authoritative than the UI model registry's static/default capacity.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_context_window: Option<u64>,
     // `skip_serializing_if` keeps absent iterations out of the re-emitted
     // Tauri payload entirely — important because `TokenUsage` rides every
     // `message_delta` event (many per turn) where `iterations` is never
@@ -31,12 +38,16 @@ pub struct TokenUsage {
 /// to one internal API call instead of summed across all iterations.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 pub struct TokenUsageIteration {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub total_tokens: Option<u64>,
     pub input_tokens: u64,
     pub output_tokens: u64,
     #[serde(default)]
     pub cache_creation_input_tokens: Option<u64>,
     #[serde(default)]
     pub cache_read_input_tokens: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_context_window: Option<u64>,
 }
 
 /// Payload the CLI emits on `subtype: "compact_boundary"` after context

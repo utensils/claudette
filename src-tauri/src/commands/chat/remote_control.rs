@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
 use claudette::agent::{
-    AgentEvent, AgentSettings, PersistentSession, StreamEvent, TokenUsage, UserContentBlock,
-    UserEventMessage, UserMessageContent,
+    AgentEvent, AgentSession, AgentSettings, ClaudeCodeHarness, PersistentSessionStart,
+    StreamEvent, TokenUsage, UserContentBlock, UserEventMessage, UserMessageContent,
 };
 use claudette::chat::{
     BuildAssistantArgs, CheckpointArgs, assistant_usage_fields_from_result,
@@ -120,7 +120,7 @@ pub async fn set_claude_remote_control(
     drop(db);
 
     let (ps, pid) = if enabled {
-        if let Some((ps, pid)) = existing_persistent_session(&state, &chat_session_id).await {
+        if let Some((ps, pid)) = existing_remote_control_session(&state, &chat_session_id).await? {
             let enabling = ClaudeRemoteControlStatus {
                 state: ClaudeRemoteControlLifecycle::Enabling,
                 detail: Some("Starting Claude Remote Control.".to_string()),
@@ -153,7 +153,9 @@ pub async fn set_claude_remote_control(
             .await?
         }
     } else {
-        let Some((ps, pid)) = existing_persistent_session(&state, &chat_session_id).await else {
+        let Some((ps, pid)) =
+            existing_remote_control_session_if_supported(&state, &chat_session_id).await
+        else {
             let disabled = ClaudeRemoteControlStatus::disabled();
             store_remote_control_status(&app, &state, &workspace_id, &chat_session_id, disabled)
                 .await;
@@ -282,11 +284,40 @@ fn remote_control_title(
 async fn existing_persistent_session(
     state: &State<'_, AppState>,
     chat_session_id: &str,
-) -> Option<(Arc<PersistentSession>, u32)> {
+) -> Option<(Arc<AgentSession>, u32)> {
     let agents = state.agents.read().await;
     let ps = agents.get(chat_session_id)?.persistent_session.clone()?;
     let pid = ps.pid();
     Some((ps, pid))
+}
+
+async fn existing_remote_control_session(
+    state: &State<'_, AppState>,
+    chat_session_id: &str,
+) -> Result<Option<(Arc<AgentSession>, u32)>, String> {
+    let Some((ps, pid)) = existing_persistent_session(state, chat_session_id).await else {
+        return Ok(None);
+    };
+    if ps.capabilities().remote_control {
+        Ok(Some((ps, pid)))
+    } else {
+        Err(unsupported_remote_control_session_error(&ps))
+    }
+}
+
+async fn existing_remote_control_session_if_supported(
+    state: &State<'_, AppState>,
+    chat_session_id: &str,
+) -> Option<(Arc<AgentSession>, u32)> {
+    let (ps, pid) = existing_persistent_session(state, chat_session_id).await?;
+    ps.capabilities().remote_control.then_some((ps, pid))
+}
+
+fn unsupported_remote_control_session_error(ps: &AgentSession) -> String {
+    format!(
+        "Claude Remote Control is only supported for Claude Code sessions; current session uses {:?}.",
+        ps.kind()
+    )
 }
 
 async fn store_deferred_enable_status(
@@ -324,6 +355,7 @@ async fn store_deferred_enable_status(
                 mcp_config_dirty: false,
                 session_plan_mode: false,
                 session_allowed_tools: Vec::new(),
+                session_fast_mode: false,
                 session_disable_1m_context: false,
                 session_backend_hash: String::new(),
                 pending_permissions: std::collections::HashMap::new(),
@@ -352,7 +384,7 @@ async fn ensure_persistent_session_for_remote_control(
     workspace: &Workspace,
     worktree_path: &str,
     launch_options: RemoteControlLaunchOptions,
-) -> Result<(Arc<PersistentSession>, u32), String> {
+) -> Result<(Arc<AgentSession>, u32), String> {
     let chat_session_id = chat_session.id.clone();
     let workspace_id = chat_session.workspace_id.clone();
     {
@@ -366,7 +398,10 @@ async fn ensure_persistent_session_for_remote_control(
             };
             if let Some(ps) = session.persistent_session.clone() {
                 let pid = ps.pid();
-                return Ok((ps, pid));
+                if ps.capabilities().remote_control {
+                    return Ok((ps, pid));
+                }
+                return Err(unsupported_remote_control_session_error(&ps));
             }
         }
     }
@@ -544,19 +579,19 @@ async fn ensure_persistent_session_for_remote_control(
         .map(ToOwned::to_owned);
     let is_resume = persisted_sid.is_some();
     let claude_session_id = persisted_sid.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-    let ps = PersistentSession::start(
-        std::path::Path::new(worktree_path),
-        &claude_session_id,
+    let ps = ClaudeCodeHarness::start_persistent(PersistentSessionStart {
+        working_dir: std::path::Path::new(worktree_path),
+        session_id: &claude_session_id,
         is_resume,
-        &allowed_tools,
-        custom_instructions.as_deref(),
-        &agent_settings,
-        Some(&ws_env),
-        Some(&resolved_env),
-    )
+        allowed_tools: &allowed_tools,
+        custom_instructions: custom_instructions.as_deref(),
+        settings: &agent_settings,
+        workspace_env: Some(&ws_env),
+        resolved_env: Some(&resolved_env),
+    })
     .await
     .map_err(|err| crate::missing_cli::handle_err(app, &err).unwrap_or(err))?;
-    let ps = Arc::new(ps);
+    let ps = Arc::new(AgentSession::from_claude_code(ps));
     let pid = ps.pid();
 
     {
@@ -579,6 +614,7 @@ async fn ensure_persistent_session_for_remote_control(
                 mcp_config_dirty: false,
                 session_plan_mode: false,
                 session_allowed_tools: Vec::new(),
+                session_fast_mode: false,
                 session_disable_1m_context: false,
                 session_backend_hash: String::new(),
                 pending_permissions: std::collections::HashMap::new(),
@@ -605,6 +641,7 @@ async fn ensure_persistent_session_for_remote_control(
         session.claude_remote_control_monitor_pid = None;
         session.session_plan_mode = agent_settings.plan_mode;
         session.session_allowed_tools = allowed_tools.clone();
+        session.session_fast_mode = agent_settings.fast_mode;
         session.session_disable_1m_context = agent_settings.disable_1m_context;
         session.session_backend_hash = agent_settings.backend_runtime.hash.clone();
         session.session_exited_plan = false;
@@ -660,7 +697,7 @@ pub(super) fn reenable_remote_control_after_respawn(
     chat_session_id: String,
     worktree_path: String,
     pid: u32,
-    ps: Arc<PersistentSession>,
+    ps: Arc<AgentSession>,
     title: String,
 ) {
     tokio::spawn(async move {
@@ -789,7 +826,7 @@ async fn ensure_remote_control_monitor(
     chat_session_id: String,
     worktree_path: String,
     pid: u32,
-    ps: Arc<PersistentSession>,
+    ps: Arc<AgentSession>,
 ) {
     let app_state = app.state::<AppState>();
     {

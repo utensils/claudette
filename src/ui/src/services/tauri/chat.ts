@@ -136,3 +136,22 @@ export function submitPlanApproval(
     reason: reason ?? null,
   });
 }
+
+/**
+ * Approve or reject a pending generic agent approval. The Rust side uses the
+ * same approval resolver as plan approval so Codex app-server approvals and
+ * Claude ExitPlanMode keep identical validation and response behavior.
+ */
+export function submitAgentApproval(
+  sessionId: string,
+  toolUseId: string,
+  approved: boolean,
+  reason?: string,
+): Promise<void> {
+  return invoke("submit_agent_approval", {
+    sessionId,
+    toolUseId,
+    approved,
+    reason: reason ?? null,
+  });
+}

@@ -37,6 +37,7 @@ pub struct SessionFlags<'a> {
     pub plan_mode: bool,
     pub allowed_tools: &'a [String],
     pub exited_plan: bool,
+    pub fast_mode: bool,
     pub disable_1m_context: bool,
     pub backend_hash: &'a str,
 }
@@ -46,6 +47,7 @@ pub struct SessionFlags<'a> {
 pub struct RequestedFlags<'a> {
     pub plan_mode: bool,
     pub allowed_tools: &'a [String],
+    pub fast_mode: bool,
     pub disable_1m_context: bool,
     pub backend_hash: &'a str,
 }
@@ -67,6 +69,7 @@ pub fn persistent_session_flags_drifted(
 ) -> bool {
     session.plan_mode != requested.plan_mode
         || session.allowed_tools != requested.allowed_tools
+        || session.fast_mode != requested.fast_mode
         || session.disable_1m_context != requested.disable_1m_context
         || session.backend_hash != requested.backend_hash
         || (session.plan_mode && session.exited_plan)
@@ -445,6 +448,7 @@ mod tests {
             plan_mode,
             allowed_tools,
             exited_plan,
+            fast_mode: false,
             disable_1m_context: false,
             backend_hash: "",
         }
@@ -454,6 +458,7 @@ mod tests {
         RequestedFlags {
             plan_mode,
             allowed_tools,
+            fast_mode: false,
             disable_1m_context: false,
             backend_hash: "",
         }
@@ -564,12 +569,14 @@ mod tests {
                 plan_mode: false,
                 allowed_tools: &tools,
                 exited_plan: false,
+                fast_mode: false,
                 disable_1m_context: false,
                 backend_hash: "",
             },
             RequestedFlags {
                 plan_mode: false,
                 allowed_tools: &tools,
+                fast_mode: false,
                 disable_1m_context: true,
                 backend_hash: "",
             },
@@ -579,12 +586,14 @@ mod tests {
                 plan_mode: false,
                 allowed_tools: &tools,
                 exited_plan: false,
+                fast_mode: false,
                 disable_1m_context: true,
                 backend_hash: "",
             },
             RequestedFlags {
                 plan_mode: false,
                 allowed_tools: &tools,
+                fast_mode: false,
                 disable_1m_context: false,
                 backend_hash: "",
             },
@@ -599,13 +608,37 @@ mod tests {
                 plan_mode: false,
                 allowed_tools: &tools,
                 exited_plan: false,
+                fast_mode: false,
                 disable_1m_context: true,
                 backend_hash: "",
             },
             RequestedFlags {
                 plan_mode: false,
                 allowed_tools: &tools,
+                fast_mode: false,
                 disable_1m_context: true,
+                backend_hash: "",
+            },
+        ));
+    }
+
+    #[test]
+    fn drift_when_fast_mode_flips() {
+        let tools = s(&["Read"]);
+        assert!(persistent_session_flags_drifted(
+            SessionFlags {
+                plan_mode: false,
+                allowed_tools: &tools,
+                exited_plan: false,
+                fast_mode: false,
+                disable_1m_context: false,
+                backend_hash: "",
+            },
+            RequestedFlags {
+                plan_mode: false,
+                allowed_tools: &tools,
+                fast_mode: true,
+                disable_1m_context: false,
                 backend_hash: "",
             },
         ));
@@ -619,12 +652,14 @@ mod tests {
                 plan_mode: false,
                 allowed_tools: &tools,
                 exited_plan: false,
+                fast_mode: false,
                 disable_1m_context: false,
                 backend_hash: "anthropic",
             },
             RequestedFlags {
                 plan_mode: false,
                 allowed_tools: &tools,
+                fast_mode: false,
                 disable_1m_context: false,
                 backend_hash: "ollama",
             },
@@ -776,10 +811,12 @@ mod tests {
     #[test]
     fn build_assistant_message_populates_token_fields_when_usage_present() {
         let usage = TokenUsage {
+            total_tokens: None,
             input_tokens: 10,
             output_tokens: 20,
             cache_creation_input_tokens: Some(30),
             cache_read_input_tokens: Some(40),
+            model_context_window: None,
             iterations: None,
         };
         let m = build_assistant_chat_message(args("hello", Some(usage)));
@@ -813,10 +850,12 @@ mod tests {
     fn build_assistant_message_handles_partial_cache_fields() {
         // Older CLI / fallback responses may omit one of the cache_* fields.
         let usage = TokenUsage {
+            total_tokens: None,
             input_tokens: 5,
             output_tokens: 7,
             cache_creation_input_tokens: None,
             cache_read_input_tokens: Some(99),
+            model_context_window: None,
             iterations: None,
         };
         let m = build_assistant_chat_message(args("x", Some(usage)));
@@ -829,15 +868,19 @@ mod tests {
     #[test]
     fn assistant_usage_fields_from_result_prefers_iteration_usage() {
         let usage = TokenUsage {
+            total_tokens: None,
             input_tokens: 62,
             output_tokens: 41_322,
             cache_creation_input_tokens: Some(153_239),
             cache_read_input_tokens: Some(4_695_413),
+            model_context_window: Some(272_000),
             iterations: Some(vec![TokenUsageIteration {
+                total_tokens: None,
                 input_tokens: 1,
                 output_tokens: 611,
                 cache_creation_input_tokens: Some(573),
                 cache_read_input_tokens: Some(131_890),
+                model_context_window: Some(272_000),
             }]),
         };
 
@@ -851,10 +894,12 @@ mod tests {
     #[test]
     fn assistant_usage_fields_from_result_falls_back_to_aggregate() {
         let usage = TokenUsage {
+            total_tokens: None,
             input_tokens: 100,
             output_tokens: 20,
             cache_creation_input_tokens: None,
             cache_read_input_tokens: Some(5_000),
+            model_context_window: None,
             iterations: None,
         };
 

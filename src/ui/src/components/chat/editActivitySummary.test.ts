@@ -45,6 +45,25 @@ describe("editActivitySummary", () => {
     ]);
   });
 
+  it("summarizes Codex-style Edit aliases with the shared file edit stats", () => {
+    const summary = summarizeTurnEdits([
+      activity({
+        toolName: "Edit",
+        inputJson: JSON.stringify({
+          path: "simple-wave.svg",
+          old_str: "<text>SVG test</text>\n",
+          new_str: "<path d=\"M0 4 C 8 0 16 8 24 4\" />\n<text>SVG edited</text>\n",
+        }),
+      }),
+    ]);
+
+    expect(summary).toMatchObject({
+      added: 2,
+      removed: 1,
+      files: [{ filePath: "simple-wave.svg", added: 2, removed: 1 }],
+    });
+  });
+
   it("aggregates MultiEdit and nested agent edit calls by file", () => {
     const summary = summarizeTurnEdits([
       activity({
@@ -136,6 +155,49 @@ describe("editActivitySummary", () => {
       removed: 1,
       files: [{ filePath: "src/ui/App.tsx", added: 1, removed: 1 }],
     });
+  });
+
+  it("summarizes Codex fileChange tool inputs through the patch parser", () => {
+    const summary = summarizeTurnEdits([
+      activity({
+        toolName: "Edit",
+        inputJson: JSON.stringify({
+          changes: [
+            {
+              path: "src/ui/App.tsx",
+              kind: "update",
+              diff: [
+                "@@ -1,2 +1,3 @@",
+                " import React from \"react\";",
+                "-const label = \"old\";",
+                "+const label = \"new\";",
+                "+const enabled = true;",
+              ].join("\n"),
+            },
+            {
+              path: "src/main.rs",
+              kind: "add",
+              diff: ["@@ -0,0 +1,2 @@", "+fn main() {", "+}"].join("\n"),
+            },
+          ],
+        }),
+      }),
+    ]);
+
+    expect(summary).toMatchObject({
+      added: 4,
+      removed: 1,
+      files: [
+        { filePath: "src/main.rs", added: 2, removed: 0 },
+        { filePath: "src/ui/App.tsx", added: 2, removed: 1 },
+      ],
+    });
+    expect(summary?.files[1].previewLines).toMatchObject([
+      { type: "context", content: "import React from \"react\";" },
+      { type: "removed", content: "const label = \"old\";" },
+      { type: "added", content: "const label = \"new\";" },
+      { type: "added", content: "const enabled = true;" },
+    ]);
   });
 
   it("summarizes workspace diff files and builds lazy preview lines", () => {

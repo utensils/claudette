@@ -13,6 +13,7 @@ export type Model = {
   readonly legacy?: boolean;
   readonly providerId?: string;
   readonly providerLabel?: string;
+  readonly providerKind?: string;
   readonly providerQualifiedId?: string;
   readonly supportsThinking?: boolean;
   readonly supportsEffort?: boolean;
@@ -77,39 +78,157 @@ export interface BackendRegistrySource {
   discovered_models: BackendRegistryModel[];
 }
 
+type ParsedModelVersion = {
+  prefix: string;
+  versionKey: string;
+  versionParts: number[];
+  suffix: string;
+};
+
+type RankedBackendModel = {
+  model: BackendRegistryModel;
+  index: number;
+  parsed: ParsedModelVersion | undefined;
+};
+
+const PRIMARY_BACKEND_VERSION_BANDS = 2;
+
+function parseModelVersion(model: BackendRegistryModel): ParsedModelVersion | undefined {
+  const text = `${model.id} ${model.label}`.toLowerCase();
+  // Heuristic for provider-supplied model ids, not a strict semantic-version
+  // parser. We intentionally keep variant suffixes inside the same prefix band
+  // so API-family lists (for example gpt-5.x plus codex/spark variants) do not
+  // promote every cosmetic suffix into the primary group.
+  const match = text.match(/\b([a-z][a-z0-9]*)(?:[-\s]?)(\d+(?:[.-]\d+)*)([a-z0-9-]*)\b/);
+  if (!match) return undefined;
+  const versionParts = match[2]
+    .split(/[.-]/)
+    .map((part) => Number.parseInt(part, 10));
+  if (versionParts.some((part) => !Number.isFinite(part))) return undefined;
+  return {
+    prefix: match[1],
+    versionKey: versionParts.join("."),
+    versionParts,
+    suffix: match[3] ?? "",
+  };
+}
+
+function compareVersionPartsDesc(a: readonly number[], b: readonly number[]): number {
+  const length = Math.max(a.length, b.length);
+  for (let i = 0; i < length; i += 1) {
+    const diff = (b[i] ?? 0) - (a[i] ?? 0);
+    if (diff !== 0) return diff;
+  }
+  return 0;
+}
+
+function rankBackendModels(models: readonly BackendRegistryModel[]): RankedBackendModel[] {
+  const prefixOrder = new Map<string, number>();
+  const ranked = models.map((model, index) => {
+    const parsed = parseModelVersion(model);
+    if (parsed && !prefixOrder.has(parsed.prefix)) {
+      prefixOrder.set(parsed.prefix, prefixOrder.size);
+    }
+    return { model, index, parsed };
+  });
+
+  return ranked.sort((a, b) => {
+    if (!a.parsed && !b.parsed) return a.index - b.index;
+    if (!a.parsed) return 1;
+    if (!b.parsed) return -1;
+
+    const prefixDiff =
+      (prefixOrder.get(a.parsed.prefix) ?? a.index) -
+      (prefixOrder.get(b.parsed.prefix) ?? b.index);
+    if (prefixDiff !== 0) return prefixDiff;
+
+    const versionDiff = compareVersionPartsDesc(
+      a.parsed.versionParts,
+      b.parsed.versionParts,
+    );
+    if (versionDiff !== 0) return versionDiff;
+
+    const suffixDiff = a.parsed.suffix.localeCompare(b.parsed.suffix);
+    if (suffixDiff !== 0) return suffixDiff;
+    return a.index - b.index;
+  });
+}
+
+function primaryVersionKeysByPrefix(
+  ranked: readonly RankedBackendModel[],
+): Map<string, Set<string>> {
+  const keys = new Map<string, Set<string>>();
+  for (const entry of ranked) {
+    if (!entry.parsed) continue;
+    const versions = keys.get(entry.parsed.prefix) ?? new Set<string>();
+    if (versions.size < PRIMARY_BACKEND_VERSION_BANDS) {
+      versions.add(entry.parsed.versionKey);
+      keys.set(entry.parsed.prefix, versions);
+    }
+  }
+  return keys;
+}
+
+export function shouldExposeBackendModels(
+  backend: BackendRegistrySource,
+  alternativeBackendsEnabled: boolean,
+  experimentalCodexEnabled = false,
+): boolean {
+  if (!backend.enabled || backend.id === "anthropic") return false;
+  if (backend.kind === "codex_subscription") return false;
+  if (backend.kind === "codex_native") return experimentalCodexEnabled;
+  return alternativeBackendsEnabled;
+}
+
 export function buildModelRegistry(
   alternativeBackendsEnabled: boolean,
   backends: readonly BackendRegistrySource[],
+  experimentalCodexEnabled = false,
 ): readonly Model[] {
-  if (!alternativeBackendsEnabled) return MODELS;
-
-  const models: Model[] = [...MODELS];
+  let models: Model[] | undefined;
   for (const backend of backends) {
-    if (!backend.enabled || backend.id === "anthropic") continue;
+    if (!shouldExposeBackendModels(
+      backend,
+      alternativeBackendsEnabled,
+      experimentalCodexEnabled,
+    )) continue;
     const backendModels =
       backend.discovered_models.length > 0
         ? backend.discovered_models
         : backend.manual_models;
+    const rankedModels = rankBackendModels(backendModels);
+    const primaryVersions = primaryVersionKeysByPrefix(rankedModels);
     const seen = new Set<string>();
-    for (const model of backendModels) {
+    for (const entry of rankedModels) {
+      const { model } = entry;
       if (!model.id || seen.has(model.id)) continue;
       seen.add(model.id);
-      models.push({
+      const isNativeCodex = backend.kind === "codex_native";
+      const providerDisplayLabel = isNativeCodex ? "Codex" : backend.label;
+      const isOlderBackendVersion = entry.parsed
+        ? !primaryVersions
+          .get(entry.parsed.prefix)
+          ?.has(entry.parsed.versionKey)
+        : false;
+      const target = models ??= [...MODELS];
+      target.push({
         id: model.id,
         label: model.label || model.id,
-        group: backend.label,
+        group: providerDisplayLabel,
         extraUsage: false,
+        legacy: isOlderBackendVersion,
         providerId: backend.id,
-        providerLabel: backend.label,
+        providerLabel: providerDisplayLabel,
+        providerKind: backend.kind,
         providerQualifiedId: `${backend.id}/${model.id}`,
-        supportsThinking: backend.capabilities.thinking,
-        supportsEffort: backend.capabilities.effort,
-        supportsFastMode: backend.capabilities.fast_mode,
+        supportsThinking: isNativeCodex || backend.capabilities.thinking,
+        supportsEffort: isNativeCodex || backend.capabilities.effort,
+        supportsFastMode: isNativeCodex || backend.capabilities.fast_mode,
         contextWindowTokens: model.context_window_tokens,
       });
     }
   }
-  return models;
+  return models ?? MODELS;
 }
 
 export function resolveModelSelection(

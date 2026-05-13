@@ -1,4 +1,4 @@
-/** Models that support fast mode (Opus 4.6 only). */
+/** Built-in Claude models that support fast mode. Provider models use backend capabilities. */
 const FAST_SUPPORTED_MODELS = new Set(["claude-opus-4-6", "claude-opus-4-6[1m]"]);
 
 /** Models that support effort levels. */

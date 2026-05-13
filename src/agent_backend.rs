@@ -8,6 +8,7 @@ pub enum AgentBackendKind {
     #[serde(rename = "openai_api")]
     OpenAiApi,
     CodexSubscription,
+    CodexNative,
     CustomAnthropic,
     #[serde(rename = "custom_openai")]
     CustomOpenAi,
@@ -46,6 +47,14 @@ impl AgentBackendKind {
     }
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentBackendRuntimeHarness {
+    #[default]
+    ClaudeCode,
+    CodexAppServer,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentBackendCapabilities {
     pub thinking: bool,
@@ -76,6 +85,17 @@ impl AgentBackendCapabilities {
             one_m_context: false,
             tools: true,
             vision: true,
+        }
+    }
+
+    pub fn codex_native() -> Self {
+        Self {
+            thinking: true,
+            effort: true,
+            fast_mode: true,
+            one_m_context: false,
+            tools: true,
+            vision: false,
         }
     }
 }
@@ -185,6 +205,37 @@ impl AgentBackendConfig {
         }
     }
 
+    pub fn builtin_experimental_codex() -> Self {
+        Self {
+            id: "experimental-codex".to_string(),
+            label: "Codex".to_string(),
+            kind: AgentBackendKind::CodexNative,
+            base_url: None,
+            enabled: true,
+            default_model: Some("gpt-5.4".to_string()),
+            manual_models: vec![
+                AgentBackendModel {
+                    id: "gpt-5.4".to_string(),
+                    label: "GPT-5.4".to_string(),
+                    context_window_tokens: 272_000,
+                    discovered: false,
+                },
+                AgentBackendModel {
+                    id: "gpt-5.3-codex".to_string(),
+                    label: "GPT-5.3 Codex".to_string(),
+                    context_window_tokens: 272_000,
+                    discovered: false,
+                },
+            ],
+            discovered_models: Vec::new(),
+            auth_ref: Some("codex-cli".to_string()),
+            capabilities: AgentBackendCapabilities::codex_native(),
+            context_window_default: 272_000,
+            model_discovery: true,
+            has_secret: false,
+        }
+    }
+
     pub fn builtin_lm_studio() -> Self {
         Self {
             id: "lm-studio".to_string(),
@@ -210,6 +261,8 @@ impl AgentBackendConfig {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentBackendRuntime {
     pub backend_id: Option<String>,
+    #[serde(default)]
+    pub harness: AgentBackendRuntimeHarness,
     pub env: Vec<(String, String)>,
     pub hash: String,
 }
@@ -235,5 +288,44 @@ impl AgentBackendRuntime {
         for (key, value) in &self.env {
             cmd.env(key, value);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn native_codex_builtin_uses_app_server_harness_shape() {
+        let backend = AgentBackendConfig::builtin_experimental_codex();
+
+        assert_eq!(backend.id, "experimental-codex");
+        assert_eq!(backend.label, "Codex");
+        assert_eq!(backend.kind, AgentBackendKind::CodexNative);
+        assert!(backend.enabled);
+        assert!(!backend.kind.needs_gateway());
+        assert!(!backend.kind.is_anthropic_compatible());
+        assert!(backend.model_discovery);
+        assert!(backend.capabilities.thinking);
+        assert!(backend.capabilities.effort);
+        assert!(backend.capabilities.fast_mode);
+        assert!(!backend.capabilities.vision);
+        assert_eq!(backend.context_window_default, 272_000);
+        assert!(!backend.manual_models.is_empty());
+        assert!(
+            backend
+                .manual_models
+                .iter()
+                .all(|model| model.context_window_tokens == 272_000)
+        );
+    }
+
+    #[test]
+    fn runtime_defaults_to_claude_code_harness() {
+        let runtime = AgentBackendRuntime::default();
+
+        assert_eq!(runtime.harness, AgentBackendRuntimeHarness::ClaudeCode);
+        assert_eq!(runtime.backend_id, None);
+        assert!(runtime.env.is_empty());
     }
 }

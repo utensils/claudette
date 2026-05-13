@@ -1,4 +1,5 @@
 import { useState, useMemo, useEffect, useRef, useCallback } from "react";
+import { useTranslation } from "react-i18next";
 import { Search, ChevronLeft } from "lucide-react";
 import { useAppStore } from "../../stores/useAppStore";
 import { applyTheme, applyUserFonts, findTheme, loadAllThemes, cacheThemePreference, getThemeDataAttr } from "../../utils/theme";
@@ -44,6 +45,7 @@ interface GroupedCommands {
 }
 
 export function CommandPalette() {
+  const { t } = useTranslation("chat");
   const toggleCommandPalette = useAppStore((s) => s.toggleCommandPalette);
   const toggleSidebar = useAppStore((s) => s.toggleSidebar);
   const toggleTerminalPanel = useAppStore((s) => s.toggleTerminalPanel);
@@ -97,6 +99,7 @@ export function CommandPalette() {
     (s) => (selectedSessionId ? s.selectedModelProvider[selectedSessionId] ?? "anthropic" : "anthropic"),
   );
   const alternativeBackendsEnabled = useAppStore((s) => s.alternativeBackendsEnabled);
+  const experimentalCodexEnabled = useAppStore((s) => s.experimentalCodexEnabled);
   const agentBackends = useAppStore((s) => s.agentBackends);
   const setThinkingEnabled = useAppStore((s) => s.setThinkingEnabled);
   const setPlanMode = useAppStore((s) => s.setPlanMode);
@@ -104,6 +107,7 @@ export function CommandPalette() {
   const setEffortLevel = useAppStore((s) => s.setEffortLevel);
   const clearAgentQuestion = useAppStore((s) => s.clearAgentQuestion);
   const clearPlanApproval = useAppStore((s) => s.clearPlanApproval);
+  const clearAgentApproval = useAppStore((s) => s.clearAgentApproval);
   const openFileTab = useAppStore((s) => s.openFileTab);
   const keybindings = useAppStore((s) => s.keybindings);
   const commandPaletteInitialMode = useAppStore((s) => s.commandPaletteInitialMode);
@@ -316,6 +320,7 @@ export function CommandPalette() {
         effortLevel,
         setEffortLevel,
         selectedModel,
+        selectedModelProvider,
         persistSetting: (key: string, value: string) => setAppSetting(key, value).catch(console.error),
         stopAgent: (sessionId: string) => {
           const state = useAppStore.getState();
@@ -328,10 +333,11 @@ export function CommandPalette() {
         resetAgentSession: (sessionId: string) => resetAgentSession(sessionId),
         clearAgentQuestion: (sessionId: string) => clearAgentQuestion(sessionId),
         clearPlanApproval: (sessionId: string) => clearPlanApproval(sessionId),
+        clearAgentApproval: (sessionId: string) => clearAgentApproval(sessionId),
         updateWorkspace: (id: string, updates: Record<string, unknown>) => updateWorkspace(id, updates),
       }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [themes, selectedWorkspaceId, selectedSessionId, currentRepoId, thinkingEnabled, planMode, fastMode, effortLevel, selectedModel, keybindings, enterThemeMode, enterFileMode, applyThemeById, handleCreateWorkspace],
+    [themes, selectedWorkspaceId, selectedSessionId, currentRepoId, thinkingEnabled, planMode, fastMode, effortLevel, selectedModel, selectedModelProvider, keybindings, enterThemeMode, enterFileMode, applyThemeById, handleCreateWorkspace, clearAgentApproval],
   );
 
   // Build sub-menu command lists
@@ -342,8 +348,8 @@ export function CommandPalette() {
   );
 
   const modelRegistry = useMemo(
-    () => buildModelRegistry(alternativeBackendsEnabled, agentBackends),
-    [alternativeBackendsEnabled, agentBackends],
+    () => buildModelRegistry(alternativeBackendsEnabled, agentBackends, experimentalCodexEnabled),
+    [alternativeBackendsEnabled, agentBackends, experimentalCodexEnabled],
   );
 
   const modelCommands = useMemo(
@@ -371,9 +377,14 @@ export function CommandPalette() {
         await setAppSetting(`effort_level:${selectedSessionId}`, level);
       },
       close,
+      selectedModelProvider,
+      {
+        codexReasoningEffort: t("codex_reasoning_effort"),
+        codexSetReasoningEffort: t("codex_set_reasoning_effort"),
+      },
     ),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [selectedModel, effortLevel, selectedSessionId],
+    [selectedModel, selectedModelProvider, effortLevel, selectedSessionId, t],
   );
 
   const fileCommands = useMemo(

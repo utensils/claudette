@@ -7,7 +7,12 @@ import {
   setSessionCliInvocation,
 } from "../services/tauri";
 import type { AgentStreamPayload } from "../types/agent-events";
-import type { AgentToolCall } from "../stores/useAppStore";
+import type {
+  AgentApproval,
+  AgentApprovalDetail,
+  AgentApprovalKind,
+  AgentToolCall,
+} from "../stores/useAppStore";
 import type { ChatMessage } from "../types/chat";
 import type { ConversationCheckpoint } from "../types/checkpoint";
 import type { TerminalTab } from "../types/terminal";
@@ -23,9 +28,94 @@ import { debugChat } from "../utils/chatDebug";
 import { extractLatestCallUsage } from "../utils/extractLatestCallUsage";
 import { buildCompactionSentinel } from "../utils/compactionSentinel";
 import { pickMeterUsageFromResult } from "./pickMeterUsageFromResult";
-import { applyCommandLineEvent } from "./useAgentStreamLogic";
+import {
+  applyCommandLineEvent,
+  approvalDetailValue,
+  extractAssistantMessageParts,
+  firstApprovalDetailString,
+} from "./useAgentStreamLogic";
 
 const ASK_USER_QUESTION_TOOL = "AskUserQuestion";
+const CODEX_COMMAND_APPROVAL_TOOL = "CodexCommandApproval";
+const CODEX_FILE_CHANGE_APPROVAL_TOOL = "CodexFileChangeApproval";
+const CODEX_PERMISSIONS_APPROVAL_TOOL = "CodexPermissionsApproval";
+
+function isCodexApprovalTool(toolName: string): boolean {
+  return (
+    toolName === CODEX_COMMAND_APPROVAL_TOOL ||
+    toolName === CODEX_FILE_CHANGE_APPROVAL_TOOL ||
+    toolName === CODEX_PERMISSIONS_APPROVAL_TOOL
+  );
+}
+
+function stringField(input: Record<string, unknown>, key: string): string | null {
+  const value = input[key];
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return trimmed ? trimmed : null;
+}
+
+function addDetail(
+  details: AgentApproval["details"],
+  labelKey: AgentApprovalDetail["labelKey"],
+  value: unknown,
+) {
+  const formatted = approvalDetailValue(value);
+  if (formatted) details.push({ labelKey, value: formatted });
+}
+
+function parseCodexApproval(
+  sessionId: string,
+  toolUseId: string,
+  toolName: string,
+  input: Record<string, unknown>,
+): AgentApproval | null {
+  const kind = stringField(input, "codexApprovalKind") as AgentApprovalKind | null;
+  const details: AgentApproval["details"] = [];
+  const baseApproval = {
+    sessionId,
+    toolUseId,
+    supportsDenyReason: false,
+  };
+
+  if (toolName === CODEX_COMMAND_APPROVAL_TOOL && kind === "commandExecution") {
+    addDetail(details, "command", input.command);
+    addDetail(details, "cwd", input.cwd);
+    addDetail(details, "reason", input.reason);
+    return {
+      ...baseApproval,
+      kind,
+      details,
+    };
+  }
+
+  if (toolName === CODEX_FILE_CHANGE_APPROVAL_TOOL && kind === "fileChange") {
+    addDetail(
+      details,
+      "path",
+      firstApprovalDetailString(input, ["path", "filePath", "grantRoot"]),
+    );
+    addDetail(details, "reason", input.reason);
+    return {
+      ...baseApproval,
+      kind,
+      details,
+    };
+  }
+
+  if (toolName === CODEX_PERMISSIONS_APPROVAL_TOOL && kind === "permissions") {
+    addDetail(details, "cwd", input.cwd);
+    addDetail(details, "permissions", input.permissions);
+    addDetail(details, "reason", input.reason);
+    return {
+      ...baseApproval,
+      kind,
+      details,
+    };
+  }
+
+  return null;
+}
 
 function stringFromUnknown(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
@@ -73,6 +163,7 @@ export function useAgentStream() {
   const updateChatSession = useAppStore((s) => s.updateChatSession);
   const setAgentQuestion = useAppStore((s) => s.setAgentQuestion);
   const setPlanApproval = useAppStore((s) => s.setPlanApproval);
+  const setAgentApproval = useAppStore((s) => s.setAgentApproval);
   const finalizeTurn = useAppStore((s) => s.finalizeTurn);
   const setPlanMode = useAppStore((s) => s.setPlanMode);
   const addCompactionEvent = useAppStore((s) => s.addCompactionEvent);
@@ -87,6 +178,7 @@ export function useAgentStream() {
   const turnMessageCountRef = useRef<Record<string, number>>({});
   const turnFinalizedRef = useRef<Record<string, boolean>>({});
   const turnCheckpointIdRef = useRef<Record<string, string | undefined>>({});
+  const turnSawUsageRef = useRef<Record<string, boolean>>({});
   const planFilePathRef = useRef<Record<string, string>>({});
   const thinkingBlocksRef = useRef<Record<string, Set<number>>>({});
   const pendingAgentToolCallsRef = useRef<Record<string, AgentToolCall[]>>({});
@@ -159,6 +251,7 @@ export function useAgentStream() {
         turnMessageCountRef.current[sessionId] = 0;
         turnFinalizedRef.current[sessionId] = false;
         turnCheckpointIdRef.current[sessionId] = undefined;
+        turnSawUsageRef.current[sessionId] = false;
         // Natural completion emits a `result` event (wasFinalized=true) → Idle.
         // User stop or crash has no prior `result` → Stopped.
         updateChatSession(sessionId, { agent_status: wasFinalized ? "Idle" : "Stopped" });
@@ -329,13 +422,17 @@ export function useAgentStream() {
                   // fills the gap in between so the meter doesn't sit stale.
                   if (inner.usage) {
                     const { setLatestTurnUsage } = useAppStore.getState();
+                    turnSawUsageRef.current[sessionId] = true;
                     setLatestTurnUsage(sessionId, {
+                      totalTokens: inner.usage.total_tokens ?? undefined,
                       inputTokens: inner.usage.input_tokens,
                       outputTokens: inner.usage.output_tokens,
                       cacheReadTokens:
                         inner.usage.cache_read_input_tokens ?? undefined,
                       cacheCreationTokens:
                         inner.usage.cache_creation_input_tokens ?? undefined,
+                      modelContextWindow:
+                        inner.usage.model_context_window ?? undefined,
                     });
                   }
                   break;
@@ -488,12 +585,9 @@ export function useAgentStream() {
             // The CLI may fire multiple assistant events per turn: one with
             // thinking blocks only (no text), then one with text. We only
             // add a message and clear thinking when we have actual text.
-            const text = streamEvent.message.content
-              .filter(
-                (b): b is { type: "text"; text: string } => b.type === "text"
-              )
-              .map((b) => b.text)
-              .join("");
+            const { text, thinking } = extractAssistantMessageParts(
+              streamEvent.message.content,
+            );
             if (text) {
               turnMessageCountRef.current[sessionId] =
                 (turnMessageCountRef.current[sessionId] || 0) + 1;
@@ -518,7 +612,9 @@ export function useAgentStream() {
                 duration_ms: null,
                 created_at: new Date().toISOString(),
                 thinking:
-                  useAppStore.getState().streamingThinking[sessionId] || null,
+                  useAppStore.getState().streamingThinking[sessionId] ||
+                  thinking ||
+                  null,
                 input_tokens: null,
                 output_tokens: null,
                 cache_read_tokens: null,
@@ -557,9 +653,10 @@ export function useAgentStream() {
             const { setLatestTurnUsage, clearLatestTurnUsage } =
               useAppStore.getState();
             if (meterUsage) setLatestTurnUsage(sessionId, meterUsage);
-            else clearLatestTurnUsage(sessionId);
+            else if (!turnSawUsageRef.current[sessionId]) clearLatestTurnUsage(sessionId);
             turnMessageCountRef.current[sessionId] = 0;
             turnFinalizedRef.current[sessionId] = true;
+            turnSawUsageRef.current[sessionId] = false;
             updateChatSession(sessionId, { agent_status: "Idle" });
             syncWorkspaceAgentStatus(wsId);
             useAppStore.getState().clearPromptStartTime(wsId);
@@ -795,13 +892,29 @@ export function useAgentStream() {
           needs_attention: true,
           attention_kind: "Plan",
         });
+      } else if (isCodexApprovalTool(toolName)) {
+        if (input && typeof input === "object") {
+          const approval = parseCodexApproval(
+            sessionId,
+            toolUseId,
+            toolName,
+            input as Record<string, unknown>,
+          );
+          if (approval) {
+            setAgentApproval(approval);
+            updateChatSession(sessionId, {
+              needs_attention: true,
+              attention_kind: "Ask",
+            });
+          }
+        }
       }
     });
     return () => {
       active = false;
       unlisten.then((fn) => fn());
     };
-  }, [setAgentQuestion, setPlanApproval, setPlanMode, updateChatSession]);
+  }, [setAgentApproval, setAgentQuestion, setPlanApproval, setPlanMode, updateChatSession]);
 
   // Listen for checkpoint-created events from the backend.
   const addCheckpoint = useAppStore((s) => s.addCheckpoint);

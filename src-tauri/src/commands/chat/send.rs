@@ -8,9 +8,12 @@ use claudette::agent::background::{
     parse_background_task_binding, parse_bash_start, parse_task_notification,
 };
 use claudette::agent::{
-    self, AgentEvent, AgentSettings, ControlRequestInner, FileAttachment, InnerStreamEvent,
-    PersistentSession, StartContentBlock, StreamEvent,
+    self, AgentEvent, AgentSession, AgentSettings, ClaudeCodeHarness, CodexAppServerOptions,
+    CodexAppServerSession, CodexPermissionLevel, ControlRequestInner, FileAttachment,
+    InnerStreamEvent, PersistentSessionStart, StartContentBlock, StreamEvent,
+    is_codex_approval_tool_name, normalize_codex_reasoning_effort,
 };
+use claudette::agent_backend::AgentBackendRuntimeHarness;
 use claudette::base64_decode;
 use claudette::chat::{
     BuildAssistantArgs, CheckpointArgs, RequestedFlags, SessionFlags,
@@ -115,6 +118,38 @@ fn is_env_trust_warning_message(message: &ChatMessage) -> bool {
 
 fn has_env_trust_warning(messages: &[ChatMessage]) -> bool {
     messages.iter().any(is_env_trust_warning_message)
+}
+
+fn control_prompt_attention_kind(tool_name: &str) -> crate::state::AttentionKind {
+    if tool_name == "ExitPlanMode" {
+        crate::state::AttentionKind::Plan
+    } else {
+        crate::state::AttentionKind::Ask
+    }
+}
+
+fn queue_control_prompt(
+    session: &mut AgentSessionState,
+    request_id: String,
+    tool_name: String,
+    tool_use_id: String,
+    input: serde_json::Value,
+) -> crate::state::AttentionKind {
+    let kind = control_prompt_attention_kind(&tool_name);
+    session.needs_attention = true;
+    session.attention_kind = Some(kind);
+    if tool_name == "ExitPlanMode" {
+        session.session_exited_plan = true;
+    }
+    session.pending_permissions.insert(
+        tool_use_id,
+        PendingPermission {
+            request_id,
+            tool_name,
+            original_input: input,
+        },
+    );
+    kind
 }
 
 fn auth_failure_message_from_stderr(stderr_lines: &[String]) -> Option<String> {
@@ -1540,6 +1575,7 @@ pub async fn send_chat_message(
         );
     }
     let allowed_tools = tools_for_level(level);
+    let codex_permission_level = CodexPermissionLevel::from_claudette_level(level);
 
     // Resolve custom instructions: .claudette.json > repo settings > none.
     // Only resolved on the first turn — cached in the session for subsequent turns.
@@ -1606,6 +1642,7 @@ pub async fn send_chat_message(
                 mcp_config_dirty: false,
                 session_plan_mode: false,
                 session_allowed_tools: Vec::new(),
+                session_fast_mode: false,
                 session_disable_1m_context: false,
                 session_backend_hash: String::new(),
                 pending_permissions: std::collections::HashMap::new(),
@@ -1636,6 +1673,7 @@ pub async fn send_chat_message(
             mcp_config_dirty: false,
             session_plan_mode: false,
             session_allowed_tools: Vec::new(),
+            session_fast_mode: false,
             session_disable_1m_context: false,
             session_backend_hash: String::new(),
             pending_permissions: std::collections::HashMap::new(),
@@ -1807,12 +1845,19 @@ pub async fn send_chat_message(
             model.as_deref(),
         )?;
 
-    let backend_runtime = crate::commands::agent_backends::resolve_backend_runtime(
+    let mut backend_runtime = crate::commands::agent_backends::resolve_backend_runtime(
         &state,
         resolved_backend_id.as_deref(),
         resolved_model.as_deref(),
     )
     .await?;
+    if backend_runtime.harness == AgentBackendRuntimeHarness::CodexAppServer
+        && let Some(codex_effort) = normalize_codex_reasoning_effort(effort.as_deref())
+    {
+        backend_runtime
+            .hash
+            .push_str(&format!("|codex-reasoning-effort:{codex_effort}"));
+    }
 
     // Resolve user-toggled `claude --help` flags from the cached defs.
     // Treat "still discovering" / "discovery failed" as no extra flags so
@@ -1897,12 +1942,14 @@ pub async fn send_chat_message(
                 plan_mode: session.session_plan_mode,
                 allowed_tools: &session.session_allowed_tools,
                 exited_plan: session.session_exited_plan,
+                fast_mode: session.session_fast_mode,
                 disable_1m_context: session.session_disable_1m_context,
                 backend_hash: &session.session_backend_hash,
             },
             RequestedFlags {
                 plan_mode: agent_settings.plan_mode,
                 allowed_tools: &allowed_tools,
+                fast_mode: agent_settings.fast_mode,
                 disable_1m_context: agent_settings.disable_1m_context,
                 backend_hash: &agent_settings.backend_runtime.hash,
             },
@@ -1924,12 +1971,14 @@ pub async fn send_chat_message(
                 plan_mode: session.session_plan_mode,
                 allowed_tools: &session.session_allowed_tools,
                 exited_plan: session.session_exited_plan,
+                fast_mode: session.session_fast_mode,
                 disable_1m_context: session.session_disable_1m_context,
                 backend_hash: &session.session_backend_hash,
             },
             RequestedFlags {
                 plan_mode: agent_settings.plan_mode,
                 allowed_tools: &allowed_tools,
+                fast_mode: agent_settings.fast_mode,
                 disable_1m_context: agent_settings.disable_1m_context,
                 backend_hash: &agent_settings.backend_runtime.hash,
             },
@@ -1951,12 +2000,14 @@ pub async fn send_chat_message(
                 plan_mode: session.session_plan_mode,
                 allowed_tools: &session.session_allowed_tools,
                 exited_plan: session.session_exited_plan,
+                fast_mode: session.session_fast_mode,
                 disable_1m_context: session.session_disable_1m_context,
                 backend_hash: &session.session_backend_hash,
             },
             RequestedFlags {
                 plan_mode: agent_settings.plan_mode,
                 allowed_tools: &allowed_tools,
+                fast_mode: agent_settings.fast_mode,
                 disable_1m_context: agent_settings.disable_1m_context,
                 backend_hash: &agent_settings.backend_runtime.hash,
             },
@@ -1969,6 +2020,7 @@ pub async fn send_chat_message(
             plan_mode_drifted = session.session_plan_mode != agent_settings.plan_mode,
             allowed_tools_changed = session.session_allowed_tools != allowed_tools,
             exited_plan = session.session_exited_plan,
+            fast_mode_drifted = session.session_fast_mode != agent_settings.fast_mode,
             disable_1m_context_drifted = session.session_disable_1m_context != agent_settings.disable_1m_context,
             backend_hash_changed = session.session_backend_hash != agent_settings.backend_runtime.hash,
             "session flags drifted — tearing down persistent session"
@@ -2207,6 +2259,7 @@ pub async fn send_chat_message(
     // surface-the-structured-error before any event emission happens.
     let ws_env_for_persistent = ws_env.clone();
     let resolved_env_for_persistent = resolved_env.clone();
+    let codex_permission_level_for_persistent = codex_permission_level;
     let start_persistent = move |worktree: String,
                                  sid: String,
                                  is_resume: bool,
@@ -2226,18 +2279,45 @@ pub async fn send_chat_message(
             // `handle_err` themselves, which keeps event emission attributed
             // to the actual decision-to-fail rather than to the speculative
             // first attempt of a resume.
-            let started = PersistentSession::start(
-                std::path::Path::new(&worktree),
-                &sid,
-                is_resume,
-                &tools,
-                instructions.as_deref(),
-                &settings,
-                Some(&env),
-                Some(&resolved),
-            )
-            .await?;
-            Ok::<Arc<PersistentSession>, String>(Arc::new(started))
+            match settings.backend_runtime.harness {
+                AgentBackendRuntimeHarness::ClaudeCode => {
+                    let started = ClaudeCodeHarness::start_persistent(PersistentSessionStart {
+                        working_dir: std::path::Path::new(&worktree),
+                        session_id: &sid,
+                        is_resume,
+                        allowed_tools: &tools,
+                        custom_instructions: instructions.as_deref(),
+                        settings: &settings,
+                        workspace_env: Some(&env),
+                        resolved_env: Some(&resolved),
+                    })
+                    .await?;
+                    Ok::<Arc<AgentSession>, String>(Arc::new(AgentSession::from_claude_code(
+                        started,
+                    )))
+                }
+                AgentBackendRuntimeHarness::CodexAppServer => {
+                    let started = CodexAppServerSession::start_with_options(
+                        std::path::Path::new(&worktree),
+                        env!("CARGO_PKG_VERSION"),
+                        CodexAppServerOptions {
+                            model: settings.model.clone(),
+                            permission_level: codex_permission_level_for_persistent,
+                            fast_mode: settings.fast_mode,
+                            reasoning_effort: settings.effort.clone(),
+                            resume_thread_id: is_resume.then(|| sid.clone()),
+                            custom_instructions: instructions.clone(),
+                            mcp_config: settings.mcp_config.clone(),
+                            workspace_env: Some(env.clone()),
+                            resolved_env: Some(resolved.clone()),
+                        },
+                    )
+                    .await?;
+                    Ok::<Arc<AgentSession>, String>(Arc::new(AgentSession::from_codex_app_server(
+                        started,
+                    )))
+                }
+            }
         }
     };
 
@@ -2279,21 +2359,44 @@ pub async fn send_chat_message(
                 drop(agents);
 
                 let mut respawn_settings = agent_settings.clone();
-                let bridge = if send_to_user_enabled {
-                    let (b, mcp_with_claudette) = start_bridge_and_inject_mcp(
-                        &app,
-                        &state.db_path,
-                        &workspace_id,
-                        &chat_session_id,
-                        agent_settings.mcp_config.clone(),
-                    )
-                    .await?;
-                    respawn_settings.mcp_config = mcp_with_claudette;
-                    b
-                } else {
-                    start_chat_bridge(&app, &state.db_path, &workspace_id, &chat_session_id).await?
+                let bridge = match respawn_settings.backend_runtime.harness {
+                    AgentBackendRuntimeHarness::ClaudeCode => Some(if send_to_user_enabled {
+                        let (b, mcp_with_claudette) = start_bridge_and_inject_mcp(
+                            &app,
+                            &state.db_path,
+                            &workspace_id,
+                            &chat_session_id,
+                            agent_settings.mcp_config.clone(),
+                        )
+                        .await?;
+                        respawn_settings.mcp_config = mcp_with_claudette;
+                        b
+                    } else {
+                        start_chat_bridge(&app, &state.db_path, &workspace_id, &chat_session_id)
+                            .await?
+                    }),
+                    AgentBackendRuntimeHarness::CodexAppServer if send_to_user_enabled => {
+                        let (b, mcp_with_claudette) = start_bridge_and_inject_mcp(
+                            &app,
+                            &state.db_path,
+                            &workspace_id,
+                            &chat_session_id,
+                            agent_settings.mcp_config.clone(),
+                        )
+                        .await?;
+                        respawn_settings.mcp_config = mcp_with_claudette;
+                        Some(b)
+                    }
+                    AgentBackendRuntimeHarness::CodexAppServer => None,
                 };
-                respawn_settings.hook_bridge = Some(build_agent_hook_bridge(&bridge)?);
+                if let Some(bridge) = bridge.as_ref()
+                    && matches!(
+                        respawn_settings.backend_runtime.harness,
+                        AgentBackendRuntimeHarness::ClaudeCode
+                    )
+                {
+                    respawn_settings.hook_bridge = Some(build_agent_hook_bridge(bridge)?);
+                }
 
                 let is_resume = should_resume_persistent_session(
                     &saved_session_id,
@@ -2397,10 +2500,11 @@ pub async fn send_chat_message(
                 agents = state.agents.write().await;
                 let session = agents.get_mut(&chat_session_id).ok_or("Session lost")?;
                 session.persistent_session = Some(ps);
-                session.mcp_bridge = Some(bridge);
+                session.mcp_bridge = bridge;
                 session.session_id = final_sid;
                 session.session_plan_mode = agent_settings.plan_mode;
                 session.session_allowed_tools = allowed_tools.clone();
+                session.session_fast_mode = agent_settings.fast_mode;
                 session.session_disable_1m_context = agent_settings.disable_1m_context;
                 session.session_backend_hash = agent_settings.backend_runtime.hash.clone();
                 // Fresh process — any prior ExitPlanMode observation belongs
@@ -2438,21 +2542,43 @@ pub async fn send_chat_message(
         // on the session below so it lives exactly as long as the
         // persistent CLI process.
         let mut spawn_settings = agent_settings.clone();
-        let bridge = if send_to_user_enabled {
-            let (b, mcp_with_claudette) = start_bridge_and_inject_mcp(
-                &app,
-                &state.db_path,
-                &workspace_id,
-                &chat_session_id,
-                agent_settings.mcp_config.clone(),
-            )
-            .await?;
-            spawn_settings.mcp_config = mcp_with_claudette;
-            b
-        } else {
-            start_chat_bridge(&app, &state.db_path, &workspace_id, &chat_session_id).await?
+        let bridge = match spawn_settings.backend_runtime.harness {
+            AgentBackendRuntimeHarness::ClaudeCode => Some(if send_to_user_enabled {
+                let (b, mcp_with_claudette) = start_bridge_and_inject_mcp(
+                    &app,
+                    &state.db_path,
+                    &workspace_id,
+                    &chat_session_id,
+                    agent_settings.mcp_config.clone(),
+                )
+                .await?;
+                spawn_settings.mcp_config = mcp_with_claudette;
+                b
+            } else {
+                start_chat_bridge(&app, &state.db_path, &workspace_id, &chat_session_id).await?
+            }),
+            AgentBackendRuntimeHarness::CodexAppServer if send_to_user_enabled => {
+                let (b, mcp_with_claudette) = start_bridge_and_inject_mcp(
+                    &app,
+                    &state.db_path,
+                    &workspace_id,
+                    &chat_session_id,
+                    agent_settings.mcp_config.clone(),
+                )
+                .await?;
+                spawn_settings.mcp_config = mcp_with_claudette;
+                Some(b)
+            }
+            AgentBackendRuntimeHarness::CodexAppServer => None,
         };
-        spawn_settings.hook_bridge = Some(build_agent_hook_bridge(&bridge)?);
+        if let Some(bridge) = bridge.as_ref()
+            && matches!(
+                spawn_settings.backend_runtime.harness,
+                AgentBackendRuntimeHarness::ClaudeCode
+            )
+        {
+            spawn_settings.hook_bridge = Some(build_agent_hook_bridge(bridge)?);
+        }
 
         let (ps, final_sid) = match start_persistent(
             worktree_path.clone(),
@@ -2530,10 +2656,11 @@ pub async fn send_chat_message(
         agents = state.agents.write().await;
         let session = agents.get_mut(&chat_session_id).ok_or("Session lost")?;
         session.persistent_session = Some(ps);
-        session.mcp_bridge = Some(bridge);
+        session.mcp_bridge = bridge;
         session.session_id = final_sid.clone();
         session.session_plan_mode = agent_settings.plan_mode;
         session.session_allowed_tools = allowed_tools.clone();
+        session.session_fast_mode = agent_settings.fast_mode;
         session.session_disable_1m_context = agent_settings.disable_1m_context;
         session.session_backend_hash = agent_settings.backend_runtime.hash.clone();
         // See the sibling reset above — fresh process, fresh latch.
@@ -2951,19 +3078,22 @@ pub async fn send_chat_message(
                     },
             }) = &event
             {
-                if matches!(tool_name.as_str(), "AskUserQuestion" | "ExitPlanMode") {
+                if matches!(tool_name.as_str(), "AskUserQuestion" | "ExitPlanMode")
+                    || is_codex_approval_tool_name(tool_name)
+                {
                     let app_state = app.state::<AppState>();
                     let mut agents = app_state.agents.write().await;
-                    if let Some(session) = agents.get_mut(&chat_session_id_for_stream) {
-                        session.pending_permissions.insert(
+                    let kind = if let Some(session) = agents.get_mut(&chat_session_id_for_stream) {
+                        queue_control_prompt(
+                            session,
+                            request_id.clone(),
+                            tool_name.clone(),
                             tool_use_id.clone(),
-                            PendingPermission {
-                                request_id: request_id.clone(),
-                                tool_name: tool_name.clone(),
-                                original_input: input.clone(),
-                            },
-                        );
-                    }
+                            input.clone(),
+                        )
+                    } else {
+                        control_prompt_attention_kind(tool_name)
+                    };
                     drop(agents);
                     let payload = serde_json::json!({
                         "workspace_id": &ws_id,
@@ -2991,11 +3121,6 @@ pub async fn send_chat_message(
                     //   - If a different pending prompt in the same cycle has
                     //     already triggered the notification, dedupe via
                     //     `attention_notification_sent`.
-                    let kind = if tool_name == "AskUserQuestion" {
-                        crate::state::AttentionKind::Ask
-                    } else {
-                        crate::state::AttentionKind::Plan
-                    };
                     let app_for_notify = app.clone();
                     let ws_id_for_notify = ws_id.clone();
                     let session_id_for_notify = chat_session_id_for_stream.clone();
@@ -3613,15 +3738,17 @@ pub async fn send_chat_message(
 mod tests {
     use super::{
         auth_failure_message_from_assistant_text, auth_failure_message_from_stderr,
-        env_provider_drifted_parts, has_env_trust_warning, remote_control_requested_or_active,
-        remote_control_requested_or_active_for_turn,
+        env_provider_drifted_parts, has_env_trust_warning, queue_control_prompt,
+        remote_control_requested_or_active, remote_control_requested_or_active_for_turn,
         remote_control_should_defer_drift_teardown_for_turn,
         remote_control_should_restore_for_turn, remote_control_title, resolve_spawn_session_id,
         should_defer_persistent_restart_for_state,
         should_reenable_remote_control_after_turn_result, should_resume_persistent_session,
         should_run_auto_naming, terminal_text,
     };
-    use crate::state::{ClaudeRemoteControlLifecycle, ClaudeRemoteControlStatus};
+    use crate::state::{
+        AgentSessionState, AttentionKind, ClaudeRemoteControlLifecycle, ClaudeRemoteControlStatus,
+    };
     use claudette::model::{ChatMessage, ChatRole};
 
     fn test_chat_message(role: ChatRole, content: &str) -> ChatMessage {
@@ -3640,6 +3767,79 @@ mod tests {
             cache_read_tokens: None,
             cache_creation_tokens: None,
         }
+    }
+
+    fn test_agent_session_state() -> AgentSessionState {
+        AgentSessionState {
+            workspace_id: "workspace-1".to_string(),
+            session_id: "session-1".to_string(),
+            turn_count: 1,
+            active_pid: None,
+            custom_instructions: None,
+            needs_attention: false,
+            attention_kind: None,
+            attention_notification_sent: false,
+            persistent_session: None,
+            claude_remote_control: ClaudeRemoteControlStatus::disabled(),
+            claude_remote_control_monitor_pid: None,
+            local_user_message_uuids: Default::default(),
+            mcp_config_dirty: false,
+            session_plan_mode: false,
+            session_allowed_tools: Vec::new(),
+            session_fast_mode: false,
+            session_disable_1m_context: false,
+            session_backend_hash: String::new(),
+            pending_permissions: Default::default(),
+            running_background_tasks: Default::default(),
+            background_wake_active: false,
+            session_exited_plan: false,
+            session_resolved_env: Default::default(),
+            session_resolved_env_signature: String::new(),
+            mcp_bridge: None,
+            last_user_msg_id: None,
+            posted_env_trust_warning: false,
+        }
+    }
+
+    #[test]
+    fn queue_control_prompt_sets_attention_for_codex_approval() {
+        let mut session = test_agent_session_state();
+
+        let kind = queue_control_prompt(
+            &mut session,
+            "request-1".to_string(),
+            "CodexCommandApproval".to_string(),
+            "tool-1".to_string(),
+            serde_json::json!({"command": "cargo test"}),
+        );
+
+        assert_eq!(kind, AttentionKind::Ask);
+        assert!(session.needs_attention);
+        assert_eq!(session.attention_kind, Some(AttentionKind::Ask));
+        assert!(!session.session_exited_plan);
+        let pending = session.pending_permissions.get("tool-1").unwrap();
+        assert_eq!(pending.request_id, "request-1");
+        assert_eq!(pending.tool_name, "CodexCommandApproval");
+        assert_eq!(pending.original_input["command"], "cargo test");
+    }
+
+    #[test]
+    fn queue_control_prompt_sets_plan_attention_for_exit_plan_mode() {
+        let mut session = test_agent_session_state();
+
+        let kind = queue_control_prompt(
+            &mut session,
+            "request-2".to_string(),
+            "ExitPlanMode".to_string(),
+            "tool-2".to_string(),
+            serde_json::json!({"plan": "ship it"}),
+        );
+
+        assert_eq!(kind, AttentionKind::Plan);
+        assert!(session.needs_attention);
+        assert_eq!(session.attention_kind, Some(AttentionKind::Plan));
+        assert!(session.session_exited_plan);
+        assert!(session.pending_permissions.contains_key("tool-2"));
     }
 
     #[test]

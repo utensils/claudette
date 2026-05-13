@@ -2,7 +2,10 @@ use std::sync::Arc;
 
 use tauri::State;
 
-use claudette::agent::PersistentSession;
+use claudette::agent::{
+    AgentSession, build_codex_approval_response_payload, build_codex_user_input_response_payload,
+    is_codex_approval_tool_name,
+};
 
 use crate::state::{AgentSessionState, AppState, PendingPermission};
 
@@ -103,25 +106,63 @@ pub async fn submit_agent_answer(
         }
     }
 
-    let response = serde_json::json!({
-        "behavior": "allow",
-        "updatedInput": updated_input,
-    });
+    let response = if pending
+        .original_input
+        .get("codexMethod")
+        .and_then(serde_json::Value::as_str)
+        .is_some()
+    {
+        build_codex_user_input_response_payload(&pending.original_input, &answers)?
+    } else {
+        serde_json::json!({
+            "behavior": "allow",
+            "updatedInput": updated_input,
+        })
+    };
     ps.send_control_response(&pending.request_id, response)
         .await
 }
 
-/// Resolve a pending ExitPlanMode `can_use_tool` request.
+fn build_attention_response(
+    pending: &PendingPermission,
+    approved: bool,
+    reason: Option<String>,
+) -> Result<serde_json::Value, String> {
+    if is_codex_approval_tool_name(&pending.tool_name) {
+        return build_codex_approval_response_payload(
+            &pending.tool_name,
+            &pending.original_input,
+            approved,
+        );
+    }
+
+    if approved {
+        Ok(serde_json::json!({
+            "behavior": "allow",
+            "updatedInput": pending.original_input,
+        }))
+    } else {
+        let feedback = reason.unwrap_or_else(|| "Plan denied. Please revise the approach.".into());
+        let message = format!(
+            "{feedback}\n\nRevise the plan to address this feedback, then call ExitPlanMode again to present the updated plan for approval. Do not begin implementation until the user approves the revised plan."
+        );
+        Ok(serde_json::json!({
+            "behavior": "deny",
+            "message": message,
+        }))
+    }
+}
+
+fn is_user_approval_tool(tool_name: &str) -> bool {
+    tool_name == "ExitPlanMode" || is_codex_approval_tool_name(tool_name)
+}
+
+/// Resolve a pending approval-style `can_use_tool` request.
 /// `approved=true` → allow with the model's original input (the CLI's
-/// `call()` will save the plan and emit the real tool_result).
+/// `call()` will save the plan and emit the real tool_result for Claude plan
+/// approvals, while Codex receives an app-server protocol response).
 /// `approved=false` → deny with the given reason (or a sensible default).
-#[tauri::command]
-#[tracing::instrument(
-    target = "claudette::chat",
-    skip(reason, state),
-    fields(chat_session_id = %session_id, tool_use_id = %tool_use_id, approved),
-)]
-pub async fn submit_plan_approval(
+async fn submit_approval_response(
     session_id: String,
     tool_use_id: String,
     approved: bool,
@@ -145,9 +186,9 @@ pub async fn submit_plan_approval(
                     "No pending permission request for tool_use_id {tool_use_id} (pending: {pending_ids:?})"
                 ));
             }
-            Some(p) if p.tool_name != "ExitPlanMode" => {
+            Some(p) if !is_user_approval_tool(&p.tool_name) => {
                 return Err(format!(
-                    "Pending tool for {tool_use_id} is {}, not ExitPlanMode",
+                    "Pending tool for {tool_use_id} is {}, not an approval request",
                     p.tool_name
                 ));
             }
@@ -161,35 +202,53 @@ pub async fn submit_plan_approval(
         (pending, ps)
     };
 
-    let response = if approved {
-        serde_json::json!({
-            "behavior": "allow",
-            "updatedInput": pending.original_input,
-        })
-    } else {
-        let feedback = reason.unwrap_or_else(|| "Plan denied. Please revise the approach.".into());
-        let message = format!(
-            "{feedback}\n\nRevise the plan to address this feedback, then call ExitPlanMode again to present the updated plan for approval. Do not begin implementation until the user approves the revised plan."
-        );
-        serde_json::json!({
-            "behavior": "deny",
-            "message": message,
-        })
-    };
+    let response = build_attention_response(&pending, approved, reason)?;
     ps.send_control_response(&pending.request_id, response)
         .await
 }
 
+#[tauri::command]
+#[tracing::instrument(
+    target = "claudette::chat",
+    skip(reason, state),
+    fields(chat_session_id = %session_id, tool_use_id = %tool_use_id, approved),
+)]
+pub async fn submit_plan_approval(
+    session_id: String,
+    tool_use_id: String,
+    approved: bool,
+    reason: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    submit_approval_response(session_id, tool_use_id, approved, reason, state).await
+}
+
+#[tauri::command]
+#[tracing::instrument(
+    target = "claudette::chat",
+    skip(reason, state),
+    fields(chat_session_id = %session_id, tool_use_id = %tool_use_id, approved),
+)]
+pub async fn submit_agent_approval(
+    session_id: String,
+    tool_use_id: String,
+    approved: bool,
+    reason: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    submit_approval_response(session_id, tool_use_id, approved, reason, state).await
+}
+
 /// Synchronously drain any pending permission requests from `session` and
-/// snapshot the [`PersistentSession`] needed to deny them. Designed to be
+/// snapshot the [`AgentSession`] needed to deny them. Designed to be
 /// called while holding the agents write lock — does no async work itself.
 ///
 /// Returns `None` when there is nothing to do (no pending entries) or when
-/// there is no live `PersistentSession` to receive the denies (entries are
+/// there is no live `AgentSession` to receive the denies (entries are
 /// dropped in that case, since nobody could read the response anyway).
 pub(crate) fn drain_pending_permissions(
     session: &mut AgentSessionState,
-) -> Option<(Arc<PersistentSession>, Vec<PendingPermission>)> {
+) -> Option<(Arc<AgentSession>, Vec<PendingPermission>)> {
     if session.pending_permissions.is_empty() {
         return None;
     }
@@ -210,14 +269,17 @@ pub(crate) fn drain_pending_permissions(
 /// the CLI's stdin and would otherwise serialize all other agent-state ops.
 pub(crate) async fn deny_drained_permissions(
     drained: Vec<PendingPermission>,
-    ps: &PersistentSession,
+    ps: &AgentSession,
     reason: &str,
 ) {
     for pending in drained {
-        let deny = serde_json::json!({
-            "behavior": "deny",
-            "message": reason,
-        });
+        let deny = build_attention_response(&pending, false, Some(reason.to_string()))
+            .unwrap_or_else(|_| {
+                serde_json::json!({
+                    "behavior": "deny",
+                    "message": reason,
+                })
+            });
         if let Err(e) = ps.send_control_response(&pending.request_id, deny).await {
             tracing::warn!(
                 target: "claudette::chat",

@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use claudette::agent::PersistentSession;
+use claudette::agent::AgentSession;
 use tokio::sync::{RwLock, Semaphore};
 
 use claudette::claude_help::ClaudeFlagDef;
@@ -113,10 +113,12 @@ pub struct AgentSessionState {
     /// (i.e. when the user responds). Prevents repeated banner/sound when
     /// multiple `can_use_tool` prompts queue inside a single cycle.
     pub attention_notification_sent: bool,
-    /// Long-lived process that persists MCP servers across turns.
-    /// When present, subsequent turns write to this process's stdin instead of
-    /// spawning new processes.
-    pub persistent_session: Option<Arc<PersistentSession>>,
+    /// Long-lived agent process handle reused across turns when the selected
+    /// harness supports persistent sessions.
+    ///
+    /// Claude Code sessions also use this to keep CLI-side MCP servers alive
+    /// across turns; other harnesses may persist different protocol state.
+    pub persistent_session: Option<Arc<AgentSession>>,
     /// Ephemeral Claude Code Remote Control status for the current persistent
     /// process. This is intentionally not persisted across app restarts.
     pub claude_remote_control: ClaudeRemoteControlStatus,
@@ -140,6 +142,10 @@ pub struct AgentSessionState {
     /// A mismatch on the next turn (e.g. permission level changed, or plan
     /// approval elevates access) forces a teardown + respawn.
     pub session_allowed_tools: Vec<String>,
+    /// Fast-mode value baked into the current `persistent_session`. Claude
+    /// Code receives this via spawn settings; Codex app-server receives it as
+    /// serviceTier, so either harness needs a respawn when the toolbar flips.
+    pub session_fast_mode: bool,
     /// `CLAUDE_CODE_DISABLE_1M_CONTEXT` value baked into the current
     /// `persistent_session` at spawn. A mismatch on the next turn (user
     /// switched from 200k to 1M model variant, or vice versa) forces a
