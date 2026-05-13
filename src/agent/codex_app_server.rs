@@ -240,6 +240,29 @@ impl CodexAppServerSession {
         Ok(())
     }
 
+    pub async fn interrupt_turn(&self) -> Result<(), String> {
+        let thread_id = self
+            .thread_id
+            .lock()
+            .await
+            .clone()
+            .ok_or_else(|| "Codex app-server has no thread to interrupt".to_string())?;
+        let turn_id = self
+            .active_turn_id
+            .lock()
+            .await
+            .clone()
+            .ok_or_else(|| "Codex app-server has no active turn to interrupt".to_string())?;
+        self.send_request(build_turn_interrupt_request(
+            self.next_id(),
+            &thread_id,
+            &turn_id,
+        ))
+        .await?;
+        *self.active_turn_id.lock().await = None;
+        Ok(())
+    }
+
     async fn initialize(&self, client_version: &str) -> Result<(), String> {
         let request = build_initialize_request(self.next_id(), client_version);
         self.send_request(request).await?;
@@ -1360,6 +1383,16 @@ mod tests {
     }
 
     #[test]
+    fn turn_interrupt_request_carries_thread_and_turn_ids() {
+        let request = build_turn_interrupt_request(10, "thread-1", "turn-1");
+        let value = serde_json::to_value(request).unwrap();
+
+        assert_eq!(value["method"], "turn/interrupt");
+        assert_eq!(value["params"]["threadId"], "thread-1");
+        assert_eq!(value["params"]["turnId"], "turn-1");
+    }
+
+    #[test]
     fn parses_agent_message_delta_notification() {
         let message = parse_jsonrpc_line(
             r#"{"method":"item/agentMessage/delta","params":{"threadId":"t","turnId":"u","itemId":"i","delta":"hi"}}"#,
@@ -1556,6 +1589,16 @@ mod tests {
         };
         assert_eq!(text, "hi");
         assert_eq!(session.pid(), 4321);
+    }
+
+    #[tokio::test]
+    async fn codex_interrupt_requires_started_thread() {
+        let session = CodexAppServerSession::new_for_test(4321);
+
+        assert_eq!(
+            session.interrupt_turn().await.unwrap_err(),
+            "Codex app-server has no thread to interrupt"
+        );
     }
 
     #[tokio::test]

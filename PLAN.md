@@ -115,11 +115,16 @@
   - `nix develop -c cargo test -p claudette agent::codex_app_server --all-features`
   - `nix develop -c cargo test -p claudette agent::harness --all-features`
   - `nix develop -c cargo fmt --all`
+- 2026-05-13: Committed and pushed hidden Codex turn flow as `c0f85c89` (`feat: wire codex app-server turn flow`).
+- 2026-05-13: Added Codex `turn/interrupt` support and a provider-neutral `AgentSession::interrupt_turn` entry point.
+- 2026-05-13: Verified interrupt scaffolding with:
+  - `nix develop -c cargo test -p claudette agent::codex_app_server --all-features`
+  - `nix develop -c cargo test -p claudette agent::harness --all-features`
+  - `nix develop -c cargo fmt --all`
 
 ## Next Stage
 
 - Begin regular Copilot review passes on draft PR #786 after pushed checkpoints.
-- Add Codex `turn/interrupt` support and a thin harness stop/interrupt abstraction before selecting it from backend runtime.
 - Select native Codex from backend runtime only under the native Codex experimental gate.
 - Add fake-harness tests around chat send lifecycle seams before selecting the native Codex runtime from backend settings.
 - Keep `codex-subscription` hidden/replaced only after the native `Experimental Codex` backend has a real harness path.

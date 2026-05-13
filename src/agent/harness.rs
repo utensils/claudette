@@ -188,6 +188,13 @@ impl AgentSession {
         }
     }
 
+    pub async fn interrupt_turn(&self) -> Result<(), String> {
+        match self {
+            Self::ClaudeCode(session) => super::process::stop_agent(session.pid()).await,
+            Self::CodexAppServer(session) => session.interrupt_turn().await,
+        }
+    }
+
     pub async fn set_remote_control(
         &self,
         enabled: bool,
