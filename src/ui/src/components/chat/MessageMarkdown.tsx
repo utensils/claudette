@@ -39,9 +39,11 @@ const COMPONENTS: Components = {
 export const MessageMarkdown = memo(function MessageMarkdown({
   content,
   onOpenFile,
+  resolveFilePath,
 }: {
   content: string;
   onOpenFile?: (path: string) => boolean;
+  resolveFilePath?: (path: string) => string | null;
 }) {
   const preprocessed = useMemo(() => preprocessContent(content), [content]);
   const body = (
@@ -56,9 +58,14 @@ export const MessageMarkdown = memo(function MessageMarkdown({
       </Markdown>
     </div>
   );
-  if (!onOpenFile) return body;
+  if (!onOpenFile && !resolveFilePath) return body;
   return (
-    <MarkdownFileOpenContext.Provider value={{ openFile: onOpenFile }}>
+    <MarkdownFileOpenContext.Provider
+      value={{
+        openFile: onOpenFile ?? (() => false),
+        resolveFilePath,
+      }}
+    >
       {body}
     </MarkdownFileOpenContext.Provider>
   );

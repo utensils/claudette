@@ -58,6 +58,7 @@ import {
 import { ChatAuthFailureCallout } from "../auth/ChatAuthFailureCallout";
 import { cleanClaudeAuthError, isClaudeAuthError } from "../auth/claudeAuth";
 import { monacoFileLinkTarget } from "./chatFileLinks";
+import { useWorkspaceFileIndex } from "./useWorkspaceFileIndex";
 import {
   EMPTY_ACTIVITIES,
   EMPTY_ATTACHMENTS,
@@ -156,6 +157,7 @@ export const MessagesWithTurns = memo(function MessagesWithTurns({
   const worktreePath = useAppStore(
     (s) => s.workspaces.find((w) => w.id === workspaceId)?.worktree_path,
   );
+  const fileIndex = useWorkspaceFileIndex(workspaceId);
   const liveToolActivities = useAppStore(
     (s) => s.toolActivities[sessionId] ?? EMPTY_ACTIVITIES,
   );
@@ -931,6 +933,7 @@ export const MessagesWithTurns = memo(function MessagesWithTurns({
                       content={msg.content}
                       query={searchQuery}
                       onOpenFile={openFileInMonaco}
+                      resolveFilePath={fileIndex.resolve}
                     />
                   ) : searchQuery ? (
                     // While the search bar is open, render user messages as plain

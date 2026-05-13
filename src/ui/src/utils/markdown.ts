@@ -184,6 +184,7 @@ export const EXTERNAL_SCHEMES = /^https?:|^mailto:/i;
 
 export interface MarkdownFileOpenContextValue {
   openFile: (path: string) => boolean;
+  resolveFilePath?: (path: string) => string | null;
 }
 
 export const MarkdownFileOpenContext =
@@ -297,6 +298,7 @@ export function HighlightedCode({
     ? (className.match(/(?:^|\s)language-([^\s]+)/)?.[1] ?? null)
     : null;
   const isStreaming = useContext(StreamingContext);
+  const fileOpen = useContext(MarkdownFileOpenContext);
   // Memoize so re-renders that don't change `children` skip the recursive walk
   // and keep `code`'s identity stable — the highlight effect's deps then no
   // longer fire spuriously, so we don't enqueue redundant worker dispatches.
@@ -357,6 +359,23 @@ export function HighlightedCode({
       "code",
       { ...props, className },
       code.replace(/\n+$/, ""),
+    );
+  }
+  const inlineText = extractText(children).trim();
+  const resolvedPath = fileOpen?.resolveFilePath?.(inlineText) ?? null;
+  if (resolvedPath && fileOpen) {
+    return createElement(
+      "button",
+      {
+        type: "button",
+        className: classNames(
+          "cc-file-path-link",
+          typeof className === "string" ? className : undefined,
+        ),
+        title: resolvedPath,
+        onClick: () => fileOpen.openFile(resolvedPath),
+      },
+      children,
     );
   }
   return createElement("code", { ...props, className }, children);

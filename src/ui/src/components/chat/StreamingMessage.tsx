@@ -5,6 +5,7 @@ import { HighlightedMessageMarkdown } from "./HighlightedMessageMarkdown";
 import { StreamingContext } from "./StreamingContext";
 import { ScrollContext } from "./ScrollContext";
 import { monacoFileLinkTarget } from "./chatFileLinks";
+import { useWorkspaceFileIndex } from "./useWorkspaceFileIndex";
 import styles from "./ChatPanel.module.css";
 import caretStyles from "./caret.module.css";
 
@@ -35,6 +36,7 @@ export const StreamingMessage = memo(function StreamingMessage({
   const worktreePath = useAppStore(
     (s) => s.workspaces.find((w) => w.id === workspaceId)?.worktree_path,
   );
+  const fileIndex = useWorkspaceFileIndex(workspaceId);
   const { handleContentChanged } = useContext(ScrollContext);
 
   const fullText = streaming || pendingText;
@@ -78,6 +80,7 @@ export const StreamingMessage = memo(function StreamingMessage({
             content={displayed}
             query={searchQuery}
             onOpenFile={openFileInMonaco}
+            resolveFilePath={fileIndex.resolve}
           />
         </StreamingContext.Provider>
         {showCaret && <span className={caretStyles.caret} aria-hidden="true" />}

@@ -134,6 +134,43 @@ describe("MARKDOWN_COMPONENTS.code wiring", () => {
     const props = (el as unknown as { props: any }).props;
     expect(props.node).toBeUndefined();
   });
+
+  it("turns inline code into a file button when the context resolves it", async () => {
+    const openFile = vi.fn(() => true);
+    const resolveFilePath = vi.fn((path: string) =>
+      path === "Cargo.toml" ? "Cargo.toml" : null,
+    );
+    const container = await render(
+      createElement(
+        MarkdownFileOpenContext.Provider,
+        { value: { openFile, resolveFilePath } },
+        createElement(HighlightedCode, { children: "Cargo.toml" }),
+      ),
+    );
+
+    const button = container.querySelector("button");
+    expect(button?.textContent).toBe("Cargo.toml");
+    expect(container.querySelector("code")).toBeNull();
+    button?.dispatchEvent(
+      new MouseEvent("click", { bubbles: true, cancelable: true }),
+    );
+
+    expect(resolveFilePath).toHaveBeenCalledWith("Cargo.toml");
+    expect(openFile).toHaveBeenCalledWith("Cargo.toml");
+  });
+
+  it("leaves inline code alone when the context cannot resolve it", async () => {
+    const container = await render(
+      createElement(
+        MarkdownFileOpenContext.Provider,
+        { value: { openFile: vi.fn(), resolveFilePath: () => null } },
+        createElement(HighlightedCode, { children: "not-a-file" }),
+      ),
+    );
+
+    expect(container.querySelector("code")?.textContent).toBe("not-a-file");
+    expect(container.querySelector("button")).toBeNull();
+  });
 });
 
 describe("safeUrlTransform", () => {
