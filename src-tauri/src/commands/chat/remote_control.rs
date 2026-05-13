@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
 use claudette::agent::{
-    AgentEvent, AgentSettings, PersistentSession, StreamEvent, TokenUsage, UserContentBlock,
-    UserEventMessage, UserMessageContent,
+    AgentEvent, AgentSettings, ClaudeCodeHarness, PersistentSession, PersistentSessionStart,
+    StreamEvent, TokenUsage, UserContentBlock, UserEventMessage, UserMessageContent,
 };
 use claudette::chat::{
     BuildAssistantArgs, CheckpointArgs, assistant_usage_fields_from_result,
@@ -544,16 +544,16 @@ async fn ensure_persistent_session_for_remote_control(
         .map(ToOwned::to_owned);
     let is_resume = persisted_sid.is_some();
     let claude_session_id = persisted_sid.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-    let ps = PersistentSession::start(
-        std::path::Path::new(worktree_path),
-        &claude_session_id,
+    let ps = ClaudeCodeHarness::start_persistent(PersistentSessionStart {
+        working_dir: std::path::Path::new(worktree_path),
+        session_id: &claude_session_id,
         is_resume,
-        &allowed_tools,
-        custom_instructions.as_deref(),
-        &agent_settings,
-        Some(&ws_env),
-        Some(&resolved_env),
-    )
+        allowed_tools: &allowed_tools,
+        custom_instructions: custom_instructions.as_deref(),
+        settings: &agent_settings,
+        workspace_env: Some(&ws_env),
+        resolved_env: Some(&resolved_env),
+    })
     .await
     .map_err(|err| crate::missing_cli::handle_err(app, &err).unwrap_or(err))?;
     let ps = Arc::new(ps);

@@ -8,8 +8,8 @@ use claudette::agent::background::{
     parse_background_task_binding, parse_bash_start, parse_task_notification,
 };
 use claudette::agent::{
-    self, AgentEvent, AgentSettings, ControlRequestInner, FileAttachment, InnerStreamEvent,
-    PersistentSession, StartContentBlock, StreamEvent,
+    self, AgentEvent, AgentSettings, ClaudeCodeHarness, ControlRequestInner, FileAttachment,
+    InnerStreamEvent, PersistentSession, PersistentSessionStart, StartContentBlock, StreamEvent,
 };
 use claudette::base64_decode;
 use claudette::chat::{
@@ -2226,16 +2226,16 @@ pub async fn send_chat_message(
             // `handle_err` themselves, which keeps event emission attributed
             // to the actual decision-to-fail rather than to the speculative
             // first attempt of a resume.
-            let started = PersistentSession::start(
-                std::path::Path::new(&worktree),
-                &sid,
+            let started = ClaudeCodeHarness::start_persistent(PersistentSessionStart {
+                working_dir: std::path::Path::new(&worktree),
+                session_id: &sid,
                 is_resume,
-                &tools,
-                instructions.as_deref(),
-                &settings,
-                Some(&env),
-                Some(&resolved),
-            )
+                allowed_tools: &tools,
+                custom_instructions: instructions.as_deref(),
+                settings: &settings,
+                workspace_env: Some(&env),
+                resolved_env: Some(&resolved),
+            })
             .await?;
             Ok::<Arc<PersistentSession>, String>(Arc::new(started))
         }
