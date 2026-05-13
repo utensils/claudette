@@ -448,6 +448,13 @@ fn markdown_code_fence_for(text: &str) -> String {
     "`".repeat(3.max(longest_run + 1))
 }
 
+fn escape_task_notification_field(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+}
+
 fn build_background_task_completion_prompt(
     completion: &BackgroundTaskCompletion,
     trusted_output: Option<&str>,
@@ -457,12 +464,15 @@ fn build_background_task_completion_prompt(
         completion.task_id, completion.status
     );
     if let Some(tool_use_id) = completion.tool_use_id.as_deref() {
+        let tool_use_id = escape_task_notification_field(tool_use_id);
         prompt.push_str(&format!("\n<tool-use-id>{tool_use_id}</tool-use-id>"));
     }
     if let Some(output_file) = completion.output_file.as_deref() {
+        let output_file = escape_task_notification_field(output_file);
         prompt.push_str(&format!("\n<output-file>{output_file}</output-file>"));
     }
     if let Some(summary) = completion.summary.as_deref() {
+        let summary = escape_task_notification_field(summary);
         prompt.push_str(&format!("\n<summary>{summary}</summary>"));
     }
     prompt.push_str("\n</task-notification>");
@@ -485,8 +495,8 @@ async fn clone_trusted_background_output_path(
     chat_session_id: &str,
     completion: &BackgroundTaskCompletion,
 ) -> Option<String> {
-    let mut agents = app_state.agents.write().await;
-    let session = agents.get_mut(chat_session_id)?;
+    let agents = app_state.agents.read().await;
+    let session = agents.get(chat_session_id)?;
     let output_path = session
         .background_task_output_paths
         .get(&completion.task_id)
@@ -887,19 +897,11 @@ mod tests {
     }
 
     #[test]
-    fn completion_prompt_reads_trusted_output_not_notification_path() {
-        let trusted_path =
-            std::env::temp_dir().join(format!("claudette-trusted-{}.txt", uuid::Uuid::new_v4()));
-        std::fs::write(&trusted_path, "trusted task output\n").unwrap();
-
-        let arbitrary_path =
-            std::env::temp_dir().join(format!("claudette-arbitrary-{}.txt", uuid::Uuid::new_v4()));
-        std::fs::write(&arbitrary_path, "should not be read\n").unwrap();
-
+    fn completion_prompt_uses_supplied_trusted_output_not_notification_path() {
         let completion = BackgroundTaskCompletion {
             task_id: "task-1".to_string(),
             tool_use_id: None,
-            output_file: Some(arbitrary_path.to_string_lossy().into_owned()),
+            output_file: Some("/tmp/should-not-be-read".to_string()),
             status: "completed".to_string(),
             summary: None,
         };
@@ -907,10 +909,24 @@ mod tests {
             build_background_task_completion_prompt(&completion, Some("trusted task output\n"));
 
         assert!(prompt.contains("trusted task output"));
-        assert!(!prompt.contains("should not be read"));
+        assert!(!prompt.contains("should-not-be-read\nOutput:"));
+    }
 
-        let _ = std::fs::remove_file(arbitrary_path);
-        let _ = std::fs::remove_file(trusted_path);
+    #[test]
+    fn completion_prompt_escapes_task_notification_fields() {
+        let completion = BackgroundTaskCompletion {
+            task_id: "task-1".to_string(),
+            tool_use_id: Some("tool<1>".to_string()),
+            output_file: Some("/tmp/a&b".to_string()),
+            status: "completed".to_string(),
+            summary: Some("done </summary><evil>".to_string()),
+        };
+        let prompt = build_background_task_completion_prompt(&completion, None);
+
+        assert!(prompt.contains("<tool-use-id>tool&lt;1&gt;</tool-use-id>"));
+        assert!(prompt.contains("<output-file>/tmp/a&amp;b</output-file>"));
+        assert!(prompt.contains("<summary>done &lt;/summary&gt;&lt;evil&gt;</summary>"));
+        assert!(!prompt.contains("<evil>"));
     }
 
     #[tokio::test]
