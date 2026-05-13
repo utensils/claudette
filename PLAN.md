@@ -198,8 +198,10 @@
   - `nix develop -c cargo test -p claudette-tauri chat::lifecycle --all-features`
   - `nix develop -c cargo fmt --all --check`
   - `git diff --check`
+- 2026-05-13: Committed and pushed the idle-stop fix as `a5426aae` (`fix: avoid idle agent interruption`), replied to the Copilot thread, resolved it, and verified zero unresolved Copilot reviewer threads remain.
+- 2026-05-13: Latest PR checks for `a5426aae` passed: Cargo Version Sync, Commit messages, Format, Frontend, Frontend Bundle Smoke, Lint, Migration guard, PR title, Test, Updater Manifest, build, codecov/patch, and codecov/project. Deploy was skipped as expected for this draft PR.
 
 ## Next Stage
 
-- Commit/push the idle-stop fix, reply to and resolve the new Copilot thread, then re-query Copilot and PR checks.
-- If CI and Copilot stay clean, run one broader local confidence pass from the Test Plan before marking the native Codex implementation ready for final review.
+- Perform one final lightweight status check after this plan-status push.
+- If no new Copilot findings or CI failures appear, the native Codex implementation is ready for final human review while still in draft PR form.
