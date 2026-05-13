@@ -7,7 +7,7 @@ import {
   focusChatPrompt,
   isTerminalFocused,
 } from "../utils/focusTargets";
-import { adjustUiFontSize } from "../utils/fontSettings";
+import { adjustTerminalFontSize, adjustUiFontSize } from "../utils/fontSettings";
 import { resolveHotkeyAction } from "../hotkeys/bindings";
 import {
   executeCloseTab,
@@ -177,6 +177,12 @@ export function useKeyboardShortcuts() {
             return;
           case "global.decrease-ui-font":
             adjustUiFontSize(-1);
+            return;
+          case "global.increase-terminal-font":
+            adjustTerminalFontSize(+1);
+            return;
+          case "global.decrease-terminal-font":
+            adjustTerminalFontSize(-1);
             return;
           case "global.open-chat-search":
             if (selectedWorkspaceId) openChatSearch(selectedWorkspaceId);

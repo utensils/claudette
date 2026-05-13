@@ -86,6 +86,7 @@ import {
   type AttachmentContextMenuItem,
 } from "../chat/AttachmentContextMenu";
 import { viewportToFixed } from "../../utils/zoom";
+import { adjustTerminalFontSize } from "../../utils/fontSettings";
 import { reclaimScrollLines } from "./terminalReclaim";
 import "@xterm/xterm/css/xterm.css";
 import styles from "./TerminalPanel.module.css";
@@ -802,6 +803,9 @@ export const TerminalPanel = memo(function TerminalPanel() {
           return;
         }
         case "zoom":
+          if (action.scope === "terminal") {
+            adjustTerminalFontSize(action.direction === "in" ? 1 : -1);
+          }
           return;
         case "copy": {
           const copyInst = activePaneId ? instancesRef.current.get(activePaneId) : null;
@@ -862,7 +866,7 @@ export const TerminalPanel = memo(function TerminalPanel() {
         }
       }
       ev.preventDefault();
-      if (action.kind === "zoom") return false;
+      if (action.kind === "zoom" && action.scope === "ui") return false;
       ev.stopImmediatePropagation();
       handleAction(action);
       return false;

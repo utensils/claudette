@@ -2,7 +2,12 @@ import { useState, useMemo, useEffect, useRef, useCallback } from "react";
 import { Search, ChevronLeft } from "lucide-react";
 import { useAppStore } from "../../stores/useAppStore";
 import { applyTheme, applyUserFonts, findTheme, loadAllThemes, cacheThemePreference, getThemeDataAttr } from "../../utils/theme";
-import { adjustUiFontSize, resetUiFontSize } from "../../utils/fontSettings";
+import {
+  adjustTerminalFontSize,
+  adjustUiFontSize,
+  resetTerminalFontSize,
+  resetUiFontSize,
+} from "../../utils/fontSettings";
 import {
   setAppSetting,
   stopAgent,
@@ -287,6 +292,9 @@ export function CommandPalette() {
         zoomIn: () => adjustUiFontSize(+1),
         zoomOut: () => adjustUiFontSize(-1),
         resetZoom: () => resetUiFontSize(),
+        terminalZoomIn: () => adjustTerminalFontSize(+1),
+        terminalZoomOut: () => adjustTerminalFontSize(-1),
+        resetTerminalZoom: () => resetTerminalFontSize(),
         close,
         keybindings,
         themes,

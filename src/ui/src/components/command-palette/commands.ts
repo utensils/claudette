@@ -82,6 +82,9 @@ export interface CommandContext {
   zoomIn: () => void;
   zoomOut: () => void;
   resetZoom: () => void;
+  terminalZoomIn: () => void;
+  terminalZoomOut: () => void;
+  resetTerminalZoom: () => void;
   close: () => void;
   keybindings: KeybindingMap;
 
@@ -279,6 +282,35 @@ export function buildCommands(ctx: CommandContext): Command[] {
     icon: ZoomIn,
     keywords: ["zoom", "reset", "actual", "default", "font", "size"],
     execute: () => { ctx.resetZoom(); ctx.close(); },
+  });
+  cmds.push({
+    id: "terminal-zoom-in",
+    name: "Terminal: Zoom In",
+    description: "Increase terminal font size",
+    category: "ui",
+    icon: ZoomIn,
+    shortcut: shortcut("global.increase-terminal-font"),
+    keywords: ["terminal", "zoom", "larger", "bigger", "font", "size"],
+    execute: () => { ctx.terminalZoomIn(); ctx.close(); },
+  });
+  cmds.push({
+    id: "terminal-zoom-out",
+    name: "Terminal: Zoom Out",
+    description: "Decrease terminal font size",
+    category: "ui",
+    icon: ZoomOut,
+    shortcut: shortcut("global.decrease-terminal-font"),
+    keywords: ["terminal", "zoom", "smaller", "font", "size"],
+    execute: () => { ctx.terminalZoomOut(); ctx.close(); },
+  });
+  cmds.push({
+    id: "terminal-reset-zoom",
+    name: "Terminal: Reset Zoom",
+    description: "Reset terminal font size to default (11px)",
+    category: "ui",
+    icon: RotateCcw,
+    keywords: ["terminal", "zoom", "reset", "actual", "default", "font", "size"],
+    execute: () => { ctx.resetTerminalZoom(); ctx.close(); },
   });
 
   // -- Agent (only when a session is active) --

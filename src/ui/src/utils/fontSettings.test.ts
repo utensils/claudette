@@ -2,11 +2,17 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import { useAppStore } from "../stores/useAppStore";
 import {
   adjustUiFontSize,
+  adjustTerminalFontSize,
   clampUiFontSize,
+  clampTerminalFontSize,
   UI_FONT_SIZE_MIN,
   UI_FONT_SIZE_MAX,
   UI_FONT_SIZE_DEFAULT,
+  TERMINAL_FONT_SIZE_MIN,
+  TERMINAL_FONT_SIZE_MAX,
+  TERMINAL_FONT_SIZE_DEFAULT,
   buildFontOptions,
+  resetTerminalFontSize,
   resetUiFontSize,
 } from "./fontSettings";
 
@@ -43,6 +49,25 @@ describe("clampUiFontSize", () => {
 
   it("returns default when given default", () => {
     expect(clampUiFontSize(UI_FONT_SIZE_DEFAULT)).toBe(UI_FONT_SIZE_DEFAULT);
+  });
+});
+
+describe("clampTerminalFontSize", () => {
+  it("returns the value when in range", () => {
+    expect(clampTerminalFontSize(15)).toBe(15);
+  });
+
+  it("clamps at minimum", () => {
+    expect(clampTerminalFontSize(5)).toBe(TERMINAL_FONT_SIZE_MIN);
+  });
+
+  it("clamps at maximum", () => {
+    expect(clampTerminalFontSize(40)).toBe(TERMINAL_FONT_SIZE_MAX);
+  });
+
+  it("returns default when given default", () => {
+    expect(clampTerminalFontSize(TERMINAL_FONT_SIZE_DEFAULT))
+      .toBe(TERMINAL_FONT_SIZE_DEFAULT);
   });
 });
 
@@ -88,6 +113,50 @@ describe("UI zoom persistence", () => {
 
     expect(useAppStore.getState().uiFontSize).toBe(UI_FONT_SIZE_MAX);
     expect(mocks.applyUserFonts).not.toHaveBeenCalled();
+    expect(mocks.setAppSetting).not.toHaveBeenCalled();
+  });
+});
+
+describe("terminal zoom persistence", () => {
+  beforeEach(() => {
+    mocks.applyUserFonts.mockClear();
+    mocks.setAppSetting.mockClear();
+    useAppStore.setState({
+      terminalFontSize: TERMINAL_FONT_SIZE_DEFAULT,
+    });
+  });
+
+  it("persists terminal-only zoom changes to app settings", () => {
+    adjustTerminalFontSize(+1);
+
+    expect(useAppStore.getState().terminalFontSize)
+      .toBe(TERMINAL_FONT_SIZE_DEFAULT + 1);
+    expect(mocks.applyUserFonts).not.toHaveBeenCalled();
+    expect(mocks.setAppSetting).toHaveBeenCalledWith(
+      "terminal_font_size",
+      String(TERMINAL_FONT_SIZE_DEFAULT + 1),
+    );
+  });
+
+  it("persists reset terminal zoom to the default terminal font size", () => {
+    useAppStore.setState({ terminalFontSize: 18 });
+
+    resetTerminalFontSize();
+
+    expect(useAppStore.getState().terminalFontSize).toBe(TERMINAL_FONT_SIZE_DEFAULT);
+    expect(mocks.applyUserFonts).not.toHaveBeenCalled();
+    expect(mocks.setAppSetting).toHaveBeenCalledWith(
+      "terminal_font_size",
+      String(TERMINAL_FONT_SIZE_DEFAULT),
+    );
+  });
+
+  it("does not write settings when terminal zoom is already at the clamp boundary", () => {
+    useAppStore.setState({ terminalFontSize: TERMINAL_FONT_SIZE_MAX });
+
+    adjustTerminalFontSize(+1);
+
+    expect(useAppStore.getState().terminalFontSize).toBe(TERMINAL_FONT_SIZE_MAX);
     expect(mocks.setAppSetting).not.toHaveBeenCalled();
   });
 });
