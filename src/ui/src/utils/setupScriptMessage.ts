@@ -95,8 +95,10 @@ export interface SetupScriptRecorderDeps {
     options?: { persisted?: boolean },
   ) => void;
   /** `setRunningSetupScript` from the chat slice — flag the session as having a
-   *  setup script in flight (value = source label), or `null` to clear. */
-  setRunningSetupScript: (sessionId: string, source: string | null) => void;
+   *  setup script in flight, passing the user-facing source *label*
+   *  (`.claudette.json` / `settings`) for the running banner, or `null` to
+   *  clear. `runAndRecordSetupScript` does the source→label conversion. */
+  setRunningSetupScript: (sessionId: string, label: string | null) => void;
   addToast: (message: string) => void;
   /** Display name of the workspace, for the failure toast. */
   workspaceName?: string | null;

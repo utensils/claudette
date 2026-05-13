@@ -143,13 +143,15 @@ export interface ChatSlice {
     options?: { persisted?: boolean },
   ) => void;
   /** Sessions with a repo setup script currently executing, keyed by chat
-   *  session id; the value is the script source (`"repo"` / `"settings"`) for
-   *  the running-banner label. Lives here rather than as a `System` message so
-   *  the post-creation chat-history reload (which replaces `chatMessages`
-   *  wholesale) can't wipe the in-flight indicator. Cleared when the run
-   *  settles; the result is then appended as a normal message. */
+   *  session id; the value is the user-facing source *label* shown in the
+   *  running banner (`".claudette.json"` for repo config, `"settings"` for the
+   *  repo setting) — the same spelling the eventual result message renders, not
+   *  the raw `"repo"`/`"settings"` source. Lives here rather than as a `System`
+   *  message so the post-creation chat-history reload (which replaces
+   *  `chatMessages` wholesale) can't wipe the in-flight indicator. Cleared when
+   *  the run settles; the result is then appended as a normal message. */
   runningSetupScripts: Record<string, string>;
-  setRunningSetupScript: (sessionId: string, source: string | null) => void;
+  setRunningSetupScript: (sessionId: string, label: string | null) => void;
   setStreamingContent: (sessionId: string, content: string) => void;
   appendStreamingContent: (sessionId: string, text: string) => void;
   setPendingTypewriter: (sessionId: string, messageId: string, text: string) => void;
@@ -363,17 +365,17 @@ export const createChatSlice: StateCreator<AppState, [], [], ChatSlice> = (
       };
     }),
   runningSetupScripts: {},
-  setRunningSetupScript: (sessionId, source) =>
+  setRunningSetupScript: (sessionId, label) =>
     set((s) => {
-      if (source === null) {
+      if (label === null) {
         if (!(sessionId in s.runningSetupScripts)) return {};
         const next = { ...s.runningSetupScripts };
         delete next[sessionId];
         return { runningSetupScripts: next };
       }
-      if (s.runningSetupScripts[sessionId] === source) return {};
+      if (s.runningSetupScripts[sessionId] === label) return {};
       return {
-        runningSetupScripts: { ...s.runningSetupScripts, [sessionId]: source },
+        runningSetupScripts: { ...s.runningSetupScripts, [sessionId]: label },
       };
     }),
   setStreamingContent: (sessionId, content) =>
