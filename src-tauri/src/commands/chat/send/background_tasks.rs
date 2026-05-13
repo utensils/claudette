@@ -264,12 +264,8 @@ fn task_completion_from_notification(
     })
 }
 
-fn read_background_output_for_prompt(output_file: Option<&str>) -> Option<String> {
-    let output_file = output_file?.trim();
-    if output_file.is_empty() {
-        return None;
-    }
-    let bytes = std::fs::read(output_file).ok()?;
+fn read_background_output_for_prompt(chat_session_id: &str) -> Option<String> {
+    let bytes = std::fs::read(agent_bash_output_path(chat_session_id)).ok()?;
     const MAX_OUTPUT_BYTES: usize = 24_000;
     let start = bytes.len().saturating_sub(MAX_OUTPUT_BYTES);
     let mut text = String::from_utf8_lossy(&bytes[start..]).to_string();
@@ -283,7 +279,14 @@ fn read_background_output_for_prompt(output_file: Option<&str>) -> Option<String
     }
 }
 
-fn build_background_task_completion_prompt(completion: &BackgroundTaskCompletion) -> String {
+fn escape_markdown_code_fence(text: &str) -> String {
+    text.replace("```", "`\u{200b}``")
+}
+
+fn build_background_task_completion_prompt(
+    completion: &BackgroundTaskCompletion,
+    chat_session_id: &str,
+) -> String {
     let mut prompt = format!(
         "A background Bash task completed. Respond to the user now with the result.\n\n<task-notification>\n<task-id>{}</task-id>\n<status>{}</status>",
         completion.task_id, completion.status
@@ -298,7 +301,8 @@ fn build_background_task_completion_prompt(completion: &BackgroundTaskCompletion
         prompt.push_str(&format!("\n<summary>{summary}</summary>"));
     }
     prompt.push_str("\n</task-notification>");
-    if let Some(output) = read_background_output_for_prompt(completion.output_file.as_deref()) {
+    if let Some(output) = read_background_output_for_prompt(chat_session_id) {
+        let output = escape_markdown_code_fence(&output);
         prompt.push_str("\n\nOutput:\n```text\n");
         prompt.push_str(&output);
         if !output.ends_with('\n') {
@@ -420,7 +424,7 @@ pub(super) fn schedule_background_task_wake(
         )
         .await;
 
-        let prompt = build_background_task_completion_prompt(&completion);
+        let prompt = build_background_task_completion_prompt(&completion, &chat_session_id);
         let local_user_message_uuid = uuid::Uuid::new_v4().to_string();
         let ps_pid = ps.pid();
         {
@@ -635,7 +639,11 @@ pub(super) fn schedule_background_task_wake(
 
 #[cfg(test)]
 mod tests {
-    use super::{should_defer_persistent_restart_for_state, terminal_text};
+    use super::{
+        BackgroundTaskCompletion, build_background_task_completion_prompt,
+        escape_markdown_code_fence, should_defer_persistent_restart_for_state, terminal_text,
+    };
+    use claudette::agent::background::agent_bash_output_path;
 
     #[test]
     fn terminal_text_converts_newlines_to_terminal_newlines() {
@@ -669,5 +677,42 @@ mod tests {
         assert!(!should_defer_persistent_restart_for_state(true, false));
         assert!(!should_defer_persistent_restart_for_state(false, true));
         assert!(!should_defer_persistent_restart_for_state(false, false));
+    }
+
+    #[test]
+    fn output_prompt_escapes_markdown_code_fences() {
+        assert_eq!(
+            escape_markdown_code_fence("before ``` after"),
+            "before `\u{200b}`` after"
+        );
+    }
+
+    #[test]
+    fn completion_prompt_reads_aggregate_output_not_notification_path() {
+        let chat_session_id = format!("test-{}", uuid::Uuid::new_v4());
+        let aggregate_path = agent_bash_output_path(&chat_session_id);
+        if let Some(parent) = aggregate_path.parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        std::fs::write(&aggregate_path, "aggregate output\n").unwrap();
+
+        let arbitrary_path =
+            std::env::temp_dir().join(format!("claudette-arbitrary-{}.txt", uuid::Uuid::new_v4()));
+        std::fs::write(&arbitrary_path, "should not be read\n").unwrap();
+
+        let completion = BackgroundTaskCompletion {
+            task_id: "task-1".to_string(),
+            tool_use_id: None,
+            output_file: Some(arbitrary_path.to_string_lossy().into_owned()),
+            status: "completed".to_string(),
+            summary: None,
+        };
+        let prompt = build_background_task_completion_prompt(&completion, &chat_session_id);
+
+        assert!(prompt.contains("aggregate output"));
+        assert!(!prompt.contains("should not be read"));
+
+        let _ = std::fs::remove_file(arbitrary_path);
+        let _ = std::fs::remove_file(aggregate_path);
     }
 }
