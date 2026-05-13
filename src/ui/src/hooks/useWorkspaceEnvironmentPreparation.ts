@@ -80,7 +80,7 @@ function trustPayloadSignature(payload: WorkspaceEnvTrustNeededPayload): string 
  * A workspace in this state is a ghost: the worktree + DB row were torn
  * down (a delete whose `workspaces-changed` event we missed, a worktree
  * pruned out from under us, a desync after a crash) but the sidebar row
- * lingers. The toast for this case is a dead end — there's no recover
+ * lingers. The toast for this case is a dead end — there's no recovery
  * action — so the right move is to drop the row instead of stranding an
  * unactionable error next to it. See the `.catch` in the per-selection
  * effect below.

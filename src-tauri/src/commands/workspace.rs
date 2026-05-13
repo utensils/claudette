@@ -594,6 +594,11 @@ pub async fn delete_workspace(
 
     let workspaces = db.list_workspaces().map_err(|e| e.to_string())?;
     let Some(ws) = workspaces.iter().find(|w| w.id == id) else {
+        // The row is already gone — delete is idempotent. Still announce
+        // it: a sidebar row can outlive its DB row (a prior delete whose
+        // IPC response WebView2 dropped), and this `workspaces-changed`
+        // event is the backstop that reconciles that ghost away.
+        TauriHooks::new(app.clone()).workspace_changed(&id, WorkspaceChangeKind::Deleted);
         return Ok(());
     };
 
