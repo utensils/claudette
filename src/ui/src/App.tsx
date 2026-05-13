@@ -706,6 +706,13 @@ function App() {
       store.addWorkspace({ ...workspace, remote_connection_id: null });
     });
 
+    const unlistenChatSessionCreated = listen<import("./types").ChatSession>(
+      "chat-session-created",
+      (event) => {
+        useAppStore.getState().addChatSession(event.payload);
+      },
+    );
+
     // Reflect what the agent actually used into the input bar after every
     // turn. Without this, a turn dispatched from the CLI / IPC (or a remote
     // surface that bypasses the toolbar slice) leaves the toolbar showing
@@ -790,6 +797,7 @@ function App() {
       unlistenScmUpdate.then((fn) => fn());
       unlistenAutoArchived.then((fn) => fn());
       unlistenWorkspacesChanged.then((fn) => fn());
+      unlistenChatSessionCreated.then((fn) => fn());
       unlistenChatTurnSettings.then((fn) => fn());
       unlistenChatTurnStarted.then((fn) => fn());
       unlistenMissingCli.then((fn) => fn());

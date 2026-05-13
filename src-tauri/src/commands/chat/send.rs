@@ -1,6 +1,8 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use serde::Deserialize;
+
 use tauri::{AppHandle, Emitter, Manager, State};
 
 use claudette::agent::background::{
@@ -36,6 +38,106 @@ use super::{
     ChatHistoryPage, build_agent_hook_bridge, fire_completion_notification, now_iso,
     start_bridge_and_inject_mcp, start_chat_bridge,
 };
+
+#[derive(Debug, Deserialize)]
+struct ClaudeTeamAgentInput {
+    team_name: Option<String>,
+    name: Option<String>,
+    prompt: Option<String>,
+    description: Option<String>,
+    model: Option<String>,
+    plan_mode_required: Option<bool>,
+}
+
+fn spawn_claudette_send_chat_child(
+    session_id: &str,
+    content: &str,
+    model: Option<&str>,
+    plan_mode: bool,
+) -> Result<(), String> {
+    let exe = std::env::current_exe().map_err(|e| format!("current_exe: {e}"))?;
+    let prompt_file =
+        std::env::temp_dir().join(format!("claudette-team-agent-{}.txt", uuid::Uuid::new_v4()));
+    std::fs::write(&prompt_file, content)
+        .map_err(|e| format!("write prompt file {}: {e}", prompt_file.display()))?;
+
+    let mut cmd = std::process::Command::new(exe);
+    cmd.arg("--claudette-send-chat")
+        .arg("--session-id")
+        .arg(session_id)
+        .arg("--prompt-file")
+        .arg(&prompt_file);
+    if let Some(model) = model {
+        cmd.arg("--model").arg(model);
+    }
+    if plan_mode {
+        cmd.arg("--plan-mode");
+    }
+    cmd.spawn()
+        .map(|_| ())
+        .map_err(|e| format!("spawn claudette send-chat child: {e}"))
+}
+
+async fn open_claudette_session_for_team_agent(
+    app: AppHandle,
+    workspace_id: String,
+    input_json: String,
+) -> Result<(), String> {
+    let input: ClaudeTeamAgentInput = serde_json::from_str(&input_json)
+        .map_err(|e| format!("parse Agent tool input for Claudette session bridge: {e}"))?;
+    let Some(team_name) = input.team_name.as_deref().filter(|s| !s.trim().is_empty()) else {
+        return Ok(());
+    };
+    let Some(agent_name) = input.name.as_deref().filter(|s| !s.trim().is_empty()) else {
+        return Ok(());
+    };
+    let Some(prompt) = input.prompt.as_deref().filter(|s| !s.trim().is_empty()) else {
+        return Ok(());
+    };
+
+    let state = app.state::<AppState>();
+    let session =
+        crate::commands::chat::session::create_chat_session(workspace_id.clone(), state).await?;
+    let _ = app.emit("chat-session-created", &session);
+
+    let session_name = format!("{team_name} / {agent_name}");
+    let state = app.state::<AppState>();
+    if crate::commands::chat::session::rename_chat_session(
+        session.id.clone(),
+        session_name.clone(),
+        state,
+    )
+    .await
+    .is_ok()
+    {
+        let _ = app.emit(
+            "session-renamed",
+            serde_json::json!({
+                "session_id": session.id,
+                "name": session_name,
+            }),
+        );
+    }
+
+    let mut content = format!(
+        "You are Claude Code teammate `{agent_name}` in team `{team_name}`. \
+This teammate was redirected into a Claudette session tab. Report progress and final results here.\n\n{prompt}"
+    );
+    if let Some(description) = input
+        .description
+        .as_deref()
+        .filter(|s| !s.trim().is_empty())
+    {
+        content = format!("Task: {description}\n\n{content}");
+    }
+
+    spawn_claudette_send_chat_child(
+        &session.id,
+        &content,
+        input.model.as_deref(),
+        input.plan_mode_required.unwrap_or(false),
+    )
+}
 
 fn emit_agent_background_task_event(
     app: &AppHandle,
@@ -2705,6 +2807,8 @@ pub async fn send_chat_message(
         // only know command details once the block stops.
         let mut bash_inputs: std::collections::HashMap<usize, (String, String)> =
             std::collections::HashMap::new();
+        let mut team_agent_inputs: std::collections::HashMap<usize, (String, String)> =
+            std::collections::HashMap::new();
         // Track the last assistant message inserted in THIS turn. Falls back
         // to the user message ID for tool-only turns (AskUserQuestion, plan
         // approval) so that checkpoint creation isn't skipped entirely.
@@ -2810,25 +2914,60 @@ pub async fn send_chat_message(
                         content_block: Some(StartContentBlock::ToolUse { id, name }),
                     },
             }) = &event
-                && name == "Bash"
             {
-                bash_inputs.insert(*index, (id.clone(), String::new()));
+                if name == "Bash" {
+                    bash_inputs.insert(*index, (id.clone(), String::new()));
+                } else if name == "Agent" {
+                    team_agent_inputs.insert(*index, (id.clone(), String::new()));
+                }
             }
 
             if let AgentEvent::Stream(StreamEvent::Stream {
                 event: InnerStreamEvent::ContentBlockDelta { index, delta },
             }) = &event
-                && let Some((_tool_use_id, input)) = bash_inputs.get_mut(index)
             {
-                match delta {
-                    claudette::agent::Delta::ToolUse {
-                        partial_json: Some(part),
+                if let Some((_tool_use_id, input)) = bash_inputs.get_mut(index) {
+                    match delta {
+                        claudette::agent::Delta::ToolUse {
+                            partial_json: Some(part),
+                        }
+                        | claudette::agent::Delta::InputJson {
+                            partial_json: Some(part),
+                        } => input.push_str(part),
+                        _ => {}
                     }
-                    | claudette::agent::Delta::InputJson {
-                        partial_json: Some(part),
-                    } => input.push_str(part),
-                    _ => {}
                 }
+                if let Some((_tool_use_id, input)) = team_agent_inputs.get_mut(index) {
+                    match delta {
+                        claudette::agent::Delta::ToolUse {
+                            partial_json: Some(part),
+                        }
+                        | claudette::agent::Delta::InputJson {
+                            partial_json: Some(part),
+                        } => input.push_str(part),
+                        _ => {}
+                    }
+                }
+            }
+
+            if let AgentEvent::Stream(StreamEvent::Stream {
+                event: InnerStreamEvent::ContentBlockStop { index },
+            }) = &event
+                && let Some((_tool_use_id, input_json)) = team_agent_inputs.remove(index)
+            {
+                let app_for_team_agent = app.clone();
+                let workspace_id_for_team_agent = ws_id.clone();
+                tokio::spawn(async move {
+                    if let Err(err) = open_claudette_session_for_team_agent(
+                        app_for_team_agent,
+                        workspace_id_for_team_agent,
+                        input_json,
+                    )
+                    .await
+                    {
+                        tracing::warn!(target: "claudette::chat", error = %err, "failed to open Claudette session for Claude Code team Agent tool");
+                    }
+                });
             }
 
             if let AgentEvent::Stream(StreamEvent::Stream {

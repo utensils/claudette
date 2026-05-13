@@ -12,7 +12,7 @@ use crate::process::{CommandWindowExt as _, sanitize_claude_subprocess_env};
 use super::AgentSettings;
 use super::args::{build_claude_args, build_stdin_message};
 use super::binary::resolve_claude_path;
-use super::environment::apply_resolved_env_to_command;
+use super::environment::{apply_resolved_env_to_command, apply_teammate_command_override};
 use super::types::{FileAttachment, StreamEvent, parse_stream_line};
 
 /// Events emitted by an agent turn (stream events + process lifecycle).
@@ -127,6 +127,8 @@ pub async fn run_turn(
         );
         cmd.env(crate::agent_mcp::server::ENV_TOKEN, &bridge.token);
     }
+
+    apply_teammate_command_override(&mut cmd);
 
     if let Some(env) = ws_env {
         env.apply(&mut cmd);

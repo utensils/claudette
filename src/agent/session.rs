@@ -16,7 +16,7 @@ use super::args::{
     build_settings_json, build_stdin_message_with_uuid, build_steering_stdin_message,
 };
 use super::binary::resolve_claude_path;
-use super::environment::apply_resolved_env_to_command;
+use super::environment::{apply_resolved_env_to_command, apply_teammate_command_override};
 use super::process::{AgentEvent, TurnHandle};
 use super::types::{ControlResponsePayload, FileAttachment, StreamEvent, parse_stream_line};
 
@@ -121,6 +121,8 @@ impl PersistentSession {
             );
             cmd.env(crate::agent_mcp::server::ENV_TOKEN, &bridge.token);
         }
+
+        apply_teammate_command_override(&mut cmd);
 
         if let Some(env) = ws_env {
             env.apply(&mut cmd);
