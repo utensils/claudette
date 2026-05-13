@@ -20,7 +20,6 @@ describe("planExperimentalBackendGateLoad", () => {
 
     expect(plan.alternativeBackendsEnabled).toBe(false);
     expect(plan.experimentalCodexEnabled).toBe(false);
-    expect(plan.persistAlternativeBackendsEnabled).toBe(false);
   });
 
   it("keeps alternative backends off when explicitly disabled", () => {
@@ -43,7 +42,6 @@ describe("planExperimentalBackendGateLoad", () => {
 
     expect(plan.alternativeBackendsEnabled).toBe(false);
     expect(plan.experimentalCodexEnabled).toBe(true);
-    expect(plan.persistAlternativeBackendsEnabled).toBe(false);
   });
 
   it("keeps both gates off when the build omits alternative backend support", () => {

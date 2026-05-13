@@ -421,3 +421,5 @@
     - `cd src/ui && bun run lint` (warnings only; no errors)
     - `cd src/ui && bun run lint:css`
     - `git diff --check`
+- 2026-05-13: Addressed Copilot's follow-up cleanup after the Codex truthfulness push:
+  - Removed the unused `persistAlternativeBackendsEnabled` field from the experimental backend gate load plan and updated the associated tests.

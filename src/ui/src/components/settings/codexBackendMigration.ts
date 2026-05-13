@@ -30,7 +30,6 @@ export interface ExperimentalBackendGateLoadInput {
 export interface ExperimentalBackendGateLoadPlan {
   alternativeBackendsEnabled: boolean;
   experimentalCodexEnabled: boolean;
-  persistAlternativeBackendsEnabled: boolean;
 }
 
 function settingSessionId(key: string, prefix: string): string | null {
@@ -50,7 +49,6 @@ export function planExperimentalBackendGateLoad({
   return {
     alternativeBackendsEnabled,
     experimentalCodexEnabled,
-    persistAlternativeBackendsEnabled: false,
   };
 }
 
