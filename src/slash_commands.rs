@@ -1051,7 +1051,10 @@ mod tests {
 
         let login = commands.iter().find(|c| c.name == "login").unwrap();
         assert_eq!(login.source, "builtin");
-        assert_eq!(login.description, "Start sign-in for the active model provider");
+        assert_eq!(
+            login.description,
+            "Start sign-in for the active model provider"
+        );
         assert_eq!(login.kind, Some(NativeKind::LocalAction));
     }
 

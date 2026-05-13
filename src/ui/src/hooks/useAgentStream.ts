@@ -28,7 +28,10 @@ import { debugChat } from "../utils/chatDebug";
 import { extractLatestCallUsage } from "../utils/extractLatestCallUsage";
 import { buildCompactionSentinel } from "../utils/compactionSentinel";
 import { pickMeterUsageFromResult } from "./pickMeterUsageFromResult";
-import { applyCommandLineEvent } from "./useAgentStreamLogic";
+import {
+  applyCommandLineEvent,
+  extractAssistantMessageParts,
+} from "./useAgentStreamLogic";
 
 const ASK_USER_QUESTION_TOOL = "AskUserQuestion";
 const CODEX_COMMAND_APPROVAL_TOOL = "CodexCommandApproval";
@@ -578,12 +581,9 @@ export function useAgentStream() {
             // The CLI may fire multiple assistant events per turn: one with
             // thinking blocks only (no text), then one with text. We only
             // add a message and clear thinking when we have actual text.
-            const text = streamEvent.message.content
-              .filter(
-                (b): b is { type: "text"; text: string } => b.type === "text"
-              )
-              .map((b) => b.text)
-              .join("");
+            const { text, thinking } = extractAssistantMessageParts(
+              streamEvent.message.content,
+            );
             if (text) {
               turnMessageCountRef.current[sessionId] =
                 (turnMessageCountRef.current[sessionId] || 0) + 1;
@@ -608,7 +608,9 @@ export function useAgentStream() {
                 duration_ms: null,
                 created_at: new Date().toISOString(),
                 thinking:
-                  useAppStore.getState().streamingThinking[sessionId] || null,
+                  useAppStore.getState().streamingThinking[sessionId] ||
+                  thinking ||
+                  null,
                 input_tokens: null,
                 output_tokens: null,
                 cache_read_tokens: null,

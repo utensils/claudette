@@ -230,9 +230,7 @@ impl CodexAppServerSession {
         prompt: &str,
         attachments: &[FileAttachment],
     ) -> Result<TurnHandle, String> {
-        if !attachments.is_empty() {
-            return Err("Codex app-server attachments are not wired yet".to_string());
-        }
+        validate_codex_attachments(attachments)?;
         let mut broadcast_rx = self.event_tx.subscribe();
         let thread_id = self.ensure_thread().await?;
         let response = self
@@ -245,6 +243,7 @@ impl CodexAppServerSession {
                 permission_level: self.permission_level,
                 fast_mode: self.fast_mode,
                 reasoning_effort: self.reasoning_effort.as_deref(),
+                attachments,
             }))
             .await?;
         let turn_id = turn_id_from_response(&response)?;
@@ -292,9 +291,7 @@ impl CodexAppServerSession {
         prompt: &str,
         attachments: &[FileAttachment],
     ) -> Result<(), String> {
-        if !attachments.is_empty() {
-            return Err("Codex app-server steering attachments are not wired yet".to_string());
-        }
+        validate_codex_attachments(attachments)?;
         let thread_id = self.ensure_thread().await?;
         let turn_id = self
             .active_turn_id
@@ -307,6 +304,7 @@ impl CodexAppServerSession {
             &thread_id,
             &turn_id,
             prompt,
+            attachments,
         ))
         .await?;
         Ok(())
@@ -1349,6 +1347,7 @@ pub struct CodexTurnStartRequest<'a> {
     pub permission_level: CodexPermissionLevel,
     pub fast_mode: bool,
     pub reasoning_effort: Option<&'a str>,
+    pub attachments: &'a [FileAttachment],
 }
 
 pub fn build_turn_start_request(params: CodexTurnStartRequest<'_>) -> JsonRpcRequest {
@@ -1359,11 +1358,7 @@ pub fn build_turn_start_request(params: CodexTurnStartRequest<'_>) -> JsonRpcReq
         method: "turn/start".to_string(),
         params: Some(json!({
             "threadId": params.thread_id,
-            "input": [{
-                "type": "text",
-                "text": params.prompt,
-                "textElements": [],
-            }],
+            "input": build_codex_user_input(params.prompt, params.attachments),
             "cwd": params.cwd,
             "approvalPolicy": mapping.approval_policy,
             "approvalsReviewer": "user",
@@ -1388,6 +1383,7 @@ pub fn build_turn_steer_request(
     thread_id: &str,
     expected_turn_id: &str,
     prompt: &str,
+    attachments: &[FileAttachment],
 ) -> JsonRpcRequest {
     JsonRpcRequest {
         id: JsonRpcId::Integer(id),
@@ -1395,13 +1391,54 @@ pub fn build_turn_steer_request(
         params: Some(json!({
             "threadId": thread_id,
             "expectedTurnId": expected_turn_id,
-            "input": [{
-                "type": "text",
-                "text": prompt,
-                "textElements": [],
-            }],
+            "input": build_codex_user_input(prompt, attachments),
         })),
     }
+}
+
+fn validate_codex_attachments(attachments: &[FileAttachment]) -> Result<(), String> {
+    for attachment in attachments {
+        if attachment.text_content.is_some() || attachment.media_type.starts_with("image/") {
+            continue;
+        }
+        let label = attachment.filename.as_deref().unwrap_or("attachment");
+        return Err(format!(
+            "Codex app-server only supports image and text attachments; `{label}` is {}",
+            attachment.media_type
+        ));
+    }
+    Ok(())
+}
+
+fn build_codex_user_input(prompt: &str, attachments: &[FileAttachment]) -> Vec<Value> {
+    let mut input = Vec::with_capacity(attachments.len() + 1);
+
+    input.push(json!({
+        "type": "text",
+        "text": prompt,
+        "textElements": [],
+    }));
+
+    for attachment in attachments {
+        if let Some(text) = attachment.text_content.as_deref() {
+            let label = attachment.filename.as_deref().unwrap_or("file");
+            input.push(json!({
+                "type": "text",
+                "text": format!("Content of `{label}`:\n```\n{text}\n```"),
+                "textElements": [],
+            }));
+        } else if attachment.media_type.starts_with("image/") {
+            input.push(json!({
+                "type": "image",
+                "url": format!(
+                    "data:{};base64,{}",
+                    attachment.media_type, attachment.data_base64
+                ),
+            }));
+        }
+    }
+
+    input
 }
 
 pub fn build_turn_interrupt_request(id: i64, thread_id: &str, turn_id: &str) -> JsonRpcRequest {
@@ -2405,6 +2442,7 @@ mod tests {
             permission_level: CodexPermissionLevel::Readonly,
             fast_mode: false,
             reasoning_effort: None,
+            attachments: &[],
         });
         router.track_request(&request);
         assert_eq!(router.pending_len(), 1);
@@ -2570,6 +2608,7 @@ mod tests {
             permission_level: CodexPermissionLevel::Standard,
             fast_mode: true,
             reasoning_effort: Some("xhigh"),
+            attachments: &[],
         });
         let value = serde_json::to_value(request).unwrap();
 
@@ -2586,6 +2625,87 @@ mod tests {
     }
 
     #[test]
+    fn turn_start_request_carries_image_and_text_attachments() {
+        let attachments = vec![
+            FileAttachment {
+                media_type: "image/png".to_string(),
+                data_base64: "iVBORw0KGgo=".to_string(),
+                text_content: None,
+                filename: Some("screenshot.png".to_string()),
+            },
+            FileAttachment {
+                media_type: "text/plain".to_string(),
+                data_base64: "aGVsbG8=".to_string(),
+                text_content: Some("hello from a file".to_string()),
+                filename: Some("note.txt".to_string()),
+            },
+        ];
+        let request = build_turn_start_request(CodexTurnStartRequest {
+            id: 7,
+            thread_id: "thread-1",
+            prompt: "inspect this",
+            cwd: Path::new("/tmp/work"),
+            model: None,
+            permission_level: CodexPermissionLevel::Readonly,
+            fast_mode: false,
+            reasoning_effort: None,
+            attachments: &attachments,
+        });
+        let value = serde_json::to_value(request).unwrap();
+
+        assert_eq!(value["params"]["input"][0]["type"], "text");
+        assert_eq!(value["params"]["input"][0]["text"], "inspect this");
+        assert_eq!(value["params"]["input"][1]["type"], "image");
+        assert_eq!(
+            value["params"]["input"][1]["url"],
+            "data:image/png;base64,iVBORw0KGgo="
+        );
+        assert_eq!(value["params"]["input"][2]["type"], "text");
+        assert_eq!(
+            value["params"]["input"][2]["text"],
+            "Content of `note.txt`:\n```\nhello from a file\n```"
+        );
+    }
+
+    #[test]
+    fn turn_steer_request_reuses_attachment_input_shape() {
+        let attachments = vec![FileAttachment {
+            media_type: "image/jpeg".to_string(),
+            data_base64: "/9j/4AAQ".to_string(),
+            text_content: None,
+            filename: Some("photo.jpg".to_string()),
+        }];
+        let request =
+            build_turn_steer_request(9, "thread-1", "turn-1", "also inspect this", &attachments);
+        let value = serde_json::to_value(request).unwrap();
+
+        assert_eq!(value["method"], "turn/steer");
+        assert_eq!(value["params"]["threadId"], "thread-1");
+        assert_eq!(value["params"]["expectedTurnId"], "turn-1");
+        assert_eq!(value["params"]["input"][0]["text"], "also inspect this");
+        assert_eq!(value["params"]["input"][1]["type"], "image");
+        assert_eq!(
+            value["params"]["input"][1]["url"],
+            "data:image/jpeg;base64,/9j/4AAQ"
+        );
+    }
+
+    #[test]
+    fn codex_attachment_validation_rejects_unsupported_binary_files() {
+        let attachments = vec![FileAttachment {
+            media_type: "application/pdf".to_string(),
+            data_base64: "JVBERi0=".to_string(),
+            text_content: None,
+            filename: Some("brief.pdf".to_string()),
+        }];
+
+        assert_eq!(
+            validate_codex_attachments(&attachments).unwrap_err(),
+            "Codex app-server only supports image and text attachments; `brief.pdf` is application/pdf"
+        );
+    }
+
+    #[test]
     fn turn_start_request_serializes_full_sandbox_as_tagged_policy() {
         let request = build_turn_start_request(CodexTurnStartRequest {
             id: 8,
@@ -2596,6 +2716,7 @@ mod tests {
             permission_level: CodexPermissionLevel::Full,
             fast_mode: false,
             reasoning_effort: None,
+            attachments: &[],
         });
         let value = serde_json::to_value(request).unwrap();
 

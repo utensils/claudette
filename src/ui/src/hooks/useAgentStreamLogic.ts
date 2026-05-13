@@ -2,6 +2,8 @@
 // the first-emit-wins / persist semantics for `command_line` events can
 // be tested without rendering the hook.
 
+import type { ContentBlock } from "../types/agent-events";
+
 export interface CommandLineEvent {
   subtype: string;
   command_line?: string | null;
@@ -39,4 +41,21 @@ export function applyCommandLineEvent(
     console.warn("[stream] persist cli_invocation failed:", e);
   });
   return true;
+}
+
+export function extractAssistantMessageParts(content: ContentBlock[]): {
+  text: string;
+  thinking: string;
+} {
+  return content.reduce(
+    (parts, block) => {
+      if (block.type === "text") {
+        parts.text += block.text;
+      } else if (block.type === "thinking") {
+        parts.thinking += block.thinking;
+      }
+      return parts;
+    },
+    { text: "", thinking: "" },
+  );
 }

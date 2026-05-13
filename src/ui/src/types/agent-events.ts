@@ -153,6 +153,7 @@ export interface AssistantMessage {
 
 export type ContentBlock =
   | { type: "text"; text: string }
+  | { type: "thinking"; thinking: string }
   | { type: "tool_use"; id: string; name: string }
   | { type: "Unknown" };
 
