@@ -107,11 +107,12 @@ function summarizeEditToolInput(
   const normalized = toolName.toLowerCase();
 
   if (normalized === "edit") {
-    return statFromReplacement(
+    const direct = statFromReplacement(
       stringField(input, "file_path"),
       stringField(input, "old_string"),
       stringField(input, "new_string"),
     );
+    if (direct) return direct;
   }
 
   if (normalized === "multiedit") {
@@ -126,119 +127,90 @@ function summarizeEditToolInput(
         ),
       )
       .flatMap((summary) => summary?.files ?? []);
-    return mergeStats(stats);
+    const direct = mergeStats(stats);
+    if (direct) return direct;
   }
 
   if (normalized === "write") {
     const filePath = stringField(input, "file_path");
     const content = stringField(input, "content");
-    if (!filePath || content === null) return null;
-    return mergeStats([
-      {
-        filePath,
-        added: changedLineCount(content),
-        removed: 0,
-        previewLines: linesFromText(content, "added"),
-      },
-    ]);
+    if (filePath && content !== null) {
+      return mergeStats([
+        {
+          filePath,
+          added: changedLineCount(content),
+          removed: 0,
+          previewLines: linesFromText(content, "added"),
+        },
+      ]);
+    }
   }
 
   if (normalized === "notebookedit") {
-    return statFromReplacement(
+    const direct = statFromReplacement(
       stringField(input, "notebook_path"),
       stringField(input, "old_source") ?? stringField(input, "source"),
       stringField(input, "new_source"),
     );
+    if (direct) return direct;
   }
 
   if (normalized.includes("str_replace")) {
-    return statFromReplacement(
+    const direct = statFromReplacement(
       stringField(input, "path") ?? stringField(input, "file_path"),
       stringField(input, "old_str") ?? stringField(input, "old_string"),
       stringField(input, "new_str") ?? stringField(input, "new_string"),
     );
+    if (direct) return direct;
   }
 
   if (normalized.includes("apply_patch") || normalized.includes("patch")) {
-    const patch = patchTextFromInput(input);
+    const patch = patchTextFromToolInput(input);
     return patch ? mergeStats(parsePatchStats(patch)) : null;
   }
 
-  const patch = patchTextFromInput(input);
+  const patch = patchTextFromToolInput(input);
   return patch ? mergeStats(parsePatchStats(patch)) : null;
 }
 
-function patchTextFromInput(input: JsonRecord): string | null {
+export function patchTextFromToolInput(input: JsonRecord): string | null {
   for (const field of ["patch", "input", "cmd", "command"] as const) {
     const value = stringField(input, field);
     if (value && looksLikePatch(value)) return value;
   }
-  return null;
+  return patchTextFromCodexChanges(input.changes);
+}
+
+function patchTextFromCodexChanges(value: unknown): string | null {
+  if (!Array.isArray(value)) return null;
+  const patches = value
+    .map((change) => patchTextFromCodexChange(recordFromUnknown(change)))
+    .filter((patch): patch is string => patch !== null);
+  return patches.length > 0 ? patches.join("\n") : null;
+}
+
+function patchTextFromCodexChange(change: JsonRecord | null): string | null {
+  const filePath = stringField(change, "path");
+  const diff = stringField(change, "diff");
+  if (!filePath || !diff) return null;
+
+  if (looksLikePatch(diff)) {
+    return diff;
+  }
+
+  const kind = stringField(change, "kind");
+  const oldPath = kind === "add" ? "/dev/null" : `a/${filePath}`;
+  const newPath = kind === "delete" ? "/dev/null" : `b/${filePath}`;
+  return [
+    `diff --git a/${filePath} b/${filePath}`,
+    `--- ${oldPath}`,
+    `+++ ${newPath}`,
+    diff,
+  ].join("\n");
 }
 
 function looksLikePatch(value: string): boolean {
   return value.includes("*** Begin Patch") || value.includes("diff --git ");
-}
-
-function statFromReplacement(
-  filePath: string | null,
-  oldText: string | null,
-  newText: string | null,
-): EditSummary | null {
-  if (!filePath || (oldText === null && newText === null)) return null;
-  return mergeStats([
-    {
-      filePath,
-      added: changedLineCount(newText ?? ""),
-      removed: changedLineCount(oldText ?? ""),
-      previewLines: [
-        ...linesFromText(oldText ?? "", "removed"),
-        ...linesFromText(newText ?? "", "added"),
-      ],
-    },
-  ]);
-}
-
-function mergeStats(stats: readonly EditFileStat[]): EditSummary | null {
-  const byPath = new Map<string, EditFileStat>();
-  for (const stat of stats) {
-    if (!stat.filePath) continue;
-    const existing = byPath.get(stat.filePath);
-    if (existing) {
-      existing.added += stat.added;
-      existing.removed += stat.removed;
-      // Separate each merged contribution with a hunk row so multiple
-      // Edit calls to the same file render as visually distinct
-      // chunks instead of one tall blob. Skip when either side is
-      // empty (avoids a leading or trailing separator with no
-      // surrounding content).
-      const merged = stat.previewLines.length > 0 && existing.previewLines.length > 0
-        ? [
-            ...existing.previewLines,
-            {
-              type: "hunk" as const,
-              oldLineNumber: null,
-              newLineNumber: null,
-              content: "",
-            },
-            ...stat.previewLines,
-          ]
-        : [...existing.previewLines, ...stat.previewLines];
-      existing.previewLines = capPreviewLines(merged);
-    } else {
-      byPath.set(stat.filePath, {
-        ...stat,
-        previewLines: capPreviewLines(stat.previewLines),
-      });
-    }
-  }
-  const files = [...byPath.values()].sort((a, b) => a.filePath.localeCompare(b.filePath));
-  if (files.length === 0) return null;
-  return {
-    files,
-    added: files.reduce((sum, file) => sum + file.added, 0),
-    removed: files.reduce((sum, file) => sum + file.removed, 0),
-  };
 }
 
 function parsePatchStats(patch: string): EditFileStat[] {
@@ -336,6 +308,67 @@ function parsePatchStats(patch: string): EditFileStat[] {
 
 function stripDiffPrefix(filePath: string): string {
   return filePath.replace(/^[ab]\//, "");
+}
+
+function statFromReplacement(
+  filePath: string | null,
+  oldText: string | null,
+  newText: string | null,
+): EditSummary | null {
+  if (!filePath || (oldText === null && newText === null)) return null;
+  return mergeStats([
+    {
+      filePath,
+      added: changedLineCount(newText ?? ""),
+      removed: changedLineCount(oldText ?? ""),
+      previewLines: [
+        ...linesFromText(oldText ?? "", "removed"),
+        ...linesFromText(newText ?? "", "added"),
+      ],
+    },
+  ]);
+}
+
+function mergeStats(stats: readonly EditFileStat[]): EditSummary | null {
+  const byPath = new Map<string, EditFileStat>();
+  for (const stat of stats) {
+    if (!stat.filePath) continue;
+    const existing = byPath.get(stat.filePath);
+    if (existing) {
+      existing.added += stat.added;
+      existing.removed += stat.removed;
+      // Separate each merged contribution with a hunk row so multiple
+      // Edit calls to the same file render as visually distinct
+      // chunks instead of one tall blob. Skip when either side is
+      // empty (avoids a leading or trailing separator with no
+      // surrounding content).
+      const merged = stat.previewLines.length > 0 && existing.previewLines.length > 0
+        ? [
+            ...existing.previewLines,
+            {
+              type: "hunk" as const,
+              oldLineNumber: null,
+              newLineNumber: null,
+              content: "",
+            },
+            ...stat.previewLines,
+          ]
+        : [...existing.previewLines, ...stat.previewLines];
+      existing.previewLines = capPreviewLines(merged);
+    } else {
+      byPath.set(stat.filePath, {
+        ...stat,
+        previewLines: capPreviewLines(stat.previewLines),
+      });
+    }
+  }
+  const files = [...byPath.values()].sort((a, b) => a.filePath.localeCompare(b.filePath));
+  if (files.length === 0) return null;
+  return {
+    files,
+    added: files.reduce((sum, file) => sum + file.added, 0),
+    removed: files.reduce((sum, file) => sum + file.removed, 0),
+  };
 }
 
 function changedLineCount(value: string): number {

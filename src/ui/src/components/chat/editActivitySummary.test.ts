@@ -138,6 +138,49 @@ describe("editActivitySummary", () => {
     });
   });
 
+  it("summarizes Codex fileChange tool inputs through the patch parser", () => {
+    const summary = summarizeTurnEdits([
+      activity({
+        toolName: "Edit",
+        inputJson: JSON.stringify({
+          changes: [
+            {
+              path: "src/ui/App.tsx",
+              kind: "update",
+              diff: [
+                "@@ -1,2 +1,3 @@",
+                " import React from \"react\";",
+                "-const label = \"old\";",
+                "+const label = \"new\";",
+                "+const enabled = true;",
+              ].join("\n"),
+            },
+            {
+              path: "src/main.rs",
+              kind: "add",
+              diff: ["@@ -0,0 +1,2 @@", "+fn main() {", "+}"].join("\n"),
+            },
+          ],
+        }),
+      }),
+    ]);
+
+    expect(summary).toMatchObject({
+      added: 4,
+      removed: 1,
+      files: [
+        { filePath: "src/main.rs", added: 2, removed: 0 },
+        { filePath: "src/ui/App.tsx", added: 2, removed: 1 },
+      ],
+    });
+    expect(summary?.files[1].previewLines).toMatchObject([
+      { type: "context", content: "import React from \"react\";" },
+      { type: "removed", content: "const label = \"old\";" },
+      { type: "added", content: "const label = \"new\";" },
+      { type: "added", content: "const enabled = true;" },
+    ]);
+  });
+
   it("summarizes workspace diff files and builds lazy preview lines", () => {
     const summary = summarizeDiffFiles([
       { path: "src/app.ts", status: "Modified", additions: 4, deletions: 1 },

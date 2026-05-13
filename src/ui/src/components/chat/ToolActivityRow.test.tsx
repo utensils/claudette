@@ -280,4 +280,48 @@ describe("ToolActivityRow", () => {
     expect(text).toContain("self.tier_label");
     expect(text).not.toContain("\\n");
   });
+
+  it("renders Codex fileChange details with the shared diff presentation", async () => {
+    const container = await render(
+      <ToolActivityRow
+        activity={activity("Edit", {
+          inputJson: JSON.stringify({
+            changes: [
+              {
+                path: "src/app.ts",
+                kind: "update",
+                diff: ["@@ -1 +1 @@", "-old", "+new"].join("\n"),
+              },
+            ],
+          }),
+        })}
+        searchQuery=""
+      />,
+    );
+
+    expect(container.textContent).toContain("Editing");
+    expect(container.textContent).toContain("src/app.ts");
+
+    await act(async () => {
+      (container.querySelector("button") as HTMLButtonElement).click();
+      await Promise.resolve();
+    });
+
+    expect(highlightCalls).toEqual([
+      {
+        code: [
+          "diff --git a/src/app.ts b/src/app.ts",
+          "--- a/src/app.ts",
+          "+++ b/src/app.ts",
+          "@@ -1 +1 @@",
+          "-old",
+          "+new",
+        ].join("\n"),
+        lang: "diff",
+      },
+    ]);
+    expect(container.querySelector("pre")?.textContent).toContain(
+      "diff --git a/src/app.ts b/src/app.ts",
+    );
+  });
 });
