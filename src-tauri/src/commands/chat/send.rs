@@ -11,7 +11,7 @@ use claudette::agent::{
     self, AgentEvent, AgentSession, AgentSettings, ClaudeCodeHarness, CodexAppServerOptions,
     CodexAppServerSession, CodexPermissionLevel, ControlRequestInner, FileAttachment,
     InnerStreamEvent, PersistentSessionStart, StartContentBlock, StreamEvent,
-    is_codex_approval_tool_name,
+    is_codex_approval_tool_name, normalize_codex_reasoning_effort,
 };
 use claudette::agent_backend::AgentBackendRuntimeHarness;
 use claudette::base64_decode;
@@ -1813,12 +1813,19 @@ pub async fn send_chat_message(
             model.as_deref(),
         )?;
 
-    let backend_runtime = crate::commands::agent_backends::resolve_backend_runtime(
+    let mut backend_runtime = crate::commands::agent_backends::resolve_backend_runtime(
         &state,
         resolved_backend_id.as_deref(),
         resolved_model.as_deref(),
     )
     .await?;
+    if backend_runtime.harness == AgentBackendRuntimeHarness::CodexAppServer
+        && let Some(codex_effort) = normalize_codex_reasoning_effort(effort.as_deref())
+    {
+        backend_runtime
+            .hash
+            .push_str(&format!("|codex-reasoning-effort:{codex_effort}"));
+    }
 
     // Resolve user-toggled `claude --help` flags from the cached defs.
     // Treat "still discovering" / "discovery failed" as no extra flags so
@@ -2265,6 +2272,7 @@ pub async fn send_chat_message(
                             model: settings.model.clone(),
                             permission_level: codex_permission_level_for_persistent,
                             fast_mode: settings.fast_mode,
+                            reasoning_effort: settings.effort.clone(),
                         },
                     )
                     .await?;

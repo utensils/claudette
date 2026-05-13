@@ -4,8 +4,13 @@ import { CircleDollarSign, Sparkles, Zap, Brain, BookOpen, Gauge, Eye, EyeOff, G
 import { useAppStore } from "../../stores/useAppStore";
 import { resetAgentSession, setAppSetting, getAppSetting } from "../../services/tauri";
 import { ModelSelector } from "./ModelSelector";
-import { EffortSelector, EFFORT_LEVELS } from "./EffortSelector";
-import { isFastSupported, isEffortSupported, isXhighEffortAllowed, isMaxEffortAllowed } from "./modelCapabilities";
+import { EffortSelector } from "./EffortSelector";
+import { isFastSupported, isEffortSupported } from "./modelCapabilities";
+import {
+  normalizeReasoningLevel,
+  reasoningLevelLabel,
+  reasoningVariantForModel,
+} from "./reasoningControls";
 import { buildModelRegistry, findModelInRegistry } from "./modelRegistry";
 import { applySelectedModel } from "./applySelectedModel";
 import { applyPlanModeMountDefault } from "./applyPlanModeMountDefault";
@@ -93,11 +98,11 @@ export function ChatToolbar({ sessionId, disabled }: ChatToolbarProps) {
       if (effectiveEffort) {
         const normalized = !supportsEffort
           ? "auto"
-          : effectiveEffort === "xhigh" && !isXhighEffortAllowed(loadedModel)
-            ? "high"
-            : effectiveEffort === "max" && !isMaxEffortAllowed(loadedModel)
-              ? "high"
-              : effectiveEffort;
+          : normalizeReasoningLevel(
+              effectiveEffort,
+              loadedModel,
+              reasoningVariantForModel(loadedEntry),
+            );
         setEffortLevel(sessionId, normalized);
       }
       setShowThinkingBlocks(sessionId, showThinking === "true" || (!showThinking && defShowThinking === "true"));
@@ -169,12 +174,22 @@ export function ChatToolbar({ sessionId, disabled }: ChatToolbarProps) {
   const currentModel = useSelectedModelEntry(sessionId);
   const supportsFast = currentModel?.supportsFastMode ?? isFastSupported(selectedModel);
   const supportsEffort = currentModel?.supportsEffort ?? isEffortSupported(selectedModel);
+  const reasoningVariant = reasoningVariantForModel(currentModel);
+  const isCodex = reasoningVariant === "codex";
   const modelLabel = currentModel?.providerLabel
     ? `${currentModel.providerLabel} / ${currentModel.label}`
     : currentModel?.label ?? selectedModel;
   const isExtraUsage = currentModel?.extraUsage ?? false;
-  const effortLabel =
-    EFFORT_LEVELS.find((l) => l.id === effortLevel)?.label ?? effortLevel;
+  const normalizedEffort = normalizeReasoningLevel(
+    effortLevel,
+    selectedModel,
+    reasoningVariant,
+  );
+  const effortLabel = reasoningLevelLabel(
+    normalizedEffort,
+    selectedModel,
+    reasoningVariant,
+  );
   const isMac = isMacHotkeyPlatform();
   const planShortcut = getHotkeyLabel("global.toggle-plan-mode", keybindings, isMac);
 
@@ -211,17 +226,23 @@ export function ChatToolbar({ sessionId, disabled }: ChatToolbarProps) {
         className={`${styles.chip} ${thinkingEnabled ? styles.chipActive : ""}`}
         onClick={toggleThinking}
         disabled={disabled}
-        title={thinkingEnabled ? t("thinking_disable") : t("thinking_enable")}
+        title={thinkingEnabled
+          ? isCodex ? t("codex_reasoning_disable") : t("thinking_disable")
+          : isCodex ? t("codex_reasoning_enable") : t("thinking_enable")}
         aria-pressed={thinkingEnabled}
       >
         <Brain size={14} />
-        <span className={styles.chipLabel}>{t("thinking_chip")}</span>
+        <span className={styles.chipLabel}>
+          {isCodex ? t("codex_reasoning_chip") : t("thinking_chip")}
+        </span>
       </button>
 
       <button
         className={`${styles.chip} ${showThinkingBlocks ? styles.chipActive : ""}`}
         onClick={toggleShowThinking}
-        title={showThinkingBlocks ? t("hide_thinking") : t("show_thinking")}
+        title={showThinkingBlocks
+          ? isCodex ? t("codex_hide_reasoning") : t("hide_thinking")
+          : isCodex ? t("codex_show_reasoning") : t("show_thinking")}
         aria-pressed={showThinkingBlocks}
       >
         {showThinkingBlocks ? <Eye size={14} /> : <EyeOff size={14} />}
@@ -232,7 +253,7 @@ export function ChatToolbar({ sessionId, disabled }: ChatToolbarProps) {
           className={styles.chip}
           onClick={() => setEffortSelectorOpen(!effortSelectorOpen)}
           disabled={disabled}
-          title={t("set_effort")}
+          title={isCodex ? t("codex_set_reasoning_effort") : t("set_effort")}
         >
           <Gauge size={14} />
           <span className={styles.chipLabel}>{effortLabel}</span>
@@ -280,8 +301,10 @@ export function ChatToolbar({ sessionId, disabled }: ChatToolbarProps) {
 
       {effortSelectorOpen && supportsEffort && (
         <EffortSelector
-          selected={effortLevel}
+          selected={normalizedEffort}
           selectedModel={selectedModel}
+          variant={reasoningVariant}
+          label={isCodex ? t("codex_reasoning_effort") : t("effort")}
           onSelect={handleEffortSelect}
           onClose={() => setEffortSelectorOpen(false)}
         />

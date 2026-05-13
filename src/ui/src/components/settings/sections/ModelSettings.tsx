@@ -2,8 +2,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { getAppSetting, setAppSetting, listAgentBackends, saveAgentBackend, saveAgentBackendSecret, refreshAgentBackendModels, testAgentBackend, launchCodexLogin } from "../../../services/tauri";
 import type { AgentBackendConfig } from "../../../services/tauri";
-import { EFFORT_LEVELS } from "../../chat/EffortSelector";
-import { isFastSupported, isEffortSupported, isXhighEffortAllowed, isMaxEffortAllowed } from "../../chat/modelCapabilities";
+import { isFastSupported, isEffortSupported } from "../../chat/modelCapabilities";
+import {
+  getReasoningLevels,
+  normalizeReasoningLevel,
+  reasoningVariantForModel,
+} from "../../chat/reasoningControls";
 import {
   buildModelRegistry,
   resolveModelSelection,
@@ -132,12 +136,16 @@ export function ModelSettings() {
     if (!(match?.supportsEffort ?? isEffortSupported(model))) {
       setDefaultEffort("auto");
       await saveSetting("default_effort", "auto");
-    } else if (defaultEffort === "xhigh" && !isXhighEffortAllowed(model)) {
-      setDefaultEffort("high");
-      await saveSetting("default_effort", "high");
-    } else if (defaultEffort === "max" && !isMaxEffortAllowed(model)) {
-      setDefaultEffort("high");
-      await saveSetting("default_effort", "high");
+    } else {
+      const normalized = normalizeReasoningLevel(
+        defaultEffort,
+        model,
+        reasoningVariantForModel(match),
+      );
+      if (normalized !== defaultEffort) {
+        setDefaultEffort(normalized);
+        await saveSetting("default_effort", normalized);
+      }
     }
   };
 
@@ -172,13 +180,16 @@ export function ModelSettings() {
   const selectedDefaultModel = registry.find(
     (m) => (m.providerId ?? "anthropic") === defaultBackend && m.id === defaultModel,
   );
+  const reasoningVariant = reasoningVariantForModel(selectedDefaultModel);
+  const isCodex = reasoningVariant === "codex";
   const supportsEffort = selectedDefaultModel?.supportsEffort ?? isEffortSupported(defaultModel);
   const supportsFast = selectedDefaultModel?.supportsFastMode ?? isFastSupported(defaultModel);
-  const availableEffortLevels = isXhighEffortAllowed(defaultModel)
-    ? EFFORT_LEVELS
-    : isMaxEffortAllowed(defaultModel)
-      ? EFFORT_LEVELS.filter((l) => l.id !== "xhigh")
-      : EFFORT_LEVELS.filter((l) => l.id !== "xhigh" && l.id !== "max");
+  const availableEffortLevels = getReasoningLevels(defaultModel, reasoningVariant);
+  const selectedEffort = normalizeReasoningLevel(
+    defaultEffort,
+    defaultModel,
+    reasoningVariant,
+  );
   const effortDisabled = !supportsEffort;
   const fastDisabled = !supportsFast;
 
@@ -232,8 +243,12 @@ export function ModelSettings() {
               value={defaultThinking ? "true" : "false"}
               onChange={(e) => handleThinkingChange(e.target.value)}
             >
-              <option value="false">{t("models_thinking_off")}</option>
-              <option value="true">{t("models_thinking_on")}</option>
+              <option value="false">
+                {isCodex ? t("models_codex_reasoning_off") : t("models_thinking_off")}
+              </option>
+              <option value="true">
+                {isCodex ? t("models_codex_reasoning_on") : t("models_thinking_on")}
+              </option>
             </select>
           </div>
         </div>
@@ -241,16 +256,18 @@ export function ModelSettings() {
 
       <div className={styles.settingRow}>
         <div className={styles.settingInfo}>
-          <div className={styles.settingLabel}>{t("models_default_effort")}</div>
+          <div className={styles.settingLabel}>
+            {isCodex ? t("models_default_codex_reasoning_effort") : t("models_default_effort")}
+          </div>
           <div className={styles.settingDescription}>
-            {t("models_default_effort_desc")}
+            {isCodex ? t("models_default_codex_reasoning_effort_desc") : t("models_default_effort_desc")}
             {effortDisabled && t("models_effort_not_supported")}
           </div>
         </div>
         <div className={styles.settingControl}>
           <select
             className={`${styles.select}${effortDisabled ? ` ${styles.selectDim}` : ""}`}
-            value={defaultEffort}
+            value={selectedEffort}
             onChange={(e) => handleEffortChange(e.target.value)}
             disabled={effortDisabled}
           >
@@ -265,9 +282,11 @@ export function ModelSettings() {
 
       <div className={styles.settingRow}>
         <div className={styles.settingInfo}>
-          <div className={styles.settingLabel}>{t("models_show_thinking")}</div>
+          <div className={styles.settingLabel}>
+            {isCodex ? t("models_show_codex_reasoning") : t("models_show_thinking")}
+          </div>
           <div className={styles.settingDescription}>
-            {t("models_show_thinking_desc")}
+            {isCodex ? t("models_show_codex_reasoning_desc") : t("models_show_thinking_desc")}
           </div>
         </div>
         <div className={styles.settingControl}>
@@ -275,7 +294,7 @@ export function ModelSettings() {
             className={styles.toggle}
             role="switch"
             aria-checked={defaultShowThinking}
-            aria-label={t("models_show_thinking")}
+            aria-label={isCodex ? t("models_show_codex_reasoning") : t("models_show_thinking")}
             data-checked={defaultShowThinking}
             onClick={handleToggle(defaultShowThinking, setDefaultShowThinking, "default_show_thinking")}
           >

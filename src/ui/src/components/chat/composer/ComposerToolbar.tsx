@@ -6,7 +6,11 @@ import { tooltipAttributes } from "../../../hotkeys/display";
 import { isMacHotkeyPlatform } from "../../../hotkeys/platform";
 import { ModelSelector, is1mContextModel, get1mFallback } from "../ModelSelector";
 import { buildModelRegistry, findModelInRegistry } from "../modelRegistry";
-import { isFastSupported, isEffortSupported, isXhighEffortAllowed, isMaxEffortAllowed } from "../modelCapabilities";
+import { isFastSupported, isEffortSupported } from "../modelCapabilities";
+import {
+  normalizeReasoningLevel,
+  reasoningVariantForModel,
+} from "../reasoningControls";
 import { applySelectedModel } from "../applySelectedModel";
 import { applyPlanModeMountDefault } from "../applyPlanModeMountDefault";
 import { ToolbarPill } from "./ToolbarPill";
@@ -104,11 +108,11 @@ export function ComposerToolbar({
       if (effectiveEffort) {
         const normalized = !supportsEffort
           ? "auto"
-          : effectiveEffort === "xhigh" && !isXhighEffortAllowed(loadedModel)
-            ? "high"
-            : effectiveEffort === "max" && !isMaxEffortAllowed(loadedModel)
-              ? "high"
-              : effectiveEffort;
+          : normalizeReasoningLevel(
+              effectiveEffort,
+              loadedModel,
+              reasoningVariantForModel(loadedEntry),
+            );
         setEffortLevel(sessionId, normalized);
       }
       setShowThinkingBlocks(sessionId, showThinking === "true" || (!showThinking && defShowThinking === "true"));

@@ -39,6 +39,7 @@ pub struct CodexAppServerOptions {
     pub model: Option<String>,
     pub permission_level: CodexPermissionLevel,
     pub fast_mode: bool,
+    pub reasoning_effort: Option<String>,
 }
 
 impl Default for CodexAppServerOptions {
@@ -47,6 +48,7 @@ impl Default for CodexAppServerOptions {
             model: None,
             permission_level: CodexPermissionLevel::Readonly,
             fast_mode: false,
+            reasoning_effort: None,
         }
     }
 }
@@ -61,6 +63,7 @@ pub struct CodexAppServerSession {
     model: Option<String>,
     permission_level: CodexPermissionLevel,
     fast_mode: bool,
+    reasoning_effort: Option<String>,
     thread_id: Arc<tokio::sync::Mutex<Option<String>>>,
     active_turn_id: Arc<tokio::sync::Mutex<Option<String>>>,
     turn_output: TurnOutputBuffer,
@@ -124,6 +127,7 @@ impl CodexAppServerSession {
             model: options.model,
             permission_level: options.permission_level,
             fast_mode: options.fast_mode,
+            reasoning_effort: normalize_codex_reasoning_effort(options.reasoning_effort.as_deref()),
             thread_id: Arc::new(tokio::sync::Mutex::new(None)),
             active_turn_id: Arc::new(tokio::sync::Mutex::new(None)),
             turn_output: Arc::new(tokio::sync::Mutex::new(CodexTurnOutput::default())),
@@ -163,6 +167,7 @@ impl CodexAppServerSession {
             model: None,
             permission_level: CodexPermissionLevel::Readonly,
             fast_mode: false,
+            reasoning_effort: None,
             thread_id: Arc::new(tokio::sync::Mutex::new(None)),
             active_turn_id: Arc::new(tokio::sync::Mutex::new(None)),
             turn_output: Arc::new(tokio::sync::Mutex::new(CodexTurnOutput::default())),
@@ -202,6 +207,7 @@ impl CodexAppServerSession {
                 self.model.as_deref(),
                 self.permission_level,
                 self.fast_mode,
+                self.reasoning_effort.as_deref(),
             ))
             .await?;
         let turn_id = turn_id_from_response(&response)?;
@@ -352,6 +358,7 @@ impl CodexAppServerSession {
                 &self.working_dir,
                 self.permission_level,
                 self.fast_mode,
+                self.reasoning_effort.as_deref(),
             ))
             .await?;
         let thread_id = thread_id_from_response(&response)?;
@@ -1120,9 +1127,15 @@ pub fn build_thread_start_request(
     cwd: &Path,
     permission_level: CodexPermissionLevel,
     fast_mode: bool,
+    reasoning_effort: Option<&str>,
 ) -> JsonRpcRequest {
     let mapping = permission_level.mapping();
     let service_tier = fast_mode.then_some("priority");
+    let config = reasoning_effort.map(|effort| {
+        json!({
+            "model_reasoning_effort": effort,
+        })
+    });
     JsonRpcRequest {
         id: JsonRpcId::Integer(id),
         method: "thread/start".to_string(),
@@ -1135,6 +1148,7 @@ pub fn build_thread_start_request(
             "approvalsReviewer": "user",
             "sandbox": mapping.thread_sandbox,
             "threadSource": "user",
+            "config": config,
         })),
     }
 }
@@ -1147,6 +1161,7 @@ pub fn build_turn_start_request(
     model: Option<&str>,
     permission_level: CodexPermissionLevel,
     fast_mode: bool,
+    reasoning_effort: Option<&str>,
 ) -> JsonRpcRequest {
     let mapping = permission_level.mapping();
     let service_tier = fast_mode.then_some("priority");
@@ -1166,7 +1181,18 @@ pub fn build_turn_start_request(
             "sandboxPolicy": mapping.turn_sandbox_policy,
             "model": model,
             "serviceTier": service_tier,
+            "effort": reasoning_effort,
         })),
+    }
+}
+
+pub fn normalize_codex_reasoning_effort(effort: Option<&str>) -> Option<String> {
+    match effort.map(str::trim).filter(|effort| !effort.is_empty()) {
+        Some(value @ ("none" | "minimal" | "low" | "medium" | "high" | "xhigh")) => {
+            Some(value.to_string())
+        }
+        Some("max") => Some("high".to_string()),
+        _ => None,
     }
 }
 
@@ -2062,6 +2088,7 @@ mod tests {
             None,
             CodexPermissionLevel::Readonly,
             false,
+            None,
         );
         router.track_request(&request);
         assert_eq!(router.pending_len(), 1);
@@ -2226,6 +2253,7 @@ mod tests {
             Some("gpt-5.1-codex"),
             CodexPermissionLevel::Standard,
             true,
+            Some("minimal"),
         );
         let value = serde_json::to_value(request).unwrap();
 
@@ -2235,6 +2263,7 @@ mod tests {
         assert_eq!(value["params"]["input"][0]["text"], "hello");
         assert_eq!(value["params"]["model"], "gpt-5.1-codex");
         assert_eq!(value["params"]["serviceTier"], "priority");
+        assert_eq!(value["params"]["effort"], "minimal");
         assert_eq!(value["params"]["approvalPolicy"], "on-request");
         assert_eq!(value["params"]["sandboxPolicy"]["type"], "workspaceWrite");
         assert_eq!(value["params"]["sandboxPolicy"]["networkAccess"], false);
@@ -2250,6 +2279,7 @@ mod tests {
             None,
             CodexPermissionLevel::Full,
             false,
+            None,
         );
         let value = serde_json::to_value(request).unwrap();
 
@@ -2259,6 +2289,40 @@ mod tests {
             json!({"type": "dangerFullAccess"})
         );
         assert_eq!(value["params"]["serviceTier"], serde_json::Value::Null);
+        assert_eq!(value["params"]["effort"], serde_json::Value::Null);
+    }
+
+    #[test]
+    fn thread_start_request_carries_reasoning_effort_config() {
+        let request = build_thread_start_request(
+            8,
+            Some("gpt-5.4"),
+            Path::new("/tmp/work"),
+            CodexPermissionLevel::Readonly,
+            false,
+            Some("high"),
+        );
+        let value = serde_json::to_value(request).unwrap();
+
+        assert_eq!(value["method"], "thread/start");
+        assert_eq!(value["params"]["config"]["model_reasoning_effort"], "high");
+    }
+
+    #[test]
+    fn codex_reasoning_effort_normalization_matches_app_server_enum() {
+        assert_eq!(
+            normalize_codex_reasoning_effort(Some(" minimal ")).as_deref(),
+            Some("minimal")
+        );
+        assert_eq!(
+            normalize_codex_reasoning_effort(Some("none")).as_deref(),
+            Some("none")
+        );
+        assert_eq!(
+            normalize_codex_reasoning_effort(Some("max")).as_deref(),
+            Some("high")
+        );
+        assert_eq!(normalize_codex_reasoning_effort(Some("auto")), None);
     }
 
     #[test]

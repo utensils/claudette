@@ -322,3 +322,18 @@
     - `cd src/ui && bun run lint` (warnings only; no errors)
     - `nix develop -c cargo fmt --all --check`
     - `git diff --check`
+- 2026-05-13: Added Codex-specific reasoning effort support:
+  - Native Codex now advertises effort support and maps Claudette's stored effort setting into Codex app-server `config.model_reasoning_effort` and `turn/start.effort`.
+  - Codex uses Codex terminology in the UI: **Reasoning**, **Show reasoning**, and **Reasoning effort** with `default`, `none`, `minimal`, `low`, `medium`, `high`, and `xhigh` instead of Claude's `max` effort vocabulary.
+  - Stale Claude `max` effort is normalized to Codex `high`, and Codex effort participates in the persistent-session runtime hash so effort changes respawn the app-server session.
+  - Updated provider/settings docs to describe Codex reasoning effort separately from Claude effort.
+  - Verified focused reasoning support with:
+    - `nix develop -c cargo test -p claudette agent::codex_app_server --all-features`
+    - `nix develop -c cargo test -p claudette agent_backend --all-features`
+    - `nix develop -c cargo test -p claudette-tauri agent_backends --all-features`
+    - `cd src/ui && bun run test -- reasoningControls EffortSelector modelRegistry`
+    - `cd src/ui && bunx tsc -b`
+    - `cd src/ui && bun run lint` (warnings only; no errors)
+    - `cd src/ui && bun run lint:css`
+    - `nix develop -c cargo fmt --all --check`
+    - `git diff --check`

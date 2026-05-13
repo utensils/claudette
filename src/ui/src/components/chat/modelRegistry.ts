@@ -13,6 +13,7 @@ export type Model = {
   readonly legacy?: boolean;
   readonly providerId?: string;
   readonly providerLabel?: string;
+  readonly providerKind?: string;
   readonly providerQualifiedId?: string;
   readonly supportsThinking?: boolean;
   readonly supportsEffort?: boolean;
@@ -116,6 +117,7 @@ export function buildModelRegistry(
         extraUsage: false,
         providerId: backend.id,
         providerLabel: backend.label,
+        providerKind: backend.kind,
         providerQualifiedId: `${backend.id}/${model.id}`,
         supportsThinking: backend.capabilities.thinking,
         supportsEffort: backend.capabilities.effort,

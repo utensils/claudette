@@ -57,13 +57,13 @@ The per-turn capabilities differ by provider (`AgentBackendCapabilities` in `src
 | Capability | Anthropic | Ollama | LM Studio | Gateway OpenAI | Experimental Codex |
 |---|---|---|---|---|---|
 | Extended thinking | ✅ | ✅ (when model supports) | ❌ | ❌ | ✅ (reasoning summaries) |
-| Effort levels | ✅ | ❌ | ❌ | ❌ | ❌ |
+| Reasoning / effort levels | ✅ (Claude effort) | ❌ | ❌ | ❌ | ✅ (Codex reasoning effort) |
 | Fast mode | ✅ | ❌ | ❌ | ❌ | ✅ |
 | 1M-context auto-upgrade | ✅ | ❌ | ❌ | ❌ | ❌ |
 | Tool use | ✅ | ✅ | ✅ (model-dependent) | ✅ | ✅ |
 | Vision | ✅ | ✅ | ✅ (model-dependent) | ✅ | ❌ |
 
-LM Studio is on the same direct path as Ollama, but its capability profile mirrors the gateway providers' (no extended-thinking / effort / fast / 1M toggles) — local models implement those Anthropic-specific knobs inconsistently or not at all, so the chat header hides them. Experimental Codex exposes fast mode through Codex app-server settings. Switching a session to a provider visibly disables the toggles that don't apply.
+LM Studio is on the same direct path as Ollama, but its capability profile mirrors the gateway providers' (no extended-thinking / effort / fast / 1M toggles) — local models implement those Anthropic-specific knobs inconsistently or not at all, so the chat header hides them. Experimental Codex exposes fast mode and Codex reasoning effort through Codex app-server settings. Switching a session to a provider visibly disables or relabels the toggles that don't apply.
 
 ## How the gateway runtime works
 

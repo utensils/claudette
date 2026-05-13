@@ -91,7 +91,7 @@ impl AgentBackendCapabilities {
     pub fn codex_native() -> Self {
         Self {
             thinking: true,
-            effort: false,
+            effort: true,
             fast_mode: true,
             one_m_context: false,
             tools: true,
@@ -307,6 +307,7 @@ mod tests {
         assert!(!backend.kind.is_anthropic_compatible());
         assert!(backend.model_discovery);
         assert!(backend.capabilities.thinking);
+        assert!(backend.capabilities.effort);
         assert!(backend.capabilities.fast_mode);
         assert!(!backend.capabilities.vision);
         assert!(!backend.manual_models.is_empty());
