@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use tauri::{AppHandle, State};
 
-use claudette::agent::{self, PersistentSession};
+use claudette::agent::{self, AgentSession};
 use claudette::db::Database;
 use claudette::model::{ChatMessage, ChatRole};
 
@@ -14,7 +14,7 @@ use super::now_iso;
 /// What `take_stop_snapshot` hands back: permissions to deny, pid to kill,
 /// and the session id to mark ended in the DB.
 type StopSnapshot = (
-    Option<(Arc<PersistentSession>, Vec<PendingPermission>)>,
+    Option<(Arc<AgentSession>, Vec<PendingPermission>)>,
     Option<u32>,
     Option<String>,
 );

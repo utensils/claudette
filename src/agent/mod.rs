@@ -16,7 +16,8 @@ use crate::agent_backend::AgentBackendRuntime;
 pub use args::{build_claude_args, build_stdin_message};
 pub use binary::{resolve_claude_path, resolve_claude_path_blocking};
 pub use harness::{
-    AgentHarnessCapabilities, AgentHarnessKind, ClaudeCodeHarness, PersistentSessionStart,
+    AgentHarnessCapabilities, AgentHarnessKind, AgentSession, ClaudeCodeHarness,
+    PersistentSessionStart,
 };
 pub use naming::{
     generate_branch_name, generate_session_name, persist_claude_custom_title, sanitize_branch_name,

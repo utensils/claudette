@@ -3,7 +3,10 @@ use std::path::Path;
 use crate::env::WorkspaceEnv;
 use crate::env_provider::ResolvedEnv;
 
-use super::{AgentSettings, PersistentSession};
+use super::{
+    AgentEvent, AgentSettings, ControlResponsePayload, FileAttachment, PersistentSession,
+    TurnHandle,
+};
 
 /// Identifies the process protocol used by an agent session.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -87,6 +90,96 @@ impl ClaudeCodeHarness {
     }
 }
 
+/// Long-lived session handle owned by the app layer.
+///
+/// This is intentionally an enum instead of a trait object for the first
+/// refactor step: it keeps dispatch explicit, lets each harness expose only the
+/// operations it supports, and avoids async-trait plumbing while Claude Code is
+/// still the only production variant.
+pub enum AgentSession {
+    ClaudeCode(PersistentSession),
+}
+
+impl AgentSession {
+    pub fn from_claude_code(session: PersistentSession) -> Self {
+        Self::ClaudeCode(session)
+    }
+
+    pub fn kind(&self) -> AgentHarnessKind {
+        match self {
+            Self::ClaudeCode(_) => AgentHarnessKind::ClaudeCode,
+        }
+    }
+
+    pub fn capabilities(&self) -> AgentHarnessCapabilities {
+        match self {
+            Self::ClaudeCode(_) => AgentHarnessCapabilities::claude_code(),
+        }
+    }
+
+    pub fn pid(&self) -> u32 {
+        match self {
+            Self::ClaudeCode(session) => session.pid(),
+        }
+    }
+
+    pub async fn send_turn_with_uuid(
+        &self,
+        prompt: &str,
+        attachments: &[FileAttachment],
+        user_message_uuid: &str,
+    ) -> Result<TurnHandle, String> {
+        match self {
+            Self::ClaudeCode(session) => {
+                session
+                    .send_turn_with_uuid(prompt, attachments, user_message_uuid)
+                    .await
+            }
+        }
+    }
+
+    pub async fn steer_user_message(
+        &self,
+        prompt: &str,
+        attachments: &[FileAttachment],
+    ) -> Result<(), String> {
+        match self {
+            Self::ClaudeCode(session) => session.steer_user_message(prompt, attachments).await,
+        }
+    }
+
+    pub fn subscribe(&self) -> tokio::sync::broadcast::Receiver<AgentEvent> {
+        match self {
+            Self::ClaudeCode(session) => session.subscribe(),
+        }
+    }
+
+    pub async fn send_control_response(
+        &self,
+        request_id: &str,
+        response: serde_json::Value,
+    ) -> Result<(), String> {
+        match self {
+            Self::ClaudeCode(session) => session.send_control_response(request_id, response).await,
+        }
+    }
+
+    pub async fn send_task_stop(&self, task_id: &str) -> Result<(), String> {
+        match self {
+            Self::ClaudeCode(session) => session.send_task_stop(task_id).await,
+        }
+    }
+
+    pub async fn set_remote_control(
+        &self,
+        enabled: bool,
+    ) -> Result<ControlResponsePayload, String> {
+        match self {
+            Self::ClaudeCode(session) => session.set_remote_control(enabled).await,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -119,6 +212,15 @@ mod tests {
                 mcp_config: true,
                 attachments: true,
             }
+        );
+    }
+
+    #[test]
+    fn agent_session_capabilities_stay_explicit_per_variant() {
+        assert_eq!(AgentHarnessCapabilities::claude_code().remote_control, true);
+        assert_eq!(
+            AgentHarnessCapabilities::codex_app_server().remote_control,
+            false
         );
     }
 }

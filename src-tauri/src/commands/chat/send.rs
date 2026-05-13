@@ -8,8 +8,8 @@ use claudette::agent::background::{
     parse_background_task_binding, parse_bash_start, parse_task_notification,
 };
 use claudette::agent::{
-    self, AgentEvent, AgentSettings, ClaudeCodeHarness, ControlRequestInner, FileAttachment,
-    InnerStreamEvent, PersistentSession, PersistentSessionStart, StartContentBlock, StreamEvent,
+    self, AgentEvent, AgentSession, AgentSettings, ClaudeCodeHarness, ControlRequestInner,
+    FileAttachment, InnerStreamEvent, PersistentSessionStart, StartContentBlock, StreamEvent,
 };
 use claudette::base64_decode;
 use claudette::chat::{
@@ -2237,7 +2237,7 @@ pub async fn send_chat_message(
                 resolved_env: Some(&resolved),
             })
             .await?;
-            Ok::<Arc<PersistentSession>, String>(Arc::new(started))
+            Ok::<Arc<AgentSession>, String>(Arc::new(AgentSession::from_claude_code(started)))
         }
     };
 

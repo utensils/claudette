@@ -71,9 +71,15 @@
 - 2026-05-13: Verified focused Rust tests:
   - `nix develop -c cargo test -p claudette agent::harness --all-features`
   - `nix develop -c cargo test -p claudette agent::codex_app_server --all-features`
+- 2026-05-13: Committed and pushed milestone 1 as `ee05f21d` (`feat: add native codex harness foundation`).
+- 2026-05-13: Added `AgentSession`, a harness-neutral session handle, and moved Tauri chat/session ownership from `PersistentSession` to `AgentSession` while keeping the Claude Code variant delegated to the existing implementation.
+- 2026-05-13: Verified the neutral session handle with:
+  - `nix develop -c cargo test -p claudette agent::harness --all-features`
+  - `nix develop -c cargo test -p claudette-tauri --all-features --no-run`
+  - `nix develop -c cargo fmt --all`
 
 ## Next Stage
 
-- Finish Phase 1 by replacing direct `PersistentSession` ownership in the Tauri chat state with a harness-neutral session handle while keeping Claude Code behavior unchanged.
 - Add fake-harness tests around chat send lifecycle seams before selecting the native Codex runtime from backend settings.
+- Add the Codex app-server process/client skeleton behind the `AgentSession` wrapper, with fake stdio tests before any UI/backend selection changes.
 - Keep `codex-subscription` hidden/replaced only after the native `Experimental Codex` backend has a real harness path.

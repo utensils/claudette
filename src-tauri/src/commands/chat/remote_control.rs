@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use claudette::agent::{
-    AgentEvent, AgentSettings, ClaudeCodeHarness, PersistentSession, PersistentSessionStart,
+    AgentEvent, AgentSession, AgentSettings, ClaudeCodeHarness, PersistentSessionStart,
     StreamEvent, TokenUsage, UserContentBlock, UserEventMessage, UserMessageContent,
 };
 use claudette::chat::{
@@ -282,7 +282,7 @@ fn remote_control_title(
 async fn existing_persistent_session(
     state: &State<'_, AppState>,
     chat_session_id: &str,
-) -> Option<(Arc<PersistentSession>, u32)> {
+) -> Option<(Arc<AgentSession>, u32)> {
     let agents = state.agents.read().await;
     let ps = agents.get(chat_session_id)?.persistent_session.clone()?;
     let pid = ps.pid();
@@ -352,7 +352,7 @@ async fn ensure_persistent_session_for_remote_control(
     workspace: &Workspace,
     worktree_path: &str,
     launch_options: RemoteControlLaunchOptions,
-) -> Result<(Arc<PersistentSession>, u32), String> {
+) -> Result<(Arc<AgentSession>, u32), String> {
     let chat_session_id = chat_session.id.clone();
     let workspace_id = chat_session.workspace_id.clone();
     {
@@ -556,7 +556,7 @@ async fn ensure_persistent_session_for_remote_control(
     })
     .await
     .map_err(|err| crate::missing_cli::handle_err(app, &err).unwrap_or(err))?;
-    let ps = Arc::new(ps);
+    let ps = Arc::new(AgentSession::from_claude_code(ps));
     let pid = ps.pid();
 
     {
@@ -660,7 +660,7 @@ pub(super) fn reenable_remote_control_after_respawn(
     chat_session_id: String,
     worktree_path: String,
     pid: u32,
-    ps: Arc<PersistentSession>,
+    ps: Arc<AgentSession>,
     title: String,
 ) {
     tokio::spawn(async move {
@@ -789,7 +789,7 @@ async fn ensure_remote_control_monitor(
     chat_session_id: String,
     worktree_path: String,
     pid: u32,
-    ps: Arc<PersistentSession>,
+    ps: Arc<AgentSession>,
 ) {
     let app_state = app.state::<AppState>();
     {

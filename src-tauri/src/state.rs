@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use claudette::agent::PersistentSession;
+use claudette::agent::AgentSession;
 use tokio::sync::{RwLock, Semaphore};
 
 use claudette::claude_help::ClaudeFlagDef;
@@ -116,7 +116,7 @@ pub struct AgentSessionState {
     /// Long-lived process that persists MCP servers across turns.
     /// When present, subsequent turns write to this process's stdin instead of
     /// spawning new processes.
-    pub persistent_session: Option<Arc<PersistentSession>>,
+    pub persistent_session: Option<Arc<AgentSession>>,
     /// Ephemeral Claude Code Remote Control status for the current persistent
     /// process. This is intentionally not persisted across app restarts.
     pub claude_remote_control: ClaudeRemoteControlStatus,

@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use tauri::State;
 
-use claudette::agent::PersistentSession;
+use claudette::agent::AgentSession;
 
 use crate::state::{AgentSessionState, AppState, PendingPermission};
 
@@ -181,15 +181,15 @@ pub async fn submit_plan_approval(
 }
 
 /// Synchronously drain any pending permission requests from `session` and
-/// snapshot the [`PersistentSession`] needed to deny them. Designed to be
+/// snapshot the [`AgentSession`] needed to deny them. Designed to be
 /// called while holding the agents write lock — does no async work itself.
 ///
 /// Returns `None` when there is nothing to do (no pending entries) or when
-/// there is no live `PersistentSession` to receive the denies (entries are
+/// there is no live `AgentSession` to receive the denies (entries are
 /// dropped in that case, since nobody could read the response anyway).
 pub(crate) fn drain_pending_permissions(
     session: &mut AgentSessionState,
-) -> Option<(Arc<PersistentSession>, Vec<PendingPermission>)> {
+) -> Option<(Arc<AgentSession>, Vec<PendingPermission>)> {
     if session.pending_permissions.is_empty() {
         return None;
     }
@@ -210,7 +210,7 @@ pub(crate) fn drain_pending_permissions(
 /// the CLI's stdin and would otherwise serialize all other agent-state ops.
 pub(crate) async fn deny_drained_permissions(
     drained: Vec<PendingPermission>,
-    ps: &PersistentSession,
+    ps: &AgentSession,
     reason: &str,
 ) {
     for pending in drained {
