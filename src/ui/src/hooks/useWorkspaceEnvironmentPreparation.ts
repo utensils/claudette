@@ -72,6 +72,23 @@ function trustPayloadSignature(payload: WorkspaceEnvTrustNeededPayload): string 
   });
 }
 
+/**
+ * Match the error `prepare_workspace_environment` returns when the
+ * workspace id no longer resolves to a DB row — `"Workspace not found"`,
+ * raised by `resolve_target_from_db` in `src-tauri/src/commands/env.rs`.
+ *
+ * A workspace in this state is a ghost: the worktree + DB row were torn
+ * down (a delete whose `workspaces-changed` event we missed, a worktree
+ * pruned out from under us, a desync after a crash) but the sidebar row
+ * lingers. The toast for this case is a dead end — there's no recover
+ * action — so the right move is to drop the row instead of stranding an
+ * unactionable error next to it. See the `.catch` in the per-selection
+ * effect below.
+ */
+function looksLikeMissingWorkspace(message: string): boolean {
+  return message.toLowerCase().includes("workspace not found");
+}
+
 export function useWorkspaceEnvironmentPreparation() {
   const selectedWorkspaceId = useAppStore((s) => s.selectedWorkspaceId);
   const selectedWorkspaceRemoteConnectionId = useAppStore((s) => {
@@ -87,6 +104,7 @@ export function useWorkspaceEnvironmentPreparation() {
   );
   const addToast = useAppStore((s) => s.addToast);
   const openModal = useAppStore((s) => s.openModal);
+  const removeWorkspace = useAppStore((s) => s.removeWorkspace);
   const promptedTrustSignaturesRef = useRef<Map<string, string>>(new Map());
 
   const openTrustModalOnce = useCallback((payload: WorkspaceEnvTrustNeededPayload) => {
@@ -257,6 +275,17 @@ export function useWorkspaceEnvironmentPreparation() {
       .catch((err) => {
         if (cancelled) return;
         const message = String(err);
+        // The workspace row is gone from the DB but still showing in the
+        // sidebar (a delete whose `workspaces-changed` event we missed, a
+        // worktree pruned externally, a post-crash desync). Nothing the
+        // user can do with a ghost row — drop it and deselect instead of
+        // parking an unactionable "Workspace not found" error next to a
+        // row that will only fail the same way on every interaction.
+        if (looksLikeMissingWorkspace(message)) {
+          removeWorkspace(workspaceId);
+          addToast("Workspace no longer exists — removed from the sidebar.");
+          return;
+        }
         setWorkspaceEnvironment(workspaceId, "error", message);
         // Trust-class failures are routed through the
         // `workspace_env_trust_needed` event + EnvTrustModal — the
@@ -283,9 +312,10 @@ export function useWorkspaceEnvironmentPreparation() {
     setWorkspaceEnvironment,
     addToast,
     openTrustModalOnce,
+    removeWorkspace,
   ]);
 }
 
 // Internal: exposed for vitest. The hook is the only production
 // consumer.
-export const __TEST__ = { looksLikeTrustError };
+export const __TEST__ = { looksLikeTrustError, looksLikeMissingWorkspace };

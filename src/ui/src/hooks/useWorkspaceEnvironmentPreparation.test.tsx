@@ -690,4 +690,35 @@ describe("useWorkspaceEnvironmentPreparation", () => {
       "Workspace environment failed: Error: direnv blocked",
     );
   });
+
+  it("drops a ghost workspace from the store when prep reports 'Workspace not found'", async () => {
+    // The backend's `prepare_workspace_environment` returns the bare
+    // string "Workspace not found" (via `resolve_target_from_db`) when the
+    // selected workspace id no longer has a DB row — i.e. it was cleaned
+    // up but its sidebar row lingered. Instead of stranding an
+    // unactionable error toast next to the ghost, the hook removes it.
+    serviceMocks.prepareWorkspaceEnvironment.mockRejectedValue(
+      "Workspace not found",
+    );
+    useAppStore.setState({
+      selectedWorkspaceId: "ws-1",
+      workspaces: [makeWorkspace()],
+    });
+
+    await renderHarness();
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    const state = useAppStore.getState();
+    expect(state.workspaces.find((w) => w.id === "ws-1")).toBeUndefined();
+    // `removeWorkspace` also clears the selection and the env entry.
+    expect(state.selectedWorkspaceId).toBeNull();
+    expect(state.workspaceEnvironment["ws-1"]).toBeUndefined();
+    // The toast is informational, not the old "Workspace environment
+    // failed: …" dead end.
+    expect(state.toasts.at(-1)?.message).toBe(
+      "Workspace no longer exists — removed from the sidebar.",
+    );
+  });
 });

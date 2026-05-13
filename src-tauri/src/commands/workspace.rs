@@ -655,7 +655,16 @@ pub async fn delete_workspace(
         let _ = app.emit("mcp-status-cleared", &repo_id);
     }
 
-    crate::tray::rebuild_tray(&app);
+    // Announce the delete through the shared hooks (rebuilds the tray and
+    // emits `workspaces-changed { kind: "deleted" }`). This was previously
+    // a bare `rebuild_tray` call, leaving the frontend's `removeWorkspace`
+    // entirely dependent on the IPC response to this command making it
+    // back — if it was dropped (WebView2 occasionally does this) the
+    // sidebar row became a ghost with no event-based backstop, unlike the
+    // archive path which already routes through `OpsHooks`. The event is
+    // idempotent on the frontend (`removeWorkspace` filters by id), so the
+    // common case where the `.then` handler also fires is harmless.
+    TauriHooks::new(app.clone()).workspace_changed(&id, WorkspaceChangeKind::Deleted);
 
     Ok(())
 }
