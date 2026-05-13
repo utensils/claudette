@@ -15,6 +15,8 @@ export * from "./plan";
 export * from "./remoteControl";
 export * from "./repository";
 export * from "./settings";
+export * from "./pty";
+export * from "./terminal";
 export * from "./shell";
 export * from "./slashCommands";
 export * from "./updater";

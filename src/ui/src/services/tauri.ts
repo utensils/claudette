@@ -1,6 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
-  TerminalTab,
 } from "../types";
 import type {
   RemoteConnectionInfo,
@@ -25,6 +24,8 @@ export * from "./tauri/initialData";
 export * from "./tauri/metrics";
 export * from "./tauri/notifications";
 export * from "./tauri/settings";
+export * from "./tauri/pty";
+export * from "./tauri/terminal";
 export * from "./tauri/shell";
 export * from "./tauri/updater";
 export * from "./tauri/usage";
@@ -301,99 +302,6 @@ export function savePluginChannelConfiguration(
     serverName,
     values,
     repoId: repoId ?? null,
-  });
-}
-
-// -- Terminal --
-
-export function createTerminalTab(
-  workspaceId: string
-): Promise<TerminalTab> {
-  return invoke("create_terminal_tab", { workspaceId });
-}
-
-export function ensureClaudetteTerminalTab(
-  workspaceId: string,
-  chatSessionId: string
-): Promise<TerminalTab> {
-  return invoke("ensure_claudette_terminal_tab", { workspaceId, chatSessionId });
-}
-
-export function deleteTerminalTab(id: number): Promise<void> {
-  return invoke("delete_terminal_tab", { id });
-}
-
-export function listTerminalTabs(
-  workspaceId: string
-): Promise<TerminalTab[]> {
-  return invoke("list_terminal_tabs", { workspaceId });
-}
-
-export function updateTerminalTabOrder(
-  workspaceId: string,
-  tabIds: number[],
-): Promise<void> {
-  return invoke("update_terminal_tab_order", { workspaceId, tabIds });
-}
-
-// -- PTY --
-
-export function spawnPty(
-  workingDir: string,
-  workspaceName: string,
-  workspaceId: string,
-  rootPath: string,
-  defaultBranch: string,
-  branchName: string,
-): Promise<number> {
-  return invoke("spawn_pty", {
-    workingDir,
-    workspaceName,
-    workspaceId,
-    rootPath,
-    defaultBranch,
-    branchName,
-  });
-}
-
-export function writePty(ptyId: number, data: number[]): Promise<void> {
-  return invoke("write_pty", { ptyId, data });
-}
-
-export function resizePty(
-  ptyId: number,
-  cols: number,
-  rows: number
-): Promise<void> {
-  return invoke("resize_pty", { ptyId, cols, rows });
-}
-
-export function closePty(ptyId: number): Promise<void> {
-  return invoke("close_pty", { ptyId });
-}
-
-export function interruptPtyForeground(ptyId: number): Promise<void> {
-  return invoke("interrupt_pty_foreground", { ptyId });
-}
-
-export function startAgentTaskTail(
-  tabId: number,
-  outputPath: string,
-): Promise<void> {
-  return invoke("start_agent_task_tail", { tabId, outputPath });
-}
-
-export function stopAgentTaskTail(tabId: number): Promise<void> {
-  return invoke("stop_agent_task_tail", { tabId });
-}
-
-export function stopAgentBackgroundTask(
-  chatSessionId: string,
-  taskId: string,
-): Promise<void> {
-  return invoke("stop_agent_background_task", {
-    chatSessionId,
-    taskId,
   });
 }
 
