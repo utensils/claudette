@@ -15,6 +15,35 @@ fi
 
 set -euo pipefail
 
+strip_inherited_claude_auth_env() {
+  # Keep Launch Services-spawned dev apps from inheriting ephemeral Claude Code
+  # auth from Codex/Claude-hosted shells. The app should see only durable user
+  # auth from the configured Claude config/keychain.
+  if [[ "${CLAUDETTE_DEV_KEEP_CLAUDE_AUTH_ENV:-}" == "1" ]]; then
+    return
+  fi
+
+  unset ANTHROPIC_API_KEY
+  unset ANTHROPIC_AUTH_TOKEN
+  unset ANTHROPIC_FOUNDRY_API_KEY
+  unset ANTHROPIC_UNIX_SOCKET
+  unset AWS_BEARER_TOKEN_BEDROCK
+  unset CLAUDE_BRIDGE_OAUTH_TOKEN
+  unset CLAUDE_SESSION_INGRESS_TOKEN_FILE
+  unset CLAUDE_TRUSTED_DEVICE_TOKEN
+  unset CLAUDECODE
+  unset CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR
+  unset CLAUDE_CODE_ENTRYPOINT
+  unset CLAUDE_CODE_OAUTH_REFRESH_TOKEN
+  unset CLAUDE_CODE_OAUTH_SCOPES
+  unset CLAUDE_CODE_OAUTH_TOKEN
+  unset CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR
+  unset CLAUDE_CODE_SESSION_ACCESS_TOKEN
+  unset CLAUDE_CODE_WEBSOCKET_AUTH_FILE_DESCRIPTOR
+}
+
+strip_inherited_claude_auth_env
+
 if [ "$#" -lt 1 ]; then
   echo "usage: macos-dev-app-runner.sh <binary>|run [cargo/app args...]" >&2
   exit 64

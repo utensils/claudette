@@ -18,6 +18,8 @@
 #   VITE_PORT_BASE         start port for Vite probe (default 14253)
 #   CLAUDETTE_DEBUG_PORT_BASE   start port for debug probe (default 19432)
 #   CARGO_TAURI_FEATURES   features to pass to tauri (default devtools,server,voice,alternative-backends)
+#   CLAUDETTE_DEV_KEEP_CLAUDE_AUTH_ENV
+#                         preserve inherited Claude auth env vars (default strips them)
 #
 # Flags:
 #   --clean                Run as a fresh user — points CLAUDETTE_HOME,
@@ -74,6 +76,11 @@ Env vars (each consulted at process start):
                        itself and Claudette's plugin / auth code paths.
   CLAUDETTE_LOG_DIR    Per-instance log dir override (otherwise derived
                        from CLAUDETTE_HOME).
+  CLAUDETTE_DEV_KEEP_CLAUDE_AUTH_ENV
+                       Set to 1 to preserve inherited Claude auth env vars
+                       such as CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY.
+                       By default dev launches strip these so Settings and
+                       chat exercise the configured Claude Code credentials.
 
 Discovery file:
   Each invocation writes \${TMPDIR:-/tmp}/claudette-dev/<pid>.json so the
@@ -154,6 +161,35 @@ debug_port=$(find_free_port "${CLAUDETTE_DEBUG_PORT_BASE:-19432}")
 
 export VITE_PORT="$vite_port"
 export CLAUDETTE_DEBUG_PORT="$debug_port"
+
+strip_inherited_claude_auth_env() {
+  # Codex/Claude-hosted shells can provide ephemeral Claude Code auth through
+  # env vars. Dev builds must exercise the user's real Claude Code config, so
+  # avoid letting those parent-process credentials mask sign-in bugs.
+  if [[ "${CLAUDETTE_DEV_KEEP_CLAUDE_AUTH_ENV:-}" == "1" ]]; then
+    return
+  fi
+
+  unset ANTHROPIC_API_KEY
+  unset ANTHROPIC_AUTH_TOKEN
+  unset ANTHROPIC_FOUNDRY_API_KEY
+  unset ANTHROPIC_UNIX_SOCKET
+  unset AWS_BEARER_TOKEN_BEDROCK
+  unset CLAUDE_BRIDGE_OAUTH_TOKEN
+  unset CLAUDE_SESSION_INGRESS_TOKEN_FILE
+  unset CLAUDE_TRUSTED_DEVICE_TOKEN
+  unset CLAUDECODE
+  unset CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR
+  unset CLAUDE_CODE_ENTRYPOINT
+  unset CLAUDE_CODE_OAUTH_REFRESH_TOKEN
+  unset CLAUDE_CODE_OAUTH_SCOPES
+  unset CLAUDE_CODE_OAUTH_TOKEN
+  unset CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR
+  unset CLAUDE_CODE_SESSION_ACCESS_TOKEN
+  unset CLAUDE_CODE_WEBSOCKET_AUTH_FILE_DESCRIPTOR
+}
+
+strip_inherited_claude_auth_env
 
 discovery_dir="${TMPDIR:-/tmp}/claudette-dev"
 mkdir -p "$discovery_dir"
