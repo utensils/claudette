@@ -249,8 +249,17 @@
   - `cd src/ui && bun run test -- useAppStore`
   - `cd src/ui && bun run lint`
   - `git diff --check`
+- 2026-05-13: Committed and pushed the Copilot approval follow-up as `35e7ab89` (`fix: persist native codex assistant output`) after rebasing with `origin/main`.
+- 2026-05-13: Replied to and resolved the three latest Copilot threads, then re-queried Copilot and confirmed zero unresolved Copilot reviewer threads.
+- 2026-05-13: Latest PR checks for `35e7ab89` passed: Cargo Version Sync, Commit messages, Format, Frontend, Frontend Bundle Smoke, Lint, Migration guard, PR title, Test, Updater Manifest, build, codecov/patch, and codecov/project. Deploy was skipped as expected for this draft PR.
+- 2026-05-13: Final implementation audit against this plan:
+  - Harness abstraction is in place and Claude behavior remains routed through the existing Claude Code implementation.
+  - Native Codex app-server spawn, initialization, persistent thread/turn lifecycle, steering, interrupt, auth check, model list, notification mapping, command/file/MCP event mapping, token usage, failed turns, and process cleanup are implemented behind the experimental gate.
+  - Native Codex approval prompts now cover command execution, file changes, and permission escalation with user-facing UI and Codex-shaped JSON-RPC responses.
+  - Settings, model/backend gate behavior, migration between legacy and native Codex rows, docs, and tests are updated.
+  - Intentionally unsupported in this first implementation: Claude Remote Control, Claude MCP config injection, and file/image attachments for native Codex. These are documented as Claude Code-only until Codex app-server surfaces are mapped.
 
 ## Next Stage
 
-- Rebase with `origin/main`, commit and push the Copilot approval follow-up, reply to and resolve the three Copilot threads, then re-query Copilot and PR checks.
-- After Copilot and CI are green, run a final completion audit against this plan before calling native Codex complete.
+- Native Codex implementation is complete for this branch's planned scope and ready for final human review in draft PR #786.
+- Keep monitoring the draft PR for any new Copilot or CI feedback after this final plan-status commit.
