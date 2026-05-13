@@ -46,8 +46,8 @@ See [Agent Configuration](/claudette/features/agent-configuration/) for detailed
 | Setting | Description | Default |
 |---------|-------------|---------|
 | Claudette Terminal | Show a read-only terminal tab that mirrors agent shell commands and background task output. | Off |
-| Alternative Claude Code backends | Expose non-default providers in Settings > Models and the chat model picker. | Off |
-| Experimental Codex | Replace the legacy `codex-subscription` gateway backend with native `codex app-server --listen stdio://` support. Requires alternative backends to be compiled in. | Off |
+| Alternative Claude Code backends | Expose non-default providers in Settings > Models and the chat model picker. | On in supported builds |
+| Experimental Codex | Replace the legacy `codex-subscription` gateway backend with native `codex app-server --listen stdio://` support. Enabling it keeps alternative backends on and seeds Codex models into the picker. | Off |
 | Plugin Management | Show the Claude Code Plugins settings section and plugin-management slash commands. | Off |
 | Claude Remote Control | Show the local chat Remote Control toggle and allow Claudette to attach live Claude sessions to claude.ai. | On |
 | Community Registry | Show the Community settings section for themes, plugins, and language grammars. | Off |
@@ -146,7 +146,7 @@ See [Diagnostics & Logging](/claudette/features/diagnostics/) for the full pipel
 | Setting | Description | Default |
 |---------|-------------|---------|
 | Claudette Terminal | Show a read-only terminal tab that mirrors agent shell commands and background task output. | Off |
-| Alternative Claude Code backends | Expose Ollama, LM Studio, OpenAI-compatible, and custom backends through the Claude Code harness. | Off |
+| Alternative Claude Code backends | Expose Ollama, LM Studio, OpenAI-compatible, and custom backends through the Claude Code harness. | On in supported builds |
 | Plugin Management | Show Claude Code plugin marketplace management. | Off |
 | Claude Remote Control | Show the local chat Remote Control toggle and allow Claudette to attach live Claude sessions to claude.ai. | On |
 | Community Registry | Browse and install community-contributed themes, plugins, and language grammars. | Off |

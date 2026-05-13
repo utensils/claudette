@@ -123,7 +123,7 @@ The turn banner in the chat timeline shows the model, effort level, and any non-
 
 ## Alternative Providers
 
-Claudette can run agents against alternative providers — [Ollama](/claudette/features/providers/ollama/) (local, Anthropic-wire), [LM Studio](/claudette/features/providers/lm-studio/) (local, Anthropic-wire via `/v1/messages`), or [OpenAI / Codex](/claudette/features/providers/openai-codex/) (remote, gateway-translated) — instead of the official `claude` CLI. This is gated by the **Alternative Claude Code backends** experimental flag (the toggle keeps that wording in the UI).
+Claudette can run agents against alternative providers — [Ollama](/claudette/features/providers/ollama/) (local, Anthropic-wire), [LM Studio](/claudette/features/providers/lm-studio/) (local, Anthropic-wire via `/v1/messages`), or [OpenAI / Codex](/claudette/features/providers/openai-codex/) (remote, gateway-translated) — instead of the official `claude` CLI. This is controlled by the **Alternative Claude Code backends** experimental flag, which supported builds enable by default.
 
 Several chat-header toggles on this page only apply to certain providers. The capability matrix in the dedicated section shows the full picture, but the highlights:
 

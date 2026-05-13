@@ -316,7 +316,7 @@ jobs:
       # embed `frontendDist` (otherwise the release binary tries to
       # contact the devUrl at startup and shows "localhost refused to
       # connect"). `alternative-backends` is kept in release binaries
-      # while the user-facing experimental setting remains off by default.
+      # and the user-facing runtime gate defaults on.
       - name: Install Tauri CLI (Windows)
         if: startsWith(matrix.platform, 'windows')
         shell: bash

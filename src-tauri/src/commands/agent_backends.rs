@@ -28,6 +28,7 @@ const SECRET_BUCKET: &str = "agentBackendSecrets";
 const BACKEND_RUNTIME_ENV_VERSION: u8 = 2;
 const CODEX_DEFAULT_BASE_URL: &str = "https://chatgpt.com/backend-api";
 const CODEX_JWT_AUTH_CLAIM: &str = "https://api.openai.com/auth";
+const ALTERNATIVE_BACKENDS_SETTING_KEY: &str = "alternative_backends_enabled";
 const NATIVE_CODEX_SETTING_KEY: &str = "experimental_codex_enabled";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -327,12 +328,7 @@ pub async fn resolve_backend_runtime(
     model: Option<&str>,
 ) -> Result<AgentBackendRuntime, String> {
     let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
-    let enabled = db
-        .get_app_setting("alternative_backends_enabled")
-        .map_err(|e| e.to_string())?
-        .as_deref()
-        == Some("true");
-    if !enabled {
+    if !alternative_backends_enabled(&db)? {
         return Ok(AgentBackendRuntime::default());
     }
     let backends = load_backend_configs(&db)?;
@@ -480,12 +476,7 @@ pub fn resolve_backend_request_defaults(
         .map(str::trim)
         .filter(|backend| !backend.is_empty())
         .map(ToString::to_string);
-    let enabled = db
-        .get_app_setting("alternative_backends_enabled")
-        .map_err(|e| e.to_string())?
-        .as_deref()
-        == Some("true");
-    if !enabled {
+    if !alternative_backends_enabled(db)? {
         return Ok((requested_backend, requested_model));
     }
 
@@ -873,6 +864,16 @@ fn native_codex_enabled(db: &Database) -> Result<bool, String> {
     db.get_app_setting(NATIVE_CODEX_SETTING_KEY)
         .map_err(|e| e.to_string())
         .map(|value| value.as_deref() == Some("true"))
+}
+
+fn alternative_backends_enabled(db: &Database) -> Result<bool, String> {
+    let setting = db
+        .get_app_setting(ALTERNATIVE_BACKENDS_SETTING_KEY)
+        .map_err(|e| e.to_string())?;
+    if setting.as_deref() == Some("false") {
+        return native_codex_enabled(db);
+    }
+    Ok(true)
 }
 
 fn find_backend(db: &Database, backend_id: Option<&str>) -> Result<AgentBackendConfig, String> {
@@ -2931,6 +2932,33 @@ mod tests {
         };
 
         ensure_codex_native_authenticated(&account).expect("chatgpt account is authenticated");
+    }
+
+    #[test]
+    fn alternative_backends_are_enabled_by_default() {
+        let db = Database::open_in_memory().expect("test db should open");
+
+        assert!(alternative_backends_enabled(&db).expect("setting should load"));
+    }
+
+    #[test]
+    fn experimental_codex_forces_alternative_backend_runtime_on() {
+        let db = Database::open_in_memory().expect("test db should open");
+        db.set_app_setting(ALTERNATIVE_BACKENDS_SETTING_KEY, "false")
+            .expect("setting should save");
+        db.set_app_setting(NATIVE_CODEX_SETTING_KEY, "true")
+            .expect("setting should save");
+
+        assert!(alternative_backends_enabled(&db).expect("setting should load"));
+    }
+
+    #[test]
+    fn alternative_backends_can_still_be_disabled_without_experimental_codex() {
+        let db = Database::open_in_memory().expect("test db should open");
+        db.set_app_setting(ALTERNATIVE_BACKENDS_SETTING_KEY, "false")
+            .expect("setting should save");
+
+        assert!(!alternative_backends_enabled(&db).expect("setting should load"));
     }
 
     #[test]

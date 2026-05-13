@@ -10,9 +10,9 @@ OpenAI API and Codex now use different execution paths:
 
 ## Prerequisites
 
-Make sure the [Alternative Claude Code backends experimental flag](/claudette/features/providers/#enabling-the-feature) is on.
+Make sure the [Alternative Claude Code backends experimental flag](/claudette/features/providers/#enabling-the-feature) is on. Supported builds enable it by default, and enabling **Experimental Codex** repairs older settings where that parent gate was still off.
 
-For native Codex, also enable **Settings > Experimental > Experimental Codex**. When that flag is on, **Settings > Models** shows `experimental-codex` instead of the legacy `codex-subscription` backend.
+For native Codex, also enable **Settings > Experimental > Experimental Codex**. When that flag is on, **Settings > Models** shows `experimental-codex` instead of the legacy `codex-subscription` backend, and the chat model picker includes the seeded Codex models immediately.
 
 ## OpenAI API
 
@@ -54,7 +54,7 @@ You can also run `codex login` yourself in any terminal.
 
 ### Configure
 
-1. In **Settings > Experimental**, enable **Experimental Codex**.
+1. In **Settings > Experimental**, enable **Experimental Codex**. This also keeps **Alternative Claude Code backends** enabled so Codex models are visible in the chat picker.
 2. In **Settings > Models**, find `experimental-codex`.
 3. Click **Test**. Claudette starts a short-lived `codex app-server`, calls `account/read`, and confirms the Codex CLI is authenticated.
 4. Click **Refresh models**. Claudette calls `model/list` on the native app-server and updates the picker with the models Codex exposes for your account.

@@ -211,7 +211,7 @@ impl AgentBackendConfig {
             label: "Experimental Codex".to_string(),
             kind: AgentBackendKind::CodexNative,
             base_url: None,
-            enabled: false,
+            enabled: true,
             default_model: Some("gpt-5.4".to_string()),
             manual_models: vec![
                 AgentBackendModel {
@@ -302,6 +302,7 @@ mod tests {
         assert_eq!(backend.id, "experimental-codex");
         assert_eq!(backend.label, "Experimental Codex");
         assert_eq!(backend.kind, AgentBackendKind::CodexNative);
+        assert!(backend.enabled);
         assert!(!backend.kind.needs_gateway());
         assert!(!backend.kind.is_anthropic_compatible());
         assert!(backend.model_discovery);

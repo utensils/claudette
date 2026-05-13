@@ -45,8 +45,8 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--features",
-        default="devtools,server",
-        help="Features for --build (default: devtools,server)",
+        default="devtools,server,alternative-backends",
+        help="Features for --build (default: devtools,server,alternative-backends)",
     )
     parser.add_argument(
         "--settle",

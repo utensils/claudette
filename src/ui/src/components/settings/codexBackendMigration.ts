@@ -18,8 +18,46 @@ export interface CodexBackendGateMigrationPlan {
   sessionIds: string[];
 }
 
+export interface ExperimentalBackendGateLoadInput {
+  alternativeBackendsCompiled: boolean;
+  alternativeBackendsSetting: string | null;
+  experimentalCodexSetting: string | null;
+}
+
+export interface ExperimentalBackendGateLoadPlan {
+  alternativeBackendsEnabled: boolean;
+  experimentalCodexEnabled: boolean;
+  persistAlternativeBackendsEnabled: boolean;
+}
+
 function settingSessionId(key: string, prefix: string): string | null {
   return key.startsWith(prefix) ? key.slice(prefix.length) : null;
+}
+
+export function planExperimentalBackendGateLoad({
+  alternativeBackendsCompiled,
+  alternativeBackendsSetting,
+  experimentalCodexSetting,
+}: ExperimentalBackendGateLoadInput): ExperimentalBackendGateLoadPlan {
+  const experimentalCodexEnabled =
+    alternativeBackendsCompiled && experimentalCodexSetting === "true";
+  const alternativeBackendsEnabled =
+    alternativeBackendsCompiled &&
+    (experimentalCodexEnabled || alternativeBackendsSetting !== "false");
+
+  return {
+    alternativeBackendsEnabled,
+    experimentalCodexEnabled,
+    persistAlternativeBackendsEnabled:
+      experimentalCodexEnabled && alternativeBackendsSetting !== "true",
+  };
+}
+
+export function shouldEnableAlternativeBackendsForCodex(
+  nextCodexEnabled: boolean,
+  alternativeBackendsEnabled: boolean,
+): boolean {
+  return nextCodexEnabled && !alternativeBackendsEnabled;
 }
 
 export function planCodexBackendGateMigration({

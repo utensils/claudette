@@ -3,7 +3,7 @@ title: Alternative Providers
 description: Run Claudette agents against Ollama, LM Studio, OpenAI, or native Codex instead of the default Claude Code path — architecture and capability differences, with deeper setup pages for each.
 ---
 
-By default Claudette spawns the official `claude` CLI authenticated against Anthropic. Behind the **Alternative Claude Code backends** experimental flag (the UI keeps that wording for the toggle) you can also point agents at:
+By default Claudette spawns the official `claude` CLI authenticated against Anthropic. Supported builds now keep the **Alternative Claude Code backends** runtime gate on by default, so you can also point agents at:
 
 - **[Ollama](/claudette/features/providers/ollama/)** — local LLMs running on your own machine, talking Claude's wire format directly.
 - **[LM Studio](/claudette/features/providers/lm-studio/)** — local LLMs loaded in LM Studio's desktop app, served via LM Studio 0.4.1+'s native `/v1/messages`. Routed through the in-process gateway with an Anthropic-shape pass-through (no translation, just status-code correction on errors).
@@ -15,8 +15,8 @@ This is **experimental** because some Claude-specific features (extended thinkin
 
 ## Enabling the feature
 
-1. Open **Settings > Experimental** and toggle on **Alternative Claude Code backends**.
-2. For native Codex, also toggle on **Experimental Codex**. This replaces the old `codex-subscription` gateway row with `experimental-codex`.
+1. Confirm **Settings > Experimental > Alternative Claude Code backends** is on. Supported builds enable it by default; turning it off hides all non-Anthropic providers.
+2. For native Codex, toggle on **Experimental Codex**. This replaces the old `codex-subscription` gateway row with `experimental-codex`, keeps the alternative-backends gate on, and seeds Codex models into the picker.
 3. Open **Settings > Models** and configure each provider you want to use (URL, secret, models).
 4. Pick a default in **Settings > Models > Default backend**, or override per session from the chat header.
 

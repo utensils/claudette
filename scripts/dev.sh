@@ -17,7 +17,8 @@
 # Env overrides:
 #   VITE_PORT_BASE         start port for Vite probe (default 14253)
 #   CLAUDETTE_DEBUG_PORT_BASE   start port for debug probe (default 19432)
-#   CARGO_TAURI_FEATURES   features to pass to tauri (default devtools,server,voice,alternative-backends)
+#   CARGO_TAURI_FEATURES   features to pass to tauri (default devtools,server,voice,alternative-backends;
+#                          alternative-backends is appended if omitted)
 #   CLAUDETTE_DEV_KEEP_CLAUDE_AUTH_ENV
 #                         preserve inherited Claude auth env vars (default strips them)
 #
@@ -65,7 +66,8 @@ Env vars (each consulted at process start):
   CLAUDETTE_DEBUG_PORT_BASE
                        First debug-eval port to probe.      Default 19432
   CARGO_TAURI_FEATURES Features to forward to \`cargo tauri dev\`.
-                       Default: devtools,server,voice,alternative-backends
+                       Default: devtools,server,voice,alternative-backends.
+                       alternative-backends is always appended when omitted.
   CLAUDETTE_HOME       Override the ~/.claudette/ tree (workspaces,
                        plugins, themes, logs, models, packs, apps.json).
   CLAUDETTE_DATA_DIR   Override the OS data dir holding claudette.db
@@ -258,6 +260,9 @@ echo "▸ Discovery file:   $discovery_file"
 (cd src/ui && bun install)
 
 features="${CARGO_TAURI_FEATURES:-devtools,server,voice,alternative-backends}"
+if [[ ",$features," != *",alternative-backends,"* ]]; then
+  features="${features:+$features,}alternative-backends"
+fi
 runner_args=()
 if [[ "$(uname -s)" == "Darwin" ]]; then
   runner_args=(--runner "$repo_root/scripts/macos-dev-app-runner.sh")
