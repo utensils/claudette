@@ -20,13 +20,6 @@ import type {
   DiscoveredServer,
   PairResult,
 } from "../types/remote";
-import type { DetectedApp } from "../types/apps";
-import type { ClaudeCodeUsage } from "../types/usage";
-import type {
-  AnalyticsMetrics,
-  DashboardMetrics,
-  WorkspaceMetrics,
-} from "../types/metrics";
 import type {
   BulkPluginUpdateResult,
   EditablePluginScope,
@@ -44,6 +37,16 @@ import type {
   StagedDiffFiles,
 } from "../types/diff";
 import type { WorkspaceEnvTrustNeededPayload } from "../types/env";
+
+export * from "./tauri/apps";
+export * from "./tauri/auth";
+export * from "./tauri/debug";
+export * from "./tauri/metrics";
+export * from "./tauri/notifications";
+export * from "./tauri/settings";
+export * from "./tauri/shell";
+export * from "./tauri/updater";
+export * from "./tauri/usage";
 
 // -- Data --
 
@@ -1343,107 +1346,6 @@ export function stopAgentBackgroundTask(
   });
 }
 
-// -- Settings --
-
-export function getAppSetting(key: string): Promise<string | null> {
-  return invoke("get_app_setting", { key });
-}
-
-export function setAppSetting(key: string, value: string): Promise<void> {
-  return invoke("set_app_setting", { key, value });
-}
-
-export function deleteAppSetting(key: string): Promise<void> {
-  return invoke("delete_app_setting", { key });
-}
-
-export function listAppSettingsWithPrefix(prefix: string): Promise<[string, string][]> {
-  return invoke("list_app_settings_with_prefix", { prefix });
-}
-
-export function getHostEnvFlags(): Promise<{
-  disable_1m_context: boolean;
-  alternative_backends_compiled: boolean;
-}> {
-  return invoke("get_host_env_flags");
-}
-
-// -- Updater --
-
-export type UpdateChannel = "stable" | "nightly";
-
-export interface UpdateInfo {
-  version: string;
-  current_version: string;
-  body: string | null;
-  date: string | null;
-}
-
-export function checkForUpdatesWithChannel(
-  channel: UpdateChannel,
-): Promise<UpdateInfo | null> {
-  return invoke("check_for_updates_with_channel", { channel });
-}
-
-export function installPendingUpdate(): Promise<void> {
-  return invoke("install_pending_update");
-}
-
-export function bootOk(): Promise<void> {
-  return invoke("boot_ok");
-}
-
-import type { ThemeDefinition } from "../types/theme";
-
-export function listUserThemes(): Promise<ThemeDefinition[]> {
-  return invoke("list_user_themes");
-}
-
-export function openUrl(url: string): Promise<void> {
-  return invoke("open_url", { url });
-}
-
-export function openDevtools(): Promise<void> {
-  return invoke("open_devtools");
-}
-
-export function getGitUsername(): Promise<string | null> {
-  return invoke("get_git_username");
-}
-
-export function listNotificationSounds(): Promise<string[]> {
-  return invoke("list_notification_sounds");
-}
-
-export function listSystemFonts(): Promise<string[]> {
-  return invoke("list_system_fonts");
-}
-
-export function playNotificationSound(
-  sound: string,
-  volume?: number,
-): Promise<void> {
-  return invoke("play_notification_sound", { sound, volume });
-}
-
-export function runNotificationCommand(
-  workspaceName: string,
-  workspaceId: string,
-  workspacePath: string,
-  rootPath: string,
-  defaultBranch: string,
-  branchName: string,
-): Promise<void> {
-  return invoke("run_notification_command", {
-    workspaceName,
-    workspaceId,
-    workspacePath,
-    rootPath,
-    defaultBranch,
-    branchName,
-  });
-}
-
 // -- Sound Packs (CESP) --
 
 import type { RegistryPack, InstalledSoundPack } from "../types/soundpacks";
@@ -1550,79 +1452,6 @@ export function getLocalServerStatus(): Promise<LocalServerInfo> {
   return invoke("get_local_server_status");
 }
 
-// -- Apps --
-
-export function detectInstalledApps(): Promise<DetectedApp[]> {
-  return invoke("detect_installed_apps");
-}
-
-export function openWorkspaceInApp(
-  appId: string,
-  worktreePath: string,
-): Promise<void> {
-  return invoke("open_workspace_in_app", {
-    appId,
-    worktreePath,
-  });
-}
-
-// -- Usage --
-
-export function getClaudeCodeUsage(): Promise<ClaudeCodeUsage> {
-  return invoke("get_claude_code_usage");
-}
-
-export function openUsageSettings(): Promise<void> {
-  return invoke("open_usage_settings");
-}
-
-export function openReleaseNotes(): Promise<void> {
-  return invoke("open_release_notes");
-}
-
-// -- Auth --
-
-export interface ClaudeAuthStatus {
-  state: "signed_in" | "signed_out" | "unknown";
-  loggedIn: boolean;
-  verified: boolean;
-  authMethod: string | null;
-  apiProvider: string | null;
-  message: string | null;
-}
-
-export function getClaudeAuthStatus(validate = false): Promise<ClaudeAuthStatus> {
-  return invoke("get_claude_auth_status", { validate });
-}
-
-export function claudeAuthLogin(): Promise<void> {
-  return invoke("claude_auth_login");
-}
-
-export function submitClaudeAuthCode(code: string): Promise<void> {
-  return invoke("submit_claude_auth_code", { code });
-}
-
-export function cancelClaudeAuthLogin(): Promise<void> {
-  return invoke("cancel_claude_auth_login");
-}
-
-// -- Metrics --
-
-export function getDashboardMetrics(): Promise<DashboardMetrics> {
-  return invoke("get_dashboard_metrics");
-}
-
-export function getWorkspaceMetricsBatch(
-  ids: string[]
-): Promise<Record<string, WorkspaceMetrics>> {
-  return invoke("get_workspace_metrics_batch", { ids });
-}
-
-export function getAnalyticsMetrics(): Promise<AnalyticsMetrics> {
-  return invoke("get_analytics_metrics");
-}
-
 // -- SCM Plugins --
 
 import type { PluginInfo, ScmDetail, PullRequest, ScmStatusCacheRow } from "../types/plugin";
@@ -1658,15 +1487,4 @@ export function scmMergePr(
   prNumber: number
 ): Promise<unknown> {
   return invoke("scm_merge_pr", { workspaceId, prNumber });
-}
-
-// -- Debug (dev builds only) --
-
-export function debugEvalJs(js: string): Promise<string> {
-  return invoke("debug_eval_js", { js });
-}
-
-// Expose invoke on window in dev builds so debug_eval_js can call back.
-if (import.meta.env.DEV && typeof window !== "undefined") {
-  (window as unknown as Record<string, unknown>).__CLAUDETTE_INVOKE__ = invoke;
 }
