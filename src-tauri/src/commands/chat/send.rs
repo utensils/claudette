@@ -49,6 +49,65 @@ struct ClaudeTeamAgentInput {
     plan_mode_required: Option<bool>,
 }
 
+#[derive(Debug, PartialEq, Eq)]
+struct ClaudeTeamAgentDispatch {
+    session_name: String,
+    content: String,
+    model: Option<String>,
+    plan_mode: bool,
+}
+
+fn build_claudette_dispatch_for_team_agent(
+    input_json: &str,
+) -> Result<Option<ClaudeTeamAgentDispatch>, String> {
+    let input: ClaudeTeamAgentInput = serde_json::from_str(input_json)
+        .map_err(|e| format!("parse Agent tool input for Claudette session bridge: {e}"))?;
+    let Some(team_name) = input
+        .team_name
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    else {
+        return Ok(None);
+    };
+    let Some(agent_name) = input
+        .name
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    else {
+        return Ok(None);
+    };
+    let Some(prompt) = input
+        .prompt
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    else {
+        return Ok(None);
+    };
+
+    let mut content = format!(
+        "You are Claude Code teammate `{agent_name}` in team `{team_name}`. \
+This teammate was redirected into a Claudette session tab. Report progress and final results here.\n\n{prompt}"
+    );
+    if let Some(description) = input
+        .description
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        content = format!("Task: {description}\n\n{content}");
+    }
+
+    Ok(Some(ClaudeTeamAgentDispatch {
+        session_name: format!("{team_name} / {agent_name}"),
+        content,
+        model: input.model,
+        plan_mode: input.plan_mode_required.unwrap_or(false),
+    }))
+}
+
 fn spawn_claudette_send_chat_child(
     session_id: &str,
     content: &str,
@@ -83,15 +142,7 @@ async fn open_claudette_session_for_team_agent(
     workspace_id: String,
     input_json: String,
 ) -> Result<(), String> {
-    let input: ClaudeTeamAgentInput = serde_json::from_str(&input_json)
-        .map_err(|e| format!("parse Agent tool input for Claudette session bridge: {e}"))?;
-    let Some(team_name) = input.team_name.as_deref().filter(|s| !s.trim().is_empty()) else {
-        return Ok(());
-    };
-    let Some(agent_name) = input.name.as_deref().filter(|s| !s.trim().is_empty()) else {
-        return Ok(());
-    };
-    let Some(prompt) = input.prompt.as_deref().filter(|s| !s.trim().is_empty()) else {
+    let Some(dispatch) = build_claudette_dispatch_for_team_agent(&input_json)? else {
         return Ok(());
     };
 
@@ -100,11 +151,10 @@ async fn open_claudette_session_for_team_agent(
         crate::commands::chat::session::create_chat_session(workspace_id.clone(), state).await?;
     let _ = app.emit("chat-session-created", &session);
 
-    let session_name = format!("{team_name} / {agent_name}");
     let state = app.state::<AppState>();
     if crate::commands::chat::session::rename_chat_session(
         session.id.clone(),
-        session_name.clone(),
+        dispatch.session_name.clone(),
         state,
     )
     .await
@@ -114,28 +164,16 @@ async fn open_claudette_session_for_team_agent(
             "session-renamed",
             serde_json::json!({
                 "session_id": session.id,
-                "name": session_name,
+                "name": dispatch.session_name,
             }),
         );
     }
 
-    let mut content = format!(
-        "You are Claude Code teammate `{agent_name}` in team `{team_name}`. \
-This teammate was redirected into a Claudette session tab. Report progress and final results here.\n\n{prompt}"
-    );
-    if let Some(description) = input
-        .description
-        .as_deref()
-        .filter(|s| !s.trim().is_empty())
-    {
-        content = format!("Task: {description}\n\n{content}");
-    }
-
     spawn_claudette_send_chat_child(
         &session.id,
-        &content,
-        input.model.as_deref(),
-        input.plan_mode_required.unwrap_or(false),
+        &dispatch.content,
+        dispatch.model.as_deref(),
+        dispatch.plan_mode,
     )
 }
 
@@ -3739,8 +3777,8 @@ pub async fn send_chat_message(
 mod tests {
     use super::{
         auth_failure_message_from_assistant_text, auth_failure_message_from_stderr,
-        env_provider_drifted_parts, has_env_trust_warning, remote_control_requested_or_active,
-        remote_control_requested_or_active_for_turn,
+        build_claudette_dispatch_for_team_agent, env_provider_drifted_parts, has_env_trust_warning,
+        remote_control_requested_or_active, remote_control_requested_or_active_for_turn,
         remote_control_should_defer_drift_teardown_for_turn,
         remote_control_should_restore_for_turn, remote_control_title, resolve_spawn_session_id,
         should_defer_persistent_restart_for_state,
@@ -3766,6 +3804,48 @@ mod tests {
             cache_read_tokens: None,
             cache_creation_tokens: None,
         }
+    }
+
+    #[test]
+    fn team_agent_dispatch_builds_session_tab_prompt() {
+        let dispatch = build_claudette_dispatch_for_team_agent(
+            r#"{
+                "description": "Read files",
+                "team_name": "haiku-readers",
+                "name": "haiku-reader-1",
+                "model": "haiku",
+                "plan_mode_required": true,
+                "prompt": "Read src/main.rs"
+            }"#,
+        )
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(dispatch.session_name, "haiku-readers / haiku-reader-1");
+        assert_eq!(dispatch.model.as_deref(), Some("haiku"));
+        assert!(dispatch.plan_mode);
+        assert!(dispatch.content.contains("Task: Read files"));
+        assert!(dispatch.content.contains("teammate `haiku-reader-1`"));
+        assert!(dispatch.content.contains("team `haiku-readers`"));
+        assert!(dispatch.content.contains("Read src/main.rs"));
+    }
+
+    #[test]
+    fn team_agent_dispatch_ignores_plain_subagents() {
+        assert!(
+            build_claudette_dispatch_for_team_agent(
+                r#"{"description":"plain subagent","prompt":"do work"}"#,
+            )
+            .unwrap()
+            .is_none()
+        );
+        assert!(
+            build_claudette_dispatch_for_team_agent(
+                r#"{"team_name":"team","name":"worker","prompt":"   "}"#,
+            )
+            .unwrap()
+            .is_none()
+        );
     }
 
     #[test]

@@ -393,6 +393,20 @@ mod tests {
     use super::*;
 
     #[test]
+    fn detects_send_chat_launch_args() {
+        let args = vec![
+            "claudette-app".into(),
+            "--claudette-send-chat".into(),
+            "--session-id".into(),
+            "s1".into(),
+            "--prompt-file".into(),
+            "/tmp/prompt".into(),
+        ];
+        assert!(is_send_chat_launch(&args));
+        assert!(!is_teammate_launch(&args));
+    }
+
+    #[test]
     fn detects_teammate_launch_args() {
         let args = vec![
             "claudette-app".into(),
