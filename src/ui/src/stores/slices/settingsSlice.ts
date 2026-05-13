@@ -58,8 +58,6 @@ export interface SettingsSlice {
   setPluginManagementEnabled: (enabled: boolean) => void;
   claudeRemoteControlEnabled: boolean;
   setClaudeRemoteControlEnabled: (enabled: boolean) => void;
-  teamAgentSessionTabsEnabled: boolean;
-  setTeamAgentSessionTabsEnabled: (enabled: boolean) => void;
   /// Gate the Settings → Community section. When false, the section is
   /// hidden from the sidebar and direct navigation falls back to
   /// Experimental. The backend community_* commands ship unconditionally
@@ -161,9 +159,6 @@ export const createSettingsSlice: StateCreator<
   claudeRemoteControlEnabled: true,
   setClaudeRemoteControlEnabled: (enabled) =>
     set({ claudeRemoteControlEnabled: enabled }),
-  teamAgentSessionTabsEnabled: true,
-  setTeamAgentSessionTabsEnabled: (enabled) =>
-    set({ teamAgentSessionTabsEnabled: enabled }),
   communityRegistryEnabled: false,
   setCommunityRegistryEnabled: (enabled) =>
     set((state) => ({

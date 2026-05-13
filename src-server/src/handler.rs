@@ -629,7 +629,10 @@ async fn handle_send_chat_message(
         chrome_enabled: chrome_enabled.unwrap_or(false),
         mcp_config,
         disable_1m_context: disable_1m_context.unwrap_or(false),
-        team_agent_session_tabs_enabled: true,
+        // The standalone server binary does not implement Claudette's teammate
+        // bridge child-mode args, so do not ask Claude Code to launch it as the
+        // teammate command from headless remote sessions.
+        team_agent_session_tabs_enabled: false,
         backend_runtime: Default::default(),
         hook_bridge: None,
         extra_claude_flags,
