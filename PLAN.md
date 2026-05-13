@@ -309,3 +309,5 @@
   - `cd src/ui && bunx tsc -b`
   - `cd src/ui && bun run lint` (warnings only; no errors)
   - `git diff --check`
+- 2026-05-13: Ran the next Copilot pass after the rebased push. Valid finding addressed:
+  - `site/src/content/docs/features/settings.mdx` now has a single authoritative **Experimental** settings table with the Experimental Codex row included.
