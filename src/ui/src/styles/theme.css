@@ -88,6 +88,45 @@
   --badge-plan:          #8cb8e0;
   --badge-ask:           #f5a0b8;
 
+  /* ---- Semantic accents — success / warning / error / info.
+     New consumers should prefer these over the older --badge-*, --status-*,
+     and --error-* tokens. Defaults derive from existing tokens so themes
+     that don't override these still get coherent values. The -rgb companions
+     are literals (CSS lacks an rgb-from-var function), so a user theme that
+     overrides --accent-success without --accent-success-rgb will break alpha
+     layers — co-emit both when authoring themes. */
+  --accent-success:      var(--badge-done);
+  --accent-success-rgb:  108, 204, 128;
+  --accent-success-bg:   rgba(108, 204, 128, 0.10);
+  --accent-warning:      #f0a050;
+  --accent-warning-rgb:  240, 160, 80;
+  --accent-warning-bg:   rgba(240, 160, 80, 0.10);
+  --accent-error:        var(--status-stopped);
+  --accent-error-rgb:    232, 80, 80;
+  --accent-error-bg:     var(--error-bg);
+  --accent-info:         var(--badge-plan);
+  --accent-info-rgb:     140, 184, 224;
+  --accent-info-bg:      rgba(140, 184, 224, 0.10);
+
+  /* ---- UI-role tokens — neutral emphasis and a secondary brand accent.
+     Both derive from existing tokens; themes can override to break the link. */
+  --accent-neutral:      var(--text-muted);
+  --accent-secondary:    var(--mascot-pink);
+
+  /* ---- Syntax highlight palette — mirrors base16 base08–base0F roles so
+     base16 themes can map directly. Intentionally brand-invariant (like the
+     --tool-* tokens above): the default-dark palette ships these to :root
+     and themes inherit unless they have a specific reason to override
+     (e.g. high-contrast bumps saturation). */
+  --syntax-keyword:      #c0a0f0;
+  --syntax-string:       var(--badge-done);
+  --syntax-number:       #f0a050;
+  --syntax-comment:      var(--text-faint);
+  --syntax-function:     var(--badge-plan);
+  --syntax-type:         #e0c050;
+  --syntax-variable:     var(--diff-removed-text);
+  --syntax-operator:     #6cb6ff;
+
   /* ---- Tool activity — per-category hues used in chat tool chips.
      Intentionally brand-invariant: tool chips keep the same hue across
      every theme so users build a stable read/write/bash/etc. muscle
@@ -283,6 +322,11 @@
   --badge-plan: #6848a8;
   --badge-ask:  #a04828;
 
+  /* Deeper orange for warning on cream background — #f0a050 washes out. */
+  --accent-warning:     #c27430;
+  --accent-warning-rgb: 194, 116, 48;
+  --accent-warning-bg:  rgba(194, 116, 48, 0.10);
+
   --diff-added-bg:   rgba(26, 127, 55, 0.10);
   --diff-removed-bg: rgba(196, 32, 32, 0.10);
   --diff-added-text: #1a7f37;
@@ -381,6 +425,20 @@
   --badge-done: #00ffdd;
   --badge-plan: #66bbff;
   --badge-ask:  #ffbb44;
+
+  /* Max-saturation warning + syntax palette for legibility on near-black. */
+  --accent-warning:     #ffaa00;
+  --accent-warning-rgb: 255, 170, 0;
+  --accent-warning-bg:  rgba(255, 170, 0, 0.14);
+
+  --syntax-keyword:     #d090ff;
+  --syntax-string:      #44ff44;
+  --syntax-number:      #ffaa00;
+  --syntax-comment:     #888899;
+  --syntax-function:    #66bbff;
+  --syntax-type:        #ffdd00;
+  --syntax-variable:    #ff4444;
+  --syntax-operator:    #00ffdd;
 }
 
 /* ============================================================
@@ -523,6 +581,11 @@
   --badge-plan: #56949f;
   --badge-ask:  #ea9d34;
 
+  /* Rosé Pine gold for warning (matches --badge-ask hue). */
+  --accent-warning:     #ea9d34;
+  --accent-warning-rgb: 234, 157, 52;
+  --accent-warning-bg:  rgba(234, 157, 52, 0.10);
+
   --mascot-pink: #d7827e;
 
   --diff-added-bg:   rgba(40, 105, 131, 0.12);
@@ -625,6 +688,11 @@
   --badge-done: #859900;
   --badge-plan: #2aa198;
   --badge-ask:  #b58900;
+
+  /* Solarized yellow for warning (matches --badge-ask). */
+  --accent-warning:     #b58900;
+  --accent-warning-rgb: 181, 137, 0;
+  --accent-warning-bg:  rgba(181, 137, 0, 0.10);
 
   --mascot-pink: #d33682;
 

@@ -93,9 +93,38 @@ Each file must be valid JSON with the following structure:
 
 Any property you omit inherits the value from the **Default Dark** theme. You only need to specify the tokens you want to change — a theme file containing a single accent override is valid and will render correctly, with every other surface falling back to the default palette.
 
+## Importing Base16 Themes
+
+Claudette auto-detects and imports themes from the [Base16](https://github.com/tinted-theming/schemes) family — a community palette format that defines a theme with just 16 colors (`base00`–`base0F`). Drop a canonical Base16 JSON file into `~/.claudette/themes/`, restart, and it shows up in the theme picker alongside any native Claudette themes.
+
+Detection is automatic: a file is treated as Base16 if it has all 16 `base00`–`base0F` keys at the top level (each a 3- or 6-char hex with or without a leading `#`) and does **not** also declare any native Claudette tokens like `accent-primary` or `app-bg`. A file with both is treated as a Claudette theme — its author already chose what to map.
+
+The 16 base colors map onto Claudette's token vocabulary as follows:
+
+| Base16 | Role | → Claudette tokens |
+|---|---|---|
+| `base00` | default background | `app-bg`, `terminal-bg` |
+| `base01` | lighter background | `sidebar-bg`, `chat-header-bg`, `terminal-tab-bg` |
+| `base02` | selection background | `selected-bg`, `terminal-tab-active-bg` |
+| `base03` | comments / faint | `text-faint`, `syntax-comment`, `diff-line-number` |
+| `base04` | dark foreground | `text-dim`, `accent-neutral` |
+| `base05` | default foreground | `text-primary`, `terminal-fg` |
+| `base06` | light foreground | `text-muted` |
+| `base07` | lightest | `on-accent` |
+| `base08` | red | `accent-error`, `status-stopped`, `diff-removed-text`, `syntax-variable` |
+| `base09` | orange | `accent-warning`, `syntax-number` |
+| `base0A` | yellow | `badge-ask`, `syntax-type` |
+| `base0B` | green | `accent-success`, `badge-done`, `diff-added-text`, `syntax-string` |
+| `base0C` | cyan | `syntax-operator` |
+| `base0D` | blue | `accent-info`, `badge-plan`, `diff-hunk-header`, `syntax-function` |
+| `base0E` | purple | `accent-primary`, `syntax-keyword` |
+| `base0F` | brown | `accent-dim`, `accent-secondary` |
+
+The light/dark `color-scheme` is read from an optional `variant: "light"` or `variant: "dark"` field if present, otherwise inferred from `base00`'s relative luminance. The conversion happens in-memory at load time — no Claudette-format file is written back to disk.
+
 ## Color Properties Reference
 
-You can customize any of the following 57 CSS custom properties.
+You can customize any of the following CSS custom properties.
 
 ### Scheme
 
@@ -172,6 +201,46 @@ You can customize any of the following 57 CSS custom properties.
 | `badge-done` | Agent finished badge color |
 | `badge-plan` | Plan awaiting review badge color |
 | `badge-ask` | Agent question badge color |
+
+### Semantic Accents
+
+Semantic tokens express **meaning**, not color. New consumers should prefer these over the older `badge-*`, `status-*`, and `error-*` tokens. Every default derives from an existing token (`accent-success` from `badge-done`, `accent-error` from `status-stopped`, etc.) so a theme that omits them still renders coherently.
+
+| Property | Description |
+|----------|-------------|
+| `accent-success` | Successful action / positive confirmation |
+| `accent-success-rgb` | RGB triplet for `rgba(var(...), alpha)` layering — **always co-emit** with `accent-success` |
+| `accent-success-bg` | Tinted surface for success banners |
+| `accent-warning` | Caution / non-fatal warning |
+| `accent-warning-rgb` | RGB triplet for warning alpha layers |
+| `accent-warning-bg` | Tinted surface for warning banners |
+| `accent-error` | Error / destructive action |
+| `accent-error-rgb` | RGB triplet for error alpha layers |
+| `accent-error-bg` | Tinted surface for error banners |
+| `accent-info` | Informational / neutral notice |
+| `accent-info-rgb` | RGB triplet for info alpha layers |
+| `accent-info-bg` | Tinted surface for info banners |
+| `accent-neutral` | Muted emphasis text or icon — defaults to `text-muted` |
+| `accent-secondary` | Secondary brand accent — defaults to `mascot-pink` |
+
+:::caution
+The `-rgb` companion tokens are a CSS workaround: there is no way to extract `r,g,b` channels from a `var(--*)` value, so any `rgba(var(--*-rgb), alpha)` consumer needs both tokens to render. If you override `accent-success`, **always** override `accent-success-rgb` with the same color expressed as a comma-separated triplet (e.g. `"108, 204, 128"`).
+:::
+
+### Syntax Highlights
+
+Eight tokens that mirror Base16's `base08`–`base0F` semantic roles so syntax-highlight surfaces can share a vocabulary with imported Base16 themes. These are intentionally **brand-invariant** — they ship on `:root` and most themes inherit them unchanged.
+
+| Property | Description |
+|----------|-------------|
+| `syntax-keyword` | Control flow / `if`, `for`, `return` (base0E — purple) |
+| `syntax-string` | String literals (base0B — green) |
+| `syntax-number` | Numeric and boolean constants (base09 — orange) |
+| `syntax-comment` | Comments and docs (base03 — faint) |
+| `syntax-function` | Function and method names (base0D — blue) |
+| `syntax-type` | Types, classes, search highlights (base0A — yellow) |
+| `syntax-variable` | Variables and punctuation (base08 — red) |
+| `syntax-operator` | Operators and regular expressions (base0C — cyan) |
 
 ### Diff View
 
