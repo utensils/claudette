@@ -88,9 +88,15 @@
 - 2026-05-13: Verified the Codex JSON-RPC codec with:
   - `nix develop -c cargo test -p claudette agent::codex_app_server --all-features`
   - `nix develop -c cargo fmt --all`
+- 2026-05-13: Committed and pushed milestone 4 as `6472f4a0` (`feat: add codex app-server jsonrpc codec`).
+- 2026-05-13: Added Codex response routing for request/response correlation, notification decoding, orphan response detection, and server request preservation for future approval handling.
+- 2026-05-13: Verified the response router with:
+  - `nix develop -c cargo test -p claudette agent::codex_app_server --all-features`
+  - `nix develop -c cargo fmt --all`
 
 ## Next Stage
 
-- Add the Codex app-server process/client request router behind the `AgentSession` wrapper, including response correlation and server-request handling stubs.
+- Open a draft PR after the response-router checkpoint so Copilot can review this long-running branch incrementally.
+- Add the Codex app-server process spawn/wire-up behind the `AgentSession` wrapper, including initialize/initialized handshake and fake process tests where possible.
 - Add fake-harness tests around chat send lifecycle seams before selecting the native Codex runtime from backend settings.
 - Keep `codex-subscription` hidden/replaced only after the native `Experimental Codex` backend has a real harness path.

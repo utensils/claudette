@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
@@ -34,7 +35,7 @@ impl CodexAppServerSession {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum JsonRpcId {
     Integer(i64),
@@ -83,6 +84,55 @@ pub struct JsonRpcErrorBody {
     pub message: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub data: Option<Value>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum CodexRoutedMessage {
+    Response {
+        method: String,
+        response: JsonRpcResponse,
+    },
+    Error {
+        method: String,
+        error: JsonRpcError,
+    },
+    Notification(CodexNotificationEvent),
+    ServerRequest(JsonRpcRequest),
+    OrphanResponse(JsonRpcResponse),
+    OrphanError(JsonRpcError),
+}
+
+#[derive(Debug, Default)]
+pub struct CodexResponseRouter {
+    pending: BTreeMap<JsonRpcId, String>,
+}
+
+impl CodexResponseRouter {
+    pub fn track_request(&mut self, request: &JsonRpcRequest) {
+        self.pending
+            .insert(request.id.clone(), request.method.clone());
+    }
+
+    pub fn pending_len(&self) -> usize {
+        self.pending.len()
+    }
+
+    pub fn route(&mut self, message: JsonRpcMessage) -> CodexRoutedMessage {
+        match message {
+            JsonRpcMessage::Response(response) => match self.pending.remove(&response.id) {
+                Some(method) => CodexRoutedMessage::Response { method, response },
+                None => CodexRoutedMessage::OrphanResponse(response),
+            },
+            JsonRpcMessage::Error(error) => match self.pending.remove(&error.id) {
+                Some(method) => CodexRoutedMessage::Error { method, error },
+                None => CodexRoutedMessage::OrphanError(error),
+            },
+            JsonRpcMessage::Notification(notification) => {
+                CodexRoutedMessage::Notification(decode_notification(notification))
+            }
+            JsonRpcMessage::Request(request) => CodexRoutedMessage::ServerRequest(request),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -663,6 +713,89 @@ mod tests {
                 .expect("eof succeeds")
                 .is_none()
         );
+    }
+
+    #[test]
+    fn router_correlates_responses_to_tracked_requests() {
+        let mut router = CodexResponseRouter::default();
+        let request = build_turn_start_request(
+            9,
+            "thread-1",
+            "hello",
+            Path::new("/tmp/work"),
+            None,
+            CodexPermissionLevel::Readonly,
+        );
+        router.track_request(&request);
+        assert_eq!(router.pending_len(), 1);
+
+        let routed = router.route(JsonRpcMessage::Response(JsonRpcResponse {
+            id: JsonRpcId::Integer(9),
+            result: json!({"turn":{"id":"turn-1"}}),
+        }));
+
+        let CodexRoutedMessage::Response { method, response } = routed else {
+            panic!("expected correlated response");
+        };
+        assert_eq!(method, "turn/start");
+        assert_eq!(response.result["turn"]["id"], "turn-1");
+        assert_eq!(router.pending_len(), 0);
+    }
+
+    #[test]
+    fn router_preserves_server_requests_for_approval_layer() {
+        let mut router = CodexResponseRouter::default();
+        let routed = router.route(JsonRpcMessage::Request(JsonRpcRequest {
+            id: JsonRpcId::String("approval-1".to_string()),
+            method: "item/commandExecution/requestApproval".to_string(),
+            params: Some(json!({"threadId":"thread-1"})),
+        }));
+
+        let CodexRoutedMessage::ServerRequest(request) = routed else {
+            panic!("expected server request");
+        };
+        assert_eq!(request.method, "item/commandExecution/requestApproval");
+        assert_eq!(request.params.unwrap()["threadId"], "thread-1");
+    }
+
+    #[test]
+    fn router_decodes_notifications() {
+        let mut router = CodexResponseRouter::default();
+        let routed = router.route(JsonRpcMessage::Notification(JsonRpcNotification {
+            method: "item/agentMessage/delta".to_string(),
+            params: Some(json!({
+                "threadId": "thread-1",
+                "turnId": "turn-1",
+                "itemId": "message-1",
+                "delta": "hello"
+            })),
+        }));
+
+        let CodexRoutedMessage::Notification(CodexNotificationEvent::AgentMessageDelta {
+            delta,
+            ..
+        }) = routed
+        else {
+            panic!("expected notification");
+        };
+        assert_eq!(delta, "hello");
+    }
+
+    #[test]
+    fn router_surfaces_orphan_responses() {
+        let mut router = CodexResponseRouter::default();
+        let routed = router.route(JsonRpcMessage::Response(JsonRpcResponse {
+            id: JsonRpcId::Integer(404),
+            result: json!({"late": true}),
+        }));
+
+        assert!(matches!(
+            routed,
+            CodexRoutedMessage::OrphanResponse(JsonRpcResponse {
+                id: JsonRpcId::Integer(404),
+                ..
+            })
+        ));
     }
 
     #[test]
