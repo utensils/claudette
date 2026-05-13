@@ -192,8 +192,7 @@ export function CommandPalette() {
               run: () => runWorkspaceSetup(wsId),
               deps: {
                 addChatMessage,
-                updateChatMessage: useAppStore.getState().updateChatMessage,
-                removeChatMessage: useAppStore.getState().removeChatMessage,
+                setRunningSetupScript: useAppStore.getState().setRunningSetupScript,
                 addToast,
                 workspaceName: result.workspace.name,
               },

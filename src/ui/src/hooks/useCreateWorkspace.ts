@@ -112,8 +112,7 @@ export async function createWorkspaceOrchestrated(
             run: () => runWorkspaceSetup(wsId),
             deps: {
               addChatMessage: store.addChatMessage,
-              updateChatMessage: store.updateChatMessage,
-              removeChatMessage: store.removeChatMessage,
+              setRunningSetupScript: store.setRunningSetupScript,
               addToast: store.addToast,
               workspaceName: result.workspace.name,
             },

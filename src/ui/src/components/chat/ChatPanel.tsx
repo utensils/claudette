@@ -79,6 +79,7 @@ import { StreamingMessage } from "./StreamingMessage";
 import { MessagesWithTurns } from "./MessagesWithTurns";
 import { ChatAuthFailureCallout } from "../auth/ChatAuthFailureCallout";
 import { CliInvocationBanner } from "./CliInvocationBanner";
+import { SetupScriptBanner } from "./SetupScriptBanner";
 import { CurrentTurnTaskProgress } from "./CurrentTurnTaskProgress";
 import { ChatInputArea } from "./ChatInputArea";
 import { EMPTY_ACTIVITIES } from "./chatConstants";
@@ -102,6 +103,9 @@ export function ChatPanel() {
   const repositories = useAppStore((s) => s.repositories);
   const chatMessages = useAppStore((s) => s.chatMessages);
   const setChatMessages = useAppStore((s) => s.setChatMessages);
+  const runningSetupScriptSource = useAppStore((s) =>
+    activeSessionId ? s.runningSetupScripts[activeSessionId] : undefined,
+  );
   const hydrateCompletedTurns = useAppStore((s) => s.hydrateCompletedTurns);
   const addChatMessage = useAppStore((s) => s.addChatMessage);
   const enqueueTerminalCommand = useAppStore((s) => s.enqueueTerminalCommand);
@@ -1410,7 +1414,7 @@ export function ChatPanel() {
             invocation={cliInvocation}
             sessionId={activeChatSessionRecord?.id}
           />
-          {messages.length === 0 && !hasStreaming ? (
+          {messages.length === 0 && !hasStreaming && !runningSetupScriptSource ? (
             <div className={styles.empty}>
               Send a message to start a conversation
             </div>
@@ -1466,6 +1470,17 @@ export function ChatPanel() {
                   autoStartKey={chatAuthLoginRequestId}
                   autoStartedKey={chatAuthLoginStartedRequestId}
                   onAutoStarted={setChatAuthLoginStartedRequestId}
+                />
+              )}
+
+              {runningSetupScriptSource && activeSessionId && (
+                <SetupScriptBanner
+                  outcome={{
+                    source: runningSetupScriptSource,
+                    status: "running",
+                    output: "",
+                  }}
+                  messageId={`setup-running:${activeSessionId}`}
                 />
               )}
 

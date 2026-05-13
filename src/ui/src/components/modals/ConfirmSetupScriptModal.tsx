@@ -36,9 +36,9 @@ export function ConfirmSetupScriptModal() {
         console.error("Failed to persist setup-script auto-run preference:", e);
       }
     }
-    // Fire-and-forget: the run posts a "running" placeholder to the transcript
-    // right away and swaps it for the result when it finishes, so there's no
-    // need to keep the modal open blocking on it.
+    // Fire-and-forget: the run flags the session as "setup running" (ChatPanel
+    // shows the spinner banner) and appends the result when it finishes, so
+    // there's no need to keep the modal open blocking on it.
     runAndRecordSetupScript({
       sessionId,
       workspaceId,
@@ -46,8 +46,7 @@ export function ConfirmSetupScriptModal() {
       run: () => runWorkspaceSetup(workspaceId),
       deps: {
         addChatMessage,
-        updateChatMessage: store.updateChatMessage,
-        removeChatMessage: store.removeChatMessage,
+        setRunningSetupScript: store.setRunningSetupScript,
         addToast,
         workspaceName: store.workspaces.find((w) => w.id === workspaceId)?.name,
       },

@@ -142,21 +142,14 @@ export interface ChatSlice {
     message: ChatMessage,
     options?: { persisted?: boolean },
   ) => void;
-  /** Patch fields on an already-appended message, matched by `id`. No-op if
-   *  the id isn't present. Used for client-only messages that mutate in place
-   *  (e.g. the setup-script "running" placeholder flipping to its result).
-   *  Does not touch pagination — only `persisted` messages affect that, and a
-   *  patch never changes a message's persisted-ness. */
-  updateChatMessage: (
-    sessionId: string,
-    messageId: string,
-    updates: Partial<ChatMessage>,
-  ) => void;
-  /** Drop a message by `id`. Intended for client-only placeholders that turn
-   *  out to have nothing to show; never call this for a `persisted` message —
-   *  `totalCount` is left untouched, so removing a DB-backed message would
-   *  desync `globalOffset`. */
-  removeChatMessage: (sessionId: string, messageId: string) => void;
+  /** Sessions with a repo setup script currently executing, keyed by chat
+   *  session id; the value is the script source (`"repo"` / `"settings"`) for
+   *  the running-banner label. Lives here rather than as a `System` message so
+   *  the post-creation chat-history reload (which replaces `chatMessages`
+   *  wholesale) can't wipe the in-flight indicator. Cleared when the run
+   *  settles; the result is then appended as a normal message. */
+  runningSetupScripts: Record<string, string>;
+  setRunningSetupScript: (sessionId: string, source: string | null) => void;
   setStreamingContent: (sessionId: string, content: string) => void;
   appendStreamingContent: (sessionId: string, text: string) => void;
   setPendingTypewriter: (sessionId: string, messageId: string, text: string) => void;
@@ -369,38 +362,19 @@ export const createChatSlice: StateCreator<AppState, [], [], ChatSlice> = (
           : {}),
       };
     }),
-  updateChatMessage: (sessionId, messageId, updates) =>
+  runningSetupScripts: {},
+  setRunningSetupScript: (sessionId, source) =>
     set((s) => {
-      const list = s.chatMessages[sessionId];
-      if (!list) return {};
-      const idx = list.findIndex((m) => m.id === messageId);
-      if (idx === -1) return {};
-      const patched = { ...list[idx], ...updates };
-      const next = [...list];
-      next[idx] = patched;
-      return {
-        chatMessages: { ...s.chatMessages, [sessionId]: next },
-        ...(s.lastMessages[sessionId]?.id === messageId
-          ? { lastMessages: { ...s.lastMessages, [sessionId]: patched } }
-          : {}),
-      };
-    }),
-  removeChatMessage: (sessionId, messageId) =>
-    set((s) => {
-      const list = s.chatMessages[sessionId];
-      if (!list || !list.some((m) => m.id === messageId)) return {};
-      const next = list.filter((m) => m.id !== messageId);
-      const partial: Partial<typeof s> = {
-        chatMessages: { ...s.chatMessages, [sessionId]: next },
-      };
-      if (s.lastMessages[sessionId]?.id === messageId) {
-        const lastMessages = { ...s.lastMessages };
-        const newLast = next[next.length - 1];
-        if (newLast) lastMessages[sessionId] = newLast;
-        else delete lastMessages[sessionId];
-        partial.lastMessages = lastMessages;
+      if (source === null) {
+        if (!(sessionId in s.runningSetupScripts)) return {};
+        const next = { ...s.runningSetupScripts };
+        delete next[sessionId];
+        return { runningSetupScripts: next };
       }
-      return partial;
+      if (s.runningSetupScripts[sessionId] === source) return {};
+      return {
+        runningSetupScripts: { ...s.runningSetupScripts, [sessionId]: source },
+      };
     }),
   setStreamingContent: (sessionId, content) =>
     set((s) => ({
