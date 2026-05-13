@@ -344,4 +344,7 @@
     - `cd src/ui && bun run test -- reasoningControls EffortSelector modelRegistry codexBackendMigration`
     - `cd src/ui && bunx tsc -b`
     - `cd src/ui && bun run lint` (warnings only; no errors)
+    - `nix develop -c cargo clippy -p claudette -p claudette-server -p claudette-cli --all-targets --all-features`
+    - `nix develop -c cargo test -p claudette agent::codex_app_server --all-features`
+    - `nix develop -c cargo fmt --all --check`
     - `git diff --check`

@@ -199,16 +199,16 @@ impl CodexAppServerSession {
         let mut broadcast_rx = self.event_tx.subscribe();
         let thread_id = self.ensure_thread().await?;
         let response = self
-            .send_request(build_turn_start_request(
-                self.next_id(),
-                &thread_id,
+            .send_request(build_turn_start_request(CodexTurnStartRequest {
+                id: self.next_id(),
+                thread_id: &thread_id,
                 prompt,
-                &self.working_dir,
-                self.model.as_deref(),
-                self.permission_level,
-                self.fast_mode,
-                self.reasoning_effort.as_deref(),
-            ))
+                cwd: &self.working_dir,
+                model: self.model.as_deref(),
+                permission_level: self.permission_level,
+                fast_mode: self.fast_mode,
+                reasoning_effort: self.reasoning_effort.as_deref(),
+            }))
             .await?;
         let turn_id = turn_id_from_response(&response)?;
         *self.active_turn_id.lock().await = Some(turn_id);
@@ -1153,35 +1153,37 @@ pub fn build_thread_start_request(
     }
 }
 
-pub fn build_turn_start_request(
-    id: i64,
-    thread_id: &str,
-    prompt: &str,
-    cwd: &Path,
-    model: Option<&str>,
-    permission_level: CodexPermissionLevel,
-    fast_mode: bool,
-    reasoning_effort: Option<&str>,
-) -> JsonRpcRequest {
-    let mapping = permission_level.mapping();
-    let service_tier = fast_mode.then_some("priority");
+pub struct CodexTurnStartRequest<'a> {
+    pub id: i64,
+    pub thread_id: &'a str,
+    pub prompt: &'a str,
+    pub cwd: &'a Path,
+    pub model: Option<&'a str>,
+    pub permission_level: CodexPermissionLevel,
+    pub fast_mode: bool,
+    pub reasoning_effort: Option<&'a str>,
+}
+
+pub fn build_turn_start_request(params: CodexTurnStartRequest<'_>) -> JsonRpcRequest {
+    let mapping = params.permission_level.mapping();
+    let service_tier = params.fast_mode.then_some("priority");
     JsonRpcRequest {
-        id: JsonRpcId::Integer(id),
+        id: JsonRpcId::Integer(params.id),
         method: "turn/start".to_string(),
         params: Some(json!({
-            "threadId": thread_id,
+            "threadId": params.thread_id,
             "input": [{
                 "type": "text",
-                "text": prompt,
+                "text": params.prompt,
                 "textElements": [],
             }],
-            "cwd": cwd,
+            "cwd": params.cwd,
             "approvalPolicy": mapping.approval_policy,
             "approvalsReviewer": "user",
             "sandboxPolicy": mapping.turn_sandbox_policy,
-            "model": model,
+            "model": params.model,
             "serviceTier": service_tier,
-            "effort": reasoning_effort,
+            "effort": params.reasoning_effort,
         })),
     }
 }
@@ -2080,16 +2082,16 @@ mod tests {
     #[test]
     fn router_correlates_responses_to_tracked_requests() {
         let mut router = CodexResponseRouter::default();
-        let request = build_turn_start_request(
-            9,
-            "thread-1",
-            "hello",
-            Path::new("/tmp/work"),
-            None,
-            CodexPermissionLevel::Readonly,
-            false,
-            None,
-        );
+        let request = build_turn_start_request(CodexTurnStartRequest {
+            id: 9,
+            thread_id: "thread-1",
+            prompt: "hello",
+            cwd: Path::new("/tmp/work"),
+            model: None,
+            permission_level: CodexPermissionLevel::Readonly,
+            fast_mode: false,
+            reasoning_effort: None,
+        });
         router.track_request(&request);
         assert_eq!(router.pending_len(), 1);
 
@@ -2245,16 +2247,16 @@ mod tests {
 
     #[test]
     fn turn_start_request_carries_text_model_and_permission_overrides() {
-        let request = build_turn_start_request(
-            7,
-            "thread-1",
-            "hello",
-            Path::new("/tmp/work"),
-            Some("gpt-5.1-codex"),
-            CodexPermissionLevel::Standard,
-            true,
-            Some("minimal"),
-        );
+        let request = build_turn_start_request(CodexTurnStartRequest {
+            id: 7,
+            thread_id: "thread-1",
+            prompt: "hello",
+            cwd: Path::new("/tmp/work"),
+            model: Some("gpt-5.1-codex"),
+            permission_level: CodexPermissionLevel::Standard,
+            fast_mode: true,
+            reasoning_effort: Some("minimal"),
+        });
         let value = serde_json::to_value(request).unwrap();
 
         assert_eq!(value["method"], "turn/start");
@@ -2271,16 +2273,16 @@ mod tests {
 
     #[test]
     fn turn_start_request_serializes_full_sandbox_as_tagged_policy() {
-        let request = build_turn_start_request(
-            8,
-            "thread-1",
-            "ship it",
-            Path::new("/tmp/work"),
-            None,
-            CodexPermissionLevel::Full,
-            false,
-            None,
-        );
+        let request = build_turn_start_request(CodexTurnStartRequest {
+            id: 8,
+            thread_id: "thread-1",
+            prompt: "ship it",
+            cwd: Path::new("/tmp/work"),
+            model: None,
+            permission_level: CodexPermissionLevel::Full,
+            fast_mode: false,
+            reasoning_effort: None,
+        });
         let value = serde_json::to_value(request).unwrap();
 
         assert_eq!(value["params"]["approvalPolicy"], "never");
