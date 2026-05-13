@@ -1,5 +1,4 @@
 use serde::{Deserialize, Serialize};
-use std::fs;
 use std::process::Stdio;
 use std::time::Duration;
 use tauri::{AppHandle, Emitter, State};
@@ -171,11 +170,6 @@ async fn validate_claude_auth(
     claude_path: std::ffi::OsString,
     local_status: ClaudeAuthStatus,
 ) -> Result<ClaudeAuthStatus, String> {
-    let mcp_config_path =
-        std::env::temp_dir().join(format!("claudette-auth-mcp-{}.json", uuid::Uuid::new_v4()));
-    fs::write(&mcp_config_path, br#"{"mcpServers":{}}"#)
-        .map_err(|e| format!("Failed to write Claude Code auth validation MCP config: {e}"))?;
-
     let mut command = Command::new(&claude_path);
     command
         .no_console_window()
@@ -187,7 +181,7 @@ async fn validate_claude_auth(
         .arg("--disable-slash-commands")
         .arg("--strict-mcp-config")
         .arg("--mcp-config")
-        .arg(&mcp_config_path)
+        .arg(r#"{"mcpServers":{}}"#)
         .arg("--tools")
         .arg("")
         .arg("--model")
@@ -202,7 +196,6 @@ async fn validate_claude_auth(
     sanitize_claude_subprocess_env(&mut command);
 
     let output = timeout(AUTH_VALIDATE_TIMEOUT, command.output()).await;
-    let _ = fs::remove_file(&mcp_config_path);
     let output = match output {
         Ok(Ok(output)) => output,
         Ok(Err(e)) => {
@@ -450,8 +443,8 @@ pub async fn submit_claude_auth_code(
         .await
         .map_err(|e| format!("Failed to flush Claude Code auth code: {e}"))?;
 
-    let login_still_running = state.auth_login_cancel.lock().await.is_some();
-    if login_still_running {
+    let cancel_slot = state.auth_login_cancel.lock().await;
+    if cancel_slot.is_some() {
         let mut slot = state.auth_login_stdin.lock().await;
         if slot.is_none() {
             *slot = Some(stdin);

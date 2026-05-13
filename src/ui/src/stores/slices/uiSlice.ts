@@ -79,6 +79,7 @@ export interface UiSlice {
   setClaudeAuthFailure: (failure: ClaudeAuthFailureState | null) => void;
   setResolvedClaudeAuthFailureMessageId: (messageId: string | null) => void;
   openChatAuthLoginPanel: () => void;
+  closeChatAuthLoginPanel: () => void;
   setChatAuthLoginStartedRequestId: (requestId: number | null) => void;
   pluginSettingsTab: PluginSettingsTab;
   pluginSettingsRepoId: string | null;
@@ -317,6 +318,11 @@ export const createUiSlice: StateCreator<AppState, [], [], UiSlice> = (
       chatAuthLoginPanelOpen: true,
       chatAuthLoginRequestId: state.chatAuthLoginRequestId + 1,
     })),
+  closeChatAuthLoginPanel: () =>
+    set({
+      chatAuthLoginPanelOpen: false,
+      chatAuthLoginStartedRequestId: null,
+    }),
   setChatAuthLoginStartedRequestId: (requestId) =>
     set({ chatAuthLoginStartedRequestId: requestId }),
   pluginSettingsTab: "available",

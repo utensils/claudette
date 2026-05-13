@@ -20,6 +20,9 @@ export function ChatAuthFailureCallout({
   onAutoStarted?: (key: number) => void;
 }) {
   const setClaudeAuthFailure = useAppStore((s) => s.setClaudeAuthFailure);
+  const closeChatAuthLoginPanel = useAppStore(
+    (s) => s.closeChatAuthLoginPanel,
+  );
   const { validateAuthLoginSuccess } = useClaudeAuthRecovery();
   const controller = useClaudeAuthLogin({
     onSuccess: async () => {
@@ -41,6 +44,14 @@ export function ChatAuthFailureCallout({
     await startControllerAuthLogin();
   }, [error, messageId, setClaudeAuthFailure, startControllerAuthLogin]);
 
+  const cancelChatAuthLogin = useCallback(async () => {
+    try {
+      await cancelAuthLogin();
+    } finally {
+      closeChatAuthLoginPanel();
+    }
+  }, [cancelAuthLogin, closeChatAuthLoginPanel]);
+
   useEffect(() => {
     if (
       autoStartKey === null ||
@@ -54,14 +65,20 @@ export function ChatAuthFailureCallout({
     void startAuthLogin();
   }, [autoStartedKey, autoStartKey, onAutoStarted, startAuthLogin]);
 
+  useEffect(() => {
+    if (authState.status === "success") {
+      closeChatAuthLoginPanel();
+    }
+  }, [authState.status, closeChatAuthLoginPanel]);
+
   const chatController = useMemo(
     () => ({
       authState,
-      cancelAuthLogin,
+      cancelAuthLogin: cancelChatAuthLogin,
       submitAuthCode,
       startAuthLogin,
     }),
-    [authState, cancelAuthLogin, startAuthLogin, submitAuthCode],
+    [authState, cancelChatAuthLogin, startAuthLogin, submitAuthCode],
   );
 
   return (

@@ -601,7 +601,7 @@ describe("login native handler", () => {
     expect(result).toEqual({ kind: "handled", canonicalName: "login" });
     expect(ctx.startClaudeAuthLogin).toHaveBeenCalledTimes(1);
     expect(ctx.addLocalMessage).toHaveBeenCalledWith(
-      "Claude Code sign-in started. Complete the browser flow, then retry the turn.",
+      "Claude Code sign-in opened. Complete the browser flow, then retry the turn.",
     );
   });
 

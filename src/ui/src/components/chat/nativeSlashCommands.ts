@@ -369,7 +369,7 @@ const loginHandler: NativeHandler = {
     try {
       await ctx.startClaudeAuthLogin();
       ctx.addLocalMessage(
-        "Claude Code sign-in started. Complete the browser flow, then retry the turn.",
+        "Claude Code sign-in opened. Complete the browser flow, then retry the turn.",
       );
     } catch (error) {
       ctx.addLocalMessage(`/login failed: ${formatCommandError(error)}`);
