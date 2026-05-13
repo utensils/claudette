@@ -144,10 +144,15 @@
   - `cd src/ui && bunx tsc -b`
   - `cd src/ui && bun run test -- modelRegistry alternativeBackendCleanup`
   - `git diff --check`
+- 2026-05-13: Ran the regular Copilot pass after pushing `f287edfc`. Valid findings addressed:
+  - Codex `send_turn` now emits start events only after `thread/start` and `turn/start` succeed.
+  - Codex terminal notifications (`turn/completed`, `turn/failed`) now clear the active turn id so later steering cannot target a finished turn.
+- 2026-05-13: Verified the Copilot lifecycle fixes with:
+  - `nix develop -c cargo test -p claudette agent::codex_app_server --all-features`
 
 ## Next Stage
 
-- Rebase on `origin/main`, commit, push, and run the regular Copilot review pass for this checkpoint.
+- Rebase on `origin/main`, commit, push, and re-check Copilot threads for the lifecycle fix checkpoint.
 - Add fake app-server/chat lifecycle coverage around native Codex send, steer, stop, and failure persistence without spawning a real CLI.
 - Expand Codex notification mapping for MCP calls and file changes once the app-server payload shapes are confirmed against the reference clone.
 - Harden gate-off cleanup for live sessions that were selected on `experimental-codex`.

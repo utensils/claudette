@@ -164,9 +164,6 @@ impl CodexAppServerSession {
             return Err("Codex app-server attachments are not wired yet".to_string());
         }
         let mut broadcast_rx = self.event_tx.subscribe();
-        for event in codex_turn_start_events() {
-            let _ = self.event_tx.send(event);
-        }
         let thread_id = self.ensure_thread().await?;
         let response = self
             .send_request(build_turn_start_request(
@@ -180,6 +177,9 @@ impl CodexAppServerSession {
             .await?;
         let turn_id = turn_id_from_response(&response)?;
         *self.active_turn_id.lock().await = Some(turn_id);
+        for event in codex_turn_start_events() {
+            let _ = self.event_tx.send(event);
+        }
 
         let (mpsc_tx, mpsc_rx) = mpsc::channel::<AgentEvent>(128);
         tokio::spawn(async move {
@@ -343,14 +343,22 @@ impl CodexAppServerSession {
         let event_tx = self.event_tx.clone();
         let pending = self.pending.clone();
         let stdin = self.stdin.clone();
+        let active_turn_id = self.active_turn_id.clone();
         let pid = self.pid;
         tokio::spawn(async move {
             let mut reader = tokio::io::BufReader::new(stdout);
             loop {
                 match read_jsonrpc_message(&mut reader).await {
                     Ok(Some(message)) => {
-                        route_app_server_message(pid, &event_tx, &pending, stdin.as_ref(), message)
-                            .await;
+                        route_app_server_message(
+                            pid,
+                            &event_tx,
+                            &pending,
+                            stdin.as_ref(),
+                            Some(&active_turn_id),
+                            message,
+                        )
+                        .await;
                     }
                     Ok(None) => {
                         fail_pending_requests(
@@ -431,6 +439,7 @@ async fn route_app_server_message(
     event_tx: &broadcast::Sender<AgentEvent>,
     pending: &PendingRequests,
     stdin: Option<&CodexStdin>,
+    active_turn_id: Option<&Arc<tokio::sync::Mutex<Option<String>>>>,
     message: JsonRpcMessage,
 ) {
     match message {
@@ -487,7 +496,13 @@ async fn route_app_server_message(
             }
         }
         JsonRpcMessage::Notification(notification) => {
-            for event in map_notification_to_agent_events(decode_notification(notification)) {
+            let notification = decode_notification(notification);
+            if notification_finishes_turn(&notification)
+                && let Some(active_turn_id) = active_turn_id
+            {
+                *active_turn_id.lock().await = None;
+            }
+            for event in map_notification_to_agent_events(notification) {
                 let _ = event_tx.send(event);
             }
         }
@@ -940,6 +955,13 @@ pub enum CodexNotificationEvent {
         method: String,
         params: Option<Value>,
     },
+}
+
+fn notification_finishes_turn(event: &CodexNotificationEvent) -> bool {
+    matches!(
+        event,
+        CodexNotificationEvent::TurnCompleted { .. } | CodexNotificationEvent::TurnFailed { .. }
+    )
 }
 
 pub fn decode_notification(notification: JsonRpcNotification) -> CodexNotificationEvent {
@@ -1669,6 +1691,25 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn send_turn_failure_does_not_publish_start_events() {
+        let session = CodexAppServerSession::new_for_test(4321);
+        let mut rx = session.subscribe();
+
+        let err = match session.send_turn("hello", &[]).await {
+            Ok(_) => panic!("test session has no stdin"),
+            Err(err) => err,
+        };
+
+        assert!(err.contains("stdin is not available"));
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(25), rx.recv())
+                .await
+                .is_err(),
+            "failed turn start should not emit a stray start event"
+        );
+    }
+
+    #[tokio::test]
     async fn app_server_router_delivers_pending_response() {
         let (tx, rx) = oneshot::channel();
         let pending: PendingRequests = Arc::new(tokio::sync::Mutex::new(BTreeMap::from([(
@@ -1684,6 +1725,7 @@ mod tests {
             1,
             &event_tx,
             &pending,
+            None,
             None,
             JsonRpcMessage::Response(JsonRpcResponse {
                 id: Some(JsonRpcId::Integer(11)),
@@ -1709,6 +1751,7 @@ mod tests {
             1,
             &event_tx,
             &pending,
+            None,
             None,
             JsonRpcMessage::Notification(JsonRpcNotification {
                 method: "item/agentMessage/delta".to_string(),
@@ -1737,6 +1780,36 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn app_server_router_clears_active_turn_on_terminal_notification() {
+        let pending: PendingRequests = Arc::new(tokio::sync::Mutex::new(BTreeMap::new()));
+        let active_turn_id = Arc::new(tokio::sync::Mutex::new(Some("turn-1".to_string())));
+        let (event_tx, mut rx) = broadcast::channel(8);
+
+        route_app_server_message(
+            1,
+            &event_tx,
+            &pending,
+            None,
+            Some(&active_turn_id),
+            JsonRpcMessage::Notification(JsonRpcNotification {
+                method: "turn/completed".to_string(),
+                params: Some(json!({
+                    "threadId": "thread-1",
+                    "turnId": "turn-1",
+                    "durationMs": 42
+                })),
+            }),
+        )
+        .await;
+
+        assert_eq!(*active_turn_id.lock().await, None);
+        assert!(matches!(
+            rx.recv().await.expect("event emitted"),
+            AgentEvent::Stream(StreamEvent::Result { subtype, .. }) if subtype == "success"
+        ));
+    }
+
+    #[tokio::test]
     async fn app_server_router_surfaces_unhandled_server_request() {
         let pending: PendingRequests = Arc::new(tokio::sync::Mutex::new(BTreeMap::new()));
         let (event_tx, mut rx) = broadcast::channel(8);
@@ -1745,6 +1818,7 @@ mod tests {
             1,
             &event_tx,
             &pending,
+            None,
             None,
             JsonRpcMessage::Request(JsonRpcRequest {
                 id: JsonRpcId::String("req-1".to_string()),
