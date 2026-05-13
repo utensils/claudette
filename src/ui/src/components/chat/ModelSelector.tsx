@@ -120,6 +120,9 @@ function ModelRow({
   onSelect: (id: string, providerId?: string) => void;
 }) {
   const { t } = useTranslation("chat");
+  const showProviderBadge = Boolean(
+    model.providerLabel && model.providerLabel !== model.group,
+  );
   return (
     <button
       type="button"
@@ -127,8 +130,8 @@ function ModelRow({
       onClick={() => onSelect(model.id, model.providerId)}
     >
       <span className={styles.dot} />
-      {model.label}
-      {model.providerLabel && (
+      <span className={styles.modelLabel} title={model.label}>{model.label}</span>
+      {showProviderBadge && (
         <span className={styles.providerBadge}>{model.providerLabel}</span>
       )}
       {model.extraUsage && (

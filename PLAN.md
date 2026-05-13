@@ -357,3 +357,12 @@
     - `cd src/ui && bun run lint` (warnings only; no errors)
     - `cd src/ui && bun run lint:css`
     - `git diff --check`
+- 2026-05-13: Polished the model selector rendering for native Codex models:
+  - Redundant provider badges are hidden when the row is already inside the same provider group, so the **Experimental Codex** section no longer repeats the same label on every model row.
+  - Model labels now stay on one line with ellipsis and the menu has a wider, stable width for long model names such as Codex variants.
+  - Verified the model selector polish with:
+    - `cd src/ui && bunx tsc -b`
+    - `cd src/ui && bun run test -- modelRegistry`
+    - `cd src/ui && bun run lint` (warnings only; no errors)
+    - `cd src/ui && bun run lint:css`
+    - `git diff --check`
