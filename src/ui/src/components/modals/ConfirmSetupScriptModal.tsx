@@ -2,7 +2,10 @@ import { useState } from "react";
 import { Trans, useTranslation } from "react-i18next";
 import { useAppStore } from "../../stores/useAppStore";
 import { runWorkspaceSetup, setSetupScriptAutoRun } from "../../services/tauri";
-import { runAndRecordSetupScript } from "../../utils/setupScriptMessage";
+import {
+  runAndRecordSetupScript,
+  type SetupScriptSource,
+} from "../../utils/setupScriptMessage";
 import { Modal } from "./Modal";
 import shared from "./shared.module.css";
 
@@ -20,7 +23,7 @@ export function ConfirmSetupScriptModal() {
   const workspaceId = modalData.workspaceId as string;
   const sessionId = modalData.sessionId as string;
   const script = modalData.script as string;
-  const source = modalData.source as string;
+  const source = modalData.source as SetupScriptSource;
   const repoId = modalData.repoId as string;
 
   const handleRun = async () => {

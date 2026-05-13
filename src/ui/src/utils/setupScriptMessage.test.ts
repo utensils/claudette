@@ -125,6 +125,24 @@ describe("runAndRecordSetupScript", () => {
     expect(deps.addToast).not.toHaveBeenCalled();
   });
 
+  it("stores the user-facing label for a repo-config script so the running banner matches the result", async () => {
+    const deps = makeDeps();
+    runAndRecordSetupScript({
+      sessionId: "sess",
+      workspaceId: "ws",
+      source: "repo",
+      run: async () => result({ source: "repo", output: "ok" }),
+      deps,
+    });
+    // Running banner label: ".claudette.json" — not the raw "repo" — matching
+    // what `buildSetupScriptContent` writes for the completed entry.
+    expect(deps.setRunningSetupScript).toHaveBeenNthCalledWith(1, "sess", ".claudette.json");
+    await Promise.resolve();
+    await Promise.resolve();
+    const [, msg] = (deps.addChatMessage as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(msg.content).toBe("Setup script (.claudette.json) completed:\nok");
+  });
+
   it("raises a failure toast and appends the failed content", async () => {
     const deps = makeDeps({ workspaceName: "twisted-tarragon" });
     runAndRecordSetupScript({

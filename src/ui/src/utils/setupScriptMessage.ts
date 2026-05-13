@@ -16,8 +16,13 @@ export interface SetupScriptOutcome {
   output: string;
 }
 
-/** The user-facing label embedded in the message content. Kept here so the
- *  builders and the parser agree on exactly one spelling. */
+/** Where a setup script came from: `"repo"` is `.claudette.json` (committed
+ *  repo config), `"settings"` is the repo-level setting in Claudette. */
+export type SetupScriptSource = "repo" | "settings";
+
+/** The user-facing label embedded in the message content / running banner.
+ *  Kept here so the builders, the parser, and the running banner all agree on
+ *  exactly one spelling. */
 function sourceLabel(source: string): string {
   return source === "repo" ? ".claudette.json" : "settings";
 }
@@ -121,13 +126,15 @@ function failureToast(deps: SetupScriptRecorderDeps): void {
 export function runAndRecordSetupScript(opts: {
   sessionId: string;
   workspaceId: string;
-  /** `"repo"` (`.claudette.json`) or `"settings"` — the running-banner label. */
-  source: string;
+  source: SetupScriptSource;
   run: () => Promise<SetupResult | null>;
   deps: SetupScriptRecorderDeps;
 }): void {
   const { sessionId, workspaceId, source, run, deps } = opts;
-  deps.setRunningSetupScript(sessionId, source);
+  // Store the user-facing label, not the raw source, so the running banner
+  // reads `(.claudette.json)` / `(settings)` — matching the completed entry,
+  // which `buildSetupScriptContent` writes with the same `sourceLabel`.
+  deps.setRunningSetupScript(sessionId, sourceLabel(source));
   run()
     .then((sr) => {
       deps.setRunningSetupScript(sessionId, null);

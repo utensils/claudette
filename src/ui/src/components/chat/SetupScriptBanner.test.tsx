@@ -72,7 +72,7 @@ describe("SetupScriptBanner", () => {
     expect(container.textContent).toContain("setup_script_status_running");
   });
 
-  it("renders a completed run collapsed (no output body, no toggle button)", async () => {
+  it("renders a completed run collapsed — toggle present, output body hidden", async () => {
     const container = await render({
       source: "settings",
       status: "completed",
