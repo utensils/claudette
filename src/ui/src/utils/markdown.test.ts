@@ -1,7 +1,20 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+// @vitest-environment happy-dom
+
+import { act } from "react";
+import { createRoot, type Root } from "react-dom/client";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { createElement } from "react";
-import type { ReactElement } from "react";
+import type { ReactElement, ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
+import type { Components } from "react-markdown";
+
+const tauriMocks = vi.hoisted(() => ({
+  openUrl: vi.fn(() => Promise.resolve()),
+}));
+
+vi.mock("../services/tauri", () => ({
+  openUrl: tauriMocks.openUrl,
+}));
 
 vi.mock("./highlight", () => ({
   getCachedHighlight: vi.fn(),
@@ -11,11 +24,40 @@ vi.mock("./highlight", () => ({
 import {
   EXTERNAL_SCHEMES,
   MARKDOWN_COMPONENTS,
+  MarkdownFileOpenContext,
+  normalizeExternalHref,
   SANITIZE_SCHEMA,
   HighlightedCode,
   safeUrlTransform,
 } from "./markdown";
 import { getCachedHighlight, highlightCode } from "./highlight";
+
+(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean })
+  .IS_REACT_ACT_ENVIRONMENT = true;
+
+const mountedRoots: Root[] = [];
+const mountedContainers: HTMLElement[] = [];
+
+async function render(node: ReactNode): Promise<HTMLElement> {
+  const container = document.createElement("div");
+  document.body.appendChild(container);
+  const root = createRoot(container);
+  mountedRoots.push(root);
+  mountedContainers.push(container);
+  await act(async () => {
+    root.render(node);
+  });
+  return container;
+}
+
+afterEach(async () => {
+  for (const root of mountedRoots.splice(0)) {
+    await act(async () => root.unmount());
+  }
+  for (const container of mountedContainers.splice(0)) {
+    container.remove();
+  }
+});
 
 describe("EXTERNAL_SCHEMES", () => {
   it("matches http URLs", () => {
@@ -88,6 +130,43 @@ describe("MARKDOWN_COMPONENTS.code wiring", () => {
     const props = (el as unknown as { props: any }).props;
     expect(props.node).toBeUndefined();
   });
+
+  it("turns inline code into a file button when the context resolves it", async () => {
+    const openFile = vi.fn(() => true);
+    const resolveFilePath = vi.fn((path: string) =>
+      path === "Cargo.toml" ? "Cargo.toml" : null,
+    );
+    const container = await render(
+      createElement(
+        MarkdownFileOpenContext.Provider,
+        { value: { openFile, resolveFilePath } },
+        createElement(HighlightedCode, { children: "Cargo.toml" }),
+      ),
+    );
+
+    const button = container.querySelector("button");
+    expect(button?.textContent).toBe("Cargo.toml");
+    expect(container.querySelector("code")).toBeNull();
+    button?.dispatchEvent(
+      new MouseEvent("click", { bubbles: true, cancelable: true }),
+    );
+
+    expect(resolveFilePath).toHaveBeenCalledWith("Cargo.toml");
+    expect(openFile).toHaveBeenCalledWith("Cargo.toml");
+  });
+
+  it("leaves inline code alone when the context cannot resolve it", async () => {
+    const container = await render(
+      createElement(
+        MarkdownFileOpenContext.Provider,
+        { value: { openFile: vi.fn(), resolveFilePath: () => null } },
+        createElement(HighlightedCode, { children: "foo.ts" }),
+      ),
+    );
+
+    expect(container.querySelector("code")?.textContent).toBe("foo.ts");
+    expect(container.querySelector("button")).toBeNull();
+  });
 });
 
 describe("safeUrlTransform", () => {
@@ -121,6 +200,394 @@ describe("safeUrlTransform", () => {
     expect(SANITIZE_SCHEMA.attributes.source).toEqual(
       expect.arrayContaining(["srcSet", "media"]),
     );
+  });
+});
+
+describe("normalizeExternalHref", () => {
+  it("keeps explicit http, https, and mailto links", () => {
+    expect(normalizeExternalHref("https://example.com/path")).toBe(
+      "https://example.com/path",
+    );
+    expect(normalizeExternalHref("http://example.com")).toBe("http://example.com");
+    expect(normalizeExternalHref("mailto:user@example.com")).toBe(
+      "mailto:user@example.com",
+    );
+  });
+
+  it("upgrades www links that GFM can emit without a scheme", () => {
+    expect(normalizeExternalHref("www.example.com/docs")).toBe(
+      "https://www.example.com/docs",
+    );
+  });
+
+  it("rejects relative files and unsafe schemes", () => {
+    expect(normalizeExternalHref("README.md")).toBeNull();
+    expect(normalizeExternalHref("javascript:alert(1)")).toBeNull();
+  });
+});
+
+describe("MARKDOWN_COMPONENTS.a click handling", () => {
+  const LinkOverride = MARKDOWN_COMPONENTS.a as NonNullable<Components["a"]>;
+
+  beforeEach(() => {
+    tauriMocks.openUrl.mockClear();
+  });
+
+  it("routes claudettepath links through the Monaco file opener context", async () => {
+    const openFile = vi.fn(() => true);
+    const container = await render(
+      createElement(
+        MarkdownFileOpenContext.Provider,
+        { value: { openFile } },
+        createElement(LinkOverride, {
+          href: "claudettepath:README.md",
+          children: "README.md",
+        }),
+      ),
+    );
+
+    const button = container.querySelector("button");
+    expect(button?.getAttribute("href")).toBeNull();
+    button?.dispatchEvent(
+      new MouseEvent("click", { bubbles: true, cancelable: true }),
+    );
+
+    expect(openFile).toHaveBeenCalledWith("README.md");
+    expect(tauriMocks.openUrl).not.toHaveBeenCalled();
+  });
+
+  it("routes at-sign file mentions only when the workspace index resolves them", async () => {
+    const openFile = vi.fn(() => true);
+    const resolveFilePath = vi.fn((path: string) =>
+      path === "README.md" ? "docs/README.md" : null,
+    );
+    const container = await render(
+      createElement(
+        MarkdownFileOpenContext.Provider,
+        { value: { openFile, resolveFilePath } },
+        createElement(LinkOverride, {
+          href: "claudettepath:README.md",
+          children: "@README.md",
+        }),
+      ),
+    );
+
+    const button = container.querySelector("button");
+    expect(button?.textContent).toBe("@README.md");
+    button?.dispatchEvent(
+      new MouseEvent("click", { bubbles: true, cancelable: true }),
+    );
+
+    expect(resolveFilePath).toHaveBeenCalledWith("README.md");
+    expect(openFile).toHaveBeenCalledWith("docs/README.md");
+  });
+
+  it("routes bare file links only when the workspace index resolves them", async () => {
+    const openFile = vi.fn(() => true);
+    const resolveFilePath = vi.fn((path: string) =>
+      path === "README.md" ? "docs/README.md" : null,
+    );
+    const container = await render(
+      createElement(
+        MarkdownFileOpenContext.Provider,
+        { value: { openFile, resolveFilePath } },
+        createElement(LinkOverride, {
+          href: "claudettepath:README.md",
+          children: "README.md",
+        }),
+      ),
+    );
+
+    const button = container.querySelector("button");
+    expect(button?.textContent).toBe("README.md");
+    button?.dispatchEvent(
+      new MouseEvent("click", { bubbles: true, cancelable: true }),
+    );
+
+    expect(resolveFilePath).toHaveBeenCalledWith("README.md");
+    expect(openFile).toHaveBeenCalledWith("docs/README.md");
+  });
+
+  it("leaves unresolved at-sign mentions as plain text", async () => {
+    const openFile = vi.fn(() => true);
+    const container = await render(
+      createElement(
+        MarkdownFileOpenContext.Provider,
+        { value: { openFile, resolveFilePath: () => null } },
+        createElement(LinkOverride, {
+          href: "claudettepath:README.md",
+          children: "@README.md",
+        }),
+      ),
+    );
+
+    expect(container.querySelector("button")).toBeNull();
+    expect(container.textContent).toBe("@README.md");
+    expect(openFile).not.toHaveBeenCalled();
+  });
+
+  it("leaves unresolved bare file links as plain text when a resolver is available", async () => {
+    const openFile = vi.fn(() => true);
+    const container = await render(
+      createElement(
+        MarkdownFileOpenContext.Provider,
+        { value: { openFile, resolveFilePath: () => null } },
+        createElement(LinkOverride, {
+          href: "claudettepath:README.md",
+          children: "README.md",
+        }),
+      ),
+    );
+
+    expect(container.querySelector("button")).toBeNull();
+    expect(container.textContent).toBe("README.md");
+    expect(openFile).not.toHaveBeenCalled();
+  });
+
+  it("does not open absolute file paths in a native app when Monaco cannot handle them", async () => {
+    const openFile = vi.fn(() => false);
+    const container = await render(
+      createElement(
+        MarkdownFileOpenContext.Provider,
+        { value: { openFile } },
+        createElement(LinkOverride, {
+          href: "claudettepath:/tmp/report.md",
+          children: "/tmp/report.md",
+        }),
+      ),
+    );
+
+    container.querySelector("button")?.dispatchEvent(
+      new MouseEvent("click", { bubbles: true, cancelable: true }),
+    );
+
+    expect(openFile).toHaveBeenCalledWith("/tmp/report.md");
+    expect(tauriMocks.openUrl).not.toHaveBeenCalled();
+  });
+
+  it("does not open absolute file paths in a native app when the Monaco opener throws", async () => {
+    const openFile = vi.fn(() => {
+      throw new Error("boom");
+    });
+    const container = await render(
+      createElement(
+        MarkdownFileOpenContext.Provider,
+        { value: { openFile } },
+        createElement(LinkOverride, {
+          href: "claudettepath:/tmp/report.md",
+          children: "/tmp/report.md",
+        }),
+      ),
+    );
+
+    container.querySelector("button")?.dispatchEvent(
+      new MouseEvent("click", { bubbles: true, cancelable: true }),
+    );
+
+    expect(openFile).toHaveBeenCalledWith("/tmp/report.md");
+    expect(tauriMocks.openUrl).not.toHaveBeenCalled();
+  });
+
+  it("does not open localhost file URLs in the browser when Monaco cannot handle them", async () => {
+    const openFile = vi.fn(() => false);
+    const href =
+      "http://localhost:14255/Users/jamesbrink/.claudette/workspaces/claudex/copper-ginger/website/guide/quickstart.md:6";
+    const container = await render(
+      createElement(
+        MarkdownFileOpenContext.Provider,
+        { value: { openFile } },
+        createElement(LinkOverride, {
+          href,
+          children: href,
+        }),
+      ),
+    );
+
+    const button = container.querySelector("button");
+    expect(button).toBeTruthy();
+    expect(button?.textContent).toBe("website/guide/quickstart.md:6");
+    button?.dispatchEvent(
+      new MouseEvent("click", { bubbles: true, cancelable: true }),
+    );
+
+    expect(openFile).toHaveBeenCalledWith(
+      "/Users/jamesbrink/.claudette/workspaces/claudex/copper-ginger/website/guide/quickstart.md:6",
+    );
+    expect(tauriMocks.openUrl).not.toHaveBeenCalled();
+  });
+
+  it("routes localhost file URLs through the Monaco file opener without rendering a navigable href", async () => {
+    const openFile = vi.fn(() => true);
+    const container = await render(
+      createElement(
+        MarkdownFileOpenContext.Provider,
+        { value: { openFile } },
+        createElement(LinkOverride, {
+          href: "http://localhost:14254/Users/me/project/CLAUDETTE_TEST.md:1",
+          children: "http://localhost:14254/Users/me/project/CLAUDETTE_TEST.md:1",
+        }),
+      ),
+    );
+
+    const button = container.querySelector("button");
+    expect(button).toBeTruthy();
+    expect(button?.textContent).toBe("CLAUDETTE_TEST.md:1");
+    expect(container.querySelector("a")).toBeNull();
+    button?.dispatchEvent(
+      new MouseEvent("click", { bubbles: true, cancelable: true }),
+    );
+
+    expect(openFile).toHaveBeenCalledWith("/Users/me/project/CLAUDETTE_TEST.md:1");
+  });
+
+  it("routes localhost file URLs through the workspace-resolved display path when available", async () => {
+    const openFile = vi.fn(() => true);
+    const resolveFilePath = vi.fn((path: string) =>
+      path === "website/guide/quickstart.md:6"
+        ? "website/guide/quickstart.md:6"
+        : null,
+    );
+    const href =
+      "http://localhost:14255/Users/jamesbrink/.claudette/workspaces/claudex/copper-ginger/website/guide/quickstart.md:6";
+    const container = await render(
+      createElement(
+        MarkdownFileOpenContext.Provider,
+        { value: { openFile, resolveFilePath } },
+        createElement(LinkOverride, {
+          href,
+          children: href,
+        }),
+      ),
+    );
+
+    const button = container.querySelector("button");
+    expect(button).toBeTruthy();
+    expect(button?.textContent).toBe("website/guide/quickstart.md:6");
+    button?.dispatchEvent(
+      new MouseEvent("click", { bubbles: true, cancelable: true }),
+    );
+
+    expect(resolveFilePath).toHaveBeenCalledWith(
+      "/Users/jamesbrink/.claudette/workspaces/claudex/copper-ginger/website/guide/quickstart.md:6",
+    );
+    expect(resolveFilePath).toHaveBeenCalledWith("website/guide/quickstart.md:6");
+    expect(openFile).toHaveBeenCalledWith("website/guide/quickstart.md:6");
+    expect(tauriMocks.openUrl).not.toHaveBeenCalled();
+  });
+
+  it("routes localhost SVG file URLs through the Monaco file opener", async () => {
+    const openFile = vi.fn(() => true);
+    const href =
+      "http://localhost:14254/Users/jamesbrink/.claudette/workspaces/claudex/copper-ginger/simple-wave.svg:1";
+    const container = await render(
+      createElement(
+        MarkdownFileOpenContext.Provider,
+        { value: { openFile } },
+        createElement(LinkOverride, {
+          href,
+          children: href,
+        }),
+      ),
+    );
+
+    const button = container.querySelector("button");
+    expect(button).toBeTruthy();
+    expect(button?.textContent).toBe("simple-wave.svg:1");
+    expect(container.querySelector("a")).toBeNull();
+    button?.dispatchEvent(
+      new MouseEvent("click", { bubbles: true, cancelable: true }),
+    );
+
+    expect(openFile).toHaveBeenCalledWith(
+      "/Users/jamesbrink/.claudette/workspaces/claudex/copper-ginger/simple-wave.svg:1",
+    );
+    expect(tauriMocks.openUrl).not.toHaveBeenCalled();
+  });
+
+  it("routes same-origin absolute file hrefs through Monaco instead of rendering an app-route anchor", async () => {
+    const openFile = vi.fn(() => true);
+    const href =
+      "/Users/jamesbrink/.claudette/workspaces/claudex/copper-ginger/README.md:8";
+    const container = await render(
+      createElement(
+        MarkdownFileOpenContext.Provider,
+        { value: { openFile } },
+        createElement(LinkOverride, {
+          href,
+          children: "README.md",
+        }),
+      ),
+    );
+
+    const button = container.querySelector("button");
+    expect(button).toBeTruthy();
+    expect(button?.textContent).toBe("README.md:8");
+    expect(container.querySelector("a")).toBeNull();
+    button?.dispatchEvent(
+      new MouseEvent("click", { bubbles: true, cancelable: true }),
+    );
+
+    expect(openFile).toHaveBeenCalledWith(href);
+    expect(tauriMocks.openUrl).not.toHaveBeenCalled();
+  });
+
+  it("routes same-origin absolute file hrefs with unknown extensions through Monaco", async () => {
+    const openFile = vi.fn(() => true);
+    const href =
+      "/Users/jamesbrink/.claudette/workspaces/claudex/copper-ginger/generated.assetbundle:12";
+    const container = await render(
+      createElement(
+        MarkdownFileOpenContext.Provider,
+        { value: { openFile } },
+        createElement(LinkOverride, {
+          href,
+          children: "generated.assetbundle",
+        }),
+      ),
+    );
+
+    const button = container.querySelector("button");
+    expect(button).toBeTruthy();
+    expect(button?.textContent).toBe("generated.assetbundle:12");
+    expect(container.querySelector("a")).toBeNull();
+    button?.dispatchEvent(
+      new MouseEvent("click", { bubbles: true, cancelable: true }),
+    );
+
+    expect(openFile).toHaveBeenCalledWith(href);
+    expect(tauriMocks.openUrl).not.toHaveBeenCalled();
+  });
+
+  it("blocks unsupported anchors from navigating the webview", async () => {
+    const container = await render(
+      createElement(LinkOverride, {
+        href: "/internal/app/path",
+        children: "internal",
+      }),
+    );
+    const event = new MouseEvent("click", { bubbles: true, cancelable: true });
+
+    container.querySelector("a")?.dispatchEvent(event);
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(tauriMocks.openUrl).not.toHaveBeenCalled();
+  });
+
+  it("opens scheme-less www links through open_url with an https URL", async () => {
+    const container = await render(
+      createElement(LinkOverride, {
+        href: "www.example.com/docs",
+        children: "www.example.com/docs",
+      }),
+    );
+
+    const link = container.querySelector("a");
+    expect(link?.getAttribute("href")).toBe("https://www.example.com/docs");
+    link?.dispatchEvent(
+      new MouseEvent("click", { bubbles: true, cancelable: true }),
+    );
+
+    expect(tauriMocks.openUrl).toHaveBeenCalledWith("https://www.example.com/docs");
   });
 });
 

@@ -8,7 +8,6 @@ import type { ChatMessage, ChatAttachment } from "../../types/chat";
 import { roleClassKey, shouldRenderAsMarkdown } from "./messageRendering";
 import { HighlightedMessageMarkdown } from "./HighlightedMessageMarkdown";
 import { HighlightedPlainText } from "./HighlightedPlainText";
-import { relativizePath } from "../../hooks/toolSummary";
 import { ThinkingBlock } from "./ThinkingBlock";
 import { collapsedToolGroupKey } from "./collapsedToolGroupKey";
 import { CompactionDivider } from "./CompactionDivider";
@@ -58,6 +57,9 @@ import {
 } from "./toolActivityGroups";
 import { ChatAuthFailureCallout } from "../auth/ChatAuthFailureCallout";
 import { cleanClaudeAuthError, isClaudeAuthError } from "../auth/claudeAuth";
+import { monacoFileLinkTarget } from "./chatFileLinks";
+import { useWorkspaceFileIndex } from "./useWorkspaceFileIndex";
+import { detectFileReferences } from "../../utils/filePathLinks";
 import {
   EMPTY_ACTIVITIES,
   EMPTY_ATTACHMENTS,
@@ -85,6 +87,7 @@ export const MessagesWithTurns = memo(function MessagesWithTurns({
   liveTaskProgressNode,
   streamingThinkingNode,
   streamingMessageNode,
+  onOpenFileLink,
 }: {
   messages: ChatMessage[];
   /** The enclosing workspace id — forwarded into rollback data so the modal
@@ -124,6 +127,7 @@ export const MessagesWithTurns = memo(function MessagesWithTurns({
   liveTaskProgressNode?: React.ReactNode;
   streamingThinkingNode?: React.ReactNode;
   streamingMessageNode?: React.ReactNode;
+  onOpenFileLink?: () => void;
 }) {
   const { t } = useTranslation("chat");
   const completedTurns = useAppStore(
@@ -156,6 +160,7 @@ export const MessagesWithTurns = memo(function MessagesWithTurns({
   const worktreePath = useAppStore(
     (s) => s.workspaces.find((w) => w.id === workspaceId)?.worktree_path,
   );
+  const fileIndex = useWorkspaceFileIndex(workspaceId);
   const liveToolActivities = useAppStore(
     (s) => s.toolActivities[sessionId] ?? EMPTY_ACTIVITIES,
   );
@@ -469,18 +474,19 @@ export const MessagesWithTurns = memo(function MessagesWithTurns({
   // Activity-derived edits use absolute paths (the agent's full path
   // including the worktree prefix); the file-tab store keys by repo-
   // relative path, so strip the worktree prefix when present.
-  // `relativizePath` handles both `/` and `\` so this works on Windows
-  // worktrees too. If the result still looks absolute (POSIX `/...`
-  // or Windows `C:\...` / `C:/...`), the file isn't reachable via the
-  // current worktree — bail rather than passing a bad key into the
-  // file-tab store.
+  // The helper handles both `/` and `\` so this works on Windows
+  // worktrees too. If the result still looks absolute or home-relative,
+  // the file isn't reachable via the current worktree — bail rather than
+  // passing a bad key into the file-tab store.
   const openFileInMonaco = useCallback(
     (filePath: string) => {
-      const rel = relativizePath(filePath, worktreePath);
-      if (/^([a-zA-Z]:[\\/]|[\\/])/.test(rel)) return;
-      openFileTab(workspaceId, rel);
+      const target = monacoFileLinkTarget(filePath, worktreePath);
+      if (!target) return false;
+      onOpenFileLink?.();
+      openFileTab(workspaceId, target.path, target.revealTarget);
+      return true;
     },
-    [openFileTab, workspaceId, worktreePath],
+    [onOpenFileLink, openFileTab, workspaceId, worktreePath],
   );
 
   // Per-turn rollback data, keyed by turn.id. Completed turns are only
@@ -927,7 +933,12 @@ export const MessagesWithTurns = memo(function MessagesWithTurns({
                     // setup-script output, and other multi-line system notes
                     // preserve headings, lists, and code blocks instead of
                     // collapsing newlines into a single paragraph.
-                    <HighlightedMessageMarkdown content={msg.content} query={searchQuery} />
+                    <HighlightedMessageMarkdown
+                      content={msg.content}
+                      query={searchQuery}
+                      onOpenFile={openFileInMonaco}
+                      resolveFilePath={fileIndex.resolve}
+                    />
                   ) : searchQuery ? (
                     // While the search bar is open, render user messages as plain
                     // highlighted text so matches inside them get marked. The
@@ -935,12 +946,14 @@ export const MessagesWithTurns = memo(function MessagesWithTurns({
                     // searchability wins over the easter egg.
                     <HighlightedPlainText text={msg.content} query={searchQuery} />
                   ) : (
-                    renderUltrathinkText(msg.content, {
+                    renderFileLinkedPlainText(msg.content, {
                       animated: false,
                       styles: {
                         ultrathinkChar: styles.ultrathinkChar,
                         ultrathinkCharAnimated: styles.ultrathinkCharAnimated,
                       },
+                      resolveFilePath: fileIndex.resolve,
+                      openFile: openFileInMonaco,
                     })
                   )}
                 </div>
@@ -958,3 +971,54 @@ export const MessagesWithTurns = memo(function MessagesWithTurns({
     </>
   );
 });
+
+function renderFileLinkedPlainText(
+  text: string,
+  options: {
+    animated: boolean;
+    styles: Parameters<typeof renderUltrathinkText>[1]["styles"];
+    resolveFilePath: (path: string) => string | null;
+    openFile: (path: string) => boolean;
+  },
+): React.ReactNode {
+  const matches = detectFileReferences(text).flatMap((match) => {
+    const resolvedPath = options.resolveFilePath(match.path);
+    return resolvedPath ? [{ ...match, resolvedPath }] : [];
+  });
+  if (matches.length === 0) {
+    return renderUltrathinkText(text, options);
+  }
+
+  const nodes: React.ReactNode[] = [];
+  let cursor = 0;
+  for (const match of matches) {
+    if (match.start > cursor) {
+      nodes.push(
+        <React.Fragment key={`text-${cursor}`}>
+          {renderUltrathinkText(text.slice(cursor, match.start), options)}
+        </React.Fragment>,
+      );
+    }
+    const label = match.text ?? match.path;
+    nodes.push(
+      <button
+        type="button"
+        className="cc-file-path-link"
+        title={match.resolvedPath}
+        key={`file-${match.start}-${match.end}`}
+        onClick={() => options.openFile(match.resolvedPath)}
+      >
+        {label}
+      </button>,
+    );
+    cursor = match.end;
+  }
+  if (cursor < text.length) {
+    nodes.push(
+      <React.Fragment key={`text-${cursor}`}>
+        {renderUltrathinkText(text.slice(cursor), options)}
+      </React.Fragment>,
+    );
+  }
+  return nodes;
+}

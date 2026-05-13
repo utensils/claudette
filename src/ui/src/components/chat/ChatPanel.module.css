@@ -5,6 +5,26 @@
   position: relative;
 }
 
+.panel :global(.cc-file-path-link) {
+  color: var(--text-primary);
+  background: transparent;
+  border: 0;
+  padding: 0;
+  font: inherit;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  line-height: inherit;
+  text-decoration: underline;
+  text-decoration-color: rgba(var(--accent-primary-rgb), 0.35);
+  text-underline-offset: 2px;
+  cursor: pointer;
+  word-break: break-all;
+}
+
+.panel :global(.cc-file-path-link:hover) {
+  color: var(--accent-primary);
+  text-decoration-color: currentColor;
+}
+
 /* Filler shown while a workspace's sessions are still loading from the
    backend (typical window: 50-150ms on a sidebar click, longer on first
    launch). Holds the content area open with the theme background so the
@@ -829,6 +849,10 @@
   overflow-wrap: anywhere;
   white-space: pre-wrap;
   color: var(--accent-primary);
+}
+
+.inlineEditPathButton {
+  text-align: left;
 }
 
 .changeStats {

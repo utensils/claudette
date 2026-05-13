@@ -2,9 +2,17 @@ import { describe, it, expect } from "vitest";
 
 import {
   decodeFilePathHref,
+  decodeLocalhostFileUrl,
+  decodeLocalhostFileUrlTarget,
+  detectFileReferences,
   detectFilePaths,
   encodeFilePathHref,
   FILE_PATH_SCHEME,
+  formatFilePathDisplayLabel,
+  isExplicitFilePathTarget,
+  isLikelyRelativeFileReference,
+  parseFilePathTarget,
+  stripFileLineSuffix,
 } from "./filePathLinks";
 
 describe("detectFilePaths — POSIX", () => {
@@ -92,6 +100,164 @@ describe("detectFilePaths — non-matches and false-positive guards", () => {
   it("ignores leading char that suggests middle-of-token", () => {
     // Preceded by a word char → not a path start
     expect(detectFilePaths("abc/def/ghi")).toEqual([]);
+  });
+});
+
+describe("relative file references", () => {
+  it("recognizes common bare filenames agents mention in prose", () => {
+    expect(detectFileReferences("Edit README.md next")).toEqual([
+      { start: 5, end: 14, path: "README.md" },
+    ]);
+    expect(detectFileReferences("Create CLAUDETTE_TEST.md")).toEqual([
+      { start: 7, end: 24, path: "CLAUDETTE_TEST.md" },
+    ]);
+  });
+
+  it("recognizes leading at-sign file mentions without accepting emails", () => {
+    expect(detectFileReferences("make a simple edit to @README.md")).toEqual([
+      { start: 22, end: 32, path: "README.md", text: "@README.md" },
+    ]);
+    expect(isLikelyRelativeFileReference("@README.md")).toBe(true);
+    expect(detectFileReferences("email dev@example.com")).toEqual([]);
+    expect(isLikelyRelativeFileReference("dev@example.com")).toBe(false);
+  });
+
+  it("recognizes nested workspace-relative source paths", () => {
+    expect(detectFileReferences("open src/ui/src/utils/markdown.ts")).toEqual([
+      {
+        start: 5,
+        end: 33,
+        path: "src/ui/src/utils/markdown.ts",
+      },
+    ]);
+    expect(detectFileReferences("open ./src/main.rs")).toEqual([
+      {
+        start: 5,
+        end: 18,
+        path: "./src/main.rs",
+      },
+    ]);
+  });
+
+  it("keeps line and range suffixes on relative file references", () => {
+    expect(detectFileReferences("open src/main.rs:10")).toEqual([
+      {
+        start: 5,
+        end: 19,
+        path: "src/main.rs:10",
+      },
+    ]);
+    expect(detectFileReferences("see README.md:2:3-4:5")).toEqual([
+      {
+        start: 4,
+        end: 21,
+        path: "README.md:2:3-4:5",
+      },
+    ]);
+    expect(isLikelyRelativeFileReference("README.md:10")).toBe(true);
+  });
+
+  it("does not mistake domain-like text for a workspace file", () => {
+    expect(detectFileReferences("visit example.com today")).toEqual([]);
+    expect(isLikelyRelativeFileReference("example.com")).toBe(false);
+  });
+
+  it("does not match relative file references inside URLs or emails", () => {
+    expect(detectFileReferences("https://example.com/README.md")).toEqual([]);
+    expect(detectFileReferences("email dev@example.com")).toEqual([]);
+  });
+});
+
+describe("localhost file URL decoding", () => {
+  it("decodes Codex-style localhost URLs to file paths and strips line suffixes", () => {
+    expect(
+      decodeLocalhostFileUrl(
+        "http://localhost:14254/Users/jamesbrink/project/CLAUDETTE_TEST.md:1",
+      ),
+    ).toBe("/Users/jamesbrink/project/CLAUDETTE_TEST.md");
+    expect(
+      decodeLocalhostFileUrlTarget(
+        "http://localhost:14254/Users/jamesbrink/project/CLAUDETTE_TEST.md:1",
+      ),
+    ).toBe("/Users/jamesbrink/project/CLAUDETTE_TEST.md:1");
+  });
+
+  it("decodes localhost SVG file URLs with line suffixes", () => {
+    expect(
+      decodeLocalhostFileUrlTarget(
+        "http://localhost:14254/Users/jamesbrink/.claudette/workspaces/claudex/copper-ginger/simple-wave.svg:1",
+      ),
+    ).toBe(
+      "/Users/jamesbrink/.claudette/workspaces/claudex/copper-ginger/simple-wave.svg:1",
+    );
+  });
+
+  it("decodes explicit localhost file URLs without needing a known extension", () => {
+    expect(
+      decodeLocalhostFileUrlTarget(
+        "http://localhost:14254/Users/jamesbrink/.claudette/workspaces/claudex/copper-ginger/generated.assetbundle:12",
+      ),
+    ).toBe(
+      "/Users/jamesbrink/.claudette/workspaces/claudex/copper-ginger/generated.assetbundle:12",
+    );
+    expect(isExplicitFilePathTarget("/Users/me/project/generated.assetbundle:12")).toBe(
+      true,
+    );
+  });
+
+  it("decodes loopback Windows paths", () => {
+    expect(
+      decodeLocalhostFileUrl("http://127.0.0.1:14254/C:/Users/me/project/app.ts:12:3"),
+    ).toBe("C:/Users/me/project/app.ts");
+  });
+
+  it("does not treat normal localhost app routes as file paths", () => {
+    expect(decodeLocalhostFileUrl("http://localhost:14254/workspaces/current")).toBeNull();
+    expect(decodeLocalhostFileUrl("http://localhost:3000/index.html")).toBeNull();
+  });
+
+  it("does not decode non-localhost URLs as files", () => {
+    expect(
+      decodeLocalhostFileUrl("https://example.com/Users/me/project/app.ts:1"),
+    ).toBeNull();
+  });
+
+  it("strips line and column suffixes from file targets", () => {
+    expect(stripFileLineSuffix("/tmp/file.ts:10")).toBe("/tmp/file.ts");
+    expect(stripFileLineSuffix("/tmp/file.ts:10:2")).toBe("/tmp/file.ts");
+  });
+
+  it("parses line and range suffixes into file targets", () => {
+    expect(parseFilePathTarget("src/main.ts:10")).toEqual({
+      path: "src/main.ts",
+      startLine: 10,
+      endLine: 10,
+      startColumn: undefined,
+      endColumn: undefined,
+    });
+    expect(parseFilePathTarget("src/main.ts:10:2-12:8")).toEqual({
+      path: "src/main.ts",
+      startLine: 10,
+      startColumn: 2,
+      endLine: 12,
+      endColumn: 8,
+    });
+  });
+
+  it("formats decoded file targets as compact inline file labels", () => {
+    expect(
+      formatFilePathDisplayLabel(
+        "/Users/jamesbrink/.claudette/workspaces/claudex/copper-ginger/README.md:8",
+      ),
+    ).toBe("README.md:8");
+    expect(
+      formatFilePathDisplayLabel(
+        "/Users/jamesbrink/.claudette/workspaces/claudex/copper-ginger/website/guide/quickstart.md:6",
+      ),
+    ).toBe("website/guide/quickstart.md:6");
+    expect(formatFilePathDisplayLabel("/tmp/report.md:2:4-5:8")).toBe(
+      "report.md:2:4-5:8",
+    );
   });
 });
 

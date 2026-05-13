@@ -4,6 +4,7 @@ import type { Components } from "react-markdown";
 import {
   preprocessContent,
   MARKDOWN_COMPONENTS,
+  MarkdownFileOpenContext,
   REHYPE_PLUGINS,
   REMARK_PLUGINS,
   safeUrlTransform,
@@ -37,11 +38,15 @@ const COMPONENTS: Components = {
  */
 export const MessageMarkdown = memo(function MessageMarkdown({
   content,
+  onOpenFile,
+  resolveFilePath,
 }: {
   content: string;
+  onOpenFile?: (path: string) => boolean;
+  resolveFilePath?: (path: string) => string | null;
 }) {
   const preprocessed = useMemo(() => preprocessContent(content), [content]);
-  return (
+  const body = (
     <div className={styles.body}>
       <Markdown
         remarkPlugins={REMARK_PLUGINS}
@@ -52,5 +57,16 @@ export const MessageMarkdown = memo(function MessageMarkdown({
         {preprocessed}
       </Markdown>
     </div>
+  );
+  if (!onOpenFile && !resolveFilePath) return body;
+  return (
+    <MarkdownFileOpenContext.Provider
+      value={{
+        openFile: onOpenFile ?? (() => false),
+        resolveFilePath,
+      }}
+    >
+      {body}
+    </MarkdownFileOpenContext.Provider>
   );
 });

@@ -1,9 +1,9 @@
 /**
- * Detect absolute file paths inside a plain-text string so a markdown
+ * Detect file paths inside a plain-text string so a markdown
  * post-processor can wrap them in clickable links. The link target uses
  * a custom `claudettepath:` URI so the markdown `<a>` override knows to
- * route the click into a Tauri command instead of treating it as a web
- * URL — and so rehype-sanitize doesn't strip it as an unsafe protocol
+ * route the click into the workspace file opener instead of treating it as
+ * a web URL — and so rehype-sanitize doesn't strip it as an unsafe protocol
  * (we extend the allowed-scheme list in `markdown.ts`).
  *
  * Recognized:
@@ -11,13 +11,13 @@
  *  - POSIX home          `~/Downloads/foo.csv`
  *  - Windows drive       `C:\Users\foo\bar.csv`, `C:/Users/foo/bar.csv`
  *  - Windows UNC         `\\server\share\file.txt`
+ *  - Relative files      `README.md`, `src/main.rs`, `package.json`
  *
  * Deliberately ignored:
- *  - Bare relative paths (`foo/bar.csv`) — too ambiguous, false-positives
- *    with sentence fragments, and we have no anchor to resolve them
- *    against on the host side.
  *  - URLs (`https://...`) — the leading `://` lookbehind keeps the regex
  *    from matching the `/example.com/...` substring inside one.
+ *  - Domain-like prose (`example.com`) — common URL-ish hostnames are not
+ *    workspace files.
  */
 
 export interface FilePathMatch {
@@ -27,6 +27,16 @@ export interface FilePathMatch {
   end: number;
   /** The matched path with surrounding sentence punctuation stripped. */
   path: string;
+  /** Optional source text to display when it differs from the file target. */
+  text?: string;
+}
+
+export interface FilePathTarget {
+  path: string;
+  startLine?: number;
+  startColumn?: number;
+  endLine?: number;
+  endColumn?: number;
 }
 
 /**
@@ -50,13 +60,20 @@ export interface FilePathMatch {
 const PATH_REGEX =
   /(?:[A-Za-z]:[\\/][^\s<>"|*?]+|\\\\[^\s<>"|*?\\/]+\\[^\s<>"|*?\\/]+(?:\\[^\s<>"|*?\\/]+)*|~?\/[^\s<>"|*?]+)/g;
 
+const RELATIVE_FILE_REGEX =
+  /@?(?:\.{1,2}[\\/])?(?:[A-Za-z0-9_$+.-]+[\\/])*[A-Za-z0-9_$+.-]+(?:\.[A-Za-z0-9][A-Za-z0-9+-]{0,15})+(?::\d+(?::\d+)?(?:-\d+(?::\d+)?)?)?/g;
+
 /**
  * Characters that, if they sit immediately before a regex match, indicate
  * the match started in the middle of an existing token (URL scheme tail,
  * another path, hyphenated word). Mirrors the old lookbehind's character
  * class: word chars, colon, dot, both slash kinds, hyphen.
  */
-const FORBIDDEN_PREV_CHAR_REGEX = /[\w:.\\/-]/;
+const FORBIDDEN_PREV_CHAR_REGEX = /[\w:.\\@-]/;
+
+function isForbiddenPreviousChar(char: string): boolean {
+  return char === "/" || FORBIDDEN_PREV_CHAR_REGEX.test(char);
+}
 
 /**
  * Sentence-final characters that tend to follow a path in prose but are
@@ -73,6 +90,111 @@ const TRAILING_PUNCT_REGEX = /[.,;:!?)\]'"`]+$/;
  *  reject legitimate two-segment paths like `/etc` or `~/foo`. */
 const MIN_PATH_LENGTH = 3;
 
+const COMMON_HOSTLIKE_EXTENSIONS = new Set([
+  "app",
+  "biz",
+  "co",
+  "com",
+  "dev",
+  "io",
+  "net",
+  "org",
+]);
+
+const KNOWN_FILE_EXTENSIONS = new Set([
+  "astro",
+  "bash",
+  "c",
+  "cc",
+  "cfg",
+  "clj",
+  "cljs",
+  "cmake",
+  "conf",
+  "cpp",
+  "cs",
+  "css",
+  "csv",
+  "cts",
+  "cu",
+  "cxx",
+  "dart",
+  "diff",
+  "dockerignore",
+  "env",
+  "erb",
+  "fish",
+  "go",
+  "graphql",
+  "h",
+  "hpp",
+  "hs",
+  "html",
+  "java",
+  "jl",
+  "js",
+  "json",
+  "jsx",
+  "kt",
+  "kts",
+  "less",
+  "lua",
+  "m",
+  "md",
+  "mdx",
+  "mjs",
+  "mm",
+  "mts",
+  "nix",
+  "patch",
+  "php",
+  "pl",
+  "plist",
+  "proto",
+  "py",
+  "r",
+  "rb",
+  "rs",
+  "sass",
+  "scala",
+  "scss",
+  "sh",
+  "sql",
+  "svelte",
+  "svg",
+  "swift",
+  "toml",
+  "tsx",
+  "ts",
+  "txt",
+  "vue",
+  "xml",
+  "yaml",
+  "yml",
+  "zig",
+  "zsh",
+]);
+
+const KNOWN_FILENAMES = new Set([
+  ".env",
+  ".gitignore",
+  ".npmrc",
+  ".prettierrc",
+  "cargo.lock",
+  "cargo.toml",
+  "dockerfile",
+  "justfile",
+  "makefile",
+  "package-lock.json",
+  "package.json",
+  "pnpm-lock.yaml",
+  "readme",
+  "readme.md",
+  "tsconfig.json",
+  "vite.config.ts",
+  "yarn.lock",
+]);
+
 export function detectFilePaths(text: string): FilePathMatch[] {
   const matches: FilePathMatch[] = [];
   for (const m of text.matchAll(PATH_REGEX)) {
@@ -80,7 +202,7 @@ export function detectFilePaths(text: string): FilePathMatch[] {
     // Lookbehind-equivalent guard: skip matches that started in the
     // middle of another token. See PATH_REGEX comment for why this is
     // a JS check rather than a regex lookbehind.
-    if (m.index > 0 && FORBIDDEN_PREV_CHAR_REGEX.test(text[m.index - 1])) {
+    if (m.index > 0 && isForbiddenPreviousChar(text[m.index - 1])) {
       continue;
     }
     const raw = m[0];
@@ -93,6 +215,209 @@ export function detectFilePaths(text: string): FilePathMatch[] {
     });
   }
   return matches;
+}
+
+export function isLikelyRelativeFileReference(value: string): boolean {
+  const rawCandidate = value.trim().replace(TRAILING_PUNCT_REGEX, "");
+  const candidate = parseFilePathTarget(stripMentionPrefix(rawCandidate)).path;
+  if (!candidate || candidate.length < MIN_PATH_LENGTH) return false;
+  if (/^[a-z][a-z0-9+.-]*:/i.test(candidate)) return false;
+  if (/^[\\/]|^[A-Za-z]:[\\/]/.test(candidate)) return false;
+  if (candidate.includes("://") || candidate.includes("@")) return false;
+
+  const normalized = candidate.replace(/\\/g, "/").replace(/^\.\//, "");
+  if (
+    normalized === "." ||
+    normalized === ".." ||
+    normalized.startsWith("../") ||
+    normalized.includes("/../")
+  ) {
+    return false;
+  }
+
+  const parts = normalized.split("/");
+  if (parts.some((part) => !part || part === "." || part === "..")) {
+    return false;
+  }
+
+  const basename = parts[parts.length - 1].toLowerCase();
+  if (KNOWN_FILENAMES.has(basename)) return true;
+
+  const dot = basename.lastIndexOf(".");
+  if (dot <= 0 || dot === basename.length - 1) return false;
+  const ext = basename.slice(dot + 1);
+  if (COMMON_HOSTLIKE_EXTENSIONS.has(ext) && parts.length === 1) return false;
+  return KNOWN_FILE_EXTENSIONS.has(ext);
+}
+
+function stripMentionPrefix(value: string): string {
+  return value.startsWith("@") ? value.slice(1) : value;
+}
+
+export function parseFilePathTarget(path: string): FilePathTarget {
+  const match = path.match(/:(\d+)(?::(\d+))?(?:-(\d+)(?::(\d+))?)?$/);
+  if (!match) return { path };
+  const startLine = Number.parseInt(match[1], 10);
+  const startColumn = match[2] ? Number.parseInt(match[2], 10) : undefined;
+  const endLine = match[3] ? Number.parseInt(match[3], 10) : startLine;
+  const endColumn = match[4] ? Number.parseInt(match[4], 10) : undefined;
+  if (!Number.isFinite(startLine) || startLine < 1) return { path };
+  return {
+    path: path.slice(0, match.index),
+    startLine,
+    startColumn,
+    endLine,
+    endColumn,
+  };
+}
+
+export function stripFileLineSuffix(path: string): string {
+  return parseFilePathTarget(path).path;
+}
+
+export function formatFilePathDisplayLabel(path: string): string {
+  const target = parseFilePathTarget(path);
+  const normalizedPath = target.path.replace(/\\/g, "/");
+  const workspaceRelativeMatch = normalizedPath.match(
+    /\/\.claudette\/workspaces\/[^/]+\/[^/]+\/(.+)$/,
+  );
+  const displayPath =
+    workspaceRelativeMatch?.[1] ??
+    normalizedPath.split("/").filter(Boolean).pop() ??
+    normalizedPath;
+  const rangeSuffix = formatFilePathRangeSuffix(target);
+  return `${displayPath}${rangeSuffix}`;
+}
+
+function formatFilePathRangeSuffix(target: FilePathTarget): string {
+  if (typeof target.startLine !== "number") return "";
+  let suffix = `:${target.startLine}`;
+  if (typeof target.startColumn === "number") {
+    suffix += `:${target.startColumn}`;
+  }
+  if (
+    typeof target.endLine === "number" &&
+    (target.endLine !== target.startLine ||
+      typeof target.endColumn === "number")
+  ) {
+    suffix += `-${target.endLine}`;
+    if (typeof target.endColumn === "number") {
+      suffix += `:${target.endColumn}`;
+    }
+  }
+  return suffix;
+}
+
+export function isLikelyFilePathTarget(value: string): boolean {
+  const candidate = stripFileLineSuffix(value.trim().replace(TRAILING_PUNCT_REGEX, ""));
+  if (!candidate || candidate.length < MIN_PATH_LENGTH) return false;
+  if (isLikelyRelativeFileReference(candidate)) return true;
+
+  const normalized = candidate.replace(/\\/g, "/");
+  const absoluteish =
+    normalized.startsWith("/") ||
+    normalized.startsWith("~/") ||
+    /^[A-Za-z]:\//.test(normalized);
+  if (!absoluteish) return false;
+  const basename = normalized.split("/").pop()?.toLowerCase() ?? "";
+  if (KNOWN_FILENAMES.has(basename)) return true;
+  const dot = basename.lastIndexOf(".");
+  if (dot <= 0 || dot === basename.length - 1) return false;
+  return KNOWN_FILE_EXTENSIONS.has(basename.slice(dot + 1));
+}
+
+export function isExplicitFilePathTarget(value: string): boolean {
+  const candidate = value.trim().replace(TRAILING_PUNCT_REGEX, "");
+  if (!candidate || candidate.length < MIN_PATH_LENGTH) return false;
+
+  const parsed = parseFilePathTarget(candidate);
+  const normalized = parsed.path.replace(/\\/g, "/");
+  if (!isKnownLocalPathRoot(normalized)) return false;
+
+  const basename = normalized.split("/").filter(Boolean).pop()?.toLowerCase();
+  if (!basename || basename === "." || basename === "..") return false;
+  if (KNOWN_FILENAMES.has(basename)) return true;
+  if (typeof parsed.startLine === "number") return true;
+  return basename.includes(".");
+}
+
+export function decodeLocalhostFileUrl(href: string): string | null {
+  const target = decodeLocalhostFileUrlTarget(href);
+  return target ? stripFileLineSuffix(target) : null;
+}
+
+export function decodeLocalhostFileUrlTarget(href: string): string | null {
+  let parsed: URL;
+  try {
+    parsed = new URL(href);
+  } catch {
+    return null;
+  }
+  if (!/^https?:$/.test(parsed.protocol)) return null;
+  const hostname = parsed.hostname.toLowerCase();
+  if (
+    hostname !== "localhost" &&
+    hostname !== "127.0.0.1" &&
+    hostname !== "[::1]" &&
+    hostname !== "::1"
+  ) {
+    return null;
+  }
+
+  let pathname: string;
+  try {
+    pathname = decodeURI(parsed.pathname);
+  } catch {
+    pathname = parsed.pathname;
+  }
+  const candidate =
+    /^\/[A-Za-z]:[\\/]/.test(pathname) ? pathname.slice(1) : pathname;
+  return isExplicitFilePathTarget(candidate) ? candidate : null;
+}
+
+function isKnownLocalPathRoot(normalizedPath: string): boolean {
+  if (
+    normalizedPath.startsWith("~/") ||
+    /^[A-Za-z]:\//.test(normalizedPath) ||
+    /^\/\/[^/]+\/[^/]+/.test(normalizedPath)
+  ) {
+    return true;
+  }
+  return /^\/(?:Users|home|tmp|var|private|Volumes|workspaces|workspace)\//.test(
+    normalizedPath,
+  );
+}
+
+export function detectFileReferences(text: string): FilePathMatch[] {
+  const absoluteMatches = detectFilePaths(text);
+  const matches: FilePathMatch[] = [...absoluteMatches];
+
+  for (const m of text.matchAll(RELATIVE_FILE_REGEX)) {
+    if (m.index === undefined) continue;
+    if (m.index > 0 && isForbiddenPreviousChar(text[m.index - 1])) {
+      continue;
+    }
+    if (
+      absoluteMatches.some(
+        (absolute) => m.index! >= absolute.start && m.index! < absolute.end,
+      )
+    ) {
+      continue;
+    }
+
+    const raw = m[0];
+    const stripped = raw.replace(TRAILING_PUNCT_REGEX, "");
+    if (!isLikelyRelativeFileReference(stripped)) continue;
+    const path = stripMentionPrefix(stripped);
+    matches.push({
+      start: m.index,
+      end: m.index + stripped.length,
+      path,
+      ...(path === stripped ? {} : { text: stripped }),
+    });
+  }
+
+  return matches.sort((a, b) => a.start - b.start);
 }
 
 /** URI scheme used by the markdown autolinker to mark its synthesized

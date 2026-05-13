@@ -8,6 +8,7 @@ function reset() {
   useAppStore.setState({
     fileTabsByWorkspace: {},
     activeFileTabByWorkspace: {},
+    fileRevealTargetByWorkspace: {},
     fileBuffers: {},
     allFilesExpandedDirsByWorkspace: {},
     allFilesSelectedPathByWorkspace: {},
@@ -49,6 +50,44 @@ describe("file path store updates", () => {
     expect(state.tabOrderByWorkspace[WS]).toEqual([
       { kind: "file", path: "src/main.ts" },
     ]);
+  });
+
+  it("stores a one-shot reveal target when opening a file tab with a line range", () => {
+    useAppStore.getState().openFileTab(WS, "README.md", {
+      startLine: 4,
+      endLine: 8,
+      startColumn: 2,
+      endColumn: 5,
+    });
+
+    const state = useAppStore.getState();
+    expect(state.fileTabsByWorkspace[WS]).toEqual(["README.md"]);
+    expect(state.activeFileTabByWorkspace[WS]).toBe("README.md");
+    expect(state.fileRevealTargetByWorkspace[WS]).toEqual({
+      path: "README.md",
+      startLine: 4,
+      endLine: 8,
+      startColumn: 2,
+      endColumn: 5,
+      nonce: 1,
+    });
+  });
+
+  it("clears a reveal target only when the consumed nonce still matches", () => {
+    useAppStore.getState().openFileTab(WS, "README.md", {
+      startLine: 4,
+      endLine: 4,
+    });
+    useAppStore.getState().clearFileRevealTarget(WS, 0);
+    expect(useAppStore.getState().fileRevealTargetByWorkspace[WS]).toEqual({
+      path: "README.md",
+      startLine: 4,
+      endLine: 4,
+      nonce: 1,
+    });
+
+    useAppStore.getState().clearFileRevealTarget(WS, 1);
+    expect(useAppStore.getState().fileRevealTargetByWorkspace[WS]).toBeNull();
   });
 
   it("renames child file tabs when a folder is renamed", () => {
@@ -104,6 +143,57 @@ describe("file path store updates", () => {
     expect(state.fileTabsByWorkspace[WS]).toEqual(["a.ts", "b.ts"]);
     expect(state.activeFileTabByWorkspace[WS]).toBe("b.ts");
     expect(state.fileBuffers[`${WS}:c.ts`]).toBeUndefined();
+  });
+
+  it("clears closed file metadata so the same file can reopen cleanly", () => {
+    useAppStore.setState({
+      tabOrderByWorkspace: {
+        [WS]: [
+          { kind: "session", sessionId: "session-1" },
+          { kind: "file", path: "README.md" },
+        ],
+      },
+    });
+    useAppStore.getState().openFileTab(WS, "README.md", {
+      startLine: 8,
+      endLine: 8,
+    });
+    useAppStore.getState().setFileBufferLoaded(WS, "README.md", {
+      baseline: "hello",
+      isBinary: false,
+      sizeBytes: 5,
+      truncated: false,
+      imageBytesB64: null,
+    });
+
+    useAppStore.getState().closeFileTab(WS, "README.md");
+
+    expect(useAppStore.getState().fileTabsByWorkspace[WS]).toEqual([]);
+    expect(useAppStore.getState().activeFileTabByWorkspace[WS]).toBeNull();
+    expect(useAppStore.getState().fileBuffers[`${WS}:README.md`]).toBeUndefined();
+    expect(useAppStore.getState().fileRevealTargetByWorkspace[WS]).toBeNull();
+    expect(useAppStore.getState().tabOrderByWorkspace[WS]).toEqual([
+      { kind: "session", sessionId: "session-1" },
+    ]);
+
+    useAppStore.getState().openFileTab(WS, "README.md", {
+      startLine: 8,
+      endLine: 8,
+    });
+
+    const state = useAppStore.getState();
+    expect(state.fileTabsByWorkspace[WS]).toEqual(["README.md"]);
+    expect(state.activeFileTabByWorkspace[WS]).toBe("README.md");
+    expect(state.fileBuffers[`${WS}:README.md`]).toMatchObject({
+      loaded: false,
+      buffer: "",
+      baseline: "",
+    });
+    expect(state.fileRevealTargetByWorkspace[WS]).toMatchObject({
+      path: "README.md",
+      startLine: 8,
+      endLine: 8,
+    });
   });
 
   it("removes all child file tabs when a folder is deleted", () => {

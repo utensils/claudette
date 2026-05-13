@@ -9,6 +9,9 @@ import type { ChatMessage } from "../../types/chat";
 import { MessagesWithTurns } from "./MessagesWithTurns";
 
 const serviceMocks = vi.hoisted(() => ({
+  invoke: vi.fn(() => Promise.resolve()),
+  listWorkspaceFiles: vi.fn(() => Promise.resolve([])),
+  openUrl: vi.fn(() => Promise.resolve()),
   loadAttachmentData: vi.fn(),
   getClaudeAuthStatus: vi.fn(() =>
     Promise.resolve({
@@ -27,6 +30,10 @@ const serviceMocks = vi.hoisted(() => ({
 
 vi.mock("@tauri-apps/api/event", () => ({
   listen: vi.fn(() => Promise.resolve(() => {})),
+}));
+
+vi.mock("@tauri-apps/api/core", () => ({
+  invoke: serviceMocks.invoke,
 }));
 
 vi.mock("../../services/tauri", async (importOriginal) => {
@@ -102,6 +109,10 @@ async function render(node: React.ReactNode): Promise<HTMLElement> {
 }
 
 beforeEach(() => {
+  serviceMocks.invoke.mockClear();
+  serviceMocks.listWorkspaceFiles.mockClear();
+  serviceMocks.listWorkspaceFiles.mockResolvedValue([]);
+  serviceMocks.openUrl.mockClear();
   serviceMocks.claudeAuthLogin.mockClear();
   serviceMocks.getClaudeAuthStatus.mockClear();
   serviceMocks.getClaudeAuthStatus.mockResolvedValue({
@@ -139,6 +150,8 @@ beforeEach(() => {
     resolvedClaudeAuthFailureMessageId: null,
     diffFiles: [],
     diffMergeBase: "base-sha",
+    fileTabsByWorkspace: {},
+    activeFileTabByWorkspace: {},
   });
 });
 
@@ -250,6 +263,377 @@ describe("MessagesWithTurns edit summaries", () => {
     expect(useAppStore.getState().claudeAuthFailure).toEqual({
       messageId: "assistant-1",
       error: "Failed to authenticate. API Error: 401 Invalid authentication credentials",
+    });
+  });
+
+  it("opens agent-mentioned file names in the Monaco file tab", async () => {
+    serviceMocks.listWorkspaceFiles.mockResolvedValue([
+      { path: "README.md", is_directory: false },
+    ] as never);
+    useAppStore.setState({
+      fileTreeRefreshNonceByWorkspace: { [WORKSPACE_ID]: 1 },
+    });
+    const messages = [
+      message("user-1", "User", "what changed?"),
+      message("assistant-1", "Assistant", "I updated README.md for you."),
+    ];
+
+    const container = await render(
+      <MessagesWithTurns
+        messages={messages}
+        workspaceId={WORKSPACE_ID}
+        sessionId={SESSION_ID}
+        isRunning={false}
+        searchQuery=""
+        toolDisplayMode="grouped"
+      />,
+    );
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    const link = Array.from(container.querySelectorAll("button")).find(
+      (item) => item.textContent === "README.md",
+    );
+    expect(link).toBeTruthy();
+
+    await act(async () => {
+      link?.dispatchEvent(
+        new MouseEvent("click", { bubbles: true, cancelable: true }),
+      );
+    });
+
+    const state = useAppStore.getState();
+    expect(state.fileTabsByWorkspace[WORKSPACE_ID]).toEqual(["README.md"]);
+    expect(state.activeFileTabByWorkspace[WORKSPACE_ID]).toBe("README.md");
+  });
+
+  it("does not link unresolved agent-mentioned file names", async () => {
+    serviceMocks.listWorkspaceFiles.mockResolvedValue([
+      { path: "CHANGELOG.md", is_directory: false },
+    ] as never);
+    useAppStore.setState({
+      fileTreeRefreshNonceByWorkspace: { [WORKSPACE_ID]: 2 },
+    });
+    const messages = [
+      message("user-1", "User", "what changed?"),
+      message("assistant-1", "Assistant", "I updated README.md for you."),
+    ];
+
+    const container = await render(
+      <MessagesWithTurns
+        messages={messages}
+        workspaceId={WORKSPACE_ID}
+        sessionId={SESSION_ID}
+        isRunning={false}
+        searchQuery=""
+        toolDisplayMode="grouped"
+      />,
+    );
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    const link = Array.from(container.querySelectorAll("button")).find(
+      (item) => item.textContent === "README.md",
+    );
+    expect(link).toBeUndefined();
+    expect(container.textContent).toContain("README.md");
+  });
+
+  it("opens resolved at-sign file mentions in user messages", async () => {
+    serviceMocks.listWorkspaceFiles.mockResolvedValue([
+      { path: "README.md", is_directory: false },
+    ] as never);
+    useAppStore.setState({
+      fileTreeRefreshNonceByWorkspace: { [WORKSPACE_ID]: 1 },
+    });
+    const messages = [
+      message("user-1", "User", "make a simple edit to @README.md"),
+    ];
+
+    const container = await render(
+      <MessagesWithTurns
+        messages={messages}
+        workspaceId={WORKSPACE_ID}
+        sessionId={SESSION_ID}
+        isRunning={false}
+        searchQuery=""
+        toolDisplayMode="grouped"
+      />,
+    );
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    const link = Array.from(container.querySelectorAll("button")).find(
+      (item) => item.textContent === "@README.md",
+    );
+    expect(link).toBeTruthy();
+
+    await act(async () => {
+      link?.dispatchEvent(
+        new MouseEvent("click", { bubbles: true, cancelable: true }),
+      );
+    });
+
+    const state = useAppStore.getState();
+    expect(state.fileTabsByWorkspace[WORKSPACE_ID]).toEqual(["README.md"]);
+    expect(state.activeFileTabByWorkspace[WORKSPACE_ID]).toBe("README.md");
+  });
+
+  it("does not link unresolved at-sign mentions in user messages", async () => {
+    serviceMocks.listWorkspaceFiles.mockResolvedValue([
+      { path: "README.md", is_directory: false },
+    ] as never);
+    useAppStore.setState({
+      fileTreeRefreshNonceByWorkspace: { [WORKSPACE_ID]: 2 },
+    });
+    const messages = [
+      message("user-1", "User", "ask @alice about dev@example.com"),
+    ];
+
+    const container = await render(
+      <MessagesWithTurns
+        messages={messages}
+        workspaceId={WORKSPACE_ID}
+        sessionId={SESSION_ID}
+        isRunning={false}
+        searchQuery=""
+        toolDisplayMode="grouped"
+      />,
+    );
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(container.querySelector("button.cc-file-path-link")).toBeNull();
+  });
+
+  it("does not open home-relative file links as Monaco tabs", async () => {
+    const messages = [
+      message("user-1", "User", "where is it?"),
+      message("assistant-1", "Assistant", "Saved to ~/Downloads/report.md."),
+    ];
+
+    const container = await render(
+      <MessagesWithTurns
+        messages={messages}
+        workspaceId={WORKSPACE_ID}
+        sessionId={SESSION_ID}
+        isRunning={false}
+        searchQuery=""
+        toolDisplayMode="grouped"
+      />,
+    );
+
+    const link = Array.from(container.querySelectorAll("button")).find(
+      (item) => item.textContent === "~/Downloads/report.md",
+    );
+    expect(link).toBeUndefined();
+
+    await act(async () => {
+      link?.dispatchEvent(
+        new MouseEvent("click", { bubbles: true, cancelable: true }),
+      );
+    });
+
+    const state = useAppStore.getState();
+    expect(state.fileTabsByWorkspace[WORKSPACE_ID]).toBeUndefined();
+    expect(serviceMocks.invoke).not.toHaveBeenCalledWith(
+      "open_in_editor",
+      expect.anything(),
+    );
+    expect(serviceMocks.openUrl).not.toHaveBeenCalled();
+  });
+
+  it("opens localhost file URLs from agent output in Monaco without navigating", async () => {
+    serviceMocks.listWorkspaceFiles.mockResolvedValue([
+      { path: "README.md", is_directory: false },
+    ] as never);
+    const worktreePath =
+      "/Users/jamesbrink/.claudette/workspaces/claudex/copper-ginger";
+    useAppStore.setState({
+      fileTreeRefreshNonceByWorkspace: { [WORKSPACE_ID]: 3 },
+      workspaces: [
+        {
+          ...useAppStore.getState().workspaces[0],
+          worktree_path: worktreePath,
+        },
+      ],
+    });
+    const messages = [
+      message("user-1", "User", "where did you write?"),
+      message(
+        "assistant-1",
+        "Assistant",
+        `Wrote http://localhost:14254${worktreePath}/README.md:8`,
+      ),
+    ];
+
+    const container = await render(
+      <MessagesWithTurns
+        messages={messages}
+        workspaceId={WORKSPACE_ID}
+        sessionId={SESSION_ID}
+        isRunning={false}
+        searchQuery=""
+        toolDisplayMode="grouped"
+      />,
+    );
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    const fileButton = Array.from(container.querySelectorAll("button")).find(
+      (item) => item.textContent?.includes("README.md"),
+    );
+    expect(fileButton).toBeTruthy();
+    expect(fileButton?.textContent).toBe("README.md:8");
+    expect(container.querySelector('a[href^="http://localhost:14254"]')).toBeNull();
+
+    await act(async () => {
+      fileButton?.dispatchEvent(
+        new MouseEvent("click", { bubbles: true, cancelable: true }),
+      );
+    });
+
+    const state = useAppStore.getState();
+    expect(state.fileTabsByWorkspace[WORKSPACE_ID]).toEqual(["README.md"]);
+    expect(state.activeFileTabByWorkspace[WORKSPACE_ID]).toBe("README.md");
+    expect(state.fileRevealTargetByWorkspace[WORKSPACE_ID]).toMatchObject({
+      path: "README.md",
+      startLine: 8,
+      endLine: 8,
+    });
+  });
+
+  it("opens multiple file links from one agent message without dropping prior tabs", async () => {
+    serviceMocks.listWorkspaceFiles.mockResolvedValue([
+      { path: "README.md", is_directory: false },
+      { path: "simple-wave.svg", is_directory: false },
+    ] as never);
+    const worktreePath =
+      "/Users/jamesbrink/.claudette/workspaces/claudex/copper-ginger";
+    useAppStore.setState({
+      fileTreeRefreshNonceByWorkspace: { [WORKSPACE_ID]: 4 },
+      workspaces: [
+        {
+          ...useAppStore.getState().workspaces[0],
+          worktree_path: worktreePath,
+        },
+      ],
+    });
+    const messages = [
+      message(
+        "assistant-1",
+        "Assistant",
+        `Edited http://localhost:14254${worktreePath}/README.md:8 and http://localhost:14254${worktreePath}/simple-wave.svg:1`,
+      ),
+    ];
+
+    const container = await render(
+      <MessagesWithTurns
+        messages={messages}
+        workspaceId={WORKSPACE_ID}
+        sessionId={SESSION_ID}
+        isRunning={false}
+        searchQuery=""
+        toolDisplayMode="grouped"
+      />,
+    );
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    const readmeButton = Array.from(container.querySelectorAll("button")).find(
+      (item) => item.textContent === "README.md:8",
+    );
+    const svgButton = Array.from(container.querySelectorAll("button")).find(
+      (item) => item.textContent === "simple-wave.svg:1",
+    );
+    expect(readmeButton).toBeTruthy();
+    expect(svgButton).toBeTruthy();
+
+    await act(async () => {
+      readmeButton?.dispatchEvent(
+        new MouseEvent("click", { bubbles: true, cancelable: true }),
+      );
+      svgButton?.dispatchEvent(
+        new MouseEvent("click", { bubbles: true, cancelable: true }),
+      );
+    });
+
+    const state = useAppStore.getState();
+    expect(state.fileTabsByWorkspace[WORKSPACE_ID]).toEqual([
+      "README.md",
+      "simple-wave.svg",
+    ]);
+    expect(state.activeFileTabByWorkspace[WORKSPACE_ID]).toBe("simple-wave.svg");
+    expect(state.fileRevealTargetByWorkspace[WORKSPACE_ID]).toMatchObject({
+      path: "simple-wave.svg",
+      startLine: 1,
+      endLine: 1,
+    });
+  });
+
+  it("reopens a chat file link after its Monaco tab was closed", async () => {
+    const worktreePath =
+      "/Users/jamesbrink/.claudette/workspaces/claudex/copper-ginger";
+    useAppStore.setState({
+      workspaces: [
+        {
+          ...useAppStore.getState().workspaces[0],
+          worktree_path: worktreePath,
+        },
+      ],
+    });
+    const messages = [
+      message(
+        "assistant-1",
+        "Assistant",
+        `See http://localhost:14254${worktreePath}/README.md:8`,
+      ),
+    ];
+
+    const container = await render(
+      <MessagesWithTurns
+        messages={messages}
+        workspaceId={WORKSPACE_ID}
+        sessionId={SESSION_ID}
+        isRunning={false}
+        searchQuery=""
+        toolDisplayMode="grouped"
+      />,
+    );
+
+    const fileButton = Array.from(container.querySelectorAll("button")).find(
+      (item) => item.textContent === "README.md:8",
+    );
+    expect(fileButton).toBeTruthy();
+
+    await act(async () => {
+      fileButton?.dispatchEvent(
+        new MouseEvent("click", { bubbles: true, cancelable: true }),
+      );
+    });
+    useAppStore.getState().closeFileTab(WORKSPACE_ID, "README.md");
+    expect(useAppStore.getState().fileTabsByWorkspace[WORKSPACE_ID]).toEqual([]);
+    expect(useAppStore.getState().activeFileTabByWorkspace[WORKSPACE_ID]).toBeNull();
+
+    await act(async () => {
+      fileButton?.dispatchEvent(
+        new MouseEvent("click", { bubbles: true, cancelable: true }),
+      );
+    });
+
+    const state = useAppStore.getState();
+    expect(state.fileTabsByWorkspace[WORKSPACE_ID]).toEqual(["README.md"]);
+    expect(state.activeFileTabByWorkspace[WORKSPACE_ID]).toBe("README.md");
+    expect(state.fileRevealTargetByWorkspace[WORKSPACE_ID]).toMatchObject({
+      path: "README.md",
+      startLine: 8,
+      endLine: 8,
     });
   });
 

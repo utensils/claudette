@@ -102,6 +102,13 @@ export function ChatPanel() {
       ? s.selectedSessionIdByWorkspaceId[s.selectedWorkspaceId] ?? null
       : null,
   );
+  const activeSessionIdsKey = useAppStore((s) =>
+    selectedWorkspaceId
+      ? (s.sessionsByWorkspace[selectedWorkspaceId] ?? [])
+          .map((session) => session.id)
+          .join("\0")
+      : "",
+  );
   const workspaces = useAppStore((s) => s.workspaces);
   const repositories = useAppStore((s) => s.repositories);
   const chatMessages = useAppStore((s) => s.chatMessages);
@@ -127,6 +134,8 @@ export function ChatPanel() {
   const setSlashCommandsCache = useAppStore((s) => s.setSlashCommands);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const processingRef = useRef<HTMLDivElement>(null);
+  const chatScrollTopBySessionRef = useRef(new Map<string, number>());
+  const restoringChatScrollSessionsRef = useRef(new Set<string>());
   const [error, setError] = useState<string | null>(null);
   const [isSteeringQueued, setIsSteeringQueued] = useState(false);
   const [pendingSteerContent, setPendingSteerContent] = useState<string | null>(null);
@@ -370,8 +379,13 @@ export function ChatPanel() {
   );
 
   // Sticky scroll: auto-follow when at bottom, stop when user scrolls up.
-  const { isAtBottom, scrollToBottom, handleContentChanged, suppressNextAutoScrollRef } =
-    useStickyScroll(messagesContainerRef);
+  const {
+    isAtBottom,
+    scrollToBottom,
+    restoreScrollPosition,
+    handleContentChanged,
+    suppressNextAutoScrollRef,
+  } = useStickyScroll(messagesContainerRef);
   usePreventScrollBounce(messagesContainerRef);
 
   // Memoize context value to avoid re-rendering StreamingMessage on every parent render.
@@ -379,6 +393,22 @@ export function ChatPanel() {
     () => ({ handleContentChanged, suppressNextAutoScrollRef }),
     [handleContentChanged, suppressNextAutoScrollRef],
   );
+
+  useEffect(() => {
+    const activeSessionIds = new Set(
+      activeSessionIdsKey ? activeSessionIdsKey.split("\0") : [],
+    );
+    for (const sessionId of chatScrollTopBySessionRef.current.keys()) {
+      if (!activeSessionIds.has(sessionId)) {
+        chatScrollTopBySessionRef.current.delete(sessionId);
+      }
+    }
+    for (const sessionId of restoringChatScrollSessionsRef.current.keys()) {
+      if (!activeSessionIds.has(sessionId)) {
+        restoringChatScrollSessionsRef.current.delete(sessionId);
+      }
+    }
+  }, [activeSessionIdsKey]);
 
   // Elapsed timer for running agent.
   const promptStartTime = useAppStore(
@@ -563,10 +593,68 @@ export function ChatPanel() {
     };
   }, [activeSessionId, selectedWorkspaceId, setChatMessages, setChatPagination, hydrateCompletedTurns]);
 
-  // Scroll to bottom unconditionally on session switch.
+  // Preserve chat position while moving between chat, Monaco, and diff views.
+  // Without this, opening a file link can snap long chats back to bottom.
   useEffect(() => {
-    if (activeSessionId) scrollToBottom();
-  }, [activeSessionId, scrollToBottom]);
+    if (!activeSessionId) return;
+    const savedScrollTop = chatScrollTopBySessionRef.current.get(activeSessionId);
+    if (savedScrollTop == null) {
+      restoringChatScrollSessionsRef.current.delete(activeSessionId);
+      scrollToBottom();
+      return;
+    }
+    restoringChatScrollSessionsRef.current.add(activeSessionId);
+    let cancelled = false;
+    let frameId: number | null = null;
+    let attempts = 0;
+    const restore = () => {
+      if (cancelled) return;
+      restoreScrollPosition(savedScrollTop);
+      attempts += 1;
+      const container = messagesContainerRef.current;
+      const maxScrollTop = container
+        ? Math.max(0, container.scrollHeight - container.clientHeight)
+        : 0;
+      const expectedTop = Math.min(savedScrollTop, maxScrollTop);
+      if (
+        attempts < 8 &&
+        container &&
+        Math.abs(container.scrollTop - expectedTop) > 1
+      ) {
+        frameId = requestAnimationFrame(restore);
+      } else {
+        restoringChatScrollSessionsRef.current.delete(activeSessionId);
+      }
+    };
+    frameId = requestAnimationFrame(restore);
+    return () => {
+      cancelled = true;
+      restoringChatScrollSessionsRef.current.delete(activeSessionId);
+      if (frameId !== null) cancelAnimationFrame(frameId);
+    };
+  }, [activeSessionId, restoreScrollPosition, scrollToBottom]);
+
+  useEffect(() => {
+    if (!activeSessionId) return;
+    const container = messagesContainerRef.current;
+    return () => {
+      if (
+        container &&
+        !restoringChatScrollSessionsRef.current.has(activeSessionId)
+      ) {
+        chatScrollTopBySessionRef.current.set(activeSessionId, container.scrollTop);
+        restoringChatScrollSessionsRef.current.add(activeSessionId);
+      }
+    };
+  }, [activeSessionId]);
+
+  const rememberChatScrollPosition = useCallback(() => {
+    if (!activeSessionId) return;
+    const container = messagesContainerRef.current;
+    if (!container) return;
+    chatScrollTopBySessionRef.current.set(activeSessionId, container.scrollTop);
+    restoringChatScrollSessionsRef.current.add(activeSessionId);
+  }, [activeSessionId]);
 
   // Load older messages when the user scrolls to the top of the message list.
   const hasMoreRef = useRef(false);
@@ -595,6 +683,15 @@ export function ChatPanel() {
     if (!container) return;
 
     const onScroll = () => {
+      if (
+        activeSessionIdRef.current &&
+        !restoringChatScrollSessionsRef.current.has(activeSessionIdRef.current)
+      ) {
+        chatScrollTopBySessionRef.current.set(
+          activeSessionIdRef.current,
+          container.scrollTop,
+        );
+      }
       if (
         container.scrollTop < 200 &&
         hasMoreRef.current &&
@@ -1444,6 +1541,7 @@ export function ChatPanel() {
                   onForkTurn={isRemote ? undefined : handleFork}
                   onAttachmentContextMenu={openAttachmentMenu}
                   onAttachmentClick={openLightbox}
+                  onOpenFileLink={rememberChatScrollPosition}
                   searchQuery={searchQuery}
                   globalOffset={globalOffset}
                   toolDisplayMode={toolDisplayMode}
@@ -1466,6 +1564,7 @@ export function ChatPanel() {
                     hasStreaming || hasPendingTypewriter ? (
                       <StreamingMessage
                         sessionId={activeSessionId}
+                        workspaceId={selectedWorkspaceId}
                         isStreaming={isRunning ?? false}
                         searchQuery={searchQuery}
                       />

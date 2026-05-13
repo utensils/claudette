@@ -74,6 +74,10 @@ interface FileViewerInnerProps {
 function FileViewerInner({ workspaceId, path, t }: FileViewerInnerProps) {
   const bufferKey = fileBufferKey(workspaceId, path);
   const bufferState = useAppStore((s) => s.fileBuffers[bufferKey]);
+  const revealTarget = useAppStore((s) => {
+    const target = s.fileRevealTargetByWorkspace[workspaceId];
+    return target?.path === path ? target : null;
+  });
   const setFileBufferLoaded = useAppStore((s) => s.setFileBufferLoaded);
   const setFileBufferLoadError = useAppStore((s) => s.setFileBufferLoadError);
   const setFileBufferContent = useAppStore((s) => s.setFileBufferContent);
@@ -81,6 +85,7 @@ function FileViewerInner({ workspaceId, path, t }: FileViewerInnerProps) {
   const setDiffFiles = useAppStore((s) => s.setDiffFiles);
   const setFileTabPreview = useAppStore((s) => s.setFileTabPreview);
   const closeFileTab = useAppStore((s) => s.closeFileTab);
+  const clearFileRevealTarget = useAppStore((s) => s.clearFileRevealTarget);
   const requestFileTreeRefresh = useAppStore((s) => s.requestFileTreeRefresh);
   const addToast = useAppStore((s) => s.addToast);
   const keybindings = useAppStore((s) => s.keybindings);
@@ -185,6 +190,12 @@ function FileViewerInner({ workspaceId, path, t }: FileViewerInnerProps) {
       setFileBufferContent(workspaceId, path, next);
     },
     [workspaceId, path, setFileBufferContent],
+  );
+  const handleRevealTargetApplied = useCallback(
+    (nonce: number) => {
+      clearFileRevealTarget(workspaceId, nonce);
+    },
+    [clearFileRevealTarget, workspaceId],
   );
 
   const copySource = useCallback((): string | null => {
@@ -361,17 +372,21 @@ function FileViewerInner({ workspaceId, path, t }: FileViewerInnerProps) {
   // its own close button uses, so the unsaved-changes prompt fires
   // identically whether the user clicks × or hits the keystroke.
   //
-  // Handled-nonce tracking matches the FilesPanel pattern: a Map
-  // keyed by workspace, seeded at 0 so a bump that arrived while
-  // this viewer was mounting (rare but possible if `Cmd+W` fired
-  // mid-route to a fresh file tab) is still consumed.
+  // Handled-nonce tracking is keyed by workspace and initializes from the
+  // current value. A nonce is a "new close request" signal, not persistent
+  // desired state; consuming an old value would immediately close every file
+  // reopened after the first Cmd+W/tab-close request in that workspace.
   const closeFileTabNonce = useAppStore(
     (s) => s.requestCloseFileTabNonceByWorkspace[workspaceId] ?? 0,
   );
   const handledCloseNonces = useRef<Map<string, number>>(new Map());
   useEffect(() => {
-    if (closeFileTabNonce === 0) return;
     const handled = handledCloseNonces.current.get(workspaceId) ?? 0;
+    if (!handledCloseNonces.current.has(workspaceId)) {
+      handledCloseNonces.current.set(workspaceId, closeFileTabNonce);
+      return;
+    }
+    if (closeFileTabNonce === 0) return;
     if (closeFileTabNonce === handled) return;
     handledCloseNonces.current.set(workspaceId, closeFileTabNonce);
     requestCloseFileTab();
@@ -504,6 +519,8 @@ function FileViewerInner({ workspaceId, path, t }: FileViewerInnerProps) {
               // `executeEdits` (preserves cursor + undo).
               value={bufferState.buffer}
               filename={path}
+              revealTarget={revealTarget}
+              onRevealTargetApplied={handleRevealTargetApplied}
               readOnly={editDisabled}
               onChange={handleBufferChange}
               onSave={handleSave}

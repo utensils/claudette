@@ -144,5 +144,29 @@ export function useStickyScroll(
     });
   }, [containerRef]);
 
-  return { isAtBottom, scrollToBottom, handleContentChanged, suppressNextAutoScrollRef } as const;
+  /** Restore a saved scrollTop without re-enabling auto-follow. */
+  const restoreScrollPosition = useCallback(
+    (scrollTop: number) => {
+      const el = containerRef.current;
+      if (!el) return;
+      const maxScrollTop = Math.max(0, el.scrollHeight - el.clientHeight);
+      const nextScrollTop = Math.max(0, Math.min(scrollTop, maxScrollTop));
+      programmaticScrollRef.current = true;
+      el.scrollTop = nextScrollTop;
+      const atBottom =
+        nextScrollTop + el.clientHeight >=
+        el.scrollHeight - thresholdRef.current;
+      isAtBottomRef.current = atBottom;
+      setIsAtBottom(atBottom);
+    },
+    [containerRef],
+  );
+
+  return {
+    isAtBottom,
+    scrollToBottom,
+    restoreScrollPosition,
+    handleContentChanged,
+    suppressNextAutoScrollRef,
+  } as const;
 }

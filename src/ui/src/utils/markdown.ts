@@ -1,16 +1,29 @@
-import React, { createElement, useContext, useEffect, useMemo, useReducer } from "react";
+import React, {
+  createContext,
+  createElement,
+  useContext,
+  useEffect,
+  useMemo,
+  useReducer,
+} from "react";
 import type { PluggableList } from "unified";
 import type { Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeRaw from "rehype-raw";
 import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
 import { AnsiUp } from "ansi_up";
-import { invoke } from "@tauri-apps/api/core";
 import { openUrl } from "../services/tauri";
 import { CodeBlock } from "../components/chat/CodeBlock";
 import { MermaidBlock } from "../components/chat/MermaidBlock";
 import { StreamingContext } from "../components/chat/StreamingContext";
-import { decodeFilePathHref, FILE_PATH_SCHEME } from "./filePathLinks";
+import {
+  decodeFilePathHref,
+  decodeLocalhostFileUrlTarget,
+  FILE_PATH_SCHEME,
+  formatFilePathDisplayLabel,
+  isExplicitFilePathTarget,
+  isLikelyFilePathTarget,
+} from "./filePathLinks";
 import { getCachedHighlight, highlightCode } from "./highlight";
 import { rehypeFilePathLinks } from "./rehypeFilePathLinks";
 
@@ -170,6 +183,25 @@ export const REMARK_PLUGINS: PluggableList = [remarkGfm];
 // Schemes that should open in the system browser rather than navigate the webview.
 export const EXTERNAL_SCHEMES = /^https?:|^mailto:/i;
 
+export interface MarkdownFileOpenContextValue {
+  openFile: (path: string) => boolean;
+  resolveFilePath?: (path: string) => string | null;
+}
+
+export const MarkdownFileOpenContext =
+  createContext<MarkdownFileOpenContextValue | null>(null);
+
+export function normalizeExternalHref(href: string): string | null {
+  const trimmed = href.trim();
+  if (!trimmed) return null;
+  if (/^mailto:/i.test(trimmed)) return trimmed;
+  if (/^https?:\/\//i.test(trimmed)) return trimmed;
+  if (/^www\.[^\s/$.?#].[^\s]*$/i.test(trimmed)) {
+    return `https://${trimmed}`;
+  }
+  return null;
+}
+
 /**
  * URL transform that runs *inside* react-markdown after rehype but before
  * each `<a>`/`<img>` is rendered. react-markdown's `defaultUrlTransform`
@@ -265,6 +297,7 @@ export function HighlightedCode({
     ? (className.match(/(?:^|\s)language-([^\s]+)/)?.[1] ?? null)
     : null;
   const isStreaming = useContext(StreamingContext);
+  const fileOpen = useContext(MarkdownFileOpenContext);
   // Memoize so re-renders that don't change `children` skip the recursive walk
   // and keep `code`'s identity stable — the highlight effect's deps then no
   // longer fire spuriously, so we don't enqueue redundant worker dispatches.
@@ -327,46 +360,144 @@ export function HighlightedCode({
       code.replace(/\n+$/, ""),
     );
   }
+  const inlineText = extractText(children).trim();
+  const resolvedPath = fileOpen?.resolveFilePath?.(inlineText) ?? null;
+  const hasFileResolver = typeof fileOpen?.resolveFilePath === "function";
+  const inlineFilePath =
+    resolvedPath ??
+    (!hasFileResolver && isLikelyFilePathTarget(inlineText) ? inlineText : null);
+  if (inlineFilePath && fileOpen) {
+    return createElement(
+      "button",
+      {
+        type: "button",
+        className: classNames(
+          "cc-file-path-link",
+          typeof className === "string" ? className : undefined,
+        ),
+        title: inlineFilePath,
+        onClick: () => fileOpen.openFile(inlineFilePath),
+      },
+      children,
+    );
+  }
   return createElement("code", { ...props, className }, children);
+}
+
+const MarkdownLink: NonNullable<Components["a"]> = ({
+  node: _node,
+  href,
+  children,
+  ...props
+}) => {
+  const fileOpen = useContext(MarkdownFileOpenContext);
+  const encodedFilePath = href ? decodeFilePathHref(href) : null;
+  const localhostFilePath = href ? decodeLocalhostFileUrlTarget(href) : null;
+  const hrefFilePath =
+    href && !encodedFilePath && !localhostFilePath && isExplicitFilePathTarget(href)
+      ? href
+      : null;
+  const filePath = href
+    ? (encodedFilePath ?? localhostFilePath ?? hrefFilePath)
+    : null;
+  const hasFileResolver = typeof fileOpen?.resolveFilePath === "function";
+  const compactFilePath = localhostFilePath ?? hrefFilePath;
+  const compactFilePathLabel = compactFilePath
+    ? formatFilePathDisplayLabel(compactFilePath)
+    : null;
+  const verifiedFilePath =
+    filePath && hasFileResolver
+      ? (fileOpen?.resolveFilePath?.(filePath) ??
+        (compactFilePathLabel
+          ? fileOpen?.resolveFilePath?.(compactFilePathLabel)
+          : null))
+      : null;
+  const externalHref = href ? normalizeExternalHref(href) : null;
+  const openExternalHref = (target: string) => {
+    void openUrl(target).catch((err) =>
+      console.error("Failed to open URL:", target, err),
+    );
+  };
+  const openFilePath = () => {
+    if (!filePath) return;
+    if (fileOpen) {
+      if (verifiedFilePath) {
+        try {
+          if (fileOpen.openFile(verifiedFilePath)) return;
+        } catch (err) {
+          console.error(
+            "Failed to open verified file link in Monaco:",
+            verifiedFilePath,
+            err,
+          );
+        }
+      }
+      if (!hasFileResolver) {
+        try {
+          if (fileOpen.openFile(filePath)) return;
+        } catch (err) {
+          console.error("Failed to open file link in Monaco:", filePath, err);
+        }
+      }
+    }
+    if (localhostFilePath || hrefFilePath) {
+      console.warn(
+        "No workspace file match available for chat file link:",
+        filePath,
+      );
+      return;
+    }
+    console.warn(
+      "No workspace file opener available for chat file link:",
+      filePath,
+    );
+  };
+  if (filePath) {
+    if (hasFileResolver && !verifiedFilePath) {
+      return createElement("span", props, children);
+    }
+    const filePathLabel = compactFilePathLabel ?? children;
+    return createElement(
+      "button",
+      {
+        type: "button",
+        className: classNames(
+          "cc-file-path-link",
+          typeof props.className === "string" ? props.className : undefined,
+        ),
+        title: verifiedFilePath ?? filePath,
+        onClick: openFilePath,
+      },
+      filePathLabel,
+    );
+  }
+  return createElement(
+    "a",
+    {
+      ...props,
+      href: externalHref ?? href,
+      onClick: (e: React.MouseEvent<HTMLAnchorElement>) => {
+        e.preventDefault();
+        if (externalHref) {
+          openExternalHref(externalHref);
+          return;
+        }
+        console.warn("Blocked in-app navigation for chat link:", href);
+      },
+    },
+    children,
+  );
+};
+
+function classNames(...values: Array<string | undefined>): string {
+  return values.filter(Boolean).join(" ");
 }
 
 // Override <a> to open external links in the system browser instead of
 // navigating the webview, and to route `claudettepath:` links — produced
-// by the file-path autolinker — through the OS default-app handler.
+// by the file-path autolinker — through the Monaco opener when possible.
 export const MARKDOWN_COMPONENTS: Components = {
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  a: ({ node, href, children, ...props }) => {
-    const filePath = href ? decodeFilePathHref(href) : null;
-    return createElement(
-      "a",
-      {
-        ...props,
-        href,
-        // Tooltip the actual path so a user hovering can see exactly
-        // what the click will open — the visible text is the path
-        // already, but title= adds redundancy on long paths that get
-        // visually truncated by surrounding wrap/ellipsis rules.
-        title: filePath ?? (props as { title?: string }).title,
-        onClick: (e: React.MouseEvent<HTMLAnchorElement>) => {
-          if (filePath) {
-            e.preventDefault();
-            void invoke("open_in_editor", { path: filePath }).catch(
-              (err) =>
-                console.error("Failed to open path:", filePath, err),
-            );
-            return;
-          }
-          if (href && EXTERNAL_SCHEMES.test(href)) {
-            e.preventDefault();
-            void openUrl(href).catch((err) =>
-              console.error("Failed to open URL:", href, err),
-            );
-          }
-        },
-      },
-      children,
-    );
-  },
+  a: MarkdownLink,
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   pre: ({ node, children, ...props }) => {
     // Detect ```mermaid fences and route them to MermaidBlock instead of

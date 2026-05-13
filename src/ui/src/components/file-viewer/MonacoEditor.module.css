@@ -34,6 +34,10 @@
   border-radius: var(--radius-sm) !important;
 }
 
+.host :global(.claudette-reveal-line) {
+  background: rgba(var(--accent-primary-rgb), 0.16);
+}
+
 /* Git gutter — colored bars in Monaco's line-numbers gutter. Decorations
    are applied via `linesDecorationsClassName`; Monaco renders the class
    on a thin strip immediately right of the line numbers. */

@@ -297,9 +297,14 @@
    away from the prose around it. The path text itself is monospace (matching
    how Claude usually writes paths) so the click target reads as
    path-shaped rather than as a generic link. */
-.body :where(:global(a.cc-file-path-link)) {
-  font-family: var(--font-mono, ui-monospace, monospace);
+.body :where(:global(.cc-file-path-link)) {
   color: var(--text-primary);
+  background: transparent;
+  border: 0;
+  padding: 0;
+  font: inherit;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  line-height: inherit;
   text-decoration: underline;
   text-decoration-color: rgba(var(--accent-primary-rgb), 0.35);
   text-underline-offset: 2px;
@@ -307,7 +312,7 @@
   word-break: break-all;
 }
 
-.body :where(:global(a.cc-file-path-link:hover)) {
+.body :where(:global(.cc-file-path-link:hover)) {
   color: var(--accent-primary);
   text-decoration-color: currentColor;
 }

@@ -1,8 +1,8 @@
 /**
- * Rehype plugin that scans text nodes for absolute file paths and rewrites
+ * Rehype plugin that scans text nodes for file paths and rewrites
  * each match as an `<a href="claudettepath:…">` element. The MARKDOWN_COMPONENTS.a
  * override in `markdown.ts` recognises that scheme and routes clicks into a
- * Tauri command so the user's default app opens the file.
+ * workspace file opener when one is available.
  *
  * Skipped contexts: anywhere already inside `<code>`, `<pre>`, or `<a>`. We
  * don't want to mangle code samples (where slashes are syntactic) or stack
@@ -12,12 +12,31 @@ import type { Plugin } from "unified";
 import type { Element, ElementContent, Root, Text } from "hast";
 import { visitParents } from "unist-util-visit-parents";
 
-import { detectFilePaths, encodeFilePathHref } from "./filePathLinks";
+import {
+  detectFileReferences,
+  encodeFilePathHref,
+  isLikelyRelativeFileReference,
+} from "./filePathLinks";
 
 const SKIP_TAGS = new Set(["code", "pre", "a"]);
 
 export const rehypeFilePathLinks: Plugin<[], Root> = () => {
   return (tree) => {
+    visitParents(tree, "element", (node: Element) => {
+      if (node.tagName !== "a") return;
+      const href =
+        typeof node.properties?.href === "string" ? node.properties.href : "";
+      const text = singleTextChild(node);
+      if (!href || !text || !isLikelyRelativeFileReference(text)) return;
+      if (!isAutolinkedFileReference(href, text)) return;
+
+      node.properties = {
+        ...node.properties,
+        href: encodeFilePathHref(text),
+        className: mergeClassName(node.properties.className, "cc-file-path-link"),
+      };
+    });
+
     visitParents(tree, "text", (node: Text, ancestors) => {
       // unist-util-visit-parents passes the ancestor chain root-first.
       // Any element ancestor that's a code/pre/a means we're inside one
@@ -28,7 +47,7 @@ export const rehypeFilePathLinks: Plugin<[], Root> = () => {
         }
       }
 
-      const matches = detectFilePaths(node.value);
+      const matches = detectFileReferences(node.value);
       if (matches.length === 0) return;
 
       const replacement: ElementContent[] = [];
@@ -47,7 +66,7 @@ export const rehypeFilePathLinks: Plugin<[], Root> = () => {
             href: encodeFilePathHref(m.path),
             className: ["cc-file-path-link"],
           },
-          children: [{ type: "text", value: m.path }],
+          children: [{ type: "text", value: m.text ?? m.path }],
         });
         cursor = m.end;
       }
@@ -66,3 +85,29 @@ export const rehypeFilePathLinks: Plugin<[], Root> = () => {
     });
   };
 };
+
+function singleTextChild(node: Element): string | null {
+  if (node.children.length !== 1) return null;
+  const child = node.children[0];
+  return child.type === "text" ? child.value.trim() : null;
+}
+
+function isAutolinkedFileReference(href: string, text: string): boolean {
+  const normalizedText = text.trim();
+  const normalizedHref = href.trim();
+  if (normalizedHref === normalizedText) return true;
+  return /^https?:\/\//i.test(normalizedHref)
+    && normalizedHref.replace(/^https?:\/\//i, "") === normalizedText;
+}
+
+function mergeClassName(
+  value: unknown,
+  className: string,
+): string[] {
+  const current = Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === "string")
+    : typeof value === "string"
+      ? value.split(/\s+/).filter(Boolean)
+      : [];
+  return current.includes(className) ? current : [...current, className];
+}
