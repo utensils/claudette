@@ -119,7 +119,19 @@ impl CodexAppServerSession {
         session.spawn_stderr_reader(stderr);
         session.spawn_exit_watcher(child);
         let _ = session.event_tx.send(codex_command_line_event());
-        session.initialize(client_version).await?;
+        if let Err(err) = session.initialize(client_version).await {
+            fail_pending_requests(&session.pending, "Codex app-server initialize failed").await;
+            if let Err(stop_err) = super::process::stop_agent_graceful(pid).await {
+                tracing::warn!(
+                    target: "claudette::agent",
+                    subsystem = "codex-app-server",
+                    pid,
+                    error = %stop_err,
+                    "failed to stop codex app-server after initialize failure"
+                );
+            }
+            return Err(err);
+        }
 
         Ok(session)
     }
@@ -536,16 +548,23 @@ async fn route_app_server_message(
         JsonRpcMessage::Request(request) => {
             let method = request.method.clone();
             if let Some(stdin) = stdin {
-                let error = JsonRpcMessage::Error(JsonRpcError {
-                    id: Some(request.id),
-                    error: JsonRpcErrorBody {
-                        code: -32601,
-                        message: format!("Codex app-server request `{method}` is not implemented"),
-                        data: None,
-                    },
-                });
                 let mut stdin = stdin.lock().await;
-                if let Err(err) = write_jsonrpc_message(&mut *stdin, &error).await {
+                let result = if let Some(response) = build_codex_server_request_response(&request) {
+                    write_jsonrpc_message(&mut *stdin, &response).await
+                } else {
+                    let error = JsonRpcMessage::Error(JsonRpcError {
+                        id: Some(request.id),
+                        error: JsonRpcErrorBody {
+                            code: -32601,
+                            message: format!(
+                                "Codex app-server request `{method}` is not implemented"
+                            ),
+                            data: None,
+                        },
+                    });
+                    write_jsonrpc_message(&mut *stdin, &error).await
+                };
+                if let Err(err) = result {
                     tracing::warn!(
                         target: "claudette::agent",
                         subsystem = "codex-app-server",
@@ -560,12 +579,14 @@ async fn route_app_server_message(
                 subsystem = "codex-app-server",
                 pid,
                 method = %method,
-                "codex app-server request handling is not wired yet"
+                "handled codex app-server server request without user prompt"
             );
-            let _ = event_tx.send(AgentEvent::Stderr(format!(
-                "Codex app-server request `{}` is not handled yet.",
-                method
-            )));
+            if !is_supported_codex_server_request(&method) {
+                let _ = event_tx.send(AgentEvent::Stderr(format!(
+                    "Codex app-server request `{}` is not handled yet.",
+                    method
+                )));
+            }
         }
     }
 }
@@ -636,6 +657,13 @@ pub struct JsonRpcErrorBody {
     pub message: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub data: Option<Value>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct JsonRpcServerResponse {
+    pub id: JsonRpcId,
+    pub method: String,
+    pub response: Value,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -801,12 +829,10 @@ where
     }
 }
 
-pub async fn write_jsonrpc_message<W>(
-    writer: &mut W,
-    message: &JsonRpcMessage,
-) -> Result<(), String>
+pub async fn write_jsonrpc_message<W, M>(writer: &mut W, message: &M) -> Result<(), String>
 where
     W: AsyncWrite + Unpin,
+    M: Serialize + ?Sized,
 {
     let payload = serde_json::to_string(message)
         .map_err(|e| format!("Failed to encode Codex app-server JSON-RPC message: {e}"))?;
@@ -823,6 +849,34 @@ where
         .await
         .map_err(|e| format!("Failed to flush Codex app-server JSON-RPC message: {e}"))?;
     Ok(())
+}
+
+fn is_supported_codex_server_request(method: &str) -> bool {
+    matches!(
+        method,
+        "item/commandExecution/requestApproval"
+            | "item/fileChange/requestApproval"
+            | "item/permissions/requestApproval"
+    )
+}
+
+pub fn build_codex_server_request_response(
+    request: &JsonRpcRequest,
+) -> Option<JsonRpcServerResponse> {
+    let response = match request.method.as_str() {
+        "item/commandExecution/requestApproval" => json!({ "decision": "decline" }),
+        "item/fileChange/requestApproval" => json!({ "decision": "decline" }),
+        "item/permissions/requestApproval" => json!({
+            "permissions": {},
+            "scope": "turn",
+        }),
+        _ => return None,
+    };
+    Some(JsonRpcServerResponse {
+        id: request.id.clone(),
+        method: request.method.clone(),
+        response,
+    })
 }
 
 pub fn codex_app_server_args() -> [&'static str; 3] {
@@ -1579,6 +1633,34 @@ mod tests {
             parsed,
             JsonRpcMessage::Request(JsonRpcRequest { method, .. }) if method == "initialize"
         ));
+    }
+
+    #[tokio::test]
+    async fn writes_codex_server_response_with_response_field() {
+        let request = JsonRpcRequest {
+            id: JsonRpcId::Integer(8),
+            method: "item/commandExecution/requestApproval".to_string(),
+            params: None,
+        };
+        let response =
+            build_codex_server_request_response(&request).expect("approval request is handled");
+        let mut out = Vec::new();
+
+        write_jsonrpc_message(&mut out, &response)
+            .await
+            .expect("response writes");
+
+        let value: Value = serde_json::from_slice(&out).expect("json response");
+        assert_eq!(
+            value,
+            json!({
+                "id": 8,
+                "method": "item/commandExecution/requestApproval",
+                "response": {
+                    "decision": "decline"
+                }
+            })
+        );
     }
 
     #[tokio::test]
@@ -2402,7 +2484,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn app_server_router_surfaces_unhandled_server_request() {
+    async fn app_server_router_surfaces_unknown_server_request() {
         let pending: PendingRequests = Arc::new(tokio::sync::Mutex::new(BTreeMap::new()));
         let (event_tx, mut rx) = broadcast::channel(8);
 
@@ -2414,7 +2496,7 @@ mod tests {
             None,
             JsonRpcMessage::Request(JsonRpcRequest {
                 id: JsonRpcId::String("req-1".to_string()),
-                method: "item/commandExecution/requestApproval".to_string(),
+                method: "item/tool/requestUserInput".to_string(),
                 params: None,
             }),
         )
@@ -2423,7 +2505,36 @@ mod tests {
         let AgentEvent::Stderr(line) = rx.recv().await.expect("stderr event") else {
             panic!("expected stderr event");
         };
-        assert!(line.contains("request `item/commandExecution/requestApproval`"));
+        assert!(line.contains("request `item/tool/requestUserInput`"));
+    }
+
+    #[tokio::test]
+    async fn app_server_router_declines_command_approval_requests() {
+        let pending: PendingRequests = Arc::new(tokio::sync::Mutex::new(BTreeMap::new()));
+        let (event_tx, mut rx) = broadcast::channel(8);
+
+        route_app_server_message(
+            1,
+            &event_tx,
+            &pending,
+            None,
+            None,
+            JsonRpcMessage::Request(JsonRpcRequest {
+                id: JsonRpcId::Integer(42),
+                method: "item/commandExecution/requestApproval".to_string(),
+                params: Some(json!({
+                    "threadId": "thread-1",
+                    "turnId": "turn-1",
+                    "itemId": "cmd-1"
+                })),
+            }),
+        )
+        .await;
+
+        assert!(
+            rx.try_recv().is_err(),
+            "handled approval should not emit stderr"
+        );
     }
 
     #[tokio::test]
