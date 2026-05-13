@@ -205,6 +205,77 @@ describe("modelRegistry", () => {
 
       expect(registry.find((model) => model.providerQualifiedId === "codex-subscription/gpt-5.4")).toBeUndefined();
     });
+
+    it("orders versioned backend models newest first and moves older bands to More", () => {
+      const registry = buildModelRegistry(false, [
+        {
+          id: "experimental-codex",
+          label: "Codex",
+          kind: "codex_native",
+          enabled: true,
+          capabilities: {
+            thinking: true,
+            effort: true,
+            fast_mode: true,
+          },
+          manual_models: [],
+          discovered_models: [
+            {
+              id: "gpt-5.4",
+              label: "gpt-5.4",
+              context_window_tokens: 400_000,
+            },
+            {
+              id: "gpt-5.2",
+              label: "gpt-5.2",
+              context_window_tokens: 400_000,
+            },
+            {
+              id: "gpt-5.3-codex",
+              label: "gpt-5.3-codex",
+              context_window_tokens: 400_000,
+            },
+            {
+              id: "gpt-5.5",
+              label: "GPT-5.5",
+              context_window_tokens: 400_000,
+            },
+            {
+              id: "gpt-5.3-codex-spark",
+              label: "GPT-5.3-Codex-Spark",
+              context_window_tokens: 400_000,
+            },
+            {
+              id: "gpt-5.4-mini",
+              label: "GPT-5.4-Mini",
+              context_window_tokens: 400_000,
+            },
+          ],
+        },
+      ], true);
+
+      const codexModels = registry.filter(
+        (model) => model.providerId === "experimental-codex",
+      );
+      expect(codexModels.map((model) => model.id)).toEqual([
+        "gpt-5.5",
+        "gpt-5.4",
+        "gpt-5.4-mini",
+        "gpt-5.3-codex",
+        "gpt-5.3-codex-spark",
+        "gpt-5.2",
+      ]);
+      expect(
+        codexModels
+          .filter((model) => !model.legacy)
+          .map((model) => model.id),
+      ).toEqual(["gpt-5.5", "gpt-5.4", "gpt-5.4-mini"]);
+      expect(
+        codexModels
+          .filter((model) => model.legacy)
+          .map((model) => model.id),
+      ).toEqual(["gpt-5.3-codex", "gpt-5.3-codex-spark", "gpt-5.2"]);
+    });
   });
 
   describe("findModelInRegistry", () => {

@@ -73,6 +73,7 @@ export function ModelSelector({
                 model={model}
                 selected={model.id === selected && (model.providerId ?? "anthropic") === selectedProvider}
                 onSelect={onSelect}
+                showProviderBadge={model.providerLabel !== group}
               />
             ))}
           </div>
@@ -99,6 +100,7 @@ export function ModelSelector({
                     model={model}
                     selected={model.id === selected && (model.providerId ?? "anthropic") === selectedProvider}
                     onSelect={onSelect}
+                    showProviderBadge={Boolean(model.providerLabel)}
                   />
                 ))}
               </div>
@@ -114,15 +116,15 @@ function ModelRow({
   model,
   selected,
   onSelect,
+  showProviderBadge,
 }: {
   model: Model;
   selected: boolean;
   onSelect: (id: string, providerId?: string) => void;
+  showProviderBadge?: boolean;
 }) {
   const { t } = useTranslation("chat");
-  const showProviderBadge = Boolean(
-    model.providerLabel && model.providerLabel !== model.group,
-  );
+  const shouldShowProviderBadge = Boolean(showProviderBadge && model.providerLabel);
   return (
     <button
       type="button"
@@ -131,7 +133,7 @@ function ModelRow({
     >
       <span className={styles.dot} />
       <span className={styles.modelLabel} title={model.label}>{model.label}</span>
-      {showProviderBadge && (
+      {shouldShowProviderBadge && (
         <span className={styles.providerBadge}>{model.providerLabel}</span>
       )}
       {model.extraUsage && (

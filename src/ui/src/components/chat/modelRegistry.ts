@@ -78,6 +78,93 @@ export interface BackendRegistrySource {
   discovered_models: BackendRegistryModel[];
 }
 
+type ParsedModelVersion = {
+  prefix: string;
+  versionKey: string;
+  versionParts: number[];
+  suffix: string;
+};
+
+type RankedBackendModel = {
+  model: BackendRegistryModel;
+  index: number;
+  parsed: ParsedModelVersion | undefined;
+};
+
+const PRIMARY_BACKEND_VERSION_BANDS = 2;
+
+function parseModelVersion(model: BackendRegistryModel): ParsedModelVersion | undefined {
+  const text = `${model.id} ${model.label}`.toLowerCase();
+  const match = text.match(/\b([a-z][a-z0-9]*)(?:[-\s]?)(\d+(?:[.-]\d+)*)([a-z0-9-]*)\b/);
+  if (!match) return undefined;
+  const versionParts = match[2]
+    .split(/[.-]/)
+    .map((part) => Number.parseInt(part, 10));
+  if (versionParts.some((part) => !Number.isFinite(part))) return undefined;
+  return {
+    prefix: match[1],
+    versionKey: versionParts.join("."),
+    versionParts,
+    suffix: match[3] ?? "",
+  };
+}
+
+function compareVersionPartsDesc(a: readonly number[], b: readonly number[]): number {
+  const length = Math.max(a.length, b.length);
+  for (let i = 0; i < length; i += 1) {
+    const diff = (b[i] ?? 0) - (a[i] ?? 0);
+    if (diff !== 0) return diff;
+  }
+  return 0;
+}
+
+function rankBackendModels(models: readonly BackendRegistryModel[]): RankedBackendModel[] {
+  const prefixOrder = new Map<string, number>();
+  const ranked = models.map((model, index) => {
+    const parsed = parseModelVersion(model);
+    if (parsed && !prefixOrder.has(parsed.prefix)) {
+      prefixOrder.set(parsed.prefix, prefixOrder.size);
+    }
+    return { model, index, parsed };
+  });
+
+  return ranked.sort((a, b) => {
+    if (!a.parsed && !b.parsed) return a.index - b.index;
+    if (!a.parsed) return 1;
+    if (!b.parsed) return -1;
+
+    const prefixDiff =
+      (prefixOrder.get(a.parsed.prefix) ?? a.index) -
+      (prefixOrder.get(b.parsed.prefix) ?? b.index);
+    if (prefixDiff !== 0) return prefixDiff;
+
+    const versionDiff = compareVersionPartsDesc(
+      a.parsed.versionParts,
+      b.parsed.versionParts,
+    );
+    if (versionDiff !== 0) return versionDiff;
+
+    const suffixDiff = a.parsed.suffix.localeCompare(b.parsed.suffix);
+    if (suffixDiff !== 0) return suffixDiff;
+    return a.index - b.index;
+  });
+}
+
+function primaryVersionKeysByPrefix(
+  ranked: readonly RankedBackendModel[],
+): Map<string, Set<string>> {
+  const keys = new Map<string, Set<string>>();
+  for (const entry of ranked) {
+    if (!entry.parsed) continue;
+    const versions = keys.get(entry.parsed.prefix) ?? new Set<string>();
+    if (versions.size < PRIMARY_BACKEND_VERSION_BANDS) {
+      versions.add(entry.parsed.versionKey);
+      keys.set(entry.parsed.prefix, versions);
+    }
+  }
+  return keys;
+}
+
 export function shouldExposeBackendModels(
   backend: BackendRegistrySource,
   alternativeBackendsEnabled: boolean,
@@ -105,16 +192,25 @@ export function buildModelRegistry(
       backend.discovered_models.length > 0
         ? backend.discovered_models
         : backend.manual_models;
+    const rankedModels = rankBackendModels(backendModels);
+    const primaryVersions = primaryVersionKeysByPrefix(rankedModels);
     const seen = new Set<string>();
-    for (const model of backendModels) {
+    for (const entry of rankedModels) {
+      const { model } = entry;
       if (!model.id || seen.has(model.id)) continue;
       seen.add(model.id);
+      const isOlderBackendVersion = entry.parsed
+        ? !primaryVersions
+          .get(entry.parsed.prefix)
+          ?.has(entry.parsed.versionKey)
+        : false;
       const target = models ??= [...MODELS];
       target.push({
         id: model.id,
         label: model.label || model.id,
         group: backend.label,
         extraUsage: false,
+        legacy: isOlderBackendVersion,
         providerId: backend.id,
         providerLabel: backend.label,
         providerKind: backend.kind,

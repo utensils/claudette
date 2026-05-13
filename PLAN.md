@@ -378,3 +378,11 @@
     - `cd src/ui && bun run lint:css`
     - `nix develop -c cargo fmt --all --check`
     - `git diff --check`
+- 2026-05-13: Improved backend model ordering and overflow behavior:
+  - Backend model lists now sort versioned model families by parsed numeric version, so newer GPT-style models appear first without hard-coding a specific current version.
+  - The two newest version bands per model family remain in the main picker; older parsed bands move under **More**.
+  - Older Codex rows under **More** show their provider badge because they no longer sit under the Codex group header.
+  - Verified the picker ordering change with:
+    - `cd src/ui && bun run test -- modelRegistry`
+    - `cd src/ui && bunx tsc -b`
+    - `cd src/ui && bun run lint` (warnings only; no errors)
