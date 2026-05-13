@@ -1,5 +1,9 @@
+use std::io::Write as _;
 use std::sync::Arc;
 use std::time::Duration;
+
+#[cfg(unix)]
+use std::os::unix::fs::OpenOptionsExt as _;
 
 use serde::Deserialize;
 
@@ -108,6 +112,24 @@ This teammate was redirected into a Claudette session tab. Report progress and f
     }))
 }
 
+fn write_secure_prompt_file(content: &str) -> Result<std::path::PathBuf, String> {
+    let prompt_file =
+        std::env::temp_dir().join(format!("claudette-team-agent-{}.txt", uuid::Uuid::new_v4()));
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    options.mode(0o600);
+    let write_result = options
+        .open(&prompt_file)
+        .and_then(|mut file| file.write_all(content.as_bytes()))
+        .map_err(|e| format!("write prompt file {}: {e}", prompt_file.display()));
+    if let Err(e) = write_result {
+        let _ = std::fs::remove_file(&prompt_file);
+        return Err(e);
+    }
+    Ok(prompt_file)
+}
+
 fn spawn_claudette_send_chat_child(
     session_id: &str,
     content: &str,
@@ -115,10 +137,7 @@ fn spawn_claudette_send_chat_child(
     plan_mode: bool,
 ) -> Result<(), String> {
     let exe = std::env::current_exe().map_err(|e| format!("current_exe: {e}"))?;
-    let prompt_file =
-        std::env::temp_dir().join(format!("claudette-team-agent-{}.txt", uuid::Uuid::new_v4()));
-    std::fs::write(&prompt_file, content)
-        .map_err(|e| format!("write prompt file {}: {e}", prompt_file.display()))?;
+    let prompt_file = write_secure_prompt_file(content)?;
 
     let mut cmd = std::process::Command::new(exe);
     cmd.arg("--claudette-send-chat")
@@ -132,9 +151,10 @@ fn spawn_claudette_send_chat_child(
     if plan_mode {
         cmd.arg("--plan-mode");
     }
-    cmd.spawn()
-        .map(|_| ())
-        .map_err(|e| format!("spawn claudette send-chat child: {e}"))
+    cmd.spawn().map(|_| ()).map_err(|e| {
+        let _ = std::fs::remove_file(&prompt_file);
+        format!("spawn claudette send-chat child: {e}")
+    })
 }
 
 async fn open_claudette_session_for_team_agent(
@@ -3783,10 +3803,12 @@ mod tests {
         remote_control_should_restore_for_turn, remote_control_title, resolve_spawn_session_id,
         should_defer_persistent_restart_for_state,
         should_reenable_remote_control_after_turn_result, should_resume_persistent_session,
-        should_run_auto_naming, terminal_text,
+        should_run_auto_naming, terminal_text, write_secure_prompt_file,
     };
     use crate::state::{ClaudeRemoteControlLifecycle, ClaudeRemoteControlStatus};
     use claudette::model::{ChatMessage, ChatRole};
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt as _;
 
     fn test_chat_message(role: ChatRole, content: &str) -> ChatMessage {
         ChatMessage {
@@ -3828,6 +3850,18 @@ mod tests {
         assert!(dispatch.content.contains("teammate `haiku-reader-1`"));
         assert!(dispatch.content.contains("team `haiku-readers`"));
         assert!(dispatch.content.contains("Read src/main.rs"));
+    }
+
+    #[test]
+    fn secure_prompt_file_round_trips_and_is_private() {
+        let path = write_secure_prompt_file("secret prompt").unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "secret prompt");
+        #[cfg(unix)]
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        std::fs::remove_file(path).unwrap();
     }
 
     #[test]

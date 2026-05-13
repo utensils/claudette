@@ -39,6 +39,9 @@ pub(crate) async fn run_send_chat_from_args(args: Vec<String>) -> Result<(), Str
     let content = tokio::fs::read_to_string(&prompt_file)
         .await
         .map_err(|e| format!("read prompt file {}: {e}", prompt_file.display()))?;
+    // The prompt is now in memory; remove the temp file before the IPC call so
+    // failures in `send_chat_message` do not leave sensitive prompt text behind.
+    let _ = tokio::fs::remove_file(&prompt_file).await;
     let model = flag_value(&args, "--model").ok().map(str::to_string);
     let plan_mode = has_flag(&args, "--plan-mode");
     let info = read_app_info()?;
@@ -54,7 +57,6 @@ pub(crate) async fn run_send_chat_from_args(args: Vec<String>) -> Result<(), Str
         params["plan_mode"] = Value::Bool(true);
     }
     rpc_call(&info, "send_chat_message", params).await?;
-    let _ = tokio::fs::remove_file(prompt_file).await;
     Ok(())
 }
 
