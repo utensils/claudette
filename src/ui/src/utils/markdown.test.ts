@@ -300,7 +300,7 @@ describe("MARKDOWN_COMPONENTS.a click handling", () => {
     expect(tauriMocks.openUrl).not.toHaveBeenCalled();
   });
 
-  it("opens a localhost file URL in the browser when Monaco cannot handle it", async () => {
+  it("does not open localhost file URLs in the browser when Monaco cannot handle them", async () => {
     const openFile = vi.fn(() => false);
     const href =
       "http://localhost:14255/Users/jamesbrink/.claudette/workspaces/claudex/copper-ginger/website/guide/quickstart.md:6";
@@ -317,6 +317,7 @@ describe("MARKDOWN_COMPONENTS.a click handling", () => {
 
     const button = container.querySelector("button");
     expect(button).toBeTruthy();
+    expect(button?.textContent).toBe("website/guide/quickstart.md:6");
     button?.dispatchEvent(
       new MouseEvent("click", { bubbles: true, cancelable: true }),
     );
@@ -324,7 +325,7 @@ describe("MARKDOWN_COMPONENTS.a click handling", () => {
     expect(openFile).toHaveBeenCalledWith(
       "/Users/jamesbrink/.claudette/workspaces/claudex/copper-ginger/website/guide/quickstart.md:6",
     );
-    expect(tauriMocks.openUrl).toHaveBeenCalledWith(href);
+    expect(tauriMocks.openUrl).not.toHaveBeenCalled();
   });
 
   it("routes localhost file URLs through the Monaco file opener without rendering a navigable href", async () => {
@@ -342,12 +343,96 @@ describe("MARKDOWN_COMPONENTS.a click handling", () => {
 
     const button = container.querySelector("button");
     expect(button).toBeTruthy();
+    expect(button?.textContent).toBe("CLAUDETTE_TEST.md:1");
     expect(container.querySelector("a")).toBeNull();
     button?.dispatchEvent(
       new MouseEvent("click", { bubbles: true, cancelable: true }),
     );
 
     expect(openFile).toHaveBeenCalledWith("/Users/me/project/CLAUDETTE_TEST.md:1");
+  });
+
+  it("routes localhost SVG file URLs through the Monaco file opener", async () => {
+    const openFile = vi.fn(() => true);
+    const href =
+      "http://localhost:14254/Users/jamesbrink/.claudette/workspaces/claudex/copper-ginger/simple-wave.svg:1";
+    const container = await render(
+      createElement(
+        MarkdownFileOpenContext.Provider,
+        { value: { openFile } },
+        createElement(LinkOverride, {
+          href,
+          children: href,
+        }),
+      ),
+    );
+
+    const button = container.querySelector("button");
+    expect(button).toBeTruthy();
+    expect(button?.textContent).toBe("simple-wave.svg:1");
+    expect(container.querySelector("a")).toBeNull();
+    button?.dispatchEvent(
+      new MouseEvent("click", { bubbles: true, cancelable: true }),
+    );
+
+    expect(openFile).toHaveBeenCalledWith(
+      "/Users/jamesbrink/.claudette/workspaces/claudex/copper-ginger/simple-wave.svg:1",
+    );
+    expect(tauriMocks.openUrl).not.toHaveBeenCalled();
+  });
+
+  it("routes same-origin absolute file hrefs through Monaco instead of rendering an app-route anchor", async () => {
+    const openFile = vi.fn(() => true);
+    const href =
+      "/Users/jamesbrink/.claudette/workspaces/claudex/copper-ginger/README.md:8";
+    const container = await render(
+      createElement(
+        MarkdownFileOpenContext.Provider,
+        { value: { openFile } },
+        createElement(LinkOverride, {
+          href,
+          children: "README.md",
+        }),
+      ),
+    );
+
+    const button = container.querySelector("button");
+    expect(button).toBeTruthy();
+    expect(button?.textContent).toBe("README.md:8");
+    expect(container.querySelector("a")).toBeNull();
+    button?.dispatchEvent(
+      new MouseEvent("click", { bubbles: true, cancelable: true }),
+    );
+
+    expect(openFile).toHaveBeenCalledWith(href);
+    expect(tauriMocks.openUrl).not.toHaveBeenCalled();
+  });
+
+  it("routes same-origin absolute file hrefs with unknown extensions through Monaco", async () => {
+    const openFile = vi.fn(() => true);
+    const href =
+      "/Users/jamesbrink/.claudette/workspaces/claudex/copper-ginger/generated.assetbundle:12";
+    const container = await render(
+      createElement(
+        MarkdownFileOpenContext.Provider,
+        { value: { openFile } },
+        createElement(LinkOverride, {
+          href,
+          children: "generated.assetbundle",
+        }),
+      ),
+    );
+
+    const button = container.querySelector("button");
+    expect(button).toBeTruthy();
+    expect(button?.textContent).toBe("generated.assetbundle:12");
+    expect(container.querySelector("a")).toBeNull();
+    button?.dispatchEvent(
+      new MouseEvent("click", { bubbles: true, cancelable: true }),
+    );
+
+    expect(openFile).toHaveBeenCalledWith(href);
+    expect(tauriMocks.openUrl).not.toHaveBeenCalled();
   });
 
   it("blocks unsupported anchors from navigating the webview", async () => {

@@ -159,6 +159,7 @@ const KNOWN_FILE_EXTENSIONS = new Set([
   "sh",
   "sql",
   "svelte",
+  "svg",
   "swift",
   "toml",
   "tsx",
@@ -267,6 +268,39 @@ export function stripFileLineSuffix(path: string): string {
   return parseFilePathTarget(path).path;
 }
 
+export function formatFilePathDisplayLabel(path: string): string {
+  const target = parseFilePathTarget(path);
+  const normalizedPath = target.path.replace(/\\/g, "/");
+  const workspaceRelativeMatch = normalizedPath.match(
+    /\/\.claudette\/workspaces\/[^/]+\/[^/]+\/(.+)$/,
+  );
+  const displayPath =
+    workspaceRelativeMatch?.[1] ??
+    normalizedPath.split("/").filter(Boolean).pop() ??
+    normalizedPath;
+  const rangeSuffix = formatFilePathRangeSuffix(target);
+  return `${displayPath}${rangeSuffix}`;
+}
+
+function formatFilePathRangeSuffix(target: FilePathTarget): string {
+  if (typeof target.startLine !== "number") return "";
+  let suffix = `:${target.startLine}`;
+  if (typeof target.startColumn === "number") {
+    suffix += `:${target.startColumn}`;
+  }
+  if (
+    typeof target.endLine === "number" &&
+    (target.endLine !== target.startLine ||
+      typeof target.endColumn === "number")
+  ) {
+    suffix += `-${target.endLine}`;
+    if (typeof target.endColumn === "number") {
+      suffix += `:${target.endColumn}`;
+    }
+  }
+  return suffix;
+}
+
 export function isLikelyFilePathTarget(value: string): boolean {
   const candidate = stripFileLineSuffix(value.trim().replace(TRAILING_PUNCT_REGEX, ""));
   if (!candidate || candidate.length < MIN_PATH_LENGTH) return false;
@@ -283,6 +317,21 @@ export function isLikelyFilePathTarget(value: string): boolean {
   const dot = basename.lastIndexOf(".");
   if (dot <= 0 || dot === basename.length - 1) return false;
   return KNOWN_FILE_EXTENSIONS.has(basename.slice(dot + 1));
+}
+
+export function isExplicitFilePathTarget(value: string): boolean {
+  const candidate = value.trim().replace(TRAILING_PUNCT_REGEX, "");
+  if (!candidate || candidate.length < MIN_PATH_LENGTH) return false;
+
+  const parsed = parseFilePathTarget(candidate);
+  const normalized = parsed.path.replace(/\\/g, "/");
+  if (!isKnownLocalPathRoot(normalized)) return false;
+
+  const basename = normalized.split("/").filter(Boolean).pop()?.toLowerCase();
+  if (!basename || basename === "." || basename === "..") return false;
+  if (KNOWN_FILENAMES.has(basename)) return true;
+  if (typeof parsed.startLine === "number") return true;
+  return basename.includes(".");
 }
 
 export function decodeLocalhostFileUrl(href: string): string | null {
@@ -316,19 +365,19 @@ export function decodeLocalhostFileUrlTarget(href: string): string | null {
   }
   const candidate =
     /^\/[A-Za-z]:[\\/]/.test(pathname) ? pathname.slice(1) : pathname;
-  if (!isLikelyFilePathTarget(candidate)) return null;
-  return isLikelyLocalhostFileTarget(candidate) ? candidate : null;
+  return isExplicitFilePathTarget(candidate) ? candidate : null;
 }
 
-function isLikelyLocalhostFileTarget(candidate: string): boolean {
-  const parsed = parseFilePathTarget(candidate);
-  if (typeof parsed.startLine === "number") return true;
-  const normalized = parsed.path.replace(/\\/g, "/");
-  if (/^[A-Za-z]:\//.test(normalized) || /^\/\/[^/]+\/[^/]+/.test(normalized)) {
+function isKnownLocalPathRoot(normalizedPath: string): boolean {
+  if (
+    normalizedPath.startsWith("~/") ||
+    /^[A-Za-z]:\//.test(normalizedPath) ||
+    /^\/\/[^/]+\/[^/]+/.test(normalizedPath)
+  ) {
     return true;
   }
   return /^\/(?:Users|home|tmp|var|private|Volumes|workspaces|workspace)\//.test(
-    normalized,
+    normalizedPath,
   );
 }
 

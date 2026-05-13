@@ -8,6 +8,8 @@ import {
   detectFilePaths,
   encodeFilePathHref,
   FILE_PATH_SCHEME,
+  formatFilePathDisplayLabel,
+  isExplicitFilePathTarget,
   isLikelyRelativeFileReference,
   parseFilePathTarget,
   stripFileLineSuffix,
@@ -153,6 +155,29 @@ describe("localhost file URL decoding", () => {
     ).toBe("/Users/jamesbrink/project/CLAUDETTE_TEST.md:1");
   });
 
+  it("decodes localhost SVG file URLs with line suffixes", () => {
+    expect(
+      decodeLocalhostFileUrlTarget(
+        "http://localhost:14254/Users/jamesbrink/.claudette/workspaces/claudex/copper-ginger/simple-wave.svg:1",
+      ),
+    ).toBe(
+      "/Users/jamesbrink/.claudette/workspaces/claudex/copper-ginger/simple-wave.svg:1",
+    );
+  });
+
+  it("decodes explicit localhost file URLs without needing a known extension", () => {
+    expect(
+      decodeLocalhostFileUrlTarget(
+        "http://localhost:14254/Users/jamesbrink/.claudette/workspaces/claudex/copper-ginger/generated.assetbundle:12",
+      ),
+    ).toBe(
+      "/Users/jamesbrink/.claudette/workspaces/claudex/copper-ginger/generated.assetbundle:12",
+    );
+    expect(isExplicitFilePathTarget("/Users/me/project/generated.assetbundle:12")).toBe(
+      true,
+    );
+  });
+
   it("decodes loopback Windows paths", () => {
     expect(
       decodeLocalhostFileUrl("http://127.0.0.1:14254/C:/Users/me/project/app.ts:12:3"),
@@ -190,6 +215,22 @@ describe("localhost file URL decoding", () => {
       endLine: 12,
       endColumn: 8,
     });
+  });
+
+  it("formats decoded file targets as compact inline file labels", () => {
+    expect(
+      formatFilePathDisplayLabel(
+        "/Users/jamesbrink/.claudette/workspaces/claudex/copper-ginger/README.md:8",
+      ),
+    ).toBe("README.md:8");
+    expect(
+      formatFilePathDisplayLabel(
+        "/Users/jamesbrink/.claudette/workspaces/claudex/copper-ginger/website/guide/quickstart.md:6",
+      ),
+    ).toBe("website/guide/quickstart.md:6");
+    expect(formatFilePathDisplayLabel("/tmp/report.md:2:4-5:8")).toBe(
+      "report.md:2:4-5:8",
+    );
   });
 });
 

@@ -337,12 +337,22 @@ describe("MessagesWithTurns edit summaries", () => {
   });
 
   it("opens localhost file URLs from agent output in Monaco without navigating", async () => {
+    const worktreePath =
+      "/Users/jamesbrink/.claudette/workspaces/claudex/copper-ginger";
+    useAppStore.setState({
+      workspaces: [
+        {
+          ...useAppStore.getState().workspaces[0],
+          worktree_path: worktreePath,
+        },
+      ],
+    });
     const messages = [
       message("user-1", "User", "where did you write?"),
       message(
         "assistant-1",
         "Assistant",
-        "Wrote http://localhost:14254/repo/CLAUDETTE_TEST.md:1",
+        `Wrote http://localhost:14254${worktreePath}/README.md:8`,
       ),
     ];
 
@@ -358,10 +368,11 @@ describe("MessagesWithTurns edit summaries", () => {
     );
 
     const fileButton = Array.from(container.querySelectorAll("button")).find(
-      (item) => item.textContent?.includes("CLAUDETTE_TEST.md"),
+      (item) => item.textContent?.includes("README.md"),
     );
     expect(fileButton).toBeTruthy();
-    expect(container.querySelector('a[href^="http://localhost:14254/repo"]')).toBeNull();
+    expect(fileButton?.textContent).toBe("README.md:8");
+    expect(container.querySelector('a[href^="http://localhost:14254"]')).toBeNull();
 
     await act(async () => {
       fileButton?.dispatchEvent(
@@ -370,12 +381,72 @@ describe("MessagesWithTurns edit summaries", () => {
     });
 
     const state = useAppStore.getState();
-    expect(state.fileTabsByWorkspace[WORKSPACE_ID]).toEqual(["CLAUDETTE_TEST.md"]);
-    expect(state.activeFileTabByWorkspace[WORKSPACE_ID]).toBe("CLAUDETTE_TEST.md");
+    expect(state.fileTabsByWorkspace[WORKSPACE_ID]).toEqual(["README.md"]);
+    expect(state.activeFileTabByWorkspace[WORKSPACE_ID]).toBe("README.md");
     expect(state.fileRevealTargetByWorkspace[WORKSPACE_ID]).toMatchObject({
-      path: "CLAUDETTE_TEST.md",
-      startLine: 1,
-      endLine: 1,
+      path: "README.md",
+      startLine: 8,
+      endLine: 8,
+    });
+  });
+
+  it("reopens a chat file link after its Monaco tab was closed", async () => {
+    const worktreePath =
+      "/Users/jamesbrink/.claudette/workspaces/claudex/copper-ginger";
+    useAppStore.setState({
+      workspaces: [
+        {
+          ...useAppStore.getState().workspaces[0],
+          worktree_path: worktreePath,
+        },
+      ],
+    });
+    const messages = [
+      message(
+        "assistant-1",
+        "Assistant",
+        `See http://localhost:14254${worktreePath}/README.md:8`,
+      ),
+    ];
+
+    const container = await render(
+      <MessagesWithTurns
+        messages={messages}
+        workspaceId={WORKSPACE_ID}
+        sessionId={SESSION_ID}
+        isRunning={false}
+        searchQuery=""
+        toolDisplayMode="grouped"
+      />,
+    );
+
+    const fileButton = Array.from(container.querySelectorAll("button")).find(
+      (item) => item.textContent === "README.md:8",
+    );
+    expect(fileButton).toBeTruthy();
+
+    await act(async () => {
+      fileButton?.dispatchEvent(
+        new MouseEvent("click", { bubbles: true, cancelable: true }),
+      );
+    });
+    useAppStore.getState().closeFileTab(WORKSPACE_ID, "README.md");
+    expect(useAppStore.getState().fileTabsByWorkspace[WORKSPACE_ID]).toEqual([]);
+    expect(useAppStore.getState().activeFileTabByWorkspace[WORKSPACE_ID]).toBeNull();
+
+    await act(async () => {
+      fileButton?.dispatchEvent(
+        new MouseEvent("click", { bubbles: true, cancelable: true }),
+      );
+    });
+
+    const state = useAppStore.getState();
+    expect(state.fileTabsByWorkspace[WORKSPACE_ID]).toEqual(["README.md"]);
+    expect(state.activeFileTabByWorkspace[WORKSPACE_ID]).toBe("README.md");
+    expect(state.fileRevealTargetByWorkspace[WORKSPACE_ID]).toMatchObject({
+      path: "README.md",
+      startLine: 8,
+      endLine: 8,
     });
   });
 

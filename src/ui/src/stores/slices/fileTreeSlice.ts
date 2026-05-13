@@ -496,6 +496,25 @@ export const createFileTreeSlice: StateCreator<AppState, [], [], FileTreeSlice> 
       }
       const key = fileBufferKey(workspaceId, path);
       const { [key]: _dropped, ...remainingBuffers } = s.fileBuffers;
+      const currentReveal = s.fileRevealTargetByWorkspace[workspaceId];
+      const nextReveal =
+        currentReveal?.path === path
+          ? {
+              ...s.fileRevealTargetByWorkspace,
+              [workspaceId]: null,
+            }
+          : s.fileRevealTargetByWorkspace;
+      const existingOrder = s.tabOrderByWorkspace[workspaceId] ?? [];
+      const nextOrder = existingOrder.filter(
+        (entry) => !(entry.kind === "file" && entry.path === path),
+      );
+      const nextTabOrder =
+        nextOrder.length === existingOrder.length
+          ? s.tabOrderByWorkspace
+          : {
+              ...s.tabOrderByWorkspace,
+              [workspaceId]: nextOrder,
+            };
       return {
         fileTabsByWorkspace: {
           ...s.fileTabsByWorkspace,
@@ -505,6 +524,8 @@ export const createFileTreeSlice: StateCreator<AppState, [], [], FileTreeSlice> 
           ...s.activeFileTabByWorkspace,
           [workspaceId]: nextActive,
         },
+        fileRevealTargetByWorkspace: nextReveal,
+        tabOrderByWorkspace: nextTabOrder,
         fileBuffers: remainingBuffers,
       };
     }),

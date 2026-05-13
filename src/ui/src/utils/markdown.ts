@@ -20,6 +20,9 @@ import {
   decodeFilePathHref,
   decodeLocalhostFileUrlTarget,
   FILE_PATH_SCHEME,
+  formatFilePathDisplayLabel,
+  isExplicitFilePathTarget,
+  isLikelyFilePathTarget,
 } from "./filePathLinks";
 import { getCachedHighlight, highlightCode } from "./highlight";
 import { rehypeFilePathLinks } from "./rehypeFilePathLinks";
@@ -359,7 +362,9 @@ export function HighlightedCode({
   }
   const inlineText = extractText(children).trim();
   const resolvedPath = fileOpen?.resolveFilePath?.(inlineText) ?? null;
-  if (resolvedPath && fileOpen) {
+  const inlineFilePath =
+    resolvedPath ?? (isLikelyFilePathTarget(inlineText) ? inlineText : null);
+  if (inlineFilePath && fileOpen) {
     return createElement(
       "button",
       {
@@ -368,8 +373,8 @@ export function HighlightedCode({
           "cc-file-path-link",
           typeof className === "string" ? className : undefined,
         ),
-        title: resolvedPath,
-        onClick: () => fileOpen.openFile(resolvedPath),
+        title: inlineFilePath,
+        onClick: () => fileOpen.openFile(inlineFilePath),
       },
       children,
     );
@@ -386,8 +391,12 @@ const MarkdownLink: NonNullable<Components["a"]> = ({
   const fileOpen = useContext(MarkdownFileOpenContext);
   const encodedFilePath = href ? decodeFilePathHref(href) : null;
   const localhostFilePath = href ? decodeLocalhostFileUrlTarget(href) : null;
+  const hrefFilePath =
+    href && !encodedFilePath && !localhostFilePath && isExplicitFilePathTarget(href)
+      ? href
+      : null;
   const filePath = href
-    ? (encodedFilePath ?? localhostFilePath)
+    ? (encodedFilePath ?? localhostFilePath ?? hrefFilePath)
     : null;
   const externalHref = href ? normalizeExternalHref(href) : null;
   const openExternalHref = (target: string) => {
@@ -398,14 +407,34 @@ const MarkdownLink: NonNullable<Components["a"]> = ({
   const openFilePath = () => {
     if (!filePath) return;
     if (fileOpen) {
+      const displayFilePath = localhostFilePath ?? hrefFilePath;
+      const resolvedDisplayFilePath = displayFilePath
+        ? fileOpen.resolveFilePath?.(
+            formatFilePathDisplayLabel(displayFilePath),
+          )
+        : null;
+      if (resolvedDisplayFilePath) {
+        try {
+          if (fileOpen.openFile(resolvedDisplayFilePath)) return;
+        } catch (err) {
+          console.error(
+            "Failed to open resolved file link in Monaco:",
+            resolvedDisplayFilePath,
+            err,
+          );
+        }
+      }
       try {
         if (fileOpen.openFile(filePath)) return;
       } catch (err) {
         console.error("Failed to open file link in Monaco:", filePath, err);
       }
     }
-    if (localhostFilePath && externalHref) {
-      openExternalHref(externalHref);
+    if (localhostFilePath || hrefFilePath) {
+      console.warn(
+        "No workspace file match available for chat file link:",
+        filePath,
+      );
       return;
     }
     console.warn(
@@ -414,6 +443,10 @@ const MarkdownLink: NonNullable<Components["a"]> = ({
     );
   };
   if (filePath) {
+    const compactFilePath = localhostFilePath ?? hrefFilePath;
+    const filePathLabel = compactFilePath
+      ? formatFilePathDisplayLabel(compactFilePath)
+      : children;
     return createElement(
       "button",
       {
@@ -425,7 +458,7 @@ const MarkdownLink: NonNullable<Components["a"]> = ({
         title: filePath,
         onClick: openFilePath,
       },
-      children,
+      filePathLabel,
     );
   }
   return createElement(

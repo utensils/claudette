@@ -145,6 +145,57 @@ describe("file path store updates", () => {
     expect(state.fileBuffers[`${WS}:c.ts`]).toBeUndefined();
   });
 
+  it("clears closed file metadata so the same file can reopen cleanly", () => {
+    useAppStore.setState({
+      tabOrderByWorkspace: {
+        [WS]: [
+          { kind: "session", sessionId: "session-1" },
+          { kind: "file", path: "README.md" },
+        ],
+      },
+    });
+    useAppStore.getState().openFileTab(WS, "README.md", {
+      startLine: 8,
+      endLine: 8,
+    });
+    useAppStore.getState().setFileBufferLoaded(WS, "README.md", {
+      baseline: "hello",
+      isBinary: false,
+      sizeBytes: 5,
+      truncated: false,
+      imageBytesB64: null,
+    });
+
+    useAppStore.getState().closeFileTab(WS, "README.md");
+
+    expect(useAppStore.getState().fileTabsByWorkspace[WS]).toEqual([]);
+    expect(useAppStore.getState().activeFileTabByWorkspace[WS]).toBeNull();
+    expect(useAppStore.getState().fileBuffers[`${WS}:README.md`]).toBeUndefined();
+    expect(useAppStore.getState().fileRevealTargetByWorkspace[WS]).toBeNull();
+    expect(useAppStore.getState().tabOrderByWorkspace[WS]).toEqual([
+      { kind: "session", sessionId: "session-1" },
+    ]);
+
+    useAppStore.getState().openFileTab(WS, "README.md", {
+      startLine: 8,
+      endLine: 8,
+    });
+
+    const state = useAppStore.getState();
+    expect(state.fileTabsByWorkspace[WS]).toEqual(["README.md"]);
+    expect(state.activeFileTabByWorkspace[WS]).toBe("README.md");
+    expect(state.fileBuffers[`${WS}:README.md`]).toMatchObject({
+      loaded: false,
+      buffer: "",
+      baseline: "",
+    });
+    expect(state.fileRevealTargetByWorkspace[WS]).toMatchObject({
+      path: "README.md",
+      startLine: 8,
+      endLine: 8,
+    });
+  });
+
   it("removes all child file tabs when a folder is deleted", () => {
     openLoadedFile("src/components/Button.tsx");
     openLoadedFile("src/components/Card.tsx");
