@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   applyCommandLineEvent,
+  approvalDetailValue,
   extractAssistantMessageParts,
   type CommandLineApplyDeps,
 } from "./useAgentStreamLogic";
@@ -96,5 +97,18 @@ describe("extractAssistantMessageParts", () => {
     ]);
 
     expect(parts).toEqual({ text: "Visible", thinking: "" });
+  });
+});
+
+describe("approvalDetailValue", () => {
+  it("formats supported detail values without surfacing raw JSON", () => {
+    expect(approvalDetailValue("  /repo  ")).toBe("/repo");
+    expect(approvalDetailValue(["read", " write ", ""])).toBe("read, write");
+  });
+
+  it("drops unknown object and scalar shapes", () => {
+    expect(approvalDetailValue({ foo: "bar" })).toBeNull();
+    expect(approvalDetailValue(42)).toBeNull();
+    expect(approvalDetailValue(["read", 42])).toBeNull();
   });
 });

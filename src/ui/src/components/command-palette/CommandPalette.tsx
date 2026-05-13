@@ -1,4 +1,5 @@
 import { useState, useMemo, useEffect, useRef, useCallback } from "react";
+import { useTranslation } from "react-i18next";
 import { Search, ChevronLeft } from "lucide-react";
 import { useAppStore } from "../../stores/useAppStore";
 import { applyTheme, applyUserFonts, findTheme, loadAllThemes, cacheThemePreference, getThemeDataAttr } from "../../utils/theme";
@@ -44,6 +45,7 @@ interface GroupedCommands {
 }
 
 export function CommandPalette() {
+  const { t } = useTranslation("chat");
   const toggleCommandPalette = useAppStore((s) => s.toggleCommandPalette);
   const toggleSidebar = useAppStore((s) => s.toggleSidebar);
   const toggleTerminalPanel = useAppStore((s) => s.toggleTerminalPanel);
@@ -376,9 +378,13 @@ export function CommandPalette() {
       },
       close,
       selectedModelProvider,
+      {
+        codexReasoningEffort: t("codex_reasoning_effort"),
+        codexSetReasoningEffort: t("codex_set_reasoning_effort"),
+      },
     ),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [selectedModel, selectedModelProvider, effortLevel, selectedSessionId],
+    [selectedModel, selectedModelProvider, effortLevel, selectedSessionId, t],
   );
 
   const fileCommands = useMemo(

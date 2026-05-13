@@ -30,6 +30,7 @@ import { buildCompactionSentinel } from "../utils/compactionSentinel";
 import { pickMeterUsageFromResult } from "./pickMeterUsageFromResult";
 import {
   applyCommandLineEvent,
+  approvalDetailValue,
   extractAssistantMessageParts,
 } from "./useAgentStreamLogic";
 
@@ -51,24 +52,6 @@ function stringField(input: Record<string, unknown>, key: string): string | null
   if (typeof value !== "string") return null;
   const trimmed = value.trim();
   return trimmed ? trimmed : null;
-}
-
-function approvalDetailValue(value: unknown): string | null {
-  if (typeof value === "string") {
-    const trimmed = value.trim();
-    return trimmed ? trimmed : null;
-  }
-  if (Array.isArray(value) && value.every((item) => typeof item === "string")) {
-    const joined = value
-      .map((item) => item.trim())
-      .filter(Boolean)
-      .join(", ");
-    return joined || null;
-  }
-  if (value !== null && value !== undefined && typeof value !== "function") {
-    return JSON.stringify(value) ?? null;
-  }
-  return null;
 }
 
 function addDetail(

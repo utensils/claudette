@@ -52,6 +52,11 @@ export interface Command {
   execute: () => void;
 }
 
+export interface EffortCommandLabels {
+  codexReasoningEffort?: string;
+  codexSetReasoningEffort?: string;
+}
+
 export const CATEGORY_LABELS: Record<CommandCategory, string> = {
   general: "General",
   ui: "Interface",
@@ -169,18 +174,26 @@ export function buildEffortCommands(
   onSelect: (level: string) => void,
   close: () => void,
   selectedProvider = "anthropic",
+  labels: EffortCommandLabels = {},
 ): Command[] {
   if (selectedProvider === "experimental-codex") {
+    const effortLabel = labels.codexReasoningEffort ?? "Intelligence";
+    const setEffortLabel = labels.codexSetReasoningEffort ?? "Set Codex intelligence";
     const selectedEffort = CODEX_REASONING_LEVELS.some((level) => level.id === currentEffort)
       ? currentEffort
       : "high";
     return CODEX_REASONING_LEVELS.map((level) => ({
       id: `effort:${level.id}`,
       name: `${level.label}${level.id === selectedEffort ? " ✓" : ""}`,
-      description: `${level.label} intelligence`,
+      description: `${effortLabel}: ${level.label}`,
       category: "agent" as const,
       icon: Gauge,
-      keywords: ["intelligence", "reasoning", level.label.toLowerCase()],
+      keywords: [
+        effortLabel.toLowerCase(),
+        setEffortLabel.toLowerCase(),
+        "reasoning",
+        level.label.toLowerCase(),
+      ],
       execute: () => { onSelect(level.id); close(); },
     }));
   }

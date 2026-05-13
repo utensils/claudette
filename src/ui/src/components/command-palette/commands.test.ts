@@ -237,6 +237,10 @@ describe("buildEffortCommands", () => {
       vi.fn(),
       vi.fn(),
       "experimental-codex",
+      {
+        codexReasoningEffort: "Inteligencia",
+        codexSetReasoningEffort: "Establecer inteligencia de Codex",
+      },
     );
 
     expect(cmds.map((cmd) => cmd.id)).toEqual([
@@ -246,6 +250,12 @@ describe("buildEffortCommands", () => {
       "effort:xhigh",
     ]);
     expect(cmds.find((cmd) => cmd.id === "effort:high")?.name).toContain("✓");
+    expect(cmds.find((cmd) => cmd.id === "effort:high")?.description).toBe(
+      "Inteligencia: High",
+    );
+    expect(cmds.find((cmd) => cmd.id === "effort:high")?.keywords).toContain(
+      "establecer inteligencia de codex",
+    );
   });
 });
 

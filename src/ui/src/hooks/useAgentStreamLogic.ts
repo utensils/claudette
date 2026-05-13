@@ -43,6 +43,21 @@ export function applyCommandLineEvent(
   return true;
 }
 
+export function approvalDetailValue(value: unknown): string | null {
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    return trimmed ? trimmed : null;
+  }
+  if (Array.isArray(value) && value.every((item) => typeof item === "string")) {
+    const joined = value
+      .map((item) => item.trim())
+      .filter(Boolean)
+      .join(", ");
+    return joined || null;
+  }
+  return null;
+}
+
 export function extractAssistantMessageParts(content: ContentBlock[]): {
   text: string;
   thinking: string;
