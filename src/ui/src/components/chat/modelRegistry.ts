@@ -77,15 +77,29 @@ export interface BackendRegistrySource {
   discovered_models: BackendRegistryModel[];
 }
 
+export function shouldExposeBackendModels(
+  backend: BackendRegistrySource,
+  alternativeBackendsEnabled: boolean,
+  experimentalCodexEnabled = false,
+): boolean {
+  if (!backend.enabled || backend.id === "anthropic") return false;
+  if (backend.kind === "codex_subscription") return false;
+  if (backend.kind === "codex_native") return experimentalCodexEnabled;
+  return alternativeBackendsEnabled;
+}
+
 export function buildModelRegistry(
   alternativeBackendsEnabled: boolean,
   backends: readonly BackendRegistrySource[],
+  experimentalCodexEnabled = false,
 ): readonly Model[] {
-  if (!alternativeBackendsEnabled) return MODELS;
-
-  const models: Model[] = [...MODELS];
+  let models: Model[] | undefined;
   for (const backend of backends) {
-    if (!backend.enabled || backend.id === "anthropic") continue;
+    if (!shouldExposeBackendModels(
+      backend,
+      alternativeBackendsEnabled,
+      experimentalCodexEnabled,
+    )) continue;
     const backendModels =
       backend.discovered_models.length > 0
         ? backend.discovered_models
@@ -94,7 +108,8 @@ export function buildModelRegistry(
     for (const model of backendModels) {
       if (!model.id || seen.has(model.id)) continue;
       seen.add(model.id);
-      models.push({
+      const target = models ??= [...MODELS];
+      target.push({
         id: model.id,
         label: model.label || model.id,
         group: backend.label,
@@ -109,7 +124,7 @@ export function buildModelRegistry(
       });
     }
   }
-  return models;
+  return models ?? MODELS;
 }
 
 export function resolveModelSelection(

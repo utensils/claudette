@@ -38,6 +38,7 @@ struct CodexTurnOutput {
 pub struct CodexAppServerOptions {
     pub model: Option<String>,
     pub permission_level: CodexPermissionLevel,
+    pub fast_mode: bool,
 }
 
 impl Default for CodexAppServerOptions {
@@ -45,6 +46,7 @@ impl Default for CodexAppServerOptions {
         Self {
             model: None,
             permission_level: CodexPermissionLevel::Readonly,
+            fast_mode: false,
         }
     }
 }
@@ -58,6 +60,7 @@ pub struct CodexAppServerSession {
     working_dir: PathBuf,
     model: Option<String>,
     permission_level: CodexPermissionLevel,
+    fast_mode: bool,
     thread_id: Arc<tokio::sync::Mutex<Option<String>>>,
     active_turn_id: Arc<tokio::sync::Mutex<Option<String>>>,
     turn_output: TurnOutputBuffer,
@@ -120,6 +123,7 @@ impl CodexAppServerSession {
             working_dir: working_dir.to_path_buf(),
             model: options.model,
             permission_level: options.permission_level,
+            fast_mode: options.fast_mode,
             thread_id: Arc::new(tokio::sync::Mutex::new(None)),
             active_turn_id: Arc::new(tokio::sync::Mutex::new(None)),
             turn_output: Arc::new(tokio::sync::Mutex::new(CodexTurnOutput::default())),
@@ -158,6 +162,7 @@ impl CodexAppServerSession {
             working_dir: PathBuf::from("/tmp"),
             model: None,
             permission_level: CodexPermissionLevel::Readonly,
+            fast_mode: false,
             thread_id: Arc::new(tokio::sync::Mutex::new(None)),
             active_turn_id: Arc::new(tokio::sync::Mutex::new(None)),
             turn_output: Arc::new(tokio::sync::Mutex::new(CodexTurnOutput::default())),
@@ -196,6 +201,7 @@ impl CodexAppServerSession {
                 &self.working_dir,
                 self.model.as_deref(),
                 self.permission_level,
+                self.fast_mode,
             ))
             .await?;
         let turn_id = turn_id_from_response(&response)?;
@@ -345,6 +351,7 @@ impl CodexAppServerSession {
                 self.model.as_deref(),
                 &self.working_dir,
                 self.permission_level,
+                self.fast_mode,
             ))
             .await?;
         let thread_id = thread_id_from_response(&response)?;
@@ -808,7 +815,7 @@ pub enum CodexSandboxMode {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(tag = "type", rename_all = "camelCase")]
 pub enum CodexSandboxPolicy {
     DangerFullAccess,
     #[serde(rename_all = "camelCase")]
@@ -1112,14 +1119,17 @@ pub fn build_thread_start_request(
     model: Option<&str>,
     cwd: &Path,
     permission_level: CodexPermissionLevel,
+    fast_mode: bool,
 ) -> JsonRpcRequest {
     let mapping = permission_level.mapping();
+    let service_tier = fast_mode.then_some("priority");
     JsonRpcRequest {
         id: JsonRpcId::Integer(id),
         method: "thread/start".to_string(),
         params: Some(json!({
             "model": model,
             "modelProvider": "openai",
+            "serviceTier": service_tier,
             "cwd": cwd,
             "approvalPolicy": mapping.approval_policy,
             "approvalsReviewer": "user",
@@ -1136,8 +1146,10 @@ pub fn build_turn_start_request(
     cwd: &Path,
     model: Option<&str>,
     permission_level: CodexPermissionLevel,
+    fast_mode: bool,
 ) -> JsonRpcRequest {
     let mapping = permission_level.mapping();
+    let service_tier = fast_mode.then_some("priority");
     JsonRpcRequest {
         id: JsonRpcId::Integer(id),
         method: "turn/start".to_string(),
@@ -1153,6 +1165,7 @@ pub fn build_turn_start_request(
             "approvalsReviewer": "user",
             "sandboxPolicy": mapping.turn_sandbox_policy,
             "model": model,
+            "serviceTier": service_tier,
         })),
     }
 }
@@ -2048,6 +2061,7 @@ mod tests {
             Path::new("/tmp/work"),
             None,
             CodexPermissionLevel::Readonly,
+            false,
         );
         router.track_request(&request);
         assert_eq!(router.pending_len(), 1);
@@ -2211,6 +2225,7 @@ mod tests {
             Path::new("/tmp/work"),
             Some("gpt-5.1-codex"),
             CodexPermissionLevel::Standard,
+            true,
         );
         let value = serde_json::to_value(request).unwrap();
 
@@ -2219,11 +2234,31 @@ mod tests {
         assert_eq!(value["params"]["input"][0]["type"], "text");
         assert_eq!(value["params"]["input"][0]["text"], "hello");
         assert_eq!(value["params"]["model"], "gpt-5.1-codex");
+        assert_eq!(value["params"]["serviceTier"], "priority");
         assert_eq!(value["params"]["approvalPolicy"], "on-request");
-        assert_eq!(
-            value["params"]["sandboxPolicy"]["workspaceWrite"]["networkAccess"],
-            false
+        assert_eq!(value["params"]["sandboxPolicy"]["type"], "workspaceWrite");
+        assert_eq!(value["params"]["sandboxPolicy"]["networkAccess"], false);
+    }
+
+    #[test]
+    fn turn_start_request_serializes_full_sandbox_as_tagged_policy() {
+        let request = build_turn_start_request(
+            8,
+            "thread-1",
+            "ship it",
+            Path::new("/tmp/work"),
+            None,
+            CodexPermissionLevel::Full,
+            false,
         );
+        let value = serde_json::to_value(request).unwrap();
+
+        assert_eq!(value["params"]["approvalPolicy"], "never");
+        assert_eq!(
+            value["params"]["sandboxPolicy"],
+            json!({"type": "dangerFullAccess"})
+        );
+        assert_eq!(value["params"]["serviceTier"], serde_json::Value::Null);
     }
 
     #[test]

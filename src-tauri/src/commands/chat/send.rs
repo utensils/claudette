@@ -1610,6 +1610,7 @@ pub async fn send_chat_message(
                 mcp_config_dirty: false,
                 session_plan_mode: false,
                 session_allowed_tools: Vec::new(),
+                session_fast_mode: false,
                 session_disable_1m_context: false,
                 session_backend_hash: String::new(),
                 pending_permissions: std::collections::HashMap::new(),
@@ -1640,6 +1641,7 @@ pub async fn send_chat_message(
             mcp_config_dirty: false,
             session_plan_mode: false,
             session_allowed_tools: Vec::new(),
+            session_fast_mode: false,
             session_disable_1m_context: false,
             session_backend_hash: String::new(),
             pending_permissions: std::collections::HashMap::new(),
@@ -1901,12 +1903,14 @@ pub async fn send_chat_message(
                 plan_mode: session.session_plan_mode,
                 allowed_tools: &session.session_allowed_tools,
                 exited_plan: session.session_exited_plan,
+                fast_mode: session.session_fast_mode,
                 disable_1m_context: session.session_disable_1m_context,
                 backend_hash: &session.session_backend_hash,
             },
             RequestedFlags {
                 plan_mode: agent_settings.plan_mode,
                 allowed_tools: &allowed_tools,
+                fast_mode: agent_settings.fast_mode,
                 disable_1m_context: agent_settings.disable_1m_context,
                 backend_hash: &agent_settings.backend_runtime.hash,
             },
@@ -1928,12 +1932,14 @@ pub async fn send_chat_message(
                 plan_mode: session.session_plan_mode,
                 allowed_tools: &session.session_allowed_tools,
                 exited_plan: session.session_exited_plan,
+                fast_mode: session.session_fast_mode,
                 disable_1m_context: session.session_disable_1m_context,
                 backend_hash: &session.session_backend_hash,
             },
             RequestedFlags {
                 plan_mode: agent_settings.plan_mode,
                 allowed_tools: &allowed_tools,
+                fast_mode: agent_settings.fast_mode,
                 disable_1m_context: agent_settings.disable_1m_context,
                 backend_hash: &agent_settings.backend_runtime.hash,
             },
@@ -1955,12 +1961,14 @@ pub async fn send_chat_message(
                 plan_mode: session.session_plan_mode,
                 allowed_tools: &session.session_allowed_tools,
                 exited_plan: session.session_exited_plan,
+                fast_mode: session.session_fast_mode,
                 disable_1m_context: session.session_disable_1m_context,
                 backend_hash: &session.session_backend_hash,
             },
             RequestedFlags {
                 plan_mode: agent_settings.plan_mode,
                 allowed_tools: &allowed_tools,
+                fast_mode: agent_settings.fast_mode,
                 disable_1m_context: agent_settings.disable_1m_context,
                 backend_hash: &agent_settings.backend_runtime.hash,
             },
@@ -1973,6 +1981,7 @@ pub async fn send_chat_message(
             plan_mode_drifted = session.session_plan_mode != agent_settings.plan_mode,
             allowed_tools_changed = session.session_allowed_tools != allowed_tools,
             exited_plan = session.session_exited_plan,
+            fast_mode_drifted = session.session_fast_mode != agent_settings.fast_mode,
             disable_1m_context_drifted = session.session_disable_1m_context != agent_settings.disable_1m_context,
             backend_hash_changed = session.session_backend_hash != agent_settings.backend_runtime.hash,
             "session flags drifted — tearing down persistent session"
@@ -2255,6 +2264,7 @@ pub async fn send_chat_message(
                         CodexAppServerOptions {
                             model: settings.model.clone(),
                             permission_level: codex_permission_level_for_persistent,
+                            fast_mode: settings.fast_mode,
                         },
                     )
                     .await?;
@@ -2436,6 +2446,7 @@ pub async fn send_chat_message(
                 session.session_id = final_sid;
                 session.session_plan_mode = agent_settings.plan_mode;
                 session.session_allowed_tools = allowed_tools.clone();
+                session.session_fast_mode = agent_settings.fast_mode;
                 session.session_disable_1m_context = agent_settings.disable_1m_context;
                 session.session_backend_hash = agent_settings.backend_runtime.hash.clone();
                 // Fresh process — any prior ExitPlanMode observation belongs
@@ -2578,6 +2589,7 @@ pub async fn send_chat_message(
         session.session_id = final_sid.clone();
         session.session_plan_mode = agent_settings.plan_mode;
         session.session_allowed_tools = allowed_tools.clone();
+        session.session_fast_mode = agent_settings.fast_mode;
         session.session_disable_1m_context = agent_settings.disable_1m_context;
         session.session_backend_hash = agent_settings.backend_runtime.hash.clone();
         // See the sibling reset above — fresh process, fresh latch.

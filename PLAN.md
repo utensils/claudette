@@ -17,6 +17,8 @@
 - Preserve the existing OpenAI API gateway backend.
 - Supersede only the current `codex-subscription` gateway backend with native Codex when the new experimental gate is enabled.
 - Use the UI label `Experimental Codex` for native Codex.
+- Keep **Experimental Codex** independent from **Alternative Claude Code backends**. Alternative backend runtime exposure stays off by default for new users and only gates Ollama, LM Studio, OpenAI API, and future non-Codex providers.
+- Map Claudette fast mode to Codex app-server `serviceTier: "priority"` for native Codex turns and thread starts.
 - Keep Claude Remote Control Claude-only in this first Codex implementation.
 - Refactor Claude Code into a behavior-preserving harness adapter before adding native Codex behavior.
 
@@ -218,6 +220,25 @@
 - 2026-05-13: Verified the initialization cleanup and approval-response fixes with:
   - `nix develop -c cargo test -p claudette agent::codex_app_server --all-features`
   - `nix develop -c cargo fmt --all --check`
+- 2026-05-13: Corrected the feature-gate split after live app testing:
+  - **Alternative Claude Code backends** is again disabled by default and no longer includes, enables, or exposes Codex.
+  - **Experimental Codex** independently exposes the native `experimental-codex` backend and seeded/refreshed Codex models.
+  - Legacy `codex-subscription` remains hidden from Settings/model pickers and never reappears through the Alternative backend gate.
+- 2026-05-13: Implemented native Codex fast mode:
+  - Codex app-server `thread/start` and `turn/start` now send `serviceTier: "priority"` when Claudette fast mode is enabled.
+  - Fast-mode drift now respawns persistent sessions so toggling Fast takes effect on the next turn.
+  - Provider-aware model registry checks now keep Fast visible for Codex models even while Alternative backends are off.
+  - Codex `sandboxPolicy` now serializes as the app-server tagged object shape (`{"type":"dangerFullAccess"}` etc.), fixing the live `dangerFullAccess` deserialization failure.
+- 2026-05-13: Verified the fast-mode and gate split fixes with:
+  - `nix develop -c cargo test -p claudette agent::codex_app_server --all-features`
+  - `nix develop -c cargo test -p claudette drift_when_fast_mode_flips --all-features`
+  - `nix develop -c cargo test -p claudette-tauri agent_backends --all-features`
+  - `nix develop -c cargo test -p claudette-tauri chat::lifecycle --all-features`
+  - `cd src/ui && bun run test -- modelRegistry codexBackendMigration`
+  - `cd src/ui && bunx tsc -b`
+  - `cd src/ui && bun run lint` (warnings only; no errors)
+  - `cd src/ui && bun run lint:css`
+  - `nix develop -c cargo fmt --all --check`
   - `git diff --check`
 - 2026-05-13: Reopened the completion bar after identifying that blanket app-server approval declines were only a temporary non-stalling fallback, not complete native Codex support.
 - 2026-05-13: Implemented interactive native Codex approval routing:
@@ -269,19 +290,14 @@
 
 - Native Codex implementation is complete for this branch's planned scope and ready for final human review in draft PR #786.
 - Keep monitoring the draft PR for any new Copilot or CI feedback after this final plan-status commit.
-- 2026-05-13: Reopened the completion bar after live dev-app validation showed a usable-model surfacing bug: `experimentalCodexEnabled` could be true while the parent alternative-backends runtime gate remained false, and the native Codex backend seed was disabled so its models could not enter the picker.
-- 2026-05-13: Implemented the surfacing fix:
-  - `alternative-backends` remains in Tauri default features, Windows release/nightly builds, and `scripts/dev.sh`; `dev.sh` now appends the feature when an override omits it.
-  - The alternative-backends runtime setting now defaults on in supported builds.
-  - Existing stale state with Experimental Codex on and alternative backends off is repaired on frontend startup and honored by Rust backend runtime resolution.
-  - Turning on Experimental Codex enables the parent gate; turning the parent gate off also disables Experimental Codex and migrates selections away from native Codex.
-  - Native `experimental-codex` is enabled by default behind the Experimental Codex gate so seeded Codex models appear in chat model pickers immediately, while user-saved disabled backend configs still persist.
-  - Settings copy and provider/settings docs now describe the default-on alternative backend gate and Codex model surfacing behavior.
-- 2026-05-13: Verified the focused surfacing fix with:
-  - `cd src/ui && bun run test -- codexBackendMigration modelRegistry`
-  - `nix develop -c cargo test -p claudette agent_backend --all-features`
-  - `nix develop -c cargo test -p claudette-tauri agent_backends --all-features`
-  - `cd src/ui && bunx tsc -b`
-  - `cd src/ui && bun run lint` (warnings only; no errors)
-  - `nix develop -c cargo fmt --all --check`
-  - `git diff --check`
+- 2026-05-13: Superseded the earlier surfacing approach after live dev-app validation:
+  - The native Codex models still surface when **Experimental Codex** is enabled, but they do so through a Codex-specific registry path rather than by enabling or depending on **Alternative Claude Code backends**.
+  - **Alternative Claude Code backends** is disabled by default for new users and no longer controls or reveals Codex.
+  - The Tauri `alternative-backends` compile feature remains enabled in dev/release build feature sets so the code is available, but the runtime setting is independent and default-off.
+  - `dev.sh` continues to append the compile feature when a local override omits it; this does not enable the user-facing runtime setting.
+  - Settings copy and provider/settings docs now describe Codex as a separate experimental gate.
+
+## Current Next Stage
+
+- Rebase with `origin/main`, commit, push, and run the regular Copilot review loop for the fast-mode/gate-separation fix.
+- After push, verify the dev app can select an `experimental-codex/*` model with **Experimental Codex** on and **Alternative Claude Code backends** off.

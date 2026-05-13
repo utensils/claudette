@@ -97,6 +97,7 @@ export function CommandPalette() {
     (s) => (selectedSessionId ? s.selectedModelProvider[selectedSessionId] ?? "anthropic" : "anthropic"),
   );
   const alternativeBackendsEnabled = useAppStore((s) => s.alternativeBackendsEnabled);
+  const experimentalCodexEnabled = useAppStore((s) => s.experimentalCodexEnabled);
   const agentBackends = useAppStore((s) => s.agentBackends);
   const setThinkingEnabled = useAppStore((s) => s.setThinkingEnabled);
   const setPlanMode = useAppStore((s) => s.setPlanMode);
@@ -344,8 +345,8 @@ export function CommandPalette() {
   );
 
   const modelRegistry = useMemo(
-    () => buildModelRegistry(alternativeBackendsEnabled, agentBackends),
-    [alternativeBackendsEnabled, agentBackends],
+    () => buildModelRegistry(alternativeBackendsEnabled, agentBackends, experimentalCodexEnabled),
+    [alternativeBackendsEnabled, agentBackends, experimentalCodexEnabled],
   );
 
   const modelCommands = useMemo(

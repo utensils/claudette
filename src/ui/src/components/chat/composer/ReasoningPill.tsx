@@ -4,6 +4,7 @@ import { useAppStore } from "../../../stores/useAppStore";
 import { setAppSetting } from "../../../services/tauri";
 import { isEffortSupported, isXhighEffortAllowed, isMaxEffortAllowed } from "../modelCapabilities";
 import { EFFORT_LEVELS } from "../EffortSelector";
+import { useSelectedModelEntry } from "../useSelectedModelEntry";
 import styles from "./ReasoningPill.module.css";
 
 interface ReasoningPillProps {
@@ -28,7 +29,8 @@ export function ReasoningPill({ sessionId, disabled }: ReasoningPillProps) {
   const setThinkingEnabled = useAppStore((s) => s.setThinkingEnabled);
   const setShowThinkingBlocks = useAppStore((s) => s.setShowThinkingBlocks);
   const setEffortLevel = useAppStore((s) => s.setEffortLevel);
-  const showEffort = isEffortSupported(selectedModel);
+  const currentModel = useSelectedModelEntry(sessionId);
+  const showEffort = currentModel?.supportsEffort ?? isEffortSupported(selectedModel);
   const effortLabel = EFFORT_LEVELS.find((l) => l.id === effortLevel)?.label ?? effortLevel;
   const isActive = thinkingEnabled;
 

@@ -92,7 +92,7 @@ impl AgentBackendCapabilities {
         Self {
             thinking: true,
             effort: false,
-            fast_mode: false,
+            fast_mode: true,
             one_m_context: false,
             tools: true,
             vision: false,
@@ -307,6 +307,7 @@ mod tests {
         assert!(!backend.kind.is_anthropic_compatible());
         assert!(backend.model_discovery);
         assert!(backend.capabilities.thinking);
+        assert!(backend.capabilities.fast_mode);
         assert!(!backend.capabilities.vision);
         assert!(!backend.manual_models.is_empty());
     }

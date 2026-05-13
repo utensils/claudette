@@ -42,22 +42,13 @@ export function planExperimentalBackendGateLoad({
   const experimentalCodexEnabled =
     alternativeBackendsCompiled && experimentalCodexSetting === "true";
   const alternativeBackendsEnabled =
-    alternativeBackendsCompiled &&
-    (experimentalCodexEnabled || alternativeBackendsSetting !== "false");
+    alternativeBackendsCompiled && alternativeBackendsSetting === "true";
 
   return {
     alternativeBackendsEnabled,
     experimentalCodexEnabled,
-    persistAlternativeBackendsEnabled:
-      experimentalCodexEnabled && alternativeBackendsSetting !== "true",
+    persistAlternativeBackendsEnabled: false,
   };
-}
-
-export function shouldEnableAlternativeBackendsForCodex(
-  nextCodexEnabled: boolean,
-  alternativeBackendsEnabled: boolean,
-): boolean {
-  return nextCodexEnabled && !alternativeBackendsEnabled;
 }
 
 export function planCodexBackendGateMigration({

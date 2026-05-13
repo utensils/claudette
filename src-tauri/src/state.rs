@@ -142,6 +142,10 @@ pub struct AgentSessionState {
     /// A mismatch on the next turn (e.g. permission level changed, or plan
     /// approval elevates access) forces a teardown + respawn.
     pub session_allowed_tools: Vec<String>,
+    /// Fast-mode value baked into the current `persistent_session`. Claude
+    /// Code receives this via spawn settings; Codex app-server receives it as
+    /// serviceTier, so either harness needs a respawn when the toolbar flips.
+    pub session_fast_mode: bool,
     /// `CLAUDE_CODE_DISABLE_1M_CONTEXT` value baked into the current
     /// `persistent_session` at spawn. A mismatch on the next turn (user
     /// switched from 200k to 1M model variant, or vice versa) forces a

@@ -5,7 +5,7 @@ import { getAppSetting } from "../../../services/tauri";
 import { tooltipAttributes } from "../../../hotkeys/display";
 import { isMacHotkeyPlatform } from "../../../hotkeys/platform";
 import { ModelSelector, is1mContextModel, get1mFallback } from "../ModelSelector";
-import { buildModelRegistry } from "../modelRegistry";
+import { buildModelRegistry, findModelInRegistry } from "../modelRegistry";
 import { isFastSupported, isEffortSupported, isXhighEffortAllowed, isMaxEffortAllowed } from "../modelCapabilities";
 import { applySelectedModel } from "../applySelectedModel";
 import { applyPlanModeMountDefault } from "../applyPlanModeMountDefault";
@@ -36,6 +36,7 @@ export function ComposerToolbar({
   const planMode = useAppStore((s) => s.planMode[sessionId] ?? false);
   const modelSelectorOpen = useAppStore((s) => s.modelSelectorOpen);
   const alternativeBackendsEnabled = useAppStore((s) => s.alternativeBackendsEnabled);
+  const experimentalCodexEnabled = useAppStore((s) => s.experimentalCodexEnabled);
   const agentBackends = useAppStore((s) => s.agentBackends);
   const keybindings = useAppStore((s) => s.keybindings);
   const setSelectedModel = useAppStore((s) => s.setSelectedModel);
@@ -62,6 +63,10 @@ export function ComposerToolbar({
   const resolvedFlags = claudeFlagsState?.resolved ?? [];
 
   const [loaded, setLoaded] = useState(false);
+  const registry = useMemo(
+    () => buildModelRegistry(alternativeBackendsEnabled, agentBackends, experimentalCodexEnabled),
+    [alternativeBackendsEnabled, agentBackends, experimentalCodexEnabled],
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -86,15 +91,18 @@ export function ComposerToolbar({
       if (cancelled) return;
       const loadedModel = model ?? defModel ?? "opus";
       const loadedProvider = provider ?? defProvider ?? "anthropic";
+      const loadedEntry = findModelInRegistry(registry, loadedModel, loadedProvider);
+      const supportsFast = loadedEntry?.supportsFastMode ?? isFastSupported(loadedModel);
+      const supportsEffort = loadedEntry?.supportsEffort ?? isEffortSupported(loadedModel);
       setSelectedModel(sessionId, loadedModel, loadedProvider);
-      const effectiveFast = isFastSupported(loadedModel) && (fast === "true" || (!fast && defFast === "true"));
+      const effectiveFast = supportsFast && (fast === "true" || (!fast && defFast === "true"));
       const effectiveThinking = thinking === "true" || (!thinking && defThinking === "true");
       setFastMode(sessionId, effectiveFast);
       setThinkingEnabled(sessionId, effectiveThinking);
       applyPlanModeMountDefault(sessionId, defPlan === "true");
       const effectiveEffort = effort ?? defEffort;
       if (effectiveEffort) {
-        const normalized = !isEffortSupported(loadedModel)
+        const normalized = !supportsEffort
           ? "auto"
           : effectiveEffort === "xhigh" && !isXhighEffortAllowed(loadedModel)
             ? "high"
@@ -109,7 +117,7 @@ export function ComposerToolbar({
     }
     load();
     return () => { cancelled = true; };
-  }, [sessionId, setSelectedModel, setFastMode, setThinkingEnabled, setEffortLevel, setShowThinkingBlocks, setChromeEnabled]);
+  }, [sessionId, registry, setSelectedModel, setFastMode, setThinkingEnabled, setEffortLevel, setShowThinkingBlocks, setChromeEnabled]);
 
   const handleModelSelect = useCallback(
     async (model: string, providerId = "anthropic") => {
@@ -138,10 +146,6 @@ export function ComposerToolbar({
     }
   }, [loaded, disable1mContext, selectedModel, sessionId]);
 
-  const registry = useMemo(
-    () => buildModelRegistry(alternativeBackendsEnabled, agentBackends),
-    [alternativeBackendsEnabled, agentBackends],
-  );
   const currentModel = registry.find(
     (m) => m.id === selectedModel && (m.providerId ?? "anthropic") === selectedProvider,
   );

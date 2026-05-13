@@ -315,8 +315,8 @@ jobs:
       # `custom-protocol` is the feature flag that tells tauri-build to
       # embed `frontendDist` (otherwise the release binary tries to
       # contact the devUrl at startup and shows "localhost refused to
-      # connect"). `alternative-backends` is kept in release binaries
-      # and the user-facing runtime gate defaults on.
+      # connect"). `alternative-backends` is kept in release binaries,
+      # while the user-facing runtime gate defaults off for new users.
       - name: Install Tauri CLI (Windows)
         if: startsWith(matrix.platform, 'windows')
         shell: bash

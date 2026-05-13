@@ -328,15 +328,16 @@ pub async fn resolve_backend_runtime(
     model: Option<&str>,
 ) -> Result<AgentBackendRuntime, String> {
     let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
-    if !alternative_backends_enabled(&db)? {
-        return Ok(AgentBackendRuntime::default());
-    }
+    let alternative_backends_enabled = alternative_backends_enabled(&db)?;
     let backends = load_backend_configs(&db)?;
     let default_backend_id = db
         .get_app_setting("default_agent_backend")
         .map_err(|e| e.to_string())?;
     let mut backend =
         select_backend_for_request(&backends, backend_id, model, default_backend_id.as_deref())?;
+    if !alternative_backends_enabled && backend.kind != AgentBackendKind::CodexNative {
+        return Ok(AgentBackendRuntime::default());
+    }
     if backend.kind == AgentBackendKind::Anthropic {
         return Ok(AgentBackendRuntime {
             backend_id: Some(backend.id),
@@ -476,14 +477,11 @@ pub fn resolve_backend_request_defaults(
         .map(str::trim)
         .filter(|backend| !backend.is_empty())
         .map(ToString::to_string);
-    if !alternative_backends_enabled(db)? {
-        return Ok((requested_backend, requested_model));
-    }
-
     let backends = load_backend_configs(db)?;
     if requested_model.is_some() {
         return Ok((requested_backend, requested_model));
     }
+    let alternative_backends_enabled = alternative_backends_enabled(db)?;
 
     if let Some(backend_id) = requested_backend.as_deref() {
         let backend_id = backend_request_alias(&backends, backend_id);
@@ -491,6 +489,9 @@ pub fn resolve_backend_request_defaults(
             .iter()
             .find(|backend| backend.id == backend_id.as_str())
             .ok_or_else(|| format!("Unknown backend `{backend_id}`"))?;
+        if !alternative_backends_enabled && backend.kind != AgentBackendKind::CodexNative {
+            return Ok((requested_backend, requested_model));
+        }
         let model = if backend.kind == AgentBackendKind::Anthropic {
             None
         } else {
@@ -523,6 +524,9 @@ pub fn resolve_backend_request_defaults(
     };
     if backend.kind == AgentBackendKind::Anthropic {
         return Ok((Some(backend.id.clone()), default_model));
+    }
+    if !alternative_backends_enabled && backend.kind != AgentBackendKind::CodexNative {
+        return Ok((None, default_model));
     }
 
     let model = default_model
@@ -867,13 +871,9 @@ fn native_codex_enabled(db: &Database) -> Result<bool, String> {
 }
 
 fn alternative_backends_enabled(db: &Database) -> Result<bool, String> {
-    let setting = db
-        .get_app_setting(ALTERNATIVE_BACKENDS_SETTING_KEY)
-        .map_err(|e| e.to_string())?;
-    if setting.as_deref() == Some("false") {
-        return native_codex_enabled(db);
-    }
-    Ok(true)
+    db.get_app_setting(ALTERNATIVE_BACKENDS_SETTING_KEY)
+        .map_err(|e| e.to_string())
+        .map(|setting| setting.as_deref() == Some("true"))
 }
 
 fn find_backend(db: &Database, backend_id: Option<&str>) -> Result<AgentBackendConfig, String> {
@@ -2935,21 +2935,21 @@ mod tests {
     }
 
     #[test]
-    fn alternative_backends_are_enabled_by_default() {
+    fn alternative_backends_are_disabled_by_default() {
         let db = Database::open_in_memory().expect("test db should open");
 
-        assert!(alternative_backends_enabled(&db).expect("setting should load"));
+        assert!(!alternative_backends_enabled(&db).expect("setting should load"));
     }
 
     #[test]
-    fn experimental_codex_forces_alternative_backend_runtime_on() {
+    fn experimental_codex_does_not_force_alternative_backend_runtime_on() {
         let db = Database::open_in_memory().expect("test db should open");
         db.set_app_setting(ALTERNATIVE_BACKENDS_SETTING_KEY, "false")
             .expect("setting should save");
         db.set_app_setting(NATIVE_CODEX_SETTING_KEY, "true")
             .expect("setting should save");
 
-        assert!(alternative_backends_enabled(&db).expect("setting should load"));
+        assert!(!alternative_backends_enabled(&db).expect("setting should load"));
     }
 
     #[test]
@@ -3118,8 +3118,6 @@ mod tests {
     fn native_codex_gate_aliases_legacy_subscription_requests() {
         let db = Database::open_in_memory().expect("test db should open");
         db.set_app_setting(NATIVE_CODEX_SETTING_KEY, "true")
-            .expect("setting should save");
-        db.set_app_setting("alternative_backends_enabled", "true")
             .expect("setting should save");
         let mut native = AgentBackendConfig::builtin_experimental_codex();
         native.enabled = true;

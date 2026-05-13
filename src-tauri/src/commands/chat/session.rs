@@ -284,6 +284,7 @@ mod tests {
             mcp_config_dirty: false,
             session_plan_mode: false,
             session_allowed_tools: Vec::new(),
+            session_fast_mode: false,
             session_disable_1m_context: false,
             session_backend_hash: String::new(),
             pending_permissions: Default::default(),

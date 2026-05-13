@@ -9,10 +9,7 @@ import {
   setAppSetting,
 } from "../../../services/tauri";
 import { planAlternativeBackendDisableCleanup } from "../alternativeBackendCleanup";
-import {
-  planCodexBackendGateMigration,
-  shouldEnableAlternativeBackendsForCodex,
-} from "../codexBackendMigration";
+import { planCodexBackendGateMigration } from "../codexBackendMigration";
 import styles from "../Settings.module.css";
 
 export function ExperimentalSettings() {
@@ -166,24 +163,15 @@ export function ExperimentalSettings() {
     if (!alternativeBackendsAvailable) return;
     const next = !alternativeBackendsEnabled;
     const previous = alternativeBackendsEnabled;
-    const previousCodex = experimentalCodexEnabled;
     setAlternativeBackendsEnabled(next);
-    if (!next && experimentalCodexEnabled) {
-      setExperimentalCodexEnabled(false);
-    }
     try {
       setError(null);
       if (!next) {
-        if (experimentalCodexEnabled) {
-          await migrateExperimentalCodexSelections(false);
-          await setAppSetting("experimental_codex_enabled", "false");
-        }
         await resetAlternativeBackendSelections();
       }
       await setAppSetting("alternative_backends_enabled", next ? "true" : "false");
     } catch (e) {
       setAlternativeBackendsEnabled(previous);
-      setExperimentalCodexEnabled(previousCodex);
       setError(String(e));
     }
   };
@@ -237,19 +225,9 @@ export function ExperimentalSettings() {
     if (!alternativeBackendsAvailable) return;
     const next = !experimentalCodexEnabled;
     const previous = experimentalCodexEnabled;
-    const shouldEnableAlternativeBackends = shouldEnableAlternativeBackendsForCodex(
-      next,
-      alternativeBackendsEnabled,
-    );
     setExperimentalCodexEnabled(next);
-    if (shouldEnableAlternativeBackends) {
-      setAlternativeBackendsEnabled(true);
-    }
     try {
       setError(null);
-      if (shouldEnableAlternativeBackends) {
-        await setAppSetting("alternative_backends_enabled", "true");
-      }
       await migrateExperimentalCodexSelections(next);
       await setAppSetting("experimental_codex_enabled", next ? "true" : "false");
       const data = await listAgentBackends();
@@ -257,9 +235,6 @@ export function ExperimentalSettings() {
       setDefaultAgentBackendId(data.default_backend_id);
     } catch (e) {
       setExperimentalCodexEnabled(previous);
-      if (shouldEnableAlternativeBackends) {
-        setAlternativeBackendsEnabled(false);
-      }
       setError(String(e));
     }
   };

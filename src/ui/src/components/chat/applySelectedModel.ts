@@ -6,7 +6,12 @@ import {
   isMaxEffortAllowed,
   isXhighEffortAllowed,
 } from "./modelCapabilities";
-import { is1mContextModel, get1mFallback } from "./modelRegistry";
+import {
+  buildModelRegistry,
+  findModelInRegistry,
+  is1mContextModel,
+  get1mFallback,
+} from "./modelRegistry";
 
 /**
  * Apply a model change for a chat session.
@@ -34,14 +39,23 @@ export async function applySelectedModel(
   store.clearPlanApproval(sessionId);
   store.clearAgentApproval(sessionId);
 
+  const registry = buildModelRegistry(
+    store.alternativeBackendsEnabled,
+    store.agentBackends,
+    store.experimentalCodexEnabled,
+  );
+  const selectedEntry = findModelInRegistry(registry, model, nextProvider);
+  const supportsFast = selectedEntry?.supportsFastMode ?? isFastSupported(model);
+  const supportsEffort = selectedEntry?.supportsEffort ?? isEffortSupported(model);
+
   const prevFastMode = store.fastMode[sessionId] ?? false;
-  if (prevFastMode && !isFastSupported(model)) {
+  if (prevFastMode && !supportsFast) {
     store.setFastMode(sessionId, false);
     await setAppSetting(`fast_mode:${sessionId}`, "false");
   }
 
   const prevEffort = store.effortLevel[sessionId] ?? "auto";
-  if (!isEffortSupported(model)) {
+  if (!supportsEffort) {
     store.setEffortLevel(sessionId, "auto");
     await setAppSetting(`effort_level:${sessionId}`, "auto");
   } else if (prevEffort === "xhigh" && !isXhighEffortAllowed(model)) {

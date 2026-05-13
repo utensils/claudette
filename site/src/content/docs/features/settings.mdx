@@ -37,7 +37,7 @@ Default values applied to all new agent sessions. Per-workspace overrides are av
 | Default fast mode | Start new sessions in fast mode | Off |
 | Team agents as session tabs | Open Claude Code team agents (`TeamCreate` + `Agent` with a team name) as separate Claudette chat session tabs. | On |
 | Default backend | Provider used for new chats when alternative backends are enabled. | `anthropic` |
-| Agent backend cards | Enable, test, authenticate, and refresh model lists for built-in providers such as Ollama, LM Studio, OpenAI API, and Experimental Codex. | Provider-specific |
+| Agent backend cards | Enable, test, authenticate, and refresh model lists for built-in providers such as Ollama, LM Studio, OpenAI API, and Experimental Codex. Alternative providers and Codex are gated separately. | Provider-specific |
 
 See [Agent Configuration](/claudette/features/agent-configuration/) for detailed descriptions of each option.
 
@@ -46,8 +46,8 @@ See [Agent Configuration](/claudette/features/agent-configuration/) for detailed
 | Setting | Description | Default |
 |---------|-------------|---------|
 | Claudette Terminal | Show a read-only terminal tab that mirrors agent shell commands and background task output. | Off |
-| Alternative Claude Code backends | Expose non-default providers in Settings > Models and the chat model picker. | On in supported builds |
-| Experimental Codex | Replace the legacy `codex-subscription` gateway backend with native `codex app-server --listen stdio://` support. Enabling it keeps alternative backends on and seeds Codex models into the picker. | Off |
+| Alternative Claude Code backends | Expose Ollama, LM Studio, OpenAI API, and custom providers in Settings > Models and the chat model picker. Codex is not part of this gate. | Off |
+| Experimental Codex | Enable native `codex app-server --listen stdio://` support and seed Codex models into the picker. Independent from Alternative Claude Code backends. | Off |
 | Plugin Management | Show the Claude Code Plugins settings section and plugin-management slash commands. | Off |
 | Claude Remote Control | Show the local chat Remote Control toggle and allow Claudette to attach live Claude sessions to claude.ai. | On |
 | Community Registry | Show the Community settings section for themes, plugins, and language grammars. | Off |
@@ -146,7 +146,7 @@ See [Diagnostics & Logging](/claudette/features/diagnostics/) for the full pipel
 | Setting | Description | Default |
 |---------|-------------|---------|
 | Claudette Terminal | Show a read-only terminal tab that mirrors agent shell commands and background task output. | Off |
-| Alternative Claude Code backends | Expose Ollama, LM Studio, OpenAI-compatible, and custom backends through the Claude Code harness. | On in supported builds |
+| Alternative Claude Code backends | Expose Ollama, LM Studio, OpenAI-compatible, and custom backends through the Claude Code harness. Codex uses its own native harness gate. | Off |
 | Plugin Management | Show Claude Code plugin marketplace management. | Off |
 | Claude Remote Control | Show the local chat Remote Control toggle and allow Claudette to attach live Claude sessions to claude.ai. | On |
 | Community Registry | Browse and install community-contributed themes, plugins, and language grammars. | Off |

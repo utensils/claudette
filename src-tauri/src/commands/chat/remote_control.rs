@@ -355,6 +355,7 @@ async fn store_deferred_enable_status(
                 mcp_config_dirty: false,
                 session_plan_mode: false,
                 session_allowed_tools: Vec::new(),
+                session_fast_mode: false,
                 session_disable_1m_context: false,
                 session_backend_hash: String::new(),
                 pending_permissions: std::collections::HashMap::new(),
@@ -613,6 +614,7 @@ async fn ensure_persistent_session_for_remote_control(
                 mcp_config_dirty: false,
                 session_plan_mode: false,
                 session_allowed_tools: Vec::new(),
+                session_fast_mode: false,
                 session_disable_1m_context: false,
                 session_backend_hash: String::new(),
                 pending_permissions: std::collections::HashMap::new(),
@@ -639,6 +641,7 @@ async fn ensure_persistent_session_for_remote_control(
         session.claude_remote_control_monitor_pid = None;
         session.session_plan_mode = agent_settings.plan_mode;
         session.session_allowed_tools = allowed_tools.clone();
+        session.session_fast_mode = agent_settings.fast_mode;
         session.session_disable_1m_context = agent_settings.disable_1m_context;
         session.session_backend_hash = agent_settings.backend_runtime.hash.clone();
         session.session_exited_plan = false;

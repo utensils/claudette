@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { CircleDollarSign, Sparkles, Zap, Brain, BookOpen, Gauge, Eye, EyeOff, Globe } from "lucide-react";
 import { useAppStore } from "../../stores/useAppStore";
@@ -6,6 +6,7 @@ import { resetAgentSession, setAppSetting, getAppSetting } from "../../services/
 import { ModelSelector } from "./ModelSelector";
 import { EffortSelector, EFFORT_LEVELS } from "./EffortSelector";
 import { isFastSupported, isEffortSupported, isXhighEffortAllowed, isMaxEffortAllowed } from "./modelCapabilities";
+import { buildModelRegistry, findModelInRegistry } from "./modelRegistry";
 import { applySelectedModel } from "./applySelectedModel";
 import { applyPlanModeMountDefault } from "./applyPlanModeMountDefault";
 import { ContextMeter } from "./ContextMeter";
@@ -28,6 +29,9 @@ export function ChatToolbar({ sessionId, disabled }: ChatToolbarProps) {
   const effortLevel = useAppStore((s) => s.effortLevel[sessionId] ?? "auto");
   const chromeEnabled = useAppStore((s) => s.chromeEnabled[sessionId] ?? false);
   const modelSelectorOpen = useAppStore((s) => s.modelSelectorOpen);
+  const alternativeBackendsEnabled = useAppStore((s) => s.alternativeBackendsEnabled);
+  const experimentalCodexEnabled = useAppStore((s) => s.experimentalCodexEnabled);
+  const agentBackends = useAppStore((s) => s.agentBackends);
   const setSelectedModel = useAppStore((s) => s.setSelectedModel);
   const setFastMode = useAppStore((s) => s.setFastMode);
   const setThinkingEnabled = useAppStore((s) => s.setThinkingEnabled);
@@ -46,6 +50,10 @@ export function ChatToolbar({ sessionId, disabled }: ChatToolbarProps) {
 
   const [loaded, setLoaded] = useState(false);
   const [effortSelectorOpen, setEffortSelectorOpen] = useState(false);
+  const registry = useMemo(
+    () => buildModelRegistry(alternativeBackendsEnabled, agentBackends, experimentalCodexEnabled),
+    [alternativeBackendsEnabled, agentBackends, experimentalCodexEnabled],
+  );
 
   // Load persisted settings on mount / session change.
   useEffect(() => {
@@ -70,8 +78,12 @@ export function ChatToolbar({ sessionId, disabled }: ChatToolbarProps) {
       ]);
       if (cancelled) return;
       const loadedModel = model ?? defModel ?? "opus";
-      setSelectedModel(sessionId, loadedModel, provider ?? defProvider ?? "anthropic");
-      const effectiveFast = isFastSupported(loadedModel) && (fast === "true" || (!fast && defFast === "true"));
+      const loadedProvider = provider ?? defProvider ?? "anthropic";
+      const loadedEntry = findModelInRegistry(registry, loadedModel, loadedProvider);
+      const supportsFast = loadedEntry?.supportsFastMode ?? isFastSupported(loadedModel);
+      const supportsEffort = loadedEntry?.supportsEffort ?? isEffortSupported(loadedModel);
+      setSelectedModel(sessionId, loadedModel, loadedProvider);
+      const effectiveFast = supportsFast && (fast === "true" || (!fast && defFast === "true"));
       const effectiveThinking = thinking === "true" || (!thinking && defThinking === "true");
       setFastMode(sessionId, effectiveFast);
       setThinkingEnabled(sessionId, effectiveThinking);
@@ -79,7 +91,7 @@ export function ChatToolbar({ sessionId, disabled }: ChatToolbarProps) {
       // Normalize effort against the loaded model to prevent stale values.
       const effectiveEffort = effort ?? defEffort;
       if (effectiveEffort) {
-        const normalized = !isEffortSupported(loadedModel)
+        const normalized = !supportsEffort
           ? "auto"
           : effectiveEffort === "xhigh" && !isXhighEffortAllowed(loadedModel)
             ? "high"
@@ -94,7 +106,7 @@ export function ChatToolbar({ sessionId, disabled }: ChatToolbarProps) {
     }
     load();
     return () => { cancelled = true; };
-  }, [sessionId, setSelectedModel, setFastMode, setThinkingEnabled, setEffortLevel, setShowThinkingBlocks, setChromeEnabled]);
+  }, [sessionId, registry, setSelectedModel, setFastMode, setThinkingEnabled, setEffortLevel, setShowThinkingBlocks, setChromeEnabled]);
 
   const handleModelSelect = useCallback(
     async (model: string, providerId = "anthropic") => {
@@ -155,6 +167,8 @@ export function ChatToolbar({ sessionId, disabled }: ChatToolbarProps) {
   // chip click + the command palette ("Toggle thinking").
 
   const currentModel = useSelectedModelEntry(sessionId);
+  const supportsFast = currentModel?.supportsFastMode ?? isFastSupported(selectedModel);
+  const supportsEffort = currentModel?.supportsEffort ?? isEffortSupported(selectedModel);
   const modelLabel = currentModel?.providerLabel
     ? `${currentModel.providerLabel} / ${currentModel.label}`
     : currentModel?.label ?? selectedModel;
@@ -181,7 +195,7 @@ export function ChatToolbar({ sessionId, disabled }: ChatToolbarProps) {
 
       <ContextMeter sessionId={sessionId} />
 
-      {isFastSupported(selectedModel) && (
+      {supportsFast && (
         <button
           className={`${styles.chip} ${fastMode ? styles.chipActive : ""}`}
           onClick={toggleFast}
@@ -213,7 +227,7 @@ export function ChatToolbar({ sessionId, disabled }: ChatToolbarProps) {
         {showThinkingBlocks ? <Eye size={14} /> : <EyeOff size={14} />}
       </button>
 
-      {isEffortSupported(selectedModel) && (
+      {supportsEffort && (
         <button
           className={styles.chip}
           onClick={() => setEffortSelectorOpen(!effortSelectorOpen)}
@@ -264,7 +278,7 @@ export function ChatToolbar({ sessionId, disabled }: ChatToolbarProps) {
         />
       )}
 
-      {effortSelectorOpen && isEffortSupported(selectedModel) && (
+      {effortSelectorOpen && supportsEffort && (
         <EffortSelector
           selected={effortLevel}
           selectedModel={selectedModel}

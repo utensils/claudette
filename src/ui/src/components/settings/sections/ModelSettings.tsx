@@ -4,7 +4,10 @@ import { getAppSetting, setAppSetting, listAgentBackends, saveAgentBackend, save
 import type { AgentBackendConfig } from "../../../services/tauri";
 import { EFFORT_LEVELS } from "../../chat/EffortSelector";
 import { isFastSupported, isEffortSupported, isXhighEffortAllowed, isMaxEffortAllowed } from "../../chat/modelCapabilities";
-import { buildModelRegistry, resolveModelSelection } from "../../chat/modelRegistry";
+import {
+  buildModelRegistry,
+  resolveModelSelection,
+} from "../../chat/modelRegistry";
 import { useAppStore } from "../../../stores/useAppStore";
 import { formatBackendError } from "../backendSettingsErrors";
 import styles from "../Settings.module.css";
@@ -28,6 +31,7 @@ export function ModelSettings() {
   // to know they aren't active in this session.
   const [backendWarnings, setBackendWarnings] = useState<string[]>([]);
   const alternativeBackendsEnabled = useAppStore((s) => s.alternativeBackendsEnabled);
+  const experimentalCodexEnabled = useAppStore((s) => s.experimentalCodexEnabled);
   const agentBackends = useAppStore((s) => s.agentBackends);
   const setAgentBackends = useAppStore((s) => s.setAgentBackends);
   const setDefaultAgentBackendId = useAppStore((s) => s.setDefaultAgentBackendId);
@@ -93,8 +97,17 @@ export function ModelSettings() {
   };
 
   const registry = useMemo(
-    () => buildModelRegistry(alternativeBackendsEnabled, agentBackends),
-    [alternativeBackendsEnabled, agentBackends],
+    () => buildModelRegistry(alternativeBackendsEnabled, agentBackends, experimentalCodexEnabled),
+    [alternativeBackendsEnabled, agentBackends, experimentalCodexEnabled],
+  );
+  const visibleBackends = useMemo(
+    () =>
+      agentBackends.filter((backend) => {
+        if (backend.id === "anthropic" || backend.kind === "codex_subscription") return false;
+        if (backend.kind === "codex_native") return experimentalCodexEnabled;
+        return alternativeBackendsEnabled;
+      }),
+    [agentBackends, alternativeBackendsEnabled, experimentalCodexEnabled],
   );
   const defaultModelValue = `${defaultBackend}/${defaultModel}`;
 
@@ -111,12 +124,12 @@ export function ModelSettings() {
     await saveSetting("default_model", model);
     await saveSetting("default_agent_backend", nextBackend);
     // Normalize fast mode when model changes
-    if (defaultFastMode && !isFastSupported(model)) {
+    if (defaultFastMode && !(match?.supportsFastMode ?? isFastSupported(model))) {
       setDefaultFastMode(false);
       await saveSetting("default_fast_mode", "false");
     }
     // Normalize effort when model changes
-    if (!isEffortSupported(model)) {
+    if (!(match?.supportsEffort ?? isEffortSupported(model))) {
       setDefaultEffort("auto");
       await saveSetting("default_effort", "auto");
     } else if (defaultEffort === "xhigh" && !isXhighEffortAllowed(model)) {
@@ -361,9 +374,9 @@ export function ModelSettings() {
         </div>
       </div>
 
-      {alternativeBackendsEnabled && (
+      {visibleBackends.length > 0 && (
         <BackendSettingsPanel
-          backends={agentBackends}
+          backends={visibleBackends}
           onBackends={setAgentBackends}
         />
       )}
@@ -716,7 +729,7 @@ function isDiscoveryBackend(backend: AgentBackendConfig) {
     backend.model_discovery ||
     backend.kind === "ollama" ||
     backend.kind === "openai_api" ||
-    backend.kind === "codex_subscription" ||
+    backend.kind === "codex_native" ||
     backend.kind === "lm_studio"
   );
 }

@@ -4,18 +4,17 @@ import {
   NATIVE_CODEX_BACKEND,
   planCodexBackendGateMigration,
   planExperimentalBackendGateLoad,
-  shouldEnableAlternativeBackendsForCodex,
 } from "./codexBackendMigration";
 
 describe("planExperimentalBackendGateLoad", () => {
-  it("enables alternative backends by default when the build includes them", () => {
+  it("keeps alternative backends disabled by default when the build includes them", () => {
     const plan = planExperimentalBackendGateLoad({
       alternativeBackendsCompiled: true,
       alternativeBackendsSetting: null,
       experimentalCodexSetting: null,
     });
 
-    expect(plan.alternativeBackendsEnabled).toBe(true);
+    expect(plan.alternativeBackendsEnabled).toBe(false);
     expect(plan.experimentalCodexEnabled).toBe(false);
     expect(plan.persistAlternativeBackendsEnabled).toBe(false);
   });
@@ -31,16 +30,16 @@ describe("planExperimentalBackendGateLoad", () => {
     expect(plan.experimentalCodexEnabled).toBe(false);
   });
 
-  it("lets Experimental Codex repair an explicitly disabled alternative gate", () => {
+  it("loads Experimental Codex without enabling the alternative backend gate", () => {
     const plan = planExperimentalBackendGateLoad({
       alternativeBackendsCompiled: true,
       alternativeBackendsSetting: "false",
       experimentalCodexSetting: "true",
     });
 
-    expect(plan.alternativeBackendsEnabled).toBe(true);
+    expect(plan.alternativeBackendsEnabled).toBe(false);
     expect(plan.experimentalCodexEnabled).toBe(true);
-    expect(plan.persistAlternativeBackendsEnabled).toBe(true);
+    expect(plan.persistAlternativeBackendsEnabled).toBe(false);
   });
 
   it("keeps both gates off when the build omits alternative backend support", () => {
@@ -52,14 +51,6 @@ describe("planExperimentalBackendGateLoad", () => {
 
     expect(plan.alternativeBackendsEnabled).toBe(false);
     expect(plan.experimentalCodexEnabled).toBe(false);
-  });
-});
-
-describe("shouldEnableAlternativeBackendsForCodex", () => {
-  it("only enables the parent gate when turning Experimental Codex on", () => {
-    expect(shouldEnableAlternativeBackendsForCodex(true, false)).toBe(true);
-    expect(shouldEnableAlternativeBackendsForCodex(true, true)).toBe(false);
-    expect(shouldEnableAlternativeBackendsForCodex(false, false)).toBe(false);
   });
 });
 

@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { getVersion } from "@tauri-apps/api/app";
 import { useAppStore } from "./stores/useAppStore";
-import { loadInitialData, getAppSetting, setAppSetting, getHostEnvFlags, listRemoteConnections, listDiscoveredServers, getLocalServerStatus, detectInstalledApps, listSystemFonts, deleteTerminalTab, listAppSettingsWithPrefix, listAgentBackends, refreshAgentBackendModels, bootOk } from "./services/tauri";
+import { loadInitialData, getAppSetting, getHostEnvFlags, listRemoteConnections, listDiscoveredServers, getLocalServerStatus, detectInstalledApps, listSystemFonts, deleteTerminalTab, listAppSettingsWithPrefix, listAgentBackends, refreshAgentBackendModels, bootOk } from "./services/tauri";
 import { applyTheme, applyUserFonts, loadAllThemes, findTheme, cacheThemePreference, getThemeDataAttr } from "./utils/theme";
 import { DEFAULT_THEME_ID, DEFAULT_LIGHT_THEME_ID } from "./styles/themes";
 import type { ThemeDefinition } from "./types/theme";
@@ -397,11 +397,6 @@ function App() {
         });
         setAlternativeBackendsEnabled(gatePlan.alternativeBackendsEnabled);
         setExperimentalCodexEnabled(gatePlan.experimentalCodexEnabled);
-        if (gatePlan.persistAlternativeBackendsEnabled) {
-          setAppSetting("alternative_backends_enabled", "true").catch((err) => {
-            console.error("Failed to repair alternative backend setting:", err);
-          });
-        }
       })
       .catch(() => {});
     listAgentBackends()

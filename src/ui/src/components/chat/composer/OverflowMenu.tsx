@@ -14,6 +14,7 @@ import {
 } from "../../../services/tauri";
 import { shouldDisable1mContext } from "../chatHelpers";
 import { isFastSupported } from "../modelCapabilities";
+import { useSelectedModelEntry } from "../useSelectedModelEntry";
 import styles from "./OverflowMenu.module.css";
 
 interface OverflowMenuProps {
@@ -52,7 +53,8 @@ export function OverflowMenu({ sessionId, disabled, isRemote }: OverflowMenuProp
     (s) => s.claudeRemoteControlEnabled,
   );
 
-  const showFast = isFastSupported(selectedModel);
+  const currentModel = useSelectedModelEntry(sessionId);
+  const showFast = currentModel?.supportsFastMode ?? isFastSupported(selectedModel);
   const [remoteControlStatus, setRemoteControlStatus] =
     useState<ClaudeRemoteControlStatus>(DISABLED_REMOTE_STATUS);
   const showRemoteControl = !isRemote && claudeRemoteControlEnabled;

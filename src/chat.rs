@@ -37,6 +37,7 @@ pub struct SessionFlags<'a> {
     pub plan_mode: bool,
     pub allowed_tools: &'a [String],
     pub exited_plan: bool,
+    pub fast_mode: bool,
     pub disable_1m_context: bool,
     pub backend_hash: &'a str,
 }
@@ -46,6 +47,7 @@ pub struct SessionFlags<'a> {
 pub struct RequestedFlags<'a> {
     pub plan_mode: bool,
     pub allowed_tools: &'a [String],
+    pub fast_mode: bool,
     pub disable_1m_context: bool,
     pub backend_hash: &'a str,
 }
@@ -67,6 +69,7 @@ pub fn persistent_session_flags_drifted(
 ) -> bool {
     session.plan_mode != requested.plan_mode
         || session.allowed_tools != requested.allowed_tools
+        || session.fast_mode != requested.fast_mode
         || session.disable_1m_context != requested.disable_1m_context
         || session.backend_hash != requested.backend_hash
         || (session.plan_mode && session.exited_plan)
@@ -445,6 +448,7 @@ mod tests {
             plan_mode,
             allowed_tools,
             exited_plan,
+            fast_mode: false,
             disable_1m_context: false,
             backend_hash: "",
         }
@@ -454,6 +458,7 @@ mod tests {
         RequestedFlags {
             plan_mode,
             allowed_tools,
+            fast_mode: false,
             disable_1m_context: false,
             backend_hash: "",
         }
@@ -564,12 +569,14 @@ mod tests {
                 plan_mode: false,
                 allowed_tools: &tools,
                 exited_plan: false,
+                fast_mode: false,
                 disable_1m_context: false,
                 backend_hash: "",
             },
             RequestedFlags {
                 plan_mode: false,
                 allowed_tools: &tools,
+                fast_mode: false,
                 disable_1m_context: true,
                 backend_hash: "",
             },
@@ -579,12 +586,14 @@ mod tests {
                 plan_mode: false,
                 allowed_tools: &tools,
                 exited_plan: false,
+                fast_mode: false,
                 disable_1m_context: true,
                 backend_hash: "",
             },
             RequestedFlags {
                 plan_mode: false,
                 allowed_tools: &tools,
+                fast_mode: false,
                 disable_1m_context: false,
                 backend_hash: "",
             },
@@ -599,13 +608,37 @@ mod tests {
                 plan_mode: false,
                 allowed_tools: &tools,
                 exited_plan: false,
+                fast_mode: false,
                 disable_1m_context: true,
                 backend_hash: "",
             },
             RequestedFlags {
                 plan_mode: false,
                 allowed_tools: &tools,
+                fast_mode: false,
                 disable_1m_context: true,
+                backend_hash: "",
+            },
+        ));
+    }
+
+    #[test]
+    fn drift_when_fast_mode_flips() {
+        let tools = s(&["Read"]);
+        assert!(persistent_session_flags_drifted(
+            SessionFlags {
+                plan_mode: false,
+                allowed_tools: &tools,
+                exited_plan: false,
+                fast_mode: false,
+                disable_1m_context: false,
+                backend_hash: "",
+            },
+            RequestedFlags {
+                plan_mode: false,
+                allowed_tools: &tools,
+                fast_mode: true,
+                disable_1m_context: false,
                 backend_hash: "",
             },
         ));
@@ -619,12 +652,14 @@ mod tests {
                 plan_mode: false,
                 allowed_tools: &tools,
                 exited_plan: false,
+                fast_mode: false,
                 disable_1m_context: false,
                 backend_hash: "anthropic",
             },
             RequestedFlags {
                 plan_mode: false,
                 allowed_tools: &tools,
+                fast_mode: false,
                 disable_1m_context: false,
                 backend_hash: "ollama",
             },
