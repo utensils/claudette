@@ -6,7 +6,12 @@ import { loadInitialData, getAppSetting, getHostEnvFlags, listRemoteConnections,
 import { applyTheme, applyUserFonts, loadAllThemes, findTheme, cacheThemePreference, getThemeDataAttr } from "./utils/theme";
 import { DEFAULT_THEME_ID, DEFAULT_LIGHT_THEME_ID } from "./styles/themes";
 import type { ThemeDefinition } from "./types/theme";
-import { adjustUiFontSize, resetUiFontSize } from "./utils/fontSettings";
+import {
+  adjustUiFontSize,
+  resetUiFontSize,
+  TERMINAL_FONT_SIZE_MAX,
+  TERMINAL_FONT_SIZE_MIN,
+} from "./utils/fontSettings";
 import { deriveScmCiState } from "./utils/scmChecks";
 import { KEYBINDING_SETTING_PREFIX } from "./hotkeys/bindings";
 import type { WorkspaceOrderModeByRepo } from "./utils/workspaceOrdering";
@@ -216,7 +221,9 @@ function App() {
       .then((val) => {
         if (val) {
           const size = parseInt(val, 10);
-          if (size >= 8 && size <= 24) setTerminalFontSize(size);
+          if (size >= TERMINAL_FONT_SIZE_MIN && size <= TERMINAL_FONT_SIZE_MAX) {
+            setTerminalFontSize(size);
+          }
         }
       })
       .catch((err) => console.error("Failed to load terminal font size:", err));

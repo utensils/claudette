@@ -59,9 +59,19 @@ See [Agent Configuration → Claude CLI Flags](/claudette/features/agent-configu
 | Theme | Color theme (12 built-in + custom) | Default Dark |
 | Group adjacent tool calls | Collapse adjacent regular tool calls and Agent invocations into summary blocks that start collapsed (even while still running). Click a chevron to expand. Live Agent groups keep status / count / latest tool visible while collapsed (rendered below the header) so long runs remain glanceable. When off, every top-level tool call, Agent call, and thinking block is shown inline and always expanded. | On |
 | Extended tool call output | Add expandable, copyable input details under tool call rows. | Off |
-| Terminal font size | Font size for terminal tabs (8–24px) | 11px |
+| Terminal font size | Font size for terminal tabs (8–32px) | 11px |
 
 See [Theming](/claudette/features/theming/) for details on built-in themes and creating custom themes.
+
+## Keyboard
+
+Use **Settings > Keyboard** to review, rebind, or disable keyboard shortcuts. Disabled and rebound shortcuts are reflected in tooltips, command-palette labels, and the [Keyboard Shortcuts](/claudette/features/keyboard-shortcuts/) reference.
+
+| Setting | Description | Default |
+|---------|-------------|---------|
+| Navigation shortcuts | Sidebar, diff panel, terminal panel, settings, fuzzy finder, command palette, tab, workspace, and project-jump shortcuts. | Platform defaults |
+| Terminal shortcuts | Terminal tab, pane split, pane focus, copy/paste, terminal panel focus, and terminal-only zoom shortcuts. `⌘/Ctrl + Shift + =` and `⌘/Ctrl + Shift + -` adjust only the terminal font size. | Platform defaults |
+| Voice shortcuts | Toggle recording and hold-to-talk shortcuts. | `⌘⇧M` / `Ctrl+Shift+M`; Right `⌥` on macOS for hold-to-talk |
 
 ## Notifications
 

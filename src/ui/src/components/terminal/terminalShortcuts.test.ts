@@ -164,28 +164,42 @@ describe("terminalKeyAction", () => {
 
   it("recognizes Cmd+= as zoom-in (code-based)", () => {
     expect(terminalKeyAction(mk({ code: "Equal", metaKey: true })))
-      .toEqual({ kind: "zoom", direction: "in" });
+      .toEqual({ kind: "zoom", direction: "in", scope: "ui" });
   });
 
-  it("recognizes Cmd+Shift+= (key='+') as zoom-in via code", () => {
+  it("recognizes Cmd+Shift+= (key='+') as terminal zoom-in via code", () => {
     // On US keyboards Shift+= produces "+", but code stays "Equal"
     expect(terminalKeyAction(mk({ key: "+", code: "Equal", metaKey: true, shiftKey: true })))
-      .toEqual({ kind: "zoom", direction: "in" });
+      .toEqual({ kind: "zoom", direction: "in", scope: "terminal" });
   });
 
   it("recognizes Cmd+- as zoom-out (code-based)", () => {
     expect(terminalKeyAction(mk({ code: "Minus", metaKey: true })))
-      .toEqual({ kind: "zoom", direction: "out" });
+      .toEqual({ kind: "zoom", direction: "out", scope: "ui" });
   });
 
   it("recognizes Ctrl+= as zoom-in (Linux)", () => {
     expect(terminalKeyAction(mk({ code: "Equal", ctrlKey: true })))
-      .toEqual({ kind: "zoom", direction: "in" });
+      .toEqual({ kind: "zoom", direction: "in", scope: "ui" });
   });
 
   it("recognizes Ctrl+- as zoom-out (Linux)", () => {
     expect(terminalKeyAction(mk({ code: "Minus", ctrlKey: true })))
-      .toEqual({ kind: "zoom", direction: "out" });
+      .toEqual({ kind: "zoom", direction: "out", scope: "ui" });
+  });
+
+  it("recognizes Ctrl+Shift+- as terminal zoom-out (Linux)", () => {
+    expect(terminalKeyAction(mk({ code: "Minus", ctrlKey: true, shiftKey: true })))
+      .toEqual({ kind: "zoom", direction: "out", scope: "terminal" });
+  });
+
+  it("recognizes terminal font zoom with customized keybindings", () => {
+    expect(
+      terminalKeyAction(
+        mk({ code: "Period", metaKey: true, shiftKey: true }),
+        { "global.increase-terminal-font": "mod+shift+code:Period" },
+      ),
+    ).toEqual({ kind: "zoom", direction: "in", scope: "terminal" });
   });
 
   describe("split-pane", () => {

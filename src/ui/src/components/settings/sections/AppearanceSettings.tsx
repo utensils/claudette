@@ -7,6 +7,8 @@ import {
   UI_FONT_SIZE_MIN,
   UI_FONT_SIZE_MAX,
   UI_FONT_SIZE_DEFAULT,
+  TERMINAL_FONT_SIZE_MIN,
+  TERMINAL_FONT_SIZE_MAX,
   buildFontOptions,
 } from "../../../utils/fontSettings";
 import type { ThemeDefinition } from "../../../types/theme";
@@ -164,7 +166,11 @@ export function AppearanceSettings() {
 
   const handleTermFontSizeBlur = async () => {
     const size = parseInt(termFontSize, 10);
-    if (isNaN(size) || size < 8 || size > 24) {
+    if (
+      isNaN(size) ||
+      size < TERMINAL_FONT_SIZE_MIN ||
+      size > TERMINAL_FONT_SIZE_MAX
+    ) {
       setTermFontSize(String(terminalFontSize));
       return;
     }
@@ -398,8 +404,8 @@ export function AppearanceSettings() {
           <input
             className={styles.numberInput}
             type="number"
-            min={8}
-            max={24}
+            min={TERMINAL_FONT_SIZE_MIN}
+            max={TERMINAL_FONT_SIZE_MAX}
             value={termFontSize}
             onChange={(e) => setTermFontSize(e.target.value)}
             onBlur={handleTermFontSizeBlur}

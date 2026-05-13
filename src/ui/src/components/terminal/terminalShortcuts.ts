@@ -43,7 +43,7 @@ export type TerminalKeyAction =
   | { kind: "new-tab" }
   | { kind: "toggle-panel" }
   | { kind: "focus-chat" }
-  | { kind: "zoom"; direction: "in" | "out" }
+  | { kind: "zoom"; direction: "in" | "out"; scope: "ui" | "terminal" }
   | { kind: "split-pane"; direction: "horizontal" | "vertical" }
   | { kind: "close-pane" }
   | { kind: "focus-pane"; direction: "left" | "right" | "up" | "down" }
@@ -90,8 +90,15 @@ export function terminalKeyAction(
 ): TerminalKeyAction {
   if (ev.type !== "keydown") return null;
   const resolved = resolveHotkeyAction(ev, "terminal", keybindings);
+  const resolvedGlobal = resolveHotkeyAction(ev, "global", keybindings);
+  const terminalFontAction =
+    resolvedGlobal === "global.increase-terminal-font" ||
+    resolvedGlobal === "global.decrease-terminal-font"
+      ? resolvedGlobal
+      : null;
   const action = resolved ?? (Object.keys(keybindings).length === 0 ? legacyTerminalKeyAction(ev) : null);
-  switch (action) {
+  const scopedAction = action ?? terminalFontAction;
+  switch (scopedAction) {
     case "terminal.cycle-tab-prev":
       return { kind: "cycle", direction: "prev" };
     case "terminal.cycle-tab-next":
@@ -103,9 +110,13 @@ export function terminalKeyAction(
     case "terminal.focus-chat":
       return { kind: "focus-chat" };
     case "terminal.zoom-in":
-      return { kind: "zoom", direction: "in" };
+      return { kind: "zoom", direction: "in", scope: "ui" };
     case "terminal.zoom-out":
-      return { kind: "zoom", direction: "out" };
+      return { kind: "zoom", direction: "out", scope: "ui" };
+    case "global.increase-terminal-font":
+      return { kind: "zoom", direction: "in", scope: "terminal" };
+    case "global.decrease-terminal-font":
+      return { kind: "zoom", direction: "out", scope: "terminal" };
     case "terminal.split-pane-horizontal":
       return { kind: "split-pane", direction: "horizontal" };
     case "terminal.split-pane-vertical":
@@ -143,8 +154,12 @@ function legacyTerminalKeyAction(ev: KeyboardEvent): string | null {
   if (isT && ev.ctrlKey && ev.shiftKey && !ev.metaKey) return "terminal.new-tab";
   if (!ev.shiftKey && ev.key === "`") return "terminal.toggle-panel";
   if (!ev.shiftKey && ev.key === "0") return "terminal.focus-chat";
-  if (ev.code === "Equal") return "terminal.zoom-in";
-  if (ev.code === "Minus") return "terminal.zoom-out";
+  if (ev.code === "Equal") {
+    return ev.shiftKey ? "global.increase-terminal-font" : "terminal.zoom-in";
+  }
+  if (ev.code === "Minus") {
+    return ev.shiftKey ? "global.decrease-terminal-font" : "terminal.zoom-out";
+  }
   const isD = ev.code === "KeyD" || ev.key === "d" || ev.key === "D";
   if (isD && ev.metaKey && !ev.ctrlKey) {
     return ev.shiftKey ? "terminal.split-pane-vertical" : "terminal.split-pane-horizontal";

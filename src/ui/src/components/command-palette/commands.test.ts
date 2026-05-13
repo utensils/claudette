@@ -28,6 +28,9 @@ function makeContext(overrides: Partial<CommandContext> = {}): CommandContext {
     zoomIn: vi.fn(),
     zoomOut: vi.fn(),
     resetZoom: vi.fn(),
+    terminalZoomIn: vi.fn(),
+    terminalZoomOut: vi.fn(),
+    resetTerminalZoom: vi.fn(),
     close: vi.fn(),
     keybindings: {},
     themes: [],
@@ -116,6 +119,39 @@ describe("buildCommands — zoom commands", () => {
     const zoomOut = cmds.find((c) => c.id === "zoom-out");
     expect(zoomIn!.shortcut).toContain("=");
     expect(zoomOut!.shortcut).toContain("-");
+  });
+
+  it("includes terminal zoom commands", () => {
+    const zoomIn = cmds.find((c) => c.id === "terminal-zoom-in");
+    const zoomOut = cmds.find((c) => c.id === "terminal-zoom-out");
+    const reset = cmds.find((c) => c.id === "terminal-reset-zoom");
+
+    expect(zoomIn).toBeDefined();
+    expect(zoomIn!.name).toBe("Terminal: Zoom In");
+    expect(zoomIn!.shortcut).toContain("⇧");
+    expect(zoomIn!.shortcut).toContain("=");
+    expect(zoomIn!.keywords).toContain("terminal");
+    expect(zoomOut).toBeDefined();
+    expect(zoomOut!.shortcut).toContain("-");
+    expect(reset).toBeDefined();
+    expect(reset!.keywords).toContain("reset");
+  });
+
+  it("terminal zoom execute calls terminal zoom handlers and ctx.close", () => {
+    const testCtx = makeContext();
+    const testCmds = buildCommands(testCtx);
+
+    testCmds.find((c) => c.id === "terminal-zoom-in")!.execute();
+    expect(testCtx.terminalZoomIn).toHaveBeenCalled();
+    expect(testCtx.close).toHaveBeenCalledTimes(1);
+
+    testCmds.find((c) => c.id === "terminal-zoom-out")!.execute();
+    expect(testCtx.terminalZoomOut).toHaveBeenCalled();
+    expect(testCtx.close).toHaveBeenCalledTimes(2);
+
+    testCmds.find((c) => c.id === "terminal-reset-zoom")!.execute();
+    expect(testCtx.resetTerminalZoom).toHaveBeenCalled();
+    expect(testCtx.close).toHaveBeenCalledTimes(3);
   });
 
   it("uses customized shortcut labels", () => {

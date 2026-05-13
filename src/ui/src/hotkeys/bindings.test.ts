@@ -258,6 +258,35 @@ describe("global.new-tab default binding", () => {
   });
 });
 
+describe("terminal font zoom default bindings", () => {
+  it("resolves Shift+= and Shift+- to terminal font zoom in global scope", () => {
+    expect(
+      resolveHotkeyAction(
+        macKey({ key: "+", code: "Equal", metaKey: true, shiftKey: true }),
+        "global",
+        {},
+        "mac",
+      ),
+    ).toBe("global.increase-terminal-font");
+    expect(
+      resolveHotkeyAction(
+        macKey({ key: "_", code: "Minus", ctrlKey: true, shiftKey: true }),
+        "global",
+        {},
+        "linux",
+      ),
+    ).toBe("global.decrease-terminal-font");
+  });
+
+  it("keeps unshifted +/- bound to UI zoom in global and terminal scopes", () => {
+    const event = macKey({ key: "=", code: "Equal", metaKey: true });
+    expect(resolveHotkeyAction(event, "global", {}, "mac"))
+      .toBe("global.increase-ui-font");
+    expect(resolveHotkeyAction(event, "terminal", {}, "mac"))
+      .toBe("terminal.zoom-in");
+  });
+});
+
 describe("bindingMatchesEvent — modifier-only codes", () => {
   // Regression: hold-to-talk on Right Alt was bound to `code:AltRight`,
   // but pressing Alt asserts e.altKey, which the matcher used to reject

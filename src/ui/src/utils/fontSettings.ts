@@ -5,9 +5,16 @@ import { applyUserFonts } from "./theme";
 export const UI_FONT_SIZE_MIN = 10;
 export const UI_FONT_SIZE_MAX = 20;
 export const UI_FONT_SIZE_DEFAULT = 13;
+export const TERMINAL_FONT_SIZE_MIN = 8;
+export const TERMINAL_FONT_SIZE_MAX = 32;
+export const TERMINAL_FONT_SIZE_DEFAULT = 11;
 
 export function clampUiFontSize(size: number): number {
   return Math.max(UI_FONT_SIZE_MIN, Math.min(UI_FONT_SIZE_MAX, size));
+}
+
+export function clampTerminalFontSize(size: number): number {
+  return Math.max(TERMINAL_FONT_SIZE_MIN, Math.min(TERMINAL_FONT_SIZE_MAX, size));
 }
 
 /**
@@ -30,6 +37,23 @@ export function resetUiFontSize(): void {
   s.setUiFontSize(UI_FONT_SIZE_DEFAULT);
   applyUserFonts(s.fontFamilySans, s.fontFamilyMono, UI_FONT_SIZE_DEFAULT);
   setAppSetting("ui_font_size", String(UI_FONT_SIZE_DEFAULT)).catch(console.error);
+}
+
+/** Adjust terminal font size by `delta` (+1 or -1), clamp, and persist. */
+export function adjustTerminalFontSize(delta: number): void {
+  const s = useAppStore.getState();
+  const next = clampTerminalFontSize(s.terminalFontSize + delta);
+  if (next === s.terminalFontSize) return;
+  s.setTerminalFontSize(next);
+  setAppSetting("terminal_font_size", String(next)).catch(console.error);
+}
+
+/** Reset terminal font size to default. */
+export function resetTerminalFontSize(): void {
+  const s = useAppStore.getState();
+  if (s.terminalFontSize === TERMINAL_FONT_SIZE_DEFAULT) return;
+  s.setTerminalFontSize(TERMINAL_FONT_SIZE_DEFAULT);
+  setAppSetting("terminal_font_size", String(TERMINAL_FONT_SIZE_DEFAULT)).catch(console.error);
 }
 
 export interface FontOption {

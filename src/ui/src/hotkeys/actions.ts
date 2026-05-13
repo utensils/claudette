@@ -185,6 +185,26 @@ export const HOTKEY_ACTIONS = [
     suppressUnderOverlay: false,
   },
   {
+    id: "global.increase-terminal-font",
+    scope: "global",
+    category: "keyboard_category_terminal",
+    description: "keyboard_action_increase_terminal_font",
+    defaultBinding: allPlatforms("mod+shift+code:Equal"),
+    match: "code",
+    rebindable: true,
+    suppressUnderOverlay: false,
+  },
+  {
+    id: "global.decrease-terminal-font",
+    scope: "global",
+    category: "keyboard_category_terminal",
+    description: "keyboard_action_decrease_terminal_font",
+    defaultBinding: allPlatforms("mod+shift+code:Minus"),
+    match: "code",
+    rebindable: true,
+    suppressUnderOverlay: false,
+  },
+  {
     // Cmd/Ctrl+T: context-aware "new tab".
     //  - When the workspace's right pane is showing a file (an
     //    `activeFileTabByWorkspace` entry exists), this triggers the

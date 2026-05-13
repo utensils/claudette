@@ -27,6 +27,7 @@ Every terminal tab can be split into multiple panes side-by-side or stacked, so 
 - **Close the focused pane**: `⌘W` on macOS, `Ctrl+Shift+W` on Linux/Windows. When only one pane is left, this closes the enclosing tab.
 - **Move focus between panes**: `⌘⌥←/→/↑/↓` on macOS, `Ctrl+Alt+←/→/↑/↓` on Linux. You can also click any pane to focus it.
 - **Resize**: drag the divider between two panes.
+- **Zoom terminal text only**: `⌘/Ctrl + Shift + =` to increase terminal font size, `⌘/Ctrl + Shift + -` to decrease it.
 
 Each pane runs its own independent PTY in the workspace's worktree. Up to six panes are supported per tab to keep the layout usable.
 
@@ -57,7 +58,7 @@ No extra arguments are passed, so the shell behaves the same as it would in a st
 
 ## Terminal Font Size
 
-Adjust the terminal font size in `Settings > Appearance > Terminal font size` (range: 8–24px, default: 11px).
+Adjust the terminal font size in `Settings > Appearance > Terminal font size` (range: 8–32px, default: 11px). Press `⌘/Ctrl + Shift + =` or `⌘/Ctrl + Shift + -` to scale only the terminal without changing the rest of the UI.
 
 ## Environment Variables
 
