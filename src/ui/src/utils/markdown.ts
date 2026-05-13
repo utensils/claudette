@@ -12,8 +12,7 @@ import remarkGfm from "remark-gfm";
 import rehypeRaw from "rehype-raw";
 import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
 import { AnsiUp } from "ansi_up";
-import { invoke } from "@tauri-apps/api/core";
-import { openUrl } from "../services/tauri";
+import { openInEditor, openUrl } from "../services/tauri";
 import { CodeBlock } from "../components/chat/CodeBlock";
 import { MermaidBlock } from "../components/chat/MermaidBlock";
 import { StreamingContext } from "../components/chat/StreamingContext";
@@ -398,7 +397,6 @@ const MarkdownLink: NonNullable<Components["a"]> = ({
         if (fileOpen.openFile(filePath)) return;
       } catch (err) {
         console.error("Failed to open file link in Monaco:", filePath, err);
-        return;
       }
     }
     const nativeTarget = parseFilePathTarget(filePath);
@@ -406,7 +404,7 @@ const MarkdownLink: NonNullable<Components["a"]> = ({
       console.warn("No workspace file opener available for relative path:", filePath);
       return;
     }
-    void invoke("open_in_editor", { path: nativeTarget.path }).catch(
+    void openInEditor(nativeTarget.path).catch(
       (err) =>
         console.error("Failed to open path:", filePath, err),
     );

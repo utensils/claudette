@@ -10,6 +10,9 @@ describe("monacoFileLinkPath", () => {
 
   it("relativizes absolute paths inside the worktree", () => {
     expect(monacoFileLinkPath("/repo/src/main.rs", "/repo")).toBe("src/main.rs");
+    expect(monacoFileLinkPath("C:\\repo\\src\\main.rs", "C:\\repo")).toBe(
+      "src/main.rs",
+    );
   });
 
   it("preserves line and range targets separately from the file tab path", () => {

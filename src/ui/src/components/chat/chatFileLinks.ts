@@ -38,7 +38,7 @@ export function monacoFileLinkTarget(
   ) {
     return null;
   }
-  const path = rel.replace(/^\.[\\/]/, "");
+  const path = rel.replace(/^\.[\\/]/, "").replace(/\\/g, "/");
   const revealTarget =
     typeof parsed.startLine === "number"
       ? {

@@ -9,6 +9,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 
 const tauriMocks = vi.hoisted(() => ({
   invoke: vi.fn(() => Promise.resolve()),
+  openInEditor: vi.fn(() => Promise.resolve()),
   openUrl: vi.fn(() => Promise.resolve()),
 }));
 
@@ -17,6 +18,7 @@ vi.mock("@tauri-apps/api/core", () => ({
 }));
 
 vi.mock("../services/tauri", () => ({
+  openInEditor: tauriMocks.openInEditor,
   openUrl: tauriMocks.openUrl,
 }));
 
@@ -236,6 +238,7 @@ describe("MARKDOWN_COMPONENTS.a click handling", () => {
 
   beforeEach(() => {
     tauriMocks.invoke.mockClear();
+    tauriMocks.openInEditor.mockClear();
     tauriMocks.openUrl.mockClear();
   });
 
@@ -259,7 +262,7 @@ describe("MARKDOWN_COMPONENTS.a click handling", () => {
     );
 
     expect(openFile).toHaveBeenCalledWith("README.md");
-    expect(tauriMocks.invoke).not.toHaveBeenCalled();
+    expect(tauriMocks.openInEditor).not.toHaveBeenCalled();
   });
 
   it("falls back to the native opener for absolute file paths outside Monaco", async () => {
@@ -280,9 +283,30 @@ describe("MARKDOWN_COMPONENTS.a click handling", () => {
     );
 
     expect(openFile).toHaveBeenCalledWith("/tmp/report.md");
-    expect(tauriMocks.invoke).toHaveBeenCalledWith("open_in_editor", {
-      path: "/tmp/report.md",
+    expect(tauriMocks.openInEditor).toHaveBeenCalledWith("/tmp/report.md");
+  });
+
+  it("falls back to the native opener when the Monaco opener throws", async () => {
+    const openFile = vi.fn(() => {
+      throw new Error("boom");
     });
+    const container = await render(
+      createElement(
+        MarkdownFileOpenContext.Provider,
+        { value: { openFile } },
+        createElement(LinkOverride, {
+          href: "claudettepath:/tmp/report.md",
+          children: "/tmp/report.md",
+        }),
+      ),
+    );
+
+    container.querySelector("button")?.dispatchEvent(
+      new MouseEvent("click", { bubbles: true, cancelable: true }),
+    );
+
+    expect(openFile).toHaveBeenCalledWith("/tmp/report.md");
+    expect(tauriMocks.openInEditor).toHaveBeenCalledWith("/tmp/report.md");
   });
 
   it("routes localhost file URLs through the Monaco file opener without rendering a navigable href", async () => {

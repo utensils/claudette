@@ -221,7 +221,7 @@ export function isLikelyRelativeFileReference(value: string): boolean {
   if (/^[\\/]|^[A-Za-z]:[\\/]/.test(candidate)) return false;
   if (candidate.includes("://") || candidate.includes("@")) return false;
 
-  const normalized = candidate.replace(/\\/g, "/");
+  const normalized = candidate.replace(/\\/g, "/").replace(/^\.\//, "");
   if (
     normalized === "." ||
     normalized === ".." ||
@@ -316,7 +316,20 @@ export function decodeLocalhostFileUrlTarget(href: string): string | null {
   }
   const candidate =
     /^\/[A-Za-z]:[\\/]/.test(pathname) ? pathname.slice(1) : pathname;
-  return isLikelyFilePathTarget(candidate) ? candidate : null;
+  if (!isLikelyFilePathTarget(candidate)) return null;
+  return isLikelyLocalhostFileTarget(candidate) ? candidate : null;
+}
+
+function isLikelyLocalhostFileTarget(candidate: string): boolean {
+  const parsed = parseFilePathTarget(candidate);
+  if (typeof parsed.startLine === "number") return true;
+  const normalized = parsed.path.replace(/\\/g, "/");
+  if (/^[A-Za-z]:\//.test(normalized) || /^\/\/[^/]+\/[^/]+/.test(normalized)) {
+    return true;
+  }
+  return /^\/(?:Users|home|tmp|var|private|Volumes|workspaces|workspace)\//.test(
+    normalized,
+  );
 }
 
 export function detectFileReferences(text: string): FilePathMatch[] {

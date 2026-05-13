@@ -119,6 +119,13 @@ describe("relative file references", () => {
         path: "src/ui/src/utils/markdown.ts",
       },
     ]);
+    expect(detectFileReferences("open ./src/main.rs")).toEqual([
+      {
+        start: 5,
+        end: 18,
+        path: "./src/main.rs",
+      },
+    ]);
   });
 
   it("does not mistake domain-like text for a workspace file", () => {
@@ -154,6 +161,7 @@ describe("localhost file URL decoding", () => {
 
   it("does not treat normal localhost app routes as file paths", () => {
     expect(decodeLocalhostFileUrl("http://localhost:14254/workspaces/current")).toBeNull();
+    expect(decodeLocalhostFileUrl("http://localhost:3000/index.html")).toBeNull();
   });
 
   it("does not decode non-localhost URLs as files", () => {
