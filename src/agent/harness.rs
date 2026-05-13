@@ -144,7 +144,7 @@ impl AgentSession {
                     .send_turn_with_uuid(prompt, attachments, user_message_uuid)
                     .await
             }
-            Self::CodexAppServer(_) => Err("Codex app-server turns are not wired yet".to_string()),
+            Self::CodexAppServer(session) => session.send_turn(prompt, attachments).await,
         }
     }
 
@@ -155,9 +155,7 @@ impl AgentSession {
     ) -> Result<(), String> {
         match self {
             Self::ClaudeCode(session) => session.steer_user_message(prompt, attachments).await,
-            Self::CodexAppServer(_) => {
-                Err("Codex app-server steering is not wired yet".to_string())
-            }
+            Self::CodexAppServer(session) => session.steer_turn(prompt, attachments).await,
         }
     }
 

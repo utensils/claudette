@@ -1,5 +1,5 @@
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicI64, Ordering};
 
@@ -8,11 +8,15 @@ use serde_json::{Value, json};
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::process::{ChildStdin, Command};
 use tokio::sync::broadcast;
+use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 
 use crate::process::CommandWindowExt as _;
 
-use super::{AgentEvent, Delta, InnerStreamEvent, StartContentBlock, StreamEvent, TokenUsage};
+use super::{
+    AgentEvent, Delta, FileAttachment, InnerStreamEvent, StartContentBlock, StreamEvent,
+    TokenUsage, TurnHandle,
+};
 
 type CodexStdin = Arc<tokio::sync::Mutex<ChildStdin>>;
 type PendingRequests = Arc<tokio::sync::Mutex<BTreeMap<JsonRpcId, PendingCodexRequest>>>;
@@ -22,16 +26,49 @@ struct PendingCodexRequest {
     tx: oneshot::Sender<Result<JsonRpcResponse, JsonRpcError>>,
 }
 
+#[derive(Debug, Clone)]
+pub struct CodexAppServerOptions {
+    pub model: Option<String>,
+    pub permission_level: CodexPermissionLevel,
+}
+
+impl Default for CodexAppServerOptions {
+    fn default() -> Self {
+        Self {
+            model: None,
+            permission_level: CodexPermissionLevel::Readonly,
+        }
+    }
+}
+
 pub struct CodexAppServerSession {
     pid: u32,
     stdin: Option<CodexStdin>,
     event_tx: broadcast::Sender<AgentEvent>,
     pending: PendingRequests,
     next_request_id: AtomicI64,
+    working_dir: PathBuf,
+    model: Option<String>,
+    permission_level: CodexPermissionLevel,
+    thread_id: Arc<tokio::sync::Mutex<Option<String>>>,
+    active_turn_id: Arc<tokio::sync::Mutex<Option<String>>>,
 }
 
 impl CodexAppServerSession {
     pub async fn start(working_dir: &Path, client_version: &str) -> Result<Self, String> {
+        Self::start_with_options(
+            working_dir,
+            client_version,
+            CodexAppServerOptions::default(),
+        )
+        .await
+    }
+
+    pub async fn start_with_options(
+        working_dir: &Path,
+        client_version: &str,
+        options: CodexAppServerOptions,
+    ) -> Result<Self, String> {
         crate::missing_cli::precheck_cwd(working_dir)?;
 
         let mut cmd = Command::new("codex");
@@ -71,6 +108,11 @@ impl CodexAppServerSession {
             event_tx,
             pending: Arc::new(tokio::sync::Mutex::new(BTreeMap::new())),
             next_request_id: AtomicI64::new(1),
+            working_dir: working_dir.to_path_buf(),
+            model: options.model,
+            permission_level: options.permission_level,
+            thread_id: Arc::new(tokio::sync::Mutex::new(None)),
+            active_turn_id: Arc::new(tokio::sync::Mutex::new(None)),
         };
 
         session.spawn_stdout_reader(stdout);
@@ -91,6 +133,11 @@ impl CodexAppServerSession {
             event_tx,
             pending: Arc::new(tokio::sync::Mutex::new(BTreeMap::new())),
             next_request_id: AtomicI64::new(1),
+            working_dir: PathBuf::from("/tmp"),
+            model: None,
+            permission_level: CodexPermissionLevel::Readonly,
+            thread_id: Arc::new(tokio::sync::Mutex::new(None)),
+            active_turn_id: Arc::new(tokio::sync::Mutex::new(None)),
         }
     }
 
@@ -108,11 +155,113 @@ impl CodexAppServerSession {
         }
     }
 
+    pub async fn send_turn(
+        &self,
+        prompt: &str,
+        attachments: &[FileAttachment],
+    ) -> Result<TurnHandle, String> {
+        if !attachments.is_empty() {
+            return Err("Codex app-server attachments are not wired yet".to_string());
+        }
+        let mut broadcast_rx = self.event_tx.subscribe();
+        for event in codex_turn_start_events() {
+            let _ = self.event_tx.send(event);
+        }
+        let thread_id = self.ensure_thread().await?;
+        let response = self
+            .send_request(build_turn_start_request(
+                self.next_id(),
+                &thread_id,
+                prompt,
+                &self.working_dir,
+                self.model.as_deref(),
+                self.permission_level,
+            ))
+            .await?;
+        let turn_id = turn_id_from_response(&response)?;
+        *self.active_turn_id.lock().await = Some(turn_id);
+
+        let (mpsc_tx, mpsc_rx) = mpsc::channel::<AgentEvent>(128);
+        tokio::spawn(async move {
+            loop {
+                match broadcast_rx.recv().await {
+                    Ok(event) => {
+                        let is_turn_end =
+                            matches!(&event, AgentEvent::Stream(StreamEvent::Result { .. }));
+                        let is_process_exit = matches!(&event, AgentEvent::ProcessExited(_));
+                        if mpsc_tx.send(event).await.is_err() {
+                            break;
+                        }
+                        if is_turn_end || is_process_exit {
+                            break;
+                        }
+                    }
+                    Err(broadcast::error::RecvError::Closed) => break,
+                    Err(broadcast::error::RecvError::Lagged(n)) => {
+                        tracing::warn!(
+                            target: "claudette::agent",
+                            subsystem = "codex-app-server",
+                            dropped_events = n,
+                            "broadcast lag — codex per-turn receiver missed events"
+                        );
+                    }
+                }
+            }
+        });
+
+        Ok(TurnHandle {
+            event_rx: mpsc_rx,
+            pid: self.pid,
+        })
+    }
+
+    pub async fn steer_turn(
+        &self,
+        prompt: &str,
+        attachments: &[FileAttachment],
+    ) -> Result<(), String> {
+        if !attachments.is_empty() {
+            return Err("Codex app-server steering attachments are not wired yet".to_string());
+        }
+        let thread_id = self.ensure_thread().await?;
+        let turn_id = self
+            .active_turn_id
+            .lock()
+            .await
+            .clone()
+            .ok_or_else(|| "Codex app-server has no active turn to steer".to_string())?;
+        self.send_request(build_turn_steer_request(
+            self.next_id(),
+            &thread_id,
+            &turn_id,
+            prompt,
+        ))
+        .await?;
+        Ok(())
+    }
+
     async fn initialize(&self, client_version: &str) -> Result<(), String> {
         let request = build_initialize_request(self.next_id(), client_version);
         self.send_request(request).await?;
         self.send_notification(build_initialized_notification())
             .await
+    }
+
+    async fn ensure_thread(&self) -> Result<String, String> {
+        if let Some(thread_id) = self.thread_id.lock().await.clone() {
+            return Ok(thread_id);
+        }
+        let response = self
+            .send_request(build_thread_start_request(
+                self.next_id(),
+                self.model.as_deref(),
+                &self.working_dir,
+                self.permission_level,
+            ))
+            .await?;
+        let thread_id = thread_id_from_response(&response)?;
+        *self.thread_id.lock().await = Some(thread_id.clone());
+        Ok(thread_id)
     }
 
     async fn send_request(&self, request: JsonRpcRequest) -> Result<JsonRpcResponse, String> {
@@ -877,6 +1026,36 @@ fn string_field(value: &Value, key: &str) -> String {
         .to_string()
 }
 
+fn thread_id_from_response(response: &JsonRpcResponse) -> Result<String, String> {
+    response_id_from_response(response, "thread", "thread/start")
+}
+
+fn turn_id_from_response(response: &JsonRpcResponse) -> Result<String, String> {
+    response_id_from_response(response, "turn", "turn/start")
+}
+
+fn response_id_from_response(
+    response: &JsonRpcResponse,
+    object_key: &str,
+    method: &str,
+) -> Result<String, String> {
+    let id = response
+        .result
+        .get(object_key)
+        .and_then(|value| value.get("id"))
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    if id.is_empty() {
+        Err(format!(
+            "Codex app-server `{method}` response did not include `{object_key}.id`"
+        ))
+    } else {
+        Ok(id)
+    }
+}
+
 fn token_usage_from_params(params: &Value) -> TokenUsage {
     let total = params
         .get("tokenUsage")
@@ -1017,6 +1196,34 @@ mod tests {
         assert_eq!(method, "turn/start");
         assert_eq!(response.result["turn"]["id"], "turn-1");
         assert_eq!(router.pending_len(), 0);
+    }
+
+    #[test]
+    fn extracts_thread_and_turn_ids_from_app_server_responses() {
+        let thread = JsonRpcResponse {
+            id: Some(JsonRpcId::Integer(1)),
+            result: json!({"thread":{"id":"thread-1"}}),
+        };
+        let turn = JsonRpcResponse {
+            id: Some(JsonRpcId::Integer(2)),
+            result: json!({"turn":{"id":"turn-1"}}),
+        };
+
+        assert_eq!(thread_id_from_response(&thread).unwrap(), "thread-1");
+        assert_eq!(turn_id_from_response(&turn).unwrap(), "turn-1");
+    }
+
+    #[test]
+    fn missing_turn_id_is_a_structured_error() {
+        let response = JsonRpcResponse {
+            id: Some(JsonRpcId::Integer(2)),
+            result: json!({"turn":{}}),
+        };
+
+        assert_eq!(
+            turn_id_from_response(&response).unwrap_err(),
+            "Codex app-server `turn/start` response did not include `turn.id`"
+        );
     }
 
     #[test]

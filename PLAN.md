@@ -109,10 +109,17 @@
 - 2026-05-13: Verified Copilot fixes with:
   - `nix develop -c cargo test -p claudette agent::codex_app_server --all-features`
   - `nix develop -c cargo fmt --all`
+- 2026-05-13: Committed and pushed Copilot fixes as `08c47f82` (`fix: tolerate null codex jsonrpc ids`), replied to both Copilot threads, resolved them, and verified no unresolved Copilot threads remained.
+- 2026-05-13: Added hidden Codex turn start and steer methods on `CodexAppServerSession`, including lazy `thread/start`, `turn/start` response ID validation, per-turn event forwarding, and `AgentSession::CodexAppServer` dispatch.
+- 2026-05-13: Verified hidden Codex turn path scaffolding with:
+  - `nix develop -c cargo test -p claudette agent::codex_app_server --all-features`
+  - `nix develop -c cargo test -p claudette agent::harness --all-features`
+  - `nix develop -c cargo fmt --all`
 
 ## Next Stage
 
 - Begin regular Copilot review passes on draft PR #786 after pushed checkpoints.
-- Wire `CodexAppServerSession` turn start/steer/interrupt methods and then select it from backend runtime only under the native Codex experimental gate.
+- Add Codex `turn/interrupt` support and a thin harness stop/interrupt abstraction before selecting it from backend runtime.
+- Select native Codex from backend runtime only under the native Codex experimental gate.
 - Add fake-harness tests around chat send lifecycle seams before selecting the native Codex runtime from backend settings.
 - Keep `codex-subscription` hidden/replaced only after the native `Experimental Codex` backend has a real harness path.
