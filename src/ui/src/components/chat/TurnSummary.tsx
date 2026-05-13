@@ -128,19 +128,19 @@ export function TurnSummary({
       {inline ? (
         <div className={styles.inlineTurnActivities}>{renderedActivities}</div>
       ) : (
-        <div
-          className={styles.turnSummary}
-          role="button"
-          tabIndex={0}
-          onClick={onToggle}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" || e.key === " ") {
-              e.preventDefault();
-              onToggle();
-            }
-          }}
-        >
-          <div className={styles.turnHeader}>
+        <div className={styles.turnSummary}>
+          <div
+            className={styles.turnHeader}
+            role="button"
+            tabIndex={0}
+            onClick={onToggle}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                onToggle();
+              }
+            }}
+          >
             <span className={styles.toolChevron}>{isExpanded ? "⌄" : "›"}</span>
             <span className={styles.turnLabel}>
               {label ??

@@ -14,13 +14,11 @@ export function activityMatchesSearch(
   const normalizedQuery = query.toLowerCase();
   const summary = relativizePath(activitySummaryText(activity), worktreePath);
   if (summary.toLowerCase().includes(normalizedQuery)) return true;
+  if (!isAgentTranscriptActivity(activity)) return false;
+
   const prompt = relativizePath(agentPromptText(activity), worktreePath);
   if (prompt.toLowerCase().includes(normalizedQuery)) return true;
-  if (
-    (activity.agentResultText ?? activity.resultText)
-      .toLowerCase()
-      .includes(normalizedQuery)
-  ) {
+  if ((activity.agentResultText ?? "").toLowerCase().includes(normalizedQuery)) {
     return true;
   }
   if (
@@ -35,6 +33,10 @@ export function activityMatchesSearch(
       .toLowerCase()
       .includes(normalizedQuery),
   );
+}
+
+function isAgentTranscriptActivity(activity: ToolActivity): boolean {
+  return activity.toolName === "Agent" || !!activity.agentTaskId;
 }
 
 export function activitySummaryText(activity: ToolActivity): string {

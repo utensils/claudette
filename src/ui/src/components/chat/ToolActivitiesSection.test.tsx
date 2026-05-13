@@ -471,6 +471,32 @@ describe("ToolActivitiesSection", () => {
     expect(container.textContent).toContain("Bash");
   });
 
+  it("does not force-expand ordinary tool groups for result-text search matches", async () => {
+    // Agent transcript search includes final results, but ordinary
+    // tool-result payloads can be large and noisy. Keep the older
+    // generic-tool contract: summaries/searchable inputs can open a
+    // group, raw result text alone does not.
+    const container = await render(
+      <ToolActivitiesSection
+        sessionId="session-result-search"
+        toolDisplayMode="grouped"
+        searchQuery="secret-result-token"
+        activities={[
+          activity("Bash", {
+            toolUseId: "result-search-1",
+            resultText: "secret-result-token",
+          }),
+        ]}
+      />,
+    );
+
+    const header = container.querySelector(
+      '[role="button"][aria-expanded]',
+    ) as HTMLElement;
+    expect(header.getAttribute("aria-expanded")).toBe("false");
+    expect(container.textContent).not.toContain("Bash");
+  });
+
   it("persists collapse state via the chatSlice so it survives running→completed transition", async () => {
     // The unified slice key (`tools:${first toolUseId}`) is shared
     // with `MessagesWithTurns`'s `TurnSummary` rendering, so a user's
@@ -1056,6 +1082,88 @@ describe("ToolActivitiesSection", () => {
 });
 
 describe("TurnSummary", () => {
+  it("only toggles completed ordinary tool groups from the header", async () => {
+    const onToggle = vi.fn();
+    const container = await render(
+      <TurnSummary
+        turn={completedTurn([
+          activity("Bash", {
+            summary: "echo selectable text",
+            resultText: "selectable output",
+          }),
+        ])}
+        collapsed={false}
+        onToggle={onToggle}
+        assistantText=""
+        searchQuery=""
+      />,
+    );
+
+    const activities = container.querySelector(
+      `.${styles.turnActivities}`,
+    ) as HTMLElement;
+    expect(activities).toBeTruthy();
+
+    await act(async () => {
+      activities.click();
+    });
+    expect(onToggle).not.toHaveBeenCalled();
+
+    const header = container.querySelector(
+      `.${styles.turnHeader}[role="button"]`,
+    ) as HTMLElement;
+    await act(async () => {
+      header.click();
+    });
+    expect(onToggle).toHaveBeenCalledTimes(1);
+  });
+
+  it("only toggles completed Agent groups from the turn header", async () => {
+    const onToggle = vi.fn();
+    const container = await render(
+      <TurnSummary
+        turn={completedTurn([
+          activity("Agent", {
+            agentDescription: "Review selectable content",
+            agentResultText: "selectable agent result",
+            agentThinkingBlocks: ["selectable thinking"],
+            agentToolCalls: [
+              {
+                toolUseId: "nested-1",
+                toolName: "Read",
+                agentId: "agent-1",
+                status: "completed",
+                startedAt: "2026-05-08T00:00:00Z",
+              },
+            ],
+          }),
+        ])}
+        collapsed={false}
+        onToggle={onToggle}
+        assistantText=""
+        searchQuery=""
+      />,
+    );
+
+    const nestedChat = container.querySelector(
+      `.${styles.agentNestedChat}`,
+    ) as HTMLElement;
+    expect(nestedChat).toBeTruthy();
+
+    await act(async () => {
+      nestedChat.click();
+    });
+    expect(onToggle).not.toHaveBeenCalled();
+
+    const header = container.querySelector(
+      `.${styles.turnHeader}[role="button"]`,
+    ) as HTMLElement;
+    await act(async () => {
+      header.click();
+    });
+    expect(onToggle).toHaveBeenCalledTimes(1);
+  });
+
   it("renders completed inline Agent calls without the summary card chrome", async () => {
     const agent = activity("Agent", {
       agentDescription: "Review changes",

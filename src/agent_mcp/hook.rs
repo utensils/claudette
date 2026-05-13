@@ -5,12 +5,18 @@
 //! already-running per-session bridge so the Tauri UI can show nested
 //! subagent tool activity without scraping DEBUG logs.
 
-use std::io::{self, BufRead};
+use std::io::{self, BufRead, Read, Seek, SeekFrom};
 use std::path::Path;
 
 use tokio::io::AsyncReadExt;
 
 use crate::agent_mcp::protocol::{BridgePayload, BridgeRequest};
+
+const MAX_TRANSCRIPT_TAIL_BYTES: u64 = 512 * 1024;
+const MAX_TRANSCRIPT_LINES: usize = 2_000;
+const MAX_THINKING_BLOCKS: usize = 32;
+const MAX_THINKING_TOTAL_CHARS: usize = 32_000;
+const MAX_RESULT_CHARS: usize = 32_000;
 
 /// Run a one-shot hook forwarder.
 pub async fn run_stdin() -> io::Result<()> {
@@ -68,13 +74,12 @@ fn enrich_subagent_stop(input: &mut serde_json::Value) {
         .get("last_assistant_message")
         .and_then(serde_json::Value::as_str)
         .is_none_or(str::is_empty)
+        && let Some(result) = snapshot.final_result
     {
-        if let Some(result) = snapshot.final_result {
-            obj.insert(
-                "claudette_agent_final_result".to_string(),
-                serde_json::Value::String(result),
-            );
-        }
+        obj.insert(
+            "claudette_agent_final_result".to_string(),
+            serde_json::Value::String(result),
+        );
     }
 }
 
@@ -84,12 +89,13 @@ struct SubagentTranscriptSnapshot {
 }
 
 fn extract_subagent_transcript_snapshot(path: &Path) -> io::Result<SubagentTranscriptSnapshot> {
-    let file = std::fs::File::open(path)?;
-    let reader = std::io::BufReader::new(file);
+    let tail = read_transcript_tail(path)?;
+    let reader = std::io::BufReader::new(std::io::Cursor::new(tail));
     let mut thinking_blocks = Vec::new();
+    let mut thinking_chars = 0usize;
     let mut final_result = None;
 
-    for line in reader.lines() {
+    for line in reader.lines().take(MAX_TRANSCRIPT_LINES) {
         let line = line?;
         let Ok(value) = serde_json::from_str::<serde_json::Value>(&line) else {
             continue;
@@ -108,10 +114,7 @@ fn extract_subagent_transcript_snapshot(path: &Path) -> io::Result<SubagentTrans
                     if let Some(thinking) =
                         block.get("thinking").and_then(serde_json::Value::as_str)
                     {
-                        let thinking = thinking.trim();
-                        if !thinking.is_empty() {
-                            thinking_blocks.push(thinking.to_string());
-                        }
+                        push_capped_thinking(&mut thinking_blocks, &mut thinking_chars, thinking);
                     }
                 }
                 "text" => {
@@ -127,7 +130,7 @@ fn extract_subagent_transcript_snapshot(path: &Path) -> io::Result<SubagentTrans
         }
 
         if !text_blocks.is_empty() {
-            final_result = Some(text_blocks.join("\n\n"));
+            final_result = Some(truncate_chars(&text_blocks.join("\n\n"), MAX_RESULT_CHARS));
         }
     }
 
@@ -135,6 +138,41 @@ fn extract_subagent_transcript_snapshot(path: &Path) -> io::Result<SubagentTrans
         thinking_blocks,
         final_result,
     })
+}
+
+fn read_transcript_tail(path: &Path) -> io::Result<String> {
+    let mut file = std::fs::File::open(path)?;
+    let len = file.metadata()?.len();
+    let start = len.saturating_sub(MAX_TRANSCRIPT_TAIL_BYTES);
+    if start > 0 {
+        file.seek(SeekFrom::Start(start))?;
+    }
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes)?;
+    if start > 0
+        && let Some(pos) = bytes.iter().position(|b| *b == b'\n')
+    {
+        bytes.drain(..=pos);
+    }
+    Ok(String::from_utf8_lossy(&bytes).into_owned())
+}
+
+fn push_capped_thinking(blocks: &mut Vec<String>, total_chars: &mut usize, thinking: &str) {
+    if blocks.len() >= MAX_THINKING_BLOCKS || *total_chars >= MAX_THINKING_TOTAL_CHARS {
+        return;
+    }
+    let thinking = thinking.trim();
+    if thinking.is_empty() {
+        return;
+    }
+    let remaining = MAX_THINKING_TOTAL_CHARS - *total_chars;
+    let capped = truncate_chars(thinking, remaining);
+    *total_chars += capped.chars().count();
+    blocks.push(capped);
+}
+
+fn truncate_chars(value: &str, max_chars: usize) -> String {
+    value.chars().take(max_chars).collect()
 }
 
 fn assistant_content_blocks(value: &serde_json::Value) -> Option<&Vec<serde_json::Value>> {
@@ -199,5 +237,27 @@ mod tests {
             serde_json::json!(["plan"])
         );
         assert!(input.get("claudette_agent_final_result").is_none());
+    }
+
+    #[test]
+    fn transcript_snapshot_is_bounded_to_tail_and_field_caps() {
+        let mut file = tempfile::NamedTempFile::new().unwrap();
+        file.write_all(&vec![b'x'; (MAX_TRANSCRIPT_TAIL_BYTES + 128) as usize])
+            .unwrap();
+        writeln!(file).unwrap();
+        writeln!(
+            file,
+            r#"{{"type":"assistant","message":{{"content":[{{"type":"thinking","thinking":" tail thought "}},{{"type":"text","text":"{}"}}]}}}}"#,
+            "y".repeat(MAX_RESULT_CHARS + 128)
+        )
+        .unwrap();
+
+        let snapshot = extract_subagent_transcript_snapshot(file.path()).unwrap();
+
+        assert_eq!(snapshot.thinking_blocks, vec!["tail thought".to_string()]);
+        assert_eq!(
+            snapshot.final_result.as_ref().map(|s| s.chars().count()),
+            Some(MAX_RESULT_CHARS)
+        );
     }
 }

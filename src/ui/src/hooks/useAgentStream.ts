@@ -33,10 +33,9 @@ function stringFromUnknown(value: unknown): string | undefined {
 
 function stringArrayFromUnknown(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
-  return value.filter(
-    (item): item is string =>
-      typeof item === "string" && item.trim().length > 0,
-  );
+  return value
+    .map((item) => (typeof item === "string" ? item.trim() : ""))
+    .filter((item) => item.length > 0);
 }
 
 interface AgentHookEventPayload {

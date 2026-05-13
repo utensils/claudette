@@ -443,7 +443,6 @@
   border: 1px solid var(--divider);
   border-radius: 6px;
   margin: 4px 0;
-  cursor: pointer;
   transition: border-color var(--transition-fast);
   overflow: hidden;
   flex-shrink: 0;
@@ -461,6 +460,10 @@
   background: transparent;
   font-size: 12px;
   transition: background var(--transition-fast);
+}
+
+.turnHeader[role="button"] {
+  cursor: pointer;
 }
 
 .turnSummary:hover > .turnHeader {
@@ -1138,6 +1141,10 @@
   gap: 0;
   padding: 6px 8px 2px 8px;
   min-width: 0;
+}
+
+.agentToolGroupHeader[role="button"] {
+  cursor: pointer;
 }
 
 .agentToolGroupInline .agentToolGroupHeader {
