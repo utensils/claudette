@@ -1,0 +1,184 @@
+/* Setup-script output chip in the chat transcript. Mirrors
+   CliInvocationBanner: a collapsed pill that expands on click. A failed or
+   timed-out run carries a danger treatment (`.failed`) so it's still
+   noticeable even when collapsed. */
+
+.banner {
+  margin: 6px 0 14px 0;
+  border: 1px solid var(--divider);
+  background: var(--sidebar-bg);
+  border-radius: var(--radius-lg);
+  font-size: var(--fs-sm);
+  /* Sits inside `.messages` (a flex-column scroll container) — without an
+     explicit floor it could be squeezed to its border under sibling
+     pressure. Always reserve space for the content. */
+  flex-shrink: 0;
+  overflow: hidden;
+  transition:
+    border-color 120ms ease,
+    background-color 120ms ease;
+}
+
+.banner:hover {
+  border-color: rgba(var(--accent-primary-rgb), 0.35);
+}
+
+.expanded {
+  border-color: rgba(var(--accent-primary-rgb), 0.35);
+  background: var(--chat-input-bg);
+}
+
+/* Danger treatment for failed / timed-out runs — kept on the collapsed chip
+   too so the failure draws the eye even after the user collapses it. */
+.failed {
+  border-color: var(--error-border);
+  background: var(--error-bg);
+}
+
+.failed:hover {
+  border-color: var(--error-border);
+  background: var(--error-hover);
+}
+
+.failed.expanded {
+  border-color: var(--error-border);
+  background: var(--error-hover);
+}
+
+/* ── Header (always visible — collapsed pill) ── */
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+  min-height: 32px;
+  padding: 4px 6px 4px 4px;
+}
+
+.toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+  padding: 4px 6px;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  color: var(--text-muted);
+  font-family: inherit;
+  font-size: var(--fs-sm);
+  text-align: left;
+  border-radius: var(--radius-md);
+}
+
+.toggle:focus-visible {
+  outline: 2px solid var(--accent-primary);
+  outline-offset: -2px;
+}
+
+/* Same row layout as `.toggle` for the no-output case where there's nothing
+   to expand — keeps the chip's height and alignment identical. */
+.staticHeader {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+  padding: 4px 6px 4px 26px;
+}
+
+.chevron {
+  flex-shrink: 0;
+  color: var(--text-dim);
+  transition: transform 140ms ease;
+}
+
+.chevronOpen {
+  transform: rotate(90deg);
+  color: var(--accent-primary);
+}
+
+.statusIcon {
+  flex-shrink: 0;
+  color: var(--accent-primary);
+}
+
+.failed .statusIcon {
+  color: var(--status-stopped);
+}
+
+.summary {
+  font-family: var(--font-mono);
+  color: var(--text-primary);
+  /* Wrap rather than ellipsize — the summary is the only thing visible while
+     collapsed; truncating it hid the status when the panel narrowed. */
+  white-space: normal;
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+
+.failed .summary {
+  color: var(--status-stopped);
+}
+
+.copyButton {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  transition:
+    background-color 120ms ease,
+    color 120ms ease;
+}
+
+.copyButton:hover {
+  background: var(--hover-bg);
+  color: var(--text-primary);
+}
+
+/* ── Expanded body ── */
+
+.body {
+  padding: 4px 12px 12px 30px;
+  border-top: 1px dashed var(--divider);
+  /* Match CliInvocationBanner — fade the expanded content in rather than a
+     hard pop. */
+  animation: setupBannerReveal 140ms ease-out;
+}
+
+.failed .body {
+  border-top-color: var(--error-border);
+}
+
+@keyframes setupBannerReveal {
+  from {
+    opacity: 0;
+    transform: translateY(-2px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.output {
+  margin: 8px 0 0;
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  color: var(--text-primary);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  /* Long install logs shouldn't push the transcript around — cap the height
+     and let the block scroll. */
+  max-height: 40vh;
+  overflow-y: auto;
+}

@@ -145,6 +145,15 @@
   "cli_invocation_copied": "Copiado",
   "cli_invocation_prompt_label": "prompt",
 
+  "setup_script_label": "script de configuração",
+  "setup_script_status_completed": "concluído",
+  "setup_script_status_failed": "falhou",
+  "setup_script_status_timed_out": "tempo esgotado",
+  "setup_script_expand": "Mostrar saída do script de configuração",
+  "setup_script_collapse": "Ocultar saída do script de configuração",
+  "setup_script_copy": "Copiar saída do script de configuração",
+  "setup_script_copied": "Copiado",
+
   "mcp_unknown_error": "desconhecido",
 
   "diff_loading": "Carregando diff...",

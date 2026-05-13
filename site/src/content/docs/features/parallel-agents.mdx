@@ -89,6 +89,8 @@ A workspace can run a script when it's created and another when it's archived. U
 
 Configure them per repository in **Settings > Repository > Setup scripts** / **Archive scripts**. See [Per-Repo Settings](/claudette/features/per-repo-settings/) for the full schema.
 
+When a setup script finishes, its output lands in the new workspace's chat transcript as a collapsed entry — click it to expand the full log (handy when a script prints thousands of lines, like `bun install`). A run that fails or times out is highlighted in the transcript, expanded automatically, and raises a toast so you don't miss it scrolling past.
+
 ## Fanning Out from the CLI
 
 The flagship use case for the [`claudette` CLI](/claudette/features/cli-client/): a phase-of-work plan that creates N workspaces and dispatches a prompt to each.

@@ -13,6 +13,7 @@ import { ThinkingBlock } from "./ThinkingBlock";
 import { collapsedToolGroupKey } from "./collapsedToolGroupKey";
 import { CompactionDivider } from "./CompactionDivider";
 import { SyntheticContinuationMessage } from "./SyntheticContinuationMessage";
+import { SetupScriptBanner } from "./SetupScriptBanner";
 import { MessageAttachment, isTextDataMediaType } from "./MessageAttachment";
 import {
   type DownloadableAttachment,
@@ -32,6 +33,7 @@ import {
   parseCompactionSentinel,
   parseSyntheticSummarySentinel,
 } from "../../utils/compactionSentinel";
+import { parseSetupScriptMessage } from "../../utils/setupScriptMessage";
 import { renderUltrathinkText } from "./ultrathink";
 import {
   processActivities,
@@ -767,6 +769,16 @@ export const MessagesWithTurns = memo(function MessagesWithTurns({
                 {renderTurns(globalOffset + idx)}
                 {renderLiveToolActivity(globalOffset + idx)}
                 <SyntheticContinuationMessage body={syntheticBody} />
+              </React.Fragment>
+            );
+          }
+          const setupOutcome = parseSetupScriptMessage(msg.content);
+          if (setupOutcome) {
+            return (
+              <React.Fragment key={msg.id}>
+                {renderTurns(globalOffset + idx)}
+                {renderLiveToolActivity(globalOffset + idx)}
+                <SetupScriptBanner outcome={setupOutcome} messageId={msg.id} />
               </React.Fragment>
             );
           }
