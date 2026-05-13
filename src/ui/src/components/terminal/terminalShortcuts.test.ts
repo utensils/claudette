@@ -196,8 +196,8 @@ describe("terminalKeyAction", () => {
   it("recognizes terminal font zoom with customized keybindings", () => {
     expect(
       terminalKeyAction(
-        mk({ code: "Period", metaKey: true, shiftKey: true }),
-        { "global.increase-terminal-font": "mod+shift+code:Period" },
+        mk({ code: "Period", shiftKey: true }),
+        { "global.increase-terminal-font": "shift+code:Period" },
       ),
     ).toEqual({ kind: "zoom", direction: "in", scope: "terminal" });
   });
