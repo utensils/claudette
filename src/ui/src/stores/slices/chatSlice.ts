@@ -20,6 +20,8 @@ export interface ToolActivity {
   agentToolUseCount?: number | null;
   agentStatus?: string | null;
   agentToolCalls?: AgentToolCall[];
+  agentThinkingBlocks?: string[];
+  agentResultText?: string | null;
 }
 
 export interface AgentToolCall {
@@ -542,6 +544,8 @@ export const createChatSlice: StateCreator<AppState, [], [], ChatSlice> = (
           agentToolUseCount: a.agentToolUseCount,
           agentStatus: a.agentStatus,
           agentToolCalls: a.agentToolCalls,
+          agentThinkingBlocks: a.agentThinkingBlocks,
+          agentResultText: a.agentResultText,
         })),
         messageCount,
         collapsed: true,

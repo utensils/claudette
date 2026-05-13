@@ -6,10 +6,13 @@ import styles from "./ChatPanel.module.css";
 import { toolColor } from "./chatHelpers";
 import {
   activitySummaryText,
+  agentPromptText,
   agentToolCallSummary,
 } from "./agentToolCallRendering";
 import { InlineEditSummary } from "./EditChangeSummary";
 import { summarizeAgentToolCallEdit } from "./editActivitySummary";
+import { ThinkingBlock } from "./ThinkingBlock";
+import { HighlightedMessageMarkdown } from "./HighlightedMessageMarkdown";
 
 export function AgentToolCallGroup({
   activity,
@@ -36,7 +39,10 @@ export function AgentToolCallGroup({
   onToggle?: () => void;
 }) {
   const summary = activitySummaryText(activity);
+  const prompt = agentPromptText(activity);
   const calls = activity.agentToolCalls ?? [];
+  const thinkingBlocks = activity.agentThinkingBlocks ?? [];
+  const resultText = activity.agentResultText || activity.resultText;
   // Inline mode is the legacy "show everything inline" rendering; do
   // not let collapse semantics leak into it. Only when an explicit
   // toggle has been wired (the new live-agent wrapper) do we render
@@ -48,7 +54,7 @@ export function AgentToolCallGroup({
         role: "button" as const,
         tabIndex: 0,
         "aria-expanded": !isCollapsed,
-        "aria-label": `${isCollapsed ? "Expand" : "Collapse"} ${activity.toolName} tool call list`,
+        "aria-label": `${isCollapsed ? "Expand" : "Collapse"} ${activity.toolName} transcript details`,
         onClick: onToggle,
         onKeyDown: (e: KeyboardEvent<HTMLDivElement>) => {
           if (e.key === "Enter" || e.key === " ") {
@@ -99,38 +105,77 @@ export function AgentToolCallGroup({
         </div>
       )}
       {!isCollapsed && (
-        <div className={styles.agentToolCallList}>
-          {calls.map((call) => {
-            const callSummary = agentToolCallSummary(call);
-            const editSummary = summarizeAgentToolCallEdit(call);
-            return (
-              <div key={call.toolUseId} className={styles.agentToolCall}>
-                {editSummary ? (
-                  <InlineEditSummary
-                    summary={editSummary}
-                    searchQuery={searchQuery}
-                    worktreePath={worktreePath}
-                  />
-                ) : (
-                  <span
-                    className={styles.agentToolCallName}
-                    style={{ color: toolColor(call.toolName) }}
-                  >
-                    {call.toolName}
-                  </span>
-                )}
-                {!editSummary && callSummary && (
-                  <span className={styles.agentToolCallSummary}>
-                    <HighlightedPlainText
-                      text={relativizePath(callSummary, worktreePath)}
-                      query={searchQuery}
-                    />
-                  </span>
-                )}
-                <span className={styles.agentToolCallStatus}>{call.status}</span>
+        <div className={styles.agentNestedChat}>
+          {prompt && (
+            <div className={styles.agentNestedMessage}>
+              <div className={styles.agentNestedRole}>Prompt</div>
+              <div className={styles.agentNestedText}>
+                <HighlightedPlainText
+                  text={relativizePath(prompt, worktreePath)}
+                  query={searchQuery}
+                />
               </div>
-            );
-          })}
+            </div>
+          )}
+          {thinkingBlocks.map((thinking, index) => (
+            <ThinkingBlock
+              key={`${activity.toolUseId}:thinking:${index}`}
+              content={thinking}
+              isStreaming={false}
+              searchQuery={searchQuery}
+            />
+          ))}
+          {calls.length > 0 && (
+            <div className={styles.agentNestedSection}>
+              <div className={styles.agentNestedRole}>Tool calls</div>
+              <div className={styles.agentToolCallList}>
+                {calls.map((call) => {
+                  const callSummary = agentToolCallSummary(call);
+                  const editSummary = summarizeAgentToolCallEdit(call);
+                  return (
+                    <div key={call.toolUseId} className={styles.agentToolCall}>
+                      {editSummary ? (
+                        <InlineEditSummary
+                          summary={editSummary}
+                          searchQuery={searchQuery}
+                          worktreePath={worktreePath}
+                        />
+                      ) : (
+                        <span
+                          className={styles.agentToolCallName}
+                          style={{ color: toolColor(call.toolName) }}
+                        >
+                          {call.toolName}
+                        </span>
+                      )}
+                      {!editSummary && callSummary && (
+                        <span className={styles.agentToolCallSummary}>
+                          <HighlightedPlainText
+                            text={relativizePath(callSummary, worktreePath)}
+                            query={searchQuery}
+                          />
+                        </span>
+                      )}
+                      <span className={styles.agentToolCallStatus}>
+                        {call.status}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+          {resultText && (
+            <div className={styles.agentNestedMessage}>
+              <div className={styles.agentNestedRole}>Result</div>
+              <div className={styles.agentNestedMarkdown}>
+                <HighlightedMessageMarkdown
+                  content={resultText}
+                  query={searchQuery}
+                />
+              </div>
+            </div>
+          )}
         </div>
       )}
     </div>

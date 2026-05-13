@@ -443,7 +443,6 @@
   border: 1px solid var(--divider);
   border-radius: 6px;
   margin: 4px 0;
-  cursor: pointer;
   transition: border-color var(--transition-fast);
   overflow: hidden;
   flex-shrink: 0;
@@ -461,6 +460,10 @@
   background: transparent;
   font-size: 12px;
   transition: background var(--transition-fast);
+}
+
+.turnHeader[role="button"] {
+  cursor: pointer;
 }
 
 .turnSummary:hover > .turnHeader {
@@ -1140,6 +1143,10 @@
   min-width: 0;
 }
 
+.agentToolGroupHeader[role="button"] {
+  cursor: pointer;
+}
+
 .agentToolGroupInline .agentToolGroupHeader {
   padding: 2px 8px;
 }
@@ -1147,11 +1154,59 @@
 .agentToolCallList {
   display: grid;
   gap: 2px;
-  padding: 0 8px 6px 24px;
+  padding: 0;
 }
 
 .agentToolGroupInline .agentToolCallList {
   padding: 0 8px 2px 24px;
+}
+
+.agentNestedChat {
+  display: grid;
+  gap: 8px;
+  padding: 6px 8px 8px 24px;
+}
+
+.agentNestedMessage,
+.agentNestedSection {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.agentNestedRole {
+  color: var(--text-faint);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.agentNestedText {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.5;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.agentNestedMarkdown {
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.5;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.agentNestedMarkdown > *:first-child {
+  margin-top: 0;
+}
+
+.agentNestedMarkdown > *:last-child {
+  margin-bottom: 0;
 }
 
 .agentToolCall {

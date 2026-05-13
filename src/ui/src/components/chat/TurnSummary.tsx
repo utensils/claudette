@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useId, useMemo } from "react";
 import type { CompletedTurn, ToolActivity } from "../../stores/useAppStore";
 import type { TaskTrackerResult } from "../../hooks/useTaskTracker";
 import styles from "./ChatPanel.module.css";
@@ -74,6 +74,7 @@ export function TurnSummary({
   const hasTokens =
     typeof turn.inputTokens === "number" && typeof turn.outputTokens === "number";
   const hasCopy = assistantText.length > 0;
+  const activitiesId = useId();
   const hasFork = !!onFork;
   const hasRollback = !!onRollback;
   const shouldShowFooter =
@@ -128,19 +129,21 @@ export function TurnSummary({
       {inline ? (
         <div className={styles.inlineTurnActivities}>{renderedActivities}</div>
       ) : (
-        <div
-          className={styles.turnSummary}
-          role="button"
-          tabIndex={0}
-          onClick={onToggle}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" || e.key === " ") {
-              e.preventDefault();
-              onToggle();
-            }
-          }}
-        >
-          <div className={styles.turnHeader}>
+        <div className={styles.turnSummary}>
+          <div
+            className={styles.turnHeader}
+            role="button"
+            tabIndex={0}
+            aria-expanded={isExpanded}
+            aria-controls={activitiesId}
+            onClick={onToggle}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                onToggle();
+              }
+            }}
+          >
             <span className={styles.toolChevron}>{isExpanded ? "⌄" : "›"}</span>
             <span className={styles.turnLabel}>
               {label ??
@@ -152,7 +155,9 @@ export function TurnSummary({
             </span>
           </div>
           {isExpanded && (
-            <div className={styles.turnActivities}>{renderedActivities}</div>
+            <div id={activitiesId} className={styles.turnActivities}>
+              {renderedActivities}
+            </div>
           )}
         </div>
       )}

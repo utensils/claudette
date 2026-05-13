@@ -56,6 +56,8 @@ When `Settings > Appearance > Extended tool call output` is enabled, tool-call r
 
 The expanded state sticks to each tool call while the chat panel re-renders, so you can keep a long query or command open while later tool activity streams in.
 
+Sub-agent runs from the Agent tool render as their own expandable transcript blocks instead of being mixed into adjacent tool-call groups. Expanding one shows the delegated prompt, captured thinking blocks, nested tool calls, live progress, and the final result returned to the parent agent.
+
 ## Fast Mode
 
 Fast mode prioritizes speed over depth. When enabled, the agent uses quicker, more concise responses.

@@ -224,4 +224,9 @@ pub const MIGRATIONS: &[Migration] = &[
         sql: include_str!("20260511131643_pinned_prompts_toggle_overrides.sql"),
         legacy_version: None,
     },
+    Migration {
+        id: "20260513144558_turn_tool_activity_agent_transcript",
+        sql: include_str!("20260513144558_turn_tool_activity_agent_transcript.sql"),
+        legacy_version: None,
+    },
 ];

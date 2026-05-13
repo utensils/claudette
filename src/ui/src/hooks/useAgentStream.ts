@@ -27,6 +27,17 @@ import { applyCommandLineEvent } from "./useAgentStreamLogic";
 
 const ASK_USER_QUESTION_TOOL = "AskUserQuestion";
 
+function stringFromUnknown(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function stringArrayFromUnknown(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item) => (typeof item === "string" ? item.trim() : ""))
+    .filter((item) => item.length > 0);
+}
+
 interface AgentHookEventPayload {
   workspace_id: string;
   chat_session_id: string;
@@ -39,6 +50,9 @@ interface AgentHookEventPayload {
     tool_response?: unknown;
     tool_use_id?: string;
     error?: string;
+    last_assistant_message?: unknown;
+    claudette_agent_final_result?: unknown;
+    claudette_agent_thinking_blocks?: unknown;
   };
 }
 
@@ -623,6 +637,33 @@ export function useAgentStream() {
         return;
       }
 
+      if (hookName === "SubagentStop") {
+        const activity = (
+          useAppStore.getState().toolActivities[sessionId] || []
+        ).find(
+          (item) =>
+            item.agentTaskId === agentId ||
+            item.toolUseId === input.tool_use_id ||
+            item.toolUseId === agentId,
+        );
+        if (!activity) return;
+        const finalResult =
+          stringFromUnknown(input.last_assistant_message) ??
+          stringFromUnknown(input.claudette_agent_final_result);
+        const thinkingBlocks = stringArrayFromUnknown(
+          input.claudette_agent_thinking_blocks,
+        );
+        const updates: Parameters<typeof updateToolActivity>[2] = {
+          agentStatus: input.error ? "failed" : "completed",
+        };
+        if (finalResult) updates.agentResultText = finalResult;
+        if (thinkingBlocks.length > 0) {
+          updates.agentThinkingBlocks = thinkingBlocks;
+        }
+        updateToolActivity(sessionId, activity.toolUseId, updates);
+        return;
+      }
+
       if (
         hookName !== "PreToolUse" &&
         hookName !== "PostToolUse" &&
@@ -667,7 +708,7 @@ export function useAgentStream() {
       active = false;
       unlisten.then((fn) => fn());
     };
-  }, [upsertAgentToolCall]);
+  }, [upsertAgentToolCall, updateToolActivity]);
 
   // Listen for `agent-permission-prompt` — emitted by the Rust bridge the
   // moment a CLI `control_request: can_use_tool` is captured for
@@ -812,6 +853,10 @@ export function useAgentStream() {
               agent_tool_use_count: a.agentToolUseCount ?? null,
               agent_status: a.agentStatus ?? null,
               agent_tool_calls_json: JSON.stringify(a.agentToolCalls ?? []),
+              agent_thinking_blocks_json: JSON.stringify(
+                a.agentThinkingBlocks ?? [],
+              ),
+              agent_result_text: a.agentResultText ?? null,
             }));
             return saveTurnToolActivities(checkpoint.id, messageCount, activities);
           })()
