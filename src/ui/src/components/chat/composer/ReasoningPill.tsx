@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { Brain, Eye, EyeOff, ChevronDown } from "lucide-react";
 import { useAppStore } from "../../../stores/useAppStore";
 import { setAppSetting } from "../../../services/tauri";
@@ -18,6 +19,7 @@ interface ReasoningPillProps {
 }
 
 export function ReasoningPill({ sessionId, disabled }: ReasoningPillProps) {
+  const { t } = useTranslation("chat");
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -93,9 +95,13 @@ export function ReasoningPill({ sessionId, disabled }: ReasoningPillProps) {
   }, [dropdownOpen]);
 
   const levels = getReasoningLevels(selectedModel, reasoningVariant);
-  const thinkingLabel = isCodex ? "Reasoning" : "Thinking";
-  const showThinkingLabel = isCodex ? "Show reasoning" : "Show thinking";
-  const effortGroupLabel = isCodex ? "Reasoning effort" : "Effort";
+  const reasoningSettingsLabel = isCodex
+    ? t("codex_reasoning_settings")
+    : t("reasoning_settings");
+  const thinkingLabel = isCodex ? t("codex_reasoning_chip") : t("thinking_chip");
+  const showThinkingLabel = isCodex ? t("codex_show_reasoning") : t("show_thinking");
+  const effortGroupLabel = isCodex ? t("codex_reasoning_effort") : t("effort");
+  const setEffortLabel = isCodex ? t("codex_set_reasoning_effort") : t("set_effort");
 
   return (
     <div ref={containerRef} className={styles.wrap}>
@@ -105,9 +111,9 @@ export function ReasoningPill({ sessionId, disabled }: ReasoningPillProps) {
           className={styles.segment}
           onClick={openDropdown}
           disabled={disabled}
-          title={isCodex ? "Codex reasoning settings" : "Reasoning settings"}
+          title={reasoningSettingsLabel}
           aria-expanded={dropdownOpen}
-          aria-label={isCodex ? "Codex reasoning settings" : "Reasoning settings"}
+          aria-label={reasoningSettingsLabel}
         >
           <span className={styles.shortcutContent}>
             <Brain size={14} />
@@ -122,7 +128,7 @@ export function ReasoningPill({ sessionId, disabled }: ReasoningPillProps) {
           className={styles.segment}
           onClick={openDropdown}
           disabled={disabled}
-          title="Reasoning settings"
+          title={reasoningSettingsLabel}
           aria-expanded={dropdownOpen}
         >
           {showThinkingBlocks ? <Eye size={13} /> : <EyeOff size={13} />}
@@ -136,7 +142,7 @@ export function ReasoningPill({ sessionId, disabled }: ReasoningPillProps) {
               className={styles.segment}
               onClick={openDropdown}
               disabled={disabled}
-              title={isCodex ? "Set reasoning effort" : "Set effort level"}
+              title={setEffortLabel}
               aria-expanded={dropdownOpen}
             >
               <span className={styles.effortLabel}>{effortLabel.toLowerCase()}</span>
@@ -150,7 +156,7 @@ export function ReasoningPill({ sessionId, disabled }: ReasoningPillProps) {
 
       {dropdownOpen && (
         <div className={styles.dropdown}>
-          <div className={styles.sectionLabel}>Reasoning</div>
+          <div className={styles.sectionLabel}>{thinkingLabel}</div>
           <button
             type="button"
             className={`${styles.menuItem} ${thinkingEnabled ? styles.menuItemActive : ""}`}

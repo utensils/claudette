@@ -348,3 +348,12 @@
     - `nix develop -c cargo test -p claudette agent::codex_app_server --all-features`
     - `nix develop -c cargo fmt --all --check`
     - `git diff --check`
+- 2026-05-13: Addressed the next Copilot i18n finding for Codex reasoning terminology:
+  - `ReasoningPill` now uses `chat` locale keys for Codex and Claude reasoning labels, titles, and aria labels instead of hard-coded English.
+  - Added missing `reasoning_settings` and `codex_reasoning_settings` locale entries across supported locales.
+  - Verified the localization fix with:
+    - `cd src/ui && bunx tsc -b`
+    - `cd src/ui && bun run test -- reasoningControls EffortSelector modelRegistry codexBackendMigration`
+    - `cd src/ui && bun run lint` (warnings only; no errors)
+    - `cd src/ui && bun run lint:css`
+    - `git diff --check`
