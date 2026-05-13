@@ -2,6 +2,7 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::sync::broadcast;
 
 use super::{AgentEvent, Delta, InnerStreamEvent, StartContentBlock, StreamEvent, TokenUsage};
@@ -166,6 +167,58 @@ impl CodexPermissionLevel {
 
 pub fn parse_jsonrpc_line(line: &str) -> Result<JsonRpcMessage, serde_json::Error> {
     serde_json::from_str(line)
+}
+
+pub async fn read_jsonrpc_message<R>(reader: &mut R) -> Result<Option<JsonRpcMessage>, String>
+where
+    R: AsyncBufRead + Unpin,
+{
+    let mut line = String::new();
+    loop {
+        line.clear();
+        let bytes = reader
+            .read_line(&mut line)
+            .await
+            .map_err(|e| format!("Failed to read Codex app-server message: {e}"))?;
+        if bytes == 0 {
+            return Ok(None);
+        }
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        return parse_jsonrpc_line(trimmed)
+            .map(Some)
+            .map_err(|e| format!("Failed to parse Codex app-server JSON-RPC line: {e}"));
+    }
+}
+
+pub async fn write_jsonrpc_message<W>(
+    writer: &mut W,
+    message: &JsonRpcMessage,
+) -> Result<(), String>
+where
+    W: AsyncWrite + Unpin,
+{
+    let payload = serde_json::to_string(message)
+        .map_err(|e| format!("Failed to encode Codex app-server JSON-RPC message: {e}"))?;
+    writer
+        .write_all(payload.as_bytes())
+        .await
+        .map_err(|e| format!("Failed to write Codex app-server JSON-RPC message: {e}"))?;
+    writer
+        .write_all(b"\n")
+        .await
+        .map_err(|e| format!("Failed to write Codex app-server JSON-RPC newline: {e}"))?;
+    writer
+        .flush()
+        .await
+        .map_err(|e| format!("Failed to flush Codex app-server JSON-RPC message: {e}"))?;
+    Ok(())
+}
+
+pub fn codex_app_server_args() -> [&'static str; 3] {
+    ["app-server", "--listen", "stdio://"]
 }
 
 pub fn build_initialize_request(id: i64, client_version: &str) -> JsonRpcRequest {
@@ -462,7 +515,7 @@ pub fn map_notification_to_agent_events(event: CodexNotificationEvent) -> Vec<Ag
 }
 
 pub fn codex_invocation_line() -> String {
-    "codex app-server --listen stdio://".to_string()
+    format!("codex {}", codex_app_server_args().join(" "))
 }
 
 pub fn codex_command_line_event() -> AgentEvent {
@@ -541,6 +594,75 @@ mod tests {
         assert_eq!(value["params"]["clientInfo"]["name"], "claudette");
         assert_eq!(value["params"]["capabilities"]["experimentalApi"], true);
         assert!(value.get("jsonrpc").is_none());
+    }
+
+    #[test]
+    fn codex_app_server_invocation_uses_stdio_listener() {
+        assert_eq!(
+            codex_app_server_args(),
+            ["app-server", "--listen", "stdio://"]
+        );
+        assert_eq!(
+            codex_invocation_line(),
+            "codex app-server --listen stdio://"
+        );
+    }
+
+    #[tokio::test]
+    async fn writes_jsonrpc_message_as_single_line() {
+        let mut out = Vec::new();
+        write_jsonrpc_message(
+            &mut out,
+            &JsonRpcMessage::Request(build_initialize_request(1, "0.24.0")),
+        )
+        .await
+        .expect("message writes");
+
+        let text = String::from_utf8(out).expect("utf8");
+        assert!(text.ends_with('\n'));
+        assert_eq!(text.lines().count(), 1);
+        let parsed = parse_jsonrpc_line(text.trim()).expect("round trip parses");
+        assert!(matches!(
+            parsed,
+            JsonRpcMessage::Request(JsonRpcRequest { method, .. }) if method == "initialize"
+        ));
+    }
+
+    #[tokio::test]
+    async fn reads_jsonrpc_messages_from_newline_stream() {
+        let input = br#"
+{"method":"initialized"}
+{"id":7,"result":{"ok":true}}
+"#;
+        let mut reader = tokio::io::BufReader::new(&input[..]);
+
+        let first = read_jsonrpc_message(&mut reader)
+            .await
+            .expect("read succeeds")
+            .expect("first message");
+        assert!(matches!(
+            first,
+            JsonRpcMessage::Notification(JsonRpcNotification { method, .. }) if method == "initialized"
+        ));
+
+        let second = read_jsonrpc_message(&mut reader)
+            .await
+            .expect("read succeeds")
+            .expect("second message");
+        assert!(matches!(
+            second,
+            JsonRpcMessage::Response(JsonRpcResponse {
+                id: JsonRpcId::Integer(7),
+                ..
+            })
+        ));
+
+        assert!(
+            read_jsonrpc_message(&mut reader)
+                .await
+                .expect("eof succeeds")
+                .is_none()
+        );
     }
 
     #[test]

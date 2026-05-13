@@ -83,9 +83,14 @@
   - `nix develop -c cargo test -p claudette agent::harness --all-features`
   - `nix develop -c cargo test -p claudette agent::codex_app_server --all-features`
   - `nix develop -c cargo fmt --all`
+- 2026-05-13: Committed and pushed milestone 3 as `078baa53` (`feat: add codex app-server event adapter`).
+- 2026-05-13: Added newline-delimited Codex app-server JSON-RPC read/write helpers, locked the `codex app-server --listen stdio://` argv in tests, and verified fake stdio request/response parsing.
+- 2026-05-13: Verified the Codex JSON-RPC codec with:
+  - `nix develop -c cargo test -p claudette agent::codex_app_server --all-features`
+  - `nix develop -c cargo fmt --all`
 
 ## Next Stage
 
-- Add the Codex app-server process/client request loop behind the `AgentSession` wrapper, with fake stdio tests before any UI/backend selection changes.
+- Add the Codex app-server process/client request router behind the `AgentSession` wrapper, including response correlation and server-request handling stubs.
 - Add fake-harness tests around chat send lifecycle seams before selecting the native Codex runtime from backend settings.
 - Keep `codex-subscription` hidden/replaced only after the native `Experimental Codex` backend has a real harness path.
