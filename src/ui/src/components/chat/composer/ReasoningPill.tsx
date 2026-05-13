@@ -44,7 +44,8 @@ export function ReasoningPill({ sessionId, disabled }: ReasoningPillProps) {
     selectedModel,
     reasoningVariant,
   );
-  const isActive = thinkingEnabled;
+  const canToggleReasoning = !isCodex;
+  const isActive = isCodex ? showThinkingBlocks : thinkingEnabled;
 
   const openDropdown = useCallback(() => {
     if (!disabled) setDropdownOpen(true);
@@ -157,15 +158,17 @@ export function ReasoningPill({ sessionId, disabled }: ReasoningPillProps) {
       {dropdownOpen && (
         <div className={styles.dropdown}>
           <div className={styles.sectionLabel}>{thinkingLabel}</div>
-          <button
-            type="button"
-            className={`${styles.menuItem} ${thinkingEnabled ? styles.menuItemActive : ""}`}
-            onClick={toggleThinking}
-          >
-            <span className={styles.menuIcon}><Brain size={14} /></span>
-            <span className={styles.menuLabel}>{thinkingLabel}</span>
-            <span className={styles.menuMeta}>{thinkingEnabled ? "on" : "off"}</span>
-          </button>
+          {canToggleReasoning && (
+            <button
+              type="button"
+              className={`${styles.menuItem} ${thinkingEnabled ? styles.menuItemActive : ""}`}
+              onClick={toggleThinking}
+            >
+              <span className={styles.menuIcon}><Brain size={14} /></span>
+              <span className={styles.menuLabel}>{thinkingLabel}</span>
+              <span className={styles.menuMeta}>{thinkingEnabled ? "on" : "off"}</span>
+            </button>
+          )}
           <button
             type="button"
             className={`${styles.menuItem} ${showThinkingBlocks ? styles.menuItemActive : ""}`}

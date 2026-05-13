@@ -58,8 +58,6 @@
   "set_effort": "Definir nível de esforço",
   "effort": "Esforço",
   "reasoning_settings": "Configurações de raciocínio",
-  "codex_reasoning_enable": "Ativar raciocínio do Codex",
-  "codex_reasoning_disable": "Desativar raciocínio do Codex",
   "codex_reasoning_settings": "Configurações de raciocínio do Codex",
   "codex_show_reasoning": "Mostrar raciocínio do Codex no chat",
   "codex_hide_reasoning": "Ocultar raciocínio do Codex no chat",

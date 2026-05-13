@@ -318,6 +318,7 @@ export function CommandPalette() {
         effortLevel,
         setEffortLevel,
         selectedModel,
+        selectedModelProvider,
         persistSetting: (key: string, value: string) => setAppSetting(key, value).catch(console.error),
         stopAgent: (sessionId: string) => {
           const state = useAppStore.getState();
@@ -334,7 +335,7 @@ export function CommandPalette() {
         updateWorkspace: (id: string, updates: Record<string, unknown>) => updateWorkspace(id, updates),
       }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [themes, selectedWorkspaceId, selectedSessionId, currentRepoId, thinkingEnabled, planMode, fastMode, effortLevel, selectedModel, keybindings, enterThemeMode, enterFileMode, applyThemeById, handleCreateWorkspace, clearAgentApproval],
+    [themes, selectedWorkspaceId, selectedSessionId, currentRepoId, thinkingEnabled, planMode, fastMode, effortLevel, selectedModel, selectedModelProvider, keybindings, enterThemeMode, enterFileMode, applyThemeById, handleCreateWorkspace, clearAgentApproval],
   );
 
   // Build sub-menu command lists
@@ -374,9 +375,10 @@ export function CommandPalette() {
         await setAppSetting(`effort_level:${selectedSessionId}`, level);
       },
       close,
+      selectedModelProvider,
     ),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [selectedModel, effortLevel, selectedSessionId],
+    [selectedModel, selectedModelProvider, effortLevel, selectedSessionId],
   );
 
   const fileCommands = useMemo(

@@ -131,8 +131,6 @@
   "models_default_model_desc": "Model for new chats",
   "models_thinking_off": "Thinking off",
   "models_thinking_on": "Thinking on",
-  "models_codex_reasoning_off": "Reasoning off",
-  "models_codex_reasoning_on": "Reasoning on",
   "models_default_effort": "Default effort level",
   "models_default_effort_desc": "Reasoning effort for new chats",
   "models_default_codex_reasoning_effort": "Default Codex intelligence",

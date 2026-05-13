@@ -172,8 +172,8 @@ export function ChatToolbar({ sessionId, disabled }: ChatToolbarProps) {
   // The Cmd/Ctrl+T thinking-mode hotkey lived here as a raw
   // `window.addEventListener("keydown")` listener. It's been removed —
   // Cmd+T is now the registered `global.new-tab` action (see
-  // `useKeyboardShortcuts`), and thinking remains toggleable via the
-  // chip click + the command palette ("Toggle thinking").
+  // `useKeyboardShortcuts`), and Claude thinking remains toggleable via
+  // the chip click + the command palette ("Toggle thinking").
 
   const currentModel = useSelectedModelEntry(sessionId);
   const supportsFast = currentModel?.supportsFastMode ?? isFastSupported(selectedModel);
@@ -226,20 +226,18 @@ export function ChatToolbar({ sessionId, disabled }: ChatToolbarProps) {
         </button>
       )}
 
-      <button
-        className={`${styles.chip} ${thinkingEnabled ? styles.chipActive : ""}`}
-        onClick={toggleThinking}
-        disabled={disabled}
-        title={thinkingEnabled
-          ? isCodex ? t("codex_reasoning_disable") : t("thinking_disable")
-          : isCodex ? t("codex_reasoning_enable") : t("thinking_enable")}
-        aria-pressed={thinkingEnabled}
-      >
-        <Brain size={14} />
-        <span className={styles.chipLabel}>
-          {isCodex ? t("codex_reasoning_chip") : t("thinking_chip")}
-        </span>
-      </button>
+      {!isCodex && (
+        <button
+          className={`${styles.chip} ${thinkingEnabled ? styles.chipActive : ""}`}
+          onClick={toggleThinking}
+          disabled={disabled}
+          title={thinkingEnabled ? t("thinking_disable") : t("thinking_enable")}
+          aria-pressed={thinkingEnabled}
+        >
+          <Brain size={14} />
+          <span className={styles.chipLabel}>{t("thinking_chip")}</span>
+        </button>
+      )}
 
       <button
         className={`${styles.chip} ${showThinkingBlocks ? styles.chipActive : ""}`}

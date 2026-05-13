@@ -58,8 +58,6 @@
   "set_effort": "Set effort level",
   "effort": "Effort",
   "reasoning_settings": "Reasoning settings",
-  "codex_reasoning_enable": "Enable Codex reasoning",
-  "codex_reasoning_disable": "Disable Codex reasoning",
   "codex_reasoning_settings": "Codex reasoning settings",
   "codex_show_reasoning": "Show Codex reasoning in chat",
   "codex_hide_reasoning": "Hide Codex reasoning in chat",

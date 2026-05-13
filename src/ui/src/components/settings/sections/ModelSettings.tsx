@@ -238,18 +238,16 @@ export function ModelSettings() {
                 </option>
               ))}
             </select>
-            <select
-              className={`${styles.select} ${styles.selectWide}`}
-              value={defaultThinking ? "true" : "false"}
-              onChange={(e) => handleThinkingChange(e.target.value)}
-            >
-              <option value="false">
-                {isCodex ? t("models_codex_reasoning_off") : t("models_thinking_off")}
-              </option>
-              <option value="true">
-                {isCodex ? t("models_codex_reasoning_on") : t("models_thinking_on")}
-              </option>
-            </select>
+            {!isCodex && (
+              <select
+                className={`${styles.select} ${styles.selectWide}`}
+                value={defaultThinking ? "true" : "false"}
+                onChange={(e) => handleThinkingChange(e.target.value)}
+              >
+                <option value="false">{t("models_thinking_off")}</option>
+                <option value="true">{t("models_thinking_on")}</option>
+              </select>
+            )}
           </div>
         </div>
       </div>

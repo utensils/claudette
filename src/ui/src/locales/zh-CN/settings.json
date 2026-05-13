@@ -110,8 +110,6 @@
   "models_default_model_desc": "新对话使用的模型",
   "models_thinking_off": "关闭思考",
   "models_thinking_on": "开启思考",
-  "models_codex_reasoning_off": "关闭推理",
-  "models_codex_reasoning_on": "开启推理",
   "models_default_effort": "默认努力级别",
   "models_default_effort_desc": "新对话的推理努力程度",
   "models_default_codex_reasoning_effort": "默认 Codex 智能等级",

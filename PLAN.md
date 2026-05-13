@@ -410,3 +410,14 @@
     - `nix develop -c cargo test -p claudette-tauri agent_backends::tests::codex --all-features`
     - `cd src/ui && bun run test -- contextMeterLogic pickMeterUsageFromResult`
     - `cd src/ui && bunx tsc -b`
+- 2026-05-13: Truthfulness pass for Codex naming and reasoning controls:
+  - Re-verified the pinned Codex source and live `codex debug models` catalog: current listed Codex models expose `low`, `medium`, `high`, and `xhigh` reasoning/intelligence levels, not a model reasoning on/off picker control.
+  - Removed the Codex reasoning on/off row from the composer menu, legacy toolbar, command palette, and Models defaults. Kept **Show Codex reasoning** as a display-only control for reasoning summaries.
+  - Native Codex registry entries now sanitize stale saved provider labels such as `Experimental Codex` to `Codex` before they reach toolbar, model picker, and command palette surfaces. The feature remains experimental only by living under the Experimental settings section.
+  - Updated docs to distinguish Claude's default thinking toggle from Codex intelligence levels and Codex reasoning-summary visibility.
+  - Verified the naming/control pass with:
+    - `cd src/ui && bun run test -- modelRegistry commands reasoningControls`
+    - `cd src/ui && bunx tsc -b`
+    - `cd src/ui && bun run lint` (warnings only; no errors)
+    - `cd src/ui && bun run lint:css`
+    - `git diff --check`

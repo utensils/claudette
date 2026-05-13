@@ -110,8 +110,6 @@
   "models_default_model_desc": "新しいチャットで使用するモデル",
   "models_thinking_off": "思考オフ",
   "models_thinking_on": "思考オン",
-  "models_codex_reasoning_off": "推論オフ",
-  "models_codex_reasoning_on": "推論オン",
   "models_default_effort": "既定の思考レベル",
   "models_default_effort_desc": "新しいチャットでの推論の強度",
   "models_default_codex_reasoning_effort": "既定の Codex 知能レベル",

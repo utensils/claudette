@@ -110,8 +110,6 @@
   "models_default_model_desc": "Modelo para novos chats",
   "models_thinking_off": "Pensamento desativado",
   "models_thinking_on": "Pensamento ativado",
-  "models_codex_reasoning_off": "Raciocínio desativado",
-  "models_codex_reasoning_on": "Raciocínio ativado",
   "models_default_effort": "Nível de esforço padrão",
   "models_default_effort_desc": "Esforço de raciocínio para novos chats",
   "models_default_codex_reasoning_effort": "Inteligência padrão do Codex",

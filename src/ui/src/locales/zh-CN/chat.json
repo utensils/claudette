@@ -58,8 +58,6 @@
   "set_effort": "设置努力级别",
   "effort": "努力级别",
   "reasoning_settings": "推理设置",
-  "codex_reasoning_enable": "启用 Codex 推理",
-  "codex_reasoning_disable": "停用 Codex 推理",
   "codex_reasoning_settings": "Codex 推理设置",
   "codex_show_reasoning": "在聊天中显示 Codex 推理",
   "codex_hide_reasoning": "在聊天中隐藏 Codex 推理",

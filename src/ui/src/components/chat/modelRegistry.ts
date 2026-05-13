@@ -199,21 +199,22 @@ export function buildModelRegistry(
       const { model } = entry;
       if (!model.id || seen.has(model.id)) continue;
       seen.add(model.id);
+      const isNativeCodex = backend.kind === "codex_native";
+      const providerDisplayLabel = isNativeCodex ? "Codex" : backend.label;
       const isOlderBackendVersion = entry.parsed
         ? !primaryVersions
           .get(entry.parsed.prefix)
           ?.has(entry.parsed.versionKey)
         : false;
-      const isNativeCodex = backend.kind === "codex_native";
       const target = models ??= [...MODELS];
       target.push({
         id: model.id,
         label: model.label || model.id,
-        group: backend.label,
+        group: providerDisplayLabel,
         extraUsage: false,
         legacy: isOlderBackendVersion,
         providerId: backend.id,
-        providerLabel: backend.label,
+        providerLabel: providerDisplayLabel,
         providerKind: backend.kind,
         providerQualifiedId: `${backend.id}/${model.id}`,
         supportsThinking: isNativeCodex || backend.capabilities.thinking,

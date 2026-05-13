@@ -58,8 +58,6 @@
   "set_effort": "思考レベルを設定",
   "effort": "思考レベル",
   "reasoning_settings": "推論設定",
-  "codex_reasoning_enable": "Codex の推論を有効化",
-  "codex_reasoning_disable": "Codex の推論を無効化",
   "codex_reasoning_settings": "Codex の推論設定",
   "codex_show_reasoning": "チャットに Codex の推論を表示",
   "codex_hide_reasoning": "チャットの Codex 推論を非表示",

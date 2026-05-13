@@ -156,7 +156,7 @@ describe("modelRegistry", () => {
       const registry = buildModelRegistry(false, [
         {
           id: "experimental-codex",
-          label: "Codex",
+          label: "Experimental Codex",
           kind: "codex_native",
           enabled: true,
           capabilities: {
@@ -177,6 +177,8 @@ describe("modelRegistry", () => {
 
       const codex = registry.find((model) => model.providerQualifiedId === "experimental-codex/gpt-5.4");
       expect(codex).toBeDefined();
+      expect(codex?.group).toBe("Codex");
+      expect(codex?.providerLabel).toBe("Codex");
       expect(codex?.supportsThinking).toBe(true);
       expect(codex?.supportsEffort).toBe(true);
       expect(codex?.supportsFastMode).toBe(true);
