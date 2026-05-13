@@ -27,6 +27,7 @@ export * from "./pty";
 export * from "./terminal";
 export * from "./shell";
 export * from "./slashCommands";
+export * from "./soundPacks";
 export * from "./updater";
 export * from "./usage";
 export * from "./workspace";
