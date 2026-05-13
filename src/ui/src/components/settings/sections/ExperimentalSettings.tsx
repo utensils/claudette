@@ -9,6 +9,7 @@ import {
   setAppSetting,
 } from "../../../services/tauri";
 import { planAlternativeBackendDisableCleanup } from "../alternativeBackendCleanup";
+import { planCodexBackendGateMigration } from "../codexBackendMigration";
 import styles from "../Settings.module.css";
 
 export function ExperimentalSettings() {
@@ -174,6 +175,50 @@ export function ExperimentalSettings() {
     }
   };
 
+  const migrateExperimentalCodexSelections = async (enableNative: boolean) => {
+    const [
+      defaultBackend,
+      sessionModels,
+      sessionProviders,
+    ] = await Promise.all([
+      getAppSetting("default_agent_backend"),
+      listAppSettingsWithPrefix("model:"),
+      listAppSettingsWithPrefix("model_provider:"),
+    ]);
+    const store = useAppStore.getState();
+    const plan = planCodexBackendGateMigration({
+      enableNative,
+      defaultBackend,
+      sessionProviders,
+      selectedProviders: store.selectedModelProvider,
+    });
+
+    if (plan.resetDefault && plan.defaultBackend) {
+      await setAppSetting("default_agent_backend", plan.defaultBackend);
+      setDefaultAgentBackendId(plan.defaultBackend);
+    }
+
+    const persistedModels = new Map<string, string>();
+    for (const [key, value] of sessionModels) {
+      if (key.startsWith("model:")) {
+        persistedModels.set(key.slice("model:".length), value);
+      }
+    }
+
+    for (const sessionId of plan.sessionIds) {
+      const model = persistedModels.get(sessionId) ?? store.selectedModel[sessionId];
+      if (model) {
+        store.setSelectedModel(sessionId, model, plan.toBackend);
+      } else {
+        store.setSelectedModelProvider(sessionId, plan.toBackend);
+      }
+      await setAppSetting(`model_provider:${sessionId}`, plan.toBackend);
+      await resetAgentSession(sessionId);
+      store.clearAgentQuestion(sessionId);
+      store.clearPlanApproval(sessionId);
+    }
+  };
+
   const handleExperimentalCodexToggle = async () => {
     if (!alternativeBackendsAvailable) return;
     const next = !experimentalCodexEnabled;
@@ -181,6 +226,7 @@ export function ExperimentalSettings() {
     setExperimentalCodexEnabled(next);
     try {
       setError(null);
+      await migrateExperimentalCodexSelections(next);
       await setAppSetting("experimental_codex_enabled", next ? "true" : "false");
       const data = await listAgentBackends();
       setAgentBackends(data.backends);

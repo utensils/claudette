@@ -193,12 +193,11 @@ pub async fn list_agent_backends(
     // is always present, and surface a warning so the user knows.
     // The persisted setting is left alone — a build that does
     // recognize the kind will pick it up unchanged.
+    let aliased_default = backend_request_alias(&loaded.backends, &stored_default);
     let default_backend_id = if loaded.backends.iter().any(|b| b.id == stored_default) {
         stored_default
-    } else if stored_default == "codex-subscription"
-        && loaded.backends.iter().any(|b| b.id == "experimental-codex")
-    {
-        "experimental-codex".to_string()
+    } else if loaded.backends.iter().any(|b| b.id == aliased_default) {
+        aliased_default
     } else {
         loaded.warnings.push(format!(
             "Default backend `{stored_default}` is not available in this build; \
@@ -709,9 +708,7 @@ fn load_backend_configs_tolerant(db: &Database) -> Result<LoadedBackends, String
                 for entry in entries {
                     match serde_json::from_value::<AgentBackendConfig>(entry.clone()) {
                         Ok(saved) => {
-                            if native_codex_enabled
-                                && saved.kind == AgentBackendKind::CodexSubscription
-                            {
+                            if codex_backend_hidden_by_gate(native_codex_enabled, &saved.id) {
                                 continue;
                             }
                             if let Some(existing) = backends.iter_mut().find(|b| b.id == saved.id) {
@@ -794,7 +791,46 @@ fn read_unknown_passthrough(db: &Database) -> Result<Vec<Value>, String> {
         .collect())
 }
 
+fn is_codex_gate_backend_id(id: &str) -> bool {
+    matches!(id, "codex-subscription" | "experimental-codex")
+}
+
+fn codex_backend_hidden_by_gate(native_codex_enabled: bool, id: &str) -> bool {
+    (native_codex_enabled && id == "codex-subscription")
+        || (!native_codex_enabled && id == "experimental-codex")
+}
+
+/// Re-read the stored JSON and return hidden Codex-gate backends that this
+/// build can deserialize but deliberately omits from the active list while
+/// the experimental gate is on/off. This keeps the user's hidden legacy/native
+/// Codex config intact across unrelated backend edits.
+fn read_hidden_codex_passthrough(
+    db: &Database,
+    active_backend_ids: &HashSet<String>,
+) -> Result<Vec<Value>, String> {
+    let Some(raw) = db
+        .get_app_setting(SETTINGS_KEY)
+        .map_err(|e| e.to_string())?
+    else {
+        return Ok(Vec::new());
+    };
+    let Ok(entries) = serde_json::from_str::<Vec<Value>>(&raw) else {
+        return Ok(Vec::new());
+    };
+    Ok(entries
+        .into_iter()
+        .filter(|entry| {
+            let Ok(saved) = serde_json::from_value::<AgentBackendConfig>(entry.clone()) else {
+                return false;
+            };
+            is_codex_gate_backend_id(&saved.id) && !active_backend_ids.contains(&saved.id)
+        })
+        .collect())
+}
+
 fn save_backend_configs(db: &Database, backends: &[AgentBackendConfig]) -> Result<(), String> {
+    let active_backend_ids: HashSet<String> =
+        backends.iter().map(|backend| backend.id.clone()).collect();
     let mut persisted: Vec<Value> = backends
         .iter()
         .filter(|backend| backend.id != "anthropic")
@@ -809,6 +845,7 @@ fn save_backend_configs(db: &Database, backends: &[AgentBackendConfig]) -> Resul
     // recognize them doesn't quietly drop them on every save. Errors
     // here propagate — silently dropping unknowns on a transient DB
     // read failure would defeat the whole point of the passthrough.
+    persisted.extend(read_hidden_codex_passthrough(db, &active_backend_ids)?);
     persisted.extend(read_unknown_passthrough(db)?);
 
     let raw = serde_json::to_string(&persisted).map_err(|e| e.to_string())?;
@@ -877,6 +914,10 @@ fn select_backend_for_request(
 fn backend_request_alias(backends: &[AgentBackendConfig], requested: &str) -> String {
     if requested == "codex-subscription" && backends.iter().any(|b| b.id == "experimental-codex") {
         "experimental-codex".to_string()
+    } else if requested == "experimental-codex"
+        && backends.iter().any(|b| b.id == "codex-subscription")
+    {
+        "codex-subscription".to_string()
     } else {
         requested.to_string()
     }
@@ -2799,6 +2840,67 @@ mod tests {
     }
 
     #[test]
+    fn native_codex_gate_preserves_hidden_subscription_on_save() {
+        let db = Database::open_in_memory().expect("test db should open");
+        db.set_app_setting(NATIVE_CODEX_SETTING_KEY, "true")
+            .expect("setting should save");
+        let mut legacy = AgentBackendConfig::builtin_codex_subscription();
+        legacy.enabled = true;
+        legacy.default_model = Some("gpt-hidden-legacy".to_string());
+        save_backend_configs(&db, &[legacy]).expect("legacy backend config should save");
+
+        let loaded = load_backend_configs(&db).expect("backends should load");
+        save_backend_configs(&db, &loaded).expect("active backends should save");
+
+        let raw = db
+            .get_app_setting(SETTINGS_KEY)
+            .expect("settings should read")
+            .expect("settings should exist");
+        let entries: Vec<AgentBackendConfig> =
+            serde_json::from_str(&raw).expect("settings should deserialize");
+        let preserved = entries
+            .iter()
+            .find(|backend| backend.id == "codex-subscription")
+            .expect("hidden legacy Codex config should survive save");
+        assert!(preserved.enabled);
+        assert_eq!(
+            preserved.default_model.as_deref(),
+            Some("gpt-hidden-legacy")
+        );
+    }
+
+    #[test]
+    fn legacy_codex_gate_hides_and_preserves_native_backend_on_save() {
+        let db = Database::open_in_memory().expect("test db should open");
+        let mut native = AgentBackendConfig::builtin_experimental_codex();
+        native.enabled = true;
+        native.default_model = Some("gpt-hidden-native".to_string());
+        save_backend_configs(&db, &[native]).expect("native backend config should save");
+
+        let loaded = load_backend_configs(&db).expect("backends should load");
+        assert!(loaded.iter().any(|b| b.id == "codex-subscription"));
+        assert!(!loaded.iter().any(|b| b.id == "experimental-codex"));
+
+        save_backend_configs(&db, &loaded).expect("active backends should save");
+
+        let raw = db
+            .get_app_setting(SETTINGS_KEY)
+            .expect("settings should read")
+            .expect("settings should exist");
+        let entries: Vec<AgentBackendConfig> =
+            serde_json::from_str(&raw).expect("settings should deserialize");
+        let preserved = entries
+            .iter()
+            .find(|backend| backend.id == "experimental-codex")
+            .expect("hidden native Codex config should survive save");
+        assert!(preserved.enabled);
+        assert_eq!(
+            preserved.default_model.as_deref(),
+            Some("gpt-hidden-native")
+        );
+    }
+
+    #[test]
     fn native_codex_gate_aliases_legacy_subscription_requests() {
         let db = Database::open_in_memory().expect("test db should open");
         db.set_app_setting(NATIVE_CODEX_SETTING_KEY, "true")
@@ -2815,6 +2917,25 @@ mod tests {
 
         assert_eq!(backend_id.as_deref(), Some("experimental-codex"));
         assert_eq!(resolved_model.as_deref(), Some("gpt-5.4"));
+    }
+
+    #[test]
+    fn legacy_codex_gate_aliases_native_requests() {
+        let db = Database::open_in_memory().expect("test db should open");
+        db.set_app_setting("alternative_backends_enabled", "true")
+            .expect("setting should save");
+        let mut legacy = AgentBackendConfig::builtin_codex_subscription();
+        legacy.enabled = true;
+        legacy.default_model = Some("gpt-5.3-codex".to_string());
+        legacy.discovered_models = vec![model("gpt-5.3-codex")];
+        save_backend_configs(&db, &[legacy]).expect("legacy backend config should save");
+
+        let (backend_id, resolved_model) =
+            resolve_backend_request_defaults(&db, Some("experimental-codex"), None)
+                .expect("native codex request should resolve");
+
+        assert_eq!(backend_id.as_deref(), Some("codex-subscription"));
+        assert_eq!(resolved_model.as_deref(), Some("gpt-5.3-codex"));
     }
 
     #[test]

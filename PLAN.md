@@ -149,10 +149,18 @@
   - Codex terminal notifications (`turn/completed`, `turn/failed`) now clear the active turn id so later steering cannot target a finished turn.
 - 2026-05-13: Verified the Copilot lifecycle fixes with:
   - `nix develop -c cargo test -p claudette agent::codex_app_server --all-features`
+- 2026-05-13: Ran the next Copilot review pass. Valid findings addressed:
+  - Hidden Codex gate configs now survive unrelated backend saves in both directions, so customized `codex-subscription` and `experimental-codex` rows are not lost while hidden.
+  - Backend request/default aliasing now works both ways between `codex-subscription` and `experimental-codex` depending on the active gate.
+  - Toggling **Experimental Codex** now migrates persisted default and per-session backend selections in both directions and resets affected live sessions.
+- 2026-05-13: Verified the Codex gate persistence/migration fixes with:
+  - `nix develop -c cargo test -p claudette-tauri agent_backends --all-features`
+  - `cd src/ui && bun run test -- codexBackendMigration`
+  - `cd src/ui && bunx tsc -b`
+  - `nix develop -c cargo fmt --all`
 
 ## Next Stage
 
-- Rebase on `origin/main`, commit, push, and re-check Copilot threads for the lifecycle fix checkpoint.
+- Rebase on `origin/main`, commit, push, reply to and resolve the latest Copilot threads, then verify zero unresolved Copilot threads remain.
 - Add fake app-server/chat lifecycle coverage around native Codex send, steer, stop, and failure persistence without spawning a real CLI.
 - Expand Codex notification mapping for MCP calls and file changes once the app-server payload shapes are confirmed against the reference clone.
-- Harden gate-off cleanup for live sessions that were selected on `experimental-codex`.
