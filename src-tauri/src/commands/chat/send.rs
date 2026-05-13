@@ -161,10 +161,12 @@ fn spawn_claudette_send_chat_child(
     if plan_mode {
         cmd.arg("--plan-mode");
     }
-    cmd.spawn().map(|_| ()).map_err(|e| {
-        let _ = std::fs::remove_file(&prompt_file);
-        format!("spawn claudette send-chat child: {e}")
-    })
+    cmd.spawn()
+        .map(crate::commands::settings::spawn_and_reap)
+        .map_err(|e| {
+            let _ = std::fs::remove_file(&prompt_file);
+            format!("spawn claudette send-chat child: {e}")
+        })
 }
 
 async fn open_claudette_session_for_team_agent(

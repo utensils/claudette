@@ -140,11 +140,12 @@ pub(crate) async fn run_from_args(args: Vec<String>) -> Result<(), String> {
         }
 
         if !saw_any_message && started.elapsed() > STARTUP_MESSAGE_TIMEOUT {
-            println!(
-                "Claudette teammate bridge: no initial mailbox message arrived within {}s; still polling",
-                STARTUP_MESSAGE_TIMEOUT.as_secs()
-            );
-            saw_any_message = true;
+            return Err(format!(
+                "no initial mailbox message arrived within {}s for teammate '{}' in team '{}'",
+                STARTUP_MESSAGE_TIMEOUT.as_secs(),
+                launch.agent_name,
+                launch.team_name,
+            ));
         }
 
         tokio::time::sleep(POLL_INTERVAL).await;
