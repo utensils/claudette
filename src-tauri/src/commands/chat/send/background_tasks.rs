@@ -373,10 +373,17 @@ fn task_completion_from_notification(
 }
 
 fn read_background_output_for_prompt(chat_session_id: &str) -> Option<String> {
-    let bytes = std::fs::read(agent_bash_output_path(chat_session_id)).ok()?;
-    const MAX_OUTPUT_BYTES: usize = 24_000;
-    let start = bytes.len().saturating_sub(MAX_OUTPUT_BYTES);
-    let mut text = String::from_utf8_lossy(&bytes[start..]).to_string();
+    use std::io::{Read, Seek};
+
+    let mut file = std::fs::File::open(agent_bash_output_path(chat_session_id)).ok()?;
+    const MAX_OUTPUT_BYTES: u64 = 24_000;
+    let len = file.metadata().ok()?.len();
+    let start = len.saturating_sub(MAX_OUTPUT_BYTES);
+    file.seek(std::io::SeekFrom::Start(start)).ok()?;
+
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes).ok()?;
+    let mut text = String::from_utf8_lossy(&bytes).to_string();
     if start > 0 {
         text.insert_str(0, "[output truncated to last 24000 bytes]\n");
     }
@@ -387,8 +394,18 @@ fn read_background_output_for_prompt(chat_session_id: &str) -> Option<String> {
     }
 }
 
-fn escape_markdown_code_fence(text: &str) -> String {
-    text.replace("```", "`\u{200b}``")
+fn markdown_code_fence_for(text: &str) -> String {
+    let mut current_run = 0_usize;
+    let mut longest_run = 0_usize;
+    for ch in text.chars() {
+        if ch == '`' {
+            current_run += 1;
+            longest_run = longest_run.max(current_run);
+        } else {
+            current_run = 0;
+        }
+    }
+    "`".repeat(3.max(longest_run + 1))
 }
 
 fn build_background_task_completion_prompt(
@@ -410,13 +427,15 @@ fn build_background_task_completion_prompt(
     }
     prompt.push_str("\n</task-notification>");
     if let Some(output) = read_background_output_for_prompt(chat_session_id) {
-        let output = escape_markdown_code_fence(&output);
-        prompt.push_str("\n\nOutput:\n```text\n");
+        let fence = markdown_code_fence_for(&output);
+        prompt.push_str("\n\nOutput:\n");
+        prompt.push_str(&fence);
+        prompt.push_str("text\n");
         prompt.push_str(&output);
         if !output.ends_with('\n') {
             prompt.push('\n');
         }
-        prompt.push_str("```");
+        prompt.push_str(&fence);
     }
     prompt
 }
@@ -748,8 +767,8 @@ pub(super) fn schedule_background_task_wake(
 #[cfg(test)]
 mod tests {
     use super::{
-        BackgroundTaskCompletion, build_background_task_completion_prompt,
-        escape_markdown_code_fence, should_defer_persistent_restart_for_state, terminal_text,
+        BackgroundTaskCompletion, build_background_task_completion_prompt, markdown_code_fence_for,
+        should_defer_persistent_restart_for_state, terminal_text,
     };
     use claudette::agent::background::agent_bash_output_path;
 
@@ -788,11 +807,10 @@ mod tests {
     }
 
     #[test]
-    fn output_prompt_escapes_markdown_code_fences() {
-        assert_eq!(
-            escape_markdown_code_fence("before ``` after"),
-            "before `\u{200b}`` after"
-        );
+    fn output_prompt_uses_fence_longer_than_backtick_runs() {
+        assert_eq!(markdown_code_fence_for("plain output"), "```");
+        assert_eq!(markdown_code_fence_for("before ``` after"), "````");
+        assert_eq!(markdown_code_fence_for("before ```` after"), "`````");
     }
 
     #[test]
