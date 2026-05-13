@@ -167,6 +167,8 @@
   "notifications_sound_error_desc": "エージェントがエラーに遭遇したときのサウンド",
   "notifications_sound_session_start_label": "セッション開始",
   "notifications_sound_session_start_desc": "新しいセッションが開始されたときのサウンド",
+  "auth_code_placeholder": "ブラウザーコードを貼り付け",
+  "auth_submit_code": "コードを送信",
   "nav_editor": "Editor",
   "editor_title": "Editor",
   "editor_gutter_base_label": "Git gutter base",

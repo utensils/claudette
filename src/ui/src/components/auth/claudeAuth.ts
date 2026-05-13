@@ -235,6 +235,7 @@ export function useClaudeAuthLogin({
       await submitClaudeAuthCode(code);
     } catch (e) {
       setAuthState({ status: "error", error: String(e) });
+      throw e;
     }
   }, []);
 

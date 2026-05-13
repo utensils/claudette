@@ -167,6 +167,8 @@
   "notifications_sound_error_desc": "Som quando um agente encontra um erro",
   "notifications_sound_session_start_label": "Início de sessão",
   "notifications_sound_session_start_desc": "Som quando uma nova sessão começa",
+  "auth_code_placeholder": "Cole o código do navegador",
+  "auth_submit_code": "Enviar código",
   "nav_editor": "Editor",
   "editor_title": "Editor",
   "editor_gutter_base_label": "Git gutter base",

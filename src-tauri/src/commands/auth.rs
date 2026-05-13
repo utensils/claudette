@@ -434,10 +434,13 @@ pub async fn submit_claude_auth_code(
     if code.is_empty() {
         return Err("Auth code cannot be empty.".into());
     }
-    let mut stdin = state.auth_login_stdin.lock().await;
-    let Some(stdin) = stdin.as_mut() else {
-        return Err("No Claude Code sign-in flow is waiting for a code.".into());
+
+    let mut stdin = {
+        let mut slot = state.auth_login_stdin.lock().await;
+        slot.take()
+            .ok_or_else(|| "No Claude Code sign-in flow is waiting for a code.".to_string())?
     };
+
     stdin
         .write_all(format!("{code}\n").as_bytes())
         .await
@@ -446,6 +449,15 @@ pub async fn submit_claude_auth_code(
         .flush()
         .await
         .map_err(|e| format!("Failed to flush Claude Code auth code: {e}"))?;
+
+    let login_still_running = state.auth_login_cancel.lock().await.is_some();
+    if login_still_running {
+        let mut slot = state.auth_login_stdin.lock().await;
+        if slot.is_none() {
+            *slot = Some(stdin);
+        }
+    }
+
     Ok(())
 }
 

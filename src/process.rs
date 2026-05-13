@@ -58,7 +58,9 @@ pub fn sanitize_claude_subprocess_env(cmd: &mut tokio::process::Command) {
         cmd.env_remove("ANTHROPIC_API_KEY");
     }
     cmd.env_remove("ANTHROPIC_AUTH_TOKEN");
+    cmd.env_remove("ANTHROPIC_FOUNDRY_API_KEY");
     cmd.env_remove("ANTHROPIC_UNIX_SOCKET");
+    cmd.env_remove("AWS_BEARER_TOKEN_BEDROCK");
     cmd.env_remove("CLAUDE_BRIDGE_OAUTH_TOKEN");
     cmd.env_remove("CLAUDE_SESSION_INGRESS_TOKEN_FILE");
     cmd.env_remove("CLAUDE_TRUSTED_DEVICE_TOKEN");

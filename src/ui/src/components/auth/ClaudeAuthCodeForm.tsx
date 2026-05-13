@@ -20,10 +20,16 @@ export function ClaudeAuthCodeForm({
         event.preventDefault();
         if (!trimmed || submitting) return;
         setSubmitting(true);
-        void onSubmit(trimmed).finally(() => {
-          setSubmitting(false);
-          setCode("");
-        });
+        void (async () => {
+          try {
+            await onSubmit(trimmed);
+            setCode("");
+          } catch {
+            // The shared auth controller owns the visible error state.
+          } finally {
+            setSubmitting(false);
+          }
+        })();
       }}
     >
       <input
