@@ -629,6 +629,7 @@ async fn handle_send_chat_message(
         chrome_enabled: chrome_enabled.unwrap_or(false),
         mcp_config,
         disable_1m_context: disable_1m_context.unwrap_or(false),
+        team_agent_session_tabs_enabled: true,
         backend_runtime: Default::default(),
         hook_bridge: None,
         extra_claude_flags,

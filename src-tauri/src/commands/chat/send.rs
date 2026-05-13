@@ -43,6 +43,16 @@ use super::{
     start_bridge_and_inject_mcp, start_chat_bridge,
 };
 
+const TEAM_AGENT_SESSION_TABS_SETTING: &str = "team_agent_session_tabs_enabled";
+
+pub(super) fn team_agent_session_tabs_enabled(db: &Database) -> bool {
+    db.get_app_setting(TEAM_AGENT_SESSION_TABS_SETTING)
+        .ok()
+        .flatten()
+        .as_deref()
+        != Some("false")
+}
+
 #[derive(Debug, Deserialize)]
 struct ClaudeTeamAgentInput {
     team_name: Option<String>,
@@ -2001,6 +2011,8 @@ pub async fn send_chat_message(
         }
     };
 
+    let team_agent_tabs_enabled = team_agent_session_tabs_enabled(&db);
+
     // Build agent settings from frontend params.
     let agent_settings = AgentSettings {
         model: resolved_model,
@@ -2011,6 +2023,7 @@ pub async fn send_chat_message(
         chrome_enabled: chrome_enabled.unwrap_or(false),
         mcp_config,
         disable_1m_context: disable_1m_context.unwrap_or(false),
+        team_agent_session_tabs_enabled: team_agent_tabs_enabled,
         backend_runtime,
         hook_bridge: None,
         extra_claude_flags,
@@ -3008,9 +3021,10 @@ pub async fn send_chat_message(
                 }
             }
 
-            if let AgentEvent::Stream(StreamEvent::Stream {
-                event: InnerStreamEvent::ContentBlockStop { index },
-            }) = &event
+            if team_agent_tabs_enabled
+                && let AgentEvent::Stream(StreamEvent::Stream {
+                    event: InnerStreamEvent::ContentBlockStop { index },
+                }) = &event
                 && let Some((_tool_use_id, input_json)) = team_agent_inputs.remove(index)
             {
                 let app_for_team_agent = app.clone();
@@ -3803,9 +3817,11 @@ mod tests {
         remote_control_should_restore_for_turn, remote_control_title, resolve_spawn_session_id,
         should_defer_persistent_restart_for_state,
         should_reenable_remote_control_after_turn_result, should_resume_persistent_session,
-        should_run_auto_naming, terminal_text, write_secure_prompt_file,
+        should_run_auto_naming, team_agent_session_tabs_enabled, terminal_text,
+        write_secure_prompt_file,
     };
     use crate::state::{ClaudeRemoteControlLifecycle, ClaudeRemoteControlStatus};
+    use claudette::db::Database;
     use claudette::model::{ChatMessage, ChatRole};
     #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt as _;
@@ -3826,6 +3842,20 @@ mod tests {
             cache_read_tokens: None,
             cache_creation_tokens: None,
         }
+    }
+
+    #[test]
+    fn team_agent_session_tabs_default_to_enabled() {
+        let db = Database::open_in_memory().unwrap();
+        assert!(team_agent_session_tabs_enabled(&db));
+    }
+
+    #[test]
+    fn team_agent_session_tabs_can_be_disabled() {
+        let db = Database::open_in_memory().unwrap();
+        db.set_app_setting("team_agent_session_tabs_enabled", "false")
+            .unwrap();
+        assert!(!team_agent_session_tabs_enabled(&db));
     }
 
     #[test]

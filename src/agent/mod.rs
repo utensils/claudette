@@ -25,7 +25,7 @@ pub use types::{
 };
 
 /// Per-turn settings that control CLI flags for the agent subprocess.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentSettings {
     /// Model alias (e.g. "opus", "sonnet") or full model ID. Session-level: only
     /// applied on the first turn.
@@ -52,6 +52,9 @@ pub struct AgentSettings {
     /// selected model runs at its 200k window. Derived frontend-side from
     /// the model registry's `contextWindowTokens`.
     pub disable_1m_context: bool,
+    /// When true, redirect Claude Code agent-team teammates into Claudette
+    /// session tabs. Defaults to true for new users; settings can opt out.
+    pub team_agent_session_tabs_enabled: bool,
     /// Provider-specific env for experimental alternate Claude Code backends.
     /// Empty means the normal Claude Code account/API environment is used.
     pub backend_runtime: AgentBackendRuntime,
@@ -64,6 +67,25 @@ pub struct AgentSettings {
     /// optional_value)`; boolean flags carry `None`. Appended to argv on
     /// every turn after Claudette's own args.
     pub extra_claude_flags: Vec<(String, Option<String>)>,
+}
+
+impl Default for AgentSettings {
+    fn default() -> Self {
+        Self {
+            model: None,
+            fast_mode: false,
+            thinking_enabled: false,
+            plan_mode: false,
+            effort: None,
+            chrome_enabled: false,
+            mcp_config: None,
+            disable_1m_context: false,
+            team_agent_session_tabs_enabled: true,
+            backend_runtime: AgentBackendRuntime::default(),
+            hook_bridge: None,
+            extra_claude_flags: Vec::new(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

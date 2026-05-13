@@ -128,7 +128,7 @@ pub async fn run_turn(
         cmd.env(crate::agent_mcp::server::ENV_TOKEN, &bridge.token);
     }
 
-    apply_teammate_command_override(&mut cmd);
+    apply_teammate_command_override(&mut cmd, settings.team_agent_session_tabs_enabled);
 
     if let Some(env) = ws_env {
         env.apply(&mut cmd);

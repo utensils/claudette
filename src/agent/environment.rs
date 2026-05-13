@@ -11,8 +11,8 @@ const CLAUDE_CODE_TEAMMATE_COMMAND: &str = "CLAUDE_CODE_TEAMMATE_COMMAND";
 /// identity flags (`--agent-id`, `--agent-name`, `--team-name`); the Tauri
 /// binary recognizes that argv shape and redirects the teammate into a
 /// Claudette workspace/session instead of spawning another Claude Code process.
-pub(crate) fn apply_teammate_command_override(cmd: &mut Command) {
-    if let Ok(exe) = std::env::current_exe() {
+pub(crate) fn apply_teammate_command_override(cmd: &mut Command, enabled: bool) {
+    if enabled && let Ok(exe) = std::env::current_exe() {
         cmd.env(CLAUDE_CODE_TEAMMATE_COMMAND, exe);
     }
 }

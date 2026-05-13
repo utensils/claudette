@@ -141,6 +141,8 @@
   "models_default_fast_mode": "Default to fast mode",
   "models_default_fast_mode_desc": "Start new chats in fast mode",
   "models_fast_not_supported": " (not supported by selected model)",
+  "models_team_agent_session_tabs": "Team agents as session tabs",
+  "models_team_agent_session_tabs_desc": "Open Claude Code team agents (TeamCreate + Agent with a team name) as separate Claudette chat session tabs. Enabled by default for new users.",
   "models_chrome": "Use Claude Code with Chrome",
   "models_chrome_desc": "Allow Claude Code to control your Chrome browser. To use this feature, first install the Claude Code Chrome extension.",
   "models_backends_title": "Alternative backends",
