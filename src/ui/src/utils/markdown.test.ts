@@ -9,17 +9,10 @@ import { renderToStaticMarkup } from "react-dom/server";
 import type { Components } from "react-markdown";
 
 const tauriMocks = vi.hoisted(() => ({
-  invoke: vi.fn(() => Promise.resolve()),
-  openInEditor: vi.fn(() => Promise.resolve()),
   openUrl: vi.fn(() => Promise.resolve()),
 }));
 
-vi.mock("@tauri-apps/api/core", () => ({
-  invoke: tauriMocks.invoke,
-}));
-
 vi.mock("../services/tauri", () => ({
-  openInEditor: tauriMocks.openInEditor,
   openUrl: tauriMocks.openUrl,
 }));
 
@@ -237,8 +230,6 @@ describe("MARKDOWN_COMPONENTS.a click handling", () => {
   const LinkOverride = MARKDOWN_COMPONENTS.a as NonNullable<Components["a"]>;
 
   beforeEach(() => {
-    tauriMocks.invoke.mockClear();
-    tauriMocks.openInEditor.mockClear();
     tauriMocks.openUrl.mockClear();
   });
 
@@ -262,10 +253,10 @@ describe("MARKDOWN_COMPONENTS.a click handling", () => {
     );
 
     expect(openFile).toHaveBeenCalledWith("README.md");
-    expect(tauriMocks.openInEditor).not.toHaveBeenCalled();
+    expect(tauriMocks.openUrl).not.toHaveBeenCalled();
   });
 
-  it("falls back to the native opener for absolute file paths outside Monaco", async () => {
+  it("does not open absolute file paths in a native app when Monaco cannot handle them", async () => {
     const openFile = vi.fn(() => false);
     const container = await render(
       createElement(
@@ -283,10 +274,10 @@ describe("MARKDOWN_COMPONENTS.a click handling", () => {
     );
 
     expect(openFile).toHaveBeenCalledWith("/tmp/report.md");
-    expect(tauriMocks.openInEditor).toHaveBeenCalledWith("/tmp/report.md");
+    expect(tauriMocks.openUrl).not.toHaveBeenCalled();
   });
 
-  it("falls back to the native opener when the Monaco opener throws", async () => {
+  it("does not open absolute file paths in a native app when the Monaco opener throws", async () => {
     const openFile = vi.fn(() => {
       throw new Error("boom");
     });
@@ -306,7 +297,34 @@ describe("MARKDOWN_COMPONENTS.a click handling", () => {
     );
 
     expect(openFile).toHaveBeenCalledWith("/tmp/report.md");
-    expect(tauriMocks.openInEditor).toHaveBeenCalledWith("/tmp/report.md");
+    expect(tauriMocks.openUrl).not.toHaveBeenCalled();
+  });
+
+  it("opens a localhost file URL in the browser when Monaco cannot handle it", async () => {
+    const openFile = vi.fn(() => false);
+    const href =
+      "http://localhost:14255/Users/jamesbrink/.claudette/workspaces/claudex/copper-ginger/website/guide/quickstart.md:6";
+    const container = await render(
+      createElement(
+        MarkdownFileOpenContext.Provider,
+        { value: { openFile } },
+        createElement(LinkOverride, {
+          href,
+          children: href,
+        }),
+      ),
+    );
+
+    const button = container.querySelector("button");
+    expect(button).toBeTruthy();
+    button?.dispatchEvent(
+      new MouseEvent("click", { bubbles: true, cancelable: true }),
+    );
+
+    expect(openFile).toHaveBeenCalledWith(
+      "/Users/jamesbrink/.claudette/workspaces/claudex/copper-ginger/website/guide/quickstart.md:6",
+    );
+    expect(tauriMocks.openUrl).toHaveBeenCalledWith(href);
   });
 
   it("routes localhost file URLs through the Monaco file opener without rendering a navigable href", async () => {
@@ -330,6 +348,21 @@ describe("MARKDOWN_COMPONENTS.a click handling", () => {
     );
 
     expect(openFile).toHaveBeenCalledWith("/Users/me/project/CLAUDETTE_TEST.md:1");
+  });
+
+  it("blocks unsupported anchors from navigating the webview", async () => {
+    const container = await render(
+      createElement(LinkOverride, {
+        href: "/internal/app/path",
+        children: "internal",
+      }),
+    );
+    const event = new MouseEvent("click", { bubbles: true, cancelable: true });
+
+    container.querySelector("a")?.dispatchEvent(event);
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(tauriMocks.openUrl).not.toHaveBeenCalled();
   });
 
   it("opens scheme-less www links through open_url with an https URL", async () => {

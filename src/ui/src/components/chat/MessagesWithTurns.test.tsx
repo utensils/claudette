@@ -10,6 +10,8 @@ import { MessagesWithTurns } from "./MessagesWithTurns";
 
 const serviceMocks = vi.hoisted(() => ({
   invoke: vi.fn(() => Promise.resolve()),
+  listWorkspaceFiles: vi.fn(() => Promise.resolve([])),
+  openUrl: vi.fn(() => Promise.resolve()),
   loadAttachmentData: vi.fn(),
   getClaudeAuthStatus: vi.fn(() =>
     Promise.resolve({
@@ -108,6 +110,9 @@ async function render(node: React.ReactNode): Promise<HTMLElement> {
 
 beforeEach(() => {
   serviceMocks.invoke.mockClear();
+  serviceMocks.listWorkspaceFiles.mockClear();
+  serviceMocks.listWorkspaceFiles.mockResolvedValue([]);
+  serviceMocks.openUrl.mockClear();
   serviceMocks.claudeAuthLogin.mockClear();
   serviceMocks.getClaudeAuthStatus.mockClear();
   serviceMocks.getClaudeAuthStatus.mockResolvedValue({
@@ -324,9 +329,11 @@ describe("MessagesWithTurns edit summaries", () => {
 
     const state = useAppStore.getState();
     expect(state.fileTabsByWorkspace[WORKSPACE_ID]).toBeUndefined();
-    expect(serviceMocks.invoke).toHaveBeenCalledWith("open_in_editor", {
-      path: "~/Downloads/report.md",
-    });
+    expect(serviceMocks.invoke).not.toHaveBeenCalledWith(
+      "open_in_editor",
+      expect.anything(),
+    );
+    expect(serviceMocks.openUrl).not.toHaveBeenCalled();
   });
 
   it("opens localhost file URLs from agent output in Monaco without navigating", async () => {

@@ -12,7 +12,7 @@ import remarkGfm from "remark-gfm";
 import rehypeRaw from "rehype-raw";
 import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
 import { AnsiUp } from "ansi_up";
-import { openInEditor, openUrl } from "../services/tauri";
+import { openUrl } from "../services/tauri";
 import { CodeBlock } from "../components/chat/CodeBlock";
 import { MermaidBlock } from "../components/chat/MermaidBlock";
 import { StreamingContext } from "../components/chat/StreamingContext";
@@ -20,7 +20,6 @@ import {
   decodeFilePathHref,
   decodeLocalhostFileUrlTarget,
   FILE_PATH_SCHEME,
-  parseFilePathTarget,
 } from "./filePathLinks";
 import { getCachedHighlight, highlightCode } from "./highlight";
 import { rehypeFilePathLinks } from "./rehypeFilePathLinks";
@@ -188,8 +187,6 @@ export interface MarkdownFileOpenContextValue {
 
 export const MarkdownFileOpenContext =
   createContext<MarkdownFileOpenContextValue | null>(null);
-
-const ABSOLUTE_FILE_PATH_REGEX = /^(?:[A-Za-z]:[\\/]|[\\/]|~[\\/]|~$)/;
 
 export function normalizeExternalHref(href: string): string | null {
   const trimmed = href.trim();
@@ -387,10 +384,17 @@ const MarkdownLink: NonNullable<Components["a"]> = ({
   ...props
 }) => {
   const fileOpen = useContext(MarkdownFileOpenContext);
+  const encodedFilePath = href ? decodeFilePathHref(href) : null;
+  const localhostFilePath = href ? decodeLocalhostFileUrlTarget(href) : null;
   const filePath = href
-    ? (decodeFilePathHref(href) ?? decodeLocalhostFileUrlTarget(href))
+    ? (encodedFilePath ?? localhostFilePath)
     : null;
   const externalHref = href ? normalizeExternalHref(href) : null;
+  const openExternalHref = (target: string) => {
+    void openUrl(target).catch((err) =>
+      console.error("Failed to open URL:", target, err),
+    );
+  };
   const openFilePath = () => {
     if (!filePath) return;
     if (fileOpen) {
@@ -400,14 +404,13 @@ const MarkdownLink: NonNullable<Components["a"]> = ({
         console.error("Failed to open file link in Monaco:", filePath, err);
       }
     }
-    const nativeTarget = parseFilePathTarget(filePath);
-    if (!ABSOLUTE_FILE_PATH_REGEX.test(nativeTarget.path)) {
-      console.warn("No workspace file opener available for relative path:", filePath);
+    if (localhostFilePath && externalHref) {
+      openExternalHref(externalHref);
       return;
     }
-    void openInEditor(nativeTarget.path).catch(
-      (err) =>
-        console.error("Failed to open path:", filePath, err),
+    console.warn(
+      "No workspace file opener available for chat file link:",
+      filePath,
     );
   };
   if (filePath) {
@@ -431,12 +434,12 @@ const MarkdownLink: NonNullable<Components["a"]> = ({
       ...props,
       href: externalHref ?? href,
       onClick: (e: React.MouseEvent<HTMLAnchorElement>) => {
+        e.preventDefault();
         if (externalHref) {
-          e.preventDefault();
-          void openUrl(externalHref).catch((err) =>
-            console.error("Failed to open URL:", externalHref, err),
-          );
+          openExternalHref(externalHref);
+          return;
         }
+        console.warn("Blocked in-app navigation for chat link:", href);
       },
     },
     children,
