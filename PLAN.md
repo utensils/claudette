@@ -190,8 +190,11 @@
   - `cd src/ui && bunx tsc -b`
   - `nix develop -c cargo fmt --all --check`
   - `git diff --check`
+- 2026-05-13: Committed and pushed the Copilot fixes as `388ed967` (`fix: keep remote control claude only`), replied to all four Copilot threads, resolved them, and verified zero unresolved Copilot reviewer threads remain.
+- 2026-05-13: PR checks after `388ed967` were partially complete: commit-message/PR-title/version/format/migration checks passed; build, lint, frontend, and test were still pending.
 
 ## Next Stage
 
-- Commit/push the Copilot fixes, reply to and resolve the four Copilot threads, re-query unresolved threads, and check PR status.
-- Plan the remaining PR-hardening stage from review feedback and broader CI results.
+- Monitor the pending PR checks for `388ed967` and address any failures.
+- Re-run Copilot review after CI settles because new review comments can appear after fresh pushes.
+- If CI and Copilot stay clean, run one broader local confidence pass from the Test Plan before marking the native Codex implementation ready for final review.
