@@ -78,8 +78,23 @@
   overflow: hidden;
   display: flex;
   flex-direction: column;
+  position: relative;
   background: var(--app-bg);
   contain: layout style;
+}
+
+.contentPanel {
+  position: absolute;
+  inset: 0;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.contentPanelHidden {
+  visibility: hidden;
+  pointer-events: none;
 }
 
 .terminal {

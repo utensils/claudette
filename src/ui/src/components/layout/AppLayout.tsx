@@ -131,13 +131,32 @@ export function AppLayout() {
           <div className={styles.center}>
             <div className={styles.content}>
               {selectedWorkspaceId ? (
-                showFileViewer ? (
-                  <FileViewer />
-                ) : showDiff ? (
-                  <DiffViewer />
-                ) : (
-                  <ChatPanel />
-                )
+                <>
+                  <div
+                    className={`${styles.contentPanel} ${
+                      showFileViewer ? "" : styles.contentPanelHidden
+                    }`}
+                    aria-hidden={!showFileViewer}
+                  >
+                    {showFileViewer && <FileViewer />}
+                  </div>
+                  <div
+                    className={`${styles.contentPanel} ${
+                      showDiff ? "" : styles.contentPanelHidden
+                    }`}
+                    aria-hidden={!showDiff}
+                  >
+                    {showDiff && <DiffViewer />}
+                  </div>
+                  <div
+                    className={`${styles.contentPanel} ${
+                      !showFileViewer && !showDiff ? "" : styles.contentPanelHidden
+                    }`}
+                    aria-hidden={showFileViewer || showDiff}
+                  >
+                    <ChatPanel />
+                  </div>
+                </>
               ) : (
                 <Dashboard />
               )}

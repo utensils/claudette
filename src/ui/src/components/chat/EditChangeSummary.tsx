@@ -19,10 +19,12 @@ export function InlineEditSummary({
   summary,
   searchQuery,
   worktreePath,
+  onOpenFile,
 }: {
   summary: EditSummary;
   searchQuery: string;
   worktreePath?: string | null;
+  onOpenFile?: (filePath: string) => void;
 }) {
   const file = summary.files[0];
   if (!file) return null;
@@ -32,20 +34,34 @@ export function InlineEditSummary({
   // the +/- totals match the surface, instead of misattributing the
   // aggregate churn to just `files[0]`.
   const isMulti = summary.files.length > 1;
+  const relativePath = relativizePath(file.filePath, worktreePath);
+  const pathContent = (
+    <HighlightedPlainText
+      text={relativePath}
+      query={searchQuery}
+    />
+  );
   return (
     <span className={styles.inlineEditSummary}>
       <Pencil size={12} aria-hidden="true" className={styles.inlineEditIcon} />
       <span className={styles.inlineEditVerb}>Editing</span>
-      <span className={styles.inlineEditPath}>
-        {isMulti ? (
-          `${summary.files.length} files`
-        ) : (
-          <HighlightedPlainText
-            text={relativizePath(file.filePath, worktreePath)}
-            query={searchQuery}
-          />
-        )}
-      </span>
+      {isMulti || !onOpenFile ? (
+        <span className={styles.inlineEditPath}>
+          {isMulti ? `${summary.files.length} files` : pathContent}
+        </span>
+      ) : (
+        <button
+          type="button"
+          className={`${styles.inlineEditPath} ${styles.inlineEditPathButton} cc-file-path-link`}
+          title={relativePath}
+          onClick={(event) => {
+            event.stopPropagation();
+            onOpenFile(file.filePath);
+          }}
+        >
+          {pathContent}
+        </button>
+      )}
       <ChangeStats added={summary.added} removed={summary.removed} />
     </span>
   );

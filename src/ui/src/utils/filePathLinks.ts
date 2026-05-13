@@ -27,6 +27,8 @@ export interface FilePathMatch {
   end: number;
   /** The matched path with surrounding sentence punctuation stripped. */
   path: string;
+  /** Optional source text to display when it differs from the file target. */
+  text?: string;
 }
 
 export interface FilePathTarget {
@@ -59,7 +61,7 @@ const PATH_REGEX =
   /(?:[A-Za-z]:[\\/][^\s<>"|*?]+|\\\\[^\s<>"|*?\\/]+\\[^\s<>"|*?\\/]+(?:\\[^\s<>"|*?\\/]+)*|~?\/[^\s<>"|*?]+)/g;
 
 const RELATIVE_FILE_REGEX =
-  /(?:\.{1,2}[\\/])?(?:[A-Za-z0-9_$@.+-]+[\\/])*[A-Za-z0-9_$@.+-]+(?:\.[A-Za-z0-9][A-Za-z0-9+-]{0,15})+/g;
+  /@?(?:\.{1,2}[\\/])?(?:[A-Za-z0-9_$+.-]+[\\/])*[A-Za-z0-9_$+.-]+(?:\.[A-Za-z0-9][A-Za-z0-9+-]{0,15})+(?::\d+(?::\d+)?(?:-\d+(?::\d+)?)?)?/g;
 
 /**
  * Characters that, if they sit immediately before a regex match, indicate
@@ -216,7 +218,8 @@ export function detectFilePaths(text: string): FilePathMatch[] {
 }
 
 export function isLikelyRelativeFileReference(value: string): boolean {
-  const candidate = value.trim().replace(TRAILING_PUNCT_REGEX, "");
+  const rawCandidate = value.trim().replace(TRAILING_PUNCT_REGEX, "");
+  const candidate = parseFilePathTarget(stripMentionPrefix(rawCandidate)).path;
   if (!candidate || candidate.length < MIN_PATH_LENGTH) return false;
   if (/^[a-z][a-z0-9+.-]*:/i.test(candidate)) return false;
   if (/^[\\/]|^[A-Za-z]:[\\/]/.test(candidate)) return false;
@@ -245,6 +248,10 @@ export function isLikelyRelativeFileReference(value: string): boolean {
   const ext = basename.slice(dot + 1);
   if (COMMON_HOSTLIKE_EXTENSIONS.has(ext) && parts.length === 1) return false;
   return KNOWN_FILE_EXTENSIONS.has(ext);
+}
+
+function stripMentionPrefix(value: string): string {
+  return value.startsWith("@") ? value.slice(1) : value;
 }
 
 export function parseFilePathTarget(path: string): FilePathTarget {
@@ -401,10 +408,12 @@ export function detectFileReferences(text: string): FilePathMatch[] {
     const raw = m[0];
     const stripped = raw.replace(TRAILING_PUNCT_REGEX, "");
     if (!isLikelyRelativeFileReference(stripped)) continue;
+    const path = stripMentionPrefix(stripped);
     matches.push({
       start: m.index,
       end: m.index + stripped.length,
-      path: stripped,
+      path,
+      ...(path === stripped ? {} : { text: stripped }),
     });
   }
 

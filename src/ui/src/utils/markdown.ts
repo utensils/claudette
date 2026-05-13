@@ -362,8 +362,10 @@ export function HighlightedCode({
   }
   const inlineText = extractText(children).trim();
   const resolvedPath = fileOpen?.resolveFilePath?.(inlineText) ?? null;
+  const hasFileResolver = typeof fileOpen?.resolveFilePath === "function";
   const inlineFilePath =
-    resolvedPath ?? (isLikelyFilePathTarget(inlineText) ? inlineText : null);
+    resolvedPath ??
+    (!hasFileResolver && isLikelyFilePathTarget(inlineText) ? inlineText : null);
   if (inlineFilePath && fileOpen) {
     return createElement(
       "button",
@@ -398,6 +400,13 @@ const MarkdownLink: NonNullable<Components["a"]> = ({
   const filePath = href
     ? (encodedFilePath ?? localhostFilePath ?? hrefFilePath)
     : null;
+  const linkText = extractText(children).trim();
+  const requiresFileResolution =
+    !!encodedFilePath && linkText.startsWith("@");
+  const verifiedFilePath =
+    filePath && requiresFileResolution
+      ? (fileOpen?.resolveFilePath?.(filePath) ?? null)
+      : null;
   const externalHref = href ? normalizeExternalHref(href) : null;
   const openExternalHref = (target: string) => {
     void openUrl(target).catch((err) =>
@@ -407,6 +416,17 @@ const MarkdownLink: NonNullable<Components["a"]> = ({
   const openFilePath = () => {
     if (!filePath) return;
     if (fileOpen) {
+      if (verifiedFilePath) {
+        try {
+          if (fileOpen.openFile(verifiedFilePath)) return;
+        } catch (err) {
+          console.error(
+            "Failed to open verified file link in Monaco:",
+            verifiedFilePath,
+            err,
+          );
+        }
+      }
       const displayFilePath = localhostFilePath ?? hrefFilePath;
       const resolvedDisplayFilePath = displayFilePath
         ? fileOpen.resolveFilePath?.(
@@ -443,6 +463,9 @@ const MarkdownLink: NonNullable<Components["a"]> = ({
     );
   };
   if (filePath) {
+    if (requiresFileResolution && !verifiedFilePath) {
+      return createElement("span", props, children);
+    }
     const compactFilePath = localhostFilePath ?? hrefFilePath;
     const filePathLabel = compactFilePath
       ? formatFilePathDisplayLabel(compactFilePath)
@@ -455,7 +478,7 @@ const MarkdownLink: NonNullable<Components["a"]> = ({
           "cc-file-path-link",
           typeof props.className === "string" ? props.className : undefined,
         ),
-        title: filePath,
+        title: verifiedFilePath ?? filePath,
         onClick: openFilePath,
       },
       filePathLabel,

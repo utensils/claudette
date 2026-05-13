@@ -66,7 +66,7 @@ export function useWorkspaceFileIndex(
     if (!data) return EMPTY_INDEX;
     return {
       resolve(rawPath: string) {
-        const parsed = parseFilePathTarget(rawPath.trim());
+        const parsed = parseFilePathTarget(rawPath.trim().replace(/^@/, ""));
         const normalized = parsed.path.replace(/\\/g, "/").replace(/^\.\//, "");
         if (!normalized || normalized.startsWith("../")) return null;
         const lineSuffix = formatLineSuffix(parsed);

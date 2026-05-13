@@ -59,6 +59,14 @@ beforeEach(() => {
   useAppStore.setState({
     expandedToolUseIds: {},
     extendedToolCallOutput: true,
+    selectedWorkspaceId: "workspace-1",
+    diffFiles: [],
+    diffStagedFiles: null,
+    diffSelectedFile: null,
+    diffSelectedLayer: null,
+    diffTabsByWorkspace: {},
+    fileTabsByWorkspace: {},
+    activeFileTabByWorkspace: {},
   });
 });
 
@@ -323,5 +331,42 @@ describe("ToolActivityRow", () => {
     expect(container.querySelector("pre")?.textContent).toContain(
       "diff --git a/src/app.ts b/src/app.ts",
     );
+  });
+
+  it("opens an inline edit summary in the diff viewer when a diff is available", async () => {
+    useAppStore.setState({
+      diffFiles: [
+        { path: "README.md", status: "Modified", additions: 2, deletions: 0 },
+      ],
+    });
+    const container = await render(
+      <ToolActivityRow
+        activity={activity("Edit", {
+          inputJson: JSON.stringify({
+            file_path: "/repo/README.md",
+            old_string: "old",
+            new_string: "new\nagain",
+          }),
+        })}
+        searchQuery=""
+        worktreePath="/repo"
+      />,
+    );
+
+    const fileButton = Array.from(container.querySelectorAll("button")).find(
+      (button) => button.textContent?.includes("README.md"),
+    );
+    expect(fileButton).toBeTruthy();
+
+    await act(async () => {
+      fileButton?.click();
+    });
+
+    const state = useAppStore.getState();
+    expect(state.diffSelectedFile).toBe("README.md");
+    expect(state.diffTabsByWorkspace["workspace-1"]).toEqual([
+      { path: "README.md", layer: null },
+    ]);
+    expect(state.fileTabsByWorkspace["workspace-1"]).toBeUndefined();
   });
 });

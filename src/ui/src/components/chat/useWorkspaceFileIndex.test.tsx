@@ -69,6 +69,7 @@ describe("useWorkspaceFileIndex", () => {
 
     expect(serviceMocks.listWorkspaceFiles).toHaveBeenCalledTimes(1);
     expect(latestResolve?.("Cargo.toml")).toBe("Cargo.toml");
+    expect(latestResolve?.("@Cargo.toml")).toBe("Cargo.toml");
     expect(latestResolve?.("./README.md")).toBe("README.md");
     expect(latestResolve?.("src/main.rs")).toBe("src/main.rs");
     expect(latestResolve?.("./README.md:7")).toBe("README.md:7");

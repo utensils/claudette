@@ -372,17 +372,21 @@ function FileViewerInner({ workspaceId, path, t }: FileViewerInnerProps) {
   // its own close button uses, so the unsaved-changes prompt fires
   // identically whether the user clicks × or hits the keystroke.
   //
-  // Handled-nonce tracking matches the FilesPanel pattern: a Map
-  // keyed by workspace, seeded at 0 so a bump that arrived while
-  // this viewer was mounting (rare but possible if `Cmd+W` fired
-  // mid-route to a fresh file tab) is still consumed.
+  // Handled-nonce tracking is keyed by workspace and initializes from the
+  // current value. A nonce is a "new close request" signal, not persistent
+  // desired state; consuming an old value would immediately close every file
+  // reopened after the first Cmd+W/tab-close request in that workspace.
   const closeFileTabNonce = useAppStore(
     (s) => s.requestCloseFileTabNonceByWorkspace[workspaceId] ?? 0,
   );
   const handledCloseNonces = useRef<Map<string, number>>(new Map());
   useEffect(() => {
-    if (closeFileTabNonce === 0) return;
     const handled = handledCloseNonces.current.get(workspaceId) ?? 0;
+    if (!handledCloseNonces.current.has(workspaceId)) {
+      handledCloseNonces.current.set(workspaceId, closeFileTabNonce);
+      return;
+    }
+    if (closeFileTabNonce === 0) return;
     if (closeFileTabNonce === handled) return;
     handledCloseNonces.current.set(workspaceId, closeFileTabNonce);
     requestCloseFileTab();

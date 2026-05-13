@@ -160,11 +160,11 @@ describe("MARKDOWN_COMPONENTS.code wiring", () => {
       createElement(
         MarkdownFileOpenContext.Provider,
         { value: { openFile: vi.fn(), resolveFilePath: () => null } },
-        createElement(HighlightedCode, { children: "not-a-file" }),
+        createElement(HighlightedCode, { children: "foo.ts" }),
       ),
     );
 
-    expect(container.querySelector("code")?.textContent).toBe("not-a-file");
+    expect(container.querySelector("code")?.textContent).toBe("foo.ts");
     expect(container.querySelector("button")).toBeNull();
   });
 });
@@ -254,6 +254,50 @@ describe("MARKDOWN_COMPONENTS.a click handling", () => {
 
     expect(openFile).toHaveBeenCalledWith("README.md");
     expect(tauriMocks.openUrl).not.toHaveBeenCalled();
+  });
+
+  it("routes at-sign file mentions only when the workspace index resolves them", async () => {
+    const openFile = vi.fn(() => true);
+    const resolveFilePath = vi.fn((path: string) =>
+      path === "README.md" ? "docs/README.md" : null,
+    );
+    const container = await render(
+      createElement(
+        MarkdownFileOpenContext.Provider,
+        { value: { openFile, resolveFilePath } },
+        createElement(LinkOverride, {
+          href: "claudettepath:README.md",
+          children: "@README.md",
+        }),
+      ),
+    );
+
+    const button = container.querySelector("button");
+    expect(button?.textContent).toBe("@README.md");
+    button?.dispatchEvent(
+      new MouseEvent("click", { bubbles: true, cancelable: true }),
+    );
+
+    expect(resolveFilePath).toHaveBeenCalledWith("README.md");
+    expect(openFile).toHaveBeenCalledWith("docs/README.md");
+  });
+
+  it("leaves unresolved at-sign mentions as plain text", async () => {
+    const openFile = vi.fn(() => true);
+    const container = await render(
+      createElement(
+        MarkdownFileOpenContext.Provider,
+        { value: { openFile, resolveFilePath: () => null } },
+        createElement(LinkOverride, {
+          href: "claudettepath:README.md",
+          children: "@README.md",
+        }),
+      ),
+    );
+
+    expect(container.querySelector("button")).toBeNull();
+    expect(container.textContent).toBe("@README.md");
+    expect(openFile).not.toHaveBeenCalled();
   });
 
   it("does not open absolute file paths in a native app when Monaco cannot handle them", async () => {

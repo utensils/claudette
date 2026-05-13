@@ -90,6 +90,14 @@ import { QueuedMessagesPopover } from "./QueuedMessagesPopover";
 import { shouldAutoDispatchQueuedMessage } from "./queuedMessageEditing";
 
 const EMPTY_QUEUED_MESSAGES: QueuedMessage[] = [];
+const chatScrollState = globalThis as typeof globalThis & {
+  __CLAUDETTE_CHAT_SCROLL_TOP__?: Map<string, number>;
+  __CLAUDETTE_CHAT_SCROLL_RESTORING__?: Set<string>;
+};
+const chatScrollTopBySession =
+  chatScrollState.__CLAUDETTE_CHAT_SCROLL_TOP__ ??= new Map<string, number>();
+const restoringChatScrollSessions =
+  chatScrollState.__CLAUDETTE_CHAT_SCROLL_RESTORING__ ??= new Set<string>();
 
 export function ChatPanel() {
   const { t } = useTranslation("chat");
@@ -370,8 +378,13 @@ export function ChatPanel() {
   );
 
   // Sticky scroll: auto-follow when at bottom, stop when user scrolls up.
-  const { isAtBottom, scrollToBottom, handleContentChanged, suppressNextAutoScrollRef } =
-    useStickyScroll(messagesContainerRef);
+  const {
+    isAtBottom,
+    scrollToBottom,
+    restoreScrollPosition,
+    handleContentChanged,
+    suppressNextAutoScrollRef,
+  } = useStickyScroll(messagesContainerRef);
   usePreventScrollBounce(messagesContainerRef);
 
   // Memoize context value to avoid re-rendering StreamingMessage on every parent render.
@@ -563,10 +576,65 @@ export function ChatPanel() {
     };
   }, [activeSessionId, selectedWorkspaceId, setChatMessages, setChatPagination, hydrateCompletedTurns]);
 
-  // Scroll to bottom unconditionally on session switch.
+  // Preserve the chat position while Monaco/diff views temporarily unmount
+  // this panel. Without this, opening a file link snaps long chats to bottom.
   useEffect(() => {
-    if (activeSessionId) scrollToBottom();
-  }, [activeSessionId, scrollToBottom]);
+    if (!activeSessionId) return;
+    const savedScrollTop = chatScrollTopBySession.get(activeSessionId);
+    if (savedScrollTop == null) {
+      restoringChatScrollSessions.delete(activeSessionId);
+      scrollToBottom();
+      return;
+    }
+    restoringChatScrollSessions.add(activeSessionId);
+    let cancelled = false;
+    let frameId: number | null = null;
+    let attempts = 0;
+    const restore = () => {
+      if (cancelled) return;
+      restoreScrollPosition(savedScrollTop);
+      attempts += 1;
+      const container = messagesContainerRef.current;
+      const maxScrollTop = container
+        ? Math.max(0, container.scrollHeight - container.clientHeight)
+        : 0;
+      const expectedTop = Math.min(savedScrollTop, maxScrollTop);
+      if (
+        attempts < 8 &&
+        container &&
+        Math.abs(container.scrollTop - expectedTop) > 1
+      ) {
+        frameId = requestAnimationFrame(restore);
+      } else {
+        restoringChatScrollSessions.delete(activeSessionId);
+      }
+    };
+    frameId = requestAnimationFrame(restore);
+    return () => {
+      cancelled = true;
+      restoringChatScrollSessions.delete(activeSessionId);
+      if (frameId !== null) cancelAnimationFrame(frameId);
+    };
+  }, [activeSessionId, restoreScrollPosition, scrollToBottom]);
+
+  useEffect(() => {
+    if (!activeSessionId) return;
+    const container = messagesContainerRef.current;
+    return () => {
+      if (container && !restoringChatScrollSessions.has(activeSessionId)) {
+        chatScrollTopBySession.set(activeSessionId, container.scrollTop);
+        restoringChatScrollSessions.add(activeSessionId);
+      }
+    };
+  }, [activeSessionId]);
+
+  const rememberChatScrollPosition = useCallback(() => {
+    if (!activeSessionId) return;
+    const container = messagesContainerRef.current;
+    if (!container) return;
+    chatScrollTopBySession.set(activeSessionId, container.scrollTop);
+    restoringChatScrollSessions.add(activeSessionId);
+  }, [activeSessionId]);
 
   // Load older messages when the user scrolls to the top of the message list.
   const hasMoreRef = useRef(false);
@@ -595,6 +663,15 @@ export function ChatPanel() {
     if (!container) return;
 
     const onScroll = () => {
+      if (
+        activeSessionIdRef.current &&
+        !restoringChatScrollSessions.has(activeSessionIdRef.current)
+      ) {
+        chatScrollTopBySession.set(
+          activeSessionIdRef.current,
+          container.scrollTop,
+        );
+      }
       if (
         container.scrollTop < 200 &&
         hasMoreRef.current &&
@@ -1444,6 +1521,7 @@ export function ChatPanel() {
                   onForkTurn={isRemote ? undefined : handleFork}
                   onAttachmentContextMenu={openAttachmentMenu}
                   onAttachmentClick={openLightbox}
+                  onOpenFileLink={rememberChatScrollPosition}
                   searchQuery={searchQuery}
                   globalOffset={globalOffset}
                   toolDisplayMode={toolDisplayMode}

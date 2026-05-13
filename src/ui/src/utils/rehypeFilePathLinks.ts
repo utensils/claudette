@@ -66,7 +66,7 @@ export const rehypeFilePathLinks: Plugin<[], Root> = () => {
             href: encodeFilePathHref(m.path),
             className: ["cc-file-path-link"],
           },
-          children: [{ type: "text", value: m.path }],
+          children: [{ type: "text", value: m.text ?? m.path }],
         });
         cursor = m.end;
       }

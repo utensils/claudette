@@ -60,6 +60,19 @@ describe("rehypeFilePathLinks", () => {
     expect(p.children[2]).toEqual({ type: "text", value: " next" });
   });
 
+  it("wraps leading at-sign file mentions but targets the file path", () => {
+    const tree = root(paragraph(text("Edit @README.md next")));
+    run(tree);
+
+    const p = tree.children[0] as Element;
+    expect(p.children[0]).toEqual({ type: "text", value: "Edit " });
+    const link = p.children[1] as Element;
+    expect(link.tagName).toBe("a");
+    expect(link.properties?.href).toBe("claudettepath:README.md");
+    expect(link.children).toEqual([{ type: "text", value: "@README.md" }]);
+    expect(p.children[2]).toEqual({ type: "text", value: " next" });
+  });
+
   it("converts GFM domain-autolinked file names back into file links", () => {
     const autolink: Element = {
       type: "element",

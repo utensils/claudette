@@ -113,6 +113,15 @@ describe("relative file references", () => {
     ]);
   });
 
+  it("recognizes leading at-sign file mentions without accepting emails", () => {
+    expect(detectFileReferences("make a simple edit to @README.md")).toEqual([
+      { start: 22, end: 32, path: "README.md", text: "@README.md" },
+    ]);
+    expect(isLikelyRelativeFileReference("@README.md")).toBe(true);
+    expect(detectFileReferences("email dev@example.com")).toEqual([]);
+    expect(isLikelyRelativeFileReference("dev@example.com")).toBe(false);
+  });
+
   it("recognizes nested workspace-relative source paths", () => {
     expect(detectFileReferences("open src/ui/src/utils/markdown.ts")).toEqual([
       {
@@ -128,6 +137,24 @@ describe("relative file references", () => {
         path: "./src/main.rs",
       },
     ]);
+  });
+
+  it("keeps line and range suffixes on relative file references", () => {
+    expect(detectFileReferences("open src/main.rs:10")).toEqual([
+      {
+        start: 5,
+        end: 19,
+        path: "src/main.rs:10",
+      },
+    ]);
+    expect(detectFileReferences("see README.md:2:3-4:5")).toEqual([
+      {
+        start: 4,
+        end: 21,
+        path: "README.md:2:3-4:5",
+      },
+    ]);
+    expect(isLikelyRelativeFileReference("README.md:10")).toBe(true);
   });
 
   it("does not mistake domain-like text for a workspace file", () => {

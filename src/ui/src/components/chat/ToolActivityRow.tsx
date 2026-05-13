@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useReducer, type MouseEvent } from "react";
+import { useCallback, useEffect, useMemo, useReducer, type MouseEvent } from "react";
 import { ChevronRight, WandSparkles } from "lucide-react";
 import type { ToolActivity } from "../../stores/useAppStore";
 import { useAppStore } from "../../stores/useAppStore";
@@ -15,6 +15,7 @@ import {
 } from "./editActivitySummary";
 import { resolveToolSummary } from "./toolMetadata";
 import { isSkillActivity, skillActivationName } from "./toolActivityGroups";
+import type { DiffLayer } from "../../types/diff";
 
 interface ToolActivityRowProps {
   activity: ToolActivity;
@@ -94,6 +95,12 @@ function GenericToolActivityRow({
   const expanded = useAppStore((s) => !!s.expandedToolUseIds[activity.toolUseId]);
   const toggleToolUseExpanded = useAppStore((s) => s.toggleToolUseExpanded);
   const extendedToolCallOutput = useAppStore((s) => s.extendedToolCallOutput);
+  const selectedWorkspaceId = useAppStore((s) => s.selectedWorkspaceId);
+  const diffFiles = useAppStore((s) => s.diffFiles);
+  const diffStagedFiles = useAppStore((s) => s.diffStagedFiles);
+  const openDiffTab = useAppStore((s) => s.openDiffTab);
+  const openFileTab = useAppStore((s) => s.openFileTab);
+  const setDiffSelectedCommitHash = useAppStore((s) => s.setDiffSelectedCommitHash);
   const editSummary = summarizeToolActivityEdit(activity);
   const summary = activitySummaryText(activity);
   const details = useMemo(() => toolDetails(activity), [activity]);
@@ -114,6 +121,29 @@ function GenericToolActivityRow({
       cancelled = true;
     };
   }, [cachedHtml, details.content, details.lang, expanded, extendedToolCallOutput]);
+
+  const openEditedFile = useCallback(
+    (filePath: string) => {
+      if (!selectedWorkspaceId) return;
+      const relativePath = relativizePath(filePath, worktreePath).replace(/\\/g, "/");
+      const diffTarget = findDiffTarget(relativePath, diffFiles, diffStagedFiles);
+      if (diffTarget) {
+        openDiffTab(selectedWorkspaceId, diffTarget.path, diffTarget.layer);
+        setDiffSelectedCommitHash(null);
+        return;
+      }
+      openFileTab(selectedWorkspaceId, relativePath);
+    },
+    [
+      diffFiles,
+      diffStagedFiles,
+      openDiffTab,
+      openFileTab,
+      selectedWorkspaceId,
+      setDiffSelectedCommitHash,
+      worktreePath,
+    ],
+  );
 
   const label = `${expanded ? "Collapse" : "Expand"} ${activity.toolName} input details`;
 
@@ -142,6 +172,7 @@ function GenericToolActivityRow({
             summary={editSummary}
             searchQuery={searchQuery}
             worktreePath={worktreePath}
+            onOpenFile={openEditedFile}
           />
         ) : (
           <span
@@ -188,6 +219,27 @@ function activitySummaryText(activity: ToolActivity): string {
     extractToolSummary(activity.toolName, activity.inputJson) ||
     ""
   );
+}
+
+function findDiffTarget(
+  path: string,
+  diffFiles: ReturnType<typeof useAppStore.getState>["diffFiles"],
+  diffStagedFiles: ReturnType<typeof useAppStore.getState>["diffStagedFiles"],
+): { path: string; layer: DiffLayer | null } | null {
+  if (diffStagedFiles) {
+    const layered: Array<[DiffLayer, typeof diffFiles]> = [
+      ["unstaged", diffStagedFiles.unstaged],
+      ["staged", diffStagedFiles.staged],
+      ["untracked", diffStagedFiles.untracked],
+      ["committed", diffStagedFiles.committed],
+    ];
+    for (const [layer, files] of layered) {
+      const file = files.find((item) => item.path === path);
+      if (file) return { path: file.path, layer };
+    }
+  }
+  const file = diffFiles.find((item) => item.path === path);
+  return file ? { path: file.path, layer: null } : null;
 }
 
 function toolDetails(activity: ToolActivity): ToolDetails {
