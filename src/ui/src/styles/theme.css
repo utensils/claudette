@@ -1358,30 +1358,12 @@ select:disabled {
 }
 
 /*
- * Shiki dual-theme code highlighting.
+ * Shiki code highlighting.
  *
- * The Shiki worker emits each token span with both `--shiki-light` and
- * `--shiki-dark` CSS variables and no inline `color`. The rules below pick
- * the correct variable based on the active color scheme. Built-in themes
- * are matched by `[data-theme]`; user themes signal their scheme via an
- * inline `color-scheme: light|dark` on `<html>` (set in theme.ts:applyTheme).
- *
- * Selector targets only the Shiki-emitted token spans (those carrying the
- * `--shiki-light` custom property inline) regardless of ancestor. The
- * diff viewer mounts Shiki HTML directly inside a `<span>` (no
- * `<pre><code>` wrapper), so an ancestor-constrained selector misses
- * those tokens and they render with no token color. The line-wrapper
- * spans Shiki also emits don't carry the inline property and so
- * harmlessly miss this rule and inherit `currentColor`. Using the
- * inline-style attribute selector keeps the rule independent of
- * CSS-module class hashing.
+ * The Shiki worker uses a single Claudette theme whose foreground colors
+ * are `var(--syntax-*)` references (see styles/shikiClaudetteTheme.ts).
+ * Token spans render with inline `style="color: var(--syntax-keyword)"`
+ * etc., which the cascade resolves per-theme — no JS-side dual-theme
+ * switching needed. Light/dark adaptation comes from each theme's
+ * `--syntax-*` declarations in this file.
  */
-[style*="--shiki-light"] {
-  color: var(--shiki-dark);
-}
-[data-theme="default-light"] [style*="--shiki-light"],
-[data-theme="rose-pine-dawn"] [style*="--shiki-light"],
-[data-theme="solarized-light"] [style*="--shiki-light"],
-html[style*="color-scheme: light"] [style*="--shiki-light"] {
-  color: var(--shiki-light);
-}
