@@ -43,6 +43,7 @@ export function GitSettings() {
   const [ciAutoFix, setCiAutoFix] = useState(false);
   const [ciPrompt, setCiPrompt] = useState("");
   const [ciCooldown, setCiCooldown] = useState("300");
+  const [persistedCiCooldown, setPersistedCiCooldown] = useState("300");
   const [ciModel, setCiModel] = useState("");
   const [ciModelProvider, setCiModelProvider] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -84,7 +85,12 @@ export function GitSettings() {
       .then((val) => { if (val) setCiPrompt(val); })
       .catch(() => {});
     getAppSetting("ci_auto_fix_cooldown_seconds")
-      .then((val) => { if (val) setCiCooldown(val); })
+      .then((val) => {
+        if (val) {
+          setCiCooldown(val);
+          setPersistedCiCooldown(val);
+        }
+      })
       .catch(() => {});
     getAppSetting("ci_auto_fix_model")
       .then((val) => { if (val) setCiModel(val); })
@@ -194,7 +200,9 @@ export function GitSettings() {
     try {
       setError(null);
       await setAppSetting("ci_auto_fix_cooldown_seconds", String(clamped));
+      setPersistedCiCooldown(String(clamped));
     } catch (e) {
+      setCiCooldown(persistedCiCooldown);
       setError(String(e));
     }
   };

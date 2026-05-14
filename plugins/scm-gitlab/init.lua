@@ -161,16 +161,21 @@ function M.ci_failure_logs(args)
                 "ci", "trace", tostring(job.id),
                 "--branch", args.branch,
             })
-            local log_text = trace.stdout or ""
-            if #log_text > MAX_LOG_CHARS then
-                log_text = string.sub(log_text, -MAX_LOG_CHARS)
-            end
-            if #log_text > 0 then
-                table.insert(logs, {
-                    check_name = job.name,
-                    log = log_text,
-                    url = job.web_url,
-                })
+            if trace.code ~= 0 then
+                host.log("warn", "ci_failure_logs failed for GitLab job "
+                    .. tostring(job.id) .. ": " .. tostring(trace.stderr or ""))
+            else
+                local log_text = trace.stdout or ""
+                if #log_text > MAX_LOG_CHARS then
+                    log_text = string.sub(log_text, -MAX_LOG_CHARS)
+                end
+                if #log_text > 0 then
+                    table.insert(logs, {
+                        check_name = job.name,
+                        log = log_text,
+                        url = job.web_url,
+                    })
+                end
             end
         end
     end

@@ -212,16 +212,21 @@ function M.ci_failure_logs(args)
             local result = host.exec("gh", {
                 "run", "view", tostring(run.databaseId), "--log-failed",
             })
-            local log_text = result.stdout or ""
-            if #log_text > MAX_LOG_CHARS then
-                log_text = string.sub(log_text, -MAX_LOG_CHARS)
-            end
-            if #log_text > 0 then
-                table.insert(logs, {
-                    check_name = run.name,
-                    log = log_text,
-                    url = run.url,
-                })
+            if result.code ~= 0 then
+                host.log("warn", "ci_failure_logs failed for GitHub run "
+                    .. tostring(run.databaseId) .. ": " .. tostring(result.stderr or ""))
+            else
+                local log_text = result.stdout or ""
+                if #log_text > MAX_LOG_CHARS then
+                    log_text = string.sub(log_text, -MAX_LOG_CHARS)
+                end
+                if #log_text > 0 then
+                    table.insert(logs, {
+                        check_name = run.name,
+                        log = log_text,
+                        url = run.url,
+                    })
+                end
             end
         end
     end
