@@ -2,7 +2,12 @@
 
 .statsStrip {
   display: grid;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
+  /* auto-fit lets the strip step down 6 → 5 → 4 → 3 → 2 → 1 as the
+     dashboard panel narrows (driven by window size OR sidebar drag),
+     instead of jumping straight from 6 cols to 2 at a single viewport
+     breakpoint. 160px floor keeps the tile values legible at the bottom
+     of the step ladder. */
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
   gap: 12px;
   padding: 12px 20px;
   border-bottom: 1px solid var(--divider);
@@ -14,12 +19,17 @@
   display: flex;
   flex-direction: column;
   justify-content: space-between;
+  min-width: 0;
   min-height: 76px;
   padding: 10px 14px;
   border: 1px solid var(--divider);
   border-radius: 8px;
   background: var(--hover-bg-subtle);
   overflow: hidden;
+  /* Each tile is its own inline-size container so `.tileValue`'s
+     clamp() can reference the tile's own width (`cqi`) instead of the
+     viewport — values scale down before they clip. */
+  container-type: inline-size;
 }
 
 .tileLabel {
@@ -32,10 +42,18 @@
 
 .tileValue {
   font-family: var(--font-mono);
-  font-size: 22px;
+  /* Scales 16px → 22px with tile width. At the 160px auto-fit floor a
+     22px value clipped its trailing character ($53.11, +387 -…);
+     clamp() lets it shrink instead. The hard ellipsis below catches
+     anything still too long for the floor (e.g. very large totals). */
+  font-size: clamp(16px, 9cqi, 22px);
   color: var(--text-primary);
   line-height: 1;
   margin-top: 4px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .tileValueAccent {
@@ -43,9 +61,14 @@
 }
 
 .tileSub {
+  display: block;
   font-size: 11px;
   color: var(--text-muted);
   margin-top: 4px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .tileChart {
@@ -112,17 +135,19 @@
 
 .analyticsGrid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  /* Same auto-fit treatment as `.statsStrip` — the analytics panels
+     pack 4 → 3 → 2 → 1 as the dashboard panel narrows. 220px keeps
+     room for a row label plus its inline progress bar / value pair. */
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
   gap: 12px;
 }
 
 @media (max-width: 1100px) {
-  .analyticsGrid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-  .statsStrip {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
+  /* `.statsStrip` and `.analyticsGrid` no longer need a viewport-based
+     breakpoint — `auto-fit minmax(...)` above handles their column
+     stepping. The rules left here apply to layouts that aren't part of
+     the responsive grid (`.hideNarrow` opts elements out at small
+     viewports; `.leaderRow` collapses extra columns). */
   .hideNarrow {
     display: none;
   }
