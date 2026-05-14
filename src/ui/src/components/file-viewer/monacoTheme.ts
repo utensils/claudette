@@ -64,23 +64,39 @@ export function applyMonacoTheme(monaco: typeof MonacoType): void {
   const removedBg = cssColorToHex(cs.getPropertyValue("--diff-removed-bg").trim()  || (isDark ? "#3a1a1a" : "#ffebee"));
   const addedFg   = cssColorToHex(cs.getPropertyValue("--diff-added-text").trim()  || (isDark ? "#6ccc80" : "#2e7d32"));
   const removedFg = cssColorToHex(cs.getPropertyValue("--diff-removed-text").trim()|| (isDark ? "#f07070" : "#c62828"));
-  const numberFg  = cssColorToHex(cs.getPropertyValue("--badge-plan").trim()       || (isDark ? "#8cb8e0" : "#4a8ab0"));
+
+  // Syntax tokens — fall back to the legacy `--badge-*` / `--accent-*`
+  // hexes if the new --syntax-* family hasn't loaded yet (e.g. early in
+  // first paint, before theme.css is applied). The fallbacks match :root
+  // in theme.css.
+  const syntaxKeyword  = cssColorToHex(cs.getPropertyValue("--syntax-keyword").trim()  || (isDark ? "#c0a0f0" : "#6848a8"));
+  const syntaxString   = cssColorToHex(cs.getPropertyValue("--syntax-string").trim()   || (isDark ? "#6ccc80" : "#1a7f37"));
+  const syntaxNumber   = cssColorToHex(cs.getPropertyValue("--syntax-number").trim()   || (isDark ? "#f0a050" : "#c27430"));
+  const syntaxComment  = cssColorToHex(cs.getPropertyValue("--syntax-comment").trim()  || (isDark ? "#686058" : "#b8afa5"));
+  const syntaxFunction = cssColorToHex(cs.getPropertyValue("--syntax-function").trim() || (isDark ? "#8cb8e0" : "#3d6da0"));
+  const syntaxType     = cssColorToHex(cs.getPropertyValue("--syntax-type").trim()     || (isDark ? "#e0c050" : "#a07820"));
+  const syntaxVariable = cssColorToHex(cs.getPropertyValue("--syntax-variable").trim() || (isDark ? "#f07070" : "#c42020"));
+  const syntaxOperator = cssColorToHex(cs.getPropertyValue("--syntax-operator").trim() || (isDark ? "#6cb6ff" : "#1d6fa5"));
   const transparent = withAlpha(bg, "00");
 
   monaco.editor.defineTheme("claudette", {
     base,
     inherit: true,
     rules: [
-      // Inherit all token colours from vs-dark/vs; only nudge a handful to
-      // match Claudette's palette so the editor feels native rather than
-      // jarring against the surrounding UI chrome.
-      { token: "comment",          foreground: token6(dim),       fontStyle: "italic" },
-      { token: "keyword",          foreground: token6(accent) },
-      { token: "string",           foreground: token6(addedFg) },
-      { token: "string.escape",    foreground: token6(accent) },
-      { token: "number",           foreground: token6(numberFg) },
-      { token: "regexp",           foreground: token6(removedFg) },
-      { token: "delimiter",        foreground: token6(muted) },
+      // Token rules use the canonical --syntax-* family so Monaco stays in
+      // visual lockstep with Shiki-rendered code blocks in chat. Inherits
+      // unspecified tokens from vs-dark/vs so we don't have to enumerate
+      // every grammar's scope set.
+      { token: "comment",          foreground: token6(syntaxComment), fontStyle: "italic" },
+      { token: "keyword",          foreground: token6(syntaxKeyword) },
+      { token: "string",           foreground: token6(syntaxString) },
+      { token: "string.escape",    foreground: token6(syntaxOperator) },
+      { token: "number",           foreground: token6(syntaxNumber) },
+      { token: "regexp",           foreground: token6(syntaxOperator) },
+      { token: "type",             foreground: token6(syntaxType) },
+      { token: "function",         foreground: token6(syntaxFunction) },
+      { token: "variable",         foreground: token6(syntaxVariable) },
+      { token: "delimiter",        foreground: token6(syntaxOperator) },
     ],
     colors: {
       // Editor surface
