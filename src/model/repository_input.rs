@@ -103,9 +103,10 @@ pub fn validate_schema(schema: &[RepositoryInputField]) -> Result<(), String> {
 /// to persist, or an error explaining why it was rejected.
 ///
 /// Boolean: accepts `"true"`/`"false"` (lowercase), canonicalizes to those.
-/// Number: must parse as `f64`; min/max checked when set; canonical form
-/// is the original string trimmed (we don't reformat e.g. "1.0" → "1").
-/// String: any value accepted; whitespace preserved.
+/// Number: must parse as a finite `f64`; min/max checked when set; canonical
+/// form is the original string trimmed (we don't reformat e.g. "1.0" → "1").
+/// String: any non-empty value accepted (whitespace-only is rejected so the
+/// CLI / IPC path can't silently bypass the modal's "required" contract).
 pub fn coerce_value(field: &RepositoryInputField, raw: &str) -> Result<String, String> {
     match field {
         RepositoryInputField::Boolean { key, .. } => match raw {
@@ -119,6 +120,15 @@ pub fn coerce_value(field: &RepositoryInputField, raw: &str) -> Result<String, S
             let parsed: f64 = trimmed
                 .parse()
                 .map_err(|_| format!("Input {key:?} must be a number, got {raw:?}."))?;
+            // `f64::from_str` happily accepts "NaN" / "inf" / "-inf", and the
+            // `<` / `>` comparisons against NaN are always false — without
+            // this check, a CLI/IPC caller could persist `NaN` and the scripts
+            // downstream would see literal "NaN". Frontend already rejects.
+            if !parsed.is_finite() {
+                return Err(format!(
+                    "Input {key:?} must be a finite number, got {raw:?}."
+                ));
+            }
             if let Some(lo) = min
                 && parsed < *lo
             {
@@ -131,7 +141,16 @@ pub fn coerce_value(field: &RepositoryInputField, raw: &str) -> Result<String, S
             }
             Ok(trimmed.to_string())
         }
-        RepositoryInputField::String { .. } => Ok(raw.to_string()),
+        RepositoryInputField::String { key, .. } => {
+            // Match the frontend's "required" contract — every declared input
+            // must carry a non-blank value. Without this, IPC/CLI callers can
+            // bypass the modal and persist `""`, which would defeat the
+            // declaration entirely.
+            if raw.trim().is_empty() {
+                return Err(format!("Input {key:?} cannot be blank."));
+            }
+            Ok(raw.to_string())
+        }
     }
 }
 
@@ -209,7 +228,7 @@ mod tests {
     }
 
     #[test]
-    fn coerce_string_accepts_anything() {
+    fn coerce_string_rejects_blank_and_whitespace() {
         let field = RepositoryInputField::String {
             key: "S".into(),
             label: "S".into(),
@@ -218,8 +237,33 @@ mod tests {
             placeholder: None,
         };
         assert_eq!(coerce_value(&field, "PROJ-123").unwrap(), "PROJ-123");
-        assert_eq!(coerce_value(&field, "").unwrap(), "");
+        // Whitespace-padded values are preserved verbatim — the user may
+        // have meant the leading/trailing spaces. Only purely blank input
+        // is rejected.
         assert_eq!(coerce_value(&field, "  spaces  ").unwrap(), "  spaces  ");
+        assert!(coerce_value(&field, "").is_err());
+        assert!(coerce_value(&field, "   ").is_err());
+        assert!(coerce_value(&field, "\t\n").is_err());
+    }
+
+    #[test]
+    fn coerce_number_rejects_non_finite() {
+        let field = RepositoryInputField::Number {
+            key: "N".into(),
+            label: "N".into(),
+            description: None,
+            default: None,
+            min: None,
+            max: None,
+            step: None,
+            unit: None,
+        };
+        // `f64::from_str` parses these — the explicit `is_finite` check is
+        // what makes the backend match the frontend's rejection.
+        assert!(coerce_value(&field, "NaN").is_err());
+        assert!(coerce_value(&field, "inf").is_err());
+        assert!(coerce_value(&field, "-inf").is_err());
+        assert!(coerce_value(&field, "Infinity").is_err());
     }
 
     #[test]

@@ -252,6 +252,14 @@ async fn fork_after_worktree(
     if let Some(o) = db.lookup_workspace_sort_order(&new_ws.id)? {
         new_ws.sort_order = o;
     }
+    // `insert_workspace` only writes the original columns — `input_values`
+    // lives in its own write path. Without this, a fork would return a
+    // struct carrying the source's inputs but the DB row would be NULL,
+    // and every subsequent terminal/agent/script env merge would read
+    // nothing for those keys.
+    if let Some(values) = new_ws.input_values.as_ref() {
+        db.set_workspace_input_values(&new_ws.id, Some(values))?;
+    }
 
     copy_history(db, &source_ws.id, &new_ws.id, checkpoint)?;
 

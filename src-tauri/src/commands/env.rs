@@ -152,6 +152,28 @@ fn enabled_key(repo_id: &str, plugin_name: &str) -> String {
 }
 
 /// Load the set of env-provider plugin names that have been explicitly
+/// disabled for a repo. Absent settings = enabled (default), so the
+/// returned set contains only names with the setting set to `"false"`.
+pub(crate) fn load_disabled_providers(db: &Database, repo_id: &str) -> HashSet<String> {
+    // We list all app settings with the repo+env_provider prefix.
+    // Pattern is precise; rusqlite does this cheaply via LIKE.
+    let prefix = format!("repo:{repo_id}:env_provider:");
+    db.list_app_settings_with_prefix(&prefix)
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|(key, value)| {
+            if value == "false" {
+                // key = "repo:{repo_id}:env_provider:{plugin_name}:enabled"
+                let rest = key.strip_prefix(&prefix)?;
+                let plugin_name = rest.strip_suffix(":enabled")?;
+                Some(plugin_name.to_string())
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
 /// Layer a workspace's stored input values onto an already-resolved env.
 ///
 /// Sits at "after env-provider plugins, before workspace-context vars" in the
@@ -180,28 +202,6 @@ pub(crate) fn merge_workspace_input_env(
             );
         }
     }
-}
-
-/// disabled for a repo. Absent settings = enabled (default), so the
-/// returned set contains only names with the setting set to `"false"`.
-pub(crate) fn load_disabled_providers(db: &Database, repo_id: &str) -> HashSet<String> {
-    // We list all app settings with the repo+env_provider prefix.
-    // Pattern is precise; rusqlite does this cheaply via LIKE.
-    let prefix = format!("repo:{repo_id}:env_provider:");
-    db.list_app_settings_with_prefix(&prefix)
-        .unwrap_or_default()
-        .into_iter()
-        .filter_map(|(key, value)| {
-            if value == "false" {
-                // key = "repo:{repo_id}:env_provider:{plugin_name}:enabled"
-                let rest = key.strip_prefix(&prefix)?;
-                let plugin_name = rest.strip_suffix(":enabled")?;
-                Some(plugin_name.to_string())
-            } else {
-                None
-            }
-        })
-        .collect()
 }
 
 /// Strip sources whose plugin is globally disabled in the Plugins

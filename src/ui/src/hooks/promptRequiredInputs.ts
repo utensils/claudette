@@ -18,6 +18,13 @@ export interface PromptResult {
    *  to `createWorkspace`. `undefined` ⇒ no prompt was needed (repo has
    *  no declared schema) — callers should pass `null` to the Tauri call. */
   values: Record<string, string> | null | undefined;
+  /** `true` when this call opened a modal that's still visible to the user.
+   *  The orchestrator owns closing it (either by `openModal(...)` to a
+   *  replacement, or an explicit `closeModal()` when no follow-up modal
+   *  appears). When `values` is `null` (cancel) the modal closed itself
+   *  before resolving, so this is `false`. When `values` is `undefined`
+   *  (no schema) no modal was opened at all, so this is also `false`. */
+  modalStillOpen: boolean;
 }
 
 /** Returns `undefined` immediately when the repo declares no inputs, so the
@@ -28,7 +35,7 @@ export async function promptRequiredInputsIfDeclared(
   const repo = useAppStore.getState().repositories.find((r) => r.id === repoId);
   const schema = repo?.required_inputs ?? null;
   if (!schema || schema.length === 0) {
-    return { values: undefined };
+    return { values: undefined, modalStillOpen: false };
   }
   const values = await new Promise<Record<string, string> | null>((resolve) => {
     useAppStore.getState().openModal("requiredInputs", {
@@ -37,5 +44,8 @@ export async function promptRequiredInputsIfDeclared(
       resolve,
     });
   });
-  return { values };
+  // On submit, the modal calls `resolve` but leaves itself mounted so the
+  // orchestrator can replace it atomically. On cancel, the modal calls
+  // `closeModal()` itself before resolving with `null`.
+  return { values, modalStillOpen: values !== null };
 }
