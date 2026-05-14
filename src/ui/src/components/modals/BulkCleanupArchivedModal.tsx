@@ -269,6 +269,7 @@ export function BulkCleanupArchivedModal() {
         status_line: "",
         created_at: "",
         sort_order: 0,
+        input_values: null,
         remote_connection_id: null,
       } satisfies Workspace;
     });

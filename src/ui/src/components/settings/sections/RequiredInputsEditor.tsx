@@ -187,54 +187,74 @@ export function RequiredInputsEditor({ repoId }: RequiredInputsEditorProps) {
   const rowsRef = useRef(rows);
   rowsRef.current = rows;
 
-  const flushSave = useCallback(async () => {
-    const current = rowsRef.current;
-    // Drop rows whose key is still empty — they're WIP placeholders the
-    // user hasn't filled in yet. Surfacing a "key required" error for
-    // those would be noisy on every keystroke.
-    const candidates = current.filter((r) => r.key.trim() !== "");
-    const seen = new Set<string>();
-    const fields: RepositoryInputField[] = [];
-    for (const row of candidates) {
-      const result = rowToField(row);
-      if (!result.ok) {
-        setError(result.error);
-        return;
+  // `flushSave` takes the (repoId, rows) snapshot explicitly so the
+  // queued timer can save against the data and target it was scheduled
+  // with, not whatever is current at fire time. Without that, switching
+  // repos within the debounce window would let the timer write the new
+  // repo's rows back into the previous repo's `required_inputs` —
+  // `rowsRef.current` gets reset by the repo-change effect, but the timer
+  // still carries the previous repo id in its captured closure.
+  const flushSave = useCallback(
+    async (targetRepoId: string, rowsToSave: EditorRow[]) => {
+      // Drop rows whose key is still empty — they're WIP placeholders the
+      // user hasn't filled in yet. Surfacing a "key required" error for
+      // those would be noisy on every keystroke.
+      const candidates = rowsToSave.filter((r) => r.key.trim() !== "");
+      const seen = new Set<string>();
+      const fields: RepositoryInputField[] = [];
+      for (const row of candidates) {
+        const result = rowToField(row);
+        if (!result.ok) {
+          setError(result.error);
+          return;
+        }
+        if (seen.has(result.field.key)) {
+          setError(`Duplicate input name "${result.field.key}".`);
+          return;
+        }
+        seen.add(result.field.key);
+        fields.push(result.field);
       }
-      if (seen.has(result.field.key)) {
-        setError(`Duplicate input name "${result.field.key}".`);
-        return;
+      try {
+        setError(null);
+        await updateRepositoryRequiredInputs(targetRepoId, fields);
+        updateRepo(targetRepoId, {
+          required_inputs: fields.length === 0 ? null : fields,
+        });
+      } catch (e) {
+        setError(String(e));
       }
-      seen.add(result.field.key);
-      fields.push(result.field);
-    }
-    try {
-      setError(null);
-      await updateRepositoryRequiredInputs(repoId, fields);
-      updateRepo(repoId, {
-        required_inputs: fields.length === 0 ? null : fields,
-      });
-    } catch (e) {
-      setError(String(e));
-    }
-  }, [repoId, updateRepo]);
+    },
+    [updateRepo],
+  );
 
   const queueSave = useCallback(() => {
     if (saveTimer.current) clearTimeout(saveTimer.current);
+    // Snapshot the target repo and rows at schedule time. The timer
+    // callback uses these directly so a subsequent repo switch (which
+    // resets `rowsRef.current` to the new repo's data) can't make the
+    // pending save write the wrong rows to the wrong repo.
+    const capturedRepoId = repoId;
+    const capturedRows = rowsRef.current;
     saveTimer.current = setTimeout(() => {
-      void flushSave();
+      saveTimer.current = null;
+      void flushSave(capturedRepoId, capturedRows);
     }, 400);
-  }, [flushSave]);
+  }, [flushSave, repoId]);
 
   // Flush on unmount so a quick edit + tab-switch doesn't lose changes.
+  // We also flush on `repoId` change so the *previous* repo's pending
+  // edits land before we switch — the timer is cleared either way.
   useEffect(() => {
+    const previousRepoId = repoId;
     return () => {
-      if (saveTimer.current) {
+      if (saveTimer.current !== null) {
         clearTimeout(saveTimer.current);
-        void flushSave();
+        saveTimer.current = null;
+        void flushSave(previousRepoId, rowsRef.current);
       }
     };
-  }, [flushSave]);
+  }, [repoId, flushSave]);
 
   const updateRow = useCallback(
     (rowId: string, patch: Partial<EditorRow>) => {
