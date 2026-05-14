@@ -135,7 +135,7 @@
   "models_codex_desc": "Mostra suporte nativo ao app-server do Codex CLI e modelos Codex no seletor do chat.",
   "models_codex_unavailable_desc": "O suporte a Codex não foi compilado nesta build.",
   "models_codex_aria": "Codex",
-  "models_backends_desc": "Configura provedores locais e compatíveis com OpenAI para o Claude Code.",
+  "models_backends_desc": "Configura Claude Code, Codex e provedores locais ou compatíveis com OpenAI.",
   "models_backend_enabled": "Ativado",
   "models_backend_base_url": "URL base",
   "models_backend_default_model": "Modelo padrão",

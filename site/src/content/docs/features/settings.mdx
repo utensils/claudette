@@ -12,7 +12,6 @@ Open settings with `⌘/Ctrl + ,` or from the sidebar. Settings are organized in
 | Worktree base directory | Directory where new workspaces are created | `~/.claudette/workspaces` |
 | System tray | Enable/disable system tray integration | Enabled |
 | Archive on merge | Automatically archive a workspace when its pull request is merged. See [SCM Providers](/claudette/features/scm-providers/). | Off |
-| Claude Code sign-in | Checks local Claude Code sign-in state with the official CLI. The refresh button performs an authenticated CLI validation request; sign-in runs `claude auth login`, streams progress back into Claudette, and accepts the pasted browser code when Claude Code asks for one. Used by chat and Usage-panel auth failures. | — |
 
 ## Apps
 
@@ -39,7 +38,8 @@ Default values applied to all new agent sessions. Per-workspace overrides are av
 | Alternative Claude Code backends | Show Ollama, LM Studio, OpenAI API, and custom providers in Settings > Models and the chat model picker. | On |
 | Codex | Show native `codex app-server --listen stdio://` support and seed Codex models into the picker. Independent from Alternative Claude Code backends. | On |
 | Default backend | Provider used for new chats. | `anthropic` |
-| Agent backend cards | Enable, test, authenticate, and refresh model lists for built-in providers such as Ollama, LM Studio, OpenAI API, and Codex. | Provider-specific |
+| Claude Code | Checks local Claude Code sign-in state with the official CLI. The refresh button performs an authenticated CLI validation request; sign-in runs `claude auth login`, streams progress back into Claudette, and accepts the pasted browser code when Claude Code asks for one. Used by chat and Usage-panel auth failures. | — |
+| Agent backend cards | Enable, test, authenticate, and refresh model lists for built-in providers such as Claude Code, Codex, Ollama, LM Studio, and OpenAI API. | Provider-specific |
 
 See [Agent Configuration](/claudette/features/agent-configuration/) for detailed descriptions of each option.
 

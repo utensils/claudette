@@ -135,7 +135,7 @@
   "models_codex_desc": "Codex CLI app-server のネイティブ対応と Codex モデルをチャットピッカーに表示します。",
   "models_codex_unavailable_desc": "このビルドには Codex 対応が含まれていません。",
   "models_codex_aria": "Codex",
-  "models_backends_desc": "Claude Code 用のローカルおよび OpenAI 互換プロバイダーを設定します。",
+  "models_backends_desc": "Claude Code、Codex、ローカルまたは OpenAI 互換プロバイダーを設定します。",
   "models_backend_enabled": "有効",
   "models_backend_base_url": "ベース URL",
   "models_backend_default_model": "既定のモデル",

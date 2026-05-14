@@ -135,7 +135,7 @@
   "models_codex_desc": "在聊天选择器中显示原生 Codex CLI app-server 支持和 Codex 模型。",
   "models_codex_unavailable_desc": "此构建未编译 Codex 支持。",
   "models_codex_aria": "Codex",
-  "models_backends_desc": "配置 Claude Code 的本地和 OpenAI 兼容提供方。",
+  "models_backends_desc": "配置 Claude Code、Codex，以及本地或 OpenAI 兼容提供方。",
   "models_backend_enabled": "已启用",
   "models_backend_base_url": "基础 URL",
   "models_backend_default_model": "默认模型",

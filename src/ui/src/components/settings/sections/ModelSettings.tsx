@@ -31,6 +31,7 @@ import {
   resolveCodexBackendMigrationModel,
 } from "../codexBackendMigration";
 import { shouldShowBackendTestButton } from "../agentBackendStartupRefresh";
+import { ClaudeCodeAuthSetting } from "../../auth/ClaudeCodeAuthSetting";
 import styles from "../Settings.module.css";
 
 export function ModelSettings() {
@@ -132,6 +133,10 @@ export function ModelSettings() {
         return alternativeBackendsEnabled;
       }),
     [agentBackends, alternativeBackendsEnabled, experimentalCodexEnabled],
+  );
+  const anthropicBackend = useMemo(
+    () => agentBackends.find((backend) => backend.id === "anthropic") ?? null,
+    [agentBackends],
   );
   const defaultModelValue = `${defaultBackend}/${defaultModel}`;
 
@@ -606,8 +611,9 @@ export function ModelSettings() {
         </div>
       </div>
 
-      {visibleBackends.length > 0 && (
+      {(anthropicBackend || visibleBackends.length > 0) && (
         <BackendSettingsPanel
+          anthropicBackend={anthropicBackend}
           backends={visibleBackends}
           onBackends={setAgentBackends}
         />
@@ -617,9 +623,11 @@ export function ModelSettings() {
 }
 
 function BackendSettingsPanel({
+  anthropicBackend,
   backends,
   onBackends,
 }: {
+  anthropicBackend: AgentBackendConfig | null;
   backends: AgentBackendConfig[];
   onBackends: (backends: AgentBackendConfig[]) => void;
 }) {
@@ -634,6 +642,7 @@ function BackendSettingsPanel({
           </div>
         </div>
       </div>
+      {anthropicBackend && <ClaudeCodeAuthSetting />}
       {backends.filter((b) => b.id !== "anthropic").map((backend) => (
         <BackendCard
           key={backend.id}
