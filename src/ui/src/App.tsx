@@ -24,7 +24,7 @@ import {
 import { AppLayout } from "./components/layout/AppLayout";
 import {
   FIRST_CLASS_BACKENDS_PROMOTION_KEY,
-  planExperimentalBackendGateLoad,
+  planExperimentalBackendGateLoadFromResults,
 } from "./components/settings/codexBackendMigration";
 import { refreshStartupCodexBackends } from "./components/settings/agentBackendStartupRefresh";
 import { findLeafByPtyId } from "./stores/terminalPaneTree";
@@ -396,15 +396,13 @@ function App() {
         if (promotionResult.status === "rejected") {
           console.error("Failed to load backend promotion setting:", promotionResult.reason);
         }
-        const gatePlan = planExperimentalBackendGateLoad({
+        const gatePlan = planExperimentalBackendGateLoadFromResults({
           alternativeBackendsCompiled: flags.alternative_backends_compiled,
-          alternativeBackendsSetting:
-            settingResult.status === "fulfilled" ? settingResult.value : null,
-          experimentalCodexSetting:
-            codexSettingResult.status === "fulfilled" ? codexSettingResult.value : null,
-          promotionSetting:
-            promotionResult.status === "fulfilled" ? promotionResult.value : null,
+          alternativeBackendsSetting: settingResult,
+          experimentalCodexSetting: codexSettingResult,
+          promotionSetting: promotionResult,
         });
+        if (!gatePlan) return;
         setAlternativeBackendsEnabled(gatePlan.alternativeBackendsEnabled);
         setExperimentalCodexEnabled(gatePlan.experimentalCodexEnabled);
         if (gatePlan.shouldPersistPromotion) {

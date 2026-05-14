@@ -54,6 +54,10 @@ export interface ExperimentalBackendGateLoadPlan {
   shouldPersistPromotion: boolean;
 }
 
+type GateSettingLoad =
+  | { status: "fulfilled"; value: string | null }
+  | { status: "rejected"; reason: unknown };
+
 function settingSessionId(key: string, prefix: string): string | null {
   return key.startsWith(prefix) ? key.slice(prefix.length) : null;
 }
@@ -110,6 +114,33 @@ export function planExperimentalBackendGateLoad({
     experimentalCodexEnabled,
     shouldPersistPromotion: false,
   };
+}
+
+export function planExperimentalBackendGateLoadFromResults({
+  alternativeBackendsCompiled,
+  alternativeBackendsSetting,
+  experimentalCodexSetting,
+  promotionSetting,
+}: {
+  alternativeBackendsCompiled: boolean;
+  alternativeBackendsSetting: GateSettingLoad;
+  experimentalCodexSetting: GateSettingLoad;
+  promotionSetting: GateSettingLoad;
+}): ExperimentalBackendGateLoadPlan | null {
+  if (
+    alternativeBackendsSetting.status === "rejected" ||
+    experimentalCodexSetting.status === "rejected" ||
+    promotionSetting.status === "rejected"
+  ) {
+    return null;
+  }
+
+  return planExperimentalBackendGateLoad({
+    alternativeBackendsCompiled,
+    alternativeBackendsSetting: alternativeBackendsSetting.value,
+    experimentalCodexSetting: experimentalCodexSetting.value,
+    promotionSetting: promotionSetting.value,
+  });
 }
 
 export function planCodexBackendGateMigration({

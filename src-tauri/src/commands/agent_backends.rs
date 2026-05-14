@@ -22,6 +22,7 @@ use claudette::agent_backend::{
 };
 use claudette::db::Database;
 use claudette::plugin::{delete_secure_secret, load_secure_secret, save_secure_secret};
+use claudette::process::CommandWindowExt as _;
 
 use crate::state::AppState;
 
@@ -323,7 +324,8 @@ pub async fn launch_codex_login(state: State<'_, AppState>) -> Result<(), String
     let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
     ensure_native_codex_enabled(&db)?;
     let codex_path = resolve_codex_path().await;
-    let mut child = tokio::process::Command::new(codex_path)
+    let mut command = codex_cli_command(codex_path);
+    let mut child = command
         .arg("login")
         .spawn()
         .map_err(|e| format!("Failed to launch `codex login`: {e}"))?;
@@ -1311,7 +1313,8 @@ async fn discover_codex_models() -> Result<Vec<AgentBackendModel>, String> {
     // subscription auth. This experimental backend depends on the CLI debug
     // catalog until Codex publishes a supported discovery surface.
     let codex_path = resolve_codex_path().await;
-    let output = tokio::process::Command::new(codex_path)
+    let mut command = codex_cli_command(codex_path);
+    let output = command
         .args(["debug", "models"])
         .output()
         .await
@@ -1460,7 +1463,8 @@ async fn start_codex_native_control_session() -> Result<CodexAppServerSession, S
 
 async fn codex_login_status() -> Result<String, String> {
     let codex_path = resolve_codex_path().await;
-    let output = tokio::process::Command::new(codex_path)
+    let mut command = codex_cli_command(codex_path);
+    let output = command
         .args(["login", "status"])
         .output()
         .await
@@ -1479,6 +1483,14 @@ async fn codex_login_status() -> Result<String, String> {
     } else {
         Ok(stdout)
     }
+}
+
+fn codex_cli_command(program: impl AsRef<std::ffi::OsStr>) -> tokio::process::Command {
+    let mut command = tokio::process::Command::new(program);
+    command
+        .no_console_window()
+        .env("PATH", claudette::env::enriched_path());
+    command
 }
 
 fn load_codex_auth_material() -> Result<CodexAuthMaterial, String> {
@@ -2929,6 +2941,36 @@ mod tests {
             context_window_tokens: 400_000,
             discovered: true,
         }
+    }
+
+    #[test]
+    fn codex_cli_command_centralizes_windows_safe_background_spawns() {
+        let command = codex_cli_command("codex");
+        assert_eq!(command.as_std().get_program(), "codex");
+        assert!(
+            command
+                .as_std()
+                .get_envs()
+                .any(|(key, value)| key == "PATH" && value.is_some()),
+            "Codex CLI probes should use Claudette's enriched PATH",
+        );
+
+        // Rust does not expose a stable getter for Windows creation flags on
+        // `Command`, so keep a source-level tripwire around the helper that
+        // protects startup refresh, Settings refresh, and login-status probes
+        // from allocating black cmd.exe windows in release builds.
+        let source = include_str!("agent_backends.rs");
+        let helper_start = source
+            .find("fn codex_cli_command")
+            .expect("helper should remain in this module");
+        let helper_end = source[helper_start..]
+            .find("\n}\n\nfn load_codex_auth_material")
+            .expect("helper should stay before auth-material loading")
+            + helper_start;
+        assert!(
+            source[helper_start..helper_end].contains(".no_console_window()"),
+            "Codex CLI helper must suppress Windows console windows",
+        );
     }
 
     #[test]

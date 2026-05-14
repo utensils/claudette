@@ -1868,6 +1868,7 @@ fn copy_image_bytes_to_clipboard(
          [System.Windows.Clipboard]::SetImage($frame)"
     );
     let output = std::process::Command::new("powershell")
+        .no_console_window()
         .args(["-NoProfile", "-NonInteractive", "-Command", &script])
         .output()
         .map_err(|e| format!("failed to run powershell: {e}"))?;

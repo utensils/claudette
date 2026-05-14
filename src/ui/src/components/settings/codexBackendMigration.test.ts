@@ -8,6 +8,7 @@ import {
   NATIVE_CODEX_BACKEND,
   planCodexBackendGateMigration,
   planExperimentalBackendGateLoad,
+  planExperimentalBackendGateLoadFromResults,
   resolveCodexBackendMigrationModel,
 } from "./codexBackendMigration";
 
@@ -75,6 +76,17 @@ describe("planExperimentalBackendGateLoad", () => {
     expect(plan.alternativeBackendsEnabled).toBe(false);
     expect(plan.experimentalCodexEnabled).toBe(false);
     expect(plan.shouldPersistPromotion).toBe(false);
+  });
+
+  it("does not promote or persist gates when a settings read fails", () => {
+    const plan = planExperimentalBackendGateLoadFromResults({
+      alternativeBackendsCompiled: true,
+      alternativeBackendsSetting: { status: "rejected", reason: new Error("db busy") },
+      experimentalCodexSetting: { status: "fulfilled", value: "false" },
+      promotionSetting: { status: "fulfilled", value: null },
+    });
+
+    expect(plan).toBeNull();
   });
 });
 
