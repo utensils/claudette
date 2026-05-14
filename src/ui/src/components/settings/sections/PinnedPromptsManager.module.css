@@ -404,7 +404,7 @@
 }
 
 .btnDestructiveText:hover:not(:disabled) {
-  background: var(--error-hover);
+  background: var(--accent-error-hover);
 }
 
 .btnDestructiveFill {

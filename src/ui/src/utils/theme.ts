@@ -48,10 +48,10 @@ const THEMEABLE_VARS = [
   // Status accents — each family is a 5-token group (color, -rgb, -bg, -border, -fg).
   // The -bg/-border/-fg layers derive from -rgb in :root, so a user theme typically
   // only needs to set the base color + -rgb.
-  "accent-success", "accent-success-rgb", "accent-success-bg", "accent-success-border", "accent-success-fg",
-  "accent-warning", "accent-warning-rgb", "accent-warning-bg", "accent-warning-border", "accent-warning-fg",
-  "accent-error", "accent-error-rgb", "accent-error-bg", "accent-error-border", "accent-error-fg",
-  "accent-info", "accent-info-rgb", "accent-info-bg", "accent-info-border", "accent-info-fg",
+  "accent-success", "accent-success-rgb", "accent-success-bg", "accent-success-border", "accent-success-hover", "accent-success-fg",
+  "accent-warning", "accent-warning-rgb", "accent-warning-bg", "accent-warning-border", "accent-warning-hover", "accent-warning-fg",
+  "accent-error", "accent-error-rgb", "accent-error-bg", "accent-error-border", "accent-error-hover", "accent-error-fg",
+  "accent-info", "accent-info-rgb", "accent-info-bg", "accent-info-border", "accent-info-hover", "accent-info-fg",
   // UI-role tokens — neutral plus secondary/tertiary brand accents.
   "accent-neutral",
   "accent-secondary", "accent-secondary-rgb", "accent-secondary-bg", "accent-secondary-border", "accent-secondary-fg",

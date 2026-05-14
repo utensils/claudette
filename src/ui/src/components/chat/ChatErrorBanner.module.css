@@ -35,7 +35,7 @@
 .actionButton {
   appearance: none;
   background: var(--chat-input-bg);
-  border: 1px solid var(--error-border);
+  border: 1px solid var(--accent-error-border);
   border-radius: 6px;
   padding: 4px 10px;
   font-size: 12px;
