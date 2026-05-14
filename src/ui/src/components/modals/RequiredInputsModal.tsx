@@ -103,13 +103,31 @@ export function RequiredInputsModal() {
     resolveRef.current?.(result);
   }, []);
 
-  // Cleanup runs when the modal unmounts — including when something else
-  // (auto-opened missing-CLI modal, env-trust modal racing in) replaces
-  // `activeModal` and yanks us off the DOM. Without this, the orchestrator
-  // stays parked on `await new Promise(...)` forever and the in-flight
-  // creation guard never clears.
+  // Cleanup runs when the modal unmounts. There are two cases to
+  // distinguish:
+  //
+  //   1. Something else replaced `activeModal` (auto-opened missing-CLI
+  //      modal, env-trust modal racing in). The orchestrator would
+  //      otherwise sit on `await new Promise(...)` forever, so we must
+  //      resolve `null` to let it bail. In this case the store's
+  //      `activeModal` has already moved away from "requiredInputs"
+  //      (that's what caused the unmount in the first place).
+  //
+  //   2. React StrictMode's dev-only mount → unmount → remount cycle.
+  //      Here `activeModal` is still "requiredInputs" — the store wasn't
+  //      touched. If we resolved `null` we'd falsely tell the orchestrator
+  //      the user cancelled, it would return, and the user would be
+  //      stuck staring at a "Creating…" modal whose submit no-ops because
+  //      the orchestrator is gone. The remount's fresh `settledRef`
+  //      inherits the same `resolve` from `modalData`, so the second
+  //      mount's submit still reaches the orchestrator.
   useEffect(() => {
     return () => {
+      if (useAppStore.getState().activeModal === "requiredInputs") {
+        // StrictMode pseudo-unmount — the next mount of this same modal
+        // owns the resolver; let it.
+        return;
+      }
       settle(null);
     };
   }, [settle]);
