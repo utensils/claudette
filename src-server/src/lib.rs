@@ -122,24 +122,11 @@ pub async fn run(options: ServerOptions) -> Result<(), Box<dyn std::error::Error
         "plugins discovered"
     );
 
-    // Hydrate global enable/disable + per-plugin setting overrides from
-    // app_settings, exactly as the Tauri binary does. Failures are
+    // Hydrate enable/disable + setting overrides from app_settings,
+    // matching the Tauri binary's startup behavior. Failures are
     // non-fatal: the registry just runs with manifest defaults.
-    if let Ok(db) = claudette::db::Database::open(&db_path)
-        && let Ok(entries) = db.list_app_settings_with_prefix("plugin:")
-    {
-        for (key, value) in entries {
-            let rest = &key["plugin:".len()..];
-            if let Some((plugin_name, tail)) = rest.split_once(':') {
-                if tail == "enabled" && value == "false" {
-                    plugins.set_disabled(plugin_name, true);
-                } else if let Some(setting_key) = tail.strip_prefix("setting:")
-                    && let Ok(json_value) = serde_json::from_str::<serde_json::Value>(&value)
-                {
-                    plugins.set_setting(plugin_name, setting_key, Some(json_value));
-                }
-            }
-        }
+    if let Ok(db) = claudette::db::Database::open(&db_path) {
+        hydrate_plugin_registry_from_db(&plugins, &db);
     }
 
     let state = Arc::new(ws::ServerState::new_with_plugins(
@@ -203,5 +190,159 @@ pub async fn run(options: ServerOptions) -> Result<(), Box<dyn std::error::Error
                 }
             }
         });
+    }
+}
+
+fn hydrate_plugin_registry_from_db(
+    plugins: &claudette::plugin_runtime::PluginRegistry,
+    db: &claudette::db::Database,
+) {
+    if let Ok(entries) = db.list_app_settings_with_prefix("plugin:") {
+        for (key, value) in entries {
+            let rest = &key["plugin:".len()..];
+            if let Some((plugin_name, tail)) = rest.split_once(':') {
+                if tail == "enabled" && value == "false" {
+                    plugins.set_disabled(plugin_name, true);
+                } else if let Some(setting_key) = tail.strip_prefix("setting:")
+                    && let Ok(json_value) = serde_json::from_str::<serde_json::Value>(&value)
+                {
+                    plugins.set_setting(plugin_name, setting_key, Some(json_value));
+                }
+            }
+        }
+    }
+
+    if let Ok(entries) = db.list_app_settings_with_prefix("repo:") {
+        for (key, value) in entries {
+            let rest = &key["repo:".len()..];
+            let Some((repo_id, tail)) = rest.split_once(':') else {
+                continue;
+            };
+            let Some(rest) = tail.strip_prefix("plugin:") else {
+                continue;
+            };
+            let Some((plugin_name, tail)) = rest.split_once(':') else {
+                continue;
+            };
+            if let Some(setting_key) = tail.strip_prefix("setting:")
+                && let Ok(json_value) = serde_json::from_str::<serde_json::Value>(&value)
+            {
+                plugins.set_repo_setting(repo_id, plugin_name, setting_key, Some(json_value));
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::hydrate_plugin_registry_from_db;
+
+    fn write_settings_plugin(dir: &std::path::Path) {
+        let plugin_dir = dir.join("env-settings");
+        std::fs::create_dir_all(&plugin_dir).unwrap();
+        std::fs::write(
+            plugin_dir.join("plugin.json"),
+            r#"{
+                "name": "env-settings",
+                "display_name": "Settings fixture",
+                "version": "1.0.0",
+                "description": "test-only env-provider",
+                "kind": "env-provider",
+                "operations": ["detect", "export"]
+            }"#,
+        )
+        .unwrap();
+        std::fs::write(
+            plugin_dir.join("init.lua"),
+            r#"
+            local M = {}
+            function M.detect() return true end
+            function M.export() return { env = {}, watched = {} } end
+            return M
+            "#,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn hydrate_plugin_registry_loads_global_and_per_repo_settings() {
+        let plugin_root = tempfile::tempdir().unwrap();
+        write_settings_plugin(plugin_root.path());
+        let plugins = claudette::plugin_runtime::PluginRegistry::discover(plugin_root.path());
+
+        let db_root = tempfile::tempdir().unwrap();
+        let db = claudette::db::Database::open(&db_root.path().join("test.db")).unwrap();
+        db.set_app_setting("plugin:env-settings:enabled", "false")
+            .unwrap();
+        db.set_app_setting("plugin:env-settings:setting:mode", "\"global\"")
+            .unwrap();
+        db.set_app_setting("repo:repo-a:plugin:env-settings:setting:mode", "\"repo-a\"")
+            .unwrap();
+        db.set_app_setting(
+            "repo:repo-a:plugin:env-settings:setting:extra",
+            "{\"ok\":true}",
+        )
+        .unwrap();
+
+        hydrate_plugin_registry_from_db(&plugins, &db);
+
+        assert!(plugins.is_disabled("env-settings"));
+        assert_eq!(
+            plugins
+                .effective_config("env-settings")
+                .get("mode")
+                .and_then(|v| v.as_str()),
+            Some("global")
+        );
+
+        let mut ws_info = claudette::plugin_runtime::host_api::WorkspaceInfo {
+            repo_id: Some("repo-a".to_string()),
+            ..Default::default()
+        };
+        let repo_config = plugins.effective_config_for_invocation("env-settings", &ws_info);
+        assert_eq!(
+            repo_config.get("mode").and_then(|v| v.as_str()),
+            Some("repo-a")
+        );
+        assert_eq!(
+            repo_config
+                .get("extra")
+                .and_then(|v| v.get("ok"))
+                .and_then(|v| v.as_bool()),
+            Some(true)
+        );
+
+        ws_info.repo_id = Some("repo-b".to_string());
+        let other_config = plugins.effective_config_for_invocation("env-settings", &ws_info);
+        assert_eq!(
+            other_config.get("mode").and_then(|v| v.as_str()),
+            Some("global")
+        );
+    }
+
+    #[test]
+    fn hydrate_plugin_registry_ignores_malformed_repo_settings() {
+        let plugin_root = tempfile::tempdir().unwrap();
+        write_settings_plugin(plugin_root.path());
+        let plugins = claudette::plugin_runtime::PluginRegistry::discover(plugin_root.path());
+
+        let db_root = tempfile::tempdir().unwrap();
+        let db = claudette::db::Database::open(&db_root.path().join("test.db")).unwrap();
+        db.set_app_setting("repo:repo-a:plugin:env-settings:setting:mode", "not-json")
+            .unwrap();
+        db.set_app_setting("repo:repo-a:plugin:missing:setting:mode", "\"ignored\"")
+            .unwrap();
+
+        hydrate_plugin_registry_from_db(&plugins, &db);
+
+        let ws_info = claudette::plugin_runtime::host_api::WorkspaceInfo {
+            repo_id: Some("repo-a".to_string()),
+            ..Default::default()
+        };
+        let config = plugins.effective_config_for_invocation("env-settings", &ws_info);
+        assert!(
+            !config.contains_key("mode"),
+            "malformed repo setting should not be hydrated"
+        );
     }
 }

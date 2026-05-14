@@ -806,6 +806,59 @@ fn mise_detect_skips_when_no_config() {
     assert!(!run_detect("env-mise", MISE_SRC, &["mise"], tmp.path()));
 }
 
+fn table_strings(table: mlua::Table) -> Vec<String> {
+    let len = table.len().expect("len") as usize;
+    (1..=len)
+        .map(|i| table.get::<String>(i).expect("string path"))
+        .collect()
+}
+
+#[test]
+fn mise_export_returns_env_and_watches_present_config_files() {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(tmp.path().join("mise.toml"), "[env]\nFOO = \"bar\"").unwrap();
+    std::fs::write(tmp.path().join(".tool-versions"), "node 20").unwrap();
+    let lua = make_vm("env-mise", &["mise"], tmp.path());
+
+    let payload = serde_json::json!({
+        "FOO": "bar",
+        "PATH": "/mise/bin",
+    });
+    let payload_json = serde_json::to_string(&payload).unwrap();
+    let stub = format!(
+        r#"
+        host.exec = function(cmd, args)
+            if cmd ~= "mise" then error("expected cmd='mise', got: " .. tostring(cmd)) end
+            if type(args) ~= "table" or args[1] ~= "env" or args[2] ~= "--json" then
+                error("expected args[1..2]={{'env','--json'}}")
+            end
+            return {{ stdout = [==[{payload_json}]==], stderr = "", code = 0 }}
+        end
+        "#
+    );
+    lua.load(&stub).exec().expect("install stub");
+
+    let worktree = tmp.path().to_string_lossy().into_owned();
+    let script = format!(
+        r#"
+        local M = (function() {src} end)()
+        return M.export({{ worktree = "{path}" }})
+        "#,
+        src = MISE_SRC,
+        path = worktree.replace('\\', "\\\\"),
+    );
+    let result: mlua::Table = lua.load(&script).eval().expect("export");
+    let env_tbl: mlua::Table = result.get("env").expect("env field");
+    let watched_tbl: mlua::Table = result.get("watched").expect("watched field");
+
+    assert_eq!(env_tbl.get::<String>("FOO").unwrap(), "bar");
+    assert_eq!(env_tbl.get::<String>("PATH").unwrap(), "/mise/bin");
+    let watched = table_strings(watched_tbl);
+    assert!(watched.iter().any(|p| p.ends_with("mise.toml")));
+    assert!(watched.iter().any(|p| p.ends_with(".tool-versions")));
+    assert!(!watched.iter().any(|p| p.ends_with(".mise.toml")));
+}
+
 // ---------------------------------------------------------------------------
 // env-dotenv (the only plugin that parses in-process)
 // ---------------------------------------------------------------------------
@@ -900,6 +953,32 @@ fn dotenv_parse_skips_blank_lines_and_malformed() {
     assert_eq!(env.len(), 2);
 }
 
+#[test]
+fn dotenv_export_returns_env_and_watches_env_file() {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(tmp.path().join(".env"), "FOO=bar\nexport BAZ=qux").unwrap();
+    let lua = make_vm("env-dotenv", &[], tmp.path());
+
+    let worktree = tmp.path().to_string_lossy().into_owned();
+    let script = format!(
+        r#"
+        local M = (function() {src} end)()
+        return M.export({{ worktree = "{path}" }})
+        "#,
+        src = DOTENV_SRC,
+        path = worktree.replace('\\', "\\\\"),
+    );
+    let result: mlua::Table = lua.load(&script).eval().expect("export");
+    let env_tbl: mlua::Table = result.get("env").expect("env field");
+    let watched_tbl: mlua::Table = result.get("watched").expect("watched field");
+
+    assert_eq!(env_tbl.get::<String>("FOO").unwrap(), "bar");
+    assert_eq!(env_tbl.get::<String>("BAZ").unwrap(), "qux");
+    let watched = table_strings(watched_tbl);
+    assert_eq!(watched.len(), 1);
+    assert!(watched[0].ends_with(".env"));
+}
+
 // ---------------------------------------------------------------------------
 // env-nix-devshell
 // ---------------------------------------------------------------------------
@@ -968,9 +1047,14 @@ fn nix_detect_skips_plain_repo() {
 /// detection.
 fn nix_export_returns(
     variables: serde_json::Value,
-) -> (std::collections::HashMap<String, String>, tempfile::TempDir) {
+) -> (
+    std::collections::HashMap<String, String>,
+    Vec<String>,
+    tempfile::TempDir,
+) {
     let tmp = tempfile::tempdir().unwrap();
     std::fs::write(tmp.path().join("flake.nix"), "{}").unwrap();
+    std::fs::write(tmp.path().join("flake.lock"), "{}").unwrap();
     let lua = make_vm("env-nix-devshell", &["nix"], tmp.path());
 
     let payload = serde_json::json!({ "variables": variables });
@@ -999,6 +1083,7 @@ fn nix_export_returns(
     );
     let result: mlua::Table = lua.load(&script).eval().expect("export");
     let env_tbl: mlua::Table = result.get("env").expect("env field");
+    let watched_tbl: mlua::Table = result.get("watched").expect("watched field");
     let mut env = std::collections::HashMap::new();
     for pair in env_tbl.pairs::<String, mlua::Value>() {
         let (k, v) = pair.unwrap();
@@ -1006,7 +1091,7 @@ fn nix_export_returns(
             env.insert(k, s.to_str().unwrap().to_string());
         }
     }
-    (env, tmp)
+    (env, table_strings(watched_tbl), tmp)
 }
 
 /// `nix print-dev-env --json` emits sandbox / bash-builtin defaults
@@ -1065,7 +1150,7 @@ fn nix_export_drops_sandbox_and_bash_builtin_vars() {
         "LANG":              { "type": "exported", "value": "en_US.UTF-8" },
     });
 
-    let (env, _tmp) = nix_export_returns(variables);
+    let (env, _watched, _tmp) = nix_export_returns(variables);
 
     // None of the sandbox / bash-builtin / derivation-attr names may
     // appear in the merged env — they would override the caller's
@@ -1138,7 +1223,7 @@ fn nix_export_filter_matches_by_name_not_value() {
         "HOME": { "type": "exported", "value": "/Users/me" },
         "OK":   { "type": "exported", "value": "/homeless-shelter" },
     });
-    let (env, _tmp) = nix_export_returns(variables);
+    let (env, _watched, _tmp) = nix_export_returns(variables);
     assert!(
         !env.contains_key("HOME"),
         "HOME must be filtered regardless of value to keep the rule simple; got {env:?}"
@@ -1161,11 +1246,83 @@ fn nix_export_skips_non_scalar_and_unknown_types() {
         "WEIRD":   { "type": "exported" },                                // missing value
         "GOOD":    { "type": "exported", "value": "yes" },
     });
-    let (env, _tmp) = nix_export_returns(variables);
+    let (env, _watched, _tmp) = nix_export_returns(variables);
     assert_eq!(env.get("GOOD").map(String::as_str), Some("yes"));
     assert!(!env.contains_key("ARR"));
     assert!(!env.contains_key("ASSOC"));
     assert!(!env.contains_key("WEIRD"));
+}
+
+#[test]
+fn nix_export_watches_flake_inputs() {
+    let variables = serde_json::json!({
+        "GOOD": { "type": "exported", "value": "yes" },
+    });
+    let (env, watched, _tmp) = nix_export_returns(variables);
+
+    assert_eq!(env.get("GOOD").map(String::as_str), Some("yes"));
+    assert!(
+        watched.iter().any(|p| p.ends_with("flake.nix")),
+        "flake.nix must be watched, got {watched:?}"
+    );
+    assert!(
+        watched.iter().any(|p| p.ends_with("flake.lock")),
+        "flake.lock must be watched when present, got {watched:?}"
+    );
+    assert!(
+        !watched.iter().any(|p| p.ends_with("shell.nix")),
+        "shell.nix should not be watched when absent, got {watched:?}"
+    );
+}
+
+#[test]
+fn nix_export_shell_nix_uses_file_arg_and_watches_shell_nix() {
+    let tmp = tempfile::tempdir().unwrap();
+    let shell_path = tmp.path().join("shell.nix");
+    std::fs::write(&shell_path, "{}").unwrap();
+    let lua = make_vm("env-nix-devshell", &["nix"], tmp.path());
+
+    let payload = serde_json::json!({
+        "variables": {
+            "SHELL_ONLY": { "type": "exported", "value": "yes" }
+        }
+    });
+    let payload_json = serde_json::to_string(&payload).unwrap();
+    let expected_shell = shell_path.to_string_lossy().replace('\\', "\\\\");
+    let stub = format!(
+        r#"
+        host.exec = function(cmd, args)
+            if cmd ~= "nix" then error("expected cmd='nix', got: " .. tostring(cmd)) end
+            if type(args) ~= "table"
+                or args[1] ~= "print-dev-env"
+                or args[2] ~= "--json"
+                or args[3] ~= "-f"
+                or args[4] ~= "{expected_shell}" then
+                error("expected shell.nix args")
+            end
+            return {{ stdout = [==[{payload_json}]==], stderr = "", code = 0 }}
+        end
+        "#
+    );
+    lua.load(&stub).exec().expect("install stub");
+
+    let worktree = tmp.path().to_string_lossy().into_owned();
+    let script = format!(
+        r#"
+        local M = (function() {src} end)()
+        return M.export({{ worktree = "{path}" }})
+        "#,
+        src = NIX_SRC,
+        path = worktree.replace('\\', "\\\\"),
+    );
+    let result: mlua::Table = lua.load(&script).eval().expect("export");
+    let env_tbl: mlua::Table = result.get("env").expect("env field");
+    let watched_tbl: mlua::Table = result.get("watched").expect("watched field");
+    let watched = table_strings(watched_tbl);
+
+    assert_eq!(env_tbl.get::<String>("SHELL_ONLY").unwrap(), "yes");
+    assert!(watched.iter().any(|p| p.ends_with("shell.nix")));
+    assert!(!watched.iter().any(|p| p.ends_with("flake.nix")));
 }
 
 // ---------------------------------------------------------------------------
