@@ -9,7 +9,8 @@ export function autoDetectableBackendIds(backends: AgentBackendConfig[]) {
     .filter((backend) =>
       backend.kind === "codex_native" ||
       backend.kind === "ollama" ||
-      backend.kind === "lm_studio"
+      backend.kind === "lm_studio" ||
+      backend.kind === "pi_sdk"
     )
     .map((backend) => backend.id);
 }

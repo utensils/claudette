@@ -1,0 +1,71 @@
+---
+title: Pi
+description: Use Pi as a first-class Claudette harness with SDK-backed model discovery, persistent sessions, and Claudette-mediated permissions.
+---
+
+Pi support runs through Claudette's bundled **Pi SDK harness**, not through the Pi RPC server. Claudette ships a compiled Bun sidecar that embeds `@earendil-works/pi-coding-agent`; the Rust app talks to that sidecar over a small JSONL protocol and maps Pi session events into the same chat, tool-call, permission, stop, and attention UI used by Claude Code and Codex.
+
+This is a production provider path. It is always available in normal builds and is not hidden behind Experimental settings.
+
+## Setup
+
+1. Install and configure Pi normally.
+2. Run `pi auth` in a terminal and connect the providers you want Pi to use.
+3. Open **Settings > Models** in Claudette.
+4. Find the **Pi** card.
+5. Click **Refresh models** to load models from Pi's `ModelRegistry`.
+6. Pick a Pi model as the default, or choose one per chat from the model picker.
+
+The Pi card does not ask for a base URL or API key. Provider credentials stay in Pi's own auth/config storage.
+
+## Harness Architecture
+
+Claudette owns the Pi process lifecycle:
+
+- **Rust adapter**: `src/agent/pi_sdk.rs` starts the sidecar, correlates JSONL requests, and converts Pi events into Claudette `AgentEvent`s.
+- **Bun sidecar**: `src-pi-harness/` imports `AuthStorage`, `ModelRegistry`, `SessionManager`, `DefaultResourceLoader`, and `createAgentSession` from `@earendil-works/pi-coding-agent`.
+- **Model discovery**: Settings calls Pi's `ModelRegistry.getAvailable()` through the sidecar and stores the returned model ids/context windows in Claudette's backend settings.
+- **Session persistence**: each Claudette chat gets a Claudette-owned Pi session directory under the app data directory. Resetting or deleting the chat remains authoritative from Claudette's point of view.
+- **Packaging**: the sidecar is compiled and staged with the other Tauri external binaries. The build also stages Pi package metadata so the SDK can resolve its bundled assets at runtime.
+
+## Permissions And Tools
+
+Pi's default mutating tools are not exposed directly. Claudette registers custom Pi tools instead:
+
+- read/search/list tools can execute in read-only permission modes.
+- bash/write/edit tools emit a Claudette `tool_request`.
+- approval and denial flow through the same pending-permission cards, cleanup auto-deny, stop/reset draining, and notification attention path used by other harnesses.
+
+The visible transcript shows Pi tool calls through Claudette's native tool-call UI rather than as raw sidecar logs.
+
+## Model Selection
+
+Pi models appear under a **Pi** group in the chat model picker. Per-session choice is persisted with the same keys as other harnesses:
+
+- `model:<session_id>`
+- `model_provider:<session_id>` with provider value `pi`
+
+Default Pi selection uses the existing global model settings:
+
+- `default_model`
+- `default_agent_backend`
+
+## Slash Commands
+
+- `/model` lists Pi models when they are available and accepts provider-qualified ids such as `pi/openai/gpt-5.4`.
+- `/login` for a Pi-selected chat points you back to Pi auth/config guidance; run `pi auth` in a terminal.
+- `/permissions` keeps controlling Claudette's permission mode for Pi, Claude Code, and Codex.
+
+## Troubleshooting
+
+**Refresh models returns only the seed models.** Make sure `pi auth` has been run and provider configuration exists in Pi. Then click **Refresh models** again.
+
+**A write or shell command is waiting.** Approve or deny the Claudette permission card in the chat timeline. Pi mutating tools intentionally wait on Claudette approval.
+
+**The sidecar cannot find Pi assets.** In a dev build, run `./scripts/stage-pi-harness-sidecar.sh` or `./scripts/stage-cli-sidecar.sh` before launching Tauri. Release builds stage this automatically.
+
+## See also
+
+- [Alternative Providers](/claudette/features/providers/) - capability matrix and provider architecture
+- [Agent Configuration](/claudette/features/agent-configuration/) - model picker and reasoning controls
+- [Authentication](/claudette/features/authentication/) - how provider auth is delegated

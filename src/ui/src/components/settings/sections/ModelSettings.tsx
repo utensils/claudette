@@ -147,6 +147,7 @@ export function ModelSettings() {
       agentBackends.filter((backend) => {
         if (backend.id === "anthropic" || backend.kind === "codex_subscription") return false;
         if (backend.kind === "codex_native") return codexEnabled;
+        if (backend.kind === "pi_sdk") return true;
         return alternativeBackendsEnabled;
       }),
     [agentBackends, alternativeBackendsEnabled, codexEnabled],
@@ -712,9 +713,10 @@ function BackendCard({
   const manualModelText = manualModels.map((m) => m.id).join(", ");
   const discoveryBackend = isDiscoveryBackend(draft);
   const usesCodexCliAuth = draft.kind === "codex_subscription" || draft.kind === "codex_native";
-  const showBaseUrl = !usesCodexCliAuth;
-  const showSecret = !usesCodexCliAuth;
-  const showManualModels = draft.kind === "custom_anthropic" || draft.kind === "custom_openai";
+  const usesPiAuth = draft.kind === "pi_sdk";
+  const showBaseUrl = !usesCodexCliAuth && !usesPiAuth;
+  const showSecret = !usesCodexCliAuth && !usesPiAuth;
+  const showManualModels = draft.kind === "custom_anthropic" || draft.kind === "custom_openai" || usesPiAuth;
   const showTestButton = shouldShowBackendTestButton(draft);
   const actualModelCount = countBackendModels(draft);
   const displayModelCount = actualModelCount > 0 ? actualModelCount : statusModelCount ?? 0;
@@ -966,6 +968,15 @@ function BackendCard({
               {t("models_backend_login")}
             </button>
           )}
+          {usesPiAuth && (
+            <button
+              className={styles.iconBtn}
+              onClick={() => setStatus(t("models_backend_pi_auth_guidance", "Run `pi auth` in a terminal, then refresh Pi models."))}
+              disabled={busy}
+            >
+              {t("models_backend_login")}
+            </button>
+          )}
         </div>
       </div>
     </div>
@@ -996,6 +1007,7 @@ function isDiscoveryBackend(backend: AgentBackendConfig) {
     backend.kind === "ollama" ||
     backend.kind === "openai_api" ||
     backend.kind === "codex_native" ||
+    backend.kind === "pi_sdk" ||
     backend.kind === "lm_studio"
   );
 }

@@ -357,7 +357,8 @@ function formatCommandError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-function loginTargetForProvider(providerId: string): "claude" | "codex" {
+function loginTargetForProvider(providerId: string): "claude" | "codex" | "pi" {
+  if (providerId === "pi") return "pi";
   return providerId === "codex" ||
     providerId === "experimental-codex" ||
     providerId === "codex-subscription"
@@ -381,6 +382,10 @@ const loginHandler: NativeHandler = {
         await ctx.startCodexLogin();
         ctx.addLocalMessage(
           "Codex sign-in opened. Complete the browser flow, then retry the turn.",
+        );
+      } else if (target === "pi") {
+        ctx.addLocalMessage(
+          "Pi auth is managed by Pi. Run `pi auth` in a terminal, refresh Pi models in Settings > Models, then retry the turn.",
         );
       } else {
         await ctx.startClaudeAuthLogin();

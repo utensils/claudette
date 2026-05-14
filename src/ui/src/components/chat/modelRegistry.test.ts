@@ -184,6 +184,37 @@ describe("modelRegistry", () => {
       expect(codex?.supportsFastMode).toBe(true);
     });
 
+    it("exposes Pi models as a first-class harness even when alternative backends are disabled", () => {
+      const registry = buildModelRegistry(false, [
+        {
+          id: "pi",
+          label: "Pi",
+          kind: "pi_sdk",
+          enabled: true,
+          capabilities: {
+            thinking: true,
+            effort: true,
+            fast_mode: false,
+          },
+          manual_models: [
+            {
+              id: "openai/gpt-5.4",
+              label: "GPT-5.4",
+              context_window_tokens: 400_000,
+            },
+          ],
+          discovered_models: [],
+        },
+      ]);
+
+      const pi = registry.find((model) => model.providerQualifiedId === "pi/openai/gpt-5.4");
+      expect(pi).toBeDefined();
+      expect(pi?.group).toBe("Pi");
+      expect(pi?.providerLabel).toBe("Pi");
+      expect(pi?.supportsEffort).toBe(true);
+      expect(pi?.supportsFastMode).toBe(false);
+    });
+
     it("does not expose legacy Codex through alternative backends", () => {
       const registry = buildModelRegistry(true, [
         {

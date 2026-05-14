@@ -9,8 +9,8 @@ use claudette::agent::background::{
 use claudette::agent::{
     self, AgentEvent, AgentSession, AgentSettings, ClaudeCodeHarness, CodexAppServerOptions,
     CodexAppServerSession, CodexPermissionLevel, ControlRequestInner, FileAttachment,
-    InnerStreamEvent, PersistentSessionStart, StartContentBlock, StreamEvent,
-    is_codex_approval_tool_name, normalize_codex_reasoning_effort,
+    InnerStreamEvent, PersistentSessionStart, PiSdkOptions, PiSdkSession, StartContentBlock,
+    StreamEvent, is_codex_approval_tool_name, normalize_codex_reasoning_effort,
 };
 use claudette::agent_backend::AgentBackendRuntimeHarness;
 use claudette::base64_decode;
@@ -1654,6 +1654,11 @@ pub async fn send_chat_message(
     let ws_env_for_persistent = ws_env.clone();
     let resolved_env_for_persistent = resolved_env.clone();
     let codex_permission_level_for_persistent = codex_permission_level;
+    let pi_sessions_root = state
+        .db_path
+        .parent()
+        .map(|parent| parent.join("pi-sessions"))
+        .unwrap_or_else(|| std::env::temp_dir().join("claudette-pi-sessions"));
     let start_persistent = move |worktree: String,
                                  sid: String,
                                  is_resume: bool,
@@ -1662,6 +1667,7 @@ pub async fn send_chat_message(
                                  settings: AgentSettings| {
         let env = ws_env_for_persistent.clone();
         let resolved = resolved_env_for_persistent.clone();
+        let pi_sessions_root = pi_sessions_root.clone();
         async move {
             // Note: do NOT route the error through `crate::missing_cli::handle_err`
             // here. The caller's resume-fallback arm needs to inspect the raw
@@ -1710,6 +1716,20 @@ pub async fn send_chat_message(
                     Ok::<Arc<AgentSession>, String>(Arc::new(AgentSession::from_codex_app_server(
                         started,
                     )))
+                }
+                AgentBackendRuntimeHarness::PiSdk => {
+                    let started = PiSdkSession::start(
+                        std::path::Path::new(&worktree),
+                        &sid,
+                        PiSdkOptions {
+                            model: settings.model.clone(),
+                            thinking_level: settings.effort.clone(),
+                            session_dir: Some(pi_sessions_root.join(&sid)),
+                            allowed_tools: tools,
+                        },
+                    )
+                    .await?;
+                    Ok::<Arc<AgentSession>, String>(Arc::new(AgentSession::from_pi_sdk(started)))
                 }
             }
         }
@@ -1782,6 +1802,7 @@ pub async fn send_chat_message(
                         Some(b)
                     }
                     AgentBackendRuntimeHarness::CodexAppServer => None,
+                    AgentBackendRuntimeHarness::PiSdk => None,
                 };
                 if let Some(bridge) = bridge.as_ref()
                     && matches!(
@@ -1964,6 +1985,7 @@ pub async fn send_chat_message(
                 Some(b)
             }
             AgentBackendRuntimeHarness::CodexAppServer => None,
+            AgentBackendRuntimeHarness::PiSdk => None,
         };
         if let Some(bridge) = bridge.as_ref()
             && matches!(

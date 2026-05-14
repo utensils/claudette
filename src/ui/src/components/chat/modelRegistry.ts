@@ -177,6 +177,7 @@ export function shouldExposeBackendModels(
   if (!backend.enabled || backend.id === "anthropic") return false;
   if (backend.kind === "codex_subscription") return false;
   if (backend.kind === "codex_native") return codexEnabled;
+  if (backend.kind === "pi_sdk") return true;
   return alternativeBackendsEnabled;
 }
 
@@ -204,7 +205,8 @@ export function buildModelRegistry(
       if (!model.id || seen.has(model.id)) continue;
       seen.add(model.id);
       const isNativeCodex = backend.kind === "codex_native";
-      const providerDisplayLabel = isNativeCodex ? "Codex" : backend.label;
+      const isPi = backend.kind === "pi_sdk";
+      const providerDisplayLabel = isNativeCodex ? "Codex" : isPi ? "Pi" : backend.label;
       const isOlderBackendVersion = entry.parsed
         ? !primaryVersions
           .get(entry.parsed.prefix)

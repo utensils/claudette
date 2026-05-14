@@ -15,7 +15,8 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{Notify, RwLock};
 
 use claudette::agent::{
-    CodexAppServerOptions, CodexAppServerSession, resolve_codex_path, stop_agent_graceful,
+    CodexAppServerOptions, CodexAppServerSession, PiSdkSession, resolve_codex_path,
+    stop_agent_graceful,
 };
 use claudette::agent_backend::{
     AgentBackendConfig, AgentBackendKind, AgentBackendModel, AgentBackendRuntime,
@@ -333,6 +334,7 @@ pub async fn delete_agent_backend(
             | "codex-subscription"
             | "codex"
             | "experimental-codex"
+            | "pi"
             | "lm-studio"
     ) {
         return Err("Built-in backends can be disabled but not deleted".to_string());
@@ -426,7 +428,12 @@ pub async fn resolve_backend_runtime(
     let mut backend =
         select_backend_for_request(&backends, backend_id, model, default_backend_id.as_deref())?;
     ensure_backend_allowed_by_gate(&db, &backend)?;
-    if !alternative_backends_enabled && backend.kind != AgentBackendKind::CodexNative {
+    if !alternative_backends_enabled
+        && !matches!(
+            backend.kind,
+            AgentBackendKind::CodexNative | AgentBackendKind::PiSdk
+        )
+    {
         return Ok(AgentBackendRuntime::default());
     }
     if backend.kind == AgentBackendKind::Anthropic {
@@ -445,6 +452,18 @@ pub async fn resolve_backend_runtime(
         return Ok(AgentBackendRuntime {
             backend_id: Some(backend.id.clone()),
             harness: AgentBackendRuntimeHarness::CodexAppServer,
+            env: Vec::new(),
+            hash: runtime_hash(&backend, None, model),
+        });
+    }
+
+    if backend.kind == AgentBackendKind::PiSdk {
+        if let Some(model) = model.map(str::trim).filter(|model| !model.is_empty()) {
+            backend.default_model = Some(model.to_string());
+        }
+        return Ok(AgentBackendRuntime {
+            backend_id: Some(backend.id.clone()),
+            harness: AgentBackendRuntimeHarness::PiSdk,
             env: Vec::new(),
             hash: runtime_hash(&backend, None, model),
         });
@@ -581,7 +600,12 @@ pub fn resolve_backend_request_defaults(
             .iter()
             .find(|backend| backend.id == backend_id.as_str())
             .ok_or_else(|| format!("Unknown backend `{backend_id}`"))?;
-        if !alternative_backends_enabled && backend.kind != AgentBackendKind::CodexNative {
+        if !alternative_backends_enabled
+            && !matches!(
+                backend.kind,
+                AgentBackendKind::CodexNative | AgentBackendKind::PiSdk
+            )
+        {
             return Ok((requested_backend, requested_model));
         }
         let model = if backend.kind == AgentBackendKind::Anthropic {
@@ -617,7 +641,12 @@ pub fn resolve_backend_request_defaults(
     if backend.kind == AgentBackendKind::Anthropic {
         return Ok((Some(backend.id.clone()), default_model));
     }
-    if !alternative_backends_enabled && backend.kind != AgentBackendKind::CodexNative {
+    if !alternative_backends_enabled
+        && !matches!(
+            backend.kind,
+            AgentBackendKind::CodexNative | AgentBackendKind::PiSdk
+        )
+    {
         return Ok((None, default_model));
     }
 
@@ -741,6 +770,7 @@ fn apply_discovered_models(backend: &mut AgentBackendConfig, discovered: Vec<Age
             | AgentBackendKind::OpenAiApi
             | AgentBackendKind::CodexSubscription
             | AgentBackendKind::CodexNative
+            | AgentBackendKind::PiSdk
             | AgentBackendKind::LmStudio
     ) && !discovered.is_empty()
     {
@@ -1085,6 +1115,7 @@ fn default_backends_for_gate(native_codex_enabled: bool) -> Vec<AgentBackendConf
         AgentBackendConfig::builtin_anthropic(),
         AgentBackendConfig::builtin_ollama(),
         AgentBackendConfig::builtin_openai_api(),
+        AgentBackendConfig::builtin_pi_sdk(),
         AgentBackendConfig::builtin_lm_studio(),
     ];
     if native_codex_enabled {
@@ -1278,6 +1309,7 @@ fn normalize_backend(mut backend: AgentBackendConfig) -> AgentBackendConfig {
             | AgentBackendKind::OpenAiApi
             | AgentBackendKind::CodexSubscription
             | AgentBackendKind::CodexNative
+            | AgentBackendKind::PiSdk
             | AgentBackendKind::LmStudio
     ) {
         backend.model_discovery = true;
@@ -1375,6 +1407,7 @@ async fn discover_models(backend: &AgentBackendConfig) -> Result<Vec<AgentBacken
         AgentBackendKind::CodexSubscription => discover_codex_models().await,
         AgentBackendKind::CodexNative => discover_codex_native_models(backend).await,
         AgentBackendKind::LmStudio => discover_lm_studio_models(backend).await,
+        AgentBackendKind::PiSdk => discover_pi_models(backend).await,
         _ => Ok(backend.manual_models.clone()),
     }
 }
@@ -1394,6 +1427,15 @@ async fn test_backend_connectivity(backend: &AgentBackendConfig) -> Result<Backe
             ))
         }
         AgentBackendKind::CodexNative => test_codex_native_connectivity(backend).await,
+        AgentBackendKind::PiSdk => discover_pi_models(backend).await.map(|models| {
+            BackendStatus::new(
+                true,
+                format!(
+                    "Pi SDK harness is available. Found {} model(s). Use `pi auth` to configure providers.",
+                    models.len()
+                ),
+            )
+        }),
         AgentBackendKind::OpenAiApi => discover_openai_api_models(backend).await.map(|models| {
             BackendStatus::new(
                 true,
@@ -1622,6 +1664,31 @@ async fn discover_lm_studio_models(
         &value,
         backend.context_window_default,
     ))
+}
+
+async fn discover_pi_models(
+    backend: &AgentBackendConfig,
+) -> Result<Vec<AgentBackendModel>, String> {
+    let discovered = PiSdkSession::discover_models(std::path::Path::new(".")).await?;
+    let mut models: Vec<AgentBackendModel> = discovered
+        .into_iter()
+        .map(|model| AgentBackendModel {
+            id: model.id.clone(),
+            label: if model.label.trim().is_empty() {
+                model.id
+            } else {
+                model.label
+            },
+            context_window_tokens: model
+                .context_window_tokens
+                .unwrap_or(backend.context_window_default),
+            discovered: true,
+        })
+        .collect();
+    if models.is_empty() {
+        models = backend.manual_models.clone();
+    }
+    Ok(models)
 }
 
 fn lm_studio_models_from_v0(value: &Value, default_context: u32) -> Vec<AgentBackendModel> {
@@ -2000,6 +2067,7 @@ fn backend_kind_hash_key(kind: AgentBackendKind) -> &'static str {
         AgentBackendKind::OpenAiApi => "openai_api",
         AgentBackendKind::CodexSubscription => "codex_subscription",
         AgentBackendKind::CodexNative => "codex_native",
+        AgentBackendKind::PiSdk => "pi_sdk",
         AgentBackendKind::CustomAnthropic => "custom_anthropic",
         AgentBackendKind::CustomOpenAi => "custom_openai",
         AgentBackendKind::LmStudio => "lm_studio",

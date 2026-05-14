@@ -1,6 +1,6 @@
 ---
 title: Agent Providers
-description: Run Claudette agents against Ollama, LM Studio, OpenAI, or Codex instead of the default Claude Code path — architecture and capability differences, with deeper setup pages for each.
+description: Run Claudette agents against Ollama, LM Studio, OpenAI, native Codex, or Pi instead of the default Claude Code path — architecture and capability differences, with deeper setup pages for each.
 ---
 
 By default Claudette spawns the official `claude` CLI authenticated against Anthropic. In **Settings > Models**, you can also point agents at:
@@ -9,8 +9,9 @@ By default Claudette spawns the official `claude` CLI authenticated against Anth
 - **[LM Studio](/claudette/features/providers/lm-studio/)** — local LLMs loaded in LM Studio's desktop app, served via LM Studio 0.4.1+'s native `/v1/messages`. Routed through the in-process gateway with an Anthropic-shape pass-through (no translation, just status-code correction on errors).
 - **[OpenAI](/claudette/features/providers/openai-codex/#openai-api)** — `gpt-*` models via the OpenAI API gateway.
 - **[Codex](/claudette/features/providers/openai-codex/#codex)** — ChatGPT subscription-backed Codex through the native `codex app-server` harness.
+- **[Pi](/claudette/features/providers/pi/)** — models/providers discovered from Pi's SDK, executed through Claudette's bundled Pi sidecar with Claudette permission mediation.
 
-On startup Claudette quietly checks for local providers. If it finds the Codex CLI, an Ollama daemon on `localhost:11434`, or an LM Studio server on `localhost:1234`, that provider is enabled automatically. Turning a provider off in Settings records an opt-out, so Claudette will not re-enable it on the next launch. OpenAI API stays manual because it requires an API key and a remote account.
+On startup Claudette quietly checks for local providers. If it finds the Codex CLI, an Ollama daemon on `localhost:11434`, or an LM Studio server on `localhost:1234`, that provider is enabled automatically. Pi model discovery also refreshes through the bundled SDK sidecar when available. Turning a local provider off in Settings records an opt-out, so Claudette will not re-enable it on the next launch. OpenAI API stays manual because it requires an API key and a remote account.
 
 The data model also defines `CustomAnthropic` and `CustomOpenAi` kinds for self-hosted / proxied endpoints, but the Settings panel currently only renders the built-in backends — there is no in-GUI flow to add a custom provider yet.
 
@@ -21,10 +22,11 @@ Some Claude-specific features only have clean equivalents on particular backends
 1. Open **Settings > Models**.
 2. Keep **Agent providers** on to show Ollama, LM Studio, OpenAI API, and custom providers.
 3. Keep **Codex** on to show Codex and seed Codex models into the picker.
-4. Configure each provider you want to use (URL, secret, models).
-5. Pick a default in **Settings > Models > Default model**, or override per session from the chat header.
+4. Pi is always shown as a first-class harness; run `pi auth` and refresh Pi models to populate it.
+5. Configure each provider you want to use (URL, secret, models).
+6. Pick a default in **Settings > Models > Default model**, or override per session from the chat header.
 
-When both provider gates are off, only the built-in `Anthropic` backend is exposed — every workspace runs `claude` as before.
+When both provider gates are off, the built-in `Anthropic` backend and first-class Pi harness remain exposed. Workspaces on `Anthropic` run `claude` as before; Pi workspaces run through the bundled SDK sidecar.
 
 ## At a glance
 
@@ -35,6 +37,7 @@ When both provider gates are off, only the built-in `Anthropic` backend is expos
 | LM Studio | `LmStudio` | `http://localhost:1234` | None (or optional bearer token) | [LM Studio](/claudette/features/providers/lm-studio/) |
 | OpenAI API | `OpenAiApi` | `https://api.openai.com` | API key (required) | [OpenAI & Codex](/claudette/features/providers/openai-codex/) |
 | Codex | `CodexNative` | (uses `codex app-server`) | `codex login` (managed by `codex` CLI) | [OpenAI & Codex](/claudette/features/providers/openai-codex/) |
+| Pi | `PiSdk` | (uses bundled Pi sidecar) | `pi auth` / Pi provider config | [Pi](/claudette/features/providers/pi/) |
 
 ## Two execution paths: direct vs gateway
 
@@ -47,7 +50,7 @@ Claudette splits providers into two architectural categories:
 - **OpenAI-Responses translation** (OpenAI / legacy Codex / CustomOpenAi): full Anthropic ↔ OpenAI `/v1/responses` translation in both directions, since these backends don't speak Anthropic.
 - **Anthropic pass-through** (LM Studio): forward the Anthropic body verbatim to upstream `/v1/messages`, stream 2xx responses through unchanged, intercept non-2xx to fix LM Studio's HTTP 500 mis-classification of context-overflow errors. Wire format is already correct; we only translate status codes on the error path.
 
-**Native harness** (`CodexNative`) — Claudette spawns `codex app-server --listen stdio://` and speaks JSON-RPC to Codex directly. This path does not run `claude` or the OpenAI gateway.
+**Native harnesses** (`CodexNative`, `PiSdk`) — Claudette speaks to a purpose-built subprocess instead of spawning `claude`. Codex uses `codex app-server --listen stdio://`; Pi uses Claudette's bundled Bun sidecar embedding `@earendil-works/pi-coding-agent`.
 
 > **Heads up if you ever configure a custom OpenAI endpoint**: Claudette posts to `/v1/responses`, not `/v1/chat/completions`. Providers that only implement Chat Completions won't work behind the gateway.
 
@@ -55,14 +58,14 @@ Claudette splits providers into two architectural categories:
 
 The per-turn capabilities differ by provider (`AgentBackendCapabilities` in `src/agent_backend.rs`). The chat-header toggles for unsupported capabilities are hidden / disabled automatically:
 
-| Capability | Anthropic | Ollama | LM Studio | Gateway OpenAI | Codex |
-|---|---|---|---|---|---|
-| Extended thinking | ✅ | ✅ (when model supports) | ❌ | ❌ | ✅ (reasoning summaries) |
-| Reasoning / effort levels | ✅ (Claude effort) | ❌ | ❌ | ❌ | ✅ (Codex intelligence) |
-| Fast mode | ✅ | ❌ | ❌ | ❌ | ✅ |
-| 1M-context auto-upgrade | ✅ | ❌ | ❌ | ❌ | ❌ |
-| Tool use | ✅ | ✅ | ✅ (model-dependent) | ✅ | ✅ |
-| Vision | ✅ | ✅ | ✅ (model-dependent) | ✅ | ❌ |
+| Capability | Anthropic | Ollama | LM Studio | Gateway OpenAI | Codex | Pi |
+|---|---|---|---|---|---|---|
+| Extended thinking | ✅ | ✅ (when model supports) | ❌ | ❌ | ✅ (reasoning summaries) | ✅ (when model supports) |
+| Reasoning / effort levels | ✅ (Claude effort) | ❌ | ❌ | ❌ | ✅ (Codex intelligence) | ✅ |
+| Fast mode | ✅ | ❌ | ❌ | ❌ | ✅ | ❌ |
+| 1M-context auto-upgrade | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| Tool use | ✅ | ✅ | ✅ (model-dependent) | ✅ | ✅ | ✅ |
+| Vision | ✅ | ✅ | ✅ (model-dependent) | ✅ | ❌ | ❌ |
 
 LM Studio is on the same direct path as Ollama, but its capability profile mirrors the gateway providers' (no extended-thinking / effort / fast / 1M toggles) — local models implement those Anthropic-specific knobs inconsistently or not at all, so the chat header hides them. Codex exposes fast mode and Codex intelligence through Codex app-server settings. Switching a session to a provider visibly disables or relabels the toggles that don't apply.
 
@@ -90,7 +93,8 @@ Per-session model selection is persisted in `app_settings` as `model:<session_id
 - **[Ollama](/claudette/features/providers/ollama/)** — air-gapped work, privacy-sensitive code, or offline travel. Quality varies wildly by model.
 - **[LM Studio](/claudette/features/providers/lm-studio/)** — same air-gapped use cases as Ollama, but if you already manage your local model library through LM Studio's desktop app and want to keep it as the single source of truth.
 - **[OpenAI API](/claudette/features/providers/openai-codex/#openai-api)** — if you specifically want `gpt-*` or OpenAI reasoning models, or have prepaid OpenAI credit you'd rather burn than your Claude quota.
-- **[Codex](/claudette/features/providers/openai-codex/#codex)** — if you're already paying for ChatGPT Plus/Pro/Team and want to reuse that quota through the Codex CLI.
+- **[Codex](/claudette/features/providers/openai-codex/#codex)** — if you're already paying for ChatGPT Plus/Pro/Team and want to reuse that quota through the native Codex CLI.
+- **[Pi](/claudette/features/providers/pi/)** — if you want Pi's provider/model catalog while keeping Claudette's session lifecycle and approval UI.
 
 ## Caveats
 
@@ -100,6 +104,6 @@ Per-session model selection is persisted in `app_settings` as `model:<session_id
 
 ## See also
 
-- [Ollama](/claudette/features/providers/ollama/), [LM Studio](/claudette/features/providers/lm-studio/), and [OpenAI & Codex](/claudette/features/providers/openai-codex/) — per-provider setup pages
+- [Ollama](/claudette/features/providers/ollama/), [LM Studio](/claudette/features/providers/lm-studio/), [OpenAI & Codex](/claudette/features/providers/openai-codex/), and [Pi](/claudette/features/providers/pi/) — per-provider setup pages
 - [Agent Configuration](/claudette/features/agent-configuration/) — model selection, effort, thinking, and which knobs apply per provider
 - [Authentication](/claudette/features/authentication/) — credential handling for the default Anthropic backend

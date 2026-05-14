@@ -6,6 +6,7 @@ export type AgentBackendKind =
   | "openai_api"
   | "codex_subscription"
   | "codex_native"
+  | "pi_sdk"
   | "custom_anthropic"
   | "custom_openai"
   | "lm_studio";

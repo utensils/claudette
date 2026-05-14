@@ -9,6 +9,7 @@ pub enum AgentBackendKind {
     OpenAiApi,
     CodexSubscription,
     CodexNative,
+    PiSdk,
     CustomAnthropic,
     #[serde(rename = "custom_openai")]
     CustomOpenAi,
@@ -53,6 +54,7 @@ pub enum AgentBackendRuntimeHarness {
     #[default]
     ClaudeCode,
     CodexAppServer,
+    PiSdk,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -93,6 +95,17 @@ impl AgentBackendCapabilities {
             thinking: true,
             effort: true,
             fast_mode: true,
+            one_m_context: false,
+            tools: true,
+            vision: false,
+        }
+    }
+
+    pub fn pi_sdk() -> Self {
+        Self {
+            thinking: true,
+            effort: true,
+            fast_mode: false,
             one_m_context: false,
             tools: true,
             vision: false,
@@ -236,6 +249,37 @@ impl AgentBackendConfig {
         }
     }
 
+    pub fn builtin_pi_sdk() -> Self {
+        Self {
+            id: "pi".to_string(),
+            label: "Pi".to_string(),
+            kind: AgentBackendKind::PiSdk,
+            base_url: None,
+            enabled: true,
+            default_model: None,
+            manual_models: vec![
+                AgentBackendModel {
+                    id: "anthropic/claude-opus-4-5".to_string(),
+                    label: "Claude Opus 4.5".to_string(),
+                    context_window_tokens: 200_000,
+                    discovered: false,
+                },
+                AgentBackendModel {
+                    id: "openai/gpt-5.4".to_string(),
+                    label: "GPT-5.4".to_string(),
+                    context_window_tokens: 272_000,
+                    discovered: false,
+                },
+            ],
+            discovered_models: Vec::new(),
+            auth_ref: Some("pi".to_string()),
+            capabilities: AgentBackendCapabilities::pi_sdk(),
+            context_window_default: 200_000,
+            model_discovery: true,
+            has_secret: false,
+        }
+    }
+
     pub fn builtin_lm_studio() -> Self {
         Self {
             id: "lm-studio".to_string(),
@@ -327,5 +371,19 @@ mod tests {
         assert_eq!(runtime.harness, AgentBackendRuntimeHarness::ClaudeCode);
         assert_eq!(runtime.backend_id, None);
         assert!(runtime.env.is_empty());
+    }
+
+    #[test]
+    fn pi_builtin_uses_pi_sdk_harness_shape() {
+        let backend = AgentBackendConfig::builtin_pi_sdk();
+
+        assert_eq!(backend.id, "pi");
+        assert_eq!(backend.label, "Pi");
+        assert_eq!(backend.kind, AgentBackendKind::PiSdk);
+        assert!(backend.enabled);
+        assert!(!backend.kind.needs_gateway());
+        assert!(backend.model_discovery);
+        assert!(backend.capabilities.tools);
+        assert!(!backend.capabilities.fast_mode);
     }
 }

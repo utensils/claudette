@@ -37,9 +37,10 @@ Default values applied to all new agent sessions. Per-workspace overrides are av
 | Team agents as session tabs | Open Claude Code team agents (`TeamCreate` + `Agent` with a team name) as separate Claudette chat session tabs. | On |
 | Agent providers | Show Ollama, LM Studio, OpenAI API, and custom providers in Settings > Models and the chat model picker. Codex, Ollama, and LM Studio are auto-enabled when detected unless manually disabled. | On |
 | Codex | Show `codex app-server --listen stdio://` support and seed Codex models into the picker. Independent from Agent providers. | On |
+| Pi | Show the built-in Pi SDK harness. Refreshes models through Pi's `ModelRegistry`; auth/config stays in Pi (`pi auth`). | On |
 | Default backend | Provider used for new chats. | `anthropic` |
 | Claude Code | Checks local Claude Code sign-in state with the official CLI. The refresh button performs an authenticated CLI validation request; sign-in runs `claude auth login`, streams progress back into Claudette, and accepts the pasted browser code when Claude Code asks for one. Used by chat and Usage-panel auth failures. | — |
-| Agent backend cards | Enable, test, authenticate, and refresh model lists for built-in providers such as Claude Code, Codex, Ollama, LM Studio, and OpenAI API. | Provider-specific |
+| Agent backend cards | Enable, test, authenticate, and refresh model lists for built-in providers such as Claude Code, Codex, Pi, Ollama, LM Studio, and OpenAI API. | Provider-specific |
 
 See [Agent Configuration](/claudette/features/agent-configuration/) for detailed descriptions of each option.
 
