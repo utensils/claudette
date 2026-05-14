@@ -17,7 +17,7 @@
  * read better with adjacent labels than with the stacked layout we use in
  * the settings panel).
  */
-import { useCallback, useId, useMemo, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { useAppStore } from "../../stores/useAppStore";
 import {
   coerceInputValue,
@@ -81,6 +81,38 @@ export function RequiredInputsModal() {
   );
   const [values, setValues] = useState<Record<string, string>>(initial);
   const [submitted, setSubmitted] = useState(false);
+  // `creating` reflects "the orchestrator has the values and is making the
+  // workspace" — we keep the modal mounted in that state so the transition
+  // to the next modal (setup-script prompt) is atomic. Without this we'd
+  // briefly show an empty backdrop between modals.
+  const [creating, setCreating] = useState(false);
+
+  // Track whether we've already settled the orchestrator's promise. The
+  // resolve callback must fire at most once — submit / cancel / unmount
+  // can all reach it, and the orchestrator's `await` would deadlock the
+  // single-flight `creationInFlight` guard if none of them did.
+  const settledRef = useRef(false);
+  // Pull the resolver out via ref so the unmount cleanup can read the
+  // latest one without re-running on every store-driven render.
+  const resolveRef = useRef<ResolveFn | null>(null);
+  resolveRef.current = state?.resolve ?? null;
+
+  const settle = useCallback((result: Record<string, string> | null) => {
+    if (settledRef.current) return;
+    settledRef.current = true;
+    resolveRef.current?.(result);
+  }, []);
+
+  // Cleanup runs when the modal unmounts — including when something else
+  // (auto-opened missing-CLI modal, env-trust modal racing in) replaces
+  // `activeModal` and yanks us off the DOM. Without this, the orchestrator
+  // stays parked on `await new Promise(...)` forever and the in-flight
+  // creation guard never clears.
+  useEffect(() => {
+    return () => {
+      settle(null);
+    };
+  }, [settle]);
 
   const setValue = useCallback((key: string, raw: string) => {
     setValues((prev) => ({ ...prev, [key]: raw }));
@@ -106,6 +138,7 @@ export function RequiredInputsModal() {
     .find((e): e is string => typeof e === "string");
 
   const submit = () => {
+    if (creating) return;
     setSubmitted(true);
     if (firstError) return;
     const coerced: Record<string, string> = {};
@@ -115,12 +148,21 @@ export function RequiredInputsModal() {
       if (!result.ok) return;
       coerced[field.key] = result.value;
     }
-    state.resolve(coerced);
-    closeModal();
+    // Resolve the orchestrator's awaited promise but leave the modal
+    // mounted. The orchestrator either replaces this modal with the
+    // setup-script prompt (`openModal("confirmSetupScript", …)`) or
+    // explicitly closes it once it's done. Keeping the modal up until
+    // then prevents a transient `activeModal === null` frame that some
+    // background listeners (env-trust events, etc.) can race into.
+    setCreating(true);
+    settle(coerced);
   };
 
   const cancel = () => {
-    state.resolve(null);
+    // Ignore the backdrop / Escape after submit — the orchestrator owns
+    // the lifecycle from that point on.
+    if (creating) return;
+    settle(null);
     closeModal();
   };
 
@@ -142,20 +184,26 @@ export function RequiredInputsModal() {
             value={values[field.key] ?? ""}
             onChange={(raw) => setValue(field.key, raw)}
             error={submitted ? errors[field.key] : null}
+            disabled={creating}
           />
         ))}
       </div>
       <div className={shared.actions}>
-        <button className={shared.btn} onClick={cancel} type="button">
+        <button
+          className={shared.btn}
+          onClick={cancel}
+          type="button"
+          disabled={creating}
+        >
           Cancel
         </button>
         <button
           className={shared.btnPrimary}
           onClick={submit}
           type="button"
-          disabled={submitted && firstError !== undefined}
+          disabled={creating || (submitted && firstError !== undefined)}
         >
-          Create workspace
+          {creating ? "Creating…" : "Create workspace"}
         </button>
       </div>
     </Modal>
@@ -167,13 +215,14 @@ interface FieldRowProps {
   value: string;
   onChange: (raw: string) => void;
   error: string | null;
+  disabled: boolean;
 }
 
 /** Single labeled row in the prompt — every field type uses the same
  *  two-column layout (label left, control right) so the form is visually
  *  consistent. The toggle sits at the left edge of the control column, the
  *  same place text/number inputs start. */
-function FieldRow({ field, value, onChange, error }: FieldRowProps) {
+function FieldRow({ field, value, onChange, error, disabled }: FieldRowProps) {
   const inputId = useId();
   const checked = field.type === "boolean" && value === "true";
 
@@ -196,6 +245,7 @@ function FieldRow({ field, value, onChange, error }: FieldRowProps) {
               aria-label={field.label}
               className={`${styles.toggle} ${checked ? styles.toggleOn : ""}`}
               onClick={() => onChange(checked ? "false" : "true")}
+              disabled={disabled}
             >
               <span className={styles.toggleKnob} />
             </button>
@@ -215,6 +265,7 @@ function FieldRow({ field, value, onChange, error }: FieldRowProps) {
               min={field.min ?? undefined}
               max={field.max ?? undefined}
               step={field.step ?? undefined}
+              disabled={disabled}
             />
           )}
           {field.type === "string" && (
@@ -225,6 +276,7 @@ function FieldRow({ field, value, onChange, error }: FieldRowProps) {
               value={value}
               onChange={(e) => onChange(e.target.value)}
               placeholder={field.placeholder ?? undefined}
+              disabled={disabled}
             />
           )}
         </div>
