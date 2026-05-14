@@ -209,13 +209,35 @@ export function truncateMiddle(value: string, head = 4, tail = 4): string {
 /**
  * Build the one-line summary shown in the collapsed banner.
  *
- * TODO(user contribution): see `cliInvocationBannerLogic.test.ts` for the
- * cases this needs to satisfy. The shape is up to you — see the prompt for
- * trade-offs.
+ * Shape: `<binary> · <highlight values…> · <N flag(s)>`. The highlighted
+ * flags are picked from `SUMMARY_HIGHLIGHT_FLAGS` in order, and any value
+ * that looks like a redactor placeholder (`<…>` — the Rust side emits
+ * `<redacted>` and `<prompt>`) is dropped so the collapsed banner never
+ * shows opaque sentinels in place of real values.
+ *
+ * The flag count comes from `parsed.flags` only — the trailing positional
+ * (`<prompt>`) is parsed separately and never enters the count.
  */
+const SUMMARY_HIGHLIGHT_FLAGS = ["--model", "--session-id"] as const;
+
+function isPlaceholderValue(value: string): boolean {
+  return value.startsWith("<") && value.endsWith(">");
+}
+
 export function summarizeInvocation(parsed: ParsedInvocation): string {
-  // Placeholder fallback so the component renders something sensible until
-  // the user defines this. Counts non-prompt flags only.
+  const parts: string[] = [parsed.binary];
+
+  for (const name of SUMMARY_HIGHLIGHT_FLAGS) {
+    const flag = parsed.flags.find((f) => f.name === name);
+    if (!flag || flag.value === null) continue;
+    if (isPlaceholderValue(flag.value)) continue;
+    parts.push(truncateMiddle(flag.value));
+  }
+
   const flagCount = parsed.flags.length;
-  return `${parsed.binary} · ${flagCount} flag${flagCount === 1 ? "" : "s"}`;
+  if (flagCount > 0) {
+    parts.push(`${flagCount} flag${flagCount === 1 ? "" : "s"}`);
+  }
+
+  return parts.join(" · ");
 }
