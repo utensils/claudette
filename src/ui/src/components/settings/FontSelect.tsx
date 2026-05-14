@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, useMemo, type CSSProperties, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import type { FontOption } from "../../utils/fontSettings";
+import { useSettingsOverlay } from "../../hooks/useSettingsOverlay";
 import styles from "./Settings.module.css";
 
 interface FontSelectProps {
@@ -28,6 +29,8 @@ export function FontSelect({ options, value, onChange, isCustom, kind = "sans" }
   const ref = useRef<HTMLDivElement>(null);
   const listId = useRef(`font-list-${Math.random().toString(36).slice(2, 8)}`).current;
   const fallback = kind === "mono" ? MONO_FALLBACK : SANS_FALLBACK;
+
+  useSettingsOverlay(open);
 
   // Close on outside click
   useEffect(() => {
