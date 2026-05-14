@@ -45,20 +45,27 @@ const THEMEABLE_VARS = [
   "badge-done",
   "badge-plan",
   "badge-ask",
-  "accent-success",
-  "accent-success-rgb",
-  "accent-success-bg",
-  "accent-warning",
-  "accent-warning-rgb",
-  "accent-warning-bg",
-  "accent-error",
-  "accent-error-rgb",
-  "accent-error-bg",
-  "accent-info",
-  "accent-info-rgb",
-  "accent-info-bg",
+  // Status accents — each family is a 5-token group (color, -rgb, -bg, -border, -fg).
+  // The -bg/-border/-fg layers derive from -rgb in :root, so a user theme typically
+  // only needs to set the base color + -rgb.
+  "accent-success", "accent-success-rgb", "accent-success-bg", "accent-success-border", "accent-success-fg",
+  "accent-warning", "accent-warning-rgb", "accent-warning-bg", "accent-warning-border", "accent-warning-fg",
+  "accent-error", "accent-error-rgb", "accent-error-bg", "accent-error-border", "accent-error-fg",
+  "accent-info", "accent-info-rgb", "accent-info-bg", "accent-info-border", "accent-info-fg",
+  // UI-role tokens — neutral plus secondary/tertiary brand accents.
   "accent-neutral",
-  "accent-secondary",
+  "accent-secondary", "accent-secondary-rgb", "accent-secondary-bg", "accent-secondary-border", "accent-secondary-fg",
+  "accent-tertiary", "accent-tertiary-rgb", "accent-tertiary-bg", "accent-tertiary-border", "accent-tertiary-fg",
+  // Category slots A–H for "item N of a set" UI (workspace tags, plugin types).
+  "category-a-bg", "category-a-border", "category-a-fg",
+  "category-b-bg", "category-b-border", "category-b-fg",
+  "category-c-bg", "category-c-border", "category-c-fg",
+  "category-d-bg", "category-d-border", "category-d-fg",
+  "category-e-bg", "category-e-border", "category-e-fg",
+  "category-f-bg", "category-f-border", "category-f-fg",
+  "category-g-bg", "category-g-border", "category-g-fg",
+  "category-h-bg", "category-h-border", "category-h-fg",
+  // Syntax highlight palette — mirrors base16 base08–base0F roles.
   "syntax-keyword",
   "syntax-string",
   "syntax-number",
@@ -99,6 +106,12 @@ const THEMEABLE_VARS = [
   "font-mono",
   "font-display",
 ];
+
+// Read-only re-export for the parity test (utils/themeTokenParity.test.ts).
+// Kept as a separate symbol with a `__` prefix so it's obviously not for
+// production callers — they should reach for the canonical Claudette tokens
+// via CSS, not enumerate them at runtime.
+export const __THEMEABLE_VARS: readonly string[] = THEMEABLE_VARS;
 
 /**
  * Apply user font overrides on top of the current theme.
@@ -256,18 +269,21 @@ export function cacheThemePreference(
 // ---- Base16 import support ------------------------------------------------
 //
 // Claudette accepts user themes in `~/.claudette/themes/*.json` either in
-// Claudette's native shape (id/name/colors with `--*` keys) or as a canonical
-// Base16 scheme (`base00`–`base0F` keys). Base16 files are detected and
-// converted into Claudette tokens at load time.
+// Claudette's native shape (id/name/colors with bare token names like
+// `accent-primary` — applyTheme prepends the `--` when setting the CSS
+// property) or as a canonical Base16 scheme (`base00`–`base0F` keys).
+// Base16 files are detected and converted into Claudette tokens at load time.
 
-const BASE16_KEYS = [
-  "base00", "base01", "base02", "base03",
-  "base04", "base05", "base06", "base07",
-  "base08", "base09", "base0A", "base0B",
-  "base0C", "base0D", "base0E", "base0F",
+const BASE16_KEY_SUFFIXES = [
+  "00", "01", "02", "03", "04", "05", "06", "07",
+  "08", "09", "0A", "0B", "0C", "0D", "0E", "0F",
 ] as const;
 
-type Base16Key = (typeof BASE16_KEYS)[number];
+type Base16Key =
+  | "base00" | "base01" | "base02" | "base03"
+  | "base04" | "base05" | "base06" | "base07"
+  | "base08" | "base09" | "base0A" | "base0B"
+  | "base0C" | "base0D" | "base0E" | "base0F";
 
 // Accept #rrggbb, rrggbb, #rgb, rgb (case-insensitive). Return canonical #rrggbb.
 function normalizeHex(value: string): string | null {
@@ -296,18 +312,36 @@ function hexLuminance(hex: string): number {
   return (0.299 * r + 0.587 * g + 0.114 * b) / 255;
 }
 
+// Look up a base16 slot tolerantly: real-world files in the wild use either
+// `base0A` (Tinted Theming spec) or `base0a` (some legacy schemes). Accept
+// both by normalizing the suffix's case at lookup time.
+function readBase16Slot(
+  colors: Record<string, string>,
+  suffix: string,
+): string | undefined {
+  return colors[`base${suffix}`] ?? colors[`base${suffix.toLowerCase()}`];
+}
+
+// Token names that, when present in a `colors` map, strongly indicate the file
+// is a hand-authored Claudette theme rather than a Base16 scheme. Built from
+// THEMEABLE_VARS minus a few keys that could legitimately co-exist with a
+// base16 payload (e.g. `variant`, `scheme` aren't tokens).
+const CLAUDETTE_TOKEN_SET = new Set(THEMEABLE_VARS);
+
 /**
- * A theme payload is base16 iff its `colors` map contains all 16 baseXX keys
- * (case-insensitive on the hex digit) AND it does not already declare a
- * recognized Claudette token. The latter check makes hybrid files unambiguous:
- * if a file ships both `accent-primary` and a full base16 palette, treat it
- * as Claudette (the author already mapped what they wanted).
+ * A theme payload is base16 iff its `colors` map contains all 16 baseXX slots
+ * with valid hex values (case-insensitive on the hex digit) AND it does not
+ * declare ANY recognized Claudette token. The latter check makes hybrid files
+ * unambiguous: if a file ships both base16 keys and any THEMEABLE_VARS entry,
+ * we treat it as Claudette so the author's explicit mappings aren't silently
+ * overwritten by the converter.
  */
 export function detectBase16(colors: Record<string, string>): boolean {
-  const claudetteSignals = ["accent-primary", "app-bg", "text-primary"];
-  if (claudetteSignals.some((k) => k in colors)) return false;
-  for (const key of BASE16_KEYS) {
-    const value = colors[key];
+  for (const key of Object.keys(colors)) {
+    if (CLAUDETTE_TOKEN_SET.has(key)) return false;
+  }
+  for (const suffix of BASE16_KEY_SUFFIXES) {
+    const value = readBase16Slot(colors, suffix);
     if (typeof value !== "string") return false;
     if (normalizeHex(value) === null) return false;
   }
@@ -317,9 +351,12 @@ export function detectBase16(colors: Record<string, string>): boolean {
 /**
  * Map a base16 palette onto Claudette tokens following the canonical Tinted
  * Theming role spec: base00=bg, base05=fg, base08=red, base0A=yellow,
- * base0B=green, base0D=blue, base0E=purple, etc. `-rgb` companions are
- * co-emitted from each accent hex so `rgba(var(--*-rgb), alpha)` consumers
- * keep working.
+ * base0B=green, base0D=blue, base0E=purple, etc.
+ *
+ * For every status/UI-role accent we emit the full triplet companion set
+ * (-rgb, -bg, -border, -fg) so the imported palette doesn't inherit the
+ * baseline theme's tints. The bg/border/fg layers use the same alpha
+ * levels as :root in theme.css.
  *
  * `color-scheme` is read from a `variant` field if present (some base16
  * files declare `"variant": "light"`); otherwise derived from base00's
@@ -327,90 +364,109 @@ export function detectBase16(colors: Record<string, string>): boolean {
  */
 export function convertBase16ToClaudette(theme: ThemeDefinition): ThemeDefinition {
   const src = theme.colors;
-  const palette = {} as Record<Base16Key, string>;
-  for (const key of BASE16_KEYS) {
-    const norm = normalizeHex(src[key] ?? "");
+  const palette: Partial<Record<Base16Key, string>> = {};
+  for (const suffix of BASE16_KEY_SUFFIXES) {
+    const raw = readBase16Slot(src, suffix);
+    const norm = normalizeHex(raw ?? "");
     if (norm === null) {
       // detectBase16 should have caught this; bail out and return the input
       // unchanged so applyTheme treats it as a plain Claudette theme.
       return theme;
     }
-    palette[key] = norm;
+    palette[`base${suffix}` as Base16Key] = norm;
   }
+  const p = palette as Record<Base16Key, string>;
 
   const variant = (src["variant"] ?? "").toLowerCase();
   const scheme: "light" | "dark" =
     variant === "light" || variant === "dark"
       ? (variant as "light" | "dark")
-      : hexLuminance(palette.base00) < 0.5
+      : hexLuminance(p.base00) < 0.5
         ? "dark"
         : "light";
+
+  // Emit the full bg/border/fg triplet for a semantic accent. Alpha levels
+  // mirror the :root defaults in theme.css (10% tint, 30% outline).
+  const emitTriplet = (
+    out: Record<string, string>,
+    prefix: string,
+    hex: string,
+  ) => {
+    const rgb = hexToRgbTriplet(hex);
+    out[prefix] = hex;
+    out[`${prefix}-rgb`] = rgb;
+    out[`${prefix}-bg`] = `rgba(${rgb}, 0.10)`;
+    out[`${prefix}-border`] = `rgba(${rgb}, 0.30)`;
+    out[`${prefix}-fg`] = hex;
+  };
 
   const out: Record<string, string> = {
     "color-scheme": scheme,
 
     // Surfaces
-    "app-bg": palette.base00,
-    "sidebar-bg": palette.base01,
-    "sidebar-border": palette.base02,
-    "chat-input-bg": palette.base01,
-    "chat-header-bg": palette.base01,
-    "chat-user-bg": palette.base01,
-    "terminal-bg": palette.base00,
-    "terminal-tab-bg": palette.base01,
-    "terminal-tab-active-bg": palette.base02,
+    "app-bg": p.base00,
+    "sidebar-bg": p.base01,
+    "sidebar-border": p.base02,
+    "chat-input-bg": p.base01,
+    "chat-header-bg": p.base01,
+    "chat-user-bg": p.base01,
+    "terminal-bg": p.base00,
+    "terminal-tab-bg": p.base01,
+    "terminal-tab-active-bg": p.base02,
 
-    // Text ramp — base05 is default fg, then dimmer down through base04/03.
-    // base06 (light fg) maps to muted so it stays readable on the bg ramp.
-    "text-primary": palette.base05,
-    "text-muted": palette.base06,
-    "text-dim": palette.base04,
-    "text-faint": palette.base03,
-    "text-separator": palette.base02,
-    "on-accent": palette.base07,
-    "divider": palette.base02,
-    "selected-bg": palette.base02,
+    // Text ramp — Claudette's primary→muted→dim→faint hierarchy goes from
+    // highest to lowest contrast against the bg. In base16, base05 is the
+    // default foreground; base04→base03 are progressively dimmer. base06 is
+    // a HIGH-contrast tone (brighter than base05 in dark schemes), so it
+    // doesn't fit "muted" — we leave it unmapped here.
+    "text-primary": p.base05,
+    "text-muted": p.base04,
+    "text-dim": p.base03,
+    "text-faint": p.base03,
+    "text-separator": p.base02,
+    "on-accent": p.base07,
+    "divider": p.base02,
+    "selected-bg": p.base02,
 
-    // Status / semantic accents
-    "status-running": palette.base0B,
-    "status-stopped": palette.base08,
-    "badge-done": palette.base0B,
-    "badge-plan": palette.base0D,
-    "badge-ask": palette.base0A,
+    // Legacy semantic-ish tokens kept in sync with new accents.
+    "status-running": p.base0B,
+    "status-stopped": p.base08,
+    "badge-done": p.base0B,
+    "badge-plan": p.base0D,
+    "badge-ask": p.base0A,
 
-    "accent-success": palette.base0B,
-    "accent-success-rgb": hexToRgbTriplet(palette.base0B),
-    "accent-warning": palette.base09,
-    "accent-warning-rgb": hexToRgbTriplet(palette.base09),
-    "accent-error": palette.base08,
-    "accent-error-rgb": hexToRgbTriplet(palette.base08),
-    "accent-info": palette.base0D,
-    "accent-info-rgb": hexToRgbTriplet(palette.base0D),
-
-    "accent-neutral": palette.base04,
-    "accent-secondary": palette.base0F,
+    "accent-neutral": p.base04,
 
     // Brand accent uses base0E (purple) per the Tinted Theming convention.
-    "accent-primary": palette.base0E,
-    "accent-primary-rgb": hexToRgbTriplet(palette.base0E),
-    "accent-dim": palette.base0F,
+    "accent-primary": p.base0E,
+    "accent-primary-rgb": hexToRgbTriplet(p.base0E),
+    "accent-dim": p.base0F,
 
     // Diff
-    "diff-added-text": palette.base0B,
-    "diff-removed-text": palette.base08,
-    "diff-hunk-header": palette.base0D,
-    "diff-line-number": palette.base03,
+    "diff-added-text": p.base0B,
+    "diff-removed-text": p.base08,
+    "diff-hunk-header": p.base0D,
+    "diff-line-number": p.base03,
 
     // Syntax — direct base08-base0F mapping per spec.
-    "syntax-variable": palette.base08,
-    "syntax-number": palette.base09,
-    "syntax-type": palette.base0A,
-    "syntax-string": palette.base0B,
-    "syntax-operator": palette.base0C,
-    "syntax-function": palette.base0D,
-    "syntax-keyword": palette.base0E,
-    "syntax-comment": palette.base03,
+    "syntax-variable": p.base08,
+    "syntax-number": p.base09,
+    "syntax-type": p.base0A,
+    "syntax-string": p.base0B,
+    "syntax-operator": p.base0C,
+    "syntax-function": p.base0D,
+    "syntax-keyword": p.base0E,
+    "syntax-comment": p.base03,
   };
+
+  // Status + UI-role accents — full triplets so imported palettes don't
+  // inherit baseline tints.
+  emitTriplet(out, "accent-success", p.base0B);
+  emitTriplet(out, "accent-warning", p.base09);
+  emitTriplet(out, "accent-error", p.base08);
+  emitTriplet(out, "accent-info", p.base0D);
+  emitTriplet(out, "accent-secondary", p.base0F);
+  emitTriplet(out, "accent-tertiary", p.base0E);
 
   return {
     id: theme.id,

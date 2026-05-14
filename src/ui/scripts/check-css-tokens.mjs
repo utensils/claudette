@@ -76,10 +76,16 @@ const HEX_EXCLUDED_FILES = new Set([
 
 // Rgba file-level exclusions (entire file is exempt from Rule 2).
 const RGBA_EXCLUDED_FILES = new Set([
-  // theme.test.ts test names and theme.ts doc comments reference the
-  // `rgba(var(--*-rgb), alpha)` pattern abstractly (with `*` or `...`),
-  // which the canonical token regex can't match.
+  // theme.test.ts test names mention the `rgba(var(...), alpha)` pattern
+  // abstractly in `it()` descriptions.
   "src/utils/theme.test.ts",
+  // theme.ts's base16 converter emits `rgba(${rgb-triplet}, ${alpha})`
+  // strings from template literals as it synthesizes the -bg / -border
+  // companion tokens for imported palettes. This is the one place in the
+  // app where building an rgba string from JS is the right answer — the
+  // alternative (calling out to a CSS-token derivation in `theme.css`) is
+  // impossible because the input is a per-theme palette only known at
+  // runtime. Do not extend this exemption to other files.
   "src/utils/theme.ts",
 ]);
 
