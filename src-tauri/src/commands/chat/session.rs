@@ -293,6 +293,7 @@ mod tests {
                 .map(|task| (*task).to_string())
                 .collect(),
             background_wake_active: false,
+            background_task_output_paths: std::collections::HashMap::new(),
             session_exited_plan: false,
             session_resolved_env: Default::default(),
             session_resolved_env_signature: String::new(),
