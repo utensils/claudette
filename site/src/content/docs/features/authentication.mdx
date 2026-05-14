@@ -61,7 +61,7 @@ Your Claude OAuth tokens (`claudeAiOauth.*`) are never read or written by Claude
 
 ## Agent providers
 
-Claudette supports running an agent against [agent providers](/claudette/features/providers/) (Ollama, LM Studio, OpenAI, Codex, Pi) via **Settings > Models**. Each provider has its own credential expectations — see the per-provider docs. Pi credentials and provider config stay under Pi's auth/config system and are refreshed with `pi auth`; Claudette discovers models, runs Pi turns, and executes Claudette-mediated custom tools through its bundled Pi SDK sidecar. The Anthropic Pro/Max OAuth flow described above only applies when the active provider is the official `claude` CLI.
+Claudette supports running an agent against [agent providers](/claudette/features/providers/) (Ollama, LM Studio, OpenAI, Codex, Pi) via **Settings > Models**. Each provider has its own credential expectations — see the per-provider docs. Pi credentials and provider config stay under Pi's auth/config system and are refreshed with `pi auth`; Claudette uses its bundled Pi SDK sidecar to discover models, run Pi turns, and execute Claudette-mediated custom tools. The Anthropic Pro/Max OAuth flow described above only applies when the active provider is the official `claude` CLI.
 
 ## Signing out
 

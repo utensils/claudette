@@ -13,6 +13,7 @@ use tokio::sync::oneshot;
 
 use crate::process::CommandWindowExt as _;
 
+use super::environment::apply_resolved_env_to_command;
 use super::{
     AgentEvent, AssistantMessage, ContentBlock, ControlRequestInner, Delta, FileAttachment,
     InnerStreamEvent, StartContentBlock, StreamEvent, TurnHandle, UserContentBlock,
@@ -40,6 +41,9 @@ pub struct PiSdkOptions {
     pub thinking_level: Option<String>,
     pub session_dir: Option<PathBuf>,
     pub allowed_tools: Vec<String>,
+    pub custom_instructions: Option<String>,
+    pub workspace_env: Option<crate::env::WorkspaceEnv>,
+    pub resolved_env: Option<crate::env_provider::ResolvedEnv>,
 }
 
 pub struct PiSdkSession {
@@ -68,6 +72,12 @@ impl PiSdkSession {
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .env("PATH", crate::env::enriched_path());
+        if let Some(env) = options.resolved_env.as_ref() {
+            apply_resolved_env_to_command(&mut cmd, env);
+        }
+        if let Some(env) = options.workspace_env.as_ref() {
+            env.apply(&mut cmd);
+        }
         if let Some(package_dir) = resolve_pi_package_dir(&pi_path) {
             cmd.env("PI_PACKAGE_DIR", package_dir);
         }
@@ -329,6 +339,7 @@ impl PiSdkSession {
             "model": options.model,
             "thinkingLevel": options.thinking_level,
             "allowedTools": options.allowed_tools,
+            "customInstructions": options.custom_instructions,
         }))
         .await?;
         Ok(())
@@ -461,12 +472,16 @@ enum PiHarnessMessage {
     },
     #[serde(rename = "tool_update")]
     ToolUpdate {
+        #[serde(default)]
+        phase: Option<String>,
         #[serde(default, rename = "toolCallId")]
         tool_call_id: Option<String>,
         #[serde(default, rename = "toolName")]
         tool_name: Option<String>,
         #[serde(default)]
         args: Option<Value>,
+        #[serde(default)]
+        result: Option<Value>,
     },
     #[serde(rename = "tool_result")]
     ToolResult {
@@ -558,6 +573,12 @@ async fn route_pi_message(
                     content_block: Some(StartContentBlock::Text {}),
                 },
             }));
+            let _ = event_tx.send(AgentEvent::Stream(StreamEvent::Stream {
+                event: InnerStreamEvent::ContentBlockStart {
+                    index: 1,
+                    content_block: Some(StartContentBlock::Thinking {}),
+                },
+            }));
         }
         PiHarnessMessage::AssistantDelta { delta } => {
             turn_output.lock().await.text.push_str(&delta);
@@ -608,22 +629,28 @@ async fn route_pi_message(
             }));
         }
         PiHarnessMessage::ToolUpdate {
+            phase,
             tool_call_id,
             tool_name,
             args,
+            result,
         } => {
             let id = tool_call_id.unwrap_or_else(|| "pi-tool".to_string());
             let name = tool_name.unwrap_or_else(|| "tool".to_string());
-            let _ = event_tx.send(AgentEvent::Stream(StreamEvent::Stream {
-                event: InnerStreamEvent::ContentBlockStart {
-                    index: 2,
-                    content_block: Some(StartContentBlock::ToolUse {
-                        id: id.clone(),
-                        name,
-                    }),
-                },
-            }));
-            if let Some(args) = args {
+            if phase.as_deref().unwrap_or("start") == "start" {
+                let _ = event_tx.send(AgentEvent::Stream(StreamEvent::Stream {
+                    event: InnerStreamEvent::ContentBlockStart {
+                        index: 2,
+                        content_block: Some(StartContentBlock::ToolUse {
+                            id: id.clone(),
+                            name,
+                        }),
+                    },
+                }));
+            }
+            if let Some(args) = args
+                && phase.as_deref().unwrap_or("start") == "start"
+            {
                 let _ = event_tx.send(AgentEvent::Stream(StreamEvent::Stream {
                     event: InnerStreamEvent::ContentBlockDelta {
                         index: 2,
@@ -631,6 +658,21 @@ async fn route_pi_message(
                             partial_json: Some(args.to_string()),
                         },
                     },
+                }));
+            }
+            if let Some(result) = result
+                && phase.as_deref() == Some("update")
+            {
+                let _ = event_tx.send(AgentEvent::Stream(StreamEvent::User {
+                    message: UserEventMessage {
+                        content: UserMessageContent::Blocks(vec![UserContentBlock::ToolResult {
+                            tool_use_id: id,
+                            content: result,
+                        }]),
+                    },
+                    uuid: None,
+                    is_replay: false,
+                    is_synthetic: true,
                 }));
             }
         }
@@ -745,8 +787,21 @@ fn resolve_pi_package_dir(harness_path: &Path) -> Option<PathBuf> {
     }
     let exe = std::env::current_exe().ok()?;
     let dir = exe.parent()?;
-    let bundled = dir.join("pi");
-    bundled.exists().then_some(bundled)
+    for candidate in [
+        dir.join("pi"),
+        dir.join("binaries").join("pi"),
+        dir.join("resources").join("binaries").join("pi"),
+        dir.parent()
+            .unwrap_or(dir)
+            .join("Resources")
+            .join("binaries")
+            .join("pi"),
+    ] {
+        if candidate.exists() {
+            return Some(candidate);
+        }
+    }
+    None
 }
 
 fn pi_command_line_event(path: &Path) -> AgentEvent {

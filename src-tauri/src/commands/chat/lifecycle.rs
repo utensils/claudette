@@ -141,6 +141,10 @@ pub async fn reset_agent_session(
 ) -> Result<(), String> {
     let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
     let chat_session_id = session_id;
+    let persisted_sid = db
+        .get_chat_session(&chat_session_id)
+        .map_err(|e| e.to_string())?
+        .and_then(|session| session.session_id);
 
     // Drain pending permissions under the lock, remove the session, capture
     // its session_id and any active PID; the deny sends, process kill,
@@ -167,7 +171,9 @@ pub async fn reset_agent_session(
     // discards in-flight state, so record as a failure.
     db.clear_chat_session_state(&chat_session_id)
         .map_err(|e| e.to_string())?;
-    if let Some(sid) = ended_sid.as_deref().filter(|s| !s.is_empty()) {
+    let pi_sid = ended_sid.or(persisted_sid);
+    if let Some(sid) = pi_sid.as_deref().filter(|s| !s.is_empty()) {
+        super::remove_pi_session_dir(&state.db_path, sid).await;
         let _ = db.end_agent_session(sid, false);
     }
 

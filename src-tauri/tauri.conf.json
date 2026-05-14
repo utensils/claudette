@@ -55,6 +55,7 @@
     "targets": "all",
     "createUpdaterArtifacts": true,
     "externalBin": ["binaries/claudette", "binaries/claudette-pi-harness"],
+    "resources": ["binaries/pi/package.json"],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

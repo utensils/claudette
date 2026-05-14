@@ -33,7 +33,7 @@ fi
 
 (
   cd src-pi-harness
-  bun install
+  bun install --frozen-lockfile
 )
 
 dest_dir="src-tauri/binaries"

@@ -1686,7 +1686,7 @@ async fn discover_pi_models(
         })
         .collect();
     if models.is_empty() {
-        models = backend.manual_models.clone();
+        models = AgentBackendConfig::builtin_pi_sdk().manual_models;
     }
     Ok(models)
 }

@@ -162,17 +162,22 @@ pub async fn archive_chat_session(
         .map_err(|e| e.to_string())?
         .ok_or("Session not found")?;
     let workspace_id = session.workspace_id.clone();
+    let persisted_sid = session.session_id.clone();
 
     // Stop and remove the live agent for this session.
     // Capture the PID under the lock, then drop the lock before the async stop.
-    let pid_to_stop = {
+    let (pid_to_stop, live_sid) = {
         let mut agents = state.agents.write().await;
         agents
             .remove(&session_id)
-            .and_then(|mut agent| agent.active_pid.take())
+            .map(|mut agent| (agent.active_pid.take(), Some(agent.session_id)))
+            .unwrap_or((None, None))
     };
     if let Some(pid) = pid_to_stop {
         let _ = agent::stop_agent(pid).await;
+    }
+    if let Some(sid) = live_sid.or(persisted_sid) {
+        super::remove_pi_session_dir(&state.db_path, &sid).await;
     }
 
     let fresh = if auto_replace.unwrap_or(true) {

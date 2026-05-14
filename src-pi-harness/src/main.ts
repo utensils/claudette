@@ -1,5 +1,5 @@
-import { mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
-import { dirname, isAbsolute, join, resolve } from "node:path";
+import { lstat, mkdir, readFile, readdir, realpath, stat, writeFile } from "node:fs/promises";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { spawn } from "node:child_process";
 import { createInterface } from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
@@ -71,7 +71,56 @@ function asStringArray(value: unknown): string[] {
 }
 
 function safePath(cwd: string, value: string): string {
-  return isAbsolute(value) ? value : resolve(cwd, value);
+  const root = resolve(cwd);
+  const target = isAbsolute(value) ? resolve(value) : resolve(root, value);
+  assertInsideWorkspace(root, target, value);
+  return target;
+}
+
+async function safeExistingPath(cwd: string, value: string): Promise<string> {
+  const root = await realpath(cwd);
+  const target = await realpath(safePath(cwd, value));
+  assertInsideWorkspace(root, target, value);
+  return target;
+}
+
+async function assertWritableTarget(cwd: string, path: string): Promise<void> {
+  const root = await realpath(cwd);
+  try {
+    const current = await lstat(path);
+    if (current.isSymbolicLink()) {
+      throw new Error(`Refusing to write through symlink: ${path}`);
+    }
+    assertInsideWorkspace(root, await realpath(path), path);
+    return;
+  } catch (error) {
+    if (!(error instanceof Error) || !("code" in error) || error.code !== "ENOENT") {
+      throw error;
+    }
+  }
+  assertInsideWorkspace(root, await realExistingAncestor(dirname(path)), path);
+}
+
+async function realExistingAncestor(path: string): Promise<string> {
+  let current = path;
+  for (;;) {
+    try {
+      return await realpath(current);
+    } catch (error) {
+      if (!(error instanceof Error) || !("code" in error) || error.code !== "ENOENT") {
+        throw error;
+      }
+      const parent = dirname(current);
+      if (parent === current) throw error;
+      current = parent;
+    }
+  }
+}
+
+function assertInsideWorkspace(root: string, target: string, original: string): void {
+  const rel = relative(root, target);
+  if (rel === "" || (!rel.startsWith("..") && !isAbsolute(rel))) return;
+  throw new Error(`Path escapes workspace: ${original}`);
 }
 
 function modelKey(model: { provider?: string; id?: string; name?: string; contextWindow?: number }) {
@@ -121,7 +170,7 @@ function buildTools(cwd: string, enabledTools: readonly string[]): ToolDefinitio
         path: Type.String(),
       }),
       execute: async (_toolCallId, params) => {
-        const path = safePath(cwd, params.path);
+        const path = await safeExistingPath(cwd, params.path);
         const text = await readFile(path, "utf8");
         return textResult(text, { path });
       },
@@ -134,7 +183,7 @@ function buildTools(cwd: string, enabledTools: readonly string[]): ToolDefinitio
         path: Type.Optional(Type.String()),
       }),
       execute: async (_toolCallId, params) => {
-        const path = safePath(cwd, params.path ?? ".");
+        const path = await safeExistingPath(cwd, params.path ?? ".");
         const entries = await readdir(path, { withFileTypes: true });
         return textResult(
           entries
@@ -154,7 +203,7 @@ function buildTools(cwd: string, enabledTools: readonly string[]): ToolDefinitio
         limit: Type.Optional(Type.Number()),
       }),
       execute: async (_toolCallId, params) => {
-        const root = safePath(cwd, params.path ?? ".");
+        const root = await safeExistingPath(cwd, params.path ?? ".");
         const limit = Math.max(1, Math.min(params.limit ?? 100, 500));
         const matches: string[] = [];
         async function walk(dir: string): Promise<void> {
@@ -174,18 +223,26 @@ function buildTools(cwd: string, enabledTools: readonly string[]): ToolDefinitio
     defineTool({
       name: "grep",
       label: "Grep",
-      description: "Search text files for a query using ripgrep when available.",
+      description: "Search text files for a query.",
       parameters: Type.Object({
         query: Type.String(),
         path: Type.Optional(Type.String()),
       }),
       execute: async (_toolCallId, params, signal) => {
-        const root = safePath(cwd, params.path ?? ".");
-        const result = await runCommand("rg", ["-n", "--", params.query, root], cwd, signal);
-        return textResult(result.stdout || result.stderr, {
-          command: `rg -n -- ${params.query} ${root}`,
-          exitCode: result.exitCode,
-        });
+        const root = await safeExistingPath(cwd, params.path ?? ".");
+        try {
+          const result = await runCommand("rg", ["-n", "--", params.query, root], cwd, signal);
+          return textResult(result.stdout || result.stderr, {
+            command: `rg -n -- ${params.query} ${root}`,
+            exitCode: result.exitCode,
+          });
+        } catch (error) {
+          if (!isMissingCommand(error)) throw error;
+          return textResult(await grepFallback(root, params.query), {
+            command: `builtin grep ${params.query} ${root}`,
+            exitCode: 0,
+          });
+        }
       },
     }),
     defineTool({
@@ -217,6 +274,7 @@ function buildTools(cwd: string, enabledTools: readonly string[]): ToolDefinitio
       }),
       execute: async (toolCallId, params) => {
         const path = safePath(cwd, params.path);
+        await assertWritableTarget(cwd, path);
         const approved = await approval(toolCallId, "fileChange", {
           path,
           reason: "Pi requested a file write.",
@@ -239,13 +297,17 @@ function buildTools(cwd: string, enabledTools: readonly string[]): ToolDefinitio
       prepareArguments: (args) => {
         const input = (args ?? {}) as Record<string, unknown>;
         return {
-          path: String(input.path ?? input.file_path ?? ""),
-          oldText: String(input.oldText ?? input.old_text ?? ""),
-          newText: String(input.newText ?? input.new_text ?? ""),
+          path: typeof (input.path ?? input.file_path) === "string" ? String(input.path ?? input.file_path) : "",
+          oldText: typeof (input.oldText ?? input.old_text) === "string" ? String(input.oldText ?? input.old_text) : "",
+          newText: typeof (input.newText ?? input.new_text) === "string" ? String(input.newText ?? input.new_text) : "",
         };
       },
       execute: async (toolCallId, params) => {
         const path = safePath(cwd, params.path);
+        await assertWritableTarget(cwd, path);
+        if (!params.oldText) {
+          throw new Error("Edit requires non-empty oldText.");
+        }
         const approved = await approval(toolCallId, "fileChange", {
           path,
           reason: "Pi requested a file edit.",
@@ -289,6 +351,40 @@ function runCommand(program: string, args: string[], cwd: string, signal?: Abort
   });
 }
 
+function isMissingCommand(error: unknown): boolean {
+  return error instanceof Error && "code" in error && error.code === "ENOENT";
+}
+
+async function grepFallback(root: string, query: string): Promise<string> {
+  const matches: string[] = [];
+  async function walk(dir: string): Promise<void> {
+    if (matches.length >= 500) return;
+    for (const entry of await readdir(dir, { withFileTypes: true })) {
+      if (matches.length >= 500) return;
+      const path = join(dir, entry.name);
+      if (entry.isDirectory()) {
+        if (!entry.name.startsWith(".") && entry.name !== "node_modules") {
+          await walk(path);
+        }
+        continue;
+      }
+      if (!entry.isFile()) continue;
+      try {
+        const text = await readFile(path, "utf8");
+        text.split(/\r?\n/).forEach((line, index) => {
+          if (matches.length < 500 && line.includes(query)) {
+            matches.push(`${path}:${index + 1}:${line}`);
+          }
+        });
+      } catch {
+        // Ignore unreadable or non-UTF-8 files in the fallback scanner.
+      }
+    }
+  }
+  await walk(root);
+  return matches.join("\n");
+}
+
 function mapPermissionTools(value: unknown): string[] {
   const tools = asStringArray(value);
   if (tools.includes("*")) return ["read", "ls", "find", "grep", "bash", "write", "edit"];
@@ -311,6 +407,7 @@ async function startSession(message: RequestMessage): Promise<void> {
   const agentDir = asString(message.agentDir) ?? getAgentDir();
   const sessionDir = asString(message.sessionDir);
   const requestedModel = asString(message.model);
+  const customInstructions = asString(message.customInstructions);
   const tools = mapPermissionTools(message.allowedTools);
   state.cwd = cwd;
   state.authStorage = AuthStorage.create();
@@ -323,6 +420,7 @@ async function startSession(message: RequestMessage): Promise<void> {
     settingsManager,
     appendSystemPromptOverride: (basePrompt: string[]) => [
       ...basePrompt,
+      ...(customInstructions ? [customInstructions] : []),
       "You are running inside Claudette using the Pi SDK harness. Use the available tools normally; Claudette will ask the user for approval before mutating commands or file changes.",
     ],
   });
@@ -367,6 +465,7 @@ function normalizeThinking(value: unknown) {
 }
 
 function findModel(value: string) {
+  state.modelRegistry.refresh();
   const [provider, ...idParts] = value.includes("/") ? value.split("/") : ["", value];
   const modelId = idParts.join("/");
   if (provider) return state.modelRegistry.find(provider, modelId);

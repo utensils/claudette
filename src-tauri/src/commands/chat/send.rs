@@ -1654,11 +1654,7 @@ pub async fn send_chat_message(
     let ws_env_for_persistent = ws_env.clone();
     let resolved_env_for_persistent = resolved_env.clone();
     let codex_permission_level_for_persistent = codex_permission_level;
-    let pi_sessions_root = state
-        .db_path
-        .parent()
-        .map(|parent| parent.join("pi-sessions"))
-        .unwrap_or_else(|| std::env::temp_dir().join("claudette-pi-sessions"));
+    let pi_sessions_root = super::pi_sessions_root(&state.db_path);
     let start_persistent = move |worktree: String,
                                  sid: String,
                                  is_resume: bool,
@@ -1723,9 +1719,16 @@ pub async fn send_chat_message(
                         &sid,
                         PiSdkOptions {
                             model: settings.model.clone(),
-                            thinking_level: settings.effort.clone(),
+                            thinking_level: if settings.thinking_enabled {
+                                settings.effort.clone()
+                            } else {
+                                Some("off".to_string())
+                            },
                             session_dir: Some(pi_sessions_root.join(&sid)),
                             allowed_tools: tools,
+                            custom_instructions: instructions,
+                            workspace_env: Some(env),
+                            resolved_env: Some(resolved),
                         },
                     )
                     .await?;

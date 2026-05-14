@@ -7,6 +7,7 @@ pub mod remote_control;
 pub mod send;
 pub mod session;
 
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
@@ -75,6 +76,30 @@ pub(crate) struct AgentStreamPayload {
 /// plus a macOS window-show animation (when the user had the window hidden),
 /// short enough that the notification still feels tied to the trigger.
 pub(crate) const ATTENTION_NOTIFY_DELAY_MS: u64 = 300;
+
+pub(crate) fn pi_sessions_root(db_path: &Path) -> PathBuf {
+    db_path
+        .parent()
+        .map(|parent| parent.join("pi-sessions"))
+        .unwrap_or_else(|| std::env::temp_dir().join("claudette-pi-sessions"))
+}
+
+pub(crate) async fn remove_pi_session_dir(db_path: &Path, session_id: &str) {
+    if session_id.trim().is_empty() {
+        return;
+    }
+    let path = pi_sessions_root(db_path).join(session_id);
+    match tokio::fs::remove_dir_all(&path).await {
+        Ok(()) => {}
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+        Err(err) => tracing::warn!(
+            target: "claudette::chat",
+            path = %path.display(),
+            error = %err,
+            "failed to remove Pi session directory"
+        ),
+    }
+}
 
 /// Build a fresh bridge for a workspace and return an `mcp_config` JSON with
 /// the synthetic `claudette` MCP server entry merged in. The Claude CLI will
