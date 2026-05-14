@@ -68,17 +68,12 @@ export function useKeyboardShortcuts() {
           // (popovers, dropdowns, rebind capture, inline editors) first;
           // exit Settings only when none remain. Components register
           // themselves via `useSettingsOverlay`. The activeElement guard
-          // catches native select/input/textarea dropdowns that can't
-          // participate in the counter and stops Escape inside an open
-          // native select from exiting Settings mid-edit.
+          // catches native select dropdowns that can't participate in
+          // the counter and stops Escape inside an open native select
+          // from exiting Settings mid-edit.
           const settingsState = useAppStore.getState();
           if (settingsState.settingsOverlayCount > 0) return;
-          const focusedTag = document.activeElement?.tagName?.toLowerCase();
-          if (
-            focusedTag === "select" ||
-            focusedTag === "input" ||
-            focusedTag === "textarea"
-          ) {
+          if (shouldDeferSettingsEscapeForElement(document.activeElement)) {
             return;
           }
           settingsState.closeSettings();
@@ -354,4 +349,10 @@ export function useKeyboardShortcuts() {
     openChatSearch,
     closeChatSearch,
   ]);
+}
+
+export function shouldDeferSettingsEscapeForElement(
+  element: Element | null | undefined,
+): boolean {
+  return element?.tagName?.toLowerCase() === "select";
 }

@@ -518,6 +518,7 @@ function PromptRow({
       }
       if (e.key === "Escape") {
         e.preventDefault();
+        e.stopPropagation();
         cancelEdit();
         return true;
       }
@@ -541,6 +542,16 @@ function PromptRow({
       handleSaveCancelKey(e);
     },
     [slash, handleSaveCancelKey],
+  );
+
+  const handleConfirmDeleteKeyDown = useCallback(
+    (e: React.KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      e.preventDefault();
+      e.stopPropagation();
+      setMode("editing");
+    },
+    [],
   );
 
   // ---------- Display mode ----------
@@ -684,7 +695,7 @@ function PromptRow({
           </button>
         </div>
       ) : (
-        <div className={styles.confirmPanel}>
+        <div className={styles.confirmPanel} onKeyDown={handleConfirmDeleteKeyDown}>
           <div className={styles.confirmCopy}>
             <div className={styles.confirmTitle}>
               {t("pinned_prompts_confirm_delete_title")}
@@ -777,6 +788,7 @@ function DraftRowView({
       }
       if (e.key === "Escape") {
         e.preventDefault();
+        e.stopPropagation();
         onCancel();
         return true;
       }
