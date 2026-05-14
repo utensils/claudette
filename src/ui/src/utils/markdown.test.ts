@@ -400,6 +400,26 @@ describe("MARKDOWN_COMPONENTS.a click handling", () => {
     expect(tauriMocks.openUrl).not.toHaveBeenCalled();
   });
 
+  it("leaves unresolved home-relative file links as plain text when a resolver is available", async () => {
+    const openFile = vi.fn(() => true);
+    const container = await render(
+      createElement(
+        MarkdownFileOpenContext.Provider,
+        { value: { openFile, resolveFilePath: () => null } },
+        createElement(LinkOverride, {
+          href: "claudettepath:~/Downloads/report.md",
+          children: "~/Downloads/report.md",
+        }),
+      ),
+    );
+
+    expect(container.querySelector("button")).toBeNull();
+    expect(container.textContent).toBe("~/Downloads/report.md");
+    expect(openFile).not.toHaveBeenCalled();
+    expect(tauriMocks.openInEditor).not.toHaveBeenCalled();
+    expect(tauriMocks.openUrl).not.toHaveBeenCalled();
+  });
+
   it("opens explicit absolute file paths in the native app when Monaco cannot handle them", async () => {
     const openFile = vi.fn(() => false);
     const container = await render(

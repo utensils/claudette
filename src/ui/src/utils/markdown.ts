@@ -404,7 +404,7 @@ const MarkdownLink: NonNullable<Components["a"]> = ({
     ? (encodedFilePath ?? localhostFilePath ?? hrefFilePath)
     : null;
   const encodedExplicitFilePath =
-    encodedFilePath && isExplicitFilePathTarget(encodedFilePath)
+    encodedFilePath && isAbsoluteExplicitFilePath(encodedFilePath)
       ? encodedFilePath
       : null;
   const encodedWorkspaceRelativeFilePath =
@@ -540,14 +540,26 @@ function isExplicitWorkspaceRelativeFilePath(path: string): boolean {
   const normalized = path.trim().replace(/^@/, "").replace(/\\/g, "/");
   if (
     normalized.startsWith("../") ||
+    normalized.startsWith("~/") ||
     normalized === "." ||
     normalized === ".." ||
+    normalized === "~" ||
     /^[A-Za-z]:\//.test(normalized) ||
     normalized.startsWith("/")
   ) {
     return false;
   }
   return normalized.startsWith("./") || normalized.includes("/");
+}
+
+function isAbsoluteExplicitFilePath(path: string): boolean {
+  if (!isExplicitFilePathTarget(path)) return false;
+  const normalized = path.trim().replace(/^@/, "").replace(/\\/g, "/");
+  return (
+    normalized.startsWith("/") ||
+    /^[A-Za-z]:\//.test(normalized) ||
+    normalized.startsWith("//")
+  );
 }
 
 // Override <a> to open external links in the system browser instead of
