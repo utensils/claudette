@@ -10,7 +10,7 @@ use claudette::db::Database;
 use claudette::mcp_supervisor::McpSupervisor;
 use claudette::plugin_runtime::host_api::WorkspaceInfo;
 use claudette::scm::detect;
-use claudette::scm::types::{CiCheck, PullRequest};
+use claudette::scm::types::{CiCheck, CiCheckStatus, CiFailureLog, CiOverallStatus, PullRequest};
 
 use crate::state::{AppState, ScmCacheEntry};
 
@@ -32,6 +32,23 @@ pub struct ScmDetail {
     pub ci_checks: Vec<CiCheck>,
     pub provider: Option<String>,
     pub error: Option<String>,
+}
+
+const CI_AUTO_FIX_COOLDOWN_DEFAULT_SECONDS: u64 = 300;
+const CI_AUTO_FIX_COOLDOWN_MIN_SECONDS: u64 = 60;
+const CI_AUTO_FIX_COOLDOWN_MAX_SECONDS: u64 = 3600;
+
+struct ScmPollSettingsSnapshot {
+    workspace_ids: Vec<(String, String)>,
+    global_archive: bool,
+    per_repo_archive: HashMap<String, bool>,
+    global_ci_auto_fix: bool,
+    per_repo_ci_auto_fix: HashMap<String, bool>,
+    per_repo_ci_auto_fix_prompts: HashMap<String, String>,
+    ci_auto_fix_prompt: String,
+    ci_auto_fix_cooldown: u64,
+    ci_auto_fix_model: Option<String>,
+    ci_auto_fix_model_provider: Option<String>,
 }
 
 /// DB lookup result for workspace + repo + manual provider override.
@@ -904,6 +921,118 @@ fn tier_interval(
     }
 }
 
+fn parse_ci_auto_fix_cooldown_seconds(raw: Option<String>) -> u64 {
+    raw.and_then(|s| s.parse::<u64>().ok())
+        .map(|seconds| {
+            seconds.clamp(
+                CI_AUTO_FIX_COOLDOWN_MIN_SECONDS,
+                CI_AUTO_FIX_COOLDOWN_MAX_SECONDS,
+            )
+        })
+        .unwrap_or(CI_AUTO_FIX_COOLDOWN_DEFAULT_SECONDS)
+}
+
+fn load_scm_poll_settings_snapshot(db: &Database) -> ScmPollSettingsSnapshot {
+    let active: Vec<(String, String)> = db
+        .list_workspaces()
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|ws| ws.status == claudette::model::WorkspaceStatus::Active)
+        .map(|ws| (ws.id, ws.repository_id))
+        .collect();
+    let global_archive = db
+        .get_app_setting("archive_on_merge")
+        .ok()
+        .flatten()
+        .as_deref()
+        == Some("true");
+    let repo_ids: std::collections::HashSet<&str> =
+        active.iter().map(|(_, rid)| rid.as_str()).collect();
+    let per_repo_archive: HashMap<String, bool> = repo_ids
+        .iter()
+        .filter_map(|rid| {
+            let key = format!("repo:{rid}:archive_on_merge");
+            let val = db.get_app_setting(&key).ok().flatten()?;
+            if val.is_empty() {
+                return None;
+            }
+            Some((rid.to_string(), val == "true"))
+        })
+        .collect();
+
+    let global_ci_auto_fix = db
+        .get_app_setting("ci_auto_fix_enabled")
+        .ok()
+        .flatten()
+        .as_deref()
+        == Some("true");
+    let per_repo_ci_auto_fix: HashMap<String, bool> = repo_ids
+        .iter()
+        .filter_map(|rid| {
+            let key = format!("repo:{rid}:ci_auto_fix_enabled");
+            let val = db.get_app_setting(&key).ok().flatten()?;
+            if val.is_empty() {
+                return None;
+            }
+            Some((rid.to_string(), val == "true"))
+        })
+        .collect();
+    let per_repo_ci_auto_fix_prompts: HashMap<String, String> = repo_ids
+        .iter()
+        .filter_map(|rid| {
+            let key = format!("repo:{rid}:ci_auto_fix_prompt");
+            let val = db.get_app_setting(&key).ok().flatten()?;
+            if val.is_empty() {
+                return None;
+            }
+            Some((rid.to_string(), val))
+        })
+        .collect();
+    let ci_auto_fix_prompt = db
+        .get_app_setting("ci_auto_fix_prompt")
+        .ok()
+        .flatten()
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| DEFAULT_CI_AUTO_FIX_PROMPT.to_string());
+    let ci_auto_fix_cooldown = parse_ci_auto_fix_cooldown_seconds(
+        db.get_app_setting("ci_auto_fix_cooldown_seconds")
+            .ok()
+            .flatten(),
+    );
+    let ci_auto_fix_model = db
+        .get_app_setting("ci_auto_fix_model")
+        .ok()
+        .flatten()
+        .filter(|s| !s.is_empty())
+        .or_else(|| {
+            db.get_app_setting("default_model")
+                .ok()
+                .flatten()
+                .filter(|s| !s.is_empty())
+        });
+    let ci_auto_fix_model_provider = if ci_auto_fix_model.is_some() {
+        db.get_app_setting("ci_auto_fix_model_provider")
+            .ok()
+            .flatten()
+            .filter(|s| !s.is_empty())
+    } else {
+        None
+    };
+
+    ScmPollSettingsSnapshot {
+        workspace_ids: active,
+        global_archive,
+        per_repo_archive,
+        global_ci_auto_fix,
+        per_repo_ci_auto_fix,
+        per_repo_ci_auto_fix_prompts,
+        ci_auto_fix_prompt,
+        ci_auto_fix_cooldown,
+        ci_auto_fix_model,
+        ci_auto_fix_model_provider,
+    }
+}
+
 /// Start the background SCM polling loop.
 ///
 /// Ticks every 30s — the smallest tier interval — but only polls each
@@ -933,10 +1062,7 @@ pub fn start_scm_polling(app_handle: tauri::AppHandle) {
         loop {
             let app_state = handle.state::<AppState>();
 
-            // All DB reads for this poll cycle in one block.
-            // Collect workspace IDs with their repo IDs so we can resolve
-            // per-repo archive_on_merge overrides after polling.
-            let (workspace_ids, global_archive, per_repo_archive) = {
+            let settings = {
                 let db = match Database::open(&app_state.db_path) {
                     Ok(db) => db,
                     Err(_) => {
@@ -944,33 +1070,7 @@ pub fn start_scm_polling(app_handle: tauri::AppHandle) {
                         continue;
                     }
                 };
-                let active: Vec<(String, String)> = db
-                    .list_workspaces()
-                    .unwrap_or_default()
-                    .into_iter()
-                    .filter(|ws| ws.status == claudette::model::WorkspaceStatus::Active)
-                    .map(|ws| (ws.id, ws.repository_id))
-                    .collect();
-                let global = db
-                    .get_app_setting("archive_on_merge")
-                    .ok()
-                    .flatten()
-                    .as_deref()
-                    == Some("true");
-                let repo_ids: std::collections::HashSet<&str> =
-                    active.iter().map(|(_, rid)| rid.as_str()).collect();
-                let per_repo: std::collections::HashMap<String, bool> = repo_ids
-                    .into_iter()
-                    .filter_map(|rid| {
-                        let key = format!("repo:{rid}:archive_on_merge");
-                        let val = db.get_app_setting(&key).ok().flatten()?;
-                        if val.is_empty() {
-                            return None;
-                        }
-                        Some((rid.to_string(), val == "true"))
-                    })
-                    .collect();
-                (active, global, per_repo)
+                load_scm_poll_settings_snapshot(&db)
             };
 
             // Snapshot the per-tick decision inputs once so all tier
@@ -990,7 +1090,8 @@ pub fn start_scm_polling(app_handle: tauri::AppHandle) {
             let now = Instant::now();
 
             // Filter down to workspaces that are actually due on this tick.
-            let due: Vec<(String, String)> = workspace_ids
+            let due: Vec<(String, String)> = settings
+                .workspace_ids
                 .into_iter()
                 .filter(|(ws_id, _)| {
                     let interval = tier_interval(
@@ -1045,10 +1146,11 @@ pub fn start_scm_polling(app_handle: tauri::AppHandle) {
 
                     let _ = handle.emit("scm-data-updated", &detail);
 
-                    let should_archive = per_repo_archive
+                    let should_archive = settings
+                        .per_repo_archive
                         .get(&repo_id)
                         .copied()
-                        .unwrap_or(global_archive);
+                        .unwrap_or(settings.global_archive);
 
                     if should_archive
                         && detail
@@ -1060,12 +1162,333 @@ pub fn start_scm_polling(app_handle: tauri::AppHandle) {
                         let pr_number = detail.pull_request.as_ref().map(|pr| pr.number);
                         auto_archive_workspace(&handle, &app_state, &ws_id, pr_number).await;
                     }
+
+                    // CI auto-fix: detect failure transitions
+                    let ci_auto_fix_enabled = settings
+                        .per_repo_ci_auto_fix
+                        .get(&repo_id)
+                        .copied()
+                        .unwrap_or(settings.global_ci_auto_fix);
+
+                    if ci_auto_fix_enabled {
+                        let current_status =
+                            claudette::scm::types::derive_overall_ci_status(&detail.ci_checks);
+                        let mut ci_map = app_state.ci_last_status.write().await;
+                        let prev = ci_map.get(&ws_id);
+                        let prev_status = prev.and_then(|s| s.overall_status.clone());
+                        let prev_triggered = prev.and_then(|s| s.last_auto_fix_triggered);
+
+                        let is_failure_transition =
+                            is_ci_failure_transition(prev_status.clone(), current_status.clone());
+
+                        let within_cooldown = prev_triggered
+                            .is_some_and(|t| t.elapsed().as_secs() < settings.ci_auto_fix_cooldown);
+
+                        let should_create_auto_fix = is_failure_transition && !within_cooldown;
+
+                        let effective_prompt = settings
+                            .per_repo_ci_auto_fix_prompts
+                            .get(&repo_id)
+                            .cloned()
+                            .unwrap_or_else(|| settings.ci_auto_fix_prompt.clone());
+
+                        if !should_create_auto_fix {
+                            ci_map.insert(
+                                ws_id.clone(),
+                                crate::state::CiTransitionState {
+                                    overall_status: current_status.clone(),
+                                    last_auto_fix_triggered: prev_triggered,
+                                },
+                            );
+                        }
+                        drop(ci_map);
+
+                        if should_create_auto_fix {
+                            tracing::info!(
+                                target: "claudette::scm",
+                                workspace_id = %ws_id,
+                                "CI failure detected — creating auto-fix session"
+                            );
+                            let handled = auto_create_ci_fix_session(
+                                &handle,
+                                &app_state,
+                                &ws_id,
+                                &detail,
+                                &effective_prompt,
+                                settings.ci_auto_fix_model.as_deref(),
+                                settings.ci_auto_fix_model_provider.as_deref(),
+                            )
+                            .await;
+                            if handled {
+                                app_state.ci_last_status.write().await.insert(
+                                    ws_id.clone(),
+                                    crate::state::CiTransitionState {
+                                        overall_status: current_status,
+                                        last_auto_fix_triggered: Some(Instant::now()),
+                                    },
+                                );
+                            }
+                        }
+                    }
                 }
             }
 
             tokio::time::sleep(std::time::Duration::from_secs(30)).await;
         }
     });
+}
+
+const DEFAULT_CI_AUTO_FIX_PROMPT: &str = "\
+CI has failed on this branch. Please analyze the failures and fix the issues.
+
+## Failed checks
+{{failed_checks}}
+
+## Failure logs
+{{failure_logs}}
+
+Branch: {{branch}}
+PR: {{pr_title}} ({{pr_url}})
+
+Investigate the failing checks, identify the root cause, and make the necessary code changes to fix the CI failures.";
+
+fn format_failed_checks(checks: &[CiCheck]) -> String {
+    checks
+        .iter()
+        .filter(|c| c.status == CiCheckStatus::Failure)
+        .map(|c| {
+            let url_part = c.url.as_deref().unwrap_or("no URL");
+            format!("- **{}**: failure — {}", c.name, url_part)
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn format_all_checks(checks: &[CiCheck]) -> String {
+    checks
+        .iter()
+        .map(|c| {
+            let status = match c.status {
+                CiCheckStatus::Success => "success",
+                CiCheckStatus::Failure => "failure",
+                CiCheckStatus::Pending => "pending",
+                CiCheckStatus::Cancelled => "cancelled",
+                CiCheckStatus::Skipped => "skipped",
+            };
+            let url_part = c.url.as_deref().unwrap_or("no URL");
+            format!("- **{}**: {} — {}", c.name, status, url_part)
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn is_ci_failure_transition(
+    previous: Option<CiOverallStatus>,
+    current: Option<CiOverallStatus>,
+) -> bool {
+    matches!(
+        (previous, current),
+        (Some(prev), Some(CiOverallStatus::Failure)) if prev != CiOverallStatus::Failure
+    )
+}
+
+fn format_failure_logs(logs: &[CiFailureLog]) -> String {
+    if logs.is_empty() {
+        return "*(Failure logs unavailable — check the URLs above for details.)*".to_string();
+    }
+    logs.iter()
+        .map(|l| {
+            let fence = markdown_code_fence_for(&l.log);
+            format!("### {}\n{fence}\n{}\n{fence}", l.check_name, l.log)
+        })
+        .collect::<Vec<_>>()
+        .join("\n\n")
+}
+
+fn markdown_code_fence_for(text: &str) -> String {
+    let mut current_run = 0usize;
+    let mut longest_run = 0usize;
+    for ch in text.chars() {
+        if ch == '`' {
+            current_run += 1;
+            longest_run = longest_run.max(current_run);
+        } else {
+            current_run = 0;
+        }
+    }
+    "`".repeat(longest_run.saturating_add(1).max(3))
+}
+
+fn format_ci_auto_fix_prompt(
+    template: &str,
+    checks: &[CiCheck],
+    failure_logs: &[CiFailureLog],
+    branch: &str,
+    pr: Option<&PullRequest>,
+) -> String {
+    template
+        .replace("{{failed_checks}}", &format_failed_checks(checks))
+        .replace("{{all_checks}}", &format_all_checks(checks))
+        .replace("{{failure_logs}}", &format_failure_logs(failure_logs))
+        .replace("{{branch}}", branch)
+        .replace("{{pr_title}}", pr.map(|p| p.title.as_str()).unwrap_or(""))
+        .replace("{{pr_url}}", pr.map(|p| p.url.as_str()).unwrap_or(""))
+        .replace(
+            "{{pr_number}}",
+            &pr.map(|p| p.number.to_string()).unwrap_or_default(),
+        )
+}
+
+async fn auto_create_ci_fix_session(
+    handle: &tauri::AppHandle,
+    app_state: &AppState,
+    workspace_id: &str,
+    detail: &ScmDetail,
+    prompt_template: &str,
+    model: Option<&str>,
+    model_provider: Option<&str>,
+) -> bool {
+    let failed_check_names: Vec<String> = detail
+        .ci_checks
+        .iter()
+        .filter(|c| c.status == CiCheckStatus::Failure)
+        .map(|c| c.name.clone())
+        .collect();
+
+    let ctx = match lookup_workspace_context(&app_state.db_path, workspace_id).await {
+        Ok(ctx) => ctx,
+        Err(e) => {
+            tracing::warn!(
+                target: "claudette::scm",
+                workspace_id,
+                error = %e,
+                "CI auto-fix failed to lookup workspace context"
+            );
+            return false;
+        }
+    };
+    let ws_info = make_workspace_info(&ctx.workspace, &ctx.repo);
+    let branch = ctx.workspace.branch_name.as_str();
+    let mut failure_logs: Vec<CiFailureLog> = Vec::new();
+
+    if let Some(provider) = &detail.provider {
+        let args = serde_json::json!({
+            "branch": branch,
+            "failed_checks": failed_check_names,
+        });
+
+        let registry = app_state.plugins.read().await;
+        match registry
+            .call_operation(provider, "ci_failure_logs", args, ws_info)
+            .await
+        {
+            Ok(val) => {
+                if let Ok(logs) = serde_json::from_value::<Vec<CiFailureLog>>(val) {
+                    failure_logs = logs;
+                }
+            }
+            Err(claudette::plugin_runtime::PluginError::OperationNotSupported(_)) => {
+                tracing::info!(
+                    target: "claudette::scm",
+                    provider,
+                    "CI auto-fix plugin does not support ci_failure_logs; degrading to check names only"
+                );
+            }
+            Err(e) => {
+                tracing::warn!(
+                    target: "claudette::scm",
+                    provider,
+                    error = %e,
+                    "CI auto-fix failed to fetch failure logs"
+                );
+            }
+        }
+    }
+
+    let prompt = format_ci_auto_fix_prompt(
+        prompt_template,
+        &detail.ci_checks,
+        &failure_logs,
+        branch,
+        detail.pull_request.as_ref(),
+    );
+
+    let session_id = match Database::open(&app_state.db_path) {
+        Ok(db) => match db.create_chat_session(workspace_id) {
+            Ok(session) => session.id,
+            Err(e) => {
+                tracing::warn!(
+                    target: "claudette::scm",
+                    workspace_id,
+                    error = %e,
+                    "CI auto-fix failed to create chat session"
+                );
+                return false;
+            }
+        },
+        Err(e) => {
+            tracing::warn!(
+                target: "claudette::scm",
+                workspace_id,
+                error = %e,
+                "CI auto-fix failed to open DB"
+            );
+            return false;
+        }
+    };
+
+    let payload = serde_json::json!({
+        "workspace_id": workspace_id,
+        "session_id": session_id,
+        "prompt": prompt,
+        "failed_checks": detail.ci_checks.iter()
+            .filter(|c| c.status == CiCheckStatus::Failure)
+            .collect::<Vec<_>>(),
+        "model": model,
+        "backend_id": model_provider,
+    });
+
+    if let Err(e) = handle.emit("ci-auto-fix-session-created", payload) {
+        tracing::warn!(
+            target: "claudette::scm",
+            workspace_id,
+            session_id,
+            error = %e,
+            "CI auto-fix failed to emit created session event"
+        );
+        match Database::open(&app_state.db_path)
+            .and_then(|db| db.archive_chat_session_only(&session_id))
+        {
+            Ok(()) => {
+                tracing::info!(
+                    target: "claudette::scm",
+                    workspace_id,
+                    session_id,
+                    "CI auto-fix archived session after emit failure"
+                );
+            }
+            Err(archive_err) => {
+                tracing::warn!(
+                    target: "claudette::scm",
+                    workspace_id,
+                    session_id,
+                    error = %archive_err,
+                    "CI auto-fix failed to archive session after emit failure"
+                );
+            }
+        }
+        // The DB row already existed, so treat the attempt as handled for
+        // cooldown/dedup even though the frontend never received the event.
+        return true;
+    }
+    tracing::info!(
+        target: "claudette::scm",
+        workspace_id,
+        session_id,
+        failed_check_count = failed_check_names.len(),
+        "CI auto-fix created session"
+    );
+    true
 }
 
 /// Auto-archive a workspace when its PR is merged.
@@ -1652,5 +2075,154 @@ mod tests {
             Duration::from_secs(30 * 60),
             "selection of an unrelated workspace must not promote ws1 to hot",
         );
+    }
+}
+
+#[cfg(test)]
+mod ci_auto_fix_tests {
+    use super::*;
+    use claudette::scm::types::{CiCheck, CiCheckStatus, CiFailureLog, PrState, PullRequest};
+
+    fn make_check(name: &str, status: CiCheckStatus) -> CiCheck {
+        CiCheck {
+            name: name.to_string(),
+            status,
+            url: Some(format!("https://ci.example.com/{name}")),
+            started_at: None,
+        }
+    }
+
+    #[test]
+    fn format_failed_checks_filters_only_failures() {
+        let checks = vec![
+            make_check("build", CiCheckStatus::Failure),
+            make_check("lint", CiCheckStatus::Success),
+            make_check("test", CiCheckStatus::Failure),
+        ];
+        let result = format_failed_checks(&checks);
+        assert!(result.contains("**build**: failure"));
+        assert!(result.contains("**test**: failure"));
+        assert!(!result.contains("lint"));
+    }
+
+    #[test]
+    fn format_all_checks_includes_all() {
+        let checks = vec![
+            make_check("build", CiCheckStatus::Failure),
+            make_check("lint", CiCheckStatus::Success),
+            make_check("docs", CiCheckStatus::Skipped),
+        ];
+        let result = format_all_checks(&checks);
+        assert!(result.contains("**build**: failure"));
+        assert!(result.contains("**lint**: success"));
+        assert!(result.contains("**docs**: skipped"));
+    }
+
+    #[test]
+    fn format_failure_logs_empty_shows_degraded_message() {
+        let result = format_failure_logs(&[]);
+        assert!(result.contains("Failure logs unavailable"));
+    }
+
+    #[test]
+    fn format_failure_logs_renders_code_blocks() {
+        let logs = vec![CiFailureLog {
+            check_name: "build".to_string(),
+            log: "error: compilation failed".to_string(),
+            url: None,
+        }];
+        let result = format_failure_logs(&logs);
+        assert!(result.contains("### build"));
+        assert!(result.contains("error: compilation failed"));
+        assert!(result.contains("```"));
+    }
+
+    #[test]
+    fn format_failure_logs_uses_longer_fence_when_log_contains_backticks() {
+        let logs = vec![CiFailureLog {
+            check_name: "build".to_string(),
+            log: "before\n```\ninner\n```\nafter".to_string(),
+            url: None,
+        }];
+        let result = format_failure_logs(&logs);
+        assert!(result.contains("````\nbefore\n```"));
+        assert!(result.ends_with("\n````"));
+    }
+
+    #[test]
+    fn ci_auto_fix_cooldown_is_clamped_to_supported_range() {
+        assert_eq!(parse_ci_auto_fix_cooldown_seconds(None), 300);
+        assert_eq!(parse_ci_auto_fix_cooldown_seconds(Some("bad".into())), 300);
+        assert_eq!(parse_ci_auto_fix_cooldown_seconds(Some("0".into())), 60);
+        assert_eq!(parse_ci_auto_fix_cooldown_seconds(Some("120".into())), 120);
+        assert_eq!(
+            parse_ci_auto_fix_cooldown_seconds(Some("99999".into())),
+            3600,
+        );
+    }
+
+    #[test]
+    fn format_ci_auto_fix_prompt_substitutes_all_variables() {
+        let checks = vec![
+            make_check("build", CiCheckStatus::Failure),
+            make_check("test", CiCheckStatus::Success),
+        ];
+        let logs = vec![CiFailureLog {
+            check_name: "build".to_string(),
+            log: "FAIL".to_string(),
+            url: None,
+        }];
+        let pr = PullRequest {
+            number: 42,
+            title: "Fix stuff".to_string(),
+            state: PrState::Open,
+            url: "https://github.com/org/repo/pull/42".to_string(),
+            author: "user".to_string(),
+            branch: "fix-branch".to_string(),
+            base: "main".to_string(),
+            draft: false,
+            ci_status: Some(CiOverallStatus::Failure),
+        };
+        let template = "Branch: {{branch}}, PR: {{pr_title}} {{pr_url}} #{{pr_number}}\n{{failed_checks}}\n{{failure_logs}}\n{{all_checks}}";
+        let result = format_ci_auto_fix_prompt(template, &checks, &logs, "fix-branch", Some(&pr));
+        assert!(result.contains("Branch: fix-branch"));
+        assert!(result.contains("PR: Fix stuff"));
+        assert!(result.contains("https://github.com/org/repo/pull/42"));
+        assert!(result.contains("#42"));
+        assert!(result.contains("**build**: failure"));
+        assert!(result.contains("### build"));
+        assert!(result.contains("**test**: success"));
+    }
+
+    #[test]
+    fn format_ci_auto_fix_prompt_no_pr() {
+        let checks = vec![make_check("build", CiCheckStatus::Failure)];
+        let template = "PR: {{pr_title}} ({{pr_url}})";
+        let result = format_ci_auto_fix_prompt(template, &checks, &[], "main", None);
+        assert_eq!(result, "PR:  ()");
+    }
+
+    #[test]
+    fn ci_auto_fix_only_triggers_on_observed_transition_to_failure() {
+        assert!(!is_ci_failure_transition(
+            None,
+            Some(CiOverallStatus::Failure),
+        ));
+        assert!(is_ci_failure_transition(
+            Some(CiOverallStatus::Pending),
+            Some(CiOverallStatus::Failure),
+        ));
+        assert!(is_ci_failure_transition(
+            Some(CiOverallStatus::Success),
+            Some(CiOverallStatus::Failure),
+        ));
+        assert!(!is_ci_failure_transition(
+            Some(CiOverallStatus::Failure),
+            Some(CiOverallStatus::Failure),
+        ));
+        assert!(!is_ci_failure_transition(
+            Some(CiOverallStatus::Pending),
+            Some(CiOverallStatus::Success),
+        ));
     }
 }

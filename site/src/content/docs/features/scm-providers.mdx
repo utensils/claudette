@@ -47,6 +47,12 @@ If the CLI isn't installed or authenticated, the SCM tab shows a helpful status 
 
 Enable [**Settings > General > Archive on merge**](/claudette/features/settings/#general) to automatically archive a workspace when its PR is detected as merged. The sidebar cleans itself up without manual intervention.
 
+## Auto-Fix on CI Failure
+
+Enable [**Settings > Git > Auto-fix CI failures**](/claudette/features/settings/#git) to automatically create a new agent session when a workspace's CI changes from passing or running to failed. Claudette waits until checks have finished, applies the per-workspace cooldown, then opens a session with a prompt containing failed check names, links, branch and PR context, and failed log output when the provider supports it.
+
+The bundled GitHub provider uses `gh run view --log-failed`; the bundled GitLab provider uses `glab ci trace`. Custom SCM plugins can opt in by declaring and implementing the `ci_failure_logs` operation. If a provider does not support log fetching, the auto-fix session is still created with the check list and URLs.
+
 ## Custom Plugins
 
 SCM providers are **Lua plugins** that live in `~/.claudette/plugins/<name>/`. Each plugin has a `plugin.json` manifest declaring which CLI it wraps, which hostnames it handles, and which operations it supports.

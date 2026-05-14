@@ -134,4 +134,52 @@ function M.ci_status(args)
     return checks
 end
 
+local MAX_LOG_CHARS = 4000
+
+function M.ci_failure_logs(args)
+    local ok, data = pcall(glab, {
+        "ci", "status",
+        "--branch", args.branch,
+        "--output-format", "json",
+    })
+    if not ok then
+        return {}
+    end
+
+    local wanted = {}
+    for _, name in ipairs(args.failed_checks or {}) do
+        wanted[name] = true
+    end
+    local has_wanted = next(wanted) ~= nil
+
+    local logs = {}
+    for _, job in ipairs(data.jobs or {}) do
+        if string.lower(job.status or "") == "failed"
+            and ((not has_wanted) or wanted[job.name])
+        then
+            local trace = host.exec("glab", {
+                "ci", "trace", tostring(job.id),
+                "--branch", args.branch,
+            })
+            if trace.code ~= 0 then
+                host.log("warn", "ci_failure_logs failed for GitLab job "
+                    .. tostring(job.id) .. ": " .. tostring(trace.stderr or ""))
+            else
+                local log_text = trace.stdout or ""
+                if #log_text > MAX_LOG_CHARS then
+                    log_text = string.sub(log_text, -MAX_LOG_CHARS)
+                end
+                if #log_text > 0 then
+                    table.insert(logs, {
+                        check_name = job.name,
+                        log = log_text,
+                        url = job.web_url,
+                    })
+                end
+            end
+        end
+    end
+    return logs
+end
+
 return M

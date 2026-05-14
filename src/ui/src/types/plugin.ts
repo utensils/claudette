@@ -35,6 +35,12 @@ export interface ScmDetail {
   error: string | null;
 }
 
+export interface CiFailureLog {
+  check_name: string;
+  log: string;
+  url: string | null;
+}
+
 export interface ScmSummary {
   hasPr: boolean;
   prState: PullRequest["state"] | null;

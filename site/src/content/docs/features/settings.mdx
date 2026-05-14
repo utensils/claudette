@@ -148,6 +148,10 @@ See [Diagnostics & Logging](/claudette/features/diagnostics/) for the full pipel
 | Branch prefix mode | How branches are prefixed: `username`, `custom`, or `none` | Username |
 | Custom branch prefix | Prefix string when mode is `custom` | — |
 | Auto-delete branch on archive | Delete local branch when archiving a workspace | — |
+| Auto-fix CI failures | Create a new agent session when a workspace's CI transitions from passing/running to failed. The session prompt includes failed checks and, when supported by the SCM provider, failed log output. | Off |
+| CI auto-fix model | Model used for auto-fix sessions. Leave unset to use the global default model. | Use default model |
+| CI auto-fix prompt template | Prompt template for the created session. Supports `{{failed_checks}}`, `{{failure_logs}}`, `{{branch}}`, `{{pr_title}}`, `{{pr_url}}`, `{{pr_number}}`, and `{{all_checks}}`. | Built-in template |
+| CI auto-fix cooldown | Minimum seconds between auto-fix session creations per workspace. Values are clamped to 60-3600. | 300 seconds |
 
 ### Branch Prefix Mode
 
@@ -158,6 +162,12 @@ See [Diagnostics & Logging](/claudette/features/diagnostics/) for the full pipel
 ### Auto-Delete on Archive
 
 When enabled, archiving a workspace deletes the local branch — but only if the branch contains only checkpoint commits. If you've made manual commits on the branch, it will be preserved to prevent data loss.
+
+### CI Auto-Fix
+
+When enabled, Claudette watches the SCM polling results for active workspaces. A new auto-fix session is created only after an observed transition to failed CI, not for a failure that was already present when polling first saw the workspace.
+
+GitHub and GitLab providers attempt to include failed log output in the prompt. Providers that do not implement log fetching still create the session with failed check names and links.
 
 ## Repository
 

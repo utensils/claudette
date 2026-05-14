@@ -186,4 +186,51 @@ function M.ci_status(args)
     return checks
 end
 
+local MAX_LOG_CHARS = 4000
+
+function M.ci_failure_logs(args)
+    local ok, runs = pcall(gh, {
+        "run", "list",
+        "--branch", args.branch,
+        "--status", "failure",
+        "--json", "databaseId,name,url",
+        "--limit", "10",
+    })
+    if not ok then
+        return {}
+    end
+
+    local wanted = {}
+    for _, name in ipairs(args.failed_checks or {}) do
+        wanted[name] = true
+    end
+    local has_wanted = next(wanted) ~= nil
+
+    local logs = {}
+    for _, run in ipairs(runs) do
+        if (not has_wanted) or wanted[run.name] then
+            local result = host.exec("gh", {
+                "run", "view", tostring(run.databaseId), "--log-failed",
+            })
+            if result.code ~= 0 then
+                host.log("warn", "ci_failure_logs failed for GitHub run "
+                    .. tostring(run.databaseId) .. ": " .. tostring(result.stderr or ""))
+            else
+                local log_text = result.stdout or ""
+                if #log_text > MAX_LOG_CHARS then
+                    log_text = string.sub(log_text, -MAX_LOG_CHARS)
+                end
+                if #log_text > 0 then
+                    table.insert(logs, {
+                        check_name = run.name,
+                        log = log_text,
+                        url = run.url,
+                    })
+                end
+            end
+        end
+    end
+    return logs
+end
+
 return M
