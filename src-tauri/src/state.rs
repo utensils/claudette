@@ -165,6 +165,11 @@ pub struct AgentSessionState {
     /// True while Claudette has an internal wake turn queued/running to let
     /// Claude Code drain task-notification messages for background jobs.
     pub background_wake_active: bool,
+    /// Trusted output files reported by Claude Code's Bash tool result when a
+    /// background task is bound. Task notifications can echo an output-file
+    /// path, but the wake-up prompt only reads paths that were first observed
+    /// from the tool result to avoid trusting model-visible notification text.
+    pub background_task_output_paths: HashMap<String, String>,
     /// Set when the agent emits `ExitPlanMode` during the current persistent
     /// session. The plan phase is over even if the frontend fails to flip
     /// `plan_mode=false` on the next turn, so we force a teardown regardless
