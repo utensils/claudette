@@ -2,6 +2,7 @@ import { DEFAULT_CLAUDE_BACKEND, DEFAULT_CLAUDE_MODEL } from "./alternativeBacke
 
 export const LEGACY_CODEX_BACKEND = "codex-subscription";
 export const NATIVE_CODEX_BACKEND = "experimental-codex";
+export const FIRST_CLASS_BACKENDS_PROMOTION_KEY = "agent_backends_first_class_promoted";
 
 export type SettingEntry = readonly [string, string];
 
@@ -44,11 +45,13 @@ export interface ExperimentalBackendGateLoadInput {
   alternativeBackendsCompiled: boolean;
   alternativeBackendsSetting: string | null;
   experimentalCodexSetting: string | null;
+  promotionSetting: string | null;
 }
 
 export interface ExperimentalBackendGateLoadPlan {
   alternativeBackendsEnabled: boolean;
   experimentalCodexEnabled: boolean;
+  shouldPersistPromotion: boolean;
 }
 
 function settingSessionId(key: string, prefix: string): string | null {
@@ -79,15 +82,33 @@ export function planExperimentalBackendGateLoad({
   alternativeBackendsCompiled,
   alternativeBackendsSetting,
   experimentalCodexSetting,
+  promotionSetting,
 }: ExperimentalBackendGateLoadInput): ExperimentalBackendGateLoadPlan {
+  if (!alternativeBackendsCompiled) {
+    return {
+      alternativeBackendsEnabled: false,
+      experimentalCodexEnabled: false,
+      shouldPersistPromotion: false,
+    };
+  }
+
+  if (promotionSetting !== "true") {
+    return {
+      alternativeBackendsEnabled: true,
+      experimentalCodexEnabled: true,
+      shouldPersistPromotion: true,
+    };
+  }
+
   const experimentalCodexEnabled =
-    alternativeBackendsCompiled && experimentalCodexSetting === "true";
+    experimentalCodexSetting !== "false";
   const alternativeBackendsEnabled =
-    alternativeBackendsCompiled && alternativeBackendsSetting === "true";
+    alternativeBackendsSetting !== "false";
 
   return {
     alternativeBackendsEnabled,
     experimentalCodexEnabled,
+    shouldPersistPromotion: false,
   };
 }
 

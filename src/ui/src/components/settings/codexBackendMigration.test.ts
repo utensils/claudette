@@ -12,37 +12,56 @@ import {
 } from "./codexBackendMigration";
 
 describe("planExperimentalBackendGateLoad", () => {
-  it("keeps alternative backends disabled by default when the build includes them", () => {
+  it("promotes backend gates on first load when the build includes them", () => {
     const plan = planExperimentalBackendGateLoad({
       alternativeBackendsCompiled: true,
       alternativeBackendsSetting: null,
       experimentalCodexSetting: null,
+      promotionSetting: null,
     });
 
-    expect(plan.alternativeBackendsEnabled).toBe(false);
-    expect(plan.experimentalCodexEnabled).toBe(false);
-  });
-
-  it("keeps alternative backends off when explicitly disabled", () => {
-    const plan = planExperimentalBackendGateLoad({
-      alternativeBackendsCompiled: true,
-      alternativeBackendsSetting: "false",
-      experimentalCodexSetting: null,
-    });
-
-    expect(plan.alternativeBackendsEnabled).toBe(false);
-    expect(plan.experimentalCodexEnabled).toBe(false);
-  });
-
-  it("loads Codex without enabling the alternative backend gate", () => {
-    const plan = planExperimentalBackendGateLoad({
-      alternativeBackendsCompiled: true,
-      alternativeBackendsSetting: "false",
-      experimentalCodexSetting: "true",
-    });
-
-    expect(plan.alternativeBackendsEnabled).toBe(false);
+    expect(plan.alternativeBackendsEnabled).toBe(true);
     expect(plan.experimentalCodexEnabled).toBe(true);
+    expect(plan.shouldPersistPromotion).toBe(true);
+  });
+
+  it("respects explicit disabled settings after promotion has run", () => {
+    const plan = planExperimentalBackendGateLoad({
+      alternativeBackendsCompiled: true,
+      alternativeBackendsSetting: "false",
+      experimentalCodexSetting: "false",
+      promotionSetting: "true",
+    });
+
+    expect(plan.alternativeBackendsEnabled).toBe(false);
+    expect(plan.experimentalCodexEnabled).toBe(false);
+    expect(plan.shouldPersistPromotion).toBe(false);
+  });
+
+  it("defaults both gates on after promotion when settings are missing", () => {
+    const plan = planExperimentalBackendGateLoad({
+      alternativeBackendsCompiled: true,
+      alternativeBackendsSetting: null,
+      experimentalCodexSetting: null,
+      promotionSetting: "true",
+    });
+
+    expect(plan.alternativeBackendsEnabled).toBe(true);
+    expect(plan.experimentalCodexEnabled).toBe(true);
+    expect(plan.shouldPersistPromotion).toBe(false);
+  });
+
+  it("flips saved false values during the one-time promotion", () => {
+    const plan = planExperimentalBackendGateLoad({
+      alternativeBackendsCompiled: true,
+      alternativeBackendsSetting: "false",
+      experimentalCodexSetting: "false",
+      promotionSetting: null,
+    });
+
+    expect(plan.alternativeBackendsEnabled).toBe(true);
+    expect(plan.experimentalCodexEnabled).toBe(true);
+    expect(plan.shouldPersistPromotion).toBe(true);
   });
 
   it("keeps both gates off when the build omits alternative backend support", () => {
@@ -50,10 +69,12 @@ describe("planExperimentalBackendGateLoad", () => {
       alternativeBackendsCompiled: false,
       alternativeBackendsSetting: "true",
       experimentalCodexSetting: "true",
+      promotionSetting: null,
     });
 
     expect(plan.alternativeBackendsEnabled).toBe(false);
     expect(plan.experimentalCodexEnabled).toBe(false);
+    expect(plan.shouldPersistPromotion).toBe(false);
   });
 });
 

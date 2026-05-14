@@ -32,6 +32,7 @@ const CODEX_DEFAULT_BASE_URL: &str = "https://chatgpt.com/backend-api";
 const CODEX_JWT_AUTH_CLAIM: &str = "https://api.openai.com/auth";
 const ALTERNATIVE_BACKENDS_SETTING_KEY: &str = "alternative_backends_enabled";
 const NATIVE_CODEX_SETTING_KEY: &str = "experimental_codex_enabled";
+const FIRST_CLASS_BACKENDS_PROMOTION_KEY: &str = "agent_backends_first_class_promoted";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BackendStatus {
@@ -874,19 +875,17 @@ fn default_backends_for_gate(native_codex_enabled: bool) -> Vec<AgentBackendConf
 }
 
 fn native_codex_enabled(db: &Database) -> Result<bool, String> {
+    promote_first_class_backend_gates(db)?;
     db.get_app_setting(NATIVE_CODEX_SETTING_KEY)
         .map_err(|e| e.to_string())
-        .map(|value| value.as_deref() == Some("true"))
+        .map(|value| value.as_deref() != Some("false"))
 }
 
 fn ensure_native_codex_enabled(db: &Database) -> Result<(), String> {
     if native_codex_enabled(db)? {
         Ok(())
     } else {
-        Err(
-            "Codex is disabled. Enable Settings → Experimental → Codex to use native Codex."
-                .to_string(),
-        )
+        Err("Codex is disabled. Enable Settings → Models → Codex to use native Codex.".to_string())
     }
 }
 
@@ -908,9 +907,28 @@ fn ensure_backend_allowed_by_gate(
 }
 
 fn alternative_backends_enabled(db: &Database) -> Result<bool, String> {
+    promote_first_class_backend_gates(db)?;
     db.get_app_setting(ALTERNATIVE_BACKENDS_SETTING_KEY)
         .map_err(|e| e.to_string())
-        .map(|setting| setting.as_deref() == Some("true"))
+        .map(|setting| setting.as_deref() != Some("false"))
+}
+
+fn promote_first_class_backend_gates(db: &Database) -> Result<(), String> {
+    if db
+        .get_app_setting(FIRST_CLASS_BACKENDS_PROMOTION_KEY)
+        .map_err(|e| e.to_string())?
+        .as_deref()
+        == Some("true")
+    {
+        return Ok(());
+    }
+
+    db.set_app_setting(ALTERNATIVE_BACKENDS_SETTING_KEY, "true")
+        .map_err(|e| e.to_string())?;
+    db.set_app_setting(NATIVE_CODEX_SETTING_KEY, "true")
+        .map_err(|e| e.to_string())?;
+    db.set_app_setting(FIRST_CLASS_BACKENDS_PROMOTION_KEY, "true")
+        .map_err(|e| e.to_string())
 }
 
 fn find_backend(db: &Database, backend_id: Option<&str>) -> Result<AgentBackendConfig, String> {
@@ -3035,31 +3053,43 @@ mod tests {
     }
 
     #[test]
-    fn alternative_backends_are_disabled_by_default() {
+    fn alternative_backends_promote_on_by_default() {
         let db = Database::open_in_memory().expect("test db should open");
 
-        assert!(!alternative_backends_enabled(&db).expect("setting should load"));
+        assert!(alternative_backends_enabled(&db).expect("setting should load"));
+        assert_eq!(
+            db.get_app_setting(FIRST_CLASS_BACKENDS_PROMOTION_KEY)
+                .expect("promotion marker should read")
+                .as_deref(),
+            Some("true")
+        );
     }
 
     #[test]
-    fn experimental_codex_does_not_force_alternative_backend_runtime_on() {
+    fn saved_false_backend_gates_are_flipped_during_promotion() {
         let db = Database::open_in_memory().expect("test db should open");
         db.set_app_setting(ALTERNATIVE_BACKENDS_SETTING_KEY, "false")
             .expect("setting should save");
-        db.set_app_setting(NATIVE_CODEX_SETTING_KEY, "true")
+        db.set_app_setting(NATIVE_CODEX_SETTING_KEY, "false")
             .expect("setting should save");
 
-        assert!(!alternative_backends_enabled(&db).expect("setting should load"));
+        assert!(alternative_backends_enabled(&db).expect("setting should load"));
+        assert!(native_codex_enabled(&db).expect("setting should load"));
     }
 
     #[test]
-    fn native_codex_command_guard_requires_experimental_gate() {
+    fn native_codex_command_guard_requires_models_gate_after_promotion() {
         let db = Database::open_in_memory().expect("test db should open");
+        db.set_app_setting(FIRST_CLASS_BACKENDS_PROMOTION_KEY, "true")
+            .expect("setting should save");
+        db.set_app_setting(NATIVE_CODEX_SETTING_KEY, "false")
+            .expect("setting should save");
         let native = AgentBackendConfig::builtin_experimental_codex();
 
         let err = ensure_backend_allowed_by_gate(&db, &native)
             .expect_err("native codex should be blocked while gate is off");
         assert!(err.contains("Codex is disabled"));
+        assert!(err.contains("Settings → Models → Codex"));
 
         db.set_app_setting(NATIVE_CODEX_SETTING_KEY, "true")
             .expect("setting should save");
@@ -3069,6 +3099,8 @@ mod tests {
     #[test]
     fn alternative_backends_can_still_be_disabled_without_experimental_codex() {
         let db = Database::open_in_memory().expect("test db should open");
+        db.set_app_setting(FIRST_CLASS_BACKENDS_PROMOTION_KEY, "true")
+            .expect("setting should save");
         db.set_app_setting(ALTERNATIVE_BACKENDS_SETTING_KEY, "false")
             .expect("setting should save");
 
@@ -3200,6 +3232,10 @@ mod tests {
     #[test]
     fn legacy_codex_gate_hides_and_preserves_native_backend_on_save() {
         let db = Database::open_in_memory().expect("test db should open");
+        db.set_app_setting(FIRST_CLASS_BACKENDS_PROMOTION_KEY, "true")
+            .expect("setting should save");
+        db.set_app_setting(NATIVE_CODEX_SETTING_KEY, "false")
+            .expect("setting should save");
         let mut native = AgentBackendConfig::builtin_experimental_codex();
         native.enabled = true;
         native.default_model = Some("gpt-hidden-native".to_string());
@@ -3248,7 +3284,11 @@ mod tests {
     #[test]
     fn disabled_codex_gate_rejects_native_requests_instead_of_aliasing_legacy() {
         let db = Database::open_in_memory().expect("test db should open");
+        db.set_app_setting(FIRST_CLASS_BACKENDS_PROMOTION_KEY, "true")
+            .expect("setting should save");
         db.set_app_setting("alternative_backends_enabled", "true")
+            .expect("setting should save");
+        db.set_app_setting(NATIVE_CODEX_SETTING_KEY, "false")
             .expect("setting should save");
         let mut legacy = AgentBackendConfig::builtin_codex_subscription();
         legacy.enabled = true;
