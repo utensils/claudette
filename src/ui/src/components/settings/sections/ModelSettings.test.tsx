@@ -18,8 +18,8 @@ const appStore = vi.hoisted(() => ({
   alternativeBackendsEnabled: true,
   alternativeBackendsAvailable: true,
   setAlternativeBackendsEnabled: vi.fn(),
-  experimentalCodexEnabled: true,
-  setExperimentalCodexEnabled: vi.fn(),
+  codexEnabled: true,
+  setCodexEnabled: vi.fn(),
   agentBackends: [] as AgentBackendConfig[],
   setAgentBackends: vi.fn((backends: AgentBackendConfig[]) => {
     appStore.agentBackends = backends;
@@ -160,7 +160,7 @@ describe("ModelSettings", () => {
   beforeEach(() => {
     appStore.alternativeBackendsEnabled = true;
     appStore.alternativeBackendsAvailable = true;
-    appStore.experimentalCodexEnabled = true;
+    appStore.codexEnabled = true;
     appStore.agentBackends = [];
     appStore.settingsFocus = null;
     appStore.claudeAuthFailure = null;

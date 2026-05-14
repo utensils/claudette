@@ -41,16 +41,16 @@ export interface CodexBackendMigrationModelInput {
   backends: readonly CodexBackendMigrationBackend[];
 }
 
-export interface ExperimentalBackendGateLoadInput {
+export interface BackendGateLoadInput {
   alternativeBackendsCompiled: boolean;
   alternativeBackendsSetting: string | null;
-  experimentalCodexSetting: string | null;
+  codexSetting: string | null;
   promotionSetting: string | null;
 }
 
-export interface ExperimentalBackendGateLoadPlan {
+export interface BackendGateLoadPlan {
   alternativeBackendsEnabled: boolean;
-  experimentalCodexEnabled: boolean;
+  codexEnabled: boolean;
   shouldPersistPromotion: boolean;
 }
 
@@ -82,16 +82,16 @@ function fallbackModelForBackend(
   return models[0]?.id ?? null;
 }
 
-export function planExperimentalBackendGateLoad({
+export function planBackendGateLoad({
   alternativeBackendsCompiled,
   alternativeBackendsSetting,
-  experimentalCodexSetting,
+  codexSetting,
   promotionSetting,
-}: ExperimentalBackendGateLoadInput): ExperimentalBackendGateLoadPlan {
+}: BackendGateLoadInput): BackendGateLoadPlan {
   if (!alternativeBackendsCompiled) {
     return {
       alternativeBackendsEnabled: false,
-      experimentalCodexEnabled: false,
+      codexEnabled: false,
       shouldPersistPromotion: false,
     };
   }
@@ -99,46 +99,46 @@ export function planExperimentalBackendGateLoad({
   if (promotionSetting !== "true") {
     return {
       alternativeBackendsEnabled: true,
-      experimentalCodexEnabled: true,
+      codexEnabled: true,
       shouldPersistPromotion: true,
     };
   }
 
-  const experimentalCodexEnabled =
-    experimentalCodexSetting !== "false";
+  const codexEnabled =
+    codexSetting !== "false";
   const alternativeBackendsEnabled =
     alternativeBackendsSetting !== "false";
 
   return {
     alternativeBackendsEnabled,
-    experimentalCodexEnabled,
+    codexEnabled,
     shouldPersistPromotion: false,
   };
 }
 
-export function planExperimentalBackendGateLoadFromResults({
+export function planBackendGateLoadFromResults({
   alternativeBackendsCompiled,
   alternativeBackendsSetting,
-  experimentalCodexSetting,
+  codexSetting,
   promotionSetting,
 }: {
   alternativeBackendsCompiled: boolean;
   alternativeBackendsSetting: GateSettingLoad;
-  experimentalCodexSetting: GateSettingLoad;
+  codexSetting: GateSettingLoad;
   promotionSetting: GateSettingLoad;
-}): ExperimentalBackendGateLoadPlan | null {
+}): BackendGateLoadPlan | null {
   if (
     alternativeBackendsSetting.status === "rejected" ||
-    experimentalCodexSetting.status === "rejected" ||
+    codexSetting.status === "rejected" ||
     promotionSetting.status === "rejected"
   ) {
     return null;
   }
 
-  return planExperimentalBackendGateLoad({
+  return planBackendGateLoad({
     alternativeBackendsCompiled,
     alternativeBackendsSetting: alternativeBackendsSetting.value,
-    experimentalCodexSetting: experimentalCodexSetting.value,
+    codexSetting: codexSetting.value,
     promotionSetting: promotionSetting.value,
   });
 }

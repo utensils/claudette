@@ -812,7 +812,7 @@ fn codex_backend_hidden_by_gate(native_codex_enabled: bool, id: &str) -> bool {
 
 /// Re-read the stored JSON and return hidden Codex-gate backends that this
 /// build can deserialize but deliberately omits from the active list while
-/// the experimental gate is on/off. This keeps the user's hidden legacy/native
+/// the Codex gate is on/off. This keeps the user's hidden legacy/native
 /// Codex config intact across unrelated backend edits.
 fn read_hidden_codex_passthrough(
     db: &Database,
@@ -871,7 +871,7 @@ fn default_backends_for_gate(native_codex_enabled: bool) -> Vec<AgentBackendConf
         AgentBackendConfig::builtin_lm_studio(),
     ];
     if native_codex_enabled {
-        backends.insert(3, AgentBackendConfig::builtin_experimental_codex());
+        backends.insert(3, AgentBackendConfig::builtin_codex_native());
     }
     backends
 }
@@ -1310,7 +1310,7 @@ fn lm_studio_models_from_v0(value: &Value, default_context: u32) -> Vec<AgentBac
 async fn discover_codex_models() -> Result<Vec<AgentBackendModel>, String> {
     codex_login_status().await?;
     // Codex does not currently expose a stable model-list API for ChatGPT
-    // subscription auth. This experimental backend depends on the CLI debug
+    // subscription auth. This native backend depends on the CLI debug
     // catalog until Codex publishes a supported discovery surface.
     let codex_path = resolve_codex_path().await;
     let mut command = codex_cli_command(codex_path);
@@ -2975,7 +2975,7 @@ mod tests {
 
     #[test]
     fn codex_native_models_from_app_server_surface_picker_models() {
-        let backend = AgentBackendConfig::builtin_experimental_codex();
+        let backend = AgentBackendConfig::builtin_codex_native();
         let models = codex_native_models_from_app_server(
             &backend,
             vec![
@@ -3024,7 +3024,7 @@ mod tests {
 
     #[test]
     fn codex_native_models_leave_seed_models_untouched_when_server_returns_none() {
-        let backend = AgentBackendConfig::builtin_experimental_codex();
+        let backend = AgentBackendConfig::builtin_codex_native();
 
         let models = codex_native_models_from_app_server(&backend, Vec::new(), &[]);
 
@@ -3126,7 +3126,7 @@ mod tests {
             .expect("setting should save");
         db.set_app_setting(NATIVE_CODEX_SETTING_KEY, "false")
             .expect("setting should save");
-        let native = AgentBackendConfig::builtin_experimental_codex();
+        let native = AgentBackendConfig::builtin_codex_native();
 
         let err = ensure_backend_allowed_by_gate(&db, &native)
             .expect_err("native codex should be blocked while gate is off");
@@ -3139,7 +3139,7 @@ mod tests {
     }
 
     #[test]
-    fn alternative_backends_can_still_be_disabled_without_experimental_codex() {
+    fn alternative_backends_can_still_be_disabled_without_codex() {
         let db = Database::open_in_memory().expect("test db should open");
         db.set_app_setting(FIRST_CLASS_BACKENDS_PROMOTION_KEY, "true")
             .expect("setting should save");
@@ -3278,7 +3278,7 @@ mod tests {
             .expect("setting should save");
         db.set_app_setting(NATIVE_CODEX_SETTING_KEY, "false")
             .expect("setting should save");
-        let mut native = AgentBackendConfig::builtin_experimental_codex();
+        let mut native = AgentBackendConfig::builtin_codex_native();
         native.enabled = true;
         native.default_model = Some("gpt-hidden-native".to_string());
         save_backend_configs(&db, &[native]).expect("native backend config should save");
@@ -3311,7 +3311,7 @@ mod tests {
         let db = Database::open_in_memory().expect("test db should open");
         db.set_app_setting(NATIVE_CODEX_SETTING_KEY, "true")
             .expect("setting should save");
-        let mut native = AgentBackendConfig::builtin_experimental_codex();
+        let mut native = AgentBackendConfig::builtin_codex_native();
         native.enabled = true;
         save_backend_configs(&db, &[native]).expect("native backend config should save");
 

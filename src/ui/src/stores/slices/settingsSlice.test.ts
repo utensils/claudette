@@ -24,25 +24,25 @@ describe("settingsSlice alternative backend gates", () => {
     useAppStore.setState({
       alternativeBackendsAvailable: true,
       alternativeBackendsEnabled: false,
-      experimentalCodexEnabled: false,
+      codexEnabled: false,
     });
   });
 
   it("enables backend gates only when the build exposes them", () => {
     useAppStore.getState().setAlternativeBackendsEnabled(true);
-    useAppStore.getState().setExperimentalCodexEnabled(true);
+    useAppStore.getState().setCodexEnabled(true);
     expect(useAppStore.getState().alternativeBackendsEnabled).toBe(true);
-    expect(useAppStore.getState().experimentalCodexEnabled).toBe(true);
+    expect(useAppStore.getState().codexEnabled).toBe(true);
 
     useAppStore.getState().setAlternativeBackendsAvailable(false);
     expect(useAppStore.getState().alternativeBackendsAvailable).toBe(false);
     expect(useAppStore.getState().alternativeBackendsEnabled).toBe(false);
-    expect(useAppStore.getState().experimentalCodexEnabled).toBe(false);
+    expect(useAppStore.getState().codexEnabled).toBe(false);
 
     useAppStore.getState().setAlternativeBackendsEnabled(true);
-    useAppStore.getState().setExperimentalCodexEnabled(true);
+    useAppStore.getState().setCodexEnabled(true);
     expect(useAppStore.getState().alternativeBackendsEnabled).toBe(false);
-    expect(useAppStore.getState().experimentalCodexEnabled).toBe(false);
+    expect(useAppStore.getState().codexEnabled).toBe(false);
   });
 
   it("preserves an enabled setting when availability stays true", () => {

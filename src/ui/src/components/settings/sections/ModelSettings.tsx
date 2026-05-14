@@ -55,8 +55,8 @@ export function ModelSettings() {
   const alternativeBackendsEnabled = useAppStore((s) => s.alternativeBackendsEnabled);
   const alternativeBackendsAvailable = useAppStore((s) => s.alternativeBackendsAvailable);
   const setAlternativeBackendsEnabled = useAppStore((s) => s.setAlternativeBackendsEnabled);
-  const experimentalCodexEnabled = useAppStore((s) => s.experimentalCodexEnabled);
-  const setExperimentalCodexEnabled = useAppStore((s) => s.setExperimentalCodexEnabled);
+  const codexEnabled = useAppStore((s) => s.codexEnabled);
+  const setCodexEnabled = useAppStore((s) => s.setCodexEnabled);
   const agentBackends = useAppStore((s) => s.agentBackends);
   const setAgentBackends = useAppStore((s) => s.setAgentBackends);
   const setDefaultAgentBackendId = useAppStore((s) => s.setDefaultAgentBackendId);
@@ -122,17 +122,17 @@ export function ModelSettings() {
   };
 
   const registry = useMemo(
-    () => buildModelRegistry(alternativeBackendsEnabled, agentBackends, experimentalCodexEnabled),
-    [alternativeBackendsEnabled, agentBackends, experimentalCodexEnabled],
+    () => buildModelRegistry(alternativeBackendsEnabled, agentBackends, codexEnabled),
+    [alternativeBackendsEnabled, agentBackends, codexEnabled],
   );
   const visibleBackends = useMemo(
     () =>
       agentBackends.filter((backend) => {
         if (backend.id === "anthropic" || backend.kind === "codex_subscription") return false;
-        if (backend.kind === "codex_native") return experimentalCodexEnabled;
+        if (backend.kind === "codex_native") return codexEnabled;
         return alternativeBackendsEnabled;
       }),
-    [agentBackends, alternativeBackendsEnabled, experimentalCodexEnabled],
+    [agentBackends, alternativeBackendsEnabled, codexEnabled],
   );
   const anthropicBackend = useMemo(
     () => agentBackends.find((backend) => backend.id === "anthropic") ?? null,
@@ -259,7 +259,7 @@ export function ModelSettings() {
     }
   };
 
-  const migrateExperimentalCodexSelections = async (
+  const migrateCodexSelections = async (
     enableNative: boolean,
     backends: readonly AgentBackendConfig[],
   ) => {
@@ -319,12 +319,12 @@ export function ModelSettings() {
     }
   };
 
-  const handleExperimentalCodexToggle = async () => {
+  const handleCodexToggle = async () => {
     if (!alternativeBackendsAvailable) return;
-    const next = !experimentalCodexEnabled;
-    const previous = experimentalCodexEnabled;
+    const next = !codexEnabled;
+    const previous = codexEnabled;
     let persistedToggle = false;
-    setExperimentalCodexEnabled(next);
+    setCodexEnabled(next);
     try {
       setError(null);
       await setAppSetting("experimental_codex_enabled", next ? "true" : "false");
@@ -333,9 +333,9 @@ export function ModelSettings() {
       setAgentBackends(data.backends);
       setDefaultBackend(data.default_backend_id);
       setDefaultAgentBackendId(data.default_backend_id);
-      await migrateExperimentalCodexSelections(next, data.backends);
+      await migrateCodexSelections(next, data.backends);
     } catch (e) {
-      setExperimentalCodexEnabled(persistedToggle ? next : previous);
+      setCodexEnabled(persistedToggle ? next : previous);
       setError(String(e));
     }
   };
@@ -600,11 +600,11 @@ export function ModelSettings() {
           <button
             className={styles.toggle}
             role="switch"
-            aria-checked={experimentalCodexEnabled}
+            aria-checked={codexEnabled}
             aria-label={t("models_codex_aria")}
-            data-checked={experimentalCodexEnabled}
+            data-checked={codexEnabled}
             disabled={!alternativeBackendsAvailable}
-            onClick={handleExperimentalCodexToggle}
+            onClick={handleCodexToggle}
           >
             <div className={styles.toggleKnob} />
           </button>

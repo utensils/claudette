@@ -156,7 +156,7 @@ describe("modelRegistry", () => {
       const registry = buildModelRegistry(false, [
         {
           id: "experimental-codex",
-          label: "Experimental Codex",
+          label: "Codex",
           kind: "codex_native",
           enabled: true,
           capabilities: {

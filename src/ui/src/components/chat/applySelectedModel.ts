@@ -44,7 +44,7 @@ export async function applySelectedModel(
   const registry = buildModelRegistry(
     store.alternativeBackendsEnabled,
     store.agentBackends,
-    store.experimentalCodexEnabled,
+    store.codexEnabled,
   );
   const selectedEntry = findModelInRegistry(registry, model, nextProvider);
   const supportsFast = selectedEntry?.supportsFastMode ?? isFastSupported(model);

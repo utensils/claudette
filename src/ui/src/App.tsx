@@ -24,7 +24,7 @@ import {
 import { AppLayout } from "./components/layout/AppLayout";
 import {
   FIRST_CLASS_BACKENDS_PROMOTION_KEY,
-  planExperimentalBackendGateLoadFromResults,
+  planBackendGateLoadFromResults,
 } from "./components/settings/codexBackendMigration";
 import { refreshStartupCodexBackends } from "./components/settings/agentBackendStartupRefresh";
 import { findLeafByPtyId } from "./stores/terminalPaneTree";
@@ -83,7 +83,7 @@ function App() {
   const setDisable1mContext = useAppStore((s) => s.setDisable1mContext);
   const setAlternativeBackendsAvailable = useAppStore((s) => s.setAlternativeBackendsAvailable);
   const setAlternativeBackendsEnabled = useAppStore((s) => s.setAlternativeBackendsEnabled);
-  const setExperimentalCodexEnabled = useAppStore((s) => s.setExperimentalCodexEnabled);
+  const setCodexEnabled = useAppStore((s) => s.setCodexEnabled);
   const setAgentBackends = useAppStore((s) => s.setAgentBackends);
   const setDefaultAgentBackendId = useAppStore((s) => s.setDefaultAgentBackendId);
   // Read for the LM Studio polling effect below. We deliberately do
@@ -396,15 +396,15 @@ function App() {
         if (promotionResult.status === "rejected") {
           console.error("Failed to load backend promotion setting:", promotionResult.reason);
         }
-        const gatePlan = planExperimentalBackendGateLoadFromResults({
+        const gatePlan = planBackendGateLoadFromResults({
           alternativeBackendsCompiled: flags.alternative_backends_compiled,
           alternativeBackendsSetting: settingResult,
-          experimentalCodexSetting: codexSettingResult,
+          codexSetting: codexSettingResult,
           promotionSetting: promotionResult,
         });
         if (!gatePlan) return;
         setAlternativeBackendsEnabled(gatePlan.alternativeBackendsEnabled);
-        setExperimentalCodexEnabled(gatePlan.experimentalCodexEnabled);
+        setCodexEnabled(gatePlan.codexEnabled);
         if (gatePlan.shouldPersistPromotion) {
           await Promise.all([
             setAppSetting("alternative_backends_enabled", "true"),
@@ -842,7 +842,7 @@ function App() {
       unlistenMissingCli.then((fn) => fn());
       unlistenMissingWorktree.then((fn) => fn());
     };
-  }, [setRepositories, setWorkspaces, setWorktreeBaseDir, setDefaultTerminalAppId, setDefaultBranches, setTerminalFontSize, setLastMessages, setRemoteConnections, setDiscoveredServers, setLocalServerRunning, setLocalServerConnectionString, setCurrentThemeId, setThemeMode, setThemeDark, setThemeLight, setUiFontSize, setFontFamilySans, setFontFamilyMono, setSystemFonts, setDetectedApps, setUsageInsightsEnabled, setClaudetteTerminalEnabled, setShowSidebarRunningCommands, setToolDisplayMode, setExtendedToolCallOutput, setPluginManagementEnabled, setClaudeRemoteControlEnabled, setCommunityRegistryEnabled, setAlternativeBackendsAvailable, setAlternativeBackendsEnabled, setExperimentalCodexEnabled, setAgentBackends, setDefaultAgentBackendId, setEditorGitGutterBase, setEditorMinimapEnabled, setDisable1mContext, setAppVersion, setVoiceToggleHotkey, setVoiceHoldHotkey, setKeybindings, setManualWorkspaceOrderByRepo]);
+  }, [setRepositories, setWorkspaces, setWorktreeBaseDir, setDefaultTerminalAppId, setDefaultBranches, setTerminalFontSize, setLastMessages, setRemoteConnections, setDiscoveredServers, setLocalServerRunning, setLocalServerConnectionString, setCurrentThemeId, setThemeMode, setThemeDark, setThemeLight, setUiFontSize, setFontFamilySans, setFontFamilyMono, setSystemFonts, setDetectedApps, setUsageInsightsEnabled, setClaudetteTerminalEnabled, setShowSidebarRunningCommands, setToolDisplayMode, setExtendedToolCallOutput, setPluginManagementEnabled, setClaudeRemoteControlEnabled, setCommunityRegistryEnabled, setAlternativeBackendsAvailable, setAlternativeBackendsEnabled, setCodexEnabled, setAgentBackends, setDefaultAgentBackendId, setEditorGitGutterBase, setEditorMinimapEnabled, setDisable1mContext, setAppVersion, setVoiceToggleHotkey, setVoiceHoldHotkey, setKeybindings, setManualWorkspaceOrderByRepo]);
 
   // Live freshness for LM Studio's `loaded_context_length`.
   //

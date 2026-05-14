@@ -23,11 +23,11 @@ export function ModelSelector({
   const { t } = useTranslation("chat");
   const disable1mContext = useAppStore((s) => s.disable1mContext);
   const alternativeBackendsEnabled = useAppStore((s) => s.alternativeBackendsEnabled);
-  const experimentalCodexEnabled = useAppStore((s) => s.experimentalCodexEnabled);
+  const codexEnabled = useAppStore((s) => s.codexEnabled);
   const agentBackends = useAppStore((s) => s.agentBackends);
   const registry = useMemo(
-    () => buildModelRegistry(alternativeBackendsEnabled, agentBackends, experimentalCodexEnabled),
-    [alternativeBackendsEnabled, agentBackends, experimentalCodexEnabled],
+    () => buildModelRegistry(alternativeBackendsEnabled, agentBackends, codexEnabled),
+    [alternativeBackendsEnabled, agentBackends, codexEnabled],
   );
   const visibleModels = useMemo(
     () =>

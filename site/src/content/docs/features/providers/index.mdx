@@ -27,14 +27,13 @@ When both provider gates are off, only the built-in `Anthropic` backend is expos
 
 ## At a glance
 
-| ID | Kind | Default base URL | Auth | Setup |
+| Provider | Kind | Default base URL | Auth | Setup |
 |---|---|---|---|---|
-| `anthropic` | `Anthropic` | (uses `claude` CLI) | Inherits from Claude Code | [Authentication](/claudette/features/authentication/) |
-| `ollama` | `Ollama` | `http://localhost:11434` | None (or optional bearer token) | [Ollama](/claudette/features/providers/ollama/) |
-| `lm-studio` | `LmStudio` | `http://localhost:1234` | None (or optional bearer token) | [LM Studio](/claudette/features/providers/lm-studio/) |
-| `openai-api` | `OpenAiApi` | `https://api.openai.com` | API key (required) | [OpenAI & Codex](/claudette/features/providers/openai-codex/) |
-| `experimental-codex` | `CodexNative` | (uses `codex app-server`) | `codex login` (managed by `codex` CLI) | [OpenAI & Codex](/claudette/features/providers/openai-codex/) |
-| `codex-subscription` | `CodexSubscription` | `https://chatgpt.com/backend-api` | `codex login` (managed by `codex` CLI) | Legacy internal row; not user-facing in Settings |
+| Claude Code | `Anthropic` | (uses `claude` CLI) | Inherits from Claude Code | [Authentication](/claudette/features/authentication/) |
+| Ollama | `Ollama` | `http://localhost:11434` | None (or optional bearer token) | [Ollama](/claudette/features/providers/ollama/) |
+| LM Studio | `LmStudio` | `http://localhost:1234` | None (or optional bearer token) | [LM Studio](/claudette/features/providers/lm-studio/) |
+| OpenAI API | `OpenAiApi` | `https://api.openai.com` | API key (required) | [OpenAI & Codex](/claudette/features/providers/openai-codex/) |
+| Codex | `CodexNative` | (uses `codex app-server`) | `codex login` (managed by `codex` CLI) | [OpenAI & Codex](/claudette/features/providers/openai-codex/) |
 
 ## Two execution paths: direct vs gateway
 
