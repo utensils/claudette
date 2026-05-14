@@ -30,6 +30,7 @@ import {
   planCodexBackendGateMigration,
   resolveCodexBackendMigrationModel,
 } from "../codexBackendMigration";
+import { shouldShowBackendTestButton } from "../agentBackendStartupRefresh";
 import styles from "../Settings.module.css";
 
 export function ModelSettings() {
@@ -683,6 +684,7 @@ function BackendCard({
   const showBaseUrl = !usesCodexCliAuth;
   const showSecret = !usesCodexCliAuth;
   const showManualModels = draft.kind === "custom_anthropic" || draft.kind === "custom_openai";
+  const showTestButton = shouldShowBackendTestButton(draft);
   const actualModelCount = countBackendModels(draft);
   const displayModelCount = actualModelCount > 0 ? actualModelCount : statusModelCount ?? 0;
   const selectedDefaultModel = modelOptions.some((model) => model.id === draft.default_model)
@@ -922,7 +924,9 @@ function BackendCard({
           >
             <div className={styles.toggleKnob} />
           </button>
-          <button className={styles.iconBtn} onClick={test} disabled={busy}>{t("models_backend_test")}</button>
+          {showTestButton && (
+            <button className={styles.iconBtn} onClick={test} disabled={busy}>{t("models_backend_test")}</button>
+          )}
           {discoveryBackend && (
             <button className={styles.iconBtn} onClick={refresh} disabled={busy}>{t("models_backend_refresh")}</button>
           )}

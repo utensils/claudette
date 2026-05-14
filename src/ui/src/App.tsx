@@ -26,6 +26,7 @@ import {
   FIRST_CLASS_BACKENDS_PROMOTION_KEY,
   planExperimentalBackendGateLoad,
 } from "./components/settings/codexBackendMigration";
+import { refreshStartupCodexBackends } from "./components/settings/agentBackendStartupRefresh";
 import { findLeafByPtyId } from "./stores/terminalPaneTree";
 import type { CommandEvent } from "./types";
 import i18n, { isSupportedLanguage } from "./i18n";
@@ -421,6 +422,14 @@ function App() {
       .then((data) => {
         setAgentBackends(data.backends);
         setDefaultAgentBackendId(data.default_backend_id);
+        void refreshStartupCodexBackends({
+          backends: data.backends,
+          refreshBackend: refreshAgentBackendModels,
+          onBackends: setAgentBackends,
+          onError: (backendId, error) => {
+            console.warn("Startup Codex model refresh failed:", backendId, error);
+          },
+        });
       })
       .catch(() => {});
     getAppSetting("editor_git_gutter_base")
