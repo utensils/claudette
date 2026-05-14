@@ -234,11 +234,32 @@ pub async fn auto_detect_agent_backends(
         .iter()
         .find(|backend| backend.id == "lm-studio")
         .cloned();
+    let probe_codex = should_probe_backend_auto_detection(&db, NATIVE_CODEX_BACKEND_ID)?;
+    let probe_ollama = should_probe_backend_auto_detection(&db, "ollama")?;
+    let probe_lm_studio = should_probe_backend_auto_detection(&db, "lm-studio")?;
 
     let (codex_detection, ollama_detection, lm_studio_detection) = tokio::join!(
-        probe_codex_backend(codex),
-        probe_model_discovery_backend(ollama),
-        probe_model_discovery_backend(lm_studio),
+        async move {
+            if probe_codex {
+                probe_codex_backend(codex).await
+            } else {
+                skipped_backend_auto_detection(NATIVE_CODEX_BACKEND_ID)
+            }
+        },
+        async move {
+            if probe_ollama {
+                probe_model_discovery_backend(ollama).await
+            } else {
+                skipped_backend_auto_detection("ollama")
+            }
+        },
+        async move {
+            if probe_lm_studio {
+                probe_model_discovery_backend(lm_studio).await
+            } else {
+                skipped_backend_auto_detection("lm-studio")
+            }
+        },
     );
     let mut detections = vec![codex_detection, ollama_detection, lm_studio_detection];
     if detections.iter().any(|detection| {
@@ -987,6 +1008,19 @@ fn backend_auto_detect_disabled(db: &Database, backend_id: &str) -> Result<bool,
     db.get_app_setting(&auto_detect_disabled_key(backend_id))
         .map_err(|e| e.to_string())
         .map(|value| value.as_deref() == Some("true"))
+}
+
+fn should_probe_backend_auto_detection(db: &Database, backend_id: &str) -> Result<bool, String> {
+    backend_auto_detect_disabled(db, canonical_backend_id(backend_id)).map(|disabled| !disabled)
+}
+
+fn skipped_backend_auto_detection(backend_id: impl Into<String>) -> BackendAutoDetection {
+    BackendAutoDetection {
+        backend_id: backend_id.into(),
+        detected: false,
+        discovered_models: Vec::new(),
+        warning: None,
+    }
 }
 
 fn persist_backend_auto_detect_opt_out(
@@ -3585,6 +3619,32 @@ mod tests {
         let ollama = backends.iter().find(|b| b.id == "ollama").expect("ollama");
         assert!(!ollama.enabled);
         assert!(ollama.discovered_models.is_empty());
+    }
+
+    #[test]
+    fn auto_detection_probe_plan_respects_manual_opt_outs_before_probe_work() {
+        let db = Database::open_in_memory().expect("test db should open");
+        db.set_app_setting(&auto_detect_disabled_key("ollama"), "true")
+            .expect("ollama opt-out should save");
+        db.set_app_setting(&auto_detect_disabled_key(NATIVE_CODEX_BACKEND_ID), "true")
+            .expect("codex opt-out should save");
+
+        assert!(
+            !should_probe_backend_auto_detection(&db, "ollama")
+                .expect("ollama probe flag should load")
+        );
+        assert!(
+            !should_probe_backend_auto_detection(&db, LEGACY_NATIVE_CODEX_BACKEND_ID)
+                .expect("legacy codex probe flag should load")
+        );
+        assert!(
+            should_probe_backend_auto_detection(&db, "lm-studio")
+                .expect("lm studio probe flag should load")
+        );
+        let skipped = skipped_backend_auto_detection("ollama");
+        assert_eq!(skipped.backend_id, "ollama");
+        assert!(!skipped.detected);
+        assert!(skipped.discovered_models.is_empty());
     }
 
     #[test]
