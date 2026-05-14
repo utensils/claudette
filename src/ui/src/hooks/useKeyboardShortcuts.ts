@@ -64,6 +64,24 @@ export function useKeyboardShortcuts() {
         } else if (fuzzyFinderOpen) {
           toggleFuzzyFinder();
         } else if (useAppStore.getState().settingsOpen) {
+          // Layered Escape inside Settings: dismiss inner overlays
+          // (popovers, dropdowns, rebind capture, inline editors) first;
+          // exit Settings only when none remain. Components register
+          // themselves via `useSettingsOverlay`. The activeElement guard
+          // catches native select/input/textarea dropdowns that can't
+          // participate in the counter and stops Escape inside an open
+          // native select from exiting Settings mid-edit.
+          const settingsState = useAppStore.getState();
+          if (settingsState.settingsOverlayCount > 0) return;
+          const focusedTag = document.activeElement?.tagName?.toLowerCase();
+          if (
+            focusedTag === "select" ||
+            focusedTag === "input" ||
+            focusedTag === "textarea"
+          ) {
+            return;
+          }
+          settingsState.closeSettings();
           return;
         } else if (chatSearchOpen && selectedWorkspaceId) {
           // Close the search bar and put focus back in the composer so

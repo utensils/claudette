@@ -10,6 +10,7 @@ import {
 } from "../../../hotkeys/bindings";
 import { isMacHotkeyPlatform } from "../../../hotkeys/platform";
 import { useAppStore } from "../../../stores/useAppStore";
+import { useSettingsOverlay } from "../../../hooks/useSettingsOverlay";
 import { deleteAppSetting, setAppSetting } from "../../../services/tauri";
 import styles from "../Settings.module.css";
 import { shortcutMatchesQuery } from "./keyboardSearch";
@@ -34,6 +35,8 @@ export function KeyboardSettings() {
   const [rebinding, setRebinding] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
+
+  useSettingsOverlay(rebinding !== null);
 
   const filteredActionsByCategory = useMemo(() => {
     const groups = new Map<string, HotkeyAction[]>();

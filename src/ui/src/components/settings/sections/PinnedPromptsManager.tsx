@@ -14,6 +14,7 @@ import {
 } from "../../../services/tauri";
 import { useAppStore } from "../../../stores/useAppStore";
 import { EMPTY_PINNED_PROMPTS } from "../../../stores/slices/pinnedPromptsSlice";
+import { useSettingsOverlay } from "../../../hooks/useSettingsOverlay";
 import { useSlashAutocomplete } from "../../../hooks/useSlashAutocomplete";
 import { PLAIN_TEXT_INPUT_PROPS } from "../../../utils/textInput";
 import { SlashCommandPicker } from "../../chat/SlashCommandPicker";
@@ -121,6 +122,8 @@ export function PinnedPromptsManager({ scope, projectPath }: PinnedPromptsManage
 
   const [drafts, setDrafts] = useState<DraftRow[]>([]);
   const [errorByKey, setErrorByKey] = useState<Record<string, string>>({});
+
+  useSettingsOverlay(drafts.length > 0);
 
   const setError = useCallback((key: string, msg: string | null) => {
     setErrorByKey((prev) => {
@@ -394,6 +397,7 @@ function PromptRow({
 }: PromptRowProps) {
   const { t } = useTranslation("settings");
   const [mode, setMode] = useState<PromptRowMode>("display");
+  useSettingsOverlay(mode !== "display");
   const [name, setName] = useState(prompt.display_name);
   const [body, setBody] = useState(prompt.prompt);
   const [autoSend, setAutoSend] = useState(prompt.auto_send);
