@@ -1362,9 +1362,8 @@ async fn test_backend_connectivity(backend: &AgentBackendConfig) -> Result<Backe
 }
 
 async fn probe_codex_backend(backend: Option<AgentBackendConfig>) -> BackendAutoDetection {
-    let backend_id = backend
-        .map(|backend| backend.id)
-        .unwrap_or_else(|| NATIVE_CODEX_BACKEND_ID.to_string());
+    let backend = backend.unwrap_or_else(AgentBackendConfig::builtin_codex_native);
+    let backend_id = backend.id.clone();
     let detected = match tokio::time::timeout(AUTO_DETECT_TIMEOUT, async {
         let codex_path = resolve_codex_path().await;
         let mut command = codex_cli_command(codex_path);
@@ -1376,12 +1375,41 @@ async fn probe_codex_backend(backend: Option<AgentBackendConfig>) -> BackendAuto
         Ok(Err(_)) => false,
         Err(_) => false,
     };
+    let discovered_models = if detected {
+        match tokio::time::timeout(AUTO_DETECT_TIMEOUT, discover_codex_models()).await {
+            Ok(Ok(models)) if !models.is_empty() => models,
+            _ => codex_startup_models(&backend),
+        }
+    } else {
+        Vec::new()
+    };
     BackendAutoDetection {
         backend_id,
         detected,
-        discovered_models: Vec::new(),
+        discovered_models,
         warning: None,
     }
+}
+
+fn codex_startup_models(backend: &AgentBackendConfig) -> Vec<AgentBackendModel> {
+    if !backend.discovered_models.is_empty() {
+        return Vec::new();
+    }
+    let mut models = if backend.manual_models.is_empty() {
+        AgentBackendConfig::builtin_codex_native().manual_models
+    } else {
+        backend.manual_models.clone()
+    };
+    for model in &mut models {
+        if model.label.trim().is_empty() {
+            model.label = model.id.clone();
+        }
+        if model.context_window_tokens == 0 {
+            model.context_window_tokens = backend.context_window_default;
+        }
+        model.discovered = true;
+    }
+    models
 }
 
 async fn probe_model_discovery_backend(
@@ -3468,6 +3496,37 @@ mod tests {
         assert_eq!(ollama.default_model.as_deref(), Some("qwen3-coder"));
         assert!(lm_studio.enabled);
         assert_eq!(lm_studio.default_model.as_deref(), Some("local-model"));
+    }
+
+    #[test]
+    fn codex_startup_models_hydrate_seeded_models_for_auto_detection() {
+        let mut backend = AgentBackendConfig::builtin_codex_native();
+        backend.manual_models[0].label.clear();
+        backend.manual_models[0].context_window_tokens = 0;
+
+        let models = codex_startup_models(&backend);
+
+        assert_eq!(
+            models
+                .iter()
+                .map(|model| model.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["gpt-5.4", "gpt-5.3-codex"]
+        );
+        assert!(models.iter().all(|model| model.discovered));
+        assert_eq!(models[0].label, "gpt-5.4");
+        assert_eq!(
+            models[0].context_window_tokens,
+            backend.context_window_default
+        );
+    }
+
+    #[test]
+    fn codex_startup_models_do_not_replace_existing_discovery_results() {
+        let mut backend = AgentBackendConfig::builtin_codex_native();
+        backend.discovered_models = vec![model("gpt-5.5")];
+
+        assert!(codex_startup_models(&backend).is_empty());
     }
 
     #[test]
