@@ -11,7 +11,7 @@ The capability profile is the local-first one (no extended thinking / effort / f
 
 ## Prerequisites
 
-1. Make sure the [Alternative Claude Code backends experimental flag](/claudette/features/providers/#enabling-the-feature) is on.
+1. Make sure **Settings > Models > Alternative Claude Code backends** is on.
 2. Install LM Studio:
    - **macOS / Windows / Linux**: download from [lmstudio.ai/download](https://lmstudio.ai/download).
 3. Install the `lms` CLI (bundled with LM Studio; verify with `lms --version`).
@@ -130,7 +130,7 @@ Pass-through against LM Studio's native `/v1/messages` skips all of that and onl
 
 **Agent hangs on the first turn** — LM Studio is loading the model into VRAM. First-turn latency on a cold model can be 10–60 seconds depending on size. Subsequent turns are much faster.
 
-**Composer shows a stale context size after reloading the LM Studio model** — Claudette polls LM Studio's `/api/v0/models` every ~8 seconds while an LM Studio backend is enabled, so the indicator should refresh on its own. If it doesn't, click **Refresh models** in Settings > Models for an immediate update. The polling effect is gated behind the experimental flag — disabling alternative backends pauses the poll.
+**Composer shows a stale context size after reloading the LM Studio model** — Claudette polls LM Studio's `/api/v0/models` every ~8 seconds while an LM Studio backend is enabled, so the indicator should refresh on its own. If it doesn't, click **Refresh models** in Settings > Models for an immediate update. The polling effect follows the Models-page Alternative Claude Code backends gate — disabling alternative backends pauses the poll.
 
 **Local turns are slower than they should be** — make sure `CLAUDE_CODE_ATTRIBUTION_HEADER=0` is in effect (Claudette sets it automatically for LM Studio and Ollama; verify by checking the agent's terminal tab `env` output). With the header on, every request gets a rotating attribution string that breaks LM Studio's KV-cache prefix matching and re-runs prompt processing from scratch.
 

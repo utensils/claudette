@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { getVersion } from "@tauri-apps/api/app";
 import { useAppStore } from "./stores/useAppStore";
-import { loadInitialData, getAppSetting, getHostEnvFlags, listRemoteConnections, listDiscoveredServers, getLocalServerStatus, detectInstalledApps, listSystemFonts, deleteTerminalTab, listAppSettingsWithPrefix, listAgentBackends, refreshAgentBackendModels, bootOk } from "./services/tauri";
+import { loadInitialData, getAppSetting, setAppSetting, getHostEnvFlags, listRemoteConnections, listDiscoveredServers, getLocalServerStatus, detectInstalledApps, listSystemFonts, deleteTerminalTab, listAppSettingsWithPrefix, listAgentBackends, refreshAgentBackendModels, bootOk } from "./services/tauri";
 import { applyTheme, applyUserFonts, loadAllThemes, findTheme, cacheThemePreference, getThemeDataAttr } from "./utils/theme";
 import { DEFAULT_THEME_ID, DEFAULT_LIGHT_THEME_ID } from "./styles/themes";
 import type { ThemeDefinition } from "./types/theme";
@@ -22,7 +22,11 @@ import {
   useViewTogglePersistence,
 } from "./hooks/useViewTogglePersistence";
 import { AppLayout } from "./components/layout/AppLayout";
-import { planExperimentalBackendGateLoad } from "./components/settings/codexBackendMigration";
+import {
+  FIRST_CLASS_BACKENDS_PROMOTION_KEY,
+  planBackendGateLoadFromResults,
+} from "./components/settings/codexBackendMigration";
+import { refreshStartupCodexBackends } from "./components/settings/agentBackendStartupRefresh";
 import { findLeafByPtyId } from "./stores/terminalPaneTree";
 import type { CommandEvent } from "./types";
 import i18n, { isSupportedLanguage } from "./i18n";
@@ -79,7 +83,7 @@ function App() {
   const setDisable1mContext = useAppStore((s) => s.setDisable1mContext);
   const setAlternativeBackendsAvailable = useAppStore((s) => s.setAlternativeBackendsAvailable);
   const setAlternativeBackendsEnabled = useAppStore((s) => s.setAlternativeBackendsEnabled);
-  const setExperimentalCodexEnabled = useAppStore((s) => s.setExperimentalCodexEnabled);
+  const setCodexEnabled = useAppStore((s) => s.setCodexEnabled);
   const setAgentBackends = useAppStore((s) => s.setAgentBackends);
   const setDefaultAgentBackendId = useAppStore((s) => s.setDefaultAgentBackendId);
   // Read for the LM Studio polling effect below. We deliberately do
@@ -370,9 +374,10 @@ function App() {
     Promise.allSettled([
       getAppSetting("alternative_backends_enabled"),
       getAppSetting("experimental_codex_enabled"),
+      getAppSetting(FIRST_CLASS_BACKENDS_PROMOTION_KEY),
       getHostEnvFlags(),
     ])
-      .then(([settingResult, codexSettingResult, flagsResult]) => {
+      .then(async ([settingResult, codexSettingResult, promotionResult, flagsResult]) => {
         const flags =
           flagsResult.status === "fulfilled"
             ? flagsResult.value
@@ -388,21 +393,41 @@ function App() {
         if (codexSettingResult.status === "rejected") {
           console.error("Failed to load Codex setting:", codexSettingResult.reason);
         }
-        const gatePlan = planExperimentalBackendGateLoad({
+        if (promotionResult.status === "rejected") {
+          console.error("Failed to load backend promotion setting:", promotionResult.reason);
+        }
+        const gatePlan = planBackendGateLoadFromResults({
           alternativeBackendsCompiled: flags.alternative_backends_compiled,
-          alternativeBackendsSetting:
-            settingResult.status === "fulfilled" ? settingResult.value : "false",
-          experimentalCodexSetting:
-            codexSettingResult.status === "fulfilled" ? codexSettingResult.value : null,
+          alternativeBackendsSetting: settingResult,
+          codexSetting: codexSettingResult,
+          promotionSetting: promotionResult,
         });
+        if (!gatePlan) return;
         setAlternativeBackendsEnabled(gatePlan.alternativeBackendsEnabled);
-        setExperimentalCodexEnabled(gatePlan.experimentalCodexEnabled);
+        setCodexEnabled(gatePlan.codexEnabled);
+        if (gatePlan.shouldPersistPromotion) {
+          await Promise.all([
+            setAppSetting("alternative_backends_enabled", "true"),
+            setAppSetting("experimental_codex_enabled", "true"),
+            setAppSetting(FIRST_CLASS_BACKENDS_PROMOTION_KEY, "true"),
+          ]);
+        }
       })
-      .catch(() => {});
+      .catch((err) => {
+        console.error("Failed to load backend gate settings:", err);
+      });
     listAgentBackends()
       .then((data) => {
         setAgentBackends(data.backends);
         setDefaultAgentBackendId(data.default_backend_id);
+        void refreshStartupCodexBackends({
+          backends: data.backends,
+          refreshBackend: refreshAgentBackendModels,
+          onBackends: setAgentBackends,
+          onError: (backendId, error) => {
+            console.warn("Startup Codex model refresh failed:", backendId, error);
+          },
+        });
       })
       .catch(() => {});
     getAppSetting("editor_git_gutter_base")
@@ -817,7 +842,7 @@ function App() {
       unlistenMissingCli.then((fn) => fn());
       unlistenMissingWorktree.then((fn) => fn());
     };
-  }, [setRepositories, setWorkspaces, setWorktreeBaseDir, setDefaultTerminalAppId, setDefaultBranches, setTerminalFontSize, setLastMessages, setRemoteConnections, setDiscoveredServers, setLocalServerRunning, setLocalServerConnectionString, setCurrentThemeId, setThemeMode, setThemeDark, setThemeLight, setUiFontSize, setFontFamilySans, setFontFamilyMono, setSystemFonts, setDetectedApps, setUsageInsightsEnabled, setClaudetteTerminalEnabled, setShowSidebarRunningCommands, setToolDisplayMode, setExtendedToolCallOutput, setPluginManagementEnabled, setClaudeRemoteControlEnabled, setCommunityRegistryEnabled, setAlternativeBackendsAvailable, setAlternativeBackendsEnabled, setExperimentalCodexEnabled, setAgentBackends, setDefaultAgentBackendId, setEditorGitGutterBase, setEditorMinimapEnabled, setDisable1mContext, setAppVersion, setVoiceToggleHotkey, setVoiceHoldHotkey, setKeybindings, setManualWorkspaceOrderByRepo]);
+  }, [setRepositories, setWorkspaces, setWorktreeBaseDir, setDefaultTerminalAppId, setDefaultBranches, setTerminalFontSize, setLastMessages, setRemoteConnections, setDiscoveredServers, setLocalServerRunning, setLocalServerConnectionString, setCurrentThemeId, setThemeMode, setThemeDark, setThemeLight, setUiFontSize, setFontFamilySans, setFontFamilyMono, setSystemFonts, setDetectedApps, setUsageInsightsEnabled, setClaudetteTerminalEnabled, setShowSidebarRunningCommands, setToolDisplayMode, setExtendedToolCallOutput, setPluginManagementEnabled, setClaudeRemoteControlEnabled, setCommunityRegistryEnabled, setAlternativeBackendsAvailable, setAlternativeBackendsEnabled, setCodexEnabled, setAgentBackends, setDefaultAgentBackendId, setEditorGitGutterBase, setEditorMinimapEnabled, setDisable1mContext, setAppVersion, setVoiceToggleHotkey, setVoiceHoldHotkey, setKeybindings, setManualWorkspaceOrderByRepo]);
 
   // Live freshness for LM Studio's `loaded_context_length`.
   //
@@ -845,8 +870,8 @@ function App() {
   // would tear the interval down and recreate it on every successful
   // tick (because each tick calls `setAgentBackends`, which produces a
   // new array reference) — leading to canceled in-flight requests and
-  // missed refreshes. The effect now only re-runs when the experimental
-  // flag flips.
+  // missed refreshes. The effect now only re-runs when the Models-page
+  // backend gate flips.
   //
   // Self-scheduling `setTimeout` instead of `setInterval` so the next
   // tick is only queued *after* the current one resolves. With

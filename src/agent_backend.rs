@@ -205,7 +205,7 @@ impl AgentBackendConfig {
         }
     }
 
-    pub fn builtin_experimental_codex() -> Self {
+    pub fn builtin_codex_native() -> Self {
         Self {
             id: "experimental-codex".to_string(),
             label: "Codex".to_string(),
@@ -297,7 +297,7 @@ mod tests {
 
     #[test]
     fn native_codex_builtin_uses_app_server_harness_shape() {
-        let backend = AgentBackendConfig::builtin_experimental_codex();
+        let backend = AgentBackendConfig::builtin_codex_native();
 
         assert_eq!(backend.id, "experimental-codex");
         assert_eq!(backend.label, "Codex");

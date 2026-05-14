@@ -40,7 +40,7 @@ export function ComposerToolbar({
   const planMode = useAppStore((s) => s.planMode[sessionId] ?? false);
   const modelSelectorOpen = useAppStore((s) => s.modelSelectorOpen);
   const alternativeBackendsEnabled = useAppStore((s) => s.alternativeBackendsEnabled);
-  const experimentalCodexEnabled = useAppStore((s) => s.experimentalCodexEnabled);
+  const codexEnabled = useAppStore((s) => s.codexEnabled);
   const agentBackends = useAppStore((s) => s.agentBackends);
   const keybindings = useAppStore((s) => s.keybindings);
   const setSelectedModel = useAppStore((s) => s.setSelectedModel);
@@ -68,8 +68,8 @@ export function ComposerToolbar({
 
   const [loaded, setLoaded] = useState(false);
   const registry = useMemo(
-    () => buildModelRegistry(alternativeBackendsEnabled, agentBackends, experimentalCodexEnabled),
-    [alternativeBackendsEnabled, agentBackends, experimentalCodexEnabled],
+    () => buildModelRegistry(alternativeBackendsEnabled, agentBackends, codexEnabled),
+    [alternativeBackendsEnabled, agentBackends, codexEnabled],
   );
   const registryRef = useRef(registry);
   useEffect(() => {

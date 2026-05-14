@@ -3,37 +3,37 @@ title: Alternative Providers
 description: Run Claudette agents against Ollama, LM Studio, OpenAI, or native Codex instead of the default Claude Code path — architecture and capability differences, with deeper setup pages for each.
 ---
 
-By default Claudette spawns the official `claude` CLI authenticated against Anthropic. With the **Alternative Claude Code backends** experimental flag you can also point agents at:
+By default Claudette spawns the official `claude` CLI authenticated against Anthropic. In **Settings > Models**, you can also point agents at:
 
 - **[Ollama](/claudette/features/providers/ollama/)** — local LLMs running on your own machine, talking Claude's wire format directly.
 - **[LM Studio](/claudette/features/providers/lm-studio/)** — local LLMs loaded in LM Studio's desktop app, served via LM Studio 0.4.1+'s native `/v1/messages`. Routed through the in-process gateway with an Anthropic-shape pass-through (no translation, just status-code correction on errors).
 - **[OpenAI](/claudette/features/providers/openai-codex/#openai-api)** — `gpt-*` models via the OpenAI API gateway.
 
-Native Codex is a separate gate: **[Codex](/claudette/features/providers/openai-codex/#codex)** uses your ChatGPT subscription through the native `codex app-server` harness and does not depend on Alternative Claude Code backends.
+Native **[Codex](/claudette/features/providers/openai-codex/#codex)** is configured in the same Models section and uses your ChatGPT subscription through the native `codex app-server` harness. It remains independent from the Alternative Claude Code backends gate.
 
 The data model also defines `CustomAnthropic` and `CustomOpenAi` kinds for self-hosted / proxied endpoints, but the Settings panel currently only renders the built-in backends — there is no in-GUI flow to add a custom provider yet.
 
-This is **experimental** because some Claude-specific features only have clean equivalents on particular backends. Claudette hides or disables unsupported controls instead of sending ignored settings.
+Some Claude-specific features only have clean equivalents on particular backends. Claudette hides or disables unsupported controls instead of sending ignored settings.
 
-## Enabling the feature
+## Enabling Providers
 
-1. Confirm **Settings > Experimental > Alternative Claude Code backends** is on. It is off by default for new users; turning it off hides Ollama, LM Studio, OpenAI API, and custom providers.
-2. For native Codex, toggle on **Codex** instead. This separate gate shows Codex and seeds Codex models into the picker without enabling Alternative Claude Code backends.
-3. Open **Settings > Models** and configure each provider you want to use (URL, secret, models).
-4. Pick a default in **Settings > Models > Default backend**, or override per session from the chat header.
+1. Open **Settings > Models**.
+2. Keep **Alternative Claude Code backends** on to show Ollama, LM Studio, OpenAI API, and custom providers.
+3. Keep **Codex** on to show native Codex and seed Codex models into the picker.
+4. Configure each provider you want to use (URL, secret, models).
+5. Pick a default in **Settings > Models > Default model**, or override per session from the chat header.
 
-When the feature is off, only the built-in `Anthropic` backend is exposed — every workspace runs `claude` as before.
+When both provider gates are off, only the built-in `Anthropic` backend is exposed — every workspace runs `claude` as before.
 
 ## At a glance
 
-| ID | Kind | Default base URL | Auth | Setup |
+| Provider | Kind | Default base URL | Auth | Setup |
 |---|---|---|---|---|
-| `anthropic` | `Anthropic` | (uses `claude` CLI) | Inherits from Claude Code | [Authentication](/claudette/features/authentication/) |
-| `ollama` | `Ollama` | `http://localhost:11434` | None (or optional bearer token) | [Ollama](/claudette/features/providers/ollama/) |
-| `lm-studio` | `LmStudio` | `http://localhost:1234` | None (or optional bearer token) | [LM Studio](/claudette/features/providers/lm-studio/) |
-| `openai-api` | `OpenAiApi` | `https://api.openai.com` | API key (required) | [OpenAI & Codex](/claudette/features/providers/openai-codex/) |
-| `experimental-codex` | `CodexNative` | (uses `codex app-server`) | `codex login` (managed by `codex` CLI) | [OpenAI & Codex](/claudette/features/providers/openai-codex/) |
-| `codex-subscription` | `CodexSubscription` | `https://chatgpt.com/backend-api` | `codex login` (managed by `codex` CLI) | Legacy internal row; not user-facing in Settings |
+| Claude Code | `Anthropic` | (uses `claude` CLI) | Inherits from Claude Code | [Authentication](/claudette/features/authentication/) |
+| Ollama | `Ollama` | `http://localhost:11434` | None (or optional bearer token) | [Ollama](/claudette/features/providers/ollama/) |
+| LM Studio | `LmStudio` | `http://localhost:1234` | None (or optional bearer token) | [LM Studio](/claudette/features/providers/lm-studio/) |
+| OpenAI API | `OpenAiApi` | `https://api.openai.com` | API key (required) | [OpenAI & Codex](/claudette/features/providers/openai-codex/) |
+| Codex | `CodexNative` | (uses `codex app-server`) | `codex login` (managed by `codex` CLI) | [OpenAI & Codex](/claudette/features/providers/openai-codex/) |
 
 ## Two execution paths: direct vs gateway
 
@@ -81,7 +81,7 @@ If the provider config or model changes, the gateway restarts on the next agent 
 
 The model picker in the chat header is scoped to the active provider. Switching the provider resets the model to that provider's default.
 
-Per-session model selection is persisted in `app_settings` as `model:<session_id>` and `model_provider:<session_id>`. Disabling the experimental flag triggers a cleanup pass: only sessions whose persisted model or provider was actually pointing at a non-Anthropic backend (or a non-built-in Claude model) get rewritten to the defaults `anthropic` / `opus` — sessions already on a built-in Claude model are left alone. The cleanup writes new values rather than deleting keys, and resets the live agent on rewritten sessions so the next turn starts fresh against Claude.
+Per-session model selection is persisted in `app_settings` as `model:<session_id>` and `model_provider:<session_id>`. Disabling Alternative Claude Code backends triggers a cleanup pass: only sessions whose persisted model or provider was actually pointing at a non-Anthropic backend (or a non-built-in Claude model) get rewritten to the defaults `anthropic` / `opus` — sessions already on a built-in Claude model are left alone. The cleanup writes new values rather than deleting keys, and resets the live agent on rewritten sessions so the next turn starts fresh against Claude.
 
 ## When to choose what
 
@@ -100,6 +100,5 @@ Per-session model selection is persisted in `app_settings` as `model:<session_id
 ## See also
 
 - [Ollama](/claudette/features/providers/ollama/), [LM Studio](/claudette/features/providers/lm-studio/), and [OpenAI & Codex](/claudette/features/providers/openai-codex/) — per-provider setup pages
-- [Experimental Features](/claudette/features/experimental-features/) — the wider experimental flag set
 - [Agent Configuration](/claudette/features/agent-configuration/) — model selection, effort, thinking, and which knobs apply per provider
 - [Authentication](/claudette/features/authentication/) — credential handling for the default Anthropic backend

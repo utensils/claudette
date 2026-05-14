@@ -556,11 +556,11 @@ const modelHandler: NativeHandler = {
       return handled;
     }
     const { disable1mContext } = useAppStore.getState();
-    const { alternativeBackendsEnabled, experimentalCodexEnabled, agentBackends } = useAppStore.getState();
+    const { alternativeBackendsEnabled, codexEnabled, agentBackends } = useAppStore.getState();
     const registry = buildModelRegistry(
       alternativeBackendsEnabled,
       agentBackends,
-      experimentalCodexEnabled,
+      codexEnabled,
     );
     const available = disable1mContext
       ? registry.filter((m) => m.contextWindowTokens < 1_000_000)

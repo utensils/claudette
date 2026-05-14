@@ -7,53 +7,86 @@ import {
   LEGACY_CODEX_BACKEND,
   NATIVE_CODEX_BACKEND,
   planCodexBackendGateMigration,
-  planExperimentalBackendGateLoad,
+  planBackendGateLoad,
+  planBackendGateLoadFromResults,
   resolveCodexBackendMigrationModel,
 } from "./codexBackendMigration";
 
-describe("planExperimentalBackendGateLoad", () => {
-  it("keeps alternative backends disabled by default when the build includes them", () => {
-    const plan = planExperimentalBackendGateLoad({
+describe("planBackendGateLoad", () => {
+  it("promotes backend gates on first load when the build includes them", () => {
+    const plan = planBackendGateLoad({
       alternativeBackendsCompiled: true,
       alternativeBackendsSetting: null,
-      experimentalCodexSetting: null,
+      codexSetting: null,
+      promotionSetting: null,
     });
 
-    expect(plan.alternativeBackendsEnabled).toBe(false);
-    expect(plan.experimentalCodexEnabled).toBe(false);
+    expect(plan.alternativeBackendsEnabled).toBe(true);
+    expect(plan.codexEnabled).toBe(true);
+    expect(plan.shouldPersistPromotion).toBe(true);
   });
 
-  it("keeps alternative backends off when explicitly disabled", () => {
-    const plan = planExperimentalBackendGateLoad({
+  it("respects explicit disabled settings after promotion has run", () => {
+    const plan = planBackendGateLoad({
       alternativeBackendsCompiled: true,
       alternativeBackendsSetting: "false",
-      experimentalCodexSetting: null,
+      codexSetting: "false",
+      promotionSetting: "true",
     });
 
     expect(plan.alternativeBackendsEnabled).toBe(false);
-    expect(plan.experimentalCodexEnabled).toBe(false);
+    expect(plan.codexEnabled).toBe(false);
+    expect(plan.shouldPersistPromotion).toBe(false);
   });
 
-  it("loads Codex without enabling the alternative backend gate", () => {
-    const plan = planExperimentalBackendGateLoad({
+  it("defaults both gates on after promotion when settings are missing", () => {
+    const plan = planBackendGateLoad({
       alternativeBackendsCompiled: true,
-      alternativeBackendsSetting: "false",
-      experimentalCodexSetting: "true",
+      alternativeBackendsSetting: null,
+      codexSetting: null,
+      promotionSetting: "true",
     });
 
-    expect(plan.alternativeBackendsEnabled).toBe(false);
-    expect(plan.experimentalCodexEnabled).toBe(true);
+    expect(plan.alternativeBackendsEnabled).toBe(true);
+    expect(plan.codexEnabled).toBe(true);
+    expect(plan.shouldPersistPromotion).toBe(false);
+  });
+
+  it("flips saved false values during the one-time promotion", () => {
+    const plan = planBackendGateLoad({
+      alternativeBackendsCompiled: true,
+      alternativeBackendsSetting: "false",
+      codexSetting: "false",
+      promotionSetting: null,
+    });
+
+    expect(plan.alternativeBackendsEnabled).toBe(true);
+    expect(plan.codexEnabled).toBe(true);
+    expect(plan.shouldPersistPromotion).toBe(true);
   });
 
   it("keeps both gates off when the build omits alternative backend support", () => {
-    const plan = planExperimentalBackendGateLoad({
+    const plan = planBackendGateLoad({
       alternativeBackendsCompiled: false,
       alternativeBackendsSetting: "true",
-      experimentalCodexSetting: "true",
+      codexSetting: "true",
+      promotionSetting: null,
     });
 
     expect(plan.alternativeBackendsEnabled).toBe(false);
-    expect(plan.experimentalCodexEnabled).toBe(false);
+    expect(plan.codexEnabled).toBe(false);
+    expect(plan.shouldPersistPromotion).toBe(false);
+  });
+
+  it("does not promote or persist gates when a settings read fails", () => {
+    const plan = planBackendGateLoadFromResults({
+      alternativeBackendsCompiled: true,
+      alternativeBackendsSetting: { status: "rejected", reason: new Error("db busy") },
+      codexSetting: { status: "fulfilled", value: "false" },
+      promotionSetting: { status: "fulfilled", value: null },
+    });
+
+    expect(plan).toBeNull();
   });
 });
 
@@ -82,6 +115,21 @@ describe("planCodexBackendGateMigration", () => {
       defaultBackend: NATIVE_CODEX_BACKEND,
       sessionProviders: [["model_provider:sess-1", NATIVE_CODEX_BACKEND]],
       selectedProviders: { "sess-2": NATIVE_CODEX_BACKEND },
+    });
+
+    expect(plan.toBackend).toBe(DEFAULT_CLAUDE_BACKEND);
+    expect(plan.toModel).toBe(DEFAULT_CLAUDE_MODEL);
+    expect(plan.defaultBackend).toBe(DEFAULT_CLAUDE_BACKEND);
+    expect(plan.resetDefault).toBe(true);
+    expect(plan.sessionIds).toEqual(["sess-1", "sess-2"]);
+  });
+
+  it("resets legacy Codex defaults and sessions to Claude when disabled", () => {
+    const plan = planCodexBackendGateMigration({
+      enableNative: false,
+      defaultBackend: LEGACY_CODEX_BACKEND,
+      sessionProviders: [["model_provider:sess-1", LEGACY_CODEX_BACKEND]],
+      selectedProviders: { "sess-2": LEGACY_CODEX_BACKEND },
     });
 
     expect(plan.toBackend).toBe(DEFAULT_CLAUDE_BACKEND);

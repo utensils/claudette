@@ -35,7 +35,7 @@ export function ChatToolbar({ sessionId, disabled }: ChatToolbarProps) {
   const chromeEnabled = useAppStore((s) => s.chromeEnabled[sessionId] ?? false);
   const modelSelectorOpen = useAppStore((s) => s.modelSelectorOpen);
   const alternativeBackendsEnabled = useAppStore((s) => s.alternativeBackendsEnabled);
-  const experimentalCodexEnabled = useAppStore((s) => s.experimentalCodexEnabled);
+  const codexEnabled = useAppStore((s) => s.codexEnabled);
   const agentBackends = useAppStore((s) => s.agentBackends);
   const setSelectedModel = useAppStore((s) => s.setSelectedModel);
   const setFastMode = useAppStore((s) => s.setFastMode);
@@ -56,8 +56,8 @@ export function ChatToolbar({ sessionId, disabled }: ChatToolbarProps) {
   const [loaded, setLoaded] = useState(false);
   const [effortSelectorOpen, setEffortSelectorOpen] = useState(false);
   const registry = useMemo(
-    () => buildModelRegistry(alternativeBackendsEnabled, agentBackends, experimentalCodexEnabled),
-    [alternativeBackendsEnabled, agentBackends, experimentalCodexEnabled],
+    () => buildModelRegistry(alternativeBackendsEnabled, agentBackends, codexEnabled),
+    [alternativeBackendsEnabled, agentBackends, codexEnabled],
   );
   const registryRef = useRef(registry);
   useEffect(() => {

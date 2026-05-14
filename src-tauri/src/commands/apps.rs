@@ -962,6 +962,7 @@ fn extract_windows_icon_data_url(appx_package: &str, icon_source: &Path) -> Opti
     use std::process::Stdio;
 
     let mut child = std::process::Command::new("powershell.exe")
+        .no_console_window()
         .args([
             "-NoProfile",
             "-NonInteractive",
@@ -2250,6 +2251,7 @@ mod tests {
         // Quick gate: skip when WT isn't installed (e.g. Windows
         // Server hosts without the optional component).
         let pkg_check = std::process::Command::new("powershell.exe")
+            .no_console_window()
             .args([
                 "-NoProfile",
                 "-Command",

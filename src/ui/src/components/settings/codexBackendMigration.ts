@@ -2,6 +2,7 @@ import { DEFAULT_CLAUDE_BACKEND, DEFAULT_CLAUDE_MODEL } from "./alternativeBacke
 
 export const LEGACY_CODEX_BACKEND = "codex-subscription";
 export const NATIVE_CODEX_BACKEND = "experimental-codex";
+export const FIRST_CLASS_BACKENDS_PROMOTION_KEY = "agent_backends_first_class_promoted";
 
 export type SettingEntry = readonly [string, string];
 
@@ -40,16 +41,22 @@ export interface CodexBackendMigrationModelInput {
   backends: readonly CodexBackendMigrationBackend[];
 }
 
-export interface ExperimentalBackendGateLoadInput {
+export interface BackendGateLoadInput {
   alternativeBackendsCompiled: boolean;
   alternativeBackendsSetting: string | null;
-  experimentalCodexSetting: string | null;
+  codexSetting: string | null;
+  promotionSetting: string | null;
 }
 
-export interface ExperimentalBackendGateLoadPlan {
+export interface BackendGateLoadPlan {
   alternativeBackendsEnabled: boolean;
-  experimentalCodexEnabled: boolean;
+  codexEnabled: boolean;
+  shouldPersistPromotion: boolean;
 }
+
+type GateSettingLoad =
+  | { status: "fulfilled"; value: string | null }
+  | { status: "rejected"; reason: unknown };
 
 function settingSessionId(key: string, prefix: string): string | null {
   return key.startsWith(prefix) ? key.slice(prefix.length) : null;
@@ -75,20 +82,71 @@ function fallbackModelForBackend(
   return models[0]?.id ?? null;
 }
 
-export function planExperimentalBackendGateLoad({
+function shouldMigrateCodexBackend(provider: string | null, enableNative: boolean): boolean {
+  if (!provider) return false;
+  if (enableNative) return provider === LEGACY_CODEX_BACKEND;
+  return provider === NATIVE_CODEX_BACKEND || provider === LEGACY_CODEX_BACKEND;
+}
+
+export function planBackendGateLoad({
   alternativeBackendsCompiled,
   alternativeBackendsSetting,
-  experimentalCodexSetting,
-}: ExperimentalBackendGateLoadInput): ExperimentalBackendGateLoadPlan {
-  const experimentalCodexEnabled =
-    alternativeBackendsCompiled && experimentalCodexSetting === "true";
+  codexSetting,
+  promotionSetting,
+}: BackendGateLoadInput): BackendGateLoadPlan {
+  if (!alternativeBackendsCompiled) {
+    return {
+      alternativeBackendsEnabled: false,
+      codexEnabled: false,
+      shouldPersistPromotion: false,
+    };
+  }
+
+  if (promotionSetting !== "true") {
+    return {
+      alternativeBackendsEnabled: true,
+      codexEnabled: true,
+      shouldPersistPromotion: true,
+    };
+  }
+
+  const codexEnabled =
+    codexSetting !== "false";
   const alternativeBackendsEnabled =
-    alternativeBackendsCompiled && alternativeBackendsSetting === "true";
+    alternativeBackendsSetting !== "false";
 
   return {
     alternativeBackendsEnabled,
-    experimentalCodexEnabled,
+    codexEnabled,
+    shouldPersistPromotion: false,
   };
+}
+
+export function planBackendGateLoadFromResults({
+  alternativeBackendsCompiled,
+  alternativeBackendsSetting,
+  codexSetting,
+  promotionSetting,
+}: {
+  alternativeBackendsCompiled: boolean;
+  alternativeBackendsSetting: GateSettingLoad;
+  codexSetting: GateSettingLoad;
+  promotionSetting: GateSettingLoad;
+}): BackendGateLoadPlan | null {
+  if (
+    alternativeBackendsSetting.status === "rejected" ||
+    codexSetting.status === "rejected" ||
+    promotionSetting.status === "rejected"
+  ) {
+    return null;
+  }
+
+  return planBackendGateLoad({
+    alternativeBackendsCompiled,
+    alternativeBackendsSetting: alternativeBackendsSetting.value,
+    codexSetting: codexSetting.value,
+    promotionSetting: promotionSetting.value,
+  });
 }
 
 export function planCodexBackendGateMigration({
@@ -104,18 +162,19 @@ export function planCodexBackendGateMigration({
 
   for (const [key, value] of sessionProviders) {
     const sessionId = settingSessionId(key, "model_provider:");
-    if (sessionId && value === fromBackend) sessionIds.add(sessionId);
+    if (sessionId && shouldMigrateCodexBackend(value, enableNative)) sessionIds.add(sessionId);
   }
   for (const [sessionId, provider] of Object.entries(selectedProviders)) {
-    if (provider === fromBackend) sessionIds.add(sessionId);
+    if (shouldMigrateCodexBackend(provider, enableNative)) sessionIds.add(sessionId);
   }
+  const resetDefault = shouldMigrateCodexBackend(defaultBackend, enableNative);
 
   return {
     fromBackend,
     toBackend,
     toModel,
-    defaultBackend: defaultBackend === fromBackend ? toBackend : defaultBackend,
-    resetDefault: defaultBackend === fromBackend,
+    defaultBackend: resetDefault ? toBackend : defaultBackend,
+    resetDefault,
     sessionIds: [...sessionIds].sort(),
   };
 }

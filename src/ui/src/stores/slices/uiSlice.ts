@@ -270,10 +270,13 @@ export const createUiSlice: StateCreator<AppState, [], [], UiSlice> = (
       // the Distil-Whisper "Download model" button the user was sent
       // there to click. setSettingsSection (below) already gets this
       // distinction right; openSettings now matches.
-      const nextSection =
-        section === "claude-code-plugins" && !state.pluginManagementEnabled
-          ? "experimental"
-          : section;
+      let nextSection = section;
+      if (focus === "claude-auth" && nextSection === "general") {
+        nextSection = "models";
+      }
+      if (nextSection === "claude-code-plugins" && !state.pluginManagementEnabled) {
+        nextSection = "experimental";
+      }
       const resetMarketplaceIntent = nextSection === "claude-code-plugins";
       return {
         settingsOpen: true,

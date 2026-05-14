@@ -172,25 +172,25 @@ function primaryVersionKeysByPrefix(
 export function shouldExposeBackendModels(
   backend: BackendRegistrySource,
   alternativeBackendsEnabled: boolean,
-  experimentalCodexEnabled = false,
+  codexEnabled = false,
 ): boolean {
   if (!backend.enabled || backend.id === "anthropic") return false;
   if (backend.kind === "codex_subscription") return false;
-  if (backend.kind === "codex_native") return experimentalCodexEnabled;
+  if (backend.kind === "codex_native") return codexEnabled;
   return alternativeBackendsEnabled;
 }
 
 export function buildModelRegistry(
   alternativeBackendsEnabled: boolean,
   backends: readonly BackendRegistrySource[],
-  experimentalCodexEnabled = false,
+  codexEnabled = false,
 ): readonly Model[] {
   let models: Model[] | undefined;
   for (const backend of backends) {
     if (!shouldExposeBackendModels(
       backend,
       alternativeBackendsEnabled,
-      experimentalCodexEnabled,
+      codexEnabled,
     )) continue;
     const backendModels =
       backend.discovered_models.length > 0

@@ -1,6 +1,17 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { getAppSetting, setAppSetting, listAgentBackends, saveAgentBackend, saveAgentBackendSecret, refreshAgentBackendModels, testAgentBackend, launchCodexLogin } from "../../../services/tauri";
+import {
+  getAppSetting,
+  launchCodexLogin,
+  listAgentBackends,
+  listAppSettingsWithPrefix,
+  refreshAgentBackendModels,
+  resetAgentSession,
+  saveAgentBackend,
+  saveAgentBackendSecret,
+  setAppSetting,
+  testAgentBackend,
+} from "../../../services/tauri";
 import type { AgentBackendConfig } from "../../../services/tauri";
 import { isFastSupported, isEffortSupported } from "../../chat/modelCapabilities";
 import {
@@ -14,6 +25,13 @@ import {
 } from "../../chat/modelRegistry";
 import { useAppStore } from "../../../stores/useAppStore";
 import { formatBackendError } from "../backendSettingsErrors";
+import { planAlternativeBackendDisableCleanup } from "../alternativeBackendCleanup";
+import {
+  planCodexBackendGateMigration,
+  resolveCodexBackendMigrationModel,
+} from "../codexBackendMigration";
+import { shouldShowBackendTestButton } from "../agentBackendStartupRefresh";
+import { ClaudeCodeAuthSetting } from "../../auth/ClaudeCodeAuthSetting";
 import styles from "../Settings.module.css";
 
 export function ModelSettings() {
@@ -35,7 +53,10 @@ export function ModelSettings() {
   // to know they aren't active in this session.
   const [backendWarnings, setBackendWarnings] = useState<string[]>([]);
   const alternativeBackendsEnabled = useAppStore((s) => s.alternativeBackendsEnabled);
-  const experimentalCodexEnabled = useAppStore((s) => s.experimentalCodexEnabled);
+  const alternativeBackendsAvailable = useAppStore((s) => s.alternativeBackendsAvailable);
+  const setAlternativeBackendsEnabled = useAppStore((s) => s.setAlternativeBackendsEnabled);
+  const codexEnabled = useAppStore((s) => s.codexEnabled);
+  const setCodexEnabled = useAppStore((s) => s.setCodexEnabled);
   const agentBackends = useAppStore((s) => s.agentBackends);
   const setAgentBackends = useAppStore((s) => s.setAgentBackends);
   const setDefaultAgentBackendId = useAppStore((s) => s.setDefaultAgentBackendId);
@@ -101,17 +122,21 @@ export function ModelSettings() {
   };
 
   const registry = useMemo(
-    () => buildModelRegistry(alternativeBackendsEnabled, agentBackends, experimentalCodexEnabled),
-    [alternativeBackendsEnabled, agentBackends, experimentalCodexEnabled],
+    () => buildModelRegistry(alternativeBackendsEnabled, agentBackends, codexEnabled),
+    [alternativeBackendsEnabled, agentBackends, codexEnabled],
   );
   const visibleBackends = useMemo(
     () =>
       agentBackends.filter((backend) => {
         if (backend.id === "anthropic" || backend.kind === "codex_subscription") return false;
-        if (backend.kind === "codex_native") return experimentalCodexEnabled;
+        if (backend.kind === "codex_native") return codexEnabled;
         return alternativeBackendsEnabled;
       }),
-    [agentBackends, alternativeBackendsEnabled, experimentalCodexEnabled],
+    [agentBackends, alternativeBackendsEnabled, codexEnabled],
+  );
+  const anthropicBackend = useMemo(
+    () => agentBackends.find((backend) => backend.id === "anthropic") ?? null,
+    [agentBackends],
   );
   const defaultModelValue = `${defaultBackend}/${defaultModel}`;
 
@@ -172,6 +197,145 @@ export function ModelSettings() {
       await setAppSetting(key, String(next));
     } catch (e) {
       setter(!next);
+      setError(String(e));
+    }
+  };
+
+  const resetAlternativeBackendSelections = async () => {
+    const [
+      defaultModelSetting,
+      defaultBackendSetting,
+      sessionModels,
+      sessionProviders,
+    ] = await Promise.all([
+      getAppSetting("default_model"),
+      getAppSetting("default_agent_backend"),
+      listAppSettingsWithPrefix("model:"),
+      listAppSettingsWithPrefix("model_provider:"),
+    ]);
+    const store = useAppStore.getState();
+    const plan = planAlternativeBackendDisableCleanup({
+      defaultModel: defaultModelSetting,
+      defaultBackend: defaultBackendSetting,
+      sessionModels,
+      sessionProviders,
+      selectedModels: store.selectedModel,
+      selectedProviders: store.selectedModelProvider,
+    });
+
+    if (plan.resetDefault) {
+      await setAppSetting("default_model", plan.defaultModel);
+      await setAppSetting("default_agent_backend", plan.defaultBackend);
+      setDefaultModel(plan.defaultModel);
+      setDefaultBackend(plan.defaultBackend);
+      setDefaultAgentBackendId(plan.defaultBackend);
+    }
+
+    for (const sessionId of plan.sessionIds) {
+      store.setSelectedModel(sessionId, plan.defaultModel, plan.defaultBackend);
+      await setAppSetting(`model:${sessionId}`, plan.defaultModel);
+      await setAppSetting(`model_provider:${sessionId}`, plan.defaultBackend);
+      await resetAgentSession(sessionId);
+      store.clearAgentQuestion(sessionId);
+      store.clearPlanApproval(sessionId);
+      store.clearAgentApproval(sessionId);
+    }
+  };
+
+  const handleAlternativeBackendsToggle = async () => {
+    if (!alternativeBackendsAvailable) return;
+    const next = !alternativeBackendsEnabled;
+    const previous = alternativeBackendsEnabled;
+    setAlternativeBackendsEnabled(next);
+    try {
+      setError(null);
+      if (!next) {
+        await resetAlternativeBackendSelections();
+      }
+      await setAppSetting("alternative_backends_enabled", next ? "true" : "false");
+    } catch (e) {
+      setAlternativeBackendsEnabled(previous);
+      setError(String(e));
+    }
+  };
+
+  const migrateCodexSelections = async (
+    enableNative: boolean,
+    backends: readonly AgentBackendConfig[],
+  ) => {
+    const [
+      defaultBackendSetting,
+      sessionModels,
+      sessionProviders,
+    ] = await Promise.all([
+      getAppSetting("default_agent_backend"),
+      listAppSettingsWithPrefix("model:"),
+      listAppSettingsWithPrefix("model_provider:"),
+    ]);
+    const store = useAppStore.getState();
+    const plan = planCodexBackendGateMigration({
+      enableNative,
+      defaultBackend: defaultBackendSetting,
+      sessionProviders,
+      selectedProviders: store.selectedModelProvider,
+    });
+
+    if (plan.resetDefault && plan.defaultBackend) {
+      await setAppSetting("default_agent_backend", plan.defaultBackend);
+      if (plan.toModel) {
+        await setAppSetting("default_model", plan.toModel);
+        setDefaultModel(plan.toModel);
+      }
+      setDefaultBackend(plan.defaultBackend);
+      setDefaultAgentBackendId(plan.defaultBackend);
+    }
+
+    const persistedModels = new Map<string, string>();
+    for (const [key, value] of sessionModels) {
+      if (key.startsWith("model:")) {
+        persistedModels.set(key.slice("model:".length), value);
+      }
+    }
+
+    for (const sessionId of plan.sessionIds) {
+      const model = resolveCodexBackendMigrationModel({
+        plan,
+        sessionId,
+        persistedModels,
+        selectedModels: store.selectedModel,
+        backends,
+      });
+      if (model) {
+        store.setSelectedModel(sessionId, model, plan.toBackend);
+        await setAppSetting(`model:${sessionId}`, model);
+      } else {
+        store.setSelectedModelProvider(sessionId, plan.toBackend);
+      }
+      await setAppSetting(`model_provider:${sessionId}`, plan.toBackend);
+      await resetAgentSession(sessionId);
+      store.clearAgentQuestion(sessionId);
+      store.clearPlanApproval(sessionId);
+      store.clearAgentApproval(sessionId);
+    }
+  };
+
+  const handleCodexToggle = async () => {
+    if (!alternativeBackendsAvailable) return;
+    const next = !codexEnabled;
+    const previous = codexEnabled;
+    let persistedToggle = false;
+    setCodexEnabled(next);
+    try {
+      setError(null);
+      await setAppSetting("experimental_codex_enabled", next ? "true" : "false");
+      persistedToggle = true;
+      const data = await listAgentBackends();
+      setAgentBackends(data.backends);
+      setDefaultBackend(data.default_backend_id);
+      setDefaultAgentBackendId(data.default_backend_id);
+      await migrateCodexSelections(next, data.backends);
+    } catch (e) {
+      setCodexEnabled(persistedToggle ? next : previous);
       setError(String(e));
     }
   };
@@ -391,8 +555,65 @@ export function ModelSettings() {
         </div>
       </div>
 
-      {visibleBackends.length > 0 && (
+      <div className={styles.settingRow}>
+        <div className={styles.settingInfo}>
+          <div className={styles.settingLabel}>
+            {t("models_alternative_backends")}
+          </div>
+          <div className={styles.settingDescription}>
+            {t(
+              alternativeBackendsAvailable
+                ? "models_alternative_backends_desc"
+                : "models_alternative_backends_unavailable_desc",
+            )}
+          </div>
+        </div>
+        <div className={styles.settingControl}>
+          <button
+            className={styles.toggle}
+            role="switch"
+            aria-checked={alternativeBackendsEnabled}
+            aria-label={t("models_alternative_backends_aria")}
+            data-checked={alternativeBackendsEnabled}
+            disabled={!alternativeBackendsAvailable}
+            onClick={handleAlternativeBackendsToggle}
+          >
+            <div className={styles.toggleKnob} />
+          </button>
+        </div>
+      </div>
+
+      <div className={styles.settingRow}>
+        <div className={styles.settingInfo}>
+          <div className={styles.settingLabel}>
+            {t("models_codex")}
+          </div>
+          <div className={styles.settingDescription}>
+            {t(
+              alternativeBackendsAvailable
+                ? "models_codex_desc"
+                : "models_codex_unavailable_desc",
+            )}
+          </div>
+        </div>
+        <div className={styles.settingControl}>
+          <button
+            className={styles.toggle}
+            role="switch"
+            aria-checked={codexEnabled}
+            aria-label={t("models_codex_aria")}
+            data-checked={codexEnabled}
+            disabled={!alternativeBackendsAvailable}
+            onClick={handleCodexToggle}
+          >
+            <div className={styles.toggleKnob} />
+          </button>
+        </div>
+      </div>
+
+      {(anthropicBackend || visibleBackends.length > 0) && (
         <BackendSettingsPanel
+          anthropicBackend={anthropicBackend}
           backends={visibleBackends}
           onBackends={setAgentBackends}
         />
@@ -402,9 +623,11 @@ export function ModelSettings() {
 }
 
 function BackendSettingsPanel({
+  anthropicBackend,
   backends,
   onBackends,
 }: {
+  anthropicBackend: AgentBackendConfig | null;
   backends: AgentBackendConfig[];
   onBackends: (backends: AgentBackendConfig[]) => void;
 }) {
@@ -419,6 +642,7 @@ function BackendSettingsPanel({
           </div>
         </div>
       </div>
+      {anthropicBackend && <ClaudeCodeAuthSetting />}
       {backends.filter((b) => b.id !== "anthropic").map((backend) => (
         <BackendCard
           key={backend.id}
@@ -469,6 +693,7 @@ function BackendCard({
   const showBaseUrl = !usesCodexCliAuth;
   const showSecret = !usesCodexCliAuth;
   const showManualModels = draft.kind === "custom_anthropic" || draft.kind === "custom_openai";
+  const showTestButton = shouldShowBackendTestButton(draft);
   const actualModelCount = countBackendModels(draft);
   const displayModelCount = actualModelCount > 0 ? actualModelCount : statusModelCount ?? 0;
   const selectedDefaultModel = modelOptions.some((model) => model.id === draft.default_model)
@@ -708,7 +933,9 @@ function BackendCard({
           >
             <div className={styles.toggleKnob} />
           </button>
-          <button className={styles.iconBtn} onClick={test} disabled={busy}>{t("models_backend_test")}</button>
+          {showTestButton && (
+            <button className={styles.iconBtn} onClick={test} disabled={busy}>{t("models_backend_test")}</button>
+          )}
           {discoveryBackend && (
             <button className={styles.iconBtn} onClick={refresh} disabled={busy}>{t("models_backend_refresh")}</button>
           )}

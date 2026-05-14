@@ -5,15 +5,7 @@ description: Opt-in toggles for features that are still maturing — what each o
 
 **Settings > Experimental** holds toggles for features that are still maturing. "Experimental" doesn't mean unsafe — these are shipped and tested — but the surface area, defaults, or persistence shape may shift between releases. Toggling one off is always reversible.
 
-Six toggles live there today.
-
-## Alternative Claude Code backends
-
-Exposes Ollama (local), LM Studio (local), and the OpenAI API in addition to the default Claude Code path. This gate is off by default for new users. Codex is intentionally separate: enable **Codex** to use the native `codex app-server` harness. Custom Anthropic / OpenAI endpoint kinds exist in the data model but the GUI doesn't yet have an "Add backend" flow.
-
-When this is off, every workspace runs the official `claude` CLI authenticated against Anthropic. When on, the chat header gets a provider picker and **Settings > Models** grows configuration sections for each provider.
-
-→ Full setup and capability matrix: **[Alternative Providers](/claudette/features/providers/)**
+Five toggles live there today. Agent backend choices such as Ollama, LM Studio, OpenAI API, and Codex now live in **Settings > Models** as first-class model/provider controls.
 
 ## Claudette Terminal
 
@@ -47,7 +39,7 @@ Enables the Plugins / Themes / Grammars community catalog inside Claudette. Brow
 
 Gates the **Settings > Usage** panel that shows Claude Code subscription details (session limits, weekly limits, extra usage) by querying Anthropic's usage API directly. Requires a Pro or Max plan with standard login (env-var auth tokens don't have the OAuth scopes the API needs).
 
-When this is off, Claudette never reads your Claude Code OAuth tokens for usage data — they stay strictly in the keychain / `.credentials.json` for the `claude` CLI's own use. The Claude Code sign-in flow in **Settings > General** remains available because agent credential failures need a recovery path independent of usage tracking.
+When this is off, Claudette never reads your Claude Code OAuth tokens for usage data — they stay strictly in the keychain / `.credentials.json` for the `claude` CLI's own use. The Claude Code sign-in flow in **Settings > Models** remains available because agent credential failures need a recovery path independent of usage tracking.
 
 → What the panel shows and how it's cached: **[Usage & Metrics](/claudette/features/usage-and-metrics/)**
 
@@ -55,14 +47,13 @@ When this is off, Claudette never reads your Claude Code OAuth tokens for usage 
 
 | Toggle | What's still moving |
 |---|---|
-| Alternative Providers | Per-provider capability surfaces; gateway translation edge cases on long streamed responses. |
 | Claudette Terminal | Layout and persistence story for the read-only tab. |
 | Plugin Management | Marketplace UI; settings persistence for per-plugin config. |
 | Claude Remote Control | Reconnect / device-handoff UX; deferred-feature list. |
 | Community Registry | Content moderation; revocation flow; theme runtime loading. |
 | Usage Insights | Cache invalidation around tier changes; richer breakdown views. |
 
-If a toggle moves to "default-on" or graduates out of experimental, the upgrade path leaves your existing settings in place — toggles are independent, never bundled.
+If a toggle moves to "default-on" or graduates out of experimental, the release notes for that feature describe any one-time migration. Experimental toggles are otherwise independent, never bundled.
 
 ## See also
 

@@ -435,16 +435,16 @@ describe("plugin settings routing", () => {
     expect(useAppStore.getState().settingsSection).toBe("experimental");
   });
 
-  it("stores a focused settings target and clears it on manual section changes", () => {
+  it("routes the Claude auth focus target to Models and clears it on manual section changes", () => {
     useAppStore.getState().openSettings("general", "claude-auth");
 
     expect(useAppStore.getState().settingsOpen).toBe(true);
-    expect(useAppStore.getState().settingsSection).toBe("general");
+    expect(useAppStore.getState().settingsSection).toBe("models");
     expect(useAppStore.getState().settingsFocus).toBe("claude-auth");
 
-    useAppStore.getState().setSettingsSection("models");
+    useAppStore.getState().setSettingsSection("general");
 
-    expect(useAppStore.getState().settingsSection).toBe("models");
+    expect(useAppStore.getState().settingsSection).toBe("general");
     expect(useAppStore.getState().settingsFocus).toBeNull();
   });
 

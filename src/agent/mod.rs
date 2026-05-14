@@ -69,7 +69,7 @@ pub struct AgentSettings {
     /// When true, redirect Claude Code agent-team teammates into Claudette
     /// session tabs. Defaults to true for new users; settings can opt out.
     pub team_agent_session_tabs_enabled: bool,
-    /// Provider-specific env for experimental alternate Claude Code backends.
+    /// Provider-specific env for alternate Claude Code backends.
     /// Empty means the normal Claude Code account/API environment is used.
     pub backend_runtime: AgentBackendRuntime,
     /// Optional bridge used by Claude Code hooks. When present, args inject

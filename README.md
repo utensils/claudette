@@ -23,7 +23,7 @@
 - **[SCM providers (GitHub, GitLab, extensible)](https://utensils.github.io/claudette/features/scm-providers/)** — pull request status, CI checks, and one-click merge without leaving the app, powered by sandboxed Lua plugins.
 - **[MCP supervision and env-providers](https://utensils.github.io/claudette/features/mcp-servers/)** — per-repo MCP server config with health monitoring, plus a pluggable env stack ([direnv, mise, dotenv, nix-devshell](https://utensils.github.io/claudette/features/scm-providers/#environment-provider-plugins)).
 - **[Voice input](https://utensils.github.io/claudette/features/voice-input/)** — push-to-talk dictation with Apple Speech (macOS) or bundled Whisper, all on-device.
-- **[Alternative providers](https://utensils.github.io/claudette/features/providers/)** _(experimental)_ — run agents through Ollama (local), LM Studio (local), the OpenAI API, or OpenAI Codex (subscription) instead of Claude. An in-process gateway translates wire formats; chat-header toggles adapt to whichever provider is active.
+- **[Alternative providers](https://utensils.github.io/claudette/features/providers/)** — choose Claude Code, Ollama (local), LM Studio (local), the OpenAI API, or native Codex as first-class agent backends. Gateway and native harness paths adapt chat controls to whichever provider is active.
 
 Full documentation lives at **[utensils.github.io/claudette](https://utensils.github.io/claudette/)**.
 

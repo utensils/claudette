@@ -24,6 +24,7 @@ mod imp {
     use std::ffi::OsStr;
     use std::os::windows::ffi::OsStrExt;
 
+    use claudette::process::CommandWindowExt as _;
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         IDOK, MB_ICONERROR, MB_OKCANCEL, MB_SETFOREGROUND, MB_SYSTEMMODAL, MessageBoxW,
     };
@@ -100,6 +101,7 @@ mod imp {
         };
         if result == IDOK as i32 {
             let _ = std::process::Command::new("cmd")
+                .no_console_window()
                 .args(["/C", "start", "", DOWNLOAD_URL])
                 .spawn();
         }
