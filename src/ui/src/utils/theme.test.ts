@@ -310,8 +310,26 @@ describe("detectBase16", () => {
     expect(detectBase16(hybrid)).toBe(false);
   });
 
+  it("treats any THEMEABLE_VARS token as a Claudette signal, not just accent-primary", () => {
+    // A hybrid that overrides only `terminal-bg` (a deep-in-the-list themeable
+    // var) must still be treated as Claudette so the author's override survives.
+    const hybridTerminal = { ...TOMORROW_NIGHT, "terminal-bg": "#abcdef" };
+    expect(detectBase16(hybridTerminal)).toBe(false);
+
+    const hybridSyntax = { ...TOMORROW_NIGHT, "syntax-keyword": "#abcdef" };
+    expect(detectBase16(hybridSyntax)).toBe(false);
+  });
+
   it("returns false for a plain Claudette theme without any base keys", () => {
     expect(detectBase16({ "accent-primary": "#e07850", "app-bg": "#1c1815" })).toBe(false);
+  });
+
+  it("accepts lowercase base0a–base0f as well as uppercase", () => {
+    const lower: Record<string, string> = {};
+    for (const [k, v] of Object.entries(TOMORROW_NIGHT)) {
+      lower[k.toLowerCase()] = v;
+    }
+    expect(detectBase16(lower)).toBe(true);
   });
 });
 
@@ -398,5 +416,54 @@ describe("convertBase16ToClaudette", () => {
       colors: { ...TOMORROW_NIGHT, base05: "not-a-hex" },
     };
     expect(convertBase16ToClaudette(broken)).toBe(broken);
+  });
+
+  it("maps text-muted to base04, NOT base06 — base06 is brighter than base05 in dark schemes", () => {
+    // Tomorrow Night: base05=#c5c8c6 (default fg), base06=#e0e0e0 (brighter),
+    // base04=#b4b7b4 (dimmer). 'muted' must be dimmer than primary.
+    const out = convertBase16ToClaudette(input).colors;
+    expect(out["text-primary"]).toBe("#c5c8c6");  // base05
+    expect(out["text-muted"]).toBe("#b4b7b4");    // base04 (less prominent than primary)
+    expect(out["text-dim"]).toBe("#969896");      // base03
+  });
+
+  it("emits full -bg/-border/-fg triplets for each status accent so imported palettes don't inherit baseline tints", () => {
+    const out = convertBase16ToClaudette(input).colors;
+    // success uses base0B (#b5bd68 → 181, 189, 104)
+    expect(out["accent-success-bg"]).toBe("rgba(181, 189, 104, 0.10)");
+    expect(out["accent-success-border"]).toBe("rgba(181, 189, 104, 0.30)");
+    expect(out["accent-success-fg"]).toBe("#b5bd68");
+    // error uses base08 (#cc6666 → 204, 102, 102)
+    expect(out["accent-error-bg"]).toBe("rgba(204, 102, 102, 0.10)");
+    expect(out["accent-error-border"]).toBe("rgba(204, 102, 102, 0.30)");
+    // warning uses base09 (#de935f → 222, 147, 95)
+    expect(out["accent-warning-bg"]).toBe("rgba(222, 147, 95, 0.10)");
+    expect(out["accent-warning-border"]).toBe("rgba(222, 147, 95, 0.30)");
+    // info uses base0D (#81a2be → 129, 162, 190)
+    expect(out["accent-info-bg"]).toBe("rgba(129, 162, 190, 0.10)");
+    expect(out["accent-info-border"]).toBe("rgba(129, 162, 190, 0.30)");
+  });
+
+  it("emits secondary + tertiary triplets from base0F and base0E", () => {
+    const out = convertBase16ToClaudette(input).colors;
+    expect(out["accent-secondary"]).toBe("#a3685a");        // base0F
+    expect(out["accent-secondary-bg"]).toBe("rgba(163, 104, 90, 0.10)");
+    expect(out["accent-tertiary"]).toBe("#b294bb");         // base0E
+    expect(out["accent-tertiary-bg"]).toBe("rgba(178, 148, 187, 0.10)");
+  });
+
+  it("accepts a base16 palette using lowercase keys (base0a–base0f)", () => {
+    const lower: Record<string, string> = {};
+    for (const [k, v] of Object.entries(TOMORROW_NIGHT)) {
+      lower[k.toLowerCase()] = v;
+    }
+    const out = convertBase16ToClaudette({
+      id: "tomorrow-lower",
+      name: "Tomorrow (lowercase)",
+      description: "",
+      colors: lower,
+    }).colors;
+    expect(out["accent-success"]).toBe("#b5bd68"); // base0B regardless of case
+    expect(out["accent-primary"]).toBe("#b294bb"); // base0E regardless of case
   });
 });
