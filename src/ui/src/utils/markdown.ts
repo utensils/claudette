@@ -12,7 +12,7 @@ import remarkGfm from "remark-gfm";
 import rehypeRaw from "rehype-raw";
 import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
 import { AnsiUp } from "ansi_up";
-import { openUrl } from "../services/tauri";
+import { openInEditor, openUrl } from "../services/tauri";
 import { CodeBlock } from "../components/chat/CodeBlock";
 import { MermaidBlock } from "../components/chat/MermaidBlock";
 import { StreamingContext } from "../components/chat/StreamingContext";
@@ -23,6 +23,7 @@ import {
   formatFilePathDisplayLabel,
   isExplicitFilePathTarget,
   isLikelyFilePathTarget,
+  isLikelyRelativeFileReference,
 } from "./filePathLinks";
 import { getCachedHighlight, highlightCode } from "./highlight";
 import { rehypeFilePathLinks } from "./rehypeFilePathLinks";
@@ -190,6 +191,7 @@ export interface MarkdownFileOpenContextValue {
 
 export const MarkdownFileOpenContext =
   createContext<MarkdownFileOpenContextValue | null>(null);
+const MarkdownFileLinkContext = createContext(false);
 
 export function normalizeExternalHref(href: string): string | null {
   const trimmed = href.trim();
@@ -298,6 +300,7 @@ export function HighlightedCode({
     : null;
   const isStreaming = useContext(StreamingContext);
   const fileOpen = useContext(MarkdownFileOpenContext);
+  const insideFileLink = useContext(MarkdownFileLinkContext);
   // Memoize so re-renders that don't change `children` skip the recursive walk
   // and keep `code`'s identity stable — the highlight effect's deps then no
   // longer fire spuriously, so we don't enqueue redundant worker dispatches.
@@ -366,7 +369,7 @@ export function HighlightedCode({
   const inlineFilePath =
     resolvedPath ??
     (!hasFileResolver && isLikelyFilePathTarget(inlineText) ? inlineText : null);
-  if (inlineFilePath && fileOpen) {
+  if (inlineFilePath && fileOpen && !insideFileLink) {
     return createElement(
       "button",
       {
@@ -400,6 +403,14 @@ const MarkdownLink: NonNullable<Components["a"]> = ({
   const filePath = href
     ? (encodedFilePath ?? localhostFilePath ?? hrefFilePath)
     : null;
+  const encodedExplicitFilePath =
+    encodedFilePath && isExplicitFilePathTarget(encodedFilePath)
+      ? encodedFilePath
+      : null;
+  const encodedWorkspaceRelativeFilePath =
+    encodedFilePath && isExplicitWorkspaceRelativeFilePath(encodedFilePath)
+      ? encodedFilePath
+      : null;
   const hasFileResolver = typeof fileOpen?.resolveFilePath === "function";
   const compactFilePath = localhostFilePath ?? hrefFilePath;
   const compactFilePathLabel = compactFilePath
@@ -432,13 +443,34 @@ const MarkdownLink: NonNullable<Components["a"]> = ({
           );
         }
       }
-      if (!hasFileResolver) {
+      const candidateFilePath =
+        !verifiedFilePath &&
+          (!hasFileResolver ||
+            encodedExplicitFilePath ||
+            encodedWorkspaceRelativeFilePath)
+          ? (encodedExplicitFilePath ?? encodedWorkspaceRelativeFilePath ?? filePath)
+          : null;
+      if (candidateFilePath) {
         try {
-          if (fileOpen.openFile(filePath)) return;
+          if (fileOpen.openFile(candidateFilePath)) return;
         } catch (err) {
-          console.error("Failed to open file link in Monaco:", filePath, err);
+          console.error(
+            "Failed to open file link in Monaco:",
+            candidateFilePath,
+            err,
+          );
         }
       }
+    }
+    if (encodedExplicitFilePath) {
+      void openInEditor(encodedExplicitFilePath).catch((err) =>
+        console.error(
+          "Failed to open file link with default app:",
+          encodedExplicitFilePath,
+          err,
+        ),
+      );
+      return;
     }
     if (localhostFilePath || hrefFilePath) {
       console.warn(
@@ -453,10 +485,20 @@ const MarkdownLink: NonNullable<Components["a"]> = ({
     );
   };
   if (filePath) {
-    if (hasFileResolver && !verifiedFilePath) {
-      return createElement("span", props, children);
-    }
     const filePathLabel = compactFilePathLabel ?? children;
+    const renderedFilePathLabel = createElement(
+      MarkdownFileLinkContext.Provider,
+      { value: true },
+      filePathLabel,
+    );
+    if (
+      hasFileResolver &&
+      !verifiedFilePath &&
+      !encodedExplicitFilePath &&
+      !encodedWorkspaceRelativeFilePath
+    ) {
+      return createElement("span", props, renderedFilePathLabel);
+    }
     return createElement(
       "button",
       {
@@ -468,7 +510,7 @@ const MarkdownLink: NonNullable<Components["a"]> = ({
         title: verifiedFilePath ?? filePath,
         onClick: openFilePath,
       },
-      filePathLabel,
+      renderedFilePathLabel,
     );
   }
   return createElement(
@@ -491,6 +533,21 @@ const MarkdownLink: NonNullable<Components["a"]> = ({
 
 function classNames(...values: Array<string | undefined>): string {
   return values.filter(Boolean).join(" ");
+}
+
+function isExplicitWorkspaceRelativeFilePath(path: string): boolean {
+  if (!isLikelyRelativeFileReference(path)) return false;
+  const normalized = path.trim().replace(/^@/, "").replace(/\\/g, "/");
+  if (
+    normalized.startsWith("../") ||
+    normalized === "." ||
+    normalized === ".." ||
+    /^[A-Za-z]:\//.test(normalized) ||
+    normalized.startsWith("/")
+  ) {
+    return false;
+  }
+  return normalized.startsWith("./") || normalized.includes("/");
 }
 
 // Override <a> to open external links in the system browser instead of

@@ -10,10 +10,12 @@ import type { Components } from "react-markdown";
 
 const tauriMocks = vi.hoisted(() => ({
   openUrl: vi.fn(() => Promise.resolve()),
+  openInEditor: vi.fn(() => Promise.resolve()),
 }));
 
 vi.mock("../services/tauri", () => ({
   openUrl: tauriMocks.openUrl,
+  openInEditor: tauriMocks.openInEditor,
 }));
 
 vi.mock("./highlight", () => ({
@@ -231,6 +233,7 @@ describe("MARKDOWN_COMPONENTS.a click handling", () => {
 
   beforeEach(() => {
     tauriMocks.openUrl.mockClear();
+    tauriMocks.openInEditor.mockClear();
   });
 
   it("routes claudettepath links through the Monaco file opener context", async () => {
@@ -254,6 +257,34 @@ describe("MARKDOWN_COMPONENTS.a click handling", () => {
 
     expect(openFile).toHaveBeenCalledWith("README.md");
     expect(tauriMocks.openUrl).not.toHaveBeenCalled();
+  });
+
+  it("does not double-render file buttons for linked inline code", async () => {
+    const openFile = vi.fn(() => true);
+    const resolveFilePath = vi.fn((path: string) =>
+      path === "Cargo.toml" ? "Cargo.toml" : null,
+    );
+    const container = await render(
+      createElement(
+        MarkdownFileOpenContext.Provider,
+        { value: { openFile, resolveFilePath } },
+        createElement(LinkOverride, {
+          href: "claudettepath:Cargo.toml",
+          children: createElement(HighlightedCode, { children: "Cargo.toml" }),
+        }),
+      ),
+    );
+
+    const buttons = container.querySelectorAll("button.cc-file-path-link");
+    expect(buttons).toHaveLength(1);
+    expect(buttons[0]?.querySelector("button")).toBeNull();
+    expect(buttons[0]?.querySelector("code")?.textContent).toBe("Cargo.toml");
+    buttons[0]?.dispatchEvent(
+      new MouseEvent("click", { bubbles: true, cancelable: true }),
+    );
+
+    expect(openFile).toHaveBeenCalledWith("Cargo.toml");
+    expect(tauriMocks.openInEditor).not.toHaveBeenCalled();
   });
 
   it("routes at-sign file mentions only when the workspace index resolves them", async () => {
@@ -344,7 +375,32 @@ describe("MARKDOWN_COMPONENTS.a click handling", () => {
     expect(openFile).not.toHaveBeenCalled();
   });
 
-  it("does not open absolute file paths in a native app when Monaco cannot handle them", async () => {
+  it("routes explicit relative file paths through Monaco even before the workspace index resolves them", async () => {
+    const openFile = vi.fn(() => true);
+    const container = await render(
+      createElement(
+        MarkdownFileOpenContext.Provider,
+        { value: { openFile, resolveFilePath: () => null } },
+        createElement(LinkOverride, {
+          href: "claudettepath:./tmp/report.csv",
+          children: createElement(HighlightedCode, { children: "./tmp/report.csv" }),
+        }),
+      ),
+    );
+
+    const button = container.querySelector("button.cc-file-path-link");
+    expect(button).toBeTruthy();
+    expect(button?.querySelector("code")?.textContent).toBe("./tmp/report.csv");
+    button?.dispatchEvent(
+      new MouseEvent("click", { bubbles: true, cancelable: true }),
+    );
+
+    expect(openFile).toHaveBeenCalledWith("./tmp/report.csv");
+    expect(tauriMocks.openInEditor).not.toHaveBeenCalled();
+    expect(tauriMocks.openUrl).not.toHaveBeenCalled();
+  });
+
+  it("opens explicit absolute file paths in the native app when Monaco cannot handle them", async () => {
     const openFile = vi.fn(() => false);
     const container = await render(
       createElement(
@@ -357,15 +413,19 @@ describe("MARKDOWN_COMPONENTS.a click handling", () => {
       ),
     );
 
-    container.querySelector("button")?.dispatchEvent(
+    const button = container.querySelector("button");
+    expect(button).toBeTruthy();
+    button?.dispatchEvent(
       new MouseEvent("click", { bubbles: true, cancelable: true }),
     );
 
     expect(openFile).toHaveBeenCalledWith("/tmp/report.md");
+    expect(openFile).toHaveBeenCalledTimes(1);
+    expect(tauriMocks.openInEditor).toHaveBeenCalledWith("/tmp/report.md");
     expect(tauriMocks.openUrl).not.toHaveBeenCalled();
   });
 
-  it("does not open absolute file paths in a native app when the Monaco opener throws", async () => {
+  it("opens explicit absolute file paths in the native app when the Monaco opener throws", async () => {
     const openFile = vi.fn(() => {
       throw new Error("boom");
     });
@@ -385,6 +445,7 @@ describe("MARKDOWN_COMPONENTS.a click handling", () => {
     );
 
     expect(openFile).toHaveBeenCalledWith("/tmp/report.md");
+    expect(tauriMocks.openInEditor).toHaveBeenCalledWith("/tmp/report.md");
     expect(tauriMocks.openUrl).not.toHaveBeenCalled();
   });
 
