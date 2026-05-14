@@ -16,6 +16,7 @@ function makeWorkspace(overrides: Partial<Workspace> = {}): Workspace {
     status_line: "",
     created_at: "1700000000",
     sort_order: 0,
+    input_values: null,
     remote_connection_id: null,
     ...overrides,
   };

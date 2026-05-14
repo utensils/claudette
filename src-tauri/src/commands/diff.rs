@@ -259,6 +259,7 @@ mod tests {
             archive_script_auto_run: false,
             base_branch: Some("main".into()),
             default_remote: None,
+            required_inputs: None,
             path_valid: true,
         }
     }
@@ -278,6 +279,7 @@ mod tests {
             status_line: String::new(),
             created_at: String::new(),
             sort_order: 0,
+            input_values: None,
         }
     }
 

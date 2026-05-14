@@ -1,0 +1,41 @@
+/**
+ * Open the `requiredInputs` modal for a repo and resolve with the values
+ * the user submitted — or `null` if they cancelled (or the repo has no
+ * declared schema, in which case the modal is skipped entirely).
+ *
+ * Lives outside the React tree so both the hook-based orchestrator
+ * (`createWorkspaceOrchestrated`) and the Sidebar's own inline create flow
+ * can share the same prompt. Without this, only one of those two paths
+ * would prompt and the other would silently send no values, causing the
+ * backend validator to reject the create with a "Missing value for
+ * required input" error.
+ */
+import { useAppStore } from "../stores/useAppStore";
+import type { RepositoryInputField } from "../types/repositoryInput";
+
+export interface PromptResult {
+  /** `null` ⇒ the user cancelled. `Record` ⇒ values to forward verbatim
+   *  to `createWorkspace`. `undefined` ⇒ no prompt was needed (repo has
+   *  no declared schema) — callers should pass `null` to the Tauri call. */
+  values: Record<string, string> | null | undefined;
+}
+
+/** Returns `undefined` immediately when the repo declares no inputs, so the
+ *  caller can distinguish "skipped" from "cancelled". */
+export async function promptRequiredInputsIfDeclared(
+  repoId: string,
+): Promise<PromptResult> {
+  const repo = useAppStore.getState().repositories.find((r) => r.id === repoId);
+  const schema = repo?.required_inputs ?? null;
+  if (!schema || schema.length === 0) {
+    return { values: undefined };
+  }
+  const values = await new Promise<Record<string, string> | null>((resolve) => {
+    useAppStore.getState().openModal("requiredInputs", {
+      schema: schema satisfies RepositoryInputField[],
+      repoName: repo?.name ?? "",
+      resolve,
+    });
+  });
+  return { values };
+}

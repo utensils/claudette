@@ -200,6 +200,10 @@ async fn create_inner(
         status_line: String::new(),
         created_at: now_iso(),
         sort_order: 0,
+        // input_values are persisted by the caller (create_workspace_inner)
+        // after this op returns and before the setup script runs. Default
+        // to None here so the struct is valid mid-creation.
+        input_values: None,
     };
 
     if let Err(e) = db.insert_workspace(&ws) {
@@ -874,6 +878,7 @@ mod tests {
             archive_script_auto_run: false,
             base_branch: None,
             default_remote: None,
+            required_inputs: None,
             path_valid: true,
         };
         db.insert_repository(&repo).unwrap();

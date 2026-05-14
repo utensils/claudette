@@ -136,7 +136,7 @@ pub async fn spawn_pty(
         repo_path: root_path.clone(),
         repo_id: repo_id_opt,
     };
-    let resolved_env = {
+    let mut resolved_env = {
         // Snapshot the plugin registry — `plugins_snapshot` releases
         // the outer RwLock immediately so opening the Plugins
         // settings page (which awaits `list_claudette_plugins`) is
@@ -154,6 +154,14 @@ pub async fn spawn_pty(
         )
         .await
     };
+    // Layer the workspace's declared input values over the env-provider
+    // stack so the interactive shell (and anything the user runs in it)
+    // sees them. Reopening the DB here mirrors the rest of pty.rs — every
+    // Tauri command opens its own `rusqlite::Connection` because the type
+    // isn't `Send`.
+    if let Ok(db) = claudette::db::Database::open(&state.db_path) {
+        crate::commands::env::merge_workspace_input_env(&db, &workspace_id, &mut resolved_env);
+    }
     crate::commands::env::register_resolved_with_watcher(
         &state,
         std::path::Path::new(&working_dir),

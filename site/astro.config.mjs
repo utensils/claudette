@@ -114,6 +114,7 @@ export default defineConfig({
             { slug: 'features/scm-providers' },
             { slug: 'features/mcp-servers' },
             { slug: 'features/per-repo-settings' },
+            { slug: 'features/required-inputs' },
             { slug: 'features/claude-remote-control' },
           ],
         },

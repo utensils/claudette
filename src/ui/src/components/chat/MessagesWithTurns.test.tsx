@@ -135,6 +135,7 @@ beforeEach(() => {
         status_line: "",
         created_at: "2026-05-08T00:00:00.000Z",
         sort_order: 0,
+        input_values: null,
         remote_connection_id: null,
         agent_status: "Idle",
       },

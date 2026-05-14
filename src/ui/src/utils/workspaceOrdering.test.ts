@@ -24,6 +24,7 @@ function workspace(
     status_line: "",
     created_at,
     sort_order,
+    input_values: null,
     remote_connection_id: null,
   };
 }

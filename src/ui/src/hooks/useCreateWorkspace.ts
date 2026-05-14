@@ -7,6 +7,7 @@ import {
   runWorkspaceSetup,
 } from "../services/tauri";
 import { runAndRecordSetupScript } from "../utils/setupScriptMessage";
+import { promptRequiredInputsIfDeclared } from "./promptRequiredInputs";
 
 /** Outcome surfaced to callers so they can show toasts or chain follow-up work
  *  without prying into the store. The orchestration still performs the core
@@ -63,8 +64,25 @@ export async function createWorkspaceOrchestrated(
   store.setCreatingWorkspaceRepoId(repoId);
 
   try {
+    // If the repo declares required inputs, prompt the user before
+    // creating anything — we don't want a half-created workspace lying
+    // around if the user cancels.
+    const prompt = await promptRequiredInputsIfDeclared(repoId);
+    if (prompt.values === null) {
+      // User cancelled the modal — abort the whole flow before allocating
+      // a slug. Returning null instead of throwing keeps the surface
+      // identical to "the in-flight guard rejected us".
+      return null;
+    }
+    const inputValues = prompt.values ?? null;
+
     const generated = await generateWorkspaceName();
-    const result = await createWorkspace(repoId, generated.slug, true);
+    const result = await createWorkspace(
+      repoId,
+      generated.slug,
+      true,
+      inputValues,
+    );
 
     const post = useAppStore.getState();
     post.addWorkspace(result.workspace);
