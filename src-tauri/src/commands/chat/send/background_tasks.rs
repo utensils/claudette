@@ -322,10 +322,10 @@ pub(super) async fn apply_task_notification_status(
     let Ok(db) = Database::open(db_path) else {
         return;
     };
+    let app_state = app.state::<AppState>();
     let trusted_output_file = {
-        let app_state = app.state::<AppState>();
-        let mut agents = app_state.agents.write().await;
-        agents.get_mut(chat_session_id).and_then(|session| {
+        let agents = app_state.agents.read().await;
+        agents.get(chat_session_id).and_then(|session| {
             let trusted = session
                 .background_task_output_paths
                 .get(task_id)
@@ -335,21 +335,23 @@ pub(super) async fn apply_task_notification_status(
                     })
                 })
                 .cloned();
-            let output_file = output_file
+            output_file
                 .filter(|path| trusted.as_deref() == Some(path.trim()))
                 .map(str::trim)
-                .map(ToOwned::to_owned);
-            if is_terminal_task_status(status) {
-                session.running_background_tasks.remove(task_id);
-                session.background_task_output_paths.remove(task_id);
-                if let Some(tool_use_id) = tool_use_id {
-                    session.running_background_tasks.remove(tool_use_id);
-                    session.background_task_output_paths.remove(tool_use_id);
-                }
-            }
-            output_file
+                .map(ToOwned::to_owned)
         })
     };
+    if is_terminal_task_status(status) {
+        let mut agents = app_state.agents.write().await;
+        if let Some(session) = agents.get_mut(chat_session_id) {
+            session.running_background_tasks.remove(task_id);
+            session.background_task_output_paths.remove(task_id);
+            if let Some(tool_use_id) = tool_use_id {
+                session.running_background_tasks.remove(tool_use_id);
+                session.background_task_output_paths.remove(tool_use_id);
+            }
+        }
+    }
     let _ = db.update_agent_task_terminal_tab_status(
         chat_session_id,
         task_id,
