@@ -4,9 +4,16 @@
  * override in `markdown.ts` recognises that scheme and routes clicks into a
  * workspace file opener when one is available.
  *
- * Skipped contexts: anywhere already inside `<code>`, `<pre>`, or `<a>`. We
- * don't want to mangle code samples (where slashes are syntactic) or stack
- * up nested anchors when the path was already a real link.
+ * Skipped contexts for the text scanner: anywhere already inside `<code>`,
+ * `<pre>`, or `<a>`. We don't want to mangle code samples (where slashes are
+ * syntactic) or stack up nested anchors when the path was already a real link.
+ *
+ * Inline-code paths (a `<code>` element whose entire trimmed text is a single
+ * recognized file path, e.g. `` `/tmp/foo.csv` ``) get a separate pass: the
+ * `<code>` is wrapped in an `<a class="cc-file-path-link" href="…">` so the
+ * link styling layers on top of the inline-code background. Block code
+ * (inside `<pre>`) is left alone — fenced code samples like `cd /tmp/foo &&
+ * ls` would mangle if we linkified them.
  */
 import type { Plugin } from "unified";
 import type { Element, ElementContent, Root, Text } from "hast";
@@ -35,6 +42,46 @@ export const rehypeFilePathLinks: Plugin<[], Root> = () => {
         href: encodeFilePathHref(text),
         className: mergeClassName(node.properties.className, "cc-file-path-link"),
       };
+    });
+
+    visitParents(tree, "element", (node: Element, ancestors) => {
+      if (node.tagName !== "code") return;
+      // Skip block code (inside <pre>) and code already inside a link.
+      // Inline code in prose has no <pre> ancestor — that's the case we
+      // want to linkify.
+      for (const ancestor of ancestors) {
+        if (ancestor.type !== "element") continue;
+        const tag = (ancestor as Element).tagName;
+        if (tag === "pre" || tag === "a") return;
+      }
+
+      const text = singleTextChild(node);
+      if (!text) return;
+
+      // Whole-or-nothing: the inline code's text must be a single
+      // recognized file path covering the entire (trimmed) content.
+      // Anything with surrounding tokens (e.g. `cd /tmp/foo`) is left
+      // alone — partial linking inside code would mangle copy-paste.
+      const matches = detectFileReferences(text);
+      if (matches.length !== 1) return;
+      const match = matches[0];
+      if (match.start !== 0 || match.end !== text.length) return;
+
+      const parent = ancestors[ancestors.length - 1];
+      if (!parent || !("children" in parent)) return;
+      const idx = parent.children.indexOf(node);
+      if (idx < 0) return;
+
+      const link: Element = {
+        type: "element",
+        tagName: "a",
+        properties: {
+          href: encodeFilePathHref(match.path),
+          className: ["cc-file-path-link"],
+        },
+        children: [node],
+      };
+      parent.children.splice(idx, 1, link);
     });
 
     visitParents(tree, "text", (node: Text, ancestors) => {

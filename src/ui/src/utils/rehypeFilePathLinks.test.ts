@@ -105,12 +105,69 @@ describe("rehypeFilePathLinks", () => {
     expect(link.properties?.className).toBeUndefined();
   });
 
-  it("leaves paths inside <code> alone", () => {
+  it("wraps an inline <code> that is exactly an absolute path", () => {
     const code: Element = {
       type: "element",
       tagName: "code",
       properties: {},
       children: [text("/tmp/foo.csv")],
+    };
+    const tree = root(paragraph(text("Saved to "), code, text(".")));
+    run(tree);
+
+    const p = tree.children[0] as Element;
+    expect(p.children).toHaveLength(3);
+    const link = p.children[1] as Element;
+    expect(link.tagName).toBe("a");
+    expect(link.properties?.href).toBe("claudettepath:/tmp/foo.csv");
+    expect(link.properties?.className).toEqual(["cc-file-path-link"]);
+    const innerCode = link.children[0] as Element;
+    expect(innerCode.tagName).toBe("code");
+    expect(innerCode.children).toEqual([
+      { type: "text", value: "/tmp/foo.csv" },
+    ]);
+  });
+
+  it("wraps an inline <code> that is exactly a workspace-relative path", () => {
+    const code: Element = {
+      type: "element",
+      tagName: "code",
+      properties: {},
+      children: [text("src/main.rs")],
+    };
+    const tree = root(paragraph(text("Edit "), code, text(".")));
+    run(tree);
+
+    const p = tree.children[0] as Element;
+    const link = p.children[1] as Element;
+    expect(link.tagName).toBe("a");
+    expect(link.properties?.href).toBe("claudettepath:src/main.rs");
+    const innerCode = link.children[0] as Element;
+    expect(innerCode.tagName).toBe("code");
+  });
+
+  it("tolerates surrounding whitespace inside the <code>", () => {
+    const code: Element = {
+      type: "element",
+      tagName: "code",
+      properties: {},
+      children: [text("  /tmp/foo.csv  ")],
+    };
+    const tree = root(paragraph(code));
+    run(tree);
+
+    const p = tree.children[0] as Element;
+    const link = p.children[0] as Element;
+    expect(link.tagName).toBe("a");
+    expect(link.properties?.href).toBe("claudettepath:/tmp/foo.csv");
+  });
+
+  it("leaves inline <code> alone when it contains more than a single path", () => {
+    const code: Element = {
+      type: "element",
+      tagName: "code",
+      properties: {},
+      children: [text("cd /tmp/foo && ls")],
     };
     const tree = root(paragraph(code));
     run(tree);
@@ -118,7 +175,49 @@ describe("rehypeFilePathLinks", () => {
     const p = tree.children[0] as Element;
     const stillCode = p.children[0] as Element;
     expect(stillCode.tagName).toBe("code");
-    expect(stillCode.children).toEqual([{ type: "text", value: "/tmp/foo.csv" }]);
+    expect(stillCode.children).toEqual([
+      { type: "text", value: "cd /tmp/foo && ls" },
+    ]);
+  });
+
+  it("leaves inline <code> alone when it is not a recognized path", () => {
+    const code: Element = {
+      type: "element",
+      tagName: "code",
+      properties: {},
+      children: [text("someVar")],
+    };
+    const tree = root(paragraph(code));
+    run(tree);
+
+    const p = tree.children[0] as Element;
+    const stillCode = p.children[0] as Element;
+    expect(stillCode.tagName).toBe("code");
+  });
+
+  it("leaves block code (<pre><code>) alone even when it is a path", () => {
+    const code: Element = {
+      type: "element",
+      tagName: "code",
+      properties: {},
+      children: [text("/tmp/foo.csv")],
+    };
+    const pre: Element = {
+      type: "element",
+      tagName: "pre",
+      properties: {},
+      children: [code],
+    };
+    const tree = root(pre);
+    run(tree);
+
+    const stillPre = tree.children[0] as Element;
+    expect(stillPre.tagName).toBe("pre");
+    const stillCode = stillPre.children[0] as Element;
+    expect(stillCode.tagName).toBe("code");
+    expect(stillCode.children).toEqual([
+      { type: "text", value: "/tmp/foo.csv" },
+    ]);
   });
 
   it("leaves paths inside <pre> alone", () => {
