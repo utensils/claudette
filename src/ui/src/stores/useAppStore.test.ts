@@ -1416,6 +1416,7 @@ describe("mergeRemoteData / clearRemoteData default branches", () => {
           base_branch: null,
           default_remote: null,
           path_valid: true,
+          required_inputs: null,
           remote_connection_id: null,
         },
       ],
@@ -1472,6 +1473,7 @@ describe("mergeRemoteData / clearRemoteData default branches", () => {
           base_branch: null,
           default_remote: null,
           path_valid: true,
+          required_inputs: null,
           remote_connection_id: null,
         },
         {
@@ -1491,6 +1493,7 @@ describe("mergeRemoteData / clearRemoteData default branches", () => {
           base_branch: null,
           default_remote: null,
           path_valid: true,
+          required_inputs: null,
           remote_connection_id: null,
         },
       ],
@@ -2038,6 +2041,7 @@ function makeWorkspace(id: string, repoId: string = "r1"): Workspace {
     status_line: "",
     created_at: "2026-01-01T00:00:00Z",
     sort_order: 0,
+    input_values: null,
     remote_connection_id: null,
   };
 }

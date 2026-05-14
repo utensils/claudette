@@ -82,4 +82,9 @@ pub struct Workspace {
     /// Per-repository display order for the sidebar. Persisted via the
     /// `workspaces.sort_order` column; reassigned by `reorder_workspaces`.
     pub sort_order: i32,
+    /// Values supplied at workspace-create time for the repo's declared
+    /// `required_inputs`. Keys mirror the schema's field keys; values are
+    /// already coerced to strings on the way in. `None` when the repo had
+    /// no inputs declared (the common case).
+    pub input_values: Option<std::collections::HashMap<String, String>>,
 }

@@ -8,6 +8,7 @@ import {
 } from "../services/tauri";
 import { runAndRecordSetupScript } from "../utils/setupScriptMessage";
 import type { Workspace } from "../types/workspace";
+import { promptRequiredInputsIfDeclared } from "./promptRequiredInputs";
 
 /** Build the optimistic-placeholder Workspace inserted at the start
  *  of a create flow. The fields are best-effort approximations of
@@ -33,6 +34,10 @@ function buildPlaceholderWorkspace(repoId: string, slug: string): Workspace {
     // row's `sort_order` from `db.list_workspaces` lands at the
     // correct position once `commitPendingCreate` swaps it in.
     sort_order: Number.MAX_SAFE_INTEGER,
+    // `input_values` is populated by the backend after the create; the
+    // placeholder is a stub the orchestrator swaps out as soon as the
+    // real row arrives, so leaving this `null` is fine.
+    input_values: null,
     remote_connection_id: null,
   };
 }
@@ -167,6 +172,18 @@ async function runCreateWorkspaceOrchestrated(
   // displays in the "Preparing workspace…" placard.
   let placeholderId: string | null = null;
   try {
+    // If the repo declares required inputs, prompt the user before
+    // creating anything — we don't want a half-created workspace lying
+    // around if the user cancels.
+    const prompt = await promptRequiredInputsIfDeclared(repoId);
+    if (prompt.values === null) {
+      // User cancelled the modal — abort the whole flow before allocating
+      // a slug. Returning null instead of throwing keeps the surface
+      // identical to "the in-flight guard rejected us".
+      return null;
+    }
+    const inputValues = prompt.values ?? null;
+
     const generated = await generateWorkspaceName();
     // Clear the pre-slug indicator the moment we have a slug, even on
     // the no-placeholder (`selectOnCreate: false`) path. Otherwise the
@@ -189,7 +206,12 @@ async function runCreateWorkspaceOrchestrated(
       // for a workspace whose row is hidden.
       useAppStore.getState().expandRepo(repoId);
     }
-    const result = await createWorkspace(repoId, generated.slug, true);
+    const result = await createWorkspace(
+      repoId,
+      generated.slug,
+      true,
+      inputValues,
+    );
 
     // The Rust `Workspace` model doesn't serialize the UI-only
     // `remote_connection_id` field, so the IPC payload arrives with it

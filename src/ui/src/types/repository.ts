@@ -1,3 +1,5 @@
+import type { RepositoryInputField } from "./repositoryInput";
+
 export interface Repository {
   id: string;
   path: string;
@@ -14,6 +16,10 @@ export interface Repository {
   archive_script_auto_run: boolean;
   base_branch: string | null;
   default_remote: string | null;
+  /** Per-repo declared inputs. New workspaces must supply a value for each
+   *  declared field at creation time; those values become env vars in the
+   *  workspace session. Null/empty means "no prompt on workspace create". */
+  required_inputs: RepositoryInputField[] | null;
   path_valid: boolean;
   /** Non-null when this repo belongs to a remote connection. */
   remote_connection_id: string | null;

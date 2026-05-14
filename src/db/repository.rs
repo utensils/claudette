@@ -7,7 +7,7 @@
 
 use rusqlite::{OptionalExtension, params};
 
-use crate::model::Repository;
+use crate::model::{Repository, RepositoryInputField};
 
 use super::Database;
 
@@ -44,6 +44,24 @@ impl Database {
     }
 
     fn parse_repo_row(row: &rusqlite::Row) -> rusqlite::Result<Repository> {
+        let required_inputs_raw: Option<String> = row.get(15)?;
+        // Tolerate corrupt / forward-version JSON by dropping the schema rather
+        // than failing the entire SELECT — losing prompts is preferable to a
+        // dead sidebar. A warning trace lets ops notice the regression.
+        let required_inputs = required_inputs_raw.and_then(|s| {
+            match serde_json::from_str::<Vec<RepositoryInputField>>(&s) {
+                Ok(v) if !v.is_empty() => Some(v),
+                Ok(_) => None,
+                Err(e) => {
+                    tracing::warn!(
+                        target: "claudette::db",
+                        error = %e,
+                        "failed to parse repositories.required_inputs JSON; treating as empty"
+                    );
+                    None
+                }
+            }
+        });
         Ok(Repository {
             id: row.get(0)?,
             path: row.get(1)?,
@@ -60,13 +78,14 @@ impl Database {
             default_remote: row.get(12)?,
             archive_script: row.get(13)?,
             archive_script_auto_run: row.get::<_, i32>(14).unwrap_or(0) != 0,
+            required_inputs,
             path_valid: true, // validated after load
         })
     }
 
     pub fn list_repositories(&self) -> Result<Vec<Repository>, rusqlite::Error> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, path, name, icon, path_slug, created_at, setup_script, custom_instructions, sort_order, branch_rename_preferences, setup_script_auto_run, base_branch, default_remote, archive_script, archive_script_auto_run
+            "SELECT id, path, name, icon, path_slug, created_at, setup_script, custom_instructions, sort_order, branch_rename_preferences, setup_script_auto_run, base_branch, default_remote, archive_script, archive_script_auto_run, required_inputs
              FROM repositories ORDER BY sort_order, name",
         )?;
         let rows = stmt.query_map([], Self::parse_repo_row)?;
@@ -76,7 +95,7 @@ impl Database {
     pub fn get_repository(&self, id: &str) -> Result<Option<Repository>, rusqlite::Error> {
         self.conn
             .query_row(
-                "SELECT id, path, name, icon, path_slug, created_at, setup_script, custom_instructions, sort_order, branch_rename_preferences, setup_script_auto_run, base_branch, default_remote, archive_script, archive_script_auto_run
+                "SELECT id, path, name, icon, path_slug, created_at, setup_script, custom_instructions, sort_order, branch_rename_preferences, setup_script_auto_run, base_branch, default_remote, archive_script, archive_script_auto_run, required_inputs
                  FROM repositories WHERE id = ?1",
                 params![id],
                 Self::parse_repo_row,
@@ -228,6 +247,32 @@ impl Database {
         )?;
         Ok(())
     }
+
+    /// Persist the per-repo schema of declared inputs.
+    ///
+    /// An empty schema (`Some(&[])` or `None`) clears the column — callers
+    /// pass `None` to mean "this repo no longer prompts on workspace
+    /// creation". JSON serialization is infallible for this enum and is
+    /// surfaced as `rusqlite::Error::ToSqlConversionFailure` if it ever
+    /// breaks so a corrupt row can't sneak in.
+    pub fn update_repository_required_inputs(
+        &self,
+        id: &str,
+        schema: Option<&[RepositoryInputField]>,
+    ) -> Result<(), rusqlite::Error> {
+        let serialized = match schema {
+            Some(fields) if !fields.is_empty() => Some(
+                serde_json::to_string(fields)
+                    .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?,
+            ),
+            _ => None,
+        };
+        self.conn.execute(
+            "UPDATE repositories SET required_inputs = ?1 WHERE id = ?2",
+            params![serialized, id],
+        )?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -313,5 +358,52 @@ mod tests {
         let repos = db.list_repositories().unwrap();
         assert_eq!(repos[0].name, "My Project");
         assert_eq!(repos[0].path_slug, "my-project");
+    }
+
+    #[test]
+    fn required_inputs_roundtrip_via_update() {
+        let db = Database::open_in_memory().unwrap();
+        db.insert_repository(&make_repo("r1", "/tmp/r1", "r1"))
+            .unwrap();
+        // Empty / unset → None on read.
+        let repos = db.list_repositories().unwrap();
+        assert!(repos[0].required_inputs.is_none());
+
+        // Write a typed schema, read it back.
+        let schema = vec![
+            RepositoryInputField::String {
+                key: "TICKET_ID".into(),
+                label: "Ticket".into(),
+                description: None,
+                default: None,
+                placeholder: Some("PROJ-123".into()),
+            },
+            RepositoryInputField::Number {
+                key: "RETRIES".into(),
+                label: "Retries".into(),
+                description: None,
+                default: Some(3.0),
+                min: Some(0.0),
+                max: Some(10.0),
+                step: None,
+                unit: None,
+            },
+        ];
+        db.update_repository_required_inputs("r1", Some(&schema))
+            .unwrap();
+        let repos = db.list_repositories().unwrap();
+        let loaded = repos[0]
+            .required_inputs
+            .as_ref()
+            .expect("required_inputs should round-trip");
+        assert_eq!(loaded.len(), 2);
+        assert_eq!(loaded[0].key(), "TICKET_ID");
+        assert_eq!(loaded[1].key(), "RETRIES");
+
+        // Empty slice clears the column back to NULL.
+        db.update_repository_required_inputs("r1", Some(&[]))
+            .unwrap();
+        let repos = db.list_repositories().unwrap();
+        assert!(repos[0].required_inputs.is_none());
     }
 }

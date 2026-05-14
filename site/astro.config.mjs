@@ -117,6 +117,7 @@ export default defineConfig({
             { slug: 'features/project-view-issues-prs' },
             { slug: 'features/mcp-servers' },
             { slug: 'features/per-repo-settings' },
+            { slug: 'features/required-inputs' },
             { slug: 'features/claude-remote-control' },
           ],
         },

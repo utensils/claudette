@@ -230,6 +230,11 @@ pub const MIGRATIONS: &[Migration] = &[
         legacy_version: None,
     },
     Migration {
+        id: "20260513200000_repo_required_inputs",
+        sql: include_str!("20260513200000_repo_required_inputs.sql"),
+        legacy_version: None,
+    },
+    Migration {
         id: "20260517190000_agent_scheduled_tasks",
         sql: include_str!("20260517190000_agent_scheduled_tasks.sql"),
         legacy_version: None,

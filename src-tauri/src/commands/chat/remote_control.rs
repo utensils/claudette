@@ -439,7 +439,7 @@ async fn ensure_persistent_session_for_remote_control(
         let registry = state.plugins_snapshot().await;
         let (progress, output) =
             crate::commands::env::make_env_sinks(app.clone(), ws_info_for_env.id.clone());
-        claudette::env_provider::resolve_with_registry_streaming(
+        let mut resolved = claudette::env_provider::resolve_with_registry_streaming(
             &registry,
             &state.env_cache,
             std::path::Path::new(worktree_path),
@@ -448,7 +448,11 @@ async fn ensure_persistent_session_for_remote_control(
             Some(&progress),
             Some(output),
         )
-        .await
+        .await;
+        if let Ok(db) = Database::open(db_path) {
+            crate::commands::env::merge_workspace_input_env(&db, &workspace.id, &mut resolved);
+        }
+        resolved
     };
     crate::commands::env::register_resolved_with_watcher(
         state,
@@ -1353,6 +1357,7 @@ mod tests {
             status_line: String::new(),
             created_at: "2026-05-08T00:00:00Z".to_string(),
             sort_order: 0,
+            input_values: None,
         }
     }
 
