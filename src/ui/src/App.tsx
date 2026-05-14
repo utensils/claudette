@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { getVersion } from "@tauri-apps/api/app";
 import { useAppStore } from "./stores/useAppStore";
-import { loadInitialData, getAppSetting, setAppSetting, getHostEnvFlags, listRemoteConnections, listDiscoveredServers, getLocalServerStatus, detectInstalledApps, listSystemFonts, deleteTerminalTab, listAppSettingsWithPrefix, listAgentBackends, refreshAgentBackendModels, bootOk } from "./services/tauri";
+import { loadInitialData, getAppSetting, setAppSetting, getHostEnvFlags, listRemoteConnections, listDiscoveredServers, getLocalServerStatus, detectInstalledApps, listSystemFonts, deleteTerminalTab, listAppSettingsWithPrefix, listAgentBackends, autoDetectAgentBackends, refreshAgentBackendModels, bootOk } from "./services/tauri";
 import { applyTheme, applyUserFonts, loadAllThemes, findTheme, cacheThemePreference, getThemeDataAttr } from "./utils/theme";
 import { DEFAULT_THEME_ID, DEFAULT_LIGHT_THEME_ID } from "./styles/themes";
 import type { ThemeDefinition } from "./types/theme";
@@ -26,7 +26,7 @@ import {
   FIRST_CLASS_BACKENDS_PROMOTION_KEY,
   planBackendGateLoadFromResults,
 } from "./components/settings/codexBackendMigration";
-import { refreshStartupCodexBackends } from "./components/settings/agentBackendStartupRefresh";
+import { autoDetectStartupAgentBackends } from "./components/settings/agentBackendStartupRefresh";
 import { findLeafByPtyId } from "./stores/terminalPaneTree";
 import type { CommandEvent } from "./types";
 import i18n, { isSupportedLanguage } from "./i18n";
@@ -373,11 +373,12 @@ function App() {
       .catch(() => {});
     Promise.allSettled([
       getAppSetting("alternative_backends_enabled"),
+      getAppSetting("codex_enabled"),
       getAppSetting("experimental_codex_enabled"),
       getAppSetting(FIRST_CLASS_BACKENDS_PROMOTION_KEY),
       getHostEnvFlags(),
     ])
-      .then(async ([settingResult, codexSettingResult, promotionResult, flagsResult]) => {
+      .then(async ([settingResult, codexSettingResult, legacyCodexSettingResult, promotionResult, flagsResult]) => {
         const flags =
           flagsResult.status === "fulfilled"
             ? flagsResult.value
@@ -393,13 +394,21 @@ function App() {
         if (codexSettingResult.status === "rejected") {
           console.error("Failed to load Codex setting:", codexSettingResult.reason);
         }
+        if (legacyCodexSettingResult.status === "rejected") {
+          console.error("Failed to load legacy Codex setting:", legacyCodexSettingResult.reason);
+        }
         if (promotionResult.status === "rejected") {
           console.error("Failed to load backend promotion setting:", promotionResult.reason);
         }
         const gatePlan = planBackendGateLoadFromResults({
           alternativeBackendsCompiled: flags.alternative_backends_compiled,
           alternativeBackendsSetting: settingResult,
-          codexSetting: codexSettingResult,
+          codexSetting:
+            codexSettingResult.status === "fulfilled" && codexSettingResult.value !== null
+              ? codexSettingResult
+              : legacyCodexSettingResult.status === "fulfilled"
+                ? legacyCodexSettingResult
+                : codexSettingResult,
           promotionSetting: promotionResult,
         });
         if (!gatePlan) return;
@@ -408,7 +417,7 @@ function App() {
         if (gatePlan.shouldPersistPromotion) {
           await Promise.all([
             setAppSetting("alternative_backends_enabled", "true"),
-            setAppSetting("experimental_codex_enabled", "true"),
+            setAppSetting("codex_enabled", "true"),
             setAppSetting(FIRST_CLASS_BACKENDS_PROMOTION_KEY, "true"),
           ]);
         }
@@ -420,12 +429,13 @@ function App() {
       .then((data) => {
         setAgentBackends(data.backends);
         setDefaultAgentBackendId(data.default_backend_id);
-        void refreshStartupCodexBackends({
+        void autoDetectStartupAgentBackends({
           backends: data.backends,
-          refreshBackend: refreshAgentBackendModels,
+          autoDetectBackends: autoDetectAgentBackends,
           onBackends: setAgentBackends,
-          onError: (backendId, error) => {
-            console.warn("Startup Codex model refresh failed:", backendId, error);
+          onDefaultBackend: setDefaultAgentBackendId,
+          onError: (error) => {
+            console.warn("Startup provider auto-detection failed:", error);
           },
         });
       })

@@ -1,32 +1,38 @@
-import type { AgentBackendConfig } from "../../services/tauri";
+import type { AgentBackendConfig, AgentBackendListResponse } from "../../services/tauri";
 
 export function shouldShowBackendTestButton(backend: AgentBackendConfig) {
   return backend.kind !== "codex_native";
 }
 
-export function startupRefreshBackendIds(backends: AgentBackendConfig[]) {
+export function autoDetectableBackendIds(backends: AgentBackendConfig[]) {
   return backends
-    .filter((backend) => backend.enabled && backend.kind === "codex_native")
+    .filter((backend) =>
+      backend.kind === "codex_native" ||
+      backend.kind === "ollama" ||
+      backend.kind === "lm_studio"
+    )
     .map((backend) => backend.id);
 }
 
-export async function refreshStartupCodexBackends({
+export async function autoDetectStartupAgentBackends({
   backends,
-  refreshBackend,
+  autoDetectBackends,
   onBackends,
+  onDefaultBackend,
   onError,
 }: {
   backends: AgentBackendConfig[];
-  refreshBackend: (backendId: string) => Promise<AgentBackendConfig[]>;
+  autoDetectBackends: () => Promise<AgentBackendListResponse>;
   onBackends: (backends: AgentBackendConfig[]) => void;
-  onError: (backendId: string, error: unknown) => void;
+  onDefaultBackend: (backendId: string) => void;
+  onError: (error: unknown) => void;
 }) {
-  for (const backendId of startupRefreshBackendIds(backends)) {
-    try {
-      const refreshed = await refreshBackend(backendId);
-      onBackends(refreshed);
-    } catch (error) {
-      onError(backendId, error);
-    }
+  if (autoDetectableBackendIds(backends).length === 0) return;
+  try {
+    const detected = await autoDetectBackends();
+    onBackends(detected.backends);
+    onDefaultBackend(detected.default_backend_id);
+  } catch (error) {
+    onError(error);
   }
 }

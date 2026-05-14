@@ -69,7 +69,7 @@ describe("formatBackendError", () => {
     const message = formatBackendError(
       "error sending request for url",
       backend({
-        id: "experimental-codex",
+        id: "codex",
         label: "Codex",
         kind: "codex_native",
         base_url: null,

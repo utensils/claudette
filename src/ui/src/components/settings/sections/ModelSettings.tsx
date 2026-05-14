@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
+  deleteAppSetting,
   getAppSetting,
   launchCodexLogin,
   listAgentBackends,
@@ -27,12 +28,27 @@ import { useAppStore } from "../../../stores/useAppStore";
 import { formatBackendError } from "../backendSettingsErrors";
 import { planAlternativeBackendDisableCleanup } from "../alternativeBackendCleanup";
 import {
+  LEGACY_CODEX_BACKEND,
+  LEGACY_NATIVE_CODEX_BACKEND,
+  NATIVE_CODEX_BACKEND,
   planCodexBackendGateMigration,
   resolveCodexBackendMigrationModel,
 } from "../codexBackendMigration";
 import { shouldShowBackendTestButton } from "../agentBackendStartupRefresh";
 import { ClaudeCodeAuthSetting } from "../../auth/ClaudeCodeAuthSetting";
 import styles from "../Settings.module.css";
+
+const BACKEND_AUTO_DETECT_DISABLED_PREFIX = "agent_backend_auto_detect_disabled:";
+
+function autoDetectDisabledKey(backendId: string) {
+  return `${BACKEND_AUTO_DETECT_DISABLED_PREFIX}${backendId}`;
+}
+
+function normalizeBackendId(backendId: string) {
+  return backendId === LEGACY_CODEX_BACKEND || backendId === LEGACY_NATIVE_CODEX_BACKEND
+    ? NATIVE_CODEX_BACKEND
+    : backendId;
+}
 
 export function ModelSettings() {
   const { t } = useTranslation("settings");
@@ -68,8 +84,9 @@ export function ModelSettings() {
     getAppSetting("default_agent_backend")
       .then((val) => {
         if (val) {
-          setDefaultBackend(val);
-          setDefaultAgentBackendId(val);
+          const backendId = normalizeBackendId(val);
+          setDefaultBackend(backendId);
+          setDefaultAgentBackendId(backendId);
         }
       })
       .catch(() => {});
@@ -327,7 +344,12 @@ export function ModelSettings() {
     setCodexEnabled(next);
     try {
       setError(null);
-      await setAppSetting("experimental_codex_enabled", next ? "true" : "false");
+      await setAppSetting("codex_enabled", next ? "true" : "false");
+      if (next) {
+        await deleteAppSetting(autoDetectDisabledKey(NATIVE_CODEX_BACKEND));
+      } else {
+        await setAppSetting(autoDetectDisabledKey(NATIVE_CODEX_BACKEND), "true");
+      }
       persistedToggle = true;
       const data = await listAgentBackends();
       setAgentBackends(data.backends);

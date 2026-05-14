@@ -35,6 +35,7 @@ export function reasoningVariantForModel(
   model: ReasoningModelLike | undefined,
 ): ReasoningControlVariant {
   return model?.providerKind === "codex_native" ||
+    model?.providerId === "codex" ||
     model?.providerId === "experimental-codex"
     ? "codex"
     : "claude";

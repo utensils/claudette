@@ -2,7 +2,7 @@ import { MODELS } from "../chat/modelRegistry";
 
 export const DEFAULT_CLAUDE_BACKEND = "anthropic";
 export const DEFAULT_CLAUDE_MODEL = "opus";
-const CODEX_BACKENDS = new Set(["experimental-codex", "codex-subscription"]);
+const CODEX_BACKENDS = new Set(["codex", "experimental-codex", "codex-subscription"]);
 
 export type SettingEntry = readonly [string, string];
 

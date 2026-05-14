@@ -175,7 +175,7 @@ describe("buildCommands — provider-specific reasoning commands", () => {
       selectedWorkspaceId: "ws-1",
       selectedSessionId: "sess-1",
       selectedModel: "gpt-5.5",
-      selectedModelProvider: "experimental-codex",
+      selectedModelProvider: "codex",
     }));
 
     expect(cmds.find((c) => c.id === "toggle-thinking")).toBeUndefined();
@@ -236,7 +236,7 @@ describe("buildEffortCommands", () => {
       "high",
       vi.fn(),
       vi.fn(),
-      "experimental-codex",
+      "codex",
       {
         codexReasoningEffort: "Inteligencia",
         codexSetReasoningEffort: "Establecer inteligencia de Codex",

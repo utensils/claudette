@@ -5,6 +5,7 @@ import {
 } from "./alternativeBackendCleanup";
 import {
   LEGACY_CODEX_BACKEND,
+  LEGACY_NATIVE_CODEX_BACKEND,
   NATIVE_CODEX_BACKEND,
   planCodexBackendGateMigration,
   planBackendGateLoad,
@@ -94,8 +95,11 @@ describe("planCodexBackendGateMigration", () => {
   it("maps legacy Codex defaults and sessions to native Codex when enabled", () => {
     const plan = planCodexBackendGateMigration({
       enableNative: true,
-      defaultBackend: LEGACY_CODEX_BACKEND,
-      sessionProviders: [["model_provider:sess-1", LEGACY_CODEX_BACKEND]],
+      defaultBackend: LEGACY_NATIVE_CODEX_BACKEND,
+      sessionProviders: [
+        ["model_provider:sess-1", LEGACY_CODEX_BACKEND],
+        ["model_provider:sess-3", LEGACY_NATIVE_CODEX_BACKEND],
+      ],
       selectedProviders: { "sess-2": LEGACY_CODEX_BACKEND },
     });
 
@@ -105,7 +109,7 @@ describe("planCodexBackendGateMigration", () => {
       toModel: null,
       defaultBackend: NATIVE_CODEX_BACKEND,
       resetDefault: true,
-      sessionIds: ["sess-1", "sess-2"],
+      sessionIds: ["sess-1", "sess-2", "sess-3"],
     });
   });
 
