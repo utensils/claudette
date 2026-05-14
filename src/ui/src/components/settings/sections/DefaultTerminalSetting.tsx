@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Check, ChevronDown, Terminal } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { useAppStore } from "../../../stores/useAppStore";
+import { useSettingsOverlay } from "../../../hooks/useSettingsOverlay";
 import {
   deleteAppSetting,
   setAppSetting,
@@ -25,6 +26,8 @@ export function DefaultTerminalSetting() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const pickerRef = useRef<HTMLDivElement>(null);
+
+  useSettingsOverlay(open);
 
   const terminalApps = useMemo(
     () => terminalAppsFrom(detectedApps),

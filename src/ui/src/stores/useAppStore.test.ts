@@ -496,6 +496,34 @@ describe("plugin settings routing", () => {
   });
 });
 
+describe("settings overlay counter", () => {
+  beforeEach(() => {
+    useAppStore.setState({ settingsOverlayCount: 0, settingsOpen: false });
+  });
+
+  it("push/pop tracks nested overlay layers", () => {
+    const { pushSettingsOverlay, popSettingsOverlay } = useAppStore.getState();
+    pushSettingsOverlay();
+    pushSettingsOverlay();
+    expect(useAppStore.getState().settingsOverlayCount).toBe(2);
+    popSettingsOverlay();
+    expect(useAppStore.getState().settingsOverlayCount).toBe(1);
+    popSettingsOverlay();
+    expect(useAppStore.getState().settingsOverlayCount).toBe(0);
+  });
+
+  it("pop saturates at zero so a stray pop can't go negative", () => {
+    useAppStore.getState().popSettingsOverlay();
+    expect(useAppStore.getState().settingsOverlayCount).toBe(0);
+  });
+
+  it("closeSettings resets the overlay counter", () => {
+    useAppStore.setState({ settingsOpen: true, settingsOverlayCount: 3 });
+    useAppStore.getState().closeSettings();
+    expect(useAppStore.getState().settingsOverlayCount).toBe(0);
+  });
+});
+
 describe("agentQuestion lifecycle (per-workspace)", () => {
   beforeEach(() => {
     useAppStore.setState({

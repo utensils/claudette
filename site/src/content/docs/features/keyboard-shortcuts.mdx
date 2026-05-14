@@ -96,6 +96,8 @@ When multiple overlays are open, `Escape` dismisses them in this order:
 5. Diff panel
 6. Stop running agent
 
+Inside Settings, `Escape` peels off one layer at a time: open dropdowns (font picker, default-terminal picker, native `<select>`), rebind capture, and inline editors (pinned prompts) are dismissed first. Only when no inner overlay is active does `Escape` exit Settings and return to the app — `⌘/Ctrl + ,` and the "Back to app" control remain available as direct exits.
+
 Stopping an agent with `Escape` preserves queued chat messages and pauses automatic queue delivery until you choose what to send next.
 
 ## Keyboard Hint Badges

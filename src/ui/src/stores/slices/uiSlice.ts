@@ -67,10 +67,17 @@ export interface UiSlice {
   settingsOpen: boolean;
   settingsSection: string | null;
   settingsFocus: string | null;
+  /** Number of dismissible overlays currently open inside Settings
+   *  (custom popovers, dropdowns, modals, rebind capture). Used by the
+   *  global Escape handler to peel inner layers before exiting Settings —
+   *  see useKeyboardShortcuts and the useSettingsOverlay hook. */
+  settingsOverlayCount: number;
   openSettings: (section?: string, focus?: string | null) => void;
   closeSettings: () => void;
   setSettingsSection: (section: string) => void;
   clearSettingsFocus: () => void;
+  pushSettingsOverlay: () => void;
+  popSettingsOverlay: () => void;
   claudeAuthFailure: ClaudeAuthFailureState | null;
   resolvedClaudeAuthFailureMessageId: string | null;
   chatAuthLoginPanelOpen: boolean;
@@ -240,6 +247,13 @@ export const createUiSlice: StateCreator<AppState, [], [], UiSlice> = (
   settingsOpen: false,
   settingsSection: null,
   settingsFocus: null,
+  settingsOverlayCount: 0,
+  pushSettingsOverlay: () =>
+    set((s) => ({ settingsOverlayCount: s.settingsOverlayCount + 1 })),
+  popSettingsOverlay: () =>
+    set((s) => ({
+      settingsOverlayCount: Math.max(0, s.settingsOverlayCount - 1),
+    })),
   claudeAuthFailure: null,
   resolvedClaudeAuthFailureMessageId: null,
   chatAuthLoginPanelOpen: false,
@@ -281,6 +295,7 @@ export const createUiSlice: StateCreator<AppState, [], [], UiSlice> = (
       settingsOpen: false,
       settingsSection: null,
       settingsFocus: null,
+      settingsOverlayCount: 0,
       pluginSettingsIntent: null,
       pluginSettingsRepoId: null,
     }),

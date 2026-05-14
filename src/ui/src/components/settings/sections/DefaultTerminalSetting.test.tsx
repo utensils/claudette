@@ -11,6 +11,8 @@ const appStore = vi.hoisted(() => ({
   setDefaultTerminalAppId: vi.fn((appId: string | null) => {
     appStore.defaultTerminalAppId = appId;
   }),
+  pushSettingsOverlay: vi.fn(),
+  popSettingsOverlay: vi.fn(),
 }));
 
 const serviceMocks = vi.hoisted(() => ({

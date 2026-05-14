@@ -64,6 +64,22 @@ export function useKeyboardShortcuts() {
         } else if (fuzzyFinderOpen) {
           toggleFuzzyFinder();
         } else if (useAppStore.getState().settingsOpen) {
+          // Layered Escape inside Settings: dismiss inner overlays
+          // (popovers, dropdowns, rebind capture, inline editors) first;
+          // exit Settings only when none remain. Components register
+          // themselves via `useSettingsOverlay`. The activeElement guard
+          // catches native form controls that can't participate in the
+          // counter and keeps the first Escape local to that focused field.
+          const settingsState = useAppStore.getState();
+          if (settingsState.settingsOverlayCount > 0) return;
+          if (shouldDeferSettingsEscapeForElement(document.activeElement)) {
+            e.preventDefault();
+            if (document.activeElement instanceof HTMLElement) {
+              document.activeElement.blur();
+            }
+            return;
+          }
+          settingsState.closeSettings();
           return;
         } else if (chatSearchOpen && selectedWorkspaceId) {
           // Close the search bar and put focus back in the composer so
@@ -336,4 +352,22 @@ export function useKeyboardShortcuts() {
     openChatSearch,
     closeChatSearch,
   ]);
+}
+
+export function shouldDeferSettingsEscapeForElement(
+  element: Element | null | undefined,
+): boolean {
+  const tagName = element?.tagName?.toLowerCase();
+  if (tagName === "textarea" || tagName === "select") return true;
+  if (!(element instanceof HTMLInputElement)) return false;
+  return ![
+    "button",
+    "checkbox",
+    "hidden",
+    "image",
+    "radio",
+    "range",
+    "reset",
+    "submit",
+  ].includes(element.type);
 }
