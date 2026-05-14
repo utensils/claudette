@@ -12,9 +12,7 @@ import {
   renameWorkspace,
   restoreWorkspace,
   generateWorkspaceName,
-  createWorkspace,
   getRepoConfig,
-  runWorkspaceSetup,
   connectRemote,
   disconnectRemote,
   removeRemoteConnection,
@@ -26,6 +24,7 @@ import {
   listChatSessions,
   interruptPtyForeground,
 } from "../../services/tauri";
+import { createWorkspaceOrchestrated } from "../../hooks/useCreateWorkspace";
 import { Settings, Link, X, Share2, Plus, Globe, Archive, Trash2, CircleCheck, CircleAlert, CircleQuestionMark, Cog, Filter, LayoutDashboard, CircleDashed, CircleStop, ChevronRight, ChevronDown, ArrowDownAZ } from "lucide-react";
 import { resolveScmPrIcon } from "../shared/workspaceStatusIcon";
 import { RepoIcon } from "../shared/RepoIcon";
@@ -48,7 +47,6 @@ import {
   buildWorkspaceContextMenuItems,
   type WorkspaceContextMenuLabels,
 } from "./workspaceContextMenu";
-import { runAndRecordSetupScript } from "../../utils/setupScriptMessage";
 import type { ChatSession } from "../../types";
 import styles from "./Sidebar.module.css";
 
@@ -107,8 +105,6 @@ export const Sidebar = memo(function Sidebar() {
   const toggleRepoCollapsed = useAppStore((s) => s.toggleRepoCollapsed);
   const statusGroupCollapsed = useAppStore((s) => s.statusGroupCollapsed);
   const toggleStatusGroupCollapsed = useAppStore((s) => s.toggleStatusGroupCollapsed);
-  const addWorkspace = useAppStore((s) => s.addWorkspace);
-  const addChatMessage = useAppStore((s) => s.addChatMessage);
   const openModal = useAppStore((s) => s.openModal);
   const openSettings = useAppStore((s) => s.openSettings);
   const updateWorkspace = useAppStore((s) => s.updateWorkspace);
@@ -184,26 +180,16 @@ export const Sidebar = memo(function Sidebar() {
   const renameInputRef = useRef<HTMLInputElement>(null);
   const renameCancelledRef = useRef(false);
 
-  const creatingRef = useRef(false);
   const archivingRef = useRef<Set<string>>(new Set());
   const restoringRef = useRef<Set<string>>(new Set());
-  // Store-backed optimistic-row state — replaces a local useState pair so
-  // that any caller of useCreateWorkspace (welcome card, project-scoped
-  // CTA, Cmd+Shift+N hotkey) lights up the same sidebar placeholder row
-  // as the inline `+` button does. The setter is still used below for
-  // the inline path, which doesn't yet route through the hook.
+  // Store-backed optimistic-row state — the orchestrator
+  // (`createWorkspaceOrchestrated`) writes `creatingWorkspaceRepoId` so
+  // every caller (welcome card, project-scoped CTA, Cmd+Shift+N hotkey,
+  // and the inline `+` button below) lights up the same placeholder row.
   const creatingWorkspaceRepoId = useAppStore((s) => s.creatingWorkspaceRepoId);
-  const setCreatingWorkspaceRepoId = useAppStore(
-    (s) => s.setCreatingWorkspaceRepoId,
-  );
   const creatingWorkspace = creatingWorkspaceRepoId
     ? { repoId: creatingWorkspaceRepoId }
     : null;
-  const setCreatingWorkspace = useCallback(
-    (v: { repoId: string } | null) =>
-      setCreatingWorkspaceRepoId(v?.repoId ?? null),
-    [setCreatingWorkspaceRepoId],
-  );
   const [repoContextMenu, setRepoContextMenu] = useState<{
     repoId: string;
     x: number;
@@ -231,84 +217,24 @@ export const Sidebar = memo(function Sidebar() {
     ];
   }, [clearManualWorkspaceOrder, manualWorkspaceOrderByRepo, repoContextMenu]);
 
+  // Thin wrapper around the shared orchestrator so the inline `+` button
+  // and the welcome card / project view / Cmd+Shift+N hotkey all run the
+  // same slug-generate → createWorkspace → expand-repo → setup-script
+  // sequence. The orchestrator owns the optimistic-row state, the
+  // in-flight latch, and the system-message posting; we only need to
+  // surface the failure as a user-visible alert. `selectOnCreate: false`
+  // matches the design of the option (see `useCreateWorkspace.ts`): the
+  // sidebar already selects on row click, so the create flow doesn't
+  // need to navigate away from whatever the user was looking at.
   const handleCreateWorkspace = useCallback(async (repoId: string) => {
-    if (creatingRef.current) return;
-    creatingRef.current = true;
-
-    // Show optimistic loading workspace
-    setCreatingWorkspace({ repoId });
-
     try {
-      const generated = await generateWorkspaceName();
-      // Always skip setup initially — we'll prompt for confirmation if needed.
-      const result = await createWorkspace(repoId, generated.slug, true);
-
-      // Remove optimistic workspace
-      setCreatingWorkspace(null);
-
-      addWorkspace(result.workspace);
-      // Mirror useCreateWorkspace's expand-on-create — the sidebar still
-      // has its own orchestration, but a collapsed parent group hiding a
-      // freshly created workspace is the same UX bug from either path.
-      useAppStore.getState().expandRepo(repoId);
-      selectWorkspace(result.workspace.id);
-      const sessionId = result.default_session_id;
-      if (generated.message) {
-        addChatMessage(sessionId, {
-          id: crypto.randomUUID(),
-          workspace_id: result.workspace.id,
-          chat_session_id: sessionId,
-          role: "System",
-          content: generated.message,
-          cost_usd: null,
-          duration_ms: null,
-          created_at: new Date().toISOString(),
-          thinking: null,
-          input_tokens: null, output_tokens: null, cache_read_tokens: null, cache_creation_tokens: null,
-        });
-      }
-      // Check if a setup script exists and prompt user to review it.
-      try {
-        const config = await getRepoConfig(repoId);
-        const repo = useAppStore.getState().repositories.find((r) => r.id === repoId);
-        const script = config.setup_script ?? repo?.setup_script;
-        const source = config.setup_script ? "repo" : "settings";
-        if (script) {
-          if (repo?.setup_script_auto_run) {
-            const wsId = result.workspace.id;
-            runAndRecordSetupScript({
-              sessionId,
-              workspaceId: wsId,
-              source,
-              run: () => runWorkspaceSetup(wsId),
-              deps: {
-                addChatMessage,
-                setRunningSetupScript: useAppStore.getState().setRunningSetupScript,
-                addToast,
-                workspaceName: result.workspace.name,
-              },
-            });
-          } else {
-            openModal("confirmSetupScript", {
-              workspaceId: result.workspace.id,
-              sessionId,
-              repoId,
-              script,
-              source,
-            });
-          }
-        }
-      } catch {
-        // No config or error reading it — no setup script to run.
-      }
+      await createWorkspaceOrchestrated(repoId, { selectOnCreate: false });
     } catch (e) {
-      console.error("Failed to create workspace:", e);
-      setCreatingWorkspace(null);
-      alert(`Failed to create workspace: ${e instanceof Error ? e.message : String(e)}`);
-    } finally {
-      creatingRef.current = false;
+      alert(
+        `Failed to create workspace: ${e instanceof Error ? e.message : String(e)}`,
+      );
     }
-  }, [addWorkspace, selectWorkspace, addChatMessage, addToast, openModal, setCreatingWorkspace]);
+  }, []);
 
   const filteredWorkspaces = useMemo(
     () => workspaces.filter((ws) => {
