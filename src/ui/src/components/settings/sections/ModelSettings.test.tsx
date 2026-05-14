@@ -42,6 +42,7 @@ const appStore = vi.hoisted(() => ({
 const serviceMocks = vi.hoisted(() => ({
   getAppSetting: vi.fn(() => Promise.resolve(null)),
   setAppSetting: vi.fn(() => Promise.resolve()),
+  deleteAppSetting: vi.fn(() => Promise.resolve()),
   listAppSettingsWithPrefix: vi.fn(() => Promise.resolve([])),
   listAgentBackends: vi.fn(() =>
     Promise.resolve({
@@ -173,13 +174,14 @@ describe("ModelSettings", () => {
     serviceMocks.getAppSetting.mockReset();
     serviceMocks.getAppSetting.mockResolvedValue(null);
     serviceMocks.setAppSetting.mockClear();
+    serviceMocks.deleteAppSetting.mockClear();
     serviceMocks.listAppSettingsWithPrefix.mockClear();
     serviceMocks.listAgentBackends.mockReset();
     serviceMocks.listAgentBackends.mockResolvedValue({
       backends: [
         backend({ id: "anthropic", label: "Claude Code", kind: "anthropic" }),
         backend({
-          id: "experimental-codex",
+          id: "codex",
           label: "Codex",
           kind: "codex_native",
           default_model: "gpt-5.4",

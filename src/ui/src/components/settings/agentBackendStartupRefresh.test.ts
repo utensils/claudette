@@ -1,9 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import type { AgentBackendConfig } from "../../services/tauri";
 import {
-  refreshStartupCodexBackends,
+  autoDetectStartupAgentBackends,
+  autoDetectableBackendIds,
   shouldShowBackendTestButton,
-  startupRefreshBackendIds,
 } from "./agentBackendStartupRefresh";
 
 const capabilities = {
@@ -50,21 +50,22 @@ describe("shouldShowBackendTestButton", () => {
   });
 });
 
-describe("startupRefreshBackendIds", () => {
-  it("selects only enabled native Codex backends for startup refresh", () => {
+describe("autoDetectableBackendIds", () => {
+  it("selects local and CLI providers for startup detection", () => {
     expect(
-      startupRefreshBackendIds([
+      autoDetectableBackendIds([
         backend({ id: "codex", kind: "codex_native", enabled: true }),
-        backend({ id: "codex-off", kind: "codex_native", enabled: false }),
+        backend({ id: "ollama", kind: "ollama", enabled: false }),
+        backend({ id: "lm-studio", kind: "lm_studio", enabled: false }),
         backend({ id: "legacy", kind: "codex_subscription", enabled: true }),
         backend({ id: "openai", kind: "openai_api", enabled: true }),
-      ]),
-    ).toEqual(["codex"]);
+      ]).sort(),
+    ).toEqual(["codex", "lm-studio", "ollama"]);
   });
 });
 
-describe("refreshStartupCodexBackends", () => {
-  it("refreshes matching Codex backends without blocking initial backend display", async () => {
+describe("autoDetectStartupAgentBackends", () => {
+  it("runs provider detection without blocking initial backend display", async () => {
     const initialBackends = [
       backend({ id: "openai", kind: "openai_api" }),
       backend({ id: "codex", kind: "codex_native" }),
@@ -79,35 +80,42 @@ describe("refreshStartupCodexBackends", () => {
         },
       ] }),
     ];
-    const refreshBackend = vi.fn().mockResolvedValue(refreshedBackends);
+    const autoDetectBackends = vi.fn().mockResolvedValue({
+      backends: refreshedBackends,
+      default_backend_id: "codex",
+      warnings: [],
+    });
     const onBackends = vi.fn();
+    const onDefaultBackend = vi.fn();
 
-    await refreshStartupCodexBackends({
+    await autoDetectStartupAgentBackends({
       backends: initialBackends,
-      refreshBackend,
+      autoDetectBackends,
       onBackends,
+      onDefaultBackend,
       onError: vi.fn(),
     });
 
-    expect(refreshBackend).toHaveBeenCalledWith("codex");
-    expect(refreshBackend).toHaveBeenCalledTimes(1);
+    expect(autoDetectBackends).toHaveBeenCalledTimes(1);
     expect(onBackends).toHaveBeenCalledWith(refreshedBackends);
+    expect(onDefaultBackend).toHaveBeenCalledWith("codex");
   });
 
-  it("logs refresh failures without throwing", async () => {
+  it("logs detection failures without throwing", async () => {
     const error = new Error("not logged in");
-    const refreshBackend = vi.fn().mockRejectedValue(error);
+    const autoDetectBackends = vi.fn().mockRejectedValue(error);
     const onError = vi.fn();
 
     await expect(
-      refreshStartupCodexBackends({
+      autoDetectStartupAgentBackends({
         backends: [backend({ id: "codex", kind: "codex_native" })],
-        refreshBackend,
+        autoDetectBackends,
         onBackends: vi.fn(),
+        onDefaultBackend: vi.fn(),
         onError,
       }),
     ).resolves.toBeUndefined();
 
-    expect(onError).toHaveBeenCalledWith("codex", error);
+    expect(onError).toHaveBeenCalledWith(error);
   });
 });

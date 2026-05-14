@@ -11,7 +11,7 @@ The capability profile is the local-first one (no extended thinking / effort / f
 
 ## Prerequisites
 
-1. Make sure **Settings > Models > Alternative Claude Code backends** is on.
+1. Make sure **Settings > Models > Agent providers** is on. Claudette auto-enables LM Studio at startup when it detects a reachable server on `http://localhost:1234`, unless you have manually turned the provider off.
 2. Install LM Studio:
    - **macOS / Windows / Linux**: download from [lmstudio.ai/download](https://lmstudio.ai/download).
 3. Install the `lms` CLI (bundled with LM Studio; verify with `lms --version`).
@@ -66,7 +66,7 @@ You can change the slider mid-session — Claudette polls LM Studio every ~8 sec
 4. Click **Test** — Claudette pings the server to confirm it's reachable and counts loaded models.
 5. Click **Refresh models** — Claudette queries LM Studio's `/api/v0/models` (and falls back to `/v1/models` on older builds), populating the model list with each model's `loaded_context_length` / `max_context_length`.
 6. (Optional) Set a default model.
-7. Toggle **Enabled** on. The provider is now selectable in the chat header.
+7. Toggle **Enabled** on if auto-detection did not already enable it. The provider is now selectable in the chat header.
 
 ## Picking a session model
 
@@ -130,13 +130,13 @@ Pass-through against LM Studio's native `/v1/messages` skips all of that and onl
 
 **Agent hangs on the first turn** — LM Studio is loading the model into VRAM. First-turn latency on a cold model can be 10–60 seconds depending on size. Subsequent turns are much faster.
 
-**Composer shows a stale context size after reloading the LM Studio model** — Claudette polls LM Studio's `/api/v0/models` every ~8 seconds while an LM Studio backend is enabled, so the indicator should refresh on its own. If it doesn't, click **Refresh models** in Settings > Models for an immediate update. The polling effect follows the Models-page Alternative Claude Code backends gate — disabling alternative backends pauses the poll.
+**Composer shows a stale context size after reloading the LM Studio model** — Claudette polls LM Studio's `/api/v0/models` every ~8 seconds while an LM Studio backend is enabled, so the indicator should refresh on its own. If it doesn't, click **Refresh models** in Settings > Models for an immediate update. The polling effect follows the Models-page Agent providers gate — disabling providers pauses the poll.
 
 **Local turns are slower than they should be** — make sure `CLAUDE_CODE_ATTRIBUTION_HEADER=0` is in effect (Claudette sets it automatically for LM Studio and Ollama; verify by checking the agent's terminal tab `env` output). With the header on, every request gets a rotating attribution string that breaks LM Studio's KV-cache prefix matching and re-runs prompt processing from scratch.
 
 ## See also
 
-- [Alternative Providers overview](/claudette/features/providers/) — capability matrix and architecture
+- [Agent Providers overview](/claudette/features/providers/) — capability matrix and architecture
 - [Ollama](/claudette/features/providers/ollama/) — the native (non-gateway) local-LLM alternative
 - [OpenAI & Codex](/claudette/features/providers/openai-codex/) — the remote gateway-based alternatives
 - [Agent Configuration](/claudette/features/agent-configuration/) — chat-header toggles and how they map to provider capabilities

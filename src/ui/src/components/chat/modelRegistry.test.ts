@@ -155,7 +155,7 @@ describe("modelRegistry", () => {
     it("exposes native Codex models and normalizes stale capability metadata", () => {
       const registry = buildModelRegistry(false, [
         {
-          id: "experimental-codex",
+          id: "codex",
           label: "Codex",
           kind: "codex_native",
           enabled: true,
@@ -175,7 +175,7 @@ describe("modelRegistry", () => {
         },
       ], true);
 
-      const codex = registry.find((model) => model.providerQualifiedId === "experimental-codex/gpt-5.4");
+      const codex = registry.find((model) => model.providerQualifiedId === "codex/gpt-5.4");
       expect(codex).toBeDefined();
       expect(codex?.group).toBe("Codex");
       expect(codex?.providerLabel).toBe("Codex");
@@ -213,7 +213,7 @@ describe("modelRegistry", () => {
     it("orders versioned backend models newest first and moves older bands to More", () => {
       const registry = buildModelRegistry(false, [
         {
-          id: "experimental-codex",
+          id: "codex",
           label: "Codex",
           kind: "codex_native",
           enabled: true,
@@ -259,7 +259,7 @@ describe("modelRegistry", () => {
       ], true);
 
       const codexModels = registry.filter(
-        (model) => model.providerId === "experimental-codex",
+        (model) => model.providerId === "codex",
       );
       expect(codexModels.map((model) => model.id)).toEqual([
         "gpt-5.5",
@@ -305,7 +305,7 @@ describe("modelRegistry", () => {
           ],
         },
         {
-          id: "experimental-codex",
+          id: "codex",
           label: "Codex",
           kind: "codex_native",
           enabled: true,
@@ -326,7 +326,7 @@ describe("modelRegistry", () => {
       ], true);
 
       expect(
-        findModelInRegistry(registry, "gpt-5.4", "experimental-codex")
+        findModelInRegistry(registry, "gpt-5.4", "codex")
           ?.contextWindowTokens,
       ).toBe(1_000_000);
       expect(

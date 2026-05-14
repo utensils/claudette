@@ -52,6 +52,13 @@ pub async fn list_agent_backends(
 }
 
 #[tauri::command]
+pub async fn auto_detect_agent_backends(
+    state: State<'_, AppState>,
+) -> Result<BackendListResponse, String> {
+    list_agent_backends(state).await
+}
+
+#[tauri::command]
 pub async fn save_agent_backend(
     _backend: AgentBackendConfig,
     _state: State<'_, AppState>,

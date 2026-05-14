@@ -207,7 +207,7 @@ impl AgentBackendConfig {
 
     pub fn builtin_codex_native() -> Self {
         Self {
-            id: "experimental-codex".to_string(),
+            id: "codex".to_string(),
             label: "Codex".to_string(),
             kind: AgentBackendKind::CodexNative,
             base_url: None,
@@ -299,7 +299,7 @@ mod tests {
     fn native_codex_builtin_uses_app_server_harness_shape() {
         let backend = AgentBackendConfig::builtin_codex_native();
 
-        assert_eq!(backend.id, "experimental-codex");
+        assert_eq!(backend.id, "codex");
         assert_eq!(backend.label, "Codex");
         assert_eq!(backend.kind, AgentBackendKind::CodexNative);
         assert!(backend.enabled);

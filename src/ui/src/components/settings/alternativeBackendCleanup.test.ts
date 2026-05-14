@@ -43,17 +43,17 @@ describe("planAlternativeBackendDisableCleanup", () => {
   it("keeps Codex defaults and sessions for the independent Codex gate", () => {
     const plan = planAlternativeBackendDisableCleanup({
       defaultModel: "gpt-5.4",
-      defaultBackend: "experimental-codex",
+      defaultBackend: "codex",
       sessionModels: [
         ["model:sess-1", "gpt-5.4"],
         ["model:sess-2", "gpt-5.5"],
       ],
       sessionProviders: [
-        ["model_provider:sess-1", "experimental-codex"],
+        ["model_provider:sess-1", "codex"],
         ["model_provider:sess-2", "codex-subscription"],
       ],
       selectedModels: { "sess-3": "gpt-5.3-codex" },
-      selectedProviders: { "sess-3": "experimental-codex" },
+      selectedProviders: { "sess-3": "codex" },
     });
 
     expect(plan.resetDefault).toBe(false);
@@ -96,7 +96,7 @@ describe("isAlternativeBackendSelection", () => {
   });
 
   it("does not treat Codex providers as alternative selections", () => {
-    expect(isAlternativeBackendSelection("gpt-5.4", "experimental-codex")).toBe(false);
+    expect(isAlternativeBackendSelection("gpt-5.4", "codex")).toBe(false);
     expect(isAlternativeBackendSelection("gpt-5.5", "codex-subscription")).toBe(false);
   });
 });

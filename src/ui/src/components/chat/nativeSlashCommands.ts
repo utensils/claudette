@@ -358,7 +358,9 @@ function formatCommandError(error: unknown): string {
 }
 
 function loginTargetForProvider(providerId: string): "claude" | "codex" {
-  return providerId === "experimental-codex" || providerId === "codex-subscription"
+  return providerId === "codex" ||
+    providerId === "experimental-codex" ||
+    providerId === "codex-subscription"
     ? "codex"
     : "claude";
 }
