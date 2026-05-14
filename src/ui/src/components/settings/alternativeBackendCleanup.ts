@@ -2,6 +2,7 @@ import { MODELS } from "../chat/modelRegistry";
 
 export const DEFAULT_CLAUDE_BACKEND = "anthropic";
 export const DEFAULT_CLAUDE_MODEL = "opus";
+const CODEX_BACKENDS = new Set(["experimental-codex", "codex-subscription"]);
 
 export type SettingEntry = readonly [string, string];
 
@@ -36,6 +37,7 @@ export function isAlternativeBackendSelection(
   backend: string | null | undefined,
 ): boolean {
   const normalizedBackend = backend || DEFAULT_CLAUDE_BACKEND;
+  if (CODEX_BACKENDS.has(normalizedBackend)) return false;
   return normalizedBackend !== DEFAULT_CLAUDE_BACKEND || (!!model && !isBuiltInClaudeModel(model));
 }
 
