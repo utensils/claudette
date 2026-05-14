@@ -578,7 +578,7 @@
               }
               {
                 name = "build-app";
-                command = "cargo tauri icon assets/logo.png && cargo tauri build --features server,alternative-backends";
+                command = ''cargo tauri icon assets/logo.png && cargo tauri build --features server,alternative-backends "$@"'';
                 help = "Build release app bundle (.app / .deb) with embedded server";
                 category = "development";
               }
@@ -600,13 +600,13 @@
               }
               {
                 name = "fmt";
-                command = "cargo fmt --all && cd src/ui && bunx eslint --fix .";
+                command = ''cargo fmt --all && cd src/ui && bunx eslint --fix . "$@"'';
                 help = "Format Rust and TypeScript code";
                 category = "quality";
               }
               {
                 name = "run-tests";
-                command = "cargo test --workspace --all-features";
+                command = ''cargo test --workspace --all-features "$@"'';
                 help = "Run all Rust tests";
                 category = "quality";
               }
