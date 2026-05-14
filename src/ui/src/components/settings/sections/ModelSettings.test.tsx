@@ -235,6 +235,16 @@ describe("ModelSettings", () => {
     expect(container.textContent).toContain("auth_status_signed_in");
   });
 
+  it("honors the Claude auth focus target from the Models provider section", async () => {
+    appStore.settingsFocus = "claude-auth";
+    await renderModelSettings();
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(appStore.clearSettingsFocus).toHaveBeenCalledTimes(1);
+  });
+
   it("keeps the Claude Code browser-code sign-in flow working from Models", async () => {
     const container = await renderModelSettings();
     await act(async () => {
