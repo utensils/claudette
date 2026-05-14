@@ -68,12 +68,12 @@
 
 .btnDanger {
   composes: btn;
-  color: var(--status-stopped);
-  border-color: var(--status-stopped);
+  color: var(--accent-error);
+  border-color: var(--accent-error);
 }
 
 .btnDanger:hover {
-  background: var(--error-hover);
+  background: var(--accent-error-hover);
 }
 
 .btnPrimary {

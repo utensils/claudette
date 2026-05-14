@@ -310,8 +310,8 @@
 }
 
 .iconBtnDanger:hover {
-  color: var(--status-stopped);
-  background: var(--error-hover);
+  color: var(--accent-error);
+  background: var(--accent-error-hover);
 }
 
 .invalidBadge {

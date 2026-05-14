@@ -99,24 +99,28 @@
   --accent-success-rgb:    108, 204, 128;
   --accent-success-bg:     rgba(var(--accent-success-rgb), 0.10);
   --accent-success-border: rgba(var(--accent-success-rgb), 0.30);
+  --accent-success-hover:  rgba(var(--accent-success-rgb), 0.15);
   --accent-success-fg:     var(--accent-success);
 
   --accent-warning:        #f0a050;
   --accent-warning-rgb:    240, 160, 80;
   --accent-warning-bg:     rgba(var(--accent-warning-rgb), 0.10);
   --accent-warning-border: rgba(var(--accent-warning-rgb), 0.30);
+  --accent-warning-hover:  rgba(var(--accent-warning-rgb), 0.15);
   --accent-warning-fg:     var(--accent-warning);
 
   --accent-error:          #e85050;
   --accent-error-rgb:      232, 80, 80;
   --accent-error-bg:       rgba(var(--accent-error-rgb), 0.10);
   --accent-error-border:   rgba(var(--accent-error-rgb), 0.30);
+  --accent-error-hover:    rgba(var(--accent-error-rgb), 0.15);
   --accent-error-fg:       var(--accent-error);
 
   --accent-info:           #8cb8e0;
   --accent-info-rgb:       140, 184, 224;
   --accent-info-bg:        rgba(var(--accent-info-rgb), 0.10);
   --accent-info-border:    rgba(var(--accent-info-rgb), 0.30);
+  --accent-info-hover:     rgba(var(--accent-info-rgb), 0.15);
   --accent-info-fg:        var(--accent-info);
 
   /* ---- UI-role tokens — neutral emphasis + secondary/tertiary brand accents.

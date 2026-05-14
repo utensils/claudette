@@ -962,7 +962,7 @@
 }
 
 .btnDanger:hover {
-  background: var(--error-hover);
+  background: var(--accent-error-hover);
 }
 
 .error {
@@ -1279,9 +1279,9 @@
 }
 
 .authPanelError {
-  border: 1px solid var(--error-border);
+  border: 1px solid var(--accent-error-border);
   border-radius: var(--radius-md);
-  background: var(--error-bg);
+  background: var(--accent-error-bg);
   color: var(--status-stopped);
   font-size: 13px;
   line-height: 1.5;
@@ -1411,7 +1411,7 @@
 }
 
 .mcpRemoveBtn:hover {
-  background: var(--error-hover);
+  background: var(--accent-error-hover);
   color: var(--status-stopped);
 }
 
@@ -1476,7 +1476,7 @@
   margin: 4px 8px 8px 22px;
   padding: 10px 12px;
   border-left: 2px solid var(--status-stopped);
-  background: var(--error-hover);
+  background: var(--accent-error-hover);
   border-radius: 0 4px 4px 0;
   display: flex;
   flex-direction: column;
@@ -1958,7 +1958,7 @@
   padding: var(--space-2) var(--space-3);
   border-left: 2px solid var(--status-stopped);
   border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
-  background: var(--error-hover);
+  background: var(--accent-error-hover);
   color: var(--text-primary);
   font-size: 12px;
   line-height: 1.4;
@@ -2241,7 +2241,7 @@
   display: inline-block;
   padding: 1px 6px;
   border-radius: 3px;
-  background: var(--error-hover);
+  background: var(--accent-error-hover);
   color: var(--status-stopped);
   font-size: 10px;
   font-weight: 600;
@@ -2318,9 +2318,9 @@
 .flagErrorBanner {
   margin: 12px 0 16px;
   padding: 12px 14px;
-  border: 1px solid var(--error-border);
+  border: 1px solid var(--accent-error-border);
   border-radius: 8px;
-  background: var(--error-bg);
+  background: var(--accent-error-bg);
   color: var(--text-primary);
   display: flex;
   align-items: flex-start;
