@@ -20,13 +20,15 @@ use std::time::Duration;
 use serde::Serialize;
 use tokio::process::Command as TokioCommand;
 
+use std::collections::HashMap;
+
 use crate::agent;
 use crate::config;
 use crate::db::Database;
 use crate::env::{WorkspaceEnv, enriched_path};
 use crate::env_provider::ResolvedEnv;
 use crate::git;
-use crate::model::{AgentStatus, Workspace, WorkspaceStatus};
+use crate::model::{AgentStatus, Repository, Workspace, WorkspaceStatus, coerce_input_value};
 use crate::process::CommandWindowExt as _;
 use crate::workspace_alloc::{allocate_workspace_name, is_valid_workspace_name};
 
@@ -63,6 +65,44 @@ pub struct CreateParams<'a> {
     /// Branch prefix already resolved by the caller (e.g.
     /// `"jamesbrink/"`). Empty string is allowed.
     pub branch_prefix: &'a str,
+    /// Values for the repo's declared `required_inputs`. Validated against
+    /// the schema before the worktree is allocated; passing `None` against
+    /// a repo that declares inputs fails the create with
+    /// [`OpsError::Validation`]. Live here (rather than at the Tauri layer)
+    /// so every call site — GUI, IPC, WS server, future callers — enforces
+    /// the invariant uniformly.
+    pub input_values: Option<&'a HashMap<String, String>>,
+}
+
+/// Validate a repository's declared input schema against a supplied value
+/// map. Returns the coerced values to persist (or `Ok(None)` when the repo
+/// declares no inputs). Errors are formatted for user-facing display.
+///
+/// Used internally by [`create`] and exposed so the GUI layer can pre-check
+/// values before showing a "creating…" state on the modal — failing fast
+/// avoids the surprise of allocating a worktree only to surface a "missing
+/// value" error after the fact.
+pub fn validate_repository_inputs(
+    repo: &Repository,
+    supplied: Option<&HashMap<String, String>>,
+) -> Result<Option<HashMap<String, String>>, String> {
+    let Some(schema) = repo.required_inputs.as_ref() else {
+        return Ok(None);
+    };
+    if schema.is_empty() {
+        return Ok(None);
+    }
+    let supplied_map = supplied.cloned().unwrap_or_default();
+    let mut coerced = HashMap::with_capacity(schema.len());
+    for field in schema {
+        let key = field.key();
+        let raw = supplied_map
+            .get(key)
+            .ok_or_else(|| format!("Missing value for required input {key:?}."))?;
+        let value = coerce_input_value(field, raw)?;
+        coerced.insert(key.to_string(), value);
+    }
+    Ok(Some(coerced))
 }
 
 /// Result of a successful [`create`]. `default_session_id` is the chat
@@ -141,6 +181,12 @@ async fn create_inner(
         .find(|r| r.id == params.repo_id)
         .ok_or_else(|| OpsError::NotFound("Repository not found".to_string()))?;
 
+    // Validate declared inputs BEFORE allocating a worktree — fail-fast so
+    // a missing/invalid value doesn't leave an orphan worktree directory
+    // behind. Every caller (GUI, IPC, WS server) gets this check uniformly.
+    let validated_inputs =
+        validate_repository_inputs(repo, params.input_values).map_err(OpsError::Validation)?;
+
     let repo_path = repo.path.clone();
 
     let (allocation, actual_path) = {
@@ -200,9 +246,9 @@ async fn create_inner(
         status_line: String::new(),
         created_at: now_iso(),
         sort_order: 0,
-        // input_values are persisted by the caller (create_workspace_inner)
-        // after this op returns and before the setup script runs. Default
-        // to None here so the struct is valid mid-creation.
+        // Populated below after `insert_workspace` succeeds. Left `None`
+        // here only so the struct is valid mid-creation; the persisted
+        // value comes from `validated_inputs`.
         input_values: None,
     };
 
@@ -211,6 +257,18 @@ async fn create_inner(
         let _ = git::branch_delete(&repo_path, &ws.branch_name).await;
         return Err(OpsError::Db(e));
     }
+    // Persist any declared input values to the dedicated column. The
+    // workspace row was inserted without them — `insert_workspace`'s SQL
+    // only writes the original columns — so the agent/terminal/script env
+    // merges would read NULL without this.
+    if let Some(values) = validated_inputs.as_ref()
+        && let Err(e) = db.set_workspace_input_values(&ws.id, Some(values))
+    {
+        let _ = git::remove_worktree(&repo_path, &actual_path, true).await;
+        let _ = git::branch_delete(&repo_path, &ws.branch_name).await;
+        return Err(OpsError::Db(e));
+    }
+    ws.input_values = validated_inputs;
     // Patch sort_order to the value the DB assigned so the workspace this
     // op returns lands at the bottom of its repo group immediately, instead
     // of rendering at sort_order=0 until the next workspace-list reload.
@@ -900,6 +958,7 @@ mod tests {
                 repo_id: &repo.id,
                 name: "scratch",
                 branch_prefix: "test/",
+                input_values: None,
             },
         )
         .await
@@ -926,6 +985,7 @@ mod tests {
                 repo_id: &repo.id,
                 name: "agent-pipeline",
                 branch_prefix: "test/",
+                input_values: None,
             },
         )
         .await
@@ -938,6 +998,121 @@ mod tests {
                 .unwrap()
         );
         assert!(!db.claim_branch_auto_rename(&created.workspace.id).unwrap());
+    }
+
+    /// Regression for the cross-caller bug Copilot caught on #807: the WS
+    /// server bypasses the GUI's pre-check, so the shared op itself has to
+    /// reject a create against a repo that declared inputs when the caller
+    /// passes `input_values: None`. Without this, remote/CLI callers could
+    /// create workspaces with NULL `input_values` and silently misconfigure
+    /// the workspace's env.
+    #[tokio::test]
+    async fn create_rejects_missing_required_inputs() {
+        let (_repo_dir, _db_dir, mut db, repo) = setup_repo_and_db().await;
+        let worktree_base = tempfile::tempdir().unwrap();
+        let hooks = RecordingHooks::default();
+
+        // Declare a single required input on the repo.
+        db.update_repository_required_inputs(
+            &repo.id,
+            Some(&[crate::model::RepositoryInputField::String {
+                key: "TICKET_ID".into(),
+                label: "Ticket".into(),
+                description: None,
+                default: None,
+                placeholder: None,
+            }]),
+        )
+        .unwrap();
+
+        let result = create(
+            &mut db,
+            &hooks,
+            worktree_base.path(),
+            CreateParams {
+                repo_id: &repo.id,
+                name: "feature",
+                branch_prefix: "test/",
+                input_values: None, // caller doesn't yet support inputs
+            },
+        )
+        .await;
+
+        match result {
+            Err(OpsError::Validation(msg)) => {
+                assert!(
+                    msg.contains("TICKET_ID"),
+                    "expected validation error to name the missing key, got {msg:?}"
+                );
+            }
+            other => panic!("expected OpsError::Validation, got {other:?}"),
+        }
+
+        // No worktree allocation, no DB row, no Created hook.
+        let workspaces = db.list_workspaces().unwrap();
+        assert!(workspaces.is_empty(), "validation must run before insert");
+        assert!(
+            hooks.changes().is_empty(),
+            "no lifecycle hook should fire on validation failure"
+        );
+    }
+
+    /// Pair with the rejection test — when the caller supplies values that
+    /// satisfy the declared schema, the op persists them to the workspace
+    /// row and surfaces them on the returned struct.
+    #[tokio::test]
+    async fn create_persists_supplied_input_values() {
+        let (_repo_dir, _db_dir, mut db, repo) = setup_repo_and_db().await;
+        let worktree_base = tempfile::tempdir().unwrap();
+        let hooks = RecordingHooks::default();
+
+        db.update_repository_required_inputs(
+            &repo.id,
+            Some(&[crate::model::RepositoryInputField::String {
+                key: "TICKET_ID".into(),
+                label: "Ticket".into(),
+                description: None,
+                default: None,
+                placeholder: None,
+            }]),
+        )
+        .unwrap();
+
+        let mut supplied = std::collections::HashMap::new();
+        supplied.insert("TICKET_ID".to_string(), "PROJ-42".to_string());
+
+        let created = create(
+            &mut db,
+            &hooks,
+            worktree_base.path(),
+            CreateParams {
+                repo_id: &repo.id,
+                name: "feature",
+                branch_prefix: "test/",
+                input_values: Some(&supplied),
+            },
+        )
+        .await
+        .unwrap();
+
+        // Returned struct carries the values…
+        assert_eq!(
+            created
+                .workspace
+                .input_values
+                .as_ref()
+                .unwrap()
+                .get("TICKET_ID"),
+            Some(&"PROJ-42".to_string()),
+        );
+        // …and they also land on disk (this is what was broken before the
+        // op took over persistence — the struct looked right but the row
+        // had NULL `input_values` and the env merge read nothing).
+        let from_db = db
+            .get_workspace_input_values(&created.workspace.id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(from_db.get("TICKET_ID"), Some(&"PROJ-42".to_string()));
     }
 
     /// Regression for the `claudette workspace archive --delete-branch`
@@ -958,6 +1133,7 @@ mod tests {
                 repo_id: &repo.id,
                 name: "feature",
                 branch_prefix: "test/",
+                input_values: None,
             },
         )
         .await
@@ -1005,6 +1181,7 @@ mod tests {
                 repo_id: &repo.id,
                 name: "feature",
                 branch_prefix: "test/",
+                input_values: None,
             },
         )
         .await

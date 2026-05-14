@@ -8,9 +8,7 @@ use claudette::db::Database;
 use claudette::fork::{self, ForkInputs};
 use claudette::git;
 use claudette::mcp_supervisor::McpSupervisor;
-use claudette::model::{
-    AgentStatus, ChatMessage, ChatRole, Workspace, WorkspaceStatus, coerce_input_value,
-};
+use claudette::model::{AgentStatus, ChatMessage, ChatRole, Workspace, WorkspaceStatus};
 use claudette::names::NameGenerator;
 use claudette::ops::workspace::{self as ops_workspace, CreateParams, SetupResult};
 use claudette::ops::{NoopHooks, NotificationEvent, OpsHooks, WorkspaceChangeKind};
@@ -83,11 +81,6 @@ pub(crate) async fn create_workspace_inner(
 ) -> Result<CreateWorkspaceResult, String> {
     let mut db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
 
-    // Validate input values against the repo's declared schema BEFORE
-    // allocating a worktree, so a bad input doesn't leave an orphan branch
-    // / worktree directory behind.
-    let validated_inputs = validate_workspace_inputs(&db, repo_id, input_values.as_ref())?;
-
     let (prefix_mode, prefix_custom) = ops_workspace::read_branch_prefix_settings(&db);
     let prefix = ops_workspace::resolve_branch_prefix(&prefix_mode, &prefix_custom).await;
     let worktree_base = state.worktree_base_dir.read().await.clone();
@@ -96,6 +89,13 @@ pub(crate) async fn create_workspace_inner(
         repo_id,
         name,
         branch_prefix: &prefix,
+        // Validation + persistence of input_values happens inside the op
+        // (`ops::workspace::create_inner` runs `validate_repository_inputs`
+        // before allocating a worktree and `set_workspace_input_values`
+        // after `insert_workspace` succeeds). All callers — GUI, IPC, WS
+        // server — share the same enforcement that way; we no longer have
+        // to repeat the validate-then-persist dance per caller.
+        input_values: input_values.as_ref(),
     };
     let out = if preserve_supplied_name {
         ops_workspace::create_preserving_supplied_name(
@@ -110,11 +110,10 @@ pub(crate) async fn create_workspace_inner(
     }
     .map_err(|e| e.to_string())?;
 
-    // Persist values before running setup — setup needs them in its env.
-    if let Some(ref values) = validated_inputs {
-        db.set_workspace_input_values(&out.workspace.id, Some(values))
-            .map_err(|e| e.to_string())?;
-    }
+    // The op already persisted the coerced values and populated the
+    // workspace struct. Re-borrow here so the setup-script env synth
+    // below reads the canonical post-coercion form.
+    let validated_inputs = out.workspace.input_values.clone();
 
     // Run the setup script BEFORE resolving the env-provider stack.
     // Many `.claudette.json` setups exist precisely to prime that stack
@@ -182,48 +181,11 @@ pub(crate) async fn create_workspace_inner(
     hooks.workspace_changed(&out.workspace.id, WorkspaceChangeKind::Created);
     hooks.notification(NotificationEvent::SessionStart);
 
-    let mut returned = out.workspace;
-    returned.input_values = validated_inputs;
-
     Ok(CreateWorkspaceResult {
-        workspace: returned,
+        workspace: out.workspace,
         default_session_id: out.default_session_id,
         setup_result,
     })
-}
-
-/// Cross-check supplied values against the repo's `required_inputs`. Returns
-/// the coerced map (so type-shaped numbers round-trip through `f64::parse`
-/// before being written) or a human-readable error explaining the first
-/// problem. A repo with no schema accepts no inputs — supplying values is
-/// silently ignored to keep the API forgiving for callers (e.g. the CLI)
-/// that don't yet know the schema is empty.
-pub(crate) fn validate_workspace_inputs(
-    db: &Database,
-    repo_id: &str,
-    supplied: Option<&std::collections::HashMap<String, String>>,
-) -> Result<Option<std::collections::HashMap<String, String>>, String> {
-    let repo = db
-        .get_repository(repo_id)
-        .map_err(|e| e.to_string())?
-        .ok_or("Repository not found")?;
-    let Some(schema) = repo.required_inputs.as_ref() else {
-        return Ok(None);
-    };
-    if schema.is_empty() {
-        return Ok(None);
-    }
-    let supplied_map = supplied.cloned().unwrap_or_default();
-    let mut coerced = std::collections::HashMap::with_capacity(schema.len());
-    for field in schema {
-        let key = field.key();
-        let raw = supplied_map
-            .get(key)
-            .ok_or_else(|| format!("Missing value for required input {key:?}."))?;
-        let value = coerce_input_value(field, raw)?;
-        coerced.insert(key.to_string(), value);
-    }
-    Ok(Some(coerced))
 }
 
 /// Build a minimal [`ResolvedEnv`] from a workspace's input-value map so it
