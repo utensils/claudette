@@ -82,6 +82,12 @@ function fallbackModelForBackend(
   return models[0]?.id ?? null;
 }
 
+function shouldMigrateCodexBackend(provider: string | null, enableNative: boolean): boolean {
+  if (!provider) return false;
+  if (enableNative) return provider === LEGACY_CODEX_BACKEND;
+  return provider === NATIVE_CODEX_BACKEND || provider === LEGACY_CODEX_BACKEND;
+}
+
 export function planBackendGateLoad({
   alternativeBackendsCompiled,
   alternativeBackendsSetting,
@@ -156,18 +162,19 @@ export function planCodexBackendGateMigration({
 
   for (const [key, value] of sessionProviders) {
     const sessionId = settingSessionId(key, "model_provider:");
-    if (sessionId && value === fromBackend) sessionIds.add(sessionId);
+    if (sessionId && shouldMigrateCodexBackend(value, enableNative)) sessionIds.add(sessionId);
   }
   for (const [sessionId, provider] of Object.entries(selectedProviders)) {
-    if (provider === fromBackend) sessionIds.add(sessionId);
+    if (shouldMigrateCodexBackend(provider, enableNative)) sessionIds.add(sessionId);
   }
+  const resetDefault = shouldMigrateCodexBackend(defaultBackend, enableNative);
 
   return {
     fromBackend,
     toBackend,
     toModel,
-    defaultBackend: defaultBackend === fromBackend ? toBackend : defaultBackend,
-    resetDefault: defaultBackend === fromBackend,
+    defaultBackend: resetDefault ? toBackend : defaultBackend,
+    resetDefault,
     sessionIds: [...sessionIds].sort(),
   };
 }

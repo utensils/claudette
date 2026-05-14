@@ -124,6 +124,21 @@ describe("planCodexBackendGateMigration", () => {
     expect(plan.sessionIds).toEqual(["sess-1", "sess-2"]);
   });
 
+  it("resets legacy Codex defaults and sessions to Claude when disabled", () => {
+    const plan = planCodexBackendGateMigration({
+      enableNative: false,
+      defaultBackend: LEGACY_CODEX_BACKEND,
+      sessionProviders: [["model_provider:sess-1", LEGACY_CODEX_BACKEND]],
+      selectedProviders: { "sess-2": LEGACY_CODEX_BACKEND },
+    });
+
+    expect(plan.toBackend).toBe(DEFAULT_CLAUDE_BACKEND);
+    expect(plan.toModel).toBe(DEFAULT_CLAUDE_MODEL);
+    expect(plan.defaultBackend).toBe(DEFAULT_CLAUDE_BACKEND);
+    expect(plan.resetDefault).toBe(true);
+    expect(plan.sessionIds).toEqual(["sess-1", "sess-2"]);
+  });
+
   it("leaves unrelated providers alone", () => {
     const plan = planCodexBackendGateMigration({
       enableNative: true,
