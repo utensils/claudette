@@ -207,31 +207,8 @@ pub async fn list_agent_backends(
         .map_err(|e| e.to_string())?
         .unwrap_or_else(|| "anthropic".to_string());
     let mut loaded = load_backend_configs_tolerant(&db)?;
-    // If the stored default points to a backend that didn't make it
-    // through the tolerant load (e.g. a user-defined backend whose
-    // `kind` this build doesn't recognize), the UI would otherwise
-    // pre-select a non-existent entry. Fall back to anthropic, which
-    // is always present, and surface a warning so the user knows.
-    // The persisted setting is left alone — a build that does
-    // recognize the kind will pick it up unchanged.
-    let aliased_default = backend_request_alias(&loaded.backends, &stored_default);
-    let default_backend_id = if loaded.backends.iter().any(|b| b.id == stored_default) {
-        stored_default
-    } else if loaded.backends.iter().any(|b| b.id == aliased_default) {
-        aliased_default
-    } else {
-        loaded.warnings.push(format!(
-            "Default backend `{stored_default}` is not available in this build; \
-                 falling back to `anthropic` for this session. \
-                 Stored setting unchanged."
-        ));
-        tracing::warn!(
-            target: "agent_backends",
-            stored_default = %stored_default,
-            "default backend setting points to a backend not in the loaded list"
-        );
-        "anthropic".to_string()
-    };
+    let default_backend_id =
+        resolve_backend_list_default(&loaded.backends, &mut loaded.warnings, stored_default);
     Ok(BackendListResponse {
         backends: loaded.backends,
         default_backend_id,
@@ -290,7 +267,8 @@ pub async fn auto_detect_agent_backends(
         .get_app_setting("default_agent_backend")
         .map_err(|e| e.to_string())?
         .unwrap_or_else(|| "anthropic".to_string());
-    let default_backend_id = backend_request_alias(&loaded.backends, &stored_default);
+    let default_backend_id =
+        resolve_backend_list_default(&loaded.backends, &mut loaded.warnings, stored_default);
 
     Ok(BackendListResponse {
         backends: loaded.backends,
@@ -852,6 +830,31 @@ fn load_backend_configs_tolerant(db: &Database) -> Result<LoadedBackends, String
 
 fn load_backend_configs(db: &Database) -> Result<Vec<AgentBackendConfig>, String> {
     Ok(load_backend_configs_tolerant(db)?.backends)
+}
+
+fn resolve_backend_list_default(
+    backends: &[AgentBackendConfig],
+    warnings: &mut Vec<String>,
+    stored_default: String,
+) -> String {
+    if backends.iter().any(|backend| backend.id == stored_default) {
+        return stored_default;
+    }
+    let aliased_default = backend_request_alias(backends, &stored_default);
+    if backends.iter().any(|backend| backend.id == aliased_default) {
+        return aliased_default;
+    }
+    warnings.push(format!(
+        "Default backend `{stored_default}` is not available in this build; \
+         falling back to `anthropic` for this session. \
+         Stored setting unchanged."
+    ));
+    tracing::warn!(
+        target: "agent_backends",
+        stored_default = %stored_default,
+        "default backend setting points to a backend not in the loaded list"
+    );
+    "anthropic".to_string()
 }
 
 /// Re-read the stored JSON and return any entries this build can't
@@ -4028,22 +4031,15 @@ mod tests {
         db.set_app_setting(SETTINGS_KEY, &raw.to_string())
             .expect("seed should save");
 
-        // Mirror what list_agent_backends does post-load.
+        // Mirror what list_agent_backends and auto_detect_agent_backends
+        // do post-load.
         let stored_default = db
             .get_app_setting("default_agent_backend")
             .expect("read default")
             .expect("default present");
         let mut loaded = load_backend_configs_tolerant(&db).expect("tolerant load should succeed");
-        let default_backend_id = if loaded.backends.iter().any(|b| b.id == stored_default) {
-            stored_default.clone()
-        } else {
-            loaded.warnings.push(format!(
-                "Default backend `{stored_default}` is not available in this build; \
-                 falling back to `anthropic` for this session. \
-                 Stored setting unchanged."
-            ));
-            "anthropic".to_string()
-        };
+        let default_backend_id =
+            resolve_backend_list_default(&loaded.backends, &mut loaded.warnings, stored_default);
 
         // Fallback wired up correctly.
         assert_eq!(default_backend_id, "anthropic");
@@ -4074,6 +4070,24 @@ mod tests {
             .expect("read default after")
             .expect("default still present");
         assert_eq!(still_stored, "future-thing");
+    }
+
+    #[test]
+    fn backend_list_default_aliases_legacy_codex_to_available_native_backend() {
+        let mut warnings = Vec::new();
+        let backends = vec![
+            AgentBackendConfig::builtin_anthropic(),
+            AgentBackendConfig::builtin_codex_native(),
+        ];
+
+        let default_backend_id = resolve_backend_list_default(
+            &backends,
+            &mut warnings,
+            LEGACY_NATIVE_CODEX_BACKEND_ID.to_string(),
+        );
+
+        assert_eq!(default_backend_id, NATIVE_CODEX_BACKEND_ID);
+        assert!(warnings.is_empty());
     }
 
     #[test]
