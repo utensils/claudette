@@ -787,7 +787,7 @@ fn resolve_pi_package_dir(harness_path: &Path) -> Option<PathBuf> {
     }
     let exe = std::env::current_exe().ok()?;
     let dir = exe.parent()?;
-    for candidate in [
+    [
         dir.join("pi"),
         dir.join("binaries").join("pi"),
         dir.join("resources").join("binaries").join("pi"),
@@ -796,12 +796,9 @@ fn resolve_pi_package_dir(harness_path: &Path) -> Option<PathBuf> {
             .join("Resources")
             .join("binaries")
             .join("pi"),
-    ] {
-        if candidate.exists() {
-            return Some(candidate);
-        }
-    }
-    None
+    ]
+    .into_iter()
+    .find(|candidate| candidate.exists())
 }
 
 fn pi_command_line_event(path: &Path) -> AgentEvent {
