@@ -268,5 +268,52 @@ describe("useUsageInsightsPoller", () => {
       });
       expect(getClaudeCodeUsageMock).toHaveBeenCalledTimes(1);
     });
+
+    it("does not duplicate requests when blur/refocus races the initial fetch", async () => {
+      // Make the first fetch hang so we can simulate a focus toggle while it's
+      // still in flight. Without an in-flight guard, the refocus would call
+      // start() again and fire a second concurrent request.
+      let resolveFirst!: (value: ReturnType<typeof getClaudeCodeUsageMock>) => void;
+      const firstFetch = new Promise((r) => {
+        resolveFirst = r;
+      });
+      getClaudeCodeUsageMock.mockReturnValueOnce(firstFetch);
+
+      useAppStore.setState({ usageInsightsEnabled: true });
+      await mountHook();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(getClaudeCodeUsageMock).toHaveBeenCalledTimes(1);
+
+      // Blur → focus while the first fetch is still pending.
+      await setFocus(false);
+      await setFocus(true);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      // No duplicate request started.
+      expect(getClaudeCodeUsageMock).toHaveBeenCalledTimes(1);
+
+      // Resolve the first fetch and let the schedule settle.
+      await act(async () => {
+        resolveFirst({
+          subscription_type: "pro",
+          rate_limit_tier: "default_claude_pro",
+          fetched_at: 0,
+          usage: {
+            five_hour: null,
+            seven_day: null,
+            seven_day_sonnet: null,
+            seven_day_opus: null,
+            extra_usage: null,
+          },
+        });
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      // Still no extra calls — the refocus did not catch up because the first
+      // fetch only just resolved (lastFetchAt is now ~current time).
+      expect(getClaudeCodeUsageMock).toHaveBeenCalledTimes(1);
+    });
   });
 });

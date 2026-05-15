@@ -33,16 +33,28 @@ export function useUsageInsightsPoller() {
     let cancelled = false;
     let timeoutId: ReturnType<typeof setTimeout> | null = null;
     let lastFetchAt = 0;
+    // Tracks the currently-running fetch. Without this, a blur/refocus while
+    // the first request is still in flight would call `start()` twice — the
+    // second call sees `timeoutId === null` and `lastFetchAt === 0` and fires
+    // a duplicate request. Returning the existing promise instead keeps us
+    // to one concurrent call against the undocumented endpoint.
+    let inFlight: Promise<void> | null = null;
 
-    const fetchOnce = async () => {
-      try {
-        const data = await getClaudeCodeUsage();
-        if (cancelled) return;
-        setUsage(data);
-        lastFetchAt = Date.now();
-      } catch {
-        // Ignore — Settings panel handles error display.
-      }
+    const fetchOnce = (): Promise<void> => {
+      if (inFlight !== null) return inFlight;
+      inFlight = (async () => {
+        try {
+          const data = await getClaudeCodeUsage();
+          if (cancelled) return;
+          setUsage(data);
+          lastFetchAt = Date.now();
+        } catch {
+          // Ignore — Settings panel handles error display.
+        } finally {
+          inFlight = null;
+        }
+      })();
+      return inFlight;
     };
 
     const stop = () => {
