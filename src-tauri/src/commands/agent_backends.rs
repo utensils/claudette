@@ -561,7 +561,24 @@ fn resolve_dispatch_harness(
     if pi_available {
         harness
     } else {
-        AgentBackendRuntimeHarness::ClaudeCode
+        // Pick the first non-Pi harness the kind itself sanctions. The
+        // naive fallback to `kind.default_harness()` is wrong here:
+        // Ollama / LM Studio / OpenAI default to PiSdk, so returning the
+        // default would loop back to the very harness we're trying to
+        // downgrade away from. Codex Native's allow-list is
+        // `[CodexAppServer, PiSdk]`, so a hardcoded ClaudeCode would
+        // route a Codex card through the Claude CLI path (taking the
+        // Ollama-style base URL with it) — that's what this branch
+        // exists to prevent. Walking the allow-list in order picks
+        // CodexAppServer for Codex Native and ClaudeCode for the
+        // local-OpenAI-style cards.
+        backend
+            .kind
+            .available_harnesses()
+            .iter()
+            .copied()
+            .find(|candidate| *candidate != AgentBackendRuntimeHarness::PiSdk)
+            .unwrap_or_else(|| backend.kind.default_harness())
     }
 }
 
@@ -1261,7 +1278,10 @@ fn auto_detect_disabled_key(backend_id: &str) -> String {
 fn backend_supports_auto_detect(backend: &AgentBackendConfig) -> bool {
     matches!(
         backend.kind,
-        AgentBackendKind::Ollama | AgentBackendKind::CodexNative | AgentBackendKind::LmStudio
+        AgentBackendKind::Ollama
+            | AgentBackendKind::CodexNative
+            | AgentBackendKind::LmStudio
+            | AgentBackendKind::PiSdk
     )
 }
 
@@ -5481,6 +5501,49 @@ data: [DONE]
         assert_eq!(
             resolve_dispatch_harness(&ollama, &backends),
             AgentBackendRuntimeHarness::PiSdk,
+        );
+    }
+
+    #[test]
+    fn disabling_pi_backend_persists_auto_detect_opt_out() {
+        // Pi is included in startup auto-detect now, so the disabled-flag
+        // has to stick across launches. Without an opt-out row, the next
+        // `auto_detect_agent_backends` pass would silently re-enable the
+        // card the user just turned off.
+        let db = Database::open_in_memory().expect("test db should open");
+        let mut pi = AgentBackendConfig::builtin_pi_sdk();
+        pi.enabled = false;
+        persist_backend_auto_detect_opt_out(&db, &pi).expect("opt-out should persist");
+        assert!(
+            backend_auto_detect_disabled(&db, "pi").expect("opt-out flag should load"),
+            "Pi disable must write the auto-detect opt-out so it survives a restart",
+        );
+        // Re-enable: the opt-out row should be cleared so the probe resumes.
+        pi.enabled = true;
+        persist_backend_auto_detect_opt_out(&db, &pi).expect("opt-in should clear opt-out");
+        assert!(
+            !backend_auto_detect_disabled(&db, "pi").expect("opt-out flag should reload"),
+            "Pi re-enable must clear the opt-out row",
+        );
+    }
+
+    #[test]
+    fn resolve_dispatch_harness_uses_kind_default_when_downgrading_codex_native() {
+        // Codex Native's `available_harnesses` is `[CodexAppServer, PiSdk]`
+        // — it never sanctions ClaudeCode. So if a user wires Codex Native
+        // to Pi and then disables Pi, the downgrade must drop to the
+        // kind's own default (CodexAppServer), not the generic Claude CLI
+        // path that would otherwise leak an Ollama-style base URL into a
+        // Codex turn.
+        let mut codex = AgentBackendConfig::builtin_codex_native();
+        codex.enabled = true;
+        codex.runtime_harness = Some(AgentBackendRuntimeHarness::PiSdk);
+        let mut pi = AgentBackendConfig::builtin_pi_sdk();
+        pi.enabled = false;
+        let backends = vec![codex.clone(), pi];
+        assert_eq!(
+            resolve_dispatch_harness(&codex, &backends),
+            AgentBackendRuntimeHarness::CodexAppServer,
         );
     }
 

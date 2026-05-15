@@ -133,7 +133,7 @@ The compiled binary will be in `target/release/` at the workspace root (Claudett
 
 ## Run from source
 
-Pick the launcher that matches your platform — `--new`, `--clean`, and `-h`/`--help` work on both. `--clone` (copy-on-write snapshot of your real setup) is currently macOS/Linux only.
+Pick the launcher that matches your platform — `--new`, `--clean`, and `-h`/`--help` work on both. `--clone` (rsync mirror of your real setup into a stable sandbox dir; re-runs sync incrementally) is currently macOS/Linux only.
 
 <Tabs>
   <TabItem label="macOS / Linux">
@@ -144,8 +144,8 @@ Pick the launcher that matches your platform — `--new`, `--clean`, and `-h`/`-
     # Per-PID empty sandbox under $TMPDIR — first-run / new-user UX
     ./scripts/dev.sh --new
 
-    # Per-PID copy-on-write snapshot of your real setup; isolated from
-    # the running release app
+    # Mirror your real setup into a stable sandbox dir via rsync; re-runs
+    # sync incrementally. Isolated from the running release app.
     ./scripts/dev.sh --clone
 
     # GC stale sandboxes from killed dev runs and exit

@@ -502,7 +502,13 @@ if (( clone_session )); then
   rsync_clone() {
     local src="$1" dst="$2" label="$3"
     if [[ ! -d "$src" ]]; then
-      echo "[dev.sh] skipping clone of $label: $src missing" >&2
+      # Source removed/relocated since the last --clone — wipe any
+      # previous sandbox contents for this slot rather than silently
+      # reusing a stale mirror. The sandbox dir is stable across runs
+      # (so re-syncs are incremental), which means a stale snapshot
+      # would otherwise hang around until --clean.
+      echo "[dev.sh] clone of $label: $src missing — clearing sandbox $dst" >&2
+      rm -rf "$dst"
       mkdir -p "$dst"
       return 0
     fi

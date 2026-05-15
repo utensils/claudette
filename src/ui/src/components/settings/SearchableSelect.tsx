@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Check, ChevronDown, Search as SearchIcon } from "lucide-react";
 import styles from "./SearchableSelect.module.css";
@@ -19,6 +19,10 @@ interface SearchableSelectProps {
   /** When omitted, falls back to the localized "Filter N options…" string. */
   searchPlaceholder?: string;
   ariaLabel?: string;
+  /** id of an external label element (e.g. a `<span>` in a `<div>`
+   *  wrapper). Use this instead of `ariaLabel` when the visible label
+   *  text already lives in the DOM. */
+  ariaLabelledBy?: string;
   disabled?: boolean;
 }
 
@@ -39,6 +43,7 @@ export function SearchableSelect({
   placeholder,
   searchPlaceholder,
   ariaLabel,
+  ariaLabelledBy,
   disabled,
 }: SearchableSelectProps) {
   const { t } = useTranslation("settings");
@@ -49,6 +54,13 @@ export function SearchableSelect({
   const popoverRef = useRef<HTMLDivElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
   const activeRowRef = useRef<HTMLButtonElement>(null);
+  // Stable id prefix so each option can have a deterministic DOM id the
+  // search input can point at via `aria-activedescendant`. Without this
+  // a screen reader has no way to announce which option ArrowUp/Down
+  // moved the highlight to before Enter commits it.
+  const idPrefix = useId();
+  const listboxId = `${idPrefix}-listbox`;
+  const optionId = (index: number) => `${idPrefix}-option-${index}`;
 
   // The list the popover renders: autoOption (when provided) + options.
   const allOptions = useMemo(
@@ -172,7 +184,9 @@ export function SearchableSelect({
         disabled={disabled}
         aria-haspopup="listbox"
         aria-expanded={open}
-        aria-label={ariaLabel}
+        aria-controls={open ? listboxId : undefined}
+        aria-label={ariaLabelledBy ? undefined : ariaLabel}
+        aria-labelledby={ariaLabelledBy}
       >
         <span
           className={`${styles.triggerLabel} ${currentLabelMuted ? styles.triggerLabelMuted : ""}`}
@@ -188,15 +202,26 @@ export function SearchableSelect({
             <input
               ref={searchRef}
               type="search"
+              role="combobox"
               className={styles.searchInput}
               value={query}
               placeholder={computedSearchPlaceholder}
               aria-label={computedSearchPlaceholder}
+              aria-controls={listboxId}
+              aria-expanded={open}
+              aria-autocomplete="list"
+              // Announce the keyboard-highlighted option to screen
+              // readers without moving DOM focus off the search input.
+              aria-activedescendant={
+                visible.length > 0 && activeIndex < visible.length
+                  ? optionId(activeIndex)
+                  : undefined
+              }
               onChange={(e) => setQuery(e.target.value)}
               onKeyDown={handleSearchKey}
             />
           </div>
-          <div className={styles.list} role="listbox">
+          <div className={styles.list} role="listbox" id={listboxId}>
             {visible.length === 0 ? (
               <div className={styles.emptyState}>
                 {t("models_backend_filter_no_match", "No models match this filter")}
@@ -210,6 +235,7 @@ export function SearchableSelect({
                     ref={isActive ? activeRowRef : undefined}
                     type="button"
                     key={opt.value || "__auto__"}
+                    id={optionId(index)}
                     role="option"
                     aria-selected={isSelected}
                     className={[

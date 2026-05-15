@@ -1,4 +1,4 @@
-import { lstat, mkdir, readFile, readdir, realpath, stat, writeFile } from "node:fs/promises";
+import { lstat, mkdir, open, readFile, readdir, realpath, stat, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { spawn } from "node:child_process";
 import { createInterface } from "node:readline/promises";
@@ -230,18 +230,39 @@ function buildTools(cwd: string, enabledTools: readonly string[]): ToolDefinitio
         // Cap the file read so a stray `read` on a huge build artifact
         // (e.g. a 200 MB sourcemap, a generated SQL dump) can't push a
         // multi-megabyte tool result through the sidecar protocol and
-        // straight into the provider's context window. Truncate at the
-        // cap and tell the model that's what happened so it can either
-        // ask for a slice or move on.
-        const text = await readFile(path, "utf8");
-        const { content, truncated, limitBytes, actualBytes } =
-          capTextForTool(text, MAX_READ_BYTES);
-        return textResult(content, {
-          path,
-          ...(truncated
-            ? { truncated: true, sizeBytes: actualBytes, limitBytes }
-            : {}),
-        });
+        // straight into the provider's context window. **Stat first**:
+        // doing `readFile` on a multi-GB file would allocate the whole
+        // thing in memory before we ever get to truncate, OOMing or
+        // stalling the sidecar. Only files within the cap go through
+        // `readFile`; over-cap files are read up to the cap via a file
+        // handle and the result is reported as truncated.
+        const fileStat = await stat(path);
+        if (fileStat.size <= MAX_READ_BYTES) {
+          const text = await readFile(path, "utf8");
+          return textResult(text, { path });
+        }
+        const fd = await open(path, "r");
+        try {
+          const buf = Buffer.alloc(MAX_READ_BYTES);
+          const { bytesRead } = await fd.read(buf, 0, MAX_READ_BYTES, 0);
+          const head = buf.subarray(0, bytesRead).toString("utf8");
+          // Drop a trailing U+FFFD if the cap landed mid-codepoint, so
+          // the model doesn't see a synthetic replacement char.
+          const safeHead = head.endsWith("�") ? head.slice(0, -1) : head;
+          const dropped = fileStat.size - bytesRead;
+          return textResult(
+            safeHead +
+              `\n\n... [truncated: ${dropped} more bytes; tool limit ${MAX_READ_BYTES} bytes] ...\n`,
+            {
+              path,
+              truncated: true,
+              sizeBytes: fileStat.size,
+              limitBytes: MAX_READ_BYTES,
+            },
+          );
+        } finally {
+          await fd.close();
+        }
       },
     }),
     defineTool({
@@ -458,37 +479,6 @@ const FIND_SKIP_DIRS: ReadonlySet<string> = new Set([
   ".vscode",
 ]);
 
-function capTextForTool(
-  text: string,
-  limitBytes: number,
-): { content: string; truncated: boolean; limitBytes: number; actualBytes: number } {
-  const buf = Buffer.from(text, "utf8");
-  if (buf.length <= limitBytes) {
-    return {
-      content: text,
-      truncated: false,
-      limitBytes,
-      actualBytes: buf.length,
-    };
-  }
-  // Slice on the byte buffer but rebuild from utf8 so a multi-byte
-  // codepoint at the boundary doesn't produce a replacement char in
-  // the truncated tail. `toString("utf8")` with `lossless` semantics
-  // is safe here because we then drop the final character to avoid
-  // emitting a partial sequence.
-  const head = buf.subarray(0, limitBytes).toString("utf8");
-  const safeHead = head.endsWith("�") ? head.slice(0, -1) : head;
-  const dropped = buf.length - limitBytes;
-  return {
-    content:
-      safeHead +
-      `\n\n... [truncated: ${dropped} more bytes; tool limit ${limitBytes} bytes] ...\n`,
-    truncated: true,
-    limitBytes,
-    actualBytes: buf.length,
-  };
-}
-
 /** Per-stream byte-capped UTF-8 accumulator used by `runCommand`. The
  *  chunks we get from `setEncoding("utf8")` are JS strings (UTF-16
  *  units), so `chunk.length` is the wrong axis to compare against a
@@ -562,6 +552,14 @@ function isMissingCommand(error: unknown): boolean {
   return error instanceof Error && "code" in error && error.code === "ENOENT";
 }
 
+/** Per-file size cap for the no-`rg` grep fallback. The fallback reads
+ *  each candidate fully into memory because `String.includes` works on
+ *  the whole text; without a cap, decoding a single multi-hundred-MB
+ *  generated file as UTF-8 can allocate enough to stall or OOM the
+ *  sidecar. 4 MB is well above any realistic source file but small
+ *  enough that the worst-case allocation is bounded. */
+const GREP_FALLBACK_MAX_FILE_BYTES = 4 * 1024 * 1024;
+
 async function grepFallback(root: string, query: string): Promise<string> {
   const matches: string[] = [];
   async function walk(dir: string): Promise<void> {
@@ -577,6 +575,11 @@ async function grepFallback(root: string, query: string): Promise<string> {
       }
       if (!entry.isFile()) continue;
       try {
+        // Stat first so a single huge file (a sourcemap, a generated
+        // build artifact, a binary mis-decoded as text) can't pull
+        // hundreds of MB through `readFile` ahead of the per-tool cap.
+        const info = await stat(path);
+        if (info.size > GREP_FALLBACK_MAX_FILE_BYTES) continue;
         const text = await readFile(path, "utf8");
         text.split(/\r?\n/).forEach((line, index) => {
           if (matches.length < 500 && line.includes(query)) {

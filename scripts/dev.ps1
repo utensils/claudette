@@ -262,6 +262,76 @@ $destExe = Join-Path $destDir "claudette-$triple.exe"
 Copy-Item $srcExe $destExe -Force
 Write-Host "▸ Staged sidecar:   $destExe"
 
+# Stage the Pi SDK harness sidecar at the same path Tauri's
+# `bundle.externalBin` expects. The .sh helper `stage-pi-harness-sidecar.sh`
+# is what `tauri.conf.json`'s `beforeDevCommand` runs on Unix; this script
+# bypasses `beforeDevCommand`, so without an inline equivalent
+# `resolve_pi_harness_path()` would never find a Windows Pi sidecar and
+# the Pi backend would be unusable in dev.ps1 sessions.
+$piTarget = switch ($triple) {
+    'x86_64-pc-windows-msvc'  { 'bun-windows-x64' }
+    'aarch64-pc-windows-msvc' { 'bun-windows-arm64' }
+    default                   { $null }
+}
+if (-not $piTarget) {
+    Write-Warning "Skipping Pi harness staging: unsupported triple '$triple'"
+} elseif (-not (Get-Command bun -ErrorAction SilentlyContinue)) {
+    Write-Warning "Skipping Pi harness staging: bun not on PATH"
+} else {
+    Write-Host "▸ Building claudette-pi-harness for $triple"
+    $piRoot = Join-Path $repoRoot 'src-pi-harness'
+    # `bun install` so the workspace has the Pi SDK npm tree available
+    # for both `bun run typecheck` and `bun build --compile`. Frozen
+    # lockfile to match CI.
+    $piInstall = Start-Process bun `
+        -ArgumentList @('install', '--frozen-lockfile') `
+        -WorkingDirectory $piRoot `
+        -NoNewWindow -Wait -PassThru
+    if ($piInstall.ExitCode -ne 0) {
+        Write-Error "Pi harness bun install failed (exit $($piInstall.ExitCode))"
+        exit $piInstall.ExitCode
+    }
+    if ($env:CLAUDETTE_PI_HARNESS_SKIP_TYPECHECK -ne '1') {
+        # `bun build --compile` transpiles without type-checking, so a
+        # standalone `tsc --noEmit` pass turns latent protocol/SDK drift
+        # into a clear staging failure instead of a sidecar that runs
+        # but misbehaves. Mirrors stage-pi-harness-sidecar.sh.
+        $piTypecheck = Start-Process bun `
+            -ArgumentList @('run', 'typecheck') `
+            -WorkingDirectory $piRoot `
+            -NoNewWindow -Wait -PassThru
+        if ($piTypecheck.ExitCode -ne 0) {
+            Write-Error "Pi harness typecheck failed (exit $($piTypecheck.ExitCode))"
+            exit $piTypecheck.ExitCode
+        }
+    }
+    $piDestExe = Join-Path $destDir "claudette-pi-harness-$triple.exe"
+    $piBuild = Start-Process bun `
+        -ArgumentList @(
+            'build',
+            'src/main.ts',
+            '--compile',
+            "--target=$piTarget",
+            '--outfile', $piDestExe
+        ) `
+        -WorkingDirectory $piRoot `
+        -NoNewWindow -Wait -PassThru
+    if ($piBuild.ExitCode -ne 0) {
+        Write-Error "Pi harness bun build failed (exit $($piBuild.ExitCode))"
+        exit $piBuild.ExitCode
+    }
+    # `resolve_pi_package_dir` looks for the Pi npm package metadata
+    # next to the harness binary so `getAgentDir()` can resolve session
+    # paths correctly. Copy the metadata into `<destDir>/pi/`.
+    $piPkgSrc = Join-Path $piRoot 'node_modules\@earendil-works\pi-coding-agent\package.json'
+    if (Test-Path $piPkgSrc) {
+        $piPkgDest = Join-Path $destDir 'pi'
+        New-Item -ItemType Directory -Force -Path $piPkgDest | Out-Null
+        Copy-Item $piPkgSrc (Join-Path $piPkgDest 'package.json') -Force
+    }
+    Write-Host "▸ Staged Pi harness: $piDestExe"
+}
+
 # 5) `bun install` so a fresh clone has node_modules before Vite
 #    starts. Mirrors dev.sh's explicit pre-install pass. Unlike dev.sh
 #    we *don't* also get a second pass from `tauri.conf.json`'s

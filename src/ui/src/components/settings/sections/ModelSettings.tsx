@@ -896,9 +896,20 @@ function BackendCard({
               />
             </label>
           )}
-          <label className={styles.backendField}>
-            <span className={styles.backendFieldLabel}>{t("models_backend_default_model")}</span>
-            {discoveryBackend || modelOptions.length > 0 ? (
+          {discoveryBackend || modelOptions.length > 0 ? (
+            // `SearchableSelect` renders a `<button>` trigger and a
+            // popover containing more buttons. Nesting interactive
+            // controls inside a `<label>` produces ambiguous click /
+            // focus behavior for keyboard and assistive-tech users, so
+            // pair the field with a labeled `<div>` and let
+            // `SearchableSelect`'s `aria-labelledby` carry the name.
+            <div className={styles.backendField}>
+              <span
+                id={`${draft.id}-default-model-label`}
+                className={styles.backendFieldLabel}
+              >
+                {t("models_backend_default_model")}
+              </span>
               <SearchableSelect
                 options={modelOptions.map((model) => ({
                   value: model.id,
@@ -909,22 +920,37 @@ function BackendCard({
                   setDraft({ ...draft, default_model: next || null })
                 }
                 autoOption={{ value: "", label: t("models_backend_default_auto") }}
-                ariaLabel={t("models_backend_default_model")}
+                ariaLabelledBy={`${draft.id}-default-model-label`}
               />
-            ) : (
+            </div>
+          ) : (
+            <label className={styles.backendField}>
+              <span className={styles.backendFieldLabel}>{t("models_backend_default_model")}</span>
               <input
                 className={styles.input}
                 value={draft.default_model ?? ""}
                 placeholder={t("models_backend_default_model")}
                 onChange={(e) => setDraft({ ...draft, default_model: e.target.value || null })}
               />
-            )}
-          </label>
+            </label>
+          )}
         </div>
         <div className={styles.backendForm}>
           {discoveryBackend && (
-            <label className={styles.backendField}>
-              <span className={styles.backendFieldLabel}>{t("models_backend_discovered_models")}</span>
+            // Same a11y concern: the Pi variant renders expandable
+            // `<button>` headers, which don't belong inside a `<label>`.
+            // Use a `<div>` + labeled span and connect them via aria.
+            <div
+              className={styles.backendField}
+              role="group"
+              aria-labelledby={`${draft.id}-discovered-models-label`}
+            >
+              <span
+                id={`${draft.id}-discovered-models-label`}
+                className={styles.backendFieldLabel}
+              >
+                {t("models_backend_discovered_models")}
+              </span>
               {draft.kind === "pi_sdk" ? (
                 <PiDiscoveredModelsList models={discoveredModels} />
               ) : (
@@ -938,7 +964,7 @@ function BackendCard({
                   )}
                 </div>
               )}
-            </label>
+            </div>
           )}
           {showManualModels && (
             <label className={styles.backendField}>
