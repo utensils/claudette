@@ -1498,7 +1498,7 @@ pub async fn send_chat_message(
             app.clone(),
             ws_info_for_env.id.clone(),
         );
-        claudette::env_provider::resolve_with_registry_and_progress(
+        let mut resolved = claudette::env_provider::resolve_with_registry_and_progress(
             &registry,
             &state.env_cache,
             std::path::Path::new(&worktree_path),
@@ -1506,7 +1506,14 @@ pub async fn send_chat_message(
             &disabled_env_providers,
             Some(&progress),
         )
-        .await
+        .await;
+        // Layer the workspace's declared input values over the env-provider
+        // stack — the agent CLI subprocess sees them as plain env vars,
+        // and the drift check below treats them like any other source.
+        if let Ok(db) = Database::open(&state.db_path) {
+            crate::commands::env::merge_workspace_input_env(&db, &ws.id, &mut resolved);
+        }
+        resolved
     };
     crate::commands::env::register_resolved_with_watcher(
         &state,

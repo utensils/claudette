@@ -91,6 +91,12 @@ The **Inherited** section (read-only) shows which flags are currently coming fro
 
 See [Agent Configuration → Claude CLI Flags](/claudette/features/agent-configuration/#claude-cli-flags) for the full list of available flags and how global defaults work.
 
+## Required Inputs
+
+Declare named inputs that every new workspace must supply before it can be created. Each input has a name (the env var key), a type (string / number / boolean) used for client-side validation, and an optional label / description for the workspace-create prompt. The supplied values become environment variables in the workspace session — visible to the agent, the terminal, and the setup/archive scripts.
+
+See [Required Inputs](/claudette/features/required-inputs/) for the full reference.
+
 ## Custom Instructions
 
 Text that is appended to the agent's system prompt at the start of every chat in this repository. Use this to give the agent context about your project:

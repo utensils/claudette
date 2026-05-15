@@ -879,6 +879,12 @@ async fn handle_create_workspace(
         repo_id: repository_id,
         name,
         branch_prefix: &branch_prefix,
+        // Remote server doesn't yet plumb required-input values through —
+        // matches the CLI v1 scope. The shared op will reject the create
+        // with `OpsError::Validation` if the repo declares inputs, which
+        // surfaces back to the WS client as a clear error rather than a
+        // silently misconfigured workspace.
+        input_values: None,
     };
     let out = if preserve_supplied_name {
         ops_workspace::create_preserving_supplied_name(

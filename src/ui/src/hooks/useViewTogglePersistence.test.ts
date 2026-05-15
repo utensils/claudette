@@ -25,6 +25,7 @@ function makeWorkspace(
     status_line: "",
     created_at: "2026-01-01T00:00:00Z",
     sort_order: 0,
+    input_values: null,
     remote_connection_id: null,
   };
 }

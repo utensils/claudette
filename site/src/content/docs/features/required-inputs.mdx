@@ -1,0 +1,47 @@
+---
+title: Required Inputs
+description: Per-repo declared values that every new workspace must supply — exposed as environment variables to the agent, terminal, and scripts.
+---
+
+A repo can optionally declare named inputs that every new workspace must supply before it can be created. The values become environment variables in that workspace's session — visible to the agent, the integrated terminal, and the repo's setup/archive scripts.
+
+This is useful when a project needs values that nothing on disk can produce: a ticket ID for the agent to reference, an `ENVIRONMENT=staging` flag for scripts, or a numeric retry budget for that task.
+
+## Declaring inputs
+
+Open `Settings > Repository` and find the **Required inputs** section between **Environment** and **Custom instructions**. Click **+ Add required input**, then for each row set:
+
+- **Name** — the environment variable name (must be a valid identifier: letters, digits, and underscores; cannot start with a digit). This is the literal `$NAME` your scripts and the agent will see.
+- **Type** — one of:
+  - **String** — any text value.
+  - **Number** — numeric values, with optional min/max bounds enforced before the workspace is created.
+  - **Boolean** — `true` or `false`. Always serialized to those literal strings in the env.
+- **Label** — what the workspace-create prompt shows next to the field. Defaults to the name when empty.
+- **Description** — optional helper text shown under the label.
+- **Placeholder / Default / Min / Max** — type-specific extras.
+
+Changes save automatically (~400 ms after you stop typing). An empty schema clears the column and new workspaces no longer prompt.
+
+## Creating a workspace
+
+When a repo has declared inputs, creating a workspace opens a prompt that collects values for every declared field. The prompt validates against each type — typing `abc` for a number, or leaving a required string blank, blocks the **Create workspace** button — so a misconfigured workspace can't be created.
+
+Cancelling the prompt aborts the entire create flow; no worktree is allocated and no branch is created.
+
+## Where the values show up
+
+Once supplied, the values are persisted on the workspace row and merged into the resolved environment whenever Claudette spawns:
+
+- **The agent CLI subprocess** — your declared inputs are env vars in the agent's process.
+- **The integrated terminal** — your shell sees them just like any other `$NAME`.
+- **The setup script** that runs on workspace creation, and any later re-run.
+- **The archive script** that runs when a workspace is archived.
+
+They sit at "after env-provider plugins (direnv, mise, dotenv, nix-devshell), before `CLAUDETTE_*` workspace-context vars" in the precedence stack. So a declared `PATH` would override what direnv exported, but no value can override `$CLAUDETTE_WORKSPACE_NAME` and friends.
+
+## Limits
+
+- Values are captured **once** at workspace-create time. There is no UI today to edit them on an existing workspace; create a new workspace instead.
+- The schema is per-repo. Different repos declare different inputs (or none at all).
+- Values are stored as plain text in the local SQLite database, with the same risk profile as the **Setup script** field. Don't put secrets here unless you're comfortable with that storage. There is no integration with the OS keychain yet.
+- The CLI client and batch manifests do not yet accept `--input` / `inputs:` — the server-side validator will error if a repo with declared inputs is created from those paths. Use the GUI for the initial create; the CLI/batch path will gain a flag in a follow-up release.

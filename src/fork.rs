@@ -246,10 +246,19 @@ async fn fork_after_worktree(
         // assigned (MAX+1 within repo) so callers handing this struct back
         // to the UI render the new fork at the right sidebar position.
         sort_order: 0,
+        input_values: source_ws.input_values.clone(),
     };
     db.insert_workspace(&new_ws)?;
     if let Some(o) = db.lookup_workspace_sort_order(&new_ws.id)? {
         new_ws.sort_order = o;
+    }
+    // `insert_workspace` only writes the original columns — `input_values`
+    // lives in its own write path. Without this, a fork would return a
+    // struct carrying the source's inputs but the DB row would be NULL,
+    // and every subsequent terminal/agent/script env merge would read
+    // nothing for those keys.
+    if let Some(values) = new_ws.input_values.as_ref() {
+        db.set_workspace_input_values(&new_ws.id, Some(values))?;
     }
 
     copy_history(db, &source_ws.id, &new_ws.id, checkpoint)?;
@@ -531,6 +540,7 @@ mod tests {
             archive_script_auto_run: false,
             base_branch: None,
             default_remote: None,
+            required_inputs: None,
             path_valid: true,
             created_at: String::new(),
         }
@@ -548,6 +558,7 @@ mod tests {
             status_line: String::new(),
             created_at: String::new(),
             sort_order: 0,
+            input_values: None,
         }
     }
 
@@ -1078,6 +1089,7 @@ mod tests {
             archive_script_auto_run: false,
             base_branch: None,
             default_remote: None,
+            required_inputs: None,
             path_valid: true,
             created_at: String::new(),
         })
@@ -1093,6 +1105,7 @@ mod tests {
             status_line: String::new(),
             created_at: String::new(),
             sort_order: 0,
+            input_values: None,
         };
         db.insert_workspace(&source_ws).unwrap();
 

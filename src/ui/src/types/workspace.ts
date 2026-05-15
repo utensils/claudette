@@ -21,6 +21,9 @@ export interface Workspace {
   /** Per-repository display order in the sidebar. Persisted via the
    *  `workspaces.sort_order` column; reassigned by `reorder_workspaces`. */
   sort_order: number;
+  /** Values supplied at workspace-create time for the repo's declared
+   *  `required_inputs`. Null when the repo had no inputs declared. */
+  input_values: Record<string, string> | null;
   /** Non-null when this workspace belongs to a remote connection. */
   remote_connection_id: string | null;
 }

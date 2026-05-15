@@ -919,6 +919,7 @@ fn main() {
             commands::repository::reorder_repositories,
             commands::repository::set_setup_script_auto_run,
             commands::repository::set_archive_script_auto_run,
+            commands::repository::update_repository_required_inputs,
             // Workspace
             commands::workspace::create_workspace,
             commands::workspace::fork_workspace_at_checkpoint,
@@ -1378,6 +1379,7 @@ mod tests {
                 archive_script_auto_run: false,
                 base_branch: None,
                 default_remote: None,
+                required_inputs: None,
                 path_valid: true,
             };
             db.insert_repository(&repo).expect("insert repo");

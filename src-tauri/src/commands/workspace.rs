@@ -43,6 +43,10 @@ pub async fn create_workspace(
     repo_id: String,
     name: String,
     skip_setup: Option<bool>,
+    // Values for the repo's declared `required_inputs`. When the repo has
+    // no schema this is ignored; when it does, every declared key must be
+    // present and each value must pass its type's coercion.
+    input_values: Option<std::collections::HashMap<String, String>>,
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<CreateWorkspaceResult, String> {
@@ -51,6 +55,7 @@ pub async fn create_workspace(
         &name,
         skip_setup.unwrap_or(false),
         false,
+        input_values,
         &app,
         &state,
     )
@@ -70,10 +75,12 @@ pub(crate) async fn create_workspace_inner(
     name: &str,
     skip_setup: bool,
     preserve_supplied_name: bool,
+    input_values: Option<std::collections::HashMap<String, String>>,
     app: &AppHandle,
     state: &AppState,
 ) -> Result<CreateWorkspaceResult, String> {
     let mut db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
+
     let (prefix_mode, prefix_custom) = ops_workspace::read_branch_prefix_settings(&db);
     let prefix = ops_workspace::resolve_branch_prefix(&prefix_mode, &prefix_custom).await;
     let worktree_base = state.worktree_base_dir.read().await.clone();
@@ -82,6 +89,13 @@ pub(crate) async fn create_workspace_inner(
         repo_id,
         name,
         branch_prefix: &prefix,
+        // Validation + persistence of input_values happens inside the op
+        // (`ops::workspace::create_inner` runs `validate_repository_inputs`
+        // before allocating a worktree and `set_workspace_input_values`
+        // after `insert_workspace` succeeds). All callers — GUI, IPC, WS
+        // server — share the same enforcement that way; we no longer have
+        // to repeat the validate-then-persist dance per caller.
+        input_values: input_values.as_ref(),
     };
     let out = if preserve_supplied_name {
         ops_workspace::create_preserving_supplied_name(
@@ -95,6 +109,11 @@ pub(crate) async fn create_workspace_inner(
         ops_workspace::create(&mut db, &NoopHooks, worktree_base.as_path(), params).await
     }
     .map_err(|e| e.to_string())?;
+
+    // The op already persisted the coerced values and populated the
+    // workspace struct. Re-borrow here so the setup-script env synth
+    // below reads the canonical post-coercion form.
+    let validated_inputs = out.workspace.input_values.clone();
 
     // Run the setup script BEFORE resolving the env-provider stack.
     // Many `.claudette.json` setups exist precisely to prime that stack
@@ -120,17 +139,26 @@ pub(crate) async fn create_workspace_inner(
         .find(|r| r.id == repo_id)
         .ok_or("Repository not found")?;
 
+    // First-create setup runs BEFORE the env-provider resolve (see comment
+    // above) so we can't reuse the cached `ResolvedEnv`. We still want the
+    // workspace's input values visible to the setup script, so synthesize a
+    // minimal `ResolvedEnv` from them. `None` when the workspace has no
+    // declared inputs — `resolve_and_run_setup` then runs with the inherited
+    // PATH only, as before.
+    let inputs_only_env = validated_inputs.as_ref().map(input_values_to_resolved_env);
+    let mut workspace_with_inputs = out.workspace.clone();
+    workspace_with_inputs.input_values = validated_inputs.clone();
     let setup_result = if skip_setup {
         None
     } else {
         ops_workspace::resolve_and_run_setup(
-            &out.workspace,
+            &workspace_with_inputs,
             Path::new(&repo.path),
             Path::new(&out.worktree_path),
             repo.setup_script.as_deref(),
             repo.base_branch.as_deref(),
             repo.default_remote.as_deref(),
-            None,
+            inputs_only_env.as_ref(),
         )
         .await
     };
@@ -158,6 +186,20 @@ pub(crate) async fn create_workspace_inner(
         default_session_id: out.default_session_id,
         setup_result,
     })
+}
+
+/// Build a minimal [`ResolvedEnv`] from a workspace's input-value map so it
+/// can be passed to spawn sites that expect a `ResolvedEnv` (the setup
+/// script path, primarily). The `sources` vec stays empty because no
+/// env-provider plugin contributed these — they're declared inputs.
+pub(crate) fn input_values_to_resolved_env(
+    values: &std::collections::HashMap<String, String>,
+) -> claudette::env_provider::ResolvedEnv {
+    let mut env = claudette::env_provider::ResolvedEnv::default();
+    for (k, v) in values {
+        env.vars.insert(k.clone(), Some(v.clone()));
+    }
+    env
 }
 
 #[derive(Serialize)]
@@ -286,7 +328,7 @@ async fn resolve_env_for_workspace(
     let registry = state.plugins_snapshot().await;
     let progress =
         app.map(|h| crate::commands::env::TauriEnvProgressSink::new(h.clone(), ws.id.clone()));
-    let resolved = claudette::env_provider::resolve_with_registry_and_progress(
+    let mut resolved = claudette::env_provider::resolve_with_registry_and_progress(
         &registry,
         &state.env_cache,
         Path::new(worktree),
@@ -297,6 +339,12 @@ async fn resolve_env_for_workspace(
             .map(|p| p as &dyn claudette::env_provider::EnvProgressSink),
     )
     .await;
+    // Apply per-workspace input values on top of the env-provider stack.
+    // Opening the DB again is cheap; closing it inside the helper keeps
+    // this call site free of error noise on transient lock contention.
+    if let Ok(db) = Database::open(&state.db_path) {
+        crate::commands::env::merge_workspace_input_env(&db, &ws.id, &mut resolved);
+    }
     crate::commands::env::register_resolved_with_watcher(
         state,
         Path::new(worktree),
@@ -942,6 +990,7 @@ pub async fn import_worktrees(
             status_line: String::new(),
             created_at: now_iso(),
             sort_order: 0,
+            input_values: None,
         };
 
         created.push(ws);

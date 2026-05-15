@@ -2,13 +2,22 @@ import { invoke } from "@tauri-apps/api/core";
 import type { Workspace } from "../../types";
 import type { CreateWorkspaceResult, SetupResult } from "../../types/repository";
 import type { WorkspaceEnvTrustNeededPayload } from "../../types/env";
+import type { RepositoryInputValues } from "../../types/repositoryInput";
 
 export function createWorkspace(
   repoId: string,
   name: string,
-  skipSetup?: boolean
+  skipSetup?: boolean,
+  /** Values for the repo's declared `required_inputs`. Omit when the repo
+   *  has no schema (the backend ignores the field in that case). */
+  inputValues?: RepositoryInputValues | null,
 ): Promise<CreateWorkspaceResult> {
-  return invoke("create_workspace", { repoId, name, skipSetup: skipSetup ?? false });
+  return invoke("create_workspace", {
+    repoId,
+    name,
+    skipSetup: skipSetup ?? false,
+    inputValues: inputValues ?? null,
+  });
 }
 
 export interface ForkWorkspaceResult {

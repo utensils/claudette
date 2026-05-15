@@ -229,4 +229,9 @@ pub const MIGRATIONS: &[Migration] = &[
         sql: include_str!("20260513144558_turn_tool_activity_agent_transcript.sql"),
         legacy_version: None,
     },
+    Migration {
+        id: "20260513200000_repo_required_inputs",
+        sql: include_str!("20260513200000_repo_required_inputs.sql"),
+        legacy_version: None,
+    },
 ];

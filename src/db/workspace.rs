@@ -121,7 +121,7 @@ impl Database {
 
     pub fn list_workspaces(&self) -> Result<Vec<Workspace>, rusqlite::Error> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, repository_id, name, branch_name, worktree_path, status, status_line, created_at, sort_order
+            "SELECT id, repository_id, name, branch_name, worktree_path, status, status_line, created_at, sort_order, input_values
              FROM workspaces ORDER BY repository_id, sort_order, created_at",
         )?;
         let rows = stmt.query_map([], |row| {
@@ -138,6 +138,21 @@ impl Database {
             } else {
                 crate::model::AgentStatus::Idle
             };
+            let input_values_raw: Option<String> = row.get(9)?;
+            let input_values = input_values_raw.and_then(|s| {
+                match serde_json::from_str::<std::collections::HashMap<String, String>>(&s) {
+                    Ok(m) if !m.is_empty() => Some(m),
+                    Ok(_) => None,
+                    Err(e) => {
+                        tracing::warn!(
+                            target: "claudette::db",
+                            error = %e,
+                            "failed to parse workspaces.input_values JSON; treating as empty"
+                        );
+                        None
+                    }
+                }
+            });
             Ok(Workspace {
                 id: row.get(0)?,
                 repository_id: row.get(1)?,
@@ -149,9 +164,53 @@ impl Database {
                 status_line: row.get(6)?,
                 created_at: row.get(7)?,
                 sort_order: row.get(8)?,
+                input_values,
             })
         })?;
         rows.collect()
+    }
+
+    /// Persist the values a workspace was created with for its repo's
+    /// declared `required_inputs`. Pass an empty map (or `None`) to clear.
+    pub fn set_workspace_input_values(
+        &self,
+        workspace_id: &str,
+        values: Option<&std::collections::HashMap<String, String>>,
+    ) -> Result<(), rusqlite::Error> {
+        let serialized = match values {
+            Some(map) if !map.is_empty() => Some(
+                serde_json::to_string(map)
+                    .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?,
+            ),
+            _ => None,
+        };
+        self.conn.execute(
+            "UPDATE workspaces SET input_values = ?1 WHERE id = ?2",
+            params![serialized, workspace_id],
+        )?;
+        Ok(())
+    }
+
+    /// Read just the input values for a workspace without loading the full
+    /// row. Used by env-injection helpers that only need the map.
+    pub fn get_workspace_input_values(
+        &self,
+        workspace_id: &str,
+    ) -> Result<Option<std::collections::HashMap<String, String>>, rusqlite::Error> {
+        let raw: Option<Option<String>> = self
+            .conn
+            .query_row(
+                "SELECT input_values FROM workspaces WHERE id = ?1",
+                params![workspace_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        Ok(raw.flatten().and_then(|s| {
+            match serde_json::from_str::<std::collections::HashMap<String, String>>(&s) {
+                Ok(m) if !m.is_empty() => Some(m),
+                _ => None,
+            }
+        }))
     }
 
     /// Reassign per-repository `sort_order` of workspaces in the supplied
@@ -1264,5 +1323,35 @@ mod tests {
                 panic!("expected FromSqlConversionFailure for unknown status, got: {other:?}",)
             }
         }
+    }
+
+    #[test]
+    fn input_values_roundtrip() {
+        let db = setup_db_with_workspace();
+        // Default is None.
+        let workspaces = db.list_workspaces().unwrap();
+        let ws = workspaces.iter().find(|w| w.id == "w1").unwrap();
+        assert!(ws.input_values.is_none());
+
+        // Persist and read back.
+        let mut values = std::collections::HashMap::new();
+        values.insert("TICKET_ID".to_string(), "PROJ-42".to_string());
+        values.insert("RETRIES".to_string(), "5".to_string());
+        db.set_workspace_input_values("w1", Some(&values)).unwrap();
+
+        let loaded = db.get_workspace_input_values("w1").unwrap();
+        assert_eq!(
+            loaded.as_ref().unwrap().get("TICKET_ID"),
+            Some(&"PROJ-42".to_string())
+        );
+        assert_eq!(
+            loaded.as_ref().unwrap().get("RETRIES"),
+            Some(&"5".to_string())
+        );
+
+        // Empty map clears.
+        db.set_workspace_input_values("w1", Some(&std::collections::HashMap::new()))
+            .unwrap();
+        assert!(db.get_workspace_input_values("w1").unwrap().is_none());
     }
 }

@@ -1,0 +1,122 @@
+/* Layout for the workspace-create required-inputs prompt.
+ *
+ * Two-column row per field: label + env-var key in parens on the left,
+ * the input control on the right. We deliberately don't reuse
+ * `PluginSettingInput`'s stacked layout here because compact-form modals
+ * read better with the label adjacent to the input, not above it.
+ */
+
+.fields {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-2) 0;
+}
+
+.fieldRow {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+}
+
+.labelGroup {
+  flex: 0 0 220px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.labelText {
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-medium);
+  color: var(--text-primary);
+  overflow-wrap: anywhere; /* long labels wrap inside their column */
+}
+
+/* The env var key in parens next to the label. Mono so it visually reads
+ * as an identifier the agent / scripts will see, dim so it doesn't compete
+ * with the human label. */
+.envKey {
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  color: var(--text-dim);
+  font-weight: var(--fw-regular);
+}
+
+.description {
+  font-size: var(--fs-xs);
+  color: var(--text-muted);
+  line-height: 1.4;
+}
+
+.control {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.input {
+  width: 100%;
+  background: var(--chat-input-bg);
+  border: 1px solid var(--divider);
+  border-radius: 6px;
+  padding: 6px 10px;
+  color: var(--text-primary);
+  font-size: var(--fs-sm);
+  outline: none;
+  box-sizing: border-box;
+}
+
+.input:focus {
+  border-color: var(--accent-color, var(--text-dim));
+}
+
+.numberInput {
+  composes: input;
+}
+
+.toggle {
+  position: relative;
+  flex: 0 0 auto;
+  width: 36px;
+  height: 20px;
+  border-radius: 12px;
+  background: var(--divider);
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  transition: background 120ms ease;
+}
+
+/* Same token the rest of Claudette's toggles use (`.mcpToggleOn` in
+ * Settings.module.css). The earlier `--accent-bg` fallback resolved to
+ * `--text-dim` in this theme, which read as "off". */
+.toggleOn {
+  background: var(--accent-primary);
+}
+
+.toggle:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.toggleKnob {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--app-bg);
+  transition: transform 120ms ease;
+}
+
+.toggleOn .toggleKnob {
+  transform: translateX(16px);
+}
+
+.error {
+  color: var(--status-stopped);
+  font-size: var(--fs-xs);
+  margin-top: 4px;
+}

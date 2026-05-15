@@ -54,6 +54,7 @@ function makeWorkspace(overrides: Partial<Workspace> = {}): Workspace {
     status_line: "",
     created_at: "2026-05-09T12:00:00Z",
     sort_order: 0,
+    input_values: null,
     remote_connection_id: null,
     ...overrides,
   };
@@ -77,6 +78,7 @@ function makeRepo(overrides: Partial<Repository> = {}): Repository {
     base_branch: null,
     default_remote: null,
     path_valid: true,
+    required_inputs: null,
     remote_connection_id: null,
     ...overrides,
   };

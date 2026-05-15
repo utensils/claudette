@@ -14,6 +14,7 @@ import { ConfirmNightlyChannelModal } from "./ConfirmNightlyChannelModal";
 import { MissingCliModal } from "./MissingCliModal";
 import { KeyboardShortcutsModal } from "./KeyboardShortcutsModal";
 import { EnvTrustModal } from "./EnvTrustModal";
+import { RequiredInputsModal } from "./RequiredInputsModal";
 
 export function ModalRouter() {
   const activeModal = useAppStore((s) => s.activeModal);
@@ -49,6 +50,8 @@ export function ModalRouter() {
       return <KeyboardShortcutsModal />;
     case "envTrust":
       return <EnvTrustModal />;
+    case "requiredInputs":
+      return <RequiredInputsModal />;
     default:
       return null;
   }

@@ -174,6 +174,36 @@ pub(crate) fn load_disabled_providers(db: &Database, repo_id: &str) -> HashSet<S
         .collect()
 }
 
+/// Layer a workspace's stored input values onto an already-resolved env.
+///
+/// Sits at "after env-provider plugins, before workspace-context vars" in the
+/// precedence stack — users typed these values explicitly, so they win over
+/// whatever direnv/mise/dotenv contributed for the same key, but the
+/// `CLAUDETTE_*` markers applied later still override them. No-op when the
+/// workspace has no stored values.
+pub(crate) fn merge_workspace_input_env(
+    db: &Database,
+    workspace_id: &str,
+    resolved: &mut claudette::env_provider::ResolvedEnv,
+) {
+    match db.get_workspace_input_values(workspace_id) {
+        Ok(Some(values)) => {
+            for (k, v) in values {
+                resolved.vars.insert(k, Some(v));
+            }
+        }
+        Ok(None) => {}
+        Err(e) => {
+            tracing::warn!(
+                target: "claudette::env",
+                workspace_id,
+                error = %e,
+                "failed to load workspace input values for env merge"
+            );
+        }
+    }
+}
+
 /// Strip sources whose plugin is globally disabled in the Plugins
 /// settings section. The env panel is a per-repo/per-workspace view —
 /// surfacing globally-off plugins there is noise (they're managed

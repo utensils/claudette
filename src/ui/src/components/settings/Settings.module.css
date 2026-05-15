@@ -2333,3 +2333,102 @@
   font-size: 13px;
   line-height: 1.4;
 }
+
+/* Required inputs editor (per-repo declared workspace-create prompts).
+ *
+ * These selectors are local to RequiredInputsEditor — we intentionally do NOT
+ * reuse `.textInput` / `.numberInput` for the inline inputs because both have
+ * fixed widths (`100%` and `80px` respectively) that fight a flex row with
+ * multiple children. The dedicated classes below set their own widths and
+ * skip the `margin-top` that `.textInput` adds for vertical stacks.
+ */
+.requiredInputsList {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  margin-bottom: var(--space-2);
+}
+
+.requiredInputRow {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid var(--divider);
+  border-radius: 6px;
+  background: var(--inset-bg, transparent);
+}
+
+.requiredInputHeaderRow {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+}
+
+/* Base style for every inline input/select inside a required-input row.
+ * Matches `.textInput` visually but without `width: 100%` so flex children
+ * can size themselves correctly. */
+.requiredInputField {
+  font-size: 12px;
+  padding: 5px 8px;
+  border-radius: 3px;
+  border: 1px solid var(--sidebar-border);
+  background: var(--input-bg, var(--selected-bg));
+  color: var(--text-primary);
+  font-family: inherit;
+  min-width: 0; /* lets flex children shrink below their content width */
+}
+
+.requiredInputField:focus {
+  outline: none;
+  border-color: var(--accent-color, var(--text-primary));
+}
+
+.requiredInputKeyInput {
+  flex: 1 1 0;
+  font-family: var(--font-mono);
+}
+
+.requiredInputTypeSelect {
+  flex: 0 0 auto;
+  width: 110px;
+}
+
+/* Single-row inputs (label, description, placeholder) stretch to the row
+ * width. Defined explicitly here instead of reusing `.textInput` so the
+ * margin-top stack-spacing doesn't fight the `gap` on the parent row. */
+.requiredInputFullWidth {
+  width: 100%;
+}
+
+.requiredInputNumberRow {
+  display: flex;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+/* Wider than the shared `.numberInput` (80px) because each one carries a
+ * descriptive placeholder ("Min (optional)") that needs room to read. */
+.requiredInputNumberField {
+  flex: 1 1 140px;
+  min-width: 120px;
+  max-width: 200px;
+}
+
+.addPromptButton {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border: 1px dashed var(--divider);
+  border-radius: 6px;
+  background: none;
+  color: var(--text-muted);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.addPromptButton:hover {
+  border-color: var(--text-dim);
+  color: var(--text-primary);
+}

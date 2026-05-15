@@ -8,6 +8,7 @@ mod metrics;
 mod pinned_prompt;
 mod remote_connection;
 mod repository;
+mod repository_input;
 mod terminal_tab;
 mod workspace;
 
@@ -26,5 +27,9 @@ pub use metrics::{
 pub use pinned_prompt::PinnedPrompt;
 pub use remote_connection::RemoteConnection;
 pub use repository::Repository;
+pub use repository_input::{
+    RepositoryInputField, coerce_value as coerce_input_value, validate_input_key,
+    validate_schema as validate_input_schema,
+};
 pub use terminal_tab::{TerminalTab, TerminalTabKind};
 pub use workspace::{AgentStatus, Workspace, WorkspaceStatus};
