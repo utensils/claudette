@@ -607,14 +607,24 @@ export const Sidebar = memo(function Sidebar() {
             <CircleQuestionMark size={14} />
           </span>
         ) : workspaceEnvironment[ws.id]?.status === "preparing"
+            && workspaceEnvironment[ws.id]?.started_at != null
             && ws.agent_status !== "Running"
             && ws.agent_status !== "Compacting" ? (
           // Env-provider resolution priority: shown when this workspace
-          // is currently in `preparing` AND the agent isn't already
-          // running. Sidebar listens to `workspace_env_progress` events
-          // globally so we light up here even when a different
-          // workspace is selected — covers PTY spawns / new chat
-          // sessions in background workspaces.
+          // is currently in `preparing`, has a concrete `started_at`
+          // (i.e. a `workspace_env_progress` event has actually fired
+          // for it), AND the agent isn't already running. Without the
+          // `started_at` gate the cascade enters this branch in the
+          // window between `selectWorkspace` flipping status to
+          // `"preparing"` and the first progress event landing —
+          // `WorkspaceEnvSpinner` returns `null` in that window, so
+          // the row's icon slot collapses to nothing and the workspace
+          // briefly renders without any leading icon. Falling through
+          // to the next branch keeps the normal idle/stopped icon
+          // visible during the transition. Sidebar listens to
+          // `workspace_env_progress` events globally so we still light
+          // up here when a different workspace is selected — covers
+          // PTY spawns / new chat sessions in background workspaces.
           <WorkspaceEnvSpinner workspaceId={ws.id} />
         ) : ws.agent_status === "Running" || ws.agent_status === "Compacting" ? (
           <span
