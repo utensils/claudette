@@ -1161,24 +1161,35 @@ fn backend_models_signature(backend: &AgentBackendConfig) -> Vec<(String, u32)> 
 }
 
 fn apply_discovered_models(backend: &mut AgentBackendConfig, discovered: Vec<AgentBackendModel>) {
-    if matches!(
+    // Kinds where a successful discovery pass replaces manual entries:
+    // Ollama / LM Studio / cloud OpenAI / Codex auto-detect the server's
+    // own model list and the picker is supposed to mirror that source of
+    // truth — leaving stale manual rows behind confuses the UI.
+    //
+    // Pi is intentionally excluded: the Pi Settings card surfaces a
+    // manual-models editor for custom-provider rows the user wires up
+    // outside `getAvailable()` (e.g. local Ollama via
+    // `~/.pi/agent/models.json`, internal proxies). Wiping those on
+    // every refresh would silently delete user-entered configuration
+    // and is the regression Codex flagged.
+    let clears_manual = matches!(
         backend.kind,
         AgentBackendKind::Ollama
             | AgentBackendKind::OpenAiApi
             | AgentBackendKind::CodexSubscription
             | AgentBackendKind::CodexNative
-            | AgentBackendKind::PiSdk
             | AgentBackendKind::LmStudio
-    ) && !discovered.is_empty()
-    {
+    );
+    if clears_manual && !discovered.is_empty() {
         backend.manual_models.clear();
-        if !backend
-            .default_model
-            .as_deref()
-            .is_some_and(|model| discovered.iter().any(|found| found.id == model))
-        {
-            backend.default_model = discovered.first().map(|model| model.id.clone());
-        }
+    }
+    if !discovered.is_empty()
+        && !backend.default_model.as_deref().is_some_and(|model| {
+            discovered.iter().any(|found| found.id == model)
+                || backend.manual_models.iter().any(|m| m.id == model)
+        })
+    {
+        backend.default_model = discovered.first().map(|model| model.id.clone());
     }
     backend.discovered_models = discovered;
 }
@@ -5641,6 +5652,97 @@ data: [DONE]
         assert_eq!(
             qualify_model_for_pi(AgentBackendKind::LmStudio, "studio/foo"),
             "lmstudio/studio/foo"
+        );
+    }
+
+    #[test]
+    fn apply_discovered_models_preserves_pi_manual_entries() {
+        // Pi's Settings card exposes a manual-models editor for custom
+        // entries the user wires up outside Pi's own `getAvailable()`
+        // (e.g. local Ollama via `~/.pi/agent/models.json`, internal
+        // proxies). The Codex peer review flagged that the previous
+        // implementation included `PiSdk` in the `manual_models.clear()`
+        // branch, so every refresh silently deleted user-entered rows.
+        // Pin the preservation contract here.
+        let mut pi = AgentBackendConfig::builtin_pi_sdk();
+        pi.manual_models = vec![AgentBackendModel {
+            id: "ollama/custom-llama".to_string(),
+            label: "Custom Llama".to_string(),
+            context_window_tokens: 64_000,
+            discovered: false,
+        }];
+        let discovered = vec![AgentBackendModel {
+            id: "openai/gpt-5.4".to_string(),
+            label: "GPT-5.4".to_string(),
+            context_window_tokens: 272_000,
+            discovered: true,
+        }];
+        apply_discovered_models(&mut pi, discovered);
+        assert_eq!(
+            pi.manual_models.len(),
+            1,
+            "Pi refresh must keep user-entered manual models",
+        );
+        assert_eq!(pi.manual_models[0].id, "ollama/custom-llama");
+        // Discovered list is replaced, as expected.
+        assert_eq!(pi.discovered_models.len(), 1);
+        assert_eq!(pi.discovered_models[0].id, "openai/gpt-5.4");
+    }
+
+    #[test]
+    fn apply_discovered_models_still_clears_manual_for_ollama_card() {
+        // Sister case: non-Pi auto-detected backends (Ollama, LM Studio,
+        // cloud OpenAI, Codex) keep the historical behaviour where
+        // discovery replaces manual entries. Without this guard the Pi
+        // fix above could regress into "no backend ever clears manuals".
+        let mut ollama = AgentBackendConfig::builtin_ollama();
+        ollama.manual_models = vec![AgentBackendModel {
+            id: "stale-manual".to_string(),
+            label: "Stale".to_string(),
+            context_window_tokens: 8_000,
+            discovered: false,
+        }];
+        let discovered = vec![AgentBackendModel {
+            id: "llama3".to_string(),
+            label: "Llama 3".to_string(),
+            context_window_tokens: 128_000,
+            discovered: true,
+        }];
+        apply_discovered_models(&mut ollama, discovered);
+        assert!(
+            ollama.manual_models.is_empty(),
+            "Ollama refresh continues to clear manuals — Pi is the exception"
+        );
+    }
+
+    #[test]
+    fn apply_discovered_models_default_model_honors_pi_manual_entries() {
+        // When the user's default_model points at a manual Pi row, the
+        // discovery pass must not overwrite that selection with a
+        // discovered model. Otherwise the default flips to whatever Pi
+        // happens to surface first the next time the Pi sidecar refreshes
+        // (which can change with auth status), silently re-routing the
+        // user's chats. Mirrors the discovered-models check that already
+        // protected non-Pi defaults.
+        let mut pi = AgentBackendConfig::builtin_pi_sdk();
+        pi.manual_models = vec![AgentBackendModel {
+            id: "ollama/custom-llama".to_string(),
+            label: "Custom Llama".to_string(),
+            context_window_tokens: 64_000,
+            discovered: false,
+        }];
+        pi.default_model = Some("ollama/custom-llama".to_string());
+        let discovered = vec![AgentBackendModel {
+            id: "openai/gpt-5.4".to_string(),
+            label: "GPT-5.4".to_string(),
+            context_window_tokens: 272_000,
+            discovered: true,
+        }];
+        apply_discovered_models(&mut pi, discovered);
+        assert_eq!(
+            pi.default_model.as_deref(),
+            Some("ollama/custom-llama"),
+            "manual default must survive a refresh that doesn't include it"
         );
     }
 

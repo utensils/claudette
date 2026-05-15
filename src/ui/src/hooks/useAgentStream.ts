@@ -64,7 +64,9 @@ function addDetail(
   if (formatted) details.push({ labelKey, value: formatted });
 }
 
-function parseCodexApproval(
+// Exported only for unit tests — keeps the parsing logic verifiable
+// without standing up the full agent stream hook.
+export function parseCodexApproval(
   sessionId: string,
   toolUseId: string,
   toolName: string,
@@ -95,6 +97,16 @@ function parseCodexApproval(
       "path",
       firstApprovalDetailString(input, ["path", "filePath", "grantRoot"]),
     );
+    // Pi's sidecar tools (`write`, `edit`) populate these fields on the
+    // approval payload. Codex's own file-change approvals leave them
+    // undefined, so the `addDetail` helper (which drops empty values)
+    // keeps the card visually identical for Codex while finally
+    // showing Pi users what they're approving. Order matters here:
+    // operation first so the reader knows whether they're looking at a
+    // create or an edit before reading the content.
+    addDetail(details, "operation", input.operation);
+    addDetail(details, "oldText", input.oldText);
+    addDetail(details, "newText", input.newText);
     addDetail(details, "reason", input.reason);
     return {
       ...baseApproval,
