@@ -5,10 +5,6 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const appStore = vi.hoisted(() => ({
-  claudetteTerminalEnabled: false,
-  setClaudetteTerminalEnabled: vi.fn((next: boolean) => {
-    appStore.claudetteTerminalEnabled = next;
-  }),
   usageInsightsEnabled: false,
   setUsageInsightsEnabled: vi.fn((next: boolean) => {
     appStore.usageInsightsEnabled = next;

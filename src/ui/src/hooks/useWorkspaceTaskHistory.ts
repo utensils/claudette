@@ -158,12 +158,15 @@ export function useWorkspaceTaskHistory(
 
   const remoteConnectionId = workspace?.remote_connection_id ?? null;
 
-  // Optimistic-fork placeholder selected — backend has no row for
-  // this id so `list_chat_sessions` returns "Workspace not found".
-  // Skip the load; the hook re-fires against the real workspace id
-  // once `commitPendingFork` swaps the selection.
-  const isPendingFork = useAppStore((s) =>
-    workspaceId ? !!s.pendingForks[workspaceId] : false,
+  // Optimistic-fork OR optimistic-create placeholder selected —
+  // backend has no row for this id so `list_chat_sessions` returns
+  // "Workspace not found". Skip the load; the hook re-fires against
+  // the real workspace id once `commitPendingFork` /
+  // `commitPendingCreate` swaps the selection.
+  const isPendingPlaceholder = useAppStore((s) =>
+    workspaceId
+      ? !!s.pendingForks[workspaceId] || !!s.pendingCreates[workspaceId]
+      : false,
   );
 
   useEffect(() => {
@@ -171,7 +174,7 @@ export function useWorkspaceTaskHistory(
     setFetchedSessions([]);
     setTurnsBySession({});
 
-    if (!workspaceId || !historyEnabled || isPendingFork) {
+    if (!workspaceId || !historyEnabled || isPendingPlaceholder) {
       setLoadingSessions(false);
       return;
     }
@@ -192,7 +195,7 @@ export function useWorkspaceTaskHistory(
     return () => {
       cancelled = true;
     };
-  }, [workspaceId, remoteConnectionId, historyEnabled, isPendingFork]);
+  }, [workspaceId, remoteConnectionId, historyEnabled, isPendingPlaceholder]);
 
   const sessions = useMemo(
     () => mergeSessions(fetchedSessions, storeSessions),

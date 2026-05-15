@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { useAppStore } from "../useAppStore";
+import { findPendingPlaceholderForCreatedWorkspace } from "./workspacesSlice";
 import type { Workspace } from "../../types/workspace";
 
 function makeWorkspace(overrides: Partial<Workspace> = {}): Workspace {
@@ -349,5 +350,269 @@ describe("workspacesSlice pendingFork lifecycle", () => {
     expect(state.selectedWorkspaceId).toBe("ws-source");
     expect(state.pendingForks["pending-fork-abc"]).toBeUndefined();
     expect(state.workspaceEnvironment["pending-fork-abc"]).toBeUndefined();
+  });
+});
+
+describe("workspacesSlice pendingCreate lifecycle", () => {
+  beforeEach(() => {
+    useAppStore.setState({
+      workspaces: [],
+      selectedWorkspaceId: null,
+      workspaceEnvironment: {},
+      pendingCreates: {},
+      diffSelectionByWorkspace: {},
+      diffSelectedFile: null,
+      diffSelectedLayer: null,
+    });
+  });
+
+  function makePlaceholder(repoId: string): Workspace {
+    return makeWorkspace({
+      id: "pending-create-abc",
+      repository_id: repoId,
+      name: "lemur-snow",
+      branch_name: "",
+      worktree_path: null,
+      sort_order: Number.MAX_SAFE_INTEGER,
+    });
+  }
+
+  it("beginPendingCreate inserts the placeholder, selects it, and seeds env state to preparing", () => {
+    useAppStore.getState().beginPendingCreate(makePlaceholder("repo-1"));
+    const state = useAppStore.getState();
+    expect(state.workspaces.map((w) => w.id)).toEqual(["pending-create-abc"]);
+    expect(state.selectedWorkspaceId).toBe("pending-create-abc");
+    expect(state.pendingCreates["pending-create-abc"]).toBe("repo-1");
+    const env = state.workspaceEnvironment["pending-create-abc"];
+    expect(env?.status).toBe("preparing");
+    expect(env?.started_at).toBeTypeOf("number");
+  });
+
+  it("commitPendingCreate swaps placeholder for real, migrates env state, moves selection", () => {
+    useAppStore.getState().beginPendingCreate(makePlaceholder("repo-1"));
+    const real = makeWorkspace({
+      id: "ws-real",
+      repository_id: "repo-1",
+      name: "lemur-snow",
+    });
+    useAppStore.getState().commitPendingCreate("pending-create-abc", real);
+    const state = useAppStore.getState();
+    expect(state.workspaces.map((w) => w.id)).toEqual(["ws-real"]);
+    expect(state.selectedWorkspaceId).toBe("ws-real");
+    expect(state.pendingCreates["pending-create-abc"]).toBeUndefined();
+    expect(state.workspaceEnvironment["pending-create-abc"]).toBeUndefined();
+    // Placeholder's "preparing" state migrates to the real id so the
+    // chat composer / sidebar stay in their loading state until the
+    // env-prep hook transitions it to "ready".
+    expect(state.workspaceEnvironment["ws-real"]?.status).toBe("preparing");
+  });
+
+  it("commitPendingCreate dedupes when workspaces-changed already added the real row", () => {
+    // Race: backend emits `workspaces-changed` before the IPC
+    // response resolves, so App.tsx's listener inserts the real row
+    // first. Commit must not double-add.
+    useAppStore.getState().beginPendingCreate(makePlaceholder("repo-1"));
+    const real = makeWorkspace({ id: "ws-real", repository_id: "repo-1" });
+    useAppStore.getState().addWorkspace(real);
+    useAppStore.getState().commitPendingCreate("pending-create-abc", real);
+    const ids = useAppStore.getState().workspaces.map((w) => w.id);
+    expect(ids).toEqual(["ws-real"]);
+  });
+
+  it("commitPendingCreate leaves selection alone if user navigated away mid-create", () => {
+    useAppStore.getState().addWorkspace(
+      makeWorkspace({ id: "ws-other", repository_id: "repo-2" }),
+    );
+    useAppStore.getState().beginPendingCreate(makePlaceholder("repo-1"));
+    useAppStore.getState().selectWorkspace("ws-other");
+    useAppStore.getState().commitPendingCreate(
+      "pending-create-abc",
+      makeWorkspace({ id: "ws-real" }),
+    );
+    expect(useAppStore.getState().selectedWorkspaceId).toBe("ws-other");
+  });
+
+  it("cancelPendingCreate drops placeholder, env state, and restores selection", () => {
+    useAppStore.getState().beginPendingCreate(makePlaceholder("repo-1"));
+    useAppStore.getState().cancelPendingCreate("pending-create-abc", null);
+    const state = useAppStore.getState();
+    expect(state.workspaces).toEqual([]);
+    expect(state.selectedWorkspaceId).toBeNull();
+    expect(state.pendingCreates["pending-create-abc"]).toBeUndefined();
+    expect(state.workspaceEnvironment["pending-create-abc"]).toBeUndefined();
+  });
+});
+
+describe("findPendingPlaceholderForCreatedWorkspace", () => {
+  function placeholder(id: string, repoId: string, name: string): Workspace {
+    return makeWorkspace({
+      id,
+      repository_id: repoId,
+      name,
+      branch_name: "",
+      worktree_path: null,
+    });
+  }
+
+  it("returns null when no placeholder exists for the repo", () => {
+    const match = findPendingPlaceholderForCreatedWorkspace({
+      workspaces: [
+        placeholder("pending-create-1", "repo-1", "lemur-snow"),
+      ],
+      pendingCreates: { "pending-create-1": "repo-1" },
+      pendingForks: {},
+      real: makeWorkspace({ id: "ws-real", repository_id: "repo-2" }),
+    });
+    expect(match).toBeNull();
+  });
+
+  it("matches a pending create by repo + slug", () => {
+    const match = findPendingPlaceholderForCreatedWorkspace({
+      workspaces: [
+        placeholder("pending-create-1", "repo-1", "lemur-snow"),
+      ],
+      pendingCreates: { "pending-create-1": "repo-1" },
+      pendingForks: {},
+      real: makeWorkspace({
+        id: "ws-real",
+        repository_id: "repo-1",
+        name: "lemur-snow",
+      }),
+    });
+    expect(match).toEqual({
+      placeholderId: "pending-create-1",
+      from: "create",
+    });
+  });
+
+  it("matches a single in-flight fork when allocator added a -N suffix", () => {
+    // Fork-of-fork-of-fork: allocator may produce `<source>-fork-2`
+    // when `<source>-fork` already exists. The placeholder always uses
+    // `<source>-fork`. Allocator-suffix match keeps the swap working.
+    const match = findPendingPlaceholderForCreatedWorkspace({
+      workspaces: [
+        placeholder("pending-fork-1", "repo-1", "main-fork"),
+      ],
+      pendingCreates: {},
+      pendingForks: { "pending-fork-1": "ws-source" },
+      real: makeWorkspace({
+        id: "ws-real",
+        repository_id: "repo-1",
+        name: "main-fork-2",
+      }),
+    });
+    expect(match).toEqual({
+      placeholderId: "pending-fork-1",
+      from: "fork",
+    });
+  });
+
+  it("refuses the fallback when the real name isn't an allocator-suffix variant of the placeholder", () => {
+    // Concurrent CLI / IPC create lands while a placeholder is in
+    // flight, same repo, unrelated name. The pre-fix heuristic would
+    // swap the placeholder to the unrelated workspace and steal the
+    // user's selection. With the allocator-suffix constraint, the
+    // real name `c-fork` is not a suffix variant of `main-fork`, so
+    // we leave the placeholder alone and let the IPC return commit it.
+    const match = findPendingPlaceholderForCreatedWorkspace({
+      workspaces: [
+        placeholder("pending-fork-1", "repo-1", "main-fork"),
+      ],
+      pendingCreates: {},
+      pendingForks: { "pending-fork-1": "ws-source" },
+      real: makeWorkspace({
+        id: "ws-real",
+        repository_id: "repo-1",
+        name: "c-fork",
+      }),
+    });
+    expect(match).toBeNull();
+  });
+
+  it("refuses a suffix-shaped name that isn't a numeric allocator variant", () => {
+    // `main-fork-bug` shares the `<placeholder>-` prefix but the
+    // suffix isn't a positive integer — that's a human-chosen name,
+    // not an allocator-suffix collision. Must not match.
+    const match = findPendingPlaceholderForCreatedWorkspace({
+      workspaces: [
+        placeholder("pending-fork-1", "repo-1", "main-fork"),
+      ],
+      pendingCreates: {},
+      pendingForks: { "pending-fork-1": "ws-source" },
+      real: makeWorkspace({
+        id: "ws-real",
+        repository_id: "repo-1",
+        name: "main-fork-bug",
+      }),
+    });
+    expect(match).toBeNull();
+  });
+
+  it("refuses suffixes the allocator never emits (-0, -1, -01)", () => {
+    // `workspace_alloc.rs` starts at attempt+1=2 — `-0` and `-1`
+    // can only come from manual renames or an unrelated workspace.
+    // Match them and we'd false-swap a real `<placeholder>-1` into
+    // the optimistic placeholder slot, hijacking the user's
+    // selection. Same for leading-zero variants — the allocator's
+    // `format!("...-{}", n)` never pads.
+    for (const badSuffix of ["main-fork-0", "main-fork-1", "main-fork-01"]) {
+      const match = findPendingPlaceholderForCreatedWorkspace({
+        workspaces: [
+          placeholder("pending-fork-1", "repo-1", "main-fork"),
+        ],
+        pendingCreates: {},
+        pendingForks: { "pending-fork-1": "ws-source" },
+        real: makeWorkspace({
+          id: "ws-real",
+          repository_id: "repo-1",
+          name: badSuffix,
+        }),
+      });
+      expect(match, `suffix ${badSuffix} must NOT match`).toBeNull();
+    }
+  });
+
+  it("refuses the fallback when multiple placeholders are in flight", () => {
+    // Two concurrent forks against the same repo: even an
+    // allocator-suffix match is ambiguous because we can't tell which
+    // placeholder the suffix-bearing name resolves to. Skip the eager
+    // swap; the IPC return handler will commit them in order.
+    const match = findPendingPlaceholderForCreatedWorkspace({
+      workspaces: [
+        placeholder("pending-fork-1", "repo-1", "a-fork"),
+        placeholder("pending-fork-2", "repo-1", "a-fork"),
+      ],
+      pendingCreates: {},
+      pendingForks: {
+        "pending-fork-1": "ws-a",
+        "pending-fork-2": "ws-a",
+      },
+      real: makeWorkspace({
+        id: "ws-real",
+        repository_id: "repo-1",
+        name: "a-fork-2",
+      }),
+    });
+    expect(match).toBeNull();
+  });
+
+  it("prefers an exact name match over the single-placeholder fallback", () => {
+    const match = findPendingPlaceholderForCreatedWorkspace({
+      workspaces: [
+        placeholder("pending-create-1", "repo-1", "lemur-snow"),
+        placeholder("pending-fork-1", "repo-1", "anything"),
+      ],
+      pendingCreates: { "pending-create-1": "repo-1" },
+      pendingForks: { "pending-fork-1": "ws-source" },
+      real: makeWorkspace({
+        id: "ws-real",
+        repository_id: "repo-1",
+        name: "lemur-snow",
+      }),
+    });
+    expect(match).toEqual({
+      placeholderId: "pending-create-1",
+      from: "create",
+    });
   });
 });

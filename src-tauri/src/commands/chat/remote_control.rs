@@ -443,17 +443,16 @@ async fn ensure_persistent_session_for_remote_control(
     let resolved_env = {
         // Snapshot — see `plugins_snapshot` doc.
         let registry = state.plugins_snapshot().await;
-        let progress = crate::commands::env::TauriEnvProgressSink::new(
-            app.clone(),
-            ws_info_for_env.id.clone(),
-        );
-        claudette::env_provider::resolve_with_registry_and_progress(
+        let (progress, output) =
+            crate::commands::env::make_env_sinks(app.clone(), ws_info_for_env.id.clone());
+        claudette::env_provider::resolve_with_registry_streaming(
             &registry,
             &state.env_cache,
             std::path::Path::new(worktree_path),
             &ws_info_for_env,
             &disabled_env_providers,
             Some(&progress),
+            Some(output),
         )
         .await
     };

@@ -25,6 +25,7 @@
   "copy_agent_output_aria": "Copy agent output",
   "fork_workspace": "Fork workspace at this turn",
   "preparing_fork_from": "Preparing fork from {{name}}…",
+  "preparing_workspace_in": "Preparing workspace in {{repo}}…",
   "rollback_turn": "Roll back to before this turn",
   "remove_attachment": "Remove",
   "composer_placeholder_idle": "Send a message...",

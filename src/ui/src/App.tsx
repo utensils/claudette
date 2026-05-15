@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { getVersion } from "@tauri-apps/api/app";
 import { useAppStore } from "./stores/useAppStore";
+import { findPendingPlaceholderForCreatedWorkspace } from "./stores/slices/workspacesSlice";
 import { loadInitialData, getAppSetting, setAppSetting, getHostEnvFlags, listRemoteConnections, listDiscoveredServers, getLocalServerStatus, detectInstalledApps, listSystemFonts, deleteTerminalTab, listAppSettingsWithPrefix, listAgentBackends, autoDetectAgentBackends, refreshAgentBackendModels, bootOk } from "./services/tauri";
 import { applyTheme, applyUserFonts, loadAllThemes, findTheme, cacheThemePreference, getThemeDataAttr } from "./utils/theme";
 import { DEFAULT_THEME_ID, DEFAULT_LIGHT_THEME_ID } from "./styles/themes";
@@ -348,7 +349,11 @@ function App() {
       .then((val) => { if (val === "true") setUsageInsightsEnabled(true); })
       .catch(() => {});
     getAppSetting("claudette_terminal_enabled")
-      .then((val) => { if (val === "true") setClaudetteTerminalEnabled(true); })
+      .then((val) => {
+        // Default ON: only an explicit "false" disables. Absent / any other
+        // value leaves the store at its `true` initial value.
+        if (val === "false") setClaudetteTerminalEnabled(false);
+      })
       .catch(() => {});
     getAppSetting("show_sidebar_running_commands")
       .then((val) => { if (val === "true") setShowSidebarRunningCommands(true); })
@@ -760,9 +765,43 @@ function App() {
       // `!= null` or truthy) doesn't trip on `undefined`. All
       // `workspaces-changed` events come from local ops by definition
       // (the WS server doesn't emit them), so null is correct.
+      const stamped = { ...workspace, remote_connection_id: null };
+
+      // Untangle the optimistic-create / optimistic-fork placeholder
+      // before adding the real row. Without this swap the user can sit
+      // on a `pending-create-*` / `pending-fork-*` id while the backend
+      // is already writing to terminal tabs and workspace_terminal_output
+      // files under the real id — TerminalPanel queries by selection,
+      // finds nothing for the placeholder, and the env-provider output
+      // is invisible during the long resolve window the placeholder
+      // exists to cover.
+      if (kind === "created") {
+        const match = findPendingPlaceholderForCreatedWorkspace({
+          workspaces: store.workspaces,
+          pendingCreates: store.pendingCreates,
+          pendingForks: store.pendingForks,
+          real: stamped,
+        });
+        if (match) {
+          if (match.from === "create") {
+            store.commitPendingCreate(match.placeholderId, stamped);
+          } else {
+            store.commitPendingFork(match.placeholderId, stamped);
+          }
+          return;
+        }
+      }
+
       // `addWorkspace` is idempotent by id, so this safely handles both
       // new workspaces and re-emitted updates without duplicating.
-      store.addWorkspace({ ...workspace, remote_connection_id: null });
+      // Preparing state is seeded by the backend via a
+      // `workspace_env_progress (started)` event emitted at the start
+      // of `create_workspace_inner` — handled by the progress listener
+      // in `useWorkspaceEnvironmentPreparation` — so the no-placeholder
+      // IPC/CLI create path doesn't expose an unprimed worktree, and
+      // the fork path (which doesn't run a warmup) doesn't get stranded
+      // in a permanent preparing state.
+      store.addWorkspace(stamped);
     });
 
     // Reflect what the agent actually used into the input bar after every

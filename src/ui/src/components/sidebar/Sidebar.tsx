@@ -183,9 +183,16 @@ export const Sidebar = memo(function Sidebar() {
   const archivingRef = useRef<Set<string>>(new Set());
   const restoringRef = useRef<Set<string>>(new Set());
   // Store-backed optimistic-row state — the orchestrator
-  // (`createWorkspaceOrchestrated`) writes `creatingWorkspaceRepoId` so
-  // every caller (welcome card, project-scoped CTA, Cmd+Shift+N hotkey,
-  // and the inline `+` button below) lights up the same placeholder row.
+  // (`createWorkspaceOrchestrated`) writes `creatingWorkspaceRepoId`
+  // for the brief window between the user click and
+  // `generateWorkspaceName` returning. As soon as the slug is in
+  // hand the orchestrator clears this flag and switches to the
+  // optimistic placeholder-workspace pattern (`pendingCreates`); the
+  // placeholder workspace itself becomes the spinner row inside the
+  // repo group's normal `workspaces` list. So this flag only ever
+  // drives the very-brief pre-slug indicator — typically <100ms —
+  // and any caller that triggers a create still sees an
+  // instantaneous "something is happening" affordance.
   const creatingWorkspaceRepoId = useAppStore((s) => s.creatingWorkspaceRepoId);
   const creatingWorkspace = creatingWorkspaceRepoId
     ? { repoId: creatingWorkspaceRepoId }
@@ -222,13 +229,22 @@ export const Sidebar = memo(function Sidebar() {
   // same slug-generate → createWorkspace → expand-repo → setup-script
   // sequence. The orchestrator owns the optimistic-row state, the
   // in-flight latch, and the system-message posting; we only need to
-  // surface the failure as a user-visible alert. `selectOnCreate: false`
-  // matches the design of the option (see `useCreateWorkspace.ts`): the
-  // sidebar already selects on row click, so the create flow doesn't
-  // need to navigate away from whatever the user was looking at.
+  // surface the failure as a user-visible alert.
+  //
+  // `selectOnCreate` defaults to `true`. The previous explicit
+  // `false` here surfaced as a duplicate "Preparing workspace
+  // environment…" row in the sidebar: skipping `selectOnCreate`'s
+  // branch in `useCreateWorkspace` also skipped the
+  // `setCreatingWorkspaceRepoId(null)` call that clears the brief
+  // pre-slug indicator. The flag stayed set throughout the IPC
+  // round-trip while the backend's early `workspaces-changed`
+  // emit added the real workspace row alongside it — two rows
+  // visible for the entire create window. Letting the orchestrator
+  // navigate to the new workspace is fine because we want the user
+  // to land on the freshly created workspace anyway.
   const handleCreateWorkspace = useCallback(async (repoId: string) => {
     try {
-      await createWorkspaceOrchestrated(repoId, { selectOnCreate: false });
+      await createWorkspaceOrchestrated(repoId);
     } catch (e) {
       alert(
         `Failed to create workspace: ${e instanceof Error ? e.message : String(e)}`,

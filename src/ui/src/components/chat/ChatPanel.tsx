@@ -243,6 +243,28 @@ export function ChatPanel() {
     return s.workspaces.find((w) => w.id === sourceId)?.name ?? null;
   });
 
+  // Sibling of `pendingForkSourceName` for the optimistic-create
+  // placeholder. Resolves the repo's display name so the placard
+  // reads "Preparing workspace in <repo>…" — gives the user the
+  // same "here's what's happening" affordance the fork case has,
+  // without exposing the auto-generated slug (the slug is also
+  // visible in the placeholder's sidebar row, so doubling it here
+  // is noise).
+  const pendingCreateRepoName = useAppStore((s) => {
+    if (!s.selectedWorkspaceId) return null;
+    const repoId = s.pendingCreates[s.selectedWorkspaceId];
+    if (!repoId) return null;
+    return s.repositories.find((r) => r.id === repoId)?.name ?? null;
+  });
+  // The placeholder workspace's own name (the generated slug). Shown
+  // as a secondary line in the placard so the user knows which row
+  // in the sidebar the placard corresponds to.
+  const pendingCreateWorkspaceName = useAppStore((s) => {
+    if (!s.selectedWorkspaceId) return null;
+    if (!s.pendingCreates[s.selectedWorkspaceId]) return null;
+    return s.workspaces.find((w) => w.id === s.selectedWorkspaceId)?.name ?? null;
+  });
+
   // Counts feeding the "all tabs closed" empty state. Each selector is
   // intentionally a `.length || 0` so the subscribed value is a primitive —
   // returning the array would re-fire on every reference change.
@@ -1563,11 +1585,35 @@ export function ChatPanel() {
           "Workspace not found" and the tab strip would render empty
           anyway. Suppressing it keeps the placard centered cleanly and
           stops the console-error spam during the fork window. */}
-      {selectedWorkspaceId && !pendingForkSourceName && (
-        <SessionTabs workspaceId={selectedWorkspaceId} />
-      )}
+      {selectedWorkspaceId &&
+        !pendingForkSourceName &&
+        !pendingCreateWorkspaceName && (
+          <SessionTabs workspaceId={selectedWorkspaceId} />
+        )}
 
-      {pendingForkSourceName ? (
+      {pendingCreateWorkspaceName ? (
+        // Optimistic-create placeholder: the user clicked New
+        // Workspace, we generated a slug, inserted a placeholder
+        // row into the store, selected it, and are now awaiting
+        // `createWorkspace` to return. Same shape as the fork
+        // placard below — render a static placard with the env
+        // console mounted against the placeholder id so any output
+        // buffered against it (host.console heartbeats from
+        // env-dotenv, etc.) is visible during the create window.
+        // After commit, the placard disappears and the regular chat
+        // panel takes over for the real workspace.
+        <div className={styles.preparingFork} role="status" aria-live="polite">
+          <LoaderCircle size={20} className={styles.preparingForkSpinner} />
+          <div className={styles.preparingForkText}>
+            {t("preparing_workspace_in", "Preparing workspace in {{repo}}…", {
+              repo: pendingCreateRepoName ?? "this repository",
+            })}
+            <div className={styles.preparingForkSub}>
+              {pendingCreateWorkspaceName}
+            </div>
+          </div>
+        </div>
+      ) : pendingForkSourceName ? (
         // Optimistic-fork placeholder: the user clicked Fork from a
         // checkpoint, we inserted a placeholder workspace into the
         // store, selected it, and are now awaiting
