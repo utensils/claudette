@@ -24,17 +24,13 @@ function usage(partial: Partial<ClaudeCodeUsage["usage"]>): ClaudeCodeUsage {
 
 describe("selectUsageBucket", () => {
   it("returns null when no limits are present", () => {
-    const bucket = selectUsageBucket({
-      usage: usage({}),
-      selectedModel: "opus",
-    });
+    const bucket = selectUsageBucket({ usage: usage({}) });
     expect(bucket).toBeNull();
   });
 
   it("returns the single limit when only one is set", () => {
     const bucket = selectUsageBucket({
       usage: usage({ five_hour: limit(42) }),
-      selectedModel: "opus",
     });
     expect(bucket).not.toBeNull();
     expect(bucket?.utilization).toBe(42);
@@ -50,7 +46,6 @@ describe("selectUsageBucket", () => {
         seven_day_sonnet: limit(80),
         seven_day_opus: limit(20),
       }),
-      selectedModel: "sonnet",
     });
     expect(bucket?.label).toBe("Week (Sonnet)");
     expect(bucket?.utilization).toBe(80);
@@ -60,7 +55,6 @@ describe("selectUsageBucket", () => {
   it("marks exhausted at >= 100", () => {
     const bucket = selectUsageBucket({
       usage: usage({ five_hour: limit(100) }),
-      selectedModel: "opus",
     });
     expect(bucket?.exhausted).toBe(true);
   });
@@ -68,7 +62,6 @@ describe("selectUsageBucket", () => {
   it("does not mark exhausted at 99", () => {
     const bucket = selectUsageBucket({
       usage: usage({ five_hour: limit(99) }),
-      selectedModel: "opus",
     });
     expect(bucket?.exhausted).toBe(false);
   });
@@ -79,7 +72,6 @@ describe("selectUsageBucket", () => {
         five_hour: limit(20, "2026-07-01T12:00:00Z"),
         seven_day: limit(70, "2026-07-08T00:00:00Z"),
       }),
-      selectedModel: "opus",
     });
     expect(bucket?.resetsAt).toBe("2026-07-08T00:00:00Z");
   });

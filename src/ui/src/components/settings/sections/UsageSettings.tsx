@@ -7,6 +7,7 @@ import {
   openUsageSettings,
 } from "../../../services/tauri";
 import type { UsageLimit, ExtraUsage } from "../../../types/usage";
+import { formatResetIn } from "../../../utils/usageReset";
 import {
   cleanClaudeAuthError,
   isClaudeAuthError,
@@ -18,26 +19,6 @@ function barColor(pct: number): string {
   if (pct >= 85) return "var(--status-stopped)";
   if (pct >= 60) return "var(--context-meter-warn)";
   return "var(--accent-primary)";
-}
-
-function formatResetTime(resetsAt: string | number): string {
-  let resetMs: number;
-  if (typeof resetsAt === "string") {
-    resetMs = new Date(resetsAt).getTime();
-  } else {
-    resetMs = resetsAt < 1e12 ? resetsAt * 1000 : resetsAt;
-  }
-  const diffSec = (resetMs - Date.now()) / 1000;
-  if (diffSec <= 0) return "resetting now";
-  const hours = Math.floor(diffSec / 3600);
-  const minutes = Math.floor((diffSec % 3600) / 60);
-  if (hours > 24) {
-    const days = Math.floor(hours / 24);
-    const remHours = hours % 24;
-    return `resets in ${days}d ${remHours}h`;
-  }
-  if (hours > 0) return `resets in ${hours}h ${minutes}m`;
-  return `resets in ${minutes}m`;
 }
 
 function formatTimestamp(ms: number): string {
@@ -81,7 +62,7 @@ function UsageBar({
           style={{ width: `${pct}%`, background: color }}
         />
       </div>
-      <div className={styles.usageReset}>{formatResetTime(limit.resets_at)}</div>
+      <div className={styles.usageReset}>{formatResetIn(limit.resets_at)}</div>
     </div>
   );
 }

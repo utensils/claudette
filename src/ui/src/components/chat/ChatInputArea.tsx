@@ -1365,7 +1365,7 @@ export function ChatInputArea({
           />
         </div>
         <div className={styles.inputControlsRight}>
-          <UsageIndicator sessionId={sessionId} />
+          <UsageIndicator />
           <SegmentedMeter
             ref={meterRef}
             sessionId={sessionId}

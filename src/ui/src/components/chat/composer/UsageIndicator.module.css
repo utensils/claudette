@@ -37,6 +37,7 @@
 .countdown {
   color: var(--status-stopped);
   font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 .exhausted .bar {
