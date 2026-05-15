@@ -4,6 +4,8 @@ use crate::env::WorkspaceEnv;
 use crate::env_provider::ResolvedEnv;
 
 use super::codex_app_server::CodexAppServerSession;
+#[cfg(feature = "pi-sdk")]
+use super::pi_sdk::PiSdkSession;
 use super::{
     AgentEvent, AgentSettings, ControlResponsePayload, FileAttachment, PersistentSession,
     TurnHandle,
@@ -14,6 +16,8 @@ use super::{
 pub enum AgentHarnessKind {
     ClaudeCode,
     CodexAppServer,
+    #[cfg(feature = "pi-sdk")]
+    PiSdk,
 }
 
 /// Capabilities that affect which chat/session features a harness can support
@@ -48,6 +52,18 @@ impl AgentHarnessCapabilities {
             remote_control: false,
             mcp_config: true,
             attachments: true,
+        }
+    }
+
+    #[cfg(feature = "pi-sdk")]
+    pub const fn pi_sdk() -> Self {
+        Self {
+            persistent_sessions: true,
+            steer_turn: true,
+            host_permission_prompts: true,
+            remote_control: false,
+            mcp_config: false,
+            attachments: false,
         }
     }
 }
@@ -100,6 +116,8 @@ impl ClaudeCodeHarness {
 pub enum AgentSession {
     ClaudeCode(PersistentSession),
     CodexAppServer(CodexAppServerSession),
+    #[cfg(feature = "pi-sdk")]
+    PiSdk(PiSdkSession),
 }
 
 impl AgentSession {
@@ -111,10 +129,17 @@ impl AgentSession {
         Self::CodexAppServer(session)
     }
 
+    #[cfg(feature = "pi-sdk")]
+    pub fn from_pi_sdk(session: PiSdkSession) -> Self {
+        Self::PiSdk(session)
+    }
+
     pub fn kind(&self) -> AgentHarnessKind {
         match self {
             Self::ClaudeCode(_) => AgentHarnessKind::ClaudeCode,
             Self::CodexAppServer(_) => AgentHarnessKind::CodexAppServer,
+            #[cfg(feature = "pi-sdk")]
+            Self::PiSdk(_) => AgentHarnessKind::PiSdk,
         }
     }
 
@@ -122,6 +147,8 @@ impl AgentSession {
         match self {
             Self::ClaudeCode(_) => AgentHarnessCapabilities::claude_code(),
             Self::CodexAppServer(_) => AgentHarnessCapabilities::codex_app_server(),
+            #[cfg(feature = "pi-sdk")]
+            Self::PiSdk(_) => AgentHarnessCapabilities::pi_sdk(),
         }
     }
 
@@ -129,6 +156,8 @@ impl AgentSession {
         match self {
             Self::ClaudeCode(session) => session.pid(),
             Self::CodexAppServer(session) => session.pid(),
+            #[cfg(feature = "pi-sdk")]
+            Self::PiSdk(session) => session.pid(),
         }
     }
 
@@ -145,6 +174,8 @@ impl AgentSession {
                     .await
             }
             Self::CodexAppServer(session) => session.send_turn(prompt, attachments).await,
+            #[cfg(feature = "pi-sdk")]
+            Self::PiSdk(session) => session.send_turn(prompt, attachments).await,
         }
     }
 
@@ -156,6 +187,8 @@ impl AgentSession {
         match self {
             Self::ClaudeCode(session) => session.steer_user_message(prompt, attachments).await,
             Self::CodexAppServer(session) => session.steer_turn(prompt, attachments).await,
+            #[cfg(feature = "pi-sdk")]
+            Self::PiSdk(session) => session.steer_turn(prompt, attachments).await,
         }
     }
 
@@ -163,6 +196,8 @@ impl AgentSession {
         match self {
             Self::ClaudeCode(session) => session.subscribe(),
             Self::CodexAppServer(session) => session.subscribe(),
+            #[cfg(feature = "pi-sdk")]
+            Self::PiSdk(session) => session.subscribe(),
         }
     }
 
@@ -176,6 +211,8 @@ impl AgentSession {
             Self::CodexAppServer(session) => {
                 session.send_control_response(request_id, response).await
             }
+            #[cfg(feature = "pi-sdk")]
+            Self::PiSdk(session) => session.send_control_response(request_id, response).await,
         }
     }
 
@@ -185,6 +222,8 @@ impl AgentSession {
             Self::CodexAppServer(_) => {
                 Err(format!("Codex app-server cannot stop task `{task_id}` yet"))
             }
+            #[cfg(feature = "pi-sdk")]
+            Self::PiSdk(_) => Err(format!("Pi SDK harness cannot stop task `{task_id}` yet")),
         }
     }
 
@@ -192,6 +231,8 @@ impl AgentSession {
         match self {
             Self::ClaudeCode(session) => super::process::stop_agent(session.pid()).await,
             Self::CodexAppServer(session) => session.interrupt_turn().await,
+            #[cfg(feature = "pi-sdk")]
+            Self::PiSdk(session) => session.interrupt_turn().await,
         }
     }
 
@@ -203,6 +244,10 @@ impl AgentSession {
             Self::ClaudeCode(session) => session.set_remote_control(enabled).await,
             Self::CodexAppServer(_) => {
                 Err("Codex app-server does not support Claude Remote Control".to_string())
+            }
+            #[cfg(feature = "pi-sdk")]
+            Self::PiSdk(_) => {
+                Err("Pi SDK harness does not support Claude Remote Control".to_string())
             }
         }
     }
@@ -243,10 +288,28 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "pi-sdk")]
+    #[test]
+    fn pi_sdk_capabilities_are_harness_specific() {
+        assert_eq!(
+            AgentHarnessCapabilities::pi_sdk(),
+            AgentHarnessCapabilities {
+                persistent_sessions: true,
+                steer_turn: true,
+                host_permission_prompts: true,
+                remote_control: false,
+                mcp_config: false,
+                attachments: false,
+            }
+        );
+    }
+
     #[test]
     fn agent_session_capabilities_stay_explicit_per_variant() {
         assert!(AgentHarnessCapabilities::claude_code().remote_control);
         assert!(!AgentHarnessCapabilities::codex_app_server().remote_control);
+        #[cfg(feature = "pi-sdk")]
+        assert!(!AgentHarnessCapabilities::pi_sdk().remote_control);
     }
 
     #[test]
@@ -260,5 +323,55 @@ mod tests {
             session.capabilities(),
             AgentHarnessCapabilities::codex_app_server()
         );
+    }
+
+    #[cfg(feature = "pi-sdk")]
+    #[test]
+    fn pi_agent_session_reports_native_kind_and_capabilities() {
+        let session = AgentSession::from_pi_sdk(PiSdkSession::new_for_test(5678));
+
+        assert_eq!(session.kind(), AgentHarnessKind::PiSdk);
+        assert_eq!(session.pid(), 5678);
+        assert_eq!(session.capabilities(), AgentHarnessCapabilities::pi_sdk());
+    }
+
+    /// The Pi sidecar exposes no host-side task-stop control today; the
+    /// dispatch must surface that explicitly so the chat layer can fall
+    /// back to interrupt-based teardown instead of waiting forever.
+    #[cfg(feature = "pi-sdk")]
+    #[tokio::test]
+    async fn pi_send_task_stop_returns_unsupported() {
+        let session = AgentSession::from_pi_sdk(PiSdkSession::new_for_test(1));
+        let err = session
+            .send_task_stop("task-xyz")
+            .await
+            .expect_err("Pi has no task-stop control");
+        assert!(err.contains("Pi SDK harness cannot stop task"));
+        assert!(err.contains("task-xyz"));
+    }
+
+    /// Claude Remote Control rides on the Claude CLI's bidirectional
+    /// control channel; the Pi sidecar has no equivalent surface, and
+    /// silently no-oping would leave the UI in a half-toggled state.
+    #[cfg(feature = "pi-sdk")]
+    #[tokio::test]
+    async fn pi_set_remote_control_returns_unsupported() {
+        let session = AgentSession::from_pi_sdk(PiSdkSession::new_for_test(2));
+        let err = session
+            .set_remote_control(true)
+            .await
+            .expect_err("Pi cannot toggle Remote Control");
+        assert!(err.contains("Pi SDK harness does not support Claude Remote Control"));
+    }
+
+    #[cfg(feature = "pi-sdk")]
+    #[test]
+    fn pi_subscribe_returns_live_receiver() {
+        // `subscribe()` is dispatched through the harness enum, so the
+        // Pi arm has to give the chat bridge a receiver wired to the
+        // sidecar's broadcast channel. Without that hookup the bridge
+        // would silently miss every stream event.
+        let session = AgentSession::from_pi_sdk(PiSdkSession::new_for_test(3));
+        let _rx = session.subscribe();
     }
 }

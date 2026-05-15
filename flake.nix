@@ -559,7 +559,7 @@
             commands = [
               {
                 name = "dev";
-                # `"$@"` forwards flags like --clean / --help to the script.
+                # `"$@"` forwards flags like --new / --clone / --clean / --help to the script.
                 # Without it the wrapper silently swallows args, so
                 # `dev --help` falls through to a no-arg launch.
                 command = ''exec ./scripts/dev.sh "$@"'';

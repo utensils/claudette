@@ -37,6 +37,10 @@ const appStore = vi.hoisted(() => ({
   claudeAuthFailure: null as { messageId: string | null; error: string } | null,
   setClaudeAuthFailure: vi.fn(),
   setResolvedClaudeAuthFailureMessageId: vi.fn(),
+  claudeAuthMethod: null as string | null,
+  setClaudeAuthMethod: vi.fn((method: string | null) => {
+    appStore.claudeAuthMethod = method;
+  }),
 }));
 
 const serviceMocks = vi.hoisted(() => ({
@@ -61,6 +65,63 @@ const serviceMocks = vi.hoisted(() => ({
     Promise.resolve({ ok: true, message: "OK", backends: [] }),
   ),
   launchCodexLogin: vi.fn(() => Promise.resolve()),
+  setAgentBackendRuntimeHarness: vi.fn(
+    (_id: string, _harness: unknown) => Promise.resolve([] as AgentBackendConfig[]),
+  ),
+  defaultHarnessForKind: (kind: AgentBackendConfig["kind"]) => {
+    switch (kind) {
+      case "anthropic":
+      case "custom_anthropic":
+      case "codex_subscription":
+      case "openai_api":
+      case "custom_openai":
+        return "claude_code" as const;
+      case "ollama":
+      case "lm_studio":
+        return "pi_sdk" as const;
+      case "codex_native":
+        return "codex_app_server" as const;
+      case "pi_sdk":
+        return "pi_sdk" as const;
+    }
+  },
+  availableHarnessesForKind: (kind: AgentBackendConfig["kind"]) => {
+    switch (kind) {
+      case "anthropic":
+      case "custom_anthropic":
+      case "codex_subscription":
+        return ["claude_code"] as const;
+      case "ollama":
+      case "lm_studio":
+        return ["pi_sdk", "claude_code"] as const;
+      case "openai_api":
+      case "custom_openai":
+        return ["claude_code", "pi_sdk"] as const;
+      case "codex_native":
+        return ["codex_app_server", "pi_sdk"] as const;
+      case "pi_sdk":
+        return ["pi_sdk"] as const;
+    }
+  },
+  effectiveHarness: (backend: AgentBackendConfig) => {
+    if (backend.runtime_harness) return backend.runtime_harness;
+    // Mirror of defaultHarnessForKind — small enough to inline.
+    switch (backend.kind) {
+      case "anthropic":
+      case "custom_anthropic":
+      case "codex_subscription":
+      case "openai_api":
+      case "custom_openai":
+        return "claude_code" as const;
+      case "ollama":
+      case "lm_studio":
+        return "pi_sdk" as const;
+      case "codex_native":
+        return "codex_app_server" as const;
+      case "pi_sdk":
+        return "pi_sdk" as const;
+    }
+  },
   getClaudeAuthStatus: vi.fn<() => Promise<ClaudeAuthStatus>>(() =>
     Promise.resolve({
       state: "signed_out",

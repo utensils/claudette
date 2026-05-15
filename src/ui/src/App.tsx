@@ -3,7 +3,7 @@ import { listen } from "@tauri-apps/api/event";
 import { getVersion } from "@tauri-apps/api/app";
 import { useAppStore } from "./stores/useAppStore";
 import { findPendingPlaceholderForCreatedWorkspace } from "./stores/slices/workspacesSlice";
-import { loadInitialData, getAppSetting, setAppSetting, getHostEnvFlags, listRemoteConnections, listDiscoveredServers, getLocalServerStatus, detectInstalledApps, listSystemFonts, deleteTerminalTab, listAppSettingsWithPrefix, listAgentBackends, autoDetectAgentBackends, refreshAgentBackendModels, bootOk } from "./services/tauri";
+import { loadInitialData, getAppSetting, setAppSetting, getHostEnvFlags, listRemoteConnections, listDiscoveredServers, getLocalServerStatus, detectInstalledApps, listSystemFonts, deleteTerminalTab, listAppSettingsWithPrefix, listAgentBackends, autoDetectAgentBackends, refreshAgentBackendModels, bootOk, getClaudeAuthStatus } from "./services/tauri";
 import { applyTheme, applyUserFonts, loadAllThemes, findTheme, cacheThemePreference, getThemeDataAttr } from "./utils/theme";
 import { DEFAULT_THEME_ID, DEFAULT_LIGHT_THEME_ID } from "./styles/themes";
 import type { ThemeDefinition } from "./types/theme";
@@ -84,10 +84,12 @@ function App() {
   const setEditorMinimapEnabled = useAppStore((s) => s.setEditorMinimapEnabled);
   const setDisable1mContext = useAppStore((s) => s.setDisable1mContext);
   const setAlternativeBackendsAvailable = useAppStore((s) => s.setAlternativeBackendsAvailable);
+  const setPiSdkAvailable = useAppStore((s) => s.setPiSdkAvailable);
   const setAlternativeBackendsEnabled = useAppStore((s) => s.setAlternativeBackendsEnabled);
   const setCodexEnabled = useAppStore((s) => s.setCodexEnabled);
   const setAgentBackends = useAppStore((s) => s.setAgentBackends);
   const setDefaultAgentBackendId = useAppStore((s) => s.setDefaultAgentBackendId);
+  const setClaudeAuthMethod = useAppStore((s) => s.setClaudeAuthMethod);
   // Read for the LM Studio polling effect below. We deliberately do
   // *not* subscribe to `agentBackends` here — the polling tick reads
   // the live list via `useAppStore.getState()` so we don't tear the
@@ -389,11 +391,12 @@ function App() {
         const flags =
           flagsResult.status === "fulfilled"
             ? flagsResult.value
-            : { alternative_backends_compiled: false, disable_1m_context: false };
+            : { alternative_backends_compiled: false, disable_1m_context: false, pi_sdk_compiled: false };
         if (flagsResult.status === "rejected") {
           console.error("Failed to load host environment flags:", flagsResult.reason);
         }
         setAlternativeBackendsAvailable(flags.alternative_backends_compiled);
+        setPiSdkAvailable(flags.pi_sdk_compiled);
         if (flags.disable_1m_context) setDisable1mContext(true);
         if (settingResult.status === "rejected") {
           console.error("Failed to load alternative backend setting:", settingResult.reason);
@@ -447,6 +450,23 @@ function App() {
         });
       })
       .catch(() => {});
+    // Seed the Claude auth method so the model picker can hide
+    // Pi/anthropic/* for OAuth subscription users on first paint. The
+    // probe is a single `claude auth status --json` call with a tight
+    // timeout, gated to startup; live updates come from
+    // ClaudeCodeAuthSetting when the user logs in/out from Settings.
+    //
+    // `quiet: true` keeps the missing-CLI dialog from firing on launch
+    // for users who don't have the Claude CLI installed — they should
+    // be able to use Pi or Codex without being prompted about Claude.
+    // `loggedIn ? authMethod : null` mirrors ClaudeCodeAuthSetting: an
+    // `auth_method` returned alongside `loggedIn: false` is meaningless
+    // history, not a current subscription state, so flatten it.
+    getClaudeAuthStatus(false, { quiet: true })
+      .then((status) =>
+        setClaudeAuthMethod(status.loggedIn ? status.authMethod : null),
+      )
+      .catch(() => setClaudeAuthMethod(null));
     getAppSetting("editor_git_gutter_base")
       .then((val) => {
         if (val === "merge_base") setEditorGitGutterBase("merge_base");
@@ -893,7 +913,7 @@ function App() {
       unlistenMissingCli.then((fn) => fn());
       unlistenMissingWorktree.then((fn) => fn());
     };
-  }, [setRepositories, setWorkspaces, setWorktreeBaseDir, setDefaultTerminalAppId, setDefaultBranches, setTerminalFontSize, setLastMessages, setRemoteConnections, setDiscoveredServers, setLocalServerRunning, setLocalServerConnectionString, setCurrentThemeId, setThemeMode, setThemeDark, setThemeLight, setUiFontSize, setFontFamilySans, setFontFamilyMono, setSystemFonts, setDetectedApps, setUsageInsightsEnabled, setClaudetteTerminalEnabled, setShowSidebarRunningCommands, setToolDisplayMode, setExtendedToolCallOutput, setPluginManagementEnabled, setClaudeRemoteControlEnabled, setCommunityRegistryEnabled, setAlternativeBackendsAvailable, setAlternativeBackendsEnabled, setCodexEnabled, setAgentBackends, setDefaultAgentBackendId, setEditorGitGutterBase, setEditorMinimapEnabled, setDisable1mContext, setAppVersion, setVoiceToggleHotkey, setVoiceHoldHotkey, setKeybindings, setManualWorkspaceOrderByRepo]);
+  }, [setRepositories, setWorkspaces, setWorktreeBaseDir, setDefaultTerminalAppId, setDefaultBranches, setTerminalFontSize, setLastMessages, setRemoteConnections, setDiscoveredServers, setLocalServerRunning, setLocalServerConnectionString, setCurrentThemeId, setThemeMode, setThemeDark, setThemeLight, setUiFontSize, setFontFamilySans, setFontFamilyMono, setSystemFonts, setDetectedApps, setUsageInsightsEnabled, setClaudetteTerminalEnabled, setShowSidebarRunningCommands, setToolDisplayMode, setExtendedToolCallOutput, setPluginManagementEnabled, setClaudeRemoteControlEnabled, setCommunityRegistryEnabled, setAlternativeBackendsAvailable, setPiSdkAvailable, setAlternativeBackendsEnabled, setCodexEnabled, setAgentBackends, setDefaultAgentBackendId, setClaudeAuthMethod, setEditorGitGutterBase, setEditorMinimapEnabled, setDisable1mContext, setAppVersion, setVoiceToggleHotkey, setVoiceHoldHotkey, setKeybindings, setManualWorkspaceOrderByRepo]);
 
   // Live freshness for LM Studio's `loaded_context_length`.
   //

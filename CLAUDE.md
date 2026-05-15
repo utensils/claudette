@@ -78,7 +78,7 @@ CI also enforces `bun install --frozen-lockfile` — do not modify `bun.lock` wi
 - **Async runtime**: Tokio for process management and git operations
 - **Data persistence**: SQLite via rusqlite (bundled)
 - **Git operations**: Shelling out to `git` via `tokio::process::Command` for worktree ops
-- **Agent integration**: Claude CLI subprocess with JSON streaming, bridged to frontend via Tauri events
+- **Agent integration**: Claude CLI subprocess with JSON streaming, bridged to frontend via Tauri events. The chat-send resolver dispatches on a per-backend `runtime_harness` (`AgentBackendConfig::effective_harness` in `src/agent_backend.rs`), not on `AgentBackendKind` directly — `kind` only declares which harnesses are valid; the user picks the active one in Settings > Models > Runtime. Ollama / LM Studio default to Pi, OpenAI cards to the Claude CLI gateway, Codex Native to the Codex app-server. Anthropic / Custom Anthropic / Codex Subscription are locked to Claude CLI so subscription OAuth tokens never reach Pi.
 - **Terminal emulation**: portable-pty (Rust) + xterm.js (frontend)
 - **IPC**: Tauri commands (`#[tauri::command]`) for request/response, Tauri events for streaming
 
@@ -94,10 +94,12 @@ Four crates in a Cargo workspace:
 | `claudette-cli` | `src-cli/` | Command-line client (`claudette` binary) that drives the running GUI over a local IPC socket. |
 
 Feature flags in `claudette-tauri`:
-- `default = ["server", "voice", "devtools"]`
+- `default = ["server", "voice", "devtools", "alternative-backends", "pi-sdk"]`
 - `voice` — pulls in `cpal` (audio capture), `candle-*` (Whisper inference), `tokenizers`, `rubato`, `hound`. Linux requires `libasound2-dev` (ALSA); headless builds drop it via `--no-default-features --features tauri/custom-protocol,server`.
 - `devtools` — enables Tauri devtools (`tauri/devtools`)
 - `server` — optional dep on `claudette-server`
+- `alternative-backends` — surfaces the user-facing alt-backend gate (Codex Native + the Pi runtime option on Ollama / LM Studio / OpenAI cards). Does not by itself compile the Pi sidecar into the binary; pairs with `pi-sdk` for that.
+- `pi-sdk` — compiles the Pi coding-agent harness (sidecar wrapper around `@earendil-works/pi-coding-agent`), bundles `binaries/claudette-pi-harness` + `binaries/pi/package.json`, and exposes the Pi card / Pi runtime option in Settings. Independent of `alternative-backends` — drop it (with `--no-default-features --features tauri/custom-protocol,server,voice,devtools,alternative-backends -c src-tauri/tauri.no-pi.conf.json`) to ship a Codex-Native-enabled build without Pi. The lib crate mirrors this flag (`claudette::pi-sdk`) and downstream `claudette-server` / `claudette-cli` set `default-features = false` on their `claudette` dep so workspace feature unification can't drag Pi back in.
 
 ### Frontend
 
@@ -124,7 +126,9 @@ src/
   migrations/           — versioned .sql files + MIGRATIONS registry
   git.rs                — async git worktree operations
   diff.rs               — diff parsing and git diff operations
-  agent.rs              — Claude CLI subprocess + JSON streaming
+  agent/                — agent runtime (module dir): Claude CLI subprocess + JSON streaming,
+                          plus alternative backends gated behind `alternative-backends`
+                          (`codex_app_server.rs`, `pi_sdk.rs`, `harness.rs` shared scaffolding)
   fork.rs               — session forking / checkpoint branching
   snapshot.rs           — workspace snapshots
   process.rs            — cross-platform process spawning helpers
@@ -157,6 +161,14 @@ plugins/                — bundled Lua plugins (compiled in via include_str!)
   env-mise/             — mise env activation
   env-dotenv/           — `.env` in-process parser
   env-nix-devshell/     — `nix print-dev-env` env activation
+src-pi-harness/         — TypeScript/Bun sidecar wrapping `@earendil-works/pi-coding-agent`.
+                          Compiled by `scripts/stage-pi-harness-sidecar.sh` into a single Bun
+                          executable at `src-tauri/binaries/claudette-pi-harness-<triple>` and
+                          shipped via Tauri `bundle.externalBin`. Glue lives in
+                          `src/agent/pi_sdk.rs`; only built/loaded when the
+                          `alternative-backends` feature is on.
+tests/                  — workspace-level Rust integration tests (e.g. `grants_enforcement.rs`
+                          covering the community-plugin granted_capabilities flow).
 ```
 
 ### Plugin system
@@ -201,8 +213,9 @@ If a behavior change is intentional, call it out plainly in the PR summary or re
 
 ### Dev launcher
 
-- **Use `./scripts/dev.sh`** (not bare `cargo tauri dev`). It probes free Vite + debug-eval ports (bases `14253` / `19432`), writes a per-PID discovery file at `${TMPDIR:-/tmp}/claudette-dev/<pid>.json` so `/claudette-debug` can find the right instance, stages the CLI sidecar via `scripts/stage-cli-sidecar.sh`, and on macOS adds `--runner scripts/macos-dev-app-runner.sh` so the build is wrapped in a signed `.app` bundle (using `src-tauri/Entitlements.plist`) — required for TCC to grant mic/speech permissions to Claudette rather than the terminal. Default features used: `devtools,server,voice` (override via `$CARGO_TAURI_FEATURES`).
+- **Use `./scripts/dev.sh`** (not bare `cargo tauri dev`). It probes free Vite + debug-eval ports (bases `14253` / `19432`), writes a per-PID discovery file at `${TMPDIR:-/tmp}/claudette-dev/<pid>.json` so `/claudette-debug` can find the right instance, stages the CLI sidecar via `scripts/stage-cli-sidecar.sh` (which also chains to `scripts/stage-pi-harness-sidecar.sh` for the Pi SDK sidecar), and on macOS adds `--runner scripts/macos-dev-app-runner.sh` so the build is wrapped in a signed `.app` bundle (using `src-tauri/Entitlements.plist`) — required for TCC to grant mic/speech permissions to Claudette rather than the terminal. The runner also mirrors the staged sidecars and Pi package metadata into the dev `.app`'s `Contents/MacOS/` and `Contents/Resources/binaries/pi/`, so `current_exe.parent()` resolution behaves the same way it does in release. Default features used: `devtools,server,voice,alternative-backends` (override via `$CARGO_TAURI_FEATURES`; `alternative-backends` is always appended).
 - Bare `cargo tauri dev` still works for non-voice changes but **does not** invoke the macOS runner, probe ports, or write the discovery file.
+- **Non-Nix contributors** use `mise` (`mise.toml` pins `rust = "1.94"`, `bun = "latest"`, `tauri-cli` from npm). `make setup` runs `mise install` + `bun install` + `cargo fetch`; `make run` invokes `cargo tauri dev --features devtools,server,alternative-backends`. On macOS, `mise.toml` force-sets `CC=/usr/bin/cc` and per-target Cargo linkers so transitive `-liconv`/`-lSystem` links succeed under `nix-darwin`'s `ld` — leave those env entries alone unless you're fixing them.
 
 ### macOS privacy-prompt contract
 

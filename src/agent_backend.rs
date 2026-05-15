@@ -9,6 +9,8 @@ pub enum AgentBackendKind {
     OpenAiApi,
     CodexSubscription,
     CodexNative,
+    #[cfg(feature = "pi-sdk")]
+    PiSdk,
     CustomAnthropic,
     #[serde(rename = "custom_openai")]
     CustomOpenAi,
@@ -45,6 +47,88 @@ impl AgentBackendKind {
             Self::OpenAiApi | Self::CodexSubscription | Self::CustomOpenAi | Self::LmStudio
         )
     }
+
+    /// The harness chosen for this kind when the backend config does
+    /// not pin an explicit `runtime_harness`. The default is the
+    /// dispatch the user gets out of the box; alternatives are listed
+    /// by `available_harnesses` and surfaced as a Runtime select on
+    /// the Settings → Models card.
+    pub fn default_harness(self) -> AgentBackendRuntimeHarness {
+        match self {
+            // Claude subscription / Anthropic-compatible local proxies
+            // stay on the Claude CLI by default — Pi has its own
+            // Anthropic provider that requires Pi-side credentials, and
+            // we explicitly do not route subscription OAuth through it.
+            Self::Anthropic | Self::CustomAnthropic | Self::CodexSubscription => {
+                AgentBackendRuntimeHarness::ClaudeCode
+            }
+            // Local model runtimes flip to Pi by default when the Pi
+            // harness is compiled in. Without it they fall back to the
+            // Claude-CLI proxy path, which is also the explicit
+            // fallback for users who turn Pi off in Settings.
+            #[cfg(feature = "pi-sdk")]
+            Self::Ollama | Self::LmStudio => AgentBackendRuntimeHarness::PiSdk,
+            #[cfg(not(feature = "pi-sdk"))]
+            Self::Ollama | Self::LmStudio => AgentBackendRuntimeHarness::ClaudeCode,
+            // Cloud OpenAI-compatible backends keep the gateway path by
+            // default; Pi is an opt-in.
+            Self::OpenAiApi | Self::CustomOpenAi => AgentBackendRuntimeHarness::ClaudeCode,
+            Self::CodexNative => AgentBackendRuntimeHarness::CodexAppServer,
+            #[cfg(feature = "pi-sdk")]
+            Self::PiSdk => AgentBackendRuntimeHarness::PiSdk,
+        }
+    }
+
+    /// When this backend routes through Pi, the prefix used to map a
+    /// raw model id (e.g. `"gpt-5.4"`, `"llama3"`) onto Pi's registry
+    /// (which keys models as `"<provider>/<modelId>"`). Returns `None`
+    /// for kinds that must not be exposed via Pi (subscription-OAuth
+    /// Anthropic flavors) and for the Pi card itself (whose model ids
+    /// are already provider-qualified). Only meaningful when the Pi
+    /// harness is compiled in — callers gate the lookup site too.
+    #[cfg(feature = "pi-sdk")]
+    pub fn pi_provider_prefix(self) -> Option<&'static str> {
+        match self {
+            Self::Ollama => Some("ollama"),
+            Self::LmStudio => Some("lmstudio"),
+            Self::OpenAiApi | Self::CustomOpenAi | Self::CodexNative => Some("openai"),
+            Self::Anthropic | Self::CustomAnthropic | Self::CodexSubscription | Self::PiSdk => None,
+        }
+    }
+
+    /// The harnesses the user is allowed to pick for a backend of this
+    /// kind. The first entry is the default. Pinning a value not in
+    /// this list is rejected by the resolver as defense-in-depth.
+    pub fn available_harnesses(self) -> &'static [AgentBackendRuntimeHarness] {
+        match self {
+            Self::Anthropic | Self::CustomAnthropic | Self::CodexSubscription => {
+                &[AgentBackendRuntimeHarness::ClaudeCode]
+            }
+            #[cfg(feature = "pi-sdk")]
+            Self::Ollama | Self::LmStudio => &[
+                AgentBackendRuntimeHarness::PiSdk,
+                AgentBackendRuntimeHarness::ClaudeCode,
+            ],
+            #[cfg(not(feature = "pi-sdk"))]
+            Self::Ollama | Self::LmStudio => &[AgentBackendRuntimeHarness::ClaudeCode],
+            #[cfg(feature = "pi-sdk")]
+            Self::OpenAiApi | Self::CustomOpenAi => &[
+                AgentBackendRuntimeHarness::ClaudeCode,
+                AgentBackendRuntimeHarness::PiSdk,
+            ],
+            #[cfg(not(feature = "pi-sdk"))]
+            Self::OpenAiApi | Self::CustomOpenAi => &[AgentBackendRuntimeHarness::ClaudeCode],
+            #[cfg(feature = "pi-sdk")]
+            Self::CodexNative => &[
+                AgentBackendRuntimeHarness::CodexAppServer,
+                AgentBackendRuntimeHarness::PiSdk,
+            ],
+            #[cfg(not(feature = "pi-sdk"))]
+            Self::CodexNative => &[AgentBackendRuntimeHarness::CodexAppServer],
+            #[cfg(feature = "pi-sdk")]
+            Self::PiSdk => &[AgentBackendRuntimeHarness::PiSdk],
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -53,6 +137,8 @@ pub enum AgentBackendRuntimeHarness {
     #[default]
     ClaudeCode,
     CodexAppServer,
+    #[cfg(feature = "pi-sdk")]
+    PiSdk,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -98,6 +184,18 @@ impl AgentBackendCapabilities {
             vision: false,
         }
     }
+
+    #[cfg(feature = "pi-sdk")]
+    pub fn pi_sdk() -> Self {
+        Self {
+            thinking: true,
+            effort: true,
+            fast_mode: false,
+            one_m_context: false,
+            tools: true,
+            vision: false,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -123,6 +221,27 @@ pub struct AgentBackendConfig {
     pub context_window_default: u32,
     pub model_discovery: bool,
     pub has_secret: bool,
+    /// User override for which runtime harness handles this backend.
+    /// `None` means use [`AgentBackendKind::default_harness`]. Persisted
+    /// as JSON inside `app_settings`; the `serde(default)` keeps older
+    /// configs forward-compatible without a migration.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime_harness: Option<AgentBackendRuntimeHarness>,
+}
+
+impl AgentBackendConfig {
+    /// Effective harness for this config: the persisted override when
+    /// set and allowed for the kind, otherwise the kind's default.
+    /// Defense-in-depth: a value that escapes `available_harnesses`
+    /// (corrupted store, hand-edited DB, downgrade) is treated as
+    /// absent so the resolver never dispatches to a harness the kind
+    /// can't actually use.
+    pub fn effective_harness(&self) -> AgentBackendRuntimeHarness {
+        match self.runtime_harness {
+            Some(harness) if self.kind.available_harnesses().contains(&harness) => harness,
+            _ => self.kind.default_harness(),
+        }
+    }
 }
 
 impl AgentBackendConfig {
@@ -141,6 +260,7 @@ impl AgentBackendConfig {
             context_window_default: 200_000,
             model_discovery: false,
             has_secret: false,
+            runtime_harness: None,
         }
     }
 
@@ -166,6 +286,7 @@ impl AgentBackendConfig {
             context_window_default: 64_000,
             model_discovery: true,
             has_secret: false,
+            runtime_harness: None,
         }
     }
 
@@ -184,6 +305,7 @@ impl AgentBackendConfig {
             context_window_default: 400_000,
             model_discovery: true,
             has_secret: false,
+            runtime_harness: None,
         }
     }
 
@@ -202,6 +324,7 @@ impl AgentBackendConfig {
             context_window_default: 400_000,
             model_discovery: true,
             has_secret: false,
+            runtime_harness: None,
         }
     }
 
@@ -233,6 +356,40 @@ impl AgentBackendConfig {
             context_window_default: 272_000,
             model_discovery: true,
             has_secret: false,
+            runtime_harness: None,
+        }
+    }
+
+    #[cfg(feature = "pi-sdk")]
+    pub fn builtin_pi_sdk() -> Self {
+        Self {
+            id: "pi".to_string(),
+            label: "Pi".to_string(),
+            kind: AgentBackendKind::PiSdk,
+            base_url: None,
+            enabled: true,
+            default_model: None,
+            manual_models: vec![
+                AgentBackendModel {
+                    id: "anthropic/claude-opus-4-5".to_string(),
+                    label: "Claude Opus 4.5".to_string(),
+                    context_window_tokens: 200_000,
+                    discovered: false,
+                },
+                AgentBackendModel {
+                    id: "openai/gpt-5.4".to_string(),
+                    label: "GPT-5.4".to_string(),
+                    context_window_tokens: 272_000,
+                    discovered: false,
+                },
+            ],
+            discovered_models: Vec::new(),
+            auth_ref: Some("pi".to_string()),
+            capabilities: AgentBackendCapabilities::pi_sdk(),
+            context_window_default: 200_000,
+            model_discovery: true,
+            has_secret: false,
+            runtime_harness: None,
         }
     }
 
@@ -254,6 +411,7 @@ impl AgentBackendConfig {
             context_window_default: 8_192,
             model_discovery: true,
             has_secret: false,
+            runtime_harness: None,
         }
     }
 }
@@ -265,7 +423,83 @@ pub struct AgentBackendRuntime {
     pub harness: AgentBackendRuntimeHarness,
     pub env: Vec<(String, String)>,
     pub hash: String,
+    /// The model id to actually hand to the spawned harness. Usually
+    /// equals the input model the caller passed to
+    /// `resolve_backend_runtime`, but the Pi harness needs ids
+    /// qualified as `<provider>/<modelId>` and rewrites bare ids
+    /// here so the sidecar's `ModelRegistry.find(provider, id)`
+    /// lookup hits — without this override, a non-Pi backend (Ollama,
+    /// LM Studio, OpenAI API, Codex Native) routed through Pi would
+    /// hand the sidecar a bare id like `gpt-5.4` or a slash-containing
+    /// id like `library/llama3` that the sidecar splits on the first
+    /// slash and never resolves. `None` means "use the caller's input
+    /// unchanged", which keeps non-Pi paths invisible to this field.
+    #[serde(default)]
+    pub model: Option<String>,
+    /// Tells the Pi sidecar to register an ad-hoc provider via
+    /// `ModelRegistry.registerProvider` before it spawns the agent
+    /// session. Pi ships bundled providers for cloud vendors, but
+    /// local servers like Ollama / LM Studio aren't in its registry
+    /// unless the user has wired them up via `~/.pi/agent/models.json`
+    /// — without this override Pi's `findModel(<provider>/<id>)`
+    /// lookup misses and the turn fails to start. We synthesize the
+    /// provider entry from the user's Claudette backend config
+    /// (`base_url` + the resolved model row) so an upgrading user
+    /// gets a working Pi-routed turn without any separate Pi setup.
+    /// `None` for all other paths (Pi card itself, cloud backends
+    /// whose names would shadow Pi's bundled providers, etc.).
+    ///
+    /// The field is always present in the struct so non-Pi
+    /// construction sites stay compileable, but when the Pi harness
+    /// is compiled out `PiProviderOverride` resolves to
+    /// `std::convert::Infallible` — so the field can only ever be
+    /// `None`, and the resolver fast-paths around it.
+    #[serde(default)]
+    pub pi_provider_override: Option<PiProviderOverride>,
 }
+
+/// Minimal `ModelRegistry.registerProvider(name, config)` payload that
+/// makes a Claudette-side local backend reachable through Pi. The
+/// sidecar mirrors this onto Pi's `ProviderConfigInput`. Kept in this
+/// crate so unit tests can build the value without pulling in the
+/// Tauri layer, and so the JSON shape is colocated with the other
+/// agent-runtime serde types.
+#[cfg(feature = "pi-sdk")]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PiProviderOverride {
+    /// Provider name the override registers under. Matches the
+    /// first segment of the qualified model id (`ollama/llama3` →
+    /// `provider = "ollama"`), so `findModel` resolves cleanly.
+    pub provider: String,
+    /// Backend root URL — for OpenAI-compatible endpoints Pi expects
+    /// the `/v1` suffix to already be present. Caller normalizes.
+    pub base_url: String,
+    /// Bare model id (no provider prefix). Pi keys models inside a
+    /// provider by this id.
+    pub model_id: String,
+    /// Human-facing model label. Falls back to `model_id` when the
+    /// caller doesn't have a friendlier name.
+    pub model_label: String,
+    /// Context window in tokens. `0` means "use Pi's per-provider
+    /// default", which keeps the override forward-compatible if a
+    /// future Pi release stops requiring the field.
+    pub context_window: u32,
+}
+
+/// Stand-in for `PiProviderOverride` when the Pi harness is compiled
+/// out. An empty enum has no constructable values, so the field
+/// `Option<PiProviderOverride>` on `AgentBackendRuntime` can only ever
+/// be `None` on a no-pi build. This lets non-Pi callers continue to
+/// construct `AgentBackendRuntime` literals with
+/// `pi_provider_override: None` without sprinkling `#[cfg]` over every
+/// construction site, while guaranteeing at the type level that no
+/// Pi-routing data ever flows through a build that lacks the Pi
+/// sidecar. A stale Pi-routed runtime row that tries to load on a
+/// no-pi build deserializes as an error (no variant matches), which
+/// is the right failure mode.
+#[cfg(not(feature = "pi-sdk"))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PiProviderOverride {}
 
 impl AgentBackendRuntime {
     pub fn apply_to_command(&self, cmd: &mut tokio::process::Command) {
@@ -327,5 +561,372 @@ mod tests {
         assert_eq!(runtime.harness, AgentBackendRuntimeHarness::ClaudeCode);
         assert_eq!(runtime.backend_id, None);
         assert!(runtime.env.is_empty());
+    }
+
+    #[cfg(feature = "pi-sdk")]
+    #[test]
+    fn pi_builtin_uses_pi_sdk_harness_shape() {
+        let backend = AgentBackendConfig::builtin_pi_sdk();
+
+        assert_eq!(backend.id, "pi");
+        assert_eq!(backend.label, "Pi");
+        assert_eq!(backend.kind, AgentBackendKind::PiSdk);
+        assert!(backend.enabled);
+        assert!(!backend.kind.needs_gateway());
+        assert!(backend.model_discovery);
+        assert!(backend.capabilities.tools);
+        assert!(!backend.capabilities.fast_mode);
+    }
+
+    #[test]
+    fn runtime_harness_defaults_per_kind() {
+        // When `pi-sdk` is compiled out, Ollama/LmStudio fall back to
+        // ClaudeCode (matches the `default_harness` arm), and the
+        // PiSdk variant itself is gone from the type.
+        #[cfg(feature = "pi-sdk")]
+        let cases = [
+            (
+                AgentBackendKind::Anthropic,
+                AgentBackendRuntimeHarness::ClaudeCode,
+            ),
+            (AgentBackendKind::Ollama, AgentBackendRuntimeHarness::PiSdk),
+            (
+                AgentBackendKind::LmStudio,
+                AgentBackendRuntimeHarness::PiSdk,
+            ),
+            (
+                AgentBackendKind::OpenAiApi,
+                AgentBackendRuntimeHarness::ClaudeCode,
+            ),
+            (
+                AgentBackendKind::CodexSubscription,
+                AgentBackendRuntimeHarness::ClaudeCode,
+            ),
+            (
+                AgentBackendKind::CodexNative,
+                AgentBackendRuntimeHarness::CodexAppServer,
+            ),
+            (AgentBackendKind::PiSdk, AgentBackendRuntimeHarness::PiSdk),
+            (
+                AgentBackendKind::CustomAnthropic,
+                AgentBackendRuntimeHarness::ClaudeCode,
+            ),
+            (
+                AgentBackendKind::CustomOpenAi,
+                AgentBackendRuntimeHarness::ClaudeCode,
+            ),
+        ];
+        #[cfg(not(feature = "pi-sdk"))]
+        let cases = [
+            (
+                AgentBackendKind::Anthropic,
+                AgentBackendRuntimeHarness::ClaudeCode,
+            ),
+            (
+                AgentBackendKind::Ollama,
+                AgentBackendRuntimeHarness::ClaudeCode,
+            ),
+            (
+                AgentBackendKind::LmStudio,
+                AgentBackendRuntimeHarness::ClaudeCode,
+            ),
+            (
+                AgentBackendKind::OpenAiApi,
+                AgentBackendRuntimeHarness::ClaudeCode,
+            ),
+            (
+                AgentBackendKind::CodexSubscription,
+                AgentBackendRuntimeHarness::ClaudeCode,
+            ),
+            (
+                AgentBackendKind::CodexNative,
+                AgentBackendRuntimeHarness::CodexAppServer,
+            ),
+            (
+                AgentBackendKind::CustomAnthropic,
+                AgentBackendRuntimeHarness::ClaudeCode,
+            ),
+            (
+                AgentBackendKind::CustomOpenAi,
+                AgentBackendRuntimeHarness::ClaudeCode,
+            ),
+        ];
+        for (kind, expected) in cases {
+            assert_eq!(
+                kind.default_harness(),
+                expected,
+                "{kind:?}::default_harness() should be {expected:?}",
+            );
+            assert!(
+                kind.available_harnesses().contains(&expected),
+                "{kind:?}::available_harnesses() must include the default {expected:?}",
+            );
+        }
+    }
+
+    #[test]
+    fn anthropic_kind_only_allows_claude_code_harness() {
+        // Guard against accidental Pi opt-in for Claude subscription
+        // users — Pi must never route the user's OAuth tokens.
+        for kind in [
+            AgentBackendKind::Anthropic,
+            AgentBackendKind::CustomAnthropic,
+            AgentBackendKind::CodexSubscription,
+        ] {
+            let harnesses = kind.available_harnesses();
+            assert_eq!(
+                harnesses,
+                &[AgentBackendRuntimeHarness::ClaudeCode],
+                "{kind:?} must lock to ClaudeCode-only",
+            );
+        }
+    }
+
+    #[cfg(feature = "pi-sdk")]
+    #[test]
+    fn pi_sdk_kind_locked_to_pi_harness() {
+        assert_eq!(
+            AgentBackendKind::PiSdk.available_harnesses(),
+            &[AgentBackendRuntimeHarness::PiSdk],
+        );
+    }
+
+    #[test]
+    fn effective_harness_returns_kind_default_when_override_absent() {
+        let backend = AgentBackendConfig::builtin_ollama();
+        assert_eq!(backend.runtime_harness, None);
+        #[cfg(feature = "pi-sdk")]
+        assert_eq!(
+            backend.effective_harness(),
+            AgentBackendRuntimeHarness::PiSdk
+        );
+        #[cfg(not(feature = "pi-sdk"))]
+        assert_eq!(
+            backend.effective_harness(),
+            AgentBackendRuntimeHarness::ClaudeCode
+        );
+    }
+
+    #[test]
+    fn effective_harness_honors_allowed_override() {
+        let mut backend = AgentBackendConfig::builtin_ollama();
+        backend.runtime_harness = Some(AgentBackendRuntimeHarness::ClaudeCode);
+        assert_eq!(
+            backend.effective_harness(),
+            AgentBackendRuntimeHarness::ClaudeCode,
+        );
+    }
+
+    #[cfg(feature = "pi-sdk")]
+    #[test]
+    fn effective_harness_ignores_override_not_in_available_set() {
+        // A hand-edited / downgraded config could pin a harness the
+        // kind no longer permits. The resolver must fall back to the
+        // safe default rather than dispatch into a forbidden harness.
+        let mut backend = AgentBackendConfig::builtin_anthropic();
+        backend.runtime_harness = Some(AgentBackendRuntimeHarness::PiSdk);
+        assert_eq!(
+            backend.effective_harness(),
+            AgentBackendRuntimeHarness::ClaudeCode,
+        );
+    }
+
+    /// Single source of truth for the per-kind harness matrix. Both
+    /// Rust (this file) and TypeScript (`src/ui/.../modelRegistry.ts`,
+    /// `services/tauri/agentBackends.ts`) mirror the same data, and
+    /// drift between them silently lets the UI claim a dispatch path
+    /// the resolver doesn't actually take. The fixture is checked at
+    /// test time from both sides — see `harnessMatrix.test.ts` on the
+    /// TS side. The fixture itself always contains the Pi entries
+    /// (it's the TS-authoritative shape); the Rust-side check below
+    /// only runs when the Pi feature is compiled in, so a no-pi build
+    /// won't compare its (legitimately smaller) variant set against
+    /// the fixture's full shape and falsely fail.
+    #[cfg(feature = "pi-sdk")]
+    const MATRIX_FIXTURE: &str = include_str!("agent_backend_matrix.json");
+
+    #[cfg(feature = "pi-sdk")]
+    fn harness_serde_name(harness: AgentBackendRuntimeHarness) -> &'static str {
+        match harness {
+            AgentBackendRuntimeHarness::ClaudeCode => "claude_code",
+            AgentBackendRuntimeHarness::CodexAppServer => "codex_app_server",
+            AgentBackendRuntimeHarness::PiSdk => "pi_sdk",
+        }
+    }
+
+    #[cfg(feature = "pi-sdk")]
+    fn kind_serde_name(kind: AgentBackendKind) -> &'static str {
+        match kind {
+            AgentBackendKind::Anthropic => "anthropic",
+            AgentBackendKind::Ollama => "ollama",
+            AgentBackendKind::OpenAiApi => "openai_api",
+            AgentBackendKind::CodexSubscription => "codex_subscription",
+            AgentBackendKind::CodexNative => "codex_native",
+            AgentBackendKind::PiSdk => "pi_sdk",
+            AgentBackendKind::CustomAnthropic => "custom_anthropic",
+            AgentBackendKind::CustomOpenAi => "custom_openai",
+            AgentBackendKind::LmStudio => "lm_studio",
+        }
+    }
+
+    #[cfg(feature = "pi-sdk")]
+    #[test]
+    fn matrix_matches_fixture() {
+        let fixture: serde_json::Value =
+            serde_json::from_str(MATRIX_FIXTURE).expect("matrix fixture is valid JSON");
+        let kinds = fixture
+            .get("kinds")
+            .and_then(|v| v.as_object())
+            .expect("fixture has a `kinds` object");
+
+        let all_rust_kinds = [
+            AgentBackendKind::Anthropic,
+            AgentBackendKind::Ollama,
+            AgentBackendKind::OpenAiApi,
+            AgentBackendKind::CodexSubscription,
+            AgentBackendKind::CodexNative,
+            AgentBackendKind::PiSdk,
+            AgentBackendKind::CustomAnthropic,
+            AgentBackendKind::CustomOpenAi,
+            AgentBackendKind::LmStudio,
+        ];
+
+        // Fixture must list exactly the variants Rust knows about — no
+        // ghost entries that the resolver can't honor, no missing entries
+        // that the UI couldn't render.
+        let rust_kind_names: std::collections::BTreeSet<&str> = all_rust_kinds
+            .iter()
+            .copied()
+            .map(kind_serde_name)
+            .collect();
+        let fixture_kind_names: std::collections::BTreeSet<&str> =
+            kinds.keys().map(String::as_str).collect();
+        assert_eq!(
+            rust_kind_names, fixture_kind_names,
+            "AgentBackendKind variants and fixture `kinds` keys must match"
+        );
+
+        for kind in all_rust_kinds {
+            let name = kind_serde_name(kind);
+            let entry = kinds
+                .get(name)
+                .and_then(|v| v.as_object())
+                .unwrap_or_else(|| panic!("fixture missing entry for `{name}`"));
+
+            let fixture_default = entry
+                .get("default")
+                .and_then(|v| v.as_str())
+                .unwrap_or_else(|| panic!("fixture entry `{name}` missing `default` string"));
+            assert_eq!(
+                fixture_default,
+                harness_serde_name(kind.default_harness()),
+                "default_harness mismatch for `{name}`",
+            );
+
+            let fixture_available: Vec<&str> = entry
+                .get("available")
+                .and_then(|v| v.as_array())
+                .unwrap_or_else(|| panic!("fixture entry `{name}` missing `available` array"))
+                .iter()
+                .map(|v| {
+                    v.as_str().unwrap_or_else(|| {
+                        panic!("fixture `{name}.available` must be strings only")
+                    })
+                })
+                .collect();
+            let rust_available: Vec<&str> = kind
+                .available_harnesses()
+                .iter()
+                .copied()
+                .map(harness_serde_name)
+                .collect();
+            assert_eq!(
+                fixture_available, rust_available,
+                "available_harnesses mismatch for `{name}` (order is significant — first entry is the default)",
+            );
+
+            // Sanity check: the fixture's own internal invariant.
+            assert_eq!(
+                fixture_available.first().copied(),
+                Some(fixture_default),
+                "fixture entry `{name}`: first available must equal default",
+            );
+        }
+    }
+
+    #[cfg(feature = "pi-sdk")]
+    #[test]
+    fn pi_provider_prefix_maps_every_kind() {
+        // The prefix is what the resolver prepends to bare model ids
+        // before handing them to Pi's `ModelRegistry.find(provider, id)`
+        // lookup. Drift between this map and the harness-side provider
+        // registration silently breaks Pi-routed turns, so pin every
+        // arm.
+        let cases = [
+            (AgentBackendKind::Ollama, Some("ollama")),
+            (AgentBackendKind::LmStudio, Some("lmstudio")),
+            (AgentBackendKind::OpenAiApi, Some("openai")),
+            (AgentBackendKind::CustomOpenAi, Some("openai")),
+            (AgentBackendKind::CodexNative, Some("openai")),
+            (AgentBackendKind::Anthropic, None),
+            (AgentBackendKind::CustomAnthropic, None),
+            (AgentBackendKind::CodexSubscription, None),
+            (AgentBackendKind::PiSdk, None),
+        ];
+        for (kind, expected) in cases {
+            assert_eq!(
+                kind.pi_provider_prefix(),
+                expected,
+                "{kind:?}::pi_provider_prefix() mismatch",
+            );
+        }
+    }
+
+    #[test]
+    fn every_builtin_starts_with_no_runtime_harness_override() {
+        // Builtin constructors must seed `runtime_harness: None` so the
+        // resolver falls through to `kind.default_harness()`. A
+        // construction-time pin would silently override the per-kind
+        // default and stick around after the user changes their
+        // harness preference in Settings.
+        let builtins = [
+            AgentBackendConfig::builtin_anthropic(),
+            AgentBackendConfig::builtin_ollama(),
+            AgentBackendConfig::builtin_openai_api(),
+            AgentBackendConfig::builtin_codex_subscription(),
+            AgentBackendConfig::builtin_codex_native(),
+            AgentBackendConfig::builtin_lm_studio(),
+            #[cfg(feature = "pi-sdk")]
+            AgentBackendConfig::builtin_pi_sdk(),
+        ];
+        for backend in builtins {
+            assert!(
+                backend.runtime_harness.is_none(),
+                "{:?} should not pin a runtime_harness",
+                backend.kind,
+            );
+        }
+    }
+
+    #[test]
+    fn lm_studio_builtin_uses_gateway_shape() {
+        let backend = AgentBackendConfig::builtin_lm_studio();
+
+        assert_eq!(backend.id, "lm-studio");
+        assert_eq!(backend.label, "LM Studio");
+        assert_eq!(backend.kind, AgentBackendKind::LmStudio);
+        assert!(!backend.enabled);
+        assert_eq!(backend.base_url.as_deref(), Some("http://localhost:1234"));
+        assert!(backend.model_discovery);
+        assert!(!backend.capabilities.thinking);
+        assert_eq!(backend.context_window_default, 8_192);
+    }
+
+    #[test]
+    fn agent_backend_runtime_default_has_no_pi_override() {
+        let runtime = AgentBackendRuntime::default();
+        assert!(runtime.pi_provider_override.is_none());
+        assert!(runtime.model.is_none());
+        assert_eq!(runtime.hash, "");
     }
 }

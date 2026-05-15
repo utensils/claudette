@@ -85,6 +85,18 @@ rodio = { version = "0.22", default-features = false, features = ["playback", "s
 # build helpers) don't survive the kill of the immediate `sh -c` parent.
 libc = "0.2"
 
+[features]
+# `pi-sdk` gates the Pi coding-agent harness (sidecar wrapper around
+# `@earendil-works/pi-coding-agent`). It's on by default so library tests
+# and `cargo test -p claudette` see the full surface, but downstream
+# crates (notably `claudette-tauri`) can opt out with
+# `default-features = false` + a non-pi feature set when they want a
+# build that excludes Pi entirely. The umbrella `alternative-backends`
+# feature in `claudette-tauri` is independent — you can keep Codex
+# Native enabled while disabling Pi by dropping just `pi-sdk`.
+default = ["pi-sdk"]
+pi-sdk = []
+
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 

@@ -1000,6 +1000,79 @@ describe("/model handler", () => {
       expect.stringContaining("boom"),
     );
   });
+
+  it("rejects Pi-routed Anthropic ids under a Claude OAuth subscription", async () => {
+    // Regression: `/model` was building the registry without
+    // `isClaudeOauthSubscriber`, so an OAuth user could pick
+    // `pi/anthropic/claude-sonnet-4-6` from the slash command and the
+    // resolver would refuse the next send. Push a Pi backend into the
+    // store, flip `claudeAuthMethod` to oauth_token, and assert the
+    // command treats the blocked id as unknown.
+    const { useAppStore } = await import("../../stores/useAppStore");
+    const initial = useAppStore.getState();
+    useAppStore.setState({
+      claudeAuthMethod: "oauth_token",
+      alternativeBackendsEnabled: true,
+      agentBackends: [
+        {
+          id: "pi",
+          label: "Pi",
+          kind: "pi_sdk",
+          base_url: null,
+          enabled: true,
+          default_model: null,
+          manual_models: [],
+          discovered_models: [
+            {
+              id: "anthropic/claude-sonnet-4-6",
+              label: "Claude Sonnet 4.6",
+              context_window_tokens: 200_000,
+              discovered: true,
+            },
+            {
+              id: "openai/gpt-5.4",
+              label: "GPT-5.4",
+              context_window_tokens: 272_000,
+              discovered: true,
+            },
+          ],
+          auth_ref: null,
+          capabilities: {
+            thinking: true,
+            effort: true,
+            fast_mode: false,
+            one_m_context: false,
+            tools: true,
+            vision: true,
+          },
+          context_window_default: 200_000,
+          model_discovery: true,
+          has_secret: false,
+          runtime_harness: null,
+        },
+      ],
+    });
+    try {
+      const ctx = makeCtx({ selectedModel: "opus" });
+      const handler = resolveNativeHandler("model")!;
+      await handler.execute(ctx, "pi/anthropic/claude-sonnet-4-6");
+      expect(ctx.setSelectedModel).not.toHaveBeenCalled();
+      const msg = (ctx.addLocalMessage as ReturnType<typeof vi.fn>).mock
+        .calls[0][0] as string;
+      expect(msg).toContain("unknown model");
+      // The "Valid options" portion of the error message echoes the
+      // hidden set the registry produced — assert against that slice
+      // (not the message head, which reflects the user's blocked
+      // input verbatim).
+      const optionsSlice = msg.split("Valid options:")[1] ?? "";
+      expect(optionsSlice).not.toContain("pi/anthropic/claude-sonnet-4-6");
+      // But other Pi sub-providers stay reachable so the gate is
+      // narrow, not a blanket Pi shutdown.
+      expect(optionsSlice).toContain("pi/openai/gpt-5.4");
+    } finally {
+      useAppStore.setState(initial, true);
+    }
+  });
 });
 
 describe("/permissions handler", () => {

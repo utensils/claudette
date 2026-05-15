@@ -13,7 +13,10 @@ name = "claudette"
 path = "src/main.rs"
 
 [dependencies]
-claudette = { path = ".." }
+# `default-features = false` so transitive feature unification doesn't
+# pull `pi-sdk` back into the lib when the Tauri binary opts out. The
+# CLI only consumes data types — no Pi-specific surface.
+claudette = { path = "..", default-features = false }
 clap = { version = "4", features = ["derive", "env"] }
 clap_complete = "4"
 dirs = "6"

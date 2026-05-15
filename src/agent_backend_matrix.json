@@ -1,0 +1,41 @@
+{
+  "$comment": "Canonical default + available harness mapping per AgentBackendKind. Source of truth for AgentBackendKind::default_harness / available_harnesses in src/agent_backend.rs and for DEFAULT_HARNESS_BY_KIND / AVAILABLE_HARNESSES_BY_KIND / defaultHarnessForKind / availableHarnessesForKind on the frontend. A Rust unit test (agent_backend::tests::matrix_matches_fixture) and a TS vitest test (harnessMatrix.test.ts) both fail if their respective source-of-truth drifts from this file. To change the matrix: edit this JSON, run cargo test + bun run test, and fix whichever side reports drift. Kind keys use the serde snake_case names from AgentBackendKind (note openai_api / custom_openai overrides). Harness values use the serde snake_case names from AgentBackendRuntimeHarness. The first entry of `available` is the kind's default — kept in lockstep with `default` so both invariants are enforced at test time.",
+  "kinds": {
+    "anthropic": {
+      "default": "claude_code",
+      "available": ["claude_code"]
+    },
+    "custom_anthropic": {
+      "default": "claude_code",
+      "available": ["claude_code"]
+    },
+    "codex_subscription": {
+      "default": "claude_code",
+      "available": ["claude_code"]
+    },
+    "ollama": {
+      "default": "pi_sdk",
+      "available": ["pi_sdk", "claude_code"]
+    },
+    "lm_studio": {
+      "default": "pi_sdk",
+      "available": ["pi_sdk", "claude_code"]
+    },
+    "openai_api": {
+      "default": "claude_code",
+      "available": ["claude_code", "pi_sdk"]
+    },
+    "custom_openai": {
+      "default": "claude_code",
+      "available": ["claude_code", "pi_sdk"]
+    },
+    "codex_native": {
+      "default": "codex_app_server",
+      "available": ["codex_app_server", "pi_sdk"]
+    },
+    "pi_sdk": {
+      "default": "pi_sdk",
+      "available": ["pi_sdk"]
+    }
+  }
+}

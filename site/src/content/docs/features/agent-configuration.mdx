@@ -123,12 +123,12 @@ The turn banner in the chat timeline shows the model, effort level, and any non-
 
 ## Agent Providers
 
-Claudette can run agents against additional providers — [Ollama](/claudette/features/providers/ollama/) (local, Anthropic-wire), [LM Studio](/claudette/features/providers/lm-studio/) (local, Anthropic-wire via `/v1/messages`), [OpenAI](/claudette/features/providers/openai-codex/#openai-api) (remote, gateway-translated), or [Codex](/claudette/features/providers/openai-codex/#codex) — instead of the official `claude` CLI. These providers are configured in **Settings > Models**; Codex, Ollama, and LM Studio are auto-enabled when detected unless you manually turn them off.
+Claudette can run agents against additional providers — [Ollama](/claudette/features/providers/ollama/) (local, Anthropic-wire), [LM Studio](/claudette/features/providers/lm-studio/) (local, Anthropic-wire via `/v1/messages`), [OpenAI](/claudette/features/providers/openai-codex/#openai-api) (remote, gateway-translated), [Codex](/claudette/features/providers/openai-codex/#codex), or [Pi](/claudette/features/providers/pi/) (SDK sidecar harness) — instead of the official `claude` CLI. These providers are configured in **Settings > Models**; Codex, Ollama, LM Studio, and Pi are auto-detected and their model lists refreshed on startup when available, unless you manually turn them off.
 
 Several chat-header toggles on this page only apply to certain providers. The capability matrix in the dedicated section shows the full picture, but the highlights:
 
 - **1M-context auto-upgrade** — Anthropic only.
-- **Effort** — Anthropic only.
+- **Effort** — Anthropic, Codex, and Pi.
 - **Fast mode** — Anthropic and Codex.
 - **Extended thinking** — Anthropic and Ollama (when the model supports it).
 - **Unsupported toggles** — hidden on providers that do not advertise the matching capability. Local models and gateway OpenAI implement these knobs inconsistently or not at all, so the chat header hides them rather than silently ignoring user intent.

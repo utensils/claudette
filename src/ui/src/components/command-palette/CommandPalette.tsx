@@ -20,7 +20,7 @@ import {
   listWorkspaceFiles,
 } from "../../services/tauri";
 import { applySelectedModel } from "../chat/applySelectedModel";
-import { buildModelRegistry } from "../chat/modelRegistry";
+import { useModelRegistry } from "../chat/useModelRegistry";
 import { runAndRecordSetupScript } from "../../utils/setupScriptMessage";
 import type { ThemeDefinition } from "../../types/theme";
 import { scoreCommand } from "./searchScore";
@@ -98,9 +98,6 @@ export function CommandPalette() {
   const selectedModelProvider = useAppStore(
     (s) => (selectedSessionId ? s.selectedModelProvider[selectedSessionId] ?? "anthropic" : "anthropic"),
   );
-  const alternativeBackendsEnabled = useAppStore((s) => s.alternativeBackendsEnabled);
-  const codexEnabled = useAppStore((s) => s.codexEnabled);
-  const agentBackends = useAppStore((s) => s.agentBackends);
   const setThinkingEnabled = useAppStore((s) => s.setThinkingEnabled);
   const setPlanMode = useAppStore((s) => s.setPlanMode);
   const setFastMode = useAppStore((s) => s.setFastMode);
@@ -347,10 +344,10 @@ export function CommandPalette() {
     [themes, applyThemeById],
   );
 
-  const modelRegistry = useMemo(
-    () => buildModelRegistry(alternativeBackendsEnabled, agentBackends, codexEnabled),
-    [alternativeBackendsEnabled, agentBackends, codexEnabled],
-  );
+  // Single source for visibility — `useModelRegistry` applies the
+  // Claude-OAuth Pi-anthropic gate so the palette can't surface a
+  // model the Rust resolver would refuse.
+  const modelRegistry = useModelRegistry();
 
   const modelCommands = useMemo(
     () => buildModelCommands(

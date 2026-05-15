@@ -26,7 +26,21 @@ export interface PlanApproval {
 export type AgentApprovalKind = "commandExecution" | "fileChange" | "permissions";
 
 export interface AgentApprovalDetail {
-  labelKey: "command" | "cwd" | "path" | "permissions" | "reason";
+  labelKey:
+    | "command"
+    | "cwd"
+    | "path"
+    | "permissions"
+    | "reason"
+    | "operation"
+    // Pi `write` / `edit` approvals carry the full proposed content
+    // (`newText`) and, for edits, the text being replaced (`oldText`).
+    // Surface them so the user can audit the mutation before granting
+    // permission — the approval card was previously rendering only
+    // path + reason for Pi file changes, which defeated the audit
+    // purpose of the prompt.
+    | "oldText"
+    | "newText";
   value: string;
 }
 
@@ -36,6 +50,12 @@ export interface AgentApproval {
   kind: AgentApprovalKind;
   details: AgentApprovalDetail[];
   supportsDenyReason?: boolean;
+  // Display name of the agent that originated the approval — used to
+  // interpolate `{{agent}}` in the localized description ("Pi wants
+  // approval…" vs. "Codex wants approval…"). The Pi sidecar sets this
+  // to `Pi`; Codex's own approvals leave it absent and the card falls
+  // back to `Codex` for the existing wording.
+  agentLabel?: string;
 }
 
 /**

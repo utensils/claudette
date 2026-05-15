@@ -51,16 +51,28 @@ describe("shouldShowBackendTestButton", () => {
 });
 
 describe("autoDetectableBackendIds", () => {
-  it("selects local and CLI providers for startup detection", () => {
+  it("selects local and CLI providers for startup detection, including Pi", () => {
     expect(
       autoDetectableBackendIds([
         backend({ id: "codex", kind: "codex_native", enabled: true }),
         backend({ id: "ollama", kind: "ollama", enabled: false }),
         backend({ id: "lm-studio", kind: "lm_studio", enabled: false }),
+        backend({ id: "codex-off", kind: "codex_native", enabled: false }),
+        backend({ id: "pi", kind: "pi_sdk", enabled: true }),
+        backend({ id: "pi-off", kind: "pi_sdk", enabled: false }),
         backend({ id: "legacy", kind: "codex_subscription", enabled: true }),
         backend({ id: "openai", kind: "openai_api", enabled: true }),
       ]).sort(),
-    ).toEqual(["codex", "lm-studio", "ollama"]);
+    ).toEqual(["codex", "codex-off", "lm-studio", "ollama", "pi", "pi-off"]);
+  });
+
+  it("includes pi_sdk backends because the Tauri auto-detect command probes them", () => {
+    expect(
+      autoDetectableBackendIds([
+        backend({ id: "pi", kind: "pi_sdk", enabled: true }),
+        backend({ id: "pi-off", kind: "pi_sdk", enabled: false }),
+      ]),
+    ).toEqual(["pi", "pi-off"]);
   });
 });
 

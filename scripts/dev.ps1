@@ -6,8 +6,8 @@
 # the Windows-side `cargo`/`bun`/`tauri` aren't on the WSL distro's PATH.
 #
 # What this does, in order:
-#   1. Parse flags (--clean, --help) — matching dev.sh's surface so muscle
-#      memory carries across platforms.
+#   1. Parse flags (--new, --clean, --help) — matching dev.sh's surface so
+#      muscle memory carries across platforms.
 #   2. Refresh PATH from the registry so clang/llvm (Scoop-installed) and
 #      cargo are visible — required for `ring` to compile its ARM64 asm.
 #   3. Probe a free Vite port (default base 14253) and a free debug-eval port
@@ -29,16 +29,23 @@
 #   $env:CARGO_TAURI_FEATURES       features (default devtools,server,voice,alternative-backends — matches scripts/dev.sh)
 #
 # Flags:
-#   --clean              Run as a fresh user — points CLAUDETTE_HOME,
+#   --new                Run as a fresh user — points CLAUDETTE_HOME,
 #                        CLAUDETTE_DATA_DIR, and CLAUDE_CONFIG_DIR at
 #                        per-PID tmp dirs so the launch sees no existing
 #                        repos, settings, plugins, or Claude auth, and
 #                        nothing it does writes back to the real user
 #                        state. Cleaned up on exit. See -h for details.
+#   --clean              Top-level NUKE action — blasts everything under
+#                        $env:TEMP\claudette-dev\ (per-PID sandboxes and
+#                        discovery files) and exits without launching.
+#                        No PID check — running dev sessions lose their
+#                        sandbox too. Use to reset state after SIGKILL'd
+#                        runs left a mess.
 #   -h, --help           Print usage and exit.
 #
 # Usage from any PowerShell prompt in the repo:
 #   .\scripts\dev.ps1
+#   .\scripts\dev.ps1 --new
 #   .\scripts\dev.ps1 --clean
 #   .\scripts\dev.ps1 --help
 #
@@ -52,9 +59,9 @@
 $ErrorActionPreference = 'Stop'
 
 # 1) Parse flags before doing anything expensive (PATH refresh, port probe,
-#    cargo build). Matches dev.sh's surface so `dev --clean` / `dev -h` /
-#    `dev --help` work identically on Windows. Unknown args are forwarded
-#    to `cargo run` after `--`, mirroring dev.sh's passthrough slot.
+#    cargo build). Matches dev.sh's surface so `dev --new` / `dev --clean` /
+#    `dev -h` / `dev --help` work identically on Windows. Unknown args are
+#    forwarded to `cargo run` after `--`, mirroring dev.sh's passthrough slot.
 function Show-Usage {
     @"
 Usage: scripts\dev.ps1 [FLAGS] [-- CARGO_PASSTHROUGH_ARGS...]
@@ -64,7 +71,7 @@ and the IPv4-bound Vite + custom-protocol-off configuration that Windows
 needs for the WebView2 + /claudette-debug combination to work.
 
 Flags:
-  --clean              Run as a fresh user — points three env vars at a
+  --new                Run as a fresh user — points three env vars at a
                        per-PID tmp tree so the launch sees no existing
                        state and nothing it writes leaks back to the
                        real user:
@@ -79,6 +86,13 @@ Flags:
                        Cleaned up on exit. Useful for testing first-run
                        UX (welcome card, onboarding) and plugin/auth
                        flows without nuking real user data.
+  --clean              Top-level NUKE action — does not launch the app.
+                       Wipes everything under `$env:TEMP\claudette-dev\
+                       (per-PID sandboxes and discovery files) without
+                       checking PIDs. If you have a dev session running,
+                       its sandbox is removed too — the dev app will
+                       start seeing missing files mid-session. Use to
+                       reset state after SIGKILL'd runs left a mess.
   -h, --help           Print this usage and exit.
   --                   Pass everything after this flag straight to
                        ``cargo run`` (e.g. --release, --quiet).
@@ -120,14 +134,16 @@ Discovery file:
 "@ | Write-Host
 }
 
-$cleanSession = $false
+$newSession = $false
+$cleanAction = $false
 $showHelp = $false
 $passthrough = @()
 $inPassthrough = $false
 foreach ($a in $args) {
     if ($inPassthrough) { $passthrough += $a; continue }
     switch -Exact ($a) {
-        '--clean' { $cleanSession = $true }
+        '--new'   { $newSession = $true }
+        '--clean' { $cleanAction = $true }
         '-h'      { $showHelp = $true }
         '--help'  { $showHelp = $true }
         '--'      { $inPassthrough = $true }
@@ -137,6 +153,33 @@ foreach ($a in $args) {
 
 if ($showHelp) {
     Show-Usage
+    exit 0
+}
+
+# --clean: nuke everything under the discovery dir. No PID checks — if
+# there are running dev sessions, their sandboxes go with the sweep
+# (the user asked for nuke, that's nuke). Runs before any expensive
+# setup (PATH refresh, cargo build, port probe) so `dev --clean` is
+# fast from any directory.
+if ($cleanAction) {
+    if ($newSession) {
+        Write-Error "[dev.ps1] --clean is a standalone nuke action — don't combine it with --new"
+        exit 2
+    }
+    $discoveryDir = Join-Path $env:TEMP 'claudette-dev'
+    if (-not (Test-Path $discoveryDir)) {
+        Write-Host "[dev.ps1] no claudette-dev state at $discoveryDir — nothing to clean"
+        exit 0
+    }
+    Write-Host "▸ Nuking $discoveryDir"
+    $removed = 0
+    foreach ($entry in Get-ChildItem -LiteralPath $discoveryDir -Force) {
+        Write-Host "  removed: $($entry.Name)"
+        Remove-Item -LiteralPath $entry.FullName -Recurse -Force -ErrorAction SilentlyContinue
+        $removed++
+    }
+    Remove-Item -LiteralPath $discoveryDir -Force -ErrorAction SilentlyContinue
+    Write-Host "[dev.ps1] nuked $removed entries under $discoveryDir"
     exit 0
 }
 
@@ -219,6 +262,76 @@ $destExe = Join-Path $destDir "claudette-$triple.exe"
 Copy-Item $srcExe $destExe -Force
 Write-Host "▸ Staged sidecar:   $destExe"
 
+# Stage the Pi SDK harness sidecar at the same path Tauri's
+# `bundle.externalBin` expects. The .sh helper `stage-pi-harness-sidecar.sh`
+# is what `tauri.conf.json`'s `beforeDevCommand` runs on Unix; this script
+# bypasses `beforeDevCommand`, so without an inline equivalent
+# `resolve_pi_harness_path()` would never find a Windows Pi sidecar and
+# the Pi backend would be unusable in dev.ps1 sessions.
+$piTarget = switch ($triple) {
+    'x86_64-pc-windows-msvc'  { 'bun-windows-x64' }
+    'aarch64-pc-windows-msvc' { 'bun-windows-arm64' }
+    default                   { $null }
+}
+if (-not $piTarget) {
+    Write-Warning "Skipping Pi harness staging: unsupported triple '$triple'"
+} elseif (-not (Get-Command bun -ErrorAction SilentlyContinue)) {
+    Write-Warning "Skipping Pi harness staging: bun not on PATH"
+} else {
+    Write-Host "▸ Building claudette-pi-harness for $triple"
+    $piRoot = Join-Path $repoRoot 'src-pi-harness'
+    # `bun install` so the workspace has the Pi SDK npm tree available
+    # for both `bun run typecheck` and `bun build --compile`. Frozen
+    # lockfile to match CI.
+    $piInstall = Start-Process bun `
+        -ArgumentList @('install', '--frozen-lockfile') `
+        -WorkingDirectory $piRoot `
+        -NoNewWindow -Wait -PassThru
+    if ($piInstall.ExitCode -ne 0) {
+        Write-Error "Pi harness bun install failed (exit $($piInstall.ExitCode))"
+        exit $piInstall.ExitCode
+    }
+    if ($env:CLAUDETTE_PI_HARNESS_SKIP_TYPECHECK -ne '1') {
+        # `bun build --compile` transpiles without type-checking, so a
+        # standalone `tsc --noEmit` pass turns latent protocol/SDK drift
+        # into a clear staging failure instead of a sidecar that runs
+        # but misbehaves. Mirrors stage-pi-harness-sidecar.sh.
+        $piTypecheck = Start-Process bun `
+            -ArgumentList @('run', 'typecheck') `
+            -WorkingDirectory $piRoot `
+            -NoNewWindow -Wait -PassThru
+        if ($piTypecheck.ExitCode -ne 0) {
+            Write-Error "Pi harness typecheck failed (exit $($piTypecheck.ExitCode))"
+            exit $piTypecheck.ExitCode
+        }
+    }
+    $piDestExe = Join-Path $destDir "claudette-pi-harness-$triple.exe"
+    $piBuild = Start-Process bun `
+        -ArgumentList @(
+            'build',
+            'src/main.ts',
+            '--compile',
+            "--target=$piTarget",
+            '--outfile', $piDestExe
+        ) `
+        -WorkingDirectory $piRoot `
+        -NoNewWindow -Wait -PassThru
+    if ($piBuild.ExitCode -ne 0) {
+        Write-Error "Pi harness bun build failed (exit $($piBuild.ExitCode))"
+        exit $piBuild.ExitCode
+    }
+    # `resolve_pi_package_dir` looks for the Pi npm package metadata
+    # next to the harness binary so `getAgentDir()` can resolve session
+    # paths correctly. Copy the metadata into `<destDir>/pi/`.
+    $piPkgSrc = Join-Path $piRoot 'node_modules\@earendil-works\pi-coding-agent\package.json'
+    if (Test-Path $piPkgSrc) {
+        $piPkgDest = Join-Path $destDir 'pi'
+        New-Item -ItemType Directory -Force -Path $piPkgDest | Out-Null
+        Copy-Item $piPkgSrc (Join-Path $piPkgDest 'package.json') -Force
+    }
+    Write-Host "▸ Staged Pi harness: $piDestExe"
+}
+
 # 5) `bun install` so a fresh clone has node_modules before Vite
 #    starts. Mirrors dev.sh's explicit pre-install pass. Unlike dev.sh
 #    we *don't* also get a second pass from `tauri.conf.json`'s
@@ -266,11 +379,11 @@ $discoveryPayload = [ordered]@{
 
 Write-Host "▸ Discovery file:   $discoveryFile"
 
-# --clean: per-PID sandbox so a parallel `dev --clean` doesn't reuse this
-# session's state. Mirrors dev.sh's clean_root layout under the same
-# discovery dir so the cleanup sweep finds it predictably. The trap
-# below removes the directory on script exit; a hard kill leaves it
-# behind, but it's under $env:TEMP so it won't leak forever.
+# --new: per-PID sandbox so a parallel `dev --new` doesn't reuse this
+# session's state. Mirrors dev.sh's sandbox layout under the same
+# discovery dir so `dev --clean` finds it predictably. The trap below
+# removes the directory on script exit; a hard kill leaves it behind,
+# but it's under $env:TEMP and `dev --clean` will nuke it later.
 #
 # Three env vars get pointed at the sandbox — only the first two are
 # Claudette-specific:
@@ -280,7 +393,7 @@ Write-Host "▸ Discovery file:   $discoveryFile"
 #   CLAUDE_CONFIG_DIR   ~/.claude/ tree, owned by the *Claude CLI* but
 #                       actively read+written by Claudette: settings.json,
 #                       .credentials.json, plugins/, plugins/marketplaces/.
-#                       Without this, a --clean run that touches plugins,
+#                       Without this, a --new run that touches plugins,
 #                       auth, or marketplaces writes those changes into
 #                       the user's real ~/.claude/, defeating the
 #                       "simulate a new user" purpose of the flag.
@@ -291,29 +404,29 @@ Write-Host "▸ Discovery file:   $discoveryFile"
 # `&` runs the script in the same process. Without restoring the
 # original values on exit, the user's shell would still have
 # CLAUDE_CONFIG_DIR / CLAUDETTE_HOME / CLAUDETTE_DATA_DIR pointing at
-# the now-deleted clean root after `dev --clean` completes — silently
+# the now-deleted sandbox after `dev --new` completes — silently
 # affecting any subsequent Claudette CLI usage from that prompt. We
 # therefore snapshot the prior values (or absence) up front and put
 # the unset/restore in the same PowerShell.Exiting handler that
 # removes the temp tree.
-$cleanRoot = $null
+$newRoot = $null
 $prevClaudetteHome     = $null
 $prevClaudetteDataDir  = $null
 $prevClaudeConfigDir   = $null
-$cleanSandboxEnvVars   = $false
-if ($cleanSession) {
-    $cleanRoot = Join-Path $discoveryDir "clean-$PID"
+$sandboxEnvVarsActive  = $false
+if ($newSession) {
+    $newRoot = Join-Path $discoveryDir "new-$PID"
     $prevClaudetteHome    = if (Test-Path Env:\CLAUDETTE_HOME)     { $env:CLAUDETTE_HOME }     else { $null }
     $prevClaudetteDataDir = if (Test-Path Env:\CLAUDETTE_DATA_DIR) { $env:CLAUDETTE_DATA_DIR } else { $null }
     $prevClaudeConfigDir  = if (Test-Path Env:\CLAUDE_CONFIG_DIR)  { $env:CLAUDE_CONFIG_DIR }  else { $null }
-    $cleanSandboxEnvVars  = $true
-    $env:CLAUDETTE_HOME      = Join-Path $cleanRoot 'home'
-    $env:CLAUDETTE_DATA_DIR  = Join-Path $cleanRoot 'data'
-    $env:CLAUDE_CONFIG_DIR   = Join-Path $cleanRoot 'claude-config'
+    $sandboxEnvVarsActive = $true
+    $env:CLAUDETTE_HOME      = Join-Path $newRoot 'home'
+    $env:CLAUDETTE_DATA_DIR  = Join-Path $newRoot 'data'
+    $env:CLAUDE_CONFIG_DIR   = Join-Path $newRoot 'claude-config'
     New-Item -ItemType Directory -Force -Path $env:CLAUDETTE_HOME | Out-Null
     New-Item -ItemType Directory -Force -Path $env:CLAUDETTE_DATA_DIR | Out-Null
     New-Item -ItemType Directory -Force -Path $env:CLAUDE_CONFIG_DIR | Out-Null
-    Write-Host "▸ Clean session:      $cleanRoot"
+    Write-Host "▸ Fresh-user session: $newRoot"
     Write-Host "▸ CLAUDETTE_HOME:     $env:CLAUDETTE_HOME"
     Write-Host "▸ CLAUDETTE_DATA_DIR: $env:CLAUDETTE_DATA_DIR"
     Write-Host "▸ CLAUDE_CONFIG_DIR:  $env:CLAUDE_CONFIG_DIR"
@@ -332,11 +445,11 @@ if ($cleanSession) {
 # The env-var section restores each of the three sandbox vars to its
 # pre-launch value (or removes it entirely if it wasn't set), so the
 # caller's PowerShell session is left exactly as it was before
-# `dev --clean` ran. Sentinel literal `__UNSET__` rides through the
+# `dev --new` ran. Sentinel literal `__UNSET__` rides through the
 # format string to distinguish "wasn't set" from "was set to empty
 # string" — both legal pre-states, but they need different handling.
-$cleanRootForCleanup = if ($null -eq $cleanRoot) { '' } else { $cleanRoot }
-$envScrubFlag        = if ($cleanSandboxEnvVars) { '1' } else { '' }
+$cleanRootForCleanup = if ($null -eq $newRoot) { '' } else { $newRoot }
+$envScrubFlag        = if ($sandboxEnvVarsActive) { '1' } else { '' }
 $prevHomeForCleanup       = if ($null -eq $prevClaudetteHome)    { '__UNSET__' } else { $prevClaudetteHome }
 $prevDataDirForCleanup    = if ($null -eq $prevClaudetteDataDir) { '__UNSET__' } else { $prevClaudetteDataDir }
 $prevConfigDirForCleanup  = if ($null -eq $prevClaudeConfigDir)  { '__UNSET__' } else { $prevClaudeConfigDir }

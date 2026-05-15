@@ -5,6 +5,8 @@ pub mod codex_app_server;
 mod environment;
 pub mod harness;
 mod naming;
+#[cfg(feature = "pi-sdk")]
+pub mod pi_sdk;
 mod process;
 mod session;
 mod types;
@@ -30,6 +32,8 @@ pub use harness::{
 pub use naming::{
     generate_branch_name, generate_session_name, persist_claude_custom_title, sanitize_branch_name,
 };
+#[cfg(feature = "pi-sdk")]
+pub use pi_sdk::{PiSdkModel, PiSdkOptions, PiSdkSession, resolve_pi_harness_path};
 pub use process::{AgentEvent, TurnHandle, run_turn, stop_agent, stop_agent_graceful};
 pub use session::PersistentSession;
 pub use types::{

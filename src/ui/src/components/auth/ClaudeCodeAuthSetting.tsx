@@ -29,6 +29,7 @@ export function ClaudeCodeAuthSetting() {
     status: "checking",
   });
 
+  const setClaudeAuthMethod = useAppStore((s) => s.setClaudeAuthMethod);
   const refreshStatus = useCallback(
     async (validate = false): Promise<ClaudeAuthStatus | null> => {
       setStatusCheck({ status: "checking" });
@@ -36,13 +37,17 @@ export function ClaudeCodeAuthSetting() {
         const value = await getClaudeAuthStatus(validate);
         applyAuthStatusRecovery(value, validate);
         setStatusCheck({ status: "ready", value });
+        // Mirror the latest auth method into the slice so the model
+        // picker's Pi/anthropic hide reacts to login / logout in
+        // real time without waiting for the next app restart.
+        setClaudeAuthMethod(value.loggedIn ? value.authMethod : null);
         return value;
       } catch (e) {
         setStatusCheck({ status: "error", error: String(e) });
         return null;
       }
     },
-    [applyAuthStatusRecovery],
+    [applyAuthStatusRecovery, setClaudeAuthMethod],
   );
 
   const { authState, startAuthLogin, cancelAuthLogin, submitAuthCode } =

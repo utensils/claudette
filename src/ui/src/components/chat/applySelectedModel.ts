@@ -41,10 +41,17 @@ export async function applySelectedModel(
   store.clearPlanApproval(sessionId);
   store.clearAgentApproval(sessionId);
 
+  // Match every other registry consumer's OAuth Pi-anthropic gate.
+  // Without this the `/model` slash command can `findModelInRegistry`
+  // a Pi/anthropic row (and thus read its capabilities) for an OAuth
+  // subscriber whose resolver will refuse the send a moment later.
+  const isClaudeOauthSubscriber =
+    store.claudeAuthMethod?.toLowerCase() === "oauth_token";
   const registry = buildModelRegistry(
     store.alternativeBackendsEnabled,
     store.agentBackends,
     store.codexEnabled,
+    { isClaudeOauthSubscriber, piSdkAvailable: store.piSdkAvailable },
   );
   const selectedEntry = findModelInRegistry(registry, model, nextProvider);
   const supportsFast = selectedEntry?.supportsFastMode ?? isFastSupported(model);

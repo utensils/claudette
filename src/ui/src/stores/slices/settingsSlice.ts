@@ -70,6 +70,13 @@ export interface SettingsSlice {
   setDisable1mContext: (v: boolean) => void;
   alternativeBackendsAvailable: boolean;
   setAlternativeBackendsAvailable: (available: boolean) => void;
+  /// Whether the Pi harness was compiled into this binary. Reflects
+  /// the Rust `pi-sdk` cargo feature: false in a build that opted out.
+  /// The UI uses this to hide Pi cards and the Pi runtime option even
+  /// when `alternativeBackendsAvailable` is true (a build can ship
+  /// Codex Native alt-backend support without Pi).
+  piSdkAvailable: boolean;
+  setPiSdkAvailable: (available: boolean) => void;
   alternativeBackendsEnabled: boolean;
   setAlternativeBackendsEnabled: (enabled: boolean) => void;
   codexEnabled: boolean;
@@ -78,6 +85,18 @@ export interface SettingsSlice {
   setAgentBackends: (backends: AgentBackendConfig[]) => void;
   defaultAgentBackendId: string;
   setDefaultAgentBackendId: (id: string) => void;
+  /**
+   * Latest auth method reported by `get_claude_auth_status`. `oauth_token`
+   * is the Claude subscription path — Pi must not surface Anthropic
+   * models for those users (see ModelSelector + the Rust-side
+   * `ensure_anthropic_not_routed_through_pi_via_oauth` gate).
+   *
+   * `null` = unknown / not signed in / probe hasn't run yet. Treated as
+   * "no subscription gate" so the picker is fully visible until the
+   * probe completes.
+   */
+  claudeAuthMethod: string | null;
+  setClaudeAuthMethod: (method: string | null) => void;
   /// Which revision the Monaco git gutter compares the editor buffer
   /// against. "head" (default) shows uncommitted changes only; "merge_base"
   /// shows every change made on the workspace's branch since it diverged
@@ -184,6 +203,8 @@ export const createSettingsSlice: StateCreator<
       alternativeBackendsEnabled: available ? state.alternativeBackendsEnabled : false,
       codexEnabled: available ? state.codexEnabled : false,
     })),
+  piSdkAvailable: false,
+  setPiSdkAvailable: (available) => set({ piSdkAvailable: available }),
   alternativeBackendsEnabled: false,
   setAlternativeBackendsEnabled: (enabled) =>
     set((state) => ({
@@ -198,6 +219,8 @@ export const createSettingsSlice: StateCreator<
   setAgentBackends: (backends) => set({ agentBackends: backends }),
   defaultAgentBackendId: "anthropic",
   setDefaultAgentBackendId: (id) => set({ defaultAgentBackendId: id }),
+  claudeAuthMethod: null,
+  setClaudeAuthMethod: (method) => set({ claudeAuthMethod: method }),
   editorGitGutterBase: "head",
   setEditorGitGutterBase: (value) => set({ editorGitGutterBase: value }),
   editorMinimapEnabled: false,

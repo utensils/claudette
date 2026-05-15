@@ -163,8 +163,14 @@ pub async fn archive_chat_session(
         .ok_or("Session not found")?;
     let workspace_id = session.workspace_id.clone();
 
-    // Stop and remove the live agent for this session.
-    // Capture the PID under the lock, then drop the lock before the async stop.
+    // Stop and remove the live agent for this session. Capture the PID under
+    // the lock, then drop the lock before the async stop.
+    //
+    // Intentionally do NOT delete the Pi session directory here — archive is
+    // a reversible soft-delete (`restore_chat_session` keeps `session_id`),
+    // so removing the on-disk transcript would leave a restored chat unable
+    // to resume. Pi session-dir cleanup belongs in the reset / permanent
+    // delete paths, not archive.
     let pid_to_stop = {
         let mut agents = state.agents.write().await;
         agents
