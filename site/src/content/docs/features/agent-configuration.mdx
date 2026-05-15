@@ -123,7 +123,7 @@ The turn banner in the chat timeline shows the model, effort level, and any non-
 
 ## Agent Providers
 
-Claudette can run agents against additional providers — [Ollama](/claudette/features/providers/ollama/) (local, Anthropic-wire), [LM Studio](/claudette/features/providers/lm-studio/) (local, Anthropic-wire via `/v1/messages`), [OpenAI](/claudette/features/providers/openai-codex/#openai-api) (remote, gateway-translated), [Codex](/claudette/features/providers/openai-codex/#codex), or [Pi](/claudette/features/providers/pi/) (SDK sidecar harness) — instead of the official `claude` CLI. These providers are configured in **Settings > Models**; Codex, Ollama, LM Studio, and Pi are auto-detected or refreshed when available unless you manually turn them off where supported.
+Claudette can run agents against additional providers — [Ollama](/claudette/features/providers/ollama/) (local, Anthropic-wire), [LM Studio](/claudette/features/providers/lm-studio/) (local, Anthropic-wire via `/v1/messages`), [OpenAI](/claudette/features/providers/openai-codex/#openai-api) (remote, gateway-translated), [Codex](/claudette/features/providers/openai-codex/#codex), or [Pi](/claudette/features/providers/pi/) (SDK sidecar harness) — instead of the official `claude` CLI. These providers are configured in **Settings > Models**; Codex, Ollama, and LM Studio are auto-detected on startup when available unless you manually turn them off. Pi is always shown but is refreshed explicitly via its **Refresh models** action rather than at launch.
 
 Several chat-header toggles on this page only apply to certain providers. The capability matrix in the dedicated section shows the full picture, but the highlights:
 

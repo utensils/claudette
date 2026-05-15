@@ -62,7 +62,7 @@ Default Pi selection uses the existing global model settings:
 
 **A write or shell command is waiting.** Approve or deny the Claudette permission card in the chat timeline. Pi mutating tools intentionally wait on Claudette approval.
 
-**The sidecar cannot find Pi assets.** In a dev build, run `./scripts/stage-pi-harness-sidecar.sh` or `./scripts/stage-cli-sidecar.sh` before launching Tauri. Release builds stage this automatically.
+**`claudette-pi-harness not installed` in a dev build.** Launch via `./scripts/dev.sh` (not bare `cargo tauri dev`). The launcher stages the Bun-compiled sidecar into `src-tauri/binaries/` and, on macOS, mirrors it into the dev `.app`'s `Contents/MacOS/` so the resolver's `current_exe.parent()` lookup succeeds the same way it does in a release build. If you must run `cargo tauri dev` directly for some reason, export `CLAUDETTE_PI_HARNESS=$(pwd)/src-tauri/binaries/claudette-pi-harness-$(rustc -vV | awk '/host:/ {print $2}')` to point the resolver at the staged binary. Release builds stage everything automatically.
 
 ## See also
 
