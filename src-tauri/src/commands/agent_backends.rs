@@ -42,6 +42,15 @@ const LEGACY_NATIVE_CODEX_SETTING_KEY: &str = "experimental_codex_enabled";
 const FIRST_CLASS_BACKENDS_PROMOTION_KEY: &str = "agent_backends_first_class_promoted";
 const AUTO_DETECT_DISABLED_PREFIX: &str = "agent_backend_auto_detect_disabled:";
 const AUTO_DETECT_TIMEOUT: Duration = Duration::from_millis(900);
+// Pi's discovery cold-starts a Bun-compiled sidecar binary, boots the
+// Pi SDK, and enumerates 300+ models — easily 2–5s on first launch,
+// well past the 900ms budget we use for cheap localhost HTTP probes.
+// A short timeout here silently swallowed the discovery result and
+// left the Pi card with an empty `discovered_models` list at startup
+// (only the manual seeds were visible), forcing the user to open
+// Settings and click Refresh. 8s covers a cold Bun start with margin
+// and still bounds the worst case if the sidecar hangs.
+const PI_AUTO_DETECT_TIMEOUT: Duration = Duration::from_secs(8);
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BackendStatus {
@@ -1762,7 +1771,12 @@ async fn probe_model_discovery_backend(
         };
     };
     let backend_id = backend.id.clone();
-    match tokio::time::timeout(AUTO_DETECT_TIMEOUT, discover_models(&backend)).await {
+    // Pi cold-starts a sidecar; everything else hits a fast localhost
+    // endpoint. Pick the budget per kind rather than holding everyone
+    // to Pi's worst case (which would slow first-paint of the Settings
+    // panel and the chat picker for unrelated cards).
+    let timeout = backend_auto_detect_timeout(&backend);
+    match tokio::time::timeout(timeout, discover_models(&backend)).await {
         Ok(Ok(models)) => BackendAutoDetection {
             backend_id,
             detected: true,
@@ -1779,8 +1793,26 @@ async fn probe_model_discovery_backend(
             backend_id,
             detected: false,
             discovered_models: Vec::new(),
-            warning: None,
+            // Surface the timeout as a warning so it's visible in the
+            // settings panel's status strip instead of vanishing
+            // silently — that silent swallow was exactly what hid the
+            // Pi cold-start case before the per-kind timeout split.
+            warning: Some(format!(
+                "Auto-detect timed out for {} after {}s",
+                backend.label,
+                timeout.as_secs_f32().round() as u64
+            )),
         },
+    }
+}
+
+/// Per-backend timeout for the startup auto-detect probe. Pi runs a
+/// Bun-compiled sidecar with a multi-second cold start; HTTP-probe
+/// backends get the tighter default so they don't drag out launch.
+fn backend_auto_detect_timeout(backend: &AgentBackendConfig) -> Duration {
+    match backend.kind {
+        AgentBackendKind::PiSdk => PI_AUTO_DETECT_TIMEOUT,
+        _ => AUTO_DETECT_TIMEOUT,
     }
 }
 
@@ -5501,6 +5533,26 @@ data: [DONE]
         assert_eq!(
             resolve_dispatch_harness(&ollama, &backends),
             AgentBackendRuntimeHarness::PiSdk,
+        );
+    }
+
+    #[test]
+    fn pi_gets_a_longer_auto_detect_timeout_than_http_probes() {
+        // Pi cold-starts a Bun sidecar plus boots the Pi SDK, which can
+        // easily exceed the 900ms budget the HTTP probes use. Pin the
+        // per-kind split so a future tidy pass doesn't accidentally
+        // re-flatten Pi back into the short budget — which is the bug
+        // that left the Pi card with an empty discovered_models at
+        // startup before this fix.
+        let ollama = AgentBackendConfig::builtin_ollama();
+        let lm_studio = AgentBackendConfig::builtin_lm_studio();
+        let pi = AgentBackendConfig::builtin_pi_sdk();
+        assert_eq!(backend_auto_detect_timeout(&ollama), AUTO_DETECT_TIMEOUT);
+        assert_eq!(backend_auto_detect_timeout(&lm_studio), AUTO_DETECT_TIMEOUT);
+        assert_eq!(backend_auto_detect_timeout(&pi), PI_AUTO_DETECT_TIMEOUT);
+        assert!(
+            PI_AUTO_DETECT_TIMEOUT > AUTO_DETECT_TIMEOUT,
+            "Pi timeout must exceed the HTTP-probe default"
         );
     }
 

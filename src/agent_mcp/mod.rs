@@ -84,6 +84,18 @@ JSON, Markdown — each with its own size cap. For any other type \
 will be rejected. Instead, tell the user the absolute path on disk so \
 they can open it manually.";
 
+/// Claude-CLI-only rules that reference MCP tools shipped by the Claude
+/// Code runtime (`AskUserQuestion`, `ExitPlanMode`). These tools do not
+/// exist in the Pi SDK or the Codex app-server harnesses, so the rules
+/// only get appended for Claude CLI sessions — otherwise the model is
+/// told to use tools it doesn't have, which is both confusing for the
+/// model and a small step in the wrong direction for accuracy.
+pub const CLAUDE_CODE_MCP_RULES: &str = "\
+## Rules\n\
+\n\
+- Whenever you have a question for the user — no matter how minor — you MUST use the `AskUserQuestion` tool. No exceptions: do not ask questions in plain text output.\n\
+- Before complaining about a permissions error or denied tool call, check whether you are in plan mode. If you are in plan mode, you must exit plan mode (via `ExitPlanMode`) before retrying — many tools are intentionally blocked while planning.";
+
 #[cfg(test)]
 mod builtin_tests {
     use super::*;

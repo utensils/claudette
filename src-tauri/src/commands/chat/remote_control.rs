@@ -488,8 +488,14 @@ async fn ensure_persistent_session_for_remote_control(
         from_config.or_else(|| repo.as_ref().and_then(|r| r.custom_instructions.clone()))
     };
     let nudge = send_to_user_enabled.then_some(claudette::agent_mcp::SYSTEM_PROMPT_NUDGE);
-    let custom_instructions =
-        claudette::global_prompt::compose_system_prompt(instructions.as_deref(), nudge);
+    // Remote-control sessions always launch through Claude CLI, so the
+    // Claude-Code MCP rule block applies (AskUserQuestion / ExitPlanMode
+    // exist via the Claudette MCP bridge).
+    let custom_instructions = claudette::global_prompt::compose_system_prompt(
+        instructions.as_deref(),
+        nudge,
+        Some(claudette::agent_mcp::CLAUDE_CODE_MCP_RULES),
+    );
     let level = launch_options.permission_level.as_deref().unwrap_or("full");
     if !matches!(level, "readonly" | "standard" | "full") {
         tracing::warn!(

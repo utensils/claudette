@@ -1227,14 +1227,19 @@ pub async fn send_chat_message(
     let custom_instructions = claudette::global_prompt::compose_system_prompt(
         session.custom_instructions.as_deref(),
         nudge,
+        // Claude CLI exposes `AskUserQuestion` / `ExitPlanMode` via the
+        // Claudette MCP bridge, so those rules apply here.
+        Some(claudette::agent_mcp::CLAUDE_CODE_MCP_RULES),
     );
-    // Pi runs without the Claudette MCP bridge, so nudging the model
-    // toward `mcp__claudette__send_to_user` would point at a non-
-    // existent tool. Compose a separate prompt for the Pi branch that
-    // keeps the global system prompt + per-repo instructions but
-    // omits the MCP nudge.
+    // Pi runs without the Claudette MCP bridge, so we strip both the
+    // send_to_user nudge *and* the AskUserQuestion / ExitPlanMode
+    // rules. Pointing a qwen / llama / GPT model at MCP tools that
+    // aren't registered with its runtime confuses the model's tool
+    // self-model and is part of why "what LLM are you?" used to come
+    // back with "Claude Code agent" answers on Pi sessions.
     let pi_custom_instructions = claudette::global_prompt::compose_system_prompt(
         session.custom_instructions.as_deref(),
+        None,
         None,
     );
     session.turn_count += 1;

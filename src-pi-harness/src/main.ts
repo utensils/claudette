@@ -624,19 +624,6 @@ async function startSession(message: RequestMessage): Promise<void> {
   state.authStorage = AuthStorage.create();
   state.modelRegistry = ModelRegistry.create(state.authStorage);
 
-  const settingsManager = SettingsManager.create(cwd, agentDir);
-  const resourceLoader = new DefaultResourceLoader({
-    cwd,
-    agentDir,
-    settingsManager,
-    appendSystemPromptOverride: (basePrompt: string[]) => [
-      ...basePrompt,
-      ...(customInstructions ? [customInstructions] : []),
-      "You are running inside Claudette using the Pi SDK harness. Use the available tools normally; Claudette will ask the user for approval before mutating commands or file changes.",
-    ],
-  });
-  await resourceLoader.reload();
-
   let model: Awaited<ReturnType<typeof findModel>> | undefined = undefined;
   if (requestedModel) {
     model = findModel(requestedModel);
@@ -650,6 +637,35 @@ async function startSession(message: RequestMessage): Promise<void> {
       );
     }
   }
+
+  // Identity preface for the session's system prompt. Pi sessions can
+  // run any provider's model (qwen via Ollama, GPT via OpenAI, Anthropic
+  // via api.anthropic.com, etc.). Without an explicit identity line the
+  // model is left to guess "what LLM am I?" — and guesses often land on
+  // whatever brand showed up most in its training data ("Claude Code",
+  // "ChatGPT"), which is wrong here. Pin the actual model id when we
+  // know it; fall back to a generic Pi identity when the SDK is choosing
+  // the model on our behalf.
+  const piIdentity = [
+    "You are an AI coding agent running inside Claudette, dispatched through the Pi SDK harness.",
+    model?.id
+      ? `Your underlying model is "${model.id}". If asked "what LLM are you" or any equivalent identity question, answer truthfully with that model id and the Pi harness — do not claim to be Claude, ChatGPT, or any other product.`
+      : "If asked what model or LLM you are, say so plainly rather than guessing — do not claim to be Claude or ChatGPT.",
+    "Use the available tools normally; Claudette will ask the user for approval before mutating commands or file changes.",
+  ].join(" ");
+
+  const settingsManager = SettingsManager.create(cwd, agentDir);
+  const resourceLoader = new DefaultResourceLoader({
+    cwd,
+    agentDir,
+    settingsManager,
+    appendSystemPromptOverride: (basePrompt: string[]) => [
+      ...basePrompt,
+      ...(customInstructions ? [customInstructions] : []),
+      piIdentity,
+    ],
+  });
+  await resourceLoader.reload();
   const manager = sessionDir
     ? SessionManager.create(cwd, sessionDir)
     : SessionManager.inMemory();
