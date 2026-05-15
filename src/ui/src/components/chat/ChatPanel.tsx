@@ -369,7 +369,18 @@ export function ChatPanel() {
           selectedWorkspaceId,
           checkpointId,
         );
-        addWorkspace(result.workspace);
+        // Stamp the UI-only `remote_connection_id: null` field. The
+        // Rust `Workspace` model doesn't serialize this field, so the
+        // value coming back over IPC is `undefined`. The
+        // `useWorkspaceEnvironmentPreparation` hook treats
+        // `undefined` as "workspace not yet hydrated" and bails out of
+        // `prepare_workspace_environment`, so without this stamp the
+        // workspace is stranded in `selectWorkspace`'s `"preparing"`
+        // state until the `workspaces-changed` event handler lands and
+        // re-merges. The backend now emits that event from the fork
+        // command, but stamping here keeps the in-flight UI consistent
+        // regardless of event timing.
+        addWorkspace({ ...result.workspace, remote_connection_id: null });
         selectWorkspace(result.workspace.id);
       } catch (err) {
         setError(`Failed to fork workspace: ${err}`);
