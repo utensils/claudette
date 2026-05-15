@@ -92,13 +92,44 @@
   padding-top: 8px;
 }
 
-.groupLabel {
+.groupHeader {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   padding: 4px 10px 6px;
+}
+
+.groupLabel {
   font-size: 10px;
   font-weight: 700;
   color: var(--accent-primary);
   text-transform: uppercase;
   letter-spacing: 0.08em;
+}
+
+/* Subtle pill that surfaces the dispatch path (e.g. "via Pi") next to
+ * a section header. Visually quieter than `.groupLabel` so it reads as
+ * metadata rather than competing with the section name. The Pi variant
+ * picks up an accent tint so the "this section is sidecar-routed"
+ * pattern is recognizable at a glance. */
+.routingBadge {
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  background: var(--bg-secondary);
+  border: 1px solid var(--divider);
+  border-radius: 999px;
+  padding: 1px 7px;
+  line-height: 14px;
+  white-space: nowrap;
+}
+
+.routingBadgePi {
+  color: var(--accent-primary);
+  background: rgba(var(--accent-primary-rgb), 0.08);
+  border-color: rgba(var(--accent-primary-rgb), 0.28);
 }
 
 .subSection {

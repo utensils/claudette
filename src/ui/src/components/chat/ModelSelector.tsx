@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
+import type { TFunction } from "i18next";
 import {
   CircleDollarSign,
   ChevronRight,
@@ -52,6 +53,16 @@ interface Section {
   /** Populated only for the Pi section. Each entry has its own
    *  "Show all" disclosure rather than a single section-wide one. */
   piSubSections: PiSubSection[];
+  /** Effective harness for the backend that supplied this section's
+   *  models, inherited from the first model. Drives the
+   *  "via Pi" / "via Claude CLI" badge in the section header so the
+   *  user can see at a glance which sidecar will run the turn. */
+  runtimeHarness?: string;
+  /** Backend `kind` carried up from the first model, used to scope
+   *  badge rendering (e.g. only show "via Pi" on cards whose
+   *  allow-list contains both Pi and Claude CLI — Ollama / LM Studio /
+   *  Custom OpenAI / Codex Native). */
+  providerKind?: string;
 }
 
 /**
@@ -75,6 +86,11 @@ function buildSections(models: readonly Model[]): Section[] {
         primary: [],
         legacy: [],
         piSubSections: [],
+        // Inherit the dispatch metadata from the first model in this
+        // section — all models in a flat backend section share a
+        // backend, so these fields are constant per section.
+        runtimeHarness: model.runtimeHarness,
+        providerKind: model.providerKind,
       };
       sections.set(key, section);
     }
@@ -424,7 +440,10 @@ export function ModelSelector({
           ) : (
             sections.map((section) => (
               <div key={section.key} className={styles.section}>
-                <div className={styles.groupLabel}>{section.label}</div>
+                <div className={styles.groupHeader}>
+                  <span className={styles.groupLabel}>{section.label}</span>
+                  {renderRoutingBadge(section, t)}
+                </div>
                 {rowsForSection(section)}
               </div>
             ))
@@ -432,6 +451,64 @@ export function ModelSelector({
         </div>
       </div>
     </>
+  );
+}
+
+/** Render a small "via Pi" / "via Claude CLI" pill next to a section
+ *  header. The pill shows the dispatch path Settings has chosen for
+ *  this section's backend — important for cards like Ollama and LM
+ *  Studio where the user (and a quick glance at the picker) can't
+ *  otherwise tell which sidecar will actually run the turn. We hide
+ *  the pill when the harness matches what the section's label already
+ *  implies: the Pi card → Pi runtime is redundant, and a Codex Native
+ *  → Codex app-server runtime is the obvious default. */
+function renderRoutingBadge(
+  section: Section,
+  t: TFunction<"chat">,
+): React.ReactNode {
+  const { runtimeHarness, providerKind } = section;
+  if (!runtimeHarness || !providerKind) return null;
+  // Don't badge a card that's running its own native harness — the
+  // section label already says so.
+  if (providerKind === "pi_sdk" && runtimeHarness === "pi_sdk") return null;
+  if (providerKind === "codex_native" && runtimeHarness === "codex_app_server") return null;
+  if (providerKind === "anthropic" && runtimeHarness === "claude_code") return null;
+  if (providerKind === "custom_anthropic" && runtimeHarness === "claude_code") return null;
+  if (providerKind === "codex_subscription" && runtimeHarness === "claude_code") return null;
+  // Backends whose only sanctioned harness is `claude_code` (OpenAI /
+  // Custom OpenAI without a Pi opt-in) match the default — no badge.
+  if (
+    (providerKind === "openai_api" || providerKind === "custom_openai") &&
+    runtimeHarness === "claude_code"
+  ) {
+    return null;
+  }
+  let label: string;
+  let className = styles.routingBadge;
+  if (runtimeHarness === "pi_sdk") {
+    label = t("model_picker_routing_via_pi", { defaultValue: "via Pi" });
+    className = `${styles.routingBadge} ${styles.routingBadgePi}`;
+  } else if (runtimeHarness === "claude_code") {
+    label = t("model_picker_routing_via_claude_cli", {
+      defaultValue: "via Claude CLI",
+    });
+  } else if (runtimeHarness === "codex_app_server") {
+    label = t("model_picker_routing_via_codex", {
+      defaultValue: "via Codex app-server",
+    });
+  } else {
+    return null;
+  }
+  return (
+    <span
+      className={className}
+      title={t("model_picker_routing_tooltip", {
+        defaultValue:
+          "Dispatch path picked by this card's Runtime setting in Settings → Models.",
+      })}
+    >
+      {label}
+    </span>
   );
 }
 

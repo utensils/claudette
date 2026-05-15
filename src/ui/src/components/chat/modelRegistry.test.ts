@@ -327,6 +327,78 @@ describe("modelRegistry", () => {
     });
   });
 
+  describe("runtimeHarness on flat-backend models", () => {
+    it("tags Ollama models as Pi-routed by default", () => {
+      // Ollama's `available_harnesses` is `[pi_sdk, claude_code]`, so the
+      // implicit default the picker has to surface is Pi. The badge needs
+      // this to render "via Pi" on the section header.
+      const registry = buildModelRegistry(true, [
+        {
+          id: "ollama",
+          label: "Ollama",
+          kind: "ollama",
+          enabled: true,
+          capabilities: { thinking: false, effort: false, fast_mode: false },
+          manual_models: [],
+          discovered_models: [
+            { id: "llama3", label: "llama3", context_window_tokens: 128_000 },
+          ],
+        },
+      ]);
+      const llama = registry.find((m) => m.id === "llama3");
+      expect(llama?.runtimeHarness).toBe("pi_sdk");
+      expect(llama?.providerKind).toBe("ollama");
+    });
+
+    it("respects a persisted runtime override on Ollama (opt-in to Claude CLI)", () => {
+      const registry = buildModelRegistry(true, [
+        {
+          id: "ollama",
+          label: "Ollama",
+          kind: "ollama",
+          enabled: true,
+          runtime_harness: "claude_code",
+          capabilities: { thinking: false, effort: false, fast_mode: false },
+          manual_models: [],
+          discovered_models: [
+            { id: "llama3", label: "llama3", context_window_tokens: 128_000 },
+          ],
+        },
+      ]);
+      const llama = registry.find((m) => m.id === "llama3");
+      expect(llama?.runtimeHarness).toBe("claude_code");
+    });
+
+    it("ignores an out-of-bounds runtime override (defense in depth)", () => {
+      // Mirror of the Rust `effective_harness_ignores_override_not_in_available_set`
+      // test: a persisted value outside the kind's allow-list silently
+      // resolves to the default rather than crossing the routing gate.
+      // Uses a Custom-Anthropic-shaped row (allow-list is `["claude_code"]`)
+      // so the built-in `id === "anthropic"` filter in
+      // `shouldExposeBackendModels` doesn't suppress the test fixture.
+      const registry = buildModelRegistry(true, [
+        {
+          id: "claude-proxy",
+          label: "Claude Proxy",
+          kind: "custom_anthropic",
+          enabled: true,
+          runtime_harness: "pi_sdk", // not in Custom-Anthropic's allow-list
+          capabilities: { thinking: true, effort: false, fast_mode: false },
+          manual_models: [],
+          discovered_models: [
+            {
+              id: "claude-test",
+              label: "Claude Test",
+              context_window_tokens: 200_000,
+            },
+          ],
+        },
+      ]);
+      const claude = registry.find((m) => m.id === "claude-test");
+      expect(claude?.runtimeHarness).toBe("claude_code");
+    });
+  });
+
   describe("resolvePiSubProvider", () => {
     it("splits the provider prefix off provider-qualified ids", () => {
       expect(resolvePiSubProvider("openai/gpt-5.4")).toEqual({

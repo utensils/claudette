@@ -20,6 +20,14 @@ export type Model = {
   readonly providerLabel?: string;
   readonly providerKind?: string;
   readonly providerQualifiedId?: string;
+  /** Effective harness the resolver will pick for this model's backend
+   *  at send time. The picker uses this to surface "via Pi" / "via
+   *  Claude CLI" badges on aggregated-backend sections (Ollama, LM
+   *  Studio) so the user can see the dispatch path without opening
+   *  Settings. Not set for the Pi card itself (its group is already
+   *  "Pi") or for Claude Code curated models. Possible values:
+   *  `"pi_sdk"`, `"claude_code"`, `"codex_app_server"`. */
+  readonly runtimeHarness?: string;
   /** Display label of the *sub-provider* within a Pi-style aggregator
    *  backend (e.g. "OpenAI", "Anthropic", "Ollama"). Parsed from the
    *  `<provider>/<modelId>` id the Pi sidecar emits. Only populated for
@@ -90,6 +98,48 @@ export interface BackendRegistrySource {
   };
   manual_models: BackendRegistryModel[];
   discovered_models: BackendRegistryModel[];
+  /** Persisted runtime override. When undefined / null, the kind's
+   *  default applies. Mirror of `AgentBackendConfig.runtime_harness`. */
+  runtime_harness?: string | null;
+}
+
+/** Default harness per kind. Inlined to avoid pulling `services/tauri`
+ *  into this non-React module — mirrors `defaultHarnessForKind`
+ *  there. Keep both in sync. */
+const DEFAULT_HARNESS_BY_KIND: Readonly<Record<string, string>> = {
+  anthropic: "claude_code",
+  custom_anthropic: "claude_code",
+  codex_subscription: "claude_code",
+  ollama: "pi_sdk",
+  lm_studio: "pi_sdk",
+  openai_api: "claude_code",
+  custom_openai: "claude_code",
+  codex_native: "codex_app_server",
+  pi_sdk: "pi_sdk",
+};
+
+/** Sanctioned harnesses per kind. Mirror of `availableHarnessesForKind`
+ *  in `services/tauri/agentBackends.ts`. Used to validate the persisted
+ *  override defensively — a stale override outside the allow-list falls
+ *  back to the kind's default, same as the Rust resolver does. */
+const AVAILABLE_HARNESSES_BY_KIND: Readonly<Record<string, readonly string[]>> = {
+  anthropic: ["claude_code"],
+  custom_anthropic: ["claude_code"],
+  codex_subscription: ["claude_code"],
+  ollama: ["pi_sdk", "claude_code"],
+  lm_studio: ["pi_sdk", "claude_code"],
+  openai_api: ["claude_code", "pi_sdk"],
+  custom_openai: ["claude_code", "pi_sdk"],
+  codex_native: ["codex_app_server", "pi_sdk"],
+  pi_sdk: ["pi_sdk"],
+};
+
+function resolveEffectiveHarness(source: BackendRegistrySource): string | undefined {
+  if (!source.kind) return undefined;
+  const allowed = AVAILABLE_HARNESSES_BY_KIND[source.kind];
+  const override = source.runtime_harness ?? undefined;
+  if (override && allowed?.includes(override)) return override;
+  return DEFAULT_HARNESS_BY_KIND[source.kind];
 }
 
 type ParsedModelVersion = {
@@ -317,6 +367,9 @@ function collectFlatBackendModels(
   const rankedModels = rankBackendModels(backendModels);
   const primaryVersions = primaryVersionKeysByPrefix(rankedModels);
   const seen = new Set<string>();
+  // Compute the effective harness once per backend. The Pi-routing
+  // badge in the picker reads this off any model in the section.
+  const runtimeHarness = resolveEffectiveHarness(backend);
   for (const entry of rankedModels) {
     const { model } = entry;
     if (!model.id || seen.has(model.id)) continue;
@@ -336,6 +389,7 @@ function collectFlatBackendModels(
       providerLabel: providerDisplayLabel,
       providerKind: backend.kind,
       providerQualifiedId: `${backend.id}/${model.id}`,
+      runtimeHarness,
       supportsThinking: isNativeCodex || backend.capabilities.thinking,
       supportsEffort: isNativeCodex || backend.capabilities.effort,
       supportsFastMode: isNativeCodex || backend.capabilities.fast_mode,
