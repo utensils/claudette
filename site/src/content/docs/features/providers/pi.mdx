@@ -11,10 +11,8 @@ This is a production provider path. It is always available in normal builds and 
 
 1. Install and configure Pi normally.
 2. Run `pi auth` in a terminal and connect the providers you want Pi to use.
-3. Open **Settings > Models** in Claudette.
-4. Find the **Pi** card.
-5. Click **Refresh models** to load models from Pi's `ModelRegistry`.
-6. Pick a Pi model as the default, or choose one per chat from the model picker.
+3. Launch Claudette. Pi's model list is refreshed automatically on startup — the Bun sidecar runs `ModelRegistry.getAvailable()` and the chat-header model picker shows the result. Use **Settings > Models > Pi > Refresh models** to re-run discovery if you change provider credentials while Claudette is running.
+4. Pick a Pi model as the default in **Settings > Models > Default model**, or choose one per chat from the model picker.
 
 The Pi card does not ask for a base URL or API key. Provider credentials stay in Pi's own auth/config storage.
 

@@ -235,11 +235,13 @@ pub async fn auto_detect_agent_backends(
         .iter()
         .find(|backend| backend.id == "lm-studio")
         .cloned();
+    let pi = backends.iter().find(|backend| backend.id == "pi").cloned();
     let probe_codex = should_probe_backend_auto_detection(&db, NATIVE_CODEX_BACKEND_ID)?;
     let probe_ollama = should_probe_backend_auto_detection(&db, "ollama")?;
     let probe_lm_studio = should_probe_backend_auto_detection(&db, "lm-studio")?;
+    let probe_pi = should_probe_backend_auto_detection(&db, "pi")?;
 
-    let (codex_detection, ollama_detection, lm_studio_detection) = tokio::join!(
+    let (codex_detection, ollama_detection, lm_studio_detection, pi_detection) = tokio::join!(
         async move {
             if probe_codex {
                 probe_codex_backend(codex).await
@@ -261,8 +263,27 @@ pub async fn auto_detect_agent_backends(
                 skipped_backend_auto_detection("lm-studio")
             }
         },
+        // Pi piggybacks on `probe_model_discovery_backend` because
+        // `discover_models` already dispatches to `discover_pi_models`
+        // for the `PiSdk` kind, which spawns the same Bun sidecar the
+        // Refresh button uses. Pi's discovery is heavier than a
+        // localhost probe (Bun cold-start), but it's the only way to
+        // populate the chat-header model picker on a fresh launch —
+        // without it the user only sees the two seed manual models.
+        async move {
+            if probe_pi {
+                probe_model_discovery_backend(pi).await
+            } else {
+                skipped_backend_auto_detection("pi")
+            }
+        },
     );
-    let mut detections = vec![codex_detection, ollama_detection, lm_studio_detection];
+    let mut detections = vec![
+        codex_detection,
+        ollama_detection,
+        lm_studio_detection,
+        pi_detection,
+    ];
     if detections.iter().any(|detection| {
         canonical_backend_id(&detection.backend_id) == NATIVE_CODEX_BACKEND_ID && detection.detected
     }) && !backend_auto_detect_disabled(&db, NATIVE_CODEX_BACKEND_ID)?

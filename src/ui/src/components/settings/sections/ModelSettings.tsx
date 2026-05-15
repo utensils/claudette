@@ -27,6 +27,7 @@ import {
 import { useAppStore } from "../../../stores/useAppStore";
 import { formatBackendError } from "../backendSettingsErrors";
 import { planAlternativeBackendDisableCleanup } from "../alternativeBackendCleanup";
+import { SearchableSelect } from "../SearchableSelect";
 import {
   LEGACY_CODEX_BACKEND,
   LEGACY_NATIVE_CODEX_BACKEND,
@@ -883,18 +884,18 @@ function BackendCard({
           <label className={styles.backendField}>
             <span className={styles.backendFieldLabel}>{t("models_backend_default_model")}</span>
             {discoveryBackend || modelOptions.length > 0 ? (
-              <select
-                className={styles.select}
+              <SearchableSelect
+                options={modelOptions.map((model) => ({
+                  value: model.id,
+                  label: model.label || model.id,
+                }))}
                 value={selectedDefaultModel}
-                onChange={(e) => setDraft({ ...draft, default_model: e.target.value || null })}
-              >
-                <option value="">{t("models_backend_default_auto")}</option>
-                {modelOptions.map((model) => (
-                  <option key={model.id} value={model.id}>
-                    {model.label || model.id}
-                  </option>
-                ))}
-              </select>
+                onChange={(next) =>
+                  setDraft({ ...draft, default_model: next || null })
+                }
+                autoOption={{ value: "", label: t("models_backend_default_auto") }}
+                ariaLabel={t("models_backend_default_model")}
+              />
             ) : (
               <input
                 className={styles.input}
