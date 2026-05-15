@@ -274,6 +274,10 @@ Key globals exposed in dev mode:
 - `window.__CLAUDETTE_STORE__` — Zustand store (`.getState()` / `.setState()`)
 - `window.__CLAUDETTE_INVOKE__` — Tauri `invoke` function
 
+### Voice click→prompt latency
+
+Every mic click emits one info-level event on the `claudette::voice` target with fields `provider_id`, `total_ms` (full `voice_start_recording` command duration), and `stream_open_ms` (just the cpal input-stream open). Watch it in the dev-build console or in `~/.claudette/logs/claudette.<date>.log`. Dev builds also emit a Tauri event `voice://debug/start_latency` with the same totals so the `/claudette-debug` skill can sample without log tailing. There is no cold/warm split — voice subsystems are intentionally not prewarmed at launch (see the macOS privacy-prompt contract above), so every click is effectively cold.
+
 All debug code is gated behind `#[cfg(debug_assertions)]` / `import.meta.env.DEV` and excluded from release builds. See `.claude/skills/claudette-debug/SKILL.md` for full docs.
 
 ## Dependencies
