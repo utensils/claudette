@@ -489,6 +489,47 @@ function capTextForTool(
   };
 }
 
+/** Per-stream byte-capped UTF-8 accumulator used by `runCommand`. The
+ *  chunks we get from `setEncoding("utf8")` are JS strings (UTF-16
+ *  units), so `chunk.length` is the wrong axis to compare against a
+ *  byte cap — heavily multi-byte output would overshoot the named
+ *  limit by 2–4×. Convert to UTF-8 bytes for the budget check, and
+ *  when a chunk overflows the remaining room, re-slice on the byte
+ *  buffer and drop a trailing replacement char if we landed mid-
+ *  codepoint. */
+function makeStreamCapture(limitBytes: number) {
+  let bytes = 0;
+  let truncated = false;
+  const chunks: string[] = [];
+  return {
+    push(chunk: string): void {
+      if (bytes >= limitBytes) {
+        truncated = true;
+        return;
+      }
+      const chunkBytes = Buffer.byteLength(chunk, "utf8");
+      const room = limitBytes - bytes;
+      if (chunkBytes > room) {
+        const buf = Buffer.from(chunk, "utf8");
+        const head = buf.subarray(0, room).toString("utf8");
+        const safeHead = head.endsWith("�") ? head.slice(0, -1) : head;
+        chunks.push(safeHead);
+        bytes = limitBytes;
+        truncated = true;
+        return;
+      }
+      chunks.push(chunk);
+      bytes += chunkBytes;
+    },
+    text(): string {
+      return chunks.join("");
+    },
+    wasTruncated(): boolean {
+      return truncated;
+    },
+  };
+}
+
 function runCommand(program: string, args: string[], cwd: string, signal?: AbortSignal) {
   return new Promise<{
     stdout: string;
@@ -498,50 +539,19 @@ function runCommand(program: string, args: string[], cwd: string, signal?: Abort
     limitBytes?: number;
   }>((resolveCommand, reject) => {
     const child = spawn(program, args, { cwd, signal });
-    let stdoutBytes = 0;
-    let stderrBytes = 0;
-    let truncated = false;
-    const stdoutChunks: string[] = [];
-    const stderrChunks: string[] = [];
+    const stdout = makeStreamCapture(MAX_COMMAND_OUTPUT_BYTES);
+    const stderr = makeStreamCapture(MAX_COMMAND_OUTPUT_BYTES);
     child.stdout.setEncoding("utf8");
     child.stderr.setEncoding("utf8");
-    child.stdout.on("data", (chunk: string) => {
-      if (stdoutBytes >= MAX_COMMAND_OUTPUT_BYTES) {
-        truncated = true;
-        return;
-      }
-      const room = MAX_COMMAND_OUTPUT_BYTES - stdoutBytes;
-      if (chunk.length > room) {
-        stdoutChunks.push(chunk.slice(0, room));
-        stdoutBytes = MAX_COMMAND_OUTPUT_BYTES;
-        truncated = true;
-        return;
-      }
-      stdoutChunks.push(chunk);
-      stdoutBytes += chunk.length;
-    });
-    child.stderr.on("data", (chunk: string) => {
-      if (stderrBytes >= MAX_COMMAND_OUTPUT_BYTES) {
-        truncated = true;
-        return;
-      }
-      const room = MAX_COMMAND_OUTPUT_BYTES - stderrBytes;
-      if (chunk.length > room) {
-        stderrChunks.push(chunk.slice(0, room));
-        stderrBytes = MAX_COMMAND_OUTPUT_BYTES;
-        truncated = true;
-        return;
-      }
-      stderrChunks.push(chunk);
-      stderrBytes += chunk.length;
-    });
+    child.stdout.on("data", (chunk: string) => stdout.push(chunk));
+    child.stderr.on("data", (chunk: string) => stderr.push(chunk));
     child.on("error", reject);
     child.on("close", (exitCode) =>
       resolveCommand({
-        stdout: stdoutChunks.join(""),
-        stderr: stderrChunks.join(""),
+        stdout: stdout.text(),
+        stderr: stderr.text(),
         exitCode,
-        truncated,
+        truncated: stdout.wasTruncated() || stderr.wasTruncated(),
         limitBytes: MAX_COMMAND_OUTPUT_BYTES,
       }),
     );
@@ -765,8 +775,7 @@ function runTurn(task: Promise<unknown>): void {
 async function handle(message: RequestMessage): Promise<void> {
   switch (message.type) {
     case "initialize":
-      send({ type: "initialized", version: "0.74.0" });
-      respond(message.id, message.type, true);
+      respond(message.id, message.type, true, { version: "0.74.0" });
       break;
     case "start_session":
       await startSession(message);
@@ -783,6 +792,14 @@ async function handle(message: RequestMessage): Promise<void> {
       respond(message.id, message.type, true);
       break;
     case "abort":
+      // Resolve any pending approval prompts so the corresponding
+      // tool `execute()` calls don't keep awaiting after Pi has been
+      // told to stop. Without this, an in-flight bash/write/edit
+      // prompt would block the agent's abort propagation.
+      for (const pending of state.pendingTools.values()) {
+        pending.resolve(false);
+      }
+      state.pendingTools.clear();
       await state.session?.abort();
       respond(message.id, message.type, true);
       break;

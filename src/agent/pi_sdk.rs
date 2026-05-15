@@ -102,26 +102,87 @@ pub struct PiSdkSession {
     init_cache: InitCacheHandle,
 }
 
+/// Setup knobs for `PiSdkSession::spawn_initialized`. `start` and
+/// `start_control` differ only in whether they apply caller env, cache
+/// the command-line marker, and (in the case of `start`) follow with a
+/// `start_session` request. Everything else — spawn, stdio capture,
+/// reader/exit-watcher wiring, init handshake, error-path teardown —
+/// is identical, so it lives in the helper.
+struct PiSpawnConfig<'a> {
+    working_dir: &'a Path,
+    resolved_env: Option<&'a crate::env_provider::ResolvedEnv>,
+    workspace_env: Option<&'a crate::env::WorkspaceEnv>,
+    cache_command_line: bool,
+}
+
 impl PiSdkSession {
     pub async fn start(
         working_dir: &Path,
         session_id: &str,
         options: PiSdkOptions,
     ) -> Result<Self, String> {
-        crate::missing_cli::precheck_cwd(working_dir)?;
+        let session = Self::spawn_initialized(PiSpawnConfig {
+            working_dir,
+            resolved_env: options.resolved_env.as_ref(),
+            workspace_env: options.workspace_env.as_ref(),
+            cache_command_line: true,
+        })
+        .await?;
+        if let Err(err) = session.start_session(session_id, options).await {
+            // Same teardown story as `spawn_initialized`: the exit watcher
+            // owns `child`, so kill the leftover sidecar by PID instead of
+            // dropping the borrow.
+            let _ = crate::agent::stop_agent_graceful(session.pid).await;
+            return Err(format!("Pi SDK harness start_session failed: {err}"));
+        }
+        Ok(session)
+    }
+
+    pub async fn discover_models(working_dir: &Path) -> Result<Vec<PiSdkModel>, String> {
+        let session = Self::start_control(working_dir).await?;
+        let value = session
+            .send_request(json!({ "type": "discover_models" }))
+            .await?;
+        let models = value
+            .get("models")
+            .cloned()
+            .unwrap_or_else(|| Value::Array(Vec::new()));
+        let models = serde_json::from_value::<Vec<PiSdkModel>>(models)
+            .map_err(|e| format!("Invalid Pi model discovery response: {e}"))?;
+        let _ = session.send_request(json!({ "type": "dispose" })).await;
+        Ok(models)
+    }
+
+    async fn start_control(working_dir: &Path) -> Result<Self, String> {
+        Self::spawn_initialized(PiSpawnConfig {
+            working_dir,
+            resolved_env: None,
+            workspace_env: None,
+            cache_command_line: false,
+        })
+        .await
+    }
+
+    /// Spawn the Pi sidecar, wire its stdio readers + exit watcher, and
+    /// run the `initialize` handshake. Returns a session whose
+    /// background tasks already own the child handle; teardown on later
+    /// errors must go through `stop_agent_graceful(pid)`, not by
+    /// dropping the borrow.
+    async fn spawn_initialized(config: PiSpawnConfig<'_>) -> Result<Self, String> {
+        crate::missing_cli::precheck_cwd(config.working_dir)?;
 
         let pi_path = resolve_pi_harness_path().await;
         let mut cmd = Command::new(&pi_path);
         cmd.no_console_window();
-        cmd.current_dir(working_dir)
+        cmd.current_dir(config.working_dir)
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .env("PATH", crate::env::enriched_path());
-        if let Some(env) = options.resolved_env.as_ref() {
+        if let Some(env) = config.resolved_env {
             apply_resolved_env_to_command(&mut cmd, env);
         }
-        if let Some(env) = options.workspace_env.as_ref() {
+        if let Some(env) = config.workspace_env {
             env.apply(&mut cmd);
         }
         if let Some(package_dir) = resolve_pi_package_dir(&pi_path) {
@@ -159,7 +220,7 @@ impl PiSdkSession {
             event_tx,
             pending: Arc::new(tokio::sync::Mutex::new(BTreeMap::new())),
             next_request_id: AtomicI64::new(1),
-            working_dir: working_dir.to_path_buf(),
+            working_dir: config.working_dir.to_path_buf(),
             turn_output: Arc::new(tokio::sync::Mutex::new(PiTurnOutput::default())),
             init_cache: Arc::new(tokio::sync::Mutex::new(InitCache::default())),
         };
@@ -167,100 +228,18 @@ impl PiSdkSession {
         session.spawn_stdout_reader(stdout);
         session.spawn_stderr_reader(stderr);
         session.spawn_exit_watcher(child);
-        // Cache the command-line marker so the first turn's per-turn receiver
-        // can replay it; sending it through `event_tx` before any subscriber
-        // exists would drop it on the floor.
-        session.init_cache.lock().await.command_line = Some(pi_command_line_event(&pi_path));
+        if config.cache_command_line {
+            // Cache the command-line marker so the first turn's per-turn
+            // receiver can replay it; sending through `event_tx` before
+            // any subscriber exists would drop it on the floor.
+            session.init_cache.lock().await.command_line = Some(pi_command_line_event(&pi_path));
+        }
         // `spawn_exit_watcher` moved `child` into a background task, so we
-        // no longer hold the kill handle directly. If `initialize` or
-        // `start_session` fails the session goes out of scope; closing
-        // stdin would normally make the sidecar exit, but it can hang
-        // mid-handshake while a request is pending. Send an explicit
-        // graceful stop on the error path so a half-started Pi process
-        // never lingers.
-        if let Err(err) = session.initialize().await {
-            let _ = crate::agent::stop_agent_graceful(pid).await;
-            return Err(err);
-        }
-        if let Err(err) = session.start_session(session_id, options).await {
-            let _ = crate::agent::stop_agent_graceful(pid).await;
-            return Err(format!("Pi SDK harness start_session failed: {err}"));
-        }
-        Ok(session)
-    }
-
-    pub async fn discover_models(working_dir: &Path) -> Result<Vec<PiSdkModel>, String> {
-        let session = Self::start_control(working_dir).await?;
-        let value = session
-            .send_request(json!({ "type": "discover_models" }))
-            .await?;
-        let models = value
-            .get("models")
-            .cloned()
-            .unwrap_or_else(|| Value::Array(Vec::new()));
-        let models = serde_json::from_value::<Vec<PiSdkModel>>(models)
-            .map_err(|e| format!("Invalid Pi model discovery response: {e}"))?;
-        let _ = session.send_request(json!({ "type": "dispose" })).await;
-        Ok(models)
-    }
-
-    async fn start_control(working_dir: &Path) -> Result<Self, String> {
-        crate::missing_cli::precheck_cwd(working_dir)?;
-
-        let pi_path = resolve_pi_harness_path().await;
-        let mut cmd = Command::new(&pi_path);
-        cmd.no_console_window();
-        cmd.current_dir(working_dir)
-            .stdin(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .env("PATH", crate::env::enriched_path());
-        if let Some(package_dir) = resolve_pi_package_dir(&pi_path) {
-            cmd.env("PI_PACKAGE_DIR", package_dir);
-        }
-
-        let mut child = cmd.spawn().map_err(|e| {
-            crate::missing_cli::map_spawn_err(&e, "claudette-pi-harness", || {
-                format!(
-                    "Failed to spawn Pi SDK harness at {}: {e}",
-                    pi_path.display()
-                )
-            })
-        })?;
-        let pid = child
-            .id()
-            .ok_or_else(|| "Pi SDK harness exited immediately".to_string())?;
-        let stdin = child
-            .stdin
-            .take()
-            .ok_or_else(|| "Failed to capture Pi SDK harness stdin".to_string())?;
-        let stdout = child
-            .stdout
-            .take()
-            .ok_or_else(|| "Failed to capture Pi SDK harness stdout".to_string())?;
-        let stderr = child
-            .stderr
-            .take()
-            .ok_or_else(|| "Failed to capture Pi SDK harness stderr".to_string())?;
-
-        let (event_tx, _) = broadcast::channel(2048);
-        let session = Self {
-            pid,
-            stdin: Some(Arc::new(tokio::sync::Mutex::new(stdin))),
-            event_tx,
-            pending: Arc::new(tokio::sync::Mutex::new(BTreeMap::new())),
-            next_request_id: AtomicI64::new(1),
-            working_dir: working_dir.to_path_buf(),
-            turn_output: Arc::new(tokio::sync::Mutex::new(PiTurnOutput::default())),
-            init_cache: Arc::new(tokio::sync::Mutex::new(InitCache::default())),
-        };
-
-        session.spawn_stdout_reader(stdout);
-        session.spawn_stderr_reader(stderr);
-        session.spawn_exit_watcher(child);
-        // Same teardown-on-init-error story as `start`. The exit watcher
-        // owns `child`, so we kill the leftover sidecar via its PID
-        // instead of dropping the borrow.
+        // no longer hold the kill handle directly. If `initialize` fails the
+        // session goes out of scope; closing stdin would normally make the
+        // sidecar exit, but it can hang mid-handshake while a request is
+        // pending. Send an explicit graceful stop on the error path so a
+        // half-started Pi process never lingers.
         if let Err(err) = session.initialize().await {
             let _ = crate::agent::stop_agent_graceful(pid).await;
             return Err(err);
@@ -535,10 +514,11 @@ enum PiHarnessMessage {
     },
     #[serde(rename = "ready")]
     Ready {
-        #[serde(default)]
+        // Canonical wire key is `sessionId` (sidecar emits camelCase),
+        // but accept snake_case too so hand-crafted JSONL fixtures and
+        // any future protocol change don't silently drop the id.
+        #[serde(default, rename = "sessionId", alias = "session_id")]
         session_id: Option<String>,
-        #[serde(default, rename = "sessionId")]
-        session_id_camel: Option<String>,
     },
     #[serde(rename = "turn_start")]
     TurnStart,
@@ -626,13 +606,10 @@ async fn route_pi_message(
                 );
             }
         }
-        PiHarnessMessage::Ready {
-            session_id,
-            session_id_camel,
-        } => {
+        PiHarnessMessage::Ready { session_id } => {
             let init_event = AgentEvent::Stream(StreamEvent::System {
                 subtype: "init".to_string(),
-                session_id: session_id.or(session_id_camel),
+                session_id,
                 state: None,
                 detail: None,
                 task_id: None,
@@ -972,5 +949,33 @@ mod tests {
     fn test_session_reports_pid() {
         let session = PiSdkSession::new_for_test(42);
         assert_eq!(session.pid(), 42);
+    }
+
+    /// The sidecar emits `sessionId` (camelCase); we keep `session_id` as
+    /// an alias so hand-crafted JSONL fixtures don't silently drop the id
+    /// after the field collapse. Pin both wire forms.
+    #[test]
+    fn parses_ready_with_either_session_id_key() {
+        for line in [
+            r#"{"type":"ready","sessionId":"abc123"}"#,
+            r#"{"type":"ready","session_id":"abc123"}"#,
+        ] {
+            let msg: PiHarnessMessage = serde_json::from_str(line).unwrap();
+            match msg {
+                PiHarnessMessage::Ready { session_id } => {
+                    assert_eq!(session_id.as_deref(), Some("abc123"));
+                }
+                _ => panic!("expected Ready, got: {line}"),
+            }
+        }
+    }
+
+    #[test]
+    fn parses_ready_without_session_id() {
+        let msg: PiHarnessMessage = serde_json::from_str(r#"{"type":"ready"}"#).unwrap();
+        match msg {
+            PiHarnessMessage::Ready { session_id } => assert!(session_id.is_none()),
+            _ => panic!("expected Ready"),
+        }
     }
 }

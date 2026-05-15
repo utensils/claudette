@@ -1900,7 +1900,13 @@ async fn discover_lm_studio_models(
 async fn discover_pi_models(
     backend: &AgentBackendConfig,
 ) -> Result<Vec<AgentBackendModel>, String> {
-    let discovered = PiSdkSession::discover_models(std::path::Path::new(".")).await?;
+    // Run discovery from the OS temp dir rather than `.` so a Settings
+    // "Refresh models" click can't sweep in workspace state via the
+    // sidecar's cwd. Discovery never touches tools, so the cwd only
+    // matters for `precheck_cwd`; `std::env::temp_dir()` is always
+    // present and identical for every refresh.
+    let cwd = std::env::temp_dir();
+    let discovered = PiSdkSession::discover_models(&cwd).await?;
     let models: Vec<AgentBackendModel> = discovered
         .into_iter()
         .map(|model| AgentBackendModel {
