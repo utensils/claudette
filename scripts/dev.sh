@@ -31,18 +31,20 @@
 #                          Claude auth). Useful for testing first-run UX,
 #                          plugin/marketplace flows, and login flows
 #                          without touching ~/.claudette/ or ~/.claude/.
-#   --clone                Run with a *snapshot* of the user's existing
-#                          state — points the same three env vars at a
-#                          per-PID tmp tree pre-populated with copy-on-
-#                          write clones of ~/.claudette/, the OS data
-#                          dir holding claudette.db, and ~/.claude/.
-#                          Uses APFS clonefile on macOS / reflinks on
-#                          Linux btrfs/xfs, so the clone is near-instant
-#                          and costs ~0 disk until the dev build writes.
-#                          claudette.db is snapshotted via `sqlite3
-#                          .backup` for consistency under concurrent
-#                          writes from the running release app. Mutually
-#                          exclusive with --new.
+#   --clone                Run with an rsync'd snapshot of the user's
+#                          existing state — points the same three env
+#                          vars at a stable tmp tree pre-populated from
+#                          ~/.claudette/, the OS data dir holding
+#                          claudette.db, and ~/.claude/. Excludes caches
+#                          and build artifacts (node_modules, target,
+#                          plugins/cache, image-cache, paste-cache,
+#                          logs, updates). The sandbox is NOT removed
+#                          on exit, so a follow-up `dev --clone` re-
+#                          syncs incrementally (rsync delta) — fast.
+#                          claudette.db ships as a raw rsync; quit the
+#                          release app first if you need a guaranteed
+#                          consistent DB snapshot. Mutually exclusive
+#                          with --new.
 #   --clean                Top-level NUKE action: blasts everything under
 #                          ${TMPDIR:-/tmp}/claudette-dev/ (per-PID
 #                          sandboxes and discovery files) and exits
@@ -78,18 +80,19 @@ Flags:
                        Cleaned up on exit. Useful for testing first-run
                        UX (welcome card, onboarding) and plugin/auth
                        flows without nuking real user data.
-  --clone              Run with a snapshot of the user's existing state
-                       — points the same three env vars at a per-PID tmp
-                       tree pre-populated with copy-on-write clones of
-                       the real source dirs (APFS clonefile on macOS,
-                       reflinks on Linux btrfs/xfs; falls back to a
-                       regular recursive copy on filesystems that don't
-                       support either). claudette.db is snapshotted with
-                       \`sqlite3 .backup\` so a running release app can
-                       keep writing without corrupting the dev copy.
-                       Caches and build artifacts (node_modules, target,
-                       plugin caches, logs, updates) are pruned from the
-                       clone. Mutually exclusive with --new.
+  --clone              Run with an rsync'd snapshot of the user's
+                       existing state. The sandbox at
+                       \${TMPDIR:-/tmp}/claudette-dev/clone/ is stable
+                       (not per-PID) and is NOT removed on exit, so
+                       a follow-up \`dev --clone\` re-syncs incrementally
+                       — rsync only re-copies what changed in the real
+                       source dirs. Caches and build artifacts
+                       (node_modules, target, plugin/image/paste caches,
+                       logs, updates) are excluded at copy time.
+                       claudette.db is rsync'd raw — quit the release
+                       app first if you need a guaranteed consistent
+                       snapshot. Mutually exclusive with --new. Use
+                       \`dev --clean\` to remove the clone sandbox.
 
                        Gotcha: cloned workspaces' .git pointers still
                        reference the real repo's worktree admin dir, so
@@ -336,14 +339,25 @@ if (( new_session )); then
 fi
 
 if (( clone_session )); then
-  # Per-PID sandbox holding a copy-on-write snapshot of the user's real
-  # state. Same env-var routing as --new, but the dirs are pre-populated
-  # so the dev build inherits workspaces, themes, plugins, and Claude
-  # credentials while remaining isolated from the running release app.
-
+  # Stable-path rsync snapshot of the user's real state. Unlike --new,
+  # the sandbox dir is NOT per-PID and is NOT removed on exit, so
+  # re-running `dev --clone` syncs incrementally — rsync only re-copies
+  # what changed. Trade-offs vs the older clonefile-cp approach:
+  #
+  #   * Simpler: one rsync invocation per root with declarative
+  #     --exclude patterns, no post-copy prune step, no sqlite3 backup.
+  #   * Re-runnable: a second `dev --clone` is fast (rsync delta).
+  #   * Cost: rsync doesn't use APFS clonefile, so the first run copies
+  #     full bytes (not block-shared). For one-shot use, the old
+  #     clonefile path was cheaper; for iterative dev, rsync wins.
+  #
+  # claudette.db ships as a raw rsync (no sqlite3 .backup) — that means
+  # if the release app is actively writing the DB during clone, the dev
+  # copy can be torn. Quit release first if you need a guaranteed
+  # consistent snapshot. Most desktops are idle enough that this is fine.
+  #
   # Capture source paths BEFORE we overwrite the env vars with sandbox
-  # destinations. Mirrors path-resolution in src/path.rs and src/logging.rs:
-  # honor an explicit inherited override, otherwise fall back to OS defaults.
+  # destinations. Mirrors path-resolution in src/path.rs and src/logging.rs.
   if [[ "$(uname -s)" == "Darwin" ]]; then
     default_data_dir="$HOME/Library/Application Support/claudette"
   else
@@ -353,100 +367,77 @@ if (( clone_session )); then
   src_data_dir="${CLAUDETTE_DATA_DIR:-$default_data_dir}"
   src_claude_config="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
 
-  sandbox_root="$discovery_dir/clone-$$"
+  sandbox_root="$discovery_dir/clone"
   export CLAUDETTE_HOME="$sandbox_root/home"
   export CLAUDETTE_DATA_DIR="$sandbox_root/data"
   export CLAUDE_CONFIG_DIR="$sandbox_root/claude-config"
   mkdir -p "$sandbox_root"
 
-  # Pick the CoW-aware copy command. Use the system `/bin/cp` on macOS so we
-  # get APFS clonefile semantics (`-c`) regardless of what's on $PATH — Nix
-  # devshells ship GNU coreutils, whose `cp` doesn't know about `-c`. GNU
-  # `cp --reflink=auto` is the right thing on Linux btrfs/xfs and silently
-  # falls back to a normal copy on filesystems without reflink support.
-  if [[ "$(uname -s)" == "Darwin" ]]; then
-    cp_clone=(/bin/cp -cRp)           # macOS system cp; APFS clonefile, preserves perms/times
-  else
-    cp_clone=(cp -a --reflink=auto)   # GNU cp; reflinks on btrfs/xfs, plain copy elsewhere
+  if ! command -v rsync >/dev/null 2>&1; then
+    echo "[dev.sh] rsync not found on PATH — required for --clone" >&2
+    exit 127
   fi
 
-  echo "▸ Clone session:      $sandbox_root"
+  # One shared exclude list for all three rsyncs. Skips caches, build
+  # artifacts, and per-project logs/updates — rebuild for free, take
+  # significant disk, and would slow both first-run and re-sync runs.
+  rsync_excludes=(
+    --exclude=node_modules
+    --exclude=target
+    --exclude=.next
+    --exclude=dist
+    --exclude=build
+    --exclude=logs
+    --exclude=updates
+    --exclude=plugins/cache
+    --exclude=image-cache
+    --exclude=paste-cache
+    --exclude=cache
+  )
+
+  echo "▸ Clone session:      $sandbox_root  (rsync; re-runs sync incrementally)"
   echo "▸ Source CLAUDETTE_HOME:     $src_claudette_home"
   echo "▸ Source CLAUDETTE_DATA_DIR: $src_data_dir"
   echo "▸ Source CLAUDE_CONFIG_DIR:  $src_claude_config"
 
-  clone_one() {
+  rsync_clone() {
     local src="$1" dst="$2" label="$3"
     if [[ ! -d "$src" ]]; then
       echo "[dev.sh] skipping clone of $label: $src missing" >&2
       mkdir -p "$dst"
       return 0
     fi
-    mkdir -p "$(dirname "$dst")"
-    # cp may return non-zero on benign per-file issues — sockets inside
-    # workspaces (postgres, ipc), files the running release app has locked,
-    # or cache entries with restrictive permissions. We don't want any of
-    # that to abort the launch under `set -e`, so swallow the exit code
-    # here. The cp itself still streams its warnings to stderr so the user
-    # can see what was skipped, and the prune step below removes the cache
-    # dirs entirely.
-    if ! "${cp_clone[@]}" "$src" "$dst"; then
-      echo "[dev.sh] clone of $label finished with warnings (sockets, locked files, or unreadable cache entries are expected — continuing)" >&2
+    mkdir -p "$dst"
+    # `--delete` keeps dest a true mirror of source on re-sync. Special
+    # files (sockets, devices) are skipped by rsync with a one-line
+    # "skipping non-regular file" note; permission-denied entries get
+    # a stderr warning and rsync continues. Both are non-fatal and we
+    # don't want them to abort the launch under `set -e`.
+    if ! rsync -a --delete --info=stats1 "${rsync_excludes[@]}" "$src/" "$dst/"; then
+      echo "[dev.sh] rsync of $label finished with warnings (special files / unreadable entries skipped — continuing)" >&2
     fi
     return 0
   }
 
-  clone_one "$src_claudette_home" "$sandbox_root/home"          "CLAUDETTE_HOME"
-  clone_one "$src_data_dir"       "$sandbox_root/data"          "CLAUDETTE_DATA_DIR"
-  clone_one "$src_claude_config"  "$sandbox_root/claude-config" "CLAUDE_CONFIG_DIR"
-
-  # Replace the file-copied claudette.db with a SQLite-native backup so we
-  # get a consistent snapshot even when the release app is mid-write.
-  # Two-phase: back up to a sibling temp path first, atomically replace
-  # the raw cp only if the backup succeeded. If sqlite3 .backup fails
-  # mid-run we keep the raw cp as the fallback advertised in the comment;
-  # otherwise a clone whose backup happens to fail would launch with no
-  # DB at all (or an empty fresh-schema one), defeating the whole point.
-  if [[ -f "$src_data_dir/claudette.db" ]]; then
-    if command -v sqlite3 >/dev/null 2>&1; then
-      tmp_db="$sandbox_root/data/claudette.db.backup-tmp"
-      rm -f "$tmp_db"
-      if sqlite3 "$src_data_dir/claudette.db" ".backup '$tmp_db'"; then
-        mv -f "$tmp_db" "$sandbox_root/data/claudette.db"
-      else
-        rm -f "$tmp_db"
-        echo "[dev.sh] sqlite3 .backup failed — keeping raw file copy of claudette.db as fallback (may be inconsistent if the release app was mid-write)" >&2
-      fi
-    else
-      echo "[dev.sh] sqlite3 not found — using raw file copy of claudette.db (release app should be quit for a consistent snapshot)" >&2
-    fi
-  fi
-
-  # Prune caches and build artifacts. CoW makes these deletes essentially
-  # metadata-only, and stripping them keeps the dev build's first-load
-  # behaviour close to what the user would see on a real cold start.
-  if [[ -d "$sandbox_root/home/workspaces" ]]; then
-    find "$sandbox_root/home/workspaces" \
-      \( -name node_modules -o -name target -o -name .next -o -name dist -o -name build \) \
-      -prune -exec rm -rf {} + 2>/dev/null || true
-  fi
-  for junk in "$sandbox_root/home/updates" "$sandbox_root/home/logs" \
-              "$sandbox_root/claude-config/plugins/cache" \
-              "$sandbox_root/claude-config/image-cache" \
-              "$sandbox_root/claude-config/paste-cache" \
-              "$sandbox_root/claude-config/cache"; do
-    [[ -e "$junk" ]] && rm -rf "$junk"
-  done
+  rsync_clone "$src_claudette_home" "$sandbox_root/home"          "CLAUDETTE_HOME"
+  rsync_clone "$src_data_dir"       "$sandbox_root/data"          "CLAUDETTE_DATA_DIR"
+  rsync_clone "$src_claude_config"  "$sandbox_root/claude-config" "CLAUDE_CONFIG_DIR"
 
   echo "▸ CLAUDETTE_HOME:     $CLAUDETTE_HOME"
   echo "▸ CLAUDETTE_DATA_DIR: $CLAUDETTE_DATA_DIR"
   echo "▸ CLAUDE_CONFIG_DIR:  $CLAUDE_CONFIG_DIR"
   echo "[dev.sh] Note: cloned workspace .git files still point at the real repo's worktree admin dir; dev-app git writes will land in the real repo." >&2
+  echo "[dev.sh] Note: claudette.db was rsync'd raw — quit the release app first if you need a guaranteed-consistent DB snapshot." >&2
 fi
 
 cleanup() {
   rm -f "$discovery_file"
-  if [[ -n "${sandbox_root:-}" && -d "$sandbox_root" ]]; then
+  # --new sandboxes are per-PID and ephemeral; remove on exit.
+  # --clone sandboxes are intentionally preserved across runs so the
+  # next `dev --clone` syncs incrementally instead of doing a cold
+  # rsync. Use `dev --clean` to nuke the discovery dir entirely when
+  # you actually want the clone gone.
+  if (( new_session )) && [[ -n "${sandbox_root:-}" && -d "$sandbox_root" ]]; then
     rm -rf "$sandbox_root"
   fi
 }
