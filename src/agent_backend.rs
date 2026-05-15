@@ -415,6 +415,47 @@ pub struct AgentBackendRuntime {
     /// unchanged", which keeps non-Pi paths invisible to this field.
     #[serde(default)]
     pub model: Option<String>,
+    /// Tells the Pi sidecar to register an ad-hoc provider via
+    /// `ModelRegistry.registerProvider` before it spawns the agent
+    /// session. Pi ships bundled providers for cloud vendors, but
+    /// local servers like Ollama / LM Studio aren't in its registry
+    /// unless the user has wired them up via `~/.pi/agent/models.json`
+    /// — without this override Pi's `findModel(<provider>/<id>)`
+    /// lookup misses and the turn fails to start. We synthesize the
+    /// provider entry from the user's Claudette backend config
+    /// (`base_url` + the resolved model row) so an upgrading user
+    /// gets a working Pi-routed turn without any separate Pi setup.
+    /// `None` for all other paths (Pi card itself, cloud backends
+    /// whose names would shadow Pi's bundled providers, etc.).
+    #[serde(default)]
+    pub pi_provider_override: Option<PiProviderOverride>,
+}
+
+/// Minimal `ModelRegistry.registerProvider(name, config)` payload that
+/// makes a Claudette-side local backend reachable through Pi. The
+/// sidecar mirrors this onto Pi's `ProviderConfigInput`. Kept in this
+/// crate so unit tests can build the value without pulling in the
+/// Tauri layer, and so the JSON shape is colocated with the other
+/// agent-runtime serde types.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PiProviderOverride {
+    /// Provider name the override registers under. Matches the
+    /// first segment of the qualified model id (`ollama/llama3` →
+    /// `provider = "ollama"`), so `findModel` resolves cleanly.
+    pub provider: String,
+    /// Backend root URL — for OpenAI-compatible endpoints Pi expects
+    /// the `/v1` suffix to already be present. Caller normalizes.
+    pub base_url: String,
+    /// Bare model id (no provider prefix). Pi keys models inside a
+    /// provider by this id.
+    pub model_id: String,
+    /// Human-facing model label. Falls back to `model_id` when the
+    /// caller doesn't have a friendlier name.
+    pub model_label: String,
+    /// Context window in tokens. `0` means "use Pi's per-provider
+    /// default", which keeps the override forward-compatible if a
+    /// future Pi release stops requiring the field.
+    pub context_window: u32,
 }
 
 impl AgentBackendRuntime {

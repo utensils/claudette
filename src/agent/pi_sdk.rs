@@ -89,6 +89,12 @@ pub struct PiSdkOptions {
     pub custom_instructions: Option<String>,
     pub workspace_env: Option<crate::env::WorkspaceEnv>,
     pub resolved_env: Option<crate::env_provider::ResolvedEnv>,
+    /// `ModelRegistry.registerProvider` payload the sidecar applies
+    /// before spawning the agent session. Used by Ollama / LM Studio
+    /// routes to make Claudette-configured local servers reachable
+    /// through Pi without the user having to maintain a separate
+    /// `~/.pi/agent/models.json`.
+    pub pi_provider_override: Option<crate::agent_backend::PiProviderOverride>,
 }
 
 pub struct PiSdkSession {
@@ -393,6 +399,20 @@ impl PiSdkSession {
             .session_dir
             .as_ref()
             .map(|path| path.to_string_lossy().to_string());
+        // Build the optional provider override block. The sidecar
+        // forwards it straight into `ModelRegistry.registerProvider`,
+        // making a Claudette-side Ollama / LM Studio entry reachable
+        // through Pi without the user having to wire it up in
+        // `~/.pi/agent/models.json` first.
+        let provider_override = options.pi_provider_override.as_ref().map(|p| {
+            json!({
+                "provider": p.provider,
+                "baseUrl": p.base_url,
+                "modelId": p.model_id,
+                "modelLabel": p.model_label,
+                "contextWindow": p.context_window,
+            })
+        });
         self.send_request(json!({
             "type": "start_session",
             "cwd": self.working_dir,
@@ -402,6 +422,7 @@ impl PiSdkSession {
             "thinkingLevel": options.thinking_level,
             "allowedTools": options.allowed_tools,
             "customInstructions": options.custom_instructions,
+            "providerOverride": provider_override,
         }))
         .await?;
         Ok(())

@@ -20,7 +20,7 @@ use claudette::agent::{
 };
 use claudette::agent_backend::{
     AgentBackendConfig, AgentBackendKind, AgentBackendModel, AgentBackendRuntime,
-    AgentBackendRuntimeHarness,
+    AgentBackendRuntimeHarness, PiProviderOverride,
 };
 use claudette::db::Database;
 use claudette::plugin::{delete_secure_secret, load_secure_secret, save_secure_secret};
@@ -513,6 +513,7 @@ pub async fn resolve_backend_runtime(
             // Anthropic stays a Claude CLI path — no model rewrite.
             // None tells the caller to use its original input.
             model: None,
+            pi_provider_override: None,
         });
     }
     if !backend.enabled {
@@ -605,6 +606,7 @@ fn build_codex_app_server_runtime(
         hash: runtime_hash(backend, None, model),
         // Codex app-server speaks bare ids; no rewrite needed.
         model: None,
+        pi_provider_override: None,
     }
 }
 
@@ -625,6 +627,7 @@ fn build_pi_sdk_runtime(
     if let Some(value) = qualified.as_deref() {
         backend.default_model = Some(value.to_string());
     }
+    let pi_provider_override = build_pi_provider_override(backend, model);
     AgentBackendRuntime {
         backend_id: Some(backend.id.clone()),
         harness: AgentBackendRuntimeHarness::PiSdk,
@@ -637,6 +640,93 @@ fn build_pi_sdk_runtime(
         // unqualified and `findModel` parses `library` as the
         // provider — the lookup always misses.
         model: qualified,
+        pi_provider_override,
+    }
+}
+
+/// Build a Pi `registerProvider` payload for the local-server kinds
+/// (Ollama, LM Studio) so the Pi sidecar can route the user's
+/// Claudette-configured backend without a separate `~/.pi/agent/models.json`
+/// setup. Returns `None` for kinds Pi already ships a bundled
+/// provider for (OpenAI, Anthropic, Codex Native) — registering
+/// "openai" with a non-OpenAI base URL there would shadow Pi's
+/// official provider for the rest of the session. Also returns `None`
+/// when the caller didn't pass a model id (no row to register) or
+/// the backend has no `base_url` set.
+fn build_pi_provider_override(
+    backend: &AgentBackendConfig,
+    model: Option<&str>,
+) -> Option<PiProviderOverride> {
+    let provider = match backend.kind {
+        AgentBackendKind::Ollama => "ollama",
+        AgentBackendKind::LmStudio => "lmstudio",
+        // OpenAI-compatible cloud and Codex Native names collide with
+        // Pi's bundled providers; skip the override and let the user's
+        // `~/.pi/agent/models.json` (or Pi's bundled config) drive the
+        // route. The Pi card itself never reaches this code path —
+        // `qualify_model_for_pi` short-circuits when the kind has no
+        // prefix.
+        AgentBackendKind::Anthropic
+        | AgentBackendKind::CustomAnthropic
+        | AgentBackendKind::CodexSubscription
+        | AgentBackendKind::OpenAiApi
+        | AgentBackendKind::CustomOpenAi
+        | AgentBackendKind::CodexNative
+        | AgentBackendKind::PiSdk => return None,
+    };
+    let raw_model_id = model.map(str::trim).filter(|s| !s.is_empty())?;
+    let base_url = backend.base_url.as_deref().map(str::trim)?;
+    if base_url.is_empty() {
+        return None;
+    }
+    let normalized_base_url = normalize_pi_provider_base_url(backend.kind, base_url);
+    // The model row Pi's registry looks up is keyed by the bare id —
+    // strip the provider prefix if the caller already qualified it.
+    let prefix_with_slash = format!("{provider}/");
+    let bare_model_id = raw_model_id
+        .strip_prefix(&prefix_with_slash)
+        .unwrap_or(raw_model_id);
+    // Prefer the friendly label from the discovered/manual models list
+    // when we have one; otherwise fall back to the bare id so the
+    // picker doesn't show `undefined`.
+    let model_label = backend
+        .discovered_models
+        .iter()
+        .chain(backend.manual_models.iter())
+        .find(|m| m.id == bare_model_id || m.id == raw_model_id)
+        .map(|m| m.label.clone())
+        .unwrap_or_else(|| bare_model_id.to_string());
+    let context_window = backend
+        .discovered_models
+        .iter()
+        .chain(backend.manual_models.iter())
+        .find(|m| m.id == bare_model_id || m.id == raw_model_id)
+        .map(|m| m.context_window_tokens)
+        .unwrap_or(0);
+    Some(PiProviderOverride {
+        provider: provider.to_string(),
+        base_url: normalized_base_url,
+        model_id: bare_model_id.to_string(),
+        model_label,
+        context_window,
+    })
+}
+
+/// Ollama serves an OpenAI-compatible API under `/v1` while LM Studio
+/// already exposes that path by default. Pi's OpenAI-style provider
+/// expects the base URL to point at the OpenAI-compat root, so append
+/// `/v1` when the caller's base URL doesn't already include it. Idempotent.
+fn normalize_pi_provider_base_url(kind: AgentBackendKind, base_url: &str) -> String {
+    let trimmed = base_url.trim_end_matches('/');
+    match kind {
+        AgentBackendKind::Ollama | AgentBackendKind::LmStudio => {
+            if trimmed.ends_with("/v1") {
+                trimmed.to_string()
+            } else {
+                format!("{trimmed}/v1")
+            }
+        }
+        _ => trimmed.to_string(),
     }
 }
 
@@ -741,6 +831,7 @@ async fn build_claude_code_gateway_runtime(
         hash,
         // Claude CLI uses the caller's input directly.
         model: None,
+        pi_provider_override: None,
     })
 }
 
@@ -794,6 +885,7 @@ fn build_claude_code_direct_runtime(
         hash: runtime_hash(backend, secret.as_deref(), model),
         // Claude CLI uses the caller's input directly.
         model: None,
+        pi_provider_override: None,
     }
 }
 
@@ -5518,6 +5610,96 @@ data: [DONE]
             qualify_model_for_pi(AgentBackendKind::LmStudio, "studio/foo"),
             "lmstudio/studio/foo"
         );
+    }
+
+    #[test]
+    fn pi_runtime_emits_ollama_provider_override_with_v1_base_url() {
+        // Ollama's API is OpenAI-compatible at `/v1`. Claudette's
+        // backend stores the bare host, so the override builder must
+        // append the `/v1` suffix so Pi's `registerProvider` lands on
+        // the OpenAI-style chat completions endpoint and the agent
+        // loop can actually reach the local server.
+        let mut ollama = AgentBackendConfig::builtin_ollama();
+        ollama.base_url = Some("http://localhost:11434".to_string());
+        ollama.discovered_models = vec![claudette::agent_backend::AgentBackendModel {
+            id: "llama3".to_string(),
+            label: "Llama 3".to_string(),
+            context_window_tokens: 128_000,
+            discovered: true,
+        }];
+        let runtime = build_pi_sdk_runtime(&mut ollama, Some("llama3"));
+        let override_ = runtime
+            .pi_provider_override
+            .expect("Ollama route should emit a provider override");
+        assert_eq!(override_.provider, "ollama");
+        assert_eq!(override_.base_url, "http://localhost:11434/v1");
+        assert_eq!(override_.model_id, "llama3");
+        assert_eq!(override_.model_label, "Llama 3");
+        assert_eq!(override_.context_window, 128_000);
+    }
+
+    #[test]
+    fn pi_runtime_provider_override_preserves_v1_already_in_base_url() {
+        // Idempotency: if the user's LM Studio card already points at
+        // `http://localhost:1234/v1`, we must not append a second
+        // `/v1`. The fix to `normalize_pi_provider_base_url` is the
+        // load-bearing piece here.
+        let mut lmstudio = AgentBackendConfig::builtin_lm_studio();
+        lmstudio.base_url = Some("http://localhost:1234/v1".to_string());
+        let runtime = build_pi_sdk_runtime(&mut lmstudio, Some("openai/gpt-4"));
+        let override_ = runtime
+            .pi_provider_override
+            .expect("LM Studio route should emit a provider override");
+        assert_eq!(override_.base_url, "http://localhost:1234/v1");
+        // Bare id falls through when the qualified prefix doesn't
+        // match LM Studio's `lmstudio` prefix.
+        assert_eq!(override_.model_id, "openai/gpt-4");
+    }
+
+    #[test]
+    fn pi_runtime_strips_provider_prefix_from_model_id_for_override() {
+        // The qualified model id reaching `build_pi_sdk_runtime` will
+        // already have the `ollama/` prefix applied by
+        // `qualify_model_for_pi`. The override carries Pi's
+        // `<provider>` + `<model_id>` split, so we must strip the
+        // prefix before storing — otherwise Pi looks up `library/...`
+        // inside the `ollama` provider and misses.
+        let mut ollama = AgentBackendConfig::builtin_ollama();
+        ollama.base_url = Some("http://localhost:11434".to_string());
+        let runtime = build_pi_sdk_runtime(&mut ollama, Some("ollama/library/llama3"));
+        let override_ = runtime
+            .pi_provider_override
+            .expect("Ollama route should emit a provider override");
+        assert_eq!(override_.model_id, "library/llama3");
+    }
+
+    #[test]
+    fn pi_runtime_skips_provider_override_for_cloud_kinds() {
+        // Pi already bundles providers for `openai`, `anthropic`,
+        // `codex_native`, etc. Registering a Claudette card under the
+        // same name with a different base URL would shadow Pi's
+        // bundled provider for the rest of the session — produce
+        // nothing instead and let the user's `~/.pi/agent/models.json`
+        // (or Pi's bundled config) drive the route.
+        let mut openai = AgentBackendConfig::builtin_openai_api();
+        openai.base_url = Some("https://api.openai.com".to_string());
+        let runtime = build_pi_sdk_runtime(&mut openai, Some("gpt-5.4"));
+        assert!(
+            runtime.pi_provider_override.is_none(),
+            "OpenAI API kind must not emit an override that would shadow Pi's bundled provider"
+        );
+    }
+
+    #[test]
+    fn pi_runtime_skips_provider_override_when_base_url_is_empty() {
+        // No reachable server → no override. The session will hit
+        // `findModel`'s "not found" error which is the right UX —
+        // synthesizing an override with a blank base URL would mask
+        // the actual misconfiguration.
+        let mut ollama = AgentBackendConfig::builtin_ollama();
+        ollama.base_url = Some("   ".to_string());
+        let runtime = build_pi_sdk_runtime(&mut ollama, Some("llama3"));
+        assert!(runtime.pi_provider_override.is_none());
     }
 
     #[test]

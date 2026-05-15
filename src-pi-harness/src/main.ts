@@ -159,14 +159,29 @@ function modelKey(
 }
 
 /** Auth sources that count as "the user has configured this provider".
- *  Anything outside this set (notably `fallback` and the
- *  `models_json_*` family) is treated as a Pi-bundled default and
- *  filtered out of the model picker / Settings card so the user only
- *  sees providers they actually enabled. */
+ *  Pi's `AuthStatus.source` distinguishes:
+ *   - `stored`      — auth.json (OAuth login or saved API key)
+ *   - `runtime`     — `--api-key` CLI override
+ *   - `environment` — env var (e.g. `ANTHROPIC_API_KEY`)
+ *   - `fallback`    — custom-provider key resolved by Pi's
+ *                     `setFallbackResolver` callback chain
+ *   - `models_json_key` / `models_json_command` — literal/command
+ *                     auth recipes embedded in `~/.pi/agent/models.json`
+ *
+ *  All six paths are intentional user-configured surfaces (`stored`,
+ *  `runtime`, `environment` cover the standard /login flow; the
+ *  `fallback` and `models_json_*` family cover Pi's custom-provider
+ *  story documented at `docs/custom-provider.md`). A provider with
+ *  *no* configured auth has no `source` at all and gets filtered out
+ *  by `status.source ? … : false` in `isUserConfiguredProvider`,
+ *  which is the actual "Pi bundled default" gate. */
 const USER_CONFIGURED_AUTH_SOURCES: ReadonlySet<string> = new Set([
   "stored",
   "runtime",
   "environment",
+  "fallback",
+  "models_json_key",
+  "models_json_command",
 ]);
 
 function isUserConfiguredProvider(provider: string): boolean {
@@ -612,6 +627,67 @@ function mapPermissionTools(value: unknown): string[] {
   return [...out];
 }
 
+/**
+ * Mirror Claudette's `pi_provider_override` payload onto Pi's
+ * `ModelRegistry.registerProvider` API. The payload arrives JSON-shaped
+ * from Rust (`providerOverride` field of the `start_session` message);
+ * skip silently when absent or malformed so a release that doesn't
+ * pass the override still works.
+ */
+function applyProviderOverride(raw: unknown): void {
+  if (!raw || typeof raw !== "object") return;
+  const value = raw as Record<string, unknown>;
+  const provider = asString(value.provider);
+  const baseUrl = asString(value.baseUrl);
+  const modelId = asString(value.modelId);
+  if (!provider || !baseUrl || !modelId) return;
+  const modelLabel = asString(value.modelLabel) ?? modelId;
+  const contextRaw = value.contextWindow;
+  // `contextWindow = 0` is Claudette's "use Pi's default" signal —
+  // forward a generous fallback so the agent loop doesn't reject the
+  // model for a missing window value.
+  const contextWindow =
+    typeof contextRaw === "number" && contextRaw > 0
+      ? Math.floor(contextRaw)
+      : 200_000;
+  try {
+    state.modelRegistry.registerProvider(provider, {
+      baseUrl,
+      // OpenAI-style endpoints. Ollama and LM Studio both speak the
+      // OpenAI chat completions API at the path we receive.
+      api: "openai",
+      // No API key required for local servers — Ollama accepts any
+      // bearer and LM Studio ignores it. Set a placeholder so Pi's
+      // auth-status check doesn't filter the provider out as
+      // "unconfigured".
+      apiKey: "claudette-local",
+      models: [
+        {
+          id: modelId,
+          name: modelLabel,
+          reasoning: false,
+          input: ["text"],
+          cost: {
+            input: 0,
+            output: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+          },
+          contextWindow,
+          maxTokens: Math.min(contextWindow, 32_768),
+        },
+      ],
+    });
+  } catch (err) {
+    // Don't crash the start path on an override the SDK rejects —
+    // `findModel` will surface a useful error a few lines down if the
+    // provider truly isn't reachable.
+    process.stderr.write(
+      `pi-harness: registerProvider(${provider}) failed: ${String(err)}\n`,
+    );
+  }
+}
+
 async function startSession(message: RequestMessage): Promise<void> {
   const cwd = asString(message.cwd) ?? process.cwd();
   const agentDir = asString(message.agentDir) ?? getAgentDir();
@@ -623,6 +699,15 @@ async function startSession(message: RequestMessage): Promise<void> {
   state.cwd = cwd;
   state.authStorage = AuthStorage.create();
   state.modelRegistry = ModelRegistry.create(state.authStorage);
+
+  // Claudette can hand us a one-shot provider definition for the
+  // user's local Ollama / LM Studio server (anything Pi doesn't ship
+  // a bundled provider for). Apply it *before* `findModel` so the
+  // qualified id the agent loop will look up resolves cleanly.
+  // Without this an upgrading user who picked `ollama/llama3` in the
+  // Ollama card would get "model not found in the SDK registry" even
+  // though Claudette's own probe knows the server.
+  applyProviderOverride(message.providerOverride);
 
   let model: Awaited<ReturnType<typeof findModel>> | undefined = undefined;
   if (requestedModel) {
@@ -728,8 +813,15 @@ function findModel(value: string) {
 
 function routeSessionEvent(event: AgentSessionEvent): void {
   switch (event.type) {
+    // Pi distinguishes the agent-loop boundary (`agent_start` /
+    // `agent_end`, fired once per `send_turn`) from each internal LLM
+    // turn (`turn_start` / `turn_end`, fired N times when the agent
+    // tool-calls itself across multiple LLM rounds). Claudette's
+    // protocol expects exactly one `turn_start` + one `turn_end` per
+    // user prompt — collapse onto the agent-loop boundary and ignore
+    // the per-LLM-turn events so a multi-round agent doesn't emit N
+    // duplicate `Result` events on the Rust side.
     case "agent_start":
-    case "turn_start":
       send({ type: "turn_start" });
       break;
     case "message_update": {
@@ -773,12 +865,19 @@ function routeSessionEvent(event: AgentSessionEvent): void {
       });
       break;
     case "agent_end":
-    case "turn_end":
       send({
         type: "turn_end",
         error: "errorMessage" in event ? event.errorMessage : undefined,
       });
       break;
+    // Per-LLM-turn boundaries fire N times inside the agent loop —
+    // intentionally swallowed here (see the `agent_start` case for
+    // the full rationale). Listed explicitly so a future SDK upgrade
+    // that adds new event types fails the exhaustiveness check at
+    // the `default` branch instead of accidentally re-introducing
+    // the double-Result bug.
+    case "turn_start":
+    case "turn_end":
     case "auto_retry_start":
     case "compaction_start":
     case "compaction_end":

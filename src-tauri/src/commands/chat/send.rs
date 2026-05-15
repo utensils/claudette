@@ -1821,6 +1821,10 @@ pub async fn send_chat_message(
                             custom_instructions: pi_instructions,
                             workspace_env: Some(env),
                             resolved_env: Some(resolved),
+                            pi_provider_override: settings
+                                .backend_runtime
+                                .pi_provider_override
+                                .clone(),
                         },
                     )
                     .await?;
