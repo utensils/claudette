@@ -94,6 +94,7 @@ struct VoiceStartLatencyEvent {
         total_ms = tracing::field::Empty,
         stream_open_ms = tracing::field::Empty,
     ),
+    err,
 )]
 pub async fn voice_start_recording(
     provider_id: Option<String>,

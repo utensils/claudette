@@ -87,6 +87,21 @@ Established domains:
 | `claudette::frontend` | events forwarded from the React webview |
 | `claudette::updater` | update checks, boot probation, and rollback |
 
+## Voice click→prompt latency
+
+Every mic click logs a structured event on the `claudette::voice` target so the time between clicking the mic and the recorder opening is visible in the daily log. The event fires whether the start succeeded or not:
+
+- **Success** — info level, `provider_id`, `total_ms` (full command duration), and `stream_open_ms` (just the cpal input-stream open).
+- **Failure** — error level, with the propagated error string (permission denied, model missing, recorder open failure, already-active recording, etc.) on the same target.
+
+```
+2026-05-08T17:32:14.123Z  INFO  claudette::voice  voice_start_recording{provider_id=apple-speech total_ms=312 stream_open_ms=308}: voice start recording latency
+```
+
+To watch in real time, tail the daily log file (path under **Settings → Diagnostics → Open log directory**) or run with `RUST_LOG=claudette::voice=info cargo tauri dev`. Useful when filing a bug report about voice startup feeling slow — copy the matching line into the report and the relevant timings are right there.
+
+There is no cold/warm dimension on the event because Claudette intentionally does not prewarm voice subsystems at launch (this keeps macOS from showing an unprompted microphone permission dialog on boot). Treat every click as a cold start.
+
 ## File format
 
 Logs default to a compact text format (one event per line, with a tab-separated key=value tail of structured fields):
