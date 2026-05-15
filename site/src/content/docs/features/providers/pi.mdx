@@ -5,7 +5,7 @@ description: Use Pi as a first-class Claudette harness with SDK-backed model dis
 
 Pi support runs through Claudette's bundled **Pi SDK harness**, not through the Pi RPC server. Claudette ships a compiled Bun sidecar that embeds `@earendil-works/pi-coding-agent`; the Rust app talks to that sidecar over a small JSONL protocol and maps Pi session events into the same chat, tool-call, permission, stop, and attention UI used by Claude Code and Codex.
 
-This is a production provider path. It is always available in normal builds and is not hidden behind Experimental settings.
+This is a production provider path. It is always available in normal builds and is not hidden behind Experimental settings. Distributions that need to ship without Pi can drop the `pi-sdk` cargo feature at build time — see [Building without the Pi harness](/claudette/getting-started/installation/#building-without-the-pi-harness).
 
 ## Setup
 

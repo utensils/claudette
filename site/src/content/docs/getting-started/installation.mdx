@@ -190,7 +190,7 @@ Both launchers do a few things `cargo tauri dev` doesn't:
 **Windows-only details** the PowerShell launcher handles for you:
 
 - Forces Vite to bind on `127.0.0.1` (IPv4). The default `localhost` resolves to `::1` first on Windows, but WebView2 navigates IPv4-first, so a mismatch surfaces as a blank webview with `HRESULT 0x80070057`.
-- Defaults to the same feature set as `scripts/dev.sh` — `devtools,server,voice,alternative-backends`. On `aarch64-pc-windows-msvc` the launcher appends `-C target-feature=+fullfp16` to `$env:RUSTFLAGS` so the `gemm-f16` ARMv8.2 inline asm in the `voice` feature compiles. Existing `RUSTFLAGS` are kept (rustc concatenates `-C target-feature` directives), so any flags you already set continue to apply.
+- Defaults to the same feature set as `scripts/dev.sh` — `devtools,server,voice,alternative-backends,pi-sdk`. On `aarch64-pc-windows-msvc` the launcher appends `-C target-feature=+fullfp16` to `$env:RUSTFLAGS` so the `gemm-f16` ARMv8.2 inline asm in the `voice` feature compiles. Existing `RUSTFLAGS` are kept (rustc concatenates `-C target-feature` directives), so any flags you already set continue to apply.
 - Skips `tauri/custom-protocol`. With it on, `import.meta.env.DEV` is false in the webview, which leaves `window.__CLAUDETTE_INVOKE__` unset and breaks the [`/claudette-debug`](/claudette/) eval server.
 - Stages the `claudette-cli` sidecar at the path Tauri's `bundle.externalBin` expects — `tauri.conf.json`'s `beforeDevCommand` shell script can't run on Windows.
 
@@ -203,3 +203,16 @@ cargo tauri build --no-default-features --features tauri/custom-protocol,server
 ```
 
 The `server` feature keeps the embedded WebSocket server for [remote workspaces](/claudette/features/remote-workspaces/); drop it too if you don't need that.
+
+## Building without the Pi harness
+
+Routine builds ship the [Pi coding-agent harness](/claudette/features/providers/pi/) sidecar and its `~70 MB` of bundled assets by default. If you're shipping a Claudette variant that doesn't need Pi (an internal fork that only supports Claude Code + Codex Native, a slimmed binary for a constrained environment, etc.), drop the `pi-sdk` feature and pair the build with the no-pi overlay so Tauri's bundler stops looking for the sidecar:
+
+```bash
+cargo tauri build \
+  --no-default-features \
+  --features tauri/custom-protocol,server,voice,devtools,alternative-backends \
+  -c src-tauri/tauri.no-pi.conf.json
+```
+
+This still ships Codex Native and the rest of the alt-backend surface — only Pi is gone. The Rust resolver, the Tauri commands, the Pi sidecar, and the Pi card / Pi runtime option in **Settings > Models** are all absent from the resulting binary; the chat picker and `/model` slash command never expose Pi rows. The same recipe works for `cargo tauri dev` if you need a no-pi dev loop — drop `--config` and pass `--no-default-features` through the dev runner.
