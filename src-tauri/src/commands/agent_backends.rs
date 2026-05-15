@@ -1257,7 +1257,15 @@ fn infer_backend_for_model<'a>(
 }
 
 fn normalize_backend(mut backend: AgentBackendConfig) -> AgentBackendConfig {
+    let original_id = backend.id.clone();
     backend.id = normalize_backend_id(backend.id);
+    // The legacy "experimental-codex" backend was labelled "Experimental Codex". Reset it to
+    // the current canonical label for any DB blob that still carries the old id or label.
+    if backend.id == NATIVE_CODEX_BACKEND_ID
+        && (original_id != backend.id || backend.label == "Experimental Codex")
+    {
+        backend.label = "Codex".to_string();
+    }
     if backend.label.trim().is_empty() {
         backend.label = backend.id.clone();
     }
@@ -5035,5 +5043,24 @@ data: [DONE]
         }];
         let req = json!({"model": "custom-model", "input": "x".repeat(100_000)});
         assert!(preflight_context_window_check(&backend, "custom-model", &req).is_none());
+    }
+
+    #[test]
+    fn normalize_backend_resets_stale_experimental_codex_label_for_legacy_id() {
+        let mut legacy = AgentBackendConfig::builtin_codex_native();
+        legacy.id = LEGACY_NATIVE_CODEX_BACKEND_ID.to_string();
+        legacy.label = "Experimental Codex".to_string();
+        let normalized = normalize_backend(legacy);
+        assert_eq!(normalized.id, NATIVE_CODEX_BACKEND_ID);
+        assert_eq!(normalized.label, "Codex");
+    }
+
+    #[test]
+    fn normalize_backend_resets_stale_experimental_codex_label_for_canonical_id() {
+        let mut stale = AgentBackendConfig::builtin_codex_native();
+        stale.label = "Experimental Codex".to_string();
+        let normalized = normalize_backend(stale);
+        assert_eq!(normalized.id, NATIVE_CODEX_BACKEND_ID);
+        assert_eq!(normalized.label, "Codex");
     }
 }
