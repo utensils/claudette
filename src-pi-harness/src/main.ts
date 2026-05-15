@@ -227,8 +227,21 @@ function buildTools(cwd: string, enabledTools: readonly string[]): ToolDefinitio
       }),
       execute: async (_toolCallId, params) => {
         const path = await safeExistingPath(cwd, params.path);
+        // Cap the file read so a stray `read` on a huge build artifact
+        // (e.g. a 200 MB sourcemap, a generated SQL dump) can't push a
+        // multi-megabyte tool result through the sidecar protocol and
+        // straight into the provider's context window. Truncate at the
+        // cap and tell the model that's what happened so it can either
+        // ask for a slice or move on.
         const text = await readFile(path, "utf8");
-        return textResult(text, { path });
+        const { content, truncated, limitBytes, actualBytes } =
+          capTextForTool(text, MAX_READ_BYTES);
+        return textResult(content, {
+          path,
+          ...(truncated
+            ? { truncated: true, sizeBytes: actualBytes, limitBytes }
+            : {}),
+        });
       },
     }),
     defineTool({
@@ -267,7 +280,12 @@ function buildTools(cwd: string, enabledTools: readonly string[]): ToolDefinitio
           for (const entry of await readdir(dir, { withFileTypes: true })) {
             const path = join(dir, entry.name);
             if (entry.name.includes(params.query)) matches.push(path);
-            if (entry.isDirectory() && !entry.name.startsWith(".") && matches.length < limit) {
+            if (
+              entry.isDirectory() &&
+              !entry.name.startsWith(".") &&
+              !FIND_SKIP_DIRS.has(entry.name) &&
+              matches.length < limit
+            ) {
               await walk(path);
             }
           }
@@ -291,6 +309,9 @@ function buildTools(cwd: string, enabledTools: readonly string[]): ToolDefinitio
           return textResult(result.stdout || result.stderr, {
             command: `rg -n -- ${params.query} ${root}`,
             exitCode: result.exitCode,
+            ...(result.truncated
+              ? { truncated: true, limitBytes: result.limitBytes }
+              : {}),
           });
         } catch (error) {
           if (!isMissingCommand(error)) throw error;
@@ -317,7 +338,13 @@ function buildTools(cwd: string, enabledTools: readonly string[]): ToolDefinitio
         if (!approved) throw new Error("Command denied by user.");
         const result = await runCommand(shellProgram(), shellArgs(params.command), cwd, signal);
         const text = [result.stdout, result.stderr].filter(Boolean).join("\n");
-        return textResult(text, { command: params.command, exitCode: result.exitCode });
+        return textResult(text, {
+          command: params.command,
+          exitCode: result.exitCode,
+          ...(result.truncated
+            ? { truncated: true, limitBytes: result.limitBytes }
+            : {}),
+        });
       },
     }),
     defineTool({
@@ -402,21 +429,122 @@ function shellArgs(command: string): string[] {
   return process.platform === "win32" ? ["/S", "/C", command] : ["-c", command];
 }
 
+/** Hard ceilings on tool result sizes. These cap the bytes routed
+ *  through the sidecar's JSONL protocol so a runaway file read or shell
+ *  command can't OOM the harness, balloon the chat transcript, or push
+ *  tens of MB into the next provider request as tool input. The reads
+ *  themselves are still streamed normally; we just truncate the buffer
+ *  that gets returned to the agent. */
+const MAX_READ_BYTES = 2 * 1024 * 1024;
+const MAX_COMMAND_OUTPUT_BYTES = 1 * 1024 * 1024;
+
+/** Directories the `find` tool refuses to recurse into. These are the
+ *  classic dependency / build caches whose contents are noise for an
+ *  agent search and whose size dominates real source code 1000:1 on
+ *  most workspaces. */
+const FIND_SKIP_DIRS: ReadonlySet<string> = new Set([
+  "node_modules",
+  "target",
+  "dist",
+  "build",
+  ".next",
+  ".turbo",
+  ".cache",
+  ".venv",
+  "venv",
+  "__pycache__",
+  ".gradle",
+  ".idea",
+  ".vscode",
+]);
+
+function capTextForTool(
+  text: string,
+  limitBytes: number,
+): { content: string; truncated: boolean; limitBytes: number; actualBytes: number } {
+  const buf = Buffer.from(text, "utf8");
+  if (buf.length <= limitBytes) {
+    return {
+      content: text,
+      truncated: false,
+      limitBytes,
+      actualBytes: buf.length,
+    };
+  }
+  // Slice on the byte buffer but rebuild from utf8 so a multi-byte
+  // codepoint at the boundary doesn't produce a replacement char in
+  // the truncated tail. `toString("utf8")` with `lossless` semantics
+  // is safe here because we then drop the final character to avoid
+  // emitting a partial sequence.
+  const head = buf.subarray(0, limitBytes).toString("utf8");
+  const safeHead = head.endsWith("�") ? head.slice(0, -1) : head;
+  const dropped = buf.length - limitBytes;
+  return {
+    content:
+      safeHead +
+      `\n\n... [truncated: ${dropped} more bytes; tool limit ${limitBytes} bytes] ...\n`,
+    truncated: true,
+    limitBytes,
+    actualBytes: buf.length,
+  };
+}
+
 function runCommand(program: string, args: string[], cwd: string, signal?: AbortSignal) {
-  return new Promise<{ stdout: string; stderr: string; exitCode: number | null }>((resolveCommand, reject) => {
+  return new Promise<{
+    stdout: string;
+    stderr: string;
+    exitCode: number | null;
+    truncated?: boolean;
+    limitBytes?: number;
+  }>((resolveCommand, reject) => {
     const child = spawn(program, args, { cwd, signal });
-    let stdout = "";
-    let stderr = "";
+    let stdoutBytes = 0;
+    let stderrBytes = 0;
+    let truncated = false;
+    const stdoutChunks: string[] = [];
+    const stderrChunks: string[] = [];
     child.stdout.setEncoding("utf8");
     child.stderr.setEncoding("utf8");
-    child.stdout.on("data", (chunk) => {
-      stdout += chunk;
+    child.stdout.on("data", (chunk: string) => {
+      if (stdoutBytes >= MAX_COMMAND_OUTPUT_BYTES) {
+        truncated = true;
+        return;
+      }
+      const room = MAX_COMMAND_OUTPUT_BYTES - stdoutBytes;
+      if (chunk.length > room) {
+        stdoutChunks.push(chunk.slice(0, room));
+        stdoutBytes = MAX_COMMAND_OUTPUT_BYTES;
+        truncated = true;
+        return;
+      }
+      stdoutChunks.push(chunk);
+      stdoutBytes += chunk.length;
     });
-    child.stderr.on("data", (chunk) => {
-      stderr += chunk;
+    child.stderr.on("data", (chunk: string) => {
+      if (stderrBytes >= MAX_COMMAND_OUTPUT_BYTES) {
+        truncated = true;
+        return;
+      }
+      const room = MAX_COMMAND_OUTPUT_BYTES - stderrBytes;
+      if (chunk.length > room) {
+        stderrChunks.push(chunk.slice(0, room));
+        stderrBytes = MAX_COMMAND_OUTPUT_BYTES;
+        truncated = true;
+        return;
+      }
+      stderrChunks.push(chunk);
+      stderrBytes += chunk.length;
     });
     child.on("error", reject);
-    child.on("close", (exitCode) => resolveCommand({ stdout, stderr, exitCode }));
+    child.on("close", (exitCode) =>
+      resolveCommand({
+        stdout: stdoutChunks.join(""),
+        stderr: stderrChunks.join(""),
+        exitCode,
+        truncated,
+        limitBytes: MAX_COMMAND_OUTPUT_BYTES,
+      }),
+    );
   });
 }
 

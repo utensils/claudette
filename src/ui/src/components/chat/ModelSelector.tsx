@@ -147,10 +147,15 @@ export function ModelSelector({
     () =>
       registry.filter((m) => {
         if (disable1mContext && m.contextWindowTokens >= 1_000_000) return false;
+        // Mirror `pi_model_targets_anthropic` in agent_backends.rs: the
+        // Rust resolver blocks Pi-routed `anthropic/*` *and* `claude/*`
+        // models when the user is on a Claude OAuth subscription. Hide
+        // the same set in the picker so we never offer a row the
+        // resolver would refuse mid-send.
         if (
           isClaudeOauthSubscriber &&
           m.providerKind === "pi_sdk" &&
-          m.subProviderKey === "anthropic"
+          (m.subProviderKey === "anthropic" || m.subProviderKey === "claude")
         ) {
           return false;
         }

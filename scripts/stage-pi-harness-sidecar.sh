@@ -34,6 +34,15 @@ fi
 (
   cd src-pi-harness
   bun install --frozen-lockfile
+  # `bun build --compile` transpiles TypeScript without type-checking.
+  # Run `tsc --noEmit` first so a type error here surfaces as a clear
+  # staging failure instead of silently shipping a sidecar with a
+  # latent JSON-protocol or SDK-API drift bug. Skippable via
+  # CLAUDETTE_PI_HARNESS_SKIP_TYPECHECK=1 for hotfix builds where the
+  # tsconfig is intentionally out of sync.
+  if [ "${CLAUDETTE_PI_HARNESS_SKIP_TYPECHECK:-0}" != "1" ]; then
+    bun run typecheck
+  fi
 )
 
 dest_dir="src-tauri/binaries"

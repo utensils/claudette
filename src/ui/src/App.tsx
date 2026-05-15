@@ -448,8 +448,17 @@ function App() {
     // probe is a single `claude auth status --json` call with a tight
     // timeout, gated to startup; live updates come from
     // ClaudeCodeAuthSetting when the user logs in/out from Settings.
-    getClaudeAuthStatus()
-      .then((status) => setClaudeAuthMethod(status.authMethod))
+    //
+    // `quiet: true` keeps the missing-CLI dialog from firing on launch
+    // for users who don't have the Claude CLI installed — they should
+    // be able to use Pi or Codex without being prompted about Claude.
+    // `loggedIn ? authMethod : null` mirrors ClaudeCodeAuthSetting: an
+    // `auth_method` returned alongside `loggedIn: false` is meaningless
+    // history, not a current subscription state, so flatten it.
+    getClaudeAuthStatus(false, { quiet: true })
+      .then((status) =>
+        setClaudeAuthMethod(status.loggedIn ? status.authMethod : null),
+      )
       .catch(() => setClaudeAuthMethod(null));
     getAppSetting("editor_git_gutter_base")
       .then((val) => {

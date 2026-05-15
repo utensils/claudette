@@ -61,10 +61,16 @@ const AUTH_VALIDATE_TIMEOUT: Duration = Duration::from_secs(10);
 /// This intentionally uses `claude auth status --json` instead of the Usage
 /// panel's token-reading path. It is a lightweight local probe, bounded by a
 /// short timeout so opening Settings never waits on a slow CLI.
+///
+/// `quiet`: when true, suppresses the missing-CLI dialog event on spawn
+/// failure. Used by the startup OAuth-method probe in App.tsx so a user
+/// without the Claude CLI installed isn't greeted by a "install claude"
+/// dialog at launch — the model picker just stays in its non-OAuth shape.
 #[tauri::command]
 pub async fn get_claude_auth_status(
     app: AppHandle,
     validate: Option<bool>,
+    quiet: Option<bool>,
 ) -> Result<ClaudeAuthStatus, String> {
     let claude_path = claudette::agent::resolve_claude_path().await;
     let mut command = Command::new(&claude_path);
@@ -86,6 +92,9 @@ pub async fn get_claude_auth_status(
             let err = claudette::missing_cli::map_spawn_err(&e, "claude", || {
                 format!("Failed to run `claude auth status`: {e}")
             });
+            if quiet == Some(true) {
+                return Err(err);
+            }
             return Err(crate::missing_cli::handle_err(&app, &err).unwrap_or(err));
         }
         Err(_) => {

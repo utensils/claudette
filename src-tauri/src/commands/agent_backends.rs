@@ -509,13 +509,21 @@ pub async fn resolve_backend_runtime(
 
     ensure_anthropic_not_routed_through_pi_via_oauth(&backend, model).await?;
 
+    // Ollama/LM Studio/OpenAI cards default to (or opt into) the Pi
+    // harness, but `effective_harness()` only sees the single backend
+    // and can't tell whether the Pi backend itself is enabled. If the
+    // user disabled the Pi card in Settings → Models, those PiSdk
+    // routes have no sidecar to talk to and should fall back to the
+    // Claude CLI path that was the historical default.
+    let dispatch_harness = resolve_dispatch_harness(&backend, &backends);
+
     // Drop the borrowed Database before any `.await` so the resulting
     // future stays `Send` for the Tauri command handler. The Claude-CLI
     // path re-opens it inside the sync block when it needs to persist a
     // hydration.
     drop(db);
 
-    match backend.effective_harness() {
+    match dispatch_harness {
         AgentBackendRuntimeHarness::CodexAppServer => {
             Ok(build_codex_app_server_runtime(&backend, model))
         }
@@ -523,6 +531,37 @@ pub async fn resolve_backend_runtime(
         AgentBackendRuntimeHarness::ClaudeCode => {
             build_claude_code_runtime(state, &mut backend, model).await
         }
+    }
+}
+
+/// Decide which harness `resolve_backend_runtime` actually dispatches
+/// to. Mostly this is the backend's `effective_harness()`, but if a
+/// non-Pi-kind backend (Ollama, LM Studio, OpenAI, …) is configured to
+/// route through Pi and the user has disabled the Pi backend itself,
+/// we downgrade to the Claude CLI harness so the chat still works.
+/// Without this, the user gets a "sidecar not started" failure mid-turn
+/// for a state Settings is supposed to control.
+fn resolve_dispatch_harness(
+    backend: &AgentBackendConfig,
+    backends: &[AgentBackendConfig],
+) -> AgentBackendRuntimeHarness {
+    let harness = backend.effective_harness();
+    if harness != AgentBackendRuntimeHarness::PiSdk {
+        return harness;
+    }
+    if backend.kind == AgentBackendKind::PiSdk {
+        // The Pi card itself — `enabled` is enforced separately by the
+        // `!backend.enabled` check earlier in the resolver, so it can't
+        // reach this branch with a disabled Pi card.
+        return harness;
+    }
+    let pi_available = backends
+        .iter()
+        .any(|other| other.kind == AgentBackendKind::PiSdk && other.enabled);
+    if pi_available {
+        harness
+    } else {
+        AgentBackendRuntimeHarness::ClaudeCode
     }
 }
 
@@ -564,14 +603,25 @@ fn build_pi_sdk_runtime(
 }
 
 fn qualify_model_for_pi(kind: AgentBackendKind, model: &str) -> String {
-    if model.contains('/') {
-        // Already provider-qualified (the Pi card's own selections).
+    // The Pi card's own ids are already `<provider>/<modelId>`; for
+    // every other kind (Ollama, LM Studio, OpenAI, CustomOpenAI, Codex
+    // Native) the user picks a bare model id and we prepend the kind's
+    // Pi-provider prefix so Pi's `ModelRegistry.find(provider, id)` hits.
+    //
+    // We deliberately don't bail out on a plain `model.contains('/')`:
+    // Ollama-style ids legitimately contain slashes (`library/llama3`,
+    // `user/custom-model`), and stripping the prefix there would route
+    // `library/llama3` through Pi un-qualified, which never resolves.
+    // Instead, only skip prefixing when the id is *already* qualified
+    // with the same prefix this kind would have applied.
+    let Some(prefix) = kind.pi_provider_prefix() else {
+        return model.to_string();
+    };
+    let prefix_with_slash = format!("{prefix}/");
+    if model.starts_with(&prefix_with_slash) {
         return model.to_string();
     }
-    match kind.pi_provider_prefix() {
-        Some(prefix) => format!("{prefix}/{model}"),
-        None => model.to_string(),
-    }
+    format!("{prefix}/{model}")
 }
 
 async fn build_claude_code_runtime(
@@ -2211,6 +2261,11 @@ fn runtime_hash(config: &AgentBackendConfig, secret: Option<&str>, model: Option
     config.id.hash(&mut hasher);
     config.label.hash(&mut hasher);
     backend_kind_hash_key(config.kind).hash(&mut hasher);
+    // The user-selected harness goes into the hash too — flipping
+    // Settings → Models → $(card) → Runtime between Pi and Claude CLI
+    // mid-session must force a respawn, otherwise the live agent keeps
+    // talking to the old subprocess.
+    harness_hash_key(config.effective_harness()).hash(&mut hasher);
     config.base_url.hash(&mut hasher);
     config.enabled.hash(&mut hasher);
     config.default_model.hash(&mut hasher);
@@ -2253,6 +2308,14 @@ fn backend_kind_hash_key(kind: AgentBackendKind) -> &'static str {
         AgentBackendKind::CustomAnthropic => "custom_anthropic",
         AgentBackendKind::CustomOpenAi => "custom_openai",
         AgentBackendKind::LmStudio => "lm_studio",
+    }
+}
+
+fn harness_hash_key(harness: AgentBackendRuntimeHarness) -> &'static str {
+    match harness {
+        AgentBackendRuntimeHarness::ClaudeCode => "claude_code",
+        AgentBackendRuntimeHarness::CodexAppServer => "codex_app_server",
+        AgentBackendRuntimeHarness::PiSdk => "pi_sdk",
     }
 }
 
@@ -5358,6 +5421,93 @@ data: [DONE]
         assert_eq!(
             qualify_model_for_pi(AgentBackendKind::Anthropic, "sonnet"),
             "sonnet"
+        );
+    }
+
+    #[test]
+    fn qualify_model_for_pi_preserves_slash_in_ollama_model_ids() {
+        // Ollama model names legitimately contain slashes
+        // (`library/llama3`, `user/custom-model`). The old "any slash
+        // means already-qualified" heuristic dropped the `ollama/`
+        // prefix on these and Pi's registry never resolved them.
+        assert_eq!(
+            qualify_model_for_pi(AgentBackendKind::Ollama, "library/llama3"),
+            "ollama/library/llama3"
+        );
+        assert_eq!(
+            qualify_model_for_pi(AgentBackendKind::Ollama, "user/custom-model"),
+            "ollama/user/custom-model"
+        );
+        // The corresponding LM Studio case (e.g. a manual entry shaped
+        // like `studio/foo`) should also pick up the `lmstudio/` prefix.
+        assert_eq!(
+            qualify_model_for_pi(AgentBackendKind::LmStudio, "studio/foo"),
+            "lmstudio/studio/foo"
+        );
+    }
+
+    #[test]
+    fn resolve_dispatch_harness_downgrades_pi_to_claude_when_pi_backend_is_disabled() {
+        let ollama = AgentBackendConfig {
+            enabled: true,
+            ..AgentBackendConfig::builtin_ollama()
+        };
+        let mut pi = AgentBackendConfig::builtin_pi_sdk();
+        pi.enabled = false;
+        let backends = vec![ollama.clone(), pi];
+        // Ollama defaults to PiSdk harness, but with Pi disabled it
+        // must fall back to ClaudeCode so the user's chat still works.
+        assert_eq!(
+            resolve_dispatch_harness(&ollama, &backends),
+            AgentBackendRuntimeHarness::ClaudeCode,
+        );
+    }
+
+    #[test]
+    fn resolve_dispatch_harness_keeps_pi_when_pi_backend_is_enabled() {
+        let ollama = AgentBackendConfig {
+            enabled: true,
+            ..AgentBackendConfig::builtin_ollama()
+        };
+        let mut pi = AgentBackendConfig::builtin_pi_sdk();
+        pi.enabled = true;
+        let backends = vec![ollama.clone(), pi];
+        assert_eq!(
+            resolve_dispatch_harness(&ollama, &backends),
+            AgentBackendRuntimeHarness::PiSdk,
+        );
+    }
+
+    #[test]
+    fn resolve_dispatch_harness_does_not_downgrade_pi_card_itself() {
+        // The Pi card's own `effective_harness()` is `PiSdk`. The
+        // resolver-time enabled-flag check earlier in
+        // `resolve_backend_runtime` rejects a disabled Pi card before
+        // we get here, so `resolve_dispatch_harness` must not silently
+        // rewrite the Pi card to ClaudeCode (Pi-card-via-Claude-CLI is
+        // nonsense — there's no Anthropic-shaped endpoint to point at).
+        let pi = AgentBackendConfig::builtin_pi_sdk();
+        let backends = vec![pi.clone()];
+        assert_eq!(
+            resolve_dispatch_harness(&pi, &backends),
+            AgentBackendRuntimeHarness::PiSdk,
+        );
+    }
+
+    #[test]
+    fn runtime_hash_changes_when_runtime_harness_changes() {
+        // Flipping Settings → Models → $(card) → Runtime mid-session
+        // must respawn the agent; if `runtime_hash` ignored the
+        // override the live agent would keep talking to the previous
+        // harness's subprocess until the user manually reset.
+        let mut backend = AgentBackendConfig::builtin_ollama();
+        backend.enabled = true;
+        let default_hash = runtime_hash(&backend, None, Some("llama3"));
+        backend.runtime_harness = Some(AgentBackendRuntimeHarness::ClaudeCode);
+        let override_hash = runtime_hash(&backend, None, Some("llama3"));
+        assert_ne!(
+            default_hash, override_hash,
+            "runtime_hash must change when runtime_harness flips",
         );
     }
 

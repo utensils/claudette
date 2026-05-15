@@ -9,8 +9,14 @@ export interface ClaudeAuthStatus {
   message: string | null;
 }
 
-export function getClaudeAuthStatus(validate = false): Promise<ClaudeAuthStatus> {
-  return invoke("get_claude_auth_status", { validate });
+export function getClaudeAuthStatus(
+  validate = false,
+  options: { quiet?: boolean } = {},
+): Promise<ClaudeAuthStatus> {
+  return invoke("get_claude_auth_status", {
+    validate,
+    quiet: options.quiet ?? false,
+  });
 }
 
 export function claudeAuthLogin(): Promise<void> {

@@ -171,11 +171,21 @@ impl PiSdkSession {
         // can replay it; sending it through `event_tx` before any subscriber
         // exists would drop it on the floor.
         session.init_cache.lock().await.command_line = Some(pi_command_line_event(&pi_path));
-        session.initialize().await?;
-        session
-            .start_session(session_id, options)
-            .await
-            .map_err(|err| format!("Pi SDK harness start_session failed: {err}"))?;
+        // `spawn_exit_watcher` moved `child` into a background task, so we
+        // no longer hold the kill handle directly. If `initialize` or
+        // `start_session` fails the session goes out of scope; closing
+        // stdin would normally make the sidecar exit, but it can hang
+        // mid-handshake while a request is pending. Send an explicit
+        // graceful stop on the error path so a half-started Pi process
+        // never lingers.
+        if let Err(err) = session.initialize().await {
+            let _ = crate::agent::stop_agent_graceful(pid).await;
+            return Err(err);
+        }
+        if let Err(err) = session.start_session(session_id, options).await {
+            let _ = crate::agent::stop_agent_graceful(pid).await;
+            return Err(format!("Pi SDK harness start_session failed: {err}"));
+        }
         Ok(session)
     }
 
@@ -248,7 +258,13 @@ impl PiSdkSession {
         session.spawn_stdout_reader(stdout);
         session.spawn_stderr_reader(stderr);
         session.spawn_exit_watcher(child);
-        session.initialize().await?;
+        // Same teardown-on-init-error story as `start`. The exit watcher
+        // owns `child`, so we kill the leftover sidecar via its PID
+        // instead of dropping the borrow.
+        if let Err(err) = session.initialize().await {
+            let _ = crate::agent::stop_agent_graceful(pid).await;
+            return Err(err);
+        }
         Ok(session)
     }
 

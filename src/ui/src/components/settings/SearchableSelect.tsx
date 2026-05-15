@@ -147,7 +147,11 @@ export function SearchableSelect({
     }
   }
 
-  const totalCount = allOptions.length;
+  // `totalCount` is what the user sees in the filter placeholder
+  // (e.g. "Filter 42 models…"). Pass the real model count — the
+  // synthetic Auto / "Use first available" row is a control, not a
+  // model, so it must not inflate the count.
+  const totalCount = options.length;
   const showStatus = query.trim().length > 0;
   const computedSearchPlaceholder =
     searchPlaceholder
@@ -232,7 +236,10 @@ export function SearchableSelect({
               {t(
                 "models_backend_filter_status",
                 "Showing {{shown}} of {{total}}",
-                { shown: filtered.length, total: allOptions.length },
+                {
+                  shown: filtered.filter((opt) => opt !== autoOption).length,
+                  total: totalCount,
+                },
               )}
             </div>
           )}
