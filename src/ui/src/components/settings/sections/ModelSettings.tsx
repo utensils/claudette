@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { ChevronRight } from "lucide-react";
 import {
   deleteAppSetting,
   getAppSetting,
@@ -23,6 +24,7 @@ import {
 import {
   buildModelRegistry,
   resolveModelSelection,
+  resolvePiSubProvider,
 } from "../../chat/modelRegistry";
 import { useAppStore } from "../../../stores/useAppStore";
 import { formatBackendError } from "../backendSettingsErrors";
@@ -923,15 +925,19 @@ function BackendCard({
           {discoveryBackend && (
             <label className={styles.backendField}>
               <span className={styles.backendFieldLabel}>{t("models_backend_discovered_models")}</span>
-              <div className={styles.modelChipList}>
-                {discoveredModels.length > 0 ? (
-                  discoveredModels.map((model) => (
-                    <span key={model.id} className={styles.modelChip}>{model.label || model.id}</span>
-                  ))
-                ) : (
-                  <span className={styles.modelChipEmpty}>{t("models_backend_no_discovered_models")}</span>
-                )}
-              </div>
+              {draft.kind === "pi_sdk" ? (
+                <PiDiscoveredModelsList models={discoveredModels} />
+              ) : (
+                <div className={styles.modelChipList}>
+                  {discoveredModels.length > 0 ? (
+                    discoveredModels.map((model) => (
+                      <span key={model.id} className={styles.modelChip}>{model.label || model.id}</span>
+                    ))
+                  ) : (
+                    <span className={styles.modelChipEmpty}>{t("models_backend_no_discovered_models")}</span>
+                  )}
+                </div>
+              )}
             </label>
           )}
           {showManualModels && (
@@ -1023,5 +1029,110 @@ function isDiscoveryBackend(backend: AgentBackendConfig) {
     backend.kind === "codex_native" ||
     backend.kind === "pi_sdk" ||
     backend.kind === "lm_studio"
+  );
+}
+
+interface PiDiscoveredGroup {
+  key: string;
+  label: string;
+  models: AgentBackendConfig["discovered_models"];
+}
+
+/** Group Pi-discovered models by sub-provider (parsed from the
+ *  `provider/modelId` prefix the sidecar emits). Other backends rarely
+ *  return more than a handful of models, so the chip wall is fine for
+ *  them — this is Pi-specific UX. Sub-providers are sorted by model
+ *  count descending so the biggest catalogs (OpenAI, Anthropic) surface
+ *  first. */
+function groupPiDiscoveredModels(
+  models: AgentBackendConfig["discovered_models"],
+): PiDiscoveredGroup[] {
+  const groups = new Map<string, PiDiscoveredGroup>();
+  for (const model of models) {
+    const { key, label } = resolvePiSubProvider(model.id);
+    let group = groups.get(key);
+    if (!group) {
+      group = { key, label, models: [] };
+      groups.set(key, group);
+    }
+    group.models.push(model);
+  }
+  return Array.from(groups.values()).sort((a, b) => {
+    const sizeDiff = b.models.length - a.models.length;
+    if (sizeDiff !== 0) return sizeDiff;
+    return a.label.localeCompare(b.label);
+  });
+}
+
+function PiDiscoveredModelsList({
+  models,
+}: {
+  models: AgentBackendConfig["discovered_models"];
+}) {
+  const { t } = useTranslation("settings");
+  const groups = useMemo(() => groupPiDiscoveredModels(models), [models]);
+  const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
+
+  if (models.length === 0) {
+    return (
+      <div className={styles.modelChipList}>
+        <span className={styles.modelChipEmpty}>
+          {t("models_backend_no_discovered_models")}
+        </span>
+      </div>
+    );
+  }
+
+  function toggle(key: string) {
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }
+
+  return (
+    <div className={styles.piDiscoveredList}>
+      <div className={styles.piDiscoveredSummary}>
+        {t("models_backend_pi_discovered_summary", {
+          providers: groups.length,
+          models: models.length,
+          defaultValue: "{{providers}} providers · {{models}} models",
+        })}
+      </div>
+      {groups.map((group) => {
+        const isOpen = expanded.has(group.key);
+        return (
+          <div key={group.key} className={styles.piDiscoveredGroup}>
+            <button
+              type="button"
+              className={styles.piDiscoveredHeader}
+              aria-expanded={isOpen}
+              onClick={() => toggle(group.key)}
+            >
+              <ChevronRight
+                size={12}
+                className={`${styles.piDiscoveredChevron} ${isOpen ? styles.piDiscoveredChevronOpen : ""}`}
+                aria-hidden
+              />
+              <span className={styles.piDiscoveredGroupLabel}>{group.label}</span>
+              <span className={styles.piDiscoveredGroupCount}>
+                {group.models.length}
+              </span>
+            </button>
+            {isOpen && (
+              <div className={styles.piDiscoveredChips}>
+                {group.models.map((model) => (
+                  <span key={model.id} className={styles.modelChip} title={model.id}>
+                    {model.label || model.id}
+                  </span>
+                ))}
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
   );
 }

@@ -1991,6 +1991,77 @@
   font-size: 12px;
 }
 
+.piDiscoveredList {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--space-1) 0;
+  width: 100%;
+  max-width: 640px;
+}
+
+.piDiscoveredSummary {
+  font-size: 11px;
+  color: var(--text-muted);
+  padding: 2px 0 6px;
+}
+
+.piDiscoveredGroup {
+  display: flex;
+  flex-direction: column;
+}
+
+.piDiscoveredHeader {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  background: transparent;
+  border: none;
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  color: var(--text-primary);
+  font-size: 12px;
+  text-align: left;
+  width: 100%;
+  transition: background var(--transition-fast);
+}
+
+.piDiscoveredHeader:hover {
+  background: var(--hover-bg);
+}
+
+.piDiscoveredChevron {
+  color: var(--text-dim);
+  transition: transform var(--transition-fast);
+  flex-shrink: 0;
+}
+
+.piDiscoveredChevronOpen {
+  transform: rotate(90deg);
+}
+
+.piDiscoveredGroupLabel {
+  flex: 1;
+  font-weight: 500;
+}
+
+.piDiscoveredGroupCount {
+  font-size: 11px;
+  color: var(--text-dim);
+  background: var(--hover-bg);
+  padding: 1px 6px;
+  border-radius: 10px;
+  flex-shrink: 0;
+}
+
+.piDiscoveredChips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  padding: 4px 8px 8px 24px;
+}
+
 .backendActions {
   display: flex;
   align-items: center;

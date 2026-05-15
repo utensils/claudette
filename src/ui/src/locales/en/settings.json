@@ -183,6 +183,7 @@
   "models_backend_runtime_codex_app_server_label": "Codex app-server",
   "models_backend_runtime_default_suffix": "default",
   "models_backend_runtime_pi_unavailable_suffix": "Pi disabled",
+  "models_backend_pi_discovered_summary": "{{providers}} providers · {{models}} models",
   "models_backend_status_saving": "Saving",
   "models_backend_status_saved": "Saved",
   "models_backend_status_refreshed": "Refreshed {{count}} model(s)",

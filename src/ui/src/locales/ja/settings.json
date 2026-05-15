@@ -160,6 +160,7 @@
   "models_backend_runtime_codex_app_server_label": "Codex アプリサーバー",
   "models_backend_runtime_default_suffix": "デフォルト",
   "models_backend_runtime_pi_unavailable_suffix": "Pi 無効",
+  "models_backend_pi_discovered_summary": "{{providers}} 個のプロバイダー · {{models}} 個のモデル",
   "models_backend_status_saving": "保存中",
   "models_backend_status_saved": "保存済み",
   "models_backend_status_refreshed": "{{count}} 個のモデルを更新しました",
