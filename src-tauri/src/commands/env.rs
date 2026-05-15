@@ -856,6 +856,26 @@ fn newly_disabled(baseline: &HashSet<String>, after: &HashSet<String>) -> Vec<St
         .collect()
 }
 
+/// List the env-provider plugin names that are disabled for the
+/// target's repo. Cheap DB-only read — does NOT run any resolves and
+/// does NOT consult the registry. Designed for the EnvPanel's
+/// placeholder hydration so the user-visible toggle state matches the
+/// persisted setting even before the (potentially slow) initial
+/// `get_env_sources` resolve returns.
+#[tauri::command]
+pub async fn list_env_provider_disabled(
+    target: EnvTarget,
+    state: State<'_, AppState>,
+) -> Result<Vec<String>, String> {
+    let (_, _, repo_id) = resolve_target(&state, &target).await?;
+    let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
+    let mut names: Vec<String> = load_disabled_providers(&db, &repo_id)
+        .into_iter()
+        .collect();
+    names.sort();
+    Ok(names)
+}
+
 /// Toggle whether an env-provider plugin runs for the target's repo.
 /// The toggle is persisted per-repo, so the change applies to every
 /// worktree under that repo. This evicts the cache for the repo's

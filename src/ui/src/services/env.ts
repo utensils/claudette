@@ -55,6 +55,17 @@ export function setEnvProviderEnabled(
 }
 
 /**
+ * Cheap DB-only read of the per-repo disabled env-provider plugin
+ * names. Used by the EnvPanel to hydrate placeholder rows before the
+ * initial `getEnvSources` resolve returns, so toggles for repos with
+ * already-disabled providers reflect the persisted state immediately
+ * rather than briefly showing as enabled.
+ */
+export function listEnvProviderDisabled(target: EnvTarget): Promise<string[]> {
+  return invoke("list_env_provider_disabled", { target });
+}
+
+/**
  * Run a plugin's trust command (`direnv allow`, `mise trust`) against
  * the target's worktree. Inherits `HOME`/`PATH` from Claudette so the
  * trust cache update lands in the user's normal location. Invalidates

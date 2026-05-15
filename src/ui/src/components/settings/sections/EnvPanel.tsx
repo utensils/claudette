@@ -5,6 +5,7 @@ import { useCopyToClipboard } from "../../../hooks/useCopyToClipboard";
 import {
   getEnvSources,
   getEnvTargetWorktree,
+  listEnvProviderDisabled,
   reloadEnv,
   setEnvProviderEnabled,
 } from "../../../services/env";
@@ -245,8 +246,27 @@ export function EnvPanel({ target }: EnvPanelProps) {
     let cancelled = false;
     (async () => {
       try {
-        const plugins = await listClaudettePlugins();
+        // Two cheap parallel reads — the plugin registry's
+        // manifests AND the per-repo persisted disable set. Hydrating
+        // the placeholder rows with the disabled set is what keeps the
+        // toggle honest for repos where a provider is already disabled
+        // while the much slower `getEnvSources` resolve is still in
+        // flight. Without it the placeholder shows `enabled: true` for
+        // every provider, and the user toggling a "disable" row would
+        // be a no-op write that surfaces as a flicker rather than the
+        // intent-preserving disable they wanted. Both calls are
+        // best-effort: a failure on either degrades to "show the
+        // placeholder with the field absent / default" rather than
+        // failing the whole panel.
+        const [plugins, disabledNames] = await Promise.all([
+          listClaudettePlugins().catch(() => []),
+          // listEnvProviderDisabled returns []  on any error path so
+          // the catch is just here to harden against an unexpected
+          // throw shape from the IPC layer.
+          listEnvProviderDisabled(target).catch(() => [] as string[]),
+        ]);
         if (cancelled) return;
+        const disabledSet = new Set(disabledNames);
         // Snapshot the env-provider manifests so the per-row settings
         // drawer can render its form without an extra fetch. We index
         // by name so the row JSX can do an O(1) lookup; we keep ALL
@@ -268,7 +288,10 @@ export function EnvPanel({ target }: EnvPanelProps) {
               plugin_name: p.name,
               display_name: p.display_name,
               detected: false,
-              enabled: true,
+              // Hydrate from the persisted per-repo disabled set so
+              // already-disabled providers don't render as enabled
+              // during the pre-resolve window.
+              enabled: !disabledSet.has(p.name),
               // Placeholder rows pre-resolve. The real resolve fills in
               // the actual unavailable state from the registry's CLI
               // probe; until then assume installed so we don't flicker
@@ -403,6 +426,23 @@ export function EnvPanel({ target }: EnvPanelProps) {
 
   const handleToggle = useCallback(
     async (pluginName: string, nextEnabled: boolean) => {
+      // Snapshot the row's prior `enabled` value AND any active
+      // env-progress entry we're about to clear, so we can restore
+      // both on a failed save. Without the rollback, a rejected
+      // `setEnvProviderEnabled` would leave the panel showing the
+      // optimistic state — the user thinks they disabled the
+      // provider, but the next agent spawn still picks it up because
+      // the DB wasn't actually written.
+      const previousEnabled =
+        sources?.find((s) => s.plugin_name === pluginName)?.enabled ?? true;
+      const previousEnvEntry = !nextEnabled
+        ? useAppStore.getState().workspaceEnvironment?.[envProgressKey]
+        : undefined;
+      const clearedProgress =
+        !nextEnabled &&
+        previousEnvEntry?.status === "preparing" &&
+        previousEnvEntry.current_plugin === pluginName;
+
       // Optimistic UI: flip the row's `enabled` flag immediately so
       // the toggle visibly switches state regardless of how long the
       // post-toggle refresh takes. Env resolves can run 60-120s on
@@ -420,14 +460,10 @@ export function EnvPanel({ target }: EnvPanelProps) {
       // backend's eventual `Finished` event for the in-flight plugin
       // is idempotent against a cleared current_plugin — it just
       // re-publishes the same "no active plugin" state.
-      if (!nextEnabled) {
-        const env =
-          useAppStore.getState().workspaceEnvironment?.[envProgressKey];
-        if (env?.status === "preparing" && env.current_plugin === pluginName) {
-          useAppStore
-            .getState()
-            .setWorkspaceEnvironmentProgress(envProgressKey, null);
-        }
+      if (clearedProgress) {
+        useAppStore
+          .getState()
+          .setWorkspaceEnvironmentProgress(envProgressKey, null);
       }
       try {
         await setEnvProviderEnabled(target, pluginName, nextEnabled);
@@ -449,10 +485,50 @@ export function EnvPanel({ target }: EnvPanelProps) {
           }
         }
       } catch (e) {
-        setFetchError(String(e));
+        // Toggle errors are NOT routed through `setFetchError` — that
+        // would blank the whole panel for a single failed row write,
+        // which is much worse than the failure itself. The rollback
+        // below is the user-visible signal that the click didn't
+        // take; we log to console so an unexpected failure is still
+        // diagnosable.
+        console.error("setEnvProviderEnabled failed:", e);
+        // Roll back the optimistic flip — the persistence call failed,
+        // so the panel must reflect the unchanged DB state. If the
+        // initial setEnvProviderEnabled threw, refresh() won't have
+        // run, and `sources` still carries the optimistic value; if
+        // the throw came from refresh() itself, `sources` may have
+        // been updated to authoritative pre-toggle state already, and
+        // restoring it back to `previousEnabled` is still safe (it
+        // matches what the DB has).
+        setSources((prev) =>
+          prev?.map((s) =>
+            s.plugin_name === pluginName
+              ? { ...s, enabled: previousEnabled }
+              : s,
+          ) ?? null,
+        );
+        if (clearedProgress && previousEnvEntry) {
+          // Restore the per-plugin progress entry we optimistically
+          // cleared so the user isn't stuck without a spinner for a
+          // resolve that's still actually running.
+          useAppStore
+            .getState()
+            .setWorkspaceEnvironmentProgress(
+              envProgressKey,
+              previousEnvEntry.current_plugin ?? null,
+              previousEnvEntry.started_at,
+            );
+        }
       }
     },
-    [target, refresh, repoIdForModal, openTrustModalForPlugin, envProgressKey],
+    [
+      target,
+      refresh,
+      repoIdForModal,
+      openTrustModalForPlugin,
+      envProgressKey,
+      sources,
+    ],
   );
 
   // Lazy-load a plugin's per-repo overrides on first expansion. Saves a

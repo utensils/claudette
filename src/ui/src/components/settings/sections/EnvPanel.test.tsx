@@ -34,6 +34,7 @@ const claudettePluginServices = vi.hoisted(() => ({
 const envServices = vi.hoisted(() => ({
   getEnvSources: vi.fn(),
   getEnvTargetWorktree: vi.fn(),
+  listEnvProviderDisabled: vi.fn(),
   reloadEnv: vi.fn(),
   runEnvTrust: vi.fn(),
   setEnvProviderEnabled: vi.fn(),
@@ -133,6 +134,7 @@ describe("EnvPanel — per-repo settings drawer", () => {
     envServices.runEnvTrust.mockResolvedValue(undefined);
     envServices.setEnvProviderEnabled.mockResolvedValue(undefined);
     envServices.reloadEnv.mockResolvedValue(undefined);
+    envServices.listEnvProviderDisabled.mockResolvedValue([] as string[]);
   });
 
   afterEach(async () => {
@@ -296,6 +298,7 @@ describe("EnvPanel — toggle stays actionable mid-resolve", () => {
     envServices.runEnvTrust.mockResolvedValue(undefined);
     envServices.setEnvProviderEnabled.mockResolvedValue(undefined);
     envServices.reloadEnv.mockResolvedValue(undefined);
+    envServices.listEnvProviderDisabled.mockResolvedValue([] as string[]);
     // Real Zustand store under test — reset to defaults so prior tests'
     // state can't leak in.
     useAppStore.setState({ workspaceEnvironment: {} });
@@ -420,6 +423,109 @@ describe("EnvPanel — toggle stays actionable mid-resolve", () => {
     // plugins downstream may still resolve, and the env-prep listener
     // owns the transition to "ready" / "error".
     expect(env?.status).toBe("preparing");
+  });
+
+  it("hydrates placeholder rows from listEnvProviderDisabled before the resolve returns", async () => {
+    // Codex iter (post-squash) P2: with the toggle now actionable
+    // mid-resolve, the placeholder rows from `listClaudettePlugins`
+    // can't continue hard-coding `enabled: true` — a repo whose
+    // env-direnv is already disabled but whose env-mise resolve is
+    // slow would render env-direnv as enabled (incorrect) until the
+    // slow resolve returned. Hydrate from `listEnvProviderDisabled`
+    // (cheap DB read) so the placeholder reflects the persisted state.
+    let resolveGetEnvSources: (value: EnvSourceInfo[]) => void;
+    const getEnvSourcesPromise = new Promise<EnvSourceInfo[]>((resolve) => {
+      resolveGetEnvSources = resolve;
+    });
+    claudettePluginServices.listClaudettePlugins.mockResolvedValue([
+      envProvider({ name: "env-direnv", display_name: "direnv" }),
+      envProvider({ name: "env-mise", display_name: "mise" }),
+    ]);
+    envServices.getEnvSources.mockReturnValue(getEnvSourcesPromise);
+    envServices.listEnvProviderDisabled.mockResolvedValue(["env-direnv"]);
+
+    const container = await renderEnvPanel();
+
+    // Both rows visible, but the toggles reflect persisted state.
+    const toggles = Array.from(
+      container.querySelectorAll<HTMLButtonElement>('button[role="switch"]'),
+    );
+    expect(toggles).toHaveLength(2);
+    // The row order tracks the listClaudettePlugins iteration; assert
+    // by `aria-label` which embeds the display_name so the test
+    // doesn't depend on render order.
+    const direnvToggle = toggles.find((t) =>
+      t.getAttribute("aria-label")?.includes("direnv"),
+    );
+    const miseToggle = toggles.find((t) =>
+      t.getAttribute("aria-label")?.includes("mise"),
+    );
+    expect(direnvToggle!.getAttribute("aria-checked")).toBe("false");
+    expect(miseToggle!.getAttribute("aria-checked")).toBe("true");
+
+    // Clean up.
+    resolveGetEnvSources!([]);
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+  });
+
+  it("rolls back the optimistic flip when setEnvProviderEnabled rejects", async () => {
+    // Codex iter (post-squash) P3: a failed save must NOT leave the
+    // panel showing the optimistic state — the user thinks they
+    // disabled the provider, but the DB still has the old value, so
+    // the next agent spawn picks up env from a provider the panel
+    // claims is off. Capture the prior `enabled` flag and restore it
+    // on rejection.
+    claudettePluginServices.listClaudettePlugins.mockResolvedValue([
+      envProvider({ name: "env-direnv", display_name: "direnv" }),
+    ]);
+    envServices.getEnvSources.mockResolvedValue([
+      envSource({
+        plugin_name: "env-direnv",
+        display_name: "direnv",
+        enabled: true,
+      }),
+    ]);
+    envServices.setEnvProviderEnabled.mockRejectedValueOnce(
+      new Error("simulated write failure"),
+    );
+    // Seed an in-flight resolve hint so we also exercise the
+    // current_plugin restore branch.
+    const startedAt = Date.now() - 5_000;
+    useAppStore.setState({
+      workspaceEnvironment: {
+        "repo:repo-1": {
+          status: "preparing",
+          current_plugin: "env-direnv",
+          started_at: startedAt,
+        },
+      },
+    });
+
+    const container = await renderEnvPanel();
+
+    const toggle = container.querySelector<HTMLButtonElement>(
+      'button[role="switch"]',
+    );
+    expect(toggle!.getAttribute("aria-checked")).toBe("true");
+    await act(async () => {
+      toggle!.click();
+    });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    // Toggle reflects the pre-click state again — rollback succeeded.
+    const after = container.querySelector<HTMLButtonElement>(
+      'button[role="switch"]',
+    );
+    expect(after!.getAttribute("aria-checked")).toBe("true");
+    // Spinner entry was restored to its prior shape.
+    const env = useAppStore.getState().workspaceEnvironment["repo:repo-1"];
+    expect(env?.status).toBe("preparing");
+    expect(env?.current_plugin).toBe("env-direnv");
+    expect(env?.started_at).toBe(startedAt);
   });
 
   it("does not touch unrelated workspaceEnvironment entries on disable", async () => {
