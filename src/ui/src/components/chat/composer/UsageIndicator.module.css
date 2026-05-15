@@ -1,3 +1,8 @@
+.wrapper {
+  position: relative;
+  display: inline-flex;
+}
+
 .indicator {
   display: inline-flex;
   align-items: center;
@@ -6,10 +11,28 @@
   padding: 0 4px;
   background: transparent;
   border: none;
-  cursor: default;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
   color: var(--text-dim);
   font-size: var(--fs-xs);
   line-height: 1;
+  font-family: inherit;
+  transition: background var(--transition-fast), color var(--transition-fast);
+}
+
+.indicator:hover {
+  background: var(--hover-bg);
+  color: var(--text-primary);
+}
+
+.indicator:focus-visible {
+  outline: 1px solid var(--accent-primary);
+  outline-offset: 1px;
+}
+
+.indicator[aria-expanded="true"] {
+  background: var(--hover-bg);
+  color: var(--text-primary);
 }
 
 .bar {

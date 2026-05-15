@@ -1,7 +1,8 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useAppStore } from "../../../stores/useAppStore";
 import { formatResetCountdown } from "../../../utils/usageReset";
 import { selectUsageBucket } from "./selectUsageBucket";
+import { UsagePopover } from "./UsagePopover";
 import styles from "./UsageIndicator.module.css";
 
 function barColor(pct: number): string {
@@ -13,17 +14,16 @@ function barColor(pct: number): string {
 /**
  * Compact usage-allocation indicator for the composer toolbar.
  *
- * Vertical bar that drains as the most-relevant Anthropic subscription
- * limit fills (inverse of context meter). When exhausted, swaps to a
- * "Resets in <countdown>" readout.
- *
- * Hidden unless the experimental Usage Insights flag is on AND usage
- * data has been fetched at least once. No-data → render nothing,
- * matches existing ContextMeter behavior.
+ * Vertical bar that drains as the most-urgent Anthropic subscription
+ * limit fills (burn-rate weighted — see [[selectUsageBucket]]). Clicking
+ * opens a popover showing every bucket the API returned.
  */
 export function UsageIndicator() {
   const enabled = useAppStore((s) => s.usageInsightsEnabled);
   const usage = useAppStore((s) => s.claudeCodeUsage);
+
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const [open, setOpen] = useState(false);
 
   // Tick once a minute so the countdown stays fresh without re-rendering
   // the whole composer on every animation frame.
@@ -39,32 +39,44 @@ export function UsageIndicator() {
   if (!bucket) return null;
 
   const pct = Math.min(bucket.utilization, 100);
-  // Inverse of context meter — bar *drains* as utilization rises.
   const remainingHeight = Math.max(0, 100 - pct);
   const color = barColor(pct);
   const tooltip = bucket.exhausted
     ? `${bucket.label} exhausted — resets in ${formatResetCountdown(bucket.resetsAt)}`
-    : `${bucket.label}: ${Math.floor(pct)}% used`;
+    : `${bucket.label}: ${Math.floor(pct)}% used — click for all limits`;
 
   return (
-    <div
-      className={`${styles.indicator} ${bucket.exhausted ? styles.exhausted : ""}`}
-      title={tooltip}
-      role="status"
-      aria-label={tooltip}
-    >
-      <div className={styles.bar}>
-        <div
-          className={styles.barFill}
-          style={{ height: `${remainingHeight}%`, background: color }}
+    <div className={styles.wrapper}>
+      <button
+        ref={triggerRef}
+        type="button"
+        className={`${styles.indicator} ${bucket.exhausted ? styles.exhausted : ""}`}
+        title={tooltip}
+        aria-label={tooltip}
+        aria-expanded={open}
+        aria-haspopup="dialog"
+        onClick={() => setOpen((v) => !v)}
+      >
+        <div className={styles.bar}>
+          <div
+            className={styles.barFill}
+            style={{ height: `${remainingHeight}%`, background: color }}
+          />
+        </div>
+        {bucket.exhausted ? (
+          <span className={styles.countdown}>
+            ↻ {formatResetCountdown(bucket.resetsAt)}
+          </span>
+        ) : (
+          <span className={styles.readout}>{Math.floor(100 - pct)}%</span>
+        )}
+      </button>
+      {open && (
+        <UsagePopover
+          onClose={() => setOpen(false)}
+          triggerRef={triggerRef}
+          activeBucketKey={bucket.key}
         />
-      </div>
-      {bucket.exhausted ? (
-        <span className={styles.countdown}>
-          ↻ {formatResetCountdown(bucket.resetsAt)}
-        </span>
-      ) : (
-        <span className={styles.readout}>{Math.floor(100 - pct)}%</span>
       )}
     </div>
   );
