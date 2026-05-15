@@ -17,6 +17,7 @@ import { KEYBINDING_SETTING_PREFIX } from "./hotkeys/bindings";
 import type { WorkspaceOrderModeByRepo } from "./utils/workspaceOrdering";
 import { useMcpStatus } from "./hooks/useMcpStatus";
 import { useChatSessionCreatedEvent } from "./hooks/useChatSessionCreatedEvent";
+import { useUsageInsightsPoller } from "./hooks/useUsageInsightsPoller";
 import {
   hydratePersistedViewState,
   useViewTogglePersistence,
@@ -119,6 +120,7 @@ function App() {
   // Listen for MCP supervisor status events from the Rust backend.
   useMcpStatus();
   useChatSessionCreatedEvent();
+  useUsageInsightsPoller();
 
   // Boot-health heartbeat for the post-update probation window.
   //

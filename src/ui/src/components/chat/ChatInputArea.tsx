@@ -42,6 +42,7 @@ import { isMacHotkeyPlatform } from "../../hotkeys/platform";
 import { ComposerToolbar } from "./composer/ComposerToolbar";
 import { ContextPopover } from "./composer/ContextPopover";
 import { SegmentedMeter } from "./composer/SegmentedMeter";
+import { UsageIndicator } from "./composer/UsageIndicator";
 import { AttachMenu } from "./AttachMenu";
 import { FileMentionPicker, matchFiles } from "./FileMentionPicker";
 import { PinnedPromptsBar } from "./PinnedPromptsBar";
@@ -1364,6 +1365,7 @@ export function ChatInputArea({
           />
         </div>
         <div className={styles.inputControlsRight}>
+          <UsageIndicator sessionId={sessionId} />
           <SegmentedMeter
             ref={meterRef}
             sessionId={sessionId}
