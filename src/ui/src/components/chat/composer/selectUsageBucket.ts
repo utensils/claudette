@@ -61,37 +61,44 @@ export function getAllUsageBuckets(usage: ClaudeCodeUsage): UsageBucket[] {
 }
 
 /**
+ * Floor on fractionElapsed when computing the burn-rate score. Prevents
+ * a freshly-reset window with a tiny amount of utilization from scoring
+ * absurdly high — the first 10% of a window (~30 min of a 5h session,
+ * ~17h of a weekly window) is too noisy to read a trend from.
+ */
+const MIN_FRACTION_ELAPSED = 0.1;
+
+/**
  * Burn-rate score for a single bucket. Higher score = more urgent.
  *
- * Intuition: `utilization` alone misses that a 25% session window resetting
- * in 4h is on track to blow past 100%, while a 25% weekly window resetting
- * in 6 days is fine. We compare against fraction-of-window-elapsed instead.
+ *   fractionElapsed = (windowMs - msUntilReset) / windowMs
+ *   score           = utilization / max(fractionElapsed, MIN_FRACTION_ELAPSED)
  *
- *   fractionElapsed = (windowMs - msUntilReset) / windowMs   ∈ (0, 1]
- *   score           = utilization / fractionElapsed
+ * Surfaces "which limit will you hit first at current pace" rather than
+ * "which has the highest %". A 25% session window 1h into its 5h means
+ * a projected ~125% by reset (score 125); a 25% weekly window 1 day in
+ * projects ~175% but with 6 days to course-correct (lower urgency in
+ * absolute terms — that's why we use elapsed fraction, not projected %).
  *
- * Edge cases YOU need to decide:
- *   - fractionElapsed very small (just past reset): score blows up. Cap it?
- *   - msUntilReset <= 0 (clock skew / stale data): treat as fully elapsed?
- *   - Exhausted buckets (>=100): always rank above non-exhausted?
- *
- * Implement below — see [[selectUsageBucket]] for how it's consumed.
+ * Edge cases:
+ *   - Exhausted (>=100): returns Infinity. A maxed bucket should always
+ *     own the indicator slot — that's the actionable signal.
+ *   - msUntilReset <= 0 (clock skew or stale data): treat the window as
+ *     fully elapsed (fractionElapsed = 1, score = utilization). Hides
+ *     stale-but-low buckets while still surfacing high ones.
+ *   - Zero utilization: scores 0 regardless of windowMs (untouched limit
+ *     should never win).
  */
 function burnRateScore(bucket: UsageBucket, now: number): number {
-  // TODO(you): return a score where higher = more urgent.
-  //
-  // Available:
-  //   bucket.utilization  // 0-100
-  //   bucket.windowMs     // 5h or 7d in ms
-  //   bucket.resetsAt     // pass through parseResetMs() to get epoch ms
-  //   bucket.exhausted    // utilization >= 100
-  //
-  // Decide: how do you handle a near-zero fractionElapsed? Do you want
-  // exhausted to dominate? Should very-fresh windows (< ~5 min elapsed)
-  // fall back to plain utilization to avoid scoring noise?
-  void bucket;
-  void now;
-  return 0;
+  if (bucket.exhausted) return Number.POSITIVE_INFINITY;
+  if (bucket.utilization <= 0) return 0;
+
+  const msUntilReset = parseResetMs(bucket.resetsAt) - now;
+  const rawFractionElapsed = (bucket.windowMs - msUntilReset) / bucket.windowMs;
+  const fractionElapsed =
+    msUntilReset <= 0 ? 1 : Math.max(rawFractionElapsed, MIN_FRACTION_ELAPSED);
+
+  return bucket.utilization / fractionElapsed;
 }
 
 /**
