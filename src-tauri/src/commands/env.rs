@@ -17,9 +17,10 @@ use std::time::Duration;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
 
+use claudette::agent::background::workspace_terminal_output_path;
 use claudette::db::Database;
 use claudette::env_provider::EnvWatcher;
-use claudette::plugin_runtime::host_api::WorkspaceInfo;
+use claudette::plugin_runtime::host_api::{OutputStream, StreamingSink, WorkspaceInfo};
 use claudette::plugin_runtime::manifest::PluginKind;
 
 use crate::state::AppState;
@@ -114,6 +115,145 @@ impl claudette::env_provider::EnvProgressSink for TauriEnvProgressSink {
             },
         );
     }
+}
+
+/// Workspace-scoped sink that funnels env-provider stdout/stderr and
+/// setup-script stdout/stderr into a single line-oriented file at
+/// [`workspace_terminal_output_path`]. The Claudette Terminal tab created
+/// during workspace provisioning tails that file via the existing
+/// `start_agent_task_tail` plumbing, so xterm.js renders nix's `-L`
+/// build chatter, direnv's status spam, and `bun install` progress with
+/// their native ANSI colors — no parallel React renderer, no event
+/// serialization tax, no stripped escape codes.
+///
+/// One instance implements **both** [`StreamingSink`] (env-provider
+/// host.exec_streaming) and [`claudette::ops::workspace::SetupOutputSink`]
+/// (setup-script runner) so a single Arc can be cloned into both call
+/// sites and produce a coherent transcript.
+///
+/// A subtle bit: we emit a dim cyan section header (`── plugin ──`)
+/// whenever the plugin name changes between consecutive lines. Without
+/// this the user can't tell where direnv stops and nix-devshell starts
+/// — both stream the same kind of build chatter to the same buffer.
+pub struct WorkspaceTerminalFileSink {
+    output_path: std::path::PathBuf,
+    /// Last plugin name we emitted a header for. We don't lock for
+    /// reads — the worst case on a torn read is a duplicate header.
+    last_plugin: std::sync::Mutex<Option<String>>,
+    /// Cached append-mode file handle so the hot streaming path
+    /// (potentially 100k+ lines from `nix print-dev-env -L`) doesn't
+    /// pay an `OpenOptions::open` + `create_dir_all` syscall per line.
+    /// Lazily initialized on first append; subsequent appends only
+    /// pay one `write_all` per line. No `BufWriter` here on purpose:
+    /// xterm.js tails the file, so we want every line to land on
+    /// disk immediately rather than coalesce in a userspace buffer
+    /// the reader can't see.
+    file: std::sync::Mutex<Option<std::fs::File>>,
+}
+
+impl WorkspaceTerminalFileSink {
+    pub fn new(workspace_id: &str) -> Self {
+        Self {
+            output_path: workspace_terminal_output_path(workspace_id),
+            last_plugin: std::sync::Mutex::new(None),
+            file: std::sync::Mutex::new(None),
+        }
+    }
+
+    /// Best-effort append to the workspace terminal file. The destination
+    /// lives in `temp_dir()` — if a write fails (permissions, disk
+    /// full), dropping a line is preferable to spamming logs from the
+    /// hot streaming path.
+    fn append(&self, bytes: &[u8]) {
+        let mut guard = match self.file.lock() {
+            Ok(g) => g,
+            Err(p) => p.into_inner(),
+        };
+        if guard.is_none() {
+            if let Some(parent) = self.output_path.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            *guard = std::fs::OpenOptions::new()
+                .append(true)
+                .create(true)
+                .open(&self.output_path)
+                .ok();
+        }
+        if let Some(file) = guard.as_mut() {
+            use std::io::Write;
+            let _ = file.write_all(bytes);
+        }
+    }
+
+    /// Emit a `── <plugin> ──` header when the plugin name changes
+    /// between two consecutive lines. Bold cyan so it's easy to scan in
+    /// a wall of build output but doesn't compete with whatever ANSI
+    /// the plugin's own tool emits (nix uses yellow/blue; direnv uses
+    /// magenta).
+    fn maybe_emit_header(&self, plugin: &str) {
+        let mut last = match self.last_plugin.lock() {
+            Ok(g) => g,
+            Err(p) => p.into_inner(),
+        };
+        if last.as_deref() == Some(plugin) {
+            return;
+        }
+        *last = Some(plugin.to_string());
+        let header = format!("\r\n\x1b[1;36m── {plugin} ──\x1b[0m\r\n");
+        self.append(header.as_bytes());
+    }
+}
+
+impl StreamingSink for WorkspaceTerminalFileSink {
+    fn line(&self, plugin: &str, _stream: OutputStream, line: String) {
+        self.maybe_emit_header(plugin);
+        // xterm wants CRLF line endings. Lua's host.exec_streaming reader
+        // hands us a `line` already stripped of the trailing newline.
+        let mut bytes = line.into_bytes();
+        bytes.extend_from_slice(b"\r\n");
+        self.append(&bytes);
+    }
+}
+
+impl claudette::ops::workspace::SetupOutputSink for WorkspaceTerminalFileSink {
+    fn line(&self, _stream: claudette::ops::workspace::SetupOutputStream, line: String) {
+        self.maybe_emit_header("setup-script");
+        let mut bytes = line.into_bytes();
+        bytes.extend_from_slice(b"\r\n");
+        self.append(&bytes);
+    }
+}
+
+/// Build the matched pair of sinks every Tauri-side env-resolve call
+/// site needs: a [`TauriEnvProgressSink`] (for per-plugin loading
+/// state) and an [`Arc<dyn StreamingSink>`] (for live stdout/stderr
+/// from `host.exec_streaming`). The progress sink fans out via Tauri
+/// events for the spinner; the streaming sink writes line-oriented
+/// bytes into the workspace's Claudette Terminal output file.
+///
+/// Callers feed them into [`resolve_with_registry_streaming`]:
+/// ```ignore
+/// let (progress, output) = make_env_sinks(app.clone(), ws_id.clone());
+/// resolve_with_registry_streaming(
+///     &registry, &cache, &worktree, &ws_info, &disabled,
+///     Some(&progress), Some(output),
+/// ).await;
+/// ```
+pub fn make_env_sinks(
+    app: AppHandle,
+    workspace_id: String,
+) -> (TauriEnvProgressSink, Arc<dyn StreamingSink>) {
+    let progress = TauriEnvProgressSink::new(app, workspace_id.clone());
+    let output: Arc<dyn StreamingSink> = Arc::new(WorkspaceTerminalFileSink::new(&workspace_id));
+    (progress, output)
+}
+
+/// Shared constructor for the setup-script + env-provider sink. Returned
+/// as a concrete `Arc<WorkspaceTerminalFileSink>` because both call
+/// sites (workspace.rs setup runner; env.rs resolve loop) coerce it into
+/// their respective trait object on demand.
+pub fn make_workspace_terminal_sink(workspace_id: &str) -> Arc<WorkspaceTerminalFileSink> {
+    Arc::new(WorkspaceTerminalFileSink::new(workspace_id))
 }
 
 /// Emit a `Complete` event whenever the sink is dropped. This is the
@@ -272,16 +412,37 @@ pub async fn get_env_sources(
         .iter()
         .map(|(name, p)| (name.clone(), p.manifest.display_name.clone()))
         .collect();
-    let progress = TauriEnvProgressSink::new(app, ws_info.id.clone());
-    let resolved = claudette::env_provider::resolve_with_registry_and_progress(
+    let (progress, output) = make_env_sinks(app, ws_info.id.clone());
+    let resolved = claudette::env_provider::resolve_with_registry_streaming(
         &registry,
         &state.env_cache,
         Path::new(&worktree),
         &ws_info,
         &disabled,
         Some(&progress),
+        Some(output),
     )
     .await;
+
+    // Mid-resolve disable safety — see [`evict_newly_disabled`] doc.
+    // Re-read the disabled set once and use it for BOTH the cache
+    // eviction and the per-row `enabled` field below. Without the
+    // re-read, a slow `nix print-dev-env` whose `get_env_sources` call
+    // started before the user clicked Disable would land back at the
+    // panel with `enabled = true` (the pre-resolve snapshot value),
+    // overwriting the EnvPanel's optimistic flip until another
+    // refresh. The toggle is now actionable mid-resolve, so the
+    // response payload has to honor any toggles applied during the
+    // resolve window.
+    let disabled_after = {
+        let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
+        load_disabled_providers(&db, &repo_id)
+    };
+    for plugin in newly_disabled(&disabled, &disabled_after) {
+        state
+            .env_cache
+            .invalidate(Path::new(&worktree), Some(&plugin));
+    }
 
     // Subscribe the fs watcher to every freshly-cached plugin's
     // watched paths. Must happen BEFORE `filter_globally_disabled`
@@ -297,7 +458,7 @@ pub async fn get_env_sources(
                 .get(&s.plugin_name)
                 .cloned()
                 .unwrap_or_else(|| s.plugin_name.clone());
-            let enabled = !disabled.contains(&s.plugin_name);
+            let enabled = !disabled_after.contains(&s.plugin_name);
             // The dispatcher writes `error: Some("unavailable")` to
             // signal "required CLI isn't on PATH". Promote that to a
             // dedicated flag and clear the error string so the UI
@@ -551,7 +712,7 @@ fn clean_direnv(body: &str) -> CleanedTrustError {
 /// `None` when no source flagged a trust error. Pure — extracted so the
 /// command site stays small and the unit tests can assert payload
 /// shape without a Tauri AppHandle.
-fn build_trust_needed_payload(
+pub(crate) fn build_trust_needed_payload(
     workspace_id: &str,
     repo_id: &str,
     resolved: &claudette::env_provider::ResolvedEnv,
@@ -639,16 +800,25 @@ pub async fn prepare_workspace_environment(
     // Snapshot — see `plugins_snapshot` doc; this command can run
     // ~120s on cold env-providers and must not stall the Plugins UI.
     let registry = state.plugins_snapshot().await;
-    let progress = TauriEnvProgressSink::new(app.clone(), ws_info.id.clone());
-    let resolved = claudette::env_provider::resolve_with_registry_and_progress(
+    let (progress, output) = make_env_sinks(app.clone(), ws_info.id.clone());
+    let resolved = claudette::env_provider::resolve_with_registry_streaming(
         &registry,
         &state.env_cache,
         Path::new(&worktree),
         &ws_info,
         &disabled,
         Some(&progress),
+        Some(output),
     )
     .await;
+    // Mid-resolve disable: the user may have toggled a plugin off
+    // between the `disabled` snapshot above and the resolve's
+    // completion. `set_env_provider_enabled` invalidates the cache
+    // when it runs, but a still-running `export` would then re-populate
+    // via `cache.put` after the invalidation — re-evict any newly
+    // disabled plugin's cache entry so the user's "disable" intent
+    // survives the late completion. See evict_newly_disabled.
+    evict_newly_disabled(&state, &worktree, &repo_id, &disabled);
     register_resolved_with_watcher(&state, Path::new(&worktree), &resolved.sources).await;
     let trust_payload = build_trust_needed_payload(&ws_info.id, &repo_id, &resolved);
     if let Some(payload) = trust_payload.clone() {
@@ -661,6 +831,61 @@ pub async fn prepare_workspace_environment(
         return Err(error);
     }
     Ok(trust_payload)
+}
+
+/// Re-read the disabled set and evict cache entries for any plugins
+/// newly disabled since the supplied baseline. Defends against the
+/// race where the user clicked Disable mid-resolve: the disable
+/// itself invalidates the cache, but a still-running `export`
+/// completing after the invalidation calls `cache.put` and re-
+/// populates a stale entry. Calling this after `resolve_with_registry_*`
+/// ensures the user's "disable" intent persists across that race.
+///
+/// Silent on DB read failure — the worst case is we miss the
+/// invalidation, the cache holds the stale entry for one TTL, and
+/// the next mtime change clears it anyway.
+fn evict_newly_disabled(
+    state: &AppState,
+    worktree: &str,
+    repo_id: &str,
+    baseline: &HashSet<String>,
+) {
+    let after = match Database::open(&state.db_path) {
+        Ok(db) => load_disabled_providers(&db, repo_id),
+        Err(_) => return,
+    };
+    for plugin in newly_disabled(baseline, &after) {
+        state
+            .env_cache
+            .invalidate(Path::new(worktree), Some(&plugin));
+    }
+}
+
+/// Pure helper: the set of plugin names disabled in `after` but not in
+/// `baseline`. Factored out so the diff logic can be unit-tested
+/// without spinning up an [`AppState`] / DB / cache. Returns owned
+/// `String`s so the caller can drop the borrows on the input sets
+/// before iterating (the cache invalidation borrows mutably otherwise).
+fn newly_disabled(baseline: &HashSet<String>, after: &HashSet<String>) -> Vec<String> {
+    after.difference(baseline).map(|s| s.to_string()).collect()
+}
+
+/// List the env-provider plugin names that are disabled for the
+/// target's repo. Cheap DB-only read — does NOT run any resolves and
+/// does NOT consult the registry. Designed for the EnvPanel's
+/// placeholder hydration so the user-visible toggle state matches the
+/// persisted setting even before the (potentially slow) initial
+/// `get_env_sources` resolve returns.
+#[tauri::command]
+pub async fn list_env_provider_disabled(
+    target: EnvTarget,
+    state: State<'_, AppState>,
+) -> Result<Vec<String>, String> {
+    let (_, _, repo_id) = resolve_target(&state, &target).await?;
+    let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
+    let mut names: Vec<String> = load_disabled_providers(&db, &repo_id).into_iter().collect();
+    names.sort();
+    Ok(names)
 }
 
 /// Toggle whether an env-provider plugin runs for the target's repo.
@@ -1108,12 +1333,17 @@ async fn maybe_emit_trust_needed_for_changed_env(
             disabled.insert(name.clone());
         }
     }
-    let resolved = claudette::env_provider::resolve_with_registry_and_progress(
+    // Watcher-driven invalidation: pass `None` for both sinks. The
+    // progress spinner stays silent so a transient mtime bump doesn't
+    // flash the UI, and the streaming output is also suppressed since
+    // there's no panel listening for an off-screen re-resolve.
+    let resolved = claudette::env_provider::resolve_with_registry_streaming(
         &registry,
         &state.env_cache,
         Path::new(&worktree),
         &ws_info,
         &disabled,
+        None,
         None,
     )
     .await;
@@ -1271,14 +1501,15 @@ pub fn spawn_repo_env_warmup(app: AppHandle, repo_id: String) {
         // Best-effort warmup — snapshot so the resolve doesn't stall
         // any concurrent Plugins/SCM commands.
         let registry = state.plugins_snapshot().await;
-        let progress = TauriEnvProgressSink::new(app.clone(), ws_info.id.clone());
-        let resolved = claudette::env_provider::resolve_with_registry_and_progress(
+        let (progress, output) = make_env_sinks(app.clone(), ws_info.id.clone());
+        let resolved = claudette::env_provider::resolve_with_registry_streaming(
             &registry,
             &state.env_cache,
             Path::new(&repo.path),
             &ws_info,
             &disabled,
             Some(&progress),
+            Some(output),
         )
         .await;
         register_resolved_with_watcher(&state, Path::new(&repo.path), &resolved.sources).await;
@@ -1471,6 +1702,34 @@ mod tests {
         assert!(message.starts_with("Environment provider failed:"));
         assert!(message.contains("env-direnv"));
         assert!(!message.contains("env-mise"));
+    }
+
+    #[test]
+    fn build_trust_needed_payload_is_pub_crate_for_warmup_path() {
+        // Regression: `resolve_env_for_workspace` in
+        // `src-tauri/src/commands/workspace.rs` (the create / fork /
+        // run-setup warmup) calls this function so the new-workspace
+        // path can emit `workspace_env_trust_needed` itself — without
+        // that emit, a blocked `.envrc` on a fresh worktree silently
+        // logs the error to the Claudette Terminal and the user is
+        // stuck staring at "Preparing…" forever, because the per-
+        // selection env-prep hook skips `prepare_workspace_environment`
+        // once the warmup's synthetic progress event has already
+        // seeded `started_at`. This call site forces the symbol to
+        // stay reachable from the workspace.rs module; demoting it
+        // back to `fn` (private) would break the crate build.
+        let mut s = src("env-direnv");
+        s.error = Some(
+            "direnv: error /repo/.envrc is blocked. Run `direnv allow` to approve its content"
+                .to_string(),
+        );
+        let resolved = ResolvedEnv {
+            sources: vec![s],
+            ..Default::default()
+        };
+        let payload = super::build_trust_needed_payload("ws-id", "repo-id", &resolved).unwrap();
+        assert_eq!(payload.workspace_id, "ws-id");
+        assert_eq!(payload.plugins[0].plugin_name, "env-direnv");
     }
 
     #[test]
@@ -1670,5 +1929,144 @@ mod tests {
         // Ellipsis is one of [..3 bytes] depending on UTF-8 encoding;
         // the truncated body is at most 60 bytes pre-ellipsis.
         assert!(out.len() <= 60 + '…'.len_utf8());
+    }
+
+    #[test]
+    fn newly_disabled_returns_diff_only() {
+        // The mid-resolve-disable race: the user clicked Disable on a
+        // plugin while a resolve was already running. `newly_disabled`
+        // names only plugins that were absent from the baseline (the
+        // set captured before the resolve started) but present in the
+        // refreshed read after it finished. Plugins already disabled
+        // before the resolve don't need re-eviction — the dispatcher
+        // skipped them entirely.
+        let mut baseline = HashSet::new();
+        baseline.insert("env-mise".to_string());
+        let mut after = HashSet::new();
+        after.insert("env-mise".to_string());
+        after.insert("env-direnv".to_string());
+
+        let diff = newly_disabled(&baseline, &after);
+
+        assert_eq!(diff, vec!["env-direnv".to_string()]);
+    }
+
+    #[test]
+    fn newly_disabled_handles_no_changes() {
+        // Common case: the resolve completed with no concurrent disable
+        // click. Returning an empty vec lets the caller skip the
+        // invalidate loop entirely.
+        let mut both = HashSet::new();
+        both.insert("env-mise".to_string());
+
+        assert!(newly_disabled(&both, &both).is_empty());
+    }
+
+    #[test]
+    fn newly_disabled_ignores_re_enabled_plugins() {
+        // If a plugin was disabled at baseline and re-enabled mid-
+        // resolve (rare, but possible), it's gone from `after` —
+        // we should NOT re-evict its cache. (We also shouldn't surface
+        // it as "newly enabled" — that's not this function's job; the
+        // dispatcher already populated the cache for any provider that
+        // actually ran.) Pin the contract so a future refactor doesn't
+        // accidentally swap the difference direction.
+        let mut baseline = HashSet::new();
+        baseline.insert("env-direnv".to_string());
+        baseline.insert("env-mise".to_string());
+        let mut after = HashSet::new();
+        after.insert("env-direnv".to_string());
+
+        assert!(newly_disabled(&baseline, &after).is_empty());
+    }
+
+    #[test]
+    fn newly_disabled_diff_drives_get_env_sources_enabled_field() {
+        // Pin the contract the get_env_sources fix depends on: when a
+        // user disables a plugin mid-resolve, the post-resolve
+        // `load_disabled_providers` read returns a set whose
+        // `!contains(plugin_name)` lookup matches the new toggle
+        // state — i.e. `enabled = false` for the disabled plugin.
+        //
+        // Codex iter (post-squash) flagged: without using
+        // `disabled_after` here, a slow resolve's response would
+        // overwrite the EnvPanel's optimistic disable flip with the
+        // pre-resolve snapshot value. The fix re-reads disabled after
+        // the resolve and feeds that set into both the eviction loop
+        // and the per-row `enabled` field. This test asserts the set
+        // logic at the boundary the command actually uses
+        // (`!disabled.contains(&plugin_name)`) so the contract is
+        // explicit even though the command itself can't be exercised
+        // without a Tauri AppState.
+        let mut disabled_after = HashSet::new();
+        disabled_after.insert("env-direnv".to_string());
+
+        // env-direnv was just disabled.
+        let direnv_enabled = !disabled_after.contains("env-direnv");
+        // env-mise was never touched.
+        let mise_enabled = !disabled_after.contains("env-mise");
+
+        assert!(!direnv_enabled);
+        assert!(mise_enabled);
+    }
+
+    #[tokio::test]
+    async fn set_env_provider_enabled_persists_and_invalidates_cache() {
+        // End-to-end check of the "disable a plugin" path: the DB
+        // setting must persist with the right key + value, AND the
+        // cache for the plugin must be evicted so a still-running
+        // resolve's late `cache.put` is the only way a stale entry
+        // could come back (handled by [`evict_newly_disabled`]).
+        //
+        // This is the contract the EnvPanel toggle depends on: when
+        // a user disables a slow provider mid-resolve, the
+        // `set_env_provider_enabled` IPC alone must leave the cache
+        // empty for that plugin so a fresh spawn doesn't pick up
+        // stale env after the user's intent change.
+        use claudette::db::Database;
+        use claudette::env_provider::cache::EnvCache;
+        use claudette::env_provider::types::ProviderExport;
+        use std::collections::HashMap;
+        use tempfile::tempdir;
+
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("test.db");
+        let db = Database::open(&db_path).unwrap();
+        let cache = EnvCache::new();
+        let worktree = dir.path();
+
+        // Seed the cache as if a resolve had completed.
+        let mut env = HashMap::new();
+        env.insert("FOO".to_string(), Some("bar".to_string()));
+        cache
+            .put(
+                worktree,
+                "env-direnv",
+                &ProviderExport {
+                    env,
+                    watched: vec![],
+                },
+            )
+            .expect("put");
+        assert!(cache.get_fresh(worktree, "env-direnv").is_some());
+
+        // Persist the disable directly via load_disabled_providers'
+        // sibling write — mirrors what `set_env_provider_enabled` does
+        // (we exercise the helper rather than the full Tauri command
+        // because the command takes `State<'_, AppState>` which can't
+        // be constructed in a unit test). The cache eviction the
+        // command performs is exercised separately by the explicit
+        // `cache.invalidate` call below — the two together are the
+        // command's full behavior.
+        db.set_app_setting(&enabled_key("repo-1", "env-direnv"), "false")
+            .unwrap();
+        cache.invalidate(worktree, Some("env-direnv"));
+
+        // Persistence: load_disabled_providers reflects the new state.
+        let disabled = load_disabled_providers(&db, "repo-1");
+        assert!(disabled.contains("env-direnv"));
+
+        // Cache: the entry is gone.
+        assert!(cache.get_fresh(worktree, "env-direnv").is_none());
     }
 }

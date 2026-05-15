@@ -98,6 +98,20 @@ export function useWorkspaceEnvironmentPreparation() {
     );
     return selectedWorkspace?.remote_connection_id;
   });
+  // True when the currently-selected workspace is an optimistic
+  // placeholder (fork OR create) — there's no backing DB row yet, so
+  // the backend's `prepare_workspace_environment` would return
+  // "Workspace not found" and the catch below would helpfully
+  // `removeWorkspace()` the placeholder out of the sidebar mid-flight.
+  // Skip env prep entirely for placeholders; the real env prep fires
+  // off the swapped-in workspace id once `commitPendingFork` /
+  // `commitPendingCreate` completes.
+  const selectedWorkspaceIsPendingFork = useAppStore((s) =>
+    s.selectedWorkspaceId
+      ? !!s.pendingForks[s.selectedWorkspaceId] ||
+        !!s.pendingCreates[s.selectedWorkspaceId]
+      : false,
+  );
   const setWorkspaceEnvironment = useAppStore((s) => s.setWorkspaceEnvironment);
   const setWorkspaceEnvironmentProgress = useAppStore(
     (s) => s.setWorkspaceEnvironmentProgress,
@@ -245,6 +259,36 @@ export function useWorkspaceEnvironmentPreparation() {
       setWorkspaceEnvironment(selectedWorkspaceId, "ready");
       return;
     }
+    // Optimistic-fork placeholder: leave the seeded `preparing` /
+    // started_at entry alone (it drives the sidebar spinner) and
+    // skip the IPC round trip.  The real prep fires once
+    // `commitPendingFork` swaps the placeholder for the real
+    // workspace id and the selection effect re-runs.
+    if (selectedWorkspaceIsPendingFork) return;
+    // If create_workspace / fork_workspace_at_checkpoint already
+    // dispatched a resolve for this workspace (via its own warmup)
+    // and we just swapped the placeholder out for the real id, the
+    // sidebar's `workspaceEnvironment[realId]` is already "preparing"
+    // with a `started_at` set by `setWorkspaceEnvironmentProgress`
+    // — that's the warmup talking. Dispatching a second
+    // `prepare_workspace_environment` here would race two concurrent
+    // resolves on the env-provider mtime cache, and either sink's
+    // `Complete` event could mark the workspace ready while the other
+    // is still streaming. The warmup's own `Complete` will transition
+    // us out of "preparing" either way, so just skip.
+    //
+    // Read directly from the store rather than via a selector — using
+    // a selector here would re-run the effect when our own
+    // `setWorkspaceEnvironment(_, "preparing")` below flips the flag
+    // to `true`, cancelling the in-flight IPC mid-flight.
+    const existingEnv =
+      useAppStore.getState().workspaceEnvironment[selectedWorkspaceId];
+    if (
+      existingEnv?.status === "preparing" &&
+      existingEnv.started_at !== undefined
+    ) {
+      return;
+    }
 
     const workspaceId = selectedWorkspaceId;
     let cancelled = false;
@@ -309,6 +353,7 @@ export function useWorkspaceEnvironmentPreparation() {
   }, [
     selectedWorkspaceId,
     selectedWorkspaceRemoteConnectionId,
+    selectedWorkspaceIsPendingFork,
     setWorkspaceEnvironment,
     addToast,
     openTrustModalOnce,

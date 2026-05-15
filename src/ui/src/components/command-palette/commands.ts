@@ -176,7 +176,7 @@ export function buildEffortCommands(
   selectedProvider = "anthropic",
   labels: EffortCommandLabels = {},
 ): Command[] {
-  if (selectedProvider === "experimental-codex") {
+  if (selectedProvider === "codex" || selectedProvider === "experimental-codex") {
     const effortLabel = labels.codexReasoningEffort ?? "Intelligence";
     const setEffortLabel = labels.codexSetReasoningEffort ?? "Set Codex intelligence";
     const selectedEffort = CODEX_REASONING_LEVELS.some((level) => level.id === currentEffort)
@@ -349,7 +349,10 @@ export function buildCommands(ctx: CommandContext): Command[] {
   const wsId = ctx.selectedWorkspaceId;
   const sessId = ctx.selectedSessionId;
   if (wsId && sessId) {
-    if (ctx.selectedModelProvider !== "experimental-codex") {
+    if (
+      ctx.selectedModelProvider !== "codex" &&
+      ctx.selectedModelProvider !== "experimental-codex"
+    ) {
       cmds.push({
         id: "toggle-thinking",
         name: `${ctx.thinkingEnabled ? "Disable" : "Enable"} Thinking Mode`,

@@ -9,7 +9,7 @@ Ollama is **anthropic-compatible** — it talks Claude's wire format directly, s
 
 ## Prerequisites
 
-1. Make sure **Settings > Models > Alternative Claude Code backends** is on.
+1. Make sure **Settings > Models > Agent providers** is on. Claudette auto-enables Ollama at startup when it detects a reachable daemon on `http://localhost:11434`, unless you have manually turned the provider off.
 2. Install Ollama:
    - **macOS**: `brew install ollama` or download from [ollama.com/download](https://ollama.com/download).
    - **Linux**: `curl -fsSL https://ollama.com/install.sh | sh`.
@@ -38,7 +38,7 @@ Pulled models are cached under `~/.ollama/models/`. Run `ollama list` to see wha
 4. Click **Test** — Claudette pings the daemon to confirm it's reachable.
 5. Click **Refresh models** — Claudette queries Ollama's `/api/tags` endpoint and discovers everything you've pulled. The chips appear under **Discovered models**.
 6. (Optional) Set a default model.
-7. Toggle **Enabled** on. The provider is now selectable in the chat header.
+7. Toggle **Enabled** on if auto-detection did not already enable it. The provider is now selectable in the chat header.
 
 ## Picking a session model
 
@@ -73,6 +73,6 @@ If a model misbehaves, try switching to a different one before assuming Claudett
 
 ## See also
 
-- [Alternative Providers overview](/claudette/features/providers/) — capability matrix and architecture
+- [Agent Providers overview](/claudette/features/providers/) — capability matrix and architecture
 - [OpenAI & Codex](/claudette/features/providers/openai-codex/) — the gateway-based alternatives
 - [Agent Configuration](/claudette/features/agent-configuration/) — chat-header toggles and how they map to provider capabilities

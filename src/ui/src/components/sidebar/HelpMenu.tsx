@@ -12,6 +12,7 @@ import {
   HELP_DOCS_URL,
   HELP_ISSUES_URL,
   HELP_RELEASE_URL_BASE,
+  releaseTagFor,
 } from "../../helpUrls";
 import styles from "./HelpMenu.module.css";
 
@@ -163,7 +164,9 @@ export function HelpMenu({ buttonClassName, triggerLabel }: HelpMenuProps) {
   const handleChangelog = () => {
     setOpen(false);
     if (!appVersion) return;
-    void openUrl(`${HELP_RELEASE_URL_BASE}${appVersion}`).catch(() => {});
+    void openUrl(`${HELP_RELEASE_URL_BASE}${releaseTagFor(appVersion)}`).catch(
+      () => {},
+    );
   };
 
   const handleIssue = () => {

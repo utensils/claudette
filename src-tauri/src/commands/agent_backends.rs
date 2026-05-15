@@ -2,6 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 
 use base64::Engine as _;
 use futures_util::StreamExt;
@@ -32,8 +33,14 @@ const BACKEND_RUNTIME_ENV_VERSION: u8 = 2;
 const CODEX_DEFAULT_BASE_URL: &str = "https://chatgpt.com/backend-api";
 const CODEX_JWT_AUTH_CLAIM: &str = "https://api.openai.com/auth";
 const ALTERNATIVE_BACKENDS_SETTING_KEY: &str = "alternative_backends_enabled";
-const NATIVE_CODEX_SETTING_KEY: &str = "experimental_codex_enabled";
+const NATIVE_CODEX_BACKEND_ID: &str = "codex";
+const LEGACY_NATIVE_CODEX_BACKEND_ID: &str = "experimental-codex";
+const LEGACY_CODEX_SUBSCRIPTION_BACKEND_ID: &str = "codex-subscription";
+const NATIVE_CODEX_SETTING_KEY: &str = "codex_enabled";
+const LEGACY_NATIVE_CODEX_SETTING_KEY: &str = "experimental_codex_enabled";
 const FIRST_CLASS_BACKENDS_PROMOTION_KEY: &str = "agent_backends_first_class_promoted";
+const AUTO_DETECT_DISABLED_PREFIX: &str = "agent_backend_auto_detect_disabled:";
+const AUTO_DETECT_TIMEOUT: Duration = Duration::from_millis(900);
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BackendStatus {
@@ -65,6 +72,14 @@ pub struct BackendListResponse {
     /// whole panel.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+struct BackendAutoDetection {
+    backend_id: String,
+    detected: bool,
+    discovered_models: Vec<AgentBackendModel>,
+    warning: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -192,31 +207,90 @@ pub async fn list_agent_backends(
         .map_err(|e| e.to_string())?
         .unwrap_or_else(|| "anthropic".to_string());
     let mut loaded = load_backend_configs_tolerant(&db)?;
-    // If the stored default points to a backend that didn't make it
-    // through the tolerant load (e.g. a user-defined backend whose
-    // `kind` this build doesn't recognize), the UI would otherwise
-    // pre-select a non-existent entry. Fall back to anthropic, which
-    // is always present, and surface a warning so the user knows.
-    // The persisted setting is left alone — a build that does
-    // recognize the kind will pick it up unchanged.
-    let aliased_default = backend_request_alias(&loaded.backends, &stored_default);
-    let default_backend_id = if loaded.backends.iter().any(|b| b.id == stored_default) {
-        stored_default
-    } else if loaded.backends.iter().any(|b| b.id == aliased_default) {
-        aliased_default
-    } else {
-        loaded.warnings.push(format!(
-            "Default backend `{stored_default}` is not available in this build; \
-                 falling back to `anthropic` for this session. \
-                 Stored setting unchanged."
-        ));
-        tracing::warn!(
-            target: "agent_backends",
-            stored_default = %stored_default,
-            "default backend setting points to a backend not in the loaded list"
-        );
-        "anthropic".to_string()
-    };
+    let default_backend_id =
+        resolve_backend_list_default(&loaded.backends, &mut loaded.warnings, stored_default);
+    Ok(BackendListResponse {
+        backends: loaded.backends,
+        default_backend_id,
+        warnings: loaded.warnings,
+    })
+}
+
+#[tauri::command]
+pub async fn auto_detect_agent_backends(
+    state: State<'_, AppState>,
+) -> Result<BackendListResponse, String> {
+    let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
+    let mut backends = load_backend_configs(&db)?;
+    let codex = backends
+        .iter()
+        .find(|backend| backend.id == NATIVE_CODEX_BACKEND_ID)
+        .cloned();
+    let ollama = backends
+        .iter()
+        .find(|backend| backend.id == "ollama")
+        .cloned();
+    let lm_studio = backends
+        .iter()
+        .find(|backend| backend.id == "lm-studio")
+        .cloned();
+    let probe_codex = should_probe_backend_auto_detection(&db, NATIVE_CODEX_BACKEND_ID)?;
+    let probe_ollama = should_probe_backend_auto_detection(&db, "ollama")?;
+    let probe_lm_studio = should_probe_backend_auto_detection(&db, "lm-studio")?;
+
+    let (codex_detection, ollama_detection, lm_studio_detection) = tokio::join!(
+        async move {
+            if probe_codex {
+                probe_codex_backend(codex).await
+            } else {
+                skipped_backend_auto_detection(NATIVE_CODEX_BACKEND_ID)
+            }
+        },
+        async move {
+            if probe_ollama {
+                probe_model_discovery_backend(ollama).await
+            } else {
+                skipped_backend_auto_detection("ollama")
+            }
+        },
+        async move {
+            if probe_lm_studio {
+                probe_model_discovery_backend(lm_studio).await
+            } else {
+                skipped_backend_auto_detection("lm-studio")
+            }
+        },
+    );
+    let mut detections = vec![codex_detection, ollama_detection, lm_studio_detection];
+    if detections.iter().any(|detection| {
+        canonical_backend_id(&detection.backend_id) == NATIVE_CODEX_BACKEND_ID && detection.detected
+    }) && !backend_auto_detect_disabled(&db, NATIVE_CODEX_BACKEND_ID)?
+    {
+        db.set_app_setting(NATIVE_CODEX_SETTING_KEY, "true")
+            .map_err(|e| e.to_string())?;
+        db.set_app_setting(LEGACY_NATIVE_CODEX_SETTING_KEY, "true")
+            .map_err(|e| e.to_string())?;
+        backends = load_backend_configs(&db)?;
+    }
+    let (changed, mut warnings) = apply_backend_auto_detections(&db, &mut backends, &detections)?;
+    warnings.extend(
+        detections
+            .drain(..)
+            .filter_map(|detection| detection.warning),
+    );
+    if changed {
+        save_backend_configs(&db, &backends)?;
+    }
+    let mut loaded = load_backend_configs_tolerant(&db)?;
+    loaded.warnings.extend(warnings);
+
+    let stored_default = db
+        .get_app_setting("default_agent_backend")
+        .map_err(|e| e.to_string())?
+        .unwrap_or_else(|| "anthropic".to_string());
+    let default_backend_id =
+        resolve_backend_list_default(&loaded.backends, &mut loaded.warnings, stored_default);
+
     Ok(BackendListResponse {
         backends: loaded.backends,
         default_backend_id,
@@ -233,12 +307,14 @@ pub async fn save_agent_backend(
         return Err("The built-in Claude Code backend cannot be overwritten".to_string());
     }
     let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
+    let backend = normalize_backend(backend);
     ensure_backend_allowed_by_gate(&db, &backend)?;
+    persist_backend_auto_detect_opt_out(&db, &backend)?;
     let mut backends = load_backend_configs(&db)?;
     if let Some(existing) = backends.iter_mut().find(|b| b.id == backend.id) {
-        *existing = normalize_backend(backend);
+        *existing = backend;
     } else {
-        backends.push(normalize_backend(backend));
+        backends.push(backend);
     }
     save_backend_configs(&db, &backends)?;
     load_backend_configs(&db)
@@ -255,6 +331,7 @@ pub async fn delete_agent_backend(
             | "ollama"
             | "openai-api"
             | "codex-subscription"
+            | "codex"
             | "experimental-codex"
             | "lm-studio"
     ) {
@@ -719,13 +796,14 @@ fn load_backend_configs_tolerant(db: &Database) -> Result<LoadedBackends, String
                 for entry in entries {
                     match serde_json::from_value::<AgentBackendConfig>(entry.clone()) {
                         Ok(saved) => {
+                            let saved = normalize_backend(saved);
                             if codex_backend_hidden_by_gate(native_codex_enabled, &saved.id) {
                                 continue;
                             }
                             if let Some(existing) = backends.iter_mut().find(|b| b.id == saved.id) {
-                                *existing = normalize_backend(saved);
+                                *existing = saved;
                             } else {
-                                backends.push(normalize_backend(saved));
+                                backends.push(saved);
                             }
                         }
                         Err(err) => {
@@ -775,6 +853,31 @@ fn load_backend_configs(db: &Database) -> Result<Vec<AgentBackendConfig>, String
     Ok(load_backend_configs_tolerant(db)?.backends)
 }
 
+fn resolve_backend_list_default(
+    backends: &[AgentBackendConfig],
+    warnings: &mut Vec<String>,
+    stored_default: String,
+) -> String {
+    if backends.iter().any(|backend| backend.id == stored_default) {
+        return stored_default;
+    }
+    let aliased_default = backend_request_alias(backends, &stored_default);
+    if backends.iter().any(|backend| backend.id == aliased_default) {
+        return aliased_default;
+    }
+    warnings.push(format!(
+        "Default backend `{stored_default}` is not available in this build; \
+         falling back to `anthropic` for this session. \
+         Stored setting unchanged."
+    ));
+    tracing::warn!(
+        target: "agent_backends",
+        stored_default = %stored_default,
+        "default backend setting points to a backend not in the loaded list"
+    );
+    "anthropic".to_string()
+}
+
 /// Re-read the stored JSON and return any entries this build can't
 /// deserialize. Used by `save_backend_configs` to splice unknown
 /// passthrough entries back into the persisted blob so they survive
@@ -802,12 +905,35 @@ fn read_unknown_passthrough(db: &Database) -> Result<Vec<Value>, String> {
         .collect())
 }
 
+fn canonical_backend_id(id: &str) -> &str {
+    match id {
+        LEGACY_NATIVE_CODEX_BACKEND_ID | LEGACY_CODEX_SUBSCRIPTION_BACKEND_ID => {
+            NATIVE_CODEX_BACKEND_ID
+        }
+        other => other,
+    }
+}
+
+fn normalize_backend_id(id: String) -> String {
+    match id.as_str() {
+        LEGACY_NATIVE_CODEX_BACKEND_ID => NATIVE_CODEX_BACKEND_ID.to_string(),
+        _ => id,
+    }
+}
+
 fn is_codex_gate_backend_id(id: &str) -> bool {
-    matches!(id, "codex-subscription" | "experimental-codex")
+    matches!(
+        id,
+        LEGACY_CODEX_SUBSCRIPTION_BACKEND_ID
+            | LEGACY_NATIVE_CODEX_BACKEND_ID
+            | NATIVE_CODEX_BACKEND_ID
+    )
 }
 
 fn codex_backend_hidden_by_gate(native_codex_enabled: bool, id: &str) -> bool {
-    id == "codex-subscription" || (!native_codex_enabled && id == "experimental-codex")
+    id == LEGACY_CODEX_SUBSCRIPTION_BACKEND_ID
+        || (!native_codex_enabled
+            && matches!(id, LEGACY_NATIVE_CODEX_BACKEND_ID | NATIVE_CODEX_BACKEND_ID))
 }
 
 /// Re-read the stored JSON and return hidden Codex-gate backends that this
@@ -833,7 +959,8 @@ fn read_hidden_codex_passthrough(
             let Ok(saved) = serde_json::from_value::<AgentBackendConfig>(entry.clone()) else {
                 return false;
             };
-            is_codex_gate_backend_id(&saved.id) && !active_backend_ids.contains(&saved.id)
+            is_codex_gate_backend_id(&saved.id)
+                && !active_backend_ids.contains(normalize_backend_id(saved.id.clone()).as_str())
         })
         .collect())
 }
@@ -863,6 +990,96 @@ fn save_backend_configs(db: &Database, backends: &[AgentBackendConfig]) -> Resul
         .map_err(|e| e.to_string())
 }
 
+fn auto_detect_disabled_key(backend_id: &str) -> String {
+    format!(
+        "{AUTO_DETECT_DISABLED_PREFIX}{}",
+        canonical_backend_id(backend_id)
+    )
+}
+
+fn backend_supports_auto_detect(backend: &AgentBackendConfig) -> bool {
+    matches!(
+        backend.kind,
+        AgentBackendKind::Ollama | AgentBackendKind::CodexNative | AgentBackendKind::LmStudio
+    )
+}
+
+fn backend_auto_detect_disabled(db: &Database, backend_id: &str) -> Result<bool, String> {
+    db.get_app_setting(&auto_detect_disabled_key(backend_id))
+        .map_err(|e| e.to_string())
+        .map(|value| value.as_deref() == Some("true"))
+}
+
+fn should_probe_backend_auto_detection(db: &Database, backend_id: &str) -> Result<bool, String> {
+    backend_auto_detect_disabled(db, canonical_backend_id(backend_id)).map(|disabled| !disabled)
+}
+
+fn skipped_backend_auto_detection(backend_id: impl Into<String>) -> BackendAutoDetection {
+    BackendAutoDetection {
+        backend_id: backend_id.into(),
+        detected: false,
+        discovered_models: Vec::new(),
+        warning: None,
+    }
+}
+
+fn persist_backend_auto_detect_opt_out(
+    db: &Database,
+    backend: &AgentBackendConfig,
+) -> Result<(), String> {
+    if !backend_supports_auto_detect(backend) {
+        return Ok(());
+    }
+    let key = auto_detect_disabled_key(&backend.id);
+    if backend.enabled {
+        db.delete_app_setting(&key).map_err(|e| e.to_string())
+    } else {
+        db.set_app_setting(&key, "true").map_err(|e| e.to_string())
+    }
+}
+
+fn apply_backend_auto_detections(
+    db: &Database,
+    backends: &mut [AgentBackendConfig],
+    detections: &[BackendAutoDetection],
+) -> Result<(bool, Vec<String>), String> {
+    let mut changed = false;
+    let mut warnings = Vec::new();
+    for detection in detections {
+        if !detection.detected {
+            continue;
+        }
+        let backend_id = canonical_backend_id(&detection.backend_id);
+        if backend_auto_detect_disabled(db, backend_id)? {
+            continue;
+        }
+        let Some(backend) = backends
+            .iter_mut()
+            .find(|backend| canonical_backend_id(&backend.id) == backend_id)
+        else {
+            warnings.push(format!(
+                "Detected `{backend_id}` but no matching backend is available in this build."
+            ));
+            continue;
+        };
+        if !backend.enabled {
+            backend.enabled = true;
+            changed = true;
+        }
+        if !detection.discovered_models.is_empty() {
+            let before = backend_models_signature(backend);
+            let before_default = backend.default_model.clone();
+            apply_discovered_models(backend, detection.discovered_models.clone());
+            if backend_models_signature(backend) != before
+                || backend.default_model != before_default
+            {
+                changed = true;
+            }
+        }
+    }
+    Ok((changed, warnings))
+}
+
 fn default_backends_for_gate(native_codex_enabled: bool) -> Vec<AgentBackendConfig> {
     let mut backends = vec![
         AgentBackendConfig::builtin_anthropic(),
@@ -878,7 +1095,13 @@ fn default_backends_for_gate(native_codex_enabled: bool) -> Vec<AgentBackendConf
 
 fn native_codex_enabled(db: &Database) -> Result<bool, String> {
     promote_first_class_backend_gates(db)?;
-    db.get_app_setting(NATIVE_CODEX_SETTING_KEY)
+    let native = db
+        .get_app_setting(NATIVE_CODEX_SETTING_KEY)
+        .map_err(|e| e.to_string())?;
+    if native.is_some() {
+        return Ok(native.as_deref() != Some("false"));
+    }
+    db.get_app_setting(LEGACY_NATIVE_CODEX_SETTING_KEY)
         .map_err(|e| e.to_string())
         .map(|value| value.as_deref() != Some("false"))
 }
@@ -892,7 +1115,7 @@ fn ensure_native_codex_enabled(db: &Database) -> Result<(), String> {
 }
 
 fn ensure_backend_id_allowed_by_gate(db: &Database, backend_id: &str) -> Result<(), String> {
-    if matches!(backend_id, "experimental-codex" | "codex-subscription") {
+    if is_codex_gate_backend_id(backend_id) {
         ensure_native_codex_enabled(db)?;
     }
     Ok(())
@@ -916,6 +1139,7 @@ fn alternative_backends_enabled(db: &Database) -> Result<bool, String> {
 }
 
 fn promote_first_class_backend_gates(db: &Database) -> Result<(), String> {
+    migrate_legacy_codex_backend_settings(db)?;
     if db
         .get_app_setting(FIRST_CLASS_BACKENDS_PROMOTION_KEY)
         .map_err(|e| e.to_string())?
@@ -929,8 +1153,39 @@ fn promote_first_class_backend_gates(db: &Database) -> Result<(), String> {
         .map_err(|e| e.to_string())?;
     db.set_app_setting(NATIVE_CODEX_SETTING_KEY, "true")
         .map_err(|e| e.to_string())?;
+    db.set_app_setting(LEGACY_NATIVE_CODEX_SETTING_KEY, "true")
+        .map_err(|e| e.to_string())?;
     db.set_app_setting(FIRST_CLASS_BACKENDS_PROMOTION_KEY, "true")
         .map_err(|e| e.to_string())
+}
+
+fn migrate_legacy_codex_backend_settings(db: &Database) -> Result<(), String> {
+    if db
+        .get_app_setting("default_agent_backend")
+        .map_err(|e| e.to_string())?
+        .as_deref()
+        .is_some_and(|value| is_legacy_codex_backend_id(value))
+    {
+        db.set_app_setting("default_agent_backend", NATIVE_CODEX_BACKEND_ID)
+            .map_err(|e| e.to_string())?;
+    }
+    for (key, value) in db
+        .list_app_settings_with_prefix("model_provider:")
+        .map_err(|e| e.to_string())?
+    {
+        if is_legacy_codex_backend_id(&value) {
+            db.set_app_setting(&key, NATIVE_CODEX_BACKEND_ID)
+                .map_err(|e| e.to_string())?;
+        }
+    }
+    Ok(())
+}
+
+fn is_legacy_codex_backend_id(id: &str) -> bool {
+    matches!(
+        id,
+        LEGACY_NATIVE_CODEX_BACKEND_ID | LEGACY_CODEX_SUBSCRIPTION_BACKEND_ID
+    )
 }
 
 fn find_backend(db: &Database, backend_id: Option<&str>) -> Result<AgentBackendConfig, String> {
@@ -971,8 +1226,10 @@ fn select_backend_for_request(
 }
 
 fn backend_request_alias(backends: &[AgentBackendConfig], requested: &str) -> String {
-    if requested == "codex-subscription" && backends.iter().any(|b| b.id == "experimental-codex") {
-        "experimental-codex".to_string()
+    if is_codex_gate_backend_id(requested)
+        && backends.iter().any(|b| b.id == NATIVE_CODEX_BACKEND_ID)
+    {
+        NATIVE_CODEX_BACKEND_ID.to_string()
     } else {
         requested.to_string()
     }
@@ -1000,6 +1257,15 @@ fn infer_backend_for_model<'a>(
 }
 
 fn normalize_backend(mut backend: AgentBackendConfig) -> AgentBackendConfig {
+    let original_id = backend.id.clone();
+    backend.id = normalize_backend_id(backend.id);
+    // The legacy "experimental-codex" backend was labelled "Experimental Codex". Reset it to
+    // the current canonical label for any DB blob that still carries the old id or label.
+    if backend.id == NATIVE_CODEX_BACKEND_ID
+        && (original_id != backend.id || backend.label == "Experimental Codex")
+    {
+        backend.label = "Codex".to_string();
+    }
     if backend.label.trim().is_empty() {
         backend.label = backend.id.clone();
     }
@@ -1137,6 +1403,91 @@ async fn test_backend_connectivity(backend: &AgentBackendConfig) -> Result<Backe
         _ => discover_models(backend).await.map(|models| {
             BackendStatus::new(true, format!("Connected. Found {} model(s).", models.len()))
         }),
+    }
+}
+
+async fn probe_codex_backend(backend: Option<AgentBackendConfig>) -> BackendAutoDetection {
+    let backend = backend.unwrap_or_else(AgentBackendConfig::builtin_codex_native);
+    let backend_id = backend.id.clone();
+    let detected = match tokio::time::timeout(AUTO_DETECT_TIMEOUT, async {
+        let codex_path = resolve_codex_path().await;
+        let mut command = codex_cli_command(codex_path);
+        command.arg("--version").output().await
+    })
+    .await
+    {
+        Ok(Ok(output)) => output.status.success(),
+        Ok(Err(_)) => false,
+        Err(_) => false,
+    };
+    let discovered_models = if detected {
+        match tokio::time::timeout(AUTO_DETECT_TIMEOUT, discover_codex_models()).await {
+            Ok(Ok(models)) if !models.is_empty() => models,
+            _ => codex_startup_models(&backend),
+        }
+    } else {
+        Vec::new()
+    };
+    BackendAutoDetection {
+        backend_id,
+        detected,
+        discovered_models,
+        warning: None,
+    }
+}
+
+fn codex_startup_models(backend: &AgentBackendConfig) -> Vec<AgentBackendModel> {
+    if !backend.discovered_models.is_empty() {
+        return Vec::new();
+    }
+    let mut models = if backend.manual_models.is_empty() {
+        AgentBackendConfig::builtin_codex_native().manual_models
+    } else {
+        backend.manual_models.clone()
+    };
+    for model in &mut models {
+        if model.label.trim().is_empty() {
+            model.label = model.id.clone();
+        }
+        if model.context_window_tokens == 0 {
+            model.context_window_tokens = backend.context_window_default;
+        }
+        model.discovered = true;
+    }
+    models
+}
+
+async fn probe_model_discovery_backend(
+    backend: Option<AgentBackendConfig>,
+) -> BackendAutoDetection {
+    let Some(backend) = backend else {
+        return BackendAutoDetection {
+            backend_id: String::new(),
+            detected: false,
+            discovered_models: Vec::new(),
+            warning: None,
+        };
+    };
+    let backend_id = backend.id.clone();
+    match tokio::time::timeout(AUTO_DETECT_TIMEOUT, discover_models(&backend)).await {
+        Ok(Ok(models)) => BackendAutoDetection {
+            backend_id,
+            detected: true,
+            discovered_models: models,
+            warning: None,
+        },
+        Ok(Err(error)) => BackendAutoDetection {
+            backend_id,
+            detected: false,
+            discovered_models: Vec::new(),
+            warning: Some(format!("Auto-detect skipped {}: {error}", backend.label)),
+        },
+        Err(_) => BackendAutoDetection {
+            backend_id,
+            detected: false,
+            discovered_models: Vec::new(),
+            warning: None,
+        },
     }
 }
 
@@ -3150,6 +3501,222 @@ mod tests {
     }
 
     #[test]
+    fn auto_detection_enables_detected_builtin_backends() {
+        let db = Database::open_in_memory().expect("test db should open");
+        let mut backends = load_backend_configs(&db).expect("backends should load");
+        let detections = vec![
+            BackendAutoDetection {
+                backend_id: "codex".to_string(),
+                detected: true,
+                discovered_models: Vec::new(),
+                warning: None,
+            },
+            BackendAutoDetection {
+                backend_id: "ollama".to_string(),
+                detected: true,
+                discovered_models: vec![model("qwen3-coder")],
+                warning: None,
+            },
+            BackendAutoDetection {
+                backend_id: "lm-studio".to_string(),
+                detected: true,
+                discovered_models: vec![model("local-model")],
+                warning: None,
+            },
+        ];
+
+        let (changed, warnings) = apply_backend_auto_detections(&db, &mut backends, &detections)
+            .expect("detections should apply");
+
+        assert!(changed);
+        assert!(warnings.is_empty());
+        let codex = backends.iter().find(|b| b.id == "codex").expect("codex");
+        let ollama = backends.iter().find(|b| b.id == "ollama").expect("ollama");
+        let lm_studio = backends
+            .iter()
+            .find(|b| b.id == "lm-studio")
+            .expect("lm studio");
+        assert!(codex.enabled);
+        assert!(ollama.enabled);
+        assert_eq!(ollama.default_model.as_deref(), Some("qwen3-coder"));
+        assert!(lm_studio.enabled);
+        assert_eq!(lm_studio.default_model.as_deref(), Some("local-model"));
+    }
+
+    #[test]
+    fn codex_startup_models_hydrate_seeded_models_for_auto_detection() {
+        let mut backend = AgentBackendConfig::builtin_codex_native();
+        backend.manual_models[0].label.clear();
+        backend.manual_models[0].context_window_tokens = 0;
+
+        let models = codex_startup_models(&backend);
+
+        assert_eq!(
+            models
+                .iter()
+                .map(|model| model.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["gpt-5.4", "gpt-5.3-codex"]
+        );
+        assert!(models.iter().all(|model| model.discovered));
+        assert_eq!(models[0].label, "gpt-5.4");
+        assert_eq!(
+            models[0].context_window_tokens,
+            backend.context_window_default
+        );
+    }
+
+    #[test]
+    fn codex_startup_models_do_not_replace_existing_discovery_results() {
+        let mut backend = AgentBackendConfig::builtin_codex_native();
+        backend.discovered_models = vec![model("gpt-5.5")];
+
+        assert!(codex_startup_models(&backend).is_empty());
+    }
+
+    #[test]
+    fn auto_detection_overrides_old_disabled_rows_without_opt_out() {
+        let db = Database::open_in_memory().expect("test db should open");
+        let mut ollama = AgentBackendConfig::builtin_ollama();
+        ollama.enabled = false;
+        save_backend_configs(&db, &[ollama]).expect("config should save");
+        let mut backends = load_backend_configs(&db).expect("backends should load");
+
+        let (changed, _) = apply_backend_auto_detections(
+            &db,
+            &mut backends,
+            &[BackendAutoDetection {
+                backend_id: "ollama".to_string(),
+                detected: true,
+                discovered_models: Vec::new(),
+                warning: None,
+            }],
+        )
+        .expect("detections should apply");
+
+        assert!(changed);
+        assert!(
+            backends
+                .iter()
+                .find(|backend| backend.id == "ollama")
+                .expect("ollama")
+                .enabled
+        );
+    }
+
+    #[test]
+    fn auto_detection_respects_manual_opt_out() {
+        let db = Database::open_in_memory().expect("test db should open");
+        db.set_app_setting(&auto_detect_disabled_key("ollama"), "true")
+            .expect("opt-out should save");
+        let mut backends = load_backend_configs(&db).expect("backends should load");
+
+        let (changed, _) = apply_backend_auto_detections(
+            &db,
+            &mut backends,
+            &[BackendAutoDetection {
+                backend_id: "ollama".to_string(),
+                detected: true,
+                discovered_models: vec![model("qwen3-coder")],
+                warning: None,
+            }],
+        )
+        .expect("detections should apply");
+
+        assert!(!changed);
+        let ollama = backends.iter().find(|b| b.id == "ollama").expect("ollama");
+        assert!(!ollama.enabled);
+        assert!(ollama.discovered_models.is_empty());
+    }
+
+    #[test]
+    fn auto_detection_probe_plan_respects_manual_opt_outs_before_probe_work() {
+        let db = Database::open_in_memory().expect("test db should open");
+        db.set_app_setting(&auto_detect_disabled_key("ollama"), "true")
+            .expect("ollama opt-out should save");
+        db.set_app_setting(&auto_detect_disabled_key(NATIVE_CODEX_BACKEND_ID), "true")
+            .expect("codex opt-out should save");
+
+        assert!(
+            !should_probe_backend_auto_detection(&db, "ollama")
+                .expect("ollama probe flag should load")
+        );
+        assert!(
+            !should_probe_backend_auto_detection(&db, LEGACY_NATIVE_CODEX_BACKEND_ID)
+                .expect("legacy codex probe flag should load")
+        );
+        assert!(
+            should_probe_backend_auto_detection(&db, "lm-studio")
+                .expect("lm studio probe flag should load")
+        );
+        let skipped = skipped_backend_auto_detection("ollama");
+        assert_eq!(skipped.backend_id, "ollama");
+        assert!(!skipped.detected);
+        assert!(skipped.discovered_models.is_empty());
+    }
+
+    #[test]
+    fn codex_auto_detection_can_restore_disabled_gate_without_opt_out() {
+        let db = Database::open_in_memory().expect("test db should open");
+        db.set_app_setting(FIRST_CLASS_BACKENDS_PROMOTION_KEY, "true")
+            .expect("promotion should save");
+        db.set_app_setting(NATIVE_CODEX_SETTING_KEY, "false")
+            .expect("codex setting should save");
+        db.set_app_setting(LEGACY_NATIVE_CODEX_SETTING_KEY, "false")
+            .expect("legacy codex setting should save");
+
+        db.set_app_setting(NATIVE_CODEX_SETTING_KEY, "true")
+            .expect("auto-detect should restore gate");
+        db.set_app_setting(LEGACY_NATIVE_CODEX_SETTING_KEY, "true")
+            .expect("auto-detect should restore legacy gate");
+        let mut backends = load_backend_configs(&db).expect("backends should load");
+        let (changed, _) = apply_backend_auto_detections(
+            &db,
+            &mut backends,
+            &[BackendAutoDetection {
+                backend_id: "codex".to_string(),
+                detected: true,
+                discovered_models: Vec::new(),
+                warning: None,
+            }],
+        )
+        .expect("detections should apply");
+
+        assert!(!changed);
+        assert!(
+            backends
+                .iter()
+                .find(|backend| backend.id == "codex")
+                .expect("codex")
+                .enabled
+        );
+    }
+
+    #[test]
+    fn legacy_codex_backend_settings_migrate_to_canonical_codex() {
+        let db = Database::open_in_memory().expect("test db should open");
+        db.set_app_setting("default_agent_backend", "experimental-codex")
+            .expect("default should save");
+        db.set_app_setting("model_provider:session-a", "codex-subscription")
+            .expect("session provider should save");
+
+        migrate_legacy_codex_backend_settings(&db).expect("migration should run");
+
+        assert_eq!(
+            db.get_app_setting("default_agent_backend")
+                .expect("default should read")
+                .as_deref(),
+            Some("codex")
+        );
+        assert_eq!(
+            db.get_app_setting("model_provider:session-a")
+                .expect("provider should read")
+                .as_deref(),
+            Some("codex")
+        );
+    }
+
+    #[test]
     fn tolerant_load_skips_unknown_kind_and_preserves_passthrough() {
         // Simulates the reported breakage: a newer build wrote a
         // `lm_studio` entry, an older build is now reading it. The
@@ -3216,11 +3783,11 @@ mod tests {
 
         let loaded = load_backend_configs(&db).expect("backends should load");
 
-        assert!(loaded.iter().any(|b| b.id == "experimental-codex"));
+        assert!(loaded.iter().any(|b| b.id == "codex"));
         assert!(!loaded.iter().any(|b| b.id == "codex-subscription"));
         let codex = loaded
             .iter()
-            .find(|b| b.id == "experimental-codex")
+            .find(|b| b.id == "codex")
             .expect("native codex backend should be present");
         assert_eq!(codex.kind, AgentBackendKind::CodexNative);
         assert!(codex.model_discovery);
@@ -3237,7 +3804,7 @@ mod tests {
 
         let loaded = load_backend_configs(&db).expect("backends should load");
 
-        assert!(loaded.iter().any(|b| b.id == "experimental-codex"));
+        assert!(loaded.iter().any(|b| b.id == "codex"));
         assert!(!loaded.iter().any(|b| b.id == "codex-subscription"));
     }
 
@@ -3285,7 +3852,7 @@ mod tests {
 
         let loaded = load_backend_configs(&db).expect("backends should load");
         assert!(!loaded.iter().any(|b| b.id == "codex-subscription"));
-        assert!(!loaded.iter().any(|b| b.id == "experimental-codex"));
+        assert!(!loaded.iter().any(|b| b.id == "codex"));
 
         save_backend_configs(&db, &loaded).expect("active backends should save");
 
@@ -3297,7 +3864,7 @@ mod tests {
             serde_json::from_str(&raw).expect("settings should deserialize");
         let preserved = entries
             .iter()
-            .find(|backend| backend.id == "experimental-codex")
+            .find(|backend| backend.id == "codex")
             .expect("hidden native Codex config should survive save");
         assert!(preserved.enabled);
         assert_eq!(
@@ -3319,7 +3886,7 @@ mod tests {
             resolve_backend_request_defaults(&db, Some("codex-subscription"), None)
                 .expect("legacy codex request should resolve");
 
-        assert_eq!(backend_id.as_deref(), Some("experimental-codex"));
+        assert_eq!(backend_id.as_deref(), Some("codex"));
         assert_eq!(resolved_model.as_deref(), Some("gpt-5.4"));
     }
 
@@ -3532,22 +4099,15 @@ mod tests {
         db.set_app_setting(SETTINGS_KEY, &raw.to_string())
             .expect("seed should save");
 
-        // Mirror what list_agent_backends does post-load.
+        // Mirror what list_agent_backends and auto_detect_agent_backends
+        // do post-load.
         let stored_default = db
             .get_app_setting("default_agent_backend")
             .expect("read default")
             .expect("default present");
         let mut loaded = load_backend_configs_tolerant(&db).expect("tolerant load should succeed");
-        let default_backend_id = if loaded.backends.iter().any(|b| b.id == stored_default) {
-            stored_default.clone()
-        } else {
-            loaded.warnings.push(format!(
-                "Default backend `{stored_default}` is not available in this build; \
-                 falling back to `anthropic` for this session. \
-                 Stored setting unchanged."
-            ));
-            "anthropic".to_string()
-        };
+        let default_backend_id =
+            resolve_backend_list_default(&loaded.backends, &mut loaded.warnings, stored_default);
 
         // Fallback wired up correctly.
         assert_eq!(default_backend_id, "anthropic");
@@ -3578,6 +4138,24 @@ mod tests {
             .expect("read default after")
             .expect("default still present");
         assert_eq!(still_stored, "future-thing");
+    }
+
+    #[test]
+    fn backend_list_default_aliases_legacy_codex_to_available_native_backend() {
+        let mut warnings = Vec::new();
+        let backends = vec![
+            AgentBackendConfig::builtin_anthropic(),
+            AgentBackendConfig::builtin_codex_native(),
+        ];
+
+        let default_backend_id = resolve_backend_list_default(
+            &backends,
+            &mut warnings,
+            LEGACY_NATIVE_CODEX_BACKEND_ID.to_string(),
+        );
+
+        assert_eq!(default_backend_id, NATIVE_CODEX_BACKEND_ID);
+        assert!(warnings.is_empty());
     }
 
     #[test]
@@ -4465,5 +5043,24 @@ data: [DONE]
         }];
         let req = json!({"model": "custom-model", "input": "x".repeat(100_000)});
         assert!(preflight_context_window_check(&backend, "custom-model", &req).is_none());
+    }
+
+    #[test]
+    fn normalize_backend_resets_stale_experimental_codex_label_for_legacy_id() {
+        let mut legacy = AgentBackendConfig::builtin_codex_native();
+        legacy.id = LEGACY_NATIVE_CODEX_BACKEND_ID.to_string();
+        legacy.label = "Experimental Codex".to_string();
+        let normalized = normalize_backend(legacy);
+        assert_eq!(normalized.id, NATIVE_CODEX_BACKEND_ID);
+        assert_eq!(normalized.label, "Codex");
+    }
+
+    #[test]
+    fn normalize_backend_resets_stale_experimental_codex_label_for_canonical_id() {
+        let mut stale = AgentBackendConfig::builtin_codex_native();
+        stale.label = "Experimental Codex".to_string();
+        let normalized = normalize_backend(stale);
+        assert_eq!(normalized.id, NATIVE_CODEX_BACKEND_ID);
+        assert_eq!(normalized.label, "Codex");
     }
 }

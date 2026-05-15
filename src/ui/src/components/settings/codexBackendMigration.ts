@@ -1,7 +1,8 @@
 import { DEFAULT_CLAUDE_BACKEND, DEFAULT_CLAUDE_MODEL } from "./alternativeBackendCleanup";
 
 export const LEGACY_CODEX_BACKEND = "codex-subscription";
-export const NATIVE_CODEX_BACKEND = "experimental-codex";
+export const LEGACY_NATIVE_CODEX_BACKEND = "experimental-codex";
+export const NATIVE_CODEX_BACKEND = "codex";
 export const FIRST_CLASS_BACKENDS_PROMOTION_KEY = "agent_backends_first_class_promoted";
 
 export type SettingEntry = readonly [string, string];
@@ -84,8 +85,14 @@ function fallbackModelForBackend(
 
 function shouldMigrateCodexBackend(provider: string | null, enableNative: boolean): boolean {
   if (!provider) return false;
-  if (enableNative) return provider === LEGACY_CODEX_BACKEND;
-  return provider === NATIVE_CODEX_BACKEND || provider === LEGACY_CODEX_BACKEND;
+  if (enableNative) {
+    return provider === LEGACY_CODEX_BACKEND || provider === LEGACY_NATIVE_CODEX_BACKEND;
+  }
+  return (
+    provider === NATIVE_CODEX_BACKEND ||
+    provider === LEGACY_NATIVE_CODEX_BACKEND ||
+    provider === LEGACY_CODEX_BACKEND
+  );
 }
 
 export function planBackendGateLoad({

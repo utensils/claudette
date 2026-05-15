@@ -3,8 +3,8 @@ use std::{collections::HashMap, path::Path, time::Duration};
 use tauri::{AppHandle, Emitter, Manager};
 
 use claudette::agent::background::{
-    AgentBackgroundTaskEvent, AgentBackgroundTaskEventKind, agent_bash_output_path,
-    parse_bash_start, parse_task_notification,
+    AgentBackgroundTaskEvent, AgentBackgroundTaskEventKind, parse_bash_start,
+    parse_task_notification, workspace_terminal_output_path,
 };
 use claudette::agent::{AgentEvent, InnerStreamEvent, StartContentBlock, StreamEvent};
 use claudette::chat::{
@@ -63,13 +63,6 @@ pub(super) async fn append_agent_bash_output(
         .open(path)
         .await?;
     file.write_all(text.as_bytes()).await
-}
-
-pub(super) async fn truncate_agent_bash_output(path: &std::path::Path) -> std::io::Result<()> {
-    if let Some(parent) = path.parent() {
-        tokio::fs::create_dir_all(parent).await?;
-    }
-    tokio::fs::File::create(path).await.map(|_| ())
 }
 
 pub(super) fn mirror_background_task_output(
@@ -142,11 +135,16 @@ pub(super) fn get_or_create_agent_shell_terminal_tab(
     workspace_id: &str,
     chat_session_id: &str,
 ) -> Option<TerminalTab> {
+    // Workspace-scoped path: env-provider provisioning, setup-script,
+    // and agent shell all append to the same file so the Claudette
+    // Terminal tab shows one unified transcript per workspace. The
+    // chat-session id still drives `agent_chat_session_id` so
+    // background-task lookups by session find this tab.
     let db = Database::open(db_path).ok()?;
+    let output_path = workspace_terminal_output_path(workspace_id)
+        .to_string_lossy()
+        .into_owned();
     if let Ok(Some(mut tab)) = db.get_agent_shell_terminal_tab_by_workspace(workspace_id) {
-        let output_path = agent_bash_output_path(chat_session_id)
-            .to_string_lossy()
-            .into_owned();
         let _ = db.update_agent_shell_terminal_tab_session(tab.id, chat_session_id, &output_path);
         tab.title = CLAUDETTE_TERMINAL_TITLE.to_string();
         tab.agent_chat_session_id = Some(chat_session_id.to_string());
@@ -158,7 +156,6 @@ pub(super) fn get_or_create_agent_shell_terminal_tab(
         return Some(tab);
     }
     let max_id = db.max_terminal_tab_id().ok()?;
-    let output_path = agent_bash_output_path(chat_session_id);
     let tab = TerminalTab {
         id: max_id + 1,
         workspace_id: workspace_id.to_string(),
@@ -170,7 +167,7 @@ pub(super) fn get_or_create_agent_shell_terminal_tab(
         agent_chat_session_id: Some(chat_session_id.to_string()),
         agent_tool_use_id: None,
         agent_task_id: None,
-        output_path: Some(output_path.to_string_lossy().into_owned()),
+        output_path: Some(output_path),
         task_status: None,
         task_summary: None,
     };
@@ -257,13 +254,6 @@ impl BackgroundTaskInputTracker {
         };
 
         let command = start.command.as_deref();
-        let had_running_background_tasks = {
-            let app_state = app.state::<AppState>();
-            let agents = app_state.agents.read().await;
-            agents
-                .get(chat_session_id)
-                .is_some_and(|s| !s.running_background_tasks.is_empty())
-        };
         if start.run_in_background {
             let app_state = app.state::<AppState>();
             let mut agents = app_state.agents.write().await;
@@ -271,10 +261,14 @@ impl BackgroundTaskInputTracker {
                 session.running_background_tasks.insert(tool_use_id.clone());
             }
         }
-        let path = agent_bash_output_path(chat_session_id);
-        if !had_running_background_tasks && let Err(err) = truncate_agent_bash_output(&path).await {
-            tracing::warn!(target: "claudette::chat", error = %err, "failed to reset agent bash output");
-        }
+        // Workspace-scoped path: every agent shell command across every
+        // chat session appends to the same workspace transcript. The
+        // truncate-on-no-running-tasks behavior the chat-session-scoped
+        // path used to do is intentionally gone — env-provider
+        // provisioning + prior session history must survive into the
+        // new command's view, otherwise the user loses the unified
+        // Claudette Terminal transcript the moment they hit Bash again.
+        let path = workspace_terminal_output_path(workspace_id);
         let echo = command
             .map(|cmd| format!("\r\n$ {}\r\n", terminal_text(cmd)))
             .unwrap_or_else(|| "\r\n$ Bash\r\n".to_string());

@@ -3,8 +3,7 @@ use std::sync::Arc;
 use tauri::{AppHandle, Emitter, Manager, State};
 
 use claudette::agent::background::{
-    AgentBackgroundTaskEventKind, agent_bash_output_path, parse_background_task_binding,
-    parse_task_notification,
+    AgentBackgroundTaskEventKind, parse_background_task_binding, parse_task_notification,
 };
 use claudette::agent::{
     self, AgentEvent, AgentSession, AgentSettings, ClaudeCodeHarness, CodexAppServerOptions,
@@ -1494,17 +1493,16 @@ pub async fn send_chat_message(
         // Snapshot — see `plugins_snapshot` doc; agent spawn must not
         // block the Plugins settings UI while env resolves.
         let registry = state.plugins_snapshot().await;
-        let progress = crate::commands::env::TauriEnvProgressSink::new(
-            app.clone(),
-            ws_info_for_env.id.clone(),
-        );
-        claudette::env_provider::resolve_with_registry_and_progress(
+        let (progress, output) =
+            crate::commands::env::make_env_sinks(app.clone(), ws_info_for_env.id.clone());
+        claudette::env_provider::resolve_with_registry_streaming(
             &registry,
             &state.env_cache,
             std::path::Path::new(&worktree_path),
             &ws_info_for_env,
             &disabled_env_providers,
             Some(&progress),
+            Some(output),
         )
         .await
     };
@@ -2628,7 +2626,7 @@ pub async fn send_chat_message(
                                             }
                                         }
                                         let aggregate_path =
-                                            agent_bash_output_path(&chat_session_id_for_stream);
+                                            claudette::agent::background::workspace_terminal_output_path(&ws_id);
                                         mirror_background_task_output(
                                             std::path::PathBuf::from(&binding.output_path),
                                             aggregate_path,
@@ -2654,7 +2652,7 @@ pub async fn send_chat_message(
                                         }
                                     } else {
                                         let path =
-                                            agent_bash_output_path(&chat_session_id_for_stream);
+                                            claudette::agent::background::workspace_terminal_output_path(&ws_id);
                                         let text = terminal_text(&text);
                                         let suffix =
                                             if text.ends_with("\r\n") { "" } else { "\r\n" };

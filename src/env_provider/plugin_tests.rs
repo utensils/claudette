@@ -40,7 +40,28 @@ fn make_vm(plugin: &str, allowed: &[&str], worktree: &Path) -> Lua {
         },
         ..Default::default()
     };
-    create_lua_vm(ctx).expect("create vm")
+    let lua = create_lua_vm(ctx).expect("create vm");
+    // Tests stub `host.exec` with a Lua closure to inject canned
+    // subprocess output. After the migration to `host.exec_streaming`
+    // for env-provider plugins, those same stubs need to fire when
+    // the plugin calls the streaming variant — otherwise the plugin
+    // would try to spawn the real binary, which panics under `#[test]`
+    // (no multi-thread tokio runtime) and breaks every plugin test.
+    //
+    // Proxy `host.exec_streaming` to `host.exec` at the Lua level. The
+    // closure re-reads `host.exec` on each call, so a later
+    // `host.exec = function(...)` override is picked up automatically
+    // — no per-test bookkeeping needed.
+    lua.load(
+        r#"
+            host.exec_streaming = function(cmd, args)
+                return host.exec(cmd, args)
+            end
+        "#,
+    )
+    .exec()
+    .expect("install host.exec_streaming proxy");
+    lua
 }
 
 #[cfg(has_direnv)]
@@ -1293,11 +1314,15 @@ fn nix_export_shell_nix_uses_file_arg_and_watches_shell_nix() {
         r#"
         host.exec = function(cmd, args)
             if cmd ~= "nix" then error("expected cmd='nix', got: " .. tostring(cmd)) end
+            -- `-L` (print-build-logs) was added so streaming surfaces
+            -- per-derivation build output in the EnvProvisioningConsole.
+            -- The shell.nix path slides to args[5] as a result.
             if type(args) ~= "table"
                 or args[1] ~= "print-dev-env"
                 or args[2] ~= "--json"
-                or args[3] ~= "-f"
-                or args[4] ~= "{expected_shell}" then
+                or args[3] ~= "-L"
+                or args[4] ~= "-f"
+                or args[5] ~= "{expected_shell}" then
                 error("expected shell.nix args")
             end
             return {{ stdout = [==[{payload_json}]==], stderr = "", code = 0 }}

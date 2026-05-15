@@ -120,10 +120,58 @@ pub(crate) async fn create_workspace_inner(
         .find(|r| r.id == repo_id)
         .ok_or("Repository not found")?;
 
+    // Ensure the workspace's Claudette Terminal tab exists before any
+    // env-provider or setup-script line is written — the tab points at
+    // the workspace-scoped output file the sinks below append to, and
+    // we want it visible in the bottom panel the moment provisioning
+    // starts so the user can open the panel and watch live.
+    let _ = crate::commands::terminal::ensure_workspace_provisioning_terminal_tab(
+        &state.db_path,
+        &out.workspace.id,
+    );
+
+    // Emit `workspaces-changed` *before* env-provider + setup-script
+    // run so the frontend can hydrate the workspace row (and its
+    // pre-seeded Claudette Terminal tab) immediately. The post-
+    // provisioning emit at the end of this function re-stamps the row
+    // — both emits are idempotent in the frontend's `addWorkspace`.
+    let early_hooks = TauriHooks::new(app.clone());
+    early_hooks.workspace_changed(&out.workspace.id, WorkspaceChangeKind::Created);
+
+    // Signal the start of the create-time warmup (setup script + env
+    // resolve) via a synthetic `workspace_env_progress (started)`
+    // event. The frontend's progress listener seeds
+    // `workspaceEnvironment[wsId] = preparing` with a `started_at`,
+    // which locks chat / terminal interaction until the matching
+    // `Complete` event from the env-sink's Drop terminates it. Forks
+    // intentionally skip this — they don't run env warmup at this
+    // stage, and a permanent preparing state would strand them. IPC /
+    // CLI / remote creates ride the same signal so they don't expose
+    // an unprimed worktree.
+    let _ = app.emit(
+        "workspace_env_progress",
+        crate::commands::env::WorkspaceEnvProgressPayload {
+            workspace_id: out.workspace.id.clone(),
+            plugin: "provisioning".to_string(),
+            phase: crate::commands::env::EnvProgressPhase::Started,
+            elapsed_ms: 0,
+            ok: None,
+        },
+    );
+
     let setup_result = if skip_setup {
         None
     } else {
-        ops_workspace::resolve_and_run_setup(
+        // Stream setup-script output into the workspace's Claudette
+        // Terminal so the user watches `bun install` / `cargo build`
+        // chatter live in a real terminal rather than a frozen elapsed
+        // timer. The sink also feeds the chat-transcript
+        // SetupScriptBanner via the accumulated `SetupResult.output`
+        // after the script returns.
+        let sink: Option<std::sync::Arc<dyn ops_workspace::SetupOutputSink>> = Some(
+            crate::commands::env::make_workspace_terminal_sink(&out.workspace.id),
+        );
+        ops_workspace::resolve_and_run_setup_streaming(
             &out.workspace,
             Path::new(&repo.path),
             Path::new(&out.worktree_path),
@@ -131,6 +179,7 @@ pub(crate) async fn create_workspace_inner(
             repo.base_branch.as_deref(),
             repo.default_remote.as_deref(),
             None,
+            sink,
         )
         .await
     };
@@ -201,7 +250,32 @@ pub async fn fork_workspace_at_checkpoint(
     .await
     .map_err(|e| e.to_string())?;
 
-    crate::tray::rebuild_tray(&app);
+    // Pre-create the fork's Claudette Terminal tab pointing at the
+    // workspace-scoped provisioning output file. The fork itself doesn't
+    // run an env-provider resolve here (that fires lazily on first
+    // agent / PTY spawn), but the tab needs to exist so the lazy
+    // resolve's output is visible if the user is watching the panel.
+    let _ = crate::commands::terminal::ensure_workspace_provisioning_terminal_tab(
+        &state.db_path,
+        &outcome.workspace.id,
+    );
+
+    // Mirror `create_workspace_inner`: emit `workspaces-changed` so the
+    // frontend's listener stamps the UI-only `remote_connection_id: null`
+    // field on the new row. Without this, `result.workspace` returned by
+    // the command lands in the store with `remote_connection_id` missing
+    // entirely (Rust's `Workspace` struct has no such field). The
+    // `useWorkspaceEnvironmentPreparation` hook then treats
+    // `undefined !== null` and bails out of `prepare_workspace_environment`,
+    // stranding the just-forked workspace in the `"preparing"` state set
+    // by `selectWorkspace` — visible to the user as a "Preparing the
+    // workspace…" hang that a window reload silently fixes (because
+    // `loadInitialData` re-stamps every row on cold start).
+    //
+    // `workspace_changed` also rebuilds the tray, so we drop the direct
+    // `rebuild_tray` call below to avoid double-rebuilds.
+    let hooks = TauriHooks::new(app.clone());
+    hooks.workspace_changed(&outcome.workspace.id, WorkspaceChangeKind::Created);
 
     Ok(ForkWorkspaceResult {
         workspace: outcome.workspace,
@@ -233,8 +307,17 @@ pub async fn run_workspace_setup(
         .find(|r| r.id == ws.repository_id)
         .ok_or("Repository not found")?;
 
+    // Manual setup re-run reuses the workspace-scoped Claudette
+    // Terminal output file so the user can re-watch a failed setup
+    // without losing the prior provisioning transcript.
+    let _ = crate::commands::terminal::ensure_workspace_provisioning_terminal_tab(
+        &state.db_path,
+        &ws.id,
+    );
     let resolved_env = resolve_env_for_workspace(&state, ws, &repo.path, Some(&app)).await;
-    let result = ops_workspace::resolve_and_run_setup(
+    let sink: Option<std::sync::Arc<dyn ops_workspace::SetupOutputSink>> =
+        Some(crate::commands::env::make_workspace_terminal_sink(&ws.id));
+    let result = ops_workspace::resolve_and_run_setup_streaming(
         ws,
         Path::new(&repo.path),
         Path::new(worktree_path),
@@ -242,6 +325,7 @@ pub async fn run_workspace_setup(
         repo.base_branch.as_deref(),
         repo.default_remote.as_deref(),
         resolved_env.as_ref(),
+        sink,
     )
     .await;
 
@@ -284,9 +368,12 @@ async fn resolve_env_for_workspace(
     // resolve can run ~120s. Holding the outer RwLock that long
     // stalls the Plugins settings page; see `plugins_snapshot`.
     let registry = state.plugins_snapshot().await;
-    let progress =
-        app.map(|h| crate::commands::env::TauriEnvProgressSink::new(h.clone(), ws.id.clone()));
-    let resolved = claudette::env_provider::resolve_with_registry_and_progress(
+    let sinks = app.map(|h| crate::commands::env::make_env_sinks(h.clone(), ws.id.clone()));
+    let (progress, output) = match sinks {
+        Some((p, o)) => (Some(p), Some(o)),
+        None => (None, None),
+    };
+    let resolved = claudette::env_provider::resolve_with_registry_streaming(
         &registry,
         &state.env_cache,
         Path::new(worktree),
@@ -295,6 +382,7 @@ async fn resolve_env_for_workspace(
         progress
             .as_ref()
             .map(|p| p as &dyn claudette::env_provider::EnvProgressSink),
+        output,
     )
     .await;
     crate::commands::env::register_resolved_with_watcher(
@@ -303,6 +391,27 @@ async fn resolve_env_for_workspace(
         &resolved.sources,
     )
     .await;
+    // Surface trust-class failures via the modal-driving event. The
+    // create / fork / run-setup callers invoke this warmup as a
+    // fire-and-forget (`let _ = ...`), so its return value never
+    // reaches the frontend — and the per-selection env-prep hook
+    // skips `prepare_workspace_environment` when status is already
+    // "preparing" with a `started_at` (the warmup's own synthetic
+    // progress emit sets that), so the modal would otherwise never
+    // fire for a newly-created workspace whose .envrc is blocked.
+    // Emit here so the EnvTrustModal listener in
+    // `useWorkspaceEnvironmentPreparation` opens the modal once per
+    // workspace+signature for the app session. Skipped when `app` is
+    // None (archive teardown path — no UI to show a modal to).
+    if let Some(handle) = app
+        && let Some(payload) = crate::commands::env::build_trust_needed_payload(
+            &ws_info.id,
+            &ws_info.repo_id.clone().unwrap_or_default(),
+            &resolved,
+        )
+    {
+        let _ = handle.emit("workspace_env_trust_needed", payload);
+    }
     Some(resolved)
 }
 

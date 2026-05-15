@@ -1,10 +1,19 @@
 use serde::{Deserialize, Serialize};
 
-pub fn agent_bash_output_path(chat_session_id: &str) -> std::path::PathBuf {
+/// Workspace-scoped output file for the Claudette Terminal tab. This is
+/// the single destination for the workspace's unified provisioning +
+/// agent-shell transcript: env-provider stdout/stderr, the
+/// `.claudette.json` setup script, every chat session's Bash tool
+/// commands (foreground and the mirror of background tasks). xterm.js
+/// tails this one file; the tab created on workspace create/fork
+/// points here from the start and never rebinds, so the user can
+/// scroll back through the full history of everything that ever ran
+/// in the workspace.
+pub fn workspace_terminal_output_path(workspace_id: &str) -> std::path::PathBuf {
     std::env::temp_dir()
-        .join("claudette-agent-bash")
-        .join(chat_session_id)
-        .join("agent-shell.output")
+        .join("claudette-workspace-terminal")
+        .join(workspace_id)
+        .join("terminal.output")
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

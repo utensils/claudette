@@ -68,7 +68,26 @@ pub async fn resolve_with_registry_and_progress(
     disabled: &std::collections::HashSet<String>,
     progress: Option<&dyn EnvProgressSink>,
 ) -> ResolvedEnv {
-    let backend = PluginRegistryBackend::new(registry);
+    resolve_with_registry_streaming(registry, cache, worktree, ws_info, disabled, progress, None)
+        .await
+}
+
+/// Variant of [`resolve_with_registry_and_progress`] that *also*
+/// attaches a [`crate::plugin_runtime::host_api::StreamingSink`] so
+/// any plugin that calls `host.exec_streaming` (or `host.console`)
+/// forwards each stdout/stderr line through the sink. Used by Tauri
+/// command handlers to broadcast a `workspace_env_output` event for
+/// the EnvProvisioningConsole. Cache hits still bypass both sinks.
+pub async fn resolve_with_registry_streaming(
+    registry: &crate::plugin_runtime::PluginRegistry,
+    cache: &EnvCache,
+    worktree: &Path,
+    ws_info: &WorkspaceInfo,
+    disabled: &std::collections::HashSet<String>,
+    progress: Option<&dyn EnvProgressSink>,
+    streaming: Option<std::sync::Arc<dyn crate::plugin_runtime::host_api::StreamingSink>>,
+) -> ResolvedEnv {
+    let backend = PluginRegistryBackend::new(registry).with_streaming_sink(streaming);
     resolve_for_workspace_with_progress(&backend, cache, worktree, ws_info, disabled, progress)
         .await
 }

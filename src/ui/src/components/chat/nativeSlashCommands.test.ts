@@ -620,7 +620,7 @@ describe("login native handler", () => {
   });
 
   it("starts the Codex sign-in flow for native Codex models", async () => {
-    const ctx = makeCtx({ selectedModelProvider: "experimental-codex" });
+    const ctx = makeCtx({ selectedModelProvider: "codex" });
     const handler = resolveNativeHandler("login")!;
     const result = await handler.execute(ctx, "");
     expect(result).toEqual({ kind: "handled", canonicalName: "login" });

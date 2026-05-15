@@ -6,6 +6,88 @@ import type { AppState } from "../useAppStore";
 // Fire-and-forget wrapper around the typed service call. Errors are
 // swallowed because selection is a pure UI action — a failed notification
 // just means the backend keeps polling on its prior tier, which is fine.
+/** True when `real` could be the post-allocator name for a workspace
+ *  whose requested name was `placeholder`. The Rust allocator
+ *  (`src/workspace_alloc.rs`) takes the requested name on the first
+ *  attempt and appends `-2`, `-3`, … on collision until it finds a
+ *  free slot. So either exact match, or `placeholder-N` where N is an
+ *  integer ≥ 2 with no leading zero. Used by the eager-swap fallback
+ *  to associate an optimistic placeholder with the real workspace
+ *  even when the allocator added a numeric suffix.
+ *
+ *  Deliberately strict on both ends:
+ *  - matching `<placeholder>-anything` (no digit guard) would let an
+ *    unrelated workspace named e.g. `main-fork-bug` swap a
+ *    `main-fork` placeholder out from under the user.
+ *  - accepting `-0` / `-1` / `-01` would false-match a manually-named
+ *    workspace `<placeholder>-1` against an optimistic placeholder,
+ *    since the allocator itself never emits those suffixes. */
+function realNameMatchesAllocatorSuffix(
+  placeholder: string,
+  real: string,
+): boolean {
+  if (real === placeholder) return true;
+  const prefix = `${placeholder}-`;
+  if (!real.startsWith(prefix)) return false;
+  const suffix = real.slice(prefix.length);
+  // No-leading-zero digit run — `-02`, `-0`, etc. fail. Allocator's
+  // `format!("...-{}", n)` is base-10 with no padding, so any
+  // leading-zero suffix came from a user/manual rename.
+  if (!/^[1-9]\d*$/.test(suffix)) return false;
+  // Match allocator's first collision suffix (2) and up. Number()
+  // is safe because the regex already constrained the input to a
+  // bounded decimal run.
+  return Number(suffix) >= 2;
+}
+
+/** Match an incoming `workspaces-changed (created)` workspace against
+ *  any pending optimistic-create / optimistic-fork placeholder in the
+ *  store. Returns the placeholder id + the slice the match came from,
+ *  or null if no swap is needed. Extracted so App.tsx's listener can
+ *  call a pure function — keeps the matching heuristic testable
+ *  without mounting React.
+ *
+ *  Matching is exact on `repository_id`, and on name the real workspace
+ *  must either equal the placeholder name (the common case — create
+ *  passes the slug verbatim) or look like an allocator-suffix variant
+ *  (`<placeholder>-N`). The earlier "any single in-flight placeholder
+ *  in this repo" fallback was too lax: a concurrent CLI / IPC create
+ *  in the same repo would get cross-associated with the placeholder
+ *  and steal the user's selection.
+ */
+export function findPendingPlaceholderForCreatedWorkspace(args: {
+  workspaces: Workspace[];
+  pendingCreates: Record<string, string>;
+  pendingForks: Record<string, string>;
+  real: Workspace;
+}): { placeholderId: string; from: "create" | "fork" } | null {
+  const matchingRepo = args.workspaces.filter(
+    (w) =>
+      (w.id in args.pendingCreates || w.id in args.pendingForks) &&
+      w.repository_id === args.real.repository_id,
+  );
+  // Prefer exact match, then allocator-suffix match. Only consider the
+  // suffix candidate when exactly one placeholder is in flight; with
+  // multiple in-flight placeholders we can't safely guess which one
+  // the suffix-bearing name resolves to, and the IPC return path will
+  // commit the right one anyway.
+  const exact = matchingRepo.find((w) => w.name === args.real.name);
+  const suffixCandidate =
+    matchingRepo.length === 1 &&
+    realNameMatchesAllocatorSuffix(matchingRepo[0].name, args.real.name)
+      ? matchingRepo[0]
+      : undefined;
+  const match = exact ?? suffixCandidate;
+  if (!match) return null;
+  if (match.id in args.pendingCreates) {
+    return { placeholderId: match.id, from: "create" };
+  }
+  if (match.id in args.pendingForks) {
+    return { placeholderId: match.id, from: "fork" };
+  }
+  return null;
+}
+
 function notifyBackendSelection(workspaceId: string | null) {
   notifyWorkspaceSelected(workspaceId).catch(() => {});
 }
@@ -38,6 +120,62 @@ export interface WorkspacesSlice {
    *  Cmd+Shift+N hotkey) gives the same visual feedback. */
   creatingWorkspaceRepoId: string | null;
   setCreatingWorkspaceRepoId: (repoId: string | null) => void;
+  /** Temporary placeholder workspace ids that map to an in-flight fork
+   *  operation. The chat-side "Fork from here" action inserts a
+   *  placeholder workspace into `workspaces`, selects it for instant
+   *  navigation, and writes an entry here so the sidebar / chat panel
+   *  can render a "preparing fork from <source>…" affordance while
+   *  the backend snapshots and copies history. The placeholder is
+   *  removed and replaced with the real workspace once
+   *  `fork_workspace_at_checkpoint` resolves (or torn down on error).
+   *
+   *  Keyed by placeholder workspace id; the value is the source
+   *  workspace's id (the row the user clicked Fork from), so the chat
+   *  panel can show "Forking from <source.name>…" without re-walking
+   *  the workspaces array. */
+  pendingForks: Record<string, string>;
+  beginPendingFork: (placeholder: Workspace, sourceWorkspaceId: string) => void;
+  /** Resolve a pending fork: drop the placeholder row, add the real
+   *  workspace, and move selection from the placeholder id to the
+   *  real workspace id (only if the placeholder is still selected —
+   *  if the user navigated away mid-fork, leave their selection
+   *  alone). Bundled in one set() so the sidebar doesn't flash an
+   *  empty selection between the two operations. */
+  commitPendingFork: (placeholderId: string, real: Workspace) => void;
+  /** Tear down a pending fork that failed (or was cancelled). Drops
+   *  the placeholder row and restores selection to the supplied
+   *  workspace id (typically the source the user was viewing before
+   *  they clicked Fork). */
+  cancelPendingFork: (placeholderId: string, restoreSelectionTo: string | null) => void;
+  /** Temporary placeholder workspace ids that map to an in-flight
+   *  workspace creation. Sibling of [`pendingForks`]: the sidebar `+`
+   *  / welcome-card / Cmd+Shift+N orchestration inserts a placeholder
+   *  workspace, selects it, and writes an entry here so the chat
+   *  panel renders a "preparing workspace…" placard pointing at the
+   *  in-flight worktree. Resolved by `commitPendingCreate` once
+   *  `create_workspace` returns the real row, or torn down by
+   *  `cancelPendingCreate` on error.
+   *
+   *  Keyed by placeholder workspace id; the value is the repo id the
+   *  workspace was created against — used by the chat panel to
+   *  render "Preparing workspace in <repo>…" without re-walking the
+   *  repositories array. */
+  pendingCreates: Record<string, string>;
+  beginPendingCreate: (placeholder: Workspace) => void;
+  /** Resolve a pending create: drop the placeholder row, add the
+   *  real workspace, and move selection from the placeholder id to
+   *  the real workspace id (only if the placeholder is still
+   *  selected — if the user navigated away mid-create, leave their
+   *  selection alone). Any provisioning output already written into
+   *  the workspace's Claudette Terminal file stays on disk under the
+   *  placeholder path — the real workspace's tab starts a fresh tail
+   *  against its own file once env/setup writes there. */
+  commitPendingCreate: (placeholderId: string, real: Workspace) => void;
+  /** Tear down a pending create that failed. Drops the placeholder
+   *  row and restores selection to the supplied workspace id
+   *  (typically null since the user was on the placeholder when
+   *  it failed). */
+  cancelPendingCreate: (placeholderId: string, restoreSelectionTo: string | null) => void;
   workspaceEnvironment: Record<string, WorkspaceEnvironmentPreparation>;
   setWorkspaces: (workspaces: Workspace[]) => void;
   addWorkspace: (ws: Workspace) => void;
@@ -82,6 +220,261 @@ export const createWorkspacesSlice: StateCreator<
   creatingWorkspaceRepoId: null,
   setCreatingWorkspaceRepoId: (creatingWorkspaceRepoId) =>
     set({ creatingWorkspaceRepoId }),
+  pendingForks: {},
+  beginPendingFork: (placeholder, sourceWorkspaceId) =>
+    set((s) => {
+      // Insert the placeholder row and register it as a pending fork
+      // in one atomic update so the sidebar can't render an instant
+      // where the workspace exists but the spinner gate hasn't been
+      // tripped yet. Also seed `workspaceEnvironment` to `preparing`
+      // with a `started_at` of now so the sidebar's icon cascade
+      // (which now gates on both `status === "preparing"` AND
+      // `started_at != null`) immediately shows the spinner — the
+      // backend's `workspace_env_progress` events will land against
+      // the REAL workspace id later, not the placeholder, so we have
+      // to drive the placeholder's progress entry ourselves.
+      //
+      // We deliberately do NOT call `notifyBackendSelection(placeholder.id)`
+      // here: the backend would write the placeholder id into its
+      // `selected_workspace_id` / `workspace_activity` maps (used by
+      // SCM polling and tray menus), but the id has no backing DB
+      // row, so the entries are orphaned and accumulate one per fork
+      // attempt. Semantically, the backend's "selected workspace"
+      // during the fork window remains the source (that's where
+      // `fork_workspace_at_checkpoint` is operating), so leaving the
+      // backend's view on the source is also accurate. The notify
+      // fires with the real id once `commitPendingFork` swaps the
+      // selection.
+      //
+      // Mirror the diff/preview/right-sidebar-tab state transitions
+      // `selectWorkspace` performs so the placeholder navigation
+      // doesn't leak the source workspace's diff selection or
+      // sidebar tab state into the placeholder's view (and back out
+      // again on commit/cancel). The placeholder has no open diff
+      // tabs, so `restored`/`tabExists` collapse to "no restored
+      // file" — but we still want to save the source's selection
+      // into `diffSelectionByWorkspace` so returning to it on cancel
+      // (or via commit's real-id swap, which inherits the source's
+      // sidebar context for the placeholder's repo) preserves what
+      // the user was looking at.
+      const prev = s.selectedWorkspaceId;
+      let selectionMap = s.diffSelectionByWorkspace;
+      if (prev) {
+        if (s.diffSelectedFile) {
+          selectionMap = {
+            ...selectionMap,
+            [prev]: { path: s.diffSelectedFile, layer: s.diffSelectedLayer },
+          };
+        } else if (prev in selectionMap) {
+          const next = { ...selectionMap };
+          delete next[prev];
+          selectionMap = next;
+        }
+      }
+      return {
+        workspaces: [...s.workspaces, placeholder],
+        selectedWorkspaceId: placeholder.id,
+        selectedRepositoryId: null,
+        rightSidebarTab: "files",
+        diffSelectionByWorkspace: selectionMap,
+        diffSelectedFile: null,
+        diffSelectedLayer: null,
+        diffContent: null,
+        diffError: null,
+        diffPreviewMode: "diff",
+        diffPreviewContent: null,
+        diffPreviewLoading: false,
+        diffPreviewError: null,
+        diffMergeBase: null,
+        pendingForks: {
+          ...s.pendingForks,
+          [placeholder.id]: sourceWorkspaceId,
+        },
+        workspaceEnvironment: {
+          ...s.workspaceEnvironment,
+          [placeholder.id]: {
+            status: "preparing",
+            started_at: Date.now(),
+          },
+        },
+      };
+    }),
+  commitPendingFork: (placeholderId, real) =>
+    set((s) => {
+      const stillSelected = s.selectedWorkspaceId === placeholderId;
+      // Drop the placeholder's pendingFork entry, swap the row, and
+      // move selection only if the user hasn't navigated away. The
+      // env-prep hook fires off the `selectedWorkspaceId` dep, so
+      // flipping selection to the real id is what kicks off
+      // `prepare_workspace_environment` for the actual worktree.
+      const nextPendingForks = { ...s.pendingForks };
+      delete nextPendingForks[placeholderId];
+      // Dedupe: the backend emits `workspaces-changed` for the new
+      // fork before returning its IPC response, so by the time we run
+      // the real workspace is *usually* already in the store via
+      // App.tsx's listener.  Naive `.concat(real)` would double-add
+      // it.  Filter out both the placeholder and any pre-existing
+      // real-id row, then re-add the freshest copy so the row's
+      // fields (status_line, sort_order from `db.list_workspaces`,
+      // etc.) reflect what the command actually returned.  Idempotent
+      // either way: if the listener hasn't fired yet, only the
+      // placeholder is filtered out.
+      const filtered = s.workspaces.filter(
+        (w) => w.id !== placeholderId && w.id !== real.id,
+      );
+      const nextWorkspaces = filtered.concat(real);
+      const nextWorkspaceEnv = { ...s.workspaceEnvironment };
+      delete nextWorkspaceEnv[placeholderId];
+      if (stillSelected) {
+        notifyBackendSelection(real.id);
+      }
+      return {
+        workspaces: nextWorkspaces,
+        pendingForks: nextPendingForks,
+        selectedWorkspaceId: stillSelected ? real.id : s.selectedWorkspaceId,
+        workspaceEnvironment: nextWorkspaceEnv,
+      };
+    }),
+  cancelPendingFork: (placeholderId, restoreSelectionTo) =>
+    set((s) => {
+      const stillSelected = s.selectedWorkspaceId === placeholderId;
+      const nextPendingForks = { ...s.pendingForks };
+      delete nextPendingForks[placeholderId];
+      const nextWorkspaceEnv = { ...s.workspaceEnvironment };
+      delete nextWorkspaceEnv[placeholderId];
+      if (stillSelected) {
+        notifyBackendSelection(restoreSelectionTo);
+      }
+      return {
+        workspaces: s.workspaces.filter((w) => w.id !== placeholderId),
+        pendingForks: nextPendingForks,
+        selectedWorkspaceId: stillSelected
+          ? restoreSelectionTo
+          : s.selectedWorkspaceId,
+        workspaceEnvironment: nextWorkspaceEnv,
+      };
+    }),
+  pendingCreates: {},
+  beginPendingCreate: (placeholder) =>
+    set((s) => {
+      // Mirror `beginPendingFork` — insert the placeholder row, select
+      // it, and seed `workspaceEnvironment` to "preparing" with a
+      // `started_at` of now so the sidebar's icon cascade
+      // (status === "preparing" + started_at != null →
+      // WorkspaceEnvSpinner) immediately lights up. The backend's
+      // `workspace_env_progress` events flow against the REAL id once
+      // `commitPendingCreate` swaps that in, so the placeholder's
+      // progress is driven from here.
+      //
+      // We deliberately do NOT call `notifyBackendSelection(placeholder.id)`:
+      // the placeholder id has no DB row, so writing it into the
+      // backend's selection / activity maps would orphan an entry per
+      // attempted create. The real id gets notified on commit.
+      //
+      // Inline the diff/preview/right-sidebar resets that
+      // `selectWorkspace` would normally perform so the placeholder
+      // navigation doesn't leak the previously selected workspace's
+      // file/diff context.
+      const prev = s.selectedWorkspaceId;
+      let selectionMap = s.diffSelectionByWorkspace;
+      if (prev) {
+        if (s.diffSelectedFile) {
+          selectionMap = {
+            ...selectionMap,
+            [prev]: { path: s.diffSelectedFile, layer: s.diffSelectedLayer },
+          };
+        } else if (prev in selectionMap) {
+          const next = { ...selectionMap };
+          delete next[prev];
+          selectionMap = next;
+        }
+      }
+      return {
+        workspaces: [...s.workspaces, placeholder],
+        selectedWorkspaceId: placeholder.id,
+        selectedRepositoryId: null,
+        rightSidebarTab: "files",
+        diffSelectionByWorkspace: selectionMap,
+        diffSelectedFile: null,
+        diffSelectedLayer: null,
+        diffContent: null,
+        diffError: null,
+        diffPreviewMode: "diff",
+        diffPreviewContent: null,
+        diffPreviewLoading: false,
+        diffPreviewError: null,
+        diffMergeBase: null,
+        pendingCreates: {
+          ...s.pendingCreates,
+          [placeholder.id]: placeholder.repository_id,
+        },
+        workspaceEnvironment: {
+          ...s.workspaceEnvironment,
+          [placeholder.id]: {
+            status: "preparing",
+            started_at: Date.now(),
+          },
+        },
+      };
+    }),
+  commitPendingCreate: (placeholderId, real) =>
+    set((s) => {
+      const stillSelected = s.selectedWorkspaceId === placeholderId;
+      const nextPendingCreates = { ...s.pendingCreates };
+      delete nextPendingCreates[placeholderId];
+      // Dedupe (same pattern as commitPendingFork): the backend's
+      // `workspaces-changed` event may have already raced ahead of
+      // the IPC response and inserted the real workspace via App.tsx's
+      // listener. Filter both the placeholder AND any pre-existing
+      // real-id row, then concat the freshest copy so the sidebar
+      // never has two rows for the same workspace.
+      const filtered = s.workspaces.filter(
+        (w) => w.id !== placeholderId && w.id !== real.id,
+      );
+      const nextWorkspaces = filtered.concat(real);
+      const nextWorkspaceEnv = { ...s.workspaceEnvironment };
+      delete nextWorkspaceEnv[placeholderId];
+      // Migrate the placeholder's env-prep entry to the real id when
+      // the real id has no entry of its own yet — preserves the
+      // "preparing" status + started_at so the chat composer / sidebar
+      // stay in their loading state until the env-prep hook fires for
+      // the real workspace and transitions to "ready". If the real
+      // workspace already has its own env entry (a workspaces-changed
+      // event arrived first and the env-prep hook beat us), trust
+      // that one.
+      if (!nextWorkspaceEnv[real.id]) {
+        const ph = s.workspaceEnvironment[placeholderId];
+        if (ph) nextWorkspaceEnv[real.id] = ph;
+      }
+      if (stillSelected) {
+        notifyBackendSelection(real.id);
+      }
+      return {
+        workspaces: nextWorkspaces,
+        pendingCreates: nextPendingCreates,
+        selectedWorkspaceId: stillSelected ? real.id : s.selectedWorkspaceId,
+        workspaceEnvironment: nextWorkspaceEnv,
+      };
+    }),
+  cancelPendingCreate: (placeholderId, restoreSelectionTo) =>
+    set((s) => {
+      const stillSelected = s.selectedWorkspaceId === placeholderId;
+      const nextPendingCreates = { ...s.pendingCreates };
+      delete nextPendingCreates[placeholderId];
+      const nextWorkspaceEnv = { ...s.workspaceEnvironment };
+      delete nextWorkspaceEnv[placeholderId];
+      if (stillSelected) {
+        notifyBackendSelection(restoreSelectionTo);
+      }
+      return {
+        workspaces: s.workspaces.filter((w) => w.id !== placeholderId),
+        pendingCreates: nextPendingCreates,
+        selectedWorkspaceId: stillSelected
+          ? restoreSelectionTo
+          : s.selectedWorkspaceId,
+        workspaceEnvironment: nextWorkspaceEnv,
+      };
+    }),
   workspaceEnvironment: {},
   setWorkspaces: (workspaces) => set({ workspaces }),
   // Idempotent by id: workspace creates can race between the Tauri

@@ -73,6 +73,10 @@ export function listAgentBackends(): Promise<AgentBackendListResponse> {
   return invoke("list_agent_backends");
 }
 
+export function autoDetectAgentBackends(): Promise<AgentBackendListResponse> {
+  return invoke("auto_detect_agent_backends");
+}
+
 export function saveAgentBackend(
   backend: AgentBackendConfig,
 ): Promise<AgentBackendConfig[]> {

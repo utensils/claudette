@@ -228,6 +228,43 @@ export function ChatPanel() {
   const repo = repositories.find((r) => r.id === ws?.repository_id);
   const defaultBranch = repo ? defaultBranchesMap[repo.id] : undefined;
 
+  // When the user clicks Fork, `handleFork` inserts a placeholder
+  // workspace and registers it in `pendingForks` so this panel can
+  // render a "Preparing fork from <source>…" placard instead of the
+  // normal session UI for the brief window before the backend
+  // returns.  Resolve the source workspace's display name here so the
+  // placard tells the user what they're forking *from*, which is
+  // information they had a half-second ago and may otherwise lose
+  // track of with the optimistic navigation.
+  const pendingForkSourceName = useAppStore((s) => {
+    if (!s.selectedWorkspaceId) return null;
+    const sourceId = s.pendingForks[s.selectedWorkspaceId];
+    if (!sourceId) return null;
+    return s.workspaces.find((w) => w.id === sourceId)?.name ?? null;
+  });
+
+  // Sibling of `pendingForkSourceName` for the optimistic-create
+  // placeholder. Resolves the repo's display name so the placard
+  // reads "Preparing workspace in <repo>…" — gives the user the
+  // same "here's what's happening" affordance the fork case has,
+  // without exposing the auto-generated slug (the slug is also
+  // visible in the placeholder's sidebar row, so doubling it here
+  // is noise).
+  const pendingCreateRepoName = useAppStore((s) => {
+    if (!s.selectedWorkspaceId) return null;
+    const repoId = s.pendingCreates[s.selectedWorkspaceId];
+    if (!repoId) return null;
+    return s.repositories.find((r) => r.id === repoId)?.name ?? null;
+  });
+  // The placeholder workspace's own name (the generated slug). Shown
+  // as a secondary line in the placard so the user knows which row
+  // in the sidebar the placard corresponds to.
+  const pendingCreateWorkspaceName = useAppStore((s) => {
+    if (!s.selectedWorkspaceId) return null;
+    if (!s.pendingCreates[s.selectedWorkspaceId]) return null;
+    return s.workspaces.find((w) => w.id === s.selectedWorkspaceId)?.name ?? null;
+  });
+
   // Counts feeding the "all tabs closed" empty state. Each selector is
   // intentionally a `.length || 0` so the subscribed value is a primitive —
   // returning the array would re-fire on every reference change.
@@ -336,8 +373,9 @@ export function ChatPanel() {
     (s) => s.setQueuedMessageAutoDispatchPaused,
   );
   const addCheckpoint = useAppStore((s) => s.addCheckpoint);
-  const addWorkspace = useAppStore((s) => s.addWorkspace);
-  const selectWorkspace = useAppStore((s) => s.selectWorkspace);
+  const beginPendingFork = useAppStore((s) => s.beginPendingFork);
+  const commitPendingFork = useAppStore((s) => s.commitPendingFork);
+  const cancelPendingFork = useAppStore((s) => s.cancelPendingFork);
   const toolDisplayMode = useAppStore((s) => s.toolDisplayMode);
   const activeSessionStatus = useAppStore((s) => {
     if (!activeSessionId || !selectedWorkspaceId) return "Idle" as const;
@@ -363,19 +401,77 @@ export function ChatPanel() {
 
   const handleFork = useCallback(
     async (checkpointId: string) => {
-      if (!selectedWorkspaceId || isRemote) return;
+      if (!selectedWorkspaceId || isRemote || !ws) return;
+
+      // Optimistically insert a placeholder workspace and navigate to
+      // it BEFORE awaiting the backend. The fork command does a
+      // worktree creation + snapshot restore + history copy + Claude
+      // session JSONL copy, which can take a few seconds on big
+      // sessions; without this the user clicks Fork and sees nothing
+      // happen until the backend round-trip completes.  The
+      // placeholder mirrors the source workspace's repo/branch shape
+      // closely enough that the sidebar renders a believable row
+      // (under the same repo, with the source name suffixed
+      // "-fork…").  It carries a temporary id so the chat panel can
+      // detect it via `pendingForks` and render a "Preparing fork
+      // from <source>…" affordance instead of the empty-workspace
+      // tabs.  `commitPendingFork` swaps it for the real workspace
+      // once the backend resolves and `cancelPendingFork` tears it
+      // down on error.
+      const placeholderId = `pending-fork-${crypto.randomUUID()}`;
+      const placeholder = {
+        id: placeholderId,
+        repository_id: ws.repository_id,
+        // Mirror the backend allocator's `<source>-fork` suffix so the
+        // user sees roughly the same name in the sidebar before and
+        // after the swap. The backend may bump to `-fork-2` if there's
+        // a collision; the post-swap row reflects the final name.
+        name: `${ws.name}-fork`,
+        branch_name: `${ws.branch_name}-fork`,
+        worktree_path: null,
+        status: "Active" as const,
+        agent_status: "Idle" as const,
+        status_line: "",
+        created_at: new Date().toISOString(),
+        sort_order: ws.sort_order + 1,
+        remote_connection_id: null,
+      };
+      const previousSelection = selectedWorkspaceId;
+      beginPendingFork(placeholder, selectedWorkspaceId);
+
       try {
         const result = await forkWorkspaceAtCheckpoint(
-          selectedWorkspaceId,
+          previousSelection,
           checkpointId,
         );
-        addWorkspace(result.workspace);
-        selectWorkspace(result.workspace.id);
+        // Stamp the UI-only `remote_connection_id: null` field — the
+        // Rust `Workspace` model doesn't serialize it, so the IPC
+        // payload arrives with the field missing entirely.  Without
+        // the stamp, `useWorkspaceEnvironmentPreparation` treats the
+        // row as unhydrated and bails out of
+        // `prepare_workspace_environment`, leaving the just-forked
+        // workspace stranded at `"preparing"`.  Defense-in-depth
+        // against IPC-event timing — the backend's
+        // `workspaces-changed` emit will also stamp it, but doing it
+        // here makes the swap deterministic regardless of which lands
+        // first.
+        commitPendingFork(placeholderId, {
+          ...result.workspace,
+          remote_connection_id: null,
+        });
       } catch (err) {
+        cancelPendingFork(placeholderId, previousSelection);
         setError(`Failed to fork workspace: ${err}`);
       }
     },
-    [selectedWorkspaceId, isRemote, addWorkspace, selectWorkspace],
+    [
+      selectedWorkspaceId,
+      isRemote,
+      ws,
+      beginPendingFork,
+      commitPendingFork,
+      cancelPendingFork,
+    ],
   );
 
   // Sticky scroll: auto-follow when at bottom, stop when user scrolls up.
@@ -1483,9 +1579,60 @@ export function ChatPanel() {
   return (
     <div className={styles.panel}>
       <WorkspacePanelHeader />
-      {selectedWorkspaceId && <SessionTabs workspaceId={selectedWorkspaceId} />}
+      {/* Skip the session tab strip for the optimistic-fork placeholder.
+          The backend has no row for the placeholder id yet, so SessionTabs'
+          mount-time `listChatSessions(workspaceId)` would error with
+          "Workspace not found" and the tab strip would render empty
+          anyway. Suppressing it keeps the placard centered cleanly and
+          stops the console-error spam during the fork window. */}
+      {selectedWorkspaceId &&
+        !pendingForkSourceName &&
+        !pendingCreateWorkspaceName && (
+          <SessionTabs workspaceId={selectedWorkspaceId} />
+        )}
 
-      {selectedWorkspaceId && !sessionsLoaded ? (
+      {pendingCreateWorkspaceName ? (
+        // Optimistic-create placeholder: the user clicked New
+        // Workspace, we generated a slug, inserted a placeholder
+        // row into the store, selected it, and are now awaiting
+        // `createWorkspace` to return. Same shape as the fork
+        // placard below — render a static placard with the env
+        // console mounted against the placeholder id so any output
+        // buffered against it (host.console heartbeats from
+        // env-dotenv, etc.) is visible during the create window.
+        // After commit, the placard disappears and the regular chat
+        // panel takes over for the real workspace.
+        <div className={styles.preparingFork} role="status" aria-live="polite">
+          <LoaderCircle size={20} className={styles.preparingForkSpinner} />
+          <div className={styles.preparingForkText}>
+            {t("preparing_workspace_in", "Preparing workspace in {{repo}}…", {
+              repo: pendingCreateRepoName ?? "this repository",
+            })}
+            <div className={styles.preparingForkSub}>
+              {pendingCreateWorkspaceName}
+            </div>
+          </div>
+        </div>
+      ) : pendingForkSourceName ? (
+        // Optimistic-fork placeholder: the user clicked Fork from a
+        // checkpoint, we inserted a placeholder workspace into the
+        // store, selected it, and are now awaiting
+        // `fork_workspace_at_checkpoint` to return.  Render a static
+        // "Preparing fork from <source>…" affordance instead of the
+        // normal session/empty-tab UI so the user lands on a clear
+        // "we're working on it" state the instant they click,
+        // regardless of how slow the snapshot-restore + history-copy
+        // is on the source workspace. The placeholder swaps to the
+        // real fork via `commitPendingFork` once the backend resolves.
+        <div className={styles.preparingFork} role="status" aria-live="polite">
+          <LoaderCircle size={20} className={styles.preparingForkSpinner} />
+          <div className={styles.preparingForkText}>
+            {t("preparing_fork_from", "Preparing fork from {{name}}…", {
+              name: pendingForkSourceName,
+            })}
+          </div>
+        </div>
+      ) : selectedWorkspaceId && !sessionsLoaded ? (
         // Loading window: sessions for this workspace haven't landed yet
         // (see the `sessionsLoaded` comment above). Hold the layout open
         // with a blank shell so neither `WorkspaceEmptyTabs` nor the

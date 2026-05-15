@@ -230,10 +230,24 @@ const MACOS_CLOSE_WINDOW_ACCELERATOR: &str = "CmdOrCtrl+Shift+W";
 #[cfg(target_os = "macos")]
 const HELP_DOCS_URL: &str = "https://utensils.io/claudette/getting-started/installation/";
 #[cfg(target_os = "macos")]
-const HELP_RELEASE_URL_BASE: &str = "https://github.com/utensils/claudette/releases/tag/v";
+const HELP_RELEASE_URL_BASE: &str = "https://github.com/utensils/claudette/releases/tag/";
 #[cfg(target_os = "macos")]
 const HELP_ISSUES_URL: &str =
     "https://github.com/utensils/claudette/issues/new?template=bug_report.md";
+
+// Map a `CARGO_PKG_VERSION` string to the GitHub Release tag that actually
+// exists for that build. Nightly versions stamped by `.github/workflows/nightly.yml`
+// (`${NEXT_MINOR}-dev.${COMMITS}.g${SHORT}`) all resolve to the rolling `nightly`
+// tag; stable versions get `v<version>`. Mirrors `releaseTagFor` in
+// `src/ui/src/helpUrls.ts` — update both together.
+#[cfg(target_os = "macos")]
+fn release_tag_for(version: &str) -> String {
+    if version.contains("-dev.") {
+        "nightly".to_string()
+    } else {
+        format!("v{version}")
+    }
+}
 
 fn main() {
     // Install the rustls crypto provider before any TLS usage. Both
@@ -529,7 +543,11 @@ fn main() {
                 // Deep-link to the GitHub Release page for the running
                 // version. Stable URL — doesn't depend on CHANGELOG.md
                 // anchor formatting (which embeds the release date).
-                let url = format!("{}{}", HELP_RELEASE_URL_BASE, env!("CARGO_PKG_VERSION"));
+                let url = format!(
+                    "{}{}",
+                    HELP_RELEASE_URL_BASE,
+                    release_tag_for(env!("CARGO_PKG_VERSION"))
+                );
                 if let Err(e) = commands::shell::opener::open(&url) {
                     tracing::warn!(target: "claudette::ui", url = %url, error = %e, "failed to open changelog URL");
                 }
@@ -1035,6 +1053,7 @@ fn main() {
             commands::diagnostics::set_log_level,
             commands::diagnostics::set_frontend_verbosity,
             commands::agent_backends::list_agent_backends,
+            commands::agent_backends::auto_detect_agent_backends,
             commands::agent_backends::save_agent_backend,
             commands::agent_backends::delete_agent_backend,
             commands::agent_backends::save_agent_backend_secret,
@@ -1122,6 +1141,7 @@ fn main() {
             commands::env::prepare_workspace_environment,
             commands::env::reload_env,
             commands::env::set_env_provider_enabled,
+            commands::env::list_env_provider_disabled,
             commands::env::run_env_trust,
             commands::env::get_host_env_flags,
             // Claudette Lua plugins (SCM + env-provider) settings surface
@@ -1324,6 +1344,8 @@ mod tests {
     #[cfg(target_os = "macos")]
     use super::MACOS_CLOSE_WINDOW_ACCELERATOR;
     use super::migrate_legacy_env_provider_trust;
+    #[cfg(target_os = "macos")]
+    use super::release_tag_for;
     use claudette::db::Database;
     use claudette::model::Repository;
     use std::path::Path;
@@ -1519,5 +1541,18 @@ mod tests {
         // Positive assertion: we expect the iTerm2 / Safari / Chrome
         // convention so users' muscle memory carries over.
         assert_eq!(MACOS_CLOSE_WINDOW_ACCELERATOR, "CmdOrCtrl+Shift+W");
+    }
+
+    // Nightly builds stamp `CARGO_PKG_VERSION` as
+    // `<x.y.z>-dev.<n>.g<sha>` (see `.github/workflows/nightly.yml`) but
+    // publish to the rolling `nightly` GitHub tag, not a per-build tag.
+    // The Help → "What's New" link must route those to `nightly` instead
+    // of building a `releases/tag/v<dev-version>` URL that 404s.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn release_tag_for_routes_nightly_to_rolling_tag() {
+        assert_eq!(release_tag_for("0.25.0-dev.40.g34ce71e"), "nightly");
+        assert_eq!(release_tag_for("0.24.0"), "v0.24.0");
+        assert_eq!(release_tag_for("1.0.0-rc.1"), "v1.0.0-rc.1");
     }
 }

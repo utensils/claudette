@@ -1,18 +1,18 @@
 ---
 title: OpenAI & Codex
-description: Run Claudette agents through the OpenAI API gateway or through the native Codex CLI app-server.
+description: Run Claudette agents through the OpenAI API gateway or through the Codex CLI app-server.
 ---
 
 OpenAI API and Codex now use different execution paths:
 
 - **OpenAI API** — Claudette keeps the gateway path. It starts a local HTTP listener that translates Claude's wire format into the OpenAI Responses API (`/v1/responses`) so the official `claude` CLI can talk to OpenAI-shaped endpoints.
-- **Codex** — Claudette uses the native `codex` CLI app-server (`codex app-server --listen stdio://`) and talks JSON-RPC to that process. This path supersedes the old `codex-subscription` gateway row when the **Codex** gate is enabled.
+- **Codex** — Claudette uses the `codex` CLI app-server (`codex app-server --listen stdio://`) and talks JSON-RPC to that process. This path supersedes the old `codex-subscription` gateway row when **Codex** is enabled.
 
 ## Prerequisites
 
-For the OpenAI API backend, make sure **Settings > Models > Alternative Claude Code backends** is on.
+For the OpenAI API backend, make sure **Settings > Models > Agent providers** is on. OpenAI API remains manual because it needs an API key.
 
-For native Codex, make sure **Settings > Models > Codex** is on. Codex is independent from Alternative Claude Code backends: when the Codex gate is on, **Settings > Models** shows Codex and the chat model picker includes the seeded Codex models immediately.
+For Codex, make sure **Settings > Models > Codex** is on. Claudette auto-enables Codex at startup when it detects the `codex` CLI, unless you have manually turned Codex off. When Codex is on, **Settings > Models** shows Codex and the chat model picker includes the seeded Codex models immediately.
 
 ## OpenAI API
 
@@ -65,7 +65,7 @@ You can also select a Codex model and run `/login` in chat, or run `codex login`
 
 ### Runtime behavior
 
-Native Codex does not start the Claude Code CLI or the OpenAI gateway. Instead:
+Codex does not start the Claude Code CLI or the OpenAI gateway. Instead:
 
 1. Claudette spawns `codex app-server --listen stdio://` in the workspace.
 2. Claudette initializes the app-server over JSON-RPC.
@@ -87,7 +87,7 @@ Native Codex currently does not expose Claude Remote Control, Claude MCP config 
 
 ## Legacy Codex Gateway
 
-The old `codex-subscription` backend routed ChatGPT subscription auth through Claudette's OpenAI Responses gateway. It is no longer user-facing in Settings; native Codex is the Codex path.
+The old `codex-subscription` backend routed ChatGPT subscription auth through Claudette's OpenAI Responses gateway. It is no longer user-facing in Settings; Codex CLI app-server is the Codex path.
 
 ## Custom OpenAI-shaped endpoints
 
@@ -105,6 +105,6 @@ The `CustomOpenAi` backend kind exists in the data model but is not yet exposed 
 
 ## See also
 
-- [Alternative Providers overview](/claudette/features/providers/) — capability matrix and architecture
+- [Agent Providers overview](/claudette/features/providers/) — capability matrix and architecture
 - [Ollama](/claudette/features/providers/ollama/) — local provider setup
 - [Authentication](/claudette/features/authentication/) — credential handling for the default Anthropic backend

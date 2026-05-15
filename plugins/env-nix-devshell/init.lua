@@ -99,11 +99,16 @@ function M.export(args)
     local wt = worktree_of(args)
     local flake_path = join(wt, "flake.nix")
     local shell_path = join(wt, "shell.nix")
+    -- `-L` (`--print-build-logs`) routes per-derivation build output
+    -- to stderr so a cold flake's 30-90s evaluation isn't a silent
+    -- void in the EnvProvisioningConsole. Streaming forwards each
+    -- line to the panel as it's emitted; the eventual JSON env stays
+    -- on stdout (and inside `result.stdout`) for parsing below.
     local result
     if host.file_exists(flake_path) then
-        result = host.exec("nix", { "print-dev-env", "--json" })
+        result = host.exec_streaming("nix", { "print-dev-env", "--json", "-L" })
     elseif host.file_exists(shell_path) then
-        result = host.exec("nix", { "print-dev-env", "--json", "-f", shell_path })
+        result = host.exec_streaming("nix", { "print-dev-env", "--json", "-L", "-f", shell_path })
     else
         error("nix print-dev-env failed: neither flake.nix nor shell.nix present at export time")
     end

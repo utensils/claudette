@@ -72,8 +72,20 @@ end
 function M.export(args)
     local path = join(worktree_of(args), ".env")
     local contents = host.read_file(path)
+    local env = M._parse(contents)
+    -- env-dotenv is in-process (no subprocess to stream), so it
+    -- would otherwise render as an empty section in the
+    -- EnvProvisioningConsole even when it found and parsed real
+    -- vars. Emit one synthesized line so the user gets a clear "yes,
+    -- this provider contributed" heartbeat regardless of how fast
+    -- the parse was.
+    local count = 0
+    for _ in pairs(env) do count = count + 1 end
+    if host.console ~= nil then
+        host.console("stdout", "parsed " .. tostring(count) .. " var(s) from .env")
+    end
     return {
-        env = M._parse(contents),
+        env = env,
         watched = { path },
     }
 end

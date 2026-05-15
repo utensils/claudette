@@ -9,7 +9,7 @@ import {
 describe("reasoningControls", () => {
   it("uses Codex intelligence terminology and levels for native Codex models", () => {
     const variant = reasoningVariantForModel({
-      providerId: "experimental-codex",
+      providerId: "codex",
       providerKind: "codex_native",
     });
 

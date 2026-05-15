@@ -89,7 +89,7 @@ export default defineConfig({
           ],
         },
         {
-          label: 'Alternative Providers',
+          label: 'Agent Providers',
           items: [
             { slug: 'features/providers' },
             { slug: 'features/providers/ollama' },

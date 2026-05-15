@@ -31,7 +31,12 @@ end
 
 function M.export(args)
     local envrc_path = join(worktree_of(args), ".envrc")
-    local result = host.exec("direnv", { "export", "json" })
+    -- Streaming so direnv's own informative stderr (e.g.
+    -- `direnv: loading .envrc`, `direnv: using flake`, the `+VAR -VAR`
+    -- diff) flows into the EnvProvisioningConsole as it happens. The
+    -- captured stdout/stderr in `result` is identical to what
+    -- `host.exec` would have returned.
+    local result = host.exec_streaming("direnv", { "export", "json" })
 
     -- If the .envrc is blocked, auto-allow only when this exact file
     -- content has already been approved for the repo. This preserves
@@ -52,8 +57,8 @@ function M.export(args)
             end
         end
         if allowed then
-            host.exec("direnv", { "allow" })
-            result = host.exec("direnv", { "export", "json" })
+            host.exec_streaming("direnv", { "allow" })
+            result = host.exec_streaming("direnv", { "export", "json" })
         end
     end
 

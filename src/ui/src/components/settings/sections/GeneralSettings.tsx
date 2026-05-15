@@ -19,6 +19,12 @@ export function GeneralSettings() {
   const { t: tCommon } = useTranslation("common");
   const worktreeBaseDir = useAppStore((s) => s.worktreeBaseDir);
   const setWorktreeBaseDir = useAppStore((s) => s.setWorktreeBaseDir);
+  const claudetteTerminalEnabled = useAppStore(
+    (s) => s.claudetteTerminalEnabled,
+  );
+  const setClaudetteTerminalEnabled = useAppStore(
+    (s) => s.setClaudetteTerminalEnabled,
+  );
   const updateAvailable = useAppStore((s) => s.updateAvailable);
   const updateVersion = useAppStore((s) => s.updateVersion);
   const updateChannel = useAppStore((s) => s.updateChannel);
@@ -125,6 +131,21 @@ export function GeneralSettings() {
       await setAppSetting("tray_enabled", next ? "true" : "false");
     } catch (e) {
       setTrayEnabled(!next);
+      setError(String(e));
+    }
+  };
+
+  const handleClaudetteTerminalToggle = async () => {
+    const next = !claudetteTerminalEnabled;
+    setClaudetteTerminalEnabled(next);
+    try {
+      setError(null);
+      await setAppSetting(
+        "claudette_terminal_enabled",
+        next ? "true" : "false",
+      );
+    } catch (e) {
+      setClaudetteTerminalEnabled(!next);
       setError(String(e));
     }
   };
@@ -314,6 +335,29 @@ export function GeneralSettings() {
             aria-label={t("general_archive_on_merge")}
             data-checked={archiveOnMerge}
             onClick={handleArchiveOnMergeToggle}
+          >
+            <div className={styles.toggleKnob} />
+          </button>
+        </div>
+      </div>
+
+      <div className={styles.settingRow}>
+        <div className={styles.settingInfo}>
+          <div className={styles.settingLabel}>
+            {t("general_claudette_terminal")}
+          </div>
+          <div className={styles.settingDescription}>
+            {t("general_claudette_terminal_desc")}
+          </div>
+        </div>
+        <div className={styles.settingControl}>
+          <button
+            className={styles.toggle}
+            role="switch"
+            aria-checked={claudetteTerminalEnabled}
+            aria-label={t("general_claudette_terminal")}
+            data-checked={claudetteTerminalEnabled}
+            onClick={handleClaudetteTerminalToggle}
           >
             <div className={styles.toggleKnob} />
           </button>
