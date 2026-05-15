@@ -853,4 +853,80 @@ mod tests {
             );
         }
     }
+
+    #[cfg(feature = "pi-sdk")]
+    #[test]
+    fn pi_provider_prefix_maps_every_kind() {
+        // The prefix is what the resolver prepends to bare model ids
+        // before handing them to Pi's `ModelRegistry.find(provider, id)`
+        // lookup. Drift between this map and the harness-side provider
+        // registration silently breaks Pi-routed turns, so pin every
+        // arm.
+        let cases = [
+            (AgentBackendKind::Ollama, Some("ollama")),
+            (AgentBackendKind::LmStudio, Some("lmstudio")),
+            (AgentBackendKind::OpenAiApi, Some("openai")),
+            (AgentBackendKind::CustomOpenAi, Some("openai")),
+            (AgentBackendKind::CodexNative, Some("openai")),
+            (AgentBackendKind::Anthropic, None),
+            (AgentBackendKind::CustomAnthropic, None),
+            (AgentBackendKind::CodexSubscription, None),
+            (AgentBackendKind::PiSdk, None),
+        ];
+        for (kind, expected) in cases {
+            assert_eq!(
+                kind.pi_provider_prefix(),
+                expected,
+                "{kind:?}::pi_provider_prefix() mismatch",
+            );
+        }
+    }
+
+    #[test]
+    fn every_builtin_starts_with_no_runtime_harness_override() {
+        // Builtin constructors must seed `runtime_harness: None` so the
+        // resolver falls through to `kind.default_harness()`. A
+        // construction-time pin would silently override the per-kind
+        // default and stick around after the user changes their
+        // harness preference in Settings.
+        let builtins = [
+            AgentBackendConfig::builtin_anthropic(),
+            AgentBackendConfig::builtin_ollama(),
+            AgentBackendConfig::builtin_openai_api(),
+            AgentBackendConfig::builtin_codex_subscription(),
+            AgentBackendConfig::builtin_codex_native(),
+            AgentBackendConfig::builtin_lm_studio(),
+            #[cfg(feature = "pi-sdk")]
+            AgentBackendConfig::builtin_pi_sdk(),
+        ];
+        for backend in builtins {
+            assert!(
+                backend.runtime_harness.is_none(),
+                "{:?} should not pin a runtime_harness",
+                backend.kind,
+            );
+        }
+    }
+
+    #[test]
+    fn lm_studio_builtin_uses_gateway_shape() {
+        let backend = AgentBackendConfig::builtin_lm_studio();
+
+        assert_eq!(backend.id, "lm-studio");
+        assert_eq!(backend.label, "LM Studio");
+        assert_eq!(backend.kind, AgentBackendKind::LmStudio);
+        assert!(!backend.enabled);
+        assert_eq!(backend.base_url.as_deref(), Some("http://localhost:1234"));
+        assert!(backend.model_discovery);
+        assert!(!backend.capabilities.thinking);
+        assert_eq!(backend.context_window_default, 8_192);
+    }
+
+    #[test]
+    fn agent_backend_runtime_default_has_no_pi_override() {
+        let runtime = AgentBackendRuntime::default();
+        assert!(runtime.pi_provider_override.is_none());
+        assert!(runtime.model.is_none());
+        assert_eq!(runtime.hash, "");
+    }
 }

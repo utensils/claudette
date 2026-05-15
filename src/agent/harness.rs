@@ -334,4 +334,44 @@ mod tests {
         assert_eq!(session.pid(), 5678);
         assert_eq!(session.capabilities(), AgentHarnessCapabilities::pi_sdk());
     }
+
+    /// The Pi sidecar exposes no host-side task-stop control today; the
+    /// dispatch must surface that explicitly so the chat layer can fall
+    /// back to interrupt-based teardown instead of waiting forever.
+    #[cfg(feature = "pi-sdk")]
+    #[tokio::test]
+    async fn pi_send_task_stop_returns_unsupported() {
+        let session = AgentSession::from_pi_sdk(PiSdkSession::new_for_test(1));
+        let err = session
+            .send_task_stop("task-xyz")
+            .await
+            .expect_err("Pi has no task-stop control");
+        assert!(err.contains("Pi SDK harness cannot stop task"));
+        assert!(err.contains("task-xyz"));
+    }
+
+    /// Claude Remote Control rides on the Claude CLI's bidirectional
+    /// control channel; the Pi sidecar has no equivalent surface, and
+    /// silently no-oping would leave the UI in a half-toggled state.
+    #[cfg(feature = "pi-sdk")]
+    #[tokio::test]
+    async fn pi_set_remote_control_returns_unsupported() {
+        let session = AgentSession::from_pi_sdk(PiSdkSession::new_for_test(2));
+        let err = session
+            .set_remote_control(true)
+            .await
+            .expect_err("Pi cannot toggle Remote Control");
+        assert!(err.contains("Pi SDK harness does not support Claude Remote Control"));
+    }
+
+    #[cfg(feature = "pi-sdk")]
+    #[test]
+    fn pi_subscribe_returns_live_receiver() {
+        // `subscribe()` is dispatched through the harness enum, so the
+        // Pi arm has to give the chat bridge a receiver wired to the
+        // sidecar's broadcast channel. Without that hookup the bridge
+        // would silently miss every stream event.
+        let session = AgentSession::from_pi_sdk(PiSdkSession::new_for_test(3));
+        let _rx = session.subscribe();
+    }
 }

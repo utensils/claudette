@@ -966,6 +966,37 @@ pub struct PiSdkModel {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeMap;
+    use tokio::sync::Mutex;
+    use tokio::time::{Duration, timeout};
+
+    /// Build the four route_pi_message dependencies pre-wired together.
+    /// Returns the sender alongside a receiver so tests can drain the
+    /// emitted stream events.
+    fn pi_state() -> (
+        broadcast::Sender<AgentEvent>,
+        broadcast::Receiver<AgentEvent>,
+        PendingRequests,
+        TurnOutput,
+        InitCacheHandle,
+    ) {
+        let (event_tx, rx) = broadcast::channel::<AgentEvent>(64);
+        let pending: PendingRequests = Arc::new(Mutex::new(BTreeMap::new()));
+        let turn_output: TurnOutput = Arc::new(Mutex::new(PiTurnOutput::fresh()));
+        let init_cache: InitCacheHandle = Arc::new(Mutex::new(InitCache::default()));
+        (event_tx, rx, pending, turn_output, init_cache)
+    }
+
+    async fn next_event(rx: &mut broadcast::Receiver<AgentEvent>) -> AgentEvent {
+        timeout(Duration::from_secs(1), rx.recv())
+            .await
+            .expect("event delivered before timeout")
+            .expect("event ok")
+    }
+
+    fn try_recv_now(rx: &mut broadcast::Receiver<AgentEvent>) -> Option<AgentEvent> {
+        rx.try_recv().ok()
+    }
 
     #[test]
     fn parses_pi_tool_request() {
@@ -978,6 +1009,43 @@ mod tests {
     fn test_session_reports_pid() {
         let session = PiSdkSession::new_for_test(42);
         assert_eq!(session.pid(), 42);
+    }
+
+    #[test]
+    fn pi_turn_output_tool_index_is_stable_and_monotonic() {
+        // Tool blocks need stable indices so the React side can attach
+        // streamed args/results to the right card. The first id should
+        // map to FIRST_TOOL_BLOCK_INDEX (text=0, thinking=1), and the
+        // same id revisited must reuse its slot.
+        let mut output = PiTurnOutput::fresh();
+        let a = output.tool_index("call-a");
+        let b = output.tool_index("call-b");
+        let a_again = output.tool_index("call-a");
+
+        assert_eq!(a, FIRST_TOOL_BLOCK_INDEX);
+        assert_eq!(b, FIRST_TOOL_BLOCK_INDEX + 1);
+        assert_eq!(a_again, a, "revisiting an id must reuse its slot");
+    }
+
+    #[test]
+    fn pi_turn_output_default_matches_fresh() {
+        let d = PiTurnOutput::default();
+        assert!(d.text.is_empty());
+        assert!(d.thinking.is_empty());
+        assert!(d.tool_block_indices.is_empty());
+        assert_eq!(d.next_tool_block_index, FIRST_TOOL_BLOCK_INDEX);
+    }
+
+    #[test]
+    fn pi_sdk_session_next_id_is_monotonic_and_prefixed() {
+        let session = PiSdkSession::new_for_test(1);
+        let first = session.next_id();
+        let second = session.next_id();
+        assert!(
+            first.starts_with("pi-"),
+            "next_id must carry the `pi-` prefix"
+        );
+        assert_ne!(first, second);
     }
 
     /// The sidecar emits `sessionId` (camelCase); we keep `session_id` as
@@ -1015,14 +1083,7 @@ mod tests {
     /// app-server path leaves the field absent, so this is Pi-only.
     #[tokio::test]
     async fn pi_tool_request_injects_codex_agent_label() {
-        use std::collections::BTreeMap;
-        use tokio::sync::Mutex;
-        use tokio::time::{Duration, timeout};
-
-        let (event_tx, mut rx) = broadcast::channel::<AgentEvent>(8);
-        let pending: PendingRequests = Arc::new(Mutex::new(BTreeMap::new()));
-        let turn_output: TurnOutput = Arc::new(Mutex::new(PiTurnOutput::fresh()));
-        let init_cache: InitCacheHandle = Arc::new(Mutex::new(InitCache::default()));
+        let (event_tx, mut rx, pending, turn_output, init_cache) = pi_state();
 
         route_pi_message(
             &event_tx,
@@ -1038,10 +1099,7 @@ mod tests {
         )
         .await;
 
-        let event = timeout(Duration::from_secs(1), rx.recv())
-            .await
-            .expect("event delivered")
-            .expect("event ok");
+        let event = next_event(&mut rx).await;
         match event {
             AgentEvent::Stream(StreamEvent::ControlRequest { request, .. }) => match request {
                 ControlRequestInner::CanUseTool { input, .. } => {
@@ -1051,6 +1109,788 @@ mod tests {
                 other => panic!("expected CanUseTool, got {other:?}"),
             },
             other => panic!("expected ControlRequest, got {other:?}"),
+        }
+    }
+
+    /// `fileChange` is the only Pi tool kind that maps to the file-write
+    /// approval card; everything else falls back to the command-execution
+    /// card. Pin both branches so a future kind addition doesn't silently
+    /// route file changes through the wrong card.
+    #[tokio::test]
+    async fn pi_tool_request_file_change_uses_file_change_approval() {
+        let (event_tx, mut rx, pending, turn_output, init_cache) = pi_state();
+        route_pi_message(
+            &event_tx,
+            &pending,
+            &turn_output,
+            &init_cache,
+            PiHarnessMessage::ToolRequest {
+                request_id: "req-2".to_string(),
+                tool_call_id: "tool-2".to_string(),
+                kind: "fileChange".to_string(),
+                input: serde_json::json!({ "path": "/tmp/x" }),
+            },
+        )
+        .await;
+
+        match next_event(&mut rx).await {
+            AgentEvent::Stream(StreamEvent::ControlRequest { request, .. }) => match request {
+                ControlRequestInner::CanUseTool {
+                    tool_name, input, ..
+                } => {
+                    assert_eq!(tool_name, "CodexFileChangeApproval");
+                    assert_eq!(
+                        input.get("codexApprovalKind").and_then(Value::as_str),
+                        Some("fileChange"),
+                    );
+                    assert_eq!(
+                        input.get("codexMethod").and_then(Value::as_str),
+                        Some("pi/tool/requestApproval"),
+                    );
+                }
+                other => panic!("expected CanUseTool, got {other:?}"),
+            },
+            other => panic!("expected ControlRequest, got {other:?}"),
+        }
+    }
+
+    /// A non-object input (rare but legal JSON) must not be silently
+    /// dropped — the harness should still forward the request, just
+    /// without the metadata it can't inject.
+    #[tokio::test]
+    async fn pi_tool_request_with_non_object_input_skips_injection() {
+        let (event_tx, mut rx, pending, turn_output, init_cache) = pi_state();
+        route_pi_message(
+            &event_tx,
+            &pending,
+            &turn_output,
+            &init_cache,
+            PiHarnessMessage::ToolRequest {
+                request_id: "req-3".to_string(),
+                tool_call_id: "tool-3".to_string(),
+                kind: "commandExecution".to_string(),
+                input: Value::String("ls".to_string()),
+            },
+        )
+        .await;
+        match next_event(&mut rx).await {
+            AgentEvent::Stream(StreamEvent::ControlRequest { request, .. }) => match request {
+                ControlRequestInner::CanUseTool { input, .. } => {
+                    assert!(input.is_string(), "non-object input must round-trip");
+                }
+                other => panic!("expected CanUseTool, got {other:?}"),
+            },
+            other => panic!("expected ControlRequest, got {other:?}"),
+        }
+    }
+
+    /// Successful response wakes the pending oneshot with the payload;
+    /// failure delivers the harness-reported error string verbatim.
+    #[tokio::test]
+    async fn response_success_wakes_pending_oneshot() {
+        let (event_tx, _rx, pending, turn_output, init_cache) = pi_state();
+        let (tx, rx) = oneshot::channel();
+        pending.lock().await.insert(
+            "id-1".to_string(),
+            PendingPiRequest {
+                command: "initialize".to_string(),
+                tx,
+            },
+        );
+        route_pi_message(
+            &event_tx,
+            &pending,
+            &turn_output,
+            &init_cache,
+            PiHarnessMessage::Response {
+                id: "id-1".to_string(),
+                command: "initialize".to_string(),
+                success: true,
+                data: Some(json!({"ok": true})),
+                error: None,
+            },
+        )
+        .await;
+        let result = rx.await.expect("oneshot delivered").expect("ok payload");
+        assert_eq!(result, json!({"ok": true}));
+        assert!(pending.lock().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn response_failure_propagates_error_string() {
+        let (event_tx, _rx, pending, turn_output, init_cache) = pi_state();
+        let (tx, rx) = oneshot::channel();
+        pending.lock().await.insert(
+            "id-2".to_string(),
+            PendingPiRequest {
+                command: "prompt".to_string(),
+                tx,
+            },
+        );
+        route_pi_message(
+            &event_tx,
+            &pending,
+            &turn_output,
+            &init_cache,
+            PiHarnessMessage::Response {
+                id: "id-2".to_string(),
+                command: "prompt".to_string(),
+                success: false,
+                data: None,
+                error: Some("model unavailable".to_string()),
+            },
+        )
+        .await;
+        let err = rx.await.expect("oneshot delivered").expect_err("err path");
+        assert_eq!(err, "model unavailable");
+    }
+
+    /// A response for an id with no waiter must not panic and must not
+    /// poison the pending map — the harness logs and continues.
+    #[tokio::test]
+    async fn response_for_unknown_id_is_swallowed() {
+        let (event_tx, _rx, pending, turn_output, init_cache) = pi_state();
+        route_pi_message(
+            &event_tx,
+            &pending,
+            &turn_output,
+            &init_cache,
+            PiHarnessMessage::Response {
+                id: "ghost".to_string(),
+                command: "abort".to_string(),
+                success: true,
+                data: None,
+                error: None,
+            },
+        )
+        .await;
+        assert!(pending.lock().await.is_empty());
+    }
+
+    /// Ready emits the System init event and caches it for late
+    /// subscribers — the chat bridge's `got_init` flag depends on this.
+    #[tokio::test]
+    async fn ready_emits_and_caches_init_event() {
+        let (event_tx, mut rx, pending, turn_output, init_cache) = pi_state();
+        route_pi_message(
+            &event_tx,
+            &pending,
+            &turn_output,
+            &init_cache,
+            PiHarnessMessage::Ready {
+                session_id: Some("sess-1".to_string()),
+            },
+        )
+        .await;
+        match next_event(&mut rx).await {
+            AgentEvent::Stream(StreamEvent::System {
+                subtype,
+                session_id,
+                ..
+            }) => {
+                assert_eq!(subtype, "init");
+                assert_eq!(session_id.as_deref(), Some("sess-1"));
+            }
+            other => panic!("expected System init, got {other:?}"),
+        }
+        assert!(init_cache.lock().await.init.is_some());
+    }
+
+    /// TurnStart resets per-turn state and emits MessageStart + the two
+    /// pre-allocated ContentBlockStart events (text=0, thinking=1).
+    #[tokio::test]
+    async fn turn_start_emits_message_and_block_starts() {
+        let (event_tx, mut rx, pending, turn_output, init_cache) = pi_state();
+        // Pollute prior state so we can verify the reset.
+        turn_output.lock().await.text.push_str("stale");
+        route_pi_message(
+            &event_tx,
+            &pending,
+            &turn_output,
+            &init_cache,
+            PiHarnessMessage::TurnStart,
+        )
+        .await;
+
+        let first = next_event_kind(&mut rx).await;
+        let second = next_event_kind(&mut rx).await;
+        let third = next_event_kind(&mut rx).await;
+        assert!(matches!(first, InnerKind::MessageStart));
+        assert!(matches!(second, InnerKind::ContentBlockStart(0)));
+        assert!(matches!(third, InnerKind::ContentBlockStart(1)));
+
+        assert!(turn_output.lock().await.text.is_empty());
+    }
+
+    #[tokio::test]
+    async fn assistant_delta_appends_text_and_streams_block() {
+        let (event_tx, mut rx, pending, turn_output, init_cache) = pi_state();
+        route_pi_message(
+            &event_tx,
+            &pending,
+            &turn_output,
+            &init_cache,
+            PiHarnessMessage::AssistantDelta {
+                delta: "hello ".to_string(),
+            },
+        )
+        .await;
+        route_pi_message(
+            &event_tx,
+            &pending,
+            &turn_output,
+            &init_cache,
+            PiHarnessMessage::AssistantDelta {
+                delta: "world".to_string(),
+            },
+        )
+        .await;
+        // Drain both delta events
+        for expected in ["hello ", "world"] {
+            match next_event(&mut rx).await {
+                AgentEvent::Stream(StreamEvent::Stream {
+                    event: InnerStreamEvent::ContentBlockDelta { index, delta },
+                }) => {
+                    assert_eq!(index, 0);
+                    match delta {
+                        Delta::Text { text } => assert_eq!(text, expected),
+                        other => panic!("expected Text delta, got {other:?}"),
+                    }
+                }
+                other => panic!("expected ContentBlockDelta, got {other:?}"),
+            }
+        }
+        assert_eq!(turn_output.lock().await.text, "hello world");
+    }
+
+    #[tokio::test]
+    async fn thinking_delta_appends_thinking_and_streams_block_one() {
+        let (event_tx, mut rx, pending, turn_output, init_cache) = pi_state();
+        route_pi_message(
+            &event_tx,
+            &pending,
+            &turn_output,
+            &init_cache,
+            PiHarnessMessage::ThinkingDelta {
+                delta: "musing...".to_string(),
+            },
+        )
+        .await;
+        match next_event(&mut rx).await {
+            AgentEvent::Stream(StreamEvent::Stream {
+                event: InnerStreamEvent::ContentBlockDelta { index, delta },
+            }) => {
+                assert_eq!(index, 1);
+                match delta {
+                    Delta::Thinking { thinking } => assert_eq!(thinking, "musing..."),
+                    other => panic!("expected Thinking delta, got {other:?}"),
+                }
+            }
+            other => panic!("expected ContentBlockDelta, got {other:?}"),
+        }
+        assert_eq!(turn_output.lock().await.thinking, "musing...");
+    }
+
+    /// Tool start allocates a stable block index per tool_call_id and
+    /// streams the args as an InputJson delta in the same block.
+    #[tokio::test]
+    async fn tool_update_start_opens_block_and_streams_args() {
+        let (event_tx, mut rx, pending, turn_output, init_cache) = pi_state();
+        route_pi_message(
+            &event_tx,
+            &pending,
+            &turn_output,
+            &init_cache,
+            PiHarnessMessage::ToolUpdate {
+                phase: Some("start".to_string()),
+                tool_call_id: Some("call-7".to_string()),
+                tool_name: Some("read_file".to_string()),
+                args: Some(json!({"path": "/etc/hosts"})),
+                result: None,
+            },
+        )
+        .await;
+        // First event: ContentBlockStart
+        match next_event(&mut rx).await {
+            AgentEvent::Stream(StreamEvent::Stream {
+                event: InnerStreamEvent::ContentBlockStart { index, .. },
+            }) => {
+                assert_eq!(index, FIRST_TOOL_BLOCK_INDEX as usize);
+            }
+            other => panic!("expected ContentBlockStart, got {other:?}"),
+        }
+        // Second event: InputJson delta carrying args
+        match next_event(&mut rx).await {
+            AgentEvent::Stream(StreamEvent::Stream {
+                event: InnerStreamEvent::ContentBlockDelta { index, delta },
+            }) => {
+                assert_eq!(index, FIRST_TOOL_BLOCK_INDEX as usize);
+                match delta {
+                    Delta::InputJson { partial_json } => {
+                        let parsed: Value =
+                            serde_json::from_str(&partial_json.expect("args present")).unwrap();
+                        assert_eq!(parsed["path"], "/etc/hosts");
+                    }
+                    other => panic!("expected InputJson, got {other:?}"),
+                }
+            }
+            other => panic!("expected ContentBlockDelta, got {other:?}"),
+        }
+    }
+
+    /// A mid-tool `update` phase reports the intermediate result back as
+    /// a synthetic User tool-result event — useful for streaming
+    /// long-running tool progress to the chat UI without closing the
+    /// block.
+    #[tokio::test]
+    async fn tool_update_update_phase_emits_synthetic_user_result() {
+        let (event_tx, mut rx, pending, turn_output, init_cache) = pi_state();
+        // Prime the index by emitting a start first
+        route_pi_message(
+            &event_tx,
+            &pending,
+            &turn_output,
+            &init_cache,
+            PiHarnessMessage::ToolUpdate {
+                phase: Some("start".to_string()),
+                tool_call_id: Some("call-9".to_string()),
+                tool_name: Some("bash".to_string()),
+                args: None,
+                result: None,
+            },
+        )
+        .await;
+        let _ = next_event(&mut rx).await; // ContentBlockStart
+
+        route_pi_message(
+            &event_tx,
+            &pending,
+            &turn_output,
+            &init_cache,
+            PiHarnessMessage::ToolUpdate {
+                phase: Some("update".to_string()),
+                tool_call_id: Some("call-9".to_string()),
+                tool_name: None,
+                args: None,
+                result: Some(json!({"stdout": "progress..."})),
+            },
+        )
+        .await;
+        match next_event(&mut rx).await {
+            AgentEvent::Stream(StreamEvent::User {
+                message,
+                is_synthetic,
+                ..
+            }) => {
+                assert!(is_synthetic, "update-phase results must be synthetic");
+                match message.content {
+                    UserMessageContent::Blocks(blocks) => {
+                        assert!(matches!(blocks[0], UserContentBlock::ToolResult { .. }));
+                    }
+                    _ => panic!("expected block content"),
+                }
+            }
+            other => panic!("expected User event, got {other:?}"),
+        }
+    }
+
+    /// A tool result closes the per-tool block (if we ever opened one)
+    /// and forwards the result content as a non-synthetic user event so
+    /// the SDK transcript reflects the tool output.
+    #[tokio::test]
+    async fn tool_result_closes_block_and_forwards_payload() {
+        let (event_tx, mut rx, pending, turn_output, init_cache) = pi_state();
+        // Open block first
+        turn_output.lock().await.tool_index("call-r");
+
+        route_pi_message(
+            &event_tx,
+            &pending,
+            &turn_output,
+            &init_cache,
+            PiHarnessMessage::ToolResult {
+                tool_call_id: "call-r".to_string(),
+                tool_name: "read_file".to_string(),
+                result: Some(json!({"text": "ok"})),
+                is_error: false,
+            },
+        )
+        .await;
+        match next_event(&mut rx).await {
+            AgentEvent::Stream(StreamEvent::Stream {
+                event: InnerStreamEvent::ContentBlockStop { index },
+            }) => {
+                assert_eq!(index, FIRST_TOOL_BLOCK_INDEX as usize);
+            }
+            other => panic!("expected ContentBlockStop, got {other:?}"),
+        }
+        match next_event(&mut rx).await {
+            AgentEvent::Stream(StreamEvent::User {
+                message,
+                is_synthetic,
+                ..
+            }) => {
+                assert!(!is_synthetic, "final tool result is not synthetic");
+                match message.content {
+                    UserMessageContent::Blocks(blocks) => match &blocks[0] {
+                        UserContentBlock::ToolResult { content, .. } => {
+                            assert_eq!(content["tool"], "read_file");
+                            assert_eq!(content["is_error"], false);
+                        }
+                        other => panic!("expected ToolResult, got {other:?}"),
+                    },
+                    _ => panic!("expected block content"),
+                }
+            }
+            other => panic!("expected User event, got {other:?}"),
+        }
+    }
+
+    /// A tool result with no prior start has no block to close, so the
+    /// harness skips the Stop event entirely and only emits the user
+    /// payload. Without this branch a stray result would emit a Stop on
+    /// an invalid index and confuse the frontend's block table.
+    #[tokio::test]
+    async fn tool_result_without_prior_start_skips_block_stop() {
+        let (event_tx, mut rx, pending, turn_output, init_cache) = pi_state();
+        route_pi_message(
+            &event_tx,
+            &pending,
+            &turn_output,
+            &init_cache,
+            PiHarnessMessage::ToolResult {
+                tool_call_id: "ghost-call".to_string(),
+                tool_name: "bash".to_string(),
+                result: None,
+                is_error: true,
+            },
+        )
+        .await;
+        match next_event(&mut rx).await {
+            AgentEvent::Stream(StreamEvent::User { message, .. }) => match message.content {
+                UserMessageContent::Blocks(blocks) => match &blocks[0] {
+                    UserContentBlock::ToolResult { content, .. } => {
+                        assert_eq!(content["is_error"], true);
+                        // Fallback content was synthesized from is_error
+                        assert_eq!(content["result"], json!({"ok": false}));
+                    }
+                    other => panic!("expected ToolResult, got {other:?}"),
+                },
+                _ => panic!("expected block content"),
+            },
+            other => panic!("expected User event, got {other:?}"),
+        }
+        // No stray Stop event should remain queued
+        assert!(try_recv_now(&mut rx).is_none());
+    }
+
+    /// Successful turn end emits any accumulated text/thinking as the
+    /// final Assistant message and a Result with subtype `success`.
+    #[tokio::test]
+    async fn turn_end_success_finalizes_assistant_and_result() {
+        let (event_tx, mut rx, pending, turn_output, init_cache) = pi_state();
+        {
+            let mut output = turn_output.lock().await;
+            output.text.push_str("final answer");
+            output.thinking.push_str("ponder");
+        }
+        route_pi_message(
+            &event_tx,
+            &pending,
+            &turn_output,
+            &init_cache,
+            PiHarnessMessage::TurnEnd { error: None },
+        )
+        .await;
+        let assistant = next_event(&mut rx).await;
+        let result = next_event(&mut rx).await;
+        match assistant {
+            AgentEvent::Stream(StreamEvent::Assistant { message }) => {
+                assert_eq!(message.content.len(), 2);
+                assert!(matches!(message.content[0], ContentBlock::Thinking { .. }));
+                assert!(matches!(message.content[1], ContentBlock::Text { .. }));
+            }
+            other => panic!("expected Assistant, got {other:?}"),
+        }
+        match result {
+            AgentEvent::Stream(StreamEvent::Result {
+                subtype, result, ..
+            }) => {
+                assert_eq!(subtype, "success");
+                assert_eq!(result.as_deref(), Some("final answer"));
+            }
+            other => panic!("expected Result, got {other:?}"),
+        }
+    }
+
+    /// Turn-end with an error must surface the error text both as a
+    /// trailing assistant block (so the chat shows the failure even
+    /// after partial output) and inside Result.result (consumers that
+    /// only read the Result still see it).
+    #[tokio::test]
+    async fn turn_end_error_surfaces_error_in_assistant_and_result() {
+        let (event_tx, mut rx, pending, turn_output, init_cache) = pi_state();
+        turn_output.lock().await.text.push_str("partial");
+        route_pi_message(
+            &event_tx,
+            &pending,
+            &turn_output,
+            &init_cache,
+            PiHarnessMessage::TurnEnd {
+                error: Some("rate limit".to_string()),
+            },
+        )
+        .await;
+        match next_event(&mut rx).await {
+            AgentEvent::Stream(StreamEvent::Assistant { message }) => {
+                // First block: partial text; last block: failure text
+                let last = message
+                    .content
+                    .last()
+                    .expect("error block must be appended");
+                match last {
+                    ContentBlock::Text { text } => assert!(text.contains("rate limit")),
+                    other => panic!("expected trailing Text, got {other:?}"),
+                }
+            }
+            other => panic!("expected Assistant, got {other:?}"),
+        }
+        match next_event(&mut rx).await {
+            AgentEvent::Stream(StreamEvent::Result {
+                subtype, result, ..
+            }) => {
+                assert_eq!(subtype, "error");
+                let result = result.expect("result text present");
+                assert!(result.contains("partial"));
+                assert!(result.contains("rate limit"));
+            }
+            other => panic!("expected Result, got {other:?}"),
+        }
+    }
+
+    /// When the turn produced no text and no thinking, the assistant
+    /// message is skipped (would be an empty body), but the Result is
+    /// still emitted so the chat bridge knows the turn closed.
+    #[tokio::test]
+    async fn turn_end_with_empty_output_skips_assistant() {
+        let (event_tx, mut rx, pending, turn_output, init_cache) = pi_state();
+        route_pi_message(
+            &event_tx,
+            &pending,
+            &turn_output,
+            &init_cache,
+            PiHarnessMessage::TurnEnd { error: None },
+        )
+        .await;
+        match next_event(&mut rx).await {
+            AgentEvent::Stream(StreamEvent::Result { subtype, .. }) => {
+                assert_eq!(subtype, "success");
+            }
+            other => panic!("expected Result, got {other:?}"),
+        }
+        assert!(try_recv_now(&mut rx).is_none());
+    }
+
+    #[tokio::test]
+    async fn error_message_emits_stderr() {
+        let (event_tx, mut rx, pending, turn_output, init_cache) = pi_state();
+        route_pi_message(
+            &event_tx,
+            &pending,
+            &turn_output,
+            &init_cache,
+            PiHarnessMessage::Error {
+                error: Some("oops".to_string()),
+            },
+        )
+        .await;
+        match next_event(&mut rx).await {
+            AgentEvent::Stderr(line) => assert_eq!(line, "oops"),
+            other => panic!("expected Stderr, got {other:?}"),
+        }
+    }
+
+    /// Error with no message must still emit *something* on stderr so
+    /// the chat shows the failure cause; falling back to silence would
+    /// strand the user.
+    #[tokio::test]
+    async fn error_message_with_no_text_falls_back_to_default() {
+        let (event_tx, mut rx, pending, turn_output, init_cache) = pi_state();
+        route_pi_message(
+            &event_tx,
+            &pending,
+            &turn_output,
+            &init_cache,
+            PiHarnessMessage::Error { error: None },
+        )
+        .await;
+        match next_event(&mut rx).await {
+            AgentEvent::Stderr(line) => assert!(!line.is_empty()),
+            other => panic!("expected Stderr, got {other:?}"),
+        }
+    }
+
+    /// Unknown variants (e.g. a future-protocol message Claudette
+    /// doesn't recognize yet) must not crash the reader loop.
+    #[tokio::test]
+    async fn unknown_variant_is_silently_ignored() {
+        let (event_tx, mut rx, pending, turn_output, init_cache) = pi_state();
+        route_pi_message(
+            &event_tx,
+            &pending,
+            &turn_output,
+            &init_cache,
+            PiHarnessMessage::Unknown,
+        )
+        .await;
+        assert!(try_recv_now(&mut rx).is_none());
+    }
+
+    #[tokio::test]
+    async fn fail_pending_requests_drains_and_errors_each() {
+        let pending: PendingRequests = Arc::new(Mutex::new(BTreeMap::new()));
+        let (tx_a, rx_a) = oneshot::channel();
+        let (tx_b, rx_b) = oneshot::channel();
+        {
+            let mut p = pending.lock().await;
+            p.insert(
+                "a".to_string(),
+                PendingPiRequest {
+                    command: "prompt".to_string(),
+                    tx: tx_a,
+                },
+            );
+            p.insert(
+                "b".to_string(),
+                PendingPiRequest {
+                    command: "abort".to_string(),
+                    tx: tx_b,
+                },
+            );
+        }
+        fail_pending_requests(&pending, "sidecar exited").await;
+        assert!(pending.lock().await.is_empty());
+        let a = rx_a.await.expect("delivered");
+        let b = rx_b.await.expect("delivered");
+        for r in [a, b] {
+            let err = r.expect_err("fail path");
+            assert!(err.contains("sidecar exited"));
+        }
+    }
+
+    #[tokio::test]
+    async fn resolve_pi_harness_path_honors_env_override() {
+        // SAFETY: tests inside this module run single-threaded for the
+        // env-mutation block. The CI runner is concurrent in general but
+        // this test is the only one touching CLAUDETTE_PI_HARNESS.
+        unsafe { std::env::set_var("CLAUDETTE_PI_HARNESS", "/tmp/sidecar-mock") };
+        let path = resolve_pi_harness_path().await;
+        unsafe { std::env::remove_var("CLAUDETTE_PI_HARNESS") };
+        assert_eq!(path, PathBuf::from("/tmp/sidecar-mock"));
+    }
+
+    #[test]
+    fn host_triple_resolves_to_known_target() {
+        let triple = host_triple();
+        // We don't pin a specific host (CI runs Linux + macOS) but the
+        // mapping must always produce a recognized rustc target triple
+        // rather than silently dropping a new platform onto the
+        // catch-all "unknown" arm.
+        let known = [
+            "aarch64-apple-darwin",
+            "x86_64-apple-darwin",
+            "x86_64-unknown-linux-gnu",
+            "aarch64-unknown-linux-gnu",
+            "x86_64-pc-windows-msvc",
+            "aarch64-pc-windows-msvc",
+        ];
+        assert!(
+            known.contains(&triple),
+            "host_triple() returned `{triple}` — add the new platform mapping",
+        );
+    }
+
+    #[test]
+    fn pi_command_line_event_carries_path_as_subtype() {
+        let event = pi_command_line_event(Path::new("/opt/bin/claudette-pi-harness"));
+        match event {
+            AgentEvent::Stream(StreamEvent::System {
+                subtype,
+                command_line,
+                ..
+            }) => {
+                assert_eq!(subtype, "command_line");
+                assert_eq!(
+                    command_line.as_deref(),
+                    Some("/opt/bin/claudette-pi-harness")
+                );
+            }
+            other => panic!("expected System command_line, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn resolve_pi_package_dir_finds_sibling_pi_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let harness = tmp.path().join("claudette-pi-harness");
+        std::fs::write(&harness, b"").unwrap();
+        let pi_dir = tmp.path().join("pi");
+        std::fs::create_dir(&pi_dir).unwrap();
+        assert_eq!(resolve_pi_package_dir(&harness), Some(pi_dir));
+    }
+
+    #[test]
+    fn resolve_pi_package_dir_returns_none_when_no_sibling_or_app_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let harness = tmp.path().join("claudette-pi-harness");
+        std::fs::write(&harness, b"").unwrap();
+        // No sibling `pi/`, and we can't guarantee the test binary's
+        // exe-relative candidates don't accidentally exist on disk, so
+        // we only assert that *if* the call returns Some, the result
+        // exists. The interesting branch — sibling preference — is
+        // covered by the test above.
+        if let Some(path) = resolve_pi_package_dir(&harness) {
+            assert!(path.exists());
+        }
+    }
+
+    #[test]
+    fn pi_sdk_model_roundtrips_with_optional_context() {
+        let with = serde_json::from_str::<PiSdkModel>(
+            r#"{"id":"openai/gpt-5.4","label":"GPT-5.4","contextWindowTokens":272000}"#,
+        )
+        .unwrap();
+        assert_eq!(with.id, "openai/gpt-5.4");
+        assert_eq!(with.context_window_tokens, Some(272_000));
+
+        let without = serde_json::from_str::<PiSdkModel>(r#"{"id":"x/y","label":"Y"}"#).unwrap();
+        assert!(without.context_window_tokens.is_none());
+
+        // The wire form is camelCase — pin the rename so a future
+        // serde-rename refactor doesn't silently break Pi discovery.
+        let serialized = serde_json::to_value(&with).unwrap();
+        assert!(serialized.get("contextWindowTokens").is_some());
+        assert!(serialized.get("context_window_tokens").is_none());
+    }
+
+    // ===== Helpers used only by TurnStart =====
+
+    #[derive(Debug)]
+    enum InnerKind {
+        MessageStart,
+        ContentBlockStart(usize),
+        Other,
+    }
+
+    async fn next_event_kind(rx: &mut broadcast::Receiver<AgentEvent>) -> InnerKind {
+        match next_event(rx).await {
+            AgentEvent::Stream(StreamEvent::Stream {
+                event: InnerStreamEvent::MessageStart {},
+            }) => InnerKind::MessageStart,
+            AgentEvent::Stream(StreamEvent::Stream {
+                event: InnerStreamEvent::ContentBlockStart { index, .. },
+            }) => InnerKind::ContentBlockStart(index),
+            _ => InnerKind::Other,
         }
     }
 }
