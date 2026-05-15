@@ -9,10 +9,21 @@
 export const HELP_DOCS_URL =
   "https://utensils.io/claudette/getting-started/installation/";
 
-/** GitHub Releases tag URL. Append `CARGO_PKG_VERSION` to land on the
- * release notes for the running build (e.g. `${BASE}0.23.0`). */
+/** GitHub Releases tag URL prefix. Concatenate with `releaseTagFor(version)`
+ * to land on the release notes for the running build. Stable releases use
+ * `v<x.y.z>` tags; nightly builds all share the rolling `nightly` tag (the
+ * versioned `0.25.0-dev.40.g<sha>` shape stamped by `.github/workflows/nightly.yml`
+ * is not a real GitHub tag). */
 export const HELP_RELEASE_URL_BASE =
-  "https://github.com/utensils/claudette/releases/tag/v";
+  "https://github.com/utensils/claudette/releases/tag/";
+
+/** Map a `CARGO_PKG_VERSION` string to the GitHub Release tag that actually
+ * exists for that build. Nightly versions (which include `-dev.` per the
+ * nightly workflow's `${NEXT_MINOR}-dev.${COMMITS}.g${SHORT}` format) all
+ * resolve to `nightly`; everything else gets `v<version>`. */
+export function releaseTagFor(version: string): string {
+  return version.includes("-dev.") ? "nightly" : `v${version}`;
+}
 
 /** GitHub "new issue" entry point — bug reports / feature requests.
  * The `?template=bug_report.md` query param pre-selects the bug-report
