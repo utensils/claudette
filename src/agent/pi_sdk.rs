@@ -708,6 +708,14 @@ async fn route_pi_message(
                     "codexApprovalKind".to_string(),
                     Value::String(approval_kind.to_string()),
                 );
+                // The shared approval card i18n ("{{agent}} wants approval
+                // before …") interpolates whichever agent originated the
+                // request. Without this tag the React side falls back to
+                // the Codex default, which is wrong for Pi.
+                object.insert(
+                    "codexAgentLabel".to_string(),
+                    Value::String("Pi".to_string()),
+                );
             }
             let _ = event_tx.send(AgentEvent::Stream(StreamEvent::ControlRequest {
                 request_id,
@@ -997,6 +1005,52 @@ mod tests {
         match msg {
             PiHarnessMessage::Ready { session_id } => assert!(session_id.is_none()),
             _ => panic!("expected Ready"),
+        }
+    }
+
+    /// Regression: the approval card's localized title/description
+    /// interpolates `{{agent}}` from `codexAgentLabel`. Without this
+    /// injection, Pi approvals would render as "Codex wants approval…"
+    /// — confusing the user about which harness is running. The Codex
+    /// app-server path leaves the field absent, so this is Pi-only.
+    #[tokio::test]
+    async fn pi_tool_request_injects_codex_agent_label() {
+        use std::collections::BTreeMap;
+        use tokio::sync::Mutex;
+        use tokio::time::{Duration, timeout};
+
+        let (event_tx, mut rx) = broadcast::channel::<AgentEvent>(8);
+        let pending: PendingRequests = Arc::new(Mutex::new(BTreeMap::new()));
+        let turn_output: TurnOutput = Arc::new(Mutex::new(PiTurnOutput::fresh()));
+        let init_cache: InitCacheHandle = Arc::new(Mutex::new(InitCache::default()));
+
+        route_pi_message(
+            &event_tx,
+            &pending,
+            &turn_output,
+            &init_cache,
+            PiHarnessMessage::ToolRequest {
+                request_id: "req-1".to_string(),
+                tool_call_id: "tool-1".to_string(),
+                kind: "commandExecution".to_string(),
+                input: serde_json::json!({ "command": "ls" }),
+            },
+        )
+        .await;
+
+        let event = timeout(Duration::from_secs(1), rx.recv())
+            .await
+            .expect("event delivered")
+            .expect("event ok");
+        match event {
+            AgentEvent::Stream(StreamEvent::ControlRequest { request, .. }) => match request {
+                ControlRequestInner::CanUseTool { input, .. } => {
+                    let label = input.get("codexAgentLabel").and_then(Value::as_str);
+                    assert_eq!(label, Some("Pi"));
+                }
+                other => panic!("expected CanUseTool, got {other:?}"),
+            },
+            other => panic!("expected ControlRequest, got {other:?}"),
         }
     }
 }

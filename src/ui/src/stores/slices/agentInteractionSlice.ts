@@ -50,6 +50,12 @@ export interface AgentApproval {
   kind: AgentApprovalKind;
   details: AgentApprovalDetail[];
   supportsDenyReason?: boolean;
+  // Display name of the agent that originated the approval — used to
+  // interpolate `{{agent}}` in the localized description ("Pi wants
+  // approval…" vs. "Codex wants approval…"). The Pi sidecar sets this
+  // to `Pi`; Codex's own approvals leave it absent and the card falls
+  // back to `Codex` for the existing wording.
+  agentLabel?: string;
 }
 
 /**

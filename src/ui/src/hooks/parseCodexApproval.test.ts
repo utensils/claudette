@@ -79,4 +79,45 @@ describe("parseCodexApproval — Pi file-change details", () => {
     const labels = approval!.details.map((d) => d.labelKey);
     expect(labels).toEqual(["path", "reason"]);
   });
+
+  it("threads codexAgentLabel onto approval.agentLabel for Pi-originated prompts", () => {
+    // Regression: the approval card's localized description
+    // ("{{agent}} wants approval…") interpolates the agent name. Pi
+    // sets `codexAgentLabel = "Pi"` so the user sees "Pi wants…" instead
+    // of the historical Codex-only wording.
+    const approval = parseCodexApproval(
+      "chat-1",
+      "tool-use-1",
+      "CodexCommandApproval",
+      {
+        codexApprovalKind: "commandExecution",
+        codexMethod: "pi/tool/requestApproval",
+        codexAgentLabel: "Pi",
+        command: "ls -la",
+        cwd: "/repo",
+        reason: "Pi requested command execution.",
+      },
+    );
+    expect(approval).not.toBeNull();
+    expect(approval!.agentLabel).toBe("Pi");
+  });
+
+  it("leaves agentLabel undefined for Codex approvals (preserves existing wording)", () => {
+    // The Codex tool path doesn't emit `codexAgentLabel`. Keeping
+    // `agentLabel` undefined lets the card fall back to its historical
+    // "Codex" copy without locale changes for that flow.
+    const approval = parseCodexApproval(
+      "chat-1",
+      "tool-use-1",
+      "CodexCommandApproval",
+      {
+        codexApprovalKind: "commandExecution",
+        command: "ls",
+        cwd: "/repo",
+        reason: "Codex wants to run this.",
+      },
+    );
+    expect(approval).not.toBeNull();
+    expect(approval!.agentLabel).toBeUndefined();
+  });
 });

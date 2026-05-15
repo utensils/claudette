@@ -74,10 +74,15 @@ export function parseCodexApproval(
 ): AgentApproval | null {
   const kind = stringField(input, "codexApprovalKind") as AgentApprovalKind | null;
   const details: AgentApproval["details"] = [];
+  // `codexAgentLabel` is the originating-agent name (e.g. `Pi`). When
+  // absent, the approval card falls back to the historical `Codex`
+  // wording, preserving the existing Codex experience verbatim.
+  const agentLabel = stringField(input, "codexAgentLabel") ?? undefined;
   const baseApproval = {
     sessionId,
     toolUseId,
     supportsDenyReason: false,
+    agentLabel,
   };
 
   if (toolName === CODEX_COMMAND_APPROVAL_TOOL && kind === "commandExecution") {

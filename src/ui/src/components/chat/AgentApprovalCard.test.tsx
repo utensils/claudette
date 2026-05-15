@@ -7,8 +7,19 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AgentApproval } from "../../stores/useAppStore";
 import { AgentApprovalCard } from "./AgentApprovalCard";
 
+// Interpolating mock — mirrors i18next's `{{var}}` substitution so the
+// tests can verify the agent name actually lands in the rendered title /
+// description (the card renders raw keys when no values pass through).
 vi.mock("react-i18next", () => ({
-  useTranslation: () => ({ t: (key: string) => key }),
+  useTranslation: () => ({
+    t: (key: string, values?: Record<string, string>) => {
+      if (!values) return key;
+      return Object.entries(values).reduce(
+        (acc, [name, value]) => acc.replace(`{{${name}}}`, value),
+        key.includes("{{") ? key : `${key}[${Object.values(values).join(",")}]`,
+      );
+    },
+  }),
 }));
 
 const mountedRoots: Root[] = [];
@@ -103,5 +114,29 @@ describe("AgentApprovalCard", () => {
     await click(buttonNamed(container, "agent_approval_deny"));
 
     expect(onRespond).toHaveBeenCalledWith(false, "not this command");
+  });
+
+  it("interpolates approval.agentLabel into the title and description", async () => {
+    // Regression: Pi-originated approvals carry `agentLabel = "Pi"`.
+    // The shared approval card used to hardcode "Codex" in the
+    // localized copy, which was confusing when a Pi-routed model
+    // triggered the prompt.
+    const container = await render(
+      <AgentApprovalCard
+        approval={makeApproval({ agentLabel: "Pi" })}
+        onRespond={vi.fn()}
+      />,
+    );
+    expect(container.textContent ?? "").toContain("Pi");
+  });
+
+  it("defaults to 'Codex' when approval.agentLabel is missing", async () => {
+    // Codex's own approvals don't set `agentLabel`, so the card falls
+    // back to the historical wording. Guard the existing UX from
+    // accidental Codex → undefined drift.
+    const container = await render(
+      <AgentApprovalCard approval={makeApproval()} onRespond={vi.fn()} />,
+    );
+    expect(container.textContent ?? "").toContain("Codex");
   });
 });

@@ -34,6 +34,15 @@ type HarnessState = {
   authStorage: AuthStorage;
   modelRegistry: ModelRegistry;
   pendingTools: Map<string, PendingTool>;
+  // True when Claudette's permission level is `full` — i.e. the user
+  // ran `/permissions full` and Claudette's tools-for-level resolver
+  // returned the wildcard sentinel `["*"]`. In that mode the bash /
+  // write / edit tools must not bounce through Claudette's approval
+  // card; matching how `--permission-mode bypassPermissions` behaves
+  // for the Claude CLI harness. Re-derived in `startSession` so it
+  // tracks `/permissions` toggles that trigger a sidecar respawn via
+  // the `allowed_tools_changed` drift path.
+  bypassPermissions: boolean;
 };
 
 const state: HarnessState = {
@@ -41,6 +50,7 @@ const state: HarnessState = {
   authStorage: AuthStorage.create(),
   modelRegistry: ModelRegistry.create(AuthStorage.create()),
   pendingTools: new Map(),
+  bypassPermissions: false,
 };
 
 function send(message: Record<string, unknown>): void {
@@ -214,6 +224,14 @@ function listAvailableModels() {
 }
 
 async function approval(toolCallId: string, kind: "commandExecution" | "fileChange", input: Record<string, unknown>) {
+  // `/permissions full` → Claudette plumbs `allowedTools = ["*"]` into
+  // `start_session`, which sets `state.bypassPermissions`. Skip the
+  // approval round-trip so the user isn't asked to approve every bash
+  // / write / edit when they explicitly opted out of prompts. Tool
+  // execution still flows through the regular `tool_update` /
+  // `tool_result` events, so the activity remains visible — only the
+  // approval card is suppressed.
+  if (state.bypassPermissions) return true;
   send({
     type: "tool_request",
     requestId: toolCallId,
@@ -613,9 +631,11 @@ async function grepFallback(root: string, query: string): Promise<string> {
   return matches.join("\n");
 }
 
-function mapPermissionTools(value: unknown): string[] {
+function mapPermissionTools(value: unknown): { tools: string[]; bypass: boolean } {
   const tools = asStringArray(value);
-  if (tools.includes("*")) return ["read", "ls", "find", "grep", "bash", "write", "edit"];
+  if (tools.includes("*")) {
+    return { tools: ["read", "ls", "find", "grep", "bash", "write", "edit"], bypass: true };
+  }
   const out = new Set<string>();
   for (const tool of tools) {
     const normalized = tool.toLowerCase();
@@ -627,7 +647,7 @@ function mapPermissionTools(value: unknown): string[] {
     if (normalized === "bash") out.add("bash");
   }
   out.add("ls");
-  return [...out];
+  return { tools: [...out], bypass: false };
 }
 
 /**
@@ -698,10 +718,16 @@ async function startSession(message: RequestMessage): Promise<void> {
   const requestedSessionId = asString(message.sessionId);
   const requestedModel = asString(message.model);
   const customInstructions = asString(message.customInstructions);
-  const tools = mapPermissionTools(message.allowedTools);
+  const permissionTools = mapPermissionTools(message.allowedTools);
+  const tools = permissionTools.tools;
   state.cwd = cwd;
   state.authStorage = AuthStorage.create();
   state.modelRegistry = ModelRegistry.create(state.authStorage);
+  // Re-derive the bypass flag on every (re)start so a `/permissions
+  // full` ↔ `/permissions standard` toggle — which `chat::send` already
+  // honors by tearing down the persistent Pi process — applies on the
+  // next turn without needing a separate set_permission_level message.
+  state.bypassPermissions = permissionTools.bypass;
 
   // Claudette can hand us a one-shot provider definition for the
   // user's local Ollama / LM Studio server (anything Pi doesn't ship
@@ -829,15 +855,31 @@ function routeSessionEvent(event: AgentSessionEvent): void {
       break;
     case "message_update": {
       const update = event.assistantMessageEvent as { type?: string; delta?: string; text?: string };
-      const delta = update.delta ?? update.text ?? "";
-      if (!delta) break;
-      send({
-        type:
-          update.type === "thinking_delta" || update.type === "reasoning_delta"
-            ? "thinking_delta"
-            : "assistant_delta",
-        delta,
-      });
+      // Pi SDK `AssistantMessageEvent` is a tagged union covering text,
+      // thinking, and tool-call streaming. Each tool call streams its
+      // raw JSON arguments as a series of `toolcall_delta` events; if
+      // we forwarded those as `assistant_delta`, Claudette would render
+      // them as user-visible chat text (the bug surfaces as a run of
+      // `{"path":"…"}{"path":"…"}` strings appearing above the tool
+      // calls section when a Pi model fans out multiple reads). Tool
+      // execution is reported separately via `tool_execution_*`, so
+      // every `toolcall_*` variant here is intentionally discarded.
+      // Only `text_delta` becomes assistant text; the thinking deltas
+      // route to the dedicated thinking stream.
+      const type = update.type;
+      if (type === "thinking_delta" || type === "reasoning_delta") {
+        const delta = update.delta ?? update.text ?? "";
+        if (delta) send({ type: "thinking_delta", delta });
+        break;
+      }
+      if (type === "text_delta") {
+        const delta = update.delta ?? update.text ?? "";
+        if (delta) send({ type: "assistant_delta", delta });
+        break;
+      }
+      // start / text_start / text_end / thinking_start / thinking_end /
+      // toolcall_start / toolcall_delta / toolcall_end / done / error
+      // carry no user-visible chat text — drop them.
       break;
     }
     case "tool_execution_start":
