@@ -94,6 +94,7 @@
   "model_picker_search_placeholder": "Buscar modelos…",
   "model_picker_show_all_in_subsection": "Mostrar los {{count}}",
   "model_picker_no_results": "Ningún modelo coincide",
+  "model_picker_clear_search": "Borrar búsqueda",
   "you_label": "Tú",
   "agent_question_title": "Pregunta del agente",
   "agent_question_submit_answer": "Enviar respuesta",

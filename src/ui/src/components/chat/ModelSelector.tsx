@@ -1,6 +1,12 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { CircleDollarSign, ChevronRight, Search as SearchIcon } from "lucide-react";
+import {
+  CircleDollarSign,
+  ChevronRight,
+  Search as SearchIcon,
+  SearchX,
+  X,
+} from "lucide-react";
 import styles from "./ModelSelector.module.css";
 import { buildModelRegistry, type Model } from "./modelRegistry";
 import { useAppStore } from "../../stores/useAppStore";
@@ -240,9 +246,15 @@ export function ModelSelector({
       for (const sub of section.piSubSections) {
         const subKey = `${section.key}::${sub.key}`;
         const isExpanded = searching || expanded.has(subKey);
+        const totalCount = sub.primary.length + sub.overflow.length;
         subRows.push(
           <div key={subKey} className={styles.subSection}>
-            <div className={styles.subSectionHeader}>{sub.label}</div>
+            <div className={styles.subSectionHeader}>
+              <span>{sub.label}</span>
+              {totalCount > 1 && (
+                <span className={styles.subSectionCount}>{totalCount}</span>
+              )}
+            </div>
             {sub.primary.map((model) => (
               <ModelRow
                 key={model.providerQualifiedId ?? model.id}
@@ -261,7 +273,7 @@ export function ModelSelector({
                   onClick={() => toggleExpanded(subKey)}
                 >
                   {t("model_picker_show_all_in_subsection", {
-                    count: sub.primary.length + sub.overflow.length,
+                    count: totalCount,
                     defaultValue: "Show all {{count}}",
                   })}
                   <ChevronRight
@@ -359,6 +371,10 @@ export function ModelSelector({
     return rows;
   }
 
+  const searchPlaceholder = t("model_picker_search_placeholder", {
+    defaultValue: "Search models…",
+  });
+
   return (
     <>
       <div className={styles.overlay} onClick={onClose} />
@@ -370,25 +386,39 @@ export function ModelSelector({
             type="search"
             className={styles.searchInput}
             value={query}
-            placeholder={t("model_picker_search_placeholder", {
-              defaultValue: "Search models…",
-            })}
-            aria-label={t("model_picker_search_placeholder", {
-              defaultValue: "Search models…",
-            })}
+            placeholder={searchPlaceholder}
+            aria-label={searchPlaceholder}
             onChange={(e) => setQuery(e.target.value)}
           />
+          {query && (
+            <button
+              type="button"
+              className={styles.searchClearBtn}
+              onClick={() => {
+                setQuery("");
+                searchRef.current?.focus();
+              }}
+              aria-label={t("model_picker_clear_search", {
+                defaultValue: "Clear search",
+              })}
+            >
+              <X size={14} aria-hidden />
+            </button>
+          )}
         </div>
         <div className={styles.scrollArea}>
           {sections.length === 0 ? (
             <div className={styles.emptyState}>
-              {t("model_picker_no_results", {
-                defaultValue: "No models match",
-              })}
+              <SearchX size={18} className={styles.emptyStateIcon} aria-hidden />
+              <span>
+                {t("model_picker_no_results", {
+                  defaultValue: "No models match",
+                })}
+              </span>
             </div>
           ) : (
             sections.map((section) => (
-              <div key={section.key}>
+              <div key={section.key} className={styles.section}>
                 <div className={styles.groupLabel}>{section.label}</div>
                 {rowsForSection(section)}
               </div>

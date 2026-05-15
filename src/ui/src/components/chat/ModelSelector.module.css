@@ -8,13 +8,13 @@
   position: absolute;
   bottom: 100%;
   left: 0;
-  margin-bottom: 4px;
-  width: min(420px, calc(100vw - 24px));
-  min-width: 240px;
-  max-height: min(70vh, 540px);
+  margin-bottom: 6px;
+  width: min(440px, calc(100vw - 24px));
+  min-width: 280px;
+  max-height: min(70vh, 560px);
   background: var(--sidebar-bg);
   border: 1px solid var(--sidebar-border);
-  border-radius: 8px;
+  border-radius: 10px;
   padding: 0;
   z-index: 100;
   box-shadow: var(--shadow-lg);
@@ -27,7 +27,7 @@
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  padding: var(--space-2) var(--space-3);
+  padding: 10px 12px;
   border-bottom: 1px solid var(--divider);
   flex-shrink: 0;
 }
@@ -45,10 +45,35 @@
   color: var(--text-primary);
   font-size: 13px;
   padding: 0;
+  min-width: 0;
 }
 
 .searchInput::placeholder {
   color: var(--text-dim);
+}
+
+/* Native clear "x" on type=search makes the focus ring jump in some
+ * browsers; hide it and render our own button so spacing stays stable. */
+.searchInput::-webkit-search-cancel-button {
+  appearance: none;
+}
+
+.searchClearBtn {
+  background: transparent;
+  border: none;
+  color: var(--text-dim);
+  cursor: pointer;
+  padding: 2px;
+  border-radius: 4px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.searchClearBtn:hover {
+  color: var(--text-primary);
+  background: var(--hover-bg);
 }
 
 .scrollArea {
@@ -57,37 +82,44 @@
   padding: 6px;
 }
 
-.subSectionHeader {
-  padding: 4px 8px 2px 16px;
-  font-size: 10px;
-  font-weight: 600;
-  color: var(--text-dim);
-  letter-spacing: 0.04em;
+.section {
+  padding: 2px 0 4px;
 }
 
-.showAllRow {
-  padding-left: 22px;
-  color: var(--text-dim);
+.section + .section {
+  border-top: 1px solid var(--divider);
+  margin-top: 6px;
+  padding-top: 8px;
+}
+
+.groupLabel {
+  padding: 4px 10px 6px;
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--accent-primary);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
 }
 
 .subSection {
   margin-bottom: 2px;
 }
 
-.emptyState {
-  padding: 16px 12px;
-  text-align: center;
-  color: var(--text-dim);
-  font-size: 12px;
+.subSectionHeader {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 4px 10px 2px 16px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-primary);
+  letter-spacing: 0.01em;
 }
 
-.groupLabel {
-  padding: 6px 8px 2px;
+.subSectionCount {
   font-size: 10px;
-  font-weight: 600;
   color: var(--text-dim);
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
+  font-weight: 400;
 }
 
 .item {
@@ -95,7 +127,7 @@
   align-items: center;
   gap: 8px;
   width: 100%;
-  padding: 6px 8px;
+  padding: 7px 10px;
   border: none;
   border-radius: 6px;
   background: transparent;
@@ -103,7 +135,7 @@
   font-size: 13px;
   cursor: pointer;
   text-align: left;
-  transition: background var(--transition-fast);
+  transition: background var(--transition-fast), color var(--transition-fast);
   min-height: 34px;
 }
 
@@ -113,6 +145,11 @@
 
 .itemSelected {
   color: var(--accent-primary);
+  background: var(--selected-bg);
+}
+
+.itemSelected:hover {
+  background: var(--accent-bg-strong);
 }
 
 .dot {
@@ -168,6 +205,23 @@
 .moreToggle {
   color: var(--text-dim);
   padding-left: 22px;
+  font-size: 12px;
+}
+
+.moreToggle:hover {
+  color: var(--text-primary);
+}
+
+.showAllRow {
+  padding: 5px 10px 5px 22px;
+  color: var(--text-dim);
+  font-size: 12px;
+  min-height: 26px;
+}
+
+.showAllRow:hover {
+  color: var(--accent-primary);
+  background: var(--hover-bg-subtle);
 }
 
 .chevron {
@@ -178,4 +232,20 @@
 
 .chevronOpen {
   transform: rotate(90deg);
+}
+
+.emptyState {
+  padding: 28px 16px;
+  text-align: center;
+  color: var(--text-dim);
+  font-size: 12px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+}
+
+.emptyStateIcon {
+  color: var(--text-dim);
+  opacity: 0.6;
 }

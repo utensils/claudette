@@ -94,6 +94,7 @@
   "model_picker_search_placeholder": "Search models…",
   "model_picker_show_all_in_subsection": "Show all {{count}}",
   "model_picker_no_results": "No models match",
+  "model_picker_clear_search": "Clear search",
   "you_label": "You",
   "agent_question_title": "Agent Question",
   "agent_question_submit_answer": "Submit answer",

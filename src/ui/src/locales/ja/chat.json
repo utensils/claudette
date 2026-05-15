@@ -94,6 +94,7 @@
   "model_picker_search_placeholder": "モデルを検索…",
   "model_picker_show_all_in_subsection": "{{count}} 件すべて表示",
   "model_picker_no_results": "一致するモデルがありません",
+  "model_picker_clear_search": "検索をクリア",
   "you_label": "あなた",
   "agent_question_title": "エージェントからの質問",
   "agent_question_submit_answer": "回答を送信",

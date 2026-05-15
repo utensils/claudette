@@ -133,7 +133,10 @@ function assertInsideWorkspace(root: string, target: string, original: string): 
   throw new Error(`Path escapes workspace: ${original}`);
 }
 
-function modelKey(model: { provider?: string; id?: string; name?: string; contextWindow?: number }) {
+function modelKey(
+  model: { provider?: string; id?: string; name?: string; contextWindow?: number },
+  authSource?: string,
+) {
   const provider = model.provider ?? "pi";
   return {
     id: `${provider}/${model.id ?? model.name ?? "unknown"}`,
@@ -141,12 +144,55 @@ function modelKey(model: { provider?: string; id?: string; name?: string; contex
     modelId: model.id ?? model.name ?? "unknown",
     label: model.name ?? model.id ?? "Unknown",
     contextWindowTokens: model.contextWindow ?? 200_000,
+    // Pi's `AuthStatus.source`:
+    //   "stored"      → user ran `pi auth` (auth.json)
+    //   "runtime"     → CLI --api-key flag (per-process override)
+    //   "environment" → matching env var (e.g. `OPENAI_API_KEY`)
+    //   "fallback"    → models.json custom-provider fallback resolver
+    //   "models_json_*" → bundled keys / commands inside Pi's own
+    //                      models.json (the "free" providers like Owl
+    //                      Alpha / Auto Router / Poolside that Pi ships)
+    // We only surface providers the user actually set up — see
+    // `USER_CONFIGURED_AUTH_SOURCES`.
+    authSource,
   };
+}
+
+/** Auth sources that count as "the user has configured this provider".
+ *  Anything outside this set (notably `fallback` and the
+ *  `models_json_*` family) is treated as a Pi-bundled default and
+ *  filtered out of the model picker / Settings card so the user only
+ *  sees providers they actually enabled. */
+const USER_CONFIGURED_AUTH_SOURCES: ReadonlySet<string> = new Set([
+  "stored",
+  "runtime",
+  "environment",
+]);
+
+function isUserConfiguredProvider(provider: string): boolean {
+  if (!provider || provider === "pi") return true;
+  // `AuthStorage.getAuthStatus` already inspects auth.json, runtime
+  // overrides, env vars, and the fallback resolver in one shot, so we
+  // don't need to re-check each surface ourselves.
+  const status = state.authStorage.getAuthStatus(provider);
+  return status.source ? USER_CONFIGURED_AUTH_SOURCES.has(status.source) : false;
 }
 
 function listAvailableModels() {
   state.modelRegistry.refresh();
-  return state.modelRegistry.getAvailable().map(modelKey);
+  // `getAvailable()` filters by `hasAuth()` which counts *any* auth
+  // source (including Pi's bundled free routes). Layer our stricter
+  // user-configured filter on top so the picker / Settings card only
+  // surfaces providers the user actually set up.
+  return state.modelRegistry
+    .getAvailable()
+    .filter((model) => isUserConfiguredProvider(model.provider ?? "pi"))
+    .map((model) =>
+      modelKey(
+        model,
+        state.authStorage.getAuthStatus(model.provider ?? "pi").source,
+      ),
+    );
 }
 
 async function approval(toolCallId: string, kind: "commandExecution" | "fileChange", input: Record<string, unknown>) {
