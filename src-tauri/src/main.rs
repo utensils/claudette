@@ -1342,9 +1342,9 @@ fn shutdown_runtime_handler(_app: &tauri::AppHandle, _event: tauri::RunEvent) {
 mod tests {
     #[cfg(target_os = "macos")]
     use super::MACOS_CLOSE_WINDOW_ACCELERATOR;
+    use super::migrate_legacy_env_provider_trust;
     #[cfg(target_os = "macos")]
     use super::release_tag_for;
-    use super::migrate_legacy_env_provider_trust;
     use claudette::db::Database;
     use claudette::model::Repository;
     use std::path::Path;
