@@ -136,12 +136,6 @@ export function EnvPanel({ target }: EnvPanelProps) {
   const [loading, setLoading] = useState(false);
   const [fetchError, setFetchError] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
-  // Becomes true after the first successful `getEnvSources` resolve for
-  // the current target. While false, any rows we're showing came from
-  // the cheap placeholder fetch and don't yet reflect per-repo toggle
-  // state — so we lock per-row toggles to avoid the user acting on a
-  // placeholder value.
-  const [resolvedOnce, setResolvedOnce] = useState(false);
   // Per-plugin manifest info (settings_schema, globally-enabled flag,
   // current effective values). We keep this map alongside the
   // resolved-sources rows so each row can render its per-repo
@@ -222,7 +216,6 @@ export function EnvPanel({ target }: EnvPanelProps) {
     try {
       const result = await getEnvSources(target);
       setSources(result);
-      setResolvedOnce(true);
       return result;
     } catch (e) {
       setFetchError(String(e));
@@ -242,7 +235,6 @@ export function EnvPanel({ target }: EnvPanelProps) {
   // when sources===null. Clearing expanded too avoids surfacing error
   // details from a different target.
   useEffect(() => {
-    setResolvedOnce(false);
     setSources(null);
     setExpanded(new Set());
     setRepoOverrides({});
@@ -411,6 +403,32 @@ export function EnvPanel({ target }: EnvPanelProps) {
 
   const handleToggle = useCallback(
     async (pluginName: string, nextEnabled: boolean) => {
+      // Optimistic UI: flip the row's `enabled` flag immediately so
+      // the toggle visibly switches state regardless of how long the
+      // post-toggle refresh takes. Env resolves can run 60-120s on
+      // cold direnv/Nix; without the optimistic update the user's
+      // click would land in a 60s "did anything happen?" gap before
+      // `refresh()` returns and rewrites the row.
+      setSources((prev) =>
+        prev?.map((s) =>
+          s.plugin_name === pluginName ? { ...s, enabled: nextEnabled } : s,
+        ) ?? null,
+      );
+      // If the user is disabling the plugin that's currently resolving
+      // mid-flight, clear the per-plugin progress entry so the
+      // "Resolving env-X… Ns elapsed" hint disappears immediately. The
+      // backend's eventual `Finished` event for the in-flight plugin
+      // is idempotent against a cleared current_plugin — it just
+      // re-publishes the same "no active plugin" state.
+      if (!nextEnabled) {
+        const env =
+          useAppStore.getState().workspaceEnvironment?.[envProgressKey];
+        if (env?.status === "preparing" && env.current_plugin === pluginName) {
+          useAppStore
+            .getState()
+            .setWorkspaceEnvironmentProgress(envProgressKey, null);
+        }
+      }
       try {
         await setEnvProviderEnabled(target, pluginName, nextEnabled);
         // Re-fetch sources inline (rather than fire-and-forget
@@ -434,7 +452,7 @@ export function EnvPanel({ target }: EnvPanelProps) {
         setFetchError(String(e));
       }
     },
-    [target, refresh, repoIdForModal, openTrustModalForPlugin],
+    [target, refresh, repoIdForModal, openTrustModalForPlugin, envProgressKey],
   );
 
   // Lazy-load a plugin's per-repo overrides on first expansion. Saves a
@@ -584,13 +602,22 @@ export function EnvPanel({ target }: EnvPanelProps) {
           // re-probe PATH). The per-repo `enabled` setting is left
           // untouched so the user's intent survives the install +
           // restart cycle without forcing them to re-toggle.
+          //
+          // We intentionally do NOT gate the toggle on `!resolvedOnce`:
+          // a slow provider (cold direnv/Nix can run 60-120s) is
+          // exactly the case where a user wants to disable it, and
+          // the placeholder rows from the registry fetch already
+          // reflect the persisted enable state with reasonable
+          // accuracy. Backend `set_env_provider_enabled` is safe to
+          // call mid-resolve — it persists + invalidates the cache —
+          // and `prepare_workspace_environment` re-evicts on
+          // completion to defend against the in-flight `export`'s
+          // late `cache.put`.
           const toggleOn = source.enabled && !source.unavailable;
-          const toggleDisabled = !resolvedOnce || source.unavailable;
+          const toggleDisabled = source.unavailable;
           const toggleTitle = source.unavailable
             ? unavailableTooltip(source.plugin_name)
-            : !resolvedOnce
-              ? "Resolving environment providers…"
-              : undefined;
+            : undefined;
           // Show the inline Settings drawer only when:
           //   1. We're in repo mode (per-repo overrides only make
           //      sense scoped to a repository).

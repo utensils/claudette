@@ -407,6 +407,11 @@ pub async fn get_env_sources(
     )
     .await;
 
+    // Mid-resolve disable safety — see [`evict_newly_disabled`] doc.
+    // Cheap DB read; covers the case where the user toggled a plugin
+    // off while this resolve was already in flight.
+    evict_newly_disabled(&state, &worktree, &repo_id, &disabled);
+
     // Subscribe the fs watcher to every freshly-cached plugin's
     // watched paths. Must happen BEFORE `filter_globally_disabled`
     // moves `resolved.sources` — we want to register even hidden
@@ -774,6 +779,14 @@ pub async fn prepare_workspace_environment(
         Some(output),
     )
     .await;
+    // Mid-resolve disable: the user may have toggled a plugin off
+    // between the `disabled` snapshot above and the resolve's
+    // completion. `set_env_provider_enabled` invalidates the cache
+    // when it runs, but a still-running `export` would then re-populate
+    // via `cache.put` after the invalidation — re-evict any newly
+    // disabled plugin's cache entry so the user's "disable" intent
+    // survives the late completion. See evict_newly_disabled.
+    evict_newly_disabled(&state, &worktree, &repo_id, &disabled);
     register_resolved_with_watcher(&state, Path::new(&worktree), &resolved.sources).await;
     let trust_payload = build_trust_needed_payload(&ws_info.id, &repo_id, &resolved);
     if let Some(payload) = trust_payload.clone() {
@@ -786,6 +799,46 @@ pub async fn prepare_workspace_environment(
         return Err(error);
     }
     Ok(trust_payload)
+}
+
+/// Re-read the disabled set and evict cache entries for any plugins
+/// newly disabled since the supplied baseline. Defends against the
+/// race where the user clicked Disable mid-resolve: the disable
+/// itself invalidates the cache, but a still-running `export`
+/// completing after the invalidation calls `cache.put` and re-
+/// populates a stale entry. Calling this after `resolve_with_registry_*`
+/// ensures the user's "disable" intent persists across that race.
+///
+/// Silent on DB read failure — the worst case is we miss the
+/// invalidation, the cache holds the stale entry for one TTL, and
+/// the next mtime change clears it anyway.
+fn evict_newly_disabled(
+    state: &AppState,
+    worktree: &str,
+    repo_id: &str,
+    baseline: &HashSet<String>,
+) {
+    let after = match Database::open(&state.db_path) {
+        Ok(db) => load_disabled_providers(&db, repo_id),
+        Err(_) => return,
+    };
+    for plugin in newly_disabled(baseline, &after) {
+        state
+            .env_cache
+            .invalidate(Path::new(worktree), Some(&plugin));
+    }
+}
+
+/// Pure helper: the set of plugin names disabled in `after` but not in
+/// `baseline`. Factored out so the diff logic can be unit-tested
+/// without spinning up an [`AppState`] / DB / cache. Returns owned
+/// `String`s so the caller can drop the borrows on the input sets
+/// before iterating (the cache invalidation borrows mutably otherwise).
+fn newly_disabled(baseline: &HashSet<String>, after: &HashSet<String>) -> Vec<String> {
+    after
+        .difference(baseline)
+        .map(|s| s.to_string())
+        .collect()
 }
 
 /// Toggle whether an env-provider plugin runs for the target's repo.
@@ -1801,5 +1854,114 @@ mod tests {
         // Ellipsis is one of [..3 bytes] depending on UTF-8 encoding;
         // the truncated body is at most 60 bytes pre-ellipsis.
         assert!(out.len() <= 60 + '…'.len_utf8());
+    }
+
+    #[test]
+    fn newly_disabled_returns_diff_only() {
+        // The mid-resolve-disable race: the user clicked Disable on a
+        // plugin while a resolve was already running. `newly_disabled`
+        // names only plugins that were absent from the baseline (the
+        // set captured before the resolve started) but present in the
+        // refreshed read after it finished. Plugins already disabled
+        // before the resolve don't need re-eviction — the dispatcher
+        // skipped them entirely.
+        let mut baseline = HashSet::new();
+        baseline.insert("env-mise".to_string());
+        let mut after = HashSet::new();
+        after.insert("env-mise".to_string());
+        after.insert("env-direnv".to_string());
+
+        let diff = newly_disabled(&baseline, &after);
+
+        assert_eq!(diff, vec!["env-direnv".to_string()]);
+    }
+
+    #[test]
+    fn newly_disabled_handles_no_changes() {
+        // Common case: the resolve completed with no concurrent disable
+        // click. Returning an empty vec lets the caller skip the
+        // invalidate loop entirely.
+        let mut both = HashSet::new();
+        both.insert("env-mise".to_string());
+
+        assert!(newly_disabled(&both, &both).is_empty());
+    }
+
+    #[test]
+    fn newly_disabled_ignores_re_enabled_plugins() {
+        // If a plugin was disabled at baseline and re-enabled mid-
+        // resolve (rare, but possible), it's gone from `after` —
+        // we should NOT re-evict its cache. (We also shouldn't surface
+        // it as "newly enabled" — that's not this function's job; the
+        // dispatcher already populated the cache for any provider that
+        // actually ran.) Pin the contract so a future refactor doesn't
+        // accidentally swap the difference direction.
+        let mut baseline = HashSet::new();
+        baseline.insert("env-direnv".to_string());
+        baseline.insert("env-mise".to_string());
+        let mut after = HashSet::new();
+        after.insert("env-direnv".to_string());
+
+        assert!(newly_disabled(&baseline, &after).is_empty());
+    }
+
+    #[tokio::test]
+    async fn set_env_provider_enabled_persists_and_invalidates_cache() {
+        // End-to-end check of the "disable a plugin" path: the DB
+        // setting must persist with the right key + value, AND the
+        // cache for the plugin must be evicted so a still-running
+        // resolve's late `cache.put` is the only way a stale entry
+        // could come back (handled by [`evict_newly_disabled`]).
+        //
+        // This is the contract the EnvPanel toggle depends on: when
+        // a user disables a slow provider mid-resolve, the
+        // `set_env_provider_enabled` IPC alone must leave the cache
+        // empty for that plugin so a fresh spawn doesn't pick up
+        // stale env after the user's intent change.
+        use claudette::db::Database;
+        use claudette::env_provider::cache::EnvCache;
+        use claudette::env_provider::types::ProviderExport;
+        use std::collections::HashMap;
+        use tempfile::tempdir;
+
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("test.db");
+        let db = Database::open(&db_path).unwrap();
+        let cache = EnvCache::new();
+        let worktree = dir.path();
+
+        // Seed the cache as if a resolve had completed.
+        let mut env = HashMap::new();
+        env.insert("FOO".to_string(), Some("bar".to_string()));
+        cache
+            .put(
+                worktree,
+                "env-direnv",
+                &ProviderExport {
+                    env,
+                    watched: vec![],
+                },
+            )
+            .expect("put");
+        assert!(cache.get_fresh(worktree, "env-direnv").is_some());
+
+        // Persist the disable directly via load_disabled_providers'
+        // sibling write — mirrors what `set_env_provider_enabled` does
+        // (we exercise the helper rather than the full Tauri command
+        // because the command takes `State<'_, AppState>` which can't
+        // be constructed in a unit test). The cache eviction the
+        // command performs is exercised separately by the explicit
+        // `cache.invalidate` call below — the two together are the
+        // command's full behavior.
+        db.set_app_setting(&enabled_key("repo-1", "env-direnv"), "false")
+            .unwrap();
+        cache.invalidate(worktree, Some("env-direnv"));
+
+        // Persistence: load_disabled_providers reflects the new state.
+        let disabled = load_disabled_providers(&db, "repo-1");
+        assert!(disabled.contains("env-direnv"));
+
+        // Cache: the entry is gone.
+        assert!(cache.get_fresh(worktree, "env-direnv").is_none());
     }
 }

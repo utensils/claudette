@@ -51,6 +51,7 @@ vi.mock("../../../hooks/useCopyToClipboard", () => ({
 }));
 
 import { EnvPanel } from "./EnvPanel";
+import { useAppStore } from "../../../stores/useAppStore";
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean })
   .IS_REACT_ACT_ENVIRONMENT = true;
@@ -280,5 +281,187 @@ describe("EnvPanel — per-repo settings drawer", () => {
     const calls =
       claudettePluginServices.getClaudettePluginRepoSettings.mock.calls;
     expect(calls.map(([, plugin]) => plugin)).not.toContain("env-mise");
+  });
+});
+
+describe("EnvPanel — toggle stays actionable mid-resolve", () => {
+  beforeEach(() => {
+    document.body.innerHTML = "";
+    Object.values(claudettePluginServices).forEach((mock) => mock.mockReset());
+    Object.values(envServices).forEach((mock) => mock.mockReset());
+    claudettePluginServices.getClaudettePluginRepoSettings.mockResolvedValue(
+      {},
+    );
+    envServices.getEnvTargetWorktree.mockResolvedValue("/tmp/repo-1");
+    envServices.runEnvTrust.mockResolvedValue(undefined);
+    envServices.setEnvProviderEnabled.mockResolvedValue(undefined);
+    envServices.reloadEnv.mockResolvedValue(undefined);
+    // Real Zustand store under test — reset to defaults so prior tests'
+    // state can't leak in.
+    useAppStore.setState({ workspaceEnvironment: {} });
+  });
+
+  afterEach(async () => {
+    for (const root of mountedRoots.splice(0).reverse()) {
+      await act(async () => {
+        root.unmount();
+      });
+    }
+    for (const container of mountedContainers.splice(0)) {
+      container.remove();
+    }
+    useAppStore.setState({ workspaceEnvironment: {} });
+  });
+
+  it("keeps the toggle clickable while the initial resolve is still in flight", async () => {
+    // Before the squashed-commit change to lift `!resolvedOnce`, the
+    // toggle was disabled until the first `get_env_sources` resolve
+    // returned — which on cold direnv/Nix can take 60-120s. The user
+    // can't cancel a slow provider that way. This test pins the new
+    // behavior: the placeholder row from `listClaudettePlugins`
+    // renders an actionable toggle, and clicking it fires the IPC
+    // even though `getEnvSources` has not yet resolved.
+    let resolveGetEnvSources: (value: EnvSourceInfo[]) => void;
+    const getEnvSourcesPromise = new Promise<EnvSourceInfo[]>((resolve) => {
+      resolveGetEnvSources = resolve;
+    });
+    claudettePluginServices.listClaudettePlugins.mockResolvedValue([
+      envProvider({ name: "env-direnv", display_name: "direnv" }),
+    ]);
+    envServices.getEnvSources.mockReturnValue(getEnvSourcesPromise);
+
+    const container = await renderEnvPanel();
+
+    // Placeholder row should be visible; toggle should not be disabled.
+    expect(container.textContent).toContain("direnv");
+    const toggle = container.querySelector<HTMLButtonElement>(
+      'button[role="switch"]',
+    );
+    expect(toggle).not.toBeNull();
+    expect(toggle!.disabled).toBe(false);
+
+    // Click while the resolve is still pending.
+    await act(async () => {
+      toggle!.click();
+    });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    expect(envServices.setEnvProviderEnabled).toHaveBeenCalledWith(
+      { kind: "repo", repo_id: "repo-1" },
+      "env-direnv",
+      false,
+    );
+
+    // Clean up the in-flight promise so the panel can unmount cleanly.
+    resolveGetEnvSources!([
+      envSource({
+        plugin_name: "env-direnv",
+        display_name: "direnv",
+        enabled: false,
+        detected: false,
+        cached: false,
+        error: "disabled",
+      }),
+    ]);
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+  });
+
+  it("clears the current_plugin spinner when the user disables the actively-resolving plugin", async () => {
+    // Pins the optimistic-clear behavior: the EnvPanel surfaces an
+    // inline "Resolving env-direnv… Ns elapsed" hint driven by the
+    // workspaceEnvironment store. When the user disables the plugin
+    // that's currently mid-flight, the hint must disappear
+    // immediately rather than waiting on the backend's eventual
+    // `Finished` event (which for `nix print-dev-env` can be a
+    // minute away).
+    claudettePluginServices.listClaudettePlugins.mockResolvedValue([
+      envProvider({ name: "env-direnv", display_name: "direnv" }),
+    ]);
+    envServices.getEnvSources.mockResolvedValue([
+      envSource({
+        plugin_name: "env-direnv",
+        display_name: "direnv",
+        enabled: true,
+      }),
+    ]);
+    // Seed the store as if `prepare_workspace_environment` is mid-resolve
+    // on env-direnv. Key matches the EnvPanel's repo-target key
+    // (`repo:{repo_id}`).
+    useAppStore.setState({
+      workspaceEnvironment: {
+        "repo:repo-1": {
+          status: "preparing",
+          current_plugin: "env-direnv",
+          started_at: Date.now() - 36_000,
+        },
+      },
+    });
+
+    const container = await renderEnvPanel();
+
+    const toggle = container.querySelector<HTMLButtonElement>(
+      'button[role="switch"]',
+    );
+    expect(toggle).not.toBeNull();
+    await act(async () => {
+      toggle!.click();
+    });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    const env = useAppStore.getState().workspaceEnvironment["repo:repo-1"];
+    expect(env?.current_plugin).toBeUndefined();
+    // The aggregate `preparing` status is left in place — other
+    // plugins downstream may still resolve, and the env-prep listener
+    // owns the transition to "ready" / "error".
+    expect(env?.status).toBe("preparing");
+  });
+
+  it("does not touch unrelated workspaceEnvironment entries on disable", async () => {
+    // The optimistic clear must be tightly scoped to the EnvPanel's
+    // own target key. A user toggling a plugin off in repo-1's
+    // settings while workspace-foo's resolve is in flight must NOT
+    // wipe workspace-foo's progress entry.
+    claudettePluginServices.listClaudettePlugins.mockResolvedValue([
+      envProvider({ name: "env-direnv", display_name: "direnv" }),
+    ]);
+    envServices.getEnvSources.mockResolvedValue([
+      envSource({
+        plugin_name: "env-direnv",
+        display_name: "direnv",
+        enabled: true,
+      }),
+    ]);
+    const otherStarted = Date.now() - 12_000;
+    useAppStore.setState({
+      workspaceEnvironment: {
+        "workspace-foo": {
+          status: "preparing",
+          current_plugin: "env-direnv",
+          started_at: otherStarted,
+        },
+      },
+    });
+
+    const container = await renderEnvPanel();
+
+    const toggle = container.querySelector<HTMLButtonElement>(
+      'button[role="switch"]',
+    );
+    await act(async () => {
+      toggle!.click();
+    });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    const other = useAppStore.getState().workspaceEnvironment["workspace-foo"];
+    expect(other?.current_plugin).toBe("env-direnv");
+    expect(other?.started_at).toBe(otherStarted);
   });
 });
