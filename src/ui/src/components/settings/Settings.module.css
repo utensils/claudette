@@ -493,6 +493,16 @@
   align-items: center;
 }
 
+/* SearchableSelect renders as `width: 100%` on its wrapper, which would
+ * collapse to nothing inside a flex-shrink:0 settingControl. Give it a
+ * stable inline width close to what the old native <select> sized to so
+ * the search popover has room to render its filtered list without the
+ * Thinking-on/off select jumping next to it. */
+.defaultModelPickerWrapper {
+  width: 260px;
+  position: relative;
+}
+
 .iconBtn {
   display: inline-flex;
   align-items: center;

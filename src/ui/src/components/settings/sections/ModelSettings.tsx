@@ -418,17 +418,17 @@ export function ModelSettings() {
         </div>
         <div className={styles.settingControl}>
           <div className={styles.inlineControl}>
-            <select
-              className={styles.select}
-              value={defaultModelValue}
-              onChange={(e) => handleModelChange(e.target.value)}
-            >
-              {registry.map((m) => (
-                <option key={m.providerQualifiedId ?? `anthropic/${m.id}`} value={m.providerQualifiedId ?? `anthropic/${m.id}`}>
-                  {m.providerLabel ? `${m.providerLabel} / ${m.label}` : m.label}
-                </option>
-              ))}
-            </select>
+            <div className={styles.defaultModelPickerWrapper}>
+              <SearchableSelect
+                options={registry.map((m) => ({
+                  value: m.providerQualifiedId ?? `anthropic/${m.id}`,
+                  label: m.providerLabel ? `${m.providerLabel} / ${m.label}` : m.label,
+                }))}
+                value={defaultModelValue}
+                onChange={handleModelChange}
+                ariaLabel={t("models_default_model")}
+              />
+            </div>
             {!isCodex && (
               <select
                 className={`${styles.select} ${styles.selectWide}`}
