@@ -128,12 +128,15 @@ export function FilesPanel() {
 
   useEffect(() => {
     if (!selectedWorkspaceId || isPendingFork) {
+      // Bumping the version invalidates any in-flight load from the
+      // previously-selected workspace so its `.then` can't land here
+      // and re-flip `loading` back to true. Pair with an explicit
+      // `setLoading(false)` so the panel doesn't get stuck on the
+      // spinner if we entered this branch while a load was pending.
       loadVersionRef.current += 1;
-      // Clear any stale error from the previously-selected workspace
-      // so the right sidebar doesn't keep showing it under the
-      // pending-fork placeholder.
       setError(null);
       setEntries([]);
+      setLoading(false);
       return;
     }
     const timer = window.setTimeout(() => {

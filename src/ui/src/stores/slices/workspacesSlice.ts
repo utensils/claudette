@@ -122,11 +122,59 @@ export const createWorkspacesSlice: StateCreator<
       // backend's `workspace_env_progress` events will land against
       // the REAL workspace id later, not the placeholder, so we have
       // to drive the placeholder's progress entry ourselves.
-      notifyBackendSelection(placeholder.id);
+      //
+      // We deliberately do NOT call `notifyBackendSelection(placeholder.id)`
+      // here: the backend would write the placeholder id into its
+      // `selected_workspace_id` / `workspace_activity` maps (used by
+      // SCM polling and tray menus), but the id has no backing DB
+      // row, so the entries are orphaned and accumulate one per fork
+      // attempt. Semantically, the backend's "selected workspace"
+      // during the fork window remains the source (that's where
+      // `fork_workspace_at_checkpoint` is operating), so leaving the
+      // backend's view on the source is also accurate. The notify
+      // fires with the real id once `commitPendingFork` swaps the
+      // selection.
+      //
+      // Mirror the diff/preview/right-sidebar-tab state transitions
+      // `selectWorkspace` performs so the placeholder navigation
+      // doesn't leak the source workspace's diff selection or
+      // sidebar tab state into the placeholder's view (and back out
+      // again on commit/cancel). The placeholder has no open diff
+      // tabs, so `restored`/`tabExists` collapse to "no restored
+      // file" — but we still want to save the source's selection
+      // into `diffSelectionByWorkspace` so returning to it on cancel
+      // (or via commit's real-id swap, which inherits the source's
+      // sidebar context for the placeholder's repo) preserves what
+      // the user was looking at.
+      const prev = s.selectedWorkspaceId;
+      let selectionMap = s.diffSelectionByWorkspace;
+      if (prev) {
+        if (s.diffSelectedFile) {
+          selectionMap = {
+            ...selectionMap,
+            [prev]: { path: s.diffSelectedFile, layer: s.diffSelectedLayer },
+          };
+        } else if (prev in selectionMap) {
+          const next = { ...selectionMap };
+          delete next[prev];
+          selectionMap = next;
+        }
+      }
       return {
         workspaces: [...s.workspaces, placeholder],
         selectedWorkspaceId: placeholder.id,
         selectedRepositoryId: null,
+        rightSidebarTab: "files",
+        diffSelectionByWorkspace: selectionMap,
+        diffSelectedFile: null,
+        diffSelectedLayer: null,
+        diffContent: null,
+        diffError: null,
+        diffPreviewMode: "diff",
+        diffPreviewContent: null,
+        diffPreviewLoading: false,
+        diffPreviewError: null,
+        diffMergeBase: null,
         pendingForks: {
           ...s.pendingForks,
           [placeholder.id]: sourceWorkspaceId,
