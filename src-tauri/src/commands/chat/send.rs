@@ -1228,6 +1228,15 @@ pub async fn send_chat_message(
         session.custom_instructions.as_deref(),
         nudge,
     );
+    // Pi runs without the Claudette MCP bridge, so nudging the model
+    // toward `mcp__claudette__send_to_user` would point at a non-
+    // existent tool. Compose a separate prompt for the Pi branch that
+    // keeps the global system prompt + per-repo instructions but
+    // omits the MCP nudge.
+    let pi_custom_instructions = claudette::global_prompt::compose_system_prompt(
+        session.custom_instructions.as_deref(),
+        None,
+    );
     session.turn_count += 1;
     session.needs_attention = false;
     session.attention_kind = None;
@@ -1251,6 +1260,21 @@ pub async fn send_chat_message(
         backend_runtime
             .hash
             .push_str(&format!("|codex-reasoning-effort:{codex_effort}"));
+    }
+    // Pi's persistent sidecar receives `thinkingLevel` only at start.
+    // Include it in the runtime hash so changing Pi effort or toggling
+    // thinking while a session is alive forces a respawn; otherwise the
+    // existing sidecar silently keeps the old setting. Mirrors how the
+    // Codex effort is folded into the hash just above.
+    if backend_runtime.harness == AgentBackendRuntimeHarness::PiSdk {
+        let pi_thinking_level: String = if thinking_enabled.unwrap_or(false) {
+            effort.clone().unwrap_or_default()
+        } else {
+            "off".to_string()
+        };
+        backend_runtime
+            .hash
+            .push_str(&format!("|pi-thinking-level:{pi_thinking_level}"));
     }
 
     // Resolve user-toggled `claude --help` flags from the cached defs.
@@ -1655,6 +1679,7 @@ pub async fn send_chat_message(
     let resolved_env_for_persistent = resolved_env.clone();
     let codex_permission_level_for_persistent = codex_permission_level;
     let pi_sessions_root = super::pi_sessions_root(&state.db_path);
+    let pi_custom_instructions_for_persistent = pi_custom_instructions.clone();
     let start_persistent = move |worktree: String,
                                  sid: String,
                                  is_resume: bool,
@@ -1664,6 +1689,7 @@ pub async fn send_chat_message(
         let env = ws_env_for_persistent.clone();
         let resolved = resolved_env_for_persistent.clone();
         let pi_sessions_root = pi_sessions_root.clone();
+        let pi_instructions = pi_custom_instructions_for_persistent.clone();
         async move {
             // Note: do NOT route the error through `crate::missing_cli::handle_err`
             // here. The caller's resume-fallback arm needs to inspect the raw
@@ -1714,6 +1740,11 @@ pub async fn send_chat_message(
                     )))
                 }
                 AgentBackendRuntimeHarness::PiSdk => {
+                    // `pi_instructions` omits the `send_to_user` MCP nudge
+                    // that `instructions` carries — Pi has no MCP bridge, so
+                    // forwarding the nudge would point the model at a tool
+                    // that isn't registered in the sidecar.
+                    let _ = instructions;
                     let started = PiSdkSession::start(
                         std::path::Path::new(&worktree),
                         &sid,
@@ -1726,7 +1757,7 @@ pub async fn send_chat_message(
                             },
                             session_dir: Some(pi_sessions_root.join(&sid)),
                             allowed_tools: tools,
-                            custom_instructions: instructions,
+                            custom_instructions: pi_instructions,
                             workspace_env: Some(env),
                             resolved_env: Some(resolved),
                         },

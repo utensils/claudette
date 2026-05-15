@@ -173,6 +173,7 @@
   "models_backend_refresh": "Refresh models",
   "models_backend_test": "Test",
   "models_backend_login": "Run codex login",
+  "models_backend_pi_login": "Run pi auth",
   "models_backend_status_saving": "Saving",
   "models_backend_status_saved": "Saved",
   "models_backend_status_refreshed": "Refreshed {{count}} model(s)",

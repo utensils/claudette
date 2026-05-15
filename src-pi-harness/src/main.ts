@@ -63,6 +63,16 @@ function asString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
+// Non-trimming string accessor for free-form prompt / steer payloads.
+// `asString` is right for ids and config keys where leading/trailing
+// whitespace is always noise, but trimming user prompts would silently
+// drop meaningful whitespace (a turn that starts with a code-block fence,
+// a deliberately blank-leading message, etc.) and diverge from how
+// Claude / Codex forward prompts verbatim.
+function asPromptString(value: unknown): string | undefined {
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
 function asStringArray(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
   return value
@@ -275,8 +285,14 @@ function buildTools(cwd: string, enabledTools: readonly string[]): ToolDefinitio
       execute: async (toolCallId, params) => {
         const path = safePath(cwd, params.path);
         await assertWritableTarget(cwd, path);
+        // Surface the proposed content in the approval payload so the
+        // Claudette permission card can render it for review. Without
+        // this, the user is asked to approve a mutation knowing only the
+        // path — defeating the audit purpose of the prompt.
         const approved = await approval(toolCallId, "fileChange", {
           path,
+          operation: "write",
+          newText: params.content,
           reason: "Pi requested a file write.",
         });
         if (!approved) throw new Error("Write denied by user.");
@@ -308,8 +324,15 @@ function buildTools(cwd: string, enabledTools: readonly string[]): ToolDefinitio
         if (!params.oldText) {
           throw new Error("Edit requires non-empty oldText.");
         }
+        // Send the proposed replacement to Claudette so the permission
+        // card can render a diff. The frontend already handles diff-like
+        // approval payloads from other harnesses; without this, the user
+        // is asked to approve a mutation they cannot inspect.
         const approved = await approval(toolCallId, "fileChange", {
           path,
+          operation: "edit",
+          oldText: params.oldText,
+          newText: params.newText,
           reason: "Pi requested a file edit.",
         });
         if (!approved) throw new Error("Edit denied by user.");
@@ -406,6 +429,7 @@ async function startSession(message: RequestMessage): Promise<void> {
   const cwd = asString(message.cwd) ?? process.cwd();
   const agentDir = asString(message.agentDir) ?? getAgentDir();
   const sessionDir = asString(message.sessionDir);
+  const requestedSessionId = asString(message.sessionId);
   const requestedModel = asString(message.model);
   const customInstructions = asString(message.customInstructions);
   const tools = mapPermissionTools(message.allowedTools);
@@ -426,7 +450,19 @@ async function startSession(message: RequestMessage): Promise<void> {
   });
   await resourceLoader.reload();
 
-  const model = requestedModel ? findModel(requestedModel) : undefined;
+  let model: Awaited<ReturnType<typeof findModel>> | undefined = undefined;
+  if (requestedModel) {
+    model = findModel(requestedModel);
+    if (!model) {
+      // Fail fast instead of letting the SDK silently fall back to its
+      // own default model — the user picked a model that doesn't exist
+      // in this Pi registry, and pretending it does would run a
+      // different model than Claudette displays.
+      throw new Error(
+        `Pi model "${requestedModel}" was not found in the SDK registry. Click "Refresh models" on the Pi card, then retry.`,
+      );
+    }
+  }
   const manager = sessionDir
     ? SessionManager.create(cwd, sessionDir)
     : SessionManager.inMemory();
@@ -448,9 +484,15 @@ async function startSession(message: RequestMessage): Promise<void> {
   state.session?.dispose();
   state.session = result.session;
   state.session.subscribe((event) => routeSessionEvent(event));
+  // Echo Claudette's session id back when it sent one. The chat bridge
+  // treats the ready event's `sessionId` as canonical and uses it to
+  // build `pi-sessions/<id>` on the next start. If we reported the SDK's
+  // own generated id here, the next start would look in a different
+  // directory and lose the prior transcript. Falling back to the SDK id
+  // preserves the standalone/test paths that don't pre-allocate one.
   send({
     type: "ready",
-    sessionId: state.session.sessionId,
+    sessionId: requestedSessionId ?? state.session.sessionId,
     sessionFile: state.session.sessionFile,
     model: state.session.model ? modelKey(state.session.model) : null,
   });
@@ -558,12 +600,12 @@ async function handle(message: RequestMessage): Promise<void> {
       break;
     case "prompt":
       if (!state.session) throw new Error("Pi session has not started");
-      runTurn(state.session.prompt(asString(message.prompt) ?? ""));
+      runTurn(state.session.prompt(asPromptString(message.prompt) ?? ""));
       respond(message.id, message.type, true);
       break;
     case "steer":
       if (!state.session) throw new Error("Pi session has not started");
-      runTurn(state.session.steer(asString(message.prompt) ?? ""));
+      runTurn(state.session.steer(asPromptString(message.prompt) ?? ""));
       respond(message.id, message.type, true);
       break;
     case "abort":

@@ -974,7 +974,7 @@ function BackendCard({
               onClick={() => setStatus(t("models_backend_pi_auth_guidance", "Run `pi auth` in a terminal, then refresh Pi models."))}
               disabled={busy}
             >
-              {t("models_backend_login")}
+              {t("models_backend_pi_login")}
             </button>
           )}
         </div>

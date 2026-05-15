@@ -150,6 +150,7 @@
   "models_backend_refresh": "モデルを更新",
   "models_backend_test": "テスト",
   "models_backend_login": "codex login を実行",
+  "models_backend_pi_login": "pi auth を実行",
   "models_backend_status_saving": "保存中",
   "models_backend_status_saved": "保存済み",
   "models_backend_status_refreshed": "{{count}} 個のモデルを更新しました",

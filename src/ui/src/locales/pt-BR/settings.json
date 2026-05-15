@@ -150,6 +150,7 @@
   "models_backend_refresh": "Atualizar modelos",
   "models_backend_test": "Testar",
   "models_backend_login": "Executar codex login",
+  "models_backend_pi_login": "Executar pi auth",
   "models_backend_status_saving": "Salvando",
   "models_backend_status_saved": "Salvo",
   "models_backend_status_refreshed": "{{count}} modelo(s) atualizado(s)",

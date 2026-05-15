@@ -814,13 +814,16 @@ async fn route_pi_message(
                     text: output.text.clone(),
                 });
             }
-            // When a turn fails with no assistant text, surface the error as
-            // assistant content so the user sees a message instead of a
-            // silently-finalized empty turn.
-            if content.is_empty()
-                && let Some(err) = error_text.as_ref()
-            {
-                content.push(ContentBlock::Text { text: err.clone() });
+            // When a turn fails, always surface the error as an assistant
+            // text block — even when partial text was already streamed.
+            // The frontend renders assistant content but ignores
+            // `Result.result`, so without this an error after partial
+            // text would finalize with only the partial text visible and
+            // the failure invisible.
+            if let Some(err) = error_text.as_ref() {
+                content.push(ContentBlock::Text {
+                    text: format!("Pi turn failed: {err}"),
+                });
             }
             if !content.is_empty() {
                 let _ = event_tx.send(AgentEvent::Stream(StreamEvent::Assistant {
