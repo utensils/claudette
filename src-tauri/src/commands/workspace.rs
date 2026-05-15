@@ -201,7 +201,22 @@ pub async fn fork_workspace_at_checkpoint(
     .await
     .map_err(|e| e.to_string())?;
 
-    crate::tray::rebuild_tray(&app);
+    // Mirror `create_workspace_inner`: emit `workspaces-changed` so the
+    // frontend's listener stamps the UI-only `remote_connection_id: null`
+    // field on the new row. Without this, `result.workspace` returned by
+    // the command lands in the store with `remote_connection_id` missing
+    // entirely (Rust's `Workspace` struct has no such field). The
+    // `useWorkspaceEnvironmentPreparation` hook then treats
+    // `undefined !== null` and bails out of `prepare_workspace_environment`,
+    // stranding the just-forked workspace in the `"preparing"` state set
+    // by `selectWorkspace` — visible to the user as a "Preparing the
+    // workspace…" hang that a window reload silently fixes (because
+    // `loadInitialData` re-stamps every row on cold start).
+    //
+    // `workspace_changed` also rebuilds the tray, so we drop the direct
+    // `rebuild_tray` call below to avoid double-rebuilds.
+    let hooks = TauriHooks::new(app.clone());
+    hooks.workspace_changed(&outcome.workspace.id, WorkspaceChangeKind::Created);
 
     Ok(ForkWorkspaceResult {
         workspace: outcome.workspace,

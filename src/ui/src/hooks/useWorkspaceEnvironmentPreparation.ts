@@ -98,6 +98,16 @@ export function useWorkspaceEnvironmentPreparation() {
     );
     return selectedWorkspace?.remote_connection_id;
   });
+  // True when the currently-selected workspace is an optimistic-fork
+  // placeholder — there's no backing DB row yet, so the backend's
+  // `prepare_workspace_environment` would return "Workspace not found"
+  // and the catch below would helpfully `removeWorkspace()` the
+  // placeholder out of the sidebar mid-fork.  Skip env prep entirely
+  // for placeholders; the real env prep fires off the swapped-in
+  // workspace id once `commitPendingFork` completes.
+  const selectedWorkspaceIsPendingFork = useAppStore((s) =>
+    s.selectedWorkspaceId ? !!s.pendingForks[s.selectedWorkspaceId] : false,
+  );
   const setWorkspaceEnvironment = useAppStore((s) => s.setWorkspaceEnvironment);
   const setWorkspaceEnvironmentProgress = useAppStore(
     (s) => s.setWorkspaceEnvironmentProgress,
@@ -245,6 +255,12 @@ export function useWorkspaceEnvironmentPreparation() {
       setWorkspaceEnvironment(selectedWorkspaceId, "ready");
       return;
     }
+    // Optimistic-fork placeholder: leave the seeded `preparing` /
+    // started_at entry alone (it drives the sidebar spinner) and
+    // skip the IPC round trip.  The real prep fires once
+    // `commitPendingFork` swaps the placeholder for the real
+    // workspace id and the selection effect re-runs.
+    if (selectedWorkspaceIsPendingFork) return;
 
     const workspaceId = selectedWorkspaceId;
     let cancelled = false;
@@ -309,6 +325,7 @@ export function useWorkspaceEnvironmentPreparation() {
   }, [
     selectedWorkspaceId,
     selectedWorkspaceRemoteConnectionId,
+    selectedWorkspaceIsPendingFork,
     setWorkspaceEnvironment,
     addToast,
     openTrustModalOnce,
