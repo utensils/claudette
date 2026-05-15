@@ -5,14 +5,14 @@ use tauri::{AppHandle, Emitter, Manager, State};
 use claudette::agent::background::{
     AgentBackgroundTaskEventKind, parse_background_task_binding, parse_task_notification,
 };
-#[cfg(feature = "pi-sdk")]
-use claudette::agent::{PiSdkOptions, PiSdkSession};
 use claudette::agent::{
     self, AgentEvent, AgentSession, AgentSettings, ClaudeCodeHarness, CodexAppServerOptions,
     CodexAppServerSession, CodexPermissionLevel, ControlRequestInner, FileAttachment,
     InnerStreamEvent, PersistentSessionStart, StartContentBlock, StreamEvent,
     is_codex_approval_tool_name, normalize_codex_reasoning_effort,
 };
+#[cfg(feature = "pi-sdk")]
+use claudette::agent::{PiSdkOptions, PiSdkSession};
 use claudette::agent_backend::AgentBackendRuntimeHarness;
 use claudette::base64_decode;
 use claudette::chat::{
