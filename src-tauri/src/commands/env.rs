@@ -850,10 +850,7 @@ fn evict_newly_disabled(
 /// `String`s so the caller can drop the borrows on the input sets
 /// before iterating (the cache invalidation borrows mutably otherwise).
 fn newly_disabled(baseline: &HashSet<String>, after: &HashSet<String>) -> Vec<String> {
-    after
-        .difference(baseline)
-        .map(|s| s.to_string())
-        .collect()
+    after.difference(baseline).map(|s| s.to_string()).collect()
 }
 
 /// List the env-provider plugin names that are disabled for the
@@ -869,9 +866,7 @@ pub async fn list_env_provider_disabled(
 ) -> Result<Vec<String>, String> {
     let (_, _, repo_id) = resolve_target(&state, &target).await?;
     let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
-    let mut names: Vec<String> = load_disabled_providers(&db, &repo_id)
-        .into_iter()
-        .collect();
+    let mut names: Vec<String> = load_disabled_providers(&db, &repo_id).into_iter().collect();
     names.sort();
     Ok(names)
 }
