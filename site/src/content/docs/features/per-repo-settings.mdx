@@ -77,7 +77,7 @@ While an env-provider is resolving, Claudette surfaces the active plugin and ela
 
 ### Live provisioning output in the Claudette Terminal
 
-For long-running provisioning (`nix print-dev-env` on a cold flake can be 30-90s; a fresh `mise install` can stretch much further), Claudette streams every byte the env-provider and setup-script subprocesses emit into the workspace's **Claudette Terminal** tab. When env-provider resolve starts on a fresh workspace, the bottom terminal panel auto-opens so the output is visible without hunting for the toggle — your current tab focus is preserved if you already have another terminal open.
+For long-running provisioning (`nix print-dev-env` on a cold flake can be 30-90s; a fresh `mise install` can stretch much further), Claudette streams the env-provider plugins' **stderr** (the human-readable progress chatter) and **all** of the setup-script's stdout/stderr into the workspace's **Claudette Terminal** tab. Env-provider **stdout** is intentionally suppressed from the terminal — providers like `direnv export json` / `mise env --json` / `nix print-dev-env --json` emit the full machine-readable environment payload there, which routinely contains secrets (`AWS_SECRET_ACCESS_KEY`, `GH_TOKEN`, …) that don't belong in a transcript on disk. When env-provider resolve starts on a fresh workspace, the bottom terminal panel auto-opens so the output is visible without hunting for the toggle — your current tab focus is preserved if you already have another terminal open.
 
 Because the output lands in a real terminal (xterm.js), native ANSI colors from `nix -L`, `direnv`, and `mise` render directly — no parallel renderer, no stripped escape codes. A dim cyan `── plugin ──` header separates plugin transitions so the direnv → nix-devshell handoff in a wall of build chatter is easy to scan. The `.claudette.json` setup script's stdout / stderr writes into the same tab under a `setup-script` header, so a slow `bun install` is visible in real time instead of waiting for the SetupScriptBanner to appear in the chat transcript.
 
@@ -85,7 +85,7 @@ The Claudette Terminal can be disabled in **Settings > General > Claudette Termi
 
 **Verbose flags applied automatically.** The bundled `env-nix-devshell` plugin passes `-L` (`--print-build-logs`) to `nix print-dev-env` so per-derivation build output streams to the terminal instead of buffering inside Nix. `env-mise` and `env-direnv` rely on the providers' default stderr chatter — both are already informative.
 
-**Secrets warning.** Env-provider stdout can contain secrets (a malformed `.env` echoing values, a `direnv` script printing tokens). The terminal surfaces every byte the subprocess emits. Treat its contents the same way you'd treat any terminal session inside the workspace; don't share screenshots without redacting.
+**Secrets warning.** The env-provider stdout suppression above is a defense-in-depth measure, not a complete redaction guarantee — `direnv` scripts (and noisy setup scripts) can still echo secret values through **stderr**, which the terminal does surface. Treat the terminal's contents the same way you'd treat any terminal session inside the workspace; don't share screenshots without redacting.
 
 ## Claude CLI Flag Overrides
 

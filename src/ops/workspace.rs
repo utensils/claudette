@@ -320,9 +320,13 @@ impl SetupOutputStream {
 }
 
 /// Callback receiver for streamed setup-script output. The Tauri-side
-/// caller wraps this around a `workspace_setup_output` event emitter
-/// so the EnvProvisioningConsole can render setup-script chatter
-/// alongside the env-provider plugins' output.
+/// implementor is [`WorkspaceTerminalFileSink`] in
+/// `src-tauri/src/commands/env.rs`, which appends each line to the
+/// workspace-scoped output file under a `── setup-script ──` header
+/// so xterm.js (tailing the file in the Claudette Terminal tab) shows
+/// the setup output inline with the env-provider transcript. The
+/// previous `workspace_setup_output` Tauri event and the
+/// `EnvProvisioningConsole` React component are gone.
 pub trait SetupOutputSink: Send + Sync {
     fn line(&self, stream: SetupOutputStream, line: String);
 }

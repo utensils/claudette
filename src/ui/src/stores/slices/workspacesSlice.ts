@@ -10,14 +10,18 @@ import type { AppState } from "../useAppStore";
  *  whose requested name was `placeholder`. The Rust allocator
  *  (`src/workspace_alloc.rs`) takes the requested name on the first
  *  attempt and appends `-2`, `-3`, … on collision until it finds a
- *  free slot. So either exact match, or `placeholder-N` where N is a
- *  positive integer. Used by the eager-swap fallback to associate an
- *  optimistic placeholder with the real workspace even when the
- *  allocator added a numeric suffix.
+ *  free slot. So either exact match, or `placeholder-N` where N is an
+ *  integer ≥ 2 with no leading zero. Used by the eager-swap fallback
+ *  to associate an optimistic placeholder with the real workspace
+ *  even when the allocator added a numeric suffix.
  *
- *  Deliberately strict: matching `<placeholder>-anything` (no digit
- *  guard) would let an unrelated workspace named e.g. `main-fork-bug`
- *  swap a `main-fork` placeholder out from under the user. */
+ *  Deliberately strict on both ends:
+ *  - matching `<placeholder>-anything` (no digit guard) would let an
+ *    unrelated workspace named e.g. `main-fork-bug` swap a
+ *    `main-fork` placeholder out from under the user.
+ *  - accepting `-0` / `-1` / `-01` would false-match a manually-named
+ *    workspace `<placeholder>-1` against an optimistic placeholder,
+ *    since the allocator itself never emits those suffixes. */
 function realNameMatchesAllocatorSuffix(
   placeholder: string,
   real: string,
@@ -26,7 +30,14 @@ function realNameMatchesAllocatorSuffix(
   const prefix = `${placeholder}-`;
   if (!real.startsWith(prefix)) return false;
   const suffix = real.slice(prefix.length);
-  return suffix.length > 0 && /^\d+$/.test(suffix);
+  // No-leading-zero digit run — `-02`, `-0`, etc. fail. Allocator's
+  // `format!("...-{}", n)` is base-10 with no padding, so any
+  // leading-zero suffix came from a user/manual rename.
+  if (!/^[1-9]\d*$/.test(suffix)) return false;
+  // Match allocator's first collision suffix (2) and up. Number()
+  // is safe because the regex already constrained the input to a
+  // bounded decimal run.
+  return Number(suffix) >= 2;
 }
 
 /** Match an incoming `workspaces-changed (created)` workspace against

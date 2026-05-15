@@ -548,6 +548,30 @@ describe("findPendingPlaceholderForCreatedWorkspace", () => {
     expect(match).toBeNull();
   });
 
+  it("refuses suffixes the allocator never emits (-0, -1, -01)", () => {
+    // `workspace_alloc.rs` starts at attempt+1=2 — `-0` and `-1`
+    // can only come from manual renames or an unrelated workspace.
+    // Match them and we'd false-swap a real `<placeholder>-1` into
+    // the optimistic placeholder slot, hijacking the user's
+    // selection. Same for leading-zero variants — the allocator's
+    // `format!("...-{}", n)` never pads.
+    for (const badSuffix of ["main-fork-0", "main-fork-1", "main-fork-01"]) {
+      const match = findPendingPlaceholderForCreatedWorkspace({
+        workspaces: [
+          placeholder("pending-fork-1", "repo-1", "main-fork"),
+        ],
+        pendingCreates: {},
+        pendingForks: { "pending-fork-1": "ws-source" },
+        real: makeWorkspace({
+          id: "ws-real",
+          repository_id: "repo-1",
+          name: badSuffix,
+        }),
+      });
+      expect(match, `suffix ${badSuffix} must NOT match`).toBeNull();
+    }
+  });
+
   it("refuses the fallback when multiple placeholders are in flight", () => {
     // Two concurrent forks against the same repo: even an
     // allocator-suffix match is ambiguous because we can't tell which

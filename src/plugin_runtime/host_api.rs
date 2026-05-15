@@ -28,18 +28,22 @@ impl OutputStream {
 }
 
 /// Callback for streaming subprocess output during a `host.exec_streaming`
-/// call or a setup-script run. The plugin-runtime layer wires this to
-/// per-Tauri-app emitters that forward each line as a
-/// `workspace_env_output` / `workspace_setup_output` event so the
-/// frontend's EnvProvisioningConsole can render the live feed.
+/// call. The Tauri-side implementation is [`WorkspaceTerminalFileSink`]
+/// (in `src-tauri/src/commands/env.rs`), which appends each line to the
+/// workspace-scoped output file at
+/// `$TMPDIR/claudette-workspace-terminal/<workspace_id>/terminal.output`.
+/// The Claudette Terminal tab tails that file, so xterm.js renders
+/// the live nix/direnv/mise output directly. The previous
+/// per-line `workspace_env_output` Tauri event and the
+/// `EnvProvisioningConsole` React component are gone — see the
+/// "promote Claudette Terminal" change.
 ///
 /// Implementations should be cheap and non-blocking — the line is
 /// produced from the spawn task's reader loop, which is on the hot path
 /// of a 100k-line `nix print-dev-env -L`. Heavy work (rate-limit
-/// batching, IPC serialization) belongs in the implementor, not on the
-/// reader task — but in practice Tauri's `emit` is already a quick
-/// queueing operation, so a direct emit-per-line is fine for the
-/// typical resolve.
+/// batching, file rotation) belongs in the implementor, not on the
+/// reader task. The bundled file sink caches an append-mode handle in a
+/// `Mutex<Option<File>>` so per-line cost is one `write_all` syscall.
 pub trait StreamingSink: Send + Sync {
     fn line(&self, plugin: &str, stream: OutputStream, line: String);
 }

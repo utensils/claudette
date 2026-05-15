@@ -140,6 +140,15 @@ pub struct WorkspaceTerminalFileSink {
     /// Last plugin name we emitted a header for. We don't lock for
     /// reads — the worst case on a torn read is a duplicate header.
     last_plugin: std::sync::Mutex<Option<String>>,
+    /// Cached append-mode file handle so the hot streaming path
+    /// (potentially 100k+ lines from `nix print-dev-env -L`) doesn't
+    /// pay an `OpenOptions::open` + `create_dir_all` syscall per line.
+    /// Lazily initialized on first append; subsequent appends only
+    /// pay one `write_all` per line. No `BufWriter` here on purpose:
+    /// xterm.js tails the file, so we want every line to land on
+    /// disk immediately rather than coalesce in a userspace buffer
+    /// the reader can't see.
+    file: std::sync::Mutex<Option<std::fs::File>>,
 }
 
 impl WorkspaceTerminalFileSink {
@@ -147,6 +156,7 @@ impl WorkspaceTerminalFileSink {
         Self {
             output_path: workspace_terminal_output_path(workspace_id),
             last_plugin: std::sync::Mutex::new(None),
+            file: std::sync::Mutex::new(None),
         }
     }
 
@@ -155,14 +165,21 @@ impl WorkspaceTerminalFileSink {
     /// full), dropping a line is preferable to spamming logs from the
     /// hot streaming path.
     fn append(&self, bytes: &[u8]) {
-        if let Some(parent) = self.output_path.parent() {
-            let _ = std::fs::create_dir_all(parent);
+        let mut guard = match self.file.lock() {
+            Ok(g) => g,
+            Err(p) => p.into_inner(),
+        };
+        if guard.is_none() {
+            if let Some(parent) = self.output_path.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            *guard = std::fs::OpenOptions::new()
+                .append(true)
+                .create(true)
+                .open(&self.output_path)
+                .ok();
         }
-        if let Ok(mut file) = std::fs::OpenOptions::new()
-            .append(true)
-            .create(true)
-            .open(&self.output_path)
-        {
+        if let Some(file) = guard.as_mut() {
             use std::io::Write;
             let _ = file.write_all(bytes);
         }
