@@ -23,8 +23,8 @@ import {
 } from "../../chat/reasoningControls";
 import {
   buildModelRegistry,
+  groupPiDiscoveredModels,
   resolveModelSelection,
-  resolvePiSubProvider,
 } from "../../chat/modelRegistry";
 import { useAppStore } from "../../../stores/useAppStore";
 import { formatBackendError } from "../backendSettingsErrors";
@@ -1030,38 +1030,6 @@ function isDiscoveryBackend(backend: AgentBackendConfig) {
     backend.kind === "pi_sdk" ||
     backend.kind === "lm_studio"
   );
-}
-
-interface PiDiscoveredGroup {
-  key: string;
-  label: string;
-  models: AgentBackendConfig["discovered_models"];
-}
-
-/** Group Pi-discovered models by sub-provider (parsed from the
- *  `provider/modelId` prefix the sidecar emits). Other backends rarely
- *  return more than a handful of models, so the chip wall is fine for
- *  them — this is Pi-specific UX. Sub-providers are sorted by model
- *  count descending so the biggest catalogs (OpenAI, Anthropic) surface
- *  first. */
-function groupPiDiscoveredModels(
-  models: AgentBackendConfig["discovered_models"],
-): PiDiscoveredGroup[] {
-  const groups = new Map<string, PiDiscoveredGroup>();
-  for (const model of models) {
-    const { key, label } = resolvePiSubProvider(model.id);
-    let group = groups.get(key);
-    if (!group) {
-      group = { key, label, models: [] };
-      groups.set(key, group);
-    }
-    group.models.push(model);
-  }
-  return Array.from(groups.values()).sort((a, b) => {
-    const sizeDiff = b.models.length - a.models.length;
-    if (sizeDiff !== 0) return sizeDiff;
-    return a.label.localeCompare(b.label);
-  });
 }
 
 function PiDiscoveredModelsList({

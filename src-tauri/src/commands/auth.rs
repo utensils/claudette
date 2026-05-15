@@ -124,6 +124,11 @@ pub async fn get_claude_auth_status(
 /// token right now?". Returns `false` on any error path (missing CLI,
 /// timeout, parse failure) so the gate fails open — the only caller
 /// uses it to block a sensitive route, not to grant one.
+//
+// `alternative-backends`-gated builds are the only consumer; suppress
+// the dead-code warning on stripped builds without forcing the function
+// itself behind a feature wall (it's small and stays useful for tests).
+#[cfg_attr(not(feature = "alternative-backends"), allow(dead_code))]
 pub async fn is_claude_oauth_authenticated() -> bool {
     let claude_path = claudette::agent::resolve_claude_path().await;
     let mut command = Command::new(&claude_path);

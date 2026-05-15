@@ -1,7 +1,9 @@
 use serde::{Deserialize, Serialize};
 use tauri::State;
 
-use claudette::agent_backend::{AgentBackendConfig, AgentBackendRuntime};
+use claudette::agent_backend::{
+    AgentBackendConfig, AgentBackendRuntime, AgentBackendRuntimeHarness,
+};
 
 use crate::state::AppState;
 
@@ -76,6 +78,21 @@ pub async fn delete_agent_backend(
 
 #[tauri::command]
 pub async fn save_agent_backend_secret(_update: BackendSecretUpdate) -> Result<(), String> {
+    Err(disabled_error())
+}
+
+/// No-op stub for builds without `alternative-backends`. The
+/// real implementation in `agent_backends.rs` only makes sense when
+/// non-Anthropic backends exist; in a stripped build the persisted
+/// `runtime_harness` field would have no consumer, so the command
+/// rejects every call. Keeps the IPC surface stable so the frontend
+/// doesn't have to feature-detect.
+#[tauri::command]
+pub async fn set_agent_backend_runtime_harness(
+    _backend_id: String,
+    _harness: Option<AgentBackendRuntimeHarness>,
+    _state: State<'_, AppState>,
+) -> Result<Vec<AgentBackendConfig>, String> {
     Err(disabled_error())
 }
 
@@ -215,5 +232,23 @@ mod tests {
 
         assert_eq!(backend.as_deref(), Some("anthropic"));
         assert_eq!(model.as_deref(), Some("sonnet"));
+    }
+
+    #[test]
+    fn disabled_error_mentions_alternative_backends_compile_flag() {
+        // The error returned by every disabled stub must be specific
+        // enough for the user (and future debugging) to know this is a
+        // compile-time gate, not a runtime config issue. A regression
+        // test pins the wording so we don't accidentally make it
+        // generic the next time we add a stub.
+        let message = disabled_error();
+        assert!(
+            message.contains("Alternative Claude Code backends"),
+            "disabled error should name the feature: {message}"
+        );
+        assert!(
+            message.to_lowercase().contains("compiled"),
+            "disabled error should mention this is a compile-time gate: {message}"
+        );
     }
 }

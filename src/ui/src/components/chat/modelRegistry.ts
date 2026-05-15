@@ -157,6 +157,43 @@ export function resolvePiSubProvider(
   return { key: rawKey, label };
 }
 
+export interface PiDiscoveredGroup<M> {
+  key: string;
+  label: string;
+  models: M[];
+}
+
+/**
+ * Group Pi-discovered models by sub-provider (parsed from the
+ * `provider/modelId` prefix the sidecar emits). Sub-providers are
+ * sorted by model count descending so the biggest catalogs surface
+ * first — ties break alphabetically by display label.
+ *
+ * Pure grouping helper, shared between the Settings card render and
+ * its regression tests. Generic over the model shape so the same
+ * function works with `BackendRegistryModel`, `AgentBackendModel`,
+ * or any other `{ id: string }` payload.
+ */
+export function groupPiDiscoveredModels<M extends { id: string }>(
+  models: readonly M[],
+): PiDiscoveredGroup<M>[] {
+  const groups = new Map<string, PiDiscoveredGroup<M>>();
+  for (const model of models) {
+    const { key, label } = resolvePiSubProvider(model.id);
+    let group = groups.get(key);
+    if (!group) {
+      group = { key, label, models: [] };
+      groups.set(key, group);
+    }
+    group.models.push(model);
+  }
+  return Array.from(groups.values()).sort((a, b) => {
+    const sizeDiff = b.models.length - a.models.length;
+    if (sizeDiff !== 0) return sizeDiff;
+    return a.label.localeCompare(b.label);
+  });
+}
+
 function parseModelVersion(model: BackendRegistryModel): ParsedModelVersion | undefined {
   const text = `${model.id} ${model.label}`.toLowerCase();
   // Heuristic for provider-supplied model ids, not a strict semantic-version

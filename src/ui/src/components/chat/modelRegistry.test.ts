@@ -4,6 +4,7 @@ import {
   PI_SUBSECTION_PRIMARY_CAP,
   buildModelRegistry,
   findModelInRegistry,
+  groupPiDiscoveredModels,
   is1mContextModel,
   get1mFallback,
   resolvePiSubProvider,
@@ -351,6 +352,48 @@ describe("modelRegistry", () => {
         key: "other",
         label: "Other",
       });
+    });
+  });
+
+  describe("groupPiDiscoveredModels", () => {
+    const m = (id: string) => ({ id, label: id });
+
+    it("groups by provider prefix and sorts by count desc", () => {
+      const result = groupPiDiscoveredModels([
+        m("openai/gpt-5.4"),
+        m("anthropic/claude-sonnet-4-6"),
+        m("openai/gpt-4o"),
+        m("openai/gpt-5"),
+        m("ollama/llama3"),
+      ]);
+      expect(result.map((g) => g.key)).toEqual(["openai", "anthropic", "ollama"]);
+      expect(result[0]!.models).toHaveLength(3);
+      expect(result[1]!.models).toHaveLength(1);
+      expect(result[2]!.models).toHaveLength(1);
+    });
+
+    it("breaks ties alphabetically by display label so order is stable", () => {
+      const result = groupPiDiscoveredModels([
+        m("openai/gpt-5.4"),
+        m("anthropic/claude-sonnet-4-6"),
+      ]);
+      expect(result.map((g) => g.key)).toEqual(["anthropic", "openai"]);
+    });
+
+    it("returns an empty array when given no models", () => {
+      expect(groupPiDiscoveredModels([])).toEqual([]);
+    });
+
+    it("buckets non-provider-qualified ids under `other` instead of crashing", () => {
+      const result = groupPiDiscoveredModels([
+        m("openai/gpt-5.4"),
+        m("bare-id-with-no-slash"),
+      ]);
+      const otherGroup = result.find((g) => g.key === "other");
+      expect(otherGroup).toBeDefined();
+      expect(otherGroup?.models.map((mm) => mm.id)).toEqual([
+        "bare-id-with-no-slash",
+      ]);
     });
 
     it("does not expose legacy Codex through alternative backends", () => {
