@@ -424,6 +424,17 @@
   "usage_last_updated": "Last updated {{time}}",
   "usage_pct_used": "{{pct}}% used",
 
+  "usage_insights_confirm_title": "Enable Usage Insights?",
+  "usage_insights_confirm_how_it_works": "Usage Insights asks Anthropic's usage API how much of your subscription you've used and shows that next to the context meter — a little vertical bar that fills as you approach your limit, plus a 'resets in…' countdown when you've hit it. Claudette only reads usage when this is on; it never stores or shares the numbers.",
+  "usage_indicator_tooltip_used": "{{label}}: {{pct}}% used — click for all limits",
+  "usage_indicator_tooltip_exhausted": "{{label}} exhausted — resets in {{countdown}}",
+  "usage_indicator_tooltip_exhausted_resetting": "{{label}} exhausted — resetting now",
+  "usage_insights_confirm_warning_heading": "Heads up",
+  "usage_insights_confirm_warning_body": "This feature talks to a Claude Code API endpoint that isn't part of Anthropic's documented public API surface. Programmatic access to it may not be permitted under Anthropic's terms — please review them before enabling.",
+  "usage_insights_confirm_tos_link": "Read Anthropic's Consumer Terms",
+  "usage_insights_confirm_cancel": "Cancel",
+  "usage_insights_confirm_enable": "I understand — enable",
+
   "repo_not_found": "Repository not found",
   "repo_change_icon_aria": "Change repository icon",
   "repo_change_icon_title": "Change icon",

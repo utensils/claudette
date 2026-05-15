@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useAppStore } from "../../../stores/useAppStore";
 import { setAppSetting } from "../../../services/tauri";
+import { UsageInsightsConfirmModal } from "./UsageInsightsConfirmModal";
 import styles from "../Settings.module.css";
 
 export function ExperimentalSettings() {
@@ -29,6 +30,7 @@ export function ExperimentalSettings() {
     (s) => s.setCommunityRegistryEnabled,
   );
   const [error, setError] = useState<string | null>(null);
+  const [usageConfirmOpen, setUsageConfirmOpen] = useState(false);
 
   const handleClaudetteTerminalToggle = async () => {
     const next = !claudetteTerminalEnabled;
@@ -42,8 +44,7 @@ export function ExperimentalSettings() {
     }
   };
 
-  const handleUsageToggle = async () => {
-    const next = !usageInsightsEnabled;
+  const applyUsageInsights = async (next: boolean) => {
     setUsageInsightsEnabled(next);
     try {
       setError(null);
@@ -52,6 +53,15 @@ export function ExperimentalSettings() {
       setUsageInsightsEnabled(!next);
       setError(String(e));
     }
+  };
+
+  const handleUsageToggle = async () => {
+    // Confirm only on OFF -> ON. Disabling never prompts.
+    if (!usageInsightsEnabled) {
+      setUsageConfirmOpen(true);
+      return;
+    }
+    await applyUsageInsights(false);
   };
 
   const handlePluginManagementToggle = async () => {
@@ -209,6 +219,16 @@ export function ExperimentalSettings() {
           </button>
         </div>
       </div>
+
+      {usageConfirmOpen && (
+        <UsageInsightsConfirmModal
+          onCancel={() => setUsageConfirmOpen(false)}
+          onConfirm={() => {
+            setUsageConfirmOpen(false);
+            void applyUsageInsights(true);
+          }}
+        />
+      )}
     </div>
   );
 }
