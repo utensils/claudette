@@ -14,9 +14,11 @@ function barColor(pct: number): string {
 /**
  * Compact usage-allocation indicator for the composer toolbar.
  *
- * Vertical bar that drains as the most-urgent Anthropic subscription
- * limit fills (burn-rate weighted — see [[selectUsageBucket]]). Clicking
- * opens a popover showing every bucket the API returned.
+ * Vertical bar that fills as the most-urgent Anthropic subscription
+ * limit is consumed (burn-rate weighted — see [[selectUsageBucket]]).
+ * The readout shows percent *used* to match the popover and Claude
+ * Code's own `/usage` panel. Clicking opens a popover with every
+ * bucket the API returned.
  */
 export function UsageIndicator() {
   const enabled = useAppStore((s) => s.usageInsightsEnabled);
@@ -39,7 +41,6 @@ export function UsageIndicator() {
   if (!bucket) return null;
 
   const pct = Math.min(bucket.utilization, 100);
-  const remainingHeight = Math.max(0, 100 - pct);
   const color = barColor(pct);
   const tooltip = bucket.exhausted
     ? `${bucket.label} exhausted — resets in ${formatResetCountdown(bucket.resetsAt)}`
@@ -60,7 +61,7 @@ export function UsageIndicator() {
         <div className={styles.bar}>
           <div
             className={styles.barFill}
-            style={{ height: `${remainingHeight}%`, background: color }}
+            style={{ height: `${pct}%`, background: color }}
           />
         </div>
         {bucket.exhausted ? (
@@ -68,7 +69,7 @@ export function UsageIndicator() {
             ↻ {formatResetCountdown(bucket.resetsAt)}
           </span>
         ) : (
-          <span className={styles.readout}>{Math.floor(100 - pct)}%</span>
+          <span className={styles.readout}>{Math.floor(pct)}%</span>
         )}
       </button>
       {open && (
