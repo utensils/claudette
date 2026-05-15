@@ -209,6 +209,47 @@ rm -f "$bundle_executable"
 cp "$binary" "$bundle_executable"
 chmod +x "$bundle_executable"
 
+# Mirror Tauri externalBin + resources staging into the dev .app so the
+# running binary's `current_exe.parent()` lookup behaves the same way it
+# does in a release bundle. Without this mirror, sidecars staged by
+# `scripts/stage-*-sidecar.sh` exist only at `src-tauri/binaries/<name>-<triple>`,
+# and the running app — launched via `open -W` with cwd `/` — has no
+# path that resolves them: the resolver's `current_exe.parent()` candidate
+# looks in `Contents/MacOS/`, and its repo-relative fallback is defeated
+# by the lost cwd. The user then sees a "not installed" error in dev even
+# though staging succeeded. Each entry in `tauri.conf.json`'s `externalBin`
+# is staged as `<basename>-<triple>` (with `.exe` on Windows); the release
+# bundler strips the triple suffix when placing it next to the main exe,
+# so we replicate that contract here. Mirroring also runs before
+# `codesign --deep` below so the staged binaries inherit the dev
+# entitlements in one pass.
+host_triple="$(rustc -vV 2>/dev/null | awk '/host:/ {print $2}')"
+staged_dir="$repo_root/src-tauri/binaries"
+if [ -n "$host_triple" ] && [ -d "$staged_dir" ]; then
+  shopt -s nullglob
+  for staged in "$staged_dir"/*-"$host_triple"; do
+    base="$(basename "$staged")"
+    stripped="${base%-$host_triple}"
+    dest="$macos_dir/$stripped"
+    rm -f "$dest"
+    cp "$staged" "$dest"
+    chmod +x "$dest"
+    echo "▸ Mirrored sidecar ${base} → MacOS/${stripped}"
+  done
+  shopt -u nullglob
+  # Pi SDK metadata: `resolve_pi_package_dir` in `src/agent/pi_sdk.rs` looks
+  # for `binaries/pi/` adjacent to the main exe (release Tauri places it in
+  # `Contents/Resources/binaries/pi/` because the entry in `bundle.resources`
+  # preserves its path). Mirror the same layout so the Pi harness sidecar
+  # can find package.json in dev too.
+  if [ -f "$staged_dir/pi/package.json" ]; then
+    resource_pi_dir="$resources_dir/binaries/pi"
+    mkdir -p "$resource_pi_dir"
+    cp "$staged_dir/pi/package.json" "$resource_pi_dir/package.json"
+    echo "▸ Mirrored pi/package.json → Resources/binaries/pi/"
+  fi
+fi
+
 cat >"$contents_dir/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
