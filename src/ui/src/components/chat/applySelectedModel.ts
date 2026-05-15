@@ -51,7 +51,7 @@ export async function applySelectedModel(
     store.alternativeBackendsEnabled,
     store.agentBackends,
     store.codexEnabled,
-    { isClaudeOauthSubscriber },
+    { isClaudeOauthSubscriber, piSdkAvailable: store.piSdkAvailable },
   );
   const selectedEntry = findModelInRegistry(registry, model, nextProvider);
   const supportsFast = selectedEntry?.supportsFastMode ?? isFastSupported(model);

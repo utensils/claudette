@@ -31,6 +31,7 @@ export function useModelRegistry(): readonly Model[] {
   const codexEnabled = useAppStore((s) => s.codexEnabled);
   const agentBackends = useAppStore((s) => s.agentBackends);
   const claudeAuthMethod = useAppStore((s) => s.claudeAuthMethod);
+  const piSdkAvailable = useAppStore((s) => s.piSdkAvailable);
   const isClaudeOauthSubscriber = useMemo(
     () => claudeAuthMethod?.toLowerCase() === "oauth_token",
     [claudeAuthMethod],
@@ -41,13 +42,14 @@ export function useModelRegistry(): readonly Model[] {
         alternativeBackendsEnabled,
         agentBackends,
         codexEnabled,
-        { isClaudeOauthSubscriber },
+        { isClaudeOauthSubscriber, piSdkAvailable },
       ),
     [
       alternativeBackendsEnabled,
       agentBackends,
       codexEnabled,
       isClaudeOauthSubscriber,
+      piSdkAvailable,
     ],
   );
 }

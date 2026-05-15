@@ -360,11 +360,18 @@ export function shouldExposeBackendModels(
   backend: BackendRegistrySource,
   alternativeBackendsEnabled: boolean,
   codexEnabled = false,
+  piSdkAvailable = true,
 ): boolean {
   if (!backend.enabled || backend.id === "anthropic") return false;
   if (backend.kind === "codex_subscription") return false;
   if (backend.kind === "codex_native") return codexEnabled;
-  if (backend.kind === "pi_sdk") return true;
+  // Defense in depth: even when a stale Pi backend row makes it into
+  // the store (e.g. a remote-server connection that exposes Pi rows
+  // back to a local no-pi build), the model picker must not surface
+  // them on builds where the Pi harness can't actually dispatch.
+  // The Rust loader normally drops Pi rows in a no-pi build, but the
+  // contract is "hide Pi when not compiled in" — pin it here too.
+  if (backend.kind === "pi_sdk") return piSdkAvailable;
   return alternativeBackendsEnabled;
 }
 
@@ -387,6 +394,15 @@ export interface ModelRegistryOptions {
    * surface ids that the resolver rejects mid-send.
    */
   isClaudeOauthSubscriber?: boolean;
+  /**
+   * False when the host binary was built without the `pi-sdk` cargo
+   * feature. The Rust loader normally suppresses Pi rows in that case,
+   * but the model registry double-checks here so a remote-server
+   * connection (or any future source that bypasses the loader) can't
+   * leak Pi rows into the no-pi UI. Defaults to `true` so existing
+   * unit-test fixtures keep their full surface without modification.
+   */
+  piSdkAvailable?: boolean;
 }
 
 export function buildModelRegistry(
@@ -396,6 +412,7 @@ export function buildModelRegistry(
   options: ModelRegistryOptions = {},
 ): readonly Model[] {
   const isClaudeOauthSubscriber = options.isClaudeOauthSubscriber === true;
+  const piSdkAvailable = options.piSdkAvailable !== false;
   // Pi-disabled downgrade: when no enabled Pi backend exists, non-Pi
   // cards that point at the Pi harness fall through to their first
   // sanctioned non-Pi runtime — same logic as `resolve_dispatch_harness`
@@ -411,6 +428,7 @@ export function buildModelRegistry(
       backend,
       alternativeBackendsEnabled,
       codexEnabled,
+      piSdkAvailable,
     )) continue;
     const backendModels =
       backend.discovered_models.length > 0

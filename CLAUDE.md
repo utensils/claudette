@@ -94,11 +94,12 @@ Four crates in a Cargo workspace:
 | `claudette-cli` | `src-cli/` | Command-line client (`claudette` binary) that drives the running GUI over a local IPC socket. |
 
 Feature flags in `claudette-tauri`:
-- `default = ["server", "voice", "devtools", "alternative-backends"]`
+- `default = ["server", "voice", "devtools", "alternative-backends", "pi-sdk"]`
 - `voice` — pulls in `cpal` (audio capture), `candle-*` (Whisper inference), `tokenizers`, `rubato`, `hound`. Linux requires `libasound2-dev` (ALSA); headless builds drop it via `--no-default-features --features tauri/custom-protocol,server`.
 - `devtools` — enables Tauri devtools (`tauri/devtools`)
 - `server` — optional dep on `claudette-server`
-- `alternative-backends` — enables non-Claude-CLI agent providers (Codex app-server, Pi SDK). The frontend gates UI behind the flag.
+- `alternative-backends` — surfaces the user-facing alt-backend gate (Codex Native + the Pi runtime option on Ollama / LM Studio / OpenAI cards). Does not by itself compile the Pi sidecar into the binary; pairs with `pi-sdk` for that.
+- `pi-sdk` — compiles the Pi coding-agent harness (sidecar wrapper around `@earendil-works/pi-coding-agent`), bundles `binaries/claudette-pi-harness` + `binaries/pi/package.json`, and exposes the Pi card / Pi runtime option in Settings. Independent of `alternative-backends` — drop it (with `--no-default-features --features tauri/custom-protocol,server,voice,devtools,alternative-backends -c src-tauri/tauri.no-pi.conf.json`) to ship a Codex-Native-enabled build without Pi. The lib crate mirrors this flag (`claudette::pi-sdk`) and downstream `claudette-server` / `claudette-cli` set `default-features = false` on their `claudette` dep so workspace feature unification can't drag Pi back in.
 
 ### Frontend
 

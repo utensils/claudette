@@ -280,12 +280,15 @@ pub async fn auto_detect_agent_backends(
         .iter()
         .find(|backend| backend.id == "lm-studio")
         .cloned();
+    #[cfg(feature = "pi-sdk")]
     let pi = backends.iter().find(|backend| backend.id == "pi").cloned();
     let probe_codex = should_probe_backend_auto_detection(&db, NATIVE_CODEX_BACKEND_ID)?;
     let probe_ollama = should_probe_backend_auto_detection(&db, "ollama")?;
     let probe_lm_studio = should_probe_backend_auto_detection(&db, "lm-studio")?;
+    #[cfg(feature = "pi-sdk")]
     let probe_pi = should_probe_backend_auto_detection(&db, "pi")?;
 
+    #[cfg(feature = "pi-sdk")]
     let (codex_detection, ollama_detection, lm_studio_detection, pi_detection) = tokio::join!(
         async move {
             if probe_codex {
@@ -323,10 +326,35 @@ pub async fn auto_detect_agent_backends(
             }
         },
     );
+    #[cfg(not(feature = "pi-sdk"))]
+    let (codex_detection, ollama_detection, lm_studio_detection) = tokio::join!(
+        async move {
+            if probe_codex {
+                probe_codex_backend(codex).await
+            } else {
+                skipped_backend_auto_detection(NATIVE_CODEX_BACKEND_ID)
+            }
+        },
+        async move {
+            if probe_ollama {
+                probe_model_discovery_backend(ollama).await
+            } else {
+                skipped_backend_auto_detection("ollama")
+            }
+        },
+        async move {
+            if probe_lm_studio {
+                probe_model_discovery_backend(lm_studio).await
+            } else {
+                skipped_backend_auto_detection("lm-studio")
+            }
+        },
+    );
     let mut detections = vec![
         codex_detection,
         ollama_detection,
         lm_studio_detection,
+        #[cfg(feature = "pi-sdk")]
         pi_detection,
     ];
     if detections.iter().any(|detection| {
