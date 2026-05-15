@@ -8,6 +8,7 @@ import {
   HELP_DOCS_URL,
   HELP_ISSUES_URL,
   HELP_RELEASE_URL_BASE,
+  releaseTagFor,
 } from "../../../helpUrls";
 import styles from "../Settings.module.css";
 
@@ -22,7 +23,9 @@ export function HelpSettings() {
 
   const openChangelog = () => {
     if (!appVersion) return;
-    void openUrl(`${HELP_RELEASE_URL_BASE}${appVersion}`).catch(() => {});
+    void openUrl(`${HELP_RELEASE_URL_BASE}${releaseTagFor(appVersion)}`).catch(
+      () => {},
+    );
   };
 
   return (
