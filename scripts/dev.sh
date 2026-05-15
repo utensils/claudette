@@ -378,21 +378,120 @@ if (( clone_session )); then
     exit 127
   fi
 
-  # One shared exclude list for all three rsyncs. Skips caches, build
-  # artifacts, and per-project logs/updates — rebuild for free, take
-  # significant disk, and would slow both first-run and re-sync runs.
+  # One shared exclude list for all three rsyncs. Aggressively drops
+  # dep caches, build outputs, virtualenvs, and tool scratch across
+  # every common language ecosystem — the dev clone exists to exercise
+  # Claudette itself, not to faithfully mirror project state. Patterns
+  # without a leading `/` match by basename at any depth, so e.g.
+  # `--exclude=target` skips every `target/` dir inside cloned
+  # workspaces. File-glob patterns (`*.pyc`, `*.tsbuildinfo`) apply
+  # at every depth too.
   rsync_excludes=(
-    --exclude=node_modules
-    --exclude=target
-    --exclude=.next
-    --exclude=dist
-    --exclude=build
-    --exclude=logs
-    --exclude=updates
+    # Claudette-internal caches under ~/.claudette and ~/.claude
     --exclude=plugins/cache
     --exclude=image-cache
     --exclude=paste-cache
     --exclude=cache
+    --exclude=.cache
+    --exclude=logs
+    --exclude=updates
+
+    # Rust / Cargo (per-workspace target/ dir)
+    --exclude=target
+
+    # JS / TS — package managers, framework caches, build outputs
+    --exclude=node_modules
+    --exclude=bower_components
+    --exclude=.npm
+    --exclude=.pnpm-store
+    --exclude=.yarn/cache
+    --exclude=.parcel-cache
+    --exclude=.turbo
+    --exclude=.swc
+    --exclude=.vite
+    --exclude=.next
+    --exclude=.nuxt
+    --exclude=.astro
+    --exclude=.docusaurus
+    --exclude=.vuepress
+    --exclude=.vitepress
+    --exclude=.vercel
+    --exclude=.netlify
+    --exclude=.firebase
+    --exclude=.serverless
+    --exclude=.nx
+    --exclude=.rollup.cache
+    --exclude=.esbuild
+    --exclude=.nyc_output
+    --exclude=dist
+    --exclude=build
+    --exclude=*.tsbuildinfo
+
+    # Python — virtualenvs, bytecode, tooling caches
+    --exclude=.venv
+    --exclude=venv
+    --exclude=virtualenv
+    --exclude=__pycache__
+    --exclude=.pytest_cache
+    --exclude=.mypy_cache
+    --exclude=.ruff_cache
+    --exclude=.tox
+    --exclude=.nox
+    --exclude=.ipynb_checkpoints
+    --exclude=*.pyc
+    --exclude=*.pyo
+    --exclude=*.egg-info
+
+    # JVM (Java / Kotlin / Scala / Gradle)
+    --exclude=.gradle
+    --exclude=*.class
+
+    # .NET (obj/ is unambiguously build output; bin/ skipped — too risky)
+    --exclude=obj
+
+    # Haskell
+    --exclude=.stack-work
+    --exclude=dist-newstyle
+
+    # Elixir / Erlang
+    --exclude=_build
+    --exclude=deps
+
+    # OCaml
+    --exclude=_opam
+
+    # Swift / iOS
+    --exclude=.build
+    --exclude=DerivedData
+    --exclude=Pods
+    --exclude=Carthage
+
+    # Ruby
+    --exclude=.bundle
+
+    # Infrastructure
+    --exclude=.terraform
+
+    # Coverage / test artifacts
+    --exclude=coverage
+    --exclude=htmlcov
+    --exclude=.coverage
+    --exclude=playwright-report
+    --exclude=test-results
+
+    # C / C++ object files
+    --exclude=*.o
+    --exclude=*.obj
+    --exclude=*.a
+
+    # Editor swap / backup files
+    --exclude=*.swp
+    --exclude=*.swo
+    --exclude=*~
+
+    # macOS Finder noise + AppleDouble metadata on non-HFS volumes
+    --exclude=.DS_Store
+    --exclude=._*
   )
 
   echo "▸ Clone session:      $sandbox_root  (rsync; re-runs sync incrementally)"
