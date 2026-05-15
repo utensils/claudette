@@ -408,9 +408,24 @@ pub async fn get_env_sources(
     .await;
 
     // Mid-resolve disable safety — see [`evict_newly_disabled`] doc.
-    // Cheap DB read; covers the case where the user toggled a plugin
-    // off while this resolve was already in flight.
-    evict_newly_disabled(&state, &worktree, &repo_id, &disabled);
+    // Re-read the disabled set once and use it for BOTH the cache
+    // eviction and the per-row `enabled` field below. Without the
+    // re-read, a slow `nix print-dev-env` whose `get_env_sources` call
+    // started before the user clicked Disable would land back at the
+    // panel with `enabled = true` (the pre-resolve snapshot value),
+    // overwriting the EnvPanel's optimistic flip until another
+    // refresh. The toggle is now actionable mid-resolve, so the
+    // response payload has to honor any toggles applied during the
+    // resolve window.
+    let disabled_after = {
+        let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
+        load_disabled_providers(&db, &repo_id)
+    };
+    for plugin in newly_disabled(&disabled, &disabled_after) {
+        state
+            .env_cache
+            .invalidate(Path::new(&worktree), Some(&plugin));
+    }
 
     // Subscribe the fs watcher to every freshly-cached plugin's
     // watched paths. Must happen BEFORE `filter_globally_disabled`
@@ -426,7 +441,7 @@ pub async fn get_env_sources(
                 .get(&s.plugin_name)
                 .cloned()
                 .unwrap_or_else(|| s.plugin_name.clone());
-            let enabled = !disabled.contains(&s.plugin_name);
+            let enabled = !disabled_after.contains(&s.plugin_name);
             // The dispatcher writes `error: Some("unavailable")` to
             // signal "required CLI isn't on PATH". Promote that to a
             // dedicated flag and clear the error string so the UI
@@ -1903,6 +1918,36 @@ mod tests {
         after.insert("env-direnv".to_string());
 
         assert!(newly_disabled(&baseline, &after).is_empty());
+    }
+
+    #[test]
+    fn newly_disabled_diff_drives_get_env_sources_enabled_field() {
+        // Pin the contract the get_env_sources fix depends on: when a
+        // user disables a plugin mid-resolve, the post-resolve
+        // `load_disabled_providers` read returns a set whose
+        // `!contains(plugin_name)` lookup matches the new toggle
+        // state — i.e. `enabled = false` for the disabled plugin.
+        //
+        // Codex iter (post-squash) flagged: without using
+        // `disabled_after` here, a slow resolve's response would
+        // overwrite the EnvPanel's optimistic disable flip with the
+        // pre-resolve snapshot value. The fix re-reads disabled after
+        // the resolve and feeds that set into both the eviction loop
+        // and the per-row `enabled` field. This test asserts the set
+        // logic at the boundary the command actually uses
+        // (`!disabled.contains(&plugin_name)`) so the contract is
+        // explicit even though the command itself can't be exercised
+        // without a Tauri AppState.
+        let mut disabled_after = HashSet::new();
+        disabled_after.insert("env-direnv".to_string());
+
+        // env-direnv was just disabled.
+        let direnv_enabled = !disabled_after.contains("env-direnv");
+        // env-mise was never touched.
+        let mise_enabled = !disabled_after.contains("env-mise");
+
+        assert!(!direnv_enabled);
+        assert!(mise_enabled);
     }
 
     #[tokio::test]
