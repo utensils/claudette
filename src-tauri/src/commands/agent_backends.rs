@@ -922,9 +922,41 @@ async fn ensure_anthropic_not_routed_through_pi_via_oauth(
 }
 
 fn pi_model_targets_anthropic(model_id: &str) -> bool {
-    model_id.split('/').next().map(str::trim).map(|prefix| {
-        prefix.eq_ignore_ascii_case("anthropic") || prefix.eq_ignore_ascii_case("claude")
-    }) == Some(true)
+    let trimmed = model_id.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+    // Provider-qualified form (`anthropic/...` or `claude/...`) — the
+    // common case the picker emits.
+    if let Some(prefix) = trimmed.split('/').next() {
+        let prefix = prefix.trim();
+        if prefix.eq_ignore_ascii_case("anthropic") || prefix.eq_ignore_ascii_case("claude") {
+            return true;
+        }
+        if prefix != trimmed {
+            // Slash-bearing id whose prefix isn't Anthropic — that's
+            // some other provider (`openai/...`, `ollama/...`, etc.).
+            // The provider prefix is the authoritative routing signal,
+            // don't re-scan the rest of the id.
+            return false;
+        }
+    }
+    // Bare id (no slash). Pi's `findModel` falls back to scanning the
+    // whole registry, so a bare `claude-opus-4-5` typed by a slash
+    // command or sent through IPC would still resolve to the Anthropic
+    // provider — bypassing the OAuth gate. Match Anthropic's own
+    // naming convention so the gate still trips. Examples:
+    //   `claude`            → matches
+    //   `claude-3-opus`     → matches
+    //   `claude_haiku`      → matches
+    //   `claude-instant-1`  → matches
+    //   `clade-x`           → does NOT match (no `claude` token)
+    //   `mistral-7b`        → does NOT match
+    let lowered = trimmed.to_ascii_lowercase();
+    if lowered == "claude" {
+        return true;
+    }
+    lowered.starts_with("claude-") || lowered.starts_with("claude_")
 }
 
 async fn claude_oauth_blocks_pi_anthropic() -> Result<(), String> {
@@ -5906,8 +5938,34 @@ data: [DONE]
         assert!(!pi_model_targets_anthropic("openai/gpt-5.4"));
         assert!(!pi_model_targets_anthropic("ollama/llama3"));
         assert!(!pi_model_targets_anthropic(""));
-        // Bare ids without a `/` are not Anthropic-via-Pi candidates.
+        // Bare ids that don't follow the `claude*` naming convention
+        // are routed by the Pi sidecar's findModel; they're not
+        // Anthropic-via-Pi candidates.
         assert!(!pi_model_targets_anthropic("sonnet"));
+        assert!(!pi_model_targets_anthropic("haiku"));
+        assert!(!pi_model_targets_anthropic("opus"));
+        assert!(!pi_model_targets_anthropic("mistral-7b"));
+        // Near-miss prefix: similar shape, different model.
+        assert!(!pi_model_targets_anthropic("clade-x"));
+    }
+
+    #[test]
+    fn pi_model_targets_anthropic_blocks_bare_claude_ids() {
+        // Codex peer-review regression: Pi's `findModel` falls back to
+        // scanning the entire registry when given a bare id, so a
+        // non-UI caller (slash command, IPC) sending Pi + `claude-opus-4-5`
+        // would still land on the Anthropic provider — bypassing the
+        // OAuth gate. Catch the bare-id case via Anthropic's naming
+        // convention so the gate trips on real model ids users would
+        // actually paste.
+        assert!(pi_model_targets_anthropic("claude"));
+        assert!(pi_model_targets_anthropic("claude-opus-4-5"));
+        assert!(pi_model_targets_anthropic("Claude-Sonnet-4-6"));
+        assert!(pi_model_targets_anthropic("claude_haiku"));
+        assert!(pi_model_targets_anthropic("claude-instant-1"));
+        // Surrounding whitespace must still trip the check — the
+        // upstream caller path doesn't always trim.
+        assert!(pi_model_targets_anthropic("  claude-opus-4-5  "));
     }
 
     #[test]

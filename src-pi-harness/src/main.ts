@@ -184,13 +184,21 @@ const USER_CONFIGURED_AUTH_SOURCES: ReadonlySet<string> = new Set([
   "models_json_command",
 ]);
 
+function providerAuthSource(provider: string): string | undefined {
+  // `ModelRegistry.getProviderAuthStatus` layers the `models_json_*`
+  // sources on top of `AuthStorage.getAuthStatus` — without this call,
+  // a Pi provider whose only credential is the key/command embedded in
+  // `~/.pi/agent/models.json` reports `source: undefined` and the
+  // user-configured filter drops it. Calling AuthStorage directly
+  // (the previous implementation) silently hid every models.json-only
+  // custom provider from the picker and Settings card.
+  return state.modelRegistry.getProviderAuthStatus(provider).source;
+}
+
 function isUserConfiguredProvider(provider: string): boolean {
   if (!provider || provider === "pi") return true;
-  // `AuthStorage.getAuthStatus` already inspects auth.json, runtime
-  // overrides, env vars, and the fallback resolver in one shot, so we
-  // don't need to re-check each surface ourselves.
-  const status = state.authStorage.getAuthStatus(provider);
-  return status.source ? USER_CONFIGURED_AUTH_SOURCES.has(status.source) : false;
+  const source = providerAuthSource(provider);
+  return source ? USER_CONFIGURED_AUTH_SOURCES.has(source) : false;
 }
 
 function listAvailableModels() {
@@ -202,12 +210,7 @@ function listAvailableModels() {
   return state.modelRegistry
     .getAvailable()
     .filter((model) => isUserConfiguredProvider(model.provider ?? "pi"))
-    .map((model) =>
-      modelKey(
-        model,
-        state.authStorage.getAuthStatus(model.provider ?? "pi").source,
-      ),
-    );
+    .map((model) => modelKey(model, providerAuthSource(model.provider ?? "pi")));
 }
 
 async function approval(toolCallId: string, kind: "commandExecution" | "fileChange", input: Record<string, unknown>) {
