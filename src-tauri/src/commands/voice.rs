@@ -86,35 +86,50 @@ struct VoiceStartLatencyEvent {
 
 #[cfg(feature = "voice")]
 #[tauri::command]
+#[tracing::instrument(
+    target = "claudette::voice",
+    skip(app, state),
+    fields(
+        provider_id = tracing::field::Empty,
+        total_ms = tracing::field::Empty,
+        stream_open_ms = tracing::field::Empty,
+    ),
+    err,
+)]
 pub async fn voice_start_recording(
     provider_id: Option<String>,
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
     let t0 = Instant::now();
-    let provider_id = {
+    let resolved_provider_id = {
         let db = open_db(&state)?;
         state
             .voice
             .resolve_provider_id(&db, provider_id.as_deref())?
     };
+    let span = tracing::Span::current();
+    span.record("provider_id", resolved_provider_id.as_str());
     let latency = state
         .voice
-        .start_recording(&state.db_path, &provider_id, Some(app.clone()))
+        .start_recording(&state.db_path, &resolved_provider_id, Some(app.clone()))
         .await?;
-    let total_ms = t0.elapsed().as_millis();
-    tracing::debug!(
+    let total_ms = t0.elapsed().as_millis() as u64;
+    let stream_open_ms = latency.stream_open_ms as u64;
+    span.record("total_ms", total_ms);
+    span.record("stream_open_ms", stream_open_ms);
+    tracing::info!(
         target: "claudette::voice",
-        total_ms = total_ms as u64,
-        stream_open_ms = latency.stream_open_ms,
-        "start recording latency"
+        total_ms,
+        stream_open_ms,
+        "voice start recording latency"
     );
     #[cfg(debug_assertions)]
     {
         let _ = app.emit(
             "voice://debug/start_latency",
             VoiceStartLatencyEvent {
-                total_ms,
+                total_ms: total_ms as u128,
                 stream_open_ms: latency.stream_open_ms,
             },
         );
