@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { useAppStore } from "../../../stores/useAppStore";
-import { formatResetCountdown } from "../../../utils/usageReset";
+import { formatResetCountdown, resetCountdown } from "../../../utils/usageReset";
 import { selectUsageBucket } from "./selectUsageBucket";
 import { UsagePopover } from "./UsagePopover";
 import styles from "./UsageIndicator.module.css";
@@ -21,6 +22,7 @@ function barColor(pct: number): string {
  * bucket the API returned.
  */
 export function UsageIndicator() {
+  const { t } = useTranslation("settings");
   const enabled = useAppStore((s) => s.usageInsightsEnabled);
   const usage = useAppStore((s) => s.claudeCodeUsage);
 
@@ -42,9 +44,21 @@ export function UsageIndicator() {
 
   const pct = Math.min(bucket.utilization, 100);
   const color = barColor(pct);
+  // Avoid "resets in resetting…" — when the reset moment has already passed
+  // but the API hasn't refreshed yet, fall back to a dedicated key.
+  const exhaustedResetting =
+    bucket.exhausted && resetCountdown(bucket.resetsAt).resetting;
   const tooltip = bucket.exhausted
-    ? `${bucket.label} exhausted — resets in ${formatResetCountdown(bucket.resetsAt)}`
-    : `${bucket.label}: ${Math.floor(pct)}% used — click for all limits`;
+    ? exhaustedResetting
+      ? t("usage_indicator_tooltip_exhausted_resetting", { label: bucket.label })
+      : t("usage_indicator_tooltip_exhausted", {
+          label: bucket.label,
+          countdown: formatResetCountdown(bucket.resetsAt),
+        })
+    : t("usage_indicator_tooltip_used", {
+        label: bucket.label,
+        pct: Math.floor(pct),
+      });
 
   return (
     <div className={styles.wrapper}>

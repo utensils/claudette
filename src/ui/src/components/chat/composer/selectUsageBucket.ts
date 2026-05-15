@@ -1,4 +1,5 @@
 import type { ClaudeCodeUsage, UsageLimit } from "../../../types/usage";
+import { parseResetMs } from "../../../utils/usageReset";
 
 /** Window length in milliseconds, derived from the bucket key. */
 const FIVE_HOUR_MS = 5 * 60 * 60 * 1000;
@@ -23,11 +24,6 @@ interface SelectInput {
   usage: ClaudeCodeUsage;
   /** Override "now" for deterministic tests. Defaults to Date.now(). */
   now?: number;
-}
-
-function parseResetMs(resetsAt: string | number): number {
-  if (typeof resetsAt === "string") return new Date(resetsAt).getTime();
-  return resetsAt < 1e12 ? resetsAt * 1000 : resetsAt;
 }
 
 /**
@@ -75,10 +71,11 @@ const MIN_FRACTION_ELAPSED = 0.1;
  *   score           = utilization / max(fractionElapsed, MIN_FRACTION_ELAPSED)
  *
  * Surfaces "which limit will you hit first at current pace" rather than
- * "which has the highest %". A 25% session window 1h into its 5h means
- * a projected ~125% by reset (score 125); a 25% weekly window 1 day in
- * projects ~175% but with 6 days to course-correct (lower urgency in
- * absolute terms — that's why we use elapsed fraction, not projected %).
+ * "which has the highest %". Example: a 30% session 2h into its 5h
+ * window (40% elapsed) scores ~75; a 10% weekly bucket ~2.8d into its
+ * 7d window (40% elapsed) scores ~25 — same elapsed fraction, but the
+ * session is on track to exhaust three times faster, so it wins the
+ * indicator slot.
  *
  * Edge cases:
  *   - Exhausted (>=100): returns Infinity. A maxed bucket should always
@@ -118,4 +115,3 @@ export function selectUsageBucket(input: SelectInput): UsageBucket | null {
   );
 }
 
-export { parseResetMs };

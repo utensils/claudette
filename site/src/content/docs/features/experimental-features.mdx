@@ -37,7 +37,7 @@ Enables the Plugins / Themes / Grammars community catalog inside Claudette. Brow
 
 ## Usage Insights
 
-Gates the **Settings > Usage** panel that shows Claude Code subscription details (session limits, weekly limits, extra usage) by querying Anthropic's usage API directly, plus a compact vertical bar next to the context meter in the chat composer that drains as you burn through your most-constraining limit and switches to a "resets in…" countdown when exhausted. Requires a Pro or Max plan with standard login (env-var auth tokens don't have the OAuth scopes the API needs).
+Gates the **Settings > Usage** panel that shows Claude Code subscription details (session limits, weekly limits, extra usage) by querying Anthropic's usage API directly, plus a compact vertical bar next to the context meter in the chat composer that fills as you burn through your most-urgent limit (burn-rate weighted across the 5h session and weekly caps) and switches to a "resets in…" countdown when exhausted. Clicking the bar opens a popover listing every limit the API returned. Requires a Pro or Max plan with standard login (env-var auth tokens don't have the OAuth scopes the API needs).
 
 When this is off, Claudette never reads your Claude Code OAuth tokens for usage data — they stay strictly in the keychain / `.credentials.json` for the `claude` CLI's own use. The Claude Code sign-in flow in **Settings > Models** remains available because agent credential failures need a recovery path independent of usage tracking.
 

@@ -19,7 +19,7 @@ export interface ResetCountdown {
   minutes: number;
 }
 
-function parseResetMs(resetsAt: string | number): number {
+export function parseResetMs(resetsAt: string | number): number {
   if (typeof resetsAt === "string") return new Date(resetsAt).getTime();
   // API returns seconds for some buckets, milliseconds for others.
   return resetsAt < 1e12 ? resetsAt * 1000 : resetsAt;
