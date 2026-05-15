@@ -7,6 +7,7 @@ import {
 } from "react";
 import { useAppStore } from "../../stores/useAppStore";
 import { listWorkspaceFiles, type FileEntry } from "../../services/tauri";
+import { isPendingForkWorkspace } from "../../utils/workspaceEnvironment";
 import { resolveHotkeyAction } from "../../hotkeys/bindings";
 import { isAgentBusy } from "../../utils/agentStatus";
 import {
@@ -23,6 +24,15 @@ import styles from "./FilesPanel.module.css";
 export function FilesPanel() {
   const selectedWorkspaceId = useAppStore((s) => s.selectedWorkspaceId);
   const workspaces = useAppStore((s) => s.workspaces);
+  // Optimistic-fork placeholders have no backing DB row; any
+  // `list_workspace_files` against the placeholder id returns
+  // "Workspace not found" and we'd render an error banner in the
+  // right sidebar mid-fork.  Skip every load / poll path for the
+  // duration of the pending fork; the effects re-fire against the
+  // real workspace id when `commitPendingFork` swaps the selection.
+  const isPendingFork = useAppStore((s) =>
+    isPendingForkWorkspace(s, selectedWorkspaceId),
+  );
   const refreshNonce = useAppStore((s) =>
     selectedWorkspaceId
       ? (s.fileTreeRefreshNonceByWorkspace[selectedWorkspaceId] ?? 0)
@@ -117,18 +127,26 @@ export function FilesPanel() {
   );
 
   useEffect(() => {
-    if (!selectedWorkspaceId) {
+    if (!selectedWorkspaceId || isPendingFork) {
+      // Bumping the version invalidates any in-flight load from the
+      // previously-selected workspace so its `.then` can't land here
+      // and re-flip `loading` back to true. Pair with an explicit
+      // `setLoading(false)` so the panel doesn't get stuck on the
+      // spinner if we entered this branch while a load was pending.
       loadVersionRef.current += 1;
+      setError(null);
+      setEntries([]);
+      setLoading(false);
       return;
     }
     const timer = window.setTimeout(() => {
       void loadFiles(selectedWorkspaceId, true);
     }, 0);
     return () => window.clearTimeout(timer);
-  }, [selectedWorkspaceId, refreshNonce, loadFiles]);
+  }, [selectedWorkspaceId, refreshNonce, loadFiles, isPendingFork]);
 
   useEffect(() => {
-    if (!selectedWorkspaceId || !isRunning) return;
+    if (!selectedWorkspaceId || isPendingFork || !isRunning) return;
     const interval = setInterval(() => {
       // Skip when a previous load is still in flight — see
       // `loadFilesInFlightCount` declaration above for the pileup rationale.
@@ -136,18 +154,18 @@ export function FilesPanel() {
       void loadFiles(selectedWorkspaceId, false);
     }, FILES_AGENT_RUNNING_INTERVAL_MS);
     return () => clearInterval(interval);
-  }, [isRunning, selectedWorkspaceId, loadFiles]);
+  }, [isRunning, selectedWorkspaceId, loadFiles, isPendingFork]);
 
   useEffect(() => {
     const wasRunning = prevIsRunning.current;
     prevIsRunning.current = isRunning;
-    if (!selectedWorkspaceId || wasRunning !== true || isRunning) return;
+    if (!selectedWorkspaceId || isPendingFork || wasRunning !== true || isRunning) return;
 
     const timer = setTimeout(() => {
       void loadFiles(selectedWorkspaceId, false);
     }, 500);
     return () => clearTimeout(timer);
-  }, [isRunning, selectedWorkspaceId, loadFiles]);
+  }, [isRunning, selectedWorkspaceId, loadFiles, isPendingFork]);
 
   // Idle polling: refresh file tree while agent is not running so
   // manually-edited files surface without navigating away. The cadence
@@ -155,7 +173,7 @@ export function FilesPanel() {
   // interval so the two stay in lockstep — see that module for the
   // full three-tier rationale.
   useEffect(() => {
-    if (!selectedWorkspaceId || isRunning) return;
+    if (!selectedWorkspaceId || isPendingFork || isRunning) return;
     const interval = setInterval(() => {
       // Skip when a previous load is still in flight — see
       // `loadFilesInFlightCount` declaration above for the pileup rationale.
@@ -163,7 +181,7 @@ export function FilesPanel() {
       void loadFiles(selectedWorkspaceId, false);
     }, IDLE_REFRESH_INTERVAL_MS);
     return () => clearInterval(interval);
-  }, [isRunning, selectedWorkspaceId, loadFiles]);
+  }, [isRunning, selectedWorkspaceId, loadFiles, isPendingFork]);
 
   // React to the `requestNewFileAtRoot` nonce: open the inline create
   // editor at the workspace root.

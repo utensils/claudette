@@ -170,3 +170,184 @@ describe("workspacesSlice.addWorkspace", () => {
     });
   });
 });
+
+describe("workspacesSlice pendingFork lifecycle", () => {
+  beforeEach(() => {
+    useAppStore.setState({
+      workspaces: [],
+      selectedWorkspaceId: null,
+      workspaceEnvironment: {},
+      pendingForks: {},
+    });
+  });
+
+  // The optimistic fork flow: ChatPanel inserts a placeholder workspace
+  // and selects it BEFORE awaiting the backend, so the user lands on
+  // a "Preparing fork from <source>…" placard the instant they click
+  // Fork. `beginPendingFork` is the entry point — it must be atomic
+  // (placeholder row, selection, pendingForks entry, and the seeded
+  // env-prep `preparing` status with a `started_at` all in one set()),
+  // otherwise the sidebar's icon cascade renders a flicker.
+  it("seeds placeholder workspace, selection, pendingForks entry, and env-prep status atomically", () => {
+    useAppStore.getState().addWorkspace(makeWorkspace({ id: "ws-source" }));
+    useAppStore.getState().selectWorkspace("ws-source");
+
+    const placeholder: Workspace = makeWorkspace({
+      id: "pending-fork-abc",
+      name: "feature-fork",
+      worktree_path: null,
+    });
+    useAppStore.getState().beginPendingFork(placeholder, "ws-source");
+
+    const state = useAppStore.getState();
+    expect(state.workspaces.map((w) => w.id)).toContain("pending-fork-abc");
+    expect(state.selectedWorkspaceId).toBe("pending-fork-abc");
+    expect(state.pendingForks["pending-fork-abc"]).toBe("ws-source");
+    const env = state.workspaceEnvironment["pending-fork-abc"];
+    expect(env?.status).toBe("preparing");
+    expect(env?.started_at).toBeTypeOf("number");
+  });
+
+  // `commitPendingFork` is the success path: drop the placeholder, add
+  // the real workspace (with its real id), move selection from
+  // placeholder → real. If the user navigated away mid-fork, selection
+  // stays where they put it.
+  it("swaps placeholder for real workspace and moves selection on commit", () => {
+    useAppStore.getState().addWorkspace(makeWorkspace({ id: "ws-source" }));
+    useAppStore.getState().selectWorkspace("ws-source");
+    useAppStore.getState().beginPendingFork(
+      makeWorkspace({ id: "pending-fork-abc", worktree_path: null }),
+      "ws-source",
+    );
+
+    const real = makeWorkspace({ id: "ws-fork-real", name: "feature-fork" });
+    useAppStore.getState().commitPendingFork("pending-fork-abc", real);
+
+    const state = useAppStore.getState();
+    expect(state.workspaces.map((w) => w.id)).not.toContain("pending-fork-abc");
+    expect(state.workspaces.map((w) => w.id)).toContain("ws-fork-real");
+    expect(state.selectedWorkspaceId).toBe("ws-fork-real");
+    expect(state.pendingForks["pending-fork-abc"]).toBeUndefined();
+    // Placeholder's seeded preparing entry was cleared; the real
+    // workspace's prep entry is whatever the env-prep hook will set
+    // next (untouched by commit).
+    expect(state.workspaceEnvironment["pending-fork-abc"]).toBeUndefined();
+  });
+
+  // Regression: the backend emits `workspaces-changed` for the new
+  // fork before its IPC response returns. App.tsx's listener calls
+  // `addWorkspace(real)` ahead of `commitPendingFork`, so by the time
+  // commit runs, the real row is already in the store. A naive
+  // `.concat(real)` in commit would double-add it — visible to the
+  // user as two identical sidebar rows for one fork.
+  it("dedupes the real workspace when commit lands after workspaces-changed listener already added it", () => {
+    useAppStore.getState().addWorkspace(makeWorkspace({ id: "ws-source" }));
+    useAppStore.getState().selectWorkspace("ws-source");
+    useAppStore.getState().beginPendingFork(
+      makeWorkspace({ id: "pending-fork-abc", worktree_path: null }),
+      "ws-source",
+    );
+
+    const real = makeWorkspace({ id: "ws-fork-real", name: "feature-fork" });
+    // Simulate the `workspaces-changed` listener firing first.
+    useAppStore.getState().addWorkspace(real);
+    // Then handleFork's await resolves and commit runs.
+    useAppStore.getState().commitPendingFork("pending-fork-abc", real);
+
+    const ids = useAppStore.getState().workspaces.map((w) => w.id);
+    expect(ids).not.toContain("pending-fork-abc");
+    // Real workspace appears exactly once, not twice.
+    expect(ids.filter((id) => id === "ws-fork-real")).toHaveLength(1);
+  });
+
+  it("leaves selection alone when commit lands after the user navigated away", () => {
+    useAppStore.getState().addWorkspace(makeWorkspace({ id: "ws-source" }));
+    useAppStore.getState().addWorkspace(makeWorkspace({ id: "ws-other" }));
+    useAppStore.getState().selectWorkspace("ws-source");
+    useAppStore.getState().beginPendingFork(
+      makeWorkspace({ id: "pending-fork-abc", worktree_path: null }),
+      "ws-source",
+    );
+    // User navigates away from the placeholder mid-fork.
+    useAppStore.getState().selectWorkspace("ws-other");
+
+    useAppStore.getState().commitPendingFork(
+      "pending-fork-abc",
+      makeWorkspace({ id: "ws-fork-real" }),
+    );
+
+    expect(useAppStore.getState().selectedWorkspaceId).toBe("ws-other");
+    expect(useAppStore.getState().workspaces.map((w) => w.id)).toContain(
+      "ws-fork-real",
+    );
+  });
+
+  // Regression: the source workspace's diff selection / preview state
+  // must NOT leak into the placeholder's view. `beginPendingFork`
+  // mirrors the diff/preview/right-sidebar-tab resets that
+  // `selectWorkspace` performs. Without these resets, the placeholder
+  // would render against the source's diffSelectedFile + diffContent
+  // + diffMergeBase, which is wrong (no diff exists for the
+  // placeholder), and the leaked state would persist back when the
+  // real workspace lands or the user cancels.
+  it("clears diff/preview state when starting a pending fork (selectWorkspace parity)", () => {
+    useAppStore.getState().addWorkspace(makeWorkspace({ id: "ws-source" }));
+    useAppStore.getState().selectWorkspace("ws-source");
+    // Seed non-null diff/preview state so the assertions below verify
+    // the reset path, not just defaults. The exact field shape doesn't
+    // matter — beginPendingFork unconditionally writes null. Cast
+    // through `Partial<AppState>` so we don't have to construct full
+    // FileDiff/FileContent fixtures just to prove they get cleared.
+    useAppStore.setState({
+      diffSelectedFile: "src/foo.ts",
+      diffSelectedLayer: "unstaged",
+      diffMergeBase: "abc123",
+      diffPreviewLoading: true,
+      rightSidebarTab: "changes",
+    } as Partial<typeof useAppStore extends { getState: () => infer T } ? T : never>);
+
+    useAppStore.getState().beginPendingFork(
+      makeWorkspace({ id: "pending-fork-abc", worktree_path: null }),
+      "ws-source",
+    );
+
+    const state = useAppStore.getState();
+    expect(state.diffSelectedFile).toBeNull();
+    expect(state.diffSelectedLayer).toBeNull();
+    expect(state.diffContent).toBeNull();
+    expect(state.diffMergeBase).toBeNull();
+    expect(state.diffPreviewContent).toBeNull();
+    expect(state.diffPreviewLoading).toBe(false);
+    expect(state.diffPreviewMode).toBe("diff");
+    expect(state.rightSidebarTab).toBe("files");
+    // The source's diff selection is preserved in the per-workspace
+    // map so returning to it (via cancel, or the user navigating back)
+    // restores what they were viewing.
+    expect(state.diffSelectionByWorkspace["ws-source"]).toEqual({
+      path: "src/foo.ts",
+      layer: "unstaged",
+    });
+  });
+
+  // The error path: backend rejected the fork. Drop the placeholder
+  // and restore the source selection so the user lands back where
+  // they were before clicking Fork (i.e. on the same row that hosts
+  // the same checkpoint list — they can retry without re-navigating).
+  it("tears down placeholder and restores selection on cancel", () => {
+    useAppStore.getState().addWorkspace(makeWorkspace({ id: "ws-source" }));
+    useAppStore.getState().selectWorkspace("ws-source");
+    useAppStore.getState().beginPendingFork(
+      makeWorkspace({ id: "pending-fork-abc", worktree_path: null }),
+      "ws-source",
+    );
+
+    useAppStore.getState().cancelPendingFork("pending-fork-abc", "ws-source");
+
+    const state = useAppStore.getState();
+    expect(state.workspaces.map((w) => w.id)).not.toContain("pending-fork-abc");
+    expect(state.workspaces.map((w) => w.id)).toContain("ws-source");
+    expect(state.selectedWorkspaceId).toBe("ws-source");
+    expect(state.pendingForks["pending-fork-abc"]).toBeUndefined();
+    expect(state.workspaceEnvironment["pending-fork-abc"]).toBeUndefined();
+  });
+});

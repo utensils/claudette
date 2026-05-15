@@ -194,6 +194,55 @@ describe("useWorkspaceEnvironmentPreparation", () => {
     });
   });
 
+  it("waits for hydration before preparing env when remote_connection_id is undefined", async () => {
+    // Regression pin for the fork "Preparing the workspace…" hang:
+    // the Rust `Workspace` model has no `remote_connection_id` field,
+    // so a workspace surfaced into the store directly from a Tauri
+    // command response (rather than through the `workspaces-changed`
+    // listener that stamps it) lands with `remote_connection_id`
+    // missing entirely.  The selected-workspace effect deliberately
+    // treats `undefined` as "not yet hydrated" and bails, because
+    // running `prepare_workspace_environment` against a workspace
+    // whose remote-vs-local classification is unknown could spawn a
+    // local resolve for what's actually a remote row.  Fix sites
+    // (the fork command's backend event emission, the ChatPanel
+    // handleFork stamp) are responsible for guaranteeing this field
+    // is `null` (local) or a string (remote) before selection.
+    //
+    // Cast through `Partial` so the test can express the wire shape
+    // — `remote_connection_id` simply missing — without the test
+    // helper's default `null` masking it.
+    const wsWithoutStamp = {
+      ...makeWorkspace(),
+    } as Partial<Workspace> as Workspace;
+    delete (wsWithoutStamp as Partial<Workspace>).remote_connection_id;
+
+    useAppStore.setState({
+      selectedWorkspaceId: "ws-1",
+      workspaces: [wsWithoutStamp],
+    });
+
+    await renderHarness();
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(serviceMocks.prepareWorkspaceEnvironment).not.toHaveBeenCalled();
+
+    // Once the workspace gets stamped (e.g. via the `workspaces-changed`
+    // event handler), the selector reads `null` and the effect re-fires.
+    act(() => {
+      useAppStore
+        .getState()
+        .updateWorkspace("ws-1", { remote_connection_id: null });
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(serviceMocks.prepareWorkspaceEnvironment).toHaveBeenCalledWith("ws-1");
+  });
+
   it("does not restart env preparation when unrelated workspace fields update", async () => {
     useAppStore.setState({
       selectedWorkspaceId: "ws-1",
