@@ -342,6 +342,42 @@ pub async fn save_agent_backend(
     load_backend_configs(&db)
 }
 
+/// Persist the user's per-backend runtime override.
+///
+/// `harness` is `None` to clear the override (the resolver falls back
+/// to `AgentBackendKind::default_harness`). A `Some` value must be in
+/// the kind's `available_harnesses` list — otherwise the call is
+/// rejected so a malicious frontend cannot bypass the per-kind matrix.
+/// The built-in Anthropic backend always rejects overrides because its
+/// kind only permits the Claude CLI harness.
+#[tauri::command]
+pub async fn set_agent_backend_runtime_harness(
+    backend_id: String,
+    harness: Option<AgentBackendRuntimeHarness>,
+    state: State<'_, AppState>,
+) -> Result<Vec<AgentBackendConfig>, String> {
+    let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
+    ensure_backend_id_allowed_by_gate(&db, &backend_id)?;
+    let mut backends = load_backend_configs(&db)?;
+    let slot = backends
+        .iter_mut()
+        .find(|backend| backend.id == backend_id)
+        .ok_or_else(|| format!("Unknown backend `{backend_id}`"))?;
+    if let Some(harness) = harness {
+        if !slot.kind.available_harnesses().contains(&harness) {
+            return Err(format!(
+                "Backend `{}` ({:?}) does not allow harness `{:?}`",
+                slot.id, slot.kind, harness
+            ));
+        }
+        slot.runtime_harness = Some(harness);
+    } else {
+        slot.runtime_harness = None;
+    }
+    save_backend_configs(&db, &backends)?;
+    load_backend_configs(&db)
+}
+
 #[tauri::command]
 pub async fn delete_agent_backend(
     backend_id: String,
@@ -457,6 +493,8 @@ pub async fn resolve_backend_runtime(
     {
         return Ok(AgentBackendRuntime::default());
     }
+    // Anthropic stays a fast-path: no enabled-flag check, no env, no hash.
+    // The Claude CLI inherits the parent process's auth state.
     if backend.kind == AgentBackendKind::Anthropic {
         return Ok(AgentBackendRuntime {
             backend_id: Some(backend.id),
@@ -469,86 +507,158 @@ pub async fn resolve_backend_runtime(
         return Err(format!("Backend `{}` is disabled", backend.label));
     }
 
-    if backend.kind == AgentBackendKind::CodexNative {
-        return Ok(AgentBackendRuntime {
-            backend_id: Some(backend.id.clone()),
-            harness: AgentBackendRuntimeHarness::CodexAppServer,
-            env: Vec::new(),
-            hash: runtime_hash(&backend, None, model),
-        });
-    }
+    ensure_anthropic_not_routed_through_pi_via_oauth(&backend, model).await?;
 
-    if backend.kind == AgentBackendKind::PiSdk {
-        if let Some(model) = model.map(str::trim).filter(|model| !model.is_empty()) {
-            backend.default_model = Some(model.to_string());
+    // Drop the borrowed Database before any `.await` so the resulting
+    // future stays `Send` for the Tauri command handler. The Claude-CLI
+    // path re-opens it inside the sync block when it needs to persist a
+    // hydration.
+    drop(db);
+
+    match backend.effective_harness() {
+        AgentBackendRuntimeHarness::CodexAppServer => {
+            Ok(build_codex_app_server_runtime(&backend, model))
         }
-        return Ok(AgentBackendRuntime {
-            backend_id: Some(backend.id.clone()),
-            harness: AgentBackendRuntimeHarness::PiSdk,
-            env: Vec::new(),
-            hash: runtime_hash(&backend, None, model),
-        });
+        AgentBackendRuntimeHarness::PiSdk => Ok(build_pi_sdk_runtime(&mut backend, model)),
+        AgentBackendRuntimeHarness::ClaudeCode => {
+            build_claude_code_runtime(state, &mut backend, model).await
+        }
     }
+}
 
+fn build_codex_app_server_runtime(
+    backend: &AgentBackendConfig,
+    model: Option<&str>,
+) -> AgentBackendRuntime {
+    AgentBackendRuntime {
+        backend_id: Some(backend.id.clone()),
+        harness: AgentBackendRuntimeHarness::CodexAppServer,
+        env: Vec::new(),
+        hash: runtime_hash(backend, None, model),
+    }
+}
+
+fn build_pi_sdk_runtime(
+    backend: &mut AgentBackendConfig,
+    model: Option<&str>,
+) -> AgentBackendRuntime {
+    // The Pi sidecar's registry keys models as `"<provider>/<modelId>"`.
+    // The Pi backend card already stores ids in that shape, but when a
+    // non-Pi backend (Ollama, LM Studio, OpenAI API, Codex Native) opts
+    // into the Pi harness, the user's selected model id is bare (e.g.
+    // `"gpt-5.4"`) and we need to prepend the Pi-provider hint so the
+    // sidecar's `ModelRegistry.find` lookup hits.
+    let qualified = model
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| qualify_model_for_pi(backend.kind, value));
+    if let Some(value) = qualified.as_deref() {
+        backend.default_model = Some(value.to_string());
+    }
+    AgentBackendRuntime {
+        backend_id: Some(backend.id.clone()),
+        harness: AgentBackendRuntimeHarness::PiSdk,
+        env: Vec::new(),
+        hash: runtime_hash(backend, None, qualified.as_deref()),
+    }
+}
+
+fn qualify_model_for_pi(kind: AgentBackendKind, model: &str) -> String {
+    if model.contains('/') {
+        // Already provider-qualified (the Pi card's own selections).
+        return model.to_string();
+    }
+    match kind.pi_provider_prefix() {
+        Some(prefix) => format!("{prefix}/{model}"),
+        None => model.to_string(),
+    }
+}
+
+async fn build_claude_code_runtime(
+    state: &AppState,
+    backend: &mut AgentBackendConfig,
+    model: Option<&str>,
+) -> Result<AgentBackendRuntime, String> {
     let secret = if backend.kind == AgentBackendKind::CodexSubscription {
         Some(serde_json::to_string(&load_codex_auth_material()?).map_err(|e| e.to_string())?)
     } else {
         load_secure_secret(SECRET_BUCKET, &backend.id)?
     };
     if backend.kind.needs_gateway() {
-        if backend.kind == AgentBackendKind::OpenAiApi && secret.is_none() {
-            return Err("OpenAI API backend requires an API key in Settings → Models".to_string());
-        }
-        let pre_hydrate = backend.clone();
-        hydrate_gateway_models_for_runtime(&mut backend, model).await?;
-        // Persist fresh discoveries (new model list, new context windows)
-        // so the UI's token-capacity indicator and the next list_agent_backends
-        // call see the live values — without requiring a manual Settings →
-        // Models refresh. Limited to a real change to keep the chat-send
-        // hot path off the DB writer when nothing has actually moved.
-        if backend_models_signature(&backend) != backend_models_signature(&pre_hydrate)
-            && let Ok(mut all) = load_backend_configs(&db)
-            && let Some(slot) = all.iter_mut().find(|item| item.id == backend.id)
-        {
-            *slot = backend.clone();
-            let _ = save_backend_configs(&db, &all);
-        }
-        if let Some(model) = model.map(str::trim).filter(|model| !model.is_empty()) {
-            backend.default_model = Some(model.to_string());
-        }
-        let (gateway_url, gateway_token, hash) = state
-            .backend_gateway
-            .ensure(backend.clone(), secret, model.map(String::from))
-            .await?;
-        let mut env = vec![
-            ("ANTHROPIC_BASE_URL".to_string(), gateway_url),
-            ("ANTHROPIC_AUTH_TOKEN".to_string(), gateway_token),
-            (
-                "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY".to_string(),
-                "1".to_string(),
-            ),
-        ];
-        // LM Studio benefits from the same KV-cache reuse fix Ollama gets:
-        // suppress Claude Code's rotating attribution header so identical
-        // request prefixes hit LM Studio's prefix cache turn after turn.
-        // (Routing-wise LM Studio still goes through our gateway because
-        // it returns HTTP 500 for context-overflow, which the SDK retries
-        // unless we demote it to 4xx. See `proxy_anthropic_messages`.)
-        if backend.kind == AgentBackendKind::LmStudio {
-            env.push((
-                "CLAUDE_CODE_ATTRIBUTION_HEADER".to_string(),
-                "0".to_string(),
-            ));
-        }
-        append_custom_model_env(&mut env, &backend, model);
-        return Ok(AgentBackendRuntime {
-            backend_id: Some(backend.id),
-            harness: AgentBackendRuntimeHarness::ClaudeCode,
-            env,
-            hash,
-        });
+        return build_claude_code_gateway_runtime(state, backend, model, secret).await;
     }
+    Ok(build_claude_code_direct_runtime(backend, model, secret))
+}
 
+async fn build_claude_code_gateway_runtime(
+    state: &AppState,
+    backend: &mut AgentBackendConfig,
+    model: Option<&str>,
+    secret: Option<String>,
+) -> Result<AgentBackendRuntime, String> {
+    if backend.kind == AgentBackendKind::OpenAiApi && secret.is_none() {
+        return Err("OpenAI API backend requires an API key in Settings → Models".to_string());
+    }
+    let pre_hydrate = backend.clone();
+    hydrate_gateway_models_for_runtime(backend, model).await?;
+    // Persist fresh discoveries (new model list, new context windows)
+    // so the UI's token-capacity indicator and the next list_agent_backends
+    // call see the live values — without requiring a manual Settings →
+    // Models refresh. Limited to a real change to keep the chat-send
+    // hot path off the DB writer when nothing has actually moved.
+    //
+    // Opens a fresh `Database` inside this sync block so the connection
+    // (which is `!Sync`) never has to cross an `.await` and the future
+    // stays `Send` for Tauri's command dispatcher.
+    if backend_models_signature(backend) != backend_models_signature(&pre_hydrate)
+        && let Ok(db) = Database::open(&state.db_path)
+        && let Ok(mut all) = load_backend_configs(&db)
+        && let Some(slot) = all.iter_mut().find(|item| item.id == backend.id)
+    {
+        *slot = backend.clone();
+        let _ = save_backend_configs(&db, &all);
+    }
+    if let Some(model) = model.map(str::trim).filter(|model| !model.is_empty()) {
+        backend.default_model = Some(model.to_string());
+    }
+    let (gateway_url, gateway_token, hash) = state
+        .backend_gateway
+        .ensure(backend.clone(), secret, model.map(String::from))
+        .await?;
+    let mut env = vec![
+        ("ANTHROPIC_BASE_URL".to_string(), gateway_url),
+        ("ANTHROPIC_AUTH_TOKEN".to_string(), gateway_token),
+        (
+            "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY".to_string(),
+            "1".to_string(),
+        ),
+    ];
+    // LM Studio benefits from the same KV-cache reuse fix Ollama gets:
+    // suppress Claude Code's rotating attribution header so identical
+    // request prefixes hit LM Studio's prefix cache turn after turn.
+    // (Routing-wise LM Studio still goes through our gateway because
+    // it returns HTTP 500 for context-overflow, which the SDK retries
+    // unless we demote it to 4xx. See `proxy_anthropic_messages`.)
+    if backend.kind == AgentBackendKind::LmStudio {
+        env.push((
+            "CLAUDE_CODE_ATTRIBUTION_HEADER".to_string(),
+            "0".to_string(),
+        ));
+    }
+    append_custom_model_env(&mut env, backend, model);
+    Ok(AgentBackendRuntime {
+        backend_id: Some(backend.id.clone()),
+        harness: AgentBackendRuntimeHarness::ClaudeCode,
+        env,
+        hash,
+    })
+}
+
+fn build_claude_code_direct_runtime(
+    backend: &AgentBackendConfig,
+    model: Option<&str>,
+    secret: Option<String>,
+) -> AgentBackendRuntime {
     let base_url = backend
         .base_url
         .clone()
@@ -586,13 +696,63 @@ pub async fn resolve_backend_runtime(
             "1".to_string(),
         ));
     }
-    append_custom_model_env(&mut env, &backend, model);
-    Ok(AgentBackendRuntime {
+    append_custom_model_env(&mut env, backend, model);
+    AgentBackendRuntime {
         backend_id: Some(backend.id.clone()),
         harness: AgentBackendRuntimeHarness::ClaudeCode,
         env,
-        hash: runtime_hash(&backend, secret.as_deref(), model),
-    })
+        hash: runtime_hash(backend, secret.as_deref(), model),
+    }
+}
+
+/// Defense-in-depth: when the user picks an Anthropic model via Pi and
+/// the local Claude CLI is signed in with an OAuth subscription token,
+/// refuse the routing. Claude OAuth tokens must never leave the Claude
+/// CLI subprocess; the picker already hides this case in the UI but a
+/// stale persisted selection or a slash-command typed `model:` value
+/// can still hit the resolver. Returns Ok for the (overwhelming) majority
+/// case where the gate does not apply.
+async fn ensure_anthropic_not_routed_through_pi_via_oauth(
+    backend: &AgentBackendConfig,
+    model: Option<&str>,
+) -> Result<(), String> {
+    if backend.effective_harness() != AgentBackendRuntimeHarness::PiSdk {
+        return Ok(());
+    }
+    let Some(model) = model.map(str::trim).filter(|m| !m.is_empty()) else {
+        // No explicit model — Pi will pick a default from its registry,
+        // which the user can only target via this code path by setting
+        // `default_model` to an Anthropic id. The Pi backend's own
+        // default_model gate is the last line of defense.
+        let default = backend.default_model.as_deref().unwrap_or("");
+        if !pi_model_targets_anthropic(default) {
+            return Ok(());
+        }
+        return claude_oauth_blocks_pi_anthropic().await;
+    };
+    let qualified = qualify_model_for_pi(backend.kind, model);
+    if !pi_model_targets_anthropic(&qualified) {
+        return Ok(());
+    }
+    claude_oauth_blocks_pi_anthropic().await
+}
+
+fn pi_model_targets_anthropic(model_id: &str) -> bool {
+    model_id.split('/').next().map(str::trim).map(|prefix| {
+        prefix.eq_ignore_ascii_case("anthropic") || prefix.eq_ignore_ascii_case("claude")
+    }) == Some(true)
+}
+
+async fn claude_oauth_blocks_pi_anthropic() -> Result<(), String> {
+    if crate::commands::auth::is_claude_oauth_authenticated().await {
+        Err(
+            "Pi cannot route Anthropic models while you're signed in with a Claude subscription. \
+             Pick a non-Anthropic Pi provider, or switch this backend's runtime to Claude CLI."
+                .to_string(),
+        )
+    } else {
+        Ok(())
+    }
 }
 
 pub fn resolve_backend_request_defaults(
@@ -5152,5 +5312,125 @@ data: [DONE]
         let normalized = normalize_backend(stale);
         assert_eq!(normalized.id, NATIVE_CODEX_BACKEND_ID);
         assert_eq!(normalized.label, "Codex");
+    }
+
+    // -- Pi runtime helpers -------------------------------------------------
+
+    #[test]
+    fn qualify_model_for_pi_prepends_provider_prefix_for_local_kinds() {
+        assert_eq!(
+            qualify_model_for_pi(AgentBackendKind::Ollama, "llama3"),
+            "ollama/llama3"
+        );
+        assert_eq!(
+            qualify_model_for_pi(AgentBackendKind::LmStudio, "qwen3"),
+            "lmstudio/qwen3"
+        );
+    }
+
+    #[test]
+    fn qualify_model_for_pi_prepends_openai_for_codex_native() {
+        assert_eq!(
+            qualify_model_for_pi(AgentBackendKind::CodexNative, "gpt-5.4"),
+            "openai/gpt-5.4"
+        );
+    }
+
+    #[test]
+    fn qualify_model_for_pi_leaves_already_qualified_ids_unchanged() {
+        // The Pi card's own ids are already provider/model — never
+        // double-prefix them.
+        assert_eq!(
+            qualify_model_for_pi(AgentBackendKind::PiSdk, "anthropic/claude-opus-4-5"),
+            "anthropic/claude-opus-4-5"
+        );
+        assert_eq!(
+            qualify_model_for_pi(AgentBackendKind::Ollama, "ollama/llama3"),
+            "ollama/llama3"
+        );
+    }
+
+    #[test]
+    fn qualify_model_for_pi_passes_through_when_kind_has_no_prefix() {
+        // Subscription-OAuth flavors return None — those models must
+        // never reach the Pi sidecar at all (the gate above stops them),
+        // but defensively the qualifier doesn't invent a provider.
+        assert_eq!(
+            qualify_model_for_pi(AgentBackendKind::Anthropic, "sonnet"),
+            "sonnet"
+        );
+    }
+
+    #[test]
+    fn pi_model_targets_anthropic_detects_anthropic_prefix() {
+        assert!(pi_model_targets_anthropic("anthropic/claude-opus-4-5"));
+        assert!(pi_model_targets_anthropic("Anthropic/Claude-Sonnet"));
+        assert!(pi_model_targets_anthropic("claude/sonnet"));
+    }
+
+    #[test]
+    fn pi_model_targets_anthropic_ignores_other_providers() {
+        assert!(!pi_model_targets_anthropic("openai/gpt-5.4"));
+        assert!(!pi_model_targets_anthropic("ollama/llama3"));
+        assert!(!pi_model_targets_anthropic(""));
+        // Bare ids without a `/` are not Anthropic-via-Pi candidates.
+        assert!(!pi_model_targets_anthropic("sonnet"));
+    }
+
+    #[test]
+    fn build_pi_sdk_runtime_qualifies_model_for_non_pi_kind() {
+        let mut backend = AgentBackendConfig::builtin_ollama();
+        let runtime = build_pi_sdk_runtime(&mut backend, Some("llama3"));
+        assert_eq!(runtime.harness, AgentBackendRuntimeHarness::PiSdk);
+        assert!(
+            runtime.env.is_empty(),
+            "Pi runs with empty env so subscription credentials never leak in"
+        );
+        assert_eq!(backend.default_model.as_deref(), Some("ollama/llama3"));
+    }
+
+    #[test]
+    fn build_pi_sdk_runtime_keeps_pi_card_ids_unchanged() {
+        let mut backend = AgentBackendConfig::builtin_pi_sdk();
+        let runtime = build_pi_sdk_runtime(&mut backend, Some("openai/gpt-5.4"));
+        assert_eq!(runtime.harness, AgentBackendRuntimeHarness::PiSdk);
+        assert_eq!(backend.default_model.as_deref(), Some("openai/gpt-5.4"));
+    }
+
+    #[test]
+    fn build_pi_sdk_runtime_leaves_default_model_alone_when_no_model_passed() {
+        let mut backend = AgentBackendConfig::builtin_ollama();
+        backend.default_model = Some("preexisting".to_string());
+        let runtime = build_pi_sdk_runtime(&mut backend, None);
+        assert_eq!(runtime.harness, AgentBackendRuntimeHarness::PiSdk);
+        assert_eq!(backend.default_model.as_deref(), Some("preexisting"));
+    }
+
+    #[test]
+    fn build_codex_app_server_runtime_uses_empty_env() {
+        let backend = AgentBackendConfig::builtin_codex_native();
+        let runtime = build_codex_app_server_runtime(&backend, Some("gpt-5.4"));
+        assert_eq!(runtime.harness, AgentBackendRuntimeHarness::CodexAppServer);
+        assert!(runtime.env.is_empty());
+        assert!(!runtime.hash.is_empty());
+    }
+
+    #[test]
+    fn build_claude_code_direct_runtime_for_ollama_sets_attribution_off() {
+        let backend = AgentBackendConfig::builtin_ollama();
+        let runtime = build_claude_code_direct_runtime(&backend, Some("llama3"), None);
+        assert_eq!(runtime.harness, AgentBackendRuntimeHarness::ClaudeCode);
+        let env: HashMap<_, _> = runtime
+            .env
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.as_str()))
+            .collect();
+        assert_eq!(
+            env.get("ANTHROPIC_BASE_URL"),
+            Some(&"http://localhost:11434")
+        );
+        assert_eq!(env.get("CLAUDE_CODE_ATTRIBUTION_HEADER"), Some(&"0"));
+        // Ollama path scrubs the API key to empty (Ollama doesn't bill).
+        assert_eq!(env.get("ANTHROPIC_API_KEY"), Some(&""));
     }
 }

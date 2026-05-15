@@ -1,10 +1,12 @@
 import { describe, it, expect } from "vitest";
 import {
   MODELS,
+  PI_SUBSECTION_PRIMARY_CAP,
   buildModelRegistry,
   findModelInRegistry,
   is1mContextModel,
   get1mFallback,
+  resolvePiSubProvider,
 } from "./modelRegistry";
 
 describe("modelRegistry", () => {
@@ -211,8 +213,144 @@ describe("modelRegistry", () => {
       expect(pi).toBeDefined();
       expect(pi?.group).toBe("Pi");
       expect(pi?.providerLabel).toBe("Pi");
+      expect(pi?.subProvider).toBe("OpenAI");
+      expect(pi?.subProviderKey).toBe("openai");
       expect(pi?.supportsEffort).toBe(true);
       expect(pi?.supportsFastMode).toBe(false);
+    });
+
+    it("splits Pi models into sub-sections derived from their provider/modelId prefix", () => {
+      const registry = buildModelRegistry(false, [
+        {
+          id: "pi",
+          label: "Pi",
+          kind: "pi_sdk",
+          enabled: true,
+          capabilities: { thinking: true, effort: true, fast_mode: false },
+          manual_models: [],
+          discovered_models: [
+            { id: "openai/gpt-5.4", label: "GPT-5.4", context_window_tokens: 272_000 },
+            { id: "openai/gpt-4o", label: "GPT-4o", context_window_tokens: 128_000 },
+            { id: "anthropic/claude-sonnet-4-6", label: "Claude Sonnet 4.6", context_window_tokens: 200_000 },
+            { id: "ollama/gpt-oss:120b", label: "gpt-oss:120b", context_window_tokens: 64_000 },
+          ],
+        },
+      ]);
+
+      const piModels = registry.filter((model) => model.providerKind === "pi_sdk");
+      const subProviderKeys = Array.from(
+        new Set(piModels.map((model) => model.subProviderKey)),
+      );
+      expect(subProviderKeys.sort()).toEqual(["anthropic", "ollama", "openai"]);
+      const subProviderLabels = new Map(
+        piModels.map((model) => [model.subProviderKey, model.subProvider]),
+      );
+      expect(subProviderLabels.get("openai")).toBe("OpenAI");
+      expect(subProviderLabels.get("anthropic")).toBe("Anthropic");
+      expect(subProviderLabels.get("ollama")).toBe("Ollama");
+    });
+
+    it("marks Pi sub-section overflow as legacy without crossing sub-providers", () => {
+      // Use distinct, non-numeric model names so the version-band ranker
+      // doesn't demote them on its own — this test isolates the per-
+      // sub-section cap.
+      const codenames = [
+        "atlas",
+        "babbage",
+        "curie",
+        "davinci",
+        "echo",
+        "foxtrot",
+        "golf",
+        "hotel",
+      ];
+      const surplus = codenames.length;
+      expect(surplus).toBeGreaterThan(PI_SUBSECTION_PRIMARY_CAP);
+      const openaiModels = codenames.map((name) => ({
+        id: `openai/${name}`,
+        label: name,
+        context_window_tokens: 200_000,
+      }));
+      const registry = buildModelRegistry(false, [
+        {
+          id: "pi",
+          label: "Pi",
+          kind: "pi_sdk",
+          enabled: true,
+          capabilities: { thinking: true, effort: true, fast_mode: false },
+          manual_models: [],
+          discovered_models: [
+            ...openaiModels,
+            // A second sub-provider with one entry — must stay primary
+            // even though OpenAI ran past its cap.
+            {
+              id: "anthropic/claude-sonnet-4-6",
+              label: "Claude Sonnet 4.6",
+              context_window_tokens: 200_000,
+            },
+          ],
+        },
+      ]);
+
+      const openaiPrimary = registry.filter(
+        (m) => m.subProviderKey === "openai" && !m.legacy,
+      );
+      const openaiOverflow = registry.filter(
+        (m) => m.subProviderKey === "openai" && m.legacy,
+      );
+      expect(openaiPrimary.length).toBe(PI_SUBSECTION_PRIMARY_CAP);
+      expect(openaiOverflow.length).toBe(surplus - PI_SUBSECTION_PRIMARY_CAP);
+      const anthropic = registry.find(
+        (m) => m.subProviderKey === "anthropic",
+      );
+      expect(anthropic?.legacy).toBeFalsy();
+    });
+
+    it("falls back to title-cased label for unknown Pi providers", () => {
+      const registry = buildModelRegistry(false, [
+        {
+          id: "pi",
+          label: "Pi",
+          kind: "pi_sdk",
+          enabled: true,
+          capabilities: { thinking: true, effort: true, fast_mode: false },
+          manual_models: [
+            { id: "deepseek/coder", label: "Deepseek Coder", context_window_tokens: 128_000 },
+          ],
+          discovered_models: [],
+        },
+      ]);
+      const deepseek = registry.find((m) => m.id === "deepseek/coder");
+      expect(deepseek?.subProvider).toBe("Deepseek");
+      expect(deepseek?.subProviderKey).toBe("deepseek");
+    });
+  });
+
+  describe("resolvePiSubProvider", () => {
+    it("splits the provider prefix off provider-qualified ids", () => {
+      expect(resolvePiSubProvider("openai/gpt-5.4")).toEqual({
+        key: "openai",
+        label: "OpenAI",
+      });
+      expect(resolvePiSubProvider("anthropic/claude-opus-4-5")).toEqual({
+        key: "anthropic",
+        label: "Anthropic",
+      });
+    });
+
+    it("returns `other` for ids without a `/` so unknown shapes don't crash the picker", () => {
+      expect(resolvePiSubProvider("gpt-5.4")).toEqual({
+        key: "other",
+        label: "Other",
+      });
+      expect(resolvePiSubProvider("")).toEqual({
+        key: "other",
+        label: "Other",
+      });
+      expect(resolvePiSubProvider("/orphan")).toEqual({
+        key: "other",
+        label: "Other",
+      });
     });
 
     it("does not expose legacy Codex through alternative backends", () => {

@@ -1055,6 +1055,7 @@ fn main() {
             commands::agent_backends::list_agent_backends,
             commands::agent_backends::auto_detect_agent_backends,
             commands::agent_backends::save_agent_backend,
+            commands::agent_backends::set_agent_backend_runtime_harness,
             commands::agent_backends::delete_agent_backend,
             commands::agent_backends::save_agent_backend_secret,
             commands::agent_backends::refresh_agent_backend_models,

@@ -52,6 +52,17 @@ Claudette splits providers into two architectural categories:
 
 **Native harnesses** (`CodexNative`, `PiSdk`) — Claudette speaks to a purpose-built subprocess instead of spawning `claude`. Codex uses `codex app-server --listen stdio://`; Pi uses Claudette's bundled Bun sidecar embedding `@earendil-works/pi-coding-agent`.
 
+### Runtime override per backend
+
+Some kinds support more than one harness. **Settings > Models** shows a **Runtime** select on those cards that lets you swap between the kind's default and the alternative without leaving the panel:
+
+- **Ollama, LM Studio** — default to the **Pi** harness (more capable agent loop than proxying the Claude CLI through `ANTHROPIC_BASE_URL`). **Claude CLI** stays available as a fallback for users who prefer the original wire-format-passthrough behavior or hit a Pi limitation.
+- **OpenAI API, Custom OpenAI** — default stays on **Claude CLI** (gateway translation). **Pi** is opt-in.
+- **Codex Native** — default stays on the **Codex app-server**. **Pi** is opt-in (Pi's own OpenAI provider, requiring `pi auth` to be configured).
+- **Anthropic, Custom Anthropic, Codex Subscription** — locked to **Claude CLI**. Pi is **never** offered for Claude-subscription / Anthropic-OAuth flows; the resolver also enforces this at chat-send time.
+
+The override persists as a `runtime_harness` field on the backend config (`AgentBackendConfig::effective_harness` in `src/agent_backend.rs`). Picking the default value clears the override so future default-policy changes pick the user back up.
+
 > **Heads up if you ever configure a custom OpenAI endpoint**: Claudette posts to `/v1/responses`, not `/v1/chat/completions`. Providers that only implement Chat Completions won't work behind the gateway.
 
 ## Capability matrix

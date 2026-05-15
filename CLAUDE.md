@@ -78,7 +78,7 @@ CI also enforces `bun install --frozen-lockfile` — do not modify `bun.lock` wi
 - **Async runtime**: Tokio for process management and git operations
 - **Data persistence**: SQLite via rusqlite (bundled)
 - **Git operations**: Shelling out to `git` via `tokio::process::Command` for worktree ops
-- **Agent integration**: Claude CLI subprocess with JSON streaming, bridged to frontend via Tauri events
+- **Agent integration**: Claude CLI subprocess with JSON streaming, bridged to frontend via Tauri events. The chat-send resolver dispatches on a per-backend `runtime_harness` (`AgentBackendConfig::effective_harness` in `src/agent_backend.rs`), not on `AgentBackendKind` directly — `kind` only declares which harnesses are valid; the user picks the active one in Settings > Models > Runtime. Ollama / LM Studio default to Pi, OpenAI cards to the Claude CLI gateway, Codex Native to the Codex app-server. Anthropic / Custom Anthropic / Codex Subscription are locked to Claude CLI so subscription OAuth tokens never reach Pi.
 - **Terminal emulation**: portable-pty (Rust) + xterm.js (frontend)
 - **IPC**: Tauri commands (`#[tauri::command]`) for request/response, Tauri events for streaming
 

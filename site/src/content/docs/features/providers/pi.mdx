@@ -38,7 +38,9 @@ The visible transcript shows Pi tool calls through Claudette's native tool-call 
 
 ## Model Selection
 
-Pi models appear under a **Pi** group in the chat model picker. Per-session choice is persisted with the same keys as other harnesses:
+Pi models appear under a **Pi** group in the chat model picker. The picker splits Pi's registry into one sub-section per real provider (Anthropic, OpenAI, Google, Mistral, Ollama, LM Studio, …) so the list stays scannable when Pi returns hundreds of entries. Each sub-section shows a few primary models with a **Show all (N)…** disclosure for the rest, and the picker's top search filters across every section at once.
+
+Per-session choice is persisted with the same keys as other harnesses:
 
 - `model:<session_id>`
 - `model_provider:<session_id>` with provider value `pi`
@@ -47,6 +49,14 @@ Default Pi selection uses the existing global model settings:
 
 - `default_model`
 - `default_agent_backend`
+
+### Anthropic via Pi is blocked for Claude subscription users
+
+When the local Claude CLI is signed in with an OAuth subscription token (`claude auth status` reports `authMethod: oauth_token`), Claudette hides Pi's **Anthropic** sub-section in the picker and the Rust resolver also refuses any chat-send that would route an `anthropic/*` model through Pi (`ensure_anthropic_not_routed_through_pi_via_oauth` in `src-tauri/src/commands/agent_backends.rs`). The block exists so Claude OAuth tokens never leave the Claude CLI subprocess. Non-Anthropic Pi sub-sections (OpenAI, Google, Ollama, …) continue to work normally.
+
+### Routing other backends through Pi
+
+Beyond the dedicated Pi card, Ollama, LM Studio, OpenAI API, Custom OpenAI, and Codex Native can also be routed through the Pi harness via **Settings > Models > $(card) > Runtime**. The default for Ollama and LM Studio is now Pi (Claude CLI is the optional fallback). For Codex Native and the OpenAI cards, the default stays unchanged and Pi is opt-in. The provider prefix that Pi expects (`ollama/`, `lmstudio/`, `openai/`) is prepended automatically when Claudette dispatches the chat. See the **Runtime** row on each card.
 
 ## Slash Commands
 

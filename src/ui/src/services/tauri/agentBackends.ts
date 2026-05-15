@@ -27,6 +27,20 @@ export interface AgentBackendModel {
   discovered: boolean;
 }
 
+/**
+ * Which subprocess Claudette spawns for a chat turn on this backend.
+ * Mirrors the Rust `AgentBackendRuntimeHarness` enum.
+ *
+ *  - `claude_code` — the bundled Claude CLI (with `ANTHROPIC_BASE_URL` /
+ *    gateway env when the backend isn't Anthropic itself).
+ *  - `codex_app_server` — the Codex CLI's debug app-server.
+ *  - `pi_sdk` — Claudette's bundled Pi sidecar.
+ */
+export type AgentBackendRuntimeHarness =
+  | "claude_code"
+  | "codex_app_server"
+  | "pi_sdk";
+
 export interface AgentBackendConfig {
   id: string;
   label: string;
@@ -41,6 +55,9 @@ export interface AgentBackendConfig {
   context_window_default: number;
   model_discovery: boolean;
   has_secret: boolean;
+  /** User override for which runtime harness handles this backend.
+   *  `undefined` means use the kind's default — see `defaultHarnessForKind`. */
+  runtime_harness?: AgentBackendRuntimeHarness | null;
 }
 
 export interface AgentBackendListResponse {
@@ -108,4 +125,74 @@ export function testAgentBackend(backendId: string): Promise<BackendStatus> {
 
 export function launchCodexLogin(): Promise<void> {
   return invoke("launch_codex_login");
+}
+
+export function setAgentBackendRuntimeHarness(
+  backendId: string,
+  harness: AgentBackendRuntimeHarness | null,
+): Promise<AgentBackendConfig[]> {
+  return invoke("set_agent_backend_runtime_harness", { backendId, harness });
+}
+
+/**
+ * Mirror of `AgentBackendKind::default_harness` for the frontend.
+ * Keep in lockstep with `src/agent_backend.rs` — a Rust-side test
+ * pins the matrix.
+ */
+export function defaultHarnessForKind(
+  kind: AgentBackendKind,
+): AgentBackendRuntimeHarness {
+  switch (kind) {
+    case "anthropic":
+    case "custom_anthropic":
+    case "codex_subscription":
+    case "openai_api":
+    case "custom_openai":
+      return "claude_code";
+    case "ollama":
+    case "lm_studio":
+      return "pi_sdk";
+    case "codex_native":
+      return "codex_app_server";
+    case "pi_sdk":
+      return "pi_sdk";
+  }
+}
+
+/**
+ * Mirror of `AgentBackendKind::available_harnesses`. The first entry is
+ * the default. Pinning a value outside this list is rejected server-side
+ * by `set_agent_backend_runtime_harness`.
+ */
+export function availableHarnessesForKind(
+  kind: AgentBackendKind,
+): AgentBackendRuntimeHarness[] {
+  switch (kind) {
+    case "anthropic":
+    case "custom_anthropic":
+    case "codex_subscription":
+      return ["claude_code"];
+    case "ollama":
+    case "lm_studio":
+      return ["pi_sdk", "claude_code"];
+    case "openai_api":
+    case "custom_openai":
+      return ["claude_code", "pi_sdk"];
+    case "codex_native":
+      return ["codex_app_server", "pi_sdk"];
+    case "pi_sdk":
+      return ["pi_sdk"];
+  }
+}
+
+/** Effective harness for a config: persisted override when allowed,
+ *  otherwise the kind's default. Matches `AgentBackendConfig::effective_harness`. */
+export function effectiveHarness(
+  backend: AgentBackendConfig,
+): AgentBackendRuntimeHarness {
+  const override = backend.runtime_harness ?? undefined;
+  if (override && availableHarnessesForKind(backend.kind).includes(override)) {
+    return override;
+  }
+  return defaultHarnessForKind(backend.kind);
 }

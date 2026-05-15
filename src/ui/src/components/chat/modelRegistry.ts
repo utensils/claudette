@@ -10,11 +10,25 @@ export type Model = {
   readonly label: string;
   readonly group: string;
   readonly extraUsage: boolean;
+  /** Demoted out of the primary list.
+   *  - Claude Code models: hidden behind the global "More" disclosure.
+   *  - Pi models: hidden behind their sub-section's "Show all (M)…"
+   *    disclosure (the picker checks `providerKind === "pi_sdk"` to
+   *    pick the right scope). */
   readonly legacy?: boolean;
   readonly providerId?: string;
   readonly providerLabel?: string;
   readonly providerKind?: string;
   readonly providerQualifiedId?: string;
+  /** Display label of the *sub-provider* within a Pi-style aggregator
+   *  backend (e.g. "OpenAI", "Anthropic", "Ollama"). Parsed from the
+   *  `<provider>/<modelId>` id the Pi sidecar emits. Only populated for
+   *  `providerKind === "pi_sdk"`; undefined for every other backend
+   *  (Claude Code curated, Codex, Ollama-via-Claude-CLI, etc.). */
+  readonly subProvider?: string;
+  /** Raw provider key (lowercased) used for stable identity in tests
+   *  and the Anthropic-via-Pi hide. */
+  readonly subProviderKey?: string;
   readonly supportsThinking?: boolean;
   readonly supportsEffort?: boolean;
   readonly supportsFastMode?: boolean;
@@ -92,6 +106,56 @@ type RankedBackendModel = {
 };
 
 const PRIMARY_BACKEND_VERSION_BANDS = 2;
+
+/** Soft cap per Pi sub-provider before models get demoted to the
+ *  "Show all (M)…" disclosure. Picked to keep the dropdown readable
+ *  without forcing the user to expand a section for the obvious top
+ *  choice. The full registry is always reachable via the per-sub-section
+ *  search popover. */
+export const PI_SUBSECTION_PRIMARY_CAP = 5;
+
+/** Friendly display labels for Pi's well-known provider keys. Anything
+ *  not in this table falls through to `titleCaseProviderKey`, which
+ *  capitalizes the first letter and leaves hyphens / dots alone so a
+ *  newly-added Pi provider still renders sensibly without a code edit. */
+const PI_PROVIDER_DISPLAY_LABELS: Readonly<Record<string, string>> = {
+  anthropic: "Anthropic",
+  openai: "OpenAI",
+  google: "Google",
+  mistral: "Mistral",
+  qwen: "Qwen",
+  ollama: "Ollama",
+  lmstudio: "LM Studio",
+  moonshot: "MoonshotAI",
+  moonshotai: "MoonshotAI",
+  poolside: "Poolside",
+  arcee: "Arcee AI",
+  reka: "Reka",
+  relace: "Relace",
+  baidu: "Baidu Qianfan",
+  owl: "Owl",
+  router: "Router",
+};
+
+function titleCaseProviderKey(key: string): string {
+  if (!key) return "Other";
+  if (key.length <= 3) return key.toUpperCase();
+  return key.charAt(0).toUpperCase() + key.slice(1);
+}
+
+/** Resolve a Pi provider key (the prefix before `/` in a model id) to
+ *  its display label. Returns `{ key: "other", label: "Other" }` for
+ *  ids that don't follow the `provider/modelId` shape. */
+export function resolvePiSubProvider(
+  modelId: string,
+): { key: string; label: string } {
+  const slash = modelId.indexOf("/");
+  if (slash <= 0) return { key: "other", label: "Other" };
+  const rawKey = modelId.slice(0, slash).toLowerCase().trim();
+  if (!rawKey) return { key: "other", label: "Other" };
+  const label = PI_PROVIDER_DISPLAY_LABELS[rawKey] ?? titleCaseProviderKey(rawKey);
+  return { key: rawKey, label };
+}
 
 function parseModelVersion(model: BackendRegistryModel): ParsedModelVersion | undefined {
   const text = `${model.id} ${model.label}`.toLowerCase();
@@ -197,40 +261,116 @@ export function buildModelRegistry(
       backend.discovered_models.length > 0
         ? backend.discovered_models
         : backend.manual_models;
-    const rankedModels = rankBackendModels(backendModels);
-    const primaryVersions = primaryVersionKeysByPrefix(rankedModels);
+    const isPi = backend.kind === "pi_sdk";
+    const target = models ??= [...MODELS];
+    if (isPi) {
+      collectPiModelsBySubProvider(backend, backendModels, target);
+      continue;
+    }
+    collectFlatBackendModels(backend, backendModels, target);
+  }
+  return models ?? MODELS;
+}
+
+function collectFlatBackendModels(
+  backend: BackendRegistrySource,
+  backendModels: readonly BackendRegistryModel[],
+  target: Model[],
+): void {
+  const rankedModels = rankBackendModels(backendModels);
+  const primaryVersions = primaryVersionKeysByPrefix(rankedModels);
+  const seen = new Set<string>();
+  for (const entry of rankedModels) {
+    const { model } = entry;
+    if (!model.id || seen.has(model.id)) continue;
+    seen.add(model.id);
+    const isNativeCodex = backend.kind === "codex_native";
+    const providerDisplayLabel = isNativeCodex ? "Codex" : backend.label;
+    const isOlderBackendVersion = entry.parsed
+      ? !primaryVersions.get(entry.parsed.prefix)?.has(entry.parsed.versionKey)
+      : false;
+    target.push({
+      id: model.id,
+      label: model.label || model.id,
+      group: providerDisplayLabel,
+      extraUsage: false,
+      legacy: isOlderBackendVersion,
+      providerId: backend.id,
+      providerLabel: providerDisplayLabel,
+      providerKind: backend.kind,
+      providerQualifiedId: `${backend.id}/${model.id}`,
+      supportsThinking: isNativeCodex || backend.capabilities.thinking,
+      supportsEffort: isNativeCodex || backend.capabilities.effort,
+      supportsFastMode: isNativeCodex || backend.capabilities.fast_mode,
+      contextWindowTokens: model.context_window_tokens,
+    });
+  }
+}
+
+/**
+ * Pi's `ModelRegistry.getAvailable()` mixes many real providers (OpenAI,
+ * Anthropic, Google, Ollama, …) under one backend. Splitting by the
+ * `provider/` prefix in each id lets the picker render scannable
+ * sub-sections instead of a 370-row wall. Each sub-section keeps its
+ * own version-band ranking so e.g. older GPT versions collapse into
+ * "Show all" alongside other openai entries, not alongside Anthropic.
+ */
+function collectPiModelsBySubProvider(
+  backend: BackendRegistrySource,
+  backendModels: readonly BackendRegistryModel[],
+  target: Model[],
+): void {
+  const bySubProvider = new Map<string, BackendRegistryModel[]>();
+  const subProviderLabels = new Map<string, string>();
+  const subProviderOrder: string[] = [];
+  for (const model of backendModels) {
+    if (!model.id) continue;
+    const { key, label } = resolvePiSubProvider(model.id);
+    if (!bySubProvider.has(key)) {
+      bySubProvider.set(key, []);
+      subProviderLabels.set(key, label);
+      subProviderOrder.push(key);
+    }
+    bySubProvider.get(key)!.push(model);
+  }
+  for (const subKey of subProviderOrder) {
+    const subLabel = subProviderLabels.get(subKey) ?? "Other";
+    const subModels = bySubProvider.get(subKey) ?? [];
+    const ranked = rankBackendModels(subModels);
+    const primaryVersions = primaryVersionKeysByPrefix(ranked);
     const seen = new Set<string>();
-    for (const entry of rankedModels) {
+    let primaryCountForSub = 0;
+    for (const entry of ranked) {
       const { model } = entry;
       if (!model.id || seen.has(model.id)) continue;
       seen.add(model.id);
-      const isNativeCodex = backend.kind === "codex_native";
-      const isPi = backend.kind === "pi_sdk";
-      const providerDisplayLabel = isNativeCodex ? "Codex" : isPi ? "Pi" : backend.label;
-      const isOlderBackendVersion = entry.parsed
-        ? !primaryVersions
-          .get(entry.parsed.prefix)
-          ?.has(entry.parsed.versionKey)
+      const versionDemoted = entry.parsed
+        ? !primaryVersions.get(entry.parsed.prefix)?.has(entry.parsed.versionKey)
         : false;
-      const target = models ??= [...MODELS];
+      // Per-sub-section cap. A version-demoted entry is already legacy;
+      // anything else past the cap is overflow within its sub-section.
+      const overCap = primaryCountForSub >= PI_SUBSECTION_PRIMARY_CAP;
+      const legacy = versionDemoted || overCap;
+      if (!legacy) primaryCountForSub += 1;
       target.push({
         id: model.id,
         label: model.label || model.id,
-        group: providerDisplayLabel,
+        group: "Pi",
         extraUsage: false,
-        legacy: isOlderBackendVersion,
+        legacy,
         providerId: backend.id,
-        providerLabel: providerDisplayLabel,
+        providerLabel: "Pi",
         providerKind: backend.kind,
         providerQualifiedId: `${backend.id}/${model.id}`,
-        supportsThinking: isNativeCodex || backend.capabilities.thinking,
-        supportsEffort: isNativeCodex || backend.capabilities.effort,
-        supportsFastMode: isNativeCodex || backend.capabilities.fast_mode,
+        subProvider: subLabel,
+        subProviderKey: subKey,
+        supportsThinking: backend.capabilities.thinking,
+        supportsEffort: backend.capabilities.effort,
+        supportsFastMode: backend.capabilities.fast_mode,
         contextWindowTokens: model.context_window_tokens,
       });
     }
   }
-  return models ?? MODELS;
 }
 
 export function resolveModelSelection(

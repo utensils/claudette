@@ -28,6 +28,7 @@ import { useAppStore } from "../../../stores/useAppStore";
 import { formatBackendError } from "../backendSettingsErrors";
 import { planAlternativeBackendDisableCleanup } from "../alternativeBackendCleanup";
 import { SearchableSelect } from "../SearchableSelect";
+import { RuntimeSelector } from "../RuntimeSelector";
 import {
   LEGACY_CODEX_BACKEND,
   LEGACY_NATIVE_CODEX_BACKEND,
@@ -870,6 +871,18 @@ function BackendCard({
           </div>
         )}
         <div className={styles.backendForm}>
+          <RuntimeSelector
+            backend={draft}
+            onSaved={(saved) => {
+              const refreshed = saved.find((item) => item.id === draft.id);
+              if (refreshed) {
+                lastSavedDraftRef.current = JSON.stringify(refreshed);
+                setDraft(refreshed);
+              }
+              onSaved(saved);
+            }}
+            onError={(err) => setCardError(formatBackendError(err, draft))}
+          />
           {showBaseUrl && (
             <label className={styles.backendField}>
               <span className={styles.backendFieldLabel}>{t("models_backend_base_url")}</span>
