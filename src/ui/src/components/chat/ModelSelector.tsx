@@ -9,7 +9,8 @@ import {
   X,
 } from "lucide-react";
 import styles from "./ModelSelector.module.css";
-import { buildModelRegistry, type Model } from "./modelRegistry";
+import { type Model } from "./modelRegistry";
+import { useModelRegistry } from "./useModelRegistry";
 import { useAppStore } from "../../stores/useAppStore";
 
 export { MODELS, is1mContextModel, get1mFallback } from "./modelRegistry";
@@ -143,26 +144,10 @@ export function ModelSelector({
 }: ModelSelectorProps) {
   const { t } = useTranslation("chat");
   const disable1mContext = useAppStore((s) => s.disable1mContext);
-  const alternativeBackendsEnabled = useAppStore((s) => s.alternativeBackendsEnabled);
-  const codexEnabled = useAppStore((s) => s.codexEnabled);
-  const agentBackends = useAppStore((s) => s.agentBackends);
-  const claudeAuthMethod = useAppStore((s) => s.claudeAuthMethod);
-  // Claude OAuth subscription users must not see Pi-routed Anthropic
-  // models — `ensure_anthropic_not_routed_through_pi_via_oauth` in
-  // agent_backends.rs refuses them at send time. The filter lives
-  // inside `buildModelRegistry` so every consumer (Settings,
-  // `/model`, toolbars) gets the same hidden set, not just this
-  // picker.
-  const isClaudeOauthSubscriber = useMemo(
-    () => claudeAuthMethod?.toLowerCase() === "oauth_token",
-    [claudeAuthMethod],
-  );
-  const registry = useMemo(
-    () => buildModelRegistry(alternativeBackendsEnabled, agentBackends, codexEnabled, {
-      isClaudeOauthSubscriber,
-    }),
-    [alternativeBackendsEnabled, agentBackends, codexEnabled, isClaudeOauthSubscriber],
-  );
+  // `useModelRegistry` applies every cross-cutting visibility gate
+  // (feature flags + OAuth Pi-anthropic filter) so this picker never
+  // surfaces a row the Rust resolver would refuse mid-send.
+  const registry = useModelRegistry();
   const visibleModels = useMemo(
     () =>
       registry.filter((m) => {

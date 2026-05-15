@@ -319,7 +319,18 @@ cat "$stderr_fifo" >&2 &
 cat_stderr_pid=$!
 
 env_args=()
-for var in VITE_PORT CLAUDETTE_DEBUG_PORT CLAUDETTE_DEV_OVERRIDE RUST_LOG RUST_BACKTRACE; do
+# CLAUDETTE_HOME / CLAUDETTE_DATA_DIR / CLAUDE_CONFIG_DIR carry the
+# per-instance sandbox path layout that `dev.sh --new` / `--clone`
+# write before invoking this runner. Without forwarding them through
+# `open --env`, the launched .app reads the OS default paths and
+# mutates the user's real ~/.claudette/ + ~/.claude/ even though the
+# user explicitly asked for isolation. The rest of the list is the
+# normal dev-time wiring (Vite + debug-eval ports, dev-override flag,
+# tracing knobs).
+for var in \
+  VITE_PORT CLAUDETTE_DEBUG_PORT CLAUDETTE_DEV_OVERRIDE \
+  CLAUDETTE_HOME CLAUDETTE_DATA_DIR CLAUDE_CONFIG_DIR \
+  RUST_LOG RUST_BACKTRACE; do
   if [ -n "${!var:-}" ]; then
     env_args+=(--env "$var=${!var}")
   fi

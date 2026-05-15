@@ -563,11 +563,22 @@ const modelHandler: NativeHandler = {
       return handled;
     }
     const { disable1mContext } = useAppStore.getState();
-    const { alternativeBackendsEnabled, codexEnabled, agentBackends } = useAppStore.getState();
+    const { alternativeBackendsEnabled, codexEnabled, agentBackends, claudeAuthMethod } =
+      useAppStore.getState();
+    // Match every other registry consumer's OAuth Pi-anthropic gate
+    // (`ensure_anthropic_not_routed_through_pi_via_oauth` in
+    // `agent_backends.rs`). Without this the `/model` command would
+    // happily list `pi/anthropic/...` for OAuth subscribers and the
+    // next send would be refused mid-turn. Non-React context here
+    // (slash command handler), so we compute the flag inline rather
+    // than via the `useModelRegistry` hook.
+    const isClaudeOauthSubscriber =
+      claudeAuthMethod?.toLowerCase() === "oauth_token";
     const registry = buildModelRegistry(
       alternativeBackendsEnabled,
       agentBackends,
       codexEnabled,
+      { isClaudeOauthSubscriber },
     );
     const available = disable1mContext
       ? registry.filter((m) => m.contextWindowTokens < 1_000_000)
