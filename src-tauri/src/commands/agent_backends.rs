@@ -1670,7 +1670,7 @@ async fn discover_pi_models(
     backend: &AgentBackendConfig,
 ) -> Result<Vec<AgentBackendModel>, String> {
     let discovered = PiSdkSession::discover_models(std::path::Path::new(".")).await?;
-    let mut models: Vec<AgentBackendModel> = discovered
+    let models: Vec<AgentBackendModel> = discovered
         .into_iter()
         .map(|model| AgentBackendModel {
             id: model.id.clone(),
@@ -1685,9 +1685,10 @@ async fn discover_pi_models(
             discovered: true,
         })
         .collect();
-    if models.is_empty() {
-        models = AgentBackendConfig::builtin_pi_sdk().manual_models;
-    }
+    // Return an empty Vec when discovery turns up nothing so that
+    // `apply_discovered_models`'s `!discovered.is_empty()` guard keeps the
+    // user's manual_models intact. Substituting the seed list here used to
+    // trick that guard into clearing user-entered manual models.
     Ok(models)
 }
 

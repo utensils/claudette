@@ -166,7 +166,7 @@ pub async fn archive_chat_session(
 
     // Stop and remove the live agent for this session.
     // Capture the PID under the lock, then drop the lock before the async stop.
-    let (pid_to_stop, live_sid) = {
+    let (pid_to_stop, _live_sid) = {
         let mut agents = state.agents.write().await;
         agents
             .remove(&session_id)
@@ -176,9 +176,12 @@ pub async fn archive_chat_session(
     if let Some(pid) = pid_to_stop {
         let _ = agent::stop_agent(pid).await;
     }
-    if let Some(sid) = live_sid.or(persisted_sid) {
-        super::remove_pi_session_dir(&state.db_path, &sid).await;
-    }
+    // Intentionally do NOT delete the Pi session directory here — archive is
+    // a reversible soft-delete (`restore_chat_session` keeps `session_id`),
+    // so removing the on-disk transcript would leave a restored chat unable
+    // to resume. Pi session-dir cleanup belongs in the reset / permanent
+    // delete paths, not archive.
+    let _ = persisted_sid;
 
     let fresh = if auto_replace.unwrap_or(true) {
         db.archive_chat_session_ensuring_active(&session_id, &workspace_id)

@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicI64, Ordering};
@@ -23,16 +23,61 @@ use super::{
 type PiStdin = Arc<tokio::sync::Mutex<ChildStdin>>;
 type PendingRequests = Arc<tokio::sync::Mutex<BTreeMap<String, PendingPiRequest>>>;
 type TurnOutput = Arc<tokio::sync::Mutex<PiTurnOutput>>;
+type InitCacheHandle = Arc<tokio::sync::Mutex<InitCache>>;
 
 struct PendingPiRequest {
     command: String,
     tx: oneshot::Sender<Result<Value, String>>,
 }
 
-#[derive(Default)]
+// Tool block indices start at 2 because index 0 is reserved for the text block
+// and index 1 for the thinking block opened in TurnStart.
+const FIRST_TOOL_BLOCK_INDEX: u32 = 2;
+
 struct PiTurnOutput {
     text: String,
     thinking: String,
+    tool_block_indices: HashMap<String, u32>,
+    next_tool_block_index: u32,
+}
+
+impl PiTurnOutput {
+    fn fresh() -> Self {
+        Self {
+            text: String::new(),
+            thinking: String::new(),
+            tool_block_indices: HashMap::new(),
+            next_tool_block_index: FIRST_TOOL_BLOCK_INDEX,
+        }
+    }
+
+    fn tool_index(&mut self, tool_call_id: &str) -> u32 {
+        if let Some(idx) = self.tool_block_indices.get(tool_call_id).copied() {
+            return idx;
+        }
+        let idx = self.next_tool_block_index;
+        self.next_tool_block_index += 1;
+        self.tool_block_indices
+            .insert(tool_call_id.to_string(), idx);
+        idx
+    }
+}
+
+impl Default for PiTurnOutput {
+    fn default() -> Self {
+        Self::fresh()
+    }
+}
+
+// Events emitted before any subscriber exists (the harness command-line marker
+// and the post-`start_session` init event) are dropped by `broadcast::send`.
+// We cache them on the session and replay them into each turn's per-turn
+// receiver after it subscribes, so the chat bridge always sees the init event
+// and persists the sidecar invocation.
+#[derive(Default, Clone)]
+struct InitCache {
+    command_line: Option<AgentEvent>,
+    init: Option<AgentEvent>,
 }
 
 #[derive(Debug, Clone)]
@@ -54,6 +99,7 @@ pub struct PiSdkSession {
     next_request_id: AtomicI64,
     working_dir: PathBuf,
     turn_output: TurnOutput,
+    init_cache: InitCacheHandle,
 }
 
 impl PiSdkSession {
@@ -115,12 +161,16 @@ impl PiSdkSession {
             next_request_id: AtomicI64::new(1),
             working_dir: working_dir.to_path_buf(),
             turn_output: Arc::new(tokio::sync::Mutex::new(PiTurnOutput::default())),
+            init_cache: Arc::new(tokio::sync::Mutex::new(InitCache::default())),
         };
 
         session.spawn_stdout_reader(stdout);
         session.spawn_stderr_reader(stderr);
         session.spawn_exit_watcher(child);
-        let _ = session.event_tx.send(pi_command_line_event(&pi_path));
+        // Cache the command-line marker so the first turn's per-turn receiver
+        // can replay it; sending it through `event_tx` before any subscriber
+        // exists would drop it on the floor.
+        session.init_cache.lock().await.command_line = Some(pi_command_line_event(&pi_path));
         session.initialize().await?;
         session
             .start_session(session_id, options)
@@ -192,6 +242,7 @@ impl PiSdkSession {
             next_request_id: AtomicI64::new(1),
             working_dir: working_dir.to_path_buf(),
             turn_output: Arc::new(tokio::sync::Mutex::new(PiTurnOutput::default())),
+            init_cache: Arc::new(tokio::sync::Mutex::new(InitCache::default())),
         };
 
         session.spawn_stdout_reader(stdout);
@@ -212,6 +263,7 @@ impl PiSdkSession {
             next_request_id: AtomicI64::new(1),
             working_dir: PathBuf::from("/tmp"),
             turn_output: Arc::new(tokio::sync::Mutex::new(PiTurnOutput::default())),
+            init_cache: Arc::new(tokio::sync::Mutex::new(InitCache::default())),
         }
     }
 
@@ -232,6 +284,7 @@ impl PiSdkSession {
             return Err("Pi SDK harness does not support Claudette attachments yet".to_string());
         }
         let mut broadcast_rx = self.event_tx.subscribe();
+        let cached = self.init_cache.lock().await.clone();
         self.send_request(json!({
             "type": "prompt",
             "prompt": prompt,
@@ -239,6 +292,20 @@ impl PiSdkSession {
         .await?;
 
         let (mpsc_tx, mpsc_rx) = mpsc::channel::<AgentEvent>(128);
+        // Replay the cached command-line + init events into this turn's
+        // receiver before forwarding live stream events. The bridge's
+        // got_init flag depends on seeing the System { subtype: "init" }
+        // event, which is otherwise emitted before any subscriber exists.
+        if let Some(event) = cached.command_line
+            && mpsc_tx.send(event).await.is_err()
+        {
+            return Err("Pi SDK harness turn receiver closed".to_string());
+        }
+        if let Some(event) = cached.init
+            && mpsc_tx.send(event).await.is_err()
+        {
+            return Err("Pi SDK harness turn receiver closed".to_string());
+        }
         tokio::spawn(async move {
             loop {
                 match broadcast_rx.recv().await {
@@ -388,6 +455,7 @@ impl PiSdkSession {
         let event_tx = self.event_tx.clone();
         let pending = self.pending.clone();
         let turn_output = self.turn_output.clone();
+        let init_cache = self.init_cache.clone();
         tokio::spawn(async move {
             let reader = tokio::io::BufReader::new(stdout);
             let mut lines = reader.lines();
@@ -397,7 +465,8 @@ impl PiSdkSession {
                 }
                 match serde_json::from_str::<PiHarnessMessage>(&line) {
                     Ok(message) => {
-                        route_pi_message(&event_tx, &pending, &turn_output, message).await;
+                        route_pi_message(&event_tx, &pending, &turn_output, &init_cache, message)
+                            .await;
                     }
                     Err(err) => {
                         let msg = format!("Failed to parse Pi SDK harness line: {err}: {line}");
@@ -512,6 +581,7 @@ async fn route_pi_message(
     event_tx: &broadcast::Sender<AgentEvent>,
     pending: &PendingRequests,
     turn_output: &TurnOutput,
+    init_cache: &InitCacheHandle,
     message: PiHarnessMessage,
 ) {
     match message {
@@ -544,7 +614,7 @@ async fn route_pi_message(
             session_id,
             session_id_camel,
         } => {
-            let _ = event_tx.send(AgentEvent::Stream(StreamEvent::System {
+            let init_event = AgentEvent::Stream(StreamEvent::System {
                 subtype: "init".to_string(),
                 session_id: session_id.or(session_id_camel),
                 state: None,
@@ -560,10 +630,16 @@ async fn route_pi_message(
                 compact_result: None,
                 compact_metadata: None,
                 command_line: None,
-            }));
+            });
+            // Cache for replay into per-turn receivers. Ready arrives during
+            // start_session, before send_turn subscribes — without the cache
+            // the init event reaches no subscribers and the chat bridge's
+            // got_init flag stays false.
+            init_cache.lock().await.init = Some(init_event.clone());
+            let _ = event_tx.send(init_event);
         }
         PiHarnessMessage::TurnStart => {
-            *turn_output.lock().await = PiTurnOutput::default();
+            *turn_output.lock().await = PiTurnOutput::fresh();
             let _ = event_tx.send(AgentEvent::Stream(StreamEvent::Stream {
                 event: InnerStreamEvent::MessageStart {},
             }));
@@ -637,10 +713,15 @@ async fn route_pi_message(
         } => {
             let id = tool_call_id.unwrap_or_else(|| "pi-tool".to_string());
             let name = tool_name.unwrap_or_else(|| "tool".to_string());
-            if phase.as_deref().unwrap_or("start") == "start" {
+            let phase_str = phase.as_deref().unwrap_or("start");
+            // Allocate a stable per-tool block index so concurrent or
+            // sequential tool calls don't collide on a single index in the
+            // frontend's block table.
+            let block_index = turn_output.lock().await.tool_index(&id);
+            if phase_str == "start" {
                 let _ = event_tx.send(AgentEvent::Stream(StreamEvent::Stream {
                     event: InnerStreamEvent::ContentBlockStart {
-                        index: 2,
+                        index: block_index as usize,
                         content_block: Some(StartContentBlock::ToolUse {
                             id: id.clone(),
                             name,
@@ -649,11 +730,11 @@ async fn route_pi_message(
                 }));
             }
             if let Some(args) = args
-                && phase.as_deref().unwrap_or("start") == "start"
+                && phase_str == "start"
             {
                 let _ = event_tx.send(AgentEvent::Stream(StreamEvent::Stream {
                     event: InnerStreamEvent::ContentBlockDelta {
-                        index: 2,
+                        index: block_index as usize,
                         delta: Delta::InputJson {
                             partial_json: Some(args.to_string()),
                         },
@@ -661,7 +742,7 @@ async fn route_pi_message(
                 }));
             }
             if let Some(result) = result
-                && phase.as_deref() == Some("update")
+                && phase_str == "update"
             {
                 let _ = event_tx.send(AgentEvent::Stream(StreamEvent::User {
                     message: UserEventMessage {
@@ -682,6 +763,23 @@ async fn route_pi_message(
             result,
             is_error,
         } => {
+            // Close the per-tool block now that the tool has produced its
+            // final result. We only emit the stop when we actually allocated
+            // an index for this tool earlier; a result without a matching
+            // start would have no block to close.
+            let block_index = turn_output
+                .lock()
+                .await
+                .tool_block_indices
+                .get(&tool_call_id)
+                .copied();
+            if let Some(idx) = block_index {
+                let _ = event_tx.send(AgentEvent::Stream(StreamEvent::Stream {
+                    event: InnerStreamEvent::ContentBlockStop {
+                        index: idx as usize,
+                    },
+                }));
+            }
             let content = result.unwrap_or_else(|| json!({ "ok": !is_error }));
             let _ = event_tx.send(AgentEvent::Stream(StreamEvent::User {
                 message: UserEventMessage {
@@ -701,6 +799,10 @@ async fn route_pi_message(
         }
         PiHarnessMessage::TurnEnd { error } => {
             let mut output = turn_output.lock().await;
+            let error_text = error
+                .as_ref()
+                .map(|e| e.trim().to_string())
+                .filter(|e| !e.is_empty());
             let mut content = Vec::new();
             if !output.thinking.trim().is_empty() {
                 content.push(ContentBlock::Thinking {
@@ -712,15 +814,35 @@ async fn route_pi_message(
                     text: output.text.clone(),
                 });
             }
+            // When a turn fails with no assistant text, surface the error as
+            // assistant content so the user sees a message instead of a
+            // silently-finalized empty turn.
+            if content.is_empty()
+                && let Some(err) = error_text.as_ref()
+            {
+                content.push(ContentBlock::Text { text: err.clone() });
+            }
             if !content.is_empty() {
                 let _ = event_tx.send(AgentEvent::Stream(StreamEvent::Assistant {
                     message: AssistantMessage { content },
                 }));
             }
-            let subtype = if error.is_some() { "error" } else { "success" };
+            let subtype = if error_text.is_some() {
+                "error"
+            } else {
+                "success"
+            };
+            // Embed the error in the Result payload (alongside any captured
+            // text) so downstream consumers that only read Result.result —
+            // not Stderr — still have something to display.
+            let result_text = match (output.text.trim().is_empty(), error_text.as_ref()) {
+                (true, Some(err)) => err.clone(),
+                (false, Some(err)) => format!("{}\n\n{}", output.text, err),
+                _ => output.text.clone(),
+            };
             let _ = event_tx.send(AgentEvent::Stream(StreamEvent::Result {
                 subtype: subtype.to_string(),
-                result: Some(output.text.clone()),
+                result: Some(result_text),
                 total_cost_usd: None,
                 duration_ms: None,
                 usage: None,

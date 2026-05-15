@@ -84,11 +84,55 @@ pub(crate) fn pi_sessions_root(db_path: &Path) -> PathBuf {
         .unwrap_or_else(|| std::env::temp_dir().join("claudette-pi-sessions"))
 }
 
+/// Validate that a Pi `session_id` is safe to use as a single directory name
+/// under `pi_sessions_root`. Rejects empty/whitespace ids, any path separator
+/// (`/` or `\`), parent-relative segments (`..`), absolute-looking strings,
+/// and Windows drive prefixes. Session ids come from the DB or the harness
+/// and should be opaque identifiers; if one ever isn't, we'd rather refuse
+/// than feed a traversal candidate to `remove_dir_all`.
+fn is_safe_pi_session_id(session_id: &str) -> bool {
+    let trimmed = session_id.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+    if trimmed.contains('/') || trimmed.contains('\\') {
+        return false;
+    }
+    if trimmed == "." || trimmed == ".." {
+        return false;
+    }
+    // Reject absolute-looking ids ("/foo", "C:\foo") and NUL bytes.
+    if trimmed.starts_with('/') || trimmed.contains('\0') {
+        return false;
+    }
+    let path = std::path::Path::new(trimmed);
+    // Any non-Normal component (RootDir, ParentDir, Prefix, CurDir) indicates
+    // the id is trying to escape — refuse it.
+    path.components()
+        .all(|c| matches!(c, std::path::Component::Normal(_)))
+}
+
 pub(crate) async fn remove_pi_session_dir(db_path: &Path, session_id: &str) {
-    if session_id.trim().is_empty() {
+    if !is_safe_pi_session_id(session_id) {
+        tracing::warn!(
+            target: "claudette::chat",
+            session_id = %session_id,
+            "refusing to remove Pi session directory for unsafe session id"
+        );
         return;
     }
-    let path = pi_sessions_root(db_path).join(session_id);
+    let root = pi_sessions_root(db_path);
+    let path = root.join(session_id);
+    // Defense in depth: even after the id check, verify the joined path is
+    // still strictly under the sessions root before deletion.
+    if !path.starts_with(&root) {
+        tracing::warn!(
+            target: "claudette::chat",
+            path = %path.display(),
+            "computed Pi session path escaped sessions root — refusing delete"
+        );
+        return;
+    }
     match tokio::fs::remove_dir_all(&path).await {
         Ok(()) => {}
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
@@ -98,6 +142,44 @@ pub(crate) async fn remove_pi_session_dir(db_path: &Path, session_id: &str) {
             error = %err,
             "failed to remove Pi session directory"
         ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_safe_pi_session_id;
+
+    #[test]
+    fn rejects_unsafe_session_ids() {
+        for bad in [
+            "",
+            "   ",
+            ".",
+            "..",
+            "../escape",
+            "foo/bar",
+            "foo\\bar",
+            "/etc/passwd",
+            "C:\\Windows",
+            "with\0null",
+        ] {
+            assert!(
+                !is_safe_pi_session_id(bad),
+                "expected {bad:?} to be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn accepts_normal_session_ids() {
+        for good in [
+            "abc123",
+            "session-1234",
+            "session_abc",
+            "01HXYZABCDEFGHJKMNPQRSTVWX",
+        ] {
+            assert!(is_safe_pi_session_id(good), "expected {good:?} to pass");
+        }
     }
 }
 

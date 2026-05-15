@@ -63,7 +63,16 @@ describe("autoDetectableBackendIds", () => {
         backend({ id: "legacy", kind: "codex_subscription", enabled: true }),
         backend({ id: "openai", kind: "openai_api", enabled: true }),
       ]).sort(),
-    ).toEqual(["codex", "codex-off", "lm-studio", "ollama", "pi", "pi-off"]);
+    ).toEqual(["codex", "codex-off", "lm-studio", "ollama"]);
+  });
+
+  it("excludes pi_sdk backends until the Tauri auto-detect command probes them", () => {
+    expect(
+      autoDetectableBackendIds([
+        backend({ id: "pi", kind: "pi_sdk", enabled: true }),
+        backend({ id: "pi-off", kind: "pi_sdk", enabled: false }),
+      ]),
+    ).toEqual([]);
   });
 });
 
