@@ -50,7 +50,15 @@ function harnessFallbackLabel(harness: AgentBackendRuntimeHarness): string {
  */
 export function RuntimeSelector({ backend, onSaved, onError }: RuntimeSelectorProps) {
   const { t } = useTranslation("settings");
-  const harnesses = useMemo(() => availableHarnessesForKind(backend.kind), [backend.kind]);
+  const piSdkAvailable = useAppStore((s) => s.piSdkAvailable);
+  const harnesses = useMemo(() => {
+    const all = availableHarnessesForKind(backend.kind);
+    // Hide the Pi runtime option entirely on builds that didn't
+    // compile the Pi harness in — the dispatcher would fall back to
+    // ClaudeCode anyway, but exposing the option here would let the
+    // user pin a setting that has no effect.
+    return piSdkAvailable ? all : all.filter((h) => h !== "pi_sdk");
+  }, [backend.kind, piSdkAvailable]);
   const defaultHarness = defaultHarnessForKind(backend.kind);
   const current = effectiveHarness(backend);
   const piEnabled = useAppStore((s) =>

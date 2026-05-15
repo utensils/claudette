@@ -7,6 +7,10 @@ import type { AgentBackendConfig } from "../../services/tauri";
 
 const appStore = vi.hoisted(() => ({
   agentBackends: [] as AgentBackendConfig[],
+  // Tests cover the full UI surface (Pi runtime included), so default
+  // to the same shape a real Pi-compiled binary would produce. A
+  // dedicated test below pins the no-Pi behaviour.
+  piSdkAvailable: true,
 }));
 
 vi.mock("../../stores/useAppStore", () => {

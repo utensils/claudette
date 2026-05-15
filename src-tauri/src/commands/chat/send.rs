@@ -5,11 +5,13 @@ use tauri::{AppHandle, Emitter, Manager, State};
 use claudette::agent::background::{
     AgentBackgroundTaskEventKind, parse_background_task_binding, parse_task_notification,
 };
+#[cfg(feature = "pi-sdk")]
+use claudette::agent::{PiSdkOptions, PiSdkSession};
 use claudette::agent::{
     self, AgentEvent, AgentSession, AgentSettings, ClaudeCodeHarness, CodexAppServerOptions,
     CodexAppServerSession, CodexPermissionLevel, ControlRequestInner, FileAttachment,
-    InnerStreamEvent, PersistentSessionStart, PiSdkOptions, PiSdkSession, StartContentBlock,
-    StreamEvent, is_codex_approval_tool_name, normalize_codex_reasoning_effort,
+    InnerStreamEvent, PersistentSessionStart, StartContentBlock, StreamEvent,
+    is_codex_approval_tool_name, normalize_codex_reasoning_effort,
 };
 use claudette::agent_backend::AgentBackendRuntimeHarness;
 use claudette::base64_decode;
@@ -744,6 +746,7 @@ fn persist_user_send(db: &Database, prepared: &PreparedUserSend) -> Result<(), S
 
 /// Stable user-facing string for the Pi-no-attachments case. Lives in
 /// one place so the send and steer gates produce identical errors.
+#[cfg(feature = "pi-sdk")]
 pub(super) fn pi_attachment_unsupported_message() -> &'static str {
     "The Pi SDK harness does not yet support file attachments. \
      Remove the attachments or switch this backend's runtime to Claude CLI \
@@ -755,7 +758,9 @@ pub(super) fn pi_attachment_unsupported_message() -> &'static str {
 /// non-empty attachment slices because Pi has no file-upload API
 /// yet (see `src/agent/pi_sdk.rs`); checking here keeps a rejected
 /// send from leaving an orphan user-message + attachment row in the
-/// chat history with no agent response.
+/// chat history with no agent response. Without `pi-sdk` compiled in,
+/// the gate is a no-op — there's no Pi harness to dispatch to, so the
+/// only paths that survive accept attachments.
 pub(super) fn ensure_harness_accepts_attachments(
     harness: AgentBackendRuntimeHarness,
     attachments: &[FileAttachment],
@@ -763,9 +768,12 @@ pub(super) fn ensure_harness_accepts_attachments(
     if attachments.is_empty() {
         return Ok(());
     }
+    #[cfg(feature = "pi-sdk")]
     if harness == AgentBackendRuntimeHarness::PiSdk {
         return Err(pi_attachment_unsupported_message().to_string());
     }
+    #[cfg(not(feature = "pi-sdk"))]
+    let _ = harness;
     Ok(())
 }
 
@@ -853,7 +861,9 @@ pub async fn steer_queued_chat_message(
     // is whatever spawned this session — read it directly off `ps`
     // rather than re-resolving from settings. Pi rejects attachments;
     // gating here keeps a rejected steer from leaving an orphan user
-    // message + pre-steer checkpoint behind.
+    // message + pre-steer checkpoint behind. With `pi-sdk` compiled
+    // out, no live session can be Pi, so the check elides.
+    #[cfg(feature = "pi-sdk")]
     if !prepared_user_send.cli_atts.is_empty()
         && ps.kind() == claudette::agent::AgentHarnessKind::PiSdk
     {
@@ -1326,6 +1336,7 @@ pub async fn send_chat_message(
     // thinking while a session is alive forces a respawn; otherwise the
     // existing sidecar silently keeps the old setting. Mirrors how the
     // Codex effort is folded into the hash just above.
+    #[cfg(feature = "pi-sdk")]
     if backend_runtime.harness == AgentBackendRuntimeHarness::PiSdk {
         let pi_thinking_level: String = if thinking_enabled.unwrap_or(false) {
             effort.clone().unwrap_or_default()
@@ -1737,8 +1748,12 @@ pub async fn send_chat_message(
     let ws_env_for_persistent = ws_env.clone();
     let resolved_env_for_persistent = resolved_env.clone();
     let codex_permission_level_for_persistent = codex_permission_level;
+    #[cfg(feature = "pi-sdk")]
     let pi_sessions_root = super::pi_sessions_root(&state.db_path);
+    #[cfg(feature = "pi-sdk")]
     let pi_custom_instructions_for_persistent = pi_custom_instructions.clone();
+    #[cfg(not(feature = "pi-sdk"))]
+    let _ = &pi_custom_instructions;
     let start_persistent = move |worktree: String,
                                  sid: String,
                                  is_resume: bool,
@@ -1747,7 +1762,9 @@ pub async fn send_chat_message(
                                  settings: AgentSettings| {
         let env = ws_env_for_persistent.clone();
         let resolved = resolved_env_for_persistent.clone();
+        #[cfg(feature = "pi-sdk")]
         let pi_sessions_root = pi_sessions_root.clone();
+        #[cfg(feature = "pi-sdk")]
         let pi_instructions = pi_custom_instructions_for_persistent.clone();
         async move {
             // Note: do NOT route the error through `crate::missing_cli::handle_err`
@@ -1798,6 +1815,7 @@ pub async fn send_chat_message(
                         started,
                     )))
                 }
+                #[cfg(feature = "pi-sdk")]
                 AgentBackendRuntimeHarness::PiSdk => {
                     // `pi_instructions` omits the `send_to_user` MCP nudge
                     // that `instructions` carries — Pi has no MCP bridge, so
@@ -1899,6 +1917,7 @@ pub async fn send_chat_message(
                         Some(b)
                     }
                     AgentBackendRuntimeHarness::CodexAppServer => None,
+                    #[cfg(feature = "pi-sdk")]
                     AgentBackendRuntimeHarness::PiSdk => None,
                 };
                 if let Some(bridge) = bridge.as_ref()
@@ -2082,6 +2101,7 @@ pub async fn send_chat_message(
                 Some(b)
             }
             AgentBackendRuntimeHarness::CodexAppServer => None,
+            #[cfg(feature = "pi-sdk")]
             AgentBackendRuntimeHarness::PiSdk => None,
         };
         if let Some(bridge) = bridge.as_ref()
@@ -3702,6 +3722,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "pi-sdk")]
     #[test]
     fn pi_harness_rejects_attachment_before_persist() {
         // Pi's `send_turn` / `steer_turn` reject non-empty attachment
@@ -3720,6 +3741,7 @@ mod tests {
         assert!(err.contains("Settings → Models → Runtime"));
     }
 
+    #[cfg(feature = "pi-sdk")]
     #[test]
     fn pi_harness_accepts_turn_without_attachments() {
         // Empty attachment slice is the common path; the guard must

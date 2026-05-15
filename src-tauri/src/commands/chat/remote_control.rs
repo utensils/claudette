@@ -331,6 +331,7 @@ fn remote_control_requires_claude_cli_message(harness: AgentBackendRuntimeHarnes
     let harness_label = match harness {
         AgentBackendRuntimeHarness::ClaudeCode => "Claude CLI",
         AgentBackendRuntimeHarness::CodexAppServer => "Codex app-server",
+        #[cfg(feature = "pi-sdk")]
         AgentBackendRuntimeHarness::PiSdk => "Pi SDK",
     };
     format!(
@@ -1586,6 +1587,7 @@ mod tests {
         assert!(!remote_control_feature_enabled_from_value(Some("false")));
     }
 
+    #[cfg(feature = "pi-sdk")]
     #[test]
     fn remote_control_rejects_pi_runtime_with_actionable_message() {
         // Per-card runtime overrides (PR #813) let Ollama / LM Studio /

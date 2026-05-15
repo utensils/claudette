@@ -173,6 +173,7 @@ pub async fn reset_agent_session(
         .map_err(|e| e.to_string())?;
     let pi_sid = ended_sid.or(persisted_sid);
     if let Some(sid) = pi_sid.as_deref().filter(|s| !s.is_empty()) {
+        #[cfg(feature = "pi-sdk")]
         super::remove_pi_session_dir(&state.db_path, sid).await;
         let _ = db.end_agent_session(sid, false);
     }

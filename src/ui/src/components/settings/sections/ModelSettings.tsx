@@ -74,6 +74,7 @@ export function ModelSettings() {
   const [backendWarnings, setBackendWarnings] = useState<string[]>([]);
   const alternativeBackendsEnabled = useAppStore((s) => s.alternativeBackendsEnabled);
   const alternativeBackendsAvailable = useAppStore((s) => s.alternativeBackendsAvailable);
+  const piSdkAvailable = useAppStore((s) => s.piSdkAvailable);
   const setAlternativeBackendsEnabled = useAppStore((s) => s.setAlternativeBackendsEnabled);
   const codexEnabled = useAppStore((s) => s.codexEnabled);
   const setCodexEnabled = useAppStore((s) => s.setCodexEnabled);
@@ -150,10 +151,13 @@ export function ModelSettings() {
       agentBackends.filter((backend) => {
         if (backend.id === "anthropic" || backend.kind === "codex_subscription") return false;
         if (backend.kind === "codex_native") return codexEnabled;
-        if (backend.kind === "pi_sdk") return true;
+        // Pi card disappears entirely from Settings when the Pi
+        // harness wasn't compiled in. The store's `piSdkAvailable`
+        // mirrors the Rust `pi-sdk` cargo feature via `HostEnvFlags`.
+        if (backend.kind === "pi_sdk") return piSdkAvailable;
         return alternativeBackendsEnabled;
       }),
-    [agentBackends, alternativeBackendsEnabled, codexEnabled],
+    [agentBackends, alternativeBackendsEnabled, codexEnabled, piSdkAvailable],
   );
   const anthropicBackend = useMemo(
     () => agentBackends.find((backend) => backend.id === "anthropic") ?? null,

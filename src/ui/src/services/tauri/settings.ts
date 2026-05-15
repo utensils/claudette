@@ -19,6 +19,7 @@ export function listAppSettingsWithPrefix(prefix: string): Promise<[string, stri
 export function getHostEnvFlags(): Promise<{
   disable_1m_context: boolean;
   alternative_backends_compiled: boolean;
+  pi_sdk_compiled: boolean;
 }> {
   return invoke("get_host_env_flags");
 }

@@ -70,6 +70,13 @@ export interface SettingsSlice {
   setDisable1mContext: (v: boolean) => void;
   alternativeBackendsAvailable: boolean;
   setAlternativeBackendsAvailable: (available: boolean) => void;
+  /// Whether the Pi harness was compiled into this binary. Reflects
+  /// the Rust `pi-sdk` cargo feature: false in a build that opted out.
+  /// The UI uses this to hide Pi cards and the Pi runtime option even
+  /// when `alternativeBackendsAvailable` is true (a build can ship
+  /// Codex Native alt-backend support without Pi).
+  piSdkAvailable: boolean;
+  setPiSdkAvailable: (available: boolean) => void;
   alternativeBackendsEnabled: boolean;
   setAlternativeBackendsEnabled: (enabled: boolean) => void;
   codexEnabled: boolean;
@@ -196,6 +203,8 @@ export const createSettingsSlice: StateCreator<
       alternativeBackendsEnabled: available ? state.alternativeBackendsEnabled : false,
       codexEnabled: available ? state.codexEnabled : false,
     })),
+  piSdkAvailable: false,
+  setPiSdkAvailable: (available) => set({ piSdkAvailable: available }),
   alternativeBackendsEnabled: false,
   setAlternativeBackendsEnabled: (enabled) =>
     set((state) => ({

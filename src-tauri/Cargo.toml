@@ -13,7 +13,12 @@ name = "claudette-app"
 path = "src/main.rs"
 
 [dependencies]
-claudette = { path = ".." }
+# `default-features = false` so the Tauri binary stays in sole control of
+# whether the Pi harness is compiled in — we re-opt-in via our own
+# `pi-sdk` feature below. This lets `cargo tauri build --no-default-features`
+# produce a Pi-less binary while leaving lib-level tests on Pi-enabled
+# defaults.
+claudette = { path = "..", default-features = false }
 claudette-server = { path = "../src-server", optional = true }
 tauri = { version = "2", features = ["macos-private-api", "tray-icon", "image-png"] }
 tauri-plugin-dialog = "2"
@@ -114,8 +119,15 @@ windows = { version = "0.61", features = [
 # `devtools` is in the default set so the Help → Open dev tools menu item
 # works in release builds. The webview inspector ships in every binary;
 # users open it via the help menu rather than via a custom build flag.
-default = ["server", "voice", "devtools", "alternative-backends"]
+#
+# `pi-sdk` is independent of `alternative-backends`: dropping just
+# `pi-sdk` keeps Codex Native + the Ollama/LM Studio cards reachable
+# while excluding the Pi harness sidecar and all Pi-routing code. To
+# build without Pi, pair with `tauri.no-pi.conf.json` so the bundler
+# stops looking for the `claudette-pi-harness` sidecar.
+default = ["server", "voice", "devtools", "alternative-backends", "pi-sdk"]
 alternative-backends = []
+pi-sdk = ["claudette/pi-sdk"]
 devtools = ["tauri/devtools"]
 server = ["dep:claudette-server"]
 voice = [

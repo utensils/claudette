@@ -7,6 +7,7 @@ pub mod remote_control;
 pub mod send;
 pub mod session;
 
+#[cfg(feature = "pi-sdk")]
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -77,6 +78,7 @@ pub(crate) struct AgentStreamPayload {
 /// short enough that the notification still feels tied to the trigger.
 pub(crate) const ATTENTION_NOTIFY_DELAY_MS: u64 = 300;
 
+#[cfg(feature = "pi-sdk")]
 pub(crate) fn pi_sessions_root(db_path: &Path) -> PathBuf {
     db_path
         .parent()
@@ -90,6 +92,7 @@ pub(crate) fn pi_sessions_root(db_path: &Path) -> PathBuf {
 /// and Windows drive prefixes. Session ids come from the DB or the harness
 /// and should be opaque identifiers; if one ever isn't, we'd rather refuse
 /// than feed a traversal candidate to `remove_dir_all`.
+#[cfg(feature = "pi-sdk")]
 fn is_safe_pi_session_id(session_id: &str) -> bool {
     let trimmed = session_id.trim();
     if trimmed.is_empty() {
@@ -112,6 +115,7 @@ fn is_safe_pi_session_id(session_id: &str) -> bool {
         .all(|c| matches!(c, std::path::Component::Normal(_)))
 }
 
+#[cfg(feature = "pi-sdk")]
 pub(crate) async fn remove_pi_session_dir(db_path: &Path, session_id: &str) {
     if !is_safe_pi_session_id(session_id) {
         tracing::warn!(
@@ -145,7 +149,7 @@ pub(crate) async fn remove_pi_session_dir(db_path: &Path, session_id: &str) {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "pi-sdk"))]
 mod tests {
     use super::is_safe_pi_session_id;
 

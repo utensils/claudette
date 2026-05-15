@@ -27,13 +27,16 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{Notify, RwLock};
 
+#[cfg(feature = "pi-sdk")]
+use claudette::agent::PiSdkSession;
 use claudette::agent::{
-    CodexAppServerOptions, CodexAppServerSession, PiSdkSession, resolve_codex_path,
-    stop_agent_graceful,
+    CodexAppServerOptions, CodexAppServerSession, resolve_codex_path, stop_agent_graceful,
 };
+#[cfg(feature = "pi-sdk")]
+use claudette::agent_backend::PiProviderOverride;
 use claudette::agent_backend::{
     AgentBackendConfig, AgentBackendKind, AgentBackendModel, AgentBackendRuntime,
-    AgentBackendRuntimeHarness, PiProviderOverride,
+    AgentBackendRuntimeHarness,
 };
 use claudette::db::Database;
 use claudette::plugin::{delete_secure_secret, load_secure_secret, save_secure_secret};
@@ -63,7 +66,27 @@ const AUTO_DETECT_TIMEOUT: Duration = Duration::from_millis(900);
 // (only the manual seeds were visible), forcing the user to open
 // Settings and click Refresh. 8s covers a cold Bun start with margin
 // and still bounds the worst case if the sidecar hangs.
+#[cfg(feature = "pi-sdk")]
 const PI_AUTO_DETECT_TIMEOUT: Duration = Duration::from_secs(8);
+
+/// Kinds that bypass the `alternative_backends_enabled` gate because
+/// they're first-class first-run experiences when their dependencies
+/// are detected (Codex via `codex` CLI, Pi via the bundled sidecar).
+/// Pi only counts when the Pi harness is compiled in — otherwise the
+/// list collapses to just Codex Native.
+fn is_always_on_alt_backend(kind: AgentBackendKind) -> bool {
+    #[cfg(feature = "pi-sdk")]
+    {
+        matches!(
+            kind,
+            AgentBackendKind::CodexNative | AgentBackendKind::PiSdk
+        )
+    }
+    #[cfg(not(feature = "pi-sdk"))]
+    {
+        matches!(kind, AgentBackendKind::CodexNative)
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BackendStatus {
@@ -507,12 +530,7 @@ pub async fn resolve_backend_runtime(
     let mut backend =
         select_backend_for_request(&backends, backend_id, model, default_backend_id.as_deref())?;
     ensure_backend_allowed_by_gate(&db, &backend)?;
-    if !alternative_backends_enabled
-        && !matches!(
-            backend.kind,
-            AgentBackendKind::CodexNative | AgentBackendKind::PiSdk
-        )
-    {
+    if !alternative_backends_enabled && !is_always_on_alt_backend(backend.kind) {
         return Ok(AgentBackendRuntime::default());
     }
     // Anthropic stays a fast-path: no enabled-flag check, no env, no hash.
@@ -533,6 +551,7 @@ pub async fn resolve_backend_runtime(
         return Err(format!("Backend `{}` is disabled", backend.label));
     }
 
+    #[cfg(feature = "pi-sdk")]
     ensure_anthropic_not_routed_through_pi_via_oauth(&backend, model).await?;
 
     // Ollama/LM Studio/OpenAI cards default to (or opt into) the Pi
@@ -553,6 +572,7 @@ pub async fn resolve_backend_runtime(
         AgentBackendRuntimeHarness::CodexAppServer => {
             Ok(build_codex_app_server_runtime(&backend, model))
         }
+        #[cfg(feature = "pi-sdk")]
         AgentBackendRuntimeHarness::PiSdk => Ok(build_pi_sdk_runtime(&mut backend, model)),
         AgentBackendRuntimeHarness::ClaudeCode => {
             build_claude_code_runtime(state, &mut backend, model).await
@@ -567,6 +587,12 @@ pub async fn resolve_backend_runtime(
 /// we downgrade to the Claude CLI harness so the chat still works.
 /// Without this, the user gets a "sidecar not started" failure mid-turn
 /// for a state Settings is supposed to control.
+///
+/// In a build with the Pi harness compiled out, the downgrade logic
+/// is unreachable — `effective_harness()` can never return PiSdk
+/// because the variant doesn't exist — so the body collapses to
+/// returning the effective harness verbatim.
+#[cfg(feature = "pi-sdk")]
 fn resolve_dispatch_harness(
     backend: &AgentBackendConfig,
     backends: &[AgentBackendConfig],
@@ -608,6 +634,14 @@ fn resolve_dispatch_harness(
     }
 }
 
+#[cfg(not(feature = "pi-sdk"))]
+fn resolve_dispatch_harness(
+    backend: &AgentBackendConfig,
+    _backends: &[AgentBackendConfig],
+) -> AgentBackendRuntimeHarness {
+    backend.effective_harness()
+}
+
 fn build_codex_app_server_runtime(
     backend: &AgentBackendConfig,
     model: Option<&str>,
@@ -623,6 +657,7 @@ fn build_codex_app_server_runtime(
     }
 }
 
+#[cfg(feature = "pi-sdk")]
 fn build_pi_sdk_runtime(
     backend: &mut AgentBackendConfig,
     model: Option<&str>,
@@ -666,6 +701,7 @@ fn build_pi_sdk_runtime(
 /// official provider for the rest of the session. Also returns `None`
 /// when the caller didn't pass a model id (no row to register) or
 /// the backend has no `base_url` set.
+#[cfg(feature = "pi-sdk")]
 fn build_pi_provider_override(
     backend: &AgentBackendConfig,
     model: Option<&str>,
@@ -729,6 +765,7 @@ fn build_pi_provider_override(
 /// already exposes that path by default. Pi's OpenAI-style provider
 /// expects the base URL to point at the OpenAI-compat root, so append
 /// `/v1` when the caller's base URL doesn't already include it. Idempotent.
+#[cfg(feature = "pi-sdk")]
 fn normalize_pi_provider_base_url(kind: AgentBackendKind, base_url: &str) -> String {
     let trimmed = base_url.trim_end_matches('/');
     match kind {
@@ -743,6 +780,7 @@ fn normalize_pi_provider_base_url(kind: AgentBackendKind, base_url: &str) -> Str
     }
 }
 
+#[cfg(feature = "pi-sdk")]
 fn qualify_model_for_pi(kind: AgentBackendKind, model: &str) -> String {
     // The Pi card's own ids are already `<provider>/<modelId>`; for
     // every other kind (Ollama, LM Studio, OpenAI, CustomOpenAI, Codex
@@ -909,6 +947,7 @@ fn build_claude_code_direct_runtime(
 /// stale persisted selection or a slash-command typed `model:` value
 /// can still hit the resolver. Returns Ok for the (overwhelming) majority
 /// case where the gate does not apply.
+#[cfg(feature = "pi-sdk")]
 async fn ensure_anthropic_not_routed_through_pi_via_oauth(
     backend: &AgentBackendConfig,
     model: Option<&str>,
@@ -934,6 +973,7 @@ async fn ensure_anthropic_not_routed_through_pi_via_oauth(
     claude_oauth_blocks_pi_anthropic().await
 }
 
+#[cfg(feature = "pi-sdk")]
 fn pi_model_targets_anthropic(model_id: &str) -> bool {
     let trimmed = model_id.trim();
     if trimmed.is_empty() {
@@ -986,6 +1026,7 @@ fn pi_model_targets_anthropic(model_id: &str) -> bool {
         || lowered.starts_with("haiku_")
 }
 
+#[cfg(feature = "pi-sdk")]
 async fn claude_oauth_blocks_pi_anthropic() -> Result<(), String> {
     if crate::commands::auth::is_claude_oauth_authenticated().await {
         Err(
@@ -1024,12 +1065,7 @@ pub fn resolve_backend_request_defaults(
             .iter()
             .find(|backend| backend.id == backend_id.as_str())
             .ok_or_else(|| format!("Unknown backend `{backend_id}`"))?;
-        if !alternative_backends_enabled
-            && !matches!(
-                backend.kind,
-                AgentBackendKind::CodexNative | AgentBackendKind::PiSdk
-            )
-        {
+        if !alternative_backends_enabled && !is_always_on_alt_backend(backend.kind) {
             return Ok((requested_backend, requested_model));
         }
         let model = if backend.kind == AgentBackendKind::Anthropic {
@@ -1065,12 +1101,7 @@ pub fn resolve_backend_request_defaults(
     if backend.kind == AgentBackendKind::Anthropic {
         return Ok((Some(backend.id.clone()), default_model));
     }
-    if !alternative_backends_enabled
-        && !matches!(
-            backend.kind,
-            AgentBackendKind::CodexNative | AgentBackendKind::PiSdk
-        )
-    {
+    if !alternative_backends_enabled && !is_always_on_alt_backend(backend.kind) {
         return Ok((None, default_model));
     }
 
@@ -1463,13 +1494,23 @@ fn auto_detect_disabled_key(backend_id: &str) -> String {
 }
 
 fn backend_supports_auto_detect(backend: &AgentBackendConfig) -> bool {
-    matches!(
-        backend.kind,
-        AgentBackendKind::Ollama
-            | AgentBackendKind::CodexNative
-            | AgentBackendKind::LmStudio
-            | AgentBackendKind::PiSdk
-    )
+    #[cfg(feature = "pi-sdk")]
+    {
+        matches!(
+            backend.kind,
+            AgentBackendKind::Ollama
+                | AgentBackendKind::CodexNative
+                | AgentBackendKind::LmStudio
+                | AgentBackendKind::PiSdk
+        )
+    }
+    #[cfg(not(feature = "pi-sdk"))]
+    {
+        matches!(
+            backend.kind,
+            AgentBackendKind::Ollama | AgentBackendKind::CodexNative | AgentBackendKind::LmStudio
+        )
+    }
 }
 
 fn backend_auto_detect_disabled(db: &Database, backend_id: &str) -> Result<bool, String> {
@@ -1553,6 +1594,7 @@ fn default_backends_for_gate(native_codex_enabled: bool) -> Vec<AgentBackendConf
         AgentBackendConfig::builtin_anthropic(),
         AgentBackendConfig::builtin_ollama(),
         AgentBackendConfig::builtin_openai_api(),
+        #[cfg(feature = "pi-sdk")]
         AgentBackendConfig::builtin_pi_sdk(),
         AgentBackendConfig::builtin_lm_studio(),
     ];
@@ -1741,7 +1783,8 @@ fn normalize_backend(mut backend: AgentBackendConfig) -> AgentBackendConfig {
     if backend.context_window_default == 0 {
         backend.context_window_default = 64_000;
     }
-    if matches!(
+    #[cfg(feature = "pi-sdk")]
+    let model_discovery_kinds = matches!(
         backend.kind,
         AgentBackendKind::Ollama
             | AgentBackendKind::OpenAiApi
@@ -1749,7 +1792,17 @@ fn normalize_backend(mut backend: AgentBackendConfig) -> AgentBackendConfig {
             | AgentBackendKind::CodexNative
             | AgentBackendKind::PiSdk
             | AgentBackendKind::LmStudio
-    ) {
+    );
+    #[cfg(not(feature = "pi-sdk"))]
+    let model_discovery_kinds = matches!(
+        backend.kind,
+        AgentBackendKind::Ollama
+            | AgentBackendKind::OpenAiApi
+            | AgentBackendKind::CodexSubscription
+            | AgentBackendKind::CodexNative
+            | AgentBackendKind::LmStudio
+    );
+    if model_discovery_kinds {
         backend.model_discovery = true;
     }
     for model in backend
@@ -1845,6 +1898,7 @@ async fn discover_models(backend: &AgentBackendConfig) -> Result<Vec<AgentBacken
         AgentBackendKind::CodexSubscription => discover_codex_models().await,
         AgentBackendKind::CodexNative => discover_codex_native_models(backend).await,
         AgentBackendKind::LmStudio => discover_lm_studio_models(backend).await,
+        #[cfg(feature = "pi-sdk")]
         AgentBackendKind::PiSdk => discover_pi_models(backend).await,
         _ => Ok(backend.manual_models.clone()),
     }
@@ -1865,6 +1919,7 @@ async fn test_backend_connectivity(backend: &AgentBackendConfig) -> Result<Backe
             ))
         }
         AgentBackendKind::CodexNative => test_codex_native_connectivity(backend).await,
+        #[cfg(feature = "pi-sdk")]
         AgentBackendKind::PiSdk => discover_pi_models(backend).await.map(|models| {
             BackendStatus::new(
                 true,
@@ -1989,6 +2044,7 @@ async fn probe_model_discovery_backend(
 /// backends get the tighter default so they don't drag out launch.
 fn backend_auto_detect_timeout(backend: &AgentBackendConfig) -> Duration {
     match backend.kind {
+        #[cfg(feature = "pi-sdk")]
         AgentBackendKind::PiSdk => PI_AUTO_DETECT_TIMEOUT,
         _ => AUTO_DETECT_TIMEOUT,
     }
@@ -2127,6 +2183,7 @@ async fn discover_lm_studio_models(
     ))
 }
 
+#[cfg(feature = "pi-sdk")]
 async fn discover_pi_models(
     backend: &AgentBackendConfig,
 ) -> Result<Vec<AgentBackendModel>, String> {
@@ -2540,6 +2597,7 @@ fn backend_kind_hash_key(kind: AgentBackendKind) -> &'static str {
         AgentBackendKind::OpenAiApi => "openai_api",
         AgentBackendKind::CodexSubscription => "codex_subscription",
         AgentBackendKind::CodexNative => "codex_native",
+        #[cfg(feature = "pi-sdk")]
         AgentBackendKind::PiSdk => "pi_sdk",
         AgentBackendKind::CustomAnthropic => "custom_anthropic",
         AgentBackendKind::CustomOpenAi => "custom_openai",
@@ -2551,6 +2609,7 @@ fn harness_hash_key(harness: AgentBackendRuntimeHarness) -> &'static str {
     match harness {
         AgentBackendRuntimeHarness::ClaudeCode => "claude_code",
         AgentBackendRuntimeHarness::CodexAppServer => "codex_app_server",
+        #[cfg(feature = "pi-sdk")]
         AgentBackendRuntimeHarness::PiSdk => "pi_sdk",
     }
 }
@@ -5615,6 +5674,7 @@ data: [DONE]
 
     // -- Pi runtime helpers -------------------------------------------------
 
+    #[cfg(feature = "pi-sdk")]
     #[test]
     fn qualify_model_for_pi_prepends_provider_prefix_for_local_kinds() {
         assert_eq!(
@@ -5627,6 +5687,7 @@ data: [DONE]
         );
     }
 
+    #[cfg(feature = "pi-sdk")]
     #[test]
     fn qualify_model_for_pi_prepends_openai_for_codex_native() {
         assert_eq!(
@@ -5635,6 +5696,7 @@ data: [DONE]
         );
     }
 
+    #[cfg(feature = "pi-sdk")]
     #[test]
     fn qualify_model_for_pi_leaves_already_qualified_ids_unchanged() {
         // The Pi card's own ids are already provider/model — never
@@ -5649,6 +5711,7 @@ data: [DONE]
         );
     }
 
+    #[cfg(feature = "pi-sdk")]
     #[test]
     fn qualify_model_for_pi_passes_through_when_kind_has_no_prefix() {
         // Subscription-OAuth flavors return None — those models must
@@ -5660,6 +5723,7 @@ data: [DONE]
         );
     }
 
+    #[cfg(feature = "pi-sdk")]
     #[test]
     fn qualify_model_for_pi_preserves_slash_in_ollama_model_ids() {
         // Ollama model names legitimately contain slashes
@@ -5682,6 +5746,7 @@ data: [DONE]
         );
     }
 
+    #[cfg(feature = "pi-sdk")]
     #[test]
     fn apply_discovered_models_preserves_pi_manual_entries() {
         // Pi's Settings card exposes a manual-models editor for custom
@@ -5742,6 +5807,7 @@ data: [DONE]
         );
     }
 
+    #[cfg(feature = "pi-sdk")]
     #[test]
     fn apply_discovered_models_default_model_honors_pi_manual_entries() {
         // When the user's default_model points at a manual Pi row, the
@@ -5773,6 +5839,7 @@ data: [DONE]
         );
     }
 
+    #[cfg(feature = "pi-sdk")]
     #[test]
     fn pi_runtime_emits_ollama_provider_override_with_v1_base_url() {
         // Ollama's API is OpenAI-compatible at `/v1`. Claudette's
@@ -5799,6 +5866,7 @@ data: [DONE]
         assert_eq!(override_.context_window, 128_000);
     }
 
+    #[cfg(feature = "pi-sdk")]
     #[test]
     fn pi_runtime_provider_override_preserves_v1_already_in_base_url() {
         // Idempotency: if the user's LM Studio card already points at
@@ -5817,6 +5885,7 @@ data: [DONE]
         assert_eq!(override_.model_id, "openai/gpt-4");
     }
 
+    #[cfg(feature = "pi-sdk")]
     #[test]
     fn pi_runtime_strips_provider_prefix_from_model_id_for_override() {
         // The qualified model id reaching `build_pi_sdk_runtime` will
@@ -5834,6 +5903,7 @@ data: [DONE]
         assert_eq!(override_.model_id, "library/llama3");
     }
 
+    #[cfg(feature = "pi-sdk")]
     #[test]
     fn pi_runtime_skips_provider_override_for_cloud_kinds() {
         // Pi already bundles providers for `openai`, `anthropic`,
@@ -5851,6 +5921,7 @@ data: [DONE]
         );
     }
 
+    #[cfg(feature = "pi-sdk")]
     #[test]
     fn pi_runtime_skips_provider_override_when_base_url_is_empty() {
         // No reachable server → no override. The session will hit
@@ -5863,6 +5934,7 @@ data: [DONE]
         assert!(runtime.pi_provider_override.is_none());
     }
 
+    #[cfg(feature = "pi-sdk")]
     #[test]
     fn pi_runtime_surfaces_qualified_model_for_ollama_bare_id() {
         // The Pi sidecar's `findModel` splits on the first slash and
@@ -5875,6 +5947,7 @@ data: [DONE]
         assert_eq!(runtime.model.as_deref(), Some("ollama/llama3"));
     }
 
+    #[cfg(feature = "pi-sdk")]
     #[test]
     fn pi_runtime_qualifies_ollama_id_with_internal_slash() {
         // Regression: Ollama model ids legitimately contain slashes
@@ -5887,6 +5960,7 @@ data: [DONE]
         assert_eq!(runtime.model.as_deref(), Some("ollama/library/llama3"));
     }
 
+    #[cfg(feature = "pi-sdk")]
     #[test]
     fn pi_runtime_leaves_already_qualified_pi_card_model_unchanged() {
         // The Pi card's own ids are already `<provider>/<modelId>`.
@@ -5927,6 +6001,7 @@ data: [DONE]
         assert_eq!(runtime.model, None);
     }
 
+    #[cfg(feature = "pi-sdk")]
     #[test]
     fn resolve_dispatch_harness_downgrades_pi_to_claude_when_pi_backend_is_disabled() {
         let ollama = AgentBackendConfig {
@@ -5944,6 +6019,7 @@ data: [DONE]
         );
     }
 
+    #[cfg(feature = "pi-sdk")]
     #[test]
     fn resolve_dispatch_harness_keeps_pi_when_pi_backend_is_enabled() {
         let ollama = AgentBackendConfig {
@@ -5959,6 +6035,7 @@ data: [DONE]
         );
     }
 
+    #[cfg(feature = "pi-sdk")]
     #[test]
     fn pi_gets_a_longer_auto_detect_timeout_than_http_probes() {
         // Pi cold-starts a Bun sidecar plus boots the Pi SDK, which can
@@ -5979,6 +6056,7 @@ data: [DONE]
         );
     }
 
+    #[cfg(feature = "pi-sdk")]
     #[test]
     fn disabling_pi_backend_persists_auto_detect_opt_out() {
         // Pi is included in startup auto-detect now, so the disabled-flag
@@ -6002,6 +6080,7 @@ data: [DONE]
         );
     }
 
+    #[cfg(feature = "pi-sdk")]
     #[test]
     fn resolve_dispatch_harness_uses_kind_default_when_downgrading_codex_native() {
         // Codex Native's `available_harnesses` is `[CodexAppServer, PiSdk]`
@@ -6022,6 +6101,7 @@ data: [DONE]
         );
     }
 
+    #[cfg(feature = "pi-sdk")]
     #[test]
     fn resolve_dispatch_harness_does_not_downgrade_pi_card_itself() {
         // The Pi card's own `effective_harness()` is `PiSdk`. The
@@ -6055,6 +6135,7 @@ data: [DONE]
         );
     }
 
+    #[cfg(feature = "pi-sdk")]
     #[test]
     fn pi_model_targets_anthropic_detects_anthropic_prefix() {
         assert!(pi_model_targets_anthropic("anthropic/claude-opus-4-5"));
@@ -6062,6 +6143,7 @@ data: [DONE]
         assert!(pi_model_targets_anthropic("claude/sonnet"));
     }
 
+    #[cfg(feature = "pi-sdk")]
     #[test]
     fn pi_model_targets_anthropic_ignores_other_providers() {
         assert!(!pi_model_targets_anthropic("openai/gpt-5.4"));
@@ -6079,6 +6161,7 @@ data: [DONE]
         assert!(!pi_model_targets_anthropic("haikulm"));
     }
 
+    #[cfg(feature = "pi-sdk")]
     #[test]
     fn pi_model_targets_anthropic_blocks_bare_claude_ids() {
         // Codex peer-review regression: Pi's `findModel` falls back to
@@ -6098,6 +6181,7 @@ data: [DONE]
         assert!(pi_model_targets_anthropic("  claude-opus-4-5  "));
     }
 
+    #[cfg(feature = "pi-sdk")]
     #[test]
     fn pi_model_targets_anthropic_blocks_claude_code_bare_aliases() {
         // Claude Code accepts `opus` / `sonnet` / `haiku` as canonical
@@ -6129,6 +6213,7 @@ data: [DONE]
         }
     }
 
+    #[cfg(feature = "pi-sdk")]
     #[test]
     fn build_pi_sdk_runtime_qualifies_model_for_non_pi_kind() {
         let mut backend = AgentBackendConfig::builtin_ollama();
@@ -6141,6 +6226,7 @@ data: [DONE]
         assert_eq!(backend.default_model.as_deref(), Some("ollama/llama3"));
     }
 
+    #[cfg(feature = "pi-sdk")]
     #[test]
     fn build_pi_sdk_runtime_keeps_pi_card_ids_unchanged() {
         let mut backend = AgentBackendConfig::builtin_pi_sdk();
@@ -6149,6 +6235,7 @@ data: [DONE]
         assert_eq!(backend.default_model.as_deref(), Some("openai/gpt-5.4"));
     }
 
+    #[cfg(feature = "pi-sdk")]
     #[test]
     fn build_pi_sdk_runtime_leaves_default_model_alone_when_no_model_passed() {
         let mut backend = AgentBackendConfig::builtin_ollama();
