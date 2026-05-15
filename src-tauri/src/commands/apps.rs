@@ -852,11 +852,11 @@ if ($null -eq $bytes -or $bytes.Length -eq 0) { exit 3 }
 /// Where the icon disk cache lives. Routed through
 /// [`claudette::path::claudette_home`] so it follows the same
 /// `$CLAUDETTE_HOME` override that `apps_config_path` and the rest
-/// of the on-disk state honor — important for `dev --clean`, which
-/// points `CLAUDETTE_HOME` at a per-PID tmp sandbox: cache entries
-/// land under the sandbox and get cleaned up when it tears down,
-/// instead of leaking into the real `~/.claudette/icon-cache/` and
-/// surviving across sessions.
+/// of the on-disk state honor — important for `dev --new` and
+/// `dev --clone`, which point `CLAUDETTE_HOME` at a per-PID tmp
+/// sandbox: cache entries land under the sandbox and get cleaned
+/// up when it tears down, instead of leaking into the real
+/// `~/.claudette/icon-cache/` and surviving across sessions.
 ///
 /// Returns `Option` purely for symmetry with the old shape (callers
 /// already handle `None`); `claudette_home` itself falls back to
@@ -2101,10 +2101,10 @@ mod tests {
     }
 
     /// `icon_cache_dir()` must route through `claudette_home` so the
-    /// cache lands under `dev --clean`'s per-PID sandbox instead of
-    /// the real `~/.claudette/icon-cache/`. A direct `dirs::home_dir()`
-    /// would silently leak across sessions — this test pins the
-    /// override against that regression.
+    /// cache lands under `dev --new` / `dev --clone`'s per-PID sandbox
+    /// instead of the real `~/.claudette/icon-cache/`. A direct
+    /// `dirs::home_dir()` would silently leak across sessions — this
+    /// test pins the override against that regression.
     ///
     /// `$CLAUDETTE_HOME` is process-global, so we (a) hold `env_lock()`
     /// for the duration of the test to serialize against any future

@@ -92,7 +92,7 @@ cd src/ui && bun install && cd ../..
 > `tauri/custom-protocol` (it would suppress `import.meta.env.DEV`
 > and break `/claudette-debug`), and stages the
 > `claudette-cli` sidecar that the bundled `tauri.conf.json` would
-> otherwise look for. `--clean` and `--help` work the same as on
+> otherwise look for. `--new`, `--clean`, and `--help` work the same as on
 > the .sh version.
 >
 > First-time prerequisites on Windows: VS C++ Build Tools (Desktop

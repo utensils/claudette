@@ -144,6 +144,37 @@ For testing first-run UX (the welcome card, onboarding, plugin seeding) you can 
 <Tabs>
   <TabItem label="macOS / Linux">
     ```bash
+    ./scripts/dev.sh --new
+    ```
+  </TabItem>
+  <TabItem label="Windows">
+    ```powershell
+    .\scripts\dev.ps1 --new
+    ```
+  </TabItem>
+</Tabs>
+
+The flag points three env vars at a per-PID directory under `${TMPDIR}/claudette-dev/new-<pid>/` (`$env:TEMP\claudette-dev\new-<pid>\` on Windows) and removes the tree on exit:
+
+- **`CLAUDETTE_HOME`** overrides the `~/.claudette/` tree (workspaces, plugins, themes, logs, models, packs).
+- **`CLAUDETTE_DATA_DIR`** overrides the OS data directory holding `claudette.db`.
+- **`CLAUDE_CONFIG_DIR`** overrides the **Claude CLI's** `~/.claude/` tree, which Claudette reads and writes for `settings.json`, `.credentials.json`, installed plugins, and marketplace registrations. Without this override, a `--new` run that touches plugins or auth would write into the real `~/.claude/` and survive the sandbox tear-down — defeating the "simulate a new user" purpose of the flag.
+
+### Cloned (real-state) sessions
+
+`--clone` is the inverse of `--new`: it pre-populates the same per-PID sandbox with a copy-on-write snapshot of your real `~/.claudette/`, `claudette.db`, and `~/.claude/`, so the dev build inherits your existing workspaces, themes, plugins, and Claude credentials but writes to the sandbox copy rather than the originals. APFS clonefile on macOS / btrfs reflinks on Linux make the clone near-instant and ~0 disk until the dev build mutates something. The cloned `claudette.db` is taken via `sqlite3 .backup` so a running release app can keep writing without corrupting the dev copy. Mutually exclusive with `--new`. Currently macOS/Linux only — the PowerShell launcher doesn't implement `--clone`.
+
+:::caution[Git state isolation is not complete]
+The clone copies the *working trees* of your workspaces but each workspace's `.git` file remains a pointer to the **real** repository's worktree admin directory. Reads are safe; any dev-app action that writes git state (commits, branch creation, checkout, fetch into the worktree) will land in the real repo's worktree admin. Quit any sensitive long-running SCM work in the release app before using a cloned dev session against the same workspaces.
+:::
+
+### Nuking stale sandboxes
+
+If a `--new` or `--clone` session is killed with `SIGKILL` it misses its cleanup trap and leaves a directory under `${TMPDIR}/claudette-dev/` behind. Run:
+
+<Tabs>
+  <TabItem label="macOS / Linux">
+    ```bash
     ./scripts/dev.sh --clean
     ```
   </TabItem>
@@ -154,11 +185,7 @@ For testing first-run UX (the welcome card, onboarding, plugin seeding) you can 
   </TabItem>
 </Tabs>
 
-The flag points three env vars at a per-PID directory under `${TMPDIR}/claudette-dev/clean-<pid>/` (`$env:TEMP\claudette-dev\clean-<pid>\` on Windows) and removes the tree on exit:
-
-- **`CLAUDETTE_HOME`** overrides the `~/.claudette/` tree (workspaces, plugins, themes, logs, models, packs).
-- **`CLAUDETTE_DATA_DIR`** overrides the OS data directory holding `claudette.db`.
-- **`CLAUDE_CONFIG_DIR`** overrides the **Claude CLI's** `~/.claude/` tree, which Claudette reads and writes for `settings.json`, `.credentials.json`, installed plugins, and marketplace registrations. Without this override, a `--clean` run that touches plugins or auth would write into the real `~/.claude/` and survive the sandbox tear-down — defeating the "simulate a new user" purpose of the flag.
+to wipe everything under `${TMPDIR}/claudette-dev/` (`$env:TEMP\claudette-dev\` on Windows). This is a blunt nuke — no PID check, every `new-<pid>/`, `clone-<pid>/`, and `<pid>.json` is removed regardless of whether the owning process is still alive. If you have a dev session currently running, its sandbox is removed too and the dev app will start seeing missing files mid-session, so prefer to quit running dev instances first. The command exits after the sweep without launching the app.
 
 You can also set any of these env vars manually for a longer-lived sandbox:
 

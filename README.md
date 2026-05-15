@@ -64,19 +64,22 @@ cd src/ui && bun install && cd ../..
 
 ### Run in development mode
 
-Pick the launcher that matches your platform — they share the same flag surface (`--clean`, `-h`/`--help`) so muscle memory carries across:
+Pick the launcher that matches your platform — `--new`, `--clean`, and `-h`/`--help` work on both. `--clone` (copy-on-write snapshot of your real setup) is macOS/Linux only for now; on Windows the PowerShell launcher silently treats it as an unknown passthrough to `cargo run`.
 
 ```sh
 # macOS / Linux — shell launcher
 ./scripts/dev.sh                 # full-feature dev (required for macOS voice)
-./scripts/dev.sh --clean         # fresh-user sandbox under TMPDIR
+./scripts/dev.sh --new           # fresh-user sandbox under TMPDIR
+./scripts/dev.sh --clone         # copy-on-write snapshot of your real setup
+./scripts/dev.sh --clean         # nuke /tmp/claudette-dev/ and exit
 cargo tauri dev                  # quick path; no voice, no port probing
 ```
 
 ```powershell
 # Windows — PowerShell launcher
 .\scripts\dev.ps1                # equivalent of dev.sh, ARM64 + x64
-.\scripts\dev.ps1 --clean        # fresh-user sandbox under $env:TEMP
+.\scripts\dev.ps1 --new          # fresh-user sandbox under $env:TEMP
+.\scripts\dev.ps1 --clean        # nuke $env:TEMP\claudette-dev\ and exit
 .\scripts\dev.ps1 --help         # full flag/env reference
 ```
 
