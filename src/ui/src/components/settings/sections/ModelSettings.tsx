@@ -80,6 +80,7 @@ export function ModelSettings() {
   const agentBackends = useAppStore((s) => s.agentBackends);
   const setAgentBackends = useAppStore((s) => s.setAgentBackends);
   const setDefaultAgentBackendId = useAppStore((s) => s.setDefaultAgentBackendId);
+  const claudeAuthMethod = useAppStore((s) => s.claudeAuthMethod);
 
   useEffect(() => {
     getAppSetting("default_model")
@@ -142,9 +143,19 @@ export function ModelSettings() {
     }
   };
 
+  // OAuth subscribers can't route Pi/anthropic|claude — keep them out
+  // of the default-model dropdown so a saved selection can't trip the
+  // Rust resolver gate. See `buildModelRegistry` for the source of
+  // truth.
+  const isClaudeOauthSubscriber = useMemo(
+    () => claudeAuthMethod?.toLowerCase() === "oauth_token",
+    [claudeAuthMethod],
+  );
   const registry = useMemo(
-    () => buildModelRegistry(alternativeBackendsEnabled, agentBackends, codexEnabled),
-    [alternativeBackendsEnabled, agentBackends, codexEnabled],
+    () => buildModelRegistry(alternativeBackendsEnabled, agentBackends, codexEnabled, {
+      isClaudeOauthSubscriber,
+    }),
+    [alternativeBackendsEnabled, agentBackends, codexEnabled, isClaudeOauthSubscriber],
   );
   const visibleBackends = useMemo(
     () =>

@@ -510,6 +510,9 @@ pub async fn resolve_backend_runtime(
             harness: AgentBackendRuntimeHarness::ClaudeCode,
             env: Vec::new(),
             hash: String::new(),
+            // Anthropic stays a Claude CLI path — no model rewrite.
+            // None tells the caller to use its original input.
+            model: None,
         });
     }
     if !backend.enabled {
@@ -600,6 +603,8 @@ fn build_codex_app_server_runtime(
         harness: AgentBackendRuntimeHarness::CodexAppServer,
         env: Vec::new(),
         hash: runtime_hash(backend, None, model),
+        // Codex app-server speaks bare ids; no rewrite needed.
+        model: None,
     }
 }
 
@@ -625,6 +630,13 @@ fn build_pi_sdk_runtime(
         harness: AgentBackendRuntimeHarness::PiSdk,
         env: Vec::new(),
         hash: runtime_hash(backend, None, qualified.as_deref()),
+        // Hand the qualified id to the caller so the Pi spawn at
+        // `chat/send.rs` receives `<provider>/<modelId>`, not the
+        // bare or slash-bearing input the user picked. Without this
+        // an Ollama id like `library/llama3` reaches the sidecar
+        // unqualified and `findModel` parses `library` as the
+        // provider — the lookup always misses.
+        model: qualified,
     }
 }
 
@@ -727,6 +739,8 @@ async fn build_claude_code_gateway_runtime(
         harness: AgentBackendRuntimeHarness::ClaudeCode,
         env,
         hash,
+        // Claude CLI uses the caller's input directly.
+        model: None,
     })
 }
 
@@ -778,6 +792,8 @@ fn build_claude_code_direct_runtime(
         harness: AgentBackendRuntimeHarness::ClaudeCode,
         env,
         hash: runtime_hash(backend, secret.as_deref(), model),
+        // Claude CLI uses the caller's input directly.
+        model: None,
     }
 }
 
@@ -5502,6 +5518,70 @@ data: [DONE]
             qualify_model_for_pi(AgentBackendKind::LmStudio, "studio/foo"),
             "lmstudio/studio/foo"
         );
+    }
+
+    #[test]
+    fn pi_runtime_surfaces_qualified_model_for_ollama_bare_id() {
+        // The Pi sidecar's `findModel` splits on the first slash and
+        // refuses a bare model id like `llama3` on an Ollama-routed
+        // turn. The runtime needs to hand the qualified value back to
+        // the spawn site so the AgentSettings.model the harness sees is
+        // already `ollama/llama3`.
+        let mut ollama = AgentBackendConfig::builtin_ollama();
+        let runtime = build_pi_sdk_runtime(&mut ollama, Some("llama3"));
+        assert_eq!(runtime.model.as_deref(), Some("ollama/llama3"));
+    }
+
+    #[test]
+    fn pi_runtime_qualifies_ollama_id_with_internal_slash() {
+        // Regression: Ollama model ids legitimately contain slashes
+        // (`library/llama3`). Without this rewrite the sidecar's
+        // `findModel` parses `library` as the provider hint and the
+        // lookup always misses. The runtime must hand the spawn site
+        // a fully-prefixed `ollama/library/llama3`.
+        let mut ollama = AgentBackendConfig::builtin_ollama();
+        let runtime = build_pi_sdk_runtime(&mut ollama, Some("library/llama3"));
+        assert_eq!(runtime.model.as_deref(), Some("ollama/library/llama3"));
+    }
+
+    #[test]
+    fn pi_runtime_leaves_already_qualified_pi_card_model_unchanged() {
+        // The Pi card's own ids are already `<provider>/<modelId>`.
+        // Re-qualifying would double-prefix.
+        let mut pi = AgentBackendConfig::builtin_pi_sdk();
+        let runtime = build_pi_sdk_runtime(&mut pi, Some("anthropic/claude-opus-4-5"));
+        assert_eq!(
+            runtime.model.as_deref(),
+            Some("anthropic/claude-opus-4-5"),
+            "Pi card ids are already canonical and must not gain a `pi/` prefix"
+        );
+    }
+
+    #[test]
+    fn claude_code_runtime_does_not_rewrite_model() {
+        // Claude CLI consumes the caller's input as-is. Surfacing a
+        // model rewrite here would let the Pi qualification logic
+        // accidentally leak into the Claude-side spawn (which would
+        // then complain about an unknown `<provider>/<modelId>` id).
+        let ollama = AgentBackendConfig {
+            enabled: true,
+            ..AgentBackendConfig::builtin_ollama()
+        };
+        let runtime = build_claude_code_direct_runtime(&ollama, Some("llama3"), None);
+        assert_eq!(
+            runtime.model, None,
+            "Claude CLI paths leave the model field unset so the caller falls back to its input"
+        );
+    }
+
+    #[test]
+    fn codex_app_server_runtime_does_not_rewrite_model() {
+        // Codex app-server gets bare ids straight through (`gpt-5.4`,
+        // `o3`, …). Sibling guard to the Claude CLI test so a future
+        // refactor doesn't accidentally start qualifying Codex ids.
+        let codex = AgentBackendConfig::builtin_codex_native();
+        let runtime = build_codex_app_server_runtime(&codex, Some("gpt-5.4"));
+        assert_eq!(runtime.model, None);
     }
 
     #[test]

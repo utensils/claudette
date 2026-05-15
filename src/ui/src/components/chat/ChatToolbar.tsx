@@ -37,6 +37,7 @@ export function ChatToolbar({ sessionId, disabled }: ChatToolbarProps) {
   const alternativeBackendsEnabled = useAppStore((s) => s.alternativeBackendsEnabled);
   const codexEnabled = useAppStore((s) => s.codexEnabled);
   const agentBackends = useAppStore((s) => s.agentBackends);
+  const claudeAuthMethod = useAppStore((s) => s.claudeAuthMethod);
   const setSelectedModel = useAppStore((s) => s.setSelectedModel);
   const setFastMode = useAppStore((s) => s.setFastMode);
   const setThinkingEnabled = useAppStore((s) => s.setThinkingEnabled);
@@ -55,9 +56,15 @@ export function ChatToolbar({ sessionId, disabled }: ChatToolbarProps) {
 
   const [loaded, setLoaded] = useState(false);
   const [effortSelectorOpen, setEffortSelectorOpen] = useState(false);
+  const isClaudeOauthSubscriber = useMemo(
+    () => claudeAuthMethod?.toLowerCase() === "oauth_token",
+    [claudeAuthMethod],
+  );
   const registry = useMemo(
-    () => buildModelRegistry(alternativeBackendsEnabled, agentBackends, codexEnabled),
-    [alternativeBackendsEnabled, agentBackends, codexEnabled],
+    () => buildModelRegistry(alternativeBackendsEnabled, agentBackends, codexEnabled, {
+      isClaudeOauthSubscriber,
+    }),
+    [alternativeBackendsEnabled, agentBackends, codexEnabled, isClaudeOauthSubscriber],
   );
   const registryRef = useRef(registry);
   useEffect(() => {

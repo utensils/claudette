@@ -996,7 +996,7 @@ pub async fn send_chat_message(
     // out without leaving an orphan user-message + attachment row in
     // the chat history. The resolved value is reused downstream — the
     // original resolution site has been removed to avoid double work.
-    let (resolved_backend_id, resolved_model) =
+    let (resolved_backend_id, mut resolved_model) =
         crate::commands::agent_backends::resolve_backend_request_defaults(
             &db,
             backend_id.as_deref(),
@@ -1008,6 +1008,16 @@ pub async fn send_chat_message(
         resolved_model.as_deref(),
     )
     .await?;
+    // The Pi harness needs `<provider>/<modelId>` ids and rewrites bare
+    // or slash-containing inputs on its way out. Adopt the rewritten id
+    // *here* so the spawn at the bottom of this function hands the
+    // sidecar the qualified value — without this the AgentSettings.model
+    // below still carries the user's original id and the sidecar's
+    // `findModel` lookup misses (e.g. Ollama `library/llama3` would be
+    // parsed as provider=`library`).
+    if let Some(rewritten) = backend_runtime.model.clone() {
+        resolved_model = Some(rewritten);
+    }
     ensure_harness_accepts_attachments(backend_runtime.harness, &prepared_user_send.cli_atts)?;
     persist_user_send(&db, &prepared_user_send)?;
     let user_msg = prepared_user_send.user_msg.clone();

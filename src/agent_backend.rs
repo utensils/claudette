@@ -402,6 +402,19 @@ pub struct AgentBackendRuntime {
     pub harness: AgentBackendRuntimeHarness,
     pub env: Vec<(String, String)>,
     pub hash: String,
+    /// The model id to actually hand to the spawned harness. Usually
+    /// equals the input model the caller passed to
+    /// `resolve_backend_runtime`, but the Pi harness needs ids
+    /// qualified as `<provider>/<modelId>` and rewrites bare ids
+    /// here so the sidecar's `ModelRegistry.find(provider, id)`
+    /// lookup hits — without this override, a non-Pi backend (Ollama,
+    /// LM Studio, OpenAI API, Codex Native) routed through Pi would
+    /// hand the sidecar a bare id like `gpt-5.4` or a slash-containing
+    /// id like `library/llama3` that the sidecar splits on the first
+    /// slash and never resolves. `None` means "use the caller's input
+    /// unchanged", which keeps non-Pi paths invisible to this field.
+    #[serde(default)]
+    pub model: Option<String>,
 }
 
 impl AgentBackendRuntime {

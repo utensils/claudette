@@ -14,9 +14,20 @@ export function useSelectedModelEntry(sessionId: string): Model | undefined {
     (s) => s.codexEnabled,
   );
   const agentBackends = useAppStore((s) => s.agentBackends);
+  const claudeAuthMethod = useAppStore((s) => s.claudeAuthMethod);
+  // Stamp the same OAuth Pi-anthropic gate every consumer uses so a
+  // previously-saved Pi/anthropic selection resolves to `undefined`
+  // here once the CLI logs in via OAuth — preventing the toolbar from
+  // displaying a model the resolver would refuse to send.
+  const isClaudeOauthSubscriber = useMemo(
+    () => claudeAuthMethod?.toLowerCase() === "oauth_token",
+    [claudeAuthMethod],
+  );
   const registry = useMemo(
-    () => buildModelRegistry(alternativeBackendsEnabled, agentBackends, codexEnabled),
-    [alternativeBackendsEnabled, agentBackends, codexEnabled],
+    () => buildModelRegistry(alternativeBackendsEnabled, agentBackends, codexEnabled, {
+      isClaudeOauthSubscriber,
+    }),
+    [alternativeBackendsEnabled, agentBackends, codexEnabled, isClaudeOauthSubscriber],
   );
   return findModelInRegistry(registry, selectedModel, selectedProvider);
 }

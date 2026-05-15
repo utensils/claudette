@@ -307,6 +307,56 @@ describe("modelRegistry", () => {
       expect(anthropic?.legacy).toBeFalsy();
     });
 
+    it("hides Pi Anthropic and Claude sub-providers from every consumer when Claude OAuth is active", () => {
+      // The Rust resolver refuses Pi-routed `anthropic/*` or `claude/*`
+      // selections under a Pro/Max OAuth subscription, so every consumer
+      // of `buildModelRegistry` (chat picker, Settings default-model
+      // dropdown, `/model` slash command, toolbars) needs the same set
+      // hidden — gating only at the picker would let a Settings save
+      // commit `pi/anthropic/...` and fail the next send.
+      const backends = [
+        {
+          id: "pi",
+          label: "Pi",
+          kind: "pi_sdk" as const,
+          enabled: true,
+          capabilities: { thinking: true, effort: true, fast_mode: false },
+          manual_models: [],
+          discovered_models: [
+            { id: "anthropic/claude-sonnet-4-6", label: "Claude Sonnet 4.6", context_window_tokens: 200_000 },
+            { id: "claude/legacy-sonnet", label: "Legacy Sonnet (claude prefix)", context_window_tokens: 200_000 },
+            { id: "openai/gpt-5.4", label: "GPT-5.4", context_window_tokens: 272_000 },
+            { id: "ollama/gpt-oss:120b", label: "gpt-oss:120b", context_window_tokens: 64_000 },
+          ],
+        },
+      ];
+
+      const oauthRegistry = buildModelRegistry(false, backends, false, {
+        isClaudeOauthSubscriber: true,
+      });
+      const remainingPiSubKeys = new Set(
+        oauthRegistry
+          .filter((m) => m.providerKind === "pi_sdk")
+          .map((m) => m.subProviderKey),
+      );
+      expect(remainingPiSubKeys.has("anthropic")).toBe(false);
+      expect(remainingPiSubKeys.has("claude")).toBe(false);
+      // Other Pi sub-providers remain reachable — the gate is narrow.
+      expect(remainingPiSubKeys.has("openai")).toBe(true);
+      expect(remainingPiSubKeys.has("ollama")).toBe(true);
+
+      // Without the flag, Anthropic + Claude Pi sub-providers are still
+      // exposed (API-key users, non-OAuth profiles).
+      const apiKeyRegistry = buildModelRegistry(false, backends, false);
+      const apiKeyPiSubKeys = new Set(
+        apiKeyRegistry
+          .filter((m) => m.providerKind === "pi_sdk")
+          .map((m) => m.subProviderKey),
+      );
+      expect(apiKeyPiSubKeys.has("anthropic")).toBe(true);
+      expect(apiKeyPiSubKeys.has("claude")).toBe(true);
+    });
+
     it("falls back to title-cased label for unknown Pi providers", () => {
       const registry = buildModelRegistry(false, [
         {

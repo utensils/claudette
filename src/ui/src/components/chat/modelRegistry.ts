@@ -332,11 +332,34 @@ export function shouldExposeBackendModels(
   return alternativeBackendsEnabled;
 }
 
+/**
+ * Optional behavior knobs for the model registry. Lives on its own
+ * object instead of additional positional arguments so future flags
+ * (e.g. a global model-search visibility gate) compose without
+ * breaking every call site.
+ */
+export interface ModelRegistryOptions {
+  /**
+   * True when the local Claude CLI is signed in with a `oauth_token`
+   * auth method (a Pro / Max subscription). The Rust resolver refuses
+   * to route Pi/`anthropic/*` and Pi/`claude/*` selections in that
+   * mode (`ensure_anthropic_not_routed_through_pi_via_oauth` in
+   * `src-tauri/src/commands/agent_backends.rs`) so we hide those rows
+   * at the registry source rather than only in the chat picker.
+   * Without this filter the Settings default-model dropdown, the
+   * `/model` slash command, and the toolbar selectors would still
+   * surface ids that the resolver rejects mid-send.
+   */
+  isClaudeOauthSubscriber?: boolean;
+}
+
 export function buildModelRegistry(
   alternativeBackendsEnabled: boolean,
   backends: readonly BackendRegistrySource[],
   codexEnabled = false,
+  options: ModelRegistryOptions = {},
 ): readonly Model[] {
+  const isClaudeOauthSubscriber = options.isClaudeOauthSubscriber === true;
   let models: Model[] | undefined;
   for (const backend of backends) {
     if (!shouldExposeBackendModels(
@@ -351,7 +374,9 @@ export function buildModelRegistry(
     const isPi = backend.kind === "pi_sdk";
     const target = models ??= [...MODELS];
     if (isPi) {
-      collectPiModelsBySubProvider(backend, backendModels, target);
+      collectPiModelsBySubProvider(backend, backendModels, target, {
+        isClaudeOauthSubscriber,
+      });
       continue;
     }
     collectFlatBackendModels(backend, backendModels, target);
@@ -406,10 +431,15 @@ function collectFlatBackendModels(
  * own version-band ranking so e.g. older GPT versions collapse into
  * "Show all" alongside other openai entries, not alongside Anthropic.
  */
+interface CollectPiModelsOptions {
+  isClaudeOauthSubscriber: boolean;
+}
+
 function collectPiModelsBySubProvider(
   backend: BackendRegistrySource,
   backendModels: readonly BackendRegistryModel[],
   target: Model[],
+  options: CollectPiModelsOptions,
 ): void {
   const bySubProvider = new Map<string, BackendRegistryModel[]>();
   const subProviderLabels = new Map<string, string>();
@@ -417,6 +447,18 @@ function collectPiModelsBySubProvider(
   for (const model of backendModels) {
     if (!model.id) continue;
     const { key, label } = resolvePiSubProvider(model.id);
+    // OAuth subscription users can't route Anthropic-or-Claude
+    // models through Pi (the Rust resolver refuses), so strip them
+    // here so they never reach any registry consumer — picker,
+    // Settings default-model dropdown, `/model` slash command, or
+    // the toolbar selectors. Mirrors `pi_model_targets_anthropic`
+    // in `agent_backends.rs`.
+    if (
+      options.isClaudeOauthSubscriber
+      && (key === "anthropic" || key === "claude")
+    ) {
+      continue;
+    }
     if (!bySubProvider.has(key)) {
       bySubProvider.set(key, []);
       subProviderLabels.set(key, label);

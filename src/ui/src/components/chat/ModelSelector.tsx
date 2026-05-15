@@ -147,37 +147,29 @@ export function ModelSelector({
   const codexEnabled = useAppStore((s) => s.codexEnabled);
   const agentBackends = useAppStore((s) => s.agentBackends);
   const claudeAuthMethod = useAppStore((s) => s.claudeAuthMethod);
-  const registry = useMemo(
-    () => buildModelRegistry(alternativeBackendsEnabled, agentBackends, codexEnabled),
-    [alternativeBackendsEnabled, agentBackends, codexEnabled],
-  );
   // Claude OAuth subscription users must not see Pi-routed Anthropic
-  // models — see `ensure_anthropic_not_routed_through_pi_via_oauth` in
-  // agent_backends.rs. Matches the Rust gate exactly so the picker
-  // never offers a row that the resolver would refuse.
+  // models — `ensure_anthropic_not_routed_through_pi_via_oauth` in
+  // agent_backends.rs refuses them at send time. The filter lives
+  // inside `buildModelRegistry` so every consumer (Settings,
+  // `/model`, toolbars) gets the same hidden set, not just this
+  // picker.
   const isClaudeOauthSubscriber = useMemo(
     () => claudeAuthMethod?.toLowerCase() === "oauth_token",
     [claudeAuthMethod],
+  );
+  const registry = useMemo(
+    () => buildModelRegistry(alternativeBackendsEnabled, agentBackends, codexEnabled, {
+      isClaudeOauthSubscriber,
+    }),
+    [alternativeBackendsEnabled, agentBackends, codexEnabled, isClaudeOauthSubscriber],
   );
   const visibleModels = useMemo(
     () =>
       registry.filter((m) => {
         if (disable1mContext && m.contextWindowTokens >= 1_000_000) return false;
-        // Mirror `pi_model_targets_anthropic` in agent_backends.rs: the
-        // Rust resolver blocks Pi-routed `anthropic/*` *and* `claude/*`
-        // models when the user is on a Claude OAuth subscription. Hide
-        // the same set in the picker so we never offer a row the
-        // resolver would refuse mid-send.
-        if (
-          isClaudeOauthSubscriber &&
-          m.providerKind === "pi_sdk" &&
-          (m.subProviderKey === "anthropic" || m.subProviderKey === "claude")
-        ) {
-          return false;
-        }
         return true;
       }),
-    [disable1mContext, registry, isClaudeOauthSubscriber],
+    [disable1mContext, registry],
   );
 
   const [query, setQuery] = useState("");
