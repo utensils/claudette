@@ -134,12 +134,47 @@ const AVAILABLE_HARNESSES_BY_KIND: Readonly<Record<string, readonly string[]>> =
   pi_sdk: ["pi_sdk"],
 };
 
-function resolveEffectiveHarness(source: BackendRegistrySource): string | undefined {
+/**
+ * Compute the harness a backend will *actually* resolve to at send
+ * time. Mirrors `resolve_dispatch_harness` in
+ * `src-tauri/src/commands/agent_backends.rs` — in particular the
+ * Pi-disabled downgrade: when the Pi card is off, non-Pi-kind
+ * backends that default/override to Pi fall through to their first
+ * non-Pi sanctioned harness, otherwise the picker's "via Pi" badge
+ * would lie about the dispatch path until the user re-enabled the
+ * Pi card.
+ *
+ * `piEnabled` is the runtime "is the Pi backend reachable?" signal —
+ * `false` triggers the downgrade. The Pi card itself short-circuits
+ * the check because its own enabled flag is the gate elsewhere
+ * (Settings hides the card and `resolve_backend_runtime` rejects
+ * disabled backends).
+ */
+function resolveEffectiveHarness(
+  source: BackendRegistrySource,
+  piEnabled: boolean,
+): string | undefined {
   if (!source.kind) return undefined;
   const allowed = AVAILABLE_HARNESSES_BY_KIND[source.kind];
   const override = source.runtime_harness ?? undefined;
-  if (override && allowed?.includes(override)) return override;
-  return DEFAULT_HARNESS_BY_KIND[source.kind];
+  const harness =
+    override && allowed?.includes(override)
+      ? override
+      : DEFAULT_HARNESS_BY_KIND[source.kind];
+  if (
+    harness === "pi_sdk"
+    && source.kind !== "pi_sdk"
+    && !piEnabled
+  ) {
+    // First non-Pi entry the kind sanctions — same fallback logic the
+    // Rust resolver uses. `available_harnesses` is ordered with the
+    // kind's preferred default first; we look for the first non-Pi
+    // sanctioned harness so e.g. Codex Native falls through to its
+    // app-server runtime instead of jumping to Claude CLI.
+    const fallback = allowed?.find((h) => h !== "pi_sdk");
+    if (fallback) return fallback;
+  }
+  return harness;
 }
 
 type ParsedModelVersion = {
@@ -360,6 +395,15 @@ export function buildModelRegistry(
   options: ModelRegistryOptions = {},
 ): readonly Model[] {
   const isClaudeOauthSubscriber = options.isClaudeOauthSubscriber === true;
+  // Pi-disabled downgrade: when no enabled Pi backend exists, non-Pi
+  // cards that point at the Pi harness fall through to their first
+  // sanctioned non-Pi runtime — same logic as `resolve_dispatch_harness`
+  // in `agent_backends.rs`. Compute once so every per-backend pass
+  // through `resolveEffectiveHarness` reports the dispatch path the
+  // resolver will actually take.
+  const piEnabled = backends.some(
+    (b) => b.kind === "pi_sdk" && b.enabled,
+  );
   let models: Model[] | undefined;
   for (const backend of backends) {
     if (!shouldExposeBackendModels(
@@ -379,7 +423,7 @@ export function buildModelRegistry(
       });
       continue;
     }
-    collectFlatBackendModels(backend, backendModels, target);
+    collectFlatBackendModels(backend, backendModels, target, piEnabled);
   }
   return models ?? MODELS;
 }
@@ -388,13 +432,14 @@ function collectFlatBackendModels(
   backend: BackendRegistrySource,
   backendModels: readonly BackendRegistryModel[],
   target: Model[],
+  piEnabled: boolean,
 ): void {
   const rankedModels = rankBackendModels(backendModels);
   const primaryVersions = primaryVersionKeysByPrefix(rankedModels);
   const seen = new Set<string>();
   // Compute the effective harness once per backend. The Pi-routing
   // badge in the picker reads this off any model in the section.
-  const runtimeHarness = resolveEffectiveHarness(backend);
+  const runtimeHarness = resolveEffectiveHarness(backend, piEnabled);
   for (const entry of rankedModels) {
     const { model } = entry;
     if (!model.id || seen.has(model.id)) continue;

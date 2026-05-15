@@ -666,8 +666,17 @@ async function startSession(message: RequestMessage): Promise<void> {
     ],
   });
   await resourceLoader.reload();
+  // Claudette reuses the same `sessionDir` for every turn in a chat
+  // session — both within an app run and across restarts. With
+  // `SessionManager.create` the SDK always opens a fresh transcript
+  // file, so a resumed chat looks like a brand-new conversation to
+  // the model (no prior context). `continueRecent` loads the most
+  // recent session in `sessionDir` when one exists and falls back to
+  // creating a new one when the directory is empty, which matches
+  // both the first-turn and resume cases without an explicit "is
+  // this a resume?" signal from Rust.
   const manager = sessionDir
-    ? SessionManager.create(cwd, sessionDir)
+    ? SessionManager.continueRecent(cwd, sessionDir)
     : SessionManager.inMemory();
   const result = await createAgentSession({
     cwd,

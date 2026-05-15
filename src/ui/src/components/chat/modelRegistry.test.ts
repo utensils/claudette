@@ -381,7 +381,10 @@ describe("modelRegistry", () => {
     it("tags Ollama models as Pi-routed by default", () => {
       // Ollama's `available_harnesses` is `[pi_sdk, claude_code]`, so the
       // implicit default the picker has to surface is Pi. The badge needs
-      // this to render "via Pi" on the section header.
+      // this to render "via Pi" on the section header. Include an
+      // enabled Pi backend in the fixture so the Pi-disabled downgrade
+      // (mirror of `resolve_dispatch_harness`) doesn't kick in — in
+      // production Pi is always seeded as a builtin.
       const registry = buildModelRegistry(true, [
         {
           id: "ollama",
@@ -393,6 +396,15 @@ describe("modelRegistry", () => {
           discovered_models: [
             { id: "llama3", label: "llama3", context_window_tokens: 128_000 },
           ],
+        },
+        {
+          id: "pi",
+          label: "Pi",
+          kind: "pi_sdk",
+          enabled: true,
+          capabilities: { thinking: true, effort: true, fast_mode: false },
+          manual_models: [],
+          discovered_models: [],
         },
       ]);
       const llama = registry.find((m) => m.id === "llama3");
@@ -414,9 +426,113 @@ describe("modelRegistry", () => {
             { id: "llama3", label: "llama3", context_window_tokens: 128_000 },
           ],
         },
+        {
+          id: "pi",
+          label: "Pi",
+          kind: "pi_sdk",
+          enabled: true,
+          capabilities: { thinking: true, effort: true, fast_mode: false },
+          manual_models: [],
+          discovered_models: [],
+        },
       ]);
       const llama = registry.find((m) => m.id === "llama3");
       expect(llama?.runtimeHarness).toBe("claude_code");
+    });
+
+    it("downgrades Pi-routed non-Pi backends to claude_code when the Pi card is disabled", () => {
+      // Mirror of `resolve_dispatch_harness_downgrades_pi_to_claude_when_pi_backend_is_disabled`
+      // in `src-tauri/src/commands/agent_backends.rs`. Without this
+      // mirror, disabling Pi in Settings left every Ollama / LM Studio
+      // row badged "via Pi" in the picker even though the actual send
+      // would run through Claude CLI — Codex P3 from the 7239a3fc review.
+      const registry = buildModelRegistry(true, [
+        {
+          id: "ollama",
+          label: "Ollama",
+          kind: "ollama",
+          enabled: true,
+          capabilities: { thinking: false, effort: false, fast_mode: false },
+          manual_models: [],
+          discovered_models: [
+            { id: "llama3", label: "llama3", context_window_tokens: 128_000 },
+          ],
+        },
+        {
+          id: "pi",
+          label: "Pi",
+          kind: "pi_sdk",
+          enabled: false,
+          capabilities: { thinking: true, effort: true, fast_mode: false },
+          manual_models: [],
+          discovered_models: [],
+        },
+      ]);
+      const llama = registry.find((m) => m.id === "llama3");
+      expect(llama?.runtimeHarness).toBe("claude_code");
+    });
+
+    it("downgrades Pi-routed Codex Native to codex_app_server when Pi is disabled", () => {
+      // Codex Native's allow-list is `[codex_app_server, pi_sdk]` — its
+      // first non-Pi sanctioned harness is `codex_app_server`, not
+      // `claude_code`. The downgrade has to pick the kind-appropriate
+      // fallback so the picker doesn't badge a Codex card with "via
+      // Claude CLI", which would be a different lie.
+      const registry = buildModelRegistry(true, [
+        {
+          id: "codex",
+          label: "Codex",
+          kind: "codex_native",
+          enabled: true,
+          runtime_harness: "pi_sdk",
+          capabilities: { thinking: false, effort: false, fast_mode: false },
+          manual_models: [
+            { id: "gpt-5.4", label: "GPT-5.4", context_window_tokens: 272_000 },
+          ],
+          discovered_models: [],
+        },
+        {
+          id: "pi",
+          label: "Pi",
+          kind: "pi_sdk",
+          enabled: false,
+          capabilities: { thinking: true, effort: true, fast_mode: false },
+          manual_models: [],
+          discovered_models: [],
+        },
+      ], true);
+      const codex = registry.find((m) => m.id === "gpt-5.4");
+      expect(codex?.runtimeHarness).toBe("codex_app_server");
+    });
+
+    it("keeps the Pi-routed badge when the Pi card is enabled", () => {
+      // Sister case to the downgrade: with Pi present and enabled,
+      // Ollama's default harness stays `pi_sdk` so the picker still
+      // accurately reflects the dispatch path.
+      const registry = buildModelRegistry(true, [
+        {
+          id: "ollama",
+          label: "Ollama",
+          kind: "ollama",
+          enabled: true,
+          capabilities: { thinking: false, effort: false, fast_mode: false },
+          manual_models: [],
+          discovered_models: [
+            { id: "llama3", label: "llama3", context_window_tokens: 128_000 },
+          ],
+        },
+        {
+          id: "pi",
+          label: "Pi",
+          kind: "pi_sdk",
+          enabled: true,
+          capabilities: { thinking: true, effort: true, fast_mode: false },
+          manual_models: [],
+          discovered_models: [],
+        },
+      ]);
+      const llama = registry.find((m) => m.id === "llama3");
+      expect(llama?.runtimeHarness).toBe("pi_sdk");
     });
 
     it("ignores an out-of-bounds runtime override (defense in depth)", () => {
