@@ -743,6 +743,33 @@ fn persist_user_send(db: &Database, prepared: &PreparedUserSend) -> Result<(), S
     Ok(())
 }
 
+/// Stable user-facing string for the Pi-no-attachments case. Lives in
+/// one place so the send and steer gates produce identical errors.
+pub(super) fn pi_attachment_unsupported_message() -> &'static str {
+    "The Pi SDK harness does not yet support file attachments. \
+     Remove the attachments or switch this backend's runtime to Claude CLI \
+     in Settings → Models → Runtime."
+}
+
+/// Surface harness/attachment incompatibility *before* a turn is
+/// persisted. The Pi sidecar's `send_turn` / `steer_turn` reject
+/// non-empty attachment slices because Pi has no file-upload API
+/// yet (see `src/agent/pi_sdk.rs`); checking here keeps a rejected
+/// send from leaving an orphan user-message + attachment row in the
+/// chat history with no agent response.
+pub(super) fn ensure_harness_accepts_attachments(
+    harness: AgentBackendRuntimeHarness,
+    attachments: &[FileAttachment],
+) -> Result<(), String> {
+    if attachments.is_empty() {
+        return Ok(());
+    }
+    if harness == AgentBackendRuntimeHarness::PiSdk {
+        return Err(pi_attachment_unsupported_message().to_string());
+    }
+    Ok(())
+}
+
 fn cleanup_failed_steer_persistence(
     db: &Database,
     checkpoint_id: &str,
@@ -822,6 +849,17 @@ pub async fn steer_queued_chat_message(
         &content,
         attachments.as_deref(),
     )?;
+
+    // Steer goes straight to the live persistent session, so the harness
+    // is whatever spawned this session — read it directly off `ps`
+    // rather than re-resolving from settings. Pi rejects attachments;
+    // gating here keeps a rejected steer from leaving an orphan user
+    // message + pre-steer checkpoint behind.
+    if !prepared_user_send.cli_atts.is_empty()
+        && ps.kind() == claudette::agent::AgentHarnessKind::PiSdk
+    {
+        return Err(pi_attachment_unsupported_message().to_string());
+    }
 
     let anchor_msg_id = db
         .last_chat_message_id_for_session(&chat_session_id)
@@ -953,6 +991,24 @@ pub async fn send_chat_message(
         &content,
         attachments.as_deref(),
     )?;
+    // Resolve the backend runtime *before* persisting the user turn so
+    // a harness/payload incompatibility (e.g. Pi + attachments) bails
+    // out without leaving an orphan user-message + attachment row in
+    // the chat history. The resolved value is reused downstream — the
+    // original resolution site has been removed to avoid double work.
+    let (resolved_backend_id, resolved_model) =
+        crate::commands::agent_backends::resolve_backend_request_defaults(
+            &db,
+            backend_id.as_deref(),
+            model.as_deref(),
+        )?;
+    let mut backend_runtime = crate::commands::agent_backends::resolve_backend_runtime(
+        &state,
+        resolved_backend_id.as_deref(),
+        resolved_model.as_deref(),
+    )
+    .await?;
+    ensure_harness_accepts_attachments(backend_runtime.harness, &prepared_user_send.cli_atts)?;
     persist_user_send(&db, &prepared_user_send)?;
     let user_msg = prepared_user_send.user_msg.clone();
     let image_attachments = prepared_user_send.cli_atts;
@@ -1246,19 +1302,9 @@ pub async fn send_chat_message(
     session.needs_attention = false;
     session.attention_kind = None;
 
-    let (resolved_backend_id, resolved_model) =
-        crate::commands::agent_backends::resolve_backend_request_defaults(
-            &db,
-            backend_id.as_deref(),
-            model.as_deref(),
-        )?;
-
-    let mut backend_runtime = crate::commands::agent_backends::resolve_backend_runtime(
-        &state,
-        resolved_backend_id.as_deref(),
-        resolved_model.as_deref(),
-    )
-    .await?;
+    // backend_runtime / resolved_model were resolved up front (before
+    // persist) so the attachment-compat gate could run pre-persist.
+    // Reuse them here instead of re-resolving.
     if backend_runtime.harness == AgentBackendRuntimeHarness::CodexAppServer
         && let Some(codex_effort) = normalize_codex_reasoning_effort(effort.as_deref())
     {
@@ -3128,7 +3174,8 @@ pub async fn send_chat_message(
 mod tests {
     use super::{
         auth_failure_message_from_assistant_text, auth_failure_message_from_stderr,
-        env_provider_drifted_parts, has_env_trust_warning, queue_control_prompt,
+        ensure_harness_accepts_attachments, env_provider_drifted_parts, has_env_trust_warning,
+        pi_attachment_unsupported_message, queue_control_prompt,
         remote_control_requested_or_active, remote_control_requested_or_active_for_turn,
         remote_control_should_defer_drift_teardown_for_turn,
         remote_control_should_restore_for_turn, remote_control_title, resolve_spawn_session_id,
@@ -3138,6 +3185,8 @@ mod tests {
     use crate::state::{
         AgentSessionState, AttentionKind, ClaudeRemoteControlLifecycle, ClaudeRemoteControlStatus,
     };
+    use claudette::agent::FileAttachment;
+    use claudette::agent_backend::AgentBackendRuntimeHarness;
     use claudette::model::{ChatMessage, ChatRole};
 
     fn test_chat_message(role: ChatRole, content: &str) -> ChatMessage {
@@ -3630,5 +3679,61 @@ mod tests {
         assert!(remote_control_should_defer_drift_teardown_for_turn(
             true, &status
         ));
+    }
+
+    fn dummy_attachment() -> FileAttachment {
+        FileAttachment {
+            media_type: "image/png".to_string(),
+            data_base64: "iVBORw0KGgo=".to_string(),
+            text_content: None,
+            filename: Some("x.png".to_string()),
+        }
+    }
+
+    #[test]
+    fn pi_harness_rejects_attachment_before_persist() {
+        // Pi's `send_turn` / `steer_turn` reject non-empty attachment
+        // slices today. Pinning this guard at the helper level keeps the
+        // chat-side gate from regressing — without it, a Pi turn fails
+        // *after* `persist_user_send` and leaves a dead user message +
+        // attachment row in the chat history.
+        let atts = vec![dummy_attachment()];
+        let err = ensure_harness_accepts_attachments(AgentBackendRuntimeHarness::PiSdk, &atts)
+            .expect_err("Pi + attachments must error pre-persist");
+        assert_eq!(err, pi_attachment_unsupported_message());
+        // The message has to be actionable — point the user at the
+        // Settings override they can use to recover without losing the
+        // composer state.
+        assert!(err.contains("Claude CLI"));
+        assert!(err.contains("Settings → Models → Runtime"));
+    }
+
+    #[test]
+    fn pi_harness_accepts_turn_without_attachments() {
+        // Empty attachment slice is the common path; the guard must
+        // not surface a spurious error for plain Pi turns.
+        assert!(ensure_harness_accepts_attachments(AgentBackendRuntimeHarness::PiSdk, &[]).is_ok());
+    }
+
+    #[test]
+    fn claude_code_harness_accepts_attachments() {
+        // Sister-case to the Pi guard — Claude CLI fully supports image
+        // attachments and the gate must stay out of the way.
+        let atts = vec![dummy_attachment()];
+        assert!(
+            ensure_harness_accepts_attachments(AgentBackendRuntimeHarness::ClaudeCode, &atts)
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn codex_app_server_harness_accepts_attachments() {
+        // Codex app-server has its own attachment plumbing; the
+        // attachment guard only flags Pi.
+        let atts = vec![dummy_attachment()];
+        assert!(
+            ensure_harness_accepts_attachments(AgentBackendRuntimeHarness::CodexAppServer, &atts)
+                .is_ok()
+        );
     }
 }
