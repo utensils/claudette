@@ -1,11 +1,12 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { CircleDollarSign, Sparkles, BookOpen } from "lucide-react";
 import { useAppStore } from "../../../stores/useAppStore";
 import { getAppSetting } from "../../../services/tauri";
 import { tooltipAttributes } from "../../../hotkeys/display";
 import { isMacHotkeyPlatform } from "../../../hotkeys/platform";
 import { ModelSelector, is1mContextModel, get1mFallback } from "../ModelSelector";
-import { buildModelRegistry, findModelInRegistry } from "../modelRegistry";
+import { findModelInRegistry } from "../modelRegistry";
+import { useModelRegistry } from "../useModelRegistry";
 import { isFastSupported, isEffortSupported } from "../modelCapabilities";
 import {
   normalizeReasoningLevel,
@@ -39,9 +40,6 @@ export function ComposerToolbar({
   const disable1mContext = useAppStore((s) => s.disable1mContext);
   const planMode = useAppStore((s) => s.planMode[sessionId] ?? false);
   const modelSelectorOpen = useAppStore((s) => s.modelSelectorOpen);
-  const alternativeBackendsEnabled = useAppStore((s) => s.alternativeBackendsEnabled);
-  const codexEnabled = useAppStore((s) => s.codexEnabled);
-  const agentBackends = useAppStore((s) => s.agentBackends);
   const keybindings = useAppStore((s) => s.keybindings);
   const setSelectedModel = useAppStore((s) => s.setSelectedModel);
   const setFastMode = useAppStore((s) => s.setFastMode);
@@ -67,10 +65,9 @@ export function ComposerToolbar({
   const resolvedFlags = claudeFlagsState?.resolved ?? [];
 
   const [loaded, setLoaded] = useState(false);
-  const registry = useMemo(
-    () => buildModelRegistry(alternativeBackendsEnabled, agentBackends, codexEnabled),
-    [alternativeBackendsEnabled, agentBackends, codexEnabled],
-  );
+  // Single source for visibility (feature flags + OAuth gate) — see
+  // `useModelRegistry`.
+  const registry = useModelRegistry();
   const registryRef = useRef(registry);
   useEffect(() => {
     registryRef.current = registry;

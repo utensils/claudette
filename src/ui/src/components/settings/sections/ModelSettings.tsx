@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { ChevronRight } from "lucide-react";
 import {
   deleteAppSetting,
   getAppSetting,
@@ -21,12 +22,15 @@ import {
   reasoningVariantForModel,
 } from "../../chat/reasoningControls";
 import {
-  buildModelRegistry,
+  groupPiDiscoveredModels,
   resolveModelSelection,
 } from "../../chat/modelRegistry";
+import { useModelRegistry } from "../../chat/useModelRegistry";
 import { useAppStore } from "../../../stores/useAppStore";
 import { formatBackendError } from "../backendSettingsErrors";
 import { planAlternativeBackendDisableCleanup } from "../alternativeBackendCleanup";
+import { SearchableSelect } from "../SearchableSelect";
+import { RuntimeSelector } from "../RuntimeSelector";
 import {
   LEGACY_CODEX_BACKEND,
   LEGACY_NATIVE_CODEX_BACKEND,
@@ -138,15 +142,15 @@ export function ModelSettings() {
     }
   };
 
-  const registry = useMemo(
-    () => buildModelRegistry(alternativeBackendsEnabled, agentBackends, codexEnabled),
-    [alternativeBackendsEnabled, agentBackends, codexEnabled],
-  );
+  // `useModelRegistry` keeps the default-model dropdown aligned with
+  // every other selector — feature flags + OAuth Pi-anthropic gate.
+  const registry = useModelRegistry();
   const visibleBackends = useMemo(
     () =>
       agentBackends.filter((backend) => {
         if (backend.id === "anthropic" || backend.kind === "codex_subscription") return false;
         if (backend.kind === "codex_native") return codexEnabled;
+        if (backend.kind === "pi_sdk") return true;
         return alternativeBackendsEnabled;
       }),
     [agentBackends, alternativeBackendsEnabled, codexEnabled],
@@ -413,17 +417,17 @@ export function ModelSettings() {
         </div>
         <div className={styles.settingControl}>
           <div className={styles.inlineControl}>
-            <select
-              className={styles.select}
-              value={defaultModelValue}
-              onChange={(e) => handleModelChange(e.target.value)}
-            >
-              {registry.map((m) => (
-                <option key={m.providerQualifiedId ?? `anthropic/${m.id}`} value={m.providerQualifiedId ?? `anthropic/${m.id}`}>
-                  {m.providerLabel ? `${m.providerLabel} / ${m.label}` : m.label}
-                </option>
-              ))}
-            </select>
+            <div className={styles.defaultModelPickerWrapper}>
+              <SearchableSelect
+                options={registry.map((m) => ({
+                  value: m.providerQualifiedId ?? `anthropic/${m.id}`,
+                  label: m.providerLabel ? `${m.providerLabel} / ${m.label}` : m.label,
+                }))}
+                value={defaultModelValue}
+                onChange={handleModelChange}
+                ariaLabel={t("models_default_model")}
+              />
+            </div>
             {!isCodex && (
               <select
                 className={`${styles.select} ${styles.selectWide}`}
@@ -712,9 +716,10 @@ function BackendCard({
   const manualModelText = manualModels.map((m) => m.id).join(", ");
   const discoveryBackend = isDiscoveryBackend(draft);
   const usesCodexCliAuth = draft.kind === "codex_subscription" || draft.kind === "codex_native";
-  const showBaseUrl = !usesCodexCliAuth;
-  const showSecret = !usesCodexCliAuth;
-  const showManualModels = draft.kind === "custom_anthropic" || draft.kind === "custom_openai";
+  const usesPiAuth = draft.kind === "pi_sdk";
+  const showBaseUrl = !usesCodexCliAuth && !usesPiAuth;
+  const showSecret = !usesCodexCliAuth && !usesPiAuth;
+  const showManualModels = draft.kind === "custom_anthropic" || draft.kind === "custom_openai" || usesPiAuth;
   const showTestButton = shouldShowBackendTestButton(draft);
   const actualModelCount = countBackendModels(draft);
   const displayModelCount = actualModelCount > 0 ? actualModelCount : statusModelCount ?? 0;
@@ -867,6 +872,18 @@ function BackendCard({
           </div>
         )}
         <div className={styles.backendForm}>
+          <RuntimeSelector
+            backend={draft}
+            onSaved={(saved) => {
+              const refreshed = saved.find((item) => item.id === draft.id);
+              if (refreshed) {
+                lastSavedDraftRef.current = JSON.stringify(refreshed);
+                setDraft(refreshed);
+              }
+              onSaved(saved);
+            }}
+            onError={(err) => setCardError(formatBackendError(err, draft))}
+          />
           {showBaseUrl && (
             <label className={styles.backendField}>
               <span className={styles.backendFieldLabel}>{t("models_backend_base_url")}</span>
@@ -878,45 +895,75 @@ function BackendCard({
               />
             </label>
           )}
-          <label className={styles.backendField}>
-            <span className={styles.backendFieldLabel}>{t("models_backend_default_model")}</span>
-            {discoveryBackend || modelOptions.length > 0 ? (
-              <select
-                className={styles.select}
-                value={selectedDefaultModel}
-                onChange={(e) => setDraft({ ...draft, default_model: e.target.value || null })}
+          {discoveryBackend || modelOptions.length > 0 ? (
+            // `SearchableSelect` renders a `<button>` trigger and a
+            // popover containing more buttons. Nesting interactive
+            // controls inside a `<label>` produces ambiguous click /
+            // focus behavior for keyboard and assistive-tech users, so
+            // pair the field with a labeled `<div>` and let
+            // `SearchableSelect`'s `aria-labelledby` carry the name.
+            <div className={styles.backendField}>
+              <span
+                id={`${draft.id}-default-model-label`}
+                className={styles.backendFieldLabel}
               >
-                <option value="">{t("models_backend_default_auto")}</option>
-                {modelOptions.map((model) => (
-                  <option key={model.id} value={model.id}>
-                    {model.label || model.id}
-                  </option>
-                ))}
-              </select>
-            ) : (
+                {t("models_backend_default_model")}
+              </span>
+              <SearchableSelect
+                options={modelOptions.map((model) => ({
+                  value: model.id,
+                  label: model.label || model.id,
+                }))}
+                value={selectedDefaultModel}
+                onChange={(next) =>
+                  setDraft({ ...draft, default_model: next || null })
+                }
+                autoOption={{ value: "", label: t("models_backend_default_auto") }}
+                ariaLabelledBy={`${draft.id}-default-model-label`}
+              />
+            </div>
+          ) : (
+            <label className={styles.backendField}>
+              <span className={styles.backendFieldLabel}>{t("models_backend_default_model")}</span>
               <input
                 className={styles.input}
                 value={draft.default_model ?? ""}
                 placeholder={t("models_backend_default_model")}
                 onChange={(e) => setDraft({ ...draft, default_model: e.target.value || null })}
               />
-            )}
-          </label>
+            </label>
+          )}
         </div>
         <div className={styles.backendForm}>
           {discoveryBackend && (
-            <label className={styles.backendField}>
-              <span className={styles.backendFieldLabel}>{t("models_backend_discovered_models")}</span>
-              <div className={styles.modelChipList}>
-                {discoveredModels.length > 0 ? (
-                  discoveredModels.map((model) => (
-                    <span key={model.id} className={styles.modelChip}>{model.label || model.id}</span>
-                  ))
-                ) : (
-                  <span className={styles.modelChipEmpty}>{t("models_backend_no_discovered_models")}</span>
-                )}
-              </div>
-            </label>
+            // Same a11y concern: the Pi variant renders expandable
+            // `<button>` headers, which don't belong inside a `<label>`.
+            // Use a `<div>` + labeled span and connect them via aria.
+            <div
+              className={styles.backendField}
+              role="group"
+              aria-labelledby={`${draft.id}-discovered-models-label`}
+            >
+              <span
+                id={`${draft.id}-discovered-models-label`}
+                className={styles.backendFieldLabel}
+              >
+                {t("models_backend_discovered_models")}
+              </span>
+              {draft.kind === "pi_sdk" ? (
+                <PiDiscoveredModelsList models={discoveredModels} />
+              ) : (
+                <div className={styles.modelChipList}>
+                  {discoveredModels.length > 0 ? (
+                    discoveredModels.map((model) => (
+                      <span key={model.id} className={styles.modelChip}>{model.label || model.id}</span>
+                    ))
+                  ) : (
+                    <span className={styles.modelChipEmpty}>{t("models_backend_no_discovered_models")}</span>
+                  )}
+                </div>
+              )}
+            </div>
           )}
           {showManualModels && (
             <label className={styles.backendField}>
@@ -966,6 +1013,15 @@ function BackendCard({
               {t("models_backend_login")}
             </button>
           )}
+          {usesPiAuth && (
+            <button
+              className={styles.iconBtn}
+              onClick={() => setStatus(t("models_backend_pi_auth_guidance", "Run `pi auth` in a terminal, then refresh Pi models."))}
+              disabled={busy}
+            >
+              {t("models_backend_pi_login")}
+            </button>
+          )}
         </div>
       </div>
     </div>
@@ -996,6 +1052,80 @@ function isDiscoveryBackend(backend: AgentBackendConfig) {
     backend.kind === "ollama" ||
     backend.kind === "openai_api" ||
     backend.kind === "codex_native" ||
+    backend.kind === "pi_sdk" ||
     backend.kind === "lm_studio"
+  );
+}
+
+function PiDiscoveredModelsList({
+  models,
+}: {
+  models: AgentBackendConfig["discovered_models"];
+}) {
+  const { t } = useTranslation("settings");
+  const groups = useMemo(() => groupPiDiscoveredModels(models), [models]);
+  const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
+
+  if (models.length === 0) {
+    return (
+      <div className={styles.modelChipList}>
+        <span className={styles.modelChipEmpty}>
+          {t("models_backend_no_discovered_models")}
+        </span>
+      </div>
+    );
+  }
+
+  function toggle(key: string) {
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }
+
+  return (
+    <div className={styles.piDiscoveredList}>
+      <div className={styles.piDiscoveredSummary}>
+        {t("models_backend_pi_discovered_summary", {
+          providers: groups.length,
+          models: models.length,
+          defaultValue: "{{providers}} providers · {{models}} models",
+        })}
+      </div>
+      {groups.map((group) => {
+        const isOpen = expanded.has(group.key);
+        return (
+          <div key={group.key} className={styles.piDiscoveredGroup}>
+            <button
+              type="button"
+              className={styles.piDiscoveredHeader}
+              aria-expanded={isOpen}
+              onClick={() => toggle(group.key)}
+            >
+              <ChevronRight
+                size={12}
+                className={`${styles.piDiscoveredChevron} ${isOpen ? styles.piDiscoveredChevronOpen : ""}`}
+                aria-hidden
+              />
+              <span className={styles.piDiscoveredGroupLabel}>{group.label}</span>
+              <span className={styles.piDiscoveredGroupCount}>
+                {group.models.length}
+              </span>
+            </button>
+            {isOpen && (
+              <div className={styles.piDiscoveredChips}>
+                {group.models.map((model) => (
+                  <span key={model.id} className={styles.modelChip} title={model.id}>
+                    {model.label || model.id}
+                  </span>
+                ))}
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
   );
 }

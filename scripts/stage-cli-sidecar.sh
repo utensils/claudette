@@ -127,3 +127,5 @@ esac
 cp "$target_bin" "$dest"
 chmod +x "$dest"
 echo "▸ Staged $target_bin -> $dest"
+
+"$repo_root/scripts/stage-pi-harness-sidecar.sh" "$triple"

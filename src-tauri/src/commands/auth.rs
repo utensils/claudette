@@ -61,10 +61,16 @@ const AUTH_VALIDATE_TIMEOUT: Duration = Duration::from_secs(10);
 /// This intentionally uses `claude auth status --json` instead of the Usage
 /// panel's token-reading path. It is a lightweight local probe, bounded by a
 /// short timeout so opening Settings never waits on a slow CLI.
+///
+/// `quiet`: when true, suppresses the missing-CLI dialog event on spawn
+/// failure. Used by the startup OAuth-method probe in App.tsx so a user
+/// without the Claude CLI installed isn't greeted by a "install claude"
+/// dialog at launch — the model picker just stays in its non-OAuth shape.
 #[tauri::command]
 pub async fn get_claude_auth_status(
     app: AppHandle,
     validate: Option<bool>,
+    quiet: Option<bool>,
 ) -> Result<ClaudeAuthStatus, String> {
     let claude_path = claudette::agent::resolve_claude_path().await;
     let mut command = Command::new(&claude_path);
@@ -86,6 +92,9 @@ pub async fn get_claude_auth_status(
             let err = claudette::missing_cli::map_spawn_err(&e, "claude", || {
                 format!("Failed to run `claude auth status`: {e}")
             });
+            if quiet == Some(true) {
+                return Err(err);
+            }
             return Err(crate::missing_cli::handle_err(&app, &err).unwrap_or(err));
         }
         Err(_) => {
@@ -117,6 +126,46 @@ pub async fn get_claude_auth_status(
     }
 
     Ok(status)
+}
+
+/// Lightweight, AppHandle-free probe used by the backend resolver to
+/// answer "is the local Claude CLI signed in with an OAuth subscription
+/// token right now?". Returns `false` on any error path (missing CLI,
+/// timeout, parse failure) so the gate fails open — the only caller
+/// uses it to block a sensitive route, not to grant one.
+//
+// `alternative-backends`-gated builds are the only consumer; suppress
+// the dead-code warning on stripped builds without forcing the function
+// itself behind a feature wall (it's small and stays useful for tests).
+#[cfg_attr(not(feature = "alternative-backends"), allow(dead_code))]
+pub async fn is_claude_oauth_authenticated() -> bool {
+    let claude_path = claudette::agent::resolve_claude_path().await;
+    let mut command = Command::new(&claude_path);
+    command
+        .no_console_window()
+        .args(["auth", "status", "--json"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true)
+        .env("PATH", claudette::env::enriched_path());
+    sanitize_claude_subprocess_env(&mut command);
+
+    let Ok(Ok(output)) = timeout(AUTH_STATUS_TIMEOUT, command.output()).await else {
+        return false;
+    };
+    if !output.status.success() {
+        return false;
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let Ok(status) = parse_auth_status(&stdout) else {
+        return false;
+    };
+    status.logged_in
+        && status
+            .auth_method
+            .as_deref()
+            .is_some_and(|method| method.eq_ignore_ascii_case("oauth_token"))
 }
 
 fn parse_auth_status(stdout: &str) -> Result<ClaudeAuthStatus, String> {

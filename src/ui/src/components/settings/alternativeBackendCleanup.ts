@@ -2,7 +2,17 @@ import { MODELS } from "../chat/modelRegistry";
 
 export const DEFAULT_CLAUDE_BACKEND = "anthropic";
 export const DEFAULT_CLAUDE_MODEL = "opus";
-const CODEX_BACKENDS = new Set(["codex", "experimental-codex", "codex-subscription"]);
+// Backends that remain visible (and selectable) when the Agent providers
+// gate is off. Disabling the gate must not reset defaults or per-session
+// selections that point at any of these, because the user can still see
+// and use them. Anthropic is implicit (`DEFAULT_CLAUDE_BACKEND`); Codex
+// has its own gate; Pi is unconditional and first-class.
+const FIRST_CLASS_BACKENDS_OUTSIDE_GATE = new Set([
+  "codex",
+  "experimental-codex",
+  "codex-subscription",
+  "pi",
+]);
 
 export type SettingEntry = readonly [string, string];
 
@@ -37,7 +47,7 @@ export function isAlternativeBackendSelection(
   backend: string | null | undefined,
 ): boolean {
   const normalizedBackend = backend || DEFAULT_CLAUDE_BACKEND;
-  if (CODEX_BACKENDS.has(normalizedBackend)) return false;
+  if (FIRST_CLASS_BACKENDS_OUTSIDE_GATE.has(normalizedBackend)) return false;
   return normalizedBackend !== DEFAULT_CLAUDE_BACKEND || (!!model && !isBuiltInClaudeModel(model));
 }
 

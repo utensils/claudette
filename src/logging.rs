@@ -286,8 +286,8 @@ pub fn init_with_override(runtime_override: Option<&str>) -> Option<LogHandle> {
 /// 2. `<claudette_home>/logs` — sibling to the existing `workspaces`
 ///    and `plugins` directories so users have one tree to inspect when
 ///    debugging. `claudette_home` honors `$CLAUDETTE_HOME`, so a
-///    `dev --clean` session naturally lands its logs under the same
-///    sandbox as its workspaces and plugins.
+///    `dev --new` or `dev --clone` session naturally lands its logs under
+///    the same sandbox as its workspaces and plugins.
 fn resolve_log_dir() -> PathBuf {
     if let Ok(custom) = std::env::var("CLAUDETTE_LOG_DIR") {
         let path = PathBuf::from(custom);

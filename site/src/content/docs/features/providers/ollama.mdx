@@ -44,6 +44,8 @@ Pulled models are cached under `~/.ollama/models/`. Run `ollama list` to see wha
 
 Once enabled, the model picker in the chat header includes Ollama models alongside Claude. Pick one and the next turn runs through Ollama.
 
+By default, Ollama dispatch is wired through the **Pi SDK harness** rather than the Claude CLI proxy. The Ollama section in the chat-header picker carries a small "via Pi" pill so the dispatch path is visible at a glance. You can opt out per-card in **Settings → Models → Ollama → Runtime** (`Pi (default)` ↔ `Claude CLI`); when set to Claude CLI, the pill switches to "via Claude CLI" so the choice stays explicit.
+
 The chat header hides the **Effort**, **Fast mode**, and **1M-context** toggles when an Ollama model is active — `AgentBackendConfig::builtin_ollama()` declares those capabilities as `false`. **Extended thinking** stays available because Ollama supports it on models that have a thinking mode (like `qwen3-coder`).
 
 ## Tool use and vision

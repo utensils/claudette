@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { CircleDollarSign, Sparkles, Zap, Brain, BookOpen, Gauge, Eye, EyeOff, Globe } from "lucide-react";
 import { useAppStore } from "../../stores/useAppStore";
@@ -11,7 +11,8 @@ import {
   reasoningLevelLabel,
   reasoningVariantForModel,
 } from "./reasoningControls";
-import { buildModelRegistry, findModelInRegistry } from "./modelRegistry";
+import { findModelInRegistry } from "./modelRegistry";
+import { useModelRegistry } from "./useModelRegistry";
 import { applySelectedModel } from "./applySelectedModel";
 import { applyPlanModeMountDefault } from "./applyPlanModeMountDefault";
 import { ContextMeter } from "./ContextMeter";
@@ -34,9 +35,6 @@ export function ChatToolbar({ sessionId, disabled }: ChatToolbarProps) {
   const effortLevel = useAppStore((s) => s.effortLevel[sessionId] ?? "auto");
   const chromeEnabled = useAppStore((s) => s.chromeEnabled[sessionId] ?? false);
   const modelSelectorOpen = useAppStore((s) => s.modelSelectorOpen);
-  const alternativeBackendsEnabled = useAppStore((s) => s.alternativeBackendsEnabled);
-  const codexEnabled = useAppStore((s) => s.codexEnabled);
-  const agentBackends = useAppStore((s) => s.agentBackends);
   const setSelectedModel = useAppStore((s) => s.setSelectedModel);
   const setFastMode = useAppStore((s) => s.setFastMode);
   const setThinkingEnabled = useAppStore((s) => s.setThinkingEnabled);
@@ -55,10 +53,11 @@ export function ChatToolbar({ sessionId, disabled }: ChatToolbarProps) {
 
   const [loaded, setLoaded] = useState(false);
   const [effortSelectorOpen, setEffortSelectorOpen] = useState(false);
-  const registry = useMemo(
-    () => buildModelRegistry(alternativeBackendsEnabled, agentBackends, codexEnabled),
-    [alternativeBackendsEnabled, agentBackends, codexEnabled],
-  );
+  // Single source for visibility (feature flags + OAuth gate) — see
+  // `useModelRegistry`. The toolbar's stale-ref pattern below still
+  // works because `useModelRegistry` returns a stable identity until
+  // an input changes.
+  const registry = useModelRegistry();
   const registryRef = useRef(registry);
   useEffect(() => {
     registryRef.current = registry;

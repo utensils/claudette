@@ -92,8 +92,16 @@ cd src/ui && bun install && cd ../..
 > `tauri/custom-protocol` (it would suppress `import.meta.env.DEV`
 > and break `/claudette-debug`), and stages the
 > `claudette-cli` sidecar that the bundled `tauri.conf.json` would
-> otherwise look for. `--clean` and `--help` work the same as on
-> the .sh version.
+> otherwise look for. `--new`, `--clone`, `--clean`, and `--help` work
+> the same as on the .sh version.
+>
+> **Heads up if you have muscle memory for `--clean`:** the flag was
+> repurposed. It used to mean "run as a fresh user with a per-PID
+> sandbox" — that's now `--new`. The new `--clean` is a standalone
+> action that **wipes everything under `$TMPDIR/claudette-dev/`** and
+> exits without launching the app. Use `--new` for fresh-user dev
+> sessions and `--clean` only when you want to reset the discovery
+> directory after SIGKILL'd runs.
 >
 > First-time prerequisites on Windows: VS C++ Build Tools (Desktop
 > development with C++ workload) and Clang/LLVM on PATH (e.g.

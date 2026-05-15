@@ -36,8 +36,9 @@
 use std::path::PathBuf;
 
 /// Resolve the `~/.claudette/` tree root. Honors `$CLAUDETTE_HOME` so a
-/// fresh-user dev session (`scripts/dev.sh --clean`) can be sandboxed
-/// into a tmp directory without touching the real user state.
+/// fresh-user dev session (`scripts/dev.sh --new`) or a cloned-state
+/// dev session (`scripts/dev.sh --clone`) can be sandboxed into a tmp
+/// directory without touching the real user state.
 ///
 /// Falls back to `./.claudette` when `dirs::home_dir()` itself fails —
 /// extremely unusual, mostly affects sandboxed CI.

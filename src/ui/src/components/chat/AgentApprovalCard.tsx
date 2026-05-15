@@ -12,8 +12,12 @@ export function AgentApprovalCard({ approval, onRespond }: AgentApprovalCardProp
   const { t } = useTranslation("chat");
   const [feedback, setFeedback] = useState("");
   const supportsDenyReason = approval.supportsDenyReason ?? true;
-  const title = t(`agent_approval_${approval.kind}_title`);
-  const description = t(`agent_approval_${approval.kind}_description`);
+  // `{{agent}}` is interpolated by the localized title/description. Pi
+  // approvals set `agentLabel = "Pi"`; Codex approvals leave it
+  // undefined and the historical "Codex" wording is preserved.
+  const agent = approval.agentLabel ?? "Codex";
+  const title = t(`agent_approval_${approval.kind}_title`, { agent });
+  const description = t(`agent_approval_${approval.kind}_description`, { agent });
   const deny = () => {
     const reason = supportsDenyReason ? feedback.trim() : "";
     onRespond(false, reason || undefined);

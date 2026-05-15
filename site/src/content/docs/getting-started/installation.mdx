@@ -133,7 +133,7 @@ The compiled binary will be in `target/release/` at the workspace root (Claudett
 
 ## Run from source
 
-Pick the launcher that matches your platform — they share the same flag surface (`--clean`, `-h`/`--help`):
+Pick the launcher that matches your platform — `--new`, `--clean`, and `-h`/`--help` work on both. `--clone` (rsync mirror of your real setup into a stable sandbox dir; re-runs sync incrementally) is currently macOS/Linux only.
 
 <Tabs>
   <TabItem label="macOS / Linux">
@@ -141,7 +141,14 @@ Pick the launcher that matches your platform — they share the same flag surfac
     # Full-feature dev launcher (required for macOS voice input)
     ./scripts/dev.sh
 
-    # Same, but with a per-PID empty $CLAUDETTE_HOME for first-run UX
+    # Per-PID empty sandbox under $TMPDIR — first-run / new-user UX
+    ./scripts/dev.sh --new
+
+    # Mirror your real setup into a stable sandbox dir via rsync; re-runs
+    # sync incrementally. Isolated from the running release app.
+    ./scripts/dev.sh --clone
+
+    # GC stale sandboxes from killed dev runs and exit
     ./scripts/dev.sh --clean
 
     # Plain Tauri (no port probing, no signed bundle, no voice on macOS)
@@ -153,7 +160,10 @@ Pick the launcher that matches your platform — they share the same flag surfac
     # Full-feature dev launcher
     .\scripts\dev.ps1
 
-    # Fresh-user sandbox under $env:TEMP
+    # Per-PID empty sandbox under $env:TEMP — first-run / new-user UX
+    .\scripts\dev.ps1 --new
+
+    # GC stale sandboxes from killed dev runs and exit
     .\scripts\dev.ps1 --clean
 
     # Print full flag and env var reference

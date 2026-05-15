@@ -23,7 +23,7 @@
 #                         preserve inherited Claude auth env vars (default strips them)
 #
 # Flags:
-#   --clean                Run as a fresh user — points CLAUDETTE_HOME,
+#   --new                  Run as a fresh user — points CLAUDETTE_HOME,
 #                          CLAUDETTE_DATA_DIR, and CLAUDE_CONFIG_DIR at a
 #                          per-PID tmp tree so the launch sees no existing
 #                          state and nothing it writes leaks back to the
@@ -31,6 +31,29 @@
 #                          Claude auth). Useful for testing first-run UX,
 #                          plugin/marketplace flows, and login flows
 #                          without touching ~/.claudette/ or ~/.claude/.
+#   --clone                Run with an rsync'd snapshot of the user's
+#                          existing state — points the same three env
+#                          vars at a stable tmp tree pre-populated from
+#                          ~/.claudette/, the OS data dir holding
+#                          claudette.db, and ~/.claude/. Excludes caches
+#                          and build artifacts (node_modules, target,
+#                          plugins/cache, image-cache, paste-cache,
+#                          logs, updates). The sandbox is NOT removed
+#                          on exit, so a follow-up `dev --clone` re-
+#                          syncs incrementally (rsync delta) — fast.
+#                          claudette.db ships as a raw rsync; quit the
+#                          release app first if you need a guaranteed
+#                          consistent DB snapshot. Mutually exclusive
+#                          with --new.
+#   --clean                Top-level NUKE action: blasts everything under
+#                          ${TMPDIR:-/tmp}/claudette-dev/ (per-PID
+#                          sandboxes and discovery files) and exits
+#                          without launching. Use when previous --new /
+#                          --clone runs were killed with SIGKILL and
+#                          left stale sandboxes behind. No PID check —
+#                          if you have a dev session running, its
+#                          sandbox is removed too; the dev app will
+#                          start seeing missing files mid-session.
 set -euo pipefail
 
 print_usage() {
@@ -42,7 +65,7 @@ and (on macOS) the signed-bundle runner so TCC permissions attach to
 Claudette rather than the terminal.
 
 Flags:
-  --clean              Run as a fresh user — points three env vars at a
+  --new                Run as a fresh user — points three env vars at a
                        per-PID tmp tree so the launch sees no existing
                        state and nothing it writes leaks back to the
                        real user:
@@ -57,6 +80,31 @@ Flags:
                        Cleaned up on exit. Useful for testing first-run
                        UX (welcome card, onboarding) and plugin/auth
                        flows without nuking real user data.
+  --clone              Run with an rsync'd snapshot of the user's
+                       existing state. The sandbox at
+                       \${TMPDIR:-/tmp}/claudette-dev/clone/ is stable
+                       (not per-PID) and is NOT removed on exit, so
+                       a follow-up \`dev --clone\` re-syncs incrementally
+                       — rsync only re-copies what changed in the real
+                       source dirs. Caches and build artifacts
+                       (node_modules, target, plugin/image/paste caches,
+                       logs, updates) are excluded at copy time.
+                       claudette.db is rsync'd raw — quit the release
+                       app first if you need a guaranteed consistent
+                       snapshot. Mutually exclusive with --new. Use
+                       \`dev --clean\` to remove the clone sandbox.
+
+                       Gotcha: cloned workspaces' .git pointers still
+                       reference the real repo's worktree admin dir, so
+                       dev-app writes that touch git state in those
+                       workspaces will hit the real repo. Reads are safe.
+  --clean              Top-level NUKE action — does not launch the app.
+                       Wipes everything under \${TMPDIR:-/tmp}/claudette-dev/
+                       (per-PID sandboxes and discovery files) without
+                       checking PIDs. If you have a dev session running,
+                       its sandbox is removed too — the dev app will
+                       start seeing missing files mid-session. Use to
+                       reset state after SIGKILL'd runs left a mess.
   -h, --help           Print this usage and exit.
   --                   Pass everything after this flag straight to the
                        Tauri CLI (e.g. --release, --no-default-features).
@@ -91,11 +139,21 @@ Discovery file:
 EOF
 }
 
-clean_session=0
+# Stash the full original arg vector before parsing so the mise self-bootstrap
+# re-exec below can forward every flag (including --new / --clone / --clean,
+# which the parser consumes into local variables and would otherwise drop
+# when `$@` is rewritten to passthrough-only just below).
+original_args=("$@")
+
+new_session=0
+clone_session=0
+clean_action=0
 passthrough_args=()
 while (( $# )); do
   case "$1" in
-    --clean) clean_session=1 ;;
+    --new) new_session=1 ;;
+    --clone) clone_session=1 ;;
+    --clean) clean_action=1 ;;
     -h|--help) print_usage; exit 0 ;;
     --) shift; passthrough_args+=("$@"); break ;;
     *) passthrough_args+=("$1") ;;
@@ -103,6 +161,38 @@ while (( $# )); do
   shift
 done
 set -- "${passthrough_args[@]+"${passthrough_args[@]}"}"
+
+if (( new_session && clone_session )); then
+  echo "[dev.sh] --new and --clone are mutually exclusive" >&2
+  exit 2
+fi
+if (( clean_action && (new_session || clone_session) )); then
+  echo "[dev.sh] --clean is a standalone nuke action — don't combine it with --new or --clone" >&2
+  exit 2
+fi
+
+# --clean: nuke everything under the discovery dir. No PID checks — if
+# there are running dev sessions, their sandboxes go with the sweep
+# (the user asked for nuke, that's nuke). Runs before any other setup
+# so `dev --clean` works from any directory, even outside the repo.
+if (( clean_action )); then
+  discovery_dir="${TMPDIR:-/tmp}/claudette-dev"
+  if [[ ! -d "$discovery_dir" ]]; then
+    echo "[dev.sh] no claudette-dev state at $discovery_dir — nothing to clean"
+    exit 0
+  fi
+  echo "▸ Nuking $discovery_dir"
+  removed=0
+  for entry in "$discovery_dir"/* "$discovery_dir"/.[!.]* "$discovery_dir"/..?*; do
+    [[ -e "$entry" ]] || continue
+    echo "  removed: $(basename "$entry")"
+    rm -rf "$entry"
+    removed=$((removed + 1))
+  done
+  rmdir "$discovery_dir" 2>/dev/null || true
+  echo "[dev.sh] nuked $removed entries under $discovery_dir"
+  exit 0
+fi
 
 repo_root="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$repo_root"
@@ -125,7 +215,10 @@ if ! has_tauri_launcher \
    && command -v mise >/dev/null 2>&1 \
    && [[ -f mise.toml ]]; then
     export CLAUDETTE_DEV_MISE_REEXEC=1
-    exec mise exec -- "$0" "$@"
+    # Use original_args (snapshotted before the parser collapsed $@ to
+    # passthrough-only), so flags like --new / --clone / --clean survive
+    # the re-exec instead of getting silently dropped.
+    exec mise exec -- "$0" "${original_args[@]+"${original_args[@]}"}"
 fi
 
 if command -v tauri >/dev/null 2>&1; then
@@ -219,33 +312,238 @@ with open(out, "w") as f:
     }, f)
 ' "$discovery_file" "$$" "$debug_port" "$vite_port" "$started" "$cwd" "$branch"
 
-if (( clean_session )); then
-  # Per-PID sandbox so a parallel `dev --clean` doesn't reuse this session's
+sandbox_root=""
+
+if (( new_session )); then
+  # Per-PID sandbox so a parallel `dev --new` doesn't reuse this session's
   # state. The cleanup trap removes the directory on exit, but it lives
-  # under TMPDIR anyway so a forgotten kill -9 won't leak forever.
+  # under TMPDIR anyway so a forgotten kill -9 won't leak forever (and
+  # `dev --clean` will nuke it later).
   #
   # Three env vars get pointed at the sandbox — only the first two are
   # Claudette-specific. CLAUDE_CONFIG_DIR routes the *Claude CLI's*
   # ~/.claude/ tree, which Claudette actively reads and writes
   # (settings.json, .credentials.json, plugins/, plugins/marketplaces/).
-  # Without that override, a --clean run that touches plugins, auth, or
+  # Without that override, a --new run that touches plugins, auth, or
   # marketplaces silently writes those changes into the user's real
   # ~/.claude/, defeating the "simulate a new user" purpose of the flag.
-  clean_root="$discovery_dir/clean-$$"
-  export CLAUDETTE_HOME="$clean_root/home"
-  export CLAUDETTE_DATA_DIR="$clean_root/data"
-  export CLAUDE_CONFIG_DIR="$clean_root/claude-config"
+  sandbox_root="$discovery_dir/new-$$"
+  export CLAUDETTE_HOME="$sandbox_root/home"
+  export CLAUDETTE_DATA_DIR="$sandbox_root/data"
+  export CLAUDE_CONFIG_DIR="$sandbox_root/claude-config"
   mkdir -p "$CLAUDETTE_HOME" "$CLAUDETTE_DATA_DIR" "$CLAUDE_CONFIG_DIR"
-  echo "▸ Clean session:      $clean_root"
+  echo "▸ Fresh-user session: $sandbox_root"
   echo "▸ CLAUDETTE_HOME:     $CLAUDETTE_HOME"
   echo "▸ CLAUDETTE_DATA_DIR: $CLAUDETTE_DATA_DIR"
   echo "▸ CLAUDE_CONFIG_DIR:  $CLAUDE_CONFIG_DIR"
 fi
 
+if (( clone_session )); then
+  # Stable-path rsync snapshot of the user's real state. Unlike --new,
+  # the sandbox dir is NOT per-PID and is NOT removed on exit, so
+  # re-running `dev --clone` syncs incrementally — rsync only re-copies
+  # what changed. Trade-offs vs the older clonefile-cp approach:
+  #
+  #   * Simpler: one rsync invocation per root with declarative
+  #     --exclude patterns, no post-copy prune step, no sqlite3 backup.
+  #   * Re-runnable: a second `dev --clone` is fast (rsync delta).
+  #   * Cost: rsync doesn't use APFS clonefile, so the first run copies
+  #     full bytes (not block-shared). For one-shot use, the old
+  #     clonefile path was cheaper; for iterative dev, rsync wins.
+  #
+  # claudette.db ships as a raw rsync (no sqlite3 .backup) — that means
+  # if the release app is actively writing the DB during clone, the dev
+  # copy can be torn. Quit release first if you need a guaranteed
+  # consistent snapshot. Most desktops are idle enough that this is fine.
+  #
+  # Capture source paths BEFORE we overwrite the env vars with sandbox
+  # destinations. Mirrors path-resolution in src/path.rs and src/logging.rs.
+  if [[ "$(uname -s)" == "Darwin" ]]; then
+    default_data_dir="$HOME/Library/Application Support/claudette"
+  else
+    default_data_dir="${XDG_DATA_HOME:-$HOME/.local/share}/claudette"
+  fi
+  src_claudette_home="${CLAUDETTE_HOME:-$HOME/.claudette}"
+  src_data_dir="${CLAUDETTE_DATA_DIR:-$default_data_dir}"
+  src_claude_config="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+
+  sandbox_root="$discovery_dir/clone"
+  export CLAUDETTE_HOME="$sandbox_root/home"
+  export CLAUDETTE_DATA_DIR="$sandbox_root/data"
+  export CLAUDE_CONFIG_DIR="$sandbox_root/claude-config"
+  mkdir -p "$sandbox_root"
+
+  if ! command -v rsync >/dev/null 2>&1; then
+    echo "[dev.sh] rsync not found on PATH — required for --clone" >&2
+    exit 127
+  fi
+
+  # One shared exclude list for all three rsyncs. Aggressively drops
+  # dep caches, build outputs, virtualenvs, and tool scratch across
+  # every common language ecosystem — the dev clone exists to exercise
+  # Claudette itself, not to faithfully mirror project state. Patterns
+  # without a leading `/` match by basename at any depth, so e.g.
+  # `--exclude=target` skips every `target/` dir inside cloned
+  # workspaces. File-glob patterns (`*.pyc`, `*.tsbuildinfo`) apply
+  # at every depth too.
+  rsync_excludes=(
+    # Claudette-internal caches under ~/.claudette and ~/.claude
+    --exclude=plugins/cache
+    --exclude=image-cache
+    --exclude=paste-cache
+    --exclude=cache
+    --exclude=.cache
+    --exclude=logs
+    --exclude=updates
+
+    # Rust / Cargo (per-workspace target/ dir)
+    --exclude=target
+
+    # JS / TS — package managers, framework caches, build outputs
+    --exclude=node_modules
+    --exclude=bower_components
+    --exclude=.npm
+    --exclude=.pnpm-store
+    --exclude=.yarn/cache
+    --exclude=.parcel-cache
+    --exclude=.turbo
+    --exclude=.swc
+    --exclude=.vite
+    --exclude=.next
+    --exclude=.nuxt
+    --exclude=.astro
+    --exclude=.docusaurus
+    --exclude=.vuepress
+    --exclude=.vitepress
+    --exclude=.vercel
+    --exclude=.netlify
+    --exclude=.firebase
+    --exclude=.serverless
+    --exclude=.nx
+    --exclude=.rollup.cache
+    --exclude=.esbuild
+    --exclude=.nyc_output
+    --exclude=dist
+    --exclude=build
+    --exclude=*.tsbuildinfo
+
+    # Python — virtualenvs, bytecode, tooling caches
+    --exclude=.venv
+    --exclude=venv
+    --exclude=virtualenv
+    --exclude=__pycache__
+    --exclude=.pytest_cache
+    --exclude=.mypy_cache
+    --exclude=.ruff_cache
+    --exclude=.tox
+    --exclude=.nox
+    --exclude=.ipynb_checkpoints
+    --exclude=*.pyc
+    --exclude=*.pyo
+    --exclude=*.egg-info
+
+    # JVM (Java / Kotlin / Scala / Gradle)
+    --exclude=.gradle
+    --exclude=*.class
+
+    # .NET (obj/ is unambiguously build output; bin/ skipped — too risky)
+    --exclude=obj
+
+    # Haskell
+    --exclude=.stack-work
+    --exclude=dist-newstyle
+
+    # Elixir / Erlang
+    --exclude=_build
+    --exclude=deps
+
+    # OCaml
+    --exclude=_opam
+
+    # Swift / iOS
+    --exclude=.build
+    --exclude=DerivedData
+    --exclude=Pods
+    --exclude=Carthage
+
+    # Ruby
+    --exclude=.bundle
+
+    # Infrastructure
+    --exclude=.terraform
+
+    # Coverage / test artifacts
+    --exclude=coverage
+    --exclude=htmlcov
+    --exclude=.coverage
+    --exclude=playwright-report
+    --exclude=test-results
+
+    # C / C++ object files
+    --exclude=*.o
+    --exclude=*.obj
+    --exclude=*.a
+
+    # Editor swap / backup files
+    --exclude=*.swp
+    --exclude=*.swo
+    --exclude=*~
+
+    # macOS Finder noise + AppleDouble metadata on non-HFS volumes
+    --exclude=.DS_Store
+    --exclude=._*
+  )
+
+  echo "▸ Clone session:      $sandbox_root  (rsync; re-runs sync incrementally)"
+  echo "▸ Source CLAUDETTE_HOME:     $src_claudette_home"
+  echo "▸ Source CLAUDETTE_DATA_DIR: $src_data_dir"
+  echo "▸ Source CLAUDE_CONFIG_DIR:  $src_claude_config"
+
+  rsync_clone() {
+    local src="$1" dst="$2" label="$3"
+    if [[ ! -d "$src" ]]; then
+      # Source removed/relocated since the last --clone — wipe any
+      # previous sandbox contents for this slot rather than silently
+      # reusing a stale mirror. The sandbox dir is stable across runs
+      # (so re-syncs are incremental), which means a stale snapshot
+      # would otherwise hang around until --clean.
+      echo "[dev.sh] clone of $label: $src missing — clearing sandbox $dst" >&2
+      rm -rf "$dst"
+      mkdir -p "$dst"
+      return 0
+    fi
+    mkdir -p "$dst"
+    # `--delete` keeps dest a true mirror of source on re-sync. Special
+    # files (sockets, devices) are skipped by rsync with a one-line
+    # "skipping non-regular file" note; permission-denied entries get
+    # a stderr warning and rsync continues. Both are non-fatal and we
+    # don't want them to abort the launch under `set -e`.
+    if ! rsync -a --delete --info=stats1 "${rsync_excludes[@]}" "$src/" "$dst/"; then
+      echo "[dev.sh] rsync of $label finished with warnings (special files / unreadable entries skipped — continuing)" >&2
+    fi
+    return 0
+  }
+
+  rsync_clone "$src_claudette_home" "$sandbox_root/home"          "CLAUDETTE_HOME"
+  rsync_clone "$src_data_dir"       "$sandbox_root/data"          "CLAUDETTE_DATA_DIR"
+  rsync_clone "$src_claude_config"  "$sandbox_root/claude-config" "CLAUDE_CONFIG_DIR"
+
+  echo "▸ CLAUDETTE_HOME:     $CLAUDETTE_HOME"
+  echo "▸ CLAUDETTE_DATA_DIR: $CLAUDETTE_DATA_DIR"
+  echo "▸ CLAUDE_CONFIG_DIR:  $CLAUDE_CONFIG_DIR"
+  echo "[dev.sh] Note: cloned workspace .git files still point at the real repo's worktree admin dir; dev-app git writes will land in the real repo." >&2
+  echo "[dev.sh] Note: claudette.db was rsync'd raw — quit the release app first if you need a guaranteed-consistent DB snapshot." >&2
+fi
+
 cleanup() {
   rm -f "$discovery_file"
-  if (( clean_session )) && [[ -n "${clean_root:-}" && -d "$clean_root" ]]; then
-    rm -rf "$clean_root"
+  # --new sandboxes are per-PID and ephemeral; remove on exit.
+  # --clone sandboxes are intentionally preserved across runs so the
+  # next `dev --clone` syncs incrementally instead of doing a cold
+  # rsync. Use `dev --clean` to nuke the discovery dir entirely when
+  # you actually want the clone gone.
+  if (( new_session )) && [[ -n "${sandbox_root:-}" && -d "$sandbox_root" ]]; then
+    rm -rf "$sandbox_root"
   fi
 }
 trap cleanup EXIT INT TERM

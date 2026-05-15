@@ -4,6 +4,7 @@ use crate::env::WorkspaceEnv;
 use crate::env_provider::ResolvedEnv;
 
 use super::codex_app_server::CodexAppServerSession;
+use super::pi_sdk::PiSdkSession;
 use super::{
     AgentEvent, AgentSettings, ControlResponsePayload, FileAttachment, PersistentSession,
     TurnHandle,
@@ -14,6 +15,7 @@ use super::{
 pub enum AgentHarnessKind {
     ClaudeCode,
     CodexAppServer,
+    PiSdk,
 }
 
 /// Capabilities that affect which chat/session features a harness can support
@@ -48,6 +50,17 @@ impl AgentHarnessCapabilities {
             remote_control: false,
             mcp_config: true,
             attachments: true,
+        }
+    }
+
+    pub const fn pi_sdk() -> Self {
+        Self {
+            persistent_sessions: true,
+            steer_turn: true,
+            host_permission_prompts: true,
+            remote_control: false,
+            mcp_config: false,
+            attachments: false,
         }
     }
 }
@@ -100,6 +113,7 @@ impl ClaudeCodeHarness {
 pub enum AgentSession {
     ClaudeCode(PersistentSession),
     CodexAppServer(CodexAppServerSession),
+    PiSdk(PiSdkSession),
 }
 
 impl AgentSession {
@@ -111,10 +125,15 @@ impl AgentSession {
         Self::CodexAppServer(session)
     }
 
+    pub fn from_pi_sdk(session: PiSdkSession) -> Self {
+        Self::PiSdk(session)
+    }
+
     pub fn kind(&self) -> AgentHarnessKind {
         match self {
             Self::ClaudeCode(_) => AgentHarnessKind::ClaudeCode,
             Self::CodexAppServer(_) => AgentHarnessKind::CodexAppServer,
+            Self::PiSdk(_) => AgentHarnessKind::PiSdk,
         }
     }
 
@@ -122,6 +141,7 @@ impl AgentSession {
         match self {
             Self::ClaudeCode(_) => AgentHarnessCapabilities::claude_code(),
             Self::CodexAppServer(_) => AgentHarnessCapabilities::codex_app_server(),
+            Self::PiSdk(_) => AgentHarnessCapabilities::pi_sdk(),
         }
     }
 
@@ -129,6 +149,7 @@ impl AgentSession {
         match self {
             Self::ClaudeCode(session) => session.pid(),
             Self::CodexAppServer(session) => session.pid(),
+            Self::PiSdk(session) => session.pid(),
         }
     }
 
@@ -145,6 +166,7 @@ impl AgentSession {
                     .await
             }
             Self::CodexAppServer(session) => session.send_turn(prompt, attachments).await,
+            Self::PiSdk(session) => session.send_turn(prompt, attachments).await,
         }
     }
 
@@ -156,6 +178,7 @@ impl AgentSession {
         match self {
             Self::ClaudeCode(session) => session.steer_user_message(prompt, attachments).await,
             Self::CodexAppServer(session) => session.steer_turn(prompt, attachments).await,
+            Self::PiSdk(session) => session.steer_turn(prompt, attachments).await,
         }
     }
 
@@ -163,6 +186,7 @@ impl AgentSession {
         match self {
             Self::ClaudeCode(session) => session.subscribe(),
             Self::CodexAppServer(session) => session.subscribe(),
+            Self::PiSdk(session) => session.subscribe(),
         }
     }
 
@@ -176,6 +200,7 @@ impl AgentSession {
             Self::CodexAppServer(session) => {
                 session.send_control_response(request_id, response).await
             }
+            Self::PiSdk(session) => session.send_control_response(request_id, response).await,
         }
     }
 
@@ -185,6 +210,7 @@ impl AgentSession {
             Self::CodexAppServer(_) => {
                 Err(format!("Codex app-server cannot stop task `{task_id}` yet"))
             }
+            Self::PiSdk(_) => Err(format!("Pi SDK harness cannot stop task `{task_id}` yet")),
         }
     }
 
@@ -192,6 +218,7 @@ impl AgentSession {
         match self {
             Self::ClaudeCode(session) => super::process::stop_agent(session.pid()).await,
             Self::CodexAppServer(session) => session.interrupt_turn().await,
+            Self::PiSdk(session) => session.interrupt_turn().await,
         }
     }
 
@@ -203,6 +230,9 @@ impl AgentSession {
             Self::ClaudeCode(session) => session.set_remote_control(enabled).await,
             Self::CodexAppServer(_) => {
                 Err("Codex app-server does not support Claude Remote Control".to_string())
+            }
+            Self::PiSdk(_) => {
+                Err("Pi SDK harness does not support Claude Remote Control".to_string())
             }
         }
     }
@@ -244,9 +274,25 @@ mod tests {
     }
 
     #[test]
+    fn pi_sdk_capabilities_are_harness_specific() {
+        assert_eq!(
+            AgentHarnessCapabilities::pi_sdk(),
+            AgentHarnessCapabilities {
+                persistent_sessions: true,
+                steer_turn: true,
+                host_permission_prompts: true,
+                remote_control: false,
+                mcp_config: false,
+                attachments: false,
+            }
+        );
+    }
+
+    #[test]
     fn agent_session_capabilities_stay_explicit_per_variant() {
         assert!(AgentHarnessCapabilities::claude_code().remote_control);
         assert!(!AgentHarnessCapabilities::codex_app_server().remote_control);
+        assert!(!AgentHarnessCapabilities::pi_sdk().remote_control);
     }
 
     #[test]
@@ -260,5 +306,14 @@ mod tests {
             session.capabilities(),
             AgentHarnessCapabilities::codex_app_server()
         );
+    }
+
+    #[test]
+    fn pi_agent_session_reports_native_kind_and_capabilities() {
+        let session = AgentSession::from_pi_sdk(PiSdkSession::new_for_test(5678));
+
+        assert_eq!(session.kind(), AgentHarnessKind::PiSdk);
+        assert_eq!(session.pid(), 5678);
+        assert_eq!(session.capabilities(), AgentHarnessCapabilities::pi_sdk());
     }
 }
