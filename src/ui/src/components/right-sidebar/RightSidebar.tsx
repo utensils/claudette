@@ -6,7 +6,7 @@ import {
 } from "../../utils/pollingIntervals";
 import { ChevronRight, Undo2, Trash2, Plus, Minus, FilePenLine } from "lucide-react";
 import { useAppStore, selectActiveSessionId } from "../../stores/useAppStore";
-import { isPendingForkWorkspace } from "../../utils/workspaceEnvironment";
+import { isPendingPlaceholderWorkspace } from "../../utils/workspaceEnvironment";
 import { useWorkspaceTaskHistory } from "../../hooks/useWorkspaceTaskHistory";
 import {
   discardFile,
@@ -65,8 +65,8 @@ export const RightSidebar = memo(function RightSidebar() {
   // quietly empty during the fork instead of flashing error states.
   // Effects re-fire against the real workspace id once
   // `commitPendingFork` swaps the selection.
-  const isPendingFork = useAppStore((s) =>
-    isPendingForkWorkspace(s, selectedWorkspaceId),
+  const isPendingPlaceholder = useAppStore((s) =>
+    isPendingPlaceholderWorkspace(s, selectedWorkspaceId),
   );
   const remoteConnectionId = ws?.remote_connection_id ?? null;
   const worktreePath = ws?.worktree_path ?? null;
@@ -202,7 +202,7 @@ export const RightSidebar = memo(function RightSidebar() {
     // flight. The empty-list fallback `diffFiles.length === 0 && diffLoading`
     // then renders "Loading..." instead of stale rows.
     clearDiff();
-    if (isPendingFork) {
+    if (isPendingPlaceholder) {
       // Placeholder workspace — the backend doesn't have this id yet.
       // Skip the fetch entirely; the effect re-runs when commit swaps
       // selection to the real workspace.
@@ -226,11 +226,11 @@ export const RightSidebar = memo(function RightSidebar() {
       .finally(() => {
         loadDiffInFlightCount.current -= 1;
       });
-  }, [selectedWorkspaceId, loadDiff, applyDiffResult, setDiffLoading, clearDiff, isDiffResultStillValid, isPendingFork]);
+  }, [selectedWorkspaceId, loadDiff, applyDiffResult, setDiffLoading, clearDiff, isDiffResultStillValid, isPendingPlaceholder]);
 
   // Live-refresh diff files while agent is running.
   useEffect(() => {
-    if (!selectedWorkspaceId || isPendingFork || !isRunning) return;
+    if (!selectedWorkspaceId || isPendingPlaceholder || !isRunning) return;
     const workspaceId = selectedWorkspaceId;
 
     const interval = setInterval(() => {
@@ -252,14 +252,14 @@ export const RightSidebar = memo(function RightSidebar() {
     }, DIFF_AGENT_RUNNING_INTERVAL_MS);
 
     return () => clearInterval(interval);
-  }, [isRunning, selectedWorkspaceId, loadDiff, applyDiffResult, isDiffResultStillValid, isPendingFork]);
+  }, [isRunning, selectedWorkspaceId, loadDiff, applyDiffResult, isDiffResultStillValid, isPendingPlaceholder]);
 
   // Final refresh when agent stops running (after making changes).
   useEffect(() => {
     const wasRunning = prevIsRunning.current;
     prevIsRunning.current = isRunning;
 
-    if (!selectedWorkspaceId || isPendingFork || wasRunning !== true || isRunning) return;
+    if (!selectedWorkspaceId || isPendingPlaceholder || wasRunning !== true || isRunning) return;
     const workspaceId = selectedWorkspaceId;
 
     const timer = setTimeout(() => {
@@ -283,14 +283,14 @@ export const RightSidebar = memo(function RightSidebar() {
     }, 500);
 
     return () => clearTimeout(timer);
-  }, [isRunning, selectedWorkspaceId, loadDiff, applyDiffResult, setDiffLoading, isDiffResultStillValid, isPendingFork]);
+  }, [isRunning, selectedWorkspaceId, loadDiff, applyDiffResult, setDiffLoading, isDiffResultStillValid, isPendingPlaceholder]);
 
   // Idle polling: refresh diff while agent is not running so manually-edited
   // files and external git ops surface without navigating away. The cadence
   // is shared with the Files panel via `utils/pollingIntervals` so the two
   // stay in lockstep.
   useEffect(() => {
-    if (!selectedWorkspaceId || isPendingFork || isRunning) return;
+    if (!selectedWorkspaceId || isPendingPlaceholder || isRunning) return;
     const workspaceId = selectedWorkspaceId;
 
     const interval = setInterval(() => {
@@ -312,7 +312,7 @@ export const RightSidebar = memo(function RightSidebar() {
     }, IDLE_REFRESH_INTERVAL_MS);
 
     return () => clearInterval(interval);
-  }, [isRunning, selectedWorkspaceId, loadDiff, applyDiffResult, isDiffResultStillValid, isPendingFork]);
+  }, [isRunning, selectedWorkspaceId, loadDiff, applyDiffResult, isDiffResultStillValid, isPendingPlaceholder]);
 
   const statusLabel = (status: string | { Renamed: { from: string } }) => {
     if (typeof status === "string") {

@@ -7,6 +7,35 @@ import {
   runWorkspaceSetup,
 } from "../services/tauri";
 import { runAndRecordSetupScript } from "../utils/setupScriptMessage";
+import type { Workspace } from "../types/workspace";
+
+/** Build the optimistic-placeholder Workspace inserted at the start
+ *  of a create flow. The fields are best-effort approximations of
+ *  what the backend will write — `name` matches the generated slug
+ *  (which `createWorkspace` honors), and `branch_name` is left empty
+ *  until the real row replaces this one. The placeholder id uses the
+ *  `pending-create-` prefix so a glance at the store distinguishes
+ *  the two pending-placeholder families ([`pendingCreates`] vs
+ *  [`pendingForks`]) without consulting the side maps. */
+function buildPlaceholderWorkspace(repoId: string, slug: string): Workspace {
+  return {
+    id: `pending-create-${crypto.randomUUID()}`,
+    repository_id: repoId,
+    name: slug,
+    branch_name: "",
+    worktree_path: null,
+    status: "Active",
+    agent_status: "Idle",
+    status_line: "",
+    created_at: new Date().toISOString(),
+    // Float to the bottom of the repo's workspace list so the
+    // placeholder doesn't shove the existing rows around. The real
+    // row's `sort_order` from `db.list_workspaces` lands at the
+    // correct position once `commitPendingCreate` swaps it in.
+    sort_order: Number.MAX_SAFE_INTEGER,
+    remote_connection_id: null,
+  };
+}
 
 /** Outcome surfaced to callers so they can show toasts or chain follow-up work
  *  without prying into the store. The orchestration still performs the core
@@ -57,22 +86,73 @@ export async function createWorkspaceOrchestrated(
   const { selectOnCreate = true } = options;
   const store = useAppStore.getState();
   // Publish to the store so the sidebar's optimistic "preparing
-  // workspace…" placeholder row appears immediately, regardless of
+  // workspace…" indicator row appears immediately, regardless of
   // which UI surface (sidebar +, welcome card, project view, hotkey)
   // triggered the creation. Cleared in `finally` below.
+  //
+  // This flag is the "we don't know the workspace yet" hint that
+  // covers the brief window between the user click and
+  // `generateWorkspaceName` returning. As soon as we have a slug we
+  // switch to the placeholder-workspace pattern (see
+  // `beginPendingCreate` below), which takes over the optimistic UI
+  // and replaces this flag's sidebar row with the actual placeholder.
   store.setCreatingWorkspaceRepoId(repoId);
 
+  // Placeholder is built once we have the slug — the slug becomes
+  // the placeholder workspace's `name`, which the chat panel
+  // displays in the "Preparing workspace…" placard.
+  let placeholderId: string | null = null;
   try {
     const generated = await generateWorkspaceName();
+    // Clear the pre-slug indicator the moment we have a slug, even on
+    // the no-placeholder (`selectOnCreate: false`) path. Otherwise the
+    // backend's early `workspaces-changed (Created)` emit lands the
+    // real workspace row in the sidebar alongside the still-active
+    // "Preparing workspace environment…" indicator — two rows visible
+    // for the entire create window.
+    useAppStore.getState().setCreatingWorkspaceRepoId(null);
+    if (selectOnCreate) {
+      const placeholder = buildPlaceholderWorkspace(repoId, generated.slug);
+      placeholderId = placeholder.id;
+      // Atomic in one set(): insert placeholder row, select it, seed
+      // workspaceEnvironment to "preparing" so the sidebar row
+      // lights up the spinner immediately. Replaces the
+      // creatingWorkspaceRepoId-driven row above.
+      useAppStore.getState().beginPendingCreate(placeholder);
+      // Always expand the parent repo group so the placeholder
+      // (and, post-commit, the real row) is visible. Without this
+      // a user with the repo collapsed would land on the chat panel
+      // for a workspace whose row is hidden.
+      useAppStore.getState().expandRepo(repoId);
+    }
     const result = await createWorkspace(repoId, generated.slug, true);
 
+    // The Rust `Workspace` model doesn't serialize the UI-only
+    // `remote_connection_id` field, so the IPC payload arrives with it
+    // missing entirely. Stamp it as `null` (this is a local create by
+    // definition — the WS server never returns through this path) so
+    // downstream checks that strict-compare `=== null` (rather than
+    // `!= null` or truthy) don't trip on `undefined`. Without this
+    // stamp the env-prep hook treats the row as unhydrated and bails,
+    // stranding the just-created workspace at `"preparing"`. Mirrors
+    // the existing fork-path stamp in ChatPanel.
+    const stamped = { ...result.workspace, remote_connection_id: null };
+
     const post = useAppStore.getState();
-    post.addWorkspace(result.workspace);
-    // Always expand the parent repo group — leaving a freshly created
-    // workspace hidden inside a collapsed repo (because the user
-    // collapsed it earlier or hadn't expanded it yet) is disorienting.
-    post.expandRepo(repoId);
-    if (selectOnCreate) post.selectWorkspace(result.workspace.id);
+    if (placeholderId) {
+      // Atomic placeholder→real swap. Migrates the seeded
+      // workspaceEnvironment to the real id, dedupes against the row
+      // that `workspaces-changed` may already have inserted, and moves
+      // the selection.
+      post.commitPendingCreate(placeholderId, stamped);
+      placeholderId = null;
+    } else {
+      // selectOnCreate === false: orchestration was asked not to
+      // navigate, so no placeholder was inserted. Mirror the old
+      // non-optimistic flow.
+      post.addWorkspace(stamped);
+      post.expandRepo(repoId);
+    }
 
     const sessionId = result.default_session_id;
     if (generated.message) {
@@ -134,6 +214,15 @@ export async function createWorkspaceOrchestrated(
     return { workspaceId: result.workspace.id, sessionId };
   } catch (e) {
     console.error("Failed to create workspace:", e);
+    // Tear down the optimistic placeholder so the user isn't stranded
+    // on a selected row that will never resolve. Restore selection to
+    // null (we have no good fallback — the user clicked New, so
+    // taking them back to whatever they had before would be confusing
+    // too; null lands them on the dashboard which is the safest
+    // recovery surface).
+    if (placeholderId) {
+      useAppStore.getState().cancelPendingCreate(placeholderId, null);
+    }
     // Re-throw so the caller decides whether to alert / toast.
     throw e;
   } finally {

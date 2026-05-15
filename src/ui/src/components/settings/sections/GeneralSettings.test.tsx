@@ -17,6 +17,8 @@ type MockAuthStatus = {
 const appStore = vi.hoisted(() => ({
   worktreeBaseDir: "/tmp/workspaces",
   setWorktreeBaseDir: vi.fn(),
+  claudetteTerminalEnabled: true,
+  setClaudetteTerminalEnabled: vi.fn(),
   settingsFocus: null as string | null,
   clearSettingsFocus: vi.fn(),
   claudeAuthFailure: null as { messageId: string | null; error: string } | null,

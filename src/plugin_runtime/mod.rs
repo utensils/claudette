@@ -610,8 +610,40 @@ impl PluginRegistry {
         // now scale with the plugin's manifest default + any global /
         // per-repo overrides — see `effective_timeout`.
         let timeout = self.effective_timeout(plugin_name, Some(&workspace_info));
-        self.call_operation_with_timeout(plugin_name, operation, args, workspace_info, timeout)
-            .await
+        self.call_operation_with_timeout(
+            plugin_name,
+            operation,
+            args,
+            workspace_info,
+            timeout,
+            None,
+        )
+        .await
+    }
+
+    /// Variant of [`call_operation`] that attaches a [`StreamingSink`]
+    /// to the plugin's host context so any `host.exec_streaming` call
+    /// (or `host.console`) the plugin makes forwards lines to the
+    /// sink. Pass `None` for the sink to get the same behavior as
+    /// [`call_operation`].
+    pub async fn call_operation_streaming(
+        &self,
+        plugin_name: &str,
+        operation: &str,
+        args: serde_json::Value,
+        workspace_info: WorkspaceInfo,
+        streaming_sink: Option<std::sync::Arc<dyn host_api::StreamingSink>>,
+    ) -> Result<serde_json::Value, PluginError> {
+        let timeout = self.effective_timeout(plugin_name, Some(&workspace_info));
+        self.call_operation_with_timeout(
+            plugin_name,
+            operation,
+            args,
+            workspace_info,
+            timeout,
+            streaming_sink,
+        )
+        .await
     }
 
     async fn call_operation_with_timeout(
@@ -621,6 +653,7 @@ impl PluginRegistry {
         args: serde_json::Value,
         workspace_info: WorkspaceInfo,
         operation_timeout: Duration,
+        streaming_sink: Option<std::sync::Arc<dyn host_api::StreamingSink>>,
     ) -> Result<serde_json::Value, PluginError> {
         let plugin = self
             .plugins
@@ -681,6 +714,7 @@ impl PluginRegistry {
             workspace_info,
             config,
             exec_timeout: operation_timeout,
+            streaming_sink,
         };
 
         let lua =
@@ -1152,6 +1186,7 @@ mod tests {
                 serde_json::json!({}),
                 test_workspace(),
                 Duration::from_millis(100),
+                None,
             ),
         )
         .await
@@ -1191,6 +1226,7 @@ mod tests {
                 serde_json::json!({}),
                 test_workspace(),
                 Duration::from_millis(100),
+                None,
             ),
         )
         .await
@@ -1227,6 +1263,7 @@ mod tests {
                 serde_json::json!({}),
                 test_workspace(),
                 Duration::from_millis(100),
+                None,
             )
             .await;
 

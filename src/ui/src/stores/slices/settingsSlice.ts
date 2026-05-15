@@ -49,9 +49,11 @@ export interface SettingsSlice {
   extendedToolCallOutput: boolean;
   setExtendedToolCallOutput: (enabled: boolean) => void;
 
-  // Experimental
+  // Claudette Terminal (read-only mirror of agent shell + workspace provisioning output)
   claudetteTerminalEnabled: boolean;
   setClaudetteTerminalEnabled: (enabled: boolean) => void;
+
+  // Experimental
   usageInsightsEnabled: boolean;
   setUsageInsightsEnabled: (enabled: boolean) => void;
   pluginManagementEnabled: boolean;
@@ -141,7 +143,7 @@ export const createSettingsSlice: StateCreator<
   setExtendedToolCallOutput: (enabled) =>
     set({ extendedToolCallOutput: enabled }),
 
-  claudetteTerminalEnabled: false,
+  claudetteTerminalEnabled: true,
   setClaudetteTerminalEnabled: (enabled) =>
     set({ claudetteTerminalEnabled: enabled }),
   usageInsightsEnabled: false,

@@ -7,12 +7,6 @@ import styles from "../Settings.module.css";
 
 export function ExperimentalSettings() {
   const { t } = useTranslation("settings");
-  const claudetteTerminalEnabled = useAppStore(
-    (s) => s.claudetteTerminalEnabled,
-  );
-  const setClaudetteTerminalEnabled = useAppStore(
-    (s) => s.setClaudetteTerminalEnabled,
-  );
   const usageInsightsEnabled = useAppStore((s) => s.usageInsightsEnabled);
   const setUsageInsightsEnabled = useAppStore((s) => s.setUsageInsightsEnabled);
   const pluginManagementEnabled = useAppStore((s) => s.pluginManagementEnabled);
@@ -31,18 +25,6 @@ export function ExperimentalSettings() {
   );
   const [error, setError] = useState<string | null>(null);
   const [usageConfirmOpen, setUsageConfirmOpen] = useState(false);
-
-  const handleClaudetteTerminalToggle = async () => {
-    const next = !claudetteTerminalEnabled;
-    setClaudetteTerminalEnabled(next);
-    try {
-      setError(null);
-      await setAppSetting("claudette_terminal_enabled", next ? "true" : "false");
-    } catch (e) {
-      setClaudetteTerminalEnabled(!next);
-      setError(String(e));
-    }
-  };
 
   const applyUsageInsights = async (next: boolean) => {
     setUsageInsightsEnabled(next);
@@ -108,29 +90,6 @@ export function ExperimentalSettings() {
       <h2 className={styles.sectionTitle}>{t("experimental_title")}</h2>
 
       {error && <div className={styles.error}>{error}</div>}
-
-      <div className={styles.settingRow}>
-        <div className={styles.settingInfo}>
-          <div className={styles.settingLabel}>
-            {t("experimental_claudette_terminal")}
-          </div>
-          <div className={styles.settingDescription}>
-            {t("experimental_claudette_terminal_desc")}
-          </div>
-        </div>
-        <div className={styles.settingControl}>
-          <button
-            className={styles.toggle}
-            role="switch"
-            aria-checked={claudetteTerminalEnabled}
-            aria-label={t("experimental_claudette_terminal_aria")}
-            data-checked={claudetteTerminalEnabled}
-            onClick={handleClaudetteTerminalToggle}
-          >
-            <div className={styles.toggleKnob} />
-          </button>
-        </div>
-      </div>
 
       <div className={styles.settingRow}>
         <div className={styles.settingInfo}>

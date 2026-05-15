@@ -24,6 +24,40 @@ export function isPendingForkWorkspace(
 }
 
 /**
+ * Sibling of [`isPendingForkWorkspace`] for the optimistic-create
+ * placeholder. Returns `true` while the workspace id is an in-flight
+ * create that hasn't been committed yet. Same use case: short-circuit
+ * any workspace-keyed loader (FilesPanel, RightSidebar diff sync,
+ * task history, env-prep IPC) so the user doesn't see a "Workspace
+ * not found" toast against a placeholder id that has no backing DB
+ * row. The placeholder is removed by `commitPendingCreate` (success)
+ * or `cancelPendingCreate` (error), at which point the same loaders
+ * fire against the real id naturally.
+ */
+export function isPendingCreateWorkspace(
+  state: AppState,
+  workspaceId: string | null,
+): boolean {
+  if (!workspaceId) return false;
+  return !!state.pendingCreates[workspaceId];
+}
+
+/**
+ * Convenience union — true for either pending-fork or pending-create
+ * placeholders. Most workspace-keyed loaders want to skip both
+ * equally, so callers can use this instead of OR-ing the two checks.
+ */
+export function isPendingPlaceholderWorkspace(
+  state: AppState,
+  workspaceId: string | null,
+): boolean {
+  return (
+    isPendingForkWorkspace(state, workspaceId) ||
+    isPendingCreateWorkspace(state, workspaceId)
+  );
+}
+
+/**
  * Whether the workspace is in the middle of an env-provider resolve and
  * UI surfaces (terminal new-tab button, chat composer, etc.) should
  * block waiting for it. Shared by `TerminalPanel` and `ChatPanel` so

@@ -11,8 +11,9 @@
 
 use std::future::Future;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
-use crate::plugin_runtime::host_api::WorkspaceInfo;
+use crate::plugin_runtime::host_api::{StreamingSink, WorkspaceInfo};
 use crate::plugin_runtime::manifest::PluginKind;
 use crate::plugin_runtime::{PluginError, PluginRegistry};
 
@@ -74,11 +75,28 @@ pub trait EnvProviderBackend: Send + Sync {
 /// Production backend wrapping a [`PluginRegistry`].
 pub struct PluginRegistryBackend<'a> {
     pub registry: &'a PluginRegistry,
+    /// Optional sink forwarded into every `call_operation_streaming`
+    /// invocation. When set, env-provider plugins that call
+    /// `host.exec_streaming` (and `host.console`) emit their stdout
+    /// and stderr lines through here — typically wired to the
+    /// `workspace_env_output` Tauri event in the GUI.
+    streaming_sink: Option<Arc<dyn StreamingSink>>,
 }
 
 impl<'a> PluginRegistryBackend<'a> {
     pub fn new(registry: &'a PluginRegistry) -> Self {
-        Self { registry }
+        Self {
+            registry,
+            streaming_sink: None,
+        }
+    }
+
+    /// Builder-style attach of a [`StreamingSink`] so the dispatcher
+    /// can hand the same sink to every plugin invocation without each
+    /// `detect`/`export` having to thread it through manually.
+    pub fn with_streaming_sink(mut self, sink: Option<Arc<dyn StreamingSink>>) -> Self {
+        self.streaming_sink = sink;
+        self
     }
 }
 
@@ -121,7 +139,13 @@ impl EnvProviderBackend for PluginRegistryBackend<'_> {
         });
         let result = self
             .registry
-            .call_operation(plugin, "detect", args, ws_info.clone())
+            .call_operation_streaming(
+                plugin,
+                "detect",
+                args,
+                ws_info.clone(),
+                self.streaming_sink.clone(),
+            )
             .await?;
         Ok(result.as_bool().unwrap_or(false))
     }
@@ -137,7 +161,13 @@ impl EnvProviderBackend for PluginRegistryBackend<'_> {
         });
         let result = self
             .registry
-            .call_operation(plugin, "export", args, ws_info.clone())
+            .call_operation_streaming(
+                plugin,
+                "export",
+                args,
+                ws_info.clone(),
+                self.streaming_sink.clone(),
+            )
             .await?;
 
         // Expected shape: { env: { KEY: "value" | nil, ... }, watched: ["path", ...] }

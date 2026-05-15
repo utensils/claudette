@@ -107,21 +107,21 @@ describe("effortLevel (per-workspace)", () => {
   });
 });
 
-describe("experimental Claudette terminal setting", () => {
-  beforeEach(() => {
-    useAppStore.setState({ claudetteTerminalEnabled: false });
-  });
-
-  it("defaults to disabled so the read-only agent terminal is opt-in", () => {
-    expect(useAppStore.getState().claudetteTerminalEnabled).toBe(false);
-  });
-
-  it("can be enabled and disabled from settings state", () => {
-    useAppStore.getState().setClaudetteTerminalEnabled(true);
+describe("Claudette terminal setting", () => {
+  it("defaults to enabled so workspace provisioning + agent shell output are visible out of the box", () => {
+    // Read the default rather than resetting first — this asserts the
+    // initial-state contract callers (GeneralSettings, TerminalPanel) rely
+    // on. Flipping the default to `true` was the whole point of
+    // promoting this out of Experimental.
     expect(useAppStore.getState().claudetteTerminalEnabled).toBe(true);
+  });
 
+  it("can be toggled off and back on from settings state", () => {
     useAppStore.getState().setClaudetteTerminalEnabled(false);
     expect(useAppStore.getState().claudetteTerminalEnabled).toBe(false);
+
+    useAppStore.getState().setClaudetteTerminalEnabled(true);
+    expect(useAppStore.getState().claudetteTerminalEnabled).toBe(true);
   });
 });
 

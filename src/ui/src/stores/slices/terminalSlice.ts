@@ -51,6 +51,7 @@ export interface TerminalSlice {
   ) => void;
   setActiveTerminalTab: (wsId: string, id: number | null) => void;
   toggleTerminalPanel: () => void;
+  setTerminalPanelVisible: (visible: boolean) => void;
   setWorkspaceRunningCommand: (
     wsId: string,
     ptyId: number,
@@ -203,6 +204,7 @@ export const createTerminalSlice: StateCreator<
     })),
   toggleTerminalPanel: () =>
     set((s) => ({ terminalPanelVisible: !s.terminalPanelVisible })),
+  setTerminalPanelVisible: (visible) => set({ terminalPanelVisible: visible }),
   setWorkspaceRunningCommand: (wsId, ptyId, command) =>
     set((s) => {
       const wsMap = { ...(s.workspaceTerminalCommands[wsId] ?? {}) };

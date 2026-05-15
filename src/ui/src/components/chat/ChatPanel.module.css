@@ -68,6 +68,19 @@
   line-height: 1.4;
 }
 
+/* Sub-line under the main placard text — used by the
+   optimistic-create placard to show the generated workspace slug as
+   secondary info, so the primary "Preparing workspace in <repo>…"
+   line stays readable while the slug is still visible. Muted color
+   + smaller font matches the visual weight of a hint. */
+.preparingForkSub {
+  margin-top: 6px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-muted);
+  letter-spacing: 0;
+}
+
 @keyframes preparingForkSpin {
   to {
     transform: rotate(360deg);

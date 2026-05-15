@@ -142,15 +142,16 @@ pub async fn spawn_pty(
         // settings page (which awaits `list_claudette_plugins`) is
         // never blocked by a slow PTY-spawn env resolve.
         let registry = state.plugins_snapshot().await;
-        let progress =
-            crate::commands::env::TauriEnvProgressSink::new(app.clone(), workspace_id.clone());
-        claudette::env_provider::resolve_with_registry_and_progress(
+        let (progress, output) =
+            crate::commands::env::make_env_sinks(app.clone(), workspace_id.clone());
+        claudette::env_provider::resolve_with_registry_streaming(
             &registry,
             &state.env_cache,
             std::path::Path::new(&working_dir),
             &ws_info,
             &disabled_env_providers,
             Some(&progress),
+            Some(output),
         )
         .await
     };

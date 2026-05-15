@@ -17,9 +17,10 @@ use std::time::Duration;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
 
+use claudette::agent::background::workspace_terminal_output_path;
 use claudette::db::Database;
 use claudette::env_provider::EnvWatcher;
-use claudette::plugin_runtime::host_api::WorkspaceInfo;
+use claudette::plugin_runtime::host_api::{OutputStream, StreamingSink, WorkspaceInfo};
 use claudette::plugin_runtime::manifest::PluginKind;
 
 use crate::state::AppState;
@@ -114,6 +115,128 @@ impl claudette::env_provider::EnvProgressSink for TauriEnvProgressSink {
             },
         );
     }
+}
+
+/// Workspace-scoped sink that funnels env-provider stdout/stderr and
+/// setup-script stdout/stderr into a single line-oriented file at
+/// [`workspace_terminal_output_path`]. The Claudette Terminal tab created
+/// during workspace provisioning tails that file via the existing
+/// `start_agent_task_tail` plumbing, so xterm.js renders nix's `-L`
+/// build chatter, direnv's status spam, and `bun install` progress with
+/// their native ANSI colors — no parallel React renderer, no event
+/// serialization tax, no stripped escape codes.
+///
+/// One instance implements **both** [`StreamingSink`] (env-provider
+/// host.exec_streaming) and [`claudette::ops::workspace::SetupOutputSink`]
+/// (setup-script runner) so a single Arc can be cloned into both call
+/// sites and produce a coherent transcript.
+///
+/// A subtle bit: we emit a dim cyan section header (`── plugin ──`)
+/// whenever the plugin name changes between consecutive lines. Without
+/// this the user can't tell where direnv stops and nix-devshell starts
+/// — both stream the same kind of build chatter to the same buffer.
+pub struct WorkspaceTerminalFileSink {
+    output_path: std::path::PathBuf,
+    /// Last plugin name we emitted a header for. We don't lock for
+    /// reads — the worst case on a torn read is a duplicate header.
+    last_plugin: std::sync::Mutex<Option<String>>,
+}
+
+impl WorkspaceTerminalFileSink {
+    pub fn new(workspace_id: &str) -> Self {
+        Self {
+            output_path: workspace_terminal_output_path(workspace_id),
+            last_plugin: std::sync::Mutex::new(None),
+        }
+    }
+
+    /// Best-effort append to the workspace terminal file. The destination
+    /// lives in `temp_dir()` — if a write fails (permissions, disk
+    /// full), dropping a line is preferable to spamming logs from the
+    /// hot streaming path.
+    fn append(&self, bytes: &[u8]) {
+        if let Some(parent) = self.output_path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        if let Ok(mut file) = std::fs::OpenOptions::new()
+            .append(true)
+            .create(true)
+            .open(&self.output_path)
+        {
+            use std::io::Write;
+            let _ = file.write_all(bytes);
+        }
+    }
+
+    /// Emit a `── <plugin> ──` header when the plugin name changes
+    /// between two consecutive lines. Bold cyan so it's easy to scan in
+    /// a wall of build output but doesn't compete with whatever ANSI
+    /// the plugin's own tool emits (nix uses yellow/blue; direnv uses
+    /// magenta).
+    fn maybe_emit_header(&self, plugin: &str) {
+        let mut last = match self.last_plugin.lock() {
+            Ok(g) => g,
+            Err(p) => p.into_inner(),
+        };
+        if last.as_deref() == Some(plugin) {
+            return;
+        }
+        *last = Some(plugin.to_string());
+        let header = format!("\r\n\x1b[1;36m── {plugin} ──\x1b[0m\r\n");
+        self.append(header.as_bytes());
+    }
+}
+
+impl StreamingSink for WorkspaceTerminalFileSink {
+    fn line(&self, plugin: &str, _stream: OutputStream, line: String) {
+        self.maybe_emit_header(plugin);
+        // xterm wants CRLF line endings. Lua's host.exec_streaming reader
+        // hands us a `line` already stripped of the trailing newline.
+        let mut bytes = line.into_bytes();
+        bytes.extend_from_slice(b"\r\n");
+        self.append(&bytes);
+    }
+}
+
+impl claudette::ops::workspace::SetupOutputSink for WorkspaceTerminalFileSink {
+    fn line(&self, _stream: claudette::ops::workspace::SetupOutputStream, line: String) {
+        self.maybe_emit_header("setup-script");
+        let mut bytes = line.into_bytes();
+        bytes.extend_from_slice(b"\r\n");
+        self.append(&bytes);
+    }
+}
+
+/// Build the matched pair of sinks every Tauri-side env-resolve call
+/// site needs: a [`TauriEnvProgressSink`] (for per-plugin loading
+/// state) and an [`Arc<dyn StreamingSink>`] (for live stdout/stderr
+/// from `host.exec_streaming`). The progress sink fans out via Tauri
+/// events for the spinner; the streaming sink writes line-oriented
+/// bytes into the workspace's Claudette Terminal output file.
+///
+/// Callers feed them into [`resolve_with_registry_streaming`]:
+/// ```ignore
+/// let (progress, output) = make_env_sinks(app.clone(), ws_id.clone());
+/// resolve_with_registry_streaming(
+///     &registry, &cache, &worktree, &ws_info, &disabled,
+///     Some(&progress), Some(output),
+/// ).await;
+/// ```
+pub fn make_env_sinks(
+    app: AppHandle,
+    workspace_id: String,
+) -> (TauriEnvProgressSink, Arc<dyn StreamingSink>) {
+    let progress = TauriEnvProgressSink::new(app, workspace_id.clone());
+    let output: Arc<dyn StreamingSink> = Arc::new(WorkspaceTerminalFileSink::new(&workspace_id));
+    (progress, output)
+}
+
+/// Shared constructor for the setup-script + env-provider sink. Returned
+/// as a concrete `Arc<WorkspaceTerminalFileSink>` because both call
+/// sites (workspace.rs setup runner; env.rs resolve loop) coerce it into
+/// their respective trait object on demand.
+pub fn make_workspace_terminal_sink(workspace_id: &str) -> Arc<WorkspaceTerminalFileSink> {
+    Arc::new(WorkspaceTerminalFileSink::new(workspace_id))
 }
 
 /// Emit a `Complete` event whenever the sink is dropped. This is the
@@ -272,14 +395,15 @@ pub async fn get_env_sources(
         .iter()
         .map(|(name, p)| (name.clone(), p.manifest.display_name.clone()))
         .collect();
-    let progress = TauriEnvProgressSink::new(app, ws_info.id.clone());
-    let resolved = claudette::env_provider::resolve_with_registry_and_progress(
+    let (progress, output) = make_env_sinks(app, ws_info.id.clone());
+    let resolved = claudette::env_provider::resolve_with_registry_streaming(
         &registry,
         &state.env_cache,
         Path::new(&worktree),
         &ws_info,
         &disabled,
         Some(&progress),
+        Some(output),
     )
     .await;
 
@@ -639,14 +763,15 @@ pub async fn prepare_workspace_environment(
     // Snapshot — see `plugins_snapshot` doc; this command can run
     // ~120s on cold env-providers and must not stall the Plugins UI.
     let registry = state.plugins_snapshot().await;
-    let progress = TauriEnvProgressSink::new(app.clone(), ws_info.id.clone());
-    let resolved = claudette::env_provider::resolve_with_registry_and_progress(
+    let (progress, output) = make_env_sinks(app.clone(), ws_info.id.clone());
+    let resolved = claudette::env_provider::resolve_with_registry_streaming(
         &registry,
         &state.env_cache,
         Path::new(&worktree),
         &ws_info,
         &disabled,
         Some(&progress),
+        Some(output),
     )
     .await;
     register_resolved_with_watcher(&state, Path::new(&worktree), &resolved.sources).await;
@@ -1108,12 +1233,17 @@ async fn maybe_emit_trust_needed_for_changed_env(
             disabled.insert(name.clone());
         }
     }
-    let resolved = claudette::env_provider::resolve_with_registry_and_progress(
+    // Watcher-driven invalidation: pass `None` for both sinks. The
+    // progress spinner stays silent so a transient mtime bump doesn't
+    // flash the UI, and the streaming output is also suppressed since
+    // there's no panel listening for an off-screen re-resolve.
+    let resolved = claudette::env_provider::resolve_with_registry_streaming(
         &registry,
         &state.env_cache,
         Path::new(&worktree),
         &ws_info,
         &disabled,
+        None,
         None,
     )
     .await;
@@ -1271,14 +1401,15 @@ pub fn spawn_repo_env_warmup(app: AppHandle, repo_id: String) {
         // Best-effort warmup — snapshot so the resolve doesn't stall
         // any concurrent Plugins/SCM commands.
         let registry = state.plugins_snapshot().await;
-        let progress = TauriEnvProgressSink::new(app.clone(), ws_info.id.clone());
-        let resolved = claudette::env_provider::resolve_with_registry_and_progress(
+        let (progress, output) = make_env_sinks(app.clone(), ws_info.id.clone());
+        let resolved = claudette::env_provider::resolve_with_registry_streaming(
             &registry,
             &state.env_cache,
             Path::new(&repo.path),
             &ws_info,
             &disabled,
             Some(&progress),
+            Some(output),
         )
         .await;
         register_resolved_with_watcher(&state, Path::new(&repo.path), &resolved.sources).await;

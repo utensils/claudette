@@ -406,6 +406,9 @@ export const TerminalPanel = memo(function TerminalPanel() {
   const removeTerminalTab = useAppStore((s) => s.removeTerminalTab);
   const setActiveTerminalTab = useAppStore((s) => s.setActiveTerminalTab);
   const toggleTerminalPanel = useAppStore((s) => s.toggleTerminalPanel);
+  const setTerminalPanelVisible = useAppStore(
+    (s) => s.setTerminalPanelVisible,
+  );
   const terminalPanelVisible = useAppStore((s) => s.terminalPanelVisible);
   const claudetteTerminalEnabled = useAppStore(
     (s) => s.claudetteTerminalEnabled,
@@ -659,12 +662,109 @@ export const TerminalPanel = memo(function TerminalPanel() {
     if (!terminalPanelVisible) autoCreatedRef.current = null;
   }, [terminalPanelVisible]);
 
+  // Auto-open the panel AND focus the Claudette Terminal tab when env
+  // provisioning starts on the selected workspace, so the user sees
+  // nix/direnv/setup output stream live without having to discover the
+  // toggle or hunt for the right tab. Tracked across renders so we
+  // only fire on the transition into preparing — re-running
+  // provisioning shouldn't re-open the panel if the user explicitly
+  // closed it.
+  //
+  // Gated on `claudetteTerminalEnabled`: with the read-only mirror
+  // turned off in Settings > General, the only tab in this panel is
+  // whatever PTY the user created manually. Auto-opening the panel for
+  // env-provider output the user opted out of would surface a blank
+  // panel (since `agent_task` tabs are filtered out below) which is
+  // worse than the no-op the opt-out promised.
+  //
+  // Two-step (open → focus) because the tab load is async: the
+  // load-tabs effect below populates `terminalTabs[wsId]` only after
+  // the panel becomes visible, so we apply focus in a follow-up effect
+  // that watches the populated tab list rather than racing it here.
+  const lastAutoOpenedForRef = useRef<string | null>(null);
+  const lastAutoFocusedForRef = useRef<string | null>(null);
+  // Set true when our auto-focus effect is about to switch the active
+  // terminal tab to the Claudette Terminal during env preparation.
+  // The focus-management useLayoutEffect below consumes this on its
+  // next run: it updates `lastFocusKeyRef` to the new tab+pane key
+  // (so a later user-driven activation still fires) but skips the
+  // actual `helper.focus(...)` call. Net effect: the user sees the
+  // provisioning output land in view, but keyboard focus stays where
+  // they had it — typically the chat composer.
+  const suppressNextTerminalFocusRef = useRef(false);
+  useEffect(() => {
+    if (
+      !selectedWorkspaceId ||
+      !workspaceEnvironmentPreparing ||
+      !claudetteTerminalEnabled
+    ) {
+      lastAutoOpenedForRef.current = null;
+      lastAutoFocusedForRef.current = null;
+      return;
+    }
+    if (lastAutoOpenedForRef.current === selectedWorkspaceId) return;
+    lastAutoOpenedForRef.current = selectedWorkspaceId;
+    if (!terminalPanelVisible) {
+      setTerminalPanelVisible(true);
+    }
+  }, [
+    selectedWorkspaceId,
+    workspaceEnvironmentPreparing,
+    claudetteTerminalEnabled,
+    terminalPanelVisible,
+    setTerminalPanelVisible,
+  ]);
+
+  // Follow-up: once the workspace's tab list lands in the store,
+  // promote the Claudette Terminal (the AgentTask-kind tab) to active
+  // so the user lands on the streaming provisioning output even if
+  // their previous active tab in this workspace was a PTY. Fires
+  // exactly once per workspace's transition into preparing — if they
+  // click away to Terminal 1 mid-resolve we honor that, no reflux.
+  useEffect(() => {
+    if (
+      !selectedWorkspaceId ||
+      !workspaceEnvironmentPreparing ||
+      !claudetteTerminalEnabled
+    )
+      return;
+    if (lastAutoFocusedForRef.current === selectedWorkspaceId) return;
+    const tabs = terminalTabs[selectedWorkspaceId];
+    if (!tabs || tabs.length === 0) return;
+    const claudette = tabs.find((tab) => tab.kind === "agent_task");
+    if (!claudette) return;
+    if (useAppStore.getState().activeTerminalTabId[selectedWorkspaceId] === claudette.id) {
+      // Already the active tab — no need to switch, and triggering a
+      // no-op set would still re-fire the focus useLayoutEffect.
+      lastAutoFocusedForRef.current = selectedWorkspaceId;
+      return;
+    }
+    lastAutoFocusedForRef.current = selectedWorkspaceId;
+    // Tell the focus layout effect to skip keyboard-focus stealing
+    // for the activation we're about to dispatch. The user's
+    // attention belongs in the chat composer while provisioning runs.
+    suppressNextTerminalFocusRef.current = true;
+    setActiveTerminalTab(selectedWorkspaceId, claudette.id);
+  }, [
+    selectedWorkspaceId,
+    workspaceEnvironmentPreparing,
+    claudetteTerminalEnabled,
+    terminalTabs,
+    setActiveTerminalTab,
+  ]);
+
   // Load tabs on workspace + panel-visibility change.
   useEffect(() => {
     if (!selectedWorkspaceId || !terminalPanelVisible) return;
-    if (workspaceEnvironmentPreparing) return;
     const wsId = selectedWorkspaceId;
     listTerminalTabs(wsId).then(async (t) => {
+      // Bind the workspace's Claudette Terminal tab to the active
+      // chat session id so background-task code can look up the tab
+      // by session. The tab's `output_path` field is workspace-scoped
+      // (see `workspace_terminal_output_path`) and unchanged by this
+      // call — agent shell, env-provider, and setup-script all write
+      // to that single file so the user gets one unified transcript
+      // per workspace and never loses provisioning history.
       if (claudetteTerminalEnabled && selectedSessionId) {
         await ensureClaudetteTerminalTab(wsId, selectedSessionId);
         t = await listTerminalTabs(wsId);
@@ -681,7 +781,16 @@ export const TerminalPanel = memo(function TerminalPanel() {
         if (!activeStillValid) {
           setActiveTerminalTab(wsId, visibleTabs[0]?.id ?? t[0].id);
         }
-        if (!t.some((tab) => tab.kind !== "agent_task")) {
+        // Auto-spawn a regular PTY tab so the workspace always has
+        // something writable. Suppress while env is still preparing —
+        // spawning a PTY against an unprimed worktree would race the
+        // env-provider resolve and miss the merged shell env. The
+        // read-only Claudette Terminal above is unaffected: it just
+        // tails a file.
+        if (
+          !workspaceEnvironmentPreparing &&
+          !t.some((tab) => tab.kind !== "agent_task")
+        ) {
           try {
             const tab = await createTerminalTab(wsId);
             addTerminalTab(wsId, tab);
@@ -690,7 +799,10 @@ export const TerminalPanel = memo(function TerminalPanel() {
             console.error("Failed to create terminal tab:", err);
           }
         }
-      } else if (autoCreatedRef.current !== wsId) {
+      } else if (
+        !workspaceEnvironmentPreparing &&
+        autoCreatedRef.current !== wsId
+      ) {
         autoCreatedRef.current = wsId;
         try {
           const tab = await createTerminalTab(wsId);
@@ -1221,6 +1333,16 @@ export const TerminalPanel = memo(function TerminalPanel() {
         ? `${activeTerminalTabId}:${nextFocusedLeafId}`
         : null;
     if (nextFocusKey !== null && nextFocusKey !== lastFocusKeyRef.current) {
+      // Programmatic activation by the env-prep auto-focus effect: the
+      // user should see the new active tab but their typing context
+      // (chat composer) must not be stolen. Record the new focus key
+      // so a later genuine activation still fires, but skip the actual
+      // focus() call.
+      if (suppressNextTerminalFocusRef.current) {
+        suppressNextTerminalFocusRef.current = false;
+        lastFocusKeyRef.current = nextFocusKey;
+        return;
+      }
       const inst = instancesRef.current.get(nextFocusedLeafId!);
       if (
         inst &&

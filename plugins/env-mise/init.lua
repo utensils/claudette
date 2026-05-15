@@ -32,7 +32,11 @@ function M.detect(args)
 end
 
 function M.export(args)
-    local result = host.exec("mise", { "env", "--json" })
+    -- Streaming so mise's own status output (config-trust warnings,
+    -- tool install lines when the user has them queued) reaches the
+    -- EnvProvisioningConsole as it happens. `--json` keeps stdout
+    -- machine-readable; stderr carries the human-readable progress.
+    local result = host.exec_streaming("mise", { "env", "--json" })
 
     -- Per-repo trust: when mise reports config files as not trusted
     -- and the user has authorized mise for this repository (via the
@@ -42,8 +46,8 @@ function M.export(args)
     if result.code ~= 0
         and host.config("repo_trust") == "allow"
         and (result.stderr or ""):match("not trusted") then
-        host.exec("mise", { "trust" })
-        result = host.exec("mise", { "env", "--json" })
+        host.exec_streaming("mise", { "trust" })
+        result = host.exec_streaming("mise", { "env", "--json" })
     end
 
     if result.code ~= 0 then

@@ -51,6 +51,8 @@
   "general_worktree_placeholder": "~/.claudette/workspaces",
   "general_archive_on_merge": "Archive on merge",
   "general_archive_on_merge_desc": "Automatically archive a workspace when its pull request is merged.",
+  "general_claudette_terminal": "Claudette Terminal",
+  "general_claudette_terminal_desc": "Show a read-only terminal tab that mirrors workspace provisioning, agent shell commands, and background task output. Provisioning and background task completion handling stay active even when this is off.",
   "general_system_tray": "System tray",
   "general_system_tray_desc": "Show Claudette in the system tray. Closing the window will minimize to tray when enabled.",
   "general_tray_icon_style": "Tray icon style",
@@ -352,9 +354,6 @@
   "git_delete_warning": "The branch will be permanently deleted, including any unmerged commits.",
 
   "experimental_title": "Experimental",
-  "experimental_claudette_terminal": "Claudette Terminal",
-  "experimental_claudette_terminal_desc": "Show a read-only terminal tab that mirrors agent shell commands and background task output. Background task completion handling stays enabled even when this is off.",
-  "experimental_claudette_terminal_aria": "Claudette Terminal",
   "experimental_plugin_mgmt": "Plugin Management",
   "experimental_plugin_mgmt_desc": "Show the Plugins settings section and enable the built-in plugin-management slash commands that open it.",
   "experimental_plugin_mgmt_aria": "Plugin Management",

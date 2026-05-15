@@ -1,14 +1,51 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::Duration;
 
 use crate::plugin_runtime::manifest::PluginKind;
 use crate::process::CommandWindowExt as _;
 use mlua::LuaSerdeExt;
 use mlua::prelude::*;
+use tokio::io::AsyncBufReadExt;
 use tokio::process::Command;
 
+/// Which subprocess pipe a streamed line came from. Lets the UI render
+/// stdout dim and stderr accented so a build's warnings/errors stand
+/// out from informational chatter.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OutputStream {
+    Stdout,
+    Stderr,
+}
+
+impl OutputStream {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            OutputStream::Stdout => "stdout",
+            OutputStream::Stderr => "stderr",
+        }
+    }
+}
+
+/// Callback for streaming subprocess output during a `host.exec_streaming`
+/// call or a setup-script run. The plugin-runtime layer wires this to
+/// per-Tauri-app emitters that forward each line as a
+/// `workspace_env_output` / `workspace_setup_output` event so the
+/// frontend's EnvProvisioningConsole can render the live feed.
+///
+/// Implementations should be cheap and non-blocking — the line is
+/// produced from the spawn task's reader loop, which is on the hot path
+/// of a 100k-line `nix print-dev-env -L`. Heavy work (rate-limit
+/// batching, IPC serialization) belongs in the implementor, not on the
+/// reader task — but in practice Tauri's `emit` is already a quick
+/// queueing operation, so a direct emit-per-line is fine for the
+/// typical resolve.
+pub trait StreamingSink: Send + Sync {
+    fn line(&self, plugin: &str, stream: OutputStream, line: String);
+}
+
 /// Context passed to the Lua host API functions.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct HostContext {
     pub plugin_name: String,
     pub kind: PluginKind,
@@ -22,6 +59,12 @@ pub struct HostContext {
     /// can have a 5-minute window without changing the default for
     /// every other workspace.
     pub exec_timeout: Duration,
+    /// Optional sink for `host.exec_streaming` line events. When `None`,
+    /// `host.exec_streaming` still works but doesn't forward output
+    /// anywhere — equivalent to a buffered `host.exec` with the same
+    /// return shape. When `Some`, every line read from stdout/stderr is
+    /// dispatched to the sink before the function returns.
+    pub streaming_sink: Option<Arc<dyn StreamingSink>>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -63,7 +106,22 @@ impl Default for HostContext {
             workspace_info: WorkspaceInfo::default(),
             config: HashMap::new(),
             exec_timeout: DEFAULT_EXEC_TIMEOUT,
+            streaming_sink: None,
         }
+    }
+}
+
+impl std::fmt::Debug for HostContext {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("HostContext")
+            .field("plugin_name", &self.plugin_name)
+            .field("kind", &self.kind)
+            .field("allowed_clis", &self.allowed_clis)
+            .field("workspace_info", &self.workspace_info)
+            .field("config", &self.config)
+            .field("exec_timeout", &self.exec_timeout)
+            .field("streaming_sink", &self.streaming_sink.is_some())
+            .finish()
     }
 }
 
@@ -111,6 +169,49 @@ fn register_host_api(lua: &Lua, ctx: HostContext) -> LuaResult<()> {
         lua.create_async_function(move |lua, (cmd, args): (String, LuaTable)| {
             let ctx = exec_ctx.clone();
             async move { host_exec(&lua, &cmd, args, &ctx).await }
+        })?,
+    )?;
+
+    // host.exec_streaming(cmd, args) -> {stdout, stderr, code}
+    //
+    // Same contract / return shape as `host.exec`, but pipes the child's
+    // stdout and stderr line-by-line through `ctx.streaming_sink` (when
+    // present) while ALSO accumulating into the returned `stdout` /
+    // `stderr` strings so existing plugin logic (`result.stdout`,
+    // `result.code`) is unchanged.
+    //
+    // Plugins switch to this variant for long-running invocations
+    // (`nix print-dev-env -L`, `direnv export json` chasing a Nix
+    // flake) so the EnvProvisioningConsole shows live feedback instead
+    // of a frozen elapsed counter.
+    let exec_stream_ctx = ctx.clone();
+    host.set(
+        "exec_streaming",
+        lua.create_async_function(move |lua, (cmd, args): (String, LuaTable)| {
+            let ctx = exec_stream_ctx.clone();
+            async move { host_exec_streaming(&lua, &cmd, args, &ctx).await }
+        })?,
+    )?;
+
+    // host.console(stream, line) — forward a synthesized line through
+    // the same streaming sink that `host.exec_streaming` uses. Lets
+    // in-process providers (env-dotenv) report a "loaded N vars from
+    // .env" heartbeat without spawning a subprocess.
+    //
+    // `stream` is "stdout" or "stderr"; anything else falls back to
+    // stdout so a plugin typo doesn't fail the operation.
+    let console_ctx = ctx.clone();
+    host.set(
+        "console",
+        lua.create_function(move |_, (stream, line): (String, String)| {
+            if let Some(sink) = &console_ctx.streaming_sink {
+                let stream = match stream.as_str() {
+                    "stderr" => OutputStream::Stderr,
+                    _ => OutputStream::Stdout,
+                };
+                sink.line(&console_ctx.plugin_name, stream, line);
+            }
+            Ok(())
         })?,
     )?;
 
@@ -429,6 +530,198 @@ fn normalize_cli_name(cmd: &str) -> &str {
     if stem.is_empty() { cmd } else { stem }
 }
 
+/// Spawn a subprocess and stream stdout/stderr line-by-line through
+/// `ctx.streaming_sink` while accumulating the full output for the
+/// returned `{stdout, stderr, code}` table.
+///
+/// Same allowed-CLI / hermetic-env / timeout contract as
+/// [`host_exec`]. The only structural difference is that the reader
+/// pipes are forwarded line-by-line in dedicated tasks rather than
+/// read to end at once.
+async fn host_exec_streaming(
+    lua: &Lua,
+    cmd: &str,
+    args_table: LuaTable,
+    ctx: &HostContext,
+) -> LuaResult<LuaTable> {
+    let is_declared = ctx.allowed_clis.iter().any(|c| c == cmd);
+    if !is_declared {
+        return Err(LuaError::external(format!(
+            "Command '{cmd}' is not in this plugin's allowed CLIs: {:?}",
+            ctx.allowed_clis
+        )));
+    }
+
+    let mut args: Vec<String> = Vec::new();
+    for i in 1..=args_table.len()? {
+        let arg: String = args_table.get(i)?;
+        if arg.contains('\0') {
+            return Err(LuaError::external("Arguments must not contain null bytes"));
+        }
+        args.push(arg);
+    }
+
+    crate::missing_cli::precheck_cwd(std::path::Path::new(&ctx.workspace_info.worktree_path))
+        .map_err(LuaError::external)?;
+
+    let mut command = Command::new(cmd);
+    command.no_console_window();
+    command.args(&args);
+    command.current_dir(&ctx.workspace_info.worktree_path);
+    apply_hermetic_env(&mut command, ctx);
+    command.kill_on_drop(true);
+    command.stdout(std::process::Stdio::piped());
+    command.stderr(std::process::Stdio::piped());
+
+    let mut child = command.spawn().map_err(|e| {
+        let tool = normalize_cli_name(cmd);
+        let msg = crate::missing_cli::map_spawn_err(&e, tool, || {
+            format!("Failed to execute '{cmd}': {e}")
+        });
+        LuaError::external(msg)
+    })?;
+
+    let stdout = child.stdout.take();
+    let stderr = child.stderr.take();
+    let plugin_name = ctx.plugin_name.clone();
+    // SECURITY: drop env-provider stdout from the sink. Env providers
+    // run commands like `direnv export json`, `mise env --json`, and
+    // `nix print-dev-env --json` whose stdout contains the FULL
+    // machine-readable environment payload — every variable including
+    // secrets (AWS_SECRET_ACCESS_KEY, GH_TOKEN, ANTHROPIC_API_KEY, …).
+    // Streaming that into the workspace terminal file leaks tokens to
+    // disk in temp_dir AND renders them on-screen in the read-only
+    // Claudette Terminal tab. The progress information users actually
+    // want lives on stderr (`direnv: loading .envrc`, nix's `-L`
+    // per-derivation build log, mise's tool-install chatter), which
+    // the sink continues to receive.
+    //
+    // Plugin kinds OTHER than env-provider (SCM in particular) don't
+    // produce secret JSON on stdout and benefit from seeing both
+    // streams.
+    let forward_stdout_to_sink = ctx.kind != PluginKind::EnvProvider;
+    let sink_stdout = if forward_stdout_to_sink {
+        ctx.streaming_sink.clone()
+    } else {
+        None
+    };
+    let sink_stderr = ctx.streaming_sink.clone();
+    let plugin_for_stderr = plugin_name.clone();
+
+    // One reader task per pipe so stdout and stderr lines interleave in
+    // real time. Each task buffers the full stream for the returned
+    // table while forwarding individual lines to the sink (when set).
+    let stdout_task = tokio::spawn(async move {
+        let mut buf = String::new();
+        if let Some(out) = stdout {
+            let mut reader = tokio::io::BufReader::new(out);
+            // `read_line` preserves the trailing `\n` / `\r\n` (or
+            // returns an unterminated final line as-is). The captured
+            // `buf` therefore matches what a plain `read_to_end` would
+            // have produced byte-for-byte — necessary because callers
+            // like env-direnv pipe `result.stdout` into
+            // `host.json_decode`, and were relying on `host.exec`'s
+            // exact-bytes contract. The sink view trims the line ending
+            // so xterm renderers don't get duplicate CRs.
+            loop {
+                let prev_len = buf.len();
+                match reader.read_line(&mut buf).await {
+                    Ok(0) => break,
+                    Ok(_) => {
+                        if let Some(sink) = &sink_stdout {
+                            let segment = &buf[prev_len..];
+                            let trimmed = segment.trim_end_matches(['\r', '\n']);
+                            sink.line(&plugin_name, OutputStream::Stdout, trimmed.to_string());
+                        }
+                    }
+                    Err(_) => break,
+                }
+            }
+        }
+        buf
+    });
+    let stderr_task = tokio::spawn(async move {
+        let mut buf = String::new();
+        if let Some(err) = stderr {
+            let mut reader = tokio::io::BufReader::new(err);
+            loop {
+                let prev_len = buf.len();
+                match reader.read_line(&mut buf).await {
+                    Ok(0) => break,
+                    Ok(_) => {
+                        if let Some(sink) = &sink_stderr {
+                            let segment = &buf[prev_len..];
+                            let trimmed = segment.trim_end_matches(['\r', '\n']);
+                            sink.line(
+                                &plugin_for_stderr,
+                                OutputStream::Stderr,
+                                trimmed.to_string(),
+                            );
+                        }
+                    }
+                    Err(_) => break,
+                }
+            }
+        }
+        buf
+    });
+
+    let exec_timeout = ctx.exec_timeout;
+    let wait = async {
+        let status = child
+            .wait()
+            .await
+            .map_err(|e| LuaError::external(format!("Failed to wait for '{cmd}': {e}")))?;
+        let stdout = stdout_task.await.unwrap_or_default();
+        let stderr = stderr_task.await.unwrap_or_default();
+        Ok::<_, LuaError>((status, stdout, stderr))
+    };
+    let (status, stdout_buf, stderr_buf) = tokio::time::timeout(exec_timeout, wait)
+        .await
+        .map_err(|_| {
+            LuaError::external(format!(
+                "Command '{cmd}' timed out after {}s",
+                exec_timeout.as_secs()
+            ))
+        })??;
+
+    let result = lua.create_table()?;
+    result.set("stdout", stdout_buf)?;
+    result.set("stderr", stderr_buf)?;
+    result.set("code", status.code().unwrap_or(-1))?;
+    Ok(result)
+}
+
+/// Apply the env-provider hermetic baseline (clear, then restore a
+/// minimal allowlist) — shared between [`host_exec`] and
+/// [`host_exec_streaming`] so a future change to the allowlist stays in
+/// one place.
+fn apply_hermetic_env(command: &mut Command, ctx: &HostContext) {
+    if ctx.kind == PluginKind::EnvProvider {
+        command.env_clear();
+        command.env("PATH", crate::env::enriched_path());
+        for key in [
+            "HOME",
+            "USER",
+            "LOGNAME",
+            "SHELL",
+            "TERM",
+            "LANG",
+            "LC_ALL",
+            "XDG_DATA_HOME",
+            "XDG_STATE_HOME",
+            "XDG_CACHE_HOME",
+            "XDG_CONFIG_HOME",
+        ] {
+            if let Ok(val) = std::env::var(key) {
+                command.env(key, val);
+            }
+        }
+    } else {
+        command.env("PATH", crate::env::enriched_path());
+    }
+}
+
 /// Execute a subprocess, restricted to allowed CLIs.
 async fn host_exec(
     lua: &Lua,
@@ -475,49 +768,11 @@ async fn host_exec(
     command.args(&args);
     command.current_dir(&ctx.workspace_info.worktree_path);
 
-    // Env-provider plugins run hermetically: we clear the inherited env
-    // and set only a minimal, stable baseline. This matters for tools
-    // like `direnv export json` which compute a *diff* against the
-    // current env — if Claudette was launched from a terminal that
-    // already had the workspace's env loaded, direnv would emit only
-    // the delta (handful of vars), not the full set. A hermetic baseline
-    // makes the exported set deterministic and independent of how
-    // Claudette was launched. SCM plugins keep inheriting the full env
-    // because they depend on user-state vars like `GH_TOKEN`,
-    // `SSH_AUTH_SOCK`, `XDG_CONFIG_HOME`, etc.
-    if ctx.kind == PluginKind::EnvProvider {
-        command.env_clear();
-        command.env("PATH", crate::env::enriched_path());
-        // XDG_*_HOME vars matter: direnv/mise store their allow/trust
-        // caches under XDG_DATA_HOME (defaulting to $HOME/.local/share
-        // when unset). Users who point those at non-default paths
-        // would otherwise see their pre-approved worktrees reported
-        // as blocked because we'd be looking at the default location
-        // while their terminal wrote to the override.
-        for key in [
-            "HOME",
-            "USER",
-            "LOGNAME",
-            "SHELL",
-            "TERM",
-            "LANG",
-            "LC_ALL",
-            "XDG_DATA_HOME",
-            "XDG_STATE_HOME",
-            "XDG_CACHE_HOME",
-            "XDG_CONFIG_HOME",
-        ] {
-            if let Ok(val) = std::env::var(key) {
-                command.env(key, val);
-            }
-        }
-    } else {
-        // macOS GUI apps inherit a minimal launchd PATH, so binaries like
-        // `gh`/`glab` (typically in /opt/homebrew/bin) wouldn't be found.
-        // Pass the enriched PATH so the child — and anything it shells out
-        // to (git, credential helpers, editors) — can resolve them.
-        command.env("PATH", crate::env::enriched_path());
-    }
+    // Env-provider plugins run hermetically (env_clear + minimal
+    // allowlist); SCM plugins inherit the full env. Both branches are
+    // implemented in the shared [`apply_hermetic_env`] helper so
+    // host.exec and host.exec_streaming stay in sync.
+    apply_hermetic_env(&mut command, ctx);
     command.kill_on_drop(true);
     command.stdout(std::process::Stdio::piped());
     command.stderr(std::process::Stdio::piped());
@@ -1287,5 +1542,121 @@ mod tests {
         // callers from silently emitting an empty tool token.
         assert_eq!(normalize_cli_name("/"), "/");
         assert_eq!(normalize_cli_name(""), "");
+    }
+
+    /// Recording sink for the env-provider security test. Captures
+    /// every (stream, line) pair the runtime forwards.
+    #[derive(Default)]
+    struct RecordingSink {
+        lines: std::sync::Mutex<Vec<(OutputStream, String)>>,
+    }
+
+    impl StreamingSink for RecordingSink {
+        fn line(&self, _plugin: &str, stream: OutputStream, line: String) {
+            self.lines.lock().unwrap().push((stream, line));
+        }
+    }
+
+    #[tokio::test]
+    async fn exec_streaming_env_provider_drops_stdout_from_sink() {
+        // SECURITY regression: env-provider plugins run JSON-producing
+        // commands like `direnv export json`, `mise env --json`, and
+        // `nix print-dev-env --json` whose stdout contains the FULL
+        // machine-readable environment payload — every variable
+        // including secrets. The runtime must drop env-provider stdout
+        // from the streaming sink so it never lands in the workspace
+        // terminal file or the Claudette Terminal tab. The captured
+        // `result.stdout` returned to Lua is unaffected (the plugin
+        // still needs it for json_decode); only the live sink view
+        // is filtered.
+        let recording = std::sync::Arc::new(RecordingSink::default());
+        let mut ctx = make_test_ctx();
+        ctx.kind = PluginKind::EnvProvider;
+        ctx.streaming_sink = Some(recording.clone() as Arc<dyn StreamingSink>);
+        let lua = create_lua_vm(ctx).unwrap();
+
+        let stdout: String = lua
+            .load(r#"return host.exec_streaming("cargo", {"--version"}).stdout"#)
+            .eval_async()
+            .await
+            .unwrap();
+
+        // Captured stdout (returned to the plugin) is intact.
+        assert!(
+            stdout.trim().starts_with("cargo "),
+            "captured stdout must reach the plugin, got: {stdout:?}",
+        );
+
+        // Sink saw zero stdout lines — that's the security guarantee.
+        let sink_lines = recording.lines.lock().unwrap();
+        let stdout_lines: Vec<_> = sink_lines
+            .iter()
+            .filter(|(s, _)| *s == OutputStream::Stdout)
+            .collect();
+        assert!(
+            stdout_lines.is_empty(),
+            "env-provider stdout must not reach the sink (would leak \
+             secrets to the workspace terminal), got: {stdout_lines:?}",
+        );
+    }
+
+    #[tokio::test]
+    async fn exec_streaming_scm_plugin_forwards_stdout_to_sink() {
+        // Counterpart to the env-provider test: SCM plugins don't
+        // produce secret JSON on stdout, so the runtime should still
+        // forward their stdout for live progress display. Guards
+        // against an over-eager future change that would silence ALL
+        // stdout streaming.
+        let recording = std::sync::Arc::new(RecordingSink::default());
+        let mut ctx = make_test_ctx();
+        ctx.kind = PluginKind::Scm;
+        ctx.streaming_sink = Some(recording.clone() as Arc<dyn StreamingSink>);
+        let lua = create_lua_vm(ctx).unwrap();
+
+        let _: LuaTable = lua
+            .load(r#"return host.exec_streaming("cargo", {"--version"})"#)
+            .eval_async()
+            .await
+            .unwrap();
+
+        let sink_lines = recording.lines.lock().unwrap();
+        let stdout_lines: Vec<_> = sink_lines
+            .iter()
+            .filter(|(s, _)| *s == OutputStream::Stdout)
+            .collect();
+        assert!(
+            !stdout_lines.is_empty(),
+            "SCM plugin stdout must reach the sink for live progress",
+        );
+    }
+
+    #[tokio::test]
+    async fn exec_streaming_preserves_exact_stdout_bytes() {
+        // Regression for the codex review on the env-provisioning console:
+        // `host.exec_streaming` is documented as returning the same
+        // captured stdout as `host.exec`. The original implementation
+        // used `BufReader::lines()` which strips `\n` / `\r\n` and then
+        // re-appended `\n` — silently rewriting CRLF→LF and appending a
+        // trailing newline to commands whose final line had none.
+        // Plugins like env-direnv pipe `result.stdout` into
+        // `host.json_decode`, so any byte-level drift would surface as
+        // a parse failure on real env-provider workloads.
+        let ctx = make_test_ctx();
+        let lua = create_lua_vm(ctx).unwrap();
+
+        let streamed: String = lua
+            .load(r#"return host.exec_streaming("cargo", {"--version"}).stdout"#)
+            .eval_async()
+            .await
+            .unwrap();
+        let captured: String = lua
+            .load(r#"return host.exec("cargo", {"--version"}).stdout"#)
+            .eval_async()
+            .await
+            .unwrap();
+        assert_eq!(
+            streamed, captured,
+            "exec_streaming must produce byte-identical stdout to exec",
+        );
     }
 }

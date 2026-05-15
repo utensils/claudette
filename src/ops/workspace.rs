@@ -15,9 +15,11 @@
 //! [`ResolvedEnv`] in; callers that don't (the WS server today) pass `None`.
 
 use std::path::Path;
+use std::sync::Arc;
 use std::time::Duration;
 
 use serde::Serialize;
+use tokio::io::AsyncBufReadExt;
 use tokio::process::Command as TokioCommand;
 
 use crate::agent;
@@ -299,12 +301,41 @@ async fn kill_script_subtree(pid: u32) {
         .await;
 }
 
+/// Which subprocess pipe a streamed line came from. Mirrors
+/// [`crate::plugin_runtime::host_api::OutputStream`] so the two can be
+/// unified at the Tauri-event layer without converting between types.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SetupOutputStream {
+    Stdout,
+    Stderr,
+}
+
+impl SetupOutputStream {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            SetupOutputStream::Stdout => "stdout",
+            SetupOutputStream::Stderr => "stderr",
+        }
+    }
+}
+
+/// Callback receiver for streamed setup-script output. The Tauri-side
+/// caller wraps this around a `workspace_setup_output` event emitter
+/// so the EnvProvisioningConsole can render setup-script chatter
+/// alongside the env-provider plugins' output.
+pub trait SetupOutputSink: Send + Sync {
+    fn line(&self, stream: SetupOutputStream, line: String);
+}
+
 /// Resolve the setup script (preferring `.claudette.json`, falling back to
 /// the per-repo settings script) and execute it. Returns `None` when no
 /// script is configured — the common case for newly-added repositories.
 ///
 /// `WorkspaceEnv` is built lazily — `git::default_branch()` is only called
 /// once we know a script will actually run.
+///
+/// See [`resolve_and_run_setup_streaming`] for the variant that
+/// forwards each output line through a [`SetupOutputSink`].
 pub async fn resolve_and_run_setup(
     ws: &Workspace,
     repo_path: &Path,
@@ -313,6 +344,36 @@ pub async fn resolve_and_run_setup(
     base_branch: Option<&str>,
     default_remote: Option<&str>,
     resolved_env: Option<&ResolvedEnv>,
+) -> Option<SetupResult> {
+    resolve_and_run_setup_streaming(
+        ws,
+        repo_path,
+        worktree_path,
+        settings_script,
+        base_branch,
+        default_remote,
+        resolved_env,
+        None,
+    )
+    .await
+}
+
+/// Variant of [`resolve_and_run_setup`] that forwards each line of
+/// the script's stdout/stderr through `output` as it's read. The
+/// returned [`SetupResult::output`] still accumulates the full combined
+/// output for the chat-transcript banner, so the streaming callback is
+/// purely additive — existing callers passing `None` get the original
+/// behavior.
+#[allow(clippy::too_many_arguments)]
+pub async fn resolve_and_run_setup_streaming(
+    ws: &Workspace,
+    repo_path: &Path,
+    worktree_path: &Path,
+    settings_script: Option<&str>,
+    base_branch: Option<&str>,
+    default_remote: Option<&str>,
+    resolved_env: Option<&ResolvedEnv>,
+    output: Option<Arc<dyn SetupOutputSink>>,
 ) -> Option<SetupResult> {
     let (script, source) = match config::load_config(repo_path) {
         Ok(Some(cfg)) => {
@@ -385,32 +446,54 @@ pub async fn resolve_and_run_setup(
 
     let stdout_handle = child.stdout.take();
     let stderr_handle = child.stderr.take();
+    let stdout_sink = output.clone();
+    let stderr_sink = output.clone();
 
+    // Read both pipes line-by-line so the streaming sink sees output
+    // as it's produced (instead of one big blob at process exit) while
+    // still accumulating the combined buffer for the chat-transcript
+    // banner. Each line is re-terminated with `\n` so the buffered
+    // string matches what `read_to_end` would have produced for tests
+    // that compare against literal expected output.
     let stdout_task = tokio::spawn(async move {
-        let mut buf = Vec::new();
-        if let Some(mut out) = stdout_handle {
-            let _ = tokio::io::AsyncReadExt::read_to_end(&mut out, &mut buf).await;
+        let mut buf = String::new();
+        if let Some(out) = stdout_handle {
+            let reader = tokio::io::BufReader::new(out);
+            let mut lines = reader.lines();
+            while let Ok(Some(line)) = lines.next_line().await {
+                if let Some(sink) = &stdout_sink {
+                    sink.line(SetupOutputStream::Stdout, line.clone());
+                }
+                buf.push_str(&line);
+                buf.push('\n');
+            }
         }
         buf
     });
     let stderr_task = tokio::spawn(async move {
-        let mut buf = Vec::new();
-        if let Some(mut err) = stderr_handle {
-            let _ = tokio::io::AsyncReadExt::read_to_end(&mut err, &mut buf).await;
+        let mut buf = String::new();
+        if let Some(err) = stderr_handle {
+            let reader = tokio::io::BufReader::new(err);
+            let mut lines = reader.lines();
+            while let Ok(Some(line)) = lines.next_line().await {
+                if let Some(sink) = &stderr_sink {
+                    sink.line(SetupOutputStream::Stderr, line.clone());
+                }
+                buf.push_str(&line);
+                buf.push('\n');
+            }
         }
         buf
     });
 
     match tokio::time::timeout(SCRIPT_TIMEOUT, child.wait()).await {
         Ok(Ok(status)) => {
-            let stdout_buf = stdout_task.await.unwrap_or_default();
-            let stderr_buf = stderr_task.await.unwrap_or_default();
-            let stdout = String::from_utf8_lossy(&stdout_buf);
-            let stderr = String::from_utf8_lossy(&stderr_buf);
+            let stdout = stdout_task.await.unwrap_or_default();
+            let stderr = stderr_task.await.unwrap_or_default();
             let combined = if stderr.is_empty() {
-                stdout.to_string()
+                stdout
             } else if stdout.is_empty() {
-                stderr.to_string()
+                stderr
             } else {
                 format!("{stdout}\n{stderr}")
             };
@@ -446,7 +529,7 @@ pub async fn resolve_and_run_setup(
             let _ = child.kill().await;
             let _ = child.wait().await;
             // Drain the reader tasks deterministically. Killing the child
-            // closes its stdio pipes so the read_to_end calls return on
+            // closes its stdio pipes so the line-readers return on
             // their own; awaiting here just ensures both tasks have exited
             // before we return rather than leaving them detached.
             let _ = stdout_task.await;
