@@ -712,7 +712,7 @@ fn clean_direnv(body: &str) -> CleanedTrustError {
 /// `None` when no source flagged a trust error. Pure — extracted so the
 /// command site stays small and the unit tests can assert payload
 /// shape without a Tauri AppHandle.
-fn build_trust_needed_payload(
+pub(crate) fn build_trust_needed_payload(
     workspace_id: &str,
     repo_id: &str,
     resolved: &claudette::env_provider::ResolvedEnv,
@@ -1702,6 +1702,34 @@ mod tests {
         assert!(message.starts_with("Environment provider failed:"));
         assert!(message.contains("env-direnv"));
         assert!(!message.contains("env-mise"));
+    }
+
+    #[test]
+    fn build_trust_needed_payload_is_pub_crate_for_warmup_path() {
+        // Regression: `resolve_env_for_workspace` in
+        // `src-tauri/src/commands/workspace.rs` (the create / fork /
+        // run-setup warmup) calls this function so the new-workspace
+        // path can emit `workspace_env_trust_needed` itself — without
+        // that emit, a blocked `.envrc` on a fresh worktree silently
+        // logs the error to the Claudette Terminal and the user is
+        // stuck staring at "Preparing…" forever, because the per-
+        // selection env-prep hook skips `prepare_workspace_environment`
+        // once the warmup's synthetic progress event has already
+        // seeded `started_at`. This call site forces the symbol to
+        // stay reachable from the workspace.rs module; demoting it
+        // back to `fn` (private) would break the crate build.
+        let mut s = src("env-direnv");
+        s.error = Some(
+            "direnv: error /repo/.envrc is blocked. Run `direnv allow` to approve its content"
+                .to_string(),
+        );
+        let resolved = ResolvedEnv {
+            sources: vec![s],
+            ..Default::default()
+        };
+        let payload = super::build_trust_needed_payload("ws-id", "repo-id", &resolved).unwrap();
+        assert_eq!(payload.workspace_id, "ws-id");
+        assert_eq!(payload.plugins[0].plugin_name, "env-direnv");
     }
 
     #[test]

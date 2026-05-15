@@ -391,6 +391,27 @@ async fn resolve_env_for_workspace(
         &resolved.sources,
     )
     .await;
+    // Surface trust-class failures via the modal-driving event. The
+    // create / fork / run-setup callers invoke this warmup as a
+    // fire-and-forget (`let _ = ...`), so its return value never
+    // reaches the frontend — and the per-selection env-prep hook
+    // skips `prepare_workspace_environment` when status is already
+    // "preparing" with a `started_at` (the warmup's own synthetic
+    // progress emit sets that), so the modal would otherwise never
+    // fire for a newly-created workspace whose .envrc is blocked.
+    // Emit here so the EnvTrustModal listener in
+    // `useWorkspaceEnvironmentPreparation` opens the modal once per
+    // workspace+signature for the app session. Skipped when `app` is
+    // None (archive teardown path — no UI to show a modal to).
+    if let Some(handle) = app
+        && let Some(payload) = crate::commands::env::build_trust_needed_payload(
+            &ws_info.id,
+            &ws_info.repo_id.clone().unwrap_or_default(),
+            &resolved,
+        )
+    {
+        let _ = handle.emit("workspace_env_trust_needed", payload);
+    }
     Some(resolved)
 }
 
