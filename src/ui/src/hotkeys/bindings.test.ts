@@ -258,6 +258,101 @@ describe("global.new-tab default binding", () => {
   });
 });
 
+describe("command palette / quick-open default bindings", () => {
+  // VS Code parity: Cmd+P opens Quick Open (file picker) and
+  // Cmd+Shift+P opens the Command Palette. Cmd+O is kept as an
+  // alternate binding so existing muscle memory keeps working
+  // (`global.open-command-palette-file-mode-alt`).
+  it("resolves Cmd+P to quick-open (file mode) on macOS", () => {
+    expect(
+      resolveHotkeyAction(
+        macKey({ key: "p", metaKey: true }),
+        "global",
+        {},
+        "mac",
+      ),
+    ).toBe("global.open-command-palette-file-mode");
+  });
+
+  it("resolves Ctrl+P to quick-open (file mode) on Linux/Windows", () => {
+    expect(
+      resolveHotkeyAction(
+        macKey({ key: "p", ctrlKey: true }),
+        "global",
+        {},
+        "linux",
+      ),
+    ).toBe("global.open-command-palette-file-mode");
+    expect(
+      resolveHotkeyAction(
+        macKey({ key: "p", ctrlKey: true }),
+        "global",
+        {},
+        "windows",
+      ),
+    ).toBe("global.open-command-palette-file-mode");
+  });
+
+  it("resolves Cmd+Shift+P to the command palette on macOS", () => {
+    expect(
+      resolveHotkeyAction(
+        macKey({ key: "p", metaKey: true, shiftKey: true }),
+        "global",
+        {},
+        "mac",
+      ),
+    ).toBe("global.toggle-command-palette");
+  });
+
+  it("resolves Ctrl+Shift+P to the command palette on Linux/Windows", () => {
+    expect(
+      resolveHotkeyAction(
+        macKey({ key: "p", ctrlKey: true, shiftKey: true }),
+        "global",
+        {},
+        "linux",
+      ),
+    ).toBe("global.toggle-command-palette");
+  });
+
+  it("resolves Cmd+O to the quick-open alias on macOS", () => {
+    expect(
+      resolveHotkeyAction(
+        macKey({ key: "o", metaKey: true }),
+        "global",
+        {},
+        "mac",
+      ),
+    ).toBe("global.open-command-palette-file-mode-alt");
+  });
+
+  it("resolves Ctrl+O to the quick-open alias on Linux/Windows", () => {
+    expect(
+      resolveHotkeyAction(
+        macKey({ key: "o", ctrlKey: true }),
+        "global",
+        {},
+        "linux",
+      ),
+    ).toBe("global.open-command-palette-file-mode-alt");
+  });
+
+  it("does not surface the palette swap inside file-viewer scope", () => {
+    // Both palette actions live in `global` scope; the resolver must not
+    // return them when called with `file-viewer` scope, otherwise the
+    // file-viewer's local keyhandlers would silently shadow palette
+    // dispatch.
+    expect(
+      resolveHotkeyAction(
+        macKey({ key: "p", metaKey: true }),
+        "file-viewer",
+        {},
+        "mac",
+      ),
+    ).toBeNull();
+  });
+});
+
 describe("terminal font zoom default bindings", () => {
   it("resolves Shift+= and Shift+- to terminal font zoom in global scope", () => {
     expect(

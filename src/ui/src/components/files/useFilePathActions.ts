@@ -82,6 +82,7 @@ export function useFilePathActions(workspaceId: string) {
       setFileBufferLoaded(workspaceId, result.path, {
         baseline: "",
         isBinary: false,
+        isSymlink: false,
         sizeBytes: 0,
         truncated: false,
         imageBytesB64: null,

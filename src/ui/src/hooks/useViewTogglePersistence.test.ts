@@ -110,6 +110,7 @@ describe("view state persistence", () => {
           baseline: "saved",
           buffer: "unsaved edit",
           isBinary: false,
+          isSymlink: false,
           sizeBytes: 5,
           truncated: false,
           imageBytesB64: null,

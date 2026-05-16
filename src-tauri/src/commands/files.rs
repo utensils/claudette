@@ -72,6 +72,14 @@ pub struct FileContent {
     pub is_binary: bool,
     pub size_bytes: u64,
     pub truncated: bool,
+    /// True when the workspace path is a symlink on disk. Used by the
+    /// frontend to suppress noisy decorations whose semantics depend on
+    /// comparing the loaded buffer to the git blob: a symlink's blob is
+    /// the literal target string ("CLAUDE.md\n"), while the loaded
+    /// buffer is the resolved file contents, so the gutter would mark
+    /// every line as "modified". The viewer reads through the symlink
+    /// intentionally — this flag just tells the UI to skip the diff.
+    pub is_symlink: bool,
 }
 
 #[derive(Clone, Serialize)]
@@ -387,12 +395,16 @@ pub async fn read_workspace_file(
         .await
         .ok_or("File not found or path escapes worktree")?;
 
+    let absolute = std::path::Path::new(worktree_path).join(&relative_path);
+    let is_symlink = is_path_symlink(absolute).await;
+
     Ok(FileContent {
         path: relative_path,
         content: read.content,
         is_binary: read.is_binary,
         size_bytes: read.size_bytes,
         truncated: read.truncated,
+        is_symlink,
     })
 }
 
@@ -429,13 +441,28 @@ pub async fn read_workspace_file_for_viewer(
         return Err("File not readable or path escapes worktree".to_string());
     };
 
+    let is_symlink = is_path_symlink(target.absolute.clone()).await;
+
     Ok(FileContent {
         path: relative_path,
         content: read.content,
         is_binary: read.is_binary,
         size_bytes: read.size_bytes,
         truncated: read.truncated,
+        is_symlink,
     })
+}
+
+/// Probe whether `path` is itself a symlink on disk. Uses
+/// `symlink_metadata` (not `metadata`) so it reports the link, not the
+/// target. Errors (missing path, permission denied) collapse to `false`
+/// — better to leave the gutter on than to silently mislabel a regular
+/// file as a symlink and suppress real diff information.
+async fn is_path_symlink(path: std::path::PathBuf) -> bool {
+    tokio::fs::symlink_metadata(&path)
+        .await
+        .map(|m| m.file_type().is_symlink())
+        .unwrap_or(false)
 }
 
 /// Read raw bytes from a file in a workspace's worktree, base64-encoded

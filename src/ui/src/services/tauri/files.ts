@@ -6,6 +6,12 @@ export interface FileContent {
   is_binary: boolean;
   size_bytes: number;
   truncated: boolean;
+  /** True when the file path is itself a symlink on disk (the viewer
+   *  reads through it, so `content` is the resolved target's text).
+   *  Drives the git-gutter skip in `useGitGutter` — git stores symlinks
+   *  as the literal target string, which would otherwise paint a solid
+   *  "modified" stripe down every line. */
+  is_symlink: boolean;
 }
 
 export interface FileBytesContent {

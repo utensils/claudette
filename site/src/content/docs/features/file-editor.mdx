@@ -25,6 +25,21 @@ Files open in read-only mode by default. Toggling into edit mode does **not** re
 
 Save with `⌘S` on macOS or `Ctrl+S` on Linux/Windows. The shortcut is scoped to the editor — it only fires when the editor has focus, so it won't collide with other panels.
 
+## Editor Menubar
+
+Above the editor, Claudette renders a compact **File / Edit / View / Go** menubar that surfaces the editor's most useful commands without needing to remember Monaco's keyboard shortcuts. The same items work whether the file is open in read-only or edit mode; items that don't apply (Save on a clean file, Format Document on a binary) are disabled rather than hidden so the menus stay predictable.
+
+| Menu | Items |
+|------|-------|
+| **File** | Save, Revert to Saved, Reveal in Files Panel, Close File |
+| **Edit** | Undo, Redo, Find, Find and Replace, Format Document, Copy File Contents, Copy Path, Copy Relative Path |
+| **View** | Turn Word Wrap on/off, Show/Hide Minimap, Show/Hide Line Numbers, Zoom In/Out/Reset |
+| **Go** | Go to File (`⌘/Ctrl + P`), Go to Line, Go to Symbol |
+
+**Reveal in Files** opens the right-sidebar Files panel, expands the path's parent directories, and selects the file. **Copy Path** copies the absolute on-disk path (joined with the workspace's worktree root), and **Copy Relative Path** copies the workspace-relative form.
+
+The **View** toggles persist across windows and restarts — Word Wrap, Minimap, Line Numbers, and Zoom are stored as app settings (`editor_word_wrap`, `editor_minimap_enabled`, `editor_line_numbers`, `editor_font_zoom`) and hydrate on startup. **Zoom** is clamped to a 0.7×–2.0× range; **Reset Zoom** returns the editor to 100%.
+
 ## Theme Sync
 
 Monaco's theme follows Claudette's app theme automatically. Pick a theme in `Settings > Appearance` and the editor restyles immediately, with no reload required. The same is true for dynamic colour changes — the editor observes the active theme and updates in real time.
@@ -52,14 +67,12 @@ The Monaco editor is for **opening and editing files**. The [diff viewer](/claud
 
 The editor ships with these defaults:
 
-| Setting | Value |
-|---------|-------|
-| Font | Default mono stack (matches the rest of the app) |
-| Font size | 13px |
-| Line numbers | On |
-| Word wrap | On |
-| Minimap | Off |
-| Sticky scroll | Off |
-| Whitespace rendering | On selection only |
-
-These are not yet user-configurable — open an issue on GitHub if you'd like one of them surfaced as a setting.
+| Setting | Value | Toggle |
+|---------|-------|--------|
+| Font | Default mono stack (matches the rest of the app) | — |
+| Font size | 13px (Zoom 1.0×) | **View → Zoom In / Zoom Out / Reset Zoom** |
+| Line numbers | On | **View → Show/Hide Line Numbers** |
+| Word wrap | On | **View → Turn Word Wrap On/Off** |
+| Minimap | Off | **View → Show/Hide Minimap** (also in **Settings → Editor**) |
+| Sticky scroll | Off | — |
+| Whitespace rendering | On selection only | — |

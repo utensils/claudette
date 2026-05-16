@@ -6,6 +6,7 @@ import { DEFAULT_MONO_STACK } from "../../styles/fonts";
 import { useAppStore } from "../../stores/useAppStore";
 import { executeCloseTab, executeNewTab } from "../../hotkeys/contextActions";
 import type { FileRevealTarget } from "../../stores/slices/fileTreeSlice";
+import { EDITOR_BASE_FONT_SIZE } from "./editorConstants";
 import {
   useGitGutter,
   type DecorationsCollection,
@@ -31,6 +32,11 @@ interface MonacoEditorProps {
    *  works off URI extensions, so we pass the path through as a `path` prop
    *  and let Monaco pick the language. */
   filename: string;
+  /** True when the open path is a symlink on disk. Forwarded to
+   *  `useGitGutter` so the gutter doesn't paint a noisy "modified"
+   *  stripe for every line of a resolved-target buffer that doesn't
+   *  match git's blob (which is just the target path string). */
+  isSymlink: boolean;
   /** Read-only mode. Toggled at runtime via `updateOptions` so flipping
    *  view/edit doesn't lose cursor position or undo stack. */
   readOnly: boolean;
@@ -46,17 +52,26 @@ interface MonacoEditorProps {
   /** Save callback bound to Cmd/Ctrl+S. The shortcut fires only when the
    *  editor has focus, matching the spec. */
   onSave?: () => void;
+  /** Optional hook for the FileViewer to keep a reference to the active
+   *  editor instance so the menubar can dispatch Monaco actions (Find,
+   *  Format, Undo, …) against the same editor the user is typing in.
+   *  Called with `null` on dispose so callers can clear their ref. */
+  onEditorReady?: (
+    editor: Parameters<OnMount>[0] | null,
+  ) => void;
 }
 
 export const MonacoEditor = memo(function MonacoEditor({
   workspaceId,
   value,
   filename,
+  isSymlink,
   revealTarget,
   onRevealTargetApplied,
   readOnly,
   onChange,
   onSave,
+  onEditorReady,
 }: MonacoEditorProps) {
   // Stash the latest callbacks in refs so the editor doesn't need to be
   // re-mounted just because they changed identity. Monaco's command
@@ -64,12 +79,16 @@ export const MonacoEditor = memo(function MonacoEditor({
   // directly, which keeps re-renders cheap during typing.
   const onChangeRef = useRef(onChange);
   const onSaveRef = useRef(onSave);
+  const onEditorReadyRef = useRef(onEditorReady);
   useEffect(() => {
     onChangeRef.current = onChange;
   }, [onChange]);
   useEffect(() => {
     onSaveRef.current = onSave;
   }, [onSave]);
+  useEffect(() => {
+    onEditorReadyRef.current = onEditorReady;
+  }, [onEditorReady]);
 
   const editorRef = useRef<Parameters<OnMount>[0] | null>(null);
   const monacoRef = useRef<Parameters<OnMount>[1] | null>(null);
@@ -93,6 +112,9 @@ export const MonacoEditor = memo(function MonacoEditor({
   }, [value]);
 
   const minimapEnabled = useAppStore((s) => s.editorMinimapEnabled);
+  const wordWrap = useAppStore((s) => s.editorWordWrap);
+  const lineNumbersEnabled = useAppStore((s) => s.editorLineNumbersEnabled);
+  const fontZoom = useAppStore((s) => s.editorFontZoom);
 
   // Reflect readOnly changes into the editor without remounting. Monaco's
   // `updateOptions` is the explicit runtime API for this; with CodeMirror
@@ -105,10 +127,28 @@ export const MonacoEditor = memo(function MonacoEditor({
     editorRef.current?.updateOptions({ minimap: { enabled: minimapEnabled } });
   }, [minimapEnabled]);
 
+  useEffect(() => {
+    editorRef.current?.updateOptions({ wordWrap: wordWrap ? "on" : "off" });
+  }, [wordWrap]);
+
+  useEffect(() => {
+    editorRef.current?.updateOptions({
+      lineNumbers: lineNumbersEnabled ? "on" : "off",
+    });
+  }, [lineNumbersEnabled]);
+
+  useEffect(() => {
+    editorRef.current?.updateOptions({
+      fontSize: EDITOR_BASE_FONT_SIZE * fontZoom,
+    });
+  }, [fontZoom]);
+
   // Disconnect the theme observer and clear the gutter collection when
   // the editor unmounts. The collection is owned by Monaco's editor
   // instance, which is itself disposed by the `<Editor>` component, but
-  // null-ing the ref is cheap insurance against stale reads.
+  // null-ing the ref is cheap insurance against stale reads. The
+  // `onEditorReady(null)` call lets the FileViewer drop its menubar
+  // editor reference so handlers don't fire against a disposed editor.
   useEffect(
     () => () => {
       cleanupThemeSyncRef.current?.();
@@ -116,6 +156,7 @@ export const MonacoEditor = memo(function MonacoEditor({
       revealCollectionRef.current?.clear();
       gutterCollectionRef.current = null;
       revealCollectionRef.current = null;
+      onEditorReadyRef.current?.(null);
     },
     [],
   );
@@ -198,6 +239,26 @@ export const MonacoEditor = memo(function MonacoEditor({
       monacoInstance.KeyMod.CtrlCmd | monacoInstance.KeyCode.KeyW,
       () => executeCloseTab(),
     );
+    // VS Code parity: Cmd/Ctrl+P opens Quick Open (file mode) and
+    // Cmd/Ctrl+Shift+P opens the Command Palette — including when focus
+    // is inside Monaco. Without these overrides, Monaco's standalone
+    // keybinding service swallows the keystrokes (it has its own
+    // "Command Palette" action on Cmd+Shift+P), so the workspace-level
+    // dispatch in `useKeyboardShortcuts` would never see them. Routes
+    // through the same store setters, so user-customized rebinds take
+    // effect everywhere except inside Monaco — which is acceptable
+    // because the palette swap is what makes VS Code parity work.
+    editor.addCommand(
+      monacoInstance.KeyMod.CtrlCmd | monacoInstance.KeyCode.KeyP,
+      () => useAppStore.getState().openCommandPaletteFileMode(),
+    );
+    editor.addCommand(
+      monacoInstance.KeyMod.CtrlCmd |
+        monacoInstance.KeyMod.Shift |
+        monacoInstance.KeyCode.KeyP,
+      () => useAppStore.getState().toggleCommandPalette(),
+    );
+    onEditorReadyRef.current?.(editor);
   };
 
   const handleEditorChange = useCallback((value: string | undefined) => {
@@ -206,7 +267,14 @@ export const MonacoEditor = memo(function MonacoEditor({
     onChangeRef.current(next);
   }, []);
 
-  useGitGutter(monacoRef, gutterCollectionRef, workspaceId, filename, currentBuffer);
+  useGitGutter(
+    monacoRef,
+    gutterCollectionRef,
+    workspaceId,
+    filename,
+    currentBuffer,
+    isSymlink,
+  );
 
   return (
     <div className={styles.host}>
@@ -221,8 +289,13 @@ export const MonacoEditor = memo(function MonacoEditor({
         options={{
           readOnly,
           minimap: { enabled: minimapEnabled },
-          wordWrap: "on",
-          lineNumbers: "on",
+          // Initial values seeded from the store so the first paint
+          // reflects the user's persisted View-menu choices. The
+          // `useEffect` blocks above forward subsequent changes via
+          // `updateOptions` so toggling the menu items takes effect
+          // live without a remount.
+          wordWrap: wordWrap ? "on" : "off",
+          lineNumbers: lineNumbersEnabled ? "on" : "off",
           scrollBeyondLastLine: false,
           scrollbar: {
             verticalScrollbarSize: 8,
@@ -244,7 +317,7 @@ export const MonacoEditor = memo(function MonacoEditor({
           // `scripts/check-font-mono.mjs` (run by `lint:css`) asserts the
           // two stay equal.
           fontFamily: DEFAULT_MONO_STACK,
-          fontSize: 13,
+          fontSize: EDITOR_BASE_FONT_SIZE * fontZoom,
         }}
       />
     </div>

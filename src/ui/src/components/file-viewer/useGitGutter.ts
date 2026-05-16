@@ -54,6 +54,14 @@ export function useGitGutter(
   workspaceId: string,
   filename: string,
   buffer: string,
+  // When the workspace path is a symlink, the editor buffer is the
+  // resolved target while git's blob is the literal target string —
+  // diffing those paints every line as modified, which is noise rather
+  // than signal. Skip the gutter entirely in that case. We deliberately
+  // don't try to compare the symlink target's blob: the target may be
+  // outside the worktree (or untracked), so the cheapest correct
+  // behavior is "no gutter for symlinks".
+  isSymlink: boolean,
 ) {
   // `null` = gutter unavailable (no head, fetch error, binary, or revision
   // not yet resolved). Empty string `""` = file untracked at the revision;
@@ -92,6 +100,14 @@ export function useGitGutter(
   // started.
   useEffect(() => {
     const version = ++fetchVersionRef.current;
+
+    // Bail for symlinks — see the doc comment on `isSymlink` above.
+    if (isSymlink) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setHead(null);
+      collectionRef.current?.clear();
+      return;
+    }
 
     // Bail when the file is past the cap — gutter is disabled regardless.
     // We snapshot `buffer.length` at run time so we don't fire per
@@ -137,7 +153,7 @@ export function useGitGutter(
     // has moved HEAD). Re-fetching on `diffMergeBase` change is the
     // cheapest way to inherit that signal in both modes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [workspaceId, filename, revision, diffMergeBase, collectionRef]);
+  }, [workspaceId, filename, revision, diffMergeBase, collectionRef, isSymlink]);
 
   // Debounced recompute on every buffer or head change. (Unchanged from
   // before Task 6 except that it now responds to `head` updates produced

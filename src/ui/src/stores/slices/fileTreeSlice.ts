@@ -25,6 +25,11 @@ export interface FileBufferState {
    *  via its `onChange` callback. */
   buffer: string;
   isBinary: boolean;
+  /** True when the workspace path is a symlink (so the editor buffer is
+   *  the resolved target, not what git stores as the blob). Used by
+   *  `useGitGutter` to short-circuit decoration computation — see
+   *  the field's doc on the `FileContent` service type. */
+  isSymlink: boolean;
   sizeBytes: number;
   truncated: boolean;
   /** Base64 image bytes for image previews. `null` for non-image tabs. */
@@ -88,6 +93,7 @@ export function makeUnloadedBuffer(): FileBufferState {
     baseline: "",
     buffer: "",
     isBinary: false,
+    isSymlink: false,
     sizeBytes: 0,
     truncated: false,
     imageBytesB64: null,
@@ -230,7 +236,12 @@ export interface FileTreeSlice {
     path: string,
     init: Pick<
       FileBufferState,
-      "baseline" | "isBinary" | "sizeBytes" | "truncated" | "imageBytesB64"
+      | "baseline"
+      | "isBinary"
+      | "isSymlink"
+      | "sizeBytes"
+      | "truncated"
+      | "imageBytesB64"
     >,
   ) => void;
   setFileBufferLoadError: (
