@@ -86,13 +86,17 @@ export function joinWorktreePath(root: string, relative: string): string {
 
 /** Step out of every parent segment of a workspace-relative path so
  *  Reveal-in-Files can expand them in the tree. Returns parents in
- *  outer-to-inner order (`["src", "src/components", "src/components/foo"]`). */
+ *  outer-to-inner order with a **trailing slash** on each segment so the
+ *  keys line up with `buildFileTree`'s dir nodes — those store their
+ *  identifier as `src/components/` (slash terminated), and `FileTree`
+ *  reads expansion state via `expanded[node.path]`. Dropping the slash
+ *  would write to a parallel-but-unread key. */
 export function ancestorDirs(relative: string): string[] {
   const parts = relative.split("/").filter(Boolean);
   if (parts.length <= 1) return [];
   const acc: string[] = [];
   for (let i = 1; i < parts.length; i++) {
-    acc.push(parts.slice(0, i).join("/"));
+    acc.push(`${parts.slice(0, i).join("/")}/`);
   }
   return acc;
 }

@@ -72,14 +72,16 @@ describe("joinWorktreePath", () => {
 });
 
 describe("ancestorDirs", () => {
-  it("returns parent directories outer-to-inner", () => {
-    expect(ancestorDirs("a/b/c/file.ts")).toEqual(["a", "a/b", "a/b/c"]);
+  // Trailing slash matters — buildFileTree stores dir nodes as
+  // `src/components/`, so the expansion keys we write must match.
+  it("returns parent directories outer-to-inner with trailing slashes", () => {
+    expect(ancestorDirs("a/b/c/file.ts")).toEqual(["a/", "a/b/", "a/b/c/"]);
   });
   it("is empty for files at the root", () => {
     expect(ancestorDirs("README.md")).toEqual([]);
   });
   it("ignores stray leading slashes", () => {
-    expect(ancestorDirs("/a/b.ts")).toEqual(["a"]);
+    expect(ancestorDirs("/a/b.ts")).toEqual(["a/"]);
   });
 });
 
@@ -111,19 +113,19 @@ describe("buildEditorActions — file menu", () => {
     expect(deps.setFileBufferContent).not.toHaveBeenCalled();
   });
 
-  it("onRevealInFiles opens the panel, switches tab, expands parents, selects file", () => {
+  it("onRevealInFiles opens the panel, switches tab, expands parents (trailing-slashed), selects file", () => {
     const deps = makeDeps({ rightSidebarVisible: false });
     buildEditorActions(deps).onRevealInFiles();
     expect(deps.showRightSidebar).toHaveBeenCalledTimes(1);
     expect(deps.setRightSidebarTab).toHaveBeenCalledWith("files");
     expect(deps.setAllFilesDirExpanded).toHaveBeenCalledWith(
       "ws-1",
-      "src",
+      "src/",
       true,
     );
     expect(deps.setAllFilesDirExpanded).toHaveBeenCalledWith(
       "ws-1",
-      "src/components",
+      "src/components/",
       true,
     );
     expect(deps.setAllFilesSelectedPath).toHaveBeenLastCalledWith(
