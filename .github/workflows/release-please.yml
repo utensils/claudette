@@ -395,6 +395,73 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: gh release edit "${{ needs.resolve-tag.outputs.tag }}" --draft=false --repo "${{ github.repository }}"
 
+  homebrew-tap-bump:
+    name: Bump utensils/homebrew-tap
+    needs: [resolve-tag, publish]
+    if: always() && needs.publish.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Bail out if HOMEBREW_TAP_TOKEN is missing
+        id: gate-secret
+        env:
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          if [ -z "${HOMEBREW_TAP_TOKEN}" ]; then
+            echo "HOMEBREW_TAP_TOKEN secret is not set — skipping tap bump."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Compute sha256 for both arch DMGs
+        if: steps.gate-secret.outputs.skip != 'true'
+        id: shasums
+        env:
+          TAG: ${{ needs.resolve-tag.outputs.tag }}
+        run: |
+          set -euo pipefail
+          VERSION="${TAG#v}"
+          BASE="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}"
+          # Stream-hash both arch DMGs without keeping them on disk.
+          ARM_SHA=$(curl -fsSL "${BASE}/Claudette_${VERSION}_aarch64.dmg" | sha256sum | cut -d' ' -f1)
+          INTEL_SHA=$(curl -fsSL "${BASE}/Claudette_${VERSION}_x64.dmg" | sha256sum | cut -d' ' -f1)
+          echo "version=${VERSION}"  >> "$GITHUB_OUTPUT"
+          echo "arm=${ARM_SHA}"      >> "$GITHUB_OUTPUT"
+          echo "intel=${INTEL_SHA}"  >> "$GITHUB_OUTPUT"
+
+      - name: Push updated cask to utensils/homebrew-tap
+        if: steps.gate-secret.outputs.skip != 'true'
+        env:
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          VERSION: ${{ steps.shasums.outputs.version }}
+          ARM_SHA: ${{ steps.shasums.outputs.arm }}
+          INTEL_SHA: ${{ steps.shasums.outputs.intel }}
+        run: |
+          set -euo pipefail
+          git config --global user.name  "github-actions[bot]"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git clone "https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/utensils/homebrew-tap.git" tap
+          cd tap
+
+          cask="Casks/claudette.rb"
+          # Replace exactly the three lines that change per release. Anchored
+          # patterns keep this surgical — accidental matches elsewhere are
+          # unlikely given the surrounding quotes.
+          sed -i -E "s|^(  version )\"[^\"]+\"|\\1\"${VERSION}\"|"            "${cask}"
+          sed -i -E "s|^(  sha256 arm:   )\"[0-9a-f]+\"|\\1\"${ARM_SHA}\"|"    "${cask}"
+          sed -i -E "s|^(         intel: )\"[0-9a-f]+\"|\\1\"${INTEL_SHA}\"|"  "${cask}"
+
+          # No-op when the cask is already at this version (e.g. on workflow re-run).
+          if git diff --quiet; then
+            echo "Cask already at ${VERSION} — nothing to do."
+            exit 0
+          fi
+
+          git add "${cask}"
+          git commit -m "claudette ${VERSION}"
+          git push
+
   notify-discord:
     name: Discord Release Notification
     needs: [resolve-tag, publish]

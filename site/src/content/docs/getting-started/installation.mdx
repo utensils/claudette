@@ -3,9 +3,23 @@ title: Installation
 description: Download and install Claudette on macOS, Linux, or Windows.
 ---
 
+## Install on macOS (Homebrew)
+
+The recommended path on macOS is [Homebrew](https://brew.sh/), via the Utensils tap:
+
+```bash
+brew install --cask utensils/tap/claudette
+```
+
+This taps [`utensils/homebrew-tap`](https://github.com/utensils/homebrew-tap) on first run, downloads the Developer ID-signed, Apple-notarized `.dmg` for your architecture (Apple Silicon or Intel), drags `Claudette.app` into `/Applications`, and registers it with Spotlight and Launchpad. Claudette ships its own signed Tauri updater, so `brew upgrade` only refreshes the cask version pointer — in-place updates are handled by the app itself. To uninstall and remove all local data (workspaces, plugins, DB, caches), run `brew uninstall --zap --cask claudette`.
+
+:::note
+Claudette lives in a personal tap rather than the main `homebrew-cask` repository until the GitHub project crosses Homebrew's notability threshold (≥75 stars, ≥30 forks, or ≥30 watchers). The cask format and install behavior are identical; only the tap prefix differs. Star or watch [utensils/Claudette](https://github.com/utensils/Claudette) if you'd like to help move it upstream.
+:::
+
 ## Download
 
-Claudette is available as a pre-built binary from [GitHub Releases](https://github.com/utensils/Claudette/releases).
+Claudette is also available as a pre-built binary from [GitHub Releases](https://github.com/utensils/Claudette/releases).
 
 | Platform | Architecture | Format |
 |----------|-------------|--------|
@@ -17,7 +31,7 @@ Claudette is available as a pre-built binary from [GitHub Releases](https://gith
 | Windows | ARM64 | `.zip` |
 
 1. Download the appropriate binary for your platform from the [latest release](https://github.com/utensils/Claudette/releases/latest)
-2. **macOS**: Open the `.dmg` and drag Claudette to your Applications folder
+2. **macOS**: Open the `.dmg` and drag Claudette to your Applications folder (or use the Homebrew cask above)
 3. **Linux**: Install the `.deb` package with `sudo apt install ./Claudette_*.deb`
 4. **Windows**: Extract the `.zip` archive and run `claudette.exe`
 
