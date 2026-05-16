@@ -11,15 +11,19 @@ Claudette is available as a pre-built binary from [GitHub Releases](https://gith
 |----------|-------------|--------|
 | macOS | Apple Silicon (aarch64) | `.dmg` |
 | macOS | Intel (x86_64) | `.dmg` |
-| Linux | x86_64 | `.AppImage`, `.deb` |
-| Linux | aarch64 | `.AppImage`, `.deb` |
+| Linux | x86_64 | `.deb` |
+| Linux | aarch64 | `.deb` |
 | Windows | x86_64 | `.zip` |
 | Windows | ARM64 | `.zip` |
 
 1. Download the appropriate binary for your platform from the [latest release](https://github.com/utensils/Claudette/releases/latest)
 2. **macOS**: Open the `.dmg` and drag Claudette to your Applications folder
-3. **Linux**: Run the `.AppImage` directly or install the `.deb` package
+3. **Linux**: Install the `.deb` package with `sudo apt install ./Claudette_*.deb`
 4. **Windows**: Extract the `.zip` archive and run `claudette.exe`
+
+:::note
+Linux `.AppImage` is temporarily unavailable while the bundler issue documented in [#824](https://github.com/utensils/Claudette/pull/824) is resolved. Install via `.deb` until AppImage is restored.
+:::
 
 ## Prerequisites
 
