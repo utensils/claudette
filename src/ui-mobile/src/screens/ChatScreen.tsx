@@ -1,7 +1,20 @@
 import { useEffect, useRef, useState } from "react";
-import { loadChatHistory, sendChatMessage, stopAgent } from "../services/rpc";
-import { onAgentStream, type AgentStreamPayload } from "../services/events";
+import {
+  loadChatHistory,
+  sendChatMessage,
+  stopAgent,
+  submitAgentAnswer,
+  submitPlanApproval,
+} from "../services/rpc";
+import {
+  onAgentStream,
+  onPermissionPrompt,
+  type AgentStreamPayload,
+  type PermissionPromptPayload,
+} from "../services/events";
 import { parseAgentEvent } from "../services/agentStream";
+import { AskQuestionSheet, type AskQuestionInput } from "../components/AskQuestionSheet";
+import { PlanApprovalCard, type PlanInput } from "../components/PlanApprovalCard";
 import type {
   ChatMessage,
   ChatSession,
@@ -33,6 +46,8 @@ export function ChatScreen({ connection, workspace, session, onBack }: Props) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [agentActive, setAgentActive] = useState(false);
+  const [pendingPrompt, setPendingPrompt] =
+    useState<PermissionPromptPayload | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
 
   // Load history on mount, and re-load every time the agent finishes a
@@ -55,15 +70,21 @@ export function ChatScreen({ connection, workspace, session, onBack }: Props) {
   }, [session.id]);
 
   useEffect(() => {
-    let unlisten: (() => void) | null = null;
+    let unlistenStream: (() => void) | null = null;
+    let unlistenPrompt: (() => void) | null = null;
     void (async () => {
-      unlisten = await onAgentStream(connection.id, (payload) => {
+      unlistenStream = await onAgentStream(connection.id, (payload) => {
         if (payload.session_id !== session.id) return;
         handleStreamEvent(payload);
       });
+      unlistenPrompt = await onPermissionPrompt(connection.id, (payload) => {
+        if (payload.chat_session_id !== session.id) return;
+        setPendingPrompt(payload);
+      });
     })();
     return () => {
-      if (unlisten) unlisten();
+      if (unlistenStream) unlistenStream();
+      if (unlistenPrompt) unlistenPrompt();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [connection.id, session.id]);
@@ -141,6 +162,32 @@ export function ChatScreen({ connection, workspace, session, onBack }: Props) {
     }
   };
 
+  const handleAnswerQuestion = async (answers: Record<string, string>) => {
+    if (!pendingPrompt) return;
+    await submitAgentAnswer(
+      connection.id,
+      session.id,
+      pendingPrompt.tool_use_id,
+      answers,
+    );
+    setPendingPrompt(null);
+  };
+
+  const handleApprovePlan = async (approved: boolean, reason?: string) => {
+    if (!pendingPrompt) return;
+    await submitPlanApproval(
+      connection.id,
+      session.id,
+      pendingPrompt.tool_use_id,
+      approved,
+      reason,
+    );
+    setPendingPrompt(null);
+  };
+
+  const isAskQuestion = pendingPrompt?.tool_name === "AskUserQuestion";
+  const isPlanApproval = pendingPrompt?.tool_name === "ExitPlanMode";
+
   return (
     <div className="shell">
       <header className="header header-row">
@@ -176,7 +223,23 @@ export function ChatScreen({ connection, workspace, session, onBack }: Props) {
             <div className="bubble-content">{draft.text || "…"}</div>
           </div>
         )}
+        {isPlanApproval && pendingPrompt && (
+          <PlanApprovalCard
+            toolUseId={pendingPrompt.tool_use_id}
+            input={(pendingPrompt.input as PlanInput) ?? {}}
+            onSubmit={handleApprovePlan}
+            onClose={() => setPendingPrompt(null)}
+          />
+        )}
       </div>
+      {isAskQuestion && pendingPrompt && (
+        <AskQuestionSheet
+          toolUseId={pendingPrompt.tool_use_id}
+          input={(pendingPrompt.input as AskQuestionInput) ?? { questions: [] }}
+          onSubmit={handleAnswerQuestion}
+          onClose={() => setPendingPrompt(null)}
+        />
+      )}
       <footer className="composer">
         <input
           className="paste-input composer-input"

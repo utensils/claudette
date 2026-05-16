@@ -169,11 +169,8 @@ pub async fn pair_with_connection_string(
     storage::upsert(&app, saved.clone())?;
 
     let transport_arc: Arc<dyn Transport> = Arc::from(transport);
-    let forwarder = spawn_event_forwarder(
-        app.clone(),
-        saved.id.clone(),
-        Arc::clone(&transport_arc),
-    );
+    let forwarder =
+        spawn_event_forwarder(app.clone(), saved.id.clone(), Arc::clone(&transport_arc));
 
     manager
         .insert(Connection {
@@ -226,11 +223,8 @@ pub async fn connect_saved(
     transport.authenticate_session(&saved.session_token).await?;
 
     let transport_arc: Arc<dyn Transport> = Arc::from(transport);
-    let forwarder = spawn_event_forwarder(
-        app.clone(),
-        saved.id.clone(),
-        Arc::clone(&transport_arc),
-    );
+    let forwarder =
+        spawn_event_forwarder(app.clone(), saved.id.clone(), Arc::clone(&transport_arc));
 
     manager
         .insert(Connection {
@@ -279,7 +273,10 @@ pub async fn send_rpc(
             .unwrap_or("Remote returned an error");
         return Err(msg.to_string());
     }
-    Ok(response.get("result").cloned().unwrap_or(serde_json::Value::Null))
+    Ok(response
+        .get("result")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null))
 }
 
 /// Forget a paired server — closes the live transport (if any) and
