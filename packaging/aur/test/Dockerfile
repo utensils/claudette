@@ -88,6 +88,20 @@ RUN pacman -Sy --noconfirm archlinux-keyring && \
         dbus \
         ttf-dejavu \
         ttf-liberation \
+        # File-dialog backends for Tauri 2's `tauri-plugin-dialog`.
+        # The plugin uses `rfd`'s xdg-portal path on Linux, which
+        # routes through `org.freedesktop.portal.FileChooser` over
+        # DBus. Without a portal daemon + matching backend the
+        # FileChooser call panics and takes the app with it
+        # (observed: clicking "Browse" in Claudette crashes the
+        # process). `xdg-desktop-portal` is the daemon;
+        # `xdg-desktop-portal-gtk` is the GTK3-flavored backend
+        # that XFCE pairs with cleanly. `zenity` is a separate
+        # fallback path some rfd codepaths take when the portal
+        # is reachable but the file-chooser interface is missing.
+        xdg-desktop-portal \
+        xdg-desktop-portal-gtk \
+        zenity \
         # X server + VNC server (no noVNC here — installed below).
         tigervnc \
         # websockify needs python; pulling python-pip from extra so
@@ -136,6 +150,15 @@ RUN useradd -m -G wheel -s /bin/bash builder && \
     echo "builder:builder" | chpasswd && \
     echo "builder ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/00-builder && \
     chmod 0440 /etc/sudoers.d/00-builder
+
+# Pre-install tauri-cli system-wide so the "Claudette Dev"
+# desktop launcher can run `cargo tauri dev` against the cloned
+# project without a per-user setup. Installing as root with
+# `--root /usr/local` lands the binary at /usr/local/bin/cargo-tauri
+# which is on every user's PATH. Under Rosetta this build takes
+# 3-5 min during the image build — paid once so cold-start of the
+# dev loop is much faster.
+RUN cargo install --root /usr/local --version "^2" --locked tauri-cli
 
 # Remove the XFCE screensaver + power manager. They're useful on
 # real desktops but in a container they only get in the way:

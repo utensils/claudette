@@ -38,6 +38,20 @@ if [ ! -s /var/lib/dbus/machine-id ] && [ ! -s /etc/machine-id ]; then
   sudo dbus-uuidgen --ensure=/etc/machine-id
 fi
 
+# ---- xdg-desktop-portal ----------------------------------------------
+# Tauri 2's `tauri-plugin-dialog` routes "Browse" / file-picker
+# calls through `org.freedesktop.portal.FileChooser` over DBus.
+# Without a portal daemon + matching backend (xdg-desktop-portal-
+# gtk in our XFCE setup), the FileChooser call panics and takes
+# the app with it. We start the daemon in the background here
+# so by the time Claudette launches the bus name is claimed.
+# XDG_CURRENT_DESKTOP nudges the daemon to pick the GTK backend
+# over a GNOME one if both happened to be installed.
+export XDG_CURRENT_DESKTOP=XFCE
+echo "[entrypoint] starting xdg-desktop-portal"
+/usr/lib/xdg-desktop-portal >/tmp/xdg-portal.log 2>&1 &
+/usr/lib/xdg-desktop-portal-gtk >/tmp/xdg-portal-gtk.log 2>&1 &
+
 # ---- VNC + noVNC ----------------------------------------------------
 # `-SecurityTypes None` is the explicit "no password" knob. Xvnc binds
 # to localhost so the only reachable surface is websockify on 6080
@@ -144,6 +158,36 @@ Terminal=false
 EOF
   chmod +x "${projects_launcher}"
   gio set "${projects_launcher}" "metadata::trusted" true 2>/dev/null || true
+fi
+
+# ---- Claudette Dev launcher ----------------------------------------
+# Runs `scripts/dev.sh` against the cloned ~/Projects/Claudette
+# tree — hot-reloading Tauri dev server. We open it inside an
+# xfce4-terminal so the user sees Vite output + Rust compile
+# progress; `exec bash` after the dev command keeps the window
+# alive if the dev server exits (so they can read the error).
+#
+# `CARGO_TAURI_FEATURES` drops `voice` from the default set
+# because the container has no working ALSA — the voice crate
+# would compile fine but cpal::default_host() fails at runtime,
+# emitting noisy ALSA warnings. devtools + server + alt-backends
+# are kept; everything else inherits from dev.sh defaults.
+#
+# First click: cold cargo build of the full workspace, ~10-20 min
+# under Rosetta. Subsequent clicks: warm rebuild + hot reload.
+dev_launcher="${HOME}/Desktop/Claudette Dev.desktop"
+if [ ! -f "${dev_launcher}" ]; then
+  cat > "${dev_launcher}" <<EOF
+[Desktop Entry]
+Type=Application
+Name=Claudette Dev
+Comment=Hot-reloading dev mode against ~/Projects/Claudette
+Exec=xfce4-terminal --title=Claudette\\ Dev --working-directory=${project_clone} --hold --command "bash -lc 'export CARGO_TAURI_FEATURES=devtools,server,alternative-backends; ./scripts/dev.sh'"
+Icon=applications-development
+Terminal=false
+EOF
+  chmod +x "${dev_launcher}"
+  gio set "${dev_launcher}" "metadata::trusted" true 2>/dev/null || true
 fi
 
 # ---- Optional auto-launch ------------------------------------------
