@@ -41,6 +41,47 @@ body {
   padding: 20px 16px 8px;
 }
 
+.header-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.header-center {
+  flex: 1;
+  min-width: 0;
+}
+
+.header-row h1 {
+  font-size: 20px;
+  margin: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ghost-btn {
+  background: transparent;
+  color: var(--accent);
+  padding: 8px 12px;
+  border-radius: 8px;
+  font-size: 15px;
+  font-weight: 500;
+  border: none;
+}
+
+.ghost-btn:hover {
+  background: var(--surface);
+}
+
+code {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+  font-size: 12px;
+  padding: 2px 4px;
+  background: var(--surface-elevated);
+  border-radius: 4px;
+}
+
 .header h1 {
   margin: 0;
   font-size: 28px;

@@ -1,31 +1,100 @@
 import { useState } from "react";
+import { ChatListScreen } from "./screens/ChatListScreen";
 import { ConnectScreen } from "./screens/ConnectScreen";
-import type { SavedConnection } from "./types";
+import { WorkspacesScreen } from "./screens/WorkspacesScreen";
+import type { ChatSession, SavedConnection, Workspace } from "./types";
 
-// Phase 5 wires the pair / connect / forget flow. Phase 6 will add a
-// workspaces screen that the ConnectScreen routes to on success.
+type View =
+  | { kind: "connect" }
+  | { kind: "workspaces"; connection: SavedConnection }
+  | {
+      kind: "chat-list";
+      connection: SavedConnection;
+      workspace: Workspace;
+    }
+  | {
+      kind: "chat";
+      connection: SavedConnection;
+      workspace: Workspace;
+      session: ChatSession;
+    };
+
+// Phase 6: pair → workspaces → chat list. Phase 7 fills in the actual
+// `kind: "chat"` view (streaming, composer); for now it falls back to
+// a "Coming soon" placeholder so the navigation flow is fully wired.
 
 export function App() {
-  const [active, setActive] = useState<SavedConnection | null>(null);
+  const [view, setView] = useState<View>({ kind: "connect" });
 
-  if (!active) {
-    return <ConnectScreen onConnected={setActive} />;
+  switch (view.kind) {
+    case "connect":
+      return (
+        <ConnectScreen
+          onConnected={(connection) =>
+            setView({ kind: "workspaces", connection })
+          }
+        />
+      );
+    case "workspaces":
+      return (
+        <WorkspacesScreen
+          connection={view.connection}
+          onOpenWorkspace={(workspace) =>
+            setView({
+              kind: "chat-list",
+              connection: view.connection,
+              workspace,
+            })
+          }
+          onDisconnect={() => setView({ kind: "connect" })}
+        />
+      );
+    case "chat-list":
+      return (
+        <ChatListScreen
+          connection={view.connection}
+          workspace={view.workspace}
+          onOpenSession={(session) =>
+            setView({
+              kind: "chat",
+              connection: view.connection,
+              workspace: view.workspace,
+              session,
+            })
+          }
+          onBack={() =>
+            setView({ kind: "workspaces", connection: view.connection })
+          }
+        />
+      );
+    case "chat":
+      return (
+        <div className="shell">
+          <header className="header header-row">
+            <button
+              className="ghost-btn"
+              onClick={() =>
+                setView({
+                  kind: "chat-list",
+                  connection: view.connection,
+                  workspace: view.workspace,
+                })
+              }
+            >
+              ← Back
+            </button>
+            <div className="header-center">
+              <h1>{view.session.name ?? "Session"}</h1>
+              <p className="subtitle">{view.workspace.name}</p>
+            </div>
+          </header>
+          <main className="main">
+            <p className="status">
+              Streaming chat UI ships in Phase 7. Session id:{" "}
+              <code>{view.session.id}</code>
+            </p>
+          </main>
+        </div>
+      );
   }
-
-  return (
-    <div className="shell">
-      <header className="header">
-        <h1>{active.name}</h1>
-        <p className="subtitle">
-          {active.host}:{active.port}
-        </p>
-      </header>
-      <main className="main">
-        <p className="status">Connected. Workspaces UI ships in Phase 6.</p>
-        <button className="secondary" onClick={() => setActive(null)}>
-          Disconnect
-        </button>
-      </main>
-    </div>
-  );
 }

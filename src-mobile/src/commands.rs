@@ -179,6 +179,41 @@ pub async fn connect_saved(
     Ok(saved)
 }
 
+/// Generic JSON-RPC passthrough. The webview drives the protocol — the
+/// Rust side only knows how to ferry `{method, params}` over the active
+/// `Transport` and surface the result back. Keeping this generic means
+/// new server-side RPC methods (Phase 7+) work end-to-end without a
+/// matching `#[tauri::command]` per method on the mobile side.
+#[tauri::command]
+pub async fn send_rpc(
+    manager: tauri::State<'_, ConnectionManager>,
+    connection_id: String,
+    method: String,
+    params: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let conn = manager
+        .get(&connection_id)
+        .await
+        .ok_or_else(|| format!("No active connection with id {connection_id}"))?;
+    let request = serde_json::json!({
+        "method": method,
+        "params": params,
+    });
+    let response = conn.transport.send(request).await?;
+
+    // Unwrap the `{id, result}` / `{id, error}` envelope so the webview
+    // sees a clean value or a plain Err. Mirrors the desktop's
+    // `send_remote_command` in `src-tauri/src/commands/remote.rs`.
+    if let Some(error) = response.get("error") {
+        let msg = error
+            .get("message")
+            .and_then(|m| m.as_str())
+            .unwrap_or("Remote returned an error");
+        return Err(msg.to_string());
+    }
+    Ok(response.get("result").cloned().unwrap_or(serde_json::Value::Null))
+}
+
 /// Forget a paired server — closes the live transport (if any) and
 /// removes the persisted entry. The session token cannot be revoked
 /// from the phone side; if you suspect compromise, also run

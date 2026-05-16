@@ -53,6 +53,7 @@ pub fn run() {
             commands::list_saved_connections,
             commands::connect_saved,
             commands::forget_connection,
+            commands::send_rpc,
         ])
         .run(tauri::generate_context!())
         .expect("error while running claudette mobile app");
