@@ -298,67 +298,158 @@ function deriveTaskStateFromEntries(
   let todoRun: TodoRunDraft | null = null;
   let runSequence = 1;
 
+  // Buffer of tasks deleted via `TaskUpdate({ status: "deleted" })` since
+  // the last flush. Upstream Claude Code uses delete-burst + fresh
+  // `TaskCreate` instead of TodoWrite's "replace whole list" pattern,
+  // so we mirror the same archive flow here: when the agent fully
+  // empties `taskMap` and then starts creating again, the cleared
+  // batch graduates into `history` as a `TaskRun`. Partial deletions
+  // (where some original tasks survive) are treated as refinements,
+  // not run boundaries, and the buffer is discarded.
+  let pendingTaskDeletions: TrackedTask[] = [];
+  let taskRunStartedAt: string | undefined;
+  let taskRunUpdatedAt: string | undefined;
+  let taskRunTurnId: string | undefined;
+
+  const resetPendingTaskRun = () => {
+    pendingTaskDeletions = [];
+    taskRunStartedAt = undefined;
+    taskRunUpdatedAt = undefined;
+    taskRunTurnId = undefined;
+  };
+
+  const flushPendingTaskDeletions = () => {
+    if (pendingTaskDeletions.length === 0) return;
+    const result = taskResult(pendingTaskDeletions);
+    history.push({
+      ...result,
+      id: `task-run-${runSequence}`,
+      sequence: runSequence++,
+      startedAt: taskRunStartedAt,
+      updatedAt: taskRunUpdatedAt,
+      turnId: taskRunTurnId,
+    });
+    resetPendingTaskRun();
+  };
+
   for (const entry of entries) {
     for (const act of entry.activities) {
-      if (act.toolName !== "TodoWrite") {
-        processActivities([act], taskMap, todoMap, nextSyntheticId);
-        continue;
-      }
+      if (act.toolName === "TodoWrite") {
+        let input: Record<string, unknown>;
+        try {
+          input = JSON.parse(act.inputJson);
+        } catch {
+          continue;
+        }
+        const todos = input.todos;
+        if (!Array.isArray(todos)) continue;
 
-      let input: Record<string, unknown>;
-      try {
-        input = JSON.parse(act.inputJson);
-      } catch {
-        continue;
-      }
-      const todos = input.todos;
-      if (!Array.isArray(todos)) continue;
+        const tasks = parseTodoTasks(todos, nextSyntheticId);
+        todoMap.clear();
+        for (const task of tasks) {
+          todoMap.set(task.id, task);
+        }
 
-      const tasks = parseTodoTasks(todos, nextSyntheticId);
-      todoMap.clear();
-      for (const task of tasks) {
-        todoMap.set(task.id, task);
-      }
+        if (tasks.length === 0) {
+          if (todoRun) {
+            history.push(finalizeTodoRun(todoRun));
+            todoRun = null;
+          }
+          continue;
+        }
 
-      if (tasks.length === 0) {
-        if (todoRun) {
+        if (!todoRun) {
+          todoRun = {
+            id: `todo-run-${runSequence}`,
+            sequence: runSequence++,
+            tasks,
+            startedAt: act.startedAt,
+            updatedAt: act.startedAt,
+            turnId: entry.turnId,
+          };
+          continue;
+        }
+
+        if (isReplacedTodoRun(todoRun.tasks, tasks)) {
           history.push(finalizeTodoRun(todoRun));
-          todoRun = null;
+          todoRun = {
+            id: `todo-run-${runSequence}`,
+            sequence: runSequence++,
+            tasks,
+            startedAt: act.startedAt,
+            updatedAt: act.startedAt,
+            turnId: entry.turnId,
+          };
+        } else {
+          todoRun = {
+            ...todoRun,
+            tasks,
+            updatedAt: act.startedAt ?? todoRun.updatedAt,
+            turnId: entry.turnId,
+          };
         }
         continue;
       }
 
-      if (!todoRun) {
-        todoRun = {
-          id: `todo-run-${runSequence}`,
-          sequence: runSequence++,
-          tasks,
-          startedAt: act.startedAt,
-          updatedAt: act.startedAt,
-          turnId: entry.turnId,
-        };
+      if (act.toolName === "TaskUpdate") {
+        let input: Record<string, unknown>;
+        try {
+          input = JSON.parse(act.inputJson);
+        } catch {
+          continue;
+        }
+        const rawStatus =
+          typeof input.status === "string" ? input.status : undefined;
+        if (rawStatus && rawStatus.toLowerCase() === "deleted") {
+          const id = extractInputTaskId(input);
+          const existing = id ? taskMap.get(id) : undefined;
+          if (existing) {
+            // Snapshot the task as-of deletion so the history entry
+            // shows the user's last-known progress (e.g. completed
+            // tasks stay "completed" in the archive).
+            pendingTaskDeletions.push({ ...existing });
+            taskMap.delete(id);
+            if (!taskRunStartedAt) taskRunStartedAt = act.startedAt;
+            taskRunUpdatedAt = act.startedAt ?? taskRunUpdatedAt;
+            if (!taskRunTurnId) taskRunTurnId = entry.turnId;
+          }
+          continue;
+        }
+        // Non-deleted TaskUpdate (status flips, blocked-by edits, etc.)
+        // is a plain in-place mutation — delegate to the shared handler.
+        processActivities([act], taskMap, todoMap, nextSyntheticId);
         continue;
       }
 
-      if (isReplacedTodoRun(todoRun.tasks, tasks)) {
-        history.push(finalizeTodoRun(todoRun));
-        todoRun = {
-          id: `todo-run-${runSequence}`,
-          sequence: runSequence++,
-          tasks,
-          startedAt: act.startedAt,
-          updatedAt: act.startedAt,
-          turnId: entry.turnId,
-        };
-      } else {
-        todoRun = {
-          ...todoRun,
-          tasks,
-          updatedAt: act.startedAt ?? todoRun.updatedAt,
-          turnId: entry.turnId,
-        };
+      if (act.toolName === "TaskCreate") {
+        // A fresh TaskCreate arriving while we have pending deletions
+        // is the "new batch starting" signal. Archive the deletions
+        // only when the previous batch is fully cleared — partial
+        // deletions are refinements (the agent dropped one or two
+        // tasks but kept working on the rest) and shouldn't pollute
+        // history with single-task runs.
+        if (pendingTaskDeletions.length > 0) {
+          if (taskMap.size === 0) {
+            flushPendingTaskDeletions();
+          } else {
+            resetPendingTaskRun();
+          }
+        }
+        processActivities([act], taskMap, todoMap, nextSyntheticId);
+        continue;
       }
+
+      // TaskStop and anything else task-related — delegate.
+      processActivities([act], taskMap, todoMap, nextSyntheticId);
     }
+  }
+
+  // End-of-stream flush: if the user cleared everything and stopped
+  // without a follow-up TaskCreate, still surface the deleted batch
+  // as history so it isn't lost. Partial-deletion buffers (taskMap
+  // still has survivors) stay refinements and are dropped.
+  if (pendingTaskDeletions.length > 0 && taskMap.size === 0) {
+    flushPendingTaskDeletions();
   }
 
   const tasks = [...taskMap.values(), ...todoMap.values()];

@@ -620,3 +620,286 @@ describe("deriveTaskState — phase progression regression", () => {
     expect(result.current.tasks[0].status).toBe("completed");
   });
 });
+
+// ── deriveTaskState — TaskCreate/TaskUpdate history capture ──
+//
+// Upstream Claude Code switched away from TodoWrite's "replace whole
+// list" pattern to a TaskCreate / TaskUpdate(deleted) pattern: to
+// clear the task list, the agent fires a burst of
+// `TaskUpdate { taskId, status: "deleted" }` for every existing task
+// and then `TaskCreate`s a fresh batch. Our history machinery was only
+// wired up for TodoWrite, so the deleted batch silently vanished. The
+// blocks below pin the TaskCreate-side equivalent: a burst delete
+// followed by new TaskCreates archives the deleted run, mirroring what
+// the TodoWrite path already does on replacement.
+describe("deriveTaskState — TaskCreate/TaskUpdate history regression", () => {
+  // Helper: build the canonical TaskCreate activity Claude Code emits,
+  // including the "Task #N created successfully: <subject>" result so
+  // `extractTaskId` returns a stable numeric id (matches live data).
+  const taskCreate = (id: number, subject: string) =>
+    activity(
+      "TaskCreate",
+      { subject },
+      `Task #${id} created successfully: ${subject}`,
+    );
+
+  const taskDelete = (id: number) =>
+    activity("TaskUpdate", { taskId: String(id), status: "deleted" });
+
+  const taskStatus = (id: number, status: string) =>
+    activity("TaskUpdate", { taskId: String(id), status });
+
+  it("archives a burst-deleted task run when a fresh TaskCreate follows", () => {
+    // The user's reported scenario: 10 tasks created, all deleted via
+    // `TaskUpdate(deleted)`, then 4 fresh tasks created. The 10
+    // originals should land in history as a single run; the 4 new
+    // tasks should populate `current`.
+    const initial = Array.from({ length: 10 }, (_, i) =>
+      taskCreate(i + 1, `Original task ${i + 1}`),
+    );
+    const deletes = Array.from({ length: 10 }, (_, i) => taskDelete(i + 1));
+    const fresh = [
+      taskCreate(11, "Buff it to a mirror shine."),
+      taskCreate(12, "Itemize all hoarded gold."),
+      taskCreate(13, "Adjust strings for underwater acoustics."),
+      taskCreate(14, "Whatever else"),
+    ];
+
+    const result = deriveTaskState([], [...initial, ...deletes, ...fresh]);
+
+    expect(result.history).toHaveLength(1);
+    expect(result.history[0].totalCount).toBe(10);
+    expect(result.history[0].tasks.map((t) => t.description)).toEqual(
+      initial.map((_, i) => `Original task ${i + 1}`),
+    );
+    expect(result.current.totalCount).toBe(4);
+    expect(result.current.tasks.map((t) => t.description)).toEqual([
+      "Buff it to a mirror shine.",
+      "Itemize all hoarded gold.",
+      "Adjust strings for underwater acoustics.",
+      "Whatever else",
+    ]);
+  });
+
+  it("preserves the last-known status of each task when archiving", () => {
+    // The history entry should reflect what the task *looked like* at
+    // deletion time, not reset everything to pending. Otherwise a list
+    // of "all completed" tasks would be archived as "all pending" once
+    // it's wiped, losing the user's progress.
+    const result = deriveTaskState(
+      [],
+      [
+        taskCreate(1, "A"),
+        taskCreate(2, "B"),
+        taskCreate(3, "C"),
+        taskStatus(1, "in_progress"),
+        taskStatus(1, "completed"),
+        taskStatus(2, "completed"),
+        taskDelete(1),
+        taskDelete(2),
+        taskDelete(3),
+        taskCreate(4, "Fresh"),
+      ],
+    );
+
+    expect(result.history).toHaveLength(1);
+    const archived = result.history[0].tasks;
+    expect(archived.map((t) => t.description)).toEqual(["A", "B", "C"]);
+    expect(archived.map((t) => t.status)).toEqual([
+      "completed",
+      "completed",
+      "pending",
+    ]);
+    expect(result.history[0].completedCount).toBe(2);
+    expect(result.history[0].totalCount).toBe(3);
+    expect(result.current.tasks.map((t) => t.description)).toEqual(["Fresh"]);
+  });
+
+  it("archives a fully-deleted batch at end of stream even without follow-up creates", () => {
+    // User stops mid-stream: 3 created, all 3 deleted, no fresh creates.
+    // Treat this as a clear (taskMap empty after deletions) and archive
+    // the deleted batch so the user can still see what was there.
+    const result = deriveTaskState(
+      [],
+      [
+        taskCreate(1, "A"),
+        taskCreate(2, "B"),
+        taskCreate(3, "C"),
+        taskDelete(1),
+        taskDelete(2),
+        taskDelete(3),
+      ],
+    );
+
+    expect(result.history).toHaveLength(1);
+    expect(result.history[0].tasks.map((t) => t.description)).toEqual([
+      "A",
+      "B",
+      "C",
+    ]);
+    expect(result.current.tasks).toEqual([]);
+  });
+
+  it("does NOT archive a single mid-stream deletion when other tasks still survive", () => {
+    // Refinement pattern: the agent created 5 tasks, decided one was
+    // wrong, deleted it, and kept working with the rest. That's not a
+    // "clear" — no history entry should appear, just the surviving
+    // tasks in current.
+    const result = deriveTaskState(
+      [],
+      [
+        taskCreate(1, "A"),
+        taskCreate(2, "B"),
+        taskCreate(3, "C"),
+        taskCreate(4, "D"),
+        taskCreate(5, "E"),
+        taskDelete(3),
+      ],
+    );
+
+    expect(result.history).toHaveLength(0);
+    expect(result.current.totalCount).toBe(4);
+    expect(result.current.tasks.map((t) => t.description)).toEqual([
+      "A",
+      "B",
+      "D",
+      "E",
+    ]);
+  });
+
+  it("does not archive partial deletions even when a fresh TaskCreate follows", () => {
+    // 5 created → 2 deleted (3 remain) → 1 new task. The deletions
+    // weren't a clear, so they shouldn't be archived. Only when the
+    // entire previous batch is wiped do we treat it as a run boundary.
+    const result = deriveTaskState(
+      [],
+      [
+        taskCreate(1, "A"),
+        taskCreate(2, "B"),
+        taskCreate(3, "C"),
+        taskCreate(4, "D"),
+        taskCreate(5, "E"),
+        taskDelete(2),
+        taskDelete(4),
+        taskCreate(6, "F"),
+      ],
+    );
+
+    expect(result.history).toHaveLength(0);
+    expect(result.current.tasks.map((t) => t.description)).toEqual([
+      "A",
+      "C",
+      "E",
+      "F",
+    ]);
+  });
+
+  it("captures multiple delete/recreate cycles as separate history runs", () => {
+    // Stress test: three full cycles of "create batch → delete all →
+    // create next batch". The right-sidebar should show two completed
+    // history runs plus the third batch as current.
+    const result = deriveTaskState(
+      [],
+      [
+        taskCreate(1, "Run-1 A"),
+        taskCreate(2, "Run-1 B"),
+        taskDelete(1),
+        taskDelete(2),
+        taskCreate(3, "Run-2 A"),
+        taskCreate(4, "Run-2 B"),
+        taskCreate(5, "Run-2 C"),
+        taskDelete(3),
+        taskDelete(4),
+        taskDelete(5),
+        taskCreate(6, "Run-3 A"),
+      ],
+    );
+
+    expect(result.history).toHaveLength(2);
+    expect(result.history[0].tasks.map((t) => t.description)).toEqual([
+      "Run-1 A",
+      "Run-1 B",
+    ]);
+    expect(result.history[1].tasks.map((t) => t.description)).toEqual([
+      "Run-2 A",
+      "Run-2 B",
+      "Run-2 C",
+    ]);
+    expect(result.current.tasks.map((t) => t.description)).toEqual(["Run-3 A"]);
+    // Runs share the global `runSequence` counter with todo runs but
+    // must be monotonically increasing within the task path.
+    expect(result.history[1].sequence).toBeGreaterThan(
+      result.history[0].sequence,
+    );
+  });
+
+  it("captures a delete burst spanning a turn boundary", () => {
+    // Real-world pattern: the agent created and worked on tasks in
+    // one turn, then in a later turn cleared them and started fresh.
+    // The turn boundary must not break history detection.
+    const turn1 = turn([
+      taskCreate(1, "Old A"),
+      taskCreate(2, "Old B"),
+      taskStatus(1, "completed"),
+    ]);
+    const turn2 = turn([taskDelete(1), taskDelete(2), taskCreate(3, "New A")]);
+    const result = deriveTaskState([turn1, turn2], []);
+
+    expect(result.history).toHaveLength(1);
+    expect(result.history[0].tasks.map((t) => t.description)).toEqual([
+      "Old A",
+      "Old B",
+    ]);
+    expect(result.history[0].tasks[0].status).toBe("completed");
+    expect(result.current.tasks.map((t) => t.description)).toEqual(["New A"]);
+  });
+
+  it("captures the TodoWrite and TaskCreate history paths independently in the same stream", () => {
+    // Belt-and-braces: a mixed session that uses TodoWrite for one
+    // phase and TaskCreate for another should produce two distinct
+    // history runs without either path stomping on the other.
+    const todoFirst = activity("TodoWrite", {
+      todos: [
+        { content: "todo-1", status: "completed" },
+        { content: "todo-2", status: "completed" },
+      ],
+    });
+    const todoReplacement = activity("TodoWrite", {
+      todos: [
+        { content: "fresh todo X", status: "pending" },
+      ],
+    });
+
+    const result = deriveTaskState(
+      [],
+      [
+        todoFirst,
+        todoReplacement,
+        // ↑ TodoWrite replacement → history run #1
+        taskCreate(1, "task-1"),
+        taskCreate(2, "task-2"),
+        taskDelete(1),
+        taskDelete(2),
+        taskCreate(3, "task-3"),
+        // ↑ TaskCreate burst-delete → history run #2
+      ],
+    );
+
+    expect(result.history).toHaveLength(2);
+    // Both runs in history regardless of ordering — pin descriptions.
+    const archivedDescriptions = result.history
+      .map((run) => run.tasks.map((t) => t.description))
+      .flat()
+      .sort();
+    expect(archivedDescriptions).toEqual(
+      ["task-1", "task-2", "todo-1", "todo-2"].sort(),
+    );
+    // Current shows TaskCreate-sourced entries before TodoWrite-sourced
+    // ones — the existing `[...taskMap, ...todoMap]` ordering, pinned
+    // so future refactors don't accidentally swap source columns.
+    expect(result.current.tasks.map((t) => t.description)).toEqual([
+      "task-3",
+      "fresh todo X",
+    ]);
+  });
+});
