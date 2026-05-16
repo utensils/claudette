@@ -242,9 +242,20 @@ export const createTerminalSlice: StateCreator<
   setTerminalPanelVisible: (visible) =>
     set({
       terminalPanelVisible: visible,
-      // Treat any direct visibility set (keyboard shortcut, programmatic
-      // toggle from the menu/tray) the same as a user toggle. Auto-open
-      // callers route through dedicated setters that don't run this.
+      // Both directions of this setter update the dismissal flag:
+      //   • `visible = false` → user-driven close (keyboard shortcut,
+      //     menu/tray, close button). Mark dismissed so auto-open
+      //     paths stay quiet until the user re-opens.
+      //   • `visible = true`  → opening (whether user-initiated OR
+      //     env-auto-open via `useTerminalEnvAutoOpen`). Clearing
+      //     dismissal on auto-open is intentional: the panel is now
+      //     visible again, so a future env-prepare on another
+      //     workspace should auto-open it too unless the user
+      //     explicitly closes it again.
+      //
+      // Callers that need to hide the panel *without* signalling user
+      // intent should not exist today; add a dedicated setter if a
+      // future use case appears.
       terminalPanelUserDismissed: !visible,
     }),
   setWorkspaceRunningCommand: (wsId, ptyId, command) =>

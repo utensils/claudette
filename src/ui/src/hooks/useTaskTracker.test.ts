@@ -1588,6 +1588,42 @@ describe("finalizeTaskState", () => {
     );
   });
 
+  it("keeps subagents whose status is `Running` (capital R) or `starting` as live, not archived", () => {
+    // Upstream Claude Code emits both lowercase `running` and capitalized
+    // `Running` depending on the pipeline stage, and `starting` is the
+    // in-flight spawn state. All three must keep the subagent in the
+    // live `subagents` lane — archiving a spawning teammate would
+    // silently surface it as history.
+    const cases: Array<{ status: string; label: string }> = [
+      { status: "Running", label: "Cap-R running" },
+      { status: "starting", label: "Spawning" },
+      { status: "STARTING", label: "Loud spawning" },
+    ];
+    for (const { status, label } of cases) {
+      const sub: ToolActivity = {
+        ...activity("Agent", { prompt: "go" }, ""),
+        agentDescription: label,
+        agentStatus: status,
+        agentToolCalls: [
+          {
+            toolUseId: `call-${label}`,
+            toolName: "TaskCreate",
+            agentId: "sub-x",
+            input: { subject: `${label} work` },
+            response: { task: { id: "1", subject: `${label} work` } },
+            status: "completed",
+            startedAt: "2026-05-15T00:00:00Z",
+            completedAt: null,
+          },
+        ],
+      };
+      const state = deriveTaskState([], [sub]);
+      expect(state.subagents).toHaveLength(1);
+      expect(state.subagents[0].label).toBe(label);
+      expect(state.history).toHaveLength(0);
+    }
+  });
+
   it("archives still-running subagents on finalization with their label", () => {
     // Sub A finished normally → already in baseline.history via
     // status-transition archive. Sub B was still "running" when the

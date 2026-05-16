@@ -8,7 +8,6 @@ import { ChevronRight, Undo2, Trash2, Plus, Minus, FilePenLine } from "lucide-re
 import { useAppStore, selectActiveSessionId } from "../../stores/useAppStore";
 import { isPendingPlaceholderWorkspace } from "../../utils/workspaceEnvironment";
 import { useWorkspaceTaskHistory } from "../../hooks/useWorkspaceTaskHistory";
-import { useTaskTrackerWithHistory } from "../../hooks/useTaskTracker";
 import {
   discardFile,
   discardFiles,
@@ -110,14 +109,16 @@ export const RightSidebar = memo(function RightSidebar() {
   );
   const taskCount = taskHistory.totalBadgeCount;
 
-  // Lightweight IO-free signal of "the active session has any task work
-  // right now" — used to auto-switch the right sidebar to Tasks the
-  // first time a workspace's agent surfaces tasks, so devs don't have
-  // to hunt for the tab on every session.
-  const activeTaskSnapshot = useTaskTrackerWithHistory(activeSessionId);
+  // `useWorkspaceTaskHistory` already derives the active session's
+  // `current` + `subagents` snapshot (it's the lightweight IO-free
+  // half of the hook — only the cross-session history fetch is gated
+  // on `historyEnabled`). Reuse that here instead of double-subscribing
+  // through `useTaskTrackerWithHistory`, so the auto-switch signal
+  // doesn't trigger a redundant derivation on every tool-activity
+  // update.
   const hasLiveTasks =
-    activeTaskSnapshot.current.tasks.length > 0 ||
-    activeTaskSnapshot.subagents.length > 0;
+    taskHistory.current.tasks.length > 0 ||
+    taskHistory.subagents.length > 0;
   // One auto-switch per workspace selection. Tracks the workspace ids
   // we've already auto-switched for and reset on workspace change so
   // each workspace gets at most one nudge before it learns the user's

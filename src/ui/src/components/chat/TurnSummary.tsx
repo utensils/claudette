@@ -18,10 +18,13 @@ import {
 
 /// Split the leading "Agent" / "Skill" prefix on a turn label into a
 /// colored span so the finalized summary matches the accent color used
-/// while the turn was still running. Anything else renders as a plain
-/// string. Kept inline rather than promoted to a helper module — the
-/// only other consumer of `toolColor` already lives in TurnSummary.
-const COLORED_PREFIX = /^(Agent|Skill) (.+)$/;
+/// while the turn was still running. Handles three label shapes:
+///   • bare  — "Agent" / "Skill"
+///   • prefixed — "Agent <description>" / "Skill <description>"
+///   • anything else — rendered untouched
+/// Kept inline rather than promoted to a helper module — the only
+/// other consumer of `toolColor` already lives in TurnSummary.
+const COLORED_PREFIX = /^(Agent|Skill)(?:\s+(.+))?$/;
 function renderTurnLabel(label: string) {
   const match = COLORED_PREFIX.exec(label);
   if (!match) return label;
@@ -29,8 +32,12 @@ function renderTurnLabel(label: string) {
   return (
     <>
       <span style={{ color: toolColor(tool) }}>{tool}</span>
-      {" "}
-      {rest}
+      {rest != null && (
+        <>
+          {" "}
+          {rest}
+        </>
+      )}
     </>
   );
 }

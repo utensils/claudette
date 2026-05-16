@@ -751,7 +751,13 @@ function deriveTaskStateFromEntries(
     const entry = latestAgentByToolUseId.get(toolUseId)!;
     const run = deriveSubagentRunFromActivity(entry.act, nextSyntheticId);
     if (!run) continue;
-    if (run.status === "running") {
+    // Normalize the agent status before deciding live-vs-archived.
+    // Upstream emits both `"running"` and `"Running"` depending on the
+    // pipeline stage, and the in-flight `"starting"` state also counts
+    // as live — archiving it would surface a still-spawning teammate
+    // as history. Mirrors `toolActivityGroups.groupHasRunningActivity`.
+    const normalizedStatus = (run.status ?? "").toLowerCase();
+    if (normalizedStatus === "running" || normalizedStatus === "starting") {
       subagents.push(run);
     } else {
       history.push({
