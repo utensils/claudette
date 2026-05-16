@@ -290,19 +290,18 @@ pub async fn prepare_cross_harness_migration(
     let chat_session_id = session_id;
 
     // Pull every persisted message for this chat session, ordered by
-    // creation. `list_chat_messages` returns rows for the whole
-    // workspace; filter to this session and order is preserved by the
-    // underlying ORDER BY in the DB layer.
+    // creation. Use the session-scoped DB API so we don't scan the
+    // whole workspace; ordering is preserved by the underlying
+    // `ORDER BY created_at, rowid` in the DB layer.
     let chat_session = db
         .get_chat_session(&chat_session_id)
         .map_err(|e| e.to_string())?
         .ok_or("Chat session not found")?;
     let workspace_id = chat_session.workspace_id.clone();
     let messages: Vec<ChatMessage> = db
-        .list_chat_messages(&workspace_id)
+        .list_chat_messages_for_session(&chat_session_id)
         .map_err(|e| e.to_string())?
         .into_iter()
-        .filter(|m| m.chat_session_id == chat_session_id)
         .filter(|m| !matches!(m.role, ChatRole::System))
         .collect();
 

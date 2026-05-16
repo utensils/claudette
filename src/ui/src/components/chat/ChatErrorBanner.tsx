@@ -14,8 +14,13 @@ interface Props {
   /** Workspace whose chat surfaced this error — needed for archive /
    *  recreate actions on a missing-worktree banner. */
   workspaceId: string | null;
-  /** Active chat session — needed for the context-overflow recovery
-   *  affordance, which opens that session's model picker. */
+  /** Active chat session id. Only used as a presence gate for the
+   *  context-overflow recovery affordance — we don't render the
+   *  "pick a larger-context model" link unless we're attached to a
+   *  real session. The link itself opens the global model picker
+   *  (`modelSelectorOpen` in `toolbarSlice`), which the active
+   *  session's toolbar reads — no targeting parameter is threaded
+   *  through. */
   sessionId?: string | null;
   /** Callback invoked when the user takes a recovery action that should
    *  clear the error. The parent owns error state; we just notify. */

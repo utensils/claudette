@@ -622,8 +622,11 @@ export function findModelInRegistry(
  * is a warm in-place change (same harness — the persistent subprocess
  * gets respawned with `--model <new>` and `--resume <prior-sid>`, full
  * conversation preserved) or a cross-harness migration (different
- * transcript format — currently triggers a session reset; Phase 2 of
- * the model-switch plan will replace that with a transcript migration).
+ * transcript format — the prior transcript can't be replayed wire-for-wire,
+ * so the backend mints a fresh session id and seeds a synthetic
+ * `<conversation-history>` prelude into the next user turn via
+ * `prepare_cross_harness_migration` so the new harness still sees the
+ * preceding turns).
  *
  * Returns `undefined` only when the model isn't in the registry at all.
  * Curated Claude Code entries in `MODELS` don't carry a `runtimeHarness`
