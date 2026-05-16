@@ -207,6 +207,19 @@ jobs:
         shell: bash
         run: scripts/stage-cli-sidecar.sh ${{ matrix.rust-target }}
 
+      # `linuxdeploy` strips every binary in the AppDir before assembling
+      # the AppImage. The Pi harness sidecar is a `bun build --compile`
+      # output (ELF with the JS bytecode appended in a non-standard
+      # section), and GNU `strip` either mangles it or fails outright,
+      # which aborts linuxdeploy with the swallowed-stderr "failed to
+      # run linuxdeploy" error tauri-bundler surfaces. NO_STRIP=true
+      # tells linuxdeploy to skip its strip pass; .deb bundling is
+      # unaffected.
+      - name: Skip linuxdeploy strip (Pi harness sidecar is bun --compile)
+        if: startsWith(matrix.platform, 'ubuntu')
+        shell: bash
+        run: echo "NO_STRIP=true" >> "$GITHUB_ENV"
+
       # ---- macOS + Linux: tauri-action drives the bundled build ------------
       # `includeUpdaterJson: false` is intentional. tauri-action's default
       # behavior is to download the release's existing `latest.json`, merge
