@@ -456,8 +456,10 @@ function deriveSubagentRunFromActivity(
 /// multiple lines, hundreds of characters. Rendered verbatim, that
 /// blows up the right-sidebar layout and leaks prompt content into the
 /// section header. Collapse to the first non-empty line, trim, and cap
-/// at 80 chars. The full string still surfaces on hover via the
-/// section's `title` attribute (TaskList sets it from the raw label).
+/// at 80 chars in `label` (the displayed text). When the full collapse
+/// differs from the truncated label, also return the full single-line
+/// collapse in `tooltip` — TaskList wires that into the section's
+/// `title=` so hovering reveals the whole description.
 const MAX_SUBAGENT_LABEL_CHARS = 80;
 export function formatSubagentLabel(activity: {
   agentDescription?: string | null;
@@ -557,10 +559,13 @@ function deriveTaskStateFromEntries(
     }
     // No survivors — fold any cancelled (but-still-in-map) tasks into
     // the same archive run so the user sees the whole batch's final
-    // state in history. Mutating taskMap is safe here because we'll
+    // state in history. Skip ids that TaskStop already pushed into
+    // `pendingTaskDeletions` so the same task can't show up twice in
+    // the archived run. Mutating taskMap is safe here because we'll
     // exit the loop or hit the next TaskCreate immediately after.
+    const alreadyPending = new Set(pendingTaskDeletions.map((t) => t.id));
     for (const t of cancelled) {
-      pendingTaskDeletions.push({ ...t });
+      if (!alreadyPending.has(t.id)) pendingTaskDeletions.push({ ...t });
       taskMap.delete(t.id);
     }
     flushPendingTaskDeletions();
@@ -659,9 +664,14 @@ function deriveTaskStateFromEntries(
         // TaskStop is the subagent's "close the list" signal — they
         // rarely call TaskUpdate(deleted). Treat it as a run-boundary
         // contributor the same way deletions are: snapshot the task
-        // (preserved as `cancelled` in the archive) into the pending
-        // buffer and remove it from `taskMap`. The actual flush
-        // decision happens at the next TaskCreate / end-of-stream.
+        // (preserved as `cancelled`) into the pending buffer for
+        // archiving. **Keep** the cancelled task in `taskMap` so a
+        // partial TaskStop (sibling tasks still live) still surfaces
+        // it in `current` — `maybeArchivePendingBatch` would otherwise
+        // discard `pendingTaskDeletions` on partial bursts and the
+        // stopped task would disappear from both current and history.
+        // The dedup at fold time prevents archive-on-full-burst from
+        // double-counting.
         let input: Record<string, unknown>;
         try {
           input = JSON.parse(act.inputJson);
@@ -671,8 +681,12 @@ function deriveTaskStateFromEntries(
         const id = extractInputTaskId(input);
         const existing = id ? taskMap.get(id) : undefined;
         if (existing) {
-          pendingTaskDeletions.push({ ...existing, status: "cancelled" });
-          taskMap.delete(id);
+          const cancelledTask: TrackedTask = {
+            ...existing,
+            status: "cancelled",
+          };
+          pendingTaskDeletions.push(cancelledTask);
+          taskMap.set(existing.id, cancelledTask);
           if (!taskRunStartedAt) taskRunStartedAt = act.startedAt;
           taskRunUpdatedAt = act.startedAt ?? taskRunUpdatedAt;
           if (!taskRunTurnId) taskRunTurnId = entry.turnId;

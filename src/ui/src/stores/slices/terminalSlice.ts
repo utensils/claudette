@@ -37,10 +37,16 @@ export interface TerminalSlice {
   terminalPanelVisible: boolean;
   /// `true` once the user has explicitly closed the terminal panel (via the
   /// toggle button, keyboard shortcut, or `setTerminalPanelVisible(false)`).
-  /// All auto-open paths (env preparation, tab auto-creation, queued
-  /// commands) respect this flag — once dismissed, the panel stays hidden
-  /// across workspace switches and re-prepares until the user manually
-  /// opens it again. Re-opening clears the flag.
+  /// Passive auto-open paths (env preparation, tab auto-creation) respect
+  /// this flag — once dismissed, the panel stays hidden across workspace
+  /// switches and re-prepares until the user manually opens it again.
+  /// Re-opening clears the flag.
+  ///
+  /// Explicit user actions intentionally override the dismissal:
+  /// `enqueueTerminalCommand` (e.g. running a `.claudette.json` script or
+  /// the Send-to-terminal action) opens the panel and resets this flag
+  /// because the user just asked to run a command — silently swallowing
+  /// it would be surprising.
   ///
   /// Ephemeral: not persisted across app restarts. After a relaunch,
   /// `terminalPanelVisible` starts `false` and `terminalPanelUserDismissed`

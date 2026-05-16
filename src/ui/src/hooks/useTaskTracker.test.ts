@@ -899,7 +899,13 @@ describe("deriveTaskState — TaskCreate/TaskUpdate history regression", () => {
 
   it("does NOT archive a single mid-stream TaskStop when other tasks still survive", () => {
     // Refinement pattern with TaskStop: agent stops one task but keeps
-    // working with the rest. No history entry should appear.
+    // working with the rest. No history entry should appear, and the
+    // stopped task **must remain visible** in `current` as `cancelled`
+    // — previously a partial TaskStop dropped the task from both
+    // `current` and `history` (silently lost it) because
+    // `maybeArchivePendingBatch` discards `pendingTaskDeletions` on
+    // partial bursts. Now the cancelled task is kept in `taskMap` so
+    // the user sees the final state explicitly.
     const result = deriveTaskState(
       [],
       [
@@ -912,10 +918,13 @@ describe("deriveTaskState — TaskCreate/TaskUpdate history regression", () => {
     );
 
     expect(result.history).toHaveLength(0);
-    expect(result.current.tasks.map((t) => t.description)).toEqual(["A", "C"]);
-    // The stopped task stays out of current (consumed by the deletion
-    // buffer) and gets silently dropped — same semantics as a single
-    // mid-stream TaskUpdate(deleted) that doesn't trigger archive.
+    expect(
+      result.current.tasks.map((t) => [t.description, t.status]),
+    ).toEqual([
+      ["A", "completed"],
+      ["B", "cancelled"],
+      ["C", "pending"],
+    ]);
   });
 
   it("captures multiple delete/recreate cycles as separate history runs", () => {
