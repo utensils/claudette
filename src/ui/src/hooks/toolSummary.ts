@@ -34,18 +34,20 @@ export function extractToolSummary(
           ? `${input.skill}${input.args ? ` ${input.args}` : ""}`
           : "";
       case "TaskUpdate": {
-        const id = input.taskId ?? input.task_id ?? input.id;
+        // TaskUpdate's documented schema uses `taskId`. Don't accept
+        // plain `id` here — see `extractInputTaskId` for the rationale
+        // (collision risk with generic record-id fields).
+        const id = input.taskId ?? input.task_id;
         return input.status ? `#${id ?? "?"} → ${input.status}` : "";
       }
       case "TaskGet":
       case "TaskStop":
       case "TaskOutput": {
-        const id =
-          input.taskId ?? input.task_id ?? input.id ?? input.shell_id;
+        const id = input.taskId ?? input.task_id ?? input.shell_id;
         return id ? `#${id}` : "";
       }
       case "Monitor": {
-        const id = input.taskId ?? input.task_id ?? input.id;
+        const id = input.taskId ?? input.task_id;
         return id ? `task #${id}` : "";
       }
       case "CronDelete":

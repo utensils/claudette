@@ -231,10 +231,12 @@ $env:CLAUDETTE_DEBUG_PORT  = $debugPort
 # SendMessage between teammates). External Claude Code builds gate the
 # feature behind `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` or the
 # `--agent-teams` CLI flag (see Claude Code's
-# `utils/agentSwarmsEnabled.ts`). Dev builds default-on here; set to 0
-# to reproduce the disabled-state UI.
+# `utils/agentSwarmsEnabled.ts`). Default-on for the regular dev flow,
+# OFF under `--new` so the fresh-user sandbox truly reproduces what a
+# brand-new user sees upstream (agent-teams is opt-in). Either side
+# can be overridden by setting the env var explicitly before invoking.
 if (-not $env:CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS) {
-    $env:CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS = '1'
+    $env:CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS = if ($newSession) { '0' } else { '1' }
 }
 
 # 4) Resolve the host triple — the staged sidecar's filename has to match

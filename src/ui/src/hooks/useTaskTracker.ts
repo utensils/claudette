@@ -101,10 +101,12 @@ function normalizeStatus(raw: string | undefined): TaskStatus {
 /** Extract the task id from a TaskUpdate / TaskStop / TaskGet input payload.
  *  Claude Code's own tools are inconsistent: `TaskUpdate`/`TaskGet` use
  *  `taskId`, `TaskStop`/`TaskOutput` use `task_id` (with `shell_id` as a
- *  deprecated alias). Older callers and our own tests have used plain `id`.
- *  Accept all of them so the tracker stays robust across schema drift. */
+ *  deprecated alias). Accept that documented surface only — `id` is a
+ *  generic JSON key (record id, row id, UUID) and tolerating it here
+ *  invites silent mis-binds if any future tool ever lands a TaskUpdate
+ *  shape with `id` meaning something else. */
 function extractInputTaskId(input: Record<string, unknown>): string {
-  const raw = input.taskId ?? input.task_id ?? input.id ?? input.shell_id;
+  const raw = input.taskId ?? input.task_id ?? input.shell_id;
   return raw != null ? String(raw) : "";
 }
 
@@ -184,8 +186,12 @@ export function processActivities(
         const existing = taskMap.get(id);
         if (existing) {
           if (rawStatus) existing.status = normalizeStatus(rawStatus);
-          if (typeof input.description === "string")
-            existing.description = input.description;
+          // TaskUpdate.description is the long body, not the title.
+          // The display label was set from TaskCreate.subject and must
+          // stay sticky — otherwise the sidebar entry silently swaps
+          // from "Implement feature X" to a multi-paragraph essay.
+          // Only honour an explicit `subject` (not currently in the
+          // upstream TaskUpdate schema, but defensive against drift).
           if (typeof input.subject === "string" && input.subject.trim())
             existing.description = input.subject;
           if (input.priority)
@@ -383,8 +389,9 @@ function deriveSubagentRunFromActivity(
         const existing = taskMap.get(id);
         if (existing) {
           if (rawStatus) existing.status = normalizeStatus(rawStatus);
-          if (typeof input.description === "string")
-            existing.description = input.description;
+          // Same rule as the main-agent path: TaskUpdate.description
+          // is the long body, not the title. Keep the existing
+          // subject-derived label sticky.
           if (typeof input.subject === "string" && input.subject.trim())
             existing.description = input.subject;
           if (input.priority)
@@ -478,6 +485,36 @@ function deriveTaskStateFromEntries(
     resetPendingTaskRun();
   };
 
+  /** "Live" tasks are anything in taskMap that hasn't been cancelled
+   *  via TaskStop. If they remain, the deletion/stop activity was a
+   *  refinement (some originals still in play) and we drop the buffer
+   *  silently; otherwise the batch has been fully cleared and we
+   *  archive the pending deletions plus any cancelled survivors as a
+   *  single history run. Idempotent — safe to call at every TaskCreate
+   *  boundary and again at end-of-stream. */
+  const maybeArchivePendingBatch = () => {
+    if (pendingTaskDeletions.length === 0) return;
+    const live: TrackedTask[] = [];
+    const cancelled: TrackedTask[] = [];
+    for (const t of taskMap.values()) {
+      if (t.status === "cancelled") cancelled.push(t);
+      else live.push(t);
+    }
+    if (live.length > 0) {
+      resetPendingTaskRun();
+      return;
+    }
+    // No survivors — fold any cancelled (but-still-in-map) tasks into
+    // the same archive run so the user sees the whole batch's final
+    // state in history. Mutating taskMap is safe here because we'll
+    // exit the loop or hit the next TaskCreate immediately after.
+    for (const t of cancelled) {
+      pendingTaskDeletions.push({ ...t });
+      taskMap.delete(t.id);
+    }
+    flushPendingTaskDeletions();
+  };
+
   for (const entry of entries) {
     for (const act of entry.activities) {
       if (act.toolName === "TodoWrite") {
@@ -567,6 +604,31 @@ function deriveTaskStateFromEntries(
         continue;
       }
 
+      if (act.toolName === "TaskStop") {
+        // TaskStop is the subagent's "close the list" signal — they
+        // rarely call TaskUpdate(deleted). Treat it as a run-boundary
+        // contributor the same way deletions are: snapshot the task
+        // (preserved as `cancelled` in the archive) into the pending
+        // buffer and remove it from `taskMap`. The actual flush
+        // decision happens at the next TaskCreate / end-of-stream.
+        let input: Record<string, unknown>;
+        try {
+          input = JSON.parse(act.inputJson);
+        } catch {
+          continue;
+        }
+        const id = extractInputTaskId(input);
+        const existing = id ? taskMap.get(id) : undefined;
+        if (existing) {
+          pendingTaskDeletions.push({ ...existing, status: "cancelled" });
+          taskMap.delete(id);
+          if (!taskRunStartedAt) taskRunStartedAt = act.startedAt;
+          taskRunUpdatedAt = act.startedAt ?? taskRunUpdatedAt;
+          if (!taskRunTurnId) taskRunTurnId = entry.turnId;
+        }
+        continue;
+      }
+
       if (act.toolName === "TaskCreate") {
         // A fresh TaskCreate arriving while we have pending deletions
         // is the "new batch starting" signal. Archive the deletions
@@ -574,29 +636,19 @@ function deriveTaskStateFromEntries(
         // deletions are refinements (the agent dropped one or two
         // tasks but kept working on the rest) and shouldn't pollute
         // history with single-task runs.
-        if (pendingTaskDeletions.length > 0) {
-          if (taskMap.size === 0) {
-            flushPendingTaskDeletions();
-          } else {
-            resetPendingTaskRun();
-          }
-        }
+        maybeArchivePendingBatch();
         processActivities([act], taskMap, todoMap, nextSyntheticId);
         continue;
       }
 
-      // TaskStop and anything else task-related — delegate.
+      // Other task-related tools — delegate to the shared mutator.
       processActivities([act], taskMap, todoMap, nextSyntheticId);
     }
   }
 
-  // End-of-stream flush: if the user cleared everything and stopped
-  // without a follow-up TaskCreate, still surface the deleted batch
-  // as history so it isn't lost. Partial-deletion buffers (taskMap
-  // still has survivors) stay refinements and are dropped.
-  if (pendingTaskDeletions.length > 0 && taskMap.size === 0) {
-    flushPendingTaskDeletions();
-  }
+  // End-of-stream flush mirrors the TaskCreate boundary check so a
+  // session that ends on a clearing burst still records history.
+  maybeArchivePendingBatch();
 
   // Per-subagent task buckets. Walk every Agent activity in stream
   // order (past turns first, then current). Running subagents stay in
@@ -607,25 +659,45 @@ function deriveTaskStateFromEntries(
   // find what each subagent did after the fact. Subagents rarely
   // emit `TaskUpdate(deleted)` on their own list before exiting, so
   // status-transition is the only reliable "I'm done" signal we get.
-  const subagents: SubagentTaskRun[] = [];
+  //
+  // De-dupe by `toolUseId`: the same Agent activity could surface in
+  // both `completedTurns` and `toolActivities` (`finalizeTurn` clears
+  // the latter in practice, but nothing on the data side enforces
+  // it). Last write wins — so a transition from "running" in a past
+  // turn to "completed" in the current activities collapses to a
+  // single history row instead of producing duplicate React keys.
+  const latestAgentByToolUseId = new Map<
+    string,
+    { act: ToolActivity; turnId?: string }
+  >();
+  const agentToolUseOrder: string[] = [];
   for (const entry of entries) {
     for (const act of entry.activities) {
       if (act.toolName !== "Agent") continue;
-      const run = deriveSubagentRunFromActivity(act, nextSyntheticId);
-      if (!run) continue;
-      if (run.status === "running") {
-        subagents.push(run);
-      } else {
-        history.push({
-          tasks: run.tasks,
-          completedCount: run.completedCount,
-          totalCount: run.totalCount,
-          id: `subagent-${run.id}`,
-          sequence: runSequence++,
-          label: run.label,
-          turnId: entry.turnId,
-        });
+      if (!latestAgentByToolUseId.has(act.toolUseId)) {
+        agentToolUseOrder.push(act.toolUseId);
       }
+      latestAgentByToolUseId.set(act.toolUseId, { act, turnId: entry.turnId });
+    }
+  }
+
+  const subagents: SubagentTaskRun[] = [];
+  for (const toolUseId of agentToolUseOrder) {
+    const entry = latestAgentByToolUseId.get(toolUseId)!;
+    const run = deriveSubagentRunFromActivity(entry.act, nextSyntheticId);
+    if (!run) continue;
+    if (run.status === "running") {
+      subagents.push(run);
+    } else {
+      history.push({
+        tasks: run.tasks,
+        completedCount: run.completedCount,
+        totalCount: run.totalCount,
+        id: `subagent-${run.id}`,
+        sequence: runSequence++,
+        label: run.label,
+        turnId: entry.turnId,
+      });
     }
   }
 

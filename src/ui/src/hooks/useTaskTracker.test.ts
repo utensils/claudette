@@ -135,15 +135,51 @@ describe("deriveTasks", () => {
     expect(result.tasks[0].status).toBe("completed");
   });
 
-  it("accepts the deprecated `id` key on TaskUpdate for backward compatibility", () => {
-    // Some older harnesses (and pre-fix test fixtures) used `id`. Keep
-    // tolerating it so we don't break sessions persisted before the fix.
+  it("ignores plain `id` on TaskUpdate — accepts only the documented aliases", () => {
+    // Tightening the key surface: `id` is a generic JSON key (record id,
+    // row id, UUID) and any future tool happening to land a `TaskUpdate`
+    // shape with `id` meaning something else would silently bind to the
+    // wrong row. Restrict to `taskId` (per Claude Code's documented
+    // schema) plus the snake_case / `shell_id` deprecated aliases used
+    // by TaskStop.
     const activities = [
-      activity("TaskCreate", { subject: "Legacy" }, "Task #5 created successfully: Legacy"),
+      activity(
+        "TaskCreate",
+        { subject: "Legacy" },
+        "Task #5 created successfully: Legacy",
+      ),
       activity("TaskUpdate", { id: "5", status: "completed" }),
     ];
     const result = deriveTasks([], activities);
-    expect(result.tasks[0].status).toBe("completed");
+    // The TaskUpdate is treated as an orphan (no recognised id), so the
+    // original task is untouched and a stub for "" doesn't get created.
+    expect(result.totalCount).toBe(1);
+    expect(result.tasks[0].status).toBe("pending");
+  });
+
+  it("does not overwrite a TaskCreate's subject with TaskUpdate's long description", () => {
+    // Upstream TaskUpdate's `description` field is the long body, not
+    // the title. The right-sidebar label was set from `subject` at
+    // create time; subsequent body edits must NOT swap it out (the
+    // sidebar entry would silently morph from "Implement feature X"
+    // into a multi-line essay).
+    const activities = [
+      activity(
+        "TaskCreate",
+        {
+          subject: "Implement feature X",
+          description: "Original short body",
+        },
+        "Task #3 created successfully: Implement feature X",
+      ),
+      activity("TaskUpdate", {
+        taskId: "3",
+        description:
+          "Long updated body: the agent expanded its understanding of the task, blah blah blah, multiple paragraphs of new context.",
+      }),
+    ];
+    const result = deriveTasks([], activities);
+    expect(result.tasks[0].description).toBe("Implement feature X");
   });
 
   it("handles TaskStop with snake_case `task_id`", () => {
@@ -799,6 +835,88 @@ describe("deriveTaskState — TaskCreate/TaskUpdate history regression", () => {
     ]);
   });
 
+  it("archives TaskStop-only burst closures (subagent pattern) as history", () => {
+    // Subagents typically don't fire TaskUpdate(deleted) when they
+    // wrap up — they emit TaskStop on each task instead. Treat a
+    // TaskStop burst that empties the task list the same as a delete
+    // burst for run-boundary purposes: archive into history with the
+    // tasks preserved as cancelled.
+    const result = deriveTaskState(
+      [],
+      [
+        taskCreate(1, "Work item A"),
+        taskCreate(2, "Work item B"),
+        taskStatus(1, "in_progress"),
+        taskStatus(1, "completed"),
+        activity("TaskStop", { task_id: "1" }),
+        activity("TaskStop", { task_id: "2" }),
+        taskCreate(3, "Fresh batch"),
+      ],
+    );
+
+    expect(result.history).toHaveLength(1);
+    expect(result.history[0].tasks.map((t) => t.description)).toEqual([
+      "Work item A",
+      "Work item B",
+    ]);
+    expect(result.history[0].tasks.map((t) => t.status)).toEqual([
+      "cancelled",
+      "cancelled",
+    ]);
+    expect(result.current.tasks.map((t) => t.description)).toEqual([
+      "Fresh batch",
+    ]);
+  });
+
+  it("archives a mixed burst of delete + TaskStop as one history run", () => {
+    // Reviewer-flagged sequence: delete A → TaskStop B → create C
+    // should archive both A and B together (A as-status, B cancelled)
+    // and start fresh with C. Without this, A would silently vanish
+    // because TaskStop'd B still counted as a "live survivor".
+    const result = deriveTaskState(
+      [],
+      [
+        taskCreate(1, "A"),
+        taskCreate(2, "B"),
+        taskDelete(1),
+        activity("TaskStop", { task_id: "2" }),
+        taskCreate(3, "C"),
+      ],
+    );
+
+    expect(result.history).toHaveLength(1);
+    expect(result.history[0].tasks.map((t) => t.description)).toEqual([
+      "A",
+      "B",
+    ]);
+    expect(result.history[0].tasks.map((t) => t.status)).toEqual([
+      "pending",
+      "cancelled",
+    ]);
+    expect(result.current.tasks.map((t) => t.description)).toEqual(["C"]);
+  });
+
+  it("does NOT archive a single mid-stream TaskStop when other tasks still survive", () => {
+    // Refinement pattern with TaskStop: agent stops one task but keeps
+    // working with the rest. No history entry should appear.
+    const result = deriveTaskState(
+      [],
+      [
+        taskCreate(1, "A"),
+        taskCreate(2, "B"),
+        taskCreate(3, "C"),
+        activity("TaskStop", { task_id: "2" }),
+        taskStatus(1, "completed"),
+      ],
+    );
+
+    expect(result.history).toHaveLength(0);
+    expect(result.current.tasks.map((t) => t.description)).toEqual(["A", "C"]);
+    // The stopped task stays out of current (consumed by the deletion
+    // buffer) and gets silently dropped — same semantics as a single
+    // mid-stream TaskUpdate(deleted) that doesn't trigger archive.
+  });
+
   it("captures multiple delete/recreate cycles as separate history runs", () => {
     // Stress test: three full cycles of "create batch → delete all →
     // create next batch". The right-sidebar should show two completed
@@ -1064,6 +1182,35 @@ describe("deriveTaskState — subagent task tracking", () => {
     ]);
   });
 
+  it("subagent TaskUpdate does not overwrite the original subject with a long description", () => {
+    // Same fix as the main-agent path: TaskUpdate.description is the
+    // body, not the title. The right-sidebar entry must stay sticky
+    // on whatever `subject` the TaskCreate established.
+    const subagent = {
+      ...agentActivity("Subagent label", [
+        agentCall({
+          toolName: "TaskCreate",
+          agentId: "sub-X",
+          input: { subject: "Stable title", description: "Original body" },
+          response: { task: { id: "9", subject: "Stable title" } },
+        }),
+        agentCall({
+          toolName: "TaskUpdate",
+          agentId: "sub-X",
+          input: {
+            taskId: "9",
+            description:
+              "Long updated body with multiple paragraphs that would blow out the sidebar layout if it ever leaked into the title slot.",
+          },
+        }),
+      ]),
+      agentStatus: "running",
+    } satisfies ToolActivity;
+    const result = deriveTaskState([], [subagent]);
+    expect(result.subagents).toHaveLength(1);
+    expect(result.subagents[0].tasks[0].description).toBe("Stable title");
+  });
+
   it("applies TaskUpdate status flips to the subagent's own tasks only", () => {
     const subagent = {
       ...agentActivity("Agent C", [
@@ -1264,6 +1411,61 @@ describe("deriveTaskState — subagent task tracking", () => {
     expect(result.subagents).toHaveLength(0);
     expect(result.history).toHaveLength(1);
     expect(result.history[0].label).toBe("Status-less subagent");
+  });
+
+  it("dedupes the same Agent toolUseId across past turns and current activities", () => {
+    // Defensive: `finalizeTurn` clears `toolActivities[sessionId]` in
+    // practice, so an Agent activity normally only appears once. But
+    // nothing enforces that contract on the data side — if a future
+    // refactor (or a remote-replay path) ever surfaces the same
+    // toolUseId in both places, the right-sidebar must not duplicate
+    // the subagent section / history run, and React's key contract
+    // must hold. Last-write-wins so a transition from running →
+    // completed across the two surfaces lands as a single history
+    // entry, not a duplicate.
+    const act = activity("Agent", { prompt: "go" }, "");
+    const stableId = act.toolUseId;
+
+    const past: ToolActivity = {
+      ...act,
+      agentDescription: "Long-lived subagent",
+      agentStatus: "running",
+      agentToolCalls: [
+        agentCall({
+          toolName: "TaskCreate",
+          agentId: "sub-x",
+          input: { subject: "Phase 1" },
+          response: { task: { id: "1", subject: "Phase 1" } },
+        }),
+      ],
+    };
+    // Same toolUseId, status flipped to completed, with one more
+    // TaskCreate. This is what a "replayed turn" would look like
+    // arriving alongside the still-live current activity.
+    const current: ToolActivity = {
+      ...past,
+      agentStatus: "completed",
+      agentToolCalls: [
+        ...(past.agentToolCalls ?? []),
+        agentCall({
+          toolName: "TaskCreate",
+          agentId: "sub-x",
+          input: { subject: "Phase 2" },
+          response: { task: { id: "2", subject: "Phase 2" } },
+        }),
+      ],
+    };
+
+    const result = deriveTaskState([turn([past])], [current]);
+
+    // No duplicate React keys, no duplicate bucket. Last write wins.
+    expect(result.subagents).toHaveLength(0);
+    expect(result.history).toHaveLength(1);
+    expect(result.history[0].id).toBe(`subagent-${stableId}`);
+    expect(result.history[0].tasks.map((t) => t.description)).toEqual([
+      "Phase 1",
+      "Phase 2",
+    ]);
   });
 
   it("collects subagent runs from both completed turns and current activities", () => {
