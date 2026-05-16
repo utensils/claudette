@@ -120,7 +120,9 @@ function RunSummary({
           className={`${styles.chevron} ${expanded ? styles.chevronOpen : ""}`}
           aria-hidden="true"
         />
-        <span className={styles.runTitle}>Run {run.sequence}</span>
+        <span className={styles.runTitle} title={run.label ?? undefined}>
+          {run.label ?? `Run ${run.sequence}`}
+        </span>
         <span className={styles.runMeta}>
           {run.completedCount}/{run.totalCount}
         </span>

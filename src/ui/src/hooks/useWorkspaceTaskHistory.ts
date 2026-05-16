@@ -10,6 +10,7 @@ import type { ChatSession } from "../types/chat";
 import type { CompletedTurnData } from "../types/checkpoint";
 import {
   deriveTaskState,
+  finalizeTaskState,
   useTaskTrackerWithHistory,
   type SubagentTaskRun,
   type TaskActivityTurn,
@@ -264,10 +265,18 @@ export function useWorkspaceTaskHistory(
 
   const histories: SessionTaskHistory[] = [];
   for (const session of sessions) {
+    // For non-active sessions ("session tab closed" semantics, archived
+    // sessions, anything except the one currently in focus), graduate
+    // leftover `current.tasks` and still-running subagents into the
+    // history runs so closed sessions don't silently drop their work.
+    // The active session keeps its live state intact so the user can
+    // watch progress.
     const state =
       session.id === activeSessionId
         ? activeState
-        : deriveTaskState(turnsBySession[session.id] ?? [], []);
+        : finalizeTaskState(
+            deriveTaskState(turnsBySession[session.id] ?? [], []),
+          );
     if (state.history.length > 0) {
       histories.push({ session, runs: state.history });
     }

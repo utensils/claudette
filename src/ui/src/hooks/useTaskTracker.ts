@@ -29,6 +29,11 @@ export interface TaskRun extends TaskTrackerResult {
   startedAt?: string;
   updatedAt?: string;
   turnId?: string;
+  /// Optional display label. Set by the subagent-archive path so the
+  /// history section can render the agent's description (e.g.
+  /// "Agent A: build pagination") instead of the generic "Run N".
+  /// Absent for TodoWrite-replacement and main-agent delete-burst runs.
+  label?: string;
 }
 
 export interface TaskTrackerWithHistory {
@@ -594,14 +599,33 @@ function deriveTaskStateFromEntries(
   }
 
   // Per-subagent task buckets. Walk every Agent activity in stream
-  // order (past turns first, then current) so the right-sidebar
-  // section order matches when each subagent appeared.
+  // order (past turns first, then current). Running subagents stay in
+  // the live `subagents[]` lane so the right-sidebar can render
+  // them with progress indicators; everything else (completed,
+  // failed, or status-less DB-replayed entries) graduates straight
+  // into `history` with a per-subagent label so the user can still
+  // find what each subagent did after the fact. Subagents rarely
+  // emit `TaskUpdate(deleted)` on their own list before exiting, so
+  // status-transition is the only reliable "I'm done" signal we get.
   const subagents: SubagentTaskRun[] = [];
   for (const entry of entries) {
     for (const act of entry.activities) {
       if (act.toolName !== "Agent") continue;
       const run = deriveSubagentRunFromActivity(act, nextSyntheticId);
-      if (run) subagents.push(run);
+      if (!run) continue;
+      if (run.status === "running") {
+        subagents.push(run);
+      } else {
+        history.push({
+          tasks: run.tasks,
+          completedCount: run.completedCount,
+          totalCount: run.totalCount,
+          id: `subagent-${run.id}`,
+          sequence: runSequence++,
+          label: run.label,
+          turnId: entry.turnId,
+        });
+      }
     }
   }
 
@@ -632,6 +656,54 @@ export function deriveTasks(
 
   const tasks = [...taskMap.values(), ...todoMap.values()];
   return taskResult(tasks);
+}
+
+/**
+ * Graduate a `TaskTrackerWithHistory` for a session that's no longer
+ * active — typically because the user closed the chat tab. Anything
+ * still in `current` (work the session left mid-list) or `subagents`
+ * (a subagent that was still "running" when the session closed) gets
+ * folded into `history` as additional `TaskRun`s so the workspace's
+ * task panel keeps a complete record of what happened in that
+ * session. Idempotent: running it on an already-finalized state is
+ * safe (no double-counting).
+ *
+ * Used by `useWorkspaceTaskHistory` for every non-active session.
+ */
+export function finalizeTaskState(
+  state: TaskTrackerWithHistory,
+): TaskTrackerWithHistory {
+  const extraRuns: TaskRun[] = [];
+  let nextSeq =
+    state.history.reduce((max, r) => Math.max(max, r.sequence), 0) + 1;
+
+  if (state.current.tasks.length > 0) {
+    extraRuns.push({
+      tasks: state.current.tasks,
+      completedCount: state.current.completedCount,
+      totalCount: state.current.totalCount,
+      id: `final-current-${nextSeq}`,
+      sequence: nextSeq++,
+    });
+  }
+  for (const sub of state.subagents) {
+    extraRuns.push({
+      tasks: sub.tasks,
+      completedCount: sub.completedCount,
+      totalCount: sub.totalCount,
+      id: `final-subagent-${sub.id}`,
+      sequence: nextSeq++,
+      label: sub.label,
+    });
+  }
+
+  if (extraRuns.length === 0) return state;
+
+  return {
+    current: EMPTY_RESULT,
+    history: [...state.history, ...extraRuns],
+    subagents: EMPTY_SUBAGENTS,
+  };
 }
 
 export function deriveTaskState(
