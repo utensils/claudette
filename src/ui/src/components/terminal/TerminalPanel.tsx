@@ -411,6 +411,9 @@ export const TerminalPanel = memo(function TerminalPanel() {
     (s) => s.setTerminalPanelVisible,
   );
   const terminalPanelVisible = useAppStore((s) => s.terminalPanelVisible);
+  const terminalPanelUserDismissed = useAppStore(
+    (s) => s.terminalPanelUserDismissed,
+  );
   const claudetteTerminalEnabled = useAppStore(
     (s) => s.claudetteTerminalEnabled,
   );
@@ -687,6 +690,7 @@ export const TerminalPanel = memo(function TerminalPanel() {
     workspaceEnvironmentPreparing,
     claudetteTerminalEnabled,
     terminalPanelVisible,
+    terminalPanelUserDismissed,
     setTerminalPanelVisible,
   );
 

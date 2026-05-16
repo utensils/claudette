@@ -131,6 +131,13 @@ Env vars (each consulted at process start):
                        such as CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY.
                        By default dev launches strip these so Settings and
                        chat exercise the configured Claude Code credentials.
+  CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS
+                       Regular dev defaults to 1 so the agent-teams
+                       flow (TeamCreate / TeamDelete / SendMessage) is
+                       exercised. \`--new\` defaults to 0 so the fresh-
+                       user sandbox matches what brand-new users see
+                       upstream (agent-teams is opt-in). Set the env
+                       var explicitly to override either default.
 
 Discovery file:
   Each invocation writes \${TMPDIR:-/tmp}/claudette-dev/<pid>.json so the
@@ -285,6 +292,21 @@ strip_inherited_claude_auth_env() {
 }
 
 strip_inherited_claude_auth_env
+
+# Opt in to upstream Claude Code's agent-teams (TeamCreate / TeamDelete +
+# SendMessage between teammates). External Claude Code builds gate the
+# feature behind either `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` or the
+# `--agent-teams` CLI flag (see Claude Code's
+# `utils/agentSwarmsEnabled.ts`). Default-on for the regular dev flow so
+# everyone exercises the experimental surface; OFF under `--new` so the
+# "simulate a fresh install" sandbox truly reproduces what a brand-new
+# user would see (agent-teams is opt-in upstream). Either side can be
+# overridden by setting the env var explicitly before invoking.
+if (( new_session )); then
+  export CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS="${CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS:-0}"
+else
+  export CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS="${CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS:-1}"
+fi
 
 discovery_dir="${TMPDIR:-/tmp}/claudette-dev"
 mkdir -p "$discovery_dir"

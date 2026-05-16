@@ -74,6 +74,71 @@ describe("terminal slice: addTerminalTab", () => {
     useAppStore.getState().addTerminalTab(WS_A, makeTab(1, WS_A));
     expect(useAppStore.getState().terminalPanelVisible).toBe(true);
   });
+
+  // Regression: once the user has dismissed the panel, adding a tab in
+  // the background must not force the panel back open. The tab still
+  // shows up in the panel's tab list the next time the user opens it.
+  it("does not auto-show the panel when the user has dismissed it", () => {
+    useAppStore.setState({
+      terminalPanelVisible: false,
+      terminalPanelUserDismissed: true,
+    });
+    useAppStore.getState().addTerminalTab(WS_A, makeTab(1, WS_A));
+    expect(useAppStore.getState().terminalPanelVisible).toBe(false);
+    // The tab itself still landed in state.
+    expect(useAppStore.getState().terminalTabs[WS_A]).toHaveLength(1);
+  });
+});
+
+describe("terminal slice: user-dismissal tracking", () => {
+  beforeEach(() => {
+    useAppStore.setState({
+      terminalPanelVisible: false,
+      terminalPanelUserDismissed: false,
+      pendingTerminalCommands: [],
+    });
+  });
+
+  it("toggleTerminalPanel sets dismissed=true when closing", () => {
+    useAppStore.setState({ terminalPanelVisible: true });
+    useAppStore.getState().toggleTerminalPanel();
+    expect(useAppStore.getState().terminalPanelVisible).toBe(false);
+    expect(useAppStore.getState().terminalPanelUserDismissed).toBe(true);
+  });
+
+  it("toggleTerminalPanel clears dismissed when opening", () => {
+    useAppStore.setState({
+      terminalPanelVisible: false,
+      terminalPanelUserDismissed: true,
+    });
+    useAppStore.getState().toggleTerminalPanel();
+    expect(useAppStore.getState().terminalPanelVisible).toBe(true);
+    expect(useAppStore.getState().terminalPanelUserDismissed).toBe(false);
+  });
+
+  it("setTerminalPanelVisible(false) sets dismissed=true", () => {
+    useAppStore.setState({ terminalPanelVisible: true });
+    useAppStore.getState().setTerminalPanelVisible(false);
+    expect(useAppStore.getState().terminalPanelUserDismissed).toBe(true);
+  });
+
+  it("setTerminalPanelVisible(true) clears dismissed", () => {
+    useAppStore.setState({ terminalPanelUserDismissed: true });
+    useAppStore.getState().setTerminalPanelVisible(true);
+    expect(useAppStore.getState().terminalPanelUserDismissed).toBe(false);
+  });
+
+  // "Run in terminal" is an explicit user action — it surfaces the
+  // panel even if the user had previously dismissed it.
+  it("enqueueTerminalCommand opens the panel and clears the dismissal", () => {
+    useAppStore.setState({
+      terminalPanelVisible: false,
+      terminalPanelUserDismissed: true,
+    });
+    useAppStore.getState().enqueueTerminalCommand(WS_A, "ls -la");
+    expect(useAppStore.getState().terminalPanelVisible).toBe(true);
+    expect(useAppStore.getState().terminalPanelUserDismissed).toBe(false);
+  });
 });
 
 describe("terminal slice: upsertAgentTaskTerminalTab", () => {

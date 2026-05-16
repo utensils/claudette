@@ -9,7 +9,19 @@ Claude often rewrites its task list as work shifts. Claudette keeps the latest c
 
 Open the right sidebar and choose **Tasks**. The **Current** section shows the selected chat session's active task list, including status updates from Claude's task and todo tools.
 
-The tab badge counts the active checklist items plus preserved historical runs, so a workspace with older task lists still signals that there is task context to review.
+The tab badge counts every task the panel would surface — the active checklist plus any subagent buckets plus every task across archived history runs — so a workspace with older task lists still signals that there is task context to review.
+
+## Subagent Tasks
+
+When the main agent spawns subagents (via Claude Code's `TaskCreate` / agent-teams flow), each subagent's own task list renders in its own section above **History**, labeled with the subagent's name. The main agent's checklist stays in **Current**; subagent buckets are kept separate so the two never collide. Once a subagent finishes (status leaves `running`), its bucket is archived into **History** under the owning session.
+
+Subagent labels are derived from the agent's `description` field and capped at one line / 80 characters so long spawn prompts don't blow up the layout. Hover the label to see the full single-line collapse of the original description.
+
+## Sibling Sessions
+
+TeamCreate teammates run as **sibling chat sessions** in the same workspace. While a teammate's agent is still running, that session's live tasks (and its own subagents) appear as a dedicated lane in the Tasks panel — distinguished from **Current** by the session name and a pulsing live dot. Only after the teammate goes idle do its leftover tasks graduate into **History** under the session's name.
+
+The right-sidebar tab auto-switches to **Tasks** once per workspace selection when tasks first appear, so you don't have to hunt for the tab on every new session. Manually picking a different tab on that workspace cancels future auto-switches for the rest of the session.
 
 ## Historical Runs
 

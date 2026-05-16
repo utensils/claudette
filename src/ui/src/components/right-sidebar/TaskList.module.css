@@ -35,6 +35,45 @@
   text-transform: none;
 }
 
+/* Subagent section headers can be much longer than "Current" / "History"
+ * (e.g. "Agent A: build pagination for the sessions endpoint"), so let
+ * them ellipsize cleanly inside the fixed-width sidebar header instead
+ * of wrapping or pushing the count out of view. */
+.subagentLabel {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+  flex: 1 1 auto;
+  margin-right: 6px;
+  text-transform: none;
+}
+
+/* Pulsing dot next to a sibling-session header indicates the session's
+ * agent is currently running — the lane is live, not archived. Uses
+ * the in-progress accent so it matches the chevron/task-status palette. */
+.liveDot {
+  flex-shrink: 0;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent-dim);
+  box-shadow: 0 0 0 2px rgba(var(--accent-primary-rgb), 0.25);
+  animation: liveDotPulse 1.4s ease-in-out infinite;
+}
+
+@keyframes liveDotPulse {
+  0%, 100% {
+    opacity: 0.55;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
 .sessionGroup {
   display: flex;
   flex-direction: column;

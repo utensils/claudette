@@ -1211,9 +1211,9 @@
 
 .agentToolGroupHeader {
   display: flex;
-  align-items: flex-start;
-  gap: 0;
-  padding: 6px 8px 2px 8px;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px 2px 10px;
   min-width: 0;
 }
 

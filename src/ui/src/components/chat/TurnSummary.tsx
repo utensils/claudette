@@ -5,6 +5,7 @@ import styles from "./ChatPanel.module.css";
 import { TurnFooter } from "./TurnFooter";
 import { TaskProgressBar } from "./TaskProgressBar";
 import { activityMatchesSearch } from "./agentToolCallRendering";
+import { toolColor } from "./chatHelpers";
 import { AgentToolCallGroup } from "./AgentToolCallGroup";
 import { ToolActivityRow } from "./ToolActivityRow";
 import { isAgentActivity } from "./toolActivityGroups";
@@ -14,6 +15,32 @@ import {
   type EditSummary,
   summarizeTurnEdits,
 } from "./editActivitySummary";
+
+/// Split the leading "Agent" / "Skill" prefix on a turn label into a
+/// colored span so the finalized summary matches the accent color used
+/// while the turn was still running. Handles three label shapes:
+///   • bare  — "Agent" / "Skill"
+///   • prefixed — "Agent <description>" / "Skill <description>"
+///   • anything else — rendered untouched
+/// Kept inline rather than promoted to a helper module — the only
+/// other consumer of `toolColor` already lives in TurnSummary.
+const COLORED_PREFIX = /^(Agent|Skill)(?:\s+(.+))?$/;
+function renderTurnLabel(label: string) {
+  const match = COLORED_PREFIX.exec(label);
+  if (!match) return label;
+  const [, tool, rest] = match;
+  return (
+    <>
+      <span style={{ color: toolColor(tool) }}>{tool}</span>
+      {rest != null && (
+        <>
+          {" "}
+          {rest}
+        </>
+      )}
+    </>
+  );
+}
 
 /**
  * Render a single completed turn summary (collapsible tool call list).
@@ -146,10 +173,13 @@ export function TurnSummary({
           >
             <span className={styles.toolChevron}>{isExpanded ? "⌄" : "›"}</span>
             <span className={styles.turnLabel}>
-              {label ??
+              {label != null ? (
+                renderTurnLabel(label)
+              ) : (
                 `${visibleActivities.length} tool call${
                   visibleActivities.length !== 1 ? "s" : ""
-                }`}
+                }`
+              )}
               {showFooter && turn.messageCount > 0 &&
                 `, ${turn.messageCount} message${turn.messageCount !== 1 ? "s" : ""}`}
             </span>

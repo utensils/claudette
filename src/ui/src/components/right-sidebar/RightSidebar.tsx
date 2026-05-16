@@ -109,6 +109,32 @@ export const RightSidebar = memo(function RightSidebar() {
   );
   const taskCount = taskHistory.totalBadgeCount;
 
+  // `useWorkspaceTaskHistory` already derives the active session's
+  // `current` + `subagents` snapshot (it's the lightweight IO-free
+  // half of the hook — only the cross-session history fetch is gated
+  // on `historyEnabled`). Reuse that here instead of double-subscribing
+  // through `useTaskTrackerWithHistory`, so the auto-switch signal
+  // doesn't trigger a redundant derivation on every tool-activity
+  // update.
+  const hasLiveTasks =
+    taskHistory.current.tasks.length > 0 ||
+    taskHistory.subagents.length > 0;
+  // One auto-switch per workspace selection. Tracks the workspace ids
+  // we've already auto-switched for and reset on workspace change so
+  // each workspace gets at most one nudge before it learns the user's
+  // tab preference for the remainder of the session.
+  const autoSwitchedForWorkspaceRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    if (!selectedWorkspaceId || !hasLiveTasks) return;
+    if (autoSwitchedForWorkspaceRef.current.has(selectedWorkspaceId)) return;
+    if (activeTab === "tasks") {
+      autoSwitchedForWorkspaceRef.current.add(selectedWorkspaceId);
+      return;
+    }
+    autoSwitchedForWorkspaceRef.current.add(selectedWorkspaceId);
+    setActiveTab("tasks");
+  }, [selectedWorkspaceId, hasLiveTasks, activeTab, setActiveTab]);
+
   // Local-only stage/unstage/discard UI state. None of these git index
   // operations are bridged through the remote server (matches revert_file),
   // so the actions are hidden when the workspace is connected to a remote.

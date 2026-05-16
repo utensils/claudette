@@ -82,6 +82,8 @@ function taskHistory(): WorkspaceTaskHistoryResult {
         ],
       },
     ],
+    siblings: [],
+    subagents: [],
     historyRunCount: 1,
     totalBadgeCount: 2,
     loading: false,
@@ -99,6 +101,83 @@ describe("TaskList", () => {
     expect(container.textContent).toContain("Archived");
     expect(container.textContent).toContain("Run 1");
     expect(container.textContent).not.toContain("Preserve old checklist");
+  });
+
+  it("renders subagent buckets under their agent label", async () => {
+    const history = taskHistory();
+    history.subagents = [
+      {
+        id: "toolu-parent-A",
+        label: "Agent A: build pagination",
+        tasks: [
+          {
+            id: "9",
+            description: "Add pagination to /api/sessions",
+            status: "completed",
+            source: "task",
+          },
+          {
+            id: "11",
+            description: "Fix Opus pricing tier",
+            status: "in_progress",
+            source: "task",
+          },
+        ],
+        completedCount: 1,
+        totalCount: 2,
+        status: "running",
+      },
+    ];
+    const container = await render(<TaskList taskHistory={history} />);
+    expect(container.textContent).toContain("Agent A: build pagination");
+    expect(container.textContent).toContain("Add pagination to /api/sessions");
+    expect(container.textContent).toContain("Fix Opus pricing tier");
+    expect(container.textContent).toContain("1/2");
+  });
+
+  it("renders a live sibling-session lane with its session name and tasks", async () => {
+    const history = taskHistory();
+    history.siblings = [
+      {
+        session: {
+          id: "sib-1",
+          workspace_id: "ws-1",
+          session_id: null,
+          name: "alpha",
+          name_edited: false,
+          turn_count: 0,
+          sort_order: 1,
+          status: "Active",
+          created_at: "2026-05-15T00:00:00Z",
+          archived_at: null,
+          cli_invocation: null,
+          agent_status: "Running",
+          needs_attention: false,
+          attention_kind: null,
+        },
+        current: {
+          tasks: [
+            {
+              id: "alpha-1",
+              description: "Implement endpoint",
+              status: "in_progress",
+              source: "task",
+            },
+          ],
+          completedCount: 0,
+          totalCount: 1,
+        },
+        subagents: [],
+      },
+    ];
+    const container = await render(<TaskList taskHistory={history} />);
+    expect(container.textContent).toContain("alpha");
+    expect(container.textContent).toContain("Implement endpoint");
+    // Sibling lane must NOT be folded under "History" while live.
+    const siblingSection = container.querySelector(
+      "[aria-label='Sibling session: alpha']",
+    );
+    expect(siblingSection).not.toBeNull();
   });
 
   it("expands a historical run to show its preserved tasks", async () => {

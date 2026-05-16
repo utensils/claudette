@@ -10,6 +10,7 @@ interface HarnessProps {
   workspaceEnvironmentPreparing: boolean;
   claudetteTerminalEnabled: boolean;
   terminalPanelVisible: boolean;
+  userDismissed?: boolean;
   setTerminalPanelVisible: (visible: boolean) => void;
 }
 
@@ -19,6 +20,7 @@ function Harness(props: HarnessProps) {
     props.workspaceEnvironmentPreparing,
     props.claudetteTerminalEnabled,
     props.terminalPanelVisible,
+    props.userDismissed ?? false,
     props.setTerminalPanelVisible,
   );
   return null;
@@ -172,6 +174,96 @@ describe("useTerminalEnvAutoOpen", () => {
       workspaceEnvironmentPreparing: true,
       claudetteTerminalEnabled: true,
       terminalPanelVisible: false,
+      setTerminalPanelVisible: setVisible,
+    });
+    expect(setVisible).toHaveBeenCalledExactlyOnceWith(true);
+  });
+
+  // Regression: once the user has toggled the terminal closed, no
+  // workspace-switch auto-open path may re-open it — across switches to
+  // brand-new workspaces, returns to prior workspaces, or anything else.
+  // This is the "user dismissal globally overrides auto-open" contract.
+  it("never auto-opens once the user has dismissed the panel, regardless of workspace", async () => {
+    const setVisible = vi.fn();
+    // Dismissed before any workspace is even visited.
+    await render({
+      selectedWorkspaceId: "ws-1",
+      workspaceEnvironmentPreparing: true,
+      claudetteTerminalEnabled: true,
+      terminalPanelVisible: false,
+      userDismissed: true,
+      setTerminalPanelVisible: setVisible,
+    });
+    expect(setVisible).not.toHaveBeenCalled();
+
+    // Switching to a brand-new workspace whose env is also preparing
+    // must NOT re-open. Previously the per-workspace Set was empty for
+    // ws-2 so the auto-open would fire.
+    await rerender({
+      selectedWorkspaceId: "ws-2",
+      workspaceEnvironmentPreparing: true,
+      claudetteTerminalEnabled: true,
+      terminalPanelVisible: false,
+      userDismissed: true,
+      setTerminalPanelVisible: setVisible,
+    });
+    expect(setVisible).not.toHaveBeenCalled();
+
+    // Even after the env resolves and re-prepares (the most common
+    // re-open trigger), still no open.
+    await rerender({
+      selectedWorkspaceId: "ws-2",
+      workspaceEnvironmentPreparing: false,
+      claudetteTerminalEnabled: true,
+      terminalPanelVisible: false,
+      userDismissed: true,
+      setTerminalPanelVisible: setVisible,
+    });
+    await rerender({
+      selectedWorkspaceId: "ws-2",
+      workspaceEnvironmentPreparing: true,
+      claudetteTerminalEnabled: true,
+      terminalPanelVisible: false,
+      userDismissed: true,
+      setTerminalPanelVisible: setVisible,
+    });
+    expect(setVisible).not.toHaveBeenCalled();
+  });
+
+  it("resumes auto-opening once the user clears the dismissal", async () => {
+    const setVisible = vi.fn();
+    // Dismissed: no auto-open.
+    await render({
+      selectedWorkspaceId: "ws-1",
+      workspaceEnvironmentPreparing: true,
+      claudetteTerminalEnabled: true,
+      terminalPanelVisible: false,
+      userDismissed: true,
+      setTerminalPanelVisible: setVisible,
+    });
+    expect(setVisible).not.toHaveBeenCalled();
+
+    // User re-opens the panel — dismissed flag clears. Hook still has
+    // `terminalPanelVisible: true` so no open fires (no need).
+    await rerender({
+      selectedWorkspaceId: "ws-1",
+      workspaceEnvironmentPreparing: true,
+      claudetteTerminalEnabled: true,
+      terminalPanelVisible: true,
+      userDismissed: false,
+      setTerminalPanelVisible: setVisible,
+    });
+    expect(setVisible).not.toHaveBeenCalled();
+
+    // Switch to a brand-new workspace whose env begins preparing while
+    // the panel happens to be hidden again (e.g. user toggled twice).
+    // Since `userDismissed` is now false, auto-open fires again.
+    await rerender({
+      selectedWorkspaceId: "ws-2",
+      workspaceEnvironmentPreparing: true,
+      claudetteTerminalEnabled: true,
+      terminalPanelVisible: false,
+      userDismissed: false,
       setTerminalPanelVisible: setVisible,
     });
     expect(setVisible).toHaveBeenCalledExactlyOnceWith(true);
