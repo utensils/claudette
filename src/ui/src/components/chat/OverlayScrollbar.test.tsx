@@ -180,10 +180,12 @@ function Harness({
   metrics,
   nullTarget,
   onTargetReady,
+  onUserScrollIntent,
 }: {
   metrics?: { scrollTop?: number; scrollHeight: number; clientHeight: number };
   nullTarget?: boolean;
   onTargetReady?: (el: HTMLDivElement) => void;
+  onUserScrollIntent?: () => void;
 }) {
   const ref = useRef<HTMLDivElement | null>(null);
   return (
@@ -200,7 +202,10 @@ function Harness({
           }}
         />
       )}
-      <OverlayScrollbar targetRef={ref} />
+      <OverlayScrollbar
+        targetRef={ref}
+        onUserScrollIntent={onUserScrollIntent}
+      />
     </div>
   );
 }
@@ -526,6 +531,36 @@ describe("OverlayScrollbar drag mapping", () => {
     expect(slider.dataset.dragging).toBe("false");
   });
 
+  it("marks user scroll intent for slider drag start and movement", async () => {
+    const onUserScrollIntent = vi.fn();
+    const container = await render(
+      <Harness
+        metrics={{ scrollTop: 0, scrollHeight: 1000, clientHeight: 400 }}
+        onUserScrollIntent={onUserScrollIntent}
+      />,
+    );
+    const slider = container.querySelector(
+      `.${styles.slider}`,
+    ) as HTMLElement;
+    Object.defineProperty(slider, "offsetHeight", {
+      configurable: true,
+      value: 160,
+    });
+    slider.setPointerCapture = vi.fn();
+    slider.releasePointerCapture = vi.fn();
+
+    await act(async () => {
+      pointerDown(slider, 0);
+    });
+    pointerMove(slider, 100);
+
+    expect(onUserScrollIntent).toHaveBeenCalledTimes(2);
+
+    await act(async () => {
+      pointerUp(slider);
+    });
+  });
+
   it("clamps drag-driven scrollTop to [0, scrollRange]", async () => {
     let target!: HTMLDivElement;
     const container = await render(
@@ -672,6 +707,37 @@ describe("OverlayScrollbar track click-to-page", () => {
     trackPointerDown(track, 300);
     await flushRaf();
     expect(target.scrollTop).toBe(400);
+  });
+
+  it("marks user scroll intent before track click-to-page changes scrollTop", async () => {
+    const onUserScrollIntent = vi.fn();
+    const container = await render(
+      <Harness
+        metrics={{ scrollTop: 0, scrollHeight: 1000, clientHeight: 400 }}
+        onUserScrollIntent={onUserScrollIntent}
+      />,
+    );
+    const track = container.querySelector(`.${styles.track}`) as HTMLElement;
+    const slider = container.querySelector(
+      `.${styles.slider}`,
+    ) as HTMLElement;
+    Object.defineProperty(slider, "getBoundingClientRect", {
+      value: () => ({
+        top: 0,
+        bottom: 160,
+        height: 160,
+        left: 0,
+        right: 8,
+        width: 8,
+        x: 0,
+        y: 0,
+        toJSON: () => null,
+      }),
+    });
+
+    trackPointerDown(track, 300);
+
+    expect(onUserScrollIntent).toHaveBeenCalledTimes(1);
   });
 
   it("pages up by clientHeight when the click lands above the slider", async () => {

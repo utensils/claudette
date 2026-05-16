@@ -222,4 +222,30 @@ describe("useStickyScroll", () => {
     expect(target.scrollTop).toBe(500);
     expect(api.isAtBottom).toBe(false);
   });
+
+  it("does not force bottom when the overlay scrollbar marks user intent", async () => {
+    let api!: StickyScrollApi;
+    let target!: HTMLDivElement;
+    await render(
+      <Harness
+        metrics={{ scrollTop: 600, scrollHeight: 1000, clientHeight: 400 }}
+        onReady={(nextApi, nextTarget) => {
+          api = nextApi;
+          target = nextTarget;
+        }}
+      />,
+    );
+
+    await act(async () => {
+      api.handleContentChanged();
+      setScrollHeight(target, 1200);
+      api.markUserScrollIntent();
+      target.scrollTop = 500;
+      target.dispatchEvent(new Event("scroll"));
+      flushAnimationFrames();
+    });
+
+    expect(target.scrollTop).toBe(500);
+    expect(api.isAtBottom).toBe(false);
+  });
 });

@@ -27,6 +27,10 @@ export function useStickyScroll(
   const thresholdRef = useRef(threshold);
   thresholdRef.current = threshold;
 
+  const markUserScrollIntent = useCallback(() => {
+    userScrollVersionRef.current += 1;
+  }, []);
+
   /**
    * Auto-scroll to bottom if the user is already there.
    * Coalesced: at most one requestAnimationFrame callback per frame,
@@ -102,10 +106,6 @@ export function useStickyScroll(
       }
       checkPosition();
     };
-    const noteUserScrollIntent = () => {
-      userScrollVersionRef.current += 1;
-    };
-
     // ResizeObserver: catches container resizes (panel toggle, window resize).
     // Scroll first if pinned to bottom — prevents checkPosition() from
     // flipping isAtBottomRef to false before auto-scroll can act on it.
@@ -136,20 +136,20 @@ export function useStickyScroll(
     };
 
     el.addEventListener("scroll", onScroll, { passive: true });
-    el.addEventListener("wheel", noteUserScrollIntent, { passive: true });
-    el.addEventListener("touchmove", noteUserScrollIntent, { passive: true });
-    el.addEventListener("keydown", noteUserScrollIntent);
+    el.addEventListener("wheel", markUserScrollIntent, { passive: true });
+    el.addEventListener("touchmove", markUserScrollIntent, { passive: true });
+    el.addEventListener("keydown", markUserScrollIntent);
     window.addEventListener("focus", onFocus);
     return () => {
       el.removeEventListener("scroll", onScroll);
-      el.removeEventListener("wheel", noteUserScrollIntent);
-      el.removeEventListener("touchmove", noteUserScrollIntent);
-      el.removeEventListener("keydown", noteUserScrollIntent);
+      el.removeEventListener("wheel", markUserScrollIntent);
+      el.removeEventListener("touchmove", markUserScrollIntent);
+      el.removeEventListener("keydown", markUserScrollIntent);
       window.removeEventListener("focus", onFocus);
       resizeObserver.disconnect();
       mutationObserver.disconnect();
     };
-  }, [containerRef, threshold, handleContentChanged]);
+  }, [containerRef, threshold, handleContentChanged, markUserScrollIntent]);
 
   /** Programmatically scroll to bottom and re-enable auto-follow. */
   const scrollToBottom = useCallback(() => {
@@ -190,6 +190,7 @@ export function useStickyScroll(
     scrollToBottom,
     restoreScrollPosition,
     handleContentChanged,
+    markUserScrollIntent,
     suppressNextAutoScrollRef,
   } as const;
 }

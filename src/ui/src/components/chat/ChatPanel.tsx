@@ -486,6 +486,7 @@ export function ChatPanel() {
     scrollToBottom,
     restoreScrollPosition,
     handleContentChanged,
+    markUserScrollIntent,
     suppressNextAutoScrollRef,
   } = useStickyScroll(messagesContainerRef);
   usePreventScrollBounce(messagesContainerRef);
@@ -1667,7 +1668,10 @@ export function ChatPanel() {
          * pixel-identical at every browser zoom (the OS overlay
          * scrollbar that WKWebView would render on `.messages` instead
          * doesn't scale with zoom). */}
-        <OverlayScrollbar targetRef={messagesContainerRef} />
+        <OverlayScrollbar
+          targetRef={messagesContainerRef}
+          onUserScrollIntent={markUserScrollIntent}
+        />
         <div className={styles.messages} ref={messagesContainerRef}>
           <CliInvocationBanner
             invocation={cliInvocation}
