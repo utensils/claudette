@@ -44,7 +44,7 @@ echo "[entrypoint] starting openbox session"
 openbox-session >/tmp/openbox.log 2>&1 &
 
 echo "[entrypoint] starting noVNC websockify on :6080"
-websockify --web=/usr/share/webapps/novnc 6080 localhost:5901 \
+websockify --web=/usr/share/novnc 6080 localhost:5901 \
   >/tmp/websockify.log 2>&1 &
 
 # ---- Optional PKGBUILD build + install ------------------------------
