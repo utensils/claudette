@@ -490,11 +490,41 @@ fn copy_claude_session(
     Ok(true)
 }
 
-/// Resolve `~/.claude/projects` for the current user. Split out so tests can
-/// substitute a temp directory by calling [`copy_claude_session`] with an
-/// arbitrary projects dir.
+/// Resolve the Claude CLI's `projects/` directory for the current user.
+///
+/// Honors the same `CLAUDE_CONFIG_DIR` env var that Claude CLI itself
+/// uses to relocate its config (the CLI writes JSONLs at
+/// `$CLAUDE_CONFIG_DIR/projects/<slug>/<sid>.jsonl` when the variable
+/// is set, otherwise `~/.claude/projects/...`). Pre-fix this function
+/// hardcoded the `~/.claude/projects` branch, so any user with
+/// `CLAUDE_CONFIG_DIR` set — including every dev instance launched via
+/// `scripts/dev.sh`, which points the CLI at a per-instance sandbox —
+/// silently routed the fork's JSONL lookup at the wrong directory.
+/// `copy_claude_session` then returned `Ok(false)` and every fork from
+/// such an instance lost its parent's conversation history. See
+/// `resolve_claude_projects_dir_*` test pins below.
+///
+/// Split out so tests can substitute a temp directory by calling
+/// [`copy_claude_session`] with an arbitrary projects dir.
 fn claude_projects_dir() -> Option<PathBuf> {
-    Some(dirs::home_dir()?.join(".claude").join("projects"))
+    resolve_claude_projects_dir(std::env::var_os("CLAUDE_CONFIG_DIR"), dirs::home_dir())
+}
+
+/// Pure resolver for [`claude_projects_dir`], lifted out so the env-var
+/// override is testable without mutating process-global state. Returns
+/// `None` only when both inputs are absent (no override and no
+/// discoverable home directory) — the same `None`-means-skip contract
+/// the caller already handles.
+fn resolve_claude_projects_dir(
+    config_dir_env: Option<std::ffi::OsString>,
+    home_dir: Option<PathBuf>,
+) -> Option<PathBuf> {
+    if let Some(dir) = config_dir_env
+        && !dir.is_empty()
+    {
+        return Some(PathBuf::from(dir).join("projects"));
+    }
+    Some(home_dir?.join(".claude").join("projects"))
 }
 
 /// Convert an absolute filesystem path to Claude CLI's project slug
@@ -1181,5 +1211,58 @@ mod tests {
             "fork must not have repurposed the orphan dir at {}",
             orphan_dir.display()
         );
+    }
+
+    // --- resolve_claude_projects_dir regression pins ---
+    //
+    // These cover the CLAUDE_CONFIG_DIR-aware-lookup bug. Pre-fix,
+    // `claude_projects_dir` hardcoded `~/.claude/projects`, so every fork
+    // launched from a Claudette dev instance (which sets
+    // `CLAUDE_CONFIG_DIR=/tmp/claudette-dev/<run>/claude-config` to
+    // isolate transcripts) silently found no JSONL at the home-dir
+    // location and degraded to "fresh session" — losing the parent's
+    // conversation. The bug shipped to prod too: any user who sets
+    // `CLAUDE_CONFIG_DIR` (a documented Claude CLI env var) would see
+    // every fork start with no memory.
+
+    #[test]
+    fn resolve_claude_projects_dir_prefers_claude_config_dir_when_set() {
+        let resolved = resolve_claude_projects_dir(
+            Some(std::ffi::OsString::from("/tmp/sandbox/claude-config")),
+            Some(PathBuf::from("/Users/anyone")),
+        )
+        .expect("resolver must return a path when override is set");
+        assert_eq!(
+            resolved,
+            PathBuf::from("/tmp/sandbox/claude-config/projects")
+        );
+    }
+
+    #[test]
+    fn resolve_claude_projects_dir_falls_back_to_home_when_env_unset() {
+        let resolved = resolve_claude_projects_dir(None, Some(PathBuf::from("/Users/alice")))
+            .expect("resolver must return a path when home is known");
+        assert_eq!(resolved, PathBuf::from("/Users/alice/.claude/projects"));
+    }
+
+    #[test]
+    fn resolve_claude_projects_dir_treats_empty_env_as_unset() {
+        // An empty `CLAUDE_CONFIG_DIR=` is functionally "not set" — the
+        // CLI itself ignores it. Mirror that so we don't return a bogus
+        // `/projects` path rooted at the filesystem root.
+        let resolved = resolve_claude_projects_dir(
+            Some(std::ffi::OsString::from("")),
+            Some(PathBuf::from("/Users/bob")),
+        )
+        .expect("resolver must fall back to home on empty override");
+        assert_eq!(resolved, PathBuf::from("/Users/bob/.claude/projects"));
+    }
+
+    #[test]
+    fn resolve_claude_projects_dir_returns_none_when_no_signal_available() {
+        // The caller already handles `None` as "graceful skip — fork
+        // still succeeds, just without resuming the Claude session". Pin
+        // that this remains the contract when neither input is present.
+        assert!(resolve_claude_projects_dir(None, None).is_none());
     }
 }
