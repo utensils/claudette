@@ -19,6 +19,7 @@ export function useStickyScroll(
   const [isAtBottom, setIsAtBottom] = useState(true);
   const programmaticScrollRef = useRef(false);
   const rafPendingRef = useRef(false);
+  const userScrollVersionRef = useRef(0);
   const suppressNextAutoScrollRef = useRef(false);
   // Kept in a ref so the RAF callback always reads the latest value without
   // needing threshold in its useCallback deps (which would recreate the fn
@@ -33,6 +34,8 @@ export function useStickyScroll(
    */
   const handleContentChanged = useCallback(() => {
     if (rafPendingRef.current) return;
+    const shouldAutoScroll = isAtBottomRef.current;
+    const userScrollVersion = userScrollVersionRef.current;
     rafPendingRef.current = true;
     requestAnimationFrame(() => {
       rafPendingRef.current = false;
@@ -56,13 +59,24 @@ export function useStickyScroll(
         }
         return;
       }
-      if (!isAtBottomRef.current) return;
+      const userScrolledSinceSchedule =
+        userScrollVersionRef.current !== userScrollVersion;
+      if (
+        (!shouldAutoScroll && !isAtBottomRef.current) ||
+        (userScrolledSinceSchedule && !isAtBottomRef.current)
+      ) {
+        return;
+      }
       const el = containerRef.current;
       if (el) {
         const prev = el.scrollTop;
         el.scrollTop = el.scrollHeight;
         if (el.scrollTop !== prev) {
           programmaticScrollRef.current = true;
+        }
+        if (!isAtBottomRef.current) {
+          isAtBottomRef.current = true;
+          setIsAtBottom(true);
         }
       }
     });
@@ -87,6 +101,9 @@ export function useStickyScroll(
         return;
       }
       checkPosition();
+    };
+    const noteUserScrollIntent = () => {
+      userScrollVersionRef.current += 1;
     };
 
     // ResizeObserver: catches container resizes (panel toggle, window resize).
@@ -119,9 +136,15 @@ export function useStickyScroll(
     };
 
     el.addEventListener("scroll", onScroll, { passive: true });
+    el.addEventListener("wheel", noteUserScrollIntent, { passive: true });
+    el.addEventListener("touchmove", noteUserScrollIntent, { passive: true });
+    el.addEventListener("keydown", noteUserScrollIntent);
     window.addEventListener("focus", onFocus);
     return () => {
       el.removeEventListener("scroll", onScroll);
+      el.removeEventListener("wheel", noteUserScrollIntent);
+      el.removeEventListener("touchmove", noteUserScrollIntent);
+      el.removeEventListener("keydown", noteUserScrollIntent);
       window.removeEventListener("focus", onFocus);
       resizeObserver.disconnect();
       mutationObserver.disconnect();
