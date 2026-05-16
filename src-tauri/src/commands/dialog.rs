@@ -40,24 +40,40 @@ async fn probe() -> bool {
 
 #[cfg(target_os = "linux")]
 async fn probe() -> bool {
+    use std::time::Duration;
+
     // Probe via `gdbus introspect`. gdbus ships with glib2, which is
     // already a transitive runtime dep of any GTK app (Tauri included)
     // so we don't add a new system requirement just for this check.
     // The probe is "is the FileChooser interface reachable on the
     // session bus" — succeeds when xdg-desktop-portal is running AND
     // a backend implementing FileChooser is registered.
-    let output = tokio::process::Command::new("gdbus")
-        .args([
-            "introspect",
-            "--session",
-            "--dest",
-            "org.freedesktop.portal.Desktop",
-            "--object-path",
-            "/org/freedesktop/portal/desktop",
-            "--only-properties",
-        ])
-        .output()
-        .await;
+    //
+    // Full introspection rather than `--only-properties` because some
+    // FileChooser backends expose no properties; `--only-properties`
+    // would print empty output and miss the interface header.
+    //
+    // 3-second timeout guards against a DBus daemon that's up but
+    // unresponsive (cold-boot races). On timeout we report "no
+    // picker" — Browse hides, app stays alive, no crash.
+    let probe_fut = async {
+        tokio::process::Command::new("gdbus")
+            .args([
+                "introspect",
+                "--session",
+                "--dest",
+                "org.freedesktop.portal.Desktop",
+                "--object-path",
+                "/org/freedesktop/portal/desktop",
+            ])
+            .output()
+            .await
+    };
+
+    let output = match tokio::time::timeout(Duration::from_secs(3), probe_fut).await {
+        Ok(result) => result,
+        Err(_) => return false,
+    };
 
     match output {
         Ok(o) if o.status.success() => {

@@ -693,7 +693,7 @@
               {
                 name = "aur-test";
                 command = ''exec "$PRJ_ROOT/scripts/aur/test-in-docker.sh" "$@"'';
-                help = "Boot Arch + openbox + noVNC at http://localhost:6080/vnc.html; optionally builds a PKGBUILD (`aur-test claudette-bin --launch`)";
+                help = "Boot Arch + XFCE + noVNC at http://localhost:6080/; optionally builds + installs a PKGBUILD (`aur-test claudette-bin`)";
                 category = "packaging";
               }
             ];

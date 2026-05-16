@@ -23,6 +23,10 @@ depends=(
 
 optdepends=(
   'claude-code: drive Claude Code sessions (the primary use case)'
+  'xdg-desktop-portal-gtk: native file dialogs (GTK-based DEs: XFCE, MATE, Cinnamon)'
+  'xdg-desktop-portal-gnome: native file dialogs (GNOME)'
+  'xdg-desktop-portal-kde: native file dialogs (KDE Plasma)'
+  'xdg-desktop-portal-hyprland: native file dialogs (Hyprland)'
   'github-cli: GitHub PR / issue / CI integration via scm-github plugin'
   'glab: GitLab PR / pipeline integration via scm-gitlab plugin'
   'direnv: per-workspace env activation via env-direnv plugin'
