@@ -1,4 +1,0 @@
-# Started by openbox-session at noVNC connect time. Keep this
-# short — anything heavy slows down the desktop's time-to-usable.
-tint2 &
-xterm -geometry 120x32+40+40 -fa "DejaVu Sans Mono" -fs 11 -e "bash --login" &

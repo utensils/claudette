@@ -73,15 +73,21 @@ RUN pacman -Sy --noconfirm archlinux-keyring && \
         bun \
         pkgconf \
         patchelf \
-        # Lightweight desktop: openbox window manager + a panel +
-        # a terminal + a file manager. tint2 is the panel; pcmanfm
-        # gives a usable file manager and a desktop right-click menu.
+        # XFCE desktop: xfwm4 (WM) + xfdesktop (desktop with
+        # right-click menu + .desktop icon launcher) + xfce4-panel
+        # (taskbar + app menu) + thunar (file browser) + xfce4-
+        # session (manages startup). xfce4-goodies pulls in
+        # xfce4-terminal, xfce4-taskmanager, xfce4-screenshooter
+        # — useful when poking at a freshly-installed Claudette.
+        # dbus is added explicitly so libayatana-appindicator and
+        # the rest of the tray surface can attach to the session
+        # bus (without it the GUI logs DBus warnings on startup).
         xorg-xinit \
-        openbox \
-        tint2 \
-        xterm \
-        pcmanfm \
+        xfce4 \
+        xfce4-goodies \
+        dbus \
         ttf-dejavu \
+        ttf-liberation \
         # X server + VNC server (no noVNC here — installed below).
         tigervnc \
         # websockify needs python; pulling python-pip from extra so
@@ -126,12 +132,10 @@ RUN useradd -m -G wheel -s /bin/bash builder && \
 USER builder
 WORKDIR /home/builder
 
-# Openbox needs a (minimal) per-user config to start cleanly. The
-# autostart file is COPYed rather than synthesized inline because
-# Dockerfile RUN + nested heredocs are fragile across builders;
-# a real file is robust and easier to read in diffs.
-RUN mkdir -p /home/builder/.config/openbox
-COPY --chown=builder:builder openbox-autostart /home/builder/.config/openbox/autostart
+# XFCE manages its own session config; we only need an empty
+# Desktop dir so xfdesktop has somewhere to drop the Claudette
+# launcher icon once the entrypoint plants it post-install.
+RUN mkdir -p /home/builder/Desktop /home/builder/.config/autostart
 
 # Expose the noVNC HTTP port. The raw VNC display (5901) stays
 # container-internal — websockify is the only thing we surface.
