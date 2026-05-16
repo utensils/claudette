@@ -1,6 +1,9 @@
 use std::sync::Arc;
 
-use claudette::agent::{self, AgentEvent, AgentSettings, InnerStreamEvent, StreamEvent};
+use claudette::agent::{
+    self, AgentEvent, AgentSettings, ControlRequestInner, InnerStreamEvent, PersistentSession,
+    StreamEvent,
+};
 use claudette::chat::{
     BuildAssistantArgs, CheckpointArgs, build_assistant_chat_message, create_turn_checkpoint,
     extract_assistant_text, extract_event_thinking,
@@ -10,7 +13,10 @@ use claudette::model::{ChatMessage, ChatRole};
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 use serde_json::json;
 
-use crate::ws::{AgentSessionState, PtyHandle, ServerState, Writer, send_message};
+use crate::ws::{
+    AgentSessionState, PendingPermission, PtyHandle, QueuedMessage, ServerState, Writer,
+    send_message,
+};
 
 use claudette::permissions::tools_for_level;
 
@@ -83,7 +89,46 @@ pub async fn handle_request(
             .await
         }
         "steer_queued_chat_message" => {
-            Err("Mid-turn steering is not yet supported for remote sessions".to_string())
+            let chat_session_id = param_chat_session_id(&params);
+            let content = param_str(&params, "content");
+            handle_steer_queued_chat_message(state, &chat_session_id, &content).await
+        }
+        "submit_agent_answer" => {
+            let chat_session_id = param_chat_session_id(&params);
+            let tool_use_id = param_str(&params, "tool_use_id");
+            let answers: std::collections::HashMap<String, String> = params
+                .get("answers")
+                .and_then(|v| serde_json::from_value(v.clone()).ok())
+                .unwrap_or_default();
+            let annotations = params.get("annotations").cloned();
+            handle_submit_agent_answer(state, &chat_session_id, &tool_use_id, answers, annotations)
+                .await
+        }
+        "submit_plan_approval" => {
+            let chat_session_id = param_chat_session_id(&params);
+            let tool_use_id = param_str(&params, "tool_use_id");
+            let approved = params
+                .get("approved")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            let reason = params
+                .get("reason")
+                .and_then(|v| v.as_str())
+                .map(String::from);
+            handle_submit_approval(state, &chat_session_id, &tool_use_id, approved, reason).await
+        }
+        "submit_agent_approval" => {
+            let chat_session_id = param_chat_session_id(&params);
+            let tool_use_id = param_str(&params, "tool_use_id");
+            let approved = params
+                .get("approved")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            let reason = params
+                .get("reason")
+                .and_then(|v| v.as_str())
+                .map(String::from);
+            handle_submit_approval(state, &chat_session_id, &tool_use_id, approved, reason).await
         }
         "stop_agent" => {
             let chat_session_id = param_chat_session_id(&params);
@@ -569,6 +614,9 @@ async fn handle_send_chat_message(
             active_pid: None,
             custom_instructions: instructions,
             session_resolved_env: Default::default(),
+            persistent_session: None,
+            pending_permissions: std::collections::HashMap::new(),
+            pending_message_queue: std::collections::VecDeque::new(),
         }
     });
 
@@ -577,11 +625,9 @@ async fn handle_send_chat_message(
     // `mise.toml` / `direnv allow` changes until it's respawned. Compare
     // the freshly-resolved vars against the snapshot stored at spawn and
     // reset the session on divergence so this turn launches with the new
-    // env. The Tauri path uses a long-lived PersistentSession; the remote
-    // handler re-launches `claude --print` per turn, so a reset just means
-    // clearing turn_count / session_id before the rest of this function
-    // continues with `is_resume = false` and re-runs the session-init
-    // branch (`run_turn` is called below with the fresh state).
+    // env. Dropping `persistent_session` here lets `Arc::drop` kill the
+    // running `claude` subprocess; the next turn will start a fresh one
+    // with `is_resume = false` so the new env is picked up cleanly.
     if session.turn_count > 0 && session.session_resolved_env != resolved_env.vars {
         tracing::info!(
             target: "claudette::ws",
@@ -594,6 +640,9 @@ async fn handle_send_chat_message(
         session.turn_count = 0;
         session.active_pid = None;
         session.session_resolved_env = Default::default();
+        session.persistent_session = None;
+        session.pending_permissions.clear();
+        session.pending_message_queue.clear();
     }
 
     let is_resume = session.turn_count > 0;
@@ -645,23 +694,37 @@ async fn handle_send_chat_message(
         );
     }
 
-    let turn_handle = agent::run_turn(
-        std::path::Path::new(&worktree_path),
-        &session_id,
-        &prompt,
-        is_resume,
-        &allowed_tools,
-        custom_instructions.as_deref(),
-        &agent_settings,
-        &[], // Attachments not yet supported over remote transport
-        Some(&ws_env),
-        Some(&resolved_env),
-    )
-    .await?;
+    // Lazily start (or reuse) the long-lived `claude` subprocess for this
+    // chat session. Unlike the previous one-shot `run_turn` path, the CLI
+    // stays alive with stdin piped so `submit_agent_answer` /
+    // `submit_plan_approval` can write `control_response` lines back —
+    // which is the only way `AskUserQuestion` / `ExitPlanMode` work over
+    // a remote connection.
+    let ps_arc = match session.persistent_session.as_ref() {
+        Some(existing) => Arc::clone(existing),
+        None => {
+            let ps = PersistentSession::start(
+                std::path::Path::new(&worktree_path),
+                &session_id,
+                is_resume,
+                &allowed_tools,
+                custom_instructions.as_deref(),
+                &agent_settings,
+                Some(&ws_env),
+                Some(&resolved_env),
+            )
+            .await?;
+            let arc = Arc::new(ps);
+            session.persistent_session = Some(Arc::clone(&arc));
+            arc
+        }
+    };
 
-    session.active_pid = Some(turn_handle.pid);
+    session.active_pid = Some(ps_arc.pid());
     session.session_resolved_env = resolved_env.vars.clone();
     drop(agents);
+
+    let turn_handle = ps_arc.send_turn(&prompt, &[]).await?;
 
     // Bridge agent events to WebSocket.
     let ws_id = workspace_id.clone();
@@ -711,11 +774,69 @@ async fn handle_send_chat_message(
                 tracing::warn!(target: "claudette::ws", error = %e, "persist cli_invocation failed");
             }
 
-            if let AgentEvent::ProcessExited(code) = &event
-                && (!got_init || *code != Some(0))
+            // Capture pending `can_use_tool` requests (AskUserQuestion,
+            // ExitPlanMode) into per-session state so `submit_agent_answer`
+            // / `submit_plan_approval` can look them up by `tool_use_id` and
+            // write the matching `control_response` back to the CLI's
+            // stdin. Mirrors the desktop's `queue_control_prompt` path in
+            // `src-tauri/src/commands/chat/send.rs`. The same event is also
+            // forwarded in the `agent-stream` payload below so the client
+            // sees the tool call in the transcript and renders the prompt
+            // UI off the snapshot it already maintains.
+            if let AgentEvent::Stream(StreamEvent::ControlRequest {
+                ref request_id,
+                ref request,
+            }) = event
+                && let ControlRequestInner::CanUseTool {
+                    tool_name,
+                    tool_use_id,
+                    input,
+                } = request
             {
                 let mut agents = state.agents.write().await;
-                agents.remove(&chat_session_id_for_stream);
+                if let Some(session) = agents.get_mut(&chat_session_id_for_stream) {
+                    session.pending_permissions.insert(
+                        tool_use_id.clone(),
+                        PendingPermission {
+                            request_id: request_id.clone(),
+                            tool_name: tool_name.clone(),
+                            original_input: input.clone(),
+                        },
+                    );
+                }
+                drop(agents);
+
+                let prompt_msg = json!({
+                    "event": "agent-permission-prompt",
+                    "payload": {
+                        "workspace_id": ws_id,
+                        "chat_session_id": chat_session_id_for_stream,
+                        "tool_use_id": tool_use_id,
+                        "tool_name": tool_name,
+                        "request_id": request_id,
+                        "input": input,
+                    }
+                });
+                send_message(&writer, &prompt_msg).await;
+            }
+
+            if let AgentEvent::ProcessExited(code) = &event {
+                // The CLI subprocess died — clear the persistent session and
+                // pending state so the next `send_chat_message` starts fresh.
+                // For a clean exit (got_init && code == 0) we also drop the
+                // session: PersistentSession only stays alive when the CLI is
+                // alive, and a `claude --print` exit is the canonical "session
+                // ended" signal even if we expected long-lived behavior.
+                let mut agents = state.agents.write().await;
+                if let Some(session) = agents.get_mut(&chat_session_id_for_stream) {
+                    session.persistent_session = None;
+                    session.pending_permissions.clear();
+                    session.pending_message_queue.clear();
+                    session.active_pid = None;
+                }
+                if !got_init || *code != Some(0) {
+                    agents.remove(&chat_session_id_for_stream);
+                }
             }
 
             // Track per-assistant-message cumulative usage as the CLI streams
@@ -770,6 +891,36 @@ async fn handle_send_chat_message(
                 ..
             }) = event
             {
+                // Turn complete — clear `active_pid` (the persistent session
+                // stays alive for the next turn) and dispatch the head of
+                // the queued-message queue if the client steered while the
+                // turn was running. This mirrors the desktop's
+                // `process_pending_message_queue` post-turn handoff.
+                let next_queued = {
+                    let mut agents = state.agents.write().await;
+                    if let Some(session) = agents.get_mut(&chat_session_id_for_stream) {
+                        session.active_pid = None;
+                        session.pending_message_queue.pop_front()
+                    } else {
+                        None
+                    }
+                };
+                if let Some(queued) = next_queued
+                    && let Err(e) = dispatch_queued_message(
+                        Arc::clone(&state),
+                        Arc::clone(&writer),
+                        chat_session_id_for_stream.clone(),
+                        queued,
+                    )
+                    .await
+                {
+                    tracing::warn!(
+                        target: "claudette::ws",
+                        error = %e,
+                        "failed to dispatch queued message after turn end"
+                    );
+                }
+
                 if let (Some(cost), Some(dur)) = (total_cost_usd, duration_ms)
                     && let Some(ref msg_id) = last_assistant_msg_id
                     && let Ok(db) = Database::open(&db_path)
@@ -828,13 +979,24 @@ async fn handle_stop_agent(
         .ok_or("Chat session not found")?;
     let workspace_id = chat_session.workspace_id.clone();
 
-    let mut agents = state.agents.write().await;
-    if let Some(session) = agents.get_mut(&chat_session_id)
-        && let Some(pid) = session.active_pid.take()
-    {
+    // Capture the pid and drop the persistent session under the lock, then
+    // run the async kill outside it. Dropping `persistent_session` here
+    // ensures the next `send_chat_message` starts a fresh CLI instead of
+    // trying to write to a stdin attached to a process we just killed.
+    let pid_to_stop = {
+        let mut agents = state.agents.write().await;
+        if let Some(session) = agents.get_mut(&chat_session_id) {
+            session.persistent_session = None;
+            session.pending_permissions.clear();
+            session.pending_message_queue.clear();
+            session.active_pid.take()
+        } else {
+            None
+        }
+    };
+    if let Some(pid) = pid_to_stop {
         agent::stop_agent(pid).await?;
     }
-    drop(agents);
 
     let msg = ChatMessage {
         id: uuid::Uuid::new_v4().to_string(),
@@ -853,6 +1015,236 @@ async fn handle_stop_agent(
     };
     db.insert_chat_message(&msg).map_err(|e| e.to_string())?;
     Ok(json!(null))
+}
+
+/// Resolve a pending `AskUserQuestion` request. Mirrors the desktop's
+/// `submit_agent_answer` in `src-tauri/src/commands/chat/interaction.rs`:
+/// look up the pending entry by `tool_use_id`, verify it's an
+/// AskUserQuestion (not an approval-style tool), drain it, build a
+/// `behavior: "allow"` response with `answers` layered onto the original
+/// input, and write a `control_response` line to the CLI's stdin.
+pub async fn handle_submit_agent_answer(
+    state: &ServerState,
+    chat_session_id: &str,
+    tool_use_id: &str,
+    answers: std::collections::HashMap<String, String>,
+    annotations: Option<serde_json::Value>,
+) -> Result<serde_json::Value, String> {
+    let (pending, ps) = {
+        let mut agents = state.agents.write().await;
+        let session = agents.get_mut(chat_session_id).ok_or("Session not found")?;
+        let ps = session
+            .persistent_session
+            .clone()
+            .ok_or("Agent session is not active")?;
+        match session.pending_permissions.get(tool_use_id) {
+            None => {
+                let pending_ids: Vec<String> =
+                    session.pending_permissions.keys().cloned().collect();
+                return Err(format!(
+                    "No pending permission request for tool_use_id {tool_use_id} (pending: {pending_ids:?})"
+                ));
+            }
+            Some(p) if p.tool_name != "AskUserQuestion" => {
+                return Err(format!(
+                    "Pending tool for {tool_use_id} is {}, not AskUserQuestion",
+                    p.tool_name
+                ));
+            }
+            _ => {}
+        }
+        let pending = session
+            .pending_permissions
+            .remove(tool_use_id)
+            .expect("checked above");
+        (pending, ps)
+    };
+
+    let mut updated_input = pending.original_input.clone();
+    if !updated_input.is_object() {
+        updated_input = serde_json::Value::Object(serde_json::Map::new());
+    }
+    if let Some(obj) = updated_input.as_object_mut() {
+        let answers_value =
+            serde_json::to_value(&answers).map_err(|e| format!("Failed to encode answers: {e}"))?;
+        obj.insert("answers".to_string(), answers_value);
+        if let Some(ann) = annotations {
+            obj.insert("annotations".to_string(), ann);
+        }
+    }
+
+    let response = json!({
+        "behavior": "allow",
+        "updatedInput": updated_input,
+    });
+    ps.send_control_response(&pending.request_id, response)
+        .await?;
+    Ok(json!(null))
+}
+
+/// Resolve a pending `ExitPlanMode` (or other approval-style) tool
+/// request. `approved=true` allows with the model's original input;
+/// `approved=false` denies with the supplied reason (or a sensible
+/// default that nudges the model to revise and resubmit the plan).
+/// Used by both `submit_plan_approval` and `submit_agent_approval`.
+pub async fn handle_submit_approval(
+    state: &ServerState,
+    chat_session_id: &str,
+    tool_use_id: &str,
+    approved: bool,
+    reason: Option<String>,
+) -> Result<serde_json::Value, String> {
+    let (pending, ps) = {
+        let mut agents = state.agents.write().await;
+        let session = agents.get_mut(chat_session_id).ok_or("Session not found")?;
+        let ps = session
+            .persistent_session
+            .clone()
+            .ok_or("Agent session is not active")?;
+        match session.pending_permissions.get(tool_use_id) {
+            None => {
+                let pending_ids: Vec<String> =
+                    session.pending_permissions.keys().cloned().collect();
+                return Err(format!(
+                    "No pending permission request for tool_use_id {tool_use_id} (pending: {pending_ids:?})"
+                ));
+            }
+            Some(p) if p.tool_name != "ExitPlanMode" => {
+                return Err(format!(
+                    "Pending tool for {tool_use_id} is {}, not an approval request",
+                    p.tool_name
+                ));
+            }
+            _ => {}
+        }
+        let pending = session
+            .pending_permissions
+            .remove(tool_use_id)
+            .expect("checked above");
+        (pending, ps)
+    };
+
+    let response = if approved {
+        json!({
+            "behavior": "allow",
+            "updatedInput": pending.original_input,
+        })
+    } else {
+        let feedback = reason.unwrap_or_else(|| "Plan denied. Please revise the approach.".into());
+        let message = format!(
+            "{feedback}\n\nRevise the plan to address this feedback, then call ExitPlanMode again to present the updated plan for approval. Do not begin implementation until the user approves the revised plan."
+        );
+        json!({
+            "behavior": "deny",
+            "message": message,
+        })
+    };
+    ps.send_control_response(&pending.request_id, response)
+        .await?;
+    Ok(json!(null))
+}
+
+/// Steer a user message into the chat session. If a turn is currently
+/// running (`active_pid.is_some()`), the message is queued and dispatched
+/// after the running turn completes. If no turn is active, it's queued
+/// for the caller's responsibility to follow up with `send_chat_message`
+/// (we don't auto-dispatch from here because that path needs the full
+/// agent settings context which only `send_chat_message` carries).
+pub async fn handle_steer_queued_chat_message(
+    state: &ServerState,
+    chat_session_id: &str,
+    content: &str,
+) -> Result<serde_json::Value, String> {
+    if content.trim().is_empty() {
+        return Err("Cannot steer an empty message".into());
+    }
+    let mut agents = state.agents.write().await;
+    let session = agents.get_mut(chat_session_id).ok_or("Session not found")?;
+    session.pending_message_queue.push_back(QueuedMessage {
+        content: content.to_string(),
+    });
+    Ok(json!({
+        "queued": true,
+        "queue_depth": session.pending_message_queue.len(),
+    }))
+}
+
+/// Send a previously-queued user message into the active persistent
+/// session. Called from the post-turn `Result` handler. We can't reuse
+/// the full `handle_send_chat_message` path because that re-resolves env,
+/// re-applies settings, and re-spawns — we want the lighter "next turn
+/// on the same persistent session" path. The user message is persisted
+/// so the chat transcript matches an interactive send.
+async fn dispatch_queued_message(
+    state: Arc<ServerState>,
+    writer: Arc<Writer>,
+    chat_session_id: String,
+    queued: QueuedMessage,
+) -> Result<(), String> {
+    let (ps_arc, workspace_id) = {
+        let agents = state.agents.read().await;
+        let session = agents
+            .get(&chat_session_id)
+            .ok_or("Session not found in dispatch_queued_message")?;
+        let ps = session
+            .persistent_session
+            .as_ref()
+            .ok_or("No persistent session for queued message")?;
+        (Arc::clone(ps), session.workspace_id.clone())
+    };
+
+    let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
+    let user_msg = ChatMessage {
+        id: uuid::Uuid::new_v4().to_string(),
+        workspace_id: workspace_id.clone(),
+        chat_session_id: chat_session_id.clone(),
+        role: ChatRole::User,
+        content: queued.content.clone(),
+        cost_usd: None,
+        duration_ms: None,
+        created_at: now_iso(),
+        thinking: None,
+        input_tokens: None,
+        output_tokens: None,
+        cache_read_tokens: None,
+        cache_creation_tokens: None,
+    };
+    db.insert_chat_message(&user_msg)
+        .map_err(|e| e.to_string())?;
+
+    let turn_handle = ps_arc.send_turn(&queued.content, &[]).await?;
+
+    {
+        let mut agents = state.agents.write().await;
+        if let Some(session) = agents.get_mut(&chat_session_id) {
+            session.active_pid = Some(ps_arc.pid());
+            session.turn_count += 1;
+        }
+    }
+
+    // Spawn a minimal event-bridge — just forward `agent-stream` events so
+    // the client transcript stays in sync. DB persistence + checkpointing
+    // for queued turns is intentionally simplified here; users who care
+    // about per-turn cost / checkpoints on queued sends should use full
+    // `send_chat_message` calls instead.
+    let ws_id_for_stream = workspace_id;
+    let chat_session_id_for_stream = chat_session_id;
+    tokio::spawn(async move {
+        let mut rx = turn_handle.event_rx;
+        while let Some(event) = rx.recv().await {
+            let event_msg = json!({
+                "event": "agent-stream",
+                "payload": {
+                    "workspace_id": ws_id_for_stream,
+                    "session_id": chat_session_id_for_stream,
+                    "event": event,
+                }
+            });
+            send_message(&writer, &event_msg).await;
+        }
+    });
+
+    Ok(())
 }
 
 async fn handle_create_workspace(
@@ -922,8 +1314,11 @@ async fn handle_archive_workspace(
 
     // Stop any running agents for sessions in this workspace. Collect the
     // PIDs to stop under the lock, then drop the lock before awaiting any
-    // process teardowns to avoid blocking unrelated requests. Agent state
-    // is per-process; this part can't move into the shared op.
+    // process teardowns to avoid blocking unrelated requests. Removing
+    // each `AgentSessionState` from the map also drops its
+    // `Arc<PersistentSession>` reference, which (assuming nothing else
+    // holds an Arc clone) tears down the CLI subprocess via the existing
+    // RAII path.
     let pids_to_stop: Vec<u32> = {
         let mut agents = state.agents.write().await;
         let to_remove: Vec<String> = agents
