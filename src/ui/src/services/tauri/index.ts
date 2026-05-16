@@ -11,6 +11,7 @@ export * from "./chat";
 export * from "./chatSessions";
 export * from "./checkpoints";
 export * from "./debug";
+export * from "./dialog";
 export * from "./files";
 export * from "./diff";
 export * from "./fileMentions";

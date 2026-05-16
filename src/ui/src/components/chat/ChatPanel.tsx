@@ -113,6 +113,12 @@ export function ChatPanel() {
   const repositories = useAppStore((s) => s.repositories);
   const chatMessages = useAppStore((s) => s.chatMessages);
   const setChatMessages = useAppStore((s) => s.setChatMessages);
+  // Treat `null` (probe-in-flight) as available so we don't briefly
+  // hide the Download menu item on a working host. See `dialog.rs`
+  // for why this gate exists — the dialog plugin panics from the
+  // Rust side on portal-less Linux and no JS try/catch can recover.
+  const fileDialogAvailable = useAppStore((s) => s.fileDialogAvailable);
+  const browseAvailable = fileDialogAvailable !== false;
   const runningSetupScriptSource = useAppStore((s) =>
     activeSessionId ? s.runningSetupScripts[activeSessionId] : undefined,
   );
@@ -1911,14 +1917,24 @@ export function ChatPanel() {
             y={attachmentMenu.y}
             onClose={() => setAttachmentMenu(null)}
             items={[
-              {
-                label: labels.download,
-                onSelect: () => {
-                  withBytes()
-                    .then(downloadAttachment)
-                    .catch((err) => console.error("Download failed:", err));
-                },
-              },
+              // `downloadAttachment` opens a native Save As dialog
+              // via the same plugin path that crashes on portal-less
+              // Linux. Drop the row entirely when no picker is
+              // available — Copy still works for binary attachments
+              // (clipboard write), so the user retains a way to
+              // pull the bytes out.
+              ...(browseAvailable
+                ? [
+                    {
+                      label: labels.download,
+                      onSelect: () => {
+                        withBytes()
+                          .then(downloadAttachment)
+                          .catch((err) => console.error("Download failed:", err));
+                      },
+                    },
+                  ]
+                : []),
               {
                 label: labels.copy,
                 onSelect: () => {

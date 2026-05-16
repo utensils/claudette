@@ -1,5 +1,6 @@
 import type { StateCreator } from "zustand";
 import {
+  fileDialogCapability,
   getAnalyticsMetrics,
   getDashboardMetrics,
   getWorkspaceMetricsBatch,
@@ -54,6 +55,15 @@ export interface SystemSlice {
   // Slash commands (shared so native dispatch can honor file-based shadows)
   slashCommandsByWorkspace: Record<string, SlashCommand[]>;
   setSlashCommands: (wsId: string, cmds: SlashCommand[]) => void;
+
+  // Native file-picker availability. `null` until the boot-time probe
+  // completes; afterwards either true (Tauri's dialog plugin will
+  // work) or false (Linux without xdg-desktop-portal — Browse
+  // buttons should hide rather than crash the app). Components
+  // should treat `null` like "available" so the UI isn't briefly
+  // missing controls during the ~200 ms boot probe.
+  fileDialogAvailable: boolean | null;
+  fetchFileDialogCapability: () => Promise<void>;
 }
 
 export const createSystemSlice: StateCreator<
@@ -147,4 +157,17 @@ export const createSystemSlice: StateCreator<
     set((s) => ({
       slashCommandsByWorkspace: { ...s.slashCommandsByWorkspace, [wsId]: cmds },
     })),
+
+  fileDialogAvailable: null,
+  fetchFileDialogCapability: async () => {
+    try {
+      const available = await fileDialogCapability();
+      set({ fileDialogAvailable: available });
+    } catch {
+      // If the command itself fails, default to "available" rather
+      // than "missing" — the alternative is hiding Browse buttons
+      // on a working system because of a transient IPC hiccup.
+      set({ fileDialogAvailable: true });
+    }
+  },
 });

@@ -298,6 +298,11 @@ function App() {
     getVersion()
       .then((v) => setAppVersion(v))
       .catch((err) => console.error("Failed to load app version:", err));
+    // One-shot probe for native file-picker availability. On Linux
+    // without xdg-desktop-portal, Tauri's dialog plugin panics from
+    // the Rust side — components consult this to hide Browse
+    // buttons rather than gambling on a crash.
+    useAppStore.getState().fetchFileDialogCapability();
     listRemoteConnections()
       .then(setRemoteConnections)
       .catch((err) => console.error("Failed to load remote connections:", err));

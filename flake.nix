@@ -680,6 +680,22 @@
                 help = "Run tests with coverage (terminal summary + lcov + HTML report)";
                 category = "quality";
               }
+              # AUR packaging helpers. PKGBUILDs live under
+              # packaging/aur/; the release-please workflow drives
+              # the production push. These commands are for local
+              # iteration before opening a PR.
+              {
+                name = "aur-update";
+                command = ''exec "$PRJ_ROOT/scripts/aur/update-pkgbuild.sh" "$@"'';
+                help = "Refresh pkgver + sha256sums in an AUR PKGBUILD against a release (`aur-update claudette-bin 0.24.0`)";
+                category = "packaging";
+              }
+              {
+                name = "aur-test";
+                command = ''exec "$PRJ_ROOT/scripts/aur/test-in-docker.sh" "$@"'';
+                help = "Boot Arch + XFCE + noVNC at http://localhost:6080/; optionally builds + installs a PKGBUILD (`aur-test claudette-bin`)";
+                category = "packaging";
+              }
             ];
           };
 

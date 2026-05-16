@@ -462,6 +462,76 @@ jobs:
           git commit -m "claudette ${VERSION}"
           git push
 
+  # ---- Publish PKGBUILDs to the AUR ------------------------------------
+  # `claudette-bin` repackages the upstream .deb; `claudette` builds
+  # from the source tarball. The matrix runs them in parallel and is
+  # configured `fail-fast: false` so one failing AUR push (e.g. AUR
+  # SSH transient) does not block the other. `claudette-git` is not
+  # auto-published — its PKGBUILD only changes when the build recipe
+  # changes, which is a human decision.
+  publish-aur:
+    name: Publish AUR (${{ matrix.pkgname }})
+    needs: [resolve-tag, publish]
+    if: always() && needs.publish.result == 'success' && startsWith(needs.resolve-tag.outputs.tag, 'v')
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        pkgname: [claudette-bin, claudette]
+    steps:
+      # Bail out cleanly when AUR_SSH_PRIVATE_KEY hasn't been set.
+      # The one-time bootstrap (registering the AUR account's SSH
+      # key + seeding each pkgname's AUR git repo) happens outside
+      # CI; until that's done, the deploy action would fail with
+      # a confusing "Permission denied (publickey)" and turn the
+      # whole release workflow red. Same pattern as
+      # `homebrew-tap-bump`'s `gate-secret` step.
+      - name: Gate on AUR_SSH_PRIVATE_KEY
+        id: gate-secret
+        env:
+          AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+        run: |
+          if [ -z "${AUR_SSH_PRIVATE_KEY}" ]; then
+            echo "AUR_SSH_PRIVATE_KEY secret is not set — skipping AUR publish."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Checkout
+        if: steps.gate-secret.outputs.skip != 'true'
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.resolve-tag.outputs.tag }}
+
+      - name: Refresh PKGBUILD with release checksums
+        if: steps.gate-secret.outputs.skip != 'true'
+        env:
+          TAG: ${{ needs.resolve-tag.outputs.tag }}
+        run: |
+          VERSION="${TAG#v}"
+          scripts/aur/update-pkgbuild.sh "${{ matrix.pkgname }}" "$VERSION"
+
+      # The deploy action runs in an Arch container, regenerates
+      # .SRCINFO with `makepkg --printsrcinfo`, commits, and pushes
+      # over SSH. We pass `allow_empty_commits: false` so a re-run
+      # against an unchanged PKGBUILD doesn't spam the AUR git log.
+      - name: Publish to AUR
+        if: steps.gate-secret.outputs.skip != 'true'
+        uses: KSXGitHub/github-actions-deploy-aur@v2.7.2
+        with:
+          pkgname: ${{ matrix.pkgname }}
+          pkgbuild: packaging/aur/${{ matrix.pkgname }}/PKGBUILD
+          commit_username: "Claudette Release Bot"
+          commit_email: "dev.urandom.io@gmail.com"
+          commit_message: "Update to ${{ needs.resolve-tag.outputs.tag }}"
+          ssh_private_key: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+          # AUR's git server presents RSA + ed25519 host keys; scan
+          # both so we are resilient if either rotates.
+          ssh_keyscan_types: "rsa,ed25519"
+          allow_empty_commits: false
+
+
   notify-discord:
     name: Discord Release Notification
     needs: [resolve-tag, publish]

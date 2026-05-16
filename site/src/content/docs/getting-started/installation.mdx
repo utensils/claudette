@@ -39,6 +39,45 @@ Claudette is also available as a pre-built binary from [GitHub Releases](https:/
 Linux `.AppImage` is temporarily unavailable — `linuxdeploy` can't parse the Pi harness sidecar's binary format. Install via `.deb` until AppImage is restored. Tracking: [#825](https://github.com/utensils/Claudette/issues/825).
 :::
 
+### Arch Linux (AUR)
+
+Claudette is published to the [Arch User Repository](https://aur.archlinux.org) in three flavours:
+
+| Package | Source | Cadence |
+|---------|--------|---------|
+| [`claudette-bin`](https://aur.archlinux.org/packages/claudette-bin) | Repackages the upstream `.deb` | Every tagged release |
+| [`claudette`](https://aur.archlinux.org/packages/claudette) | Builds from the release tarball | Every tagged release |
+| [`claudette-git`](https://aur.archlinux.org/packages/claudette-git) | Builds from `main` HEAD | Track upstream `main` |
+
+Install with your AUR helper of choice — `paru` and `yay` are the common ones:
+
+```bash
+# Fastest path: download + repackage the .deb (no compile)
+paru -S claudette-bin
+
+# From-source build (pulls rust, bun, webkit2gtk-4.1, etc.)
+paru -S claudette
+
+# Bleeding edge — tracks main
+paru -S claudette-git
+```
+
+The three packages conflict, so install only one. PKGBUILDs live in-tree at [`packaging/aur/`](https://github.com/utensils/Claudette/tree/main/packaging/aur) — file PRs there for packaging fixes.
+
+### Linux: native file dialogs
+
+Claudette's **Browse** buttons (Add Repo, attach files, settings) call into Tauri's dialog plugin, which on Linux routes through `org.freedesktop.portal.FileChooser`. The portal needs a running daemon **and** a backend implementing the FileChooser interface — full desktop environments (GNOME, KDE, Cinnamon, MATE, XFCE with its goodies) pull these in transitively, but minimal installs (Openbox-only, i3, sway with no DE) usually do not.
+
+```bash
+# Most desktops on Arch — install one matching your DE:
+sudo pacman -S xdg-desktop-portal xdg-desktop-portal-gtk      # GTK-based (XFCE, MATE, Cinnamon)
+sudo pacman -S xdg-desktop-portal xdg-desktop-portal-gnome    # GNOME
+sudo pacman -S xdg-desktop-portal xdg-desktop-portal-kde      # KDE Plasma
+sudo pacman -S xdg-desktop-portal xdg-desktop-portal-hyprland # Hyprland
+```
+
+When no portal is detected, Claudette silently hides the Browse buttons and shows a context-appropriate hint — paths in Add Repo / Settings can be pasted into the text input; chat attachments can be drag-and-dropped into the composer. The app stays functional but loses native file pickers. Capability is probed once at startup; install the portal stack and restart Claudette to recover the buttons.
+
 ## Prerequisites
 
 Before using Claudette, ensure you have **Claude Code** installed and authenticated:

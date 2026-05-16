@@ -41,6 +41,9 @@ export function AttachMenu({
   isRemote,
 }: AttachMenuProps) {
   const { t } = useTranslation("chat");
+  const { t: tCommon } = useTranslation("common");
+  const fileDialogAvailable = useAppStore((s) => s.fileDialogAvailable);
+  const browseAvailable = fileDialogAvailable !== false;
   const mcpStatus = useAppStore((s) =>
     repoId ? s.mcpStatus[repoId] : undefined,
   );
@@ -123,22 +126,46 @@ export function AttachMenu({
     <>
       <div className={styles.overlay} onClick={onClose} />
       <div ref={menuRef} className={styles.menu}>
-        {/* Attach files */}
-        <button
-          className={styles.menuItem}
-          onClick={onAttachFiles}
-          disabled={isRemote}
-          title={
-            isRemote
-              ? t("attachments_not_supported")
-              : undefined
-          }
-        >
-          <span className={styles.menuIcon}>
-            <Paperclip size={14} />
-          </span>
-          {t("add_files")}
-        </button>
+        {/* Attach files — hidden when no native picker is available
+            on Linux (no xdg-desktop-portal). Drag-and-drop into the
+            composer still works, so attachments aren't lost entirely;
+            we just can't safely call the dialog plugin. */}
+        {browseAvailable && (
+          <button
+            className={styles.menuItem}
+            onClick={onAttachFiles}
+            disabled={isRemote}
+            title={
+              isRemote
+                ? t("attachments_not_supported")
+                : undefined
+            }
+          >
+            <span className={styles.menuIcon}>
+              <Paperclip size={14} />
+            </span>
+            {t("add_files")}
+          </button>
+        )}
+        {!browseAvailable && (
+          // Disabled button (not a div) so screen readers + keyboard
+          // navigation treat this consistently with the other menu
+          // rows. Drag-and-drop into the composer still works — the
+          // localized hint tells the user to use that path.
+          <button
+            type="button"
+            className={styles.menuItem}
+            disabled
+            aria-disabled="true"
+            title={tCommon("file_picker_unavailable_attachment")}
+            style={{ opacity: 0.7, cursor: "default" }}
+          >
+            <span className={styles.menuIcon}>
+              <Paperclip size={14} />
+            </span>
+            {tCommon("file_picker_unavailable_attachment")}
+          </button>
+        )}
 
         {/* Connectors — servers grouped by source with toggle switches */}
         {hasServers && (
