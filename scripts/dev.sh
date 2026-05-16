@@ -131,6 +131,10 @@ Env vars (each consulted at process start):
                        such as CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY.
                        By default dev launches strip these so Settings and
                        chat exercise the configured Claude Code credentials.
+  CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS
+                       Defaulted to 1 here so dev exercises the upstream
+                       Claude Code agent-teams flow (TeamCreate /
+                       TeamDelete / SendMessage). Set to 0 to disable.
 
 Discovery file:
   Each invocation writes \${TMPDIR:-/tmp}/claudette-dev/<pid>.json so the
@@ -285,6 +289,15 @@ strip_inherited_claude_auth_env() {
 }
 
 strip_inherited_claude_auth_env
+
+# Opt in to upstream Claude Code's agent-teams (TeamCreate / TeamDelete +
+# SendMessage between teammates). External Claude Code builds gate the
+# feature behind either `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` or the
+# `--agent-teams` CLI flag (see Claude Code's
+# `utils/agentSwarmsEnabled.ts`). Dev builds exist to exercise these
+# experimental flows, so default-on here. Respect an explicit override
+# if someone wants to reproduce the disabled-state UI.
+export CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS="${CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS:-1}"
 
 discovery_dir="${TMPDIR:-/tmp}/claudette-dev"
 mkdir -p "$discovery_dir"

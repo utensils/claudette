@@ -227,6 +227,16 @@ $debugPort = Find-FreePort -Start $debugBase
 $env:VITE_PORT             = $vitePort
 $env:CLAUDETTE_DEBUG_PORT  = $debugPort
 
+# Opt in to upstream Claude Code's agent-teams (TeamCreate / TeamDelete +
+# SendMessage between teammates). External Claude Code builds gate the
+# feature behind `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` or the
+# `--agent-teams` CLI flag (see Claude Code's
+# `utils/agentSwarmsEnabled.ts`). Dev builds default-on here; set to 0
+# to reproduce the disabled-state UI.
+if (-not $env:CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS) {
+    $env:CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS = '1'
+}
+
 # 4) Resolve the host triple — the staged sidecar's filename has to match
 #    the value Tauri stamps into `TAURI_ENV_TARGET_TRIPLE` at build time
 #    (looked up via `bundle.externalBin`).
