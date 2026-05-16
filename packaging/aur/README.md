@@ -61,6 +61,39 @@ The `.SRCINFO` regeneration happens inside the Arch container that the
 deploy action runs, so contributors editing PKGBUILDs in PRs do not
 need `makepkg` installed locally — CI handles it.
 
+## Smoke-testing in Docker (any host OS)
+
+A reproducible Arch Linux build environment with a lightweight desktop
++ noVNC lives in `packaging/aur/test/Dockerfile`. The desktop renders
+in your browser, so you can build a PKGBUILD with `makepkg`, install
+the resulting `.pkg.tar.zst`, and launch Claudette without needing an
+Arch host. The driver script does the build, mount, and port forward
+in one step:
+
+```bash
+# Boot the container, no auto-build — drop you at a desktop with
+# /workspace already pointed at this repo.
+scripts/aur/test-in-docker.sh
+
+# Build + install claudette-bin from the local PKGBUILD, then leave
+# you at the desktop so you can launch `claudette-app` by hand.
+scripts/aur/test-in-docker.sh claudette-bin
+
+# Build + install + auto-launch the GUI in noVNC.
+scripts/aur/test-in-docker.sh claudette-bin --launch
+```
+
+Then open `http://localhost:6080/vnc.html` in any browser and click
+**Connect** — there is no password. The container is local-only
+(`-localhost yes` on Xvnc; only `websockify` on 6080 is exposed), so
+this auth shape is fine for a dev image but should never be used on a
+host you don't own.
+
+The script picks `docker` or `podman` based on whichever is on
+`$PATH`. On a fresh box the first build downloads the full Arch
+base + Tauri toolchain (~2 GB across `webkit2gtk-4.1`, `rust`,
+`bun`, etc.); subsequent runs reuse the cached image instantly.
+
 ## Editing a PKGBUILD locally
 
 If you have `makepkg` available (Arch host, or `docker run --rm -it
