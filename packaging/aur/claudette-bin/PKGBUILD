@@ -1,0 +1,97 @@
+# Maintainer: James Brink <dev.urandom.io@gmail.com>
+# Contributor: <add yourself when you start helping out>
+
+pkgname=claudette-bin
+_pkgname=claudette
+pkgver=0.24.0
+pkgrel=1
+pkgdesc="Desktop orchestrator for parallel Claude Code agents (Tauri 2 + React)"
+arch=('x86_64' 'aarch64')
+url="https://github.com/utensils/Claudette"
+license=('MIT')
+
+# Hard runtime deps mirror the .deb's Depends field (Tauri 2 stack on
+# Linux). Anything here is required for the GUI to launch; if you can
+# imagine a user running Claudette without it, move it to optdepends.
+depends=(
+  'webkit2gtk-4.1'
+  'gtk3'
+  'libsoup3'
+  'libayatana-appindicator'
+  'librsvg'
+  'alsa-lib'
+  'openssl'
+  # TODO(maintainer): is `claude-code` (Anthropic's CLI) a hard depends
+  # or an optdepends here? The app refuses to chat without it, but a
+  # user could conceivably install Claudette first and bring up the CLI
+  # through Settings > Install Claude Code. Pick one and delete this
+  # comment. The Arch user-facing CLI lives in AUR as `claude-code` —
+  # bare-name dep is fine.
+  # 'claude-code'
+)
+
+# TODO(maintainer): fill in optdepends as `pkgname: one-line reason`.
+# Suggested rows below — keep, prune, or add based on which features
+# you actually want to surface to AUR users on `pacman -Si`:
+#
+#   git: SCM operations on worktrees (essentially required in practice)
+#   github-cli: GitHub PR / issue integration from the SCM panel
+#   glab: GitLab PR / pipeline integration via the bundled scm-gitlab plugin
+#   direnv: per-workspace env activation via the env-direnv plugin
+#   mise: per-workspace env activation via the env-mise plugin
+#   nix: env-nix-devshell plugin support
+#   openssh: remote workspaces over SSH transport
+optdepends=(
+  'git: worktree and SCM operations'
+  # 'github-cli: GitHub PR / issue integration'
+  # 'direnv: per-workspace env activation (env-direnv plugin)'
+  # 'mise: per-workspace env activation (env-mise plugin)'
+)
+
+# `claudette-bin` and the from-source `claudette` are alternates: same
+# binaries land at the same paths, so installing both makes no sense.
+# `provides=('claudette')` lets AUR helpers treat them as substitutable.
+# The bare-name `claudette` also covers the user-facing CLI binary the
+# upstream .deb installs at /usr/bin/claudette.
+provides=("${_pkgname}=${pkgver}" "claudette-cli=${pkgver}")
+conflicts=("${_pkgname}" 'claudette-git' 'claudette-cli')
+
+# Tauri's `.deb` is fully laid out (icons, .desktop, /usr/bin) and
+# already debug-stripped + lintian-clean. Re-stripping or repacking
+# loses nothing and risks invalidating the embedded sidecar signatures.
+options=(!strip !debug !lto)
+
+source_x86_64=("${url}/releases/download/v${pkgver}/Claudette_${pkgver}_amd64.deb")
+source_aarch64=("${url}/releases/download/v${pkgver}/Claudette_${pkgver}_arm64.deb")
+
+# `sha256sums` are rewritten by `scripts/aur/update-pkgbuild.sh` on
+# every release. `SKIP` is a placeholder for hand-applied dev work —
+# CI should never push a PKGBUILD with SKIP in these fields.
+sha256sums_x86_64=('d176881bdef98b13816e2e30960f0fcfea15c80a225bc22ae9ca241531223246')
+sha256sums_aarch64=('63b254d8405419089dd22422c594e0b70f1a7b80c8c7d9150e08e263ede01355')
+
+package() {
+  # `bsdtar` (libarchive) reads .deb as a top-level ar archive,
+  # extracting `data.tar.zst` (or .gz/.xz depending on dpkg-deb mode)
+  # alongside `control.tar.*`. We then expand the data tarball into
+  # $pkgdir/ — that is the entire payload (binaries, icons, .desktop).
+  local debfile
+  case "$CARCH" in
+    x86_64)  debfile="Claudette_${pkgver}_amd64.deb"  ;;
+    aarch64) debfile="Claudette_${pkgver}_arm64.deb"  ;;
+  esac
+
+  cd "${srcdir}"
+  bsdtar -xf "${debfile}"
+  bsdtar -xpf data.tar.* -C "${pkgdir}/"
+
+  # Move the LICENSE Tauri-bundler dropped under /usr/share/doc into
+  # the Arch-canonical location. Non-fatal if the file shape changes
+  # upstream — the .deb installs at least one copyright file.
+  install -d "${pkgdir}/usr/share/licenses/${pkgname}"
+  if [[ -f "${pkgdir}/usr/share/doc/${_pkgname}/copyright" ]]; then
+    install -Dm644 \
+      "${pkgdir}/usr/share/doc/${_pkgname}/copyright" \
+      "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
+  fi
+}

@@ -1,0 +1,9 @@
+# makepkg build artefacts when smoke-testing locally
+*/pkg/
+*/src/
+*/*.pkg.tar.*
+*/*.tar.gz
+*/*.tar.xz
+*/*.deb
+*/*.AppImage
+*/*.log

@@ -462,6 +462,54 @@ jobs:
           git commit -m "claudette ${VERSION}"
           git push
 
+  # ---- Publish PKGBUILDs to the AUR ------------------------------------
+  # `claudette-bin` repackages the upstream .deb; `claudette` builds
+  # from the source tarball. The matrix runs them in parallel and is
+  # configured `fail-fast: false` so one failing AUR push (e.g. AUR
+  # SSH transient) does not block the other. `claudette-git` is not
+  # auto-published — its PKGBUILD only changes when the build recipe
+  # changes, which is a human decision.
+  publish-aur:
+    name: Publish AUR (${{ matrix.pkgname }})
+    needs: [resolve-tag, publish]
+    if: always() && needs.publish.result == 'success' && startsWith(needs.resolve-tag.outputs.tag, 'v')
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        pkgname: [claudette-bin, claudette]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.resolve-tag.outputs.tag }}
+
+      - name: Refresh PKGBUILD with release checksums
+        env:
+          TAG: ${{ needs.resolve-tag.outputs.tag }}
+        run: |
+          VERSION="${TAG#v}"
+          scripts/aur/update-pkgbuild.sh "${{ matrix.pkgname }}" "$VERSION"
+
+      # The deploy action runs in an Arch container, regenerates
+      # .SRCINFO with `makepkg --printsrcinfo`, commits, and pushes
+      # over SSH. We pass `allow_empty_commits: false` so a re-run
+      # against an unchanged PKGBUILD doesn't spam the AUR git log.
+      - name: Publish to AUR
+        uses: KSXGitHub/github-actions-deploy-aur@v2.7.2
+        with:
+          pkgname: ${{ matrix.pkgname }}
+          pkgbuild: packaging/aur/${{ matrix.pkgname }}/PKGBUILD
+          commit_username: "Claudette Release Bot"
+          commit_email: "dev.urandom.io@gmail.com"
+          commit_message: "Update to ${{ needs.resolve-tag.outputs.tag }}"
+          ssh_private_key: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+          # AUR's git server presents RSA + ed25519 host keys; scan
+          # both so we are resilient if either rotates.
+          ssh_keyscan_types: "rsa,ed25519"
+          allow_empty_commits: false
+
+
   notify-discord:
     name: Discord Release Notification
     needs: [resolve-tag, publish]

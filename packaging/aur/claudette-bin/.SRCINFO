@@ -1,0 +1,30 @@
+pkgbase = claudette-bin
+	pkgdesc = Desktop orchestrator for parallel Claude Code agents (Tauri 2 + React)
+	pkgver = 0.24.0
+	pkgrel = 1
+	url = https://github.com/utensils/Claudette
+	arch = x86_64
+	arch = aarch64
+	license = MIT
+	provides = claudette=0.24.0
+	provides = claudette-cli=0.24.0
+	conflicts = claudette
+	conflicts = claudette-git
+	conflicts = claudette-cli
+	depends = webkit2gtk-4.1
+	depends = gtk3
+	depends = libsoup3
+	depends = libayatana-appindicator
+	depends = librsvg
+	depends = alsa-lib
+	depends = openssl
+	optdepends = git: worktree and SCM operations
+	options = !strip
+	options = !debug
+	options = !lto
+	source_x86_64 = https://github.com/utensils/Claudette/releases/download/v0.24.0/Claudette_0.24.0_amd64.deb
+	sha256sums_x86_64 = d176881bdef98b13816e2e30960f0fcfea15c80a225bc22ae9ca241531223246
+	source_aarch64 = https://github.com/utensils/Claudette/releases/download/v0.24.0/Claudette_0.24.0_arm64.deb
+	sha256sums_aarch64 = 63b254d8405419089dd22422c594e0b70f1a7b80c8c7d9150e08e263ede01355
+
+pkgname = claudette-bin
