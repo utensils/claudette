@@ -60,8 +60,35 @@ function normalizeStatus(raw: string | undefined): TaskStatus {
   if (s === "completed" || s === "done") return "completed";
   if (s === "in_progress" || s === "started" || s === "running") return "in_progress";
   if (s === "blocked") return "blocked";
-  if (s === "cancelled" || s === "canceled" || s === "stopped") return "cancelled";
+  if (
+    s === "cancelled" ||
+    s === "canceled" ||
+    s === "stopped" ||
+    s === "deleted"
+  )
+    return "cancelled";
   return "pending";
+}
+
+/** Extract the task id from a TaskUpdate / TaskStop / TaskGet input payload.
+ *  Claude Code's own tools are inconsistent: `TaskUpdate`/`TaskGet` use
+ *  `taskId`, `TaskStop`/`TaskOutput` use `task_id` (with `shell_id` as a
+ *  deprecated alias). Older callers and our own tests have used plain `id`.
+ *  Accept all of them so the tracker stays robust across schema drift. */
+function extractInputTaskId(input: Record<string, unknown>): string {
+  const raw = input.taskId ?? input.task_id ?? input.id ?? input.shell_id;
+  return raw != null ? String(raw) : "";
+}
+
+/** Pick the display label for a TaskCreate. Claude Code emits both
+ *  `subject` (brief title) and `description` (longer body); prefer the
+ *  brief title so the right-sidebar list stays readable. */
+function extractTaskDescription(input: Record<string, unknown>): string {
+  const subject = input.subject;
+  if (typeof subject === "string" && subject.trim().length > 0) return subject;
+  const description = input.description;
+  if (typeof description === "string") return description;
+  return "";
 }
 
 /** Try to extract a numeric task ID from a TaskCreate result string. */
@@ -109,7 +136,7 @@ export function processActivities(
           extractTaskId(act.resultText) ?? `_t${nextSyntheticId.value++}`;
         taskMap.set(id, {
           id,
-          description: String(input.description ?? ""),
+          description: extractTaskDescription(input),
           status: normalizeStatus(input.status as string | undefined),
           priority: normalizePriority(input.priority as string | undefined),
           source: "task",
@@ -117,18 +144,30 @@ export function processActivities(
         break;
       }
       case "TaskUpdate": {
-        const id = String(input.id ?? "");
+        const id = extractInputTaskId(input);
+        // `status: "deleted"` means the agent deleted the task server-side;
+        // drop it from the map rather than rendering it as cancelled.
+        const rawStatus =
+          typeof input.status === "string" ? input.status : undefined;
+        if (rawStatus && rawStatus.toLowerCase() === "deleted") {
+          if (id) taskMap.delete(id);
+          break;
+        }
         const existing = taskMap.get(id);
         if (existing) {
-          if (input.status) existing.status = normalizeStatus(input.status as string);
-          if (input.description) existing.description = String(input.description);
-          if (input.priority) existing.priority = normalizePriority(input.priority as string);
+          if (rawStatus) existing.status = normalizeStatus(rawStatus);
+          if (typeof input.description === "string")
+            existing.description = input.description;
+          if (typeof input.subject === "string" && input.subject.trim())
+            existing.description = input.subject;
+          if (input.priority)
+            existing.priority = normalizePriority(input.priority as string);
         } else if (id) {
           // Orphaned update (TaskCreate result not yet available) — create a stub
           taskMap.set(id, {
             id,
-            description: String(input.description ?? `Task #${id}`),
-            status: normalizeStatus(input.status as string | undefined),
+            description: extractTaskDescription(input) || `Task #${id}`,
+            status: normalizeStatus(rawStatus),
             priority: normalizePriority(input.priority as string | undefined),
             source: "task",
           });
@@ -136,7 +175,7 @@ export function processActivities(
         break;
       }
       case "TaskStop": {
-        const id = String(input.id ?? "");
+        const id = extractInputTaskId(input);
         const existing = taskMap.get(id);
         if (existing) {
           existing.status = "cancelled";

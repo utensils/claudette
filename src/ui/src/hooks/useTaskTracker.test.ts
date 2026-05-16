@@ -75,12 +75,18 @@ describe("deriveTasks", () => {
     expect(result.completedCount).toBe(0);
   });
 
-  it("handles basic TaskCreate", () => {
+  it("handles basic TaskCreate (subject + description)", () => {
+    // Claude Code's TaskCreate emits BOTH `subject` (brief title) and
+    // `description` (long body). The tracker uses `subject` for the
+    // sidebar label so long descriptions don't blow out the panel.
     const activities = [
       activity(
         "TaskCreate",
-        { description: "Implement feature X" },
-        '{"task_id": 1}'
+        {
+          subject: "Implement feature X",
+          description: "Long-form details about feature X go here.",
+        },
+        "Task #1 created successfully: Implement feature X",
       ),
     ];
     const result = deriveTasks([], activities);
@@ -93,15 +99,30 @@ describe("deriveTasks", () => {
     });
   });
 
-  it("handles TaskCreate → TaskUpdate flow", () => {
+  it("falls back to description when TaskCreate has no subject", () => {
     const activities = [
       activity(
         "TaskCreate",
-        { description: "Write tests" },
-        '{"task_id": 1}'
+        { description: "Implement feature X" },
+        '{"task_id": 1}',
       ),
-      activity("TaskUpdate", { id: "1", status: "in_progress" }),
-      activity("TaskUpdate", { id: "1", status: "completed" }),
+    ];
+    const result = deriveTasks([], activities);
+    expect(result.tasks[0].description).toBe("Implement feature X");
+  });
+
+  it("handles TaskCreate → TaskUpdate flow using Claude Code's `taskId` schema", () => {
+    // Regression: pre-fix code looked for `input.id`, but the actual
+    // TaskUpdate tool input is `{ taskId, status }`. This pins the
+    // canonical schema so future refactors don't silently re-break it.
+    const activities = [
+      activity(
+        "TaskCreate",
+        { subject: "Write tests" },
+        "Task #1 created successfully: Write tests",
+      ),
+      activity("TaskUpdate", { taskId: "1", status: "in_progress" }),
+      activity("TaskUpdate", { taskId: "1", status: "completed" }),
     ];
     const result = deriveTasks([], activities);
     expect(result.totalCount).toBe(1);
@@ -109,18 +130,65 @@ describe("deriveTasks", () => {
     expect(result.tasks[0].status).toBe("completed");
   });
 
-  it("handles TaskStop", () => {
+  it("accepts the deprecated `id` key on TaskUpdate for backward compatibility", () => {
+    // Some older harnesses (and pre-fix test fixtures) used `id`. Keep
+    // tolerating it so we don't break sessions persisted before the fix.
     const activities = [
-      activity("TaskCreate", { description: "Work" }, '{"task_id": 1}'),
-      activity("TaskStop", { id: "1" }),
+      activity("TaskCreate", { subject: "Legacy" }, "Task #5 created successfully: Legacy"),
+      activity("TaskUpdate", { id: "5", status: "completed" }),
+    ];
+    const result = deriveTasks([], activities);
+    expect(result.tasks[0].status).toBe("completed");
+  });
+
+  it("handles TaskStop with snake_case `task_id`", () => {
+    // TaskStop's canonical schema is `{ task_id, shell_id? }`. Pinned
+    // separately from TaskUpdate because the two tools intentionally
+    // disagree on casing.
+    const activities = [
+      activity(
+        "TaskCreate",
+        { subject: "Work" },
+        "Task #1 created successfully: Work",
+      ),
+      activity("TaskStop", { task_id: "1" }),
     ];
     const result = deriveTasks([], activities);
     expect(result.tasks[0].status).toBe("cancelled");
   });
 
+  it("accepts the deprecated `shell_id` key on TaskStop", () => {
+    const activities = [
+      activity(
+        "TaskCreate",
+        { subject: "Shell" },
+        "Task #2 created successfully: Shell",
+      ),
+      activity("TaskStop", { shell_id: "2" }),
+    ];
+    const result = deriveTasks([], activities);
+    expect(result.tasks[0].status).toBe("cancelled");
+  });
+
+  it('drops a task from the map when TaskUpdate uses status="deleted"', () => {
+    // The TaskUpdate tool documents `deleted` as a real status that
+    // actually deletes the task server-side; mirror that in the UI
+    // rather than rendering it as a stale cancelled entry.
+    const activities = [
+      activity(
+        "TaskCreate",
+        { subject: "Throwaway" },
+        "Task #7 created successfully: Throwaway",
+      ),
+      activity("TaskUpdate", { taskId: "7", status: "deleted" }),
+    ];
+    const result = deriveTasks([], activities);
+    expect(result.totalCount).toBe(0);
+  });
+
   it("creates stub for orphaned TaskUpdate", () => {
     const activities = [
-      activity("TaskUpdate", { id: "99", status: "in_progress" }),
+      activity("TaskUpdate", { taskId: "99", status: "in_progress" }),
     ];
     const result = deriveTasks([], activities);
     expect(result.totalCount).toBe(1);
@@ -187,10 +255,14 @@ describe("deriveTasks", () => {
 
   it("processes completed turns before current activities", () => {
     const historicalTurn = turn([
-      activity("TaskCreate", { description: "Old task" }, '{"task_id": 1}'),
+      activity(
+        "TaskCreate",
+        { subject: "Old task" },
+        "Task #1 created successfully: Old task",
+      ),
     ]);
     const currentActivities = [
-      activity("TaskUpdate", { id: "1", status: "completed" }),
+      activity("TaskUpdate", { taskId: "1", status: "completed" }),
     ];
     const result = deriveTasks([historicalTurn], currentActivities);
     expect(result.tasks[0].status).toBe("completed");

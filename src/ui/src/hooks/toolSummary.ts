@@ -33,14 +33,21 @@ export function extractToolSummary(
         return input.skill
           ? `${input.skill}${input.args ? ` ${input.args}` : ""}`
           : "";
-      case "TaskUpdate":
-        return input.status ? `#${input.id ?? "?"} → ${input.status}` : "";
+      case "TaskUpdate": {
+        const id = input.taskId ?? input.task_id ?? input.id;
+        return input.status ? `#${id ?? "?"} → ${input.status}` : "";
+      }
       case "TaskGet":
       case "TaskStop":
-      case "TaskOutput":
-        return input.id ? `#${input.id}` : "";
-      case "Monitor":
-        return input.id ? `task #${input.id}` : "";
+      case "TaskOutput": {
+        const id =
+          input.taskId ?? input.task_id ?? input.id ?? input.shell_id;
+        return id ? `#${id}` : "";
+      }
+      case "Monitor": {
+        const id = input.taskId ?? input.task_id ?? input.id;
+        return id ? `task #${id}` : "";
+      }
       case "CronDelete":
         return input.id ?? input.name ?? "";
       case "RemoteTrigger":
