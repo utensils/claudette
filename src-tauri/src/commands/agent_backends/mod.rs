@@ -1,25 +1,13 @@
-// NOTE (god-file watch): this file passed 6k lines after the Pi
-// harness landed. The Pi-specific resolver cluster (`build_pi_sdk_runtime`,
-// `build_pi_provider_override`, `qualify_model_for_pi`,
-// `normalize_pi_provider_base_url`, `pi_model_targets_anthropic`,
-// `ensure_anthropic_not_routed_through_pi_via_oauth`,
-// `claude_oauth_blocks_pi_anthropic`, `discover_pi_models`, and the
-// matching `pi_*` test cluster at the bottom) is the most cohesive
-// extraction candidate — they share no callers outside this file with
-// the Codex / gateway code, and pulling them into a sibling
-// `commands/agent_backends/pi.rs` module would let the rest of this
-// file go back to "general backend resolution" without invasive
-// rewiring. Not done in this PR to keep the diff scoped; tracked as a
-// follow-up.
-use std::collections::HashMap;
+//! Facade for the per-backend agent-runtime layer. The 9 Tauri commands
+//! that the frontend invokes (and the two `resolve_backend_*` helpers
+//! that `chat::send` calls) live here; everything else has been peeled
+//! into focused submodules. See each `mod` declaration's owning file
+//! for the relevant cluster.
 
-use serde_json::{Value, json};
 use tauri::State;
 
 use claudette::agent::resolve_codex_path;
-use claudette::agent_backend::{
-    AgentBackendConfig, AgentBackendKind, AgentBackendModel, AgentBackendRuntimeHarness,
-};
+use claudette::agent_backend::{AgentBackendConfig, AgentBackendKind, AgentBackendRuntimeHarness};
 use claudette::db::Database;
 use claudette::plugin::{delete_secure_secret, save_secure_secret};
 
@@ -358,6 +346,11 @@ pub async fn launch_codex_login(state: State<'_, AppState>) -> Result<(), String
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
+    use claudette::agent_backend::AgentBackendModel;
+    use serde_json::{Value, json};
+
     #[cfg(feature = "pi-sdk")]
     use super::auto_detect::PI_AUTO_DETECT_TIMEOUT;
     use super::auto_detect::{
