@@ -479,12 +479,33 @@ jobs:
       matrix:
         pkgname: [claudette-bin, claudette]
     steps:
+      # Bail out cleanly when AUR_SSH_PRIVATE_KEY hasn't been set.
+      # The one-time bootstrap (registering the AUR account's SSH
+      # key + seeding each pkgname's AUR git repo) happens outside
+      # CI; until that's done, the deploy action would fail with
+      # a confusing "Permission denied (publickey)" and turn the
+      # whole release workflow red. Same pattern as
+      # `homebrew-tap-bump`'s `gate-secret` step.
+      - name: Gate on AUR_SSH_PRIVATE_KEY
+        id: gate-secret
+        env:
+          AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+        run: |
+          if [ -z "${AUR_SSH_PRIVATE_KEY}" ]; then
+            echo "AUR_SSH_PRIVATE_KEY secret is not set — skipping AUR publish."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Checkout
+        if: steps.gate-secret.outputs.skip != 'true'
         uses: actions/checkout@v6
         with:
           ref: ${{ needs.resolve-tag.outputs.tag }}
 
       - name: Refresh PKGBUILD with release checksums
+        if: steps.gate-secret.outputs.skip != 'true'
         env:
           TAG: ${{ needs.resolve-tag.outputs.tag }}
         run: |
@@ -496,6 +517,7 @@ jobs:
       # over SSH. We pass `allow_empty_commits: false` so a re-run
       # against an unchanged PKGBUILD doesn't spam the AUR git log.
       - name: Publish to AUR
+        if: steps.gate-secret.outputs.skip != 'true'
         uses: KSXGitHub/github-actions-deploy-aur@v2.7.2
         with:
           pkgname: ${{ matrix.pkgname }}

@@ -37,14 +37,26 @@ if [ ! -f "${pkgbuild}" ]; then
   exit 1
 fi
 
-# `sha256sum` and `curl` are present on every Ubuntu runner; no need
-# to install anything before invoking us.
+# `curl` is present everywhere; `sha256sum` (GNU coreutils) ships
+# on Linux but not on macOS by default — macOS ships `shasum -a 256`
+# (a Perl script that's part of the base install). Probe once at
+# top of script so contributors hand-bumping on macOS don't need
+# to install coreutils.
+if command -v sha256sum >/dev/null 2>&1; then
+  _hasher() { sha256sum; }
+elif command -v shasum >/dev/null 2>&1; then
+  _hasher() { shasum -a 256; }
+else
+  echo "error: neither sha256sum nor shasum is on PATH" >&2
+  exit 1
+fi
+
 fetch_sha() {
   local url="$1"
   # `-fL` so curl follows redirects and fails on 404 instead of
   # silently writing an HTML error page that hashes to garbage.
   curl --silent --show-error --fail --location "${url}" \
-    | sha256sum \
+    | _hasher \
     | awk '{print $1}'
 }
 

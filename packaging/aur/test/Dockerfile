@@ -1,8 +1,9 @@
 # Local AUR PKGBUILD smoke-test environment.
 #
-# Boots an Arch Linux container running openbox under tigervnc, with
-# noVNC bridging the VNC display to a websocket on port 6080. Open
-# http://localhost:6080/vnc.html in a browser to see the desktop.
+# Boots an Arch Linux container running XFCE (xfwm4 + xfdesktop +
+# xfce4-panel + thunar) under tigervnc, with noVNC bridging the VNC
+# display to a websocket on port 6080. Open http://localhost:6080/
+# in a browser to see the desktop.
 #
 # Why this exists: Claudette is a GUI app. A headless Arch container
 # tells us whether `makepkg` succeeds, but not whether the resulting

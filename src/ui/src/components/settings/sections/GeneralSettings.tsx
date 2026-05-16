@@ -321,6 +321,9 @@ export function GeneralSettings() {
               </button>
             )}
           </div>
+          {!browseAvailable && (
+            <div className={styles.fieldHint}>{tCommon("file_picker_unavailable")}</div>
+          )}
         </div>
       </div>
 

@@ -148,12 +148,23 @@ export function AttachMenu({
           </button>
         )}
         {!browseAvailable && (
-          <div className={styles.menuItem} title={tCommon("file_picker_unavailable")} style={{ opacity: 0.7, cursor: "default" }}>
+          // Disabled button (not a div) so screen readers + keyboard
+          // navigation treat this consistently with the other menu
+          // rows. Drag-and-drop into the composer still works — the
+          // localized hint tells the user to use that path.
+          <button
+            type="button"
+            className={styles.menuItem}
+            disabled
+            aria-disabled="true"
+            title={tCommon("file_picker_unavailable_attachment")}
+            style={{ opacity: 0.7, cursor: "default" }}
+          >
             <span className={styles.menuIcon}>
               <Paperclip size={14} />
             </span>
-            {tCommon("file_picker_unavailable")}
-          </div>
+            {tCommon("file_picker_unavailable_attachment")}
+          </button>
         )}
 
         {/* Connectors — servers grouped by source with toggle switches */}

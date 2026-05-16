@@ -5,6 +5,7 @@
   "close": "Close",
   "browse": "Browse",
   "file_picker_unavailable": "File picker unavailable — paste the path above. (Install xdg-desktop-portal on Linux for native dialogs.)",
+  "file_picker_unavailable_attachment": "File picker unavailable — drag-and-drop files into the composer instead. (Install xdg-desktop-portal on Linux for native dialogs.)",
   "copy": "Copy",
   "copied": "Copied",
   "add": "Add",
