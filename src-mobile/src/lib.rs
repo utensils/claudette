@@ -14,6 +14,7 @@
 
 pub mod commands;
 pub mod state;
+pub mod storage;
 
 /// Tauri entry point. The `mobile_entry_point` attribute exposes a
 /// FFI-friendly `start_app` symbol when building for iOS / Android so
@@ -46,7 +47,13 @@ pub fn run() {
     let builder = tauri::Builder::default().manage(connections);
 
     builder
-        .invoke_handler(tauri::generate_handler![commands::version,])
+        .invoke_handler(tauri::generate_handler![
+            commands::version,
+            commands::pair_with_connection_string,
+            commands::list_saved_connections,
+            commands::connect_saved,
+            commands::forget_connection,
+        ])
         .run(tauri::generate_context!())
         .expect("error while running claudette mobile app");
 }

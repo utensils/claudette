@@ -4,6 +4,13 @@
   background: #111;
   -webkit-font-smoothing: antialiased;
   -webkit-tap-highlight-color: transparent;
+  --accent: #6aa3ff;
+  --surface: #1a1a1a;
+  --surface-elevated: #222;
+  --border: #2a2a2a;
+  --text-dim: #8a8a8a;
+  --text-muted: #a0a0a0;
+  --danger: #ff5b5b;
 }
 
 * {
@@ -21,6 +28,8 @@ body {
   padding-left: env(safe-area-inset-left);
   padding-right: env(safe-area-inset-right);
 }
+
+/* ---------- Shared shell layout (post-connect screens) ---------- */
 
 .shell {
   min-height: 100vh;
@@ -41,7 +50,7 @@ body {
 
 .subtitle {
   margin: 4px 0 0;
-  color: #888;
+  color: var(--text-dim);
   font-size: 13px;
 }
 
@@ -57,15 +66,177 @@ body {
   margin: 0;
   font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
   font-size: 13px;
-  color: #a0a0a0;
+  color: var(--text-muted);
   padding: 12px 14px;
-  background: #1a1a1a;
+  background: var(--surface);
   border-radius: 8px;
 }
 
 .hint {
   margin: 0;
   font-size: 14px;
-  color: #888;
+  color: var(--text-dim);
+  line-height: 1.5;
+}
+
+.error {
+  margin-top: 12px;
+  padding: 10px 12px;
+  background: #2a1a1a;
+  border: 1px solid var(--danger);
+  border-radius: 8px;
+  color: var(--danger);
+  font-size: 13px;
+}
+
+/* ---------- Buttons ---------- */
+
+button {
+  border: none;
+  border-radius: 10px;
+  padding: 14px 16px;
+  font-size: 16px;
+  font-weight: 500;
+  font-family: inherit;
+  cursor: pointer;
+  transition: opacity 100ms ease;
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.primary {
+  background: var(--accent);
+  color: #0a1a30;
+  width: 100%;
+}
+
+.secondary {
+  background: var(--surface);
+  color: #e0e0e0;
+  width: 100%;
+}
+
+.secondary:hover {
+  background: var(--surface-elevated);
+}
+
+/* ---------- ConnectScreen ---------- */
+
+.connect-screen {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  padding: 24px 16px;
+  gap: 24px;
+}
+
+.connect-header h1 {
+  margin: 0;
+  font-size: 32px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.connect-section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.section-title {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-dim);
+}
+
+.conn-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.conn-row {
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+}
+
+.conn-row-main {
+  flex: 1;
+  background: var(--surface);
+  text-align: left;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px 14px;
+  border-radius: 10px;
+}
+
+.conn-row-main:hover {
+  background: var(--surface-elevated);
+}
+
+.conn-name {
+  font-size: 16px;
+  font-weight: 500;
+  color: #f0f0f0;
+}
+
+.conn-host {
+  font-size: 13px;
+  color: var(--text-dim);
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+}
+
+.conn-forget {
+  background: transparent;
+  color: var(--text-dim);
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  font-size: 14px;
+}
+
+.conn-forget:hover {
+  color: var(--danger);
+  border-color: var(--danger);
+}
+
+.paste-row {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.paste-input {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px 14px;
+  color: #e0e0e0;
+  font-size: 14px;
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+  outline: none;
+}
+
+.paste-input:focus {
+  border-color: var(--accent);
+}
+
+.footnote {
+  margin-top: auto;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+  font-size: 12px;
+  color: var(--text-dim);
   line-height: 1.5;
 }

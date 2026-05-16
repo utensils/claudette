@@ -1,42 +1,30 @@
-import { useEffect, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { useState } from "react";
+import { ConnectScreen } from "./screens/ConnectScreen";
+import type { SavedConnection } from "./types";
 
-interface VersionInfo {
-  version: string;
-  commit: string | null;
-}
+// Phase 5 wires the pair / connect / forget flow. Phase 6 will add a
+// workspaces screen that the ConnectScreen routes to on success.
 
-// Phase 4 stub. The real screens — ConnectScreen, WorkspacesScreen,
-// ChatListScreen, ChatScreen — land in Phases 5-8. For now this is just
-// enough to confirm the webview boots and the Rust↔JS bridge works.
 export function App() {
-  const [version, setVersion] = useState<VersionInfo | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [active, setActive] = useState<SavedConnection | null>(null);
 
-  useEffect(() => {
-    invoke<VersionInfo>("version")
-      .then(setVersion)
-      .catch((e) => setError(String(e)));
-  }, []);
+  if (!active) {
+    return <ConnectScreen onConnected={setActive} />;
+  }
 
   return (
     <div className="shell">
       <header className="header">
-        <h1>Claudette</h1>
-        <p className="subtitle">iOS preview</p>
+        <h1>{active.name}</h1>
+        <p className="subtitle">
+          {active.host}:{active.port}
+        </p>
       </header>
       <main className="main">
-        <p className="status">
-          {error
-            ? `Bridge error: ${error}`
-            : version
-              ? `Rust ${version.version}${version.commit ? ` @ ${version.commit.slice(0, 7)}` : ""}`
-              : "Connecting to Rust side…"}
-        </p>
-        <p className="hint">
-          Pair flow, workspace list, and chat view ship in Phases 5-8 of
-          the iOS foundation work.
-        </p>
+        <p className="status">Connected. Workspaces UI ships in Phase 6.</p>
+        <button className="secondary" onClick={() => setActive(null)}>
+          Disconnect
+        </button>
       </main>
     </div>
   );
