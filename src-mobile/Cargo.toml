@@ -1,0 +1,47 @@
+[package]
+name = "claudette-mobile"
+version = "0.24.0"
+edition = "2024"
+description = "Claudette iOS / Android client — thin WSS remote-control client"
+license = "MIT"
+
+# Tauri Mobile compiles the Rust side as a staticlib for iOS (linked into a
+# Swift wrapper) and a cdylib for Android (loaded by the JNI bridge).
+# `rlib` keeps it usable as a normal dependency from `main.rs` for the
+# desktop fallback build, and from integration tests.
+[lib]
+name = "claudette_mobile_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[[bin]]
+name = "claudette-mobile"
+path = "src/main.rs"
+
+[dependencies]
+# `default-features = false` keeps the Pi harness, agent runtime, and other
+# desktop-only heavy bits out of the mobile binary. The mobile app only
+# needs the `transport` and `model` surfaces of the claudette lib — the
+# rest is the desktop's job.
+claudette = { path = "..", default-features = false }
+tauri = { version = "2" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["sync", "rt-multi-thread", "net", "time", "macros"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+gethostname = "1"
+uuid = { version = "1", features = ["v4"] }
+
+# Mobile-only plugins. The barcode-scanner plugin is `#![cfg(mobile)]`
+# upstream — its presence in the dep tree on a desktop build is fine
+# (Cargo just doesn't link it), but binding the dep itself to mobile
+# targets avoids dragging it into desktop-fallback `cargo check`
+# matrices that don't define `cfg(mobile)`.
+[target.'cfg(any(target_os = "android", target_os = "ios"))'.dependencies]
+tauri-plugin-barcode-scanner = "2"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(mobile)', 'cfg(desktop)'] }

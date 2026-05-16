@@ -84,14 +84,15 @@ CI also enforces `bun install --frozen-lockfile` — do not modify `bun.lock` wi
 
 ### Crate structure
 
-Four crates in a Cargo workspace:
+Five crates in a Cargo workspace:
 
 | Crate | Path | Purpose |
 |---|---|---|
-| `claudette` | `src/` (workspace root) | Core library — models, db, git, diff, agent logic. No UI or Tauri dependencies. |
+| `claudette` | `src/` (workspace root) | Core library — models, db, git, diff, agent logic, WSS transport. No UI or Tauri dependencies. |
 | `claudette-tauri` | `src-tauri/` | Tauri binary (`claudette-app`). Thin `#[tauri::command]` wrappers that call into `claudette`. |
-| `claudette-server` | `src-server/` | WebSocket server for remote access. Also embeddable in the Tauri binary. |
+| `claudette-server` | `src-server/` | WebSocket server for remote access. Also embeddable in the Tauri binary. Uses `PersistentSession` so interactive controls (AskUserQuestion / ExitPlanMode) work over WSS. |
 | `claudette-cli` | `src-cli/` | Command-line client (`claudette` binary) that drives the running GUI over a local IPC socket. |
+| `claudette-mobile` | `src-mobile/` | Tauri 2 iOS / Android client — thin WSS remote-control app. Pairs with a running desktop or headless server; doesn't run agents locally. See `src-mobile/README.md` for the `cargo tauri ios init` setup. |
 
 Feature flags in `claudette-tauri`:
 - `default = ["server", "voice", "devtools", "alternative-backends", "pi-sdk"]`
