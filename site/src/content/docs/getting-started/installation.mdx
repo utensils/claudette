@@ -3,9 +3,19 @@ title: Installation
 description: Download and install Claudette on macOS, Linux, or Windows.
 ---
 
+## Install on macOS (Homebrew)
+
+The recommended path on macOS is [Homebrew](https://brew.sh/):
+
+```bash
+brew install --cask claudette
+```
+
+The cask downloads the Developer ID-signed, Apple-notarized `.dmg` for your architecture (Apple Silicon or Intel), drags `Claudette.app` into `/Applications`, and registers Claudette with Spotlight and Launchpad. Claudette ships its own signed updater, so `brew upgrade` will not touch it after install — the app keeps itself current via the built-in updater. To uninstall and remove all local data (workspaces, plugins, DB, caches), run `brew uninstall --zap --cask claudette`.
+
 ## Download
 
-Claudette is available as a pre-built binary from [GitHub Releases](https://github.com/utensils/Claudette/releases).
+Claudette is also available as a pre-built binary from [GitHub Releases](https://github.com/utensils/Claudette/releases).
 
 | Platform | Architecture | Format |
 |----------|-------------|--------|
@@ -17,7 +27,7 @@ Claudette is available as a pre-built binary from [GitHub Releases](https://gith
 | Windows | ARM64 | `.zip` |
 
 1. Download the appropriate binary for your platform from the [latest release](https://github.com/utensils/Claudette/releases/latest)
-2. **macOS**: Open the `.dmg` and drag Claudette to your Applications folder
+2. **macOS**: Open the `.dmg` and drag Claudette to your Applications folder (or use the Homebrew cask above)
 3. **Linux**: Install the `.deb` package with `sudo apt install ./Claudette_*.deb`
 4. **Windows**: Extract the `.zip` archive and run `claudette.exe`
 

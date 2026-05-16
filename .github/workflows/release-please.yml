@@ -395,6 +395,63 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: gh release edit "${{ needs.resolve-tag.outputs.tag }}" --draft=false --repo "${{ github.repository }}"
 
+  homebrew-cask-bump:
+    name: Bump Homebrew Cask
+    needs: [resolve-tag, publish]
+    if: always() && needs.publish.result == 'success'
+    # macos-latest comes with brew preinstalled and writable, so brew's
+    # developer commands (bump-cask-pr) work without extra setup.
+    runs-on: macos-latest
+    steps:
+      - name: Bail out if HOMEBREW_GITHUB_API_TOKEN is missing
+        id: gate-secret
+        env:
+          HOMEBREW_GITHUB_API_TOKEN: ${{ secrets.HOMEBREW_GITHUB_API_TOKEN }}
+        run: |
+          if [ -z "${HOMEBREW_GITHUB_API_TOKEN}" ]; then
+            echo "HOMEBREW_GITHUB_API_TOKEN secret is not set — skipping cask bump."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Check the claudette cask exists upstream
+        if: steps.gate-secret.outputs.skip != 'true'
+        id: gate-cask
+        run: |
+          set -euo pipefail
+          # Resolves to the Casks/c/claudette.rb raw file on Homebrew/homebrew-cask
+          # main. 200 = merged and live; 404 = not yet merged (this PR is sitting
+          # in a draft state, or the upstream PR hasn't landed). Anything else
+          # we treat as transient and skip — don't fail the release on it.
+          status=$(curl -sS -o /dev/null -w '%{http_code}' \
+            "https://raw.githubusercontent.com/Homebrew/homebrew-cask/HEAD/Casks/c/claudette.rb" || echo "000")
+          if [ "$status" = "200" ]; then
+            echo "Cask exists upstream — proceeding with bump."
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "Cask not found upstream (HTTP $status) — skipping bump."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Open bump-cask-pr against Homebrew/homebrew-cask
+        if: steps.gate-secret.outputs.skip != 'true' && steps.gate-cask.outputs.skip != 'true'
+        env:
+          HOMEBREW_GITHUB_API_TOKEN: ${{ secrets.HOMEBREW_GITHUB_API_TOKEN }}
+          HOMEBREW_NO_AUTO_UPDATE: "1"
+          TAG: ${{ needs.resolve-tag.outputs.tag }}
+        run: |
+          set -euo pipefail
+          VERSION="${TAG#v}"
+          # bump-cask-pr re-renders the URL with the new version, downloads each
+          # arch variant, recomputes sha256s, and opens the PR upstream from the
+          # token owner's fork. No manual checksum plumbing needed.
+          brew bump-cask-pr \
+            --version "$VERSION" \
+            --no-browse \
+            --message "Released by claudette release-please workflow." \
+            claudette
+
   notify-discord:
     name: Discord Release Notification
     needs: [resolve-tag, publish]
