@@ -6,7 +6,7 @@ import { DEFAULT_MONO_STACK } from "../../styles/fonts";
 import { useAppStore } from "../../stores/useAppStore";
 import { executeCloseTab, executeNewTab } from "../../hotkeys/contextActions";
 import type { FileRevealTarget } from "../../stores/slices/fileTreeSlice";
-import { EDITOR_BASE_FONT_SIZE } from "./editor-menubar/useEditorActions";
+import { EDITOR_BASE_FONT_SIZE } from "./editorConstants";
 import {
   useGitGutter,
   type DecorationsCollection,

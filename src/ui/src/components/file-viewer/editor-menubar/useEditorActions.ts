@@ -4,17 +4,19 @@ import { writeText as clipboardWriteText } from "@tauri-apps/plugin-clipboard-ma
 import { useAppStore } from "../../../stores/useAppStore";
 import { fileBufferKey } from "../../../stores/slices/fileTreeSlice";
 import { setAppSetting } from "../../../services/tauri";
+import {
+  EDITOR_ZOOM_MAX,
+  EDITOR_ZOOM_MIN,
+  EDITOR_ZOOM_STEP,
+} from "../editorConstants";
 import type { EditorActions } from "./editorMenuConfig";
 
-/** Base Monaco font size. Single source of truth — `MonacoEditor.tsx`
- *  imports this constant for both the initial `fontSize` option and
- *  the `updateOptions` call that runs whenever `editorFontZoom`
- *  changes. The View > Zoom items multiply this by the current zoom
- *  to compute the new effective size. */
-export const EDITOR_BASE_FONT_SIZE = 13;
-export const EDITOR_ZOOM_STEP = 0.1;
-export const EDITOR_ZOOM_MIN = 0.7;
-export const EDITOR_ZOOM_MAX = 2;
+// EDITOR_BASE_FONT_SIZE lives in ../editorConstants so MonacoEditor
+// can import it without depending on this module's clipboard / store /
+// setAppSetting imports. Re-exported here as a back-compat hatch — old
+// imports of `EDITOR_BASE_FONT_SIZE` from `useEditorActions` keep
+// working. New code should import from `../editorConstants` directly.
+export { EDITOR_BASE_FONT_SIZE } from "../editorConstants";
 
 /** Pure dependency bag consumed by `buildEditorActions`. Refactoring all
  *  side effects through this interface lets the hook stay a thin store
