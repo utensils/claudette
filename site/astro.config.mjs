@@ -122,6 +122,7 @@ export default defineConfig({
           label: 'Remote & CLI',
           items: [
             { slug: 'features/remote-workspaces' },
+            { slug: 'features/mobile-app' },
             { slug: 'features/cli-client' },
           ],
         },
