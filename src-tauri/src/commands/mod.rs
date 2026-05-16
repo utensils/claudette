@@ -16,6 +16,7 @@ pub mod data;
 pub mod debug;
 pub mod devtools;
 pub mod diagnostics;
+pub mod dialog;
 pub mod diff;
 pub mod env;
 pub mod files;

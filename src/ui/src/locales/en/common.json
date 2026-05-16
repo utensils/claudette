@@ -4,6 +4,7 @@
   "delete": "Delete",
   "close": "Close",
   "browse": "Browse",
+  "file_picker_unavailable": "File picker unavailable — paste the path above. (Install xdg-desktop-portal on Linux for native dialogs.)",
   "copy": "Copy",
   "copied": "Copied",
   "add": "Add",

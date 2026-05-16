@@ -1052,6 +1052,7 @@ fn main() {
             commands::diagnostics::get_diagnostics_settings,
             commands::diagnostics::set_log_level,
             commands::diagnostics::set_frontend_verbosity,
+            commands::dialog::file_dialog_capability,
             commands::agent_backends::list_agent_backends,
             commands::agent_backends::auto_detect_agent_backends,
             commands::agent_backends::save_agent_backend,

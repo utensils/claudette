@@ -41,6 +41,9 @@ export function AttachMenu({
   isRemote,
 }: AttachMenuProps) {
   const { t } = useTranslation("chat");
+  const { t: tCommon } = useTranslation("common");
+  const fileDialogAvailable = useAppStore((s) => s.fileDialogAvailable);
+  const browseAvailable = fileDialogAvailable !== false;
   const mcpStatus = useAppStore((s) =>
     repoId ? s.mcpStatus[repoId] : undefined,
   );
@@ -123,22 +126,35 @@ export function AttachMenu({
     <>
       <div className={styles.overlay} onClick={onClose} />
       <div ref={menuRef} className={styles.menu}>
-        {/* Attach files */}
-        <button
-          className={styles.menuItem}
-          onClick={onAttachFiles}
-          disabled={isRemote}
-          title={
-            isRemote
-              ? t("attachments_not_supported")
-              : undefined
-          }
-        >
-          <span className={styles.menuIcon}>
-            <Paperclip size={14} />
-          </span>
-          {t("add_files")}
-        </button>
+        {/* Attach files — hidden when no native picker is available
+            on Linux (no xdg-desktop-portal). Drag-and-drop into the
+            composer still works, so attachments aren't lost entirely;
+            we just can't safely call the dialog plugin. */}
+        {browseAvailable && (
+          <button
+            className={styles.menuItem}
+            onClick={onAttachFiles}
+            disabled={isRemote}
+            title={
+              isRemote
+                ? t("attachments_not_supported")
+                : undefined
+            }
+          >
+            <span className={styles.menuIcon}>
+              <Paperclip size={14} />
+            </span>
+            {t("add_files")}
+          </button>
+        )}
+        {!browseAvailable && (
+          <div className={styles.menuItem} title={tCommon("file_picker_unavailable")} style={{ opacity: 0.7, cursor: "default" }}>
+            <span className={styles.menuIcon}>
+              <Paperclip size={14} />
+            </span>
+            {tCommon("file_picker_unavailable")}
+          </div>
+        )}
 
         {/* Connectors — servers grouped by source with toggle switches */}
         {hasServers && (

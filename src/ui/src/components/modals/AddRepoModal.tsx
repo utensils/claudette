@@ -18,6 +18,10 @@ export function AddRepoModal() {
   const addRepo = useAppStore((s) => s.addRepository);
   const setDefaultBranches = useAppStore((s) => s.setDefaultBranches);
   const defaultBranches = useAppStore((s) => s.defaultBranches);
+  // Treat `null` (probe-in-flight) as available so we don't briefly
+  // hide the Browse button on a working host.
+  const fileDialogAvailable = useAppStore((s) => s.fileDialogAvailable);
+  const browseAvailable = fileDialogAvailable !== false;
 
   const [mode, setMode] = useState<Mode>("open");
   const [path, setPath] = useState("");
@@ -143,10 +147,15 @@ export function AddRepoModal() {
               onKeyDown={(e) => e.key === "Enter" && handleSubmit()}
               autoFocus
             />
-            <button className={shared.btn} onClick={handleBrowseExisting}>
-              {tCommon("browse")}
-            </button>
+            {browseAvailable && (
+              <button className={shared.btn} onClick={handleBrowseExisting}>
+                {tCommon("browse")}
+              </button>
+            )}
           </div>
+          {!browseAvailable && (
+            <div className={shared.hint}>{tCommon("file_picker_unavailable")}</div>
+          )}
         </div>
       ) : (
         <>
@@ -160,10 +169,15 @@ export function AddRepoModal() {
                 placeholder={t("add_repo_create_location_placeholder")}
                 onKeyDown={(e) => e.key === "Enter" && handleSubmit()}
               />
-              <button className={shared.btn} onClick={handleBrowseParent}>
-                {tCommon("browse")}
-              </button>
+              {browseAvailable && (
+                <button className={shared.btn} onClick={handleBrowseParent}>
+                  {tCommon("browse")}
+                </button>
+              )}
             </div>
+            {!browseAvailable && (
+              <div className={shared.hint}>{tCommon("file_picker_unavailable")}</div>
+            )}
           </div>
           <div className={shared.field}>
             <label className={shared.label}>{t("add_repo_create_name_label")}</label>

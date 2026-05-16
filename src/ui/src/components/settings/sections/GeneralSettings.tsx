@@ -19,6 +19,8 @@ export function GeneralSettings() {
   const { t: tCommon } = useTranslation("common");
   const worktreeBaseDir = useAppStore((s) => s.worktreeBaseDir);
   const setWorktreeBaseDir = useAppStore((s) => s.setWorktreeBaseDir);
+  const fileDialogAvailable = useAppStore((s) => s.fileDialogAvailable);
+  const browseAvailable = fileDialogAvailable !== false;
   const claudetteTerminalEnabled = useAppStore(
     (s) => s.claudetteTerminalEnabled,
   );
@@ -297,25 +299,27 @@ export function GeneralSettings() {
               onBlur={handlePathBlur}
               placeholder={t("general_worktree_placeholder")}
             />
-            <button
-              className={styles.iconBtn}
-              onClick={async () => {
-                try {
-                  const selected = await open({ directory: true, multiple: false });
-                  if (selected) {
-                    setPath(selected);
-                    setError(null);
-                    await setAppSetting("worktree_base_dir", selected);
-                    setWorktreeBaseDir(selected);
+            {browseAvailable && (
+              <button
+                className={styles.iconBtn}
+                onClick={async () => {
+                  try {
+                    const selected = await open({ directory: true, multiple: false });
+                    if (selected) {
+                      setPath(selected);
+                      setError(null);
+                      await setAppSetting("worktree_base_dir", selected);
+                      setWorktreeBaseDir(selected);
+                    }
+                  } catch (e) {
+                    setError(String(e));
                   }
-                } catch (e) {
-                  setError(String(e));
-                }
-              }}
-              title={tCommon("browse")}
-            >
-              <FolderOpen size={14} />
-            </button>
+                }}
+                title={tCommon("browse")}
+              >
+                <FolderOpen size={14} />
+              </button>
+            )}
           </div>
         </div>
       </div>
