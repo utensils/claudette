@@ -287,17 +287,25 @@ export function useWorkspaceTaskHistory(
     0,
   );
 
-  // Total badge is the sum of every task the right-sidebar would
-  // surface: main current + subagent buckets + completed history runs.
-  // Without subagent counts the sidebar tab badge undercounts when an
-  // Agent activity carries its own task list (a regression that
-  // surfaced with upstream Claude Code's agent-teams flow).
+  // Total badge is the count of every task the right-sidebar would
+  // surface: main current + subagent buckets + every task across every
+  // archived history run. Earlier versions added `historyRunCount` here,
+  // which silently mixed task counts with run counts (a single archived
+  // run with 8 tasks contributed 1 instead of 8). Subagent counts were
+  // also missing originally, causing the badge to undercount whenever an
+  // Agent activity carries its own task list (Claude Code's agent-teams
+  // flow).
   const subagentTaskCount = activeState.subagents.reduce(
     (sum, run) => sum + run.totalCount,
     0,
   );
+  const historyTaskCount = histories.reduce(
+    (sum, session) =>
+      sum + session.runs.reduce((s, run) => s + run.totalCount, 0),
+    0,
+  );
   const totalBadgeCount =
-    activeState.current.totalCount + subagentTaskCount + historyRunCount;
+    activeState.current.totalCount + subagentTaskCount + historyTaskCount;
 
   return {
     current: activeState.current,

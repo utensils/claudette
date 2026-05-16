@@ -9,7 +9,11 @@ Claude often rewrites its task list as work shifts. Claudette keeps the latest c
 
 Open the right sidebar and choose **Tasks**. The **Current** section shows the selected chat session's active task list, including status updates from Claude's task and todo tools.
 
-The tab badge counts the active checklist items plus preserved historical runs, so a workspace with older task lists still signals that there is task context to review.
+The tab badge counts every task the panel would surface — the active checklist plus any subagent buckets plus every task across archived history runs — so a workspace with older task lists still signals that there is task context to review.
+
+## Subagent Tasks
+
+When the main agent spawns subagents (via Claude Code's `TaskCreate` / agent-teams flow), each subagent's own task list renders in its own section above **History**, labeled with the subagent's name. The main agent's checklist stays in **Current**; subagent buckets are kept separate so the two never collide. Once a subagent finishes (status leaves `running`), its bucket is archived into **History** under the owning session.
 
 ## Historical Runs
 
