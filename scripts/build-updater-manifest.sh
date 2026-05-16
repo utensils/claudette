@@ -29,11 +29,17 @@ set -euo pipefail
 # Recognized .sig filename patterns and the manifest keys they populate
 # (mirrors what tauri-action emits — the "bare" platform key duplicates
 # the default-format variant for compatibility with both Tauri 1.x and
-# 2.x updater clients):
+# 2.x updater clients).
+#
+# AppImage entries are produced only when the matrix builds appimage.
+# Since #824 dropped appimage on Linux (linuxdeploy can't parse the Pi
+# sidecar), .deb is the fallback source for the generic `linux-*`
+# keys — the AppImage-specific keys are simply omitted when no .sig
+# exists.
 #   *_amd64.AppImage.sig             -> linux-x86_64, linux-x86_64-appimage
-#   *_amd64.deb.sig                  -> linux-x86_64-deb
+#   *_amd64.deb.sig                  -> linux-x86_64-deb, linux-x86_64 (fallback)
 #   *_aarch64.AppImage.sig           -> linux-aarch64, linux-aarch64-appimage
-#   *_arm64.deb.sig                  -> linux-aarch64-deb
+#   *_arm64.deb.sig                  -> linux-aarch64-deb, linux-aarch64 (fallback)
 #   Claudette_x64.app.tar.gz.sig     -> darwin-x86_64, darwin-x86_64-app
 #   Claudette_aarch64.app.tar.gz.sig -> darwin-aarch64, darwin-aarch64-app
 #   Claudette_*_x64-setup.exe.sig    -> windows-x86_64, windows-x86_64-nsis
@@ -66,6 +72,11 @@ for sig in "$SIG_DIR"/*.sig; do
       ;;
     *_amd64.deb)
       PLATFORMS[linux-x86_64-deb]="$asset"
+      # Fallback: populate the generic linux-x86_64 key when no
+      # AppImage was produced (Pi sidecar break, see #824). If an
+      # AppImage .sig was matched earlier in the loop it has already
+      # claimed this key — `:=` keeps that precedence.
+      : "${PLATFORMS[linux-x86_64]:=$asset}"
       ;;
     *_aarch64.AppImage)
       PLATFORMS[linux-aarch64]="$asset"
@@ -73,6 +84,7 @@ for sig in "$SIG_DIR"/*.sig; do
       ;;
     *_arm64.deb)
       PLATFORMS[linux-aarch64-deb]="$asset"
+      : "${PLATFORMS[linux-aarch64]:=$asset}"
       ;;
     Claudette_x64.app.tar.gz)
       PLATFORMS[darwin-x86_64]="$asset"
@@ -105,10 +117,8 @@ shopt -u nullglob
 # gone wrong upstream.
 declare -a REQUIRED=(
   "linux-x86_64"
-  "linux-x86_64-appimage"
   "linux-x86_64-deb"
   "linux-aarch64"
-  "linux-aarch64-appimage"
   "linux-aarch64-deb"
   "darwin-x86_64"
   "darwin-x86_64-app"
@@ -131,8 +141,14 @@ done
 # trailing newline are handled correctly without any base64 / sed
 # massaging — the .sig file's contents go into the manifest verbatim,
 # matching tauri-action's output byte-for-byte.
+#
+# Iterate over every populated key in PLATFORMS (not just REQUIRED) so
+# format-specific keys like `linux-x86_64-appimage` still land in the
+# manifest when their .sig file is present, even though they're no
+# longer in REQUIRED — REQUIRED is the validation list, not the emit
+# list.
 platforms='{}'
-for key in "${REQUIRED[@]}"; do
+for key in "${!PLATFORMS[@]}"; do
   asset="${PLATFORMS[$key]}"
   platforms="$(jq \
     --arg key "$key" \

@@ -128,7 +128,7 @@ jobs:
           # (tauri.conf.json, staging script, resolve_pi_harness_path). Until
           # that lands, `.deb` is the Linux nightly artifact — its bundler
           # never invokes linuxdeploy, so the same sidecar bundles fine.
-          # Tracked in: https://github.com/utensils/claudette/issues (TODO link)
+          # Tracked in: https://github.com/utensils/Claudette/issues/825
           - platform: ubuntu-22.04
             rust-target: x86_64-unknown-linux-gnu
             bundles: deb
