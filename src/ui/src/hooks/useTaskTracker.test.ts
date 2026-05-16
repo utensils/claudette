@@ -356,3 +356,195 @@ describe("deriveTaskState", () => {
     expect(result.current.tasks).toEqual([]);
   });
 });
+
+// ── regression: phase-progression workflow ───────────────────
+//
+// Pins the most common real-world TodoWrite pattern: agent emits a list
+// of N tasks, then re-emits the same list multiple times during the
+// turn, flipping one task at a time from "pending" → "in_progress" →
+// "completed" as work progresses through each phase. The right-sidebar
+// Tasks panel should reflect the live count after every update.
+//
+// Regression target: the task-history refactor (PR 773) moved TodoWrite
+// handling into `deriveTaskStateFromEntries` and split the registry off
+// into `parseTodoTasks`. The synthetic IDs assigned to id-less todos
+// (modern TodoWrite has no id field — only content / status / activeForm)
+// must remain stable enough across passes that `todoMap.clear()` plus
+// re-set always reflects the LATEST call's statuses, not a stale snapshot.
+describe("deriveTaskState — phase progression regression", () => {
+  // Build a TodoWrite activity using the modern Claude Code TodoWrite
+  // schema (no `id`, no `priority`, content+status+activeForm only).
+  const modernTodoWrite = (
+    items: Array<{ content: string; status: string; activeForm?: string }>,
+  ) =>
+    activity("TodoWrite", {
+      todos: items.map((it) => ({
+        content: it.content,
+        status: it.status,
+        activeForm: it.activeForm ?? it.content,
+      })),
+    });
+
+  const PHASES = [
+    "Phase 1: Move transport module",
+    "Phase 2: Implement RPC handler",
+    "Phase 3: Add Tauri command",
+    "Phase 4: Workspace member wiring",
+    "Phase 5: Plugin integration",
+    "Phase 6: Generic send_rpc helper",
+    "Phase 7: Load chat history",
+    "Phase 8: AskQuestionSheet bottom sheet",
+  ];
+
+  it("reflects each phase completion when TodoWrite is re-emitted within a single turn", () => {
+    // Three TodoWrite calls in the SAME turn (no finalizeTurn between
+    // them), each flipping one phase from pending → completed. This is
+    // the screenshot scenario — agent emits the plan once, then re-emits
+    // after each commit + push.
+    const initial = PHASES.map((p) => ({ content: p, status: "pending" }));
+    const afterPhase1 = PHASES.map((p, i) => ({
+      content: p,
+      status: i === 0 ? "completed" : i === 1 ? "in_progress" : "pending",
+    }));
+    const afterPhase2 = PHASES.map((p, i) => ({
+      content: p,
+      status: i < 2 ? "completed" : i === 2 ? "in_progress" : "pending",
+    }));
+
+    const current = [
+      modernTodoWrite(initial),
+      modernTodoWrite(afterPhase1),
+      modernTodoWrite(afterPhase2),
+    ];
+
+    const result = deriveTaskState([], current);
+
+    expect(result.history).toHaveLength(0);
+    expect(result.current.totalCount).toBe(8);
+    expect(result.current.completedCount).toBe(2);
+    // Order must mirror the latest TodoWrite payload, not the first.
+    expect(result.current.tasks.map((t) => t.description)).toEqual(PHASES);
+    expect(result.current.tasks.map((t) => t.status)).toEqual([
+      "completed",
+      "completed",
+      "in_progress",
+      "pending",
+      "pending",
+      "pending",
+      "pending",
+      "pending",
+    ]);
+  });
+
+  it("preserves phase completion across a turn boundary", () => {
+    // Turn 1: emit the plan with 1 phase completed and persist it as a
+    // completed turn. Turn 2 (current): emit another update completing
+    // phase 2. The active state should reflect the merged latest view.
+    const t1 = turn([
+      modernTodoWrite(
+        PHASES.map((p, i) => ({
+          content: p,
+          status: i === 0 ? "completed" : i === 1 ? "in_progress" : "pending",
+        })),
+      ),
+    ]);
+    const current = [
+      modernTodoWrite(
+        PHASES.map((p, i) => ({
+          content: p,
+          status: i < 2 ? "completed" : i === 2 ? "in_progress" : "pending",
+        })),
+      ),
+    ];
+
+    const result = deriveTaskState([t1], current);
+
+    expect(result.history).toHaveLength(0); // status-only update, not archived
+    expect(result.current.totalCount).toBe(8);
+    expect(result.current.completedCount).toBe(2);
+    expect(result.current.tasks[0].status).toBe("completed");
+    expect(result.current.tasks[1].status).toBe("completed");
+    expect(result.current.tasks[2].status).toBe("in_progress");
+  });
+
+  it("does not lose previously-completed phases after a non-TodoWrite tool call between updates", () => {
+    // Agent pattern: TodoWrite (mark phase 1 in_progress) → Bash (run
+    // commit) → TodoWrite (mark phase 1 completed, phase 2 in_progress).
+    // The Bash call must not reset todoMap.
+    const inProgress = PHASES.map((p, i) => ({
+      content: p,
+      status: i === 0 ? "in_progress" : "pending",
+    }));
+    const completed = PHASES.map((p, i) => ({
+      content: p,
+      status: i === 0 ? "completed" : i === 1 ? "in_progress" : "pending",
+    }));
+
+    const result = deriveTaskState(
+      [],
+      [
+        modernTodoWrite(inProgress),
+        activity("Bash", { command: "git commit -am phase-1" }),
+        modernTodoWrite(completed),
+      ],
+    );
+
+    expect(result.current.totalCount).toBe(8);
+    expect(result.current.completedCount).toBe(1);
+    expect(result.current.tasks[0].status).toBe("completed");
+    expect(result.current.tasks[1].status).toBe("in_progress");
+  });
+
+  it("treats normalized status strings ('Completed', 'IN_PROGRESS', 'done') as canonical", () => {
+    // Defensive: pin that case/punctuation variants from older harnesses
+    // (Codex, Pi) still normalize to the canonical TaskStatus values.
+    const result = deriveTaskState(
+      [],
+      [
+        modernTodoWrite([
+          { content: "A", status: "Completed" },
+          { content: "B", status: "IN_PROGRESS" },
+          { content: "C", status: "in-progress" },
+          { content: "D", status: "done" },
+          { content: "E", status: "Running" },
+          { content: "F", status: "pending" },
+        ]),
+      ],
+    );
+
+    expect(result.current.completedCount).toBe(2);
+    expect(result.current.tasks.map((t) => t.status)).toEqual([
+      "completed",
+      "in_progress",
+      "in_progress",
+      "completed",
+      "in_progress",
+      "pending",
+    ]);
+  });
+
+  it("counts completions correctly when the modern TodoWrite schema (no id field) is used", () => {
+    // Modern Claude Code TodoWrite has no `id` field — only content,
+    // status, activeForm. Earlier versions sent an `id`. The tracker
+    // must handle both without losing completion state when only the
+    // status field changes between calls.
+    const oldSchema = activity("TodoWrite", {
+      todos: [
+        { id: "a", content: "A", status: "pending" },
+        { id: "b", content: "B", status: "pending" },
+      ],
+    });
+    const newSchemaCompleted = modernTodoWrite([
+      { content: "A", status: "completed" },
+      { content: "B", status: "pending" },
+    ]);
+
+    const result = deriveTaskState([], [oldSchema, newSchemaCompleted]);
+
+    expect(result.current.totalCount).toBe(2);
+    expect(result.current.completedCount).toBe(1);
+    // Tasks reflect the LATEST call's order + statuses.
+    expect(result.current.tasks.map((t) => t.description)).toEqual(["A", "B"]);
+    expect(result.current.tasks[0].status).toBe("completed");
+  });
+});
