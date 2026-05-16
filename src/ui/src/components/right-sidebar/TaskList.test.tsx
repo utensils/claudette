@@ -82,6 +82,7 @@ function taskHistory(): WorkspaceTaskHistoryResult {
         ],
       },
     ],
+    subagents: [],
     historyRunCount: 1,
     totalBadgeCount: 2,
     loading: false,
@@ -99,6 +100,38 @@ describe("TaskList", () => {
     expect(container.textContent).toContain("Archived");
     expect(container.textContent).toContain("Run 1");
     expect(container.textContent).not.toContain("Preserve old checklist");
+  });
+
+  it("renders subagent buckets under their agent label", async () => {
+    const history = taskHistory();
+    history.subagents = [
+      {
+        id: "toolu-parent-A",
+        label: "Agent A: build pagination",
+        tasks: [
+          {
+            id: "9",
+            description: "Add pagination to /api/sessions",
+            status: "completed",
+            source: "task",
+          },
+          {
+            id: "11",
+            description: "Fix Opus pricing tier",
+            status: "in_progress",
+            source: "task",
+          },
+        ],
+        completedCount: 1,
+        totalCount: 2,
+        status: "running",
+      },
+    ];
+    const container = await render(<TaskList taskHistory={history} />);
+    expect(container.textContent).toContain("Agent A: build pagination");
+    expect(container.textContent).toContain("Add pagination to /api/sessions");
+    expect(container.textContent).toContain("Fix Opus pricing tier");
+    expect(container.textContent).toContain("1/2");
   });
 
   it("expands a historical run to show its preserved tasks", async () => {

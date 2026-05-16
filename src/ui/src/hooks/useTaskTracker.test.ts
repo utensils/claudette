@@ -903,3 +903,278 @@ describe("deriveTaskState — TaskCreate/TaskUpdate history regression", () => {
     ]);
   });
 });
+
+// ── deriveTaskState — subagent task tracking ─────────────────
+//
+// Claude Code's agent-teams flow spawns subagents that maintain their
+// own independent task lists. Their TaskCreate / TaskUpdate calls
+// arrive nested inside the parent Agent activity's `agentToolCalls`
+// array, with the input field already parsed (vs the top-level
+// `inputJson` string) and the TaskCreate response in
+// `{ task: { id, subject } }` shape. Live data shape verified against
+// the running dev app on 2026-05-15.
+//
+// The right-sidebar Tasks panel should surface each subagent's
+// task list under its `agentDescription` label, independent of the
+// main agent's task tracker. Subagent task IDs share the upstream
+// "Task #N" numbering space across the whole conversation, so simply
+// piping them through the parent taskMap would produce conflicting
+// entries (one subagent's #9 vs the main agent's #9). Each subagent
+// gets its own bucket.
+describe("deriveTaskState — subagent task tracking", () => {
+  /** Build an AgentToolCall the way `parseAgentToolCalls` produces them
+   *  in `useWorkspaceTaskHistory` — input/response are already-parsed
+   *  objects (the JSON deserialization happens upstream). */
+  const agentCall = (opts: {
+    toolName: string;
+    agentId: string;
+    input?: unknown;
+    response?: unknown;
+    status?: "running" | "completed" | "failed";
+  }) => ({
+    toolUseId: crypto.randomUUID(),
+    toolName: opts.toolName,
+    agentId: opts.agentId,
+    input: opts.input,
+    response: opts.response,
+    status: opts.status ?? "completed",
+    startedAt: "2026-05-15T00:00:00Z",
+    completedAt: null,
+  });
+
+  /** Build a parent `Agent` activity wrapping a list of subagent calls. */
+  const agentActivity = (description: string, calls: ReturnType<typeof agentCall>[]) => {
+    const act = activity("Agent", { prompt: description }, "agent done");
+    return {
+      ...act,
+      agentDescription: description,
+      agentToolCalls: calls,
+    } satisfies ToolActivity;
+  };
+
+  it("groups a single subagent's TaskCreate calls under its label", () => {
+    // Live data shape: input.subject + response.task.id. Match it
+    // exactly so the production code can't drift to a different
+    // assumption.
+    const subagent = agentActivity("Agent A: build pagination", [
+      agentCall({
+        toolName: "TaskCreate",
+        agentId: "sub-a",
+        input: {
+          subject: "Add pagination to /api/sessions",
+          description: "Cursor-based, page size 25.",
+          activeForm: "Adding pagination",
+        },
+        response: { task: { id: "9", subject: "Add pagination to /api/sessions" } },
+      }),
+      agentCall({
+        toolName: "TaskCreate",
+        agentId: "sub-a",
+        input: {
+          subject: "Fix Opus pricing tier",
+          description: "Opus sessions billed at Sonnet rates.",
+        },
+        response: { task: { id: "11", subject: "Fix Opus pricing tier" } },
+      }),
+    ]);
+
+    const result = deriveTaskState([], [subagent]);
+
+    expect(result.subagents).toHaveLength(1);
+    const run = result.subagents[0];
+    expect(run.label).toBe("Agent A: build pagination");
+    expect(run.totalCount).toBe(2);
+    expect(run.tasks.map((t) => t.description)).toEqual([
+      "Add pagination to /api/sessions",
+      "Fix Opus pricing tier",
+    ]);
+    expect(run.tasks.map((t) => t.id)).toEqual(["9", "11"]);
+    // Subagent tasks must NOT leak into the main current/history slots.
+    expect(result.current.tasks).toEqual([]);
+    expect(result.history).toEqual([]);
+  });
+
+  it("tracks two subagents under separate labels", () => {
+    const agentA = agentActivity("Agent A: backend tasks", [
+      agentCall({
+        toolName: "TaskCreate",
+        agentId: "sub-a",
+        input: { subject: "A-1" },
+        response: { task: { id: "1", subject: "A-1" } },
+      }),
+      agentCall({
+        toolName: "TaskCreate",
+        agentId: "sub-a",
+        input: { subject: "A-2" },
+        response: { task: { id: "2", subject: "A-2" } },
+      }),
+    ]);
+    const agentB = agentActivity("Agent B: frontend tasks", [
+      agentCall({
+        toolName: "TaskCreate",
+        agentId: "sub-b",
+        input: { subject: "B-1" },
+        response: { task: { id: "5", subject: "B-1" } },
+      }),
+      agentCall({
+        toolName: "TaskCreate",
+        agentId: "sub-b",
+        input: { subject: "B-2" },
+        response: { task: { id: "6", subject: "B-2" } },
+      }),
+      agentCall({
+        toolName: "TaskCreate",
+        agentId: "sub-b",
+        input: { subject: "B-3" },
+        response: { task: { id: "7", subject: "B-3" } },
+      }),
+    ]);
+
+    const result = deriveTaskState([], [agentA, agentB]);
+
+    expect(result.subagents).toHaveLength(2);
+    expect(result.subagents.map((r) => r.label)).toEqual([
+      "Agent A: backend tasks",
+      "Agent B: frontend tasks",
+    ]);
+    expect(result.subagents[0].tasks.map((t) => t.description)).toEqual([
+      "A-1",
+      "A-2",
+    ]);
+    expect(result.subagents[1].tasks.map((t) => t.description)).toEqual([
+      "B-1",
+      "B-2",
+      "B-3",
+    ]);
+  });
+
+  it("applies TaskUpdate status flips to the subagent's own tasks only", () => {
+    const subagent = agentActivity("Agent C", [
+      agentCall({
+        toolName: "TaskCreate",
+        agentId: "sub-c",
+        input: { subject: "Implement feature" },
+        response: { task: { id: "1", subject: "Implement feature" } },
+      }),
+      agentCall({
+        toolName: "TaskUpdate",
+        agentId: "sub-c",
+        input: { taskId: "1", status: "in_progress" },
+      }),
+      agentCall({
+        toolName: "TaskUpdate",
+        agentId: "sub-c",
+        input: { taskId: "1", status: "completed" },
+      }),
+    ]);
+
+    const result = deriveTaskState([], [subagent]);
+
+    expect(result.subagents).toHaveLength(1);
+    expect(result.subagents[0].tasks[0].status).toBe("completed");
+    expect(result.subagents[0].completedCount).toBe(1);
+  });
+
+  it("does not collide subagent task IDs with the main agent's tasks", () => {
+    // Main agent creates Task #1; subagent also creates Task #1.
+    // They live in separate buckets and never overwrite each other.
+    const mainCreate = activity(
+      "TaskCreate",
+      { subject: "Main task" },
+      "Task #1 created successfully: Main task",
+    );
+    const subagent = agentActivity("Agent D", [
+      agentCall({
+        toolName: "TaskCreate",
+        agentId: "sub-d",
+        input: { subject: "Subagent task" },
+        response: { task: { id: "1", subject: "Subagent task" } },
+      }),
+    ]);
+
+    const result = deriveTaskState([], [mainCreate, subagent]);
+
+    expect(result.current.tasks.map((t) => t.description)).toEqual(["Main task"]);
+    expect(result.subagents).toHaveLength(1);
+    expect(result.subagents[0].tasks.map((t) => t.description)).toEqual([
+      "Subagent task",
+    ]);
+  });
+
+  it("ignores subagent calls that aren't task-related", () => {
+    const subagent = agentActivity("Agent E", [
+      agentCall({ toolName: "Bash", agentId: "sub-e", input: { command: "ls" } }),
+      agentCall({ toolName: "Read", agentId: "sub-e", input: { file_path: "/tmp/x" } }),
+    ]);
+    const result = deriveTaskState([], [subagent]);
+    // No task tools → no subagent run.
+    expect(result.subagents).toEqual([]);
+  });
+
+  it("uses the parent Agent activity's toolUseId as the run's stable key", () => {
+    const act = activity("Agent", { prompt: "go" }, "");
+    const fixedToolUseId = act.toolUseId;
+    const subagent: ToolActivity = {
+      ...act,
+      agentDescription: "Agent F",
+      agentToolCalls: [
+        agentCall({
+          toolName: "TaskCreate",
+          agentId: "sub-f",
+          input: { subject: "X" },
+          response: { task: { id: "1", subject: "X" } },
+        }),
+      ],
+    };
+
+    const result = deriveTaskState([], [subagent]);
+    expect(result.subagents[0].id).toBe(fixedToolUseId);
+  });
+
+  it("falls back to a synthetic label when agentDescription is missing", () => {
+    const act = activity("Agent", { prompt: "go" }, "");
+    const subagent: ToolActivity = {
+      ...act,
+      // intentionally no agentDescription
+      agentToolCalls: [
+        agentCall({
+          toolName: "TaskCreate",
+          agentId: "sub-g",
+          input: { subject: "Y" },
+          response: { task: { id: "1", subject: "Y" } },
+        }),
+      ],
+    };
+
+    const result = deriveTaskState([], [subagent]);
+    expect(result.subagents).toHaveLength(1);
+    // Anything non-empty is fine — pin the property so it can't go null.
+    expect(result.subagents[0].label).toBeTruthy();
+  });
+
+  it("collects subagent runs from both completed turns and current activities", () => {
+    const subA = agentActivity("Past agent", [
+      agentCall({
+        toolName: "TaskCreate",
+        agentId: "sub-past",
+        input: { subject: "Past task" },
+        response: { task: { id: "1", subject: "Past task" } },
+      }),
+    ]);
+    const subB = agentActivity("Live agent", [
+      agentCall({
+        toolName: "TaskCreate",
+        agentId: "sub-live",
+        input: { subject: "Live task" },
+        response: { task: { id: "2", subject: "Live task" } },
+      }),
+    ]);
+
+    const result = deriveTaskState([turn([subA])], [subB]);
+    expect(result.subagents).toHaveLength(2);
+    expect(result.subagents.map((r) => r.label)).toEqual([
+      "Past agent",
+      "Live agent",
+    ]);
+  });
+});

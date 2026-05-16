@@ -34,6 +34,26 @@ export interface TaskRun extends TaskTrackerResult {
 export interface TaskTrackerWithHistory {
   current: TaskTrackerResult;
   history: TaskRun[];
+  /// Per-subagent task buckets. Each Agent tool activity that ran any
+  /// Task* / TodoWrite calls inside its `agentToolCalls` array becomes
+  /// one entry here, keyed on the parent's `toolUseId` and labelled
+  /// with `agentDescription`. Subagent task IDs share the main-agent's
+  /// "Task #N" numbering space upstream, so the right-sidebar renders
+  /// them in separate sections to avoid collision.
+  subagents: SubagentTaskRun[];
+}
+
+export interface SubagentTaskRun extends TaskTrackerResult {
+  /// Stable key for React — sourced from the parent Agent activity's
+  /// `toolUseId`. Same `toolUseId` across renders → same key.
+  id: string;
+  /// Display label for the right-sidebar section header. Falls back
+  /// to a non-empty placeholder when the parent activity has no
+  /// `agentDescription`, so the section can never render blank.
+  label: string;
+  /// Latest `agentStatus` from the parent activity (running /
+  /// completed / failed). UI can use this to dim completed sections.
+  status?: string;
 }
 
 export interface TaskActivityTurn {
@@ -48,9 +68,12 @@ const EMPTY_RESULT: TaskTrackerResult = {
   completedCount: 0,
   totalCount: 0,
 };
+const EMPTY_SUBAGENTS: SubagentTaskRun[] = [];
+
 const EMPTY_WITH_HISTORY: TaskTrackerWithHistory = {
   current: EMPTY_RESULT,
   history: [],
+  subagents: EMPTY_SUBAGENTS,
 };
 
 /** Normalise status strings from Claude's TaskCreate/TaskUpdate/TodoWrite inputs. */
@@ -288,6 +311,124 @@ function finalizeTodoRun(run: TodoRunDraft): TaskRun {
   };
 }
 
+/** Build a single subagent task bucket from the parent Agent activity.
+ *  Returns `null` when the activity has no task-related nested calls.
+ *
+ *  Subagent calls land in `activity.agentToolCalls`, not at the top
+ *  level. The shape differs from top-level activities in two ways
+ *  (verified against live dev-app data):
+ *    1. `input` is already a parsed object — no JSON.parse needed.
+ *    2. `TaskCreate` response is the parsed `{ task: { id, subject } }`
+ *       struct stored in `call.response`, not a textual
+ *       `"Task #N created..."` string in `resultText`.
+ *
+ *  Mirrors the per-tool semantics from `processActivities` /
+ *  `deriveTaskStateFromEntries` so subagent task lists behave the
+ *  same as the main agent's — status flips, deletions, todo writes,
+ *  and orphaned-update stubs all work identically.
+ */
+function deriveSubagentRunFromActivity(
+  activity: ToolActivity,
+  syntheticIdSeed: { value: number },
+): SubagentTaskRun | null {
+  const calls = activity.agentToolCalls;
+  if (!calls || calls.length === 0) return null;
+
+  const taskMap = new Map<string, TrackedTask>();
+  const todoMap = new Map<string, TrackedTask>();
+
+  for (const call of calls) {
+    if (!TASK_TOOL_NAMES.has(call.toolName)) continue;
+    const rawInput = call.input;
+    if (!rawInput || typeof rawInput !== "object") continue;
+    const input = rawInput as Record<string, unknown>;
+
+    switch (call.toolName) {
+      case "TaskCreate": {
+        // Subagent TaskCreate carries the assigned id in `response.task.id`
+        // (already a parsed object), unlike the top-level form where it
+        // lives in `resultText`. Fall through to a synthetic id when the
+        // response shape is unexpected (e.g. status: "failed").
+        const response = call.response as
+          | { task?: { id?: unknown } | null }
+          | null
+          | undefined;
+        const responseId =
+          response?.task && response.task.id != null
+            ? String(response.task.id)
+            : null;
+        const id = responseId ?? `_st${syntheticIdSeed.value++}`;
+        taskMap.set(id, {
+          id,
+          description: extractTaskDescription(input),
+          status: normalizeStatus(input.status as string | undefined),
+          priority: normalizePriority(input.priority as string | undefined),
+          source: "task",
+        });
+        break;
+      }
+      case "TaskUpdate": {
+        const id = extractInputTaskId(input);
+        const rawStatus =
+          typeof input.status === "string" ? input.status : undefined;
+        if (rawStatus && rawStatus.toLowerCase() === "deleted") {
+          if (id) taskMap.delete(id);
+          break;
+        }
+        const existing = taskMap.get(id);
+        if (existing) {
+          if (rawStatus) existing.status = normalizeStatus(rawStatus);
+          if (typeof input.description === "string")
+            existing.description = input.description;
+          if (typeof input.subject === "string" && input.subject.trim())
+            existing.description = input.subject;
+          if (input.priority)
+            existing.priority = normalizePriority(input.priority as string);
+        } else if (id) {
+          taskMap.set(id, {
+            id,
+            description: extractTaskDescription(input) || `Task #${id}`,
+            status: normalizeStatus(rawStatus),
+            priority: normalizePriority(input.priority as string | undefined),
+            source: "task",
+          });
+        }
+        break;
+      }
+      case "TaskStop": {
+        const id = extractInputTaskId(input);
+        const existing = taskMap.get(id);
+        if (existing) existing.status = "cancelled";
+        break;
+      }
+      case "TodoWrite": {
+        const todos = input.todos;
+        if (!Array.isArray(todos)) break;
+        todoMap.clear();
+        for (const task of parseTodoTasks(todos, syntheticIdSeed)) {
+          todoMap.set(task.id, task);
+        }
+        break;
+      }
+    }
+  }
+
+  const tasks = [...taskMap.values(), ...todoMap.values()];
+  if (tasks.length === 0) return null;
+
+  return {
+    ...taskResult(tasks),
+    id: activity.toolUseId,
+    // Never render blank: fall back through the activity's own metadata
+    // so subagents that arrived without a description still get a chip.
+    label:
+      activity.agentDescription?.trim() ||
+      activity.toolName ||
+      `Subagent ${activity.toolUseId.slice(0, 8)}`,
+    status: activity.agentStatus ?? undefined,
+  };
+}
+
 function deriveTaskStateFromEntries(
   entries: { activities: ToolActivity[]; turnId?: string }[],
 ): TaskTrackerWithHistory {
@@ -452,10 +593,23 @@ function deriveTaskStateFromEntries(
     flushPendingTaskDeletions();
   }
 
+  // Per-subagent task buckets. Walk every Agent activity in stream
+  // order (past turns first, then current) so the right-sidebar
+  // section order matches when each subagent appeared.
+  const subagents: SubagentTaskRun[] = [];
+  for (const entry of entries) {
+    for (const act of entry.activities) {
+      if (act.toolName !== "Agent") continue;
+      const run = deriveSubagentRunFromActivity(act, nextSyntheticId);
+      if (run) subagents.push(run);
+    }
+  }
+
   const tasks = [...taskMap.values(), ...todoMap.values()];
   return {
     current: taskResult(tasks),
     history,
+    subagents,
   };
 }
 

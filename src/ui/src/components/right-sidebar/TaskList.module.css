@@ -35,6 +35,20 @@
   text-transform: none;
 }
 
+/* Subagent section headers can be much longer than "Current" / "History"
+ * (e.g. "Agent A: build pagination for the sessions endpoint"), so let
+ * them ellipsize cleanly inside the fixed-width sidebar header instead
+ * of wrapping or pushing the count out of view. */
+.subagentLabel {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+  flex: 1 1 auto;
+  margin-right: 6px;
+  text-transform: none;
+}
+
 .sessionGroup {
   display: flex;
   flex-direction: column;

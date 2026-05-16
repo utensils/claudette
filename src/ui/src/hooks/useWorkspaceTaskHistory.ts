@@ -11,6 +11,7 @@ import type { CompletedTurnData } from "../types/checkpoint";
 import {
   deriveTaskState,
   useTaskTrackerWithHistory,
+  type SubagentTaskRun,
   type TaskActivityTurn,
   type TaskRun,
   type TaskTrackerResult,
@@ -24,6 +25,10 @@ export interface SessionTaskHistory {
 export interface WorkspaceTaskHistoryResult {
   current: TaskTrackerResult;
   sessions: SessionTaskHistory[];
+  /// Per-subagent task buckets sourced from the active session. Each
+  /// section is rendered separately in the right-sidebar TaskList so
+  /// subagent task lists don't collide with the main agent's.
+  subagents: SubagentTaskRun[];
   historyRunCount: number;
   totalBadgeCount: number;
   loading: boolean;
@@ -35,9 +40,12 @@ const EMPTY_CURRENT: TaskTrackerResult = {
   totalCount: 0,
 };
 
+const EMPTY_SUBAGENTS: SubagentTaskRun[] = [];
+
 const EMPTY_RESULT: WorkspaceTaskHistoryResult = {
   current: EMPTY_CURRENT,
   sessions: [],
+  subagents: EMPTY_SUBAGENTS,
   historyRunCount: 0,
   totalBadgeCount: 0,
   loading: false,
@@ -270,11 +278,24 @@ export function useWorkspaceTaskHistory(
     0,
   );
 
+  // Total badge is the sum of every task the right-sidebar would
+  // surface: main current + subagent buckets + completed history runs.
+  // Without subagent counts the sidebar tab badge undercounts when an
+  // Agent activity carries its own task list (a regression that
+  // surfaced with upstream Claude Code's agent-teams flow).
+  const subagentTaskCount = activeState.subagents.reduce(
+    (sum, run) => sum + run.totalCount,
+    0,
+  );
+  const totalBadgeCount =
+    activeState.current.totalCount + subagentTaskCount + historyRunCount;
+
   return {
     current: activeState.current,
     sessions: histories,
+    subagents: activeState.subagents,
     historyRunCount,
-    totalBadgeCount: activeState.current.totalCount + historyRunCount,
+    totalBadgeCount,
     loading: loadingSessions || loadingTurns,
   };
 }

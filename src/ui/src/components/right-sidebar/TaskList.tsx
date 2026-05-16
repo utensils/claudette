@@ -1,6 +1,7 @@
 import { memo, useState } from "react";
 import { ChevronRight } from "lucide-react";
 import type {
+  SubagentTaskRun,
   TaskRun,
   TaskStatus,
   TrackedTask,
@@ -81,6 +82,22 @@ function TaskRows({ tasks }: { tasks: TrackedTask[] }) {
   );
 }
 
+function SubagentSection({ run }: { run: SubagentTaskRun }) {
+  return (
+    <section className={styles.section} aria-label={`Subagent: ${run.label}`}>
+      <div className={styles.sectionHeader}>
+        <span className={styles.subagentLabel} title={run.label}>
+          {run.label}
+        </span>
+        <span className={styles.sectionMeta}>
+          {run.completedCount}/{run.totalCount}
+        </span>
+      </div>
+      <TaskRows tasks={run.tasks} />
+    </section>
+  );
+}
+
 function RunSummary({
   run,
   expanded,
@@ -123,11 +140,12 @@ export const TaskList = memo(function TaskList({
   taskHistory: WorkspaceTaskHistoryResult;
 }) {
   const [expandedRuns, setExpandedRuns] = useState<Record<string, boolean>>({});
-  const { current, sessions, loading } = taskHistory;
+  const { current, sessions, subagents, loading } = taskHistory;
   const hasCurrent = current.tasks.length > 0;
   const hasHistory = sessions.length > 0;
+  const hasSubagents = subagents.length > 0;
 
-  if (!hasCurrent && !hasHistory) {
+  if (!hasCurrent && !hasHistory && !hasSubagents) {
     return (
       <div className={styles.list}>
         <div className={styles.empty}>{loading ? "Loading tasks..." : "No tasks"}</div>
@@ -148,6 +166,11 @@ export const TaskList = memo(function TaskList({
           <TaskRows tasks={current.tasks} />
         </section>
       )}
+
+      {hasSubagents &&
+        subagents.map((run) => (
+          <SubagentSection key={run.id} run={run} />
+        ))}
 
       {hasHistory && (
         <section className={styles.section} aria-label="Task history">
