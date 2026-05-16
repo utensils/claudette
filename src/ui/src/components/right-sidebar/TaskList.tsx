@@ -86,7 +86,7 @@ function SubagentSection({ run }: { run: SubagentTaskRun }) {
   return (
     <section className={styles.section} aria-label={`Subagent: ${run.label}`}>
       <div className={styles.sectionHeader}>
-        <span className={styles.subagentLabel} title={run.label}>
+        <span className={styles.subagentLabel} title={run.tooltip ?? run.label}>
           {run.label}
         </span>
         <span className={styles.sectionMeta}>
@@ -120,7 +120,10 @@ function RunSummary({
           className={`${styles.chevron} ${expanded ? styles.chevronOpen : ""}`}
           aria-hidden="true"
         />
-        <span className={styles.runTitle} title={run.label ?? undefined}>
+        <span
+          className={styles.runTitle}
+          title={run.tooltip ?? run.label ?? undefined}
+        >
           {run.label ?? `Run ${run.sequence}`}
         </span>
         <span className={styles.runMeta}>
@@ -142,12 +145,13 @@ export const TaskList = memo(function TaskList({
   taskHistory: WorkspaceTaskHistoryResult;
 }) {
   const [expandedRuns, setExpandedRuns] = useState<Record<string, boolean>>({});
-  const { current, sessions, subagents, loading } = taskHistory;
+  const { current, sessions, siblings, subagents, loading } = taskHistory;
   const hasCurrent = current.tasks.length > 0;
   const hasHistory = sessions.length > 0;
   const hasSubagents = subagents.length > 0;
+  const hasSiblings = siblings.length > 0;
 
-  if (!hasCurrent && !hasHistory && !hasSubagents) {
+  if (!hasCurrent && !hasHistory && !hasSubagents && !hasSiblings) {
     return (
       <div className={styles.list}>
         <div className={styles.empty}>{loading ? "Loading tasks..." : "No tasks"}</div>
@@ -172,6 +176,31 @@ export const TaskList = memo(function TaskList({
       {hasSubagents &&
         subagents.map((run) => (
           <SubagentSection key={run.id} run={run} />
+        ))}
+
+      {hasSiblings &&
+        siblings.map((sibling) => (
+          <section
+            key={`sibling-${sibling.session.id}`}
+            className={styles.section}
+            aria-label={`Sibling session: ${sibling.session.name}`}
+          >
+            <div className={styles.sectionHeader}>
+              <span className={styles.subagentLabel} title={sibling.session.name}>
+                {sibling.session.name}
+                <span className={styles.liveDot} aria-hidden="true" />
+              </span>
+              <span className={styles.sectionMeta}>
+                {sibling.current.completedCount}/{sibling.current.totalCount}
+              </span>
+            </div>
+            {sibling.current.tasks.length > 0 && (
+              <TaskRows tasks={sibling.current.tasks} />
+            )}
+            {sibling.subagents.map((run) => (
+              <SubagentSection key={run.id} run={run} />
+            ))}
+          </section>
         ))}
 
       {hasHistory && (

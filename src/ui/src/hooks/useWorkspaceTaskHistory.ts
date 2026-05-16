@@ -23,9 +23,23 @@ export interface SessionTaskHistory {
   runs: TaskRun[];
 }
 
+/// Live task snapshot for a non-active chat session whose agent is
+/// still running (typically a TeamCreate teammate in a sibling tab).
+/// Surfaced as its own lane between "Current" and "History" so the
+/// user can watch teammate progress without focusing the tab.
+export interface SiblingSessionTasks {
+  session: ChatSession;
+  current: TaskTrackerResult;
+  subagents: SubagentTaskRun[];
+}
+
 export interface WorkspaceTaskHistoryResult {
   current: TaskTrackerResult;
   sessions: SessionTaskHistory[];
+  /// Live task lanes for sibling sessions that are currently `Running`.
+  /// Excluded from `sessions`/history so live work doesn't show as
+  /// "archived" while a teammate is mid-turn.
+  siblings: SiblingSessionTasks[];
   /// Per-subagent task buckets sourced from the active session. Each
   /// section is rendered separately in the right-sidebar TaskList so
   /// subagent task lists don't collide with the main agent's.
@@ -43,9 +57,12 @@ const EMPTY_CURRENT: TaskTrackerResult = {
 
 const EMPTY_SUBAGENTS: SubagentTaskRun[] = [];
 
+const EMPTY_SIBLINGS: SiblingSessionTasks[] = [];
+
 const EMPTY_RESULT: WorkspaceTaskHistoryResult = {
   current: EMPTY_CURRENT,
   sessions: [],
+  siblings: EMPTY_SIBLINGS,
   subagents: EMPTY_SUBAGENTS,
   historyRunCount: 0,
   totalBadgeCount: 0,
@@ -264,19 +281,42 @@ export function useWorkspaceTaskHistory(
   if (!workspaceId) return EMPTY_RESULT;
 
   const histories: SessionTaskHistory[] = [];
+  const siblings: SiblingSessionTasks[] = [];
   for (const session of sessions) {
     // For non-active sessions ("session tab closed" semantics, archived
     // sessions, anything except the one currently in focus), graduate
     // leftover `current.tasks` and still-running subagents into the
     // history runs so closed sessions don't silently drop their work.
-    // The active session keeps its live state intact so the user can
-    // watch progress.
-    const state =
-      session.id === activeSessionId
-        ? activeState
-        : finalizeTaskState(
-            deriveTaskState(turnsBySession[session.id] ?? [], []),
-          );
+    // EXCEPTION: if the sibling session's agent is still `Running`
+    // (typically a TeamCreate teammate working in another tab), keep
+    // its `current` state live so the user can watch teammate progress
+    // from the active tab.
+    if (session.id === activeSessionId) {
+      if (activeState.history.length > 0) {
+        histories.push({ session, runs: activeState.history });
+      }
+      continue;
+    }
+
+    const derived = deriveTaskState(turnsBySession[session.id] ?? [], []);
+    if (session.agent_status === "Running") {
+      if (derived.current.tasks.length > 0 || derived.subagents.length > 0) {
+        siblings.push({
+          session,
+          current: derived.current,
+          subagents: derived.subagents,
+        });
+      }
+      // Already-archived runs from this session still surface as
+      // history even while it's live (e.g. an older TodoWrite
+      // replacement still has past runs to display).
+      if (derived.history.length > 0) {
+        histories.push({ session, runs: derived.history });
+      }
+      continue;
+    }
+
+    const state = finalizeTaskState(derived);
     if (state.history.length > 0) {
       histories.push({ session, runs: state.history });
     }
@@ -304,12 +344,23 @@ export function useWorkspaceTaskHistory(
       sum + session.runs.reduce((s, run) => s + run.totalCount, 0),
     0,
   );
+  const siblingTaskCount = siblings.reduce(
+    (sum, sibling) =>
+      sum +
+      sibling.current.totalCount +
+      sibling.subagents.reduce((s, sub) => s + sub.totalCount, 0),
+    0,
+  );
   const totalBadgeCount =
-    activeState.current.totalCount + subagentTaskCount + historyTaskCount;
+    activeState.current.totalCount +
+    subagentTaskCount +
+    siblingTaskCount +
+    historyTaskCount;
 
   return {
     current: activeState.current,
     sessions: histories,
+    siblings,
     subagents: activeState.subagents,
     historyRunCount,
     totalBadgeCount,

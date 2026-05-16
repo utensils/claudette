@@ -34,6 +34,10 @@ export interface TaskRun extends TaskTrackerResult {
   /// "Agent A: build pagination") instead of the generic "Run N".
   /// Absent for TodoWrite-replacement and main-agent delete-burst runs.
   label?: string;
+  /// Optional full hover text when `label` was truncated upstream.
+  /// Used by the right-sidebar History row's `title=` so a long
+  /// subagent prompt remains readable on hover.
+  tooltip?: string;
 }
 
 export interface TaskTrackerWithHistory {
@@ -55,7 +59,14 @@ export interface SubagentTaskRun extends TaskTrackerResult {
   /// Display label for the right-sidebar section header. Falls back
   /// to a non-empty placeholder when the parent activity has no
   /// `agentDescription`, so the section can never render blank.
+  /// Truncated to ~80 chars and single-line so a multi-line spawn
+  /// prompt can't blow up the layout.
   label: string;
+  /// Full, unredacted single-line collapse of the parent activity's
+  /// `agentDescription`. Used as the section's `title=` hover so the
+  /// user can read the whole thing without bloating the row. Falls
+  /// back to `label` when no description was provided.
+  tooltip?: string;
   /// Latest `agentStatus` from the parent activity (running /
   /// completed / failed). UI can use this to dim completed sections.
   status?: string;
@@ -428,16 +439,56 @@ function deriveSubagentRunFromActivity(
   const tasks = [...taskMap.values(), ...todoMap.values()];
   if (tasks.length === 0) return null;
 
+  const { label, tooltip } = formatSubagentLabel(activity);
   return {
     ...taskResult(tasks),
     id: activity.toolUseId,
     // Never render blank: fall back through the activity's own metadata
     // so subagents that arrived without a description still get a chip.
-    label:
-      activity.agentDescription?.trim() ||
-      activity.toolName ||
-      `Subagent ${activity.toolUseId.slice(0, 8)}`,
+    label,
+    tooltip,
     status: activity.agentStatus ?? undefined,
+  };
+}
+
+/// Subagent labels come from `agentDescription`, which upstream Claude
+/// Code populates with the **full spawn prompt** for some agents — often
+/// multiple lines, hundreds of characters. Rendered verbatim, that
+/// blows up the right-sidebar layout and leaks prompt content into the
+/// section header. Collapse to the first non-empty line, trim, and cap
+/// at 80 chars. The full string still surfaces on hover via the
+/// section's `title` attribute (TaskList sets it from the raw label).
+const MAX_SUBAGENT_LABEL_CHARS = 80;
+export function formatSubagentLabel(activity: {
+  agentDescription?: string | null;
+  toolName?: string;
+  toolUseId: string;
+}): { label: string; tooltip?: string } {
+  const raw = activity.agentDescription?.trim() ?? "";
+  if (raw) {
+    const firstLine =
+      raw
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .find((line) => line.length > 0) ?? raw;
+    const compact = firstLine.replace(/\s+/g, " ");
+    const truncated =
+      compact.length > MAX_SUBAGENT_LABEL_CHARS
+        ? `${compact.slice(0, MAX_SUBAGENT_LABEL_CHARS - 1).trimEnd()}…`
+        : compact;
+    // Tooltip keeps the full single-line collapse so hovering shows
+    // everything when the spawn description was a long prompt; we
+    // intentionally don't return raw multi-line text here because a
+    // tooltip rendered as plain text on a single line would still look
+    // garbled.
+    const fullCompact = raw.replace(/\s+/g, " ").trim();
+    return {
+      label: truncated,
+      tooltip: fullCompact !== truncated ? fullCompact : undefined,
+    };
+  }
+  return {
+    label: activity.toolName || `Subagent ${activity.toolUseId.slice(0, 8)}`,
   };
 }
 
@@ -756,6 +807,7 @@ export function finalizeTaskState(
       totalCount: state.current.totalCount,
       id: `final-current-${nextSeq}`,
       sequence: nextSeq++,
+      label: "Open tasks",
     });
   }
   for (const sub of state.subagents) {
@@ -766,6 +818,7 @@ export function finalizeTaskState(
       id: `final-subagent-${sub.id}`,
       sequence: nextSeq++,
       label: sub.label,
+      tooltip: sub.tooltip,
     });
   }
 

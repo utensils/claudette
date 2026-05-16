@@ -4,6 +4,7 @@ import {
   deriveTaskState,
   extractTaskId,
   finalizeTaskState,
+  formatSubagentLabel,
 } from "./useTaskTracker";
 import type { ToolActivity, CompletedTurn } from "../stores/useAppStore";
 
@@ -1540,6 +1541,9 @@ describe("finalizeTaskState", () => {
       "Step 3",
     ]);
     expect(result.history[0].completedCount).toBe(2);
+    // Graduated main-agent runs get a descriptive label so the
+    // right-sidebar row doesn't fall back to the generic "Run N".
+    expect(result.history[0].label).toBe("Open tasks");
   });
 
   it("preserves existing history runs and adds the leftovers after them", () => {
@@ -1620,5 +1624,63 @@ describe("finalizeTaskState", () => {
     expect(twice.history).toHaveLength(1);
     expect(twice.current.tasks).toEqual([]);
     expect(twice.subagents).toEqual([]);
+  });
+});
+
+describe("formatSubagentLabel", () => {
+  it("returns the trimmed description as the label when short and single-line", () => {
+    const out = formatSubagentLabel({
+      agentDescription: "  Build pagination  ",
+      toolName: "Agent",
+      toolUseId: "x",
+    });
+    expect(out.label).toBe("Build pagination");
+    expect(out.tooltip).toBeUndefined();
+  });
+
+  it("collapses multi-line spawn prompts to the first non-empty line and stores the full single-line in tooltip", () => {
+    const prompt = [
+      "",
+      "You are a teammate. Your job is:",
+      "  - implement X",
+      "  - implement Y",
+      "",
+    ].join("\n");
+    const out = formatSubagentLabel({
+      agentDescription: prompt,
+      toolName: "Agent",
+      toolUseId: "x",
+    });
+    expect(out.label).toBe("You are a teammate. Your job is:");
+    expect(out.tooltip).toBe(
+      "You are a teammate. Your job is: - implement X - implement Y",
+    );
+  });
+
+  it("truncates labels longer than 80 chars with an ellipsis and keeps the original in tooltip", () => {
+    const long = "a".repeat(120);
+    const out = formatSubagentLabel({
+      agentDescription: long,
+      toolName: "Agent",
+      toolUseId: "x",
+    });
+    expect(out.label.length).toBeLessThanOrEqual(80);
+    expect(out.label.endsWith("…")).toBe(true);
+    expect(out.tooltip).toBe(long);
+  });
+
+  it("falls back to toolName / id when no description is provided", () => {
+    expect(
+      formatSubagentLabel({
+        toolName: "Agent",
+        toolUseId: "abcdef0123",
+      }).label,
+    ).toBe("Agent");
+    expect(
+      formatSubagentLabel({
+        toolName: "",
+        toolUseId: "abcdef0123",
+      }).label,
+    ).toBe("Subagent abcdef01");
   });
 });

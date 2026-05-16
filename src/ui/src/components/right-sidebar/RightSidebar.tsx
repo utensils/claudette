@@ -8,6 +8,7 @@ import { ChevronRight, Undo2, Trash2, Plus, Minus, FilePenLine } from "lucide-re
 import { useAppStore, selectActiveSessionId } from "../../stores/useAppStore";
 import { isPendingPlaceholderWorkspace } from "../../utils/workspaceEnvironment";
 import { useWorkspaceTaskHistory } from "../../hooks/useWorkspaceTaskHistory";
+import { useTaskTrackerWithHistory } from "../../hooks/useTaskTracker";
 import {
   discardFile,
   discardFiles,
@@ -108,6 +109,30 @@ export const RightSidebar = memo(function RightSidebar() {
     activeTab === "tasks",
   );
   const taskCount = taskHistory.totalBadgeCount;
+
+  // Lightweight IO-free signal of "the active session has any task work
+  // right now" — used to auto-switch the right sidebar to Tasks the
+  // first time a workspace's agent surfaces tasks, so devs don't have
+  // to hunt for the tab on every session.
+  const activeTaskSnapshot = useTaskTrackerWithHistory(activeSessionId);
+  const hasLiveTasks =
+    activeTaskSnapshot.current.tasks.length > 0 ||
+    activeTaskSnapshot.subagents.length > 0;
+  // One auto-switch per workspace selection. Tracks the workspace ids
+  // we've already auto-switched for and reset on workspace change so
+  // each workspace gets at most one nudge before it learns the user's
+  // tab preference for the remainder of the session.
+  const autoSwitchedForWorkspaceRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    if (!selectedWorkspaceId || !hasLiveTasks) return;
+    if (autoSwitchedForWorkspaceRef.current.has(selectedWorkspaceId)) return;
+    if (activeTab === "tasks") {
+      autoSwitchedForWorkspaceRef.current.add(selectedWorkspaceId);
+      return;
+    }
+    autoSwitchedForWorkspaceRef.current.add(selectedWorkspaceId);
+    setActiveTab("tasks");
+  }, [selectedWorkspaceId, hasLiveTasks, activeTab, setActiveTab]);
 
   // Local-only stage/unstage/discard UI state. None of these git index
   // operations are bridged through the remote server (matches revert_file),
