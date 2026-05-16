@@ -1,0 +1,102 @@
+# Manually-triggered job that builds the Linux AppImage + .deb on the
+# branch you dispatch it from, without touching the real `nightly-staging`
+# release or the in-app updater channels. Useful for verifying CI fixes
+# that affect linuxdeploy / tauri-bundler before merging to main.
+#
+# The full `nightly.yml` workflow would clobber the live `nightly-staging`
+# release if run from a non-main branch (its `prepare-release` job
+# deletes and recreates that tag), so this is the safe alternative.
+name: Verify Linux bundle (manual)
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: "Target triple to build"
+        required: true
+        default: "x86_64-unknown-linux-gnu"
+        type: choice
+        options:
+          - x86_64-unknown-linux-gnu
+          - aarch64-unknown-linux-gnu
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  bundle:
+    name: Bundle (${{ inputs.target }})
+    runs-on: ${{ inputs.target == 'aarch64-unknown-linux-gnu' && 'ubuntu-22.04-arm' || 'ubuntu-22.04' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94"
+          targets: ${{ inputs.target }}
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: verify-${{ inputs.target }}
+
+      - name: Install Linux system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libgtk-3-dev \
+            libsoup-3.0-dev \
+            libjavascriptcoregtk-4.1-dev \
+            libasound2-dev
+
+      - name: Install bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "latest"
+
+      - name: Install frontend dependencies
+        shell: bash
+        run: cd src/ui && bun install --frozen-lockfile
+
+      - name: Generate icons
+        shell: bash
+        run: npx @tauri-apps/cli icon assets/logo.png
+
+      - name: Build and stage CLI sidecar
+        shell: bash
+        run: scripts/stage-cli-sidecar.sh ${{ inputs.target }}
+
+      # Mirrors the gate added to `nightly.yml` / `release-please.yml`:
+      # linuxdeploy's strip pass mangles the bun --compile Pi sidecar.
+      - name: Skip linuxdeploy strip
+        shell: bash
+        run: echo "NO_STRIP=true" >> "$GITHUB_ENV"
+
+      - name: Install Tauri CLI
+        shell: bash
+        run: cargo install tauri-cli --version "^2" --locked
+
+      - name: Build bundles
+        shell: bash
+        run: cargo tauri build --target ${{ inputs.target }} --bundles appimage,deb
+
+      - name: List produced artifacts
+        shell: bash
+        run: ls -lh "target/${{ inputs.target }}/release/bundle/appimage/" "target/${{ inputs.target }}/release/bundle/deb/" || true
+
+      - name: Upload AppImage as workflow artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: claudette-${{ inputs.target }}-bundle
+          path: |
+            target/${{ inputs.target }}/release/bundle/appimage/*.AppImage
+            target/${{ inputs.target }}/release/bundle/deb/*.deb
+          if-no-files-found: warn
+          retention-days: 7
