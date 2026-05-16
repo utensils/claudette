@@ -35,6 +35,18 @@ export interface TerminalSlice {
   // workspace's last-active tab independently.
   activeTerminalTabId: Record<string, number | null>;
   terminalPanelVisible: boolean;
+  /// `true` once the user has explicitly closed the terminal panel (via the
+  /// toggle button, keyboard shortcut, or `setTerminalPanelVisible(false)`).
+  /// All auto-open paths (env preparation, tab auto-creation, queued
+  /// commands) respect this flag — once dismissed, the panel stays hidden
+  /// across workspace switches and re-prepares until the user manually
+  /// opens it again. Re-opening clears the flag.
+  ///
+  /// Ephemeral: not persisted across app restarts. After a relaunch,
+  /// `terminalPanelVisible` starts `false` and `terminalPanelUserDismissed`
+  /// also starts `false`, so the first env-preparation auto-open still fires
+  /// (the dismissal was an intra-session preference, not a permanent one).
+  terminalPanelUserDismissed: boolean;
   /// Currently-running foreground commands, keyed by `wsId` then by `ptyId`.
   /// An entry exists only while that PTY's foreground command is running —
   /// it's added on `pty-command-detected`, removed on `pty-command-stopped`
@@ -114,20 +126,32 @@ export const createTerminalSlice: StateCreator<
   pendingTerminalCommands: [],
   activeTerminalTabId: {},
   terminalPanelVisible: false,
+  terminalPanelUserDismissed: false,
   workspaceTerminalCommands: {},
   setTerminalTabs: (wsId, tabs) =>
     set((s) => ({
       terminalTabs: { ...s.terminalTabs, [wsId]: orderTerminalTabs(tabs) },
     })),
   addTerminalTab: (wsId, tab) =>
-    set((s) => ({
-      terminalTabs: {
-        ...s.terminalTabs,
-        [wsId]: orderTerminalTabs([...(s.terminalTabs[wsId] || []), tab]),
-      },
-      activeTerminalTabId: { ...s.activeTerminalTabId, [wsId]: tab.id },
-      terminalPanelVisible: true,
-    })),
+    set((s) => {
+      // Auto-opening the panel here is "implicit" — the user might have
+      // dismissed it, in which case we leave it hidden. Adding the tab
+      // itself is always fine; the user can re-open the panel later and
+      // the tab will be there. Agent-created `agent_task` tabs already
+      // go through `upsertAgentTaskTerminalTab`, which doesn't touch
+      // visibility at all, so this path is dominated by user actions
+      // (clicking +, queued-command dispatch) where forcing the panel
+      // open is desirable IFF the user hasn't dismissed it.
+      const shouldShow = !s.terminalPanelUserDismissed;
+      return {
+        terminalTabs: {
+          ...s.terminalTabs,
+          [wsId]: orderTerminalTabs([...(s.terminalTabs[wsId] || []), tab]),
+        },
+        activeTerminalTabId: { ...s.activeTerminalTabId, [wsId]: tab.id },
+        terminalPanelVisible: shouldShow ? true : s.terminalPanelVisible,
+      };
+    }),
   removeTerminalTab: (wsId, tabId) =>
     set((s) => {
       const allTabs = s.terminalTabs[wsId] || [];
@@ -203,8 +227,20 @@ export const createTerminalSlice: StateCreator<
       activeTerminalTabId: { ...s.activeTerminalTabId, [wsId]: id },
     })),
   toggleTerminalPanel: () =>
-    set((s) => ({ terminalPanelVisible: !s.terminalPanelVisible })),
-  setTerminalPanelVisible: (visible) => set({ terminalPanelVisible: visible }),
+    set((s) => ({
+      terminalPanelVisible: !s.terminalPanelVisible,
+      // User toggle is the authoritative signal for the dismissal flag:
+      // closing sets it, opening clears it. Auto-open paths key off this.
+      terminalPanelUserDismissed: s.terminalPanelVisible,
+    })),
+  setTerminalPanelVisible: (visible) =>
+    set({
+      terminalPanelVisible: visible,
+      // Treat any direct visibility set (keyboard shortcut, programmatic
+      // toggle from the menu/tray) the same as a user toggle. Auto-open
+      // callers route through dedicated setters that don't run this.
+      terminalPanelUserDismissed: !visible,
+    }),
   setWorkspaceRunningCommand: (wsId, ptyId, command) =>
     set((s) => {
       const wsMap = { ...(s.workspaceTerminalCommands[wsId] ?? {}) };
@@ -236,7 +272,10 @@ export const createTerminalSlice: StateCreator<
         ...s.pendingTerminalCommands,
         { id: crypto.randomUUID(), workspaceId: wsId, command },
       ],
+      // "Run in terminal" is an explicit user action — clear any prior
+      // dismissal and surface the terminal so they can see the output.
       terminalPanelVisible: true,
+      terminalPanelUserDismissed: false,
     })),
   completeTerminalCommand: (id) =>
     set((s) => ({
