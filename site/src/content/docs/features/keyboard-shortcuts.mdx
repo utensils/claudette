@@ -39,7 +39,24 @@ To switch between workspaces in the same project, click them in the sidebar or u
 | Shortcut | Action |
 |----------|--------|
 | `⌘/Ctrl + K` | Toggle fuzzy finder (workspace search) |
-| `⌘/Ctrl + P` | Toggle command palette |
+| `⌘/Ctrl + P` | Go to file — Quick Open the workspace file picker |
+| `⌘/Ctrl + O` | Go to file (alternate). Kept after the Cmd+P swap so existing muscle memory still works; rebindable / disable-able in **Settings → Keyboard**. |
+| `⌘/Ctrl + Shift + P` | Toggle command palette |
+
+Cmd/Ctrl+P and Cmd/Ctrl+Shift+P match VS Code's defaults. The bindings can be customised — or fully swapped back to the pre-1.x defaults — in **Settings → Keyboard**.
+
+### File Editor
+
+These fire while a file is open in the editor pane. They mostly mirror Monaco's defaults, surfaced through the File / Edit / View / Go menubar above the editor — see [File Editor](/claudette/features/file-editor/) for the full reference.
+
+| Shortcut | Action |
+|----------|--------|
+| `⌘/Ctrl + S` | Save the active file |
+| `⌘/Ctrl + F` | Find in the current file |
+| `⌥⌘F` (macOS) / `Ctrl+H` (Linux/Windows) | Find and replace |
+| `⇧⌥F` (macOS) / `Ctrl+Shift+I` (Linux/Windows) | Format the current document |
+| `⌃G` (macOS) / `Ctrl+G` (Linux/Windows) | Go to line |
+| `⌘⇧O` (macOS) / `Ctrl+Shift+O` (Linux/Windows) | Go to symbol in the current file |
 
 ### Zoom
 
@@ -89,7 +106,7 @@ terminal is focused; Linux/Windows keep bare `Ctrl+D` for shell EOF and use
 
 When multiple overlays are open, `Escape` dismisses them in this order:
 
-1. Command Palette
+1. Command Palette (whether opened via `⌘/Ctrl + Shift + P` for command mode or `⌘/Ctrl + P` for Quick Open file mode)
 2. Settings
 3. Modal dialogs
 4. Fuzzy Finder

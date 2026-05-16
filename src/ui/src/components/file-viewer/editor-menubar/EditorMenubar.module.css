@@ -1,0 +1,51 @@
+/* Horizontal File/Edit/View/Go menubar that sits above the per-file
+ * PaneToolbar. Compact density to match the existing toolbar visuals;
+ * the dropdown itself is rendered by ContextMenu via a portal, so
+ * positioning + portal behavior is shared with the rest of the app. */
+.menubar {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 4px 16px;
+  background: transparent;
+  border-bottom: 1px solid var(--divider);
+  flex-shrink: 0;
+  /* Keep the menubar sticky inside the FileViewer's flex column so it
+   * stays visible if the editor scrolls. The host already has overflow
+   * hidden, but if a future change pulls scrolling up to the viewer we
+   * want the menubar pinned. */
+  position: relative;
+  z-index: 1;
+}
+
+.trigger {
+  display: inline-flex;
+  align-items: center;
+  height: 22px;
+  padding: 0 8px;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 12px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition:
+    background var(--transition-fast),
+    color var(--transition-fast);
+}
+
+.trigger:hover {
+  background: var(--hover-bg);
+  color: var(--text-primary);
+}
+
+.trigger:focus-visible {
+  outline: 2px solid var(--accent-primary);
+  outline-offset: 1px;
+}
+
+.triggerActive {
+  background: var(--hover-bg);
+  color: var(--text-primary);
+}

@@ -10,6 +10,7 @@ import {
 } from "react";
 import { useTranslation } from "react-i18next";
 import { BookOpen, Code, Save } from "lucide-react";
+import type { editor as MonacoNs } from "monaco-editor";
 import {
   selectActiveFileTabPath,
   useAppStore,
@@ -30,13 +31,13 @@ import { WorkspacePanelHeader } from "../shared/WorkspacePanelHeader";
 import { PaneToolbar } from "../shared/PaneToolbar";
 import { SegmentedControl } from "../shared/SegmentedControl";
 import { IconButton } from "../shared/IconButton";
-import { CopyButton } from "../shared/CopyButton";
 import { SessionTabs } from "../chat/SessionTabs";
 import { MessageMarkdown } from "../chat/MessageMarkdown";
 import { MarkdownImageBaseProvider } from "../chat/MarkdownImage";
 import { DiscardUnsavedChangesConfirm } from "../files/DiscardUnsavedChangesConfirm";
 import { imageMediaType, isImagePath } from "../../utils/fileIcons";
 import { useFilePathActions } from "../files/useFilePathActions";
+import { EditorMenubar } from "./editor-menubar/EditorMenubar";
 import styles from "./FileViewer.module.css";
 
 const MonacoEditor = lazy(() =>
@@ -95,6 +96,19 @@ function FileViewerInner({ workspaceId, path, t }: FileViewerInnerProps) {
   const [closePending, setClosePending] = useState(false);
   const saving = savingKey === bufferKey;
   const viewerRef = useRef<HTMLDivElement | null>(null);
+  // Live reference to Monaco's editor instance. Owned here so the
+  // EditorMenubar can dispatch actions (Find, Format, Undo, …) against
+  // the same editor the user is typing in. MonacoEditor populates this
+  // via `onEditorReady` and clears it on unmount; the menubar's handler
+  // bag null-guards every read so a click during the brief unmount
+  // window is a no-op rather than a crash.
+  const editorRef = useRef<MonacoNs.IStandaloneCodeEditor | null>(null);
+  const handleEditorReady = useCallback(
+    (editor: MonacoNs.IStandaloneCodeEditor | null) => {
+      editorRef.current = editor;
+    },
+    [],
+  );
 
   const isMarkdown = MARKDOWN_EXT.test(path);
   const isImage = isImagePath(path);
@@ -197,11 +211,6 @@ function FileViewerInner({ workspaceId, path, t }: FileViewerInnerProps) {
     },
     [clearFileRevealTarget, workspaceId],
   );
-
-  const copySource = useCallback((): string | null => {
-    if (!bufferState || isImage || bufferState.isBinary) return null;
-    return bufferState.buffer;
-  }, [bufferState, isImage]);
 
   const handleSave = useCallback(async () => {
     if (!bufferState || !dirty || saving) return;
@@ -422,24 +431,33 @@ function FileViewerInner({ workspaceId, path, t }: FileViewerInnerProps) {
     >
       <WorkspacePanelHeader />
       <SessionTabs workspaceId={workspaceId} />
+      <EditorMenubar
+        // Remount on file switch so the menubar's `useEditorActions`
+        // bag captures the new file's editor / baseline cleanly — the
+        // same `key={path}` pattern the Monaco editor already uses.
+        key={`menubar/${workspaceId}/${path}`}
+        workspaceId={workspaceId}
+        path={path}
+        dirty={dirty}
+        // Edit menu items mutate Monaco's model. They stay enabled only
+        // when the file actually renders the source editor — images,
+        // binary, oversize, and truncated files all clear `canEdit`.
+        canEdit={
+          !!bufferState?.loaded &&
+          !isImage &&
+          !bufferState.isBinary &&
+          !editDisabled &&
+          !showMarkdownPreview
+        }
+        editorRef={editorRef}
+        onSave={handleSave}
+        onCloseTab={requestCloseFileTab}
+      />
       <PaneToolbar
         path={path}
         dirty={dirty}
         actions={
           <>
-            <CopyButton
-              // Same rationale as DiffViewer: remount on tab switch so a
-              // late clipboard write from the previous tab can't flash a
-              // checkmark/error on the new tab's button.
-              key={`${workspaceId}/${path}`}
-              source={copySource}
-              tooltip={{
-                copy: t("diff_tooltip_copy_contents"),
-                copied: t("diff_tooltip_copied"),
-                failed: t("diff_tooltip_copy_failed"),
-              }}
-              disabled={isImage || !bufferState?.loaded || bufferState?.isBinary}
-            />
             {showMarkdownToggle && (
               <SegmentedControl
                 ariaLabel={t("file_markdown_view_mode_aria")}
@@ -524,6 +542,7 @@ function FileViewerInner({ workspaceId, path, t }: FileViewerInnerProps) {
               readOnly={editDisabled}
               onChange={handleBufferChange}
               onSave={handleSave}
+              onEditorReady={handleEditorReady}
             />
           </Suspense>
         ) : (

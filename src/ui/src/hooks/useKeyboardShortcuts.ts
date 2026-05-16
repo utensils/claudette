@@ -213,6 +213,7 @@ export function useKeyboardShortcuts() {
             toggleCommandPalette();
             return;
           case "global.open-command-palette-file-mode":
+          case "global.open-command-palette-file-mode-alt":
             if (selectedWorkspaceId) openCommandPaletteFileMode();
             return;
           case "global.toggle-right-sidebar":

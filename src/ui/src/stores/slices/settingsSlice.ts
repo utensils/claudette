@@ -105,6 +105,22 @@ export interface SettingsSlice {
   setEditorGitGutterBase: (value: "head" | "merge_base") => void;
   editorMinimapEnabled: boolean;
   setEditorMinimapEnabled: (enabled: boolean) => void;
+  /// File-viewer chrome: soft-wrap long lines in Monaco. Mirrors the
+  /// `editorMinimapEnabled` persistence pattern — hydrated from
+  /// `editor_word_wrap` in app_settings on app boot, written through
+  /// the View menu toggle. Default `true` so first-time users see the
+  /// same behavior as the pre-menubar baseline (Monaco was configured
+  /// with `wordWrap: "on"`).
+  editorWordWrap: boolean;
+  setEditorWordWrap: (enabled: boolean) => void;
+  editorLineNumbersEnabled: boolean;
+  setEditorLineNumbersEnabled: (enabled: boolean) => void;
+  /// Multiplier applied to Monaco's font size. Persisted as
+  /// `editor_font_zoom` (string-encoded float). Clamped to [0.7, 2]
+  /// inside the setter so callers can't push the editor into a state
+  /// the View > Reset Zoom menu item can't reach.
+  editorFontZoom: number;
+  setEditorFontZoom: (zoom: number) => void;
   keybindings: Record<string, string | null>;
   setKeybinding: (actionId: string, binding: string | null) => void;
   resetKeybinding: (actionId: string) => void;
@@ -225,6 +241,17 @@ export const createSettingsSlice: StateCreator<
   setEditorGitGutterBase: (value) => set({ editorGitGutterBase: value }),
   editorMinimapEnabled: false,
   setEditorMinimapEnabled: (enabled) => set({ editorMinimapEnabled: enabled }),
+  editorWordWrap: true,
+  setEditorWordWrap: (enabled) => set({ editorWordWrap: enabled }),
+  editorLineNumbersEnabled: true,
+  setEditorLineNumbersEnabled: (enabled) =>
+    set({ editorLineNumbersEnabled: enabled }),
+  editorFontZoom: 1,
+  setEditorFontZoom: (zoom) => {
+    if (!Number.isFinite(zoom)) return;
+    const clamped = Math.min(2, Math.max(0.7, zoom));
+    set({ editorFontZoom: clamped });
+  },
   keybindings: {},
   setKeybinding: (actionId, binding) =>
     set((state) => ({ keybindings: { ...state.keybindings, [actionId]: binding } })),

@@ -68,11 +68,16 @@ export const HOTKEY_ACTIONS = [
     suppressUnderOverlay: false,
   },
   {
+    // VS Code parity: Cmd/Ctrl+Shift+P opens the Command Palette and
+    // Cmd/Ctrl+P opens Quick Open (file mode). The two used to be
+    // swapped, so users who customized the binding keep their override
+    // via `keybinding:<id>` in app_settings — only users still on
+    // defaults pick up the new behavior.
     id: "global.toggle-command-palette",
     scope: "global",
     category: "keyboard_category_navigation",
     description: "keyboard_action_toggle_command_palette",
-    defaultBinding: allPlatforms("mod+p"),
+    defaultBinding: allPlatforms("mod+shift+p"),
     match: "key",
     rebindable: true,
     suppressUnderOverlay: false,
@@ -82,6 +87,20 @@ export const HOTKEY_ACTIONS = [
     scope: "global",
     category: "keyboard_category_navigation",
     description: "keyboard_action_open_command_palette_file_mode",
+    defaultBinding: allPlatforms("mod+p"),
+    match: "key",
+    rebindable: true,
+    suppressUnderOverlay: true,
+  },
+  {
+    // Cmd/Ctrl+O alias for Quick Open. Keeps existing muscle memory
+    // working after the Cmd+P swap. Same dispatch path as
+    // `open-command-palette-file-mode` — useKeyboardShortcuts routes
+    // both action IDs through `openCommandPaletteFileMode`.
+    id: "global.open-command-palette-file-mode-alt",
+    scope: "global",
+    category: "keyboard_category_navigation",
+    description: "keyboard_action_open_command_palette_file_mode_alt",
     defaultBinding: allPlatforms("mod+o"),
     match: "key",
     rebindable: true,

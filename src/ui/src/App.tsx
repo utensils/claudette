@@ -82,6 +82,11 @@ function App() {
   );
   const setEditorGitGutterBase = useAppStore((s) => s.setEditorGitGutterBase);
   const setEditorMinimapEnabled = useAppStore((s) => s.setEditorMinimapEnabled);
+  const setEditorWordWrap = useAppStore((s) => s.setEditorWordWrap);
+  const setEditorLineNumbersEnabled = useAppStore(
+    (s) => s.setEditorLineNumbersEnabled,
+  );
+  const setEditorFontZoom = useAppStore((s) => s.setEditorFontZoom);
   const setDisable1mContext = useAppStore((s) => s.setDisable1mContext);
   const setAlternativeBackendsAvailable = useAppStore((s) => s.setAlternativeBackendsAvailable);
   const setPiSdkAvailable = useAppStore((s) => s.setPiSdkAvailable);
@@ -479,6 +484,24 @@ function App() {
       .catch(() => {});
     getAppSetting("editor_minimap_enabled")
       .then((val) => { if (val === "true") setEditorMinimapEnabled(true); })
+      .catch(() => {});
+    // Editor view-state mirrors the minimap pattern: stored as strings
+    // in app_settings, hydrated once at boot. Word wrap and line numbers
+    // default to enabled, so we only flip them when the persisted value
+    // is explicitly "false" — that keeps fresh installs and missing keys
+    // on the documented default.
+    getAppSetting("editor_word_wrap")
+      .then((val) => { if (val === "false") setEditorWordWrap(false); })
+      .catch(() => {});
+    getAppSetting("editor_line_numbers")
+      .then((val) => { if (val === "false") setEditorLineNumbersEnabled(false); })
+      .catch(() => {});
+    getAppSetting("editor_font_zoom")
+      .then((val) => {
+        if (val === null || val === undefined) return;
+        const parsed = Number.parseFloat(val);
+        if (Number.isFinite(parsed)) setEditorFontZoom(parsed);
+      })
       .catch(() => {});
     Promise.all([
       listAppSettingsWithPrefix(KEYBINDING_SETTING_PREFIX),
@@ -918,7 +941,7 @@ function App() {
       unlistenMissingCli.then((fn) => fn());
       unlistenMissingWorktree.then((fn) => fn());
     };
-  }, [setRepositories, setWorkspaces, setWorktreeBaseDir, setDefaultTerminalAppId, setDefaultBranches, setTerminalFontSize, setLastMessages, setRemoteConnections, setDiscoveredServers, setLocalServerRunning, setLocalServerConnectionString, setCurrentThemeId, setThemeMode, setThemeDark, setThemeLight, setUiFontSize, setFontFamilySans, setFontFamilyMono, setSystemFonts, setDetectedApps, setUsageInsightsEnabled, setClaudetteTerminalEnabled, setShowSidebarRunningCommands, setToolDisplayMode, setExtendedToolCallOutput, setPluginManagementEnabled, setClaudeRemoteControlEnabled, setCommunityRegistryEnabled, setAlternativeBackendsAvailable, setPiSdkAvailable, setAlternativeBackendsEnabled, setCodexEnabled, setAgentBackends, setDefaultAgentBackendId, setClaudeAuthMethod, setEditorGitGutterBase, setEditorMinimapEnabled, setDisable1mContext, setAppVersion, setVoiceToggleHotkey, setVoiceHoldHotkey, setKeybindings, setManualWorkspaceOrderByRepo]);
+  }, [setRepositories, setWorkspaces, setWorktreeBaseDir, setDefaultTerminalAppId, setDefaultBranches, setTerminalFontSize, setLastMessages, setRemoteConnections, setDiscoveredServers, setLocalServerRunning, setLocalServerConnectionString, setCurrentThemeId, setThemeMode, setThemeDark, setThemeLight, setUiFontSize, setFontFamilySans, setFontFamilyMono, setSystemFonts, setDetectedApps, setUsageInsightsEnabled, setClaudetteTerminalEnabled, setShowSidebarRunningCommands, setToolDisplayMode, setExtendedToolCallOutput, setPluginManagementEnabled, setClaudeRemoteControlEnabled, setCommunityRegistryEnabled, setAlternativeBackendsAvailable, setPiSdkAvailable, setAlternativeBackendsEnabled, setCodexEnabled, setAgentBackends, setDefaultAgentBackendId, setClaudeAuthMethod, setEditorGitGutterBase, setEditorMinimapEnabled, setEditorWordWrap, setEditorLineNumbersEnabled, setEditorFontZoom, setDisable1mContext, setAppVersion, setVoiceToggleHotkey, setVoiceHoldHotkey, setKeybindings, setManualWorkspaceOrderByRepo]);
 
   // Live freshness for LM Studio's `loaded_context_length`.
   //
