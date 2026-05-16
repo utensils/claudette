@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { ChatListScreen } from "./screens/ChatListScreen";
+import { ChatScreen } from "./screens/ChatScreen";
 import { ConnectScreen } from "./screens/ConnectScreen";
 import { WorkspacesScreen } from "./screens/WorkspacesScreen";
 import type { ChatSession, SavedConnection, Workspace } from "./types";
@@ -69,32 +70,18 @@ export function App() {
       );
     case "chat":
       return (
-        <div className="shell">
-          <header className="header header-row">
-            <button
-              className="ghost-btn"
-              onClick={() =>
-                setView({
-                  kind: "chat-list",
-                  connection: view.connection,
-                  workspace: view.workspace,
-                })
-              }
-            >
-              ← Back
-            </button>
-            <div className="header-center">
-              <h1>{view.session.name ?? "Session"}</h1>
-              <p className="subtitle">{view.workspace.name}</p>
-            </div>
-          </header>
-          <main className="main">
-            <p className="status">
-              Streaming chat UI ships in Phase 7. Session id:{" "}
-              <code>{view.session.id}</code>
-            </p>
-          </main>
-        </div>
+        <ChatScreen
+          connection={view.connection}
+          workspace={view.workspace}
+          session={view.session}
+          onBack={() =>
+            setView({
+              kind: "chat-list",
+              connection: view.connection,
+              workspace: view.workspace,
+            })
+          }
+        />
       );
   }
 }

@@ -6,11 +6,63 @@
 
 use std::sync::Arc;
 
+use claudette::transport::Transport;
 use claudette::transport::ws::WebSocketTransport;
 use serde::Serialize;
+use tauri::Emitter;
 
 use crate::state::{Connection, ConnectionManager};
 use crate::storage::{self, SavedConnection};
+
+/// Spawn the per-connection event-forwarder task. Consumes
+/// `transport.event_stream()` (a `broadcast::Receiver`) and re-emits
+/// each `ServerEvent` to the webview as a Tauri event named after the
+/// wire event (`agent-stream`, `pty-output`, `checkpoint-created`,
+/// `agent-permission-prompt`). Each payload carries the originating
+/// `connection_id` so screens can filter to the active server when
+/// multiple connections are paired.
+fn spawn_event_forwarder(
+    app: tauri::AppHandle,
+    connection_id: String,
+    transport: Arc<dyn Transport>,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        let mut rx = transport.event_stream();
+        loop {
+            match rx.recv().await {
+                Ok(event) => {
+                    let payload = serde_json::json!({
+                        "connection_id": connection_id,
+                        "payload": event.payload,
+                    });
+                    if let Err(e) = app.emit(&event.event, payload) {
+                        tracing::warn!(
+                            target: "claudette::mobile",
+                            event = %event.event,
+                            error = %e,
+                            "failed to emit server event to webview"
+                        );
+                    }
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                    tracing::info!(
+                        target: "claudette::mobile",
+                        connection_id = %connection_id,
+                        "event stream closed"
+                    );
+                    break;
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                    tracing::warn!(
+                        target: "claudette::mobile",
+                        dropped = n,
+                        "event stream lag — receiver dropped events"
+                    );
+                }
+            }
+        }
+    })
+}
 
 #[derive(Serialize)]
 pub struct VersionInfo {
@@ -116,6 +168,13 @@ pub async fn pair_with_connection_string(
 
     storage::upsert(&app, saved.clone())?;
 
+    let transport_arc: Arc<dyn Transport> = Arc::from(transport);
+    let forwarder = spawn_event_forwarder(
+        app.clone(),
+        saved.id.clone(),
+        Arc::clone(&transport_arc),
+    );
+
     manager
         .insert(Connection {
             id: saved.id.clone(),
@@ -123,7 +182,8 @@ pub async fn pair_with_connection_string(
             port: saved.port,
             server_name: saved.name.clone(),
             fingerprint,
-            transport: Arc::from(transport),
+            transport: transport_arc,
+            event_forwarder: Some(forwarder),
         })
         .await;
 
@@ -165,6 +225,13 @@ pub async fn connect_saved(
 
     transport.authenticate_session(&saved.session_token).await?;
 
+    let transport_arc: Arc<dyn Transport> = Arc::from(transport);
+    let forwarder = spawn_event_forwarder(
+        app.clone(),
+        saved.id.clone(),
+        Arc::clone(&transport_arc),
+    );
+
     manager
         .insert(Connection {
             id: saved.id.clone(),
@@ -172,7 +239,8 @@ pub async fn connect_saved(
             port: saved.port,
             server_name: saved.name.clone(),
             fingerprint: saved.fingerprint.clone(),
-            transport: Arc::from(transport),
+            transport: transport_arc,
+            event_forwarder: Some(forwarder),
         })
         .await;
 
