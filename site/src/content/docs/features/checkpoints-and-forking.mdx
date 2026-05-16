@@ -26,6 +26,8 @@ Rollbacks are scoped to a single chat session, so a rollback in one tab can't pr
 
 The post-rollback state is the same as if the agent had finished at the chosen turn and you'd just opened the workspace fresh: the chat resumes from there, file state matches, and the next message you send continues the conversation naturally.
 
+The agent's memory of the surviving turns is preserved across the rollback. Internally, Claudette can't reuse the runtime's prior transcript (it still contains the discarded turns), so it mints a fresh session id and injects the remaining conversation as a synthetic prelude on the next user message. The mechanics mirror the cross-runtime model-switch path described in [Agent Configuration → Switching models mid-conversation](/claudette/features/agent-configuration/#switching-models-mid-conversation). The first turn after a rollback is therefore slightly slower and uses more input tokens than usual, because the surviving conversation rides along as turn-1 input.
+
 ## Forking a workspace
 
 Forking creates a **new** workspace that branches from a checkpoint without disturbing the original. Use it when you want to:
@@ -40,6 +42,7 @@ From the chat history sidebar, pick a checkpoint and choose **Fork from here**. 
 2. Branches the new worktree from the commit that the chosen checkpoint points to — so the file state matches the chosen turn.
 3. Copies the chat messages and conversation checkpoints up to and including the chosen turn into the new session.
 4. Copies the underlying Claude CLI session transcript when present, so the next turn can `--resume` without losing conversational context.
+5. Copies the parent chat's toolbar selections — model, provider, fast mode, and reasoning effort tier — so the fork opens with the same picker state you had selected, rather than falling back to the global default.
 
 The original workspace is untouched. The fork shows up in the sidebar as a new entry under the same repository.
 

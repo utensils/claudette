@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useAppStore } from "../../stores/useAppStore";
 import { useWorkspaceLifecycle } from "../../hooks/useWorkspaceLifecycle";
+import { isContextWindowError } from "./contextOverflowDetection";
 import styles from "./ChatErrorBanner.module.css";
 import chatStyles from "./ChatPanel.module.css";
 
@@ -13,6 +14,14 @@ interface Props {
   /** Workspace whose chat surfaced this error — needed for archive /
    *  recreate actions on a missing-worktree banner. */
   workspaceId: string | null;
+  /** Active chat session id. Only used as a presence gate for the
+   *  context-overflow recovery affordance — we don't render the
+   *  "pick a larger-context model" link unless we're attached to a
+   *  real session. The link itself opens the global model picker
+   *  (`modelSelectorOpen` in `toolbarSlice`), which the active
+   *  session's toolbar reads — no targeting parameter is threaded
+   *  through. */
+  sessionId?: string | null;
   /** Callback invoked when the user takes a recovery action that should
    *  clear the error. The parent owns error state; we just notify. */
   onRecovered?: () => void;
@@ -37,10 +46,16 @@ interface Props {
  * negligibly more robustness while making both surfaces harder to evolve
  * independently.
  */
-export function ChatErrorBanner({ message, workspaceId, onRecovered }: Props) {
+export function ChatErrorBanner({
+  message,
+  workspaceId,
+  sessionId,
+  onRecovered,
+}: Props) {
   const { t } = useTranslation("chat");
   const openMissingCliModal = useAppStore((s) => s.openMissingCliModal);
   const setLastMissingWorktree = useAppStore((s) => s.setLastMissingWorktree);
+  const setModelSelectorOpen = useAppStore((s) => s.setModelSelectorOpen);
   const { archive, restore } = useWorkspaceLifecycle();
   const [busy, setBusy] = useState<"archive" | "recreate" | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -63,6 +78,7 @@ export function ChatErrorBanner({ message, workspaceId, onRecovered }: Props) {
 
   const isMissingCli = / is not installed\./.test(message);
   const isMissingWorktree = /^Workspace directory is missing:/.test(message);
+  const isContextOverflow = isContextWindowError(message);
 
   async function onArchive() {
     if (!workspaceId || busy) return;
@@ -147,6 +163,18 @@ export function ChatErrorBanner({ message, workspaceId, onRecovered }: Props) {
             {t("missing_worktree_recreate")}
           </button>
         </div>
+      )}
+      {isContextOverflow && sessionId && (
+        <>
+          {" "}
+          <button
+            type="button"
+            className={styles.inlineLink}
+            onClick={() => setModelSelectorOpen(true)}
+          >
+            {t("context_overflow_pick_model")} →
+          </button>
+        </>
       )}
       {actionError && <div className={styles.actionError}>{actionError}</div>}
     </div>

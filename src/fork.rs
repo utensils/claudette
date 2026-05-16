@@ -8,7 +8,11 @@
 //!   - chat messages and conversation checkpoints are copied from the
 //!     source workspace up to and including the chosen turn,
 //!   - Claude CLI session (JSONL transcript) is copied when present so the
-//!     next turn can `--resume` without losing conversational context.
+//!     next turn can `--resume` without losing conversational context,
+//!   - per-chat-session toolbar settings (model, provider, fast-mode,
+//!     effort tier — see `FORK_COPIED_SESSION_SETTING_PREFIXES`) are
+//!     copied so the fork comes up on the same model and reasoning
+//!     settings the user had picked on the parent.
 //!
 //! The heavy lifting lives here (rather than in `src-tauri`) so the logic
 //! is testable without a Tauri runtime.
@@ -254,19 +258,28 @@ async fn fork_after_worktree(
 
     copy_history(db, &source_ws.id, &new_ws.id, checkpoint)?;
 
+    // Per-chat-session preferences (model, provider, fast-mode, effort
+    // tier) live in `app_settings` keyed by chat session id. Without
+    // this copy the fork's brand-new session id has no entries, so the
+    // toolbar resolves it to the global default — the user picked
+    // Sonnet on the parent and the fork comes up on Opus, etc. Copy
+    // the SOURCE chat session's preferences into the new chat session
+    // so a fork preserves the picker state the user had open.
+    let new_chat_session_id = db
+        .default_session_id_for_workspace(&new_ws.id)?
+        .ok_or_else(|| {
+            ForkError::InconsistentHistory(format!(
+                "new workspace {} has no default session",
+                new_ws.id
+            ))
+        })?;
+    copy_per_session_settings(db, &checkpoint.chat_session_id, &new_chat_session_id)?;
+
     let session_resumed = if let Some(src_wt) = source_ws.worktree_path.as_deref() {
         // The source's Claude CLI session id lives on the SOURCE chat
         // session — the one this checkpoint was taken in — not on the
         // workspace. Likewise the destination is the new workspace's
         // default chat session, the same one `copy_history` populated.
-        let new_chat_session_id = db
-            .default_session_id_for_workspace(&new_ws.id)?
-            .ok_or_else(|| {
-                ForkError::InconsistentHistory(format!(
-                    "new workspace {} has no default session",
-                    new_ws.id
-                ))
-            })?;
         let Some(projects_dir) = claude_projects_dir() else {
             // No discoverable home directory — graceful skip, same as a
             // missing transcript file. Fork still succeeds with a fresh
@@ -490,11 +503,75 @@ fn copy_claude_session(
     Ok(true)
 }
 
-/// Resolve `~/.claude/projects` for the current user. Split out so tests can
-/// substitute a temp directory by calling [`copy_claude_session`] with an
-/// arbitrary projects dir.
+/// Per-chat-session settings prefixes (in `app_settings`) that the fork
+/// must carry from source → destination so the new workspace's toolbar
+/// renders with the same picker state the user had open at fork time.
+///
+/// These mirror exactly the prefixes the frontend writes from
+/// `src/ui/src/components/chat/applySelectedModel.ts` — keep them in
+/// sync if a new per-session toolbar control is added. Order is not
+/// significant; we copy whichever keys exist.
+const FORK_COPIED_SESSION_SETTING_PREFIXES: &[&str] =
+    &["model:", "model_provider:", "fast_mode:", "effort_level:"];
+
+/// Copy every `app_settings` row whose key matches `<prefix><source>`
+/// for any prefix in [`FORK_COPIED_SESSION_SETTING_PREFIXES`] to the
+/// corresponding `<prefix><dest>` key.
+///
+/// Idempotent: re-running with the same source/dest is a no-op (the
+/// upsert just rewrites identical values), and absent source keys are
+/// silently skipped so a brand-new chat session with no overrides
+/// forks cleanly.
+fn copy_per_session_settings(
+    db: &Database,
+    source_chat_session_id: &str,
+    new_chat_session_id: &str,
+) -> Result<(), ForkError> {
+    for prefix in FORK_COPIED_SESSION_SETTING_PREFIXES {
+        let source_key = format!("{prefix}{source_chat_session_id}");
+        if let Some(value) = db.get_app_setting(&source_key)? {
+            let dest_key = format!("{prefix}{new_chat_session_id}");
+            db.set_app_setting(&dest_key, &value)?;
+        }
+    }
+    Ok(())
+}
+
+/// Resolve the Claude CLI's `projects/` directory for the current user.
+///
+/// Honors the same `CLAUDE_CONFIG_DIR` env var that Claude CLI itself
+/// uses to relocate its config (the CLI writes JSONLs at
+/// `$CLAUDE_CONFIG_DIR/projects/<slug>/<sid>.jsonl` when the variable
+/// is set, otherwise `~/.claude/projects/...`). Pre-fix this function
+/// hardcoded the `~/.claude/projects` branch, so any user with
+/// `CLAUDE_CONFIG_DIR` set — including every dev instance launched via
+/// `scripts/dev.sh`, which points the CLI at a per-instance sandbox —
+/// silently routed the fork's JSONL lookup at the wrong directory.
+/// `copy_claude_session` then returned `Ok(false)` and every fork from
+/// such an instance lost its parent's conversation history. See
+/// `resolve_claude_projects_dir_*` test pins below.
+///
+/// Split out so tests can substitute a temp directory by calling
+/// [`copy_claude_session`] with an arbitrary projects dir.
 fn claude_projects_dir() -> Option<PathBuf> {
-    Some(dirs::home_dir()?.join(".claude").join("projects"))
+    resolve_claude_projects_dir(std::env::var_os("CLAUDE_CONFIG_DIR"), dirs::home_dir())
+}
+
+/// Pure resolver for [`claude_projects_dir`], lifted out so the env-var
+/// override is testable without mutating process-global state. Returns
+/// `None` only when both inputs are absent (no override and no
+/// discoverable home directory) — the same `None`-means-skip contract
+/// the caller already handles.
+fn resolve_claude_projects_dir(
+    config_dir_env: Option<std::ffi::OsString>,
+    home_dir: Option<PathBuf>,
+) -> Option<PathBuf> {
+    if let Some(dir) = config_dir_env
+        && !dir.is_empty()
+    {
+        return Some(PathBuf::from(dir).join("projects"));
+    }
+    Some(home_dir?.join(".claude").join("projects"))
 }
 
 /// Convert an absolute filesystem path to Claude CLI's project slug
@@ -1181,5 +1258,180 @@ mod tests {
             "fork must not have repurposed the orphan dir at {}",
             orphan_dir.display()
         );
+    }
+
+    // --- resolve_claude_projects_dir regression pins ---
+    //
+    // These cover the CLAUDE_CONFIG_DIR-aware-lookup bug. Pre-fix,
+    // `claude_projects_dir` hardcoded `~/.claude/projects`, so every fork
+    // launched from a Claudette dev instance (which sets
+    // `CLAUDE_CONFIG_DIR=/tmp/claudette-dev/<run>/claude-config` to
+    // isolate transcripts) silently found no JSONL at the home-dir
+    // location and degraded to "fresh session" — losing the parent's
+    // conversation. The bug shipped to prod too: any user who sets
+    // `CLAUDE_CONFIG_DIR` (a documented Claude CLI env var) would see
+    // every fork start with no memory.
+
+    #[test]
+    fn resolve_claude_projects_dir_prefers_claude_config_dir_when_set() {
+        let resolved = resolve_claude_projects_dir(
+            Some(std::ffi::OsString::from("/tmp/sandbox/claude-config")),
+            Some(PathBuf::from("/Users/anyone")),
+        )
+        .expect("resolver must return a path when override is set");
+        assert_eq!(
+            resolved,
+            PathBuf::from("/tmp/sandbox/claude-config/projects")
+        );
+    }
+
+    #[test]
+    fn resolve_claude_projects_dir_falls_back_to_home_when_env_unset() {
+        let resolved = resolve_claude_projects_dir(None, Some(PathBuf::from("/Users/alice")))
+            .expect("resolver must return a path when home is known");
+        assert_eq!(resolved, PathBuf::from("/Users/alice/.claude/projects"));
+    }
+
+    #[test]
+    fn resolve_claude_projects_dir_treats_empty_env_as_unset() {
+        // An empty `CLAUDE_CONFIG_DIR=` is functionally "not set" — the
+        // CLI itself ignores it. Mirror that so we don't return a bogus
+        // `/projects` path rooted at the filesystem root.
+        let resolved = resolve_claude_projects_dir(
+            Some(std::ffi::OsString::from("")),
+            Some(PathBuf::from("/Users/bob")),
+        )
+        .expect("resolver must fall back to home on empty override");
+        assert_eq!(resolved, PathBuf::from("/Users/bob/.claude/projects"));
+    }
+
+    #[test]
+    fn resolve_claude_projects_dir_returns_none_when_no_signal_available() {
+        // The caller already handles `None` as "graceful skip — fork
+        // still succeeds, just without resuming the Claude session". Pin
+        // that this remains the contract when neither input is present.
+        assert!(resolve_claude_projects_dir(None, None).is_none());
+    }
+
+    // --- copy_per_session_settings regression pins ---
+    //
+    // Per-session toolbar state (model picker, provider, fast-mode,
+    // effort tier) is persisted as `app_settings` rows keyed by chat
+    // session id. The fork mints a brand-new chat session, so without
+    // an explicit copy the new toolbar reads "absent" for every prefix
+    // and the frontend silently falls back to the global default —
+    // visible to the user as "I forked a Sonnet conversation and the
+    // fork came up on Opus." These pins lock in the copy.
+
+    #[test]
+    fn copy_per_session_settings_carries_every_known_prefix() {
+        let db = Database::open_in_memory().unwrap();
+        let src = "src-session-id";
+        let dst = "dst-session-id";
+        db.set_app_setting(&format!("model:{src}"), "claude-sonnet-4-6")
+            .unwrap();
+        db.set_app_setting(&format!("model_provider:{src}"), "anthropic")
+            .unwrap();
+        db.set_app_setting(&format!("fast_mode:{src}"), "true")
+            .unwrap();
+        db.set_app_setting(&format!("effort_level:{src}"), "high")
+            .unwrap();
+
+        copy_per_session_settings(&db, src, dst).unwrap();
+
+        assert_eq!(
+            db.get_app_setting(&format!("model:{dst}")).unwrap(),
+            Some("claude-sonnet-4-6".into()),
+        );
+        assert_eq!(
+            db.get_app_setting(&format!("model_provider:{dst}"))
+                .unwrap(),
+            Some("anthropic".into()),
+        );
+        assert_eq!(
+            db.get_app_setting(&format!("fast_mode:{dst}")).unwrap(),
+            Some("true".into()),
+        );
+        assert_eq!(
+            db.get_app_setting(&format!("effort_level:{dst}")).unwrap(),
+            Some("high".into()),
+        );
+        // Source must remain intact — the fork is additive, not a move.
+        assert_eq!(
+            db.get_app_setting(&format!("model:{src}")).unwrap(),
+            Some("claude-sonnet-4-6".into()),
+        );
+    }
+
+    #[test]
+    fn copy_per_session_settings_skips_absent_source_keys() {
+        // A brand-new chat session with no toolbar overrides must
+        // fork cleanly — copying nothing rather than writing empty
+        // strings (which would shadow the global default).
+        let db = Database::open_in_memory().unwrap();
+        copy_per_session_settings(&db, "src-session-id", "dst-session-id").unwrap();
+        for prefix in FORK_COPIED_SESSION_SETTING_PREFIXES {
+            assert!(
+                db.get_app_setting(&format!("{prefix}dst-session-id"))
+                    .unwrap()
+                    .is_none(),
+                "{prefix} must not be written when source has no override"
+            );
+        }
+    }
+
+    #[test]
+    fn copy_per_session_settings_copies_only_set_subset() {
+        // Mixed case: user picked a model + provider but never toggled
+        // fast/effort. The two set keys must copy; the two unset keys
+        // must not be invented.
+        let db = Database::open_in_memory().unwrap();
+        let src = "src-id";
+        let dst = "dst-id";
+        db.set_app_setting(&format!("model:{src}"), "claude-opus-4-7")
+            .unwrap();
+        db.set_app_setting(&format!("model_provider:{src}"), "anthropic")
+            .unwrap();
+
+        copy_per_session_settings(&db, src, dst).unwrap();
+
+        assert_eq!(
+            db.get_app_setting(&format!("model:{dst}")).unwrap(),
+            Some("claude-opus-4-7".into()),
+        );
+        assert_eq!(
+            db.get_app_setting(&format!("model_provider:{dst}"))
+                .unwrap(),
+            Some("anthropic".into()),
+        );
+        assert!(
+            db.get_app_setting(&format!("fast_mode:{dst}"))
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            db.get_app_setting(&format!("effort_level:{dst}"))
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn copy_per_session_settings_does_not_cross_pollute_unrelated_sessions() {
+        // Substring-style key matching would be a latent footgun.
+        // `model:src` must NOT pull `model:src-similar`'s value just
+        // because the prefix overlaps. The current impl uses exact
+        // formatted keys, so this pins that property.
+        let db = Database::open_in_memory().unwrap();
+        db.set_app_setting("model:src", "wanted-value").unwrap();
+        db.set_app_setting("model:src-similar", "noise").unwrap();
+
+        copy_per_session_settings(&db, "src", "dst").unwrap();
+
+        assert_eq!(
+            db.get_app_setting("model:dst").unwrap(),
+            Some("wanted-value".into())
+        );
+        assert!(db.get_app_setting("model:dst-similar").unwrap().is_none());
     }
 }

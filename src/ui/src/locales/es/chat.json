@@ -42,6 +42,7 @@
   "agent_question_placeholder": "Escribe una respuesta...",
   "agent_question_submit": "Enviar",
   "missing_cli_inline_link": "Ver opciones de instalación",
+  "context_overflow_pick_model": "Elegir un modelo con contexto más grande",
   "missing_worktree_archive": "Archivar workspace",
   "missing_worktree_recreate": "Recrear worktree",
   "missing_worktree_recreate_failed": "No se pudo recrear el worktree: {{error}}",

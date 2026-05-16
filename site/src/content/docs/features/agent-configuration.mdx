@@ -23,6 +23,19 @@ The model selection is per-workspace — you can use different models for differ
 
 Set the default model for new sessions in `Settings > Models > Default model`.
 
+### Switching models mid-conversation
+
+You can change the model on an active chat at any time — from the toolbar dropdown or with the `/model` slash command. Whether the conversation continues depends on whether the swap stays inside the same runtime:
+
+- **Same runtime (no context loss)** — Switching between models that resolve to the same harness keeps the full transcript. The very next turn streams from the new model with every prior message available. This covers the common cases: Sonnet 4.6 ↔ Opus 4.7 on the Anthropic Claude Code path, two Pi-routed Ollama models on the same Pi card, and so on. Claudette tears down the persistent agent subprocess and respawns it with the new `--model` flag while reusing the existing session id, so the new turn resumes the prior transcript.
+- **Different runtime (context migrated as a prelude)** — Switching to a model whose backend uses a different runtime — e.g., Anthropic Claude Code to Codex Native, or anything to a Pi SDK target — preserves the conversation by injecting the prior history into the new harness's very first turn. Claudette reads every persisted message on the session, wraps it in a `<conversation-history>` block, and prepends that block to the user's next message before sending it to the new harness. The persisted chat history in the UI is unchanged; the prelude is only visible to the model on the next turn. Tool calls in the history are rendered as text — the new harness reads them for context but does not re-execute them. The first turn after a cross-runtime switch will be slower and use more input tokens than usual because the whole prior conversation is part of its input.
+
+You can see which runtime a model uses from the "via …" badge next to its row in the model picker. Models on a runtime that matches the picker section's default carry no badge (e.g., Pi-card models on the Pi runtime, Anthropic Claude Code models on the Claude CLI runtime).
+
+### When the model's context window is too small
+
+If you switch to a model whose context window can't hold the current conversation, the agent's send fails with a "context length" / "input is too long" error. Claudette detects that error class and inlines a **"Choose a larger-context model →"** link directly into the chat error banner. Clicking it opens the toolbar's model picker so you can pick one of the 1M-context variants (Opus 4.7 1M, Sonnet 4.6 1M) or another model the registry shows with a larger window. The conversation is not lost — it stays in the chat panel, and your next send under the new model will resume it via the same in-place or cross-runtime path described above.
+
 ## Reasoning Effort
 
 Control how much reasoning the agent applies to each response:

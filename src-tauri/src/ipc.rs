@@ -1410,6 +1410,7 @@ mod tests {
             mcp_bridge: None,
             last_user_msg_id: None,
             posted_env_trust_warning: false,
+            pending_history_prelude: None,
         }
     }
 

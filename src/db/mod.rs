@@ -899,6 +899,66 @@ mod tests {
         assert_eq!(reloaded.turn_count, 3);
     }
 
+    /// Regression pin for the "switching models loses context" bug.
+    ///
+    /// The frontend `applySelectedModel` helper used to call
+    /// `reset_agent_session` on every model swap, which in turn called
+    /// `clear_chat_session_state` and wiped the Claude CLI `--resume`
+    /// key. The fix is to skip the reset for same-harness swaps. This
+    /// test pins the durable contract that fix relies on: a chat
+    /// session's `session_id` is preserved across the natural
+    /// per-turn writeback path (`save_chat_session_state`) — only an
+    /// explicit `clear_chat_session_state` wipes it.
+    ///
+    /// If a future change starts implicitly nulling `session_id` from
+    /// any other code path, this test must fail loudly so the
+    /// regression doesn't ship a second time.
+    #[test]
+    fn save_chat_session_state_preserves_session_id_across_turn_writebacks() {
+        let db = Database::open_in_memory().unwrap();
+        db.insert_repository(&make_repo("r1", "/tmp/repo1", "repo1"))
+            .unwrap();
+        db.insert_workspace(&make_workspace("w1", "r1", "ws"))
+            .unwrap();
+        let sess = db.create_chat_session("w1").unwrap();
+
+        // Simulate prior turns under model A: session_id is set.
+        db.save_chat_session_state(&sess.id, "claude-sid-keep", 3)
+            .unwrap();
+        let after_first_turns = db.get_chat_session(&sess.id).unwrap().unwrap();
+        assert_eq!(
+            after_first_turns.session_id.as_deref(),
+            Some("claude-sid-keep")
+        );
+        assert_eq!(after_first_turns.turn_count, 3);
+
+        // Simulate the user swapping models (same harness). With the
+        // fix in place, no `clear_chat_session_state` happens — only
+        // the natural turn writeback runs. The session_id must
+        // survive that path so `claude --resume <sid>` keeps the
+        // conversation.
+        db.save_chat_session_state(&sess.id, "claude-sid-keep", 4)
+            .unwrap();
+        let after_swap = db.get_chat_session(&sess.id).unwrap().unwrap();
+        assert_eq!(
+            after_swap.session_id.as_deref(),
+            Some("claude-sid-keep"),
+            "session_id must survive natural per-turn writebacks — \
+             this is what `claude --resume` reads on the next turn"
+        );
+        assert_eq!(after_swap.turn_count, 4);
+
+        // Sanity check the explicit reset path still works: explicit
+        // user-initiated resets continue to clear the session_id.
+        db.clear_chat_session_state(&sess.id).unwrap();
+        let after_reset = db.get_chat_session(&sess.id).unwrap().unwrap();
+        assert!(
+            after_reset.session_id.is_none(),
+            "explicit reset must still null out session_id"
+        );
+        assert_eq!(after_reset.turn_count, 0);
+    }
+
     #[test]
     fn test_archive_chat_session_ensuring_active_creates_replacement() {
         let db = Database::open_in_memory().unwrap();

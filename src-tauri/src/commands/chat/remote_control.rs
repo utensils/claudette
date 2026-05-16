@@ -388,6 +388,7 @@ async fn store_deferred_enable_status(
                 mcp_bridge: None,
                 last_user_msg_id: None,
                 posted_env_trust_warning: false,
+                pending_history_prelude: None,
             });
         session.workspace_id = workspace_id.to_string();
         session.turn_count = turn_count;
@@ -667,6 +668,7 @@ async fn ensure_persistent_session_for_remote_control(
                 mcp_bridge: None,
                 last_user_msg_id: None,
                 posted_env_trust_warning: false,
+                pending_history_prelude: None,
             });
         session.workspace_id = workspace_id.clone();
         session.session_id = claude_session_id.clone();
