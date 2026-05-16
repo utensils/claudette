@@ -195,7 +195,7 @@ A single sandboxed Lua runtime (`src/plugin_runtime/`) serves multiple plugin ki
 
 These files are already large enough that adding more responsibility makes them harder to reason about. When touching them, prefer extracting cohesive behavior into a focused helper / hook / slice / child component near the owning feature, then wire it through the existing entry point. The goal is to reduce or isolate complexity, not pile on another unrelated concern.
 
-- **Rust**: `src/diff.rs`, `src/git.rs`, `src/plugin.rs`, `src/mcp.rs`, `src/mcp_supervisor.rs`, `src-tauri/src/ipc.rs`, `src-tauri/src/voice.rs`, anything in `src-tauri/src/commands/*` that's already a few hundred lines.
+- **Rust**: `src/diff.rs`, `src/git.rs`, `src/plugin.rs`, `src/mcp.rs`, `src/mcp_supervisor.rs`, `src-tauri/src/ipc.rs`, `src-tauri/src/voice.rs`, the largest siblings of the recently-split `src-tauri/src/commands/agent_backends/` directory (`gateway_translate.rs`, `runtime_dispatch.rs`, `discovery.rs`, `config.rs`), and anything else in `src-tauri/src/commands/*` that's already a few hundred lines.
 - **Frontend**: `src/ui/src/components/sidebar/Sidebar.tsx`, `src/ui/src/components/chat/ChatPanel.tsx`, `src/ui/src/components/chat/ChatInputArea.tsx`, `src/ui/src/components/terminal/TerminalPanel.tsx`, `src/ui/src/services/tauri.ts`, large CSS modules (e.g. `Settings.module.css`).
 
 If a god file grew because the right home for the new behavior didn't exist yet, build that home first and land it as a separate (or stacked) commit before adding the new responsibility.
