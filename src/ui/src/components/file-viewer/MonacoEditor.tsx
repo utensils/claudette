@@ -32,6 +32,11 @@ interface MonacoEditorProps {
    *  works off URI extensions, so we pass the path through as a `path` prop
    *  and let Monaco pick the language. */
   filename: string;
+  /** True when the open path is a symlink on disk. Forwarded to
+   *  `useGitGutter` so the gutter doesn't paint a noisy "modified"
+   *  stripe for every line of a resolved-target buffer that doesn't
+   *  match git's blob (which is just the target path string). */
+  isSymlink: boolean;
   /** Read-only mode. Toggled at runtime via `updateOptions` so flipping
    *  view/edit doesn't lose cursor position or undo stack. */
   readOnly: boolean;
@@ -60,6 +65,7 @@ export const MonacoEditor = memo(function MonacoEditor({
   workspaceId,
   value,
   filename,
+  isSymlink,
   revealTarget,
   onRevealTargetApplied,
   readOnly,
@@ -261,7 +267,14 @@ export const MonacoEditor = memo(function MonacoEditor({
     onChangeRef.current(next);
   }, []);
 
-  useGitGutter(monacoRef, gutterCollectionRef, workspaceId, filename, currentBuffer);
+  useGitGutter(
+    monacoRef,
+    gutterCollectionRef,
+    workspaceId,
+    filename,
+    currentBuffer,
+    isSymlink,
+  );
 
   return (
     <div className={styles.host}>

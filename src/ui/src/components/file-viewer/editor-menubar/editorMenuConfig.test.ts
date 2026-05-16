@@ -34,7 +34,8 @@ function makeActions(): EditorActions {
 function makeCtx(overrides: Partial<EditorMenuContext> = {}): EditorMenuContext {
   return {
     isMac: true,
-    canEdit: true,
+    hasEditor: true,
+    canMutate: true,
     dirty: false,
     wordWrap: true,
     lineNumbers: true,
@@ -118,10 +119,10 @@ describe("buildEditorMenus", () => {
     expect(save?.disabled).toBe(true);
   });
 
-  it("disables Save and Revert when dirty but not editable", () => {
+  it("disables Save when dirty but Monaco can't mutate (read-only)", () => {
     const menus = buildEditorMenus(
       makeActions(),
-      makeCtx({ dirty: true, canEdit: false }),
+      makeCtx({ dirty: true, canMutate: false }),
     );
     const save = menus
       .find((m) => m.id === "file")
@@ -131,33 +132,63 @@ describe("buildEditorMenus", () => {
     expect(save?.disabled).toBe(true);
   });
 
-  it("disables editor-mutation items when canEdit is false", () => {
+  it("disables only mutation items when canMutate is false but hasEditor is true (read-only Monaco)", () => {
+    // Oversize / truncated file: Monaco renders read-only. Find /
+    // Go to Line / Copy Contents stay reachable; Save / Undo / Redo /
+    // Replace / Format are gated.
     const menus = buildEditorMenus(
       makeActions(),
-      makeCtx({ canEdit: false, dirty: false }),
+      makeCtx({ hasEditor: true, canMutate: false, dirty: false }),
     );
-    const mutationItems = [
+    const flat = menus.flatMap((m) => m.items);
+    const disabledOf = (id: string) =>
+      (flat.find((i) => i.id === id) as { disabled?: boolean } | undefined)
+        ?.disabled;
+
+    // Mutation gated.
+    for (const id of ["edit.undo", "edit.redo", "edit.replace", "edit.format"]) {
+      expect(disabledOf(id), `expected ${id} disabled`).toBe(true);
+    }
+    // Read-only navigation / copy stays available.
+    for (const id of [
+      "edit.find",
+      "edit.copy-contents",
+      "edit.copy-path",
+      "edit.copy-relative-path",
+      "go.go-to-line",
+      "go.go-to-symbol",
+    ]) {
+      expect(disabledOf(id), `expected ${id} enabled`).toBeFalsy();
+    }
+  });
+
+  it("disables both navigation and mutation when hasEditor is false", () => {
+    // Image / binary preview: Monaco isn't rendered at all.
+    const menus = buildEditorMenus(
+      makeActions(),
+      makeCtx({ hasEditor: false, canMutate: false, dirty: false }),
+    );
+    const flat = menus.flatMap((m) => m.items);
+    const disabledOf = (id: string) =>
+      (flat.find((i) => i.id === id) as { disabled?: boolean } | undefined)
+        ?.disabled;
+
+    for (const id of [
       "edit.undo",
       "edit.redo",
       "edit.find",
       "edit.replace",
       "edit.format",
+      "edit.copy-contents",
       "go.go-to-line",
       "go.go-to-symbol",
-    ];
-    const flat = menus.flatMap((m) => m.items);
-    for (const id of mutationItems) {
-      const item = flat.find((i) => i.id === id) as
-        | { disabled?: boolean }
-        | undefined;
-      expect(item?.disabled, `expected ${id} disabled`).toBe(true);
+    ]) {
+      expect(disabledOf(id), `expected ${id} disabled`).toBe(true);
     }
-    // Copy Path stays enabled — the user can copy the path even when
-    // the file is read-only or binary.
-    const copyPath = flat.find((i) => i.id === "edit.copy-path") as
-      | { disabled?: boolean }
-      | undefined;
-    expect(copyPath?.disabled).toBeFalsy();
+    // Copy Path / Copy Relative Path stay enabled — they don't need
+    // Monaco to be mounted, they just need a workspace-relative path.
+    expect(disabledOf("edit.copy-path")).toBeFalsy();
+    expect(disabledOf("edit.copy-relative-path")).toBeFalsy();
   });
 
   it("swaps view toggle labels when the underlying flag is on/off", () => {

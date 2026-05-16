@@ -55,16 +55,23 @@ export interface EditorActions {
  *  reflect the file currently shown by the viewer, so menu state stays
  *  in step with the editor.
  *
- *  `canEdit` and `editDisabled` are *not* the same: a file might have
- *  been opened read-only (`editDisabled = true`) and still expose Copy /
- *  Find via the menu. `canEdit` is the narrower "Monaco can accept
- *  mutations" gate used for Undo/Redo/Format/Save. */
+ *  Two separate gates because they answer different questions:
+ *
+ *   - `hasEditor` — Monaco is mounted and has a live model. True for
+ *     read-only sources too (oversize, truncated, on-disk read-only).
+ *     Read-only commands like Find, Replace, Go to Line, Go to Symbol,
+ *     and Copy File Contents stay reachable on read-only files; the
+ *     old single `canEdit` gate disabled them along with Save, which
+ *     was a regression from the toolbar's old copy button.
+ *
+ *   - `canMutate` — Monaco accepts edits. Gates Save, Undo, Redo,
+ *     Format Document. Always implies `hasEditor` (you can't mutate
+ *     what isn't there).
+ */
 export interface EditorMenuContext {
   isMac: boolean;
-  /** True when the viewer is showing Monaco source (not image/binary/
-   *  markdown preview). When false the menubar still renders but most
-   *  Edit/View/Go items are disabled. */
-  canEdit: boolean;
+  hasEditor: boolean;
+  canMutate: boolean;
   /** Active file is dirty (buffer ≠ saved baseline). Drives File > Save
    *  + File > Revert disabled state. */
   dirty: boolean;
@@ -114,7 +121,7 @@ export function buildEditorMenus(
           id: "file.save",
           labelKey: "editor_menu_file_save",
           shortcut: ns("⌘S", "Ctrl+S"),
-          disabled: !ctx.canEdit || !ctx.dirty,
+          disabled: !ctx.canMutate || !ctx.dirty,
           onSelect: actions.onSave,
         },
         {
@@ -146,14 +153,14 @@ export function buildEditorMenus(
           id: "edit.undo",
           labelKey: "editor_menu_edit_undo",
           shortcut: ns("⌘Z", "Ctrl+Z"),
-          disabled: !ctx.canEdit,
+          disabled: !ctx.canMutate,
           onSelect: actions.onUndo,
         },
         {
           id: "edit.redo",
           labelKey: "editor_menu_edit_redo",
           shortcut: ns("⇧⌘Z", "Ctrl+Shift+Z"),
-          disabled: !ctx.canEdit,
+          disabled: !ctx.canMutate,
           onSelect: actions.onRedo,
         },
         { type: "separator", id: "edit.sep.1" },
@@ -161,14 +168,16 @@ export function buildEditorMenus(
           id: "edit.find",
           labelKey: "editor_menu_edit_find",
           shortcut: ns("⌘F", "Ctrl+F"),
-          disabled: !ctx.canEdit,
+          disabled: !ctx.hasEditor,
           onSelect: actions.onFind,
         },
         {
           id: "edit.replace",
           labelKey: "editor_menu_edit_replace",
           shortcut: ns("⌥⌘F", "Ctrl+H"),
-          disabled: !ctx.canEdit,
+          // Replace mutates the buffer — only enable when Monaco is
+          // editable. Find stays available against read-only files.
+          disabled: !ctx.canMutate,
           onSelect: actions.onReplace,
         },
         { type: "separator", id: "edit.sep.2" },
@@ -176,18 +185,17 @@ export function buildEditorMenus(
           id: "edit.format",
           labelKey: "editor_menu_edit_format",
           shortcut: ns("⇧⌥F", "Ctrl+Shift+I"),
-          disabled: !ctx.canEdit,
+          disabled: !ctx.canMutate,
           onSelect: actions.onFormat,
         },
         { type: "separator", id: "edit.sep.3" },
         {
           id: "edit.copy-contents",
           labelKey: "editor_menu_edit_copy_contents",
-          // The file's bytes can still be useful when read-only (binary
-          // metadata copy is the one exception we deliberately skip
-          // — `canEdit` is false for images/binary, and copying raw
-          // bytes through navigator.clipboard would be nonsense).
-          disabled: !ctx.canEdit,
+          // Copy is non-mutating — enable for read-only Monaco too so
+          // the menubar preserves the old toolbar CopyButton's
+          // affordance on oversize/truncated/read-only files.
+          disabled: !ctx.hasEditor,
           onSelect: actions.onCopyContents,
         },
         {
@@ -264,14 +272,16 @@ export function buildEditorMenus(
           id: "go.go-to-line",
           labelKey: "editor_menu_go_to_line",
           shortcut: ns("⌃G", "Ctrl+G"),
-          disabled: !ctx.canEdit,
+          // Go to Line / Symbol only navigates — safe on read-only
+          // Monaco. Gate on `hasEditor`, not `canMutate`.
+          disabled: !ctx.hasEditor,
           onSelect: actions.onGoToLine,
         },
         {
           id: "go.go-to-symbol",
           labelKey: "editor_menu_go_to_symbol",
           shortcut: ns("⇧⌘O", "Ctrl+Shift+O"),
-          disabled: !ctx.canEdit,
+          disabled: !ctx.hasEditor,
           onSelect: actions.onGoToSymbol,
         },
       ],

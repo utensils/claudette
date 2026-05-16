@@ -8,6 +8,7 @@ const SAMPLE_PREVIEW: FileContent = {
   path: "README.md",
   content: "# Hello\n",
   is_binary: false,
+  is_symlink: false,
   size_bytes: 7,
   truncated: false,
 };

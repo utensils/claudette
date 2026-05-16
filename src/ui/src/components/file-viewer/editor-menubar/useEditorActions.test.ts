@@ -1,4 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
+import type { editor as MonacoNs } from "monaco-editor";
 import {
   ancestorDirs,
   buildEditorActions,
@@ -26,17 +27,19 @@ function makeDeps(overrides: Partial<EditorActionsDeps> = {}): EditorActionsDeps
   return {
     workspaceId: "ws-1",
     path: "src/components/Foo.tsx",
-    // The pure builder accepts `IStandaloneCodeEditor | null` but only
-    // ever touches `getAction` and `trigger`. Casting through `unknown`
-    // gives us a minimal fake without dragging in a real Monaco type.
-    editor: fake as unknown as EditorActionsDeps["editor"],
+    // The pure builder exposes the editor via a getter, not a snapshot,
+    // so the action bag picks up Monaco mounting after the menubar has
+    // already rendered. The fake closes over a mutable variable so a
+    // test can swap the editor between calls if it needs to model the
+    // lazy-mount transition.
+    getEditor: () => fake as unknown as MonacoNs.IStandaloneCodeEditor | null,
     onSave: vi.fn(),
     onCloseTab: vi.fn(),
     getBaseline: vi.fn().mockReturnValue("// baseline"),
     setFileBufferContent: vi.fn(),
     // Below, the fake editor's getAction is used for Monaco-action
     // dispatches. Copy-Contents reads getModel().getValue() instead, so
-    // we override `editor` in the dedicated copy-contents test.
+    // we override `getEditor` in the dedicated copy-contents test.
     setAllFilesSelectedPath: vi.fn(),
     setAllFilesDirExpanded: vi.fn(),
     rightSidebarVisible: false,
@@ -66,8 +69,33 @@ describe("joinWorktreePath", () => {
   it("strips a trailing slash off the root", () => {
     expect(joinWorktreePath("/a/b/", "src/x.ts")).toBe("/a/b/src/x.ts");
   });
-  it("returns the relative path verbatim when it's already absolute", () => {
+  it("returns the relative path verbatim when it's already absolute (Unix root)", () => {
     expect(joinWorktreePath("/a/b", "/already/abs")).toBe("/already/abs");
+  });
+  it("joins with backslashes when the root is a Windows path", () => {
+    expect(joinWorktreePath("C:\\Users\\jane\\repo", "src/x.ts")).toBe(
+      "C:\\Users\\jane\\repo\\src\\x.ts",
+    );
+  });
+  it("normalizes mixed-separator relative paths against a Windows root", () => {
+    expect(joinWorktreePath("C:\\Users\\jane\\repo", "src\\x.ts")).toBe(
+      "C:\\Users\\jane\\repo\\src\\x.ts",
+    );
+  });
+  it("strips a trailing backslash off a Windows root", () => {
+    expect(joinWorktreePath("C:\\Users\\jane\\repo\\", "src/x.ts")).toBe(
+      "C:\\Users\\jane\\repo\\src\\x.ts",
+    );
+  });
+  it("returns a drive-letter relative path verbatim", () => {
+    expect(joinWorktreePath("C:\\repo", "D:\\elsewhere\\x.ts")).toBe(
+      "D:\\elsewhere\\x.ts",
+    );
+  });
+  it("returns a UNC path verbatim", () => {
+    expect(joinWorktreePath("C:\\repo", "\\\\srv\\share\\x.ts")).toBe(
+      "\\\\srv\\share\\x.ts",
+    );
   });
 });
 
@@ -148,7 +176,10 @@ describe("buildEditorActions — edit menu monaco actions", () => {
 
   beforeEach(() => {
     editor = makeFakeEditor();
-    deps = makeDeps({ editor: editor as unknown as EditorActionsDeps["editor"] });
+    deps = makeDeps({
+      getEditor: () =>
+        editor as unknown as MonacoNs.IStandaloneCodeEditor | null,
+    });
   });
 
   it("onUndo / onRedo route through editor.trigger", () => {
@@ -174,10 +205,28 @@ describe("buildEditorActions — edit menu monaco actions", () => {
   });
 
   it("editor null-guards are safe (no editor mounted)", () => {
-    deps = makeDeps({ editor: null });
+    deps = makeDeps({ getEditor: () => null });
     const actions = buildEditorActions(deps);
     expect(() => actions.onUndo()).not.toThrow();
     expect(() => actions.onFind()).not.toThrow();
+  });
+
+  it("re-reads the editor on every call so a late mount becomes live", () => {
+    // Simulate the menubar building its action bag before Monaco
+    // finishes loading: getEditor returns null first, then the real
+    // editor on the next invocation. The handlers must pick up the
+    // new value without rebuilding `buildEditorActions`.
+    let current: MonacoNs.IStandaloneCodeEditor | null = null;
+    const fake = makeFakeEditor();
+    const deps = makeDeps({ getEditor: () => current });
+    const actions = buildEditorActions(deps);
+
+    actions.onFind();
+    expect(fake.getAction).not.toHaveBeenCalled();
+
+    current = fake as unknown as MonacoNs.IStandaloneCodeEditor;
+    actions.onFind();
+    expect(fake.getAction).toHaveBeenCalledWith("actions.find");
   });
 });
 
@@ -240,15 +289,15 @@ describe("buildEditorActions — copy contents / path", () => {
       getAction: vi.fn(),
       trigger: vi.fn(),
       getModel: () => ({ getValue: () => "hello world\n" }),
-    } as unknown as EditorActionsDeps["editor"];
-    const deps = makeDeps({ editor });
+    } as unknown as MonacoNs.IStandaloneCodeEditor;
+    const deps = makeDeps({ getEditor: () => editor });
     await buildEditorActions(deps).onCopyContents();
     expect(deps.writeToClipboard).toHaveBeenCalledWith("hello world\n");
     expect(deps.addToast).toHaveBeenCalledWith("Copied file contents");
   });
 
   it("Copy File Contents is a no-op when the editor isn't mounted", async () => {
-    const deps = makeDeps({ editor: null });
+    const deps = makeDeps({ getEditor: () => null });
     await buildEditorActions(deps).onCopyContents();
     expect(deps.writeToClipboard).not.toHaveBeenCalled();
   });
@@ -296,7 +345,7 @@ describe("buildEditorActions — go menu", () => {
 
   it("Go to Line / Symbol route through Monaco actions", () => {
     const deps = makeDeps();
-    const editor = deps.editor as unknown as FakeEditor;
+    const editor = deps.getEditor() as unknown as FakeEditor;
     buildEditorActions(deps).onGoToLine();
     buildEditorActions(deps).onGoToSymbol();
     expect(editor.getAction).toHaveBeenCalledWith("editor.action.gotoLine");

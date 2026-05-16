@@ -22,6 +22,7 @@ function openLoadedFile(content: string) {
   useAppStore.getState().setFileBufferLoaded(WS, PATH, {
     baseline: content,
     isBinary: false,
+    isSymlink: false,
     sizeBytes: content.length,
     truncated: false,
     imageBytesB64: null,

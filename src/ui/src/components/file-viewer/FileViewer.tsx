@@ -129,6 +129,9 @@ function FileViewerInner({ workspaceId, path, t }: FileViewerInnerProps) {
           setFileBufferLoaded(workspaceId, path, {
             baseline: "",
             isBinary: false,
+            // Images don't render the gutter — `isSymlink` only matters
+            // when we'd otherwise paint a noisy diff. Default to false.
+            isSymlink: false,
             sizeBytes: res.size_bytes,
             truncated: res.truncated,
             imageBytesB64: res.bytes_b64,
@@ -146,6 +149,7 @@ function FileViewerInner({ workspaceId, path, t }: FileViewerInnerProps) {
           setFileBufferLoaded(workspaceId, path, {
             baseline,
             isBinary: res.is_binary,
+            isSymlink: res.is_symlink,
             sizeBytes: res.size_bytes,
             truncated: res.truncated,
             imageBytesB64: null,
@@ -157,6 +161,7 @@ function FileViewerInner({ workspaceId, path, t }: FileViewerInnerProps) {
             setFileBufferLoaded(workspaceId, path, {
               baseline: "",
               isBinary: false,
+              isSymlink: false,
               sizeBytes: 0,
               truncated: false,
               imageBytesB64: null,
@@ -439,10 +444,22 @@ function FileViewerInner({ workspaceId, path, t }: FileViewerInnerProps) {
         workspaceId={workspaceId}
         path={path}
         dirty={dirty}
-        // Edit menu items mutate Monaco's model. They stay enabled only
-        // when the file actually renders the source editor — images,
-        // binary, oversize, and truncated files all clear `canEdit`.
-        canEdit={
+        // Two gates for the menubar:
+        //   * `hasEditor`: a live Monaco model is mounted. Read-only
+        //     commands (Find, Go to Line, Copy File Contents) are safe
+        //     against oversize/truncated/read-only files — they all
+        //     still render the source editor, just with `readOnly:true`.
+        //   * `canMutate`: Monaco accepts edits. Gates Save, Undo,
+        //     Redo, Replace, Format Document.
+        // Both clear for images / binary preview / markdown preview
+        // where Monaco isn't rendered at all.
+        hasEditor={
+          !!bufferState?.loaded &&
+          !isImage &&
+          !bufferState.isBinary &&
+          !showMarkdownPreview
+        }
+        canMutate={
           !!bufferState?.loaded &&
           !isImage &&
           !bufferState.isBinary &&
@@ -539,6 +556,7 @@ function FileViewerInner({ workspaceId, path, t }: FileViewerInnerProps) {
               filename={path}
               revealTarget={revealTarget}
               onRevealTargetApplied={handleRevealTargetApplied}
+              isSymlink={bufferState.isSymlink}
               readOnly={editDisabled}
               onChange={handleBufferChange}
               onSave={handleSave}

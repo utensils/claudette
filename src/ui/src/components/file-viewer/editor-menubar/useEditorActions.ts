@@ -1,13 +1,16 @@
 import { useMemo, type MutableRefObject } from "react";
 import type { editor as MonacoNs } from "monaco-editor";
+import { writeText as clipboardWriteText } from "@tauri-apps/plugin-clipboard-manager";
 import { useAppStore } from "../../../stores/useAppStore";
 import { fileBufferKey } from "../../../stores/slices/fileTreeSlice";
 import { setAppSetting } from "../../../services/tauri";
 import type { EditorActions } from "./editorMenuConfig";
 
-/** Base Monaco font size — must stay in sync with the `fontSize: 13`
- *  literal in `MonacoEditor.tsx`. The View > Zoom items multiply this
- *  by `editorFontZoom` and call `editor.updateOptions({ fontSize })`. */
+/** Base Monaco font size. Single source of truth — `MonacoEditor.tsx`
+ *  imports this constant for both the initial `fontSize` option and
+ *  the `updateOptions` call that runs whenever `editorFontZoom`
+ *  changes. The View > Zoom items multiply this by the current zoom
+ *  to compute the new effective size. */
 export const EDITOR_BASE_FONT_SIZE = 13;
 export const EDITOR_ZOOM_STEP = 0.1;
 export const EDITOR_ZOOM_MIN = 0.7;
@@ -19,10 +22,15 @@ export const EDITOR_ZOOM_MAX = 2;
 export interface EditorActionsDeps {
   workspaceId: string;
   path: string;
-  /** Snapshot of the live editor. `null` when Monaco hasn't mounted yet
-   *  or the editor is showing markdown preview / image. Each handler
-   *  null-guards against that case. */
-  editor: MonacoNs.IStandaloneCodeEditor | null;
+  /** **Lazy** accessor for the live editor instance. Must be a function
+   *  rather than a snapshot value: the menubar mounts immediately, but
+   *  Monaco is lazy-loaded and `editorRef.current` flips from `null` to
+   *  the editor instance asynchronously. Capturing the snapshot inside
+   *  the hook's `useMemo` would freeze every Monaco-backed action
+   *  (Find, Format, Undo, …) at whatever the ref held when the action
+   *  bag was first built — usually `null`. Reading at call time keeps
+   *  the dispatch live. */
+  getEditor: () => MonacoNs.IStandaloneCodeEditor | null;
   /** FileViewer's existing save + close handlers — we route through
    *  them so the dirty-aware confirmation modal and save toast are
    *  shared with the inline Save button. */
@@ -75,13 +83,39 @@ export interface EditorActionsDeps {
   addToast: (message: string) => void;
 }
 
+/** True when `path` is already absolute and can be returned verbatim
+ *  by `joinWorktreePath`. Covers Unix-style leading slash and Windows
+ *  forms (`C:\foo`, `C:/foo`, `\\server\share`, `//server/share`).
+ *  Mirrors the absolute-path detection used by Rust's `Path::is_absolute`. */
+function isAbsolutePath(path: string): boolean {
+  if (path.startsWith("/") || path.startsWith("\\")) return true;
+  // Drive-letter prefix: `C:`, `D:\`, `Z:/something`.
+  if (path.length >= 2 && /^[A-Za-z]:/.test(path)) return true;
+  return false;
+}
+
 /** Join a worktree root and a workspace-relative path so the result is
- *  usable from a shell ("paste into terminal"). Handles trailing /
- *  separators on the root and an accidentally absolute relative path. */
+ *  usable from a shell ("paste into terminal").
+ *
+ *  Uses the **root's** separator (backslash on Windows roots, forward
+ *  slash elsewhere) so paste-into-terminal gets a consistent native
+ *  path rather than a `C:/foo/bar/baz.txt`-style mix that confuses
+ *  cmd.exe / pwsh. Already-absolute `relative` values (Unix root,
+ *  drive letter, UNC) are returned verbatim so a caller that already
+ *  did the join doesn't get it doubled up. */
 export function joinWorktreePath(root: string, relative: string): string {
-  if (relative.startsWith("/")) return relative;
-  const trimmed = root.endsWith("/") ? root.slice(0, -1) : root;
-  return `${trimmed}/${relative}`;
+  if (isAbsolutePath(relative)) return relative;
+  // Pick the separator from the root so the result is internally
+  // consistent. A Windows root carries backslashes; everything else
+  // uses forward slashes (Unix and inside-WSL paths alike).
+  const sep = root.includes("\\") ? "\\" : "/";
+  const trimmed = root.replace(/[\\/]+$/, "");
+  // Normalize the relative path's separators to match the chosen one
+  // so `src/foo.ts` from the workspace store joins cleanly under a
+  // backslash root: `C:\repo\src\foo.ts` rather than `C:\repo\src/foo.ts`.
+  const normalizedRelative =
+    sep === "\\" ? relative.replace(/\//g, "\\") : relative.replace(/\\/g, "/");
+  return `${trimmed}${sep}${normalizedRelative}`;
 }
 
 /** Step out of every parent segment of a workspace-relative path so
@@ -111,14 +145,14 @@ function clampZoom(value: number): number {
  *  passed-in functions/refs, so unit tests can swap in spies. */
 export function buildEditorActions(deps: EditorActionsDeps): EditorActions {
   const runMonacoAction = (actionId: string) => {
-    const editor = deps.editor;
+    const editor = deps.getEditor();
     if (!editor) return;
     const action = editor.getAction(actionId);
     if (action) void action.run();
   };
 
   const triggerMonacoCommand = (commandId: string) => {
-    deps.editor?.trigger("editor-menubar", commandId, null);
+    deps.getEditor()?.trigger("editor-menubar", commandId, null);
   };
 
   const onRevert = () => {
@@ -174,7 +208,7 @@ export function buildEditorActions(deps: EditorActionsDeps): EditorActions {
   const onZoomReset = () => applyZoom(1);
 
   const onCopyContents = async () => {
-    const editor = deps.editor;
+    const editor = deps.getEditor();
     if (!editor) return;
     const model = editor.getModel();
     if (!model) return;
@@ -277,7 +311,12 @@ export function useEditorActions(params: UseEditorActionsParams): EditorActions 
       buildEditorActions({
         workspaceId,
         path,
-        editor: editorRef.current,
+        // Pass the ref reader, not the snapshot — the action bag is
+        // built before Monaco mounts, so a snapshot would freeze every
+        // editor-backed handler at `null` for the lifetime of this
+        // memoization. The reader closes over the ref (stable identity)
+        // and reads the live value at call time.
+        getEditor: () => editorRef.current,
         onSave,
         onCloseTab,
         getBaseline: () => {
@@ -305,8 +344,12 @@ export function useEditorActions(params: UseEditorActionsParams): EditorActions 
         setFontZoom,
         persistSetting: (key, value) => setAppSetting(key, value),
         worktreePath,
-        writeToClipboard: (text) =>
-          navigator.clipboard.writeText(text).then(() => {}),
+        // Use Tauri's clipboard plugin (the codebase's clipboard
+        // standard — see attachmentDownload.ts and useCopyToClipboard)
+        // instead of `navigator.clipboard.writeText`. The plugin sidesteps
+        // WebKit's secure-context / permission requirements that have
+        // bitten us in past releases.
+        writeToClipboard: (text) => clipboardWriteText(text),
         addToast,
       }),
     [

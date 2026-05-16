@@ -20,10 +20,14 @@ interface EditorMenubarProps {
   path: string;
   /** True when the buffer is dirty (drives Save / Revert enabled state). */
   dirty: boolean;
-  /** True when Monaco accepts edits (file is not image/binary/oversize/
-   *  truncated, and not in markdown preview mode). Drives Edit/Go disabled
-   *  states; File > Reveal and Copy Path stay enabled regardless. */
-  canEdit: boolean;
+  /** True when Monaco is mounted with a live model (so read-only
+   *  actions like Find, Go to Line, Copy File Contents have something
+   *  to operate on). False when the viewer is showing an image /
+   *  binary / markdown preview. */
+  hasEditor: boolean;
+  /** True only when Monaco can accept edits — gates Save, Undo, Redo,
+   *  Replace, Format. Always implies `hasEditor`. */
+  canMutate: boolean;
   editorRef: MutableRefObject<MonacoNs.IStandaloneCodeEditor | null>;
   /** FileViewer's existing save handler — already routes through the
    *  dirty-aware toast + diff refresh pipeline. */
@@ -57,8 +61,16 @@ export function toContextMenuItem(
 }
 
 export function EditorMenubar(props: EditorMenubarProps) {
-  const { workspaceId, path, dirty, canEdit, editorRef, onSave, onCloseTab } =
-    props;
+  const {
+    workspaceId,
+    path,
+    dirty,
+    hasEditor,
+    canMutate,
+    editorRef,
+    onSave,
+    onCloseTab,
+  } = props;
   const { t } = useTranslation("chat");
   // Menu labels are looked up from `labelKey` strings stored in the
   // pure config — runtime values, not literal types. The `as never`
@@ -93,7 +105,8 @@ export function EditorMenubar(props: EditorMenubarProps) {
     () =>
       buildEditorMenus(actions, {
         isMac,
-        canEdit,
+        hasEditor,
+        canMutate,
         dirty,
         wordWrap,
         lineNumbers,
@@ -103,8 +116,9 @@ export function EditorMenubar(props: EditorMenubarProps) {
       }),
     [
       actions,
-      canEdit,
+      canMutate,
       dirty,
+      hasEditor,
       isMac,
       keybindings,
       lineNumbers,

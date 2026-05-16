@@ -22,6 +22,7 @@ function openLoadedFile(path: string, content = "saved") {
   useAppStore.getState().setFileBufferLoaded(WS, path, {
     baseline: content,
     isBinary: false,
+    isSymlink: false,
     sizeBytes: content.length,
     truncated: false,
     imageBytesB64: null,
@@ -161,6 +162,7 @@ describe("file path store updates", () => {
     useAppStore.getState().setFileBufferLoaded(WS, "README.md", {
       baseline: "hello",
       isBinary: false,
+      isSymlink: false,
       sizeBytes: 5,
       truncated: false,
       imageBytesB64: null,

@@ -113,19 +113,24 @@ const mountedContainers: HTMLElement[] = [];
 
 interface HarnessProps {
   dirty?: boolean;
-  canEdit?: boolean;
+  hasEditor?: boolean;
+  canMutate?: boolean;
   onSave?: () => void;
   onCloseTab?: () => void;
 }
 
 function Harness(props: HarnessProps) {
   const editorRef = useRef<MonacoNs.IStandaloneCodeEditor | null>(null);
+  // Default both to true for the bulk of tests — read-only / no-editor
+  // matrices are covered in editorMenuConfig.test.ts. Tests that need
+  // to assert disabled state on a specific item override the flags.
   return (
     <EditorMenubar
       workspaceId="ws-1"
       path="src/components/Foo.tsx"
       dirty={props.dirty ?? false}
-      canEdit={props.canEdit ?? true}
+      hasEditor={props.hasEditor ?? true}
+      canMutate={props.canMutate ?? true}
       editorRef={editorRef}
       onSave={props.onSave ?? vi.fn()}
       onCloseTab={props.onCloseTab ?? vi.fn()}
@@ -283,8 +288,8 @@ describe("EditorMenubar", () => {
     expect("disabled" in save! && save.disabled).toBe(true);
   });
 
-  it("disables editor-mutation items when canEdit is false", async () => {
-    const container = await mount({ canEdit: false });
+  it("disables Find when Monaco is not mounted (image / binary preview)", async () => {
+    const container = await mount({ hasEditor: false, canMutate: false });
     await clickTrigger(container, "edit");
     const items = lastCtxProps()!.items;
     const find = items.find((i) => "label" in i && i.label === "editor_menu_edit_find");
@@ -293,6 +298,23 @@ describe("EditorMenubar", () => {
     );
     expect("disabled" in find! && find.disabled).toBe(true);
     expect("disabled" in copyPath! && copyPath.disabled).toBeFalsy();
+  });
+
+  it("keeps Find and Copy File Contents available on read-only Monaco (hasEditor && !canMutate)", async () => {
+    const container = await mount({ hasEditor: true, canMutate: false });
+    await clickTrigger(container, "edit");
+    const items = lastCtxProps()!.items;
+    const find = items.find((i) => "label" in i && i.label === "editor_menu_edit_find");
+    const copyContents = items.find(
+      (i) => "label" in i && i.label === "editor_menu_edit_copy_contents",
+    );
+    const format = items.find(
+      (i) => "label" in i && i.label === "editor_menu_edit_format",
+    );
+    expect("disabled" in find! && find.disabled).toBeFalsy();
+    expect("disabled" in copyContents! && copyContents.disabled).toBeFalsy();
+    // Format is a mutation, so it remains disabled when canMutate is false.
+    expect("disabled" in format! && format.disabled).toBe(true);
   });
 
   it("View > Toggle Word Wrap fires the store setter + persists", async () => {
