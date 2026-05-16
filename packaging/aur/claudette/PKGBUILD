@@ -9,8 +9,8 @@ arch=('x86_64' 'aarch64')
 url="https://github.com/utensils/Claudette"
 license=('MIT')
 
-# Hard runtime deps match the `claudette-bin` set — the .deb the source
-# build produces below has the same Depends as the upstream .deb.
+# Hard runtime deps match the `claudette-bin` set — same payload,
+# same dependency surface. Keep this list aligned with that PKGBUILD.
 depends=(
   'webkit2gtk-4.1'
   'gtk3'
@@ -19,15 +19,17 @@ depends=(
   'librsvg'
   'alsa-lib'
   'openssl'
-  # TODO(maintainer): keep this in sync with the `claudette-bin`
-  # PKGBUILD `depends` array — same hard/optional split for claude-code.
+  'git'
 )
 
 optdepends=(
-  'git: worktree and SCM operations'
-  # See claudette-bin/PKGBUILD for the recommended fuller list. Keep
-  # the two PKGBUILDs aligned so users switching between them don't
-  # see surprising changes in their installed dependency set.
+  'claude-code: drive Claude Code sessions (the primary use case)'
+  'github-cli: GitHub PR / issue / CI integration via scm-github plugin'
+  'glab: GitLab PR / pipeline integration via scm-gitlab plugin'
+  'direnv: per-workspace env activation via env-direnv plugin'
+  'mise: per-workspace env activation via env-mise plugin'
+  'nix: Nix devshell env activation via env-nix-devshell plugin'
+  'openssh: remote workspaces over SSH transport'
 )
 
 makedepends=(

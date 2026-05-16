@@ -10,9 +10,11 @@ arch=('x86_64' 'aarch64')
 url="https://github.com/utensils/Claudette"
 license=('MIT')
 
-# Hard runtime deps mirror the .deb's Depends field (Tauri 2 stack on
-# Linux). Anything here is required for the GUI to launch; if you can
-# imagine a user running Claudette without it, move it to optdepends.
+# Hard runtime deps mirror the .deb's Depends field (Tauri 2 stack
+# on Linux) plus `git`, which every worktree / fork / snapshot
+# operation shells out to via tokio::process::Command. The app
+# launches without git but its defining feature fails immediately,
+# so it belongs in the "broken without it" tier.
 depends=(
   'webkit2gtk-4.1'
   'gtk3'
@@ -21,31 +23,25 @@ depends=(
   'librsvg'
   'alsa-lib'
   'openssl'
-  # TODO(maintainer): is `claude-code` (Anthropic's CLI) a hard depends
-  # or an optdepends here? The app refuses to chat without it, but a
-  # user could conceivably install Claudette first and bring up the CLI
-  # through Settings > Install Claude Code. Pick one and delete this
-  # comment. The Arch user-facing CLI lives in AUR as `claude-code` —
-  # bare-name dep is fine.
-  # 'claude-code'
+  'git'
 )
 
-# TODO(maintainer): fill in optdepends as `pkgname: one-line reason`.
-# Suggested rows below — keep, prune, or add based on which features
-# you actually want to surface to AUR users on `pacman -Si`:
-#
-#   git: SCM operations on worktrees (essentially required in practice)
-#   github-cli: GitHub PR / issue integration from the SCM panel
-#   glab: GitLab PR / pipeline integration via the bundled scm-gitlab plugin
-#   direnv: per-workspace env activation via the env-direnv plugin
-#   mise: per-workspace env activation via the env-mise plugin
-#   nix: env-nix-devshell plugin support
-#   openssh: remote workspaces over SSH transport
+# `claude-code` is the primary use case but lives in optdepends
+# because alt-backends (Codex Native, Pi, OpenAI, LM Studio, Ollama)
+# are first-class agent runtimes — a user installing claudette-bin
+# specifically to drive Codex shouldn't be forced to pull a Node-
+# heavy claude-code tree. The upstream .deb makes the same call:
+# the CLI is runtime-probed, not declared as a Depends. The AUR
+# `claude-code` package (maint: cg505) tracks Anthropic's npm
+# releases and is the right name to point users at.
 optdepends=(
-  'git: worktree and SCM operations'
-  # 'github-cli: GitHub PR / issue integration'
-  # 'direnv: per-workspace env activation (env-direnv plugin)'
-  # 'mise: per-workspace env activation (env-mise plugin)'
+  'claude-code: drive Claude Code sessions (the primary use case)'
+  'github-cli: GitHub PR / issue / CI integration via scm-github plugin'
+  'glab: GitLab PR / pipeline integration via scm-gitlab plugin'
+  'direnv: per-workspace env activation via env-direnv plugin'
+  'mise: per-workspace env activation via env-mise plugin'
+  'nix: Nix devshell env activation via env-nix-devshell plugin'
+  'openssh: remote workspaces over SSH transport'
 )
 
 # `claudette-bin` and the from-source `claudette` are alternates: same

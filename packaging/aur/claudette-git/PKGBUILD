@@ -18,10 +18,17 @@ depends=(
   'librsvg'
   'alsa-lib'
   'openssl'
+  'git'
 )
 
 optdepends=(
-  'git: worktree and SCM operations'
+  'claude-code: drive Claude Code sessions (the primary use case)'
+  'github-cli: GitHub PR / issue / CI integration via scm-github plugin'
+  'glab: GitLab PR / pipeline integration via scm-gitlab plugin'
+  'direnv: per-workspace env activation via env-direnv plugin'
+  'mise: per-workspace env activation via env-mise plugin'
+  'nix: Nix devshell env activation via env-nix-devshell plugin'
+  'openssh: remote workspaces over SSH transport'
 )
 
 makedepends=(
