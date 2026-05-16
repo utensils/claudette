@@ -707,9 +707,9 @@ export const TerminalPanel = memo(function TerminalPanel() {
   // Follow-up: once the workspace's tab list lands in the store,
   // promote the Claudette Terminal (the AgentTask-kind tab) to active
   // so the user lands on the streaming provisioning output even if
-  // their previous active tab in this workspace was a PTY. Fires
-  // exactly once per workspace's transition into preparing — if they
-  // click away to Terminal 1 mid-resolve we honor that, no reflux.
+  // their previous active tab in this workspace was a PTY. Fires at
+  // most once per workspace for the lifetime of this mounted component —
+  // if they click away to Terminal 1 mid-resolve we honor that, no reflux.
   useEffect(() => {
     if (
       !selectedWorkspaceId ||
