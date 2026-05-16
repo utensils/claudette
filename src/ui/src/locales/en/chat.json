@@ -44,6 +44,7 @@
   "agent_question_placeholder": "Type a response...",
   "agent_question_submit": "Submit",
   "missing_cli_inline_link": "View install options",
+  "context_overflow_pick_model": "Choose a larger-context model",
   "missing_worktree_archive": "Archive workspace",
   "missing_worktree_recreate": "Recreate worktree",
   "missing_worktree_recreate_failed": "Failed to recreate worktree: {{error}}",

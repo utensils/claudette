@@ -976,6 +976,7 @@ fn main() {
             commands::chat::attachments::read_file_as_base64,
             commands::chat::lifecycle::stop_agent,
             commands::chat::lifecycle::reset_agent_session,
+            commands::chat::lifecycle::prepare_cross_harness_migration,
             commands::chat::interaction::clear_attention,
             commands::chat::interaction::submit_agent_answer,
             commands::chat::interaction::submit_agent_approval,

@@ -207,6 +207,24 @@ pub struct AgentSessionState {
     /// restart. Stays sticky until then so we don't spam every turn
     /// while the user is fixing the underlying issue.
     pub posted_env_trust_warning: bool,
+    /// Cross-harness migration prelude queued for the next user turn.
+    ///
+    /// Set by `prepare_cross_harness_migration` when the user switches
+    /// a chat session to a model whose harness can't read the prior
+    /// harness's transcript (Claude CLI -> Codex, Codex -> Pi, etc.).
+    /// The next `send_chat_message` prepends this string to the user's
+    /// content *before* the spawn, then clears it. The persisted user
+    /// message in `chat_messages` stays as the bare user input — the
+    /// prelude is invisible to the UI but visible to the model as
+    /// part of turn 1.
+    ///
+    /// Lives in memory only: if the app exits between migration and
+    /// the user's next turn, the migration is forgotten and the new
+    /// harness starts with no context. That's an acceptable trade —
+    /// migrations are typically followed by a send within seconds,
+    /// and adding a DB column would force a schema migration for a
+    /// transient state.
+    pub pending_history_prelude: Option<String>,
 }
 
 impl AgentSessionState {

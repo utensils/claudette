@@ -10,6 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const appStore = vi.hoisted(() => ({
   openMissingCliModal: vi.fn(),
   setLastMissingWorktree: vi.fn(),
+  setModelSelectorOpen: vi.fn(),
 }));
 
 vi.mock("../../stores/useAppStore", () => ({
@@ -48,6 +49,7 @@ const mountedContainers: HTMLElement[] = [];
 async function render(props: {
   message: string;
   workspaceId?: string | null;
+  sessionId?: string | null;
   onRecovered?: () => void;
 }): Promise<HTMLElement> {
   const container = document.createElement("div");
@@ -60,6 +62,7 @@ async function render(props: {
       <ChatErrorBanner
         message={props.message}
         workspaceId={props.workspaceId ?? "ws-1"}
+        sessionId={"sessionId" in props ? props.sessionId : "sess-1"}
         onRecovered={props.onRecovered}
       />,
     );
@@ -71,6 +74,7 @@ describe("ChatErrorBanner", () => {
   beforeEach(() => {
     appStore.openMissingCliModal.mockReset();
     appStore.setLastMissingWorktree.mockReset();
+    appStore.setModelSelectorOpen.mockReset();
     lifecycle.archive.mockReset().mockResolvedValue({ ok: true });
     lifecycle.restore.mockReset().mockResolvedValue({ ok: true });
   });
@@ -159,5 +163,38 @@ describe("ChatErrorBanner", () => {
     });
     expect(lifecycle.restore).toHaveBeenCalledWith("ws-1");
     expect(onRecovered).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows a 'choose larger-context model' link for context-window-exceeded errors", async () => {
+    const container = await render({
+      message:
+        "API error 400: This model's maximum context length is 8192 tokens, however the conversation requires 30000.",
+    });
+    const buttons = container.querySelectorAll("button");
+    expect(buttons).toHaveLength(1);
+    expect(container.textContent).toContain("context_overflow_pick_model");
+    await act(async () => {
+      (buttons[0] as HTMLButtonElement).click();
+    });
+    // Clicking the recovery affordance opens the toolbar's model
+    // selector so the user can pick a larger-context model without
+    // having to find the picker themselves.
+    expect(appStore.setModelSelectorOpen).toHaveBeenCalledWith(true);
+    // The model-picker recovery does not call openMissingCliModal or
+    // any worktree action — those are separate error classes.
+    expect(appStore.openMissingCliModal).not.toHaveBeenCalled();
+    expect(lifecycle.archive).not.toHaveBeenCalled();
+    expect(lifecycle.restore).not.toHaveBeenCalled();
+  });
+
+  it("does not render the model-picker affordance when there is no sessionId", async () => {
+    const container = await render({
+      message: "Input is too long for requested model.",
+      sessionId: null,
+    });
+    // Without a sessionId the picker can't be targeted, so the
+    // affordance is hidden. The banner still shows the error text.
+    expect(container.querySelectorAll("button")).toHaveLength(0);
+    expect(container.textContent).toContain("Input is too long");
   });
 });

@@ -42,6 +42,7 @@
   "agent_question_placeholder": "输入回应...",
   "agent_question_submit": "提交",
   "missing_cli_inline_link": "查看安装选项",
+  "context_overflow_pick_model": "选择更大上下文窗口的模型",
   "missing_worktree_archive": "归档工作区",
   "missing_worktree_recreate": "重建 worktree",
   "missing_worktree_recreate_failed": "重建 worktree 失败：{{error}}",

@@ -4,6 +4,7 @@ mod binary;
 pub mod codex_app_server;
 mod environment;
 pub mod harness;
+pub mod history_seeder;
 mod naming;
 #[cfg(feature = "pi-sdk")]
 pub mod pi_sdk;

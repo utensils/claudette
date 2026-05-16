@@ -1849,6 +1849,7 @@ export function ChatPanel() {
                 <ChatErrorBanner
                   message={error}
                   workspaceId={selectedWorkspaceId}
+                  sessionId={activeSessionId}
                   onRecovered={() => setError(null)}
                 />
               )}

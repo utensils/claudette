@@ -24,8 +24,14 @@ export type Model = {
    *  at send time. The picker uses this to surface "via Pi" / "via
    *  Claude CLI" badges on aggregated-backend sections (Ollama, LM
    *  Studio) so the user can see the dispatch path without opening
-   *  Settings. Not set for the Pi card itself (its group is already
-   *  "Pi") or for Claude Code curated models. Possible values:
+   *  Settings. Not set for Claude Code curated models (which are always
+   *  `claude_code` — use `getHarnessForModel` if you need the resolved
+   *  value with that fallback applied). Populated for every
+   *  backend-injected entry, including the Pi card, so the chat
+   *  model-switch path can detect same- vs cross-harness changes
+   *  uniformly. The redundant-badge suppression for Pi-on-Pi /
+   *  Codex-on-CodexAppServer lives in `ModelSelector`'s
+   *  `runtimeBadge` filter, not here. Possible values:
    *  `"pi_sdk"`, `"claude_code"`, `"codex_app_server"`. */
   readonly runtimeHarness?: string;
   /** Display label of the *sub-provider* within a Pi-style aggregator
@@ -505,6 +511,11 @@ function collectPiModelsBySubProvider(
   target: Model[],
   options: CollectPiModelsOptions,
 ): void {
+  // Pi card always dispatches via the Pi harness; the Pi-disabled
+  // downgrade in `resolveEffectiveHarness` does not apply when the
+  // source's own kind is `pi_sdk`. Pass `piEnabled=true` explicitly so
+  // the call stays self-evident.
+  const runtimeHarness = resolveEffectiveHarness(backend, /* piEnabled */ true);
   const bySubProvider = new Map<string, BackendRegistryModel[]>();
   const subProviderLabels = new Map<string, string>();
   const subProviderOrder: string[] = [];
@@ -559,6 +570,7 @@ function collectPiModelsBySubProvider(
         providerLabel: "Pi",
         providerKind: backend.kind,
         providerQualifiedId: `${backend.id}/${model.id}`,
+        runtimeHarness,
         subProvider: subLabel,
         subProviderKey: subKey,
         supportsThinking: backend.capabilities.thinking,
@@ -601,4 +613,29 @@ export function findModelInRegistry(
     registry.find((model) => model.id === modelId && !model.providerId) ??
     registry.find((model) => model.id === modelId)
   );
+}
+
+/**
+ * Resolve the runtime harness a given model resolves to at send time.
+ *
+ * Used by the chat-toolbar model picker to decide whether a model swap
+ * is a warm in-place change (same harness — the persistent subprocess
+ * gets respawned with `--model <new>` and `--resume <prior-sid>`, full
+ * conversation preserved) or a cross-harness migration (different
+ * transcript format — currently triggers a session reset; Phase 2 of
+ * the model-switch plan will replace that with a transcript migration).
+ *
+ * Returns `undefined` only when the model isn't in the registry at all.
+ * Curated Claude Code entries in `MODELS` don't carry a `runtimeHarness`
+ * field — they're always `claude_code`, which we substitute here so
+ * callers don't need to special-case the curated list.
+ */
+export function getHarnessForModel(
+  registry: readonly Model[],
+  modelId: string | undefined,
+  providerId = "anthropic",
+): string | undefined {
+  const entry = findModelInRegistry(registry, modelId, providerId);
+  if (!entry) return undefined;
+  return entry.runtimeHarness ?? "claude_code";
 }

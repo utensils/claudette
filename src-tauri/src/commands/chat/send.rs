@@ -1122,6 +1122,7 @@ pub async fn send_chat_message(
                 mcp_bridge: None,
                 last_user_msg_id: None,
                 posted_env_trust_warning: false,
+                pending_history_prelude: None,
             };
         }
 
@@ -1154,6 +1155,7 @@ pub async fn send_chat_message(
             mcp_bridge: None,
             last_user_msg_id: None,
             posted_env_trust_warning: false,
+            pending_history_prelude: None,
         }
     });
     if session.turn_count == 0 {
@@ -1549,12 +1551,29 @@ pub async fn send_chat_message(
     let session = agents.get_mut(&chat_session_id).ok_or("Session lost")?;
 
     // Expand @-file mentions into inline file content for the agent prompt.
-    let prompt = claudette::file_expand::expand_file_mentions(
+    let expanded_user_content = claudette::file_expand::expand_file_mentions(
         std::path::Path::new(&worktree_path),
         &content,
         mentioned_files.as_deref().unwrap_or(&[]),
     )
     .await;
+
+    // Cross-harness migration: if `prepare_cross_harness_migration` queued
+    // a prelude on this session, prepend the prior-conversation transcript
+    // to the user's content before it reaches the harness. The persisted
+    // `chat_messages` row stays as the bare user input (set up further
+    // above via `prepare_user_send`), so the UI doesn't show the prelude
+    // text — only the agent does. The prelude is consumed once per
+    // migration: after this turn the new harness has the full prior
+    // context in its native turn-1 input and subsequent turns flow
+    // through unchanged.
+    let prompt = match session.pending_history_prelude.take() {
+        Some(prelude) => claudette::agent::history_seeder::merge_prelude_with_user_message(
+            &prelude,
+            &expanded_user_content,
+        ),
+        None => expanded_user_content,
+    };
 
     let repo_path = repo.as_ref().map(|r| r.path.as_str()).unwrap_or("");
     let default_branch = match repo.as_ref().and_then(|r| r.base_branch.as_deref()) {
@@ -3269,6 +3288,7 @@ mod tests {
             mcp_bridge: None,
             last_user_msg_id: None,
             posted_env_trust_warning: false,
+            pending_history_prelude: None,
         }
     }
 

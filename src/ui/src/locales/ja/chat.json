@@ -42,6 +42,7 @@
   "agent_question_placeholder": "返答を入力...",
   "agent_question_submit": "送信",
   "missing_cli_inline_link": "インストール方法を表示",
+  "context_overflow_pick_model": "より大きなコンテキストのモデルを選択",
   "missing_worktree_archive": "ワークスペースをアーカイブ",
   "missing_worktree_recreate": "ワークツリーを再作成",
   "missing_worktree_recreate_failed": "ワークツリーの再作成に失敗しました: {{error}}",
