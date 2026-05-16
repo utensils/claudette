@@ -19,14 +19,29 @@ on:
         options:
           - x86_64-unknown-linux-gnu
           - aarch64-unknown-linux-gnu
+  # Auto-trigger on PRs that touch CI / bundling-relevant files so a
+  # fix can be verified without first merging the workflow to main.
+  # workflow_dispatch alone requires the workflow file to already
+  # exist on the default branch (GitHub limitation), so this PR-scoped
+  # trigger covers the bootstrap case.
+  pull_request:
+    paths:
+      - ".github/workflows/verify-linux-bundle.yml"
+      - ".github/workflows/nightly.yml"
+      - ".github/workflows/release-please.yml"
+      - "scripts/stage-cli-sidecar.sh"
+      - "scripts/stage-pi-harness-sidecar.sh"
+      - "src-pi-harness/**"
+      - "src-tauri/tauri.conf.json"
+      - "src-tauri/tauri.no-pi.conf.json"
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
   bundle:
-    name: Bundle (${{ inputs.target }})
-    runs-on: ${{ inputs.target == 'aarch64-unknown-linux-gnu' && 'ubuntu-22.04-arm' || 'ubuntu-22.04' }}
+    name: Bundle (${{ inputs.target || 'x86_64-unknown-linux-gnu' }})
+    runs-on: ${{ (inputs.target || 'x86_64-unknown-linux-gnu') == 'aarch64-unknown-linux-gnu' && 'ubuntu-22.04-arm' || 'ubuntu-22.04' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -35,12 +50,12 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: "1.94"
-          targets: ${{ inputs.target }}
+          targets: ${{ inputs.target || 'x86_64-unknown-linux-gnu' }}
 
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
         with:
-          key: verify-${{ inputs.target }}
+          key: verify-${{ inputs.target || 'x86_64-unknown-linux-gnu' }}
 
       - name: Install Linux system dependencies
         run: |
@@ -70,7 +85,7 @@ jobs:
 
       - name: Build and stage CLI sidecar
         shell: bash
-        run: scripts/stage-cli-sidecar.sh ${{ inputs.target }}
+        run: scripts/stage-cli-sidecar.sh ${{ inputs.target || 'x86_64-unknown-linux-gnu' }}
 
       # Mirrors the gate added to `nightly.yml` / `release-please.yml`:
       # linuxdeploy's strip pass mangles the bun --compile Pi sidecar.
@@ -84,19 +99,19 @@ jobs:
 
       - name: Build bundles
         shell: bash
-        run: cargo tauri build --target ${{ inputs.target }} --bundles appimage,deb
+        run: cargo tauri build --target ${{ inputs.target || 'x86_64-unknown-linux-gnu' }} --bundles appimage,deb
 
       - name: List produced artifacts
         shell: bash
-        run: ls -lh "target/${{ inputs.target }}/release/bundle/appimage/" "target/${{ inputs.target }}/release/bundle/deb/" || true
+        run: ls -lh "target/${{ inputs.target || 'x86_64-unknown-linux-gnu' }}/release/bundle/appimage/" "target/${{ inputs.target || 'x86_64-unknown-linux-gnu' }}/release/bundle/deb/" || true
 
       - name: Upload AppImage as workflow artifact
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: claudette-${{ inputs.target }}-bundle
+          name: claudette-${{ inputs.target || 'x86_64-unknown-linux-gnu' }}-bundle
           path: |
-            target/${{ inputs.target }}/release/bundle/appimage/*.AppImage
-            target/${{ inputs.target }}/release/bundle/deb/*.deb
+            target/${{ inputs.target || 'x86_64-unknown-linux-gnu' }}/release/bundle/appimage/*.AppImage
+            target/${{ inputs.target || 'x86_64-unknown-linux-gnu' }}/release/bundle/deb/*.deb
           if-no-files-found: warn
           retention-days: 7
