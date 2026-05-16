@@ -125,9 +125,30 @@ RUN git clone --depth 1 --branch v1.6.0 \
 # /tmp paths to UID 0 has bitten more than one user. We make a
 # `builder` user with passwordless sudo so the container scripts
 # can `pacman -U` the resulting .pkg.tar.zst.
+#
+# The password is "builder" — set rather than left as the default
+# locked account because XFCE's polkit agent prompts for the user
+# password when actions like "Shutdown" or "Mount" are triggered
+# from the panel menu. A locked account can never satisfy that
+# prompt, leaving the user stuck. For a throwaway test container
+# a memorable password is the right trade-off.
 RUN useradd -m -G wheel -s /bin/bash builder && \
+    echo "builder:builder" | chpasswd && \
     echo "builder ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/00-builder && \
     chmod 0440 /etc/sudoers.d/00-builder
+
+# Remove the XFCE screensaver + power manager. They're useful on
+# real desktops but in a container they only get in the way:
+# - xfce4-screensaver locks after 10 min idle, which is the
+#   prompt the user just hit. Removing it eliminates the lock
+#   entirely instead of trying to disable it from xfconf at
+#   first run (which races with xfce4-session startup).
+# - xfce4-power-manager surfaces "battery low" warnings and
+#   "lid close" handlers that are nonsense in a container.
+# `pacman -Rsn` strips them and any orphan deps without
+# prompting; --noconfirm + ||true so a missing package doesn't
+# fail the build.
+RUN pacman -Rsn --noconfirm xfce4-screensaver xfce4-power-manager 2>/dev/null || true
 
 USER builder
 WORKDIR /home/builder
