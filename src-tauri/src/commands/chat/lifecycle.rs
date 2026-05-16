@@ -228,6 +228,19 @@ pub(super) fn apply_migration_to_session(
     session.persistent_session = None;
     session.session_backend_hash = String::new();
     session.pending_history_prelude = prelude;
+    // Clear state coupled to the now-dead persistent process. `mcp_bridge`
+    // documents itself as "dropped when `persistent_session = None` so the
+    // listener task is cancelled and the socket file unlinked" — leaving the
+    // Arc set leaks the bridge listener + Unix socket past the migration and
+    // may attach stale bridge state to the new session id (especially when
+    // the new harness — e.g. Pi — never uses the bridge). The Claude
+    // remote-control fields are documented as "Ephemeral … for the current
+    // persistent process": the monitor exits with the persistent CLI we
+    // just killed via `pid_to_kill`, so the pid field is stale; the status
+    // struct must reset so the next spawn starts from `disabled()`.
+    session.mcp_bridge = None;
+    session.claude_remote_control_monitor_pid = None;
+    session.claude_remote_control = crate::state::ClaudeRemoteControlStatus::disabled();
 
     // `prior_persistent` is needed both for `agent::stop_agent`
     // (handled via `pid_to_kill`) and for `deny_drained_permissions`
@@ -610,5 +623,52 @@ mod tests {
             Some(crate::state::AttentionKind::Ask)
         ));
         assert!(session.attention_notification_sent);
+    }
+
+    #[test]
+    fn apply_migration_clears_persistent_process_coupled_state() {
+        // mcp_bridge, claude_remote_control_monitor_pid, and
+        // claude_remote_control are all documented as lifecycle-coupled
+        // to `persistent_session`. The migration tears down the prior
+        // persistent process (`pid_to_kill`) and nulls
+        // `persistent_session`; the bridge Arc and remote-control
+        // shadow state must reset alongside or we leak the bridge
+        // listener / unix socket and carry stale remote-control status
+        // into a new session id (especially under harnesses like Pi
+        // that don't use the bridge at all).
+        use crate::state::{ClaudeRemoteControlLifecycle, ClaudeRemoteControlStatus};
+
+        let mut session = fresh_session("sess-rc-active", 3, Some(77));
+        session.claude_remote_control_monitor_pid = Some(88);
+        session.claude_remote_control = ClaudeRemoteControlStatus {
+            state: ClaudeRemoteControlLifecycle::Connected,
+            session_url: Some("https://example/sess".into()),
+            connect_url: None,
+            environment_id: None,
+            detail: None,
+            last_error: None,
+        };
+
+        let _snapshot = apply_migration_to_session(&mut session, Some("p".into()));
+
+        assert!(
+            session.mcp_bridge.is_none(),
+            "mcp_bridge must drop with the prior persistent process"
+        );
+        assert!(
+            session.claude_remote_control_monitor_pid.is_none(),
+            "remote-control monitor pid is stale once the prior CLI is killed"
+        );
+        assert!(
+            matches!(
+                session.claude_remote_control.state,
+                ClaudeRemoteControlLifecycle::Disabled
+            ),
+            "remote-control status must reset to disabled for the new spawn"
+        );
+        assert!(
+            session.claude_remote_control.session_url.is_none(),
+            "stale session_url must be cleared so it does not appear next to the new sid"
+        );
     }
 }

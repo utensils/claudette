@@ -85,15 +85,34 @@ export async function applySelectedModel(
     ? getHarnessForModel(registry, prevModel, prevProvider)
     : undefined;
   const nextHarness = getHarnessForModel(registry, model, nextProvider);
-  // A reset is required only when (a) there was a prior selection, and
-  // (b) the resolved harness is changing. First-time selection and
-  // same-harness swaps both reuse the existing session id. When either
-  // harness is unknown (model not in the registry) be conservative and
-  // skip the reset — a wiped transcript is the worse failure mode than
-  // a stale persistent subprocess that the drift detector will respawn
-  // on the next send anyway.
-  const harnessChanged =
-    !!prevHarness && !!nextHarness && prevHarness !== nextHarness;
+  // Decide whether to fire the cross-harness migration path:
+  //
+  // - **Both harnesses known + different** → migrate. Same as before.
+  // - **Both harnesses known + same** → skip migration (same-harness
+  //   swap; the persistent subprocess respawns on `--model` drift and
+  //   the existing session id resumes the prior transcript).
+  // - **No prior selection** (`prevModel` undefined) → skip migration
+  //   (first-time selection has no transcript to preserve).
+  // - **Prior selection exists but `prevHarness` undefined**: previously
+  //   selected model is no longer in the registry (backend disabled,
+  //   removed from manifest, OAuth gate changed, etc.). The runtime
+  //   harness may very well be changing — but staying silent here would
+  //   let the next turn try to `--resume` the prior `chat_sessions.session_id`
+  //   under a possibly different harness, which fails inside the spawn
+  //   and re-emerges as a context-loss bug (the surfacing path Copilot
+  //   flagged on this PR). Treat unknown-prev-with-prior-selection as
+  //   "assume harness changed" and route through migration so the
+  //   prelude preserves context defensively. The Rust side's fallback
+  //   `resetAgentSession` still covers the impossible-prep-call case.
+  // - **Next harness unknown** → skip migration; that's a typo / dev-mode
+  //   bogus provider id and we shouldn't compound the error by minting a
+  //   fresh session id.
+  const harnessChanged = (() => {
+    if (!nextHarness) return false;
+    if (!prevModel) return false;
+    if (!prevHarness) return true;
+    return prevHarness !== nextHarness;
+  })();
 
   store.setSelectedModel(sessionId, model, nextProvider);
   await setAppSetting(`model:${sessionId}`, model);

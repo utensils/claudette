@@ -184,6 +184,33 @@ describe("applySelectedModel", () => {
       expect(serviceMocks.resetAgentSession).not.toHaveBeenCalled();
     });
 
+    it("prepares cross-harness migration when the prior model has been removed from the registry (unknown-prev defensive path)", async () => {
+      // Regression: if the previously-selected model/provider is no
+      // longer in the registry (backend disabled, removed from
+      // manifest, OAuth-gated entry hidden), `prevHarness` resolves
+      // to `undefined`. Previously this skipped the migration even
+      // though the runtime harness was almost certainly changing —
+      // the next turn would `--resume` the prior `session_id` under
+      // a new harness that can't read its transcript, and silently
+      // restart with no context. Treat unknown-prev-with-prior-
+      // selection as "assume harness changed" and route through
+      // migration so the prelude preserves context defensively.
+      appStore.agentBackends = [
+        backend("pi-sdk", "pi_sdk", [
+          { id: "ollama/llama3", label: "llama3" },
+        ]),
+      ];
+      // Prior selection is on a backend NOT in the current registry
+      // (`anthropic` is absent from agentBackends here).
+      appStore.selectedModel["sess-1"] = "sonnet";
+      appStore.selectedModelProvider["sess-1"] = "anthropic";
+
+      await applySelectedModel("sess-1", "ollama/llama3", "pi-sdk");
+
+      expect(serviceMocks.prepareCrossHarnessMigration).toHaveBeenCalledWith("sess-1");
+      expect(serviceMocks.resetAgentSession).not.toHaveBeenCalled();
+    });
+
     it("falls back to resetAgentSession when prepareCrossHarnessMigration throws", async () => {
       // The Rust command can fail (missing chat session row, DB
       // error). When that happens, the next-best behaviour is a
