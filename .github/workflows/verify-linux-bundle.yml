@@ -99,7 +99,11 @@ jobs:
 
       - name: Build bundles
         shell: bash
-        run: cargo tauri build --target ${{ inputs.target || 'x86_64-unknown-linux-gnu' }} --bundles appimage,deb
+        # `--verbose` makes tauri-bundler surface linuxdeploy's stderr
+        # instead of swallowing it (see tauri-bundler's
+        # `linux/appimage/linuxdeploy.rs` — at log level Error it calls
+        # `cmd.output()` and discards both streams).
+        run: cargo tauri build --verbose --target ${{ inputs.target || 'x86_64-unknown-linux-gnu' }} --bundles appimage,deb
 
       - name: List produced artifacts
         shell: bash
