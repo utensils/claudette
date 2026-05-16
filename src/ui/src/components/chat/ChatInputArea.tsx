@@ -47,8 +47,8 @@ import { AttachMenu } from "./AttachMenu";
 import { FileMentionPicker, matchFiles } from "./FileMentionPicker";
 import { PinnedPromptsBar } from "./PinnedPromptsBar";
 import { extractMentionPaths } from "./queuedMessageEditing";
-import { SlashCommandPicker, filterSlashCommands } from "./SlashCommandPicker";
-import { describeSlashQuery } from "./nativeSlashCommands";
+import { SlashCommandPicker } from "./SlashCommandPicker";
+import { useSlashPicker } from "../../hooks/useSlashPicker";
 import { hasUltrathink, renderUltrathinkText } from "./ultrathink";
 import styles from "./ChatPanel.module.css";
 
@@ -214,8 +214,6 @@ export function ChatInputArea({
   const [chatInput, setChatInput] = useState(initialDraft.text);
   const [cursorPos, setCursorPos] = useState(0);
   const [inputScrollTop, setInputScrollTop] = useState(0);
-  const [slashPickerIndex, setSlashPickerIndex] = useState(0);
-  const [slashPickerDismissed, setSlashPickerDismissed] = useState(false);
   const [slashCommands, setSlashCommandsLocal] = useState<SlashCommand[]>([]);
   const setSlashCommandsStore = useAppStore((s) => s.setSlashCommands);
   const setSlashCommands = useCallback(
@@ -566,22 +564,37 @@ export function ChatInputArea({
     };
   }, [projectPath, selectedWorkspaceId]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Filter by the command-name token (text before the first whitespace) so the
-  // picker stays open while the user types arguments. This keeps the argument
-  // hint visible for native commands like `/plugin install …`.
-  const slashQuery = composerMode === "prompt" ? describeSlashQuery(chatInput) : null;
-  const slashQueryToken = slashQuery?.token ?? null;
-  const slashHasArgs = slashQuery?.hasArgs ?? false;
-  const slashResults = useMemo(
-    () => (slashQueryToken === null ? [] : filterSlashCommands(slashCommands, slashQueryToken)),
-    [slashCommands, slashQueryToken],
+  // The picker filters by the command-name token (text before the first
+  // whitespace) so it stays open while the user types arguments — this
+  // keeps the argument hint visible for native commands like `/plugin install …`.
+  const handleSlashSelect = useCallback(
+    (cmd: SlashCommand, send: string) => {
+      onSend(send);
+      setChatInput("");
+      // Native commands record their canonical name from inside the
+      // handleSend dispatcher; record here only for file-based commands
+      // that go straight to the agent.
+      if (!cmd.kind) {
+        recordSlashCommandUsage(selectedWorkspaceId, cmd.name)
+          .then(refreshSlashCommands)
+          .catch((e) => console.error("Failed to record slash command usage:", e));
+      }
+    },
+    [onSend, selectedWorkspaceId, refreshSlashCommands],
   );
-  const showSlashPicker = slashQueryToken !== null && slashResults.length > 0 && !slashPickerDismissed;
 
-  useEffect(() => {
-    setSlashPickerIndex(0);
-    setSlashPickerDismissed(false);
-  }, [slashQueryToken]);
+  const handleSlashAutocomplete = useCallback(
+    (replacement: string) => setChatInput(replacement),
+    [],
+  );
+
+  const slashPicker = useSlashPicker({
+    chatInput,
+    composerMode,
+    slashCommands,
+    onSelectCommand: handleSlashSelect,
+    onAutocomplete: handleSlashAutocomplete,
+  });
 
   // --- File mention picker ---
 
@@ -1068,51 +1081,9 @@ export function ChatInputArea({
     }
 
     // Slash command picker navigation
-    if (showSlashPicker) {
-      if (e.key === "ArrowDown") {
-        e.preventDefault();
-        setSlashPickerIndex((i) => Math.min(i + 1, slashResults.length - 1));
-        return;
-      }
-      if (e.key === "ArrowUp") {
-        e.preventDefault();
-        setSlashPickerIndex((i) => Math.max(i - 1, 0));
-        return;
-      }
-      if (e.key === "Enter" && !e.shiftKey) {
-        e.preventDefault();
-        const cmd = slashResults[slashPickerIndex];
-        if (cmd) {
-          // If the user has already typed arguments after the command name,
-          // keep what they typed; otherwise substitute the canonical name.
-          const send = slashHasArgs ? chatInput : "/" + cmd.name;
-          onSend(send);
-          setChatInput("");
-          // Native commands record their canonical name from inside the
-          // handleSend dispatcher; record here only for file-based commands
-          // that go straight to the agent.
-          if (!cmd.kind) {
-            recordSlashCommandUsage(selectedWorkspaceId, cmd.name)
-              .then(refreshSlashCommands)
-              .catch((e) => console.error("Failed to record slash command usage:", e));
-          }
-        }
-        return;
-      }
-      if (e.key === "Tab" && !e.shiftKey) {
-        e.preventDefault();
-        const cmd = slashResults[slashPickerIndex];
-        if (cmd) {
-          setChatInput("/" + cmd.name + " ");
-          setSlashPickerDismissed(true);
-        }
-        return;
-      }
-      if (e.key === "Escape") {
-        e.preventDefault();
-        setSlashPickerDismissed(true);
-        return;
-      }
+    if (slashPicker.handleKeyDown(e)) {
+      e.preventDefault();
+      return;
     }
 
     // Skip-queue / steer: when the configured "send now" hotkey fires
@@ -1189,21 +1160,12 @@ export function ChatInputArea({
           onHover={setFilePickerIndex}
         />
       )}
-      {showSlashPicker && (
+      {slashPicker.showSlashPicker && (
         <SlashCommandPicker
-          commands={slashResults}
-          selectedIndex={slashPickerIndex}
-          onSelect={(cmd) => {
-            const send = slashHasArgs ? chatInput : "/" + cmd.name;
-            onSend(send);
-            setChatInput("");
-            if (!cmd.kind) {
-              recordSlashCommandUsage(selectedWorkspaceId, cmd.name)
-                .then(refreshSlashCommands)
-                .catch((e) => console.error("Failed to record slash command usage:", e));
-            }
-          }}
-          onHover={setSlashPickerIndex}
+          commands={slashPicker.slashResults}
+          selectedIndex={slashPicker.selectedIndex}
+          onSelect={slashPicker.selectCommand}
+          onHover={slashPicker.setSelectedIndex}
         />
       )}
       {pendingAttachments.length > 0 && (
