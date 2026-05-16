@@ -7,9 +7,9 @@ use crate::remote::{DiscoveredServer, RemoteConnectionInfo, RemoteConnectionMana
 use crate::state::AppState;
 #[cfg(feature = "server")]
 use crate::state::LocalServerState;
-use crate::transport::ws::WebSocketTransport;
 #[cfg(feature = "server")]
 use claudette::process::CommandWindowExt as _;
+use claudette::transport::ws::WebSocketTransport;
 #[cfg(feature = "server")]
 use tokio::io::{AsyncBufReadExt, BufReader};
 
@@ -96,7 +96,7 @@ pub async fn pair_with_server(
     };
 
     // Load remote data before handing off the transport.
-    use crate::transport::Transport;
+    use claudette::transport::Transport;
     let remote_data = transport
         .send(serde_json::json!({
             "method": "load_initial_data",
@@ -155,7 +155,7 @@ pub async fn connect_remote(
     };
 
     // Load remote data.
-    use crate::transport::Transport;
+    use claudette::transport::Transport;
     let remote_data = transport
         .send(serde_json::json!({
             "method": "load_initial_data",
