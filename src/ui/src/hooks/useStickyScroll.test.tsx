@@ -8,6 +8,7 @@ import { useStickyScroll } from "./useStickyScroll";
 
 const mountedRoots: Root[] = [];
 const mountedContainers: HTMLElement[] = [];
+let rafCallbacks: FrameRequestCallback[] = [];
 
 type StickyScrollApi = ReturnType<typeof useStickyScroll>;
 
@@ -27,25 +28,44 @@ function configureScrollMetrics(
   el: HTMLElement,
   metrics: { scrollTop?: number; scrollHeight: number; clientHeight: number },
 ) {
+  const target = el as HTMLElement & {
+    _clientHeight?: number;
+    _stickyMetricsConfigured?: boolean;
+    _scrollHeight?: number;
+    _scrollTop?: number;
+  };
+  target._stickyMetricsConfigured = true;
+  target._scrollHeight = metrics.scrollHeight;
+  target._clientHeight = metrics.clientHeight;
   Object.defineProperty(el, "scrollTop", {
     configurable: true,
-    get: () => (el as HTMLElement & { _scrollTop?: number })._scrollTop ?? 0,
+    get: () => target._scrollTop ?? 0,
     set: (value: number) => {
-      (el as HTMLElement & { _scrollTop?: number })._scrollTop = value;
+      target._scrollTop = value;
     },
   });
   if (metrics.scrollTop != null) el.scrollTop = metrics.scrollTop;
   Object.defineProperty(el, "scrollHeight", {
     configurable: true,
-    value: metrics.scrollHeight,
+    get: () => target._scrollHeight ?? 0,
   });
   Object.defineProperty(el, "clientHeight", {
     configurable: true,
-    value: metrics.clientHeight,
+    get: () => target._clientHeight ?? 0,
   });
 }
 
+function setScrollHeight(el: HTMLElement, scrollHeight: number) {
+  (el as HTMLElement & { _scrollHeight?: number })._scrollHeight = scrollHeight;
+}
+
+function flushAnimationFrames() {
+  const callbacks = rafCallbacks.splice(0);
+  callbacks.forEach((cb) => cb(0));
+}
+
 function installDomObservers() {
+  rafCallbacks = [];
   globalThis.ResizeObserver = vi.fn().mockImplementation(function () {
     return {
       observe: () => undefined,
@@ -61,8 +81,8 @@ function installDomObservers() {
     };
   }) as unknown as typeof globalThis.MutationObserver;
   globalThis.requestAnimationFrame = ((cb: FrameRequestCallback) => {
-    cb(0);
-    return 1;
+    rafCallbacks.push(cb);
+    return rafCallbacks.length;
   }) as typeof globalThis.requestAnimationFrame;
 }
 
@@ -82,7 +102,13 @@ function Harness({
     <div
       ref={(el) => {
         ref.current = el;
-        if (el) configureScrollMetrics(el, metrics);
+        if (
+          el &&
+          !(el as HTMLElement & { _stickyMetricsConfigured?: boolean })
+            ._stickyMetricsConfigured
+        ) {
+          configureScrollMetrics(el, metrics);
+        }
       }}
     />
   );
@@ -145,5 +171,81 @@ describe("useStickyScroll", () => {
 
     expect(target.scrollTop).toBe(600);
     expect(api.isAtBottom).toBe(true);
+  });
+
+  it("keeps following bottom when inline live tool content grows before the scheduled frame", async () => {
+    let api!: StickyScrollApi;
+    let target!: HTMLDivElement;
+    await render(
+      <Harness
+        metrics={{ scrollTop: 600, scrollHeight: 1000, clientHeight: 400 }}
+        onReady={(nextApi, nextTarget) => {
+          api = nextApi;
+          target = nextTarget;
+        }}
+      />,
+    );
+
+    await act(async () => {
+      api.handleContentChanged();
+      setScrollHeight(target, 1200);
+      target.dispatchEvent(new Event("scroll"));
+      flushAnimationFrames();
+    });
+
+    expect(target.scrollTop).toBe(1200);
+    expect(api.isAtBottom).toBe(true);
+  });
+
+  it("does not force bottom when the user scrolls up during a pending live tool update", async () => {
+    let api!: StickyScrollApi;
+    let target!: HTMLDivElement;
+    await render(
+      <Harness
+        metrics={{ scrollTop: 600, scrollHeight: 1000, clientHeight: 400 }}
+        onReady={(nextApi, nextTarget) => {
+          api = nextApi;
+          target = nextTarget;
+        }}
+      />,
+    );
+
+    await act(async () => {
+      api.handleContentChanged();
+      setScrollHeight(target, 1200);
+      target.dispatchEvent(new WheelEvent("wheel", { deltaY: -120 }));
+      target.scrollTop = 500;
+      target.dispatchEvent(new Event("scroll"));
+      flushAnimationFrames();
+    });
+
+    expect(target.scrollTop).toBe(500);
+    expect(api.isAtBottom).toBe(false);
+  });
+
+  it("does not force bottom when the overlay scrollbar marks user intent", async () => {
+    let api!: StickyScrollApi;
+    let target!: HTMLDivElement;
+    await render(
+      <Harness
+        metrics={{ scrollTop: 600, scrollHeight: 1000, clientHeight: 400 }}
+        onReady={(nextApi, nextTarget) => {
+          api = nextApi;
+          target = nextTarget;
+        }}
+      />,
+    );
+
+    await act(async () => {
+      api.handleContentChanged();
+      setScrollHeight(target, 1200);
+      api.markUserScrollIntent();
+      target.scrollTop = 500;
+      target.dispatchEvent(new Event("scroll"));
+      flushAnimationFrames();
+    });
+
+    expect(target.scrollTop).toBe(500);
+    expect(api.isAtBottom).toBe(false);
   });
 });

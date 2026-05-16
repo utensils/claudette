@@ -19,12 +19,17 @@ export function useStickyScroll(
   const [isAtBottom, setIsAtBottom] = useState(true);
   const programmaticScrollRef = useRef(false);
   const rafPendingRef = useRef(false);
+  const userScrollVersionRef = useRef(0);
   const suppressNextAutoScrollRef = useRef(false);
   // Kept in a ref so the RAF callback always reads the latest value without
   // needing threshold in its useCallback deps (which would recreate the fn
   // and re-attach the MutationObserver on every threshold change).
   const thresholdRef = useRef(threshold);
   thresholdRef.current = threshold;
+
+  const markUserScrollIntent = useCallback(() => {
+    userScrollVersionRef.current += 1;
+  }, []);
 
   /**
    * Auto-scroll to bottom if the user is already there.
@@ -33,6 +38,8 @@ export function useStickyScroll(
    */
   const handleContentChanged = useCallback(() => {
     if (rafPendingRef.current) return;
+    const shouldAutoScroll = isAtBottomRef.current;
+    const userScrollVersion = userScrollVersionRef.current;
     rafPendingRef.current = true;
     requestAnimationFrame(() => {
       rafPendingRef.current = false;
@@ -56,13 +63,24 @@ export function useStickyScroll(
         }
         return;
       }
-      if (!isAtBottomRef.current) return;
+      const userScrolledSinceSchedule =
+        userScrollVersionRef.current !== userScrollVersion;
+      if (
+        (!shouldAutoScroll && !isAtBottomRef.current) ||
+        (userScrolledSinceSchedule && !isAtBottomRef.current)
+      ) {
+        return;
+      }
       const el = containerRef.current;
       if (el) {
         const prev = el.scrollTop;
         el.scrollTop = el.scrollHeight;
         if (el.scrollTop !== prev) {
           programmaticScrollRef.current = true;
+        }
+        if (!isAtBottomRef.current) {
+          isAtBottomRef.current = true;
+          setIsAtBottom(true);
         }
       }
     });
@@ -88,7 +106,6 @@ export function useStickyScroll(
       }
       checkPosition();
     };
-
     // ResizeObserver: catches container resizes (panel toggle, window resize).
     // Scroll first if pinned to bottom — prevents checkPosition() from
     // flipping isAtBottomRef to false before auto-scroll can act on it.
@@ -119,14 +136,20 @@ export function useStickyScroll(
     };
 
     el.addEventListener("scroll", onScroll, { passive: true });
+    el.addEventListener("wheel", markUserScrollIntent, { passive: true });
+    el.addEventListener("touchmove", markUserScrollIntent, { passive: true });
+    el.addEventListener("keydown", markUserScrollIntent);
     window.addEventListener("focus", onFocus);
     return () => {
       el.removeEventListener("scroll", onScroll);
+      el.removeEventListener("wheel", markUserScrollIntent);
+      el.removeEventListener("touchmove", markUserScrollIntent);
+      el.removeEventListener("keydown", markUserScrollIntent);
       window.removeEventListener("focus", onFocus);
       resizeObserver.disconnect();
       mutationObserver.disconnect();
     };
-  }, [containerRef, threshold, handleContentChanged]);
+  }, [containerRef, threshold, handleContentChanged, markUserScrollIntent]);
 
   /** Programmatically scroll to bottom and re-enable auto-follow. */
   const scrollToBottom = useCallback(() => {
@@ -167,6 +190,7 @@ export function useStickyScroll(
     scrollToBottom,
     restoreScrollPosition,
     handleContentChanged,
+    markUserScrollIntent,
     suppressNextAutoScrollRef,
   } as const;
 }

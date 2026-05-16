@@ -16,6 +16,7 @@ interface OverlayScrollbarProps {
    * of the scrolling element itself (children would scroll with content).
    */
   targetRef: RefObject<HTMLElement | null>;
+  onUserScrollIntent?: () => void;
 }
 
 /**
@@ -50,7 +51,10 @@ interface OverlayScrollbarProps {
  * explicitly below to preserve the behavior the native scrollbar gave
  * us before the swap.
  */
-export function OverlayScrollbar({ targetRef }: OverlayScrollbarProps) {
+export function OverlayScrollbar({
+  targetRef,
+  onUserScrollIntent,
+}: OverlayScrollbarProps) {
   const sliderRef = useRef<HTMLDivElement | null>(null);
   const rafPendingRef = useRef(false);
   const [overflowing, setOverflowing] = useState(false);
@@ -141,6 +145,7 @@ export function OverlayScrollbar({ targetRef }: OverlayScrollbarProps) {
       // also fire on the same pointerdown.
       e.preventDefault();
       e.stopPropagation();
+      onUserScrollIntent?.();
       slider.setPointerCapture(e.pointerId);
       setDragging(true);
       const startY = e.clientY;
@@ -155,6 +160,7 @@ export function OverlayScrollbar({ targetRef }: OverlayScrollbarProps) {
       // doesn't push scrollTop outside its valid range.
       const scale = usableTrack > 0 ? scrollRange / usableTrack : 0;
       const onMove = (ev: PointerEvent) => {
+        onUserScrollIntent?.();
         const delta = (ev.clientY - startY) * scale;
         const next = Math.max(
           0,
@@ -173,7 +179,7 @@ export function OverlayScrollbar({ targetRef }: OverlayScrollbarProps) {
       slider.addEventListener("pointerup", onUp);
       slider.addEventListener("pointercancel", onUp);
     },
-    [targetRef],
+    [onUserScrollIntent, targetRef],
   );
 
   // Track click-to-page. Native macOS scrollbar (and Monaco's slider)
@@ -193,6 +199,7 @@ export function OverlayScrollbar({ targetRef }: OverlayScrollbarProps) {
       const slider = sliderRef.current;
       if (!target || !slider) return;
       e.preventDefault();
+      onUserScrollIntent?.();
       const sliderRect = slider.getBoundingClientRect();
       // Page up if click is above the slider's top edge, down if below
       // its bottom edge. A click directly on the slider hits the slider
@@ -207,7 +214,7 @@ export function OverlayScrollbar({ targetRef }: OverlayScrollbarProps) {
       );
       target.scrollTop = next;
     },
-    [targetRef],
+    [onUserScrollIntent, targetRef],
   );
 
   return (
