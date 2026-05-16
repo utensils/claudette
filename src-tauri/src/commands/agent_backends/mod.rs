@@ -13,7 +13,6 @@
 // follow-up.
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -44,8 +43,10 @@ use claudette::process::CommandWindowExt as _;
 
 use crate::state::AppState;
 
+mod codex_auth;
 mod codex_gate;
 
+use codex_auth::{CODEX_DEFAULT_BASE_URL, CodexAuthMaterial, load_codex_auth_material};
 use codex_gate::{
     LEGACY_CODEX_SUBSCRIPTION_BACKEND_ID, LEGACY_NATIVE_CODEX_BACKEND_ID,
     LEGACY_NATIVE_CODEX_SETTING_KEY, NATIVE_CODEX_BACKEND_ID, NATIVE_CODEX_SETTING_KEY,
@@ -57,8 +58,6 @@ use codex_gate::{
 const SETTINGS_KEY: &str = "agent_backends_config";
 const SECRET_BUCKET: &str = "agentBackendSecrets";
 const BACKEND_RUNTIME_ENV_VERSION: u8 = 2;
-const CODEX_DEFAULT_BASE_URL: &str = "https://chatgpt.com/backend-api";
-const CODEX_JWT_AUTH_CLAIM: &str = "https://api.openai.com/auth";
 const AUTO_DETECT_DISABLED_PREFIX: &str = "agent_backend_auto_detect_disabled:";
 const AUTO_DETECT_TIMEOUT: Duration = Duration::from_millis(900);
 // Pi's discovery cold-starts a Bun-compiled sidecar binary, boots the
@@ -116,26 +115,6 @@ struct BackendAutoDetection {
 pub struct BackendSecretUpdate {
     pub backend_id: String,
     pub value: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct CodexAuthMaterial {
-    access_token: String,
-    account_id: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct CodexAuthJson {
-    auth_mode: Option<String>,
-    #[serde(rename = "OPENAI_API_KEY")]
-    openai_api_key: Option<String>,
-    tokens: Option<CodexAuthTokens>,
-}
-
-#[derive(Debug, Deserialize)]
-struct CodexAuthTokens {
-    access_token: String,
-    account_id: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -2323,56 +2302,6 @@ fn codex_cli_command(program: impl AsRef<std::ffi::OsStr>) -> tokio::process::Co
     command
 }
 
-fn load_codex_auth_material() -> Result<CodexAuthMaterial, String> {
-    let path = codex_auth_path()?;
-    let raw = std::fs::read_to_string(&path)
-        .map_err(|e| format!("Failed to read Codex auth cache at {}: {e}", path.display()))?;
-    let auth = serde_json::from_str::<CodexAuthJson>(&raw)
-        .map_err(|e| format!("Failed to parse Codex auth cache: {e}"))?;
-    match auth.auth_mode.as_deref() {
-        Some("chatgpt") | Some("chatgpt_auth_tokens") => {
-            let tokens = auth
-                .tokens
-                .ok_or("Codex auth cache is missing ChatGPT tokens. Run codex login.")?;
-            if tokens.access_token.trim().is_empty() {
-                return Err(
-                    "Codex auth cache has an empty access token. Run codex login.".to_string(),
-                );
-            }
-            Ok(CodexAuthMaterial {
-                account_id: tokens
-                    .account_id
-                    .or_else(|| codex_account_id_from_access_token(&tokens.access_token)),
-                access_token: tokens.access_token,
-            })
-        }
-        Some("apikey") | Some("api_key") => {
-            let key = auth
-                .openai_api_key
-                .filter(|key| !key.trim().is_empty())
-                .ok_or("Codex API-key auth is missing OPENAI_API_KEY")?;
-            Ok(CodexAuthMaterial {
-                access_token: key,
-                account_id: None,
-            })
-        }
-        Some(other) => Err(format!(
-            "Unsupported Codex auth mode `{other}`. Run codex login with ChatGPT or an API key."
-        )),
-        None => Err("Codex auth cache is missing auth_mode. Run codex login.".to_string()),
-    }
-}
-
-fn codex_auth_path() -> Result<PathBuf, String> {
-    if let Ok(home) = std::env::var("CODEX_HOME")
-        && !home.trim().is_empty()
-    {
-        return Ok(PathBuf::from(home).join("auth.json"));
-    }
-    let home = dirs::home_dir().ok_or("Could not determine home directory for Codex auth")?;
-    Ok(home.join(".codex").join("auth.json"))
-}
-
 fn filter_openai_models(models: Vec<AgentBackendModel>) -> Vec<AgentBackendModel> {
     let mut seen = HashSet::new();
     let mut filtered: Vec<_> = models
@@ -3390,20 +3319,6 @@ fn codex_responses_url(base_url: Option<&str>) -> String {
     }
 }
 
-fn codex_account_id_from_access_token(token: &str) -> Option<String> {
-    let payload = token.split('.').nth(1)?;
-    let decoded = base64::engine::general_purpose::URL_SAFE_NO_PAD
-        .decode(payload)
-        .ok()?;
-    let value = serde_json::from_slice::<Value>(&decoded).ok()?;
-    value
-        .get(CODEX_JWT_AUTH_CLAIM)?
-        .get("chatgpt_account_id")?
-        .as_str()
-        .filter(|account_id| !account_id.trim().is_empty())
-        .map(ToString::to_string)
-}
-
 fn openai_response_from_sse(body: &str) -> Result<Value, String> {
     let mut output_text = String::new();
     let mut last_response = None;
@@ -3811,8 +3726,8 @@ mod tests {
             .find("fn codex_cli_command")
             .expect("helper should remain in this module");
         let helper_end = source[helper_start..]
-            .find("\n}\n\nfn load_codex_auth_material")
-            .expect("helper should stay before auth-material loading")
+            .find("\n}\n\nfn filter_openai_models")
+            .expect("helper should stay before the OpenAI model filter")
             + helper_start;
         assert!(
             source[helper_start..helper_end].contains(".no_console_window()"),
@@ -4953,24 +4868,6 @@ mod tests {
             codex_responses_url(Some("https://chatgpt.com/backend-api/codex/responses")),
             "https://chatgpt.com/backend-api/codex/responses"
         );
-    }
-
-    #[test]
-    fn codex_account_id_can_be_derived_from_chatgpt_access_token() {
-        let mut claims = serde_json::Map::new();
-        claims.insert(
-            CODEX_JWT_AUTH_CLAIM.to_string(),
-            json!({"chatgpt_account_id": "acct-123"}),
-        );
-        let payload = Value::Object(claims);
-        let encoded =
-            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(payload.to_string().as_bytes());
-        let token = format!("header.{encoded}.signature");
-        assert_eq!(
-            codex_account_id_from_access_token(&token).as_deref(),
-            Some("acct-123")
-        );
-        assert_eq!(codex_account_id_from_access_token("not-a-jwt"), None);
     }
 
     #[test]
