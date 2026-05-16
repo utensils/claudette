@@ -4,6 +4,7 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, State};
 
+use claudette::agent::history_seeder;
 use claudette::db::Database;
 use claudette::fork::{self, ForkInputs};
 use claudette::git;
@@ -19,7 +20,7 @@ use claudette::process::CommandWindowExt as _;
 
 use crate::commands::apps::{self, DEFAULT_TERMINAL_APP_SETTING_KEY};
 use crate::ops_hooks::TauriHooks;
-use crate::state::AppState;
+use crate::state::{AgentSessionState, AppState, ClaudeRemoteControlStatus};
 
 #[derive(Serialize)]
 pub struct CreateWorkspaceResult {
@@ -217,6 +218,116 @@ pub struct ForkWorkspaceResult {
     pub session_resumed: bool,
 }
 
+/// Write a fork's synthetic history prelude onto an
+/// `AgentSessionState`, returning whether a prelude was written.
+///
+/// Pure helper around [`history_seeder::build_migration_prelude`].
+/// System rows are filtered because the prelude carries prior
+/// user/assistant turns only — the new harness derives its own system
+/// instructions from its own config. An empty history (or a history
+/// where every row is system / blank) is a no-op: the function
+/// returns `false` and leaves `pending_history_prelude` untouched so
+/// a degenerate fork (e.g. at the very first checkpoint) doesn't
+/// shadow an existing prelude with `None`.
+///
+/// Split out of [`seed_fork_history_prelude`] so the test module can
+/// pin the filter / build / write contract without standing up an
+/// `AppState` or a Tauri runtime — same pattern as
+/// `apply_migration_to_session` in `commands/chat/lifecycle.rs`.
+pub(crate) fn apply_fork_prelude(
+    session: &mut AgentSessionState,
+    messages: Vec<ChatMessage>,
+) -> bool {
+    let conversation: Vec<ChatMessage> = messages
+        .into_iter()
+        .filter(|m| !matches!(m.role, ChatRole::System))
+        .collect();
+    match history_seeder::build_migration_prelude(&conversation) {
+        Some(prelude) => {
+            session.pending_history_prelude = Some(prelude);
+            true
+        }
+        None => false,
+    }
+}
+
+/// Seed the fork's first turn with a synthetic prelude built from the
+/// chat messages `copy_history` just wrote into the new chat session.
+///
+/// Used when the harness-native transcript copy did not apply
+/// (`ForkOutcome::session_resumed == false`). The harness-native copy
+/// is at best an optimization that only the Claude CLI path implements
+/// — Pi and Codex have no equivalent, and even the Claude CLI path
+/// returns `false` when the JSONL file is absent. Without this seed,
+/// the fork's first turn lands at an empty harness session and the
+/// agent has no memory of the prior conversation even though the UI
+/// shows it (the rows are in `chat_messages`, but the harness's own
+/// transcript is empty).
+///
+/// Mirrors the in-memory write that `prepare_cross_harness_migration`
+/// performs in `commands/chat/lifecycle.rs`. The prelude lives only on
+/// `AgentSessionState.pending_history_prelude`; `send_chat_message`
+/// consumes it once and clears it on the fork's first turn. There is
+/// no DB persistence — if the user restarts Claudette between forking
+/// and sending the first message, the prelude is lost (same trade-off
+/// the cross-harness migration already accepts; in practice users
+/// send their first turn immediately after forking).
+async fn seed_fork_history_prelude(
+    state: &State<'_, AppState>,
+    new_workspace_id: &str,
+) -> Result<(), String> {
+    let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
+    let new_chat_session_id = db
+        .default_session_id_for_workspace(new_workspace_id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| format!("fork workspace {new_workspace_id} has no default chat session"))?;
+
+    // `copy_history` already populated the new chat session's
+    // `chat_messages` rows with the parent's history up to the
+    // checkpoint, so a session-scoped read here is exactly the
+    // conversation the prelude needs to render.
+    let messages = db
+        .list_chat_messages_for_session(&new_chat_session_id)
+        .map_err(|e| e.to_string())?;
+
+    let mut agents = state.agents.write().await;
+    let session = agents
+        .entry(new_chat_session_id.clone())
+        .or_insert_with(|| AgentSessionState {
+            workspace_id: new_workspace_id.to_string(),
+            session_id: String::new(),
+            turn_count: 0,
+            active_pid: None,
+            custom_instructions: None,
+            needs_attention: false,
+            attention_kind: None,
+            attention_notification_sent: false,
+            persistent_session: None,
+            claude_remote_control: ClaudeRemoteControlStatus::disabled(),
+            claude_remote_control_monitor_pid: None,
+            local_user_message_uuids: Default::default(),
+            mcp_config_dirty: false,
+            session_plan_mode: false,
+            session_allowed_tools: Vec::new(),
+            session_fast_mode: false,
+            session_disable_1m_context: false,
+            session_backend_hash: String::new(),
+            pending_permissions: Default::default(),
+            running_background_tasks: Default::default(),
+            background_wake_active: false,
+            background_task_output_paths: Default::default(),
+            session_exited_plan: false,
+            session_resolved_env: Default::default(),
+            session_resolved_env_signature: String::new(),
+            mcp_bridge: None,
+            last_user_msg_id: None,
+            posted_env_trust_warning: false,
+            pending_history_prelude: None,
+        });
+    apply_fork_prelude(session, messages);
+    Ok(())
+}
+
 #[tauri::command]
 #[tracing::instrument(
     target = "claudette::workspace",
@@ -249,6 +360,29 @@ pub async fn fork_workspace_at_checkpoint(
     )
     .await
     .map_err(|e| e.to_string())?;
+
+    // When the harness-native transcript copy did not apply (Pi / Codex
+    // forks have no JSONL to copy, Claude-CLI forks where the JSONL was
+    // missing for whatever reason fall back here too), seed the fork's
+    // first turn with the same synthetic conversation-history prelude
+    // that cross-harness model swaps use. `copy_history` already copied
+    // the parent's `chat_messages` rows into the new chat session, so
+    // the UI shows the conversation — without the prelude the new
+    // harness's session is empty and the agent answers as if the user
+    // had typed turn 1 from scratch ("I don't see a previous message").
+    if !outcome.session_resumed {
+        if let Err(e) = seed_fork_history_prelude(&state, &outcome.workspace.id).await {
+            // Non-fatal: the fork is still usable, the user's first
+            // turn just won't carry the prior context. Surface in logs
+            // so a regression is debuggable, but don't fail the fork.
+            tracing::warn!(
+                target = "claudette::fork",
+                workspace_id = %outcome.workspace.id,
+                error = %e,
+                "failed to seed history prelude on fork — first turn will lack prior context"
+            );
+        }
+    }
 
     // Pre-create the fork's Claudette Terminal tab pointing at the
     // workspace-scoped provisioning output file. The fork itself doesn't
@@ -1302,4 +1436,156 @@ pub async fn notify_workspace_selected(
         state.scm_last_polled.write().await.remove(&id);
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::apply_fork_prelude;
+    use crate::state::{AgentSessionState, ClaudeRemoteControlStatus};
+    use claudette::model::{ChatMessage, ChatRole};
+    use std::collections::HashMap;
+
+    fn fresh_session() -> AgentSessionState {
+        AgentSessionState {
+            workspace_id: "ws-test".into(),
+            session_id: String::new(),
+            turn_count: 0,
+            active_pid: None,
+            custom_instructions: None,
+            needs_attention: false,
+            attention_kind: None,
+            attention_notification_sent: false,
+            persistent_session: None,
+            claude_remote_control: ClaudeRemoteControlStatus::disabled(),
+            claude_remote_control_monitor_pid: None,
+            local_user_message_uuids: Default::default(),
+            mcp_config_dirty: false,
+            session_plan_mode: false,
+            session_allowed_tools: Vec::new(),
+            session_fast_mode: false,
+            session_disable_1m_context: false,
+            session_backend_hash: String::new(),
+            pending_permissions: HashMap::new(),
+            running_background_tasks: Default::default(),
+            background_wake_active: false,
+            background_task_output_paths: HashMap::new(),
+            session_exited_plan: false,
+            session_resolved_env: Default::default(),
+            session_resolved_env_signature: String::new(),
+            mcp_bridge: None,
+            last_user_msg_id: None,
+            posted_env_trust_warning: false,
+            pending_history_prelude: None,
+        }
+    }
+
+    fn msg(id: &str, role: ChatRole, content: &str) -> ChatMessage {
+        ChatMessage {
+            id: id.into(),
+            workspace_id: "ws-test".into(),
+            chat_session_id: "sess-test".into(),
+            role,
+            content: content.into(),
+            cost_usd: None,
+            duration_ms: None,
+            created_at: "2026-05-16T00:00:00Z".into(),
+            thinking: None,
+            input_tokens: None,
+            output_tokens: None,
+            cache_read_tokens: None,
+            cache_creation_tokens: None,
+        }
+    }
+
+    #[test]
+    fn apply_fork_prelude_writes_prelude_when_conversation_present() {
+        // The reported bug: user forked a session whose runtime had no
+        // copyable native transcript (Pi-source fork). UI showed every
+        // turn, but the agent's first reply was "I don't see a previous
+        // message to repeat" — the harness's session was empty. This pin
+        // locks the contract that `apply_fork_prelude` populates
+        // `pending_history_prelude` from the fork's copied chat
+        // messages, so `send_chat_message` prepends the prelude to the
+        // first turn and the agent has context.
+        let mut session = fresh_session();
+        let messages = vec![
+            msg("m1", ChatRole::User, "give me a random word"),
+            msg("m2", ChatRole::Assistant, "Umbrella"),
+            msg("m3", ChatRole::User, "repeat"),
+            msg("m4", ChatRole::Assistant, "Umbrella"),
+        ];
+
+        let wrote = apply_fork_prelude(&mut session, messages);
+
+        assert!(wrote, "non-empty conversation must produce a prelude");
+        let prelude = session
+            .pending_history_prelude
+            .as_deref()
+            .expect("prelude must be set when wrote=true");
+        assert!(prelude.contains("Umbrella"));
+        assert!(prelude.contains("give me a random word"));
+        assert!(prelude.contains("<conversation-history>"));
+    }
+
+    #[test]
+    fn apply_fork_prelude_is_a_noop_for_empty_history() {
+        // Degenerate fork case (e.g. fork at the very first checkpoint
+        // before any user turns landed) must NOT shadow an existing
+        // prelude with `None`. Returning false signals "left untouched".
+        let mut session = fresh_session();
+        session.pending_history_prelude = Some("pre-existing".into());
+
+        let wrote = apply_fork_prelude(&mut session, Vec::new());
+
+        assert!(!wrote);
+        assert_eq!(
+            session.pending_history_prelude.as_deref(),
+            Some("pre-existing"),
+            "empty input must leave any pre-existing prelude intact"
+        );
+    }
+
+    #[test]
+    fn apply_fork_prelude_filters_system_messages_out_of_conversation() {
+        // System rows in `chat_messages` describe the harness's own
+        // instruction stack (slash-command output, env-trust warnings,
+        // etc.) — NOT prior user/assistant turns. Including them in the
+        // prelude would leak Claudette-internal text into the new
+        // harness as if the prior conversation contained it.
+        let mut session = fresh_session();
+        let messages = vec![
+            msg("m1", ChatRole::System, "Workspace env loaded from .envrc"),
+            msg("m2", ChatRole::User, "hello"),
+            msg("m3", ChatRole::Assistant, "hi back"),
+        ];
+
+        let wrote = apply_fork_prelude(&mut session, messages);
+
+        assert!(wrote);
+        let prelude = session.pending_history_prelude.unwrap();
+        assert!(prelude.contains("hello"));
+        assert!(prelude.contains("hi back"));
+        assert!(
+            !prelude.contains("Workspace env loaded from .envrc"),
+            "system rows must not leak into the synthetic conversation history"
+        );
+        assert!(
+            !prelude.contains("<system>"),
+            "system role tag must not appear when no system content survives the filter"
+        );
+    }
+
+    #[test]
+    fn apply_fork_prelude_no_op_when_only_system_messages_present() {
+        // A history of just system rows produces no prior conversation
+        // — same as empty input.
+        let mut session = fresh_session();
+        let messages = vec![
+            msg("m1", ChatRole::System, "system 1"),
+            msg("m2", ChatRole::System, "system 2"),
+        ];
+        let wrote = apply_fork_prelude(&mut session, messages);
+        assert!(!wrote);
+        assert!(session.pending_history_prelude.is_none());
+    }
 }
