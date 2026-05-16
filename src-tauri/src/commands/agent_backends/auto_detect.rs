@@ -11,7 +11,7 @@ use claudette::agent_backend::{AgentBackendConfig, AgentBackendKind, AgentBacken
 use claudette::db::Database;
 
 use super::config::{apply_discovered_models, backend_models_signature, canonical_backend_id};
-use super::{codex_cli_command, discover_codex_models, discover_models};
+use super::discovery::{codex_cli_command, discover_codex_models, discover_models};
 
 pub(super) const AUTO_DETECT_DISABLED_PREFIX: &str = "agent_backend_auto_detect_disabled:";
 pub(super) const AUTO_DETECT_TIMEOUT: Duration = Duration::from_millis(900);
