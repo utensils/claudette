@@ -52,6 +52,15 @@ pub async fn rollback_to_checkpoint(
         .map_err(|e| e.to_string())?
         .ok_or("Chat session not found")?;
     let workspace_id = chat_session.workspace_id.clone();
+    // Capture the persisted prior session id + turn_count up front so
+    // `or_insert_with` can seed the new `AgentSessionState` from the DB
+    // (instead of stamping `session_id: String::new()`) — otherwise
+    // `apply_migration_to_session` snapshots `prior_session_id` as
+    // empty after an app restart, and the post-rollback cleanup
+    // (`end_agent_session` + `remove_pi_session_dir`) silently skips
+    // even though the DB knew about the prior runtime sid.
+    let persisted_prior_sid = chat_session.session_id.clone().unwrap_or_default();
+    let persisted_prior_turn_count = chat_session.turn_count;
 
     // Guard: reject if agent is running.
     {
@@ -129,8 +138,8 @@ pub async fn rollback_to_checkpoint(
             .entry(chat_session_id.clone())
             .or_insert_with(|| AgentSessionState {
                 workspace_id: workspace_id.clone(),
-                session_id: String::new(),
-                turn_count: 0,
+                session_id: persisted_prior_sid.clone(),
+                turn_count: persisted_prior_turn_count,
                 active_pid: None,
                 custom_instructions: None,
                 needs_attention: false,
@@ -172,10 +181,20 @@ pub async fn rollback_to_checkpoint(
     // new fresh sid (turn_count=0) in chat_sessions so subsequent
     // `send_chat_message` calls start from a clean slate under the new
     // sid and find the prelude on the in-memory `AgentSessionState`.
-    if !snapshot.prior_session_id.is_empty() {
-        let _ = db.end_agent_session(&snapshot.prior_session_id, false);
+    // Belt-and-suspenders fallback: if the in-memory snapshot's prior
+    // session id was empty (e.g. an `AgentSessionState` entry existed
+    // but had never been wired to a runtime sid), trust the persisted
+    // `chat_sessions.session_id` we captured up front so we still
+    // retire the row the DB knew about.
+    let prior_sid_for_cleanup = if snapshot.prior_session_id.is_empty() {
+        persisted_prior_sid
+    } else {
+        snapshot.prior_session_id.clone()
+    };
+    if !prior_sid_for_cleanup.is_empty() {
+        let _ = db.end_agent_session(&prior_sid_for_cleanup, false);
         #[cfg(feature = "pi-sdk")]
-        super::remove_pi_session_dir(&state.db_path, &snapshot.prior_session_id).await;
+        super::remove_pi_session_dir(&state.db_path, &prior_sid_for_cleanup).await;
     }
     db.save_chat_session_state(&chat_session_id, &snapshot.new_session_id, 0)
         .map_err(|e| e.to_string())?;

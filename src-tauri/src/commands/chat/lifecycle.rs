@@ -307,6 +307,19 @@ pub async fn prepare_cross_harness_migration(
 
     let prelude = agent::history_seeder::build_migration_prelude(&messages);
 
+    // When this command runs after an app restart (or for any session
+    // whose `AgentSessionState` is not yet in `state.agents`), we
+    // materialize a fresh entry below. Seed `session_id` and
+    // `turn_count` from the persisted `chat_sessions` row so
+    // `apply_migration_to_session`'s `prior_session_id` snapshot
+    // captures the REAL prior runtime session id — otherwise the
+    // post-migration cleanup (`end_agent_session` + `remove_pi_session_dir`)
+    // skips silently, leaving orphan `agent_sessions` rows and stale Pi
+    // session directories under `data/pi-sessions/<sid>/` even though the
+    // DB knew about the prior id.
+    let persisted_prior_sid = chat_session.session_id.clone().unwrap_or_default();
+    let persisted_prior_turn_count = chat_session.turn_count;
+
     // Tear down the prior harness's persistent subprocess (if any).
     // The new harness can't reuse it — different binary, different
     // protocol. Capturing the snapshot under the lock then releasing
@@ -318,8 +331,8 @@ pub async fn prepare_cross_harness_migration(
             .entry(chat_session_id.clone())
             .or_insert_with(|| AgentSessionState {
                 workspace_id: workspace_id.clone(),
-                session_id: String::new(),
-                turn_count: 0,
+                session_id: persisted_prior_sid.clone(),
+                turn_count: persisted_prior_turn_count,
                 active_pid: None,
                 custom_instructions: None,
                 needs_attention: false,
@@ -366,10 +379,20 @@ pub async fn prepare_cross_harness_migration(
     // Retire the prior session id (if any) so the agent_sessions
     // table doesn't accumulate orphan rows pointing at the old
     // transcript, and the Pi session dir for that id is cleaned up.
-    if !snapshot.prior_session_id.is_empty() {
-        let _ = db.end_agent_session(&snapshot.prior_session_id, false);
+    // Belt-and-suspenders fallback: if the in-memory snapshot's
+    // `prior_session_id` was empty (e.g. the `AgentSessionState`
+    // entry existed but had never been wired to a runtime sid), trust
+    // the persisted `chat_sessions.session_id` we captured before
+    // taking the lock so we still retire the row the DB knew about.
+    let prior_sid_for_cleanup = if snapshot.prior_session_id.is_empty() {
+        persisted_prior_sid
+    } else {
+        snapshot.prior_session_id.clone()
+    };
+    if !prior_sid_for_cleanup.is_empty() {
+        let _ = db.end_agent_session(&prior_sid_for_cleanup, false);
         #[cfg(feature = "pi-sdk")]
-        super::remove_pi_session_dir(&state.db_path, &snapshot.prior_session_id).await;
+        super::remove_pi_session_dir(&state.db_path, &prior_sid_for_cleanup).await;
     }
 
     crate::tray::rebuild_tray(&app);

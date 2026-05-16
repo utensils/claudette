@@ -93,9 +93,18 @@ fn escape_for_prelude_body(s: &str) -> String {
 /// trip through a single user-message slot anyway, so we can't
 /// reproduce structured tool-use even if we wrote the right JSON.
 pub fn build_migration_prelude(messages: &[ChatMessage]) -> Option<String> {
+    // Keep a row when EITHER `content` OR `thinking` has non-whitespace
+    // text. The DB layer persists assistant turns whose visible reply
+    // is empty but whose `thinking` block is real (e.g. extended-thinking
+    // models that emitted only a chain-of-thought before being
+    // interrupted); filtering on `content` alone would drop those turns
+    // and amputate context the model paid to produce.
     let entries: Vec<&ChatMessage> = messages
         .iter()
-        .filter(|m| !m.content.trim().is_empty())
+        .filter(|m| {
+            !m.content.trim().is_empty()
+                || m.thinking.as_deref().is_some_and(|t| !t.trim().is_empty())
+        })
         .collect();
     if entries.is_empty() {
         return None;
@@ -138,12 +147,19 @@ pub fn build_migration_prelude(messages: &[ChatMessage]) -> Option<String> {
 /// Kept separate from [`build_migration_prelude`] so the prelude can
 /// be persisted and reused if the user dismisses their first draft
 /// before sending — the prelude survives, only the user text changes.
+///
+/// The user's message is appended verbatim (no trim). Leading
+/// indentation and trailing newlines inside the user's text are
+/// significant for fenced code blocks, ASCII tables, and Markdown
+/// list nesting — trimming silently re-formats what the model sees
+/// vs. what the user typed (and what's persisted to `chat_messages`).
+/// `trim` is only used to detect "user clicked send with no text",
+/// in which case we ship the prelude alone.
 pub fn merge_prelude_with_user_message(prelude: &str, user_message: &str) -> String {
-    let trimmed_user = user_message.trim();
-    if trimmed_user.is_empty() {
+    if user_message.trim().is_empty() {
         return prelude.to_string();
     }
-    format!("{prelude}\n{trimmed_user}")
+    format!("{prelude}\n{user_message}")
 }
 
 #[cfg(test)]
@@ -292,11 +308,54 @@ mod tests {
     }
 
     #[test]
+    fn prelude_keeps_assistant_turns_with_thinking_but_empty_content() {
+        // Extended-thinking assistant turns can land in `chat_messages`
+        // with a non-empty `thinking` block and empty `content` (model
+        // emitted its chain-of-thought, then the user interrupted before
+        // a visible reply). Earlier we filtered on `content` alone,
+        // which silently dropped those rows from the migration prelude
+        // and lost the model's reasoning state.
+        let mut m = msg("m1", ChatRole::Assistant, "");
+        m.thinking = Some("Working through the problem step by step...".into());
+        // Plus a user turn so the prelude doesn't degenerate to "only one
+        // message and it has no content".
+        let user = msg("m2", ChatRole::User, "follow-up question");
+
+        let prelude = build_migration_prelude(&[m, user]).expect("prelude must exist");
+
+        assert!(
+            prelude.contains("Working through the problem step by step..."),
+            "thinking-only assistant turns must survive into the prelude"
+        );
+        assert!(prelude.contains("follow-up question"));
+    }
+
+    #[test]
     fn merge_prelude_with_user_message_appends_user_text() {
         let prelude = "<conversation-history>...</conversation-history>";
         let merged = merge_prelude_with_user_message(prelude, "now do X");
         assert!(merged.starts_with(prelude));
         assert!(merged.ends_with("now do X"));
+    }
+
+    #[test]
+    fn merge_prelude_preserves_user_message_indentation_and_trailing_newlines() {
+        // Regression: leading indentation and trailing newlines inside
+        // the user's typed message are significant for fenced code
+        // blocks and Markdown list nesting. The merge function used to
+        // call `user_message.trim()` and re-format what the model saw,
+        // diverging from what the user typed AND from what was
+        // persisted to `chat_messages`. Pin the verbatim contract.
+        let prelude = "<conversation-history>x</conversation-history>";
+        let user = "  ```rust\n  fn foo() {}\n  ```\n\n";
+        let merged = merge_prelude_with_user_message(prelude, user);
+        assert!(merged.starts_with(prelude));
+        assert!(
+            merged.ends_with(user),
+            "merge must append the user message verbatim — got: {merged:?}"
+        );
+        // No silent re-formatting in between.
+        assert_eq!(merged, format!("{prelude}\n{user}"));
     }
 
     #[test]
