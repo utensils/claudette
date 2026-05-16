@@ -7,7 +7,7 @@
 use tauri::State;
 
 use claudette::agent::resolve_codex_path;
-use claudette::agent_backend::{AgentBackendConfig, AgentBackendKind, AgentBackendRuntimeHarness};
+use claudette::agent_backend::{AgentBackendConfig, AgentBackendRuntimeHarness};
 use claudette::db::Database;
 use claudette::plugin::{delete_secure_secret, save_secure_secret};
 
@@ -26,14 +26,13 @@ pub use gateway::BackendGateway;
 pub use runtime_dispatch::{resolve_backend_request_defaults, resolve_backend_runtime};
 
 use auto_detect::{
-    BackendAutoDetection, apply_backend_auto_detections, backend_auto_detect_disabled,
+    apply_backend_auto_detections, backend_auto_detect_disabled,
     persist_backend_auto_detect_opt_out, probe_codex_backend, probe_model_discovery_backend,
     should_probe_backend_auto_detection, skipped_backend_auto_detection,
 };
 use codex_gate::{
-    LEGACY_NATIVE_CODEX_BACKEND_ID, LEGACY_NATIVE_CODEX_SETTING_KEY, NATIVE_CODEX_BACKEND_ID,
-    NATIVE_CODEX_SETTING_KEY, ensure_backend_allowed_by_gate, ensure_backend_id_allowed_by_gate,
-    ensure_native_codex_enabled,
+    LEGACY_NATIVE_CODEX_SETTING_KEY, NATIVE_CODEX_BACKEND_ID, NATIVE_CODEX_SETTING_KEY,
+    ensure_backend_allowed_by_gate, ensure_backend_id_allowed_by_gate, ensure_native_codex_enabled,
 };
 pub use config::{BackendListResponse, BackendSecretUpdate, BackendStatus};
 use config::{
@@ -348,16 +347,16 @@ pub async fn launch_codex_login(state: State<'_, AppState>) -> Result<(), String
 mod tests {
     use std::collections::HashMap;
 
-    use claudette::agent_backend::AgentBackendModel;
+    use claudette::agent_backend::{AgentBackendKind, AgentBackendModel};
     use serde_json::{Value, json};
 
     #[cfg(feature = "pi-sdk")]
     use super::auto_detect::PI_AUTO_DETECT_TIMEOUT;
     use super::auto_detect::{
-        AUTO_DETECT_TIMEOUT, auto_detect_disabled_key, backend_auto_detect_timeout,
-        codex_startup_models,
+        AUTO_DETECT_TIMEOUT, BackendAutoDetection, auto_detect_disabled_key,
+        backend_auto_detect_timeout, codex_startup_models,
     };
-    use super::codex_gate::FIRST_CLASS_BACKENDS_PROMOTION_KEY;
+    use super::codex_gate::{FIRST_CLASS_BACKENDS_PROMOTION_KEY, LEGACY_NATIVE_CODEX_BACKEND_ID};
     use super::config::{
         SETTINGS_KEY, backend_kind_hash_key, read_unknown_passthrough, runtime_hash,
         select_backend_for_request,
