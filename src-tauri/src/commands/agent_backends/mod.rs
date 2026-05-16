@@ -3946,7 +3946,7 @@ mod tests {
         // `Command`, so keep a source-level tripwire around the helper that
         // protects startup refresh, Settings refresh, and login-status probes
         // from allocating black cmd.exe windows in release builds.
-        let source = include_str!("agent_backends.rs");
+        let source = include_str!("mod.rs");
         let helper_start = source
             .find("fn codex_cli_command")
             .expect("helper should remain in this module");
