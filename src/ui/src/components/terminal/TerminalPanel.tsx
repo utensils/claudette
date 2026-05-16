@@ -88,6 +88,7 @@ import {
 import { viewportToFixed } from "../../utils/zoom";
 import { adjustTerminalFontSize } from "../../utils/fontSettings";
 import { reclaimScrollLines } from "./terminalReclaim";
+import { useTerminalEnvAutoOpen } from "./useTerminalEnvAutoOpen";
 import "@xterm/xterm/css/xterm.css";
 import styles from "./TerminalPanel.module.css";
 
@@ -681,8 +682,18 @@ export const TerminalPanel = memo(function TerminalPanel() {
   // load-tabs effect below populates `terminalTabs[wsId]` only after
   // the panel becomes visible, so we apply focus in a follow-up effect
   // that watches the populated tab list rather than racing it here.
-  const lastAutoOpenedForRef = useRef<string | null>(null);
-  const lastAutoFocusedForRef = useRef<string | null>(null);
+  useTerminalEnvAutoOpen(
+    selectedWorkspaceId,
+    workspaceEnvironmentPreparing,
+    claudetteTerminalEnabled,
+    terminalPanelVisible,
+    setTerminalPanelVisible,
+  );
+
+  // Per-workspace set tracking which workspaces we've already auto-focused
+  // the Claudette Terminal for during env preparation. A Set (vs the previous
+  // string | null) ensures that switching away and back doesn't re-focus.
+  const autoFocusedWorkspacesRef = useRef<Set<string>>(new Set());
   // Set true when our auto-focus effect is about to switch the active
   // terminal tab to the Claudette Terminal during env preparation.
   // The focus-management useLayoutEffect below consumes this on its
@@ -692,35 +703,13 @@ export const TerminalPanel = memo(function TerminalPanel() {
   // provisioning output land in view, but keyboard focus stays where
   // they had it — typically the chat composer.
   const suppressNextTerminalFocusRef = useRef(false);
-  useEffect(() => {
-    if (
-      !selectedWorkspaceId ||
-      !workspaceEnvironmentPreparing ||
-      !claudetteTerminalEnabled
-    ) {
-      lastAutoOpenedForRef.current = null;
-      lastAutoFocusedForRef.current = null;
-      return;
-    }
-    if (lastAutoOpenedForRef.current === selectedWorkspaceId) return;
-    lastAutoOpenedForRef.current = selectedWorkspaceId;
-    if (!terminalPanelVisible) {
-      setTerminalPanelVisible(true);
-    }
-  }, [
-    selectedWorkspaceId,
-    workspaceEnvironmentPreparing,
-    claudetteTerminalEnabled,
-    terminalPanelVisible,
-    setTerminalPanelVisible,
-  ]);
 
   // Follow-up: once the workspace's tab list lands in the store,
   // promote the Claudette Terminal (the AgentTask-kind tab) to active
   // so the user lands on the streaming provisioning output even if
-  // their previous active tab in this workspace was a PTY. Fires
-  // exactly once per workspace's transition into preparing — if they
-  // click away to Terminal 1 mid-resolve we honor that, no reflux.
+  // their previous active tab in this workspace was a PTY. Fires at
+  // most once per workspace for the lifetime of this mounted component —
+  // if they click away to Terminal 1 mid-resolve we honor that, no reflux.
   useEffect(() => {
     if (
       !selectedWorkspaceId ||
@@ -728,7 +717,7 @@ export const TerminalPanel = memo(function TerminalPanel() {
       !claudetteTerminalEnabled
     )
       return;
-    if (lastAutoFocusedForRef.current === selectedWorkspaceId) return;
+    if (autoFocusedWorkspacesRef.current.has(selectedWorkspaceId)) return;
     const tabs = terminalTabs[selectedWorkspaceId];
     if (!tabs || tabs.length === 0) return;
     const claudette = tabs.find((tab) => tab.kind === "agent_task");
@@ -736,10 +725,10 @@ export const TerminalPanel = memo(function TerminalPanel() {
     if (useAppStore.getState().activeTerminalTabId[selectedWorkspaceId] === claudette.id) {
       // Already the active tab — no need to switch, and triggering a
       // no-op set would still re-fire the focus useLayoutEffect.
-      lastAutoFocusedForRef.current = selectedWorkspaceId;
+      autoFocusedWorkspacesRef.current.add(selectedWorkspaceId);
       return;
     }
-    lastAutoFocusedForRef.current = selectedWorkspaceId;
+    autoFocusedWorkspacesRef.current.add(selectedWorkspaceId);
     // Tell the focus layout effect to skip keyboard-focus stealing
     // for the activation we're about to dispatch. The user's
     // attention belongs in the chat composer while provisioning runs.
