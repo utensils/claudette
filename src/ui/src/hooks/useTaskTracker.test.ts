@@ -365,10 +365,10 @@ describe("deriveTaskState", () => {
 // "completed" as work progresses through each phase. The right-sidebar
 // Tasks panel should reflect the live count after every update.
 //
-// Regression target: a #573-era refactor moved TodoWrite handling into
-// `deriveTaskStateFromEntries` and split the registry off into
-// `parseTodoTasks`; the synthetic IDs assigned to id-less todos (modern
-// TodoWrite has no `id` field — only `content` / `status` / `activeForm`)
+// Regression target: the task-history refactor (PR 773) moved TodoWrite
+// handling into `deriveTaskStateFromEntries` and split the registry off
+// into `parseTodoTasks`. The synthetic IDs assigned to id-less todos
+// (modern TodoWrite has no id field — only content / status / activeForm)
 // must remain stable enough across passes that `todoMap.clear()` plus
 // re-set always reflects the LATEST call's statuses, not a stale snapshot.
 describe("deriveTaskState — phase progression regression", () => {
