@@ -108,6 +108,24 @@ cd src/ui && bun install && cd ../..
 > `scoop install llvm`). The PowerShell profile snippet for a bare
 > `dev` command is in the [README — Run in development mode](README.md#run-in-development-mode).
 
+> **Verifying Linux behavior from macOS / Windows:** Claudette ships
+> an Arch Linux + XFCE + noVNC test container at
+> `packaging/aur/test/Dockerfile`. One command builds the image,
+> installs `claudette-bin` from the in-repo PKGBUILD, plants a
+> Desktop launcher, clones the public repo into `~/Projects/
+> Claudette`, and serves the desktop on `http://localhost:6080/`
+> for any browser:
+>
+> ```sh
+> scripts/aur/test-in-docker.sh claudette-bin    # or: nix develop -c aur-test claudette-bin
+> ```
+>
+> Use it to verify Tauri/GTK behavior, packaging assumptions, or
+> any reported "works on macOS, breaks on Linux" issue without
+> needing to maintain a Linux VM. The user inside the container is
+> `builder` / `builder` (sudo is passwordless). Full reference in
+> [`packaging/aur/README.md`](packaging/aur/README.md#linux-dev--test-environment-for-macos--windows-contributors).
+
 ## Commit Conventions
 
 This project uses **conventional commits**. Every commit message and PR title must follow this format:

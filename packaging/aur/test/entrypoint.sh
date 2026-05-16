@@ -99,6 +99,53 @@ if [ -f "${desktop_src}" ]; then
   gio set "${desktop_dst}" "metadata::trusted" true 2>/dev/null || true
 fi
 
+# ---- Clone the public Claudette repo for an "Open project" demo ---
+# /workspace is bind-mounted from the host and its `.git` is a
+# pointer back to a host path that doesn't resolve inside the
+# container — git ops against /workspace appear broken. We clone
+# a real, self-contained copy of the public repo into ~/Projects/
+# Claudette so the user has somewhere to point Claudette's "Add
+# repo" flow at. `CLONE_BRANCH` lets the user override the branch
+# (defaults to main); `SKIP_CLONE=1` opts out entirely for a
+# faster boot when re-testing.
+projects_dir="${HOME}/Projects"
+project_clone="${projects_dir}/Claudette"
+clone_branch="${CLONE_BRANCH:-main}"
+if [ "${SKIP_CLONE:-0}" != "1" ] && [ ! -d "${project_clone}/.git" ]; then
+  echo "[entrypoint] cloning utensils/claudette into ${project_clone} (branch ${clone_branch})"
+  mkdir -p "${projects_dir}"
+  # `--filter=blob:none` keeps history but defers blob fetches —
+  # ~10 MB instead of ~150 MB, still enough for Claudette's git
+  # features to behave normally. Blobs hydrate on first checkout.
+  if git clone --filter=blob:none --branch "${clone_branch}" \
+       https://github.com/utensils/claudette.git "${project_clone}" \
+       >/tmp/clone.log 2>&1; then
+    echo "[entrypoint] clone complete: ${project_clone}"
+  else
+    echo "[entrypoint] clone FAILED — see /tmp/clone.log" >&2
+  fi
+fi
+
+# Drop a Thunar launcher on the Desktop so the user can browse
+# ~/Projects from the file manager without hunting through the
+# panel menu. .desktop files with Type=Link can target a path
+# directly — xfdesktop opens it with the default file handler
+# (Thunar in our setup).
+projects_launcher="${HOME}/Desktop/Projects.desktop"
+if [ ! -f "${projects_launcher}" ]; then
+  cat > "${projects_launcher}" <<EOF
+[Desktop Entry]
+Type=Application
+Name=Projects
+Comment=Open ~/Projects in the file manager
+Exec=thunar ${projects_dir}
+Icon=folder
+Terminal=false
+EOF
+  chmod +x "${projects_launcher}"
+  gio set "${projects_launcher}" "metadata::trusted" true 2>/dev/null || true
+fi
+
 # ---- Optional auto-launch ------------------------------------------
 if [ -n "${LAUNCH_CMD:-}" ]; then
   echo "[entrypoint] auto-launching '${LAUNCH_CMD}' on display ${DISPLAY}"

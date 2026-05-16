@@ -61,38 +61,70 @@ The `.SRCINFO` regeneration happens inside the Arch container that the
 deploy action runs, so contributors editing PKGBUILDs in PRs do not
 need `makepkg` installed locally — CI handles it.
 
-## Smoke-testing in Docker (any host OS)
+## Linux dev / test environment for macOS + Windows contributors
 
-A reproducible Arch Linux build environment with a lightweight desktop
-+ noVNC lives in `packaging/aur/test/Dockerfile`. The desktop renders
-in your browser, so you can build a PKGBUILD with `makepkg`, install
-the resulting `.pkg.tar.zst`, and launch Claudette without needing an
-Arch host. The driver script does the build, mount, and port forward
-in one step:
+`packaging/aur/test/Dockerfile` doubles as the supported way for
+macOS and Windows contributors to verify Linux-specific behavior
+without keeping an Arch VM around. It boots an Arch Linux container
+with a real XFCE desktop (xfwm4 + xfdesktop + xfce4-panel + thunar)
++ noVNC, builds a chosen PKGBUILD from this repo, installs the
+resulting `.pkg.tar.zst`, plants a Claudette launcher on the
+Desktop, and clones the public `utensils/claudette` repo into
+`~/Projects/Claudette` so you immediately have a project to open.
 
 ```bash
-# Boot the container, no auto-build — drop you at a desktop with
-# /workspace already pointed at this repo.
-scripts/aur/test-in-docker.sh
-
-# Build + install claudette-bin from the local PKGBUILD, then leave
-# you at the desktop so you can launch `claudette-app` by hand.
+# One-command end-to-end (recommended). Builds + installs
+# claudette-bin, plants the Desktop icon, drops a project clone
+# under ~/Projects/Claudette.
 scripts/aur/test-in-docker.sh claudette-bin
 
-# Build + install + auto-launch the GUI in noVNC.
+# Boot only — no auto-build. Useful when you've already verified
+# the build and just want a Linux shell with the repo mounted at
+# /workspace.
+scripts/aur/test-in-docker.sh
+
+# Same as the first but also auto-launches the GUI on connect.
 scripts/aur/test-in-docker.sh claudette-bin --launch
+
+# Force a clean image rebuild (drops the BuildKit layer cache).
+scripts/aur/test-in-docker.sh --rebuild
 ```
 
-Then open `http://localhost:6080/vnc.html` in any browser and click
-**Connect** — there is no password. The container is local-only
-(`-localhost yes` on Xvnc; only `websockify` on 6080 is exposed), so
-this auth shape is fine for a dev image but should never be used on a
-host you don't own.
+Then open `http://localhost:6080/` in any browser and click
+**Connect** — no password on noVNC. The XFCE desktop will have:
 
-The script picks `docker` or `podman` based on whichever is on
-`$PATH`. On a fresh box the first build downloads the full Arch
-base + Tauri toolchain (~2 GB across `webkit2gtk-4.1`, `rust`,
-`bun`, etc.); subsequent runs reuse the cached image instantly.
+- A **Claudette** icon (double-click to launch the app)
+- A **Projects** icon (opens Thunar at `~/Projects`; the cloned
+  Claudette repo is one folder down at `Projects/Claudette/`,
+  ready to add as a workspace from inside the app)
+- The standard XFCE panel with the application menu, taskbar,
+  and notification area
+
+If the OS prompts for a user password (e.g. polkit on a Shutdown
+action from the panel menu), the user is `builder` with password
+`builder`. Sudo from xfce4-terminal is passwordless.
+
+Container security shape: Xvnc runs with `-localhost yes` and
+`-SecurityTypes None`, so only `websockify` on `:6080` is
+reachable. The container boundary is the only auth — fine for a
+local dev image, never expose port 6080 on a host you don't own.
+
+The script picks `docker` or `podman` based on which is on
+`$PATH`. First build downloads ~2 GB (Arch base + Tauri toolchain
++ XFCE), takes 2–3 minutes on a decent connection. Subsequent
+runs reuse the cached image instantly; entrypoint-only changes
+(the COPY layer) rebuild in seconds.
+
+Env vars you can pass through the helper script:
+
+| Var | Default | Purpose |
+|-----|---------|---------|
+| `BUILD_PKG` | unset | Which PKGBUILD to build + install on boot. Set by the positional arg. |
+| `LAUNCH_CMD` | unset | Command to auto-launch after install. `--launch` sets this to `claudette-app`. |
+| `VNC_GEOMETRY` | `1440x900` | xrandr-style geometry. Set via `CLAUDETTE_AUR_TEST_GEOMETRY`. |
+| `CLONE_BRANCH` | `main` | Branch to clone into `~/Projects/Claudette`. |
+| `SKIP_CLONE` | `0` | Set to `1` to skip the project clone for a faster boot. |
+| `CLAUDETTE_AUR_TEST_PORT` | `6080` | Host port to publish noVNC on. |
 
 ## Editing a PKGBUILD locally
 
