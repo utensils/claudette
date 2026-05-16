@@ -359,7 +359,7 @@ pub(super) async fn write_anthropic_error_response(
     err: GatewayUpstreamError,
 ) -> Result<(), String> {
     let error_type = anthropic_error_type_for(err.status);
-    super::write_json_response(
+    super::gateway::write_json_response(
         stream,
         err.status,
         json!({
