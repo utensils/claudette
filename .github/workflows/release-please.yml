@@ -74,15 +74,18 @@ jobs:
             rust-target: x86_64-apple-darwin
             bundles: app,dmg
             label: macos-x86_64
+          # See nightly.yml for the rationale — `appimage` is dropped on
+          # Linux because `linuxdeploy` segfaults on the Bun-compiled Pi
+          # harness sidecar. `.deb` bundling bypasses linuxdeploy and works.
           - platform: ubuntu-22.04
             rust-target: x86_64-unknown-linux-gnu
-            bundles: appimage,deb
+            bundles: deb
             label: linux-x86_64
           # GitHub-hosted aarch64 Linux runner (`ubuntu-22.04-arm`) is GA and
           # native, so this is a real ARM64 build — no QEMU / cross toolchain.
           - platform: ubuntu-22.04-arm
             rust-target: aarch64-unknown-linux-gnu
-            bundles: appimage,deb
+            bundles: deb
             label: linux-aarch64
           # Windows keeps the user-facing zip asset and also publishes a
           # signed NSIS updater asset so `latest.json` can advertise an
@@ -178,7 +181,11 @@ jobs:
           releaseName: ${{ needs.resolve-tag.outputs.tag }}
           releaseDraft: true
           includeUpdaterJson: false
-          args: --target ${{ matrix.rust-target }} --bundles ${{ matrix.bundles }}
+          # `--verbose` makes tauri-bundler surface bundler subprocess
+          # stderr (linuxdeploy, codesign, notarytool, etc.) instead of
+          # swallowing it at log level Error — see #824 for the failure
+          # mode that motivated this.
+          args: --verbose --target ${{ matrix.rust-target }} --bundles ${{ matrix.bundles }}
 
       - name: Build and upload desktop app (non-Windows) — attempt 2 (macOS retry)
         id: bundle2
@@ -200,7 +207,11 @@ jobs:
           releaseName: ${{ needs.resolve-tag.outputs.tag }}
           releaseDraft: true
           includeUpdaterJson: false
-          args: --target ${{ matrix.rust-target }} --bundles ${{ matrix.bundles }}
+          # `--verbose` makes tauri-bundler surface bundler subprocess
+          # stderr (linuxdeploy, codesign, notarytool, etc.) instead of
+          # swallowing it at log level Error — see #824 for the failure
+          # mode that motivated this.
+          args: --verbose --target ${{ matrix.rust-target }} --bundles ${{ matrix.bundles }}
 
       - name: Build and upload desktop app (non-Windows) — attempt 3 (macOS final)
         if: ${{ runner.os == 'macOS' && steps.bundle1.outcome == 'failure' && steps.bundle2.outcome == 'failure' }}
@@ -220,7 +231,11 @@ jobs:
           releaseName: ${{ needs.resolve-tag.outputs.tag }}
           releaseDraft: true
           includeUpdaterJson: false
-          args: --target ${{ matrix.rust-target }} --bundles ${{ matrix.bundles }}
+          # `--verbose` makes tauri-bundler surface bundler subprocess
+          # stderr (linuxdeploy, codesign, notarytool, etc.) instead of
+          # swallowing it at log level Error — see #824 for the failure
+          # mode that motivated this.
+          args: --verbose --target ${{ matrix.rust-target }} --bundles ${{ matrix.bundles }}
 
       # ---- Windows: direct Tauri build, ship zip + NSIS updater ------------
       # `custom-protocol` is the feature flag that tells tauri-build to
@@ -240,7 +255,7 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
-          cargo tauri build \
+          cargo tauri build --verbose \
             --target ${{ matrix.rust-target }} \
             --bundles nsis \
             --features tauri/custom-protocol,alternative-backends
