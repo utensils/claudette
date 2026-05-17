@@ -1,3 +1,5 @@
+#![cfg(unix)]
+
 //! End-to-end handshake test for the session-host's local-socket listener.
 //!
 //! Spawns the server pointed at a unique temp socket, connects a client,

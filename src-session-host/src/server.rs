@@ -110,7 +110,11 @@ async fn handle_connection(stream: Stream) -> std::io::Result<()> {
             message: "first frame was not Hello".into(),
             recoverable: false,
         };
-        write_frame(&mut w, &serde_json::to_vec(&bad).unwrap()).await?;
+        write_frame(
+            &mut w,
+            &serde_json::to_vec(&bad).map_err(std::io::Error::other)?,
+        )
+        .await?;
         return Ok(());
     };
     let resp = if protocol_version == PROTOCOL_VERSION {
@@ -125,6 +129,10 @@ async fn handle_connection(stream: Stream) -> std::io::Result<()> {
             supported_versions: vec![PROTOCOL_VERSION],
         }
     };
-    write_frame(&mut w, &serde_json::to_vec(&resp).unwrap()).await?;
+    write_frame(
+        &mut w,
+        &serde_json::to_vec(&resp).map_err(std::io::Error::other)?,
+    )
+    .await?;
     Ok(())
 }
