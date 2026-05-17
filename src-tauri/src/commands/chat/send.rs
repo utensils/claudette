@@ -1851,7 +1851,26 @@ pub async fn send_chat_message(
                             match rate_limits_rx.recv().await {
                                 Ok(snapshot) => {
                                     if let Some(state) = app_handle.try_state::<AppState>() {
-                                        *state.codex_rate_limits.write().await = Some(snapshot);
+                                        *state.codex_rate_limits.write().await =
+                                            Some(snapshot.clone());
+                                        // Mirror to SQLite so the next app launch
+                                        // can render the meter instantly on Codex
+                                        // model selection, without waiting for a
+                                        // chat turn. Best-effort: log and continue.
+                                        let db_path = state.db_path.clone();
+                                        tokio::task::spawn_blocking(move || {
+                                            if let Err(err) =
+                                                claudette::db::Database::open(&db_path).and_then(
+                                                    |db| db.save_codex_rate_limits(&snapshot),
+                                                )
+                                            {
+                                                tracing::warn!(
+                                                    target: "claudette::usage",
+                                                    error = %err,
+                                                    "failed to persist Codex rate-limits snapshot",
+                                                );
+                                            }
+                                        });
                                     }
                                 }
                                 Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {

@@ -1,7 +1,7 @@
 import { useEffect, useRef } from "react";
 
 import type { AgentBackendConfig } from "../services/tauri/agentBackends";
-import { getSessionUsage } from "../services/tauri";
+import { getSessionUsage, prefetchCodexRateLimits } from "../services/tauri";
 import { useAppStore } from "../stores/useAppStore";
 import type { UsageSnapshot } from "../types/usage";
 import type { UsageIndicatorMode } from "../components/chat/composer/usageIndicatorMode";
@@ -63,6 +63,14 @@ export function useSessionUsagePoller({
   // don't trigger an extra render — only the actual store mutation
   // does.
   const prevSessionRef = useRef<string | null>(null);
+
+  // Track which (sessionId, backendKind) combinations have already
+  // fired a Codex rate-limits prefetch this app run. Prevents a
+  // duplicate Codex CLI spawn every time the effect re-runs (e.g. on
+  // a new completed turn, a focus event, or a sibling-state update
+  // that bumps a dep). Cleared implicitly on unmount via the ref's
+  // own lifecycle.
+  const prefetchedCodexKeysRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
     if (!sessionId) return;
@@ -136,6 +144,30 @@ export function useSessionUsagePoller({
       })();
       return inFlight;
     };
+
+    // First-time-on-this-session prefetch for Codex backends. The
+    // backend's rate-limits cache is only populated as a side-effect
+    // of starting a chat session — without this, the meter would
+    // sit at local-aggregate until the user sent their first turn,
+    // which felt like "I have to send a message before my plan
+    // shows up." The prefetch spawns a short-lived Codex app-server
+    // session in the background and tears it down once the
+    // `account/rateLimits/read` returns.
+    const isCodexBackend =
+      backend.kind === "codex_native" || backend.kind === "codex_subscription";
+    if (isCodexBackend) {
+      const prefetchKey = `${sessionId}::${backend.kind}::${backend.id}`;
+      if (!prefetchedCodexKeysRef.current.has(prefetchKey)) {
+        prefetchedCodexKeysRef.current.add(prefetchKey);
+        // Fire and forget; the resolve handler triggers a re-fetch so
+        // the freshly-cached snapshot lands without waiting for the
+        // 5-min poller tick.
+        void prefetchCodexRateLimits(backend).then(() => {
+          if (cancelled) return;
+          void fetchOnce();
+        });
+      }
+    }
 
     const stop = () => {
       if (timeoutId !== null) {

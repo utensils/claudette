@@ -633,6 +633,16 @@ pub struct AppState {
 
 impl AppState {
     pub fn new(db_path: PathBuf, worktree_base_dir: PathBuf, plugins: PluginRegistry) -> Self {
+        // Hydrate the Codex rate-limits cache from SQLite so the
+        // composer usage meter has real plan quotas to render the
+        // first time the user selects a Codex backend after launch.
+        // Best-effort: a missing/corrupt row falls back to `None` and
+        // the next chat turn (or prefetch command) repopulates the
+        // in-memory + on-disk copies together.
+        let codex_rate_limits = claudette::db::Database::open(&db_path)
+            .ok()
+            .and_then(|db| db.load_codex_rate_limits().ok().flatten());
+
         Self {
             db_path,
             worktree_base_dir: RwLock::new(worktree_base_dir),
@@ -647,7 +657,7 @@ impl AppState {
             tray_handle: Mutex::new(None),
             next_tray_seq: AtomicU64::new(1),
             usage_cache: RwLock::new(None),
-            codex_rate_limits: RwLock::new(None),
+            codex_rate_limits: RwLock::new(codex_rate_limits),
             plugins: RwLock::new(Arc::new(plugins)),
             #[cfg(feature = "voice")]
             voice: Arc::new(VoiceProviderRegistry::new(

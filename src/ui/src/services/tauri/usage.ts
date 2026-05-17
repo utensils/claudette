@@ -25,6 +25,17 @@ export function getSessionUsage(args: {
   });
 }
 
+/** Fire a one-shot Codex `account/rateLimits/read` against a freshly
+ *  spawned app-server session. The backend writes the result into
+ *  `AppState.codex_rate_limits` and mirrors it to SQLite, so the very
+ *  next `get_session_usage` call returns live plan quotas instead of
+ *  falling back to local-aggregate. Idempotent and best-effort —
+ *  always resolves `void`, regardless of auth / spawn / RPC outcome.
+ *  See `src-tauri/src/commands/usage.rs::prefetch_codex_rate_limits`. */
+export function prefetchCodexRateLimits(backend: AgentBackendConfig): Promise<void> {
+  return invoke("prefetch_codex_rate_limits", { backend });
+}
+
 export function openUsageSettings(): Promise<void> {
   return invoke("open_usage_settings");
 }

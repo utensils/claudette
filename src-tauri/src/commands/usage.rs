@@ -3,6 +3,7 @@ use tauri::State;
 use crate::commands::agent_backends::load_backend_secret;
 use crate::state::AppState;
 use crate::usage::{self, ClaudeCodeUsage};
+use claudette::agent::{CodexAppServerOptions, CodexAppServerSession};
 use claudette::agent_backend::{AgentBackendConfig, AgentBackendKind};
 use claudette::db::Database;
 use claudette::process::CommandWindowExt as _;
@@ -157,6 +158,109 @@ fn is_claude_family(kind: &AgentBackendKind) -> bool {
         kind,
         AgentBackendKind::Anthropic | AgentBackendKind::CustomAnthropic
     )
+}
+
+/// Spawn a short-lived Codex app-server session, fire
+/// `account/rateLimits/read`, persist the result, and tear the
+/// session down. Lets the composer's usage meter render real plan
+/// quotas the moment the user selects a Codex backend, instead of
+/// waiting for the next `chat::send` turn to populate the cache as
+/// a side-effect.
+///
+/// Idempotent and cheap to call from the frontend's model-switch
+/// effect: takes ~1–2s on a cold launch (Codex CLI spawn cost) and
+/// returns immediately on success or any RPC failure. Failures fall
+/// back to the local-aggregate path that already renders in the
+/// meter — there is nothing user-visible to surface, so we return
+/// `Ok(())` either way and just log on the Rust side.
+#[tauri::command]
+pub async fn prefetch_codex_rate_limits(
+    state: State<'_, AppState>,
+    app_handle: tauri::AppHandle,
+    backend: AgentBackendConfig,
+) -> Result<(), String> {
+    if !matches!(
+        backend.kind,
+        AgentBackendKind::CodexNative | AgentBackendKind::CodexSubscription
+    ) {
+        return Ok(());
+    }
+
+    let cwd = std::env::current_dir()
+        .ok()
+        .filter(|path| path.exists())
+        .or_else(dirs::home_dir)
+        .unwrap_or_else(std::env::temp_dir);
+
+    let session = match CodexAppServerSession::start_with_options(
+        &cwd,
+        env!("CARGO_PKG_VERSION"),
+        CodexAppServerOptions {
+            model: backend.default_model.clone(),
+            ..Default::default()
+        },
+    )
+    .await
+    {
+        Ok(session) => session,
+        Err(err) => {
+            tracing::debug!(
+                target: "claudette::usage",
+                error = %err,
+                "Codex rate-limits prefetch failed at session start (auth not ready?)",
+            );
+            return Ok(());
+        }
+    };
+
+    let pid = session.pid();
+    let read_outcome = session.read_rate_limits().await;
+
+    // Best-effort shutdown — the session struct intentionally has no
+    // `Drop` impl that kills the process, so we must call this here.
+    if let Err(stop_err) = claudette::agent::stop_agent_graceful(pid).await {
+        tracing::debug!(
+            target: "claudette::usage",
+            pid,
+            error = %stop_err,
+            "failed to stop prefetch Codex app-server session",
+        );
+    }
+
+    match read_outcome {
+        Ok(response) => {
+            let snapshot = response.rate_limits.clone();
+            *state.codex_rate_limits.write().await = Some(snapshot.clone());
+
+            let db_path = state.db_path.clone();
+            tokio::task::spawn_blocking(move || {
+                if let Err(err) =
+                    Database::open(&db_path).and_then(|db| db.save_codex_rate_limits(&snapshot))
+                {
+                    tracing::warn!(
+                        target: "claudette::usage",
+                        error = %err,
+                        "failed to persist Codex rate-limits prefetch snapshot",
+                    );
+                }
+            });
+
+            // Nudge the UI to re-poll so the freshly-cached snapshot
+            // surfaces without waiting for the 5-minute poller tick.
+            // The poller already keys on the active session, so a
+            // simple custom event is enough.
+            let _ = tauri::Emitter::emit(&app_handle, "codex-rate-limits-updated", ());
+        }
+        Err(err) => {
+            tracing::debug!(
+                target: "claudette::usage",
+                error = %err,
+                "Codex rate-limits prefetch RPC failed; meter falls back to local aggregate",
+            );
+        }
+    }
+
+    Ok(())
 }
 
 #[tauri::command]

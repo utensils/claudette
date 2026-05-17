@@ -1124,6 +1124,7 @@ fn main() {
             // Usage
             commands::usage::get_claude_code_usage,
             commands::usage::get_session_usage,
+            commands::usage::prefetch_codex_rate_limits,
             commands::usage::open_usage_settings,
             commands::usage::open_release_notes,
             // Auth

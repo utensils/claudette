@@ -1616,7 +1616,7 @@ pub struct CodexAppServerModelPage {
 /// Per-window utilization snapshot. `used_percent` is on the 0-100
 /// scale Codex returns. `resets_at` is unix millis; absent means
 /// "no scheduled reset" (e.g. a credit bucket).
-#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CodexRateLimitWindow {
     pub used_percent: i32,
@@ -1628,7 +1628,7 @@ pub struct CodexRateLimitWindow {
     pub window_duration_mins: Option<i64>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CodexCreditsSnapshot {
     /// Stringified dollar balance (e.g. `"0.103"`). Codex returns this
@@ -1640,7 +1640,7 @@ pub struct CodexCreditsSnapshot {
     pub unlimited: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CodexRateLimitSnapshot {
     #[serde(default)]
