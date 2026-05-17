@@ -39,7 +39,7 @@
 //! the truth.
 
 use crate::agent::interactive_host::InteractiveHost;
-use crate::db::Database;
+use crate::db::{Database, InteractiveSessionRow};
 
 /// Reconcile every `running` `interactive_sessions` row against
 /// `host`. See module docs for the full transition table.
@@ -65,7 +65,30 @@ pub async fn reattach_pending(
     let pending = db
         .list_running_interactive_sessions()
         .map_err(ReattachError::Db)?;
-    if pending.is_empty() {
+    reattach_rows(db, &pending, host).await
+}
+
+/// Reconcile a caller-supplied set of `interactive_sessions` rows
+/// against `host`. Identical contract to [`reattach_pending`], but the
+/// row list is provided by the caller instead of being queried from
+/// the DB — useful when the caller has already fetched the rows
+/// (typically to avoid opening multiple `Database` connections).
+///
+/// The caller is responsible for scoping `rows` to rows that should
+/// be reconciled. In practice every entry should currently be in
+/// `state = 'running'`; rows in other states will still be rewritten,
+/// so don't pass them in unless that's what you want.
+///
+/// When `rows` is empty this returns `Ok(())` without calling
+/// `host.status()` — matches the no-op fast path in `reattach_pending`
+/// and means callers can pass an empty workspace group cheaply.
+#[tracing::instrument(level = "info", target = "claudette::interactive", skip_all)]
+pub async fn reattach_rows(
+    db: &Database,
+    rows: &[InteractiveSessionRow],
+    host: &dyn InteractiveHost,
+) -> Result<(), ReattachError> {
+    if rows.is_empty() {
         return Ok(());
     }
 
@@ -81,7 +104,7 @@ pub async fn reattach_pending(
         .map(|s| s.sid.as_str())
         .collect();
 
-    for row in &pending {
+    for row in rows {
         let sid = row.sid.as_str();
         let (next_state, crash_reason) = if alive.contains(sid) {
             ("detached", None)
@@ -357,6 +380,186 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(row.state, "exited");
+    }
+
+    #[tokio::test]
+    async fn reattach_rows_classifies_provided_rows_without_db_query() {
+        // reattach_rows operates on caller-supplied rows; it must NOT
+        // call list_running_interactive_sessions itself. To prove that,
+        // seed the DB with a row that has state = 'detached' (so the
+        // list query would return zero "running" rows), pass that row
+        // in explicitly, and verify it still gets classified.
+        let db = Database::open_in_memory().unwrap();
+        insert_test_workspace(&db, "ws-1");
+
+        // Seed two rows in 'detached' so list_running_interactive_sessions
+        // returns an empty list; pass them in to reattach_rows directly.
+        let row_a = make_row("claudette-ws1-aaaaaaaa", "ws-1", "detached");
+        let row_b = make_row("claudette-ws1-bbbbbbbb", "ws-1", "detached");
+        db.create_interactive_session(&row_a).unwrap();
+        db.create_interactive_session(&row_b).unwrap();
+
+        let host = MockHost {
+            status_response: HostStatus {
+                host_version: "mock".into(),
+                sessions: vec![HostSessionSummary {
+                    sid: SessionId("claudette-ws1-aaaaaaaa".into()),
+                    pid: None,
+                    running: true,
+                }],
+            },
+        };
+
+        reattach_rows(&db, &[row_a, row_b], &host).await.unwrap();
+
+        // A was reported by host as running → detached (unchanged label,
+        // but the call path proves the row was processed).
+        let a = db
+            .get_interactive_session("claudette-ws1-aaaaaaaa")
+            .unwrap()
+            .unwrap();
+        assert_eq!(a.state, "detached");
+        assert!(a.crash_reason.is_none());
+
+        // B is not on the host → crashed, host missing.
+        let b = db
+            .get_interactive_session("claudette-ws1-bbbbbbbb")
+            .unwrap()
+            .unwrap();
+        assert_eq!(b.state, "crashed");
+        assert_eq!(b.crash_reason.as_deref(), Some("host missing"));
+    }
+
+    #[tokio::test]
+    async fn reattach_rows_is_noop_when_rows_empty() {
+        // Empty row slice must not call host.status(). This is the
+        // contract the boot reconciler relies on when a workspace
+        // group ends up empty: passing it in shouldn't spin up the
+        // sidecar.
+        let db = Database::open_in_memory().unwrap();
+        insert_test_workspace(&db, "ws-1");
+
+        struct PanickyHost;
+        #[async_trait]
+        impl InteractiveHost for PanickyHost {
+            async fn ensure_session(
+                &self,
+                _sid: &SessionId,
+                _spec: &SessionSpec,
+            ) -> Result<HostHandle, HostError> {
+                unimplemented!()
+            }
+            async fn attach(
+                &self,
+                _sid: &SessionId,
+            ) -> Result<(AttachId, AttachStream), HostError> {
+                unimplemented!()
+            }
+            async fn send_input(
+                &self,
+                _sid: &SessionId,
+                _payload: InputPayload,
+            ) -> Result<(), HostError> {
+                unimplemented!()
+            }
+            async fn capture_screen(&self, _sid: &SessionId) -> Result<ScreenSnapshot, HostError> {
+                unimplemented!()
+            }
+            async fn resize(
+                &self,
+                _sid: &SessionId,
+                _rows: u16,
+                _cols: u16,
+            ) -> Result<(), HostError> {
+                unimplemented!()
+            }
+            async fn detach(
+                &self,
+                _sid: &SessionId,
+                _attach_id: AttachId,
+            ) -> Result<(), HostError> {
+                unimplemented!()
+            }
+            async fn stop(&self, _sid: &SessionId, _mode: StopMode) -> Result<(), HostError> {
+                unimplemented!()
+            }
+            async fn status(&self) -> Result<HostStatus, HostError> {
+                panic!("status must not be called when rows is empty")
+            }
+        }
+
+        reattach_rows(&db, &[], &PanickyHost).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn reattach_rows_surfaces_host_status_errors() {
+        let db = Database::open_in_memory().unwrap();
+        insert_test_workspace(&db, "ws-1");
+        let row = make_row("claudette-ws1-aaaaaaaa", "ws-1", "running");
+        db.create_interactive_session(&row).unwrap();
+
+        struct ErroringHost;
+        #[async_trait]
+        impl InteractiveHost for ErroringHost {
+            async fn ensure_session(
+                &self,
+                _sid: &SessionId,
+                _spec: &SessionSpec,
+            ) -> Result<HostHandle, HostError> {
+                unimplemented!()
+            }
+            async fn attach(
+                &self,
+                _sid: &SessionId,
+            ) -> Result<(AttachId, AttachStream), HostError> {
+                unimplemented!()
+            }
+            async fn send_input(
+                &self,
+                _sid: &SessionId,
+                _payload: InputPayload,
+            ) -> Result<(), HostError> {
+                unimplemented!()
+            }
+            async fn capture_screen(&self, _sid: &SessionId) -> Result<ScreenSnapshot, HostError> {
+                unimplemented!()
+            }
+            async fn resize(
+                &self,
+                _sid: &SessionId,
+                _rows: u16,
+                _cols: u16,
+            ) -> Result<(), HostError> {
+                unimplemented!()
+            }
+            async fn detach(
+                &self,
+                _sid: &SessionId,
+                _attach_id: AttachId,
+            ) -> Result<(), HostError> {
+                unimplemented!()
+            }
+            async fn stop(&self, _sid: &SessionId, _mode: StopMode) -> Result<(), HostError> {
+                unimplemented!()
+            }
+            async fn status(&self) -> Result<HostStatus, HostError> {
+                Err(HostError::Unavailable("mock".into()))
+            }
+        }
+
+        let err = reattach_rows(&db, &[row], &ErroringHost).await.unwrap_err();
+        assert!(
+            matches!(err, ReattachError::Host(_)),
+            "expected ReattachError::Host, got {err:?}",
+        );
+
+        // Row is untouched — we don't reclassify when we couldn't
+        // reach the host to ask.
+        let persisted = db
+            .get_interactive_session("claudette-ws1-aaaaaaaa")
+            .unwrap()
+            .unwrap();
+        assert_eq!(persisted.state, "running");
     }
 
     #[tokio::test]

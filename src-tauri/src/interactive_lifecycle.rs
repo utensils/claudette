@@ -1,6 +1,6 @@
 //! Tauri-side glue for the interactive-session boot reconciler.
 //!
-//! Wraps [`claudette::interactive::reattach_pending`] in a boot-safe
+//! Wraps [`claudette::interactive::reattach_rows`] in a boot-safe
 //! shape: groups the persisted `running` rows by workspace, resolves
 //! the cached [`InteractiveHost`](claudette::agent::interactive_host::InteractiveHost)
 //! through [`AppState::interactive_host_for`], and runs the reconciler
@@ -8,23 +8,31 @@
 //! status RPC errored) are logged and isolated per workspace so a
 //! single bad row can't wedge the rest of the boot path.
 //!
-//! The matching lib-level function lives in `claudette::interactive`
-//! and is the testable unit; this file is the thin "wire it into the
-//! AppState" layer.
+//! The matching lib-level functions live in `claudette::interactive`
+//! and are the testable units; this file is the thin "wire it into
+//! the AppState" layer.
 //!
-//! Threading note: `claudette::interactive::reattach_pending` borrows
-//! a `claudette::db::Database` across an `await` on `host.status()`,
+//! Threading note: `claudette::interactive::reattach_rows` borrows a
+//! `claudette::db::Database` across an `await` on `host.status()`,
 //! and `Database` wraps a `!Sync` `rusqlite::Connection`. The
 //! resulting future is therefore not `Send`, so we cannot park it
 //! directly on a multi-thread Tokio runtime via
 //! `tauri::async_runtime::spawn`. Instead, this module spawns a
-//! blocking thread, builds a `current_thread` Tokio runtime there,
-//! and drives the reconciler inside that runtime — the DB connection
-//! never leaves the blocking thread, but the async host call still
-//! works because we have a runtime locally.
+//! single blocking thread, builds a `current_thread` Tokio runtime
+//! there, and drives the reconciler for every workspace inside that
+//! runtime. Crucially, the DB connection is opened ONCE inside that
+//! blocking thread and reused across workspaces — opening per
+//! workspace would risk concurrent `Database::open` calls fighting
+//! for the SQLite OS-level lock and surfacing as `SQLITE_BUSY` on
+//! non-WAL databases.
+//!
+//! Each per-workspace host is resolved up-front on the async caller
+//! (because `interactive_host_for` is `async` and may need to spawn
+//! the sidecar). The resolved `(workspace_id, host, rows)` tuples are
+//! then shipped into the single blocking task that owns the DB
+//! handle.
 
 use std::collections::HashMap;
-use std::path::Path;
 
 use claudette::agent::interactive_host::InteractiveHost;
 use claudette::db::{Database, InteractiveSessionRow};
@@ -32,17 +40,6 @@ use std::sync::Arc;
 use tauri::{AppHandle, Manager};
 
 use crate::state::AppState;
-
-/// Open the DB and pull every `running` interactive session row.
-/// The string error is just the `Display` form of the underlying
-/// `rusqlite::Error` — keeping the concrete type out of
-/// `claudette-tauri`'s dep tree (`rusqlite` is a transitive dep of
-/// `claudette` only).
-fn fetch_running_rows(db_path: &Path) -> Result<Vec<InteractiveSessionRow>, String> {
-    let db = Database::open(db_path).map_err(|e| e.to_string())?;
-    db.list_running_interactive_sessions()
-        .map_err(|e| e.to_string())
-}
 
 /// Reconcile every persisted `interactive_sessions` row currently in
 /// `state = 'running'` against the live host. See module docs for the
@@ -58,9 +55,16 @@ pub async fn reattach_interactive_sessions_on_boot(app: AppHandle) {
     let state = app.state::<AppState>();
     let db_path = state.db_path.clone();
 
+    // Phase 1: fetch all running rows in a single blocking task that
+    // opens and closes its own DB connection. Doing this on the async
+    // caller would block the multi-thread runtime on rusqlite I/O.
     let pending = match tokio::task::spawn_blocking({
         let db_path = db_path.clone();
-        move || fetch_running_rows(&db_path)
+        move || -> Result<Vec<InteractiveSessionRow>, String> {
+            let db = Database::open(&db_path).map_err(|e| e.to_string())?;
+            db.list_running_interactive_sessions()
+                .map_err(|e| e.to_string())
+        }
     })
     .await
     {
@@ -101,9 +105,17 @@ pub async fn reattach_interactive_sessions_on_boot(app: AppHandle) {
             .push(row);
     }
 
+    // Phase 2: resolve each workspace's host on the async caller.
+    // `interactive_host_for` is `async` (may spawn the sidecar), so
+    // we can't do this inside the single-threaded blocking task. We
+    // collect everything that resolves successfully into a list of
+    // `(workspace_id, host, rows)` tuples and ship that list into the
+    // one blocking task that owns the DB handle.
+    let mut resolved: Vec<(String, Arc<dyn InteractiveHost>, Vec<InteractiveSessionRow>)> =
+        Vec::with_capacity(by_workspace.len());
     for (workspace_id, rows) in by_workspace {
-        let host = match state.interactive_host_for(&workspace_id).await {
-            Ok(h) => h,
+        match state.interactive_host_for(&workspace_id).await {
+            Ok(host) => resolved.push((workspace_id, host, rows)),
             Err(err) => {
                 tracing::warn!(
                     target: "claudette::interactive",
@@ -112,50 +124,57 @@ pub async fn reattach_interactive_sessions_on_boot(app: AppHandle) {
                     error = %err,
                     "boot reconciler: could not resolve host; leaving rows as running",
                 );
-                continue;
             }
-        };
+        }
+    }
 
-        // Drive `reattach_pending` on a blocking thread with a
-        // single-threaded Tokio runtime. The reconciler awaits the
-        // host but holds a `!Sync` `Database` borrow across the
-        // await — running it inside `current_thread` (no work
-        // stealing) means the borrow never crosses thread boundaries
-        // and the future doesn't need `Send`.
-        let workspace_id_clone = workspace_id.clone();
-        let db_path_inner = state.db_path.clone();
-        let host_clone: Arc<dyn InteractiveHost> = Arc::clone(&host);
-        let result = tokio::task::spawn_blocking(move || -> Result<(), String> {
-            let rt = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .map_err(|e| e.to_string())?;
-            rt.block_on(async move {
-                let db = Database::open(&db_path_inner).map_err(|e| e.to_string())?;
-                claudette::interactive::reattach_pending(&db, host_clone.as_ref())
-                    .await
-                    .map_err(|e| e.to_string())
-            })
-        })
-        .await;
-        match result {
-            Ok(Ok(())) => {}
-            Ok(Err(err)) => {
-                tracing::warn!(
-                    target: "claudette::interactive",
-                    workspace_id = %workspace_id_clone,
-                    error = %err,
-                    "boot reconciler: reattach_pending failed",
-                );
+    if resolved.is_empty() {
+        return;
+    }
+
+    // Phase 3: one blocking task, one DB connection, current-thread
+    // Tokio runtime so the `!Send` future from `reattach_rows` is
+    // legal. Per-workspace errors are logged and isolated; a single
+    // failing workspace must not abort the rest of the reconciliation.
+    let db_path_inner = db_path.clone();
+    let join = tokio::task::spawn_blocking(move || -> Result<(), String> {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| e.to_string())?;
+        let db = Database::open(&db_path_inner).map_err(|e| e.to_string())?;
+        rt.block_on(async move {
+            for (workspace_id, host, rows) in resolved {
+                if let Err(err) =
+                    claudette::interactive::reattach_rows(&db, &rows, host.as_ref()).await
+                {
+                    tracing::warn!(
+                        target: "claudette::interactive",
+                        workspace_id = %workspace_id,
+                        error = %err,
+                        "boot reconciler: reattach_rows failed",
+                    );
+                }
             }
-            Err(join_err) => {
-                tracing::warn!(
-                    target: "claudette::interactive",
-                    workspace_id = %workspace_id_clone,
-                    error = %join_err,
-                    "boot reconciler: join failed",
-                );
-            }
+        });
+        Ok(())
+    })
+    .await;
+    match join {
+        Ok(Ok(())) => {}
+        Ok(Err(err)) => {
+            tracing::warn!(
+                target: "claudette::interactive",
+                error = %err,
+                "boot reconciler: blocking task setup failed",
+            );
+        }
+        Err(join_err) => {
+            tracing::warn!(
+                target: "claudette::interactive",
+                error = %join_err,
+                "boot reconciler: join failed",
+            );
         }
     }
 }
