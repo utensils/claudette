@@ -189,6 +189,24 @@ mod tests {
         assert_eq!(val.as_deref(), Some("value2"));
     }
 
+    /// `claudeInteractiveEnabled` is the Settings → Experimental flag that
+    /// surfaces the interactive `claude` CLI (tmux/sidecar) agent backend.
+    /// It is persisted through the same generic `app_settings` table as
+    /// every other experimental flag (e.g. `pluginManagementEnabled`), so
+    /// this test just pins the round-trip contract: write a string, read
+    /// it back unchanged. Pinning by key catches accidental renames before
+    /// they wipe out a user's saved preference on restart.
+    #[test]
+    fn claude_interactive_enabled_round_trips() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("test.db");
+        let db = Database::open(&db_path).unwrap();
+        db.set_app_setting("claudeInteractiveEnabled", "true")
+            .unwrap();
+        let v = db.get_app_setting("claudeInteractiveEnabled").unwrap();
+        assert_eq!(v.as_deref(), Some("true"));
+    }
+
     // --- MCP server enabled field ---
 
     fn make_mcp_server(id: &str, repo_id: &str, name: &str) -> RepositoryMcpServer {
