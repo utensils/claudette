@@ -159,7 +159,11 @@ pub async fn detect_orphans(
     let orphans = status
         .sessions
         .iter()
-        .filter(|s| s.sid.as_str().starts_with("claudette-") && !db_set.contains(s.sid.as_str()))
+        .filter(|s| {
+            s.running
+                && s.sid.as_str().starts_with("claudette-")
+                && !db_set.contains(s.sid.as_str())
+        })
         .map(|s| s.sid.clone())
         .collect();
     Ok(orphans)
@@ -867,6 +871,46 @@ mod tests {
         ];
         let orphans = detect_orphans(&db_known, &host).await.unwrap();
         assert!(orphans.is_empty());
+    }
+
+    #[tokio::test]
+    async fn detect_orphans_excludes_not_running_host_summaries() {
+        // Host reports two claudette- sessions: one with running=true
+        // (orphan candidate) and one with running=false (mid-reap or
+        // graceful shutdown — must NOT be flagged as an orphan).
+        // The DB knows about neither. Only the running=true session
+        // should be returned, mirroring the
+        // `reattach_pending_treats_not_running_host_summaries_as_missing`
+        // semantics: not-running host summaries are not actionable.
+        let host = MockHost {
+            status_response: HostStatus {
+                host_version: "mock".into(),
+                sessions: vec![
+                    HostSessionSummary {
+                        sid: SessionId("claudette-ws1-aaaaaaaa".into()),
+                        pid: None,
+                        running: true,
+                    },
+                    HostSessionSummary {
+                        sid: SessionId("claudette-ws1-bbbbbbbb".into()),
+                        pid: None,
+                        running: false,
+                    },
+                ],
+            },
+        };
+
+        let orphans = detect_orphans(&[], &host).await.unwrap();
+        let orphan_strs: Vec<&str> = orphans.iter().map(|s| s.as_str()).collect();
+        assert_eq!(
+            orphan_strs,
+            vec!["claudette-ws1-aaaaaaaa"],
+            "only running host summaries should be reported as orphans",
+        );
+        assert!(
+            !orphan_strs.contains(&"claudette-ws1-bbbbbbbb"),
+            "not-running host summary must be excluded from orphan list",
+        );
     }
 
     #[tokio::test]
