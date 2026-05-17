@@ -11,6 +11,7 @@ use std::path::PathBuf;
 
 use clap::Subcommand;
 
+use crate::commands::chat_hook;
 use crate::{discovery, ipc, output};
 
 #[derive(Subcommand)]
@@ -174,6 +175,10 @@ pub enum Action {
         #[arg(long)]
         permission: Option<String>,
     },
+    /// Relay a Claude Code hook event to the running GUI. Designed to
+    /// be invoked from a Claude Code `hooks` configuration entry; the
+    /// hook payload (if any) is read from stdin as JSON.
+    Hook(chat_hook::ChatHookArgs),
 }
 
 pub async fn run(action: Action, json: bool) -> Result<(), Box<dyn Error>> {
@@ -389,6 +394,9 @@ pub async fn run(action: Action, json: bool) -> Result<(), Box<dyn Error>> {
             } else {
                 println!("ok");
             }
+        }
+        Action::Hook(args) => {
+            chat_hook::run(&info, args).await?;
         }
     }
     Ok(())

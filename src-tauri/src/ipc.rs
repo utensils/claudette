@@ -88,6 +88,7 @@ const METHODS: &[&str] = &[
     "routine.list",
     "routine.delete",
     "routine.run",
+    "chat_hook",
     "plugin.list",
     "plugin.invoke",
     "scm.detect_provider",
@@ -429,6 +430,7 @@ async fn dispatch(app: &AppHandle, req: RpcRequest) -> RpcResponse {
         "routine.list" => handle_routine_list(app).await,
         "routine.delete" => handle_routine_delete(app, &req.params).await,
         "routine.run" => handle_routine_run(app, &req.params).await,
+        "chat_hook" => handle_chat_hook(app, &req.params).await,
         "plugin.list" => handle_plugin_list(app).await,
         "plugin.invoke" => handle_plugin_invoke(app, &req.params).await,
         "scm.detect_provider" => handle_scm_detect_provider(app, &req.params).await,
@@ -1204,6 +1206,50 @@ async fn handle_submit_agent_approval(
     handle_submit_plan_approval(app, params).await
 }
 
+/// Relay a Claude Code hook event (sent by `claudette-cli chat hook`)
+/// into the appropriate interactive-session channel. Expected params:
+///
+/// - `sid` (string, required): interactive session id the GUI handed
+///   to the Claude process when it spawned.
+/// - `kind` (string, required): hook kind (e.g. `stop`, `awaiting`,
+///   `prompt_submitted`).
+/// - `reason` (string, optional): human-readable detail.
+/// - `payload_stdin` (string, optional): the raw stdin payload Claude
+///   Code passed to the hook command (JSON, or empty if the hook
+///   produced no stdin).
+///
+/// The full event routing — registering per-session channels and
+/// dispatching parsed events onto them — lands in Task E2. This
+/// handler currently validates the request shape and returns an
+/// explicit "not yet implemented" error so a misconfigured hook or a
+/// premature integration shows up loudly instead of being silently
+/// swallowed.
+async fn handle_chat_hook(
+    _app: &AppHandle,
+    params: &serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let _sid = params
+        .get("sid")
+        .and_then(|v| v.as_str())
+        .ok_or("missing sid")?
+        .to_string();
+    let _kind = params
+        .get("kind")
+        .and_then(|v| v.as_str())
+        .ok_or("missing kind")?
+        .to_string();
+    let _reason = params
+        .get("reason")
+        .and_then(|v| v.as_str())
+        .map(String::from);
+    let _payload_stdin = params
+        .get("payload_stdin")
+        .and_then(|v| v.as_str())
+        .map(String::from)
+        .unwrap_or_default();
+    Err("chat_hook not yet implemented".to_string())
+}
+
 /// Delegates to the shared `commands::workspace::archive_workspace_inner`
 /// helper so CLI-driven archives perform the same agent process
 /// teardown, env-watcher cleanup, and MCP supervisor shutdown the GUI
@@ -1577,6 +1623,7 @@ mod tests {
             "submit_agent_approval",
             "submit_plan_approval",
             "steer_queued_chat_message",
+            "chat_hook",
         ] {
             assert!(METHODS.contains(&method), "{method} missing from METHODS");
         }
