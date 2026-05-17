@@ -33,11 +33,24 @@ export function InteractiveTurnView({
 }: InteractiveTurnViewProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
+  // Tracks how many bytes from `bytes` have already been written into
+  // the live xterm instance. We use this to (a) replay the accumulated
+  // buffer when the terminal is recreated on a rows/cols change, and
+  // (b) write only the new tail when `bytes` grows.
+  const lastWrittenLenRef = useRef(0);
+  // The bytes-effect needs the current value of `bytes` but we don't
+  // want it to re-run on every prop change just to capture the latest —
+  // a ref keeps the mount effect in sync with whatever the latest
+  // `bytes` prop is at the moment it runs.
+  const bytesRef = useRef(bytes);
+  bytesRef.current = bytes;
 
   // Mount/unmount the terminal. We intentionally rebuild the instance if
   // `rows`/`cols` change because xterm.js's `resize()` triggers extra
   // renderer work that's pointless for a static per-turn view — the
   // chat host wires those dimensions once when the turn is created.
+  // After remount we replay the accumulated `bytes` so a resize doesn't
+  // wipe the turn's contents.
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
@@ -78,22 +91,49 @@ export function InteractiveTurnView({
       // shouldn't tear the component down.
     }
 
+    // Replay the current accumulated buffer into the freshly-created
+    // terminal. Without this, a rows/cols change would leave the new
+    // terminal empty until the parent next mutated `bytes`.
+    const current = bytesRef.current;
+    if (current.length > 0) {
+      term.write(current);
+    }
+    lastWrittenLenRef.current = current.length;
+
     termRef.current = term;
     return () => {
       term.dispose();
       termRef.current = null;
+      lastWrittenLenRef.current = 0;
     };
   }, [rows, cols]);
 
-  // Write incoming bytes whenever they change. We always start from a
-  // fresh terminal on mount, so a parent that swaps in a brand-new
-  // `bytes` reference will see the full payload replayed. For "append"
-  // semantics on a live turn, the parent should pass the cumulative
-  // byte buffer — that's the contract G6 uses.
+  // Write incoming bytes whenever they change. The mount effect already
+  // replays the accumulated buffer when the terminal is (re)created, so
+  // here we only ever emit the new tail — except when the parent swaps
+  // in a shorter buffer (a brand-new turn payload), in which case we
+  // clear and rewrite from scratch.
   useEffect(() => {
     const term = termRef.current;
     if (!term) return;
-    term.write(bytes);
+    const lastLen = lastWrittenLenRef.current;
+    if (bytes.length > lastLen) {
+      // Common case: parent appended more bytes to the cumulative
+      // buffer. Write only the new tail to avoid re-rendering the whole
+      // turn on every chunk.
+      term.write(lastLen === 0 ? bytes : bytes.subarray(lastLen));
+      lastWrittenLenRef.current = bytes.length;
+    } else if (bytes.length < lastLen) {
+      // Parent replaced the buffer with something shorter — treat as a
+      // fresh payload and rewrite from scratch.
+      term.clear();
+      term.reset();
+      term.write(bytes);
+      lastWrittenLenRef.current = bytes.length;
+    }
+    // Equal-length case: nothing new to write. (If a parent ever passes
+    // a same-length-but-different buffer, that's outside this view's
+    // contract — bytes are expected to be append-only or replaced.)
   }, [bytes]);
 
   return <div ref={containerRef} className={styles.interactiveTurnView} />;
