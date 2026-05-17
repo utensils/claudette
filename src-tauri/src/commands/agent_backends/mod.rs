@@ -9,7 +9,7 @@ use tauri::State;
 use claudette::agent::resolve_codex_path;
 use claudette::agent_backend::{AgentBackendConfig, AgentBackendRuntimeHarness};
 use claudette::db::Database;
-use claudette::plugin::{delete_secure_secret, save_secure_secret};
+use claudette::plugin::{delete_secure_secret, load_secure_secret, save_secure_secret};
 
 use crate::state::AppState;
 
@@ -41,6 +41,16 @@ use config::{
     resolve_backend_list_default, save_backend_configs,
 };
 use discovery::{codex_cli_command, discover_models, test_backend_connectivity};
+
+/// Read the stored secret (typically an API key / bearer token) for a
+/// configured agent backend. Returns `Ok(None)` when nothing is stored
+/// for that backend id. Exposed as a small public surface so sibling
+/// command modules (`commands::usage`) can resolve a backend's secret
+/// without needing visibility into the `agent_backends::config` bucket
+/// constant or the keychain plumbing in `claudette::plugin`.
+pub fn load_backend_secret(backend_id: &str) -> Result<Option<String>, String> {
+    load_secure_secret(SECRET_BUCKET, backend_id)
+}
 
 #[tauri::command]
 pub async fn list_agent_backends(

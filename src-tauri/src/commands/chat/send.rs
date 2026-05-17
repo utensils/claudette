@@ -1767,6 +1767,12 @@ pub async fn send_chat_message(
     let ws_env_for_persistent = ws_env.clone();
     let resolved_env_for_persistent = resolved_env.clone();
     let codex_permission_level_for_persistent = codex_permission_level;
+    // Pre-cloned for the Codex rate-limit subscriber task spawned
+    // inside the persistent-session closure. The closure may be
+    // invoked more than once (initial try + resume fallback), so we
+    // can't move `app` into it directly — clone here, re-clone per
+    // invocation, then re-clone again for the spawned task.
+    let app_for_persistent = app.clone();
     #[cfg(feature = "pi-sdk")]
     let pi_sessions_root = super::pi_sessions_root(&state.db_path);
     #[cfg(feature = "pi-sdk")]
@@ -1781,6 +1787,7 @@ pub async fn send_chat_message(
                                  settings: AgentSettings| {
         let env = ws_env_for_persistent.clone();
         let resolved = resolved_env_for_persistent.clone();
+        let app_handle_for_this_call = app_for_persistent.clone();
         #[cfg(feature = "pi-sdk")]
         let pi_sessions_root = pi_sessions_root.clone();
         #[cfg(feature = "pi-sdk")]
@@ -1830,6 +1837,60 @@ pub async fn send_chat_message(
                         },
                     )
                     .await?;
+                    // Drain Codex's `account/rateLimits/updated` pushes
+                    // (and the one-shot seed we fire below) into
+                    // `AppState.codex_rate_limits` so the composer
+                    // usage meter shows live quota data instead of
+                    // local-aggregate token totals. The task ends
+                    // when the session is dropped — the broadcast
+                    // sender goes away and `recv()` returns Closed.
+                    //
+                    // `seed_rate_limits` is fired AFTER subscribing
+                    // so the seed value is captured by this
+                    // receiver. `start_with_options` no longer seeds
+                    // implicitly (the value would be dropped before
+                    // any subscriber existed).
+                    let mut rate_limits_rx = started.subscribe_rate_limits();
+                    started.seed_rate_limits().await;
+                    let app_handle = app_handle_for_this_call.clone();
+                    tokio::spawn(async move {
+                        loop {
+                            match rate_limits_rx.recv().await {
+                                Ok(snapshot) => {
+                                    if let Some(state) = app_handle.try_state::<AppState>() {
+                                        *state.codex_rate_limits.write().await =
+                                            Some(snapshot.clone());
+                                        // Mirror to SQLite so the next app launch
+                                        // can render the meter instantly on Codex
+                                        // model selection, without waiting for a
+                                        // chat turn. Best-effort: log and continue.
+                                        let db_path = state.db_path.clone();
+                                        tokio::task::spawn_blocking(move || {
+                                            if let Err(err) = claudette::db::Database::open(
+                                                &db_path,
+                                            )
+                                            .and_then(|db| db.save_codex_rate_limits(&snapshot))
+                                            {
+                                                tracing::warn!(
+                                                    target: "claudette::usage",
+                                                    error = %err,
+                                                    "failed to persist Codex rate-limits snapshot",
+                                                );
+                                            }
+                                        });
+                                    }
+                                }
+                                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                                    // Skipped some intermediate snapshots — fine,
+                                    // we only care about the latest value.
+                                    continue;
+                                }
+                                Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                                    break;
+                                }
+                            }
+                        }
+                    });
                     Ok::<Arc<AgentSession>, String>(Arc::new(AgentSession::from_codex_app_server(
                         started,
                     )))
