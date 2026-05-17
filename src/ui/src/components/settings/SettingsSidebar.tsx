@@ -16,6 +16,7 @@ import {
   HelpCircle,
   Flag,
   Stethoscope,
+  HardDrive,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { useAppStore } from "../../stores/useAppStore";
@@ -34,6 +35,7 @@ export function getAppSections(
     { id: "notifications", icon: Bell },
     { id: "editor", icon: FileCode },
     { id: "diagnostics", icon: Stethoscope },
+    { id: "storage", icon: HardDrive },
     { id: "git", icon: GitBranch },
     { id: "keyboard", icon: Keyboard },
     { id: "cli", icon: Terminal },
@@ -70,6 +72,7 @@ export function SettingsSidebar() {
     if (id === "notifications") return t("settings:nav_notifications");
     if (id === "editor") return t("settings:nav_editor");
     if (id === "diagnostics") return t("settings:nav_diagnostics");
+    if (id === "storage") return t("settings:nav_storage");
     if (id === "git") return t("settings:nav_git");
     if (id === "keyboard") return t("settings:nav_keyboard");
     if (id === "cli") return t("settings:nav_cli");

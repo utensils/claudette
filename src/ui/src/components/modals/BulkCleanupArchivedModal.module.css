@@ -1,0 +1,139 @@
+.filterRow {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+}
+
+.filterLabel {
+  font-size: 12px;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.filterChoices {
+  display: inline-flex;
+  gap: 4px;
+  background: var(--chat-input-bg);
+  border: 1px solid var(--divider);
+  border-radius: 6px;
+  padding: 2px;
+}
+
+.filterChip,
+.filterChipActive {
+  appearance: none;
+  background: transparent;
+  border: none;
+  padding: 4px 10px;
+  border-radius: 4px;
+  font-size: 12px;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-family: inherit;
+  transition:
+    background var(--transition-fast),
+    color var(--transition-fast);
+}
+
+.filterChip:hover {
+  background: var(--hover-bg);
+  color: var(--text-primary);
+}
+
+.filterChipActive {
+  background: var(--selected-bg);
+  color: var(--text-primary);
+}
+
+.headerRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+  padding: 0 4px;
+}
+
+.selectAllLabel {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.counter {
+  font-size: 12px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.row {
+  background: var(--hover-bg-subtle);
+  border: 1px solid var(--divider);
+  border-radius: 6px;
+}
+
+.rowLabel {
+  display: grid;
+  grid-template-columns: auto 1fr auto auto;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 12px;
+  cursor: pointer;
+  min-width: 0;
+}
+
+.rowName {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.rowBranch {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-dim);
+  flex-shrink: 0;
+}
+
+.rowAge {
+  font-size: 11px;
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+  min-width: 60px;
+  text-align: right;
+}
+
+.rowError {
+  padding: 4px 12px 8px 36px;
+  font-size: 11px;
+  color: var(--status-stopped);
+}
+
+.empty {
+  padding: 24px 12px;
+  text-align: center;
+  font-size: 13px;
+  color: var(--text-muted);
+}

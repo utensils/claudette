@@ -917,6 +917,166 @@ pub async fn delete_workspace(
     Ok(())
 }
 
+/// Result of [`delete_workspaces_bulk`]. `deleted` lists IDs that were
+/// successfully hard-deleted; `failed` carries per-ID error messages for
+/// rows that survived (typically due to a transient DB error). The
+/// frontend uses this to drive partial-failure UI and reconcile its
+/// store one row at a time.
+#[derive(Debug, Serialize)]
+pub struct BulkDeleteResult {
+    pub deleted: Vec<String>,
+    pub failed: Vec<BulkDeleteFailure>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct BulkDeleteFailure {
+    pub id: String,
+    pub error: String,
+}
+
+/// Hard-delete a batch of archived workspaces. Mirrors the single-workspace
+/// [`delete_workspace`] flow — agent shutdown, worktree removal, branch
+/// deletion, env-watcher/cache cleanup, summary materialization, MCP
+/// supervisor reconciliation — but batched so 72 archived workspaces don't
+/// require 72 round-trips.
+///
+/// Pre-validates that every target is `Archived` before mutating anything;
+/// returns `Err` if any ID is missing or Active so a buggy caller can't
+/// accidentally hard-delete in-use work. Per-row DB failures inside the
+/// validated set are isolated in the returned `failed` list.
+#[tauri::command]
+#[tracing::instrument(
+    target = "claudette::workspace",
+    skip(app, state, supervisor),
+    fields(workspace_count = ids.len()),
+)]
+pub async fn delete_workspaces_bulk(
+    ids: Vec<String>,
+    app: AppHandle,
+    state: State<'_, AppState>,
+    supervisor: State<'_, Arc<McpSupervisor>>,
+) -> Result<BulkDeleteResult, String> {
+    delete_workspaces_bulk_inner(&ids, &app, &state, &supervisor).await
+}
+
+/// Shared body of [`delete_workspaces_bulk`] used by both the Tauri
+/// command (GUI) and the IPC dispatcher (CLI). Pulled into a free
+/// function — same as `archive_workspace_inner` /
+/// `create_workspace_inner` — so the CLI path runs identical agent
+/// teardown, git cleanup, env-watcher reconciliation, and MCP supervisor
+/// updates without needing to construct Tauri `State` wrappers.
+pub(crate) async fn delete_workspaces_bulk_inner(
+    ids: &[String],
+    app: &AppHandle,
+    state: &AppState,
+    supervisor: &McpSupervisor,
+) -> Result<BulkDeleteResult, String> {
+    if ids.is_empty() {
+        return Ok(BulkDeleteResult {
+            deleted: Vec::new(),
+            failed: Vec::new(),
+        });
+    }
+
+    let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
+    let workspaces = db.list_workspaces().map_err(|e| e.to_string())?;
+    let repos = db.list_repositories().map_err(|e| e.to_string())?;
+
+    // Resolve every ID up front. Reject the whole batch if any row is
+    // missing or not Archived — a server-side guard so a UI bug can't
+    // hard-delete an Active workspace via this path.
+    let mut targets: Vec<&Workspace> = Vec::with_capacity(ids.len());
+    for id in ids {
+        match workspaces.iter().find(|w| &w.id == id) {
+            Some(ws) if ws.status == WorkspaceStatus::Archived => targets.push(ws),
+            Some(_) => return Err(format!("Workspace {id} is not archived")),
+            None => return Err(format!("Workspace {id} not found")),
+        }
+    }
+
+    // Stop running agents for every target in one lock acquisition, then
+    // signal the processes outside the lock (matches `delete_workspace`).
+    let id_set: std::collections::HashSet<String> = ids.iter().cloned().collect();
+    let pids_to_stop: Vec<u32> = {
+        let mut agents = state.agents.write().await;
+        let to_remove: Vec<String> = agents
+            .iter()
+            .filter(|(_, s)| id_set.contains(&s.workspace_id))
+            .map(|(k, _)| k.clone())
+            .collect();
+        to_remove
+            .into_iter()
+            .filter_map(|key| agents.remove(&key).and_then(|s| s.active_pid))
+            .collect()
+    };
+    for pid in pids_to_stop {
+        let _ = claudette::agent::stop_agent(pid).await;
+    }
+
+    // Git cleanup: best-effort worktree removal + force branch delete per row.
+    for ws in &targets {
+        let Some(repo) = repos.iter().find(|r| r.id == ws.repository_id) else {
+            continue;
+        };
+        if let Some(ref wt_path) = ws.worktree_path {
+            let _ = git::remove_worktree(&repo.path, wt_path, true).await;
+        }
+        let _ = git::branch_delete(&repo.path, &ws.branch_name).await;
+    }
+
+    // Env-watcher + cache cleanup in a single watcher acquisition.
+    {
+        let watcher_guard = state.env_watcher.read().await;
+        if let Some(watcher) = watcher_guard.as_ref() {
+            for ws in &targets {
+                if let Some(ref wt_path) = ws.worktree_path {
+                    watcher.unregister(Path::new(wt_path), None);
+                }
+            }
+        }
+    }
+    for ws in &targets {
+        if let Some(ref wt_path) = ws.worktree_path {
+            state.env_cache.invalidate(Path::new(wt_path), None);
+        }
+    }
+
+    // Track affected repos so we can do the "last workspace" MCP cleanup
+    // check exactly once per repo after the batch (delete_workspace runs
+    // this per row — fine for a single delete, wasteful for a batch).
+    let affected_repos: std::collections::HashSet<String> =
+        targets.iter().map(|w| w.repository_id.clone()).collect();
+
+    // DB deletes + summary materialization + Deleted hooks per row.
+    let hooks = TauriHooks::new(app.clone());
+    let outcomes = claudette::ops::workspace::delete_workspaces_bulk(&db, hooks.as_ref(), ids)
+        .map_err(|e| e.to_string())?;
+
+    let mut deleted = Vec::with_capacity(outcomes.len());
+    let mut failed = Vec::new();
+    for outcome in outcomes {
+        match outcome.error {
+            None => deleted.push(outcome.id),
+            Some(err) => failed.push(BulkDeleteFailure {
+                id: outcome.id,
+                error: err,
+            }),
+        }
+    }
+
+    // Per affected repo: if no Active or Archived workspaces remain, drop
+    // its MCP supervisor entry and clear the frontend's MCP status pill.
+    let remaining = db.list_workspaces().unwrap_or_default();
+    for repo_id in affected_repos {
+        if !remaining.iter().any(|w| w.repository_id == repo_id) {
+            supervisor.remove_repo(&repo_id).await;
+            let _ = app.emit("mcp-status-cleared", &repo_id);
+        }
+    }
+
+    Ok(BulkDeleteResult { deleted, failed })
+}
+
 #[tauri::command]
 #[tracing::instrument(
     target = "claudette::workspace",
