@@ -108,6 +108,21 @@ impl Database {
         rows.collect()
     }
 
+    /// Return every `interactive_sessions.sid` across all workspaces
+    /// regardless of state. Used by the startup orphan detector
+    /// (`claudette::interactive::detect_orphans`) which compares the DB
+    /// set against the host's live session list to find sids the host
+    /// has but the DB doesn't.
+    ///
+    /// We intentionally project to just the sid column instead of full
+    /// rows — orphan detection only needs the identifier, and a tiny
+    /// snapshot keeps the boot path cheap.
+    pub fn list_all_interactive_session_sids(&self) -> rusqlite::Result<Vec<String>> {
+        let mut stmt = self.conn.prepare("SELECT sid FROM interactive_sessions")?;
+        let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
+        rows.collect()
+    }
+
     /// Return every `interactive_sessions` row currently in `state =
     /// 'running'`, across all workspaces. Used by the startup
     /// reconciler (`claudette::interactive::reattach_pending`) to find

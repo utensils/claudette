@@ -36,10 +36,22 @@ use std::collections::HashMap;
 
 use claudette::agent::interactive_host::InteractiveHost;
 use claudette::db::{Database, InteractiveSessionRow};
+use serde::Serialize;
 use std::sync::Arc;
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Emitter, Manager};
 
 use crate::state::AppState;
+
+/// Wire payload for `interactive://orphans-detected`. Emitted once
+/// during boot if the reconciler finds any orphan sids on the host
+/// that the DB doesn't know about. The frontend uses this to show a
+/// one-shot toast / banner with a "Clean up" button bound to the
+/// `interactive_cleanup_orphans` command.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct OrphansDetectedPayload {
+    sids: Vec<String>,
+}
 
 /// Reconcile every persisted `interactive_sessions` row currently in
 /// `state = 'running'` against the live host. See module docs for the
@@ -55,25 +67,37 @@ pub async fn reattach_interactive_sessions_on_boot(app: AppHandle) {
     let state = app.state::<AppState>();
     let db_path = state.db_path.clone();
 
-    // Phase 1: fetch all running rows in a single blocking task that
-    // opens and closes its own DB connection. Doing this on the async
-    // caller would block the multi-thread runtime on rusqlite I/O.
-    let pending = match tokio::task::spawn_blocking({
+    // Phase 1: fetch (a) all running rows for reclassification and
+    // (b) the full set of known sids for orphan detection in a single
+    // blocking task that opens and closes its own DB connection. Doing
+    // this on the async caller would block the multi-thread runtime on
+    // rusqlite I/O.
+    //
+    // We snapshot ALL sids (not just running ones) because a
+    // crashed/detached/exited row is still a row the DB knows about —
+    // its sid must NOT count as an orphan even though the host might
+    // happen to still be holding the session under the same name.
+    let (pending, known_sids) = match tokio::task::spawn_blocking({
         let db_path = db_path.clone();
-        move || -> Result<Vec<InteractiveSessionRow>, String> {
+        move || -> Result<(Vec<InteractiveSessionRow>, Vec<String>), String> {
             let db = Database::open(&db_path).map_err(|e| e.to_string())?;
-            db.list_running_interactive_sessions()
-                .map_err(|e| e.to_string())
+            let running = db
+                .list_running_interactive_sessions()
+                .map_err(|e| e.to_string())?;
+            let known = db
+                .list_all_interactive_session_sids()
+                .map_err(|e| e.to_string())?;
+            Ok((running, known))
         }
     })
     .await
     {
-        Ok(Ok(rows)) => rows,
+        Ok(Ok(pair)) => pair,
         Ok(Err(err)) => {
             tracing::warn!(
                 target: "claudette::interactive",
                 error = %err,
-                "boot reconciler: failed to read running sessions; skipping"
+                "boot reconciler: failed to read sessions; skipping"
             );
             return;
         }
@@ -87,11 +111,13 @@ pub async fn reattach_interactive_sessions_on_boot(app: AppHandle) {
         }
     };
 
-    if pending.is_empty() {
-        // Fast path: don't touch hosts at all when there's no work.
-        // Important: `interactive_host_for` can spawn the sidecar
-        // binary; we don't want that side-effect on boots where it
-        // wouldn't otherwise be needed.
+    if pending.is_empty() && known_sids.is_empty() {
+        // Fast path: no DB-tracked sessions AND no records to reconcile.
+        // We still skip the host probe here because resolving a host
+        // when the DB never had any interactive sessions would spawn
+        // the sidecar binary for no useful reason. The orphan check on
+        // a totally cold DB is also moot — Claudette could not have
+        // created any orphans without ever persisting a row.
         return;
     }
 
@@ -123,6 +149,91 @@ pub async fn reattach_interactive_sessions_on_boot(app: AppHandle) {
                     rows = rows.len(),
                     error = %err,
                     "boot reconciler: could not resolve host; leaving rows as running",
+                );
+            }
+        }
+    }
+
+    // Phase 2b: orphan detection. We need to ask SOME host
+    // `status()` to see what sessions actually exist. Every workspace
+    // shares the same backend selection (tmux server / sidecar
+    // socket), so the first successfully-resolved host is
+    // representative. If we couldn't resolve any host via the running
+    // rows (e.g. all of them failed host resolution OR there were no
+    // running rows but there were historical ones), fall back to
+    // resolving a host against the workspace of the first known sid
+    // we still have on file. In the cold case where no workspace can
+    // resolve a host, we skip orphan detection — the user can't have
+    // accumulated orphans we can clean up either.
+    let orphan_host: Option<Arc<dyn InteractiveHost>> = if let Some((_, host, _)) = resolved.first()
+    {
+        Some(Arc::clone(host))
+    } else {
+        // No host resolved yet. Try to resolve one from any workspace
+        // that historically owned an interactive session. We probe
+        // `known_sids` for sids whose `claudette-<wsshort>-` prefix
+        // points at a workspace we can look up. In practice this is
+        // rare — running rows would normally cover the same workspaces
+        // — but it matters when the only known DB rows are
+        // crashed/exited and the user wants stale host sessions
+        // cleaned up.
+        let mut probed: Option<Arc<dyn InteractiveHost>> = None;
+        // The list_workspaces query is cheap; do it once.
+        let workspaces_for_probe = tokio::task::spawn_blocking({
+            let db_path = db_path.clone();
+            move || -> Result<Vec<String>, String> {
+                let db = Database::open(&db_path).map_err(|e| e.to_string())?;
+                db.list_workspaces()
+                    .map(|rows| rows.into_iter().map(|w| w.id).collect())
+                    .map_err(|e| e.to_string())
+            }
+        })
+        .await
+        .ok()
+        .and_then(|r| r.ok())
+        .unwrap_or_default();
+        for ws_id in workspaces_for_probe {
+            if let Ok(host) = state.interactive_host_for(&ws_id).await {
+                probed = Some(host);
+                break;
+            }
+        }
+        probed
+    };
+
+    if let Some(host) = orphan_host {
+        match claudette::interactive::detect_orphans(&known_sids, host.as_ref()).await {
+            Ok(orphans) if !orphans.is_empty() => {
+                let sids: Vec<String> = orphans.iter().map(|s| s.0.clone()).collect();
+                tracing::info!(
+                    target: "claudette::interactive",
+                    count = sids.len(),
+                    "boot reconciler: detected orphan host sessions",
+                );
+                // Stash sid → host into AppState so
+                // `interactive_cleanup_orphans` can stop them without
+                // needing to re-resolve which workspace they came from.
+                {
+                    let mut map = state.interactive_orphans.write().await;
+                    for sid in &sids {
+                        map.insert(sid.clone(), Arc::clone(&host));
+                    }
+                }
+                let payload = OrphansDetectedPayload { sids };
+                if let Err(err) = app.emit("interactive://orphans-detected", &payload) {
+                    tracing::warn!(
+                        target: "claudette::interactive",
+                        error = %err,
+                        "boot reconciler: failed to emit orphans-detected event",
+                    );
+                }
+            }
+            Ok(_) => {}
+            Err(err) => {
+                tracing::warn!(
+                    target: "claudette::interactive",
+                    error = %err,
+                    "boot reconciler: orphan detection failed; skipping",
                 );
             }
         }

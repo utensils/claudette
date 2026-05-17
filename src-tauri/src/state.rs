@@ -805,6 +805,15 @@ pub struct AppState {
     /// by [`AppState::register_interactive_session`] and dropped by
     /// [`AppState::unregister_interactive_session`].
     pub interactive_sessions: RwLock<HashMap<String, String>>,
+    /// Orphan interactive sessions detected at boot — sids the host
+    /// reported but the DB did NOT track. Populated by the boot
+    /// reconciler ([`crate::interactive_lifecycle`]) via
+    /// [`claudette::interactive::detect_orphans`], drained by the
+    /// `interactive_cleanup_orphans` Tauri command. Each entry maps
+    /// `sid → host that reported it` so the cleanup command can call
+    /// `host.stop()` without re-resolving the host (and without needing
+    /// the orphan to belong to a workspace Claudette still tracks).
+    pub interactive_orphans: RwLock<HashMap<String, Arc<dyn InteractiveHost>>>,
 }
 
 impl AppState {
@@ -864,6 +873,7 @@ impl AppState {
             interactive_hook_channels: Arc::new(Mutex::new(HashMap::new())),
             interactive_hosts: RwLock::new(HashMap::new()),
             interactive_sessions: RwLock::new(HashMap::new()),
+            interactive_orphans: RwLock::new(HashMap::new()),
         }
     }
 

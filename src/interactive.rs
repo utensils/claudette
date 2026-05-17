@@ -38,7 +38,7 @@
 //! classify the persisted rows so the badge in the sidebar reflects
 //! the truth.
 
-use crate::agent::interactive_host::InteractiveHost;
+use crate::agent::interactive_host::{InteractiveHost, SessionId};
 use crate::db::{Database, InteractiveSessionRow};
 
 /// Reconcile every `running` `interactive_sessions` row against
@@ -123,6 +123,46 @@ pub async fn reattach_rows(
     }
 
     Ok(())
+}
+
+/// Compute the set of `claudette-` sessions the host knows about but
+/// the DB does NOT — i.e. sessions left over from a previous Claudette
+/// process that crashed before it could record them (or before it
+/// could mark a now-orphaned row as torn down). These are returned to
+/// the caller so the UI can surface a one-shot "Clean up" prompt and
+/// invoke [`InteractiveHost::stop`] on each via the Tauri
+/// `interactive_cleanup_orphans` command.
+///
+/// The filter is intentionally narrow: only sessions whose sid starts
+/// with the `claudette-` prefix are considered. The host may be
+/// hosting unrelated tmux sessions for the user (or unrelated sidecar
+/// sessions from another tool sharing the socket), and we must never
+/// stop those.
+///
+/// `db_known_sids` is the full set of sids the DB currently tracks for
+/// this host — typically the union of every state. The caller is
+/// responsible for assembling this list (usually by snapshotting all
+/// `interactive_sessions` rows). Passing only `running` sids would
+/// incorrectly flag valid `detached` / `crashed` rows as orphans.
+///
+/// Errors from `host.status()` surface to the caller — there is no
+/// safe default behavior when the host is unreachable (we don't want
+/// to claim "no orphans" if we couldn't actually look).
+#[tracing::instrument(level = "info", target = "claudette::interactive", skip_all)]
+pub async fn detect_orphans(
+    db_known_sids: &[String],
+    host: &dyn InteractiveHost,
+) -> Result<Vec<SessionId>, ReattachError> {
+    let status = host.status().await.map_err(ReattachError::Host)?;
+    let db_set: std::collections::HashSet<&str> =
+        db_known_sids.iter().map(|s| s.as_str()).collect();
+    let orphans = status
+        .sessions
+        .iter()
+        .filter(|s| s.sid.as_str().starts_with("claudette-") && !db_set.contains(s.sid.as_str()))
+        .map(|s| s.sid.clone())
+        .collect();
+    Ok(orphans)
 }
 
 /// Errors returned by [`reattach_pending`].
@@ -681,6 +721,210 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(row.state, "running");
+    }
+
+    // ----- detect_orphans --------------------------------------------------
+    //
+    // Orphan detection is a pure host.status() consumer; we reuse MockHost
+    // from the reattach tests to construct a known status response.
+
+    #[tokio::test]
+    async fn detect_orphans_returns_host_sessions_missing_from_db() {
+        // DB tracks A; host has A + B + C (all claudette- prefixed).
+        // → B and C are orphans.
+        let host = MockHost {
+            status_response: HostStatus {
+                host_version: "mock".into(),
+                sessions: vec![
+                    HostSessionSummary {
+                        sid: SessionId("claudette-ws1-aaaaaaaa".into()),
+                        pid: None,
+                        running: true,
+                    },
+                    HostSessionSummary {
+                        sid: SessionId("claudette-ws1-bbbbbbbb".into()),
+                        pid: None,
+                        running: true,
+                    },
+                    HostSessionSummary {
+                        sid: SessionId("claudette-ws1-cccccccc".into()),
+                        pid: None,
+                        running: true,
+                    },
+                ],
+            },
+        };
+
+        let db_known = vec!["claudette-ws1-aaaaaaaa".to_string()];
+        let orphans = detect_orphans(&db_known, &host).await.unwrap();
+
+        let orphan_strs: Vec<&str> = orphans.iter().map(|s| s.as_str()).collect();
+        assert_eq!(
+            orphan_strs.len(),
+            2,
+            "expected exactly two orphans, got {orphan_strs:?}",
+        );
+        assert!(orphan_strs.contains(&"claudette-ws1-bbbbbbbb"));
+        assert!(orphan_strs.contains(&"claudette-ws1-cccccccc"));
+        assert!(
+            !orphan_strs.contains(&"claudette-ws1-aaaaaaaa"),
+            "DB-known sid must not be reported as orphan",
+        );
+    }
+
+    #[tokio::test]
+    async fn detect_orphans_ignores_non_claudette_prefixed_sessions() {
+        // Host hosts a user-owned tmux session ("dev", "scratch") AND a
+        // legit DB-tracked claudette session. None of those user sessions
+        // count as orphans — Claudette must never kill a session it
+        // didn't create.
+        let host = MockHost {
+            status_response: HostStatus {
+                host_version: "mock".into(),
+                sessions: vec![
+                    HostSessionSummary {
+                        sid: SessionId("dev".into()),
+                        pid: None,
+                        running: true,
+                    },
+                    HostSessionSummary {
+                        sid: SessionId("scratch".into()),
+                        pid: None,
+                        running: true,
+                    },
+                    HostSessionSummary {
+                        sid: SessionId("claudette-ws1-aaaaaaaa".into()),
+                        pid: None,
+                        running: true,
+                    },
+                ],
+            },
+        };
+
+        let db_known = vec!["claudette-ws1-aaaaaaaa".to_string()];
+        let orphans = detect_orphans(&db_known, &host).await.unwrap();
+
+        assert!(
+            orphans.is_empty(),
+            "non-claudette sessions must never appear as orphans; got {:?}",
+            orphans.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
+        );
+    }
+
+    #[tokio::test]
+    async fn detect_orphans_with_empty_db_returns_all_claudette_sessions() {
+        // Cold start with a stale tmux server: DB has nothing yet, every
+        // claudette- session on the host is an orphan.
+        let host = MockHost {
+            status_response: HostStatus {
+                host_version: "mock".into(),
+                sessions: vec![
+                    HostSessionSummary {
+                        sid: SessionId("claudette-ws1-aaaaaaaa".into()),
+                        pid: None,
+                        running: true,
+                    },
+                    HostSessionSummary {
+                        sid: SessionId("claudette-ws1-bbbbbbbb".into()),
+                        pid: None,
+                        running: true,
+                    },
+                ],
+            },
+        };
+
+        let orphans = detect_orphans(&[], &host).await.unwrap();
+        let orphan_strs: Vec<&str> = orphans.iter().map(|s| s.as_str()).collect();
+        assert_eq!(orphan_strs.len(), 2);
+        assert!(orphan_strs.contains(&"claudette-ws1-aaaaaaaa"));
+        assert!(orphan_strs.contains(&"claudette-ws1-bbbbbbbb"));
+    }
+
+    #[tokio::test]
+    async fn detect_orphans_returns_empty_when_db_covers_host() {
+        // Every host session is tracked → no orphans.
+        let host = MockHost {
+            status_response: HostStatus {
+                host_version: "mock".into(),
+                sessions: vec![
+                    HostSessionSummary {
+                        sid: SessionId("claudette-ws1-aaaaaaaa".into()),
+                        pid: None,
+                        running: true,
+                    },
+                    HostSessionSummary {
+                        sid: SessionId("claudette-ws1-bbbbbbbb".into()),
+                        pid: None,
+                        running: true,
+                    },
+                ],
+            },
+        };
+
+        let db_known = vec![
+            "claudette-ws1-aaaaaaaa".to_string(),
+            "claudette-ws1-bbbbbbbb".to_string(),
+        ];
+        let orphans = detect_orphans(&db_known, &host).await.unwrap();
+        assert!(orphans.is_empty());
+    }
+
+    #[tokio::test]
+    async fn detect_orphans_surfaces_host_status_errors() {
+        struct ErroringHost;
+        #[async_trait]
+        impl InteractiveHost for ErroringHost {
+            async fn ensure_session(
+                &self,
+                _sid: &SessionId,
+                _spec: &SessionSpec,
+            ) -> Result<HostHandle, HostError> {
+                unimplemented!()
+            }
+            async fn attach(
+                &self,
+                _sid: &SessionId,
+            ) -> Result<(AttachId, AttachStream), HostError> {
+                unimplemented!()
+            }
+            async fn send_input(
+                &self,
+                _sid: &SessionId,
+                _payload: InputPayload,
+            ) -> Result<(), HostError> {
+                unimplemented!()
+            }
+            async fn capture_screen(&self, _sid: &SessionId) -> Result<ScreenSnapshot, HostError> {
+                unimplemented!()
+            }
+            async fn resize(
+                &self,
+                _sid: &SessionId,
+                _rows: u16,
+                _cols: u16,
+            ) -> Result<(), HostError> {
+                unimplemented!()
+            }
+            async fn detach(
+                &self,
+                _sid: &SessionId,
+                _attach_id: AttachId,
+            ) -> Result<(), HostError> {
+                unimplemented!()
+            }
+            async fn stop(&self, _sid: &SessionId, _mode: StopMode) -> Result<(), HostError> {
+                unimplemented!()
+            }
+            async fn status(&self) -> Result<HostStatus, HostError> {
+                Err(HostError::Unavailable("mock".into()))
+            }
+        }
+
+        let err = detect_orphans(&[], &ErroringHost).await.unwrap_err();
+        assert!(
+            matches!(err, ReattachError::Host(_)),
+            "expected ReattachError::Host, got {err:?}",
+        );
     }
 
     // ----- stop_sessions_for_workspace -----------------------------------

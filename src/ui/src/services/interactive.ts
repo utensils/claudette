@@ -350,3 +350,51 @@ export function subscribeStreamError(
     fn(e.payload),
   );
 }
+
+// ---------------------------------------------------------------------------
+// Orphan detection / cleanup (H3)
+// ---------------------------------------------------------------------------
+
+/**
+ * Wire payload of `interactive://orphans-detected`. Emitted once
+ * during boot when the reconciler finds `claudette-` sessions on the
+ * host that aren't tracked by the DB — typically left over from a
+ * previous Claudette process that crashed.
+ */
+export interface OrphansDetectedEvent {
+  sids: string[];
+}
+
+/**
+ * List orphan interactive sids currently pending cleanup. Returns an
+ * empty array when there is nothing to clean up. Useful for late-
+ * mounting UI that missed the boot-time `interactive://orphans-detected`
+ * event.
+ */
+export function listOrphans(): Promise<string[]> {
+  return invoke<string[]>("interactive_list_orphans");
+}
+
+/**
+ * Gracefully stop every orphan interactive session. Returns the sids
+ * that were successfully stopped (any whose `host.stop` failed are
+ * logged on the Rust side and dropped from the orphan map, so the
+ * frontend toast doesn't keep reappearing).
+ */
+export function cleanupOrphans(): Promise<string[]> {
+  return invoke<string[]>("interactive_cleanup_orphans");
+}
+
+/**
+ * Subscribe to the one-shot boot-time `interactive://orphans-detected`
+ * event. Fires exactly once per Claudette process — if the listener
+ * mounts after the event fired, use {@link listOrphans} to pull the
+ * current list instead.
+ */
+export function subscribeOrphansDetected(
+  fn: (ev: OrphansDetectedEvent) => void,
+): Promise<UnlistenFn> {
+  return listen<OrphansDetectedEvent>("interactive://orphans-detected", (e) =>
+    fn(e.payload),
+  );
+}

@@ -1094,6 +1094,8 @@ fn main() {
             commands::interactive::interactive_stop,
             commands::interactive::interactive_list_for_workspace,
             commands::interactive::interactive_attach,
+            commands::interactive::interactive_list_orphans,
+            commands::interactive::interactive_cleanup_orphans,
             // Plan
             commands::plan::read_plan_file,
             // Agent-managed files (plans, memory, …)

@@ -387,6 +387,60 @@ pub async fn interactive_list_for_workspace(
     Ok(rows.into_iter().map(Into::into).collect())
 }
 
+/// List the orphaned interactive sids currently pending cleanup.
+/// Populated by the boot reconciler when the host reports
+/// `claudette-` sessions the DB doesn't know about (see
+/// [`crate::interactive_lifecycle`]). The frontend uses this for
+/// reload-without-event recovery — the
+/// `interactive://orphans-detected` event is fired once at boot, so a
+/// page that mounts late can pull the list via this command instead
+/// of waiting for the next reboot.
+///
+/// Returns an empty list when there are no orphans pending; safe to
+/// poll without side effects.
+#[tauri::command]
+pub async fn interactive_list_orphans(state: State<'_, AppState>) -> Result<Vec<String>, String> {
+    let map = state.interactive_orphans.read().await;
+    Ok(map.keys().cloned().collect())
+}
+
+/// Stop every orphan interactive session currently registered on
+/// [`AppState::interactive_orphans`]. Each call to
+/// `host.stop(sid, Graceful)` is best-effort: a failure is logged and
+/// skipped so a single unreachable host can't poison the rest of the
+/// batch. The DB is untouched (orphans are by definition not in the
+/// DB).
+///
+/// Returns the list of sids that were successfully stopped. Sids that
+/// errored out are tracing-logged and dropped from the orphan map so
+/// the frontend toast doesn't keep reappearing on repeated calls.
+#[tauri::command]
+pub async fn interactive_cleanup_orphans(
+    state: State<'_, AppState>,
+) -> Result<Vec<String>, String> {
+    // Drain the orphan map under a write lock so concurrent cleanup
+    // calls don't double-stop the same sid.
+    let drained: Vec<(String, Arc<dyn InteractiveHost>)> = {
+        let mut map = state.interactive_orphans.write().await;
+        map.drain().collect()
+    };
+    let mut stopped: Vec<String> = Vec::with_capacity(drained.len());
+    for (sid, host) in drained {
+        match host.stop(&SessionId(sid.clone()), StopMode::Graceful).await {
+            Ok(()) => stopped.push(sid),
+            Err(err) => {
+                tracing::warn!(
+                    target: "claudette::interactive",
+                    sid = %sid,
+                    error = %err,
+                    "cleanup_orphans: host.stop failed; dropping from orphan map",
+                );
+            }
+        }
+    }
+    Ok(stopped)
+}
+
 /// Wire payload for `interactive://<sid>/output`.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
