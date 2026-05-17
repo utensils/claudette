@@ -206,13 +206,23 @@ async fn dispatch(map: &SessionMap, req: Request) -> Response {
             recoverable: true,
         },
         Request::EnsureSession { sid, spec } => {
-            let mut m = map.lock().await;
-            if let Some(s) = m.get(&sid) {
+            // Grab the existing session (if any) under the map lock, then drop
+            // the map guard before awaiting any inner-session locks. Holding
+            // the coarse map lock across a finer-grained `s.rows.lock().await`
+            // would risk deadlock with any future path that takes those locks
+            // in the inverse order.
+            let existing: Option<Arc<Session>> = {
+                let m = map.lock().await;
+                m.get(&sid).cloned()
+            };
+            if let Some(s) = existing {
+                let rows = *s.rows.lock().await;
+                let cols = *s.cols.lock().await;
                 return Response::SessionStarted {
                     sid: s.sid.clone(),
                     pid: s.pid.unwrap_or(0),
-                    rows: *s.rows.lock().await,
-                    cols: *s.cols.lock().await,
+                    rows,
+                    cols,
                 };
             }
             match Session::spawn(sid.clone(), spec).await {
@@ -220,7 +230,10 @@ async fn dispatch(map: &SessionMap, req: Request) -> Response {
                     let pid = s.pid.unwrap_or(0);
                     let rows = *s.rows.lock().await;
                     let cols = *s.cols.lock().await;
-                    m.insert(sid.clone(), s);
+                    {
+                        let mut m = map.lock().await;
+                        m.insert(sid.clone(), s);
+                    }
                     Response::SessionStarted {
                         sid,
                         pid,
@@ -267,14 +280,16 @@ async fn dispatch(map: &SessionMap, req: Request) -> Response {
             }
         }
         Request::Stop { sid, mode } => {
-            let mut m = map.lock().await;
-            let Some(s) = m.remove(&sid) else {
+            let removed = {
+                let mut m = map.lock().await;
+                m.remove(&sid)
+            };
+            let Some(s) = removed else {
                 return Response::Error {
                     message: format!("not found: {sid}"),
                     recoverable: true,
                 };
             };
-            drop(m);
             match mode {
                 StopMode::Graceful => s.stop_graceful().await,
                 StopMode::Force => {
@@ -283,7 +298,11 @@ async fn dispatch(map: &SessionMap, req: Request) -> Response {
             }
             // Dropping the last Arc lets the PtyPair drop and reap the child.
             drop(s);
-            Response::Stopped { exit_status: 0 }
+            // `exit_status: -1` is a sentinel meaning "not waited" — the
+            // session-host does NOT block `Stop` on the child being reaped.
+            // The actual exit status will arrive on the attach stream as
+            // `SessionEvent::Exit` (see C4 for the streamed Exit event).
+            Response::Stopped { exit_status: -1 }
         }
         // Resize / Detach / CaptureScreen / Attach come in later tasks.
         Request::Resize { .. }

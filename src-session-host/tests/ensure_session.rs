@@ -100,6 +100,38 @@ async fn ensure_session_starts_and_status_lists_it() {
         }
         other => panic!("expected Status, got {other:?}"),
     }
+
+    // Idempotency: a second EnsureSession with the same sid + spec must
+    // return SessionStarted echoing the same sid. This exercises the
+    // early-return path in the dispatch handler that previously held the
+    // SessionMap lock across an inner-session lock acquisition.
+    send_req(
+        &mut w,
+        &Request::EnsureSession {
+            sid: "claudette-test-aaaaaaaa".into(),
+            spec: SessionSpec {
+                working_dir: std::env::temp_dir().to_string_lossy().into(),
+                rows: 24,
+                cols: 80,
+                claude_binary: stub.to_string_lossy().into(),
+                claude_args: vec![],
+                env: vec![],
+                claude_config_dir: std::env::temp_dir().to_string_lossy().into(),
+            },
+        },
+    )
+    .await;
+    let resp2 = recv_resp(&mut r).await;
+    match resp2 {
+        Response::SessionStarted { sid, .. } => {
+            assert_eq!(
+                sid, "claudette-test-aaaaaaaa",
+                "second EnsureSession should be idempotent and echo the same sid"
+            );
+        }
+        other => panic!("expected SessionStarted on idempotent EnsureSession, got {other:?}"),
+    }
+
     server.abort();
     let _ = std::fs::remove_file(&socket);
 }
