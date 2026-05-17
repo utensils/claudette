@@ -33,11 +33,17 @@ export interface AgentBackendModel {
  *
  *  - `claude_code` — the bundled Claude CLI (with `ANTHROPIC_BASE_URL` /
  *    gateway env when the backend isn't Anthropic itself).
+ *  - `claude_interactive` — interactive `claude` running inside a
+ *    detachable host (tmux on Unix, sidecar on Windows). Gated on the
+ *    `claudeInteractiveEnabled` experimental flag and intentionally
+ *    absent from `availableHarnessesForKind` — the experimental gate
+ *    is enforced server-side via `AgentBackendConfig.effective_harness_kind`.
  *  - `codex_app_server` — the Codex CLI's debug app-server.
  *  - `pi_sdk` — Claudette's bundled Pi sidecar.
  */
 export type AgentBackendRuntimeHarness =
   | "claude_code"
+  | "claude_interactive"
   | "codex_app_server"
   | "pi_sdk";
 
