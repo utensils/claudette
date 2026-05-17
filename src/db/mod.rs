@@ -28,6 +28,8 @@ pub use workspace::WORKSPACE_ORDER_MODE_PREFIX;
 
 mod commands;
 
+mod usage;
+
 #[cfg(test)]
 pub(crate) mod test_support;
 

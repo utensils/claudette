@@ -376,9 +376,10 @@
   "experimental_community_registry": "Community Registry",
   "experimental_community_registry_desc": "Browse and install community-contributed themes, plugins, and language grammars.",
   "experimental_community_registry_aria": "Community Registry",
-  "experimental_usage": "Usage Insights",
-  "experimental_usage_desc": "Show usage data from your Claude Code subscription (session limits, weekly limits, extra usage). Requires a Pro or Max plan with standard login.",
-  "experimental_usage_aria": "Usage Insights",
+  "experimental_claude_code_usage": "Claude Code Usage",
+  "experimental_claude_code_usage_desc": "Surface Claude Pro / Max subscription quotas (5-hour session, weekly all-model, weekly Sonnet/Opus, extra usage) in the chat composer's usage meter. Requires a standard Pro or Max login — does not apply to API-key sessions or to Codex / OpenAI / OpenRouter / Pi backends, which already show local-aggregate token totals.",
+  "experimental_claude_code_usage_aria": "Claude Code Usage",
+  "usage_indicator_disabled_tooltip": "Claude Code Usage is off — click to enable",
 
   "plugins_title": "Plugins",
   "plugins_loading": "Loading…",

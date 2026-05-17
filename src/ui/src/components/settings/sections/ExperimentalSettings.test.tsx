@@ -72,9 +72,9 @@ async function renderSettings(): Promise<HTMLElement> {
 
 function findUsageToggle(container: HTMLElement): HTMLButtonElement {
   const toggle = container.querySelector(
-    'button[aria-label="experimental_usage_aria"]',
+    'button[aria-label="experimental_claude_code_usage_aria"]',
   );
-  if (!toggle) throw new Error("Usage Insights toggle not found");
+  if (!toggle) throw new Error("Claude Code Usage toggle not found");
   return toggle as HTMLButtonElement;
 }
 

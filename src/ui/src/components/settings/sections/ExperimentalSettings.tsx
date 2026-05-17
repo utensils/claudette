@@ -158,11 +158,13 @@ export function ExperimentalSettings() {
         </div>
       </div>
 
-      <div className={styles.settingRow}>
+      <div className={styles.settingRow} id="claude-code-usage-setting">
         <div className={styles.settingInfo}>
-          <div className={styles.settingLabel}>{t("experimental_usage")}</div>
+          <div className={styles.settingLabel}>
+            {t("experimental_claude_code_usage")}
+          </div>
           <div className={styles.settingDescription}>
-            {t("experimental_usage_desc")}
+            {t("experimental_claude_code_usage_desc")}
           </div>
         </div>
         <div className={styles.settingControl}>
@@ -170,7 +172,7 @@ export function ExperimentalSettings() {
             className={styles.toggle}
             role="switch"
             aria-checked={usageInsightsEnabled}
-            aria-label={t("experimental_usage_aria")}
+            aria-label={t("experimental_claude_code_usage_aria")}
             data-checked={usageInsightsEnabled}
             onClick={handleUsageToggle}
           >

@@ -6,7 +6,7 @@ import {
   getWorkspaceMetricsBatch,
 } from "../../services/tauri";
 import type { SlashCommand } from "../../services/tauri";
-import type { ClaudeCodeUsage } from "../../types/usage";
+import type { ClaudeCodeUsage, UsageSnapshot } from "../../types/usage";
 import type {
   AnalyticsMetrics,
   DashboardMetrics,
@@ -15,9 +15,20 @@ import type {
 import type { AppState } from "../useAppStore";
 
 export interface SystemSlice {
-  // Claude Code Usage
+  // Claude Code Usage (legacy Anthropic OAuth poller — global per-account
+  // payload from `get_claude_code_usage`). Kept for the existing
+  // `useUsageInsightsPoller` so the settings page can keep surfacing the
+  // raw API shape even when the indicator is rendering a `UsageSnapshot`.
   claudeCodeUsage: ClaudeCodeUsage | null;
   setClaudeCodeUsage: (usage: ClaudeCodeUsage | null) => void;
+
+  /** Per-session unified snapshots keyed by `chatSessionId`. Populated by
+   *  `useSessionUsagePoller`. Drives the new multi-provider indicator +
+   *  popover; one entry per session in flight, evicted by the poller's
+   *  cleanup pass. */
+  sessionUsage: Record<string, UsageSnapshot>;
+  setSessionUsage: (chatSessionId: string, snapshot: UsageSnapshot) => void;
+  clearSessionUsage: (chatSessionId: string) => void;
 
   // Metrics
   dashboardMetrics: DashboardMetrics | null;
@@ -74,6 +85,19 @@ export const createSystemSlice: StateCreator<
 > = (set) => ({
   claudeCodeUsage: null,
   setClaudeCodeUsage: (usage) => set({ claudeCodeUsage: usage }),
+
+  sessionUsage: {},
+  setSessionUsage: (chatSessionId, snapshot) =>
+    set((state) => ({
+      sessionUsage: { ...state.sessionUsage, [chatSessionId]: snapshot },
+    })),
+  clearSessionUsage: (chatSessionId) =>
+    set((state) => {
+      if (!(chatSessionId in state.sessionUsage)) return state;
+      const next = { ...state.sessionUsage };
+      delete next[chatSessionId];
+      return { sessionUsage: next };
+    }),
 
   dashboardMetrics: null,
   analyticsMetrics: null,

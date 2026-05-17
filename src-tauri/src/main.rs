@@ -1122,6 +1122,7 @@ fn main() {
             commands::remote::send_remote_command,
             // Usage
             commands::usage::get_claude_code_usage,
+            commands::usage::get_session_usage,
             commands::usage::open_usage_settings,
             commands::usage::open_release_notes,
             // Auth
