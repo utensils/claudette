@@ -1,24 +1,25 @@
 #!/usr/bin/env bash
-# Stage the `claudette` CLI binary at the path Tauri's `bundle.externalBin`
-# expects: `src-tauri/binaries/claudette-<TARGET_TRIPLE>` (with a `.exe`
-# suffix on Windows). Tauri strips the suffix at bundle time and places
-# the binary alongside the GUI binary in the resulting artifact (.app /
-# .deb / AppImage / Windows install dir).
+# Compile and stage the `claudette-session-host` binary at the path Tauri's
+# bundle.externalBin expects: `src-tauri/binaries/claudette-session-host-<triple>`
+# (with `.exe` on Windows). Tauri strips the triple suffix at bundle time and
+# places the binary alongside the GUI binary in the resulting artifact (.app /
+# .deb / AppImage / Windows install dir), where `current_exe().parent()` finds
+# it at runtime.
 #
 # Usage:
-#   scripts/stage-cli-sidecar.sh                         # auto-detect host triple
-#   scripts/stage-cli-sidecar.sh <triple>                # explicit triple (CI)
-#   scripts/stage-cli-sidecar.sh --profile debug         # dev builds
-#   scripts/stage-cli-sidecar.sh <triple> --release-built
-#       # don't rebuild; assume `target/<triple>/release/claudette` already
-#       # exists (CI flow where claudette-cli was built in a separate step).
+#   scripts/stage-session-host-sidecar.sh                         # auto-detect host triple
+#   scripts/stage-session-host-sidecar.sh <triple>                # explicit triple (CI)
+#   scripts/stage-session-host-sidecar.sh --profile debug         # dev builds
+#   scripts/stage-session-host-sidecar.sh <triple> --release-built
+#       # don't rebuild; assume `target/<triple>/release/claudette-session-host`
+#       # already exists (CI flow where the binary was built in a separate step).
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$repo_root"
 
 usage() {
-  sed -n '2,13p' "$0" >&2
+  sed -n '2,14p' "$0" >&2
 }
 
 triple=""
@@ -89,8 +90,8 @@ if [ "$triple" = "" ]; then
 fi
 
 case "$triple" in
-  *windows*) bin_name="claudette.exe" ;;
-  *)         bin_name="claudette" ;;
+  *windows*) bin_name="claudette-session-host.exe" ;;
+  *)         bin_name="claudette-session-host" ;;
 esac
 
 if [ "$profile" = "debug" ] && [ "$triple_explicit" != "true" ]; then
@@ -100,13 +101,13 @@ else
 fi
 
 if [ "$release_built" != "true" ]; then
-  echo "▸ Building claudette-cli (${profile}) for ${triple}"
-  cargo_args=(build -p claudette-cli)
+  echo "▸ Building claudette-session-host (${profile}) for ${triple}"
+  cargo_args=(build -p claudette-session-host)
   if [ "$profile" = "release" ] || [ "$triple_explicit" = "true" ]; then
     cargo_args+=(--target "${triple}")
   fi
   if [ "$profile" = "release" ]; then
-    cargo_args=(build --release --target "${triple}" -p claudette-cli)
+    cargo_args=(build --release --target "${triple}" -p claudette-session-host)
   fi
   cargo "${cargo_args[@]}"
 fi
@@ -120,24 +121,10 @@ dest_dir="src-tauri/binaries"
 mkdir -p "$dest_dir"
 
 case "$triple" in
-  *windows*) dest="${dest_dir}/claudette-${triple}.exe" ;;
-  *)         dest="${dest_dir}/claudette-${triple}" ;;
+  *windows*) dest="${dest_dir}/claudette-session-host-${triple}.exe" ;;
+  *)         dest="${dest_dir}/claudette-session-host-${triple}" ;;
 esac
 
 cp "$target_bin" "$dest"
 chmod +x "$dest"
 echo "▸ Staged $target_bin -> $dest"
-
-"$repo_root/scripts/stage-pi-harness-sidecar.sh" "$triple"
-
-# Chain to the session-host sidecar staging. Forward the same profile so a
-# `scripts/stage-cli-sidecar.sh --profile debug` invocation builds the
-# session-host in debug mode too — otherwise the dev `.app` would mirror a
-# release session-host while the GUI was built debug, doubling cargo compile
-# time on first dev launch.
-session_host_args=()
-if [ "$triple_explicit" = "true" ]; then
-  session_host_args+=("$triple")
-fi
-session_host_args+=("--profile" "$profile")
-"$repo_root/scripts/stage-session-host-sidecar.sh" "${session_host_args[@]}"

@@ -1010,24 +1010,81 @@ impl AppState {
         dir
     }
 
-    /// Path to the bundled `claudette-cli` binary that interactive
-    /// hooks will shell out to. Resolves relative to `current_exe()`
-    /// so it works in dev (next to `claudette-app`) and in packaged
-    /// builds (Contents/MacOS/ on macOS, alongside the .exe on
-    /// Windows).
+    /// Path to the bundled `claudette` CLI binary that interactive
+    /// hooks will shell out to. The CLI is staged by
+    /// `scripts/stage-cli-sidecar.sh` and registered in
+    /// `tauri.conf.json`'s `bundle.externalBin` as `binaries/claudette`;
+    /// at runtime it lives next to the GUI binary (`Contents/MacOS/`
+    /// on macOS, alongside the `.exe` on Windows, alongside the
+    /// AppImage on Linux). In dev the macOS app runner mirrors the
+    /// staged sidecar into the same layout so `current_exe().parent()`
+    /// resolves identically.
     ///
-    /// Task F4 will replace this with a more robust resolution that
-    /// understands bundled sidecars and Tauri resource paths. For F3
-    /// the placeholder is sufficient — the path is only used to embed
-    /// hook commands inside per-session settings overlays.
+    /// Returns `None` if `current_exe` cannot be read or if the
+    /// resolved candidate does not exist on disk — the latter is the
+    /// common dev-without-staging case, and callers surface a
+    /// "claudette-cli binary not found" error so the user knows to
+    /// re-run `scripts/stage-cli-sidecar.sh`.
     pub async fn bundled_cli_binary_path(&self) -> Option<std::path::PathBuf> {
         let exe = std::env::current_exe().ok()?;
-        let dir = exe.parent()?.to_path_buf();
-        #[cfg(windows)]
-        let candidate = dir.join("claudette-cli.exe");
-        #[cfg(not(windows))]
-        let candidate = dir.join("claudette-cli");
-        Some(candidate)
+        let dir = exe.parent()?;
+        let suffix = std::env::consts::EXE_SUFFIX;
+        let candidate = dir.join(format!("claudette{suffix}"));
+        if candidate.exists() {
+            return Some(candidate);
+        }
+        // Dev fallback: repo-relative staged path. Mirrors
+        // `claudette::agent::pi_sdk::resolve_pi_harness_path` so a
+        // bare `cargo run` (which doesn't go through the macOS dev
+        // runner) can still find the sidecar.
+        let triple = host_triple();
+        let staged = std::path::PathBuf::from("src-tauri")
+            .join("binaries")
+            .join(format!("claudette-{triple}{suffix}"));
+        if staged.exists() {
+            return Some(staged);
+        }
+        None
+    }
+
+    /// Path to the bundled `claudette-session-host` sidecar used by
+    /// the interactive backend's sidecar host. The session-host is
+    /// staged by `scripts/stage-session-host-sidecar.sh` and
+    /// registered in `tauri.conf.json`'s `bundle.externalBin` as
+    /// `binaries/claudette-session-host`; at runtime it lives next to
+    /// the GUI binary (`Contents/MacOS/` on macOS, alongside the
+    /// `.exe` on Windows, alongside the AppImage on Linux). In dev
+    /// the macOS app runner mirrors the staged sidecar into the same
+    /// layout.
+    ///
+    /// Returns `None` if `current_exe` cannot be read or no candidate
+    /// exists on disk. The sidecar host falls back to a bare
+    /// `claudette-session-host` (PATH lookup) when this is `None`,
+    /// which lets a `cargo run`-from-workspace flow still work when
+    /// the user has the binary on PATH.
+    pub async fn bundled_session_host_binary_path(&self) -> Option<std::path::PathBuf> {
+        if let Ok(override_path) = std::env::var("CLAUDETTE_SESSION_HOST") {
+            return Some(std::path::PathBuf::from(override_path));
+        }
+        let exe = std::env::current_exe().ok()?;
+        let dir = exe.parent()?;
+        let suffix = std::env::consts::EXE_SUFFIX;
+        let candidate = dir.join(format!("claudette-session-host{suffix}"));
+        if candidate.exists() {
+            return Some(candidate);
+        }
+        // Dev fallback: repo-relative staged path. Mirrors
+        // `claudette::agent::pi_sdk::resolve_pi_harness_path` so a
+        // bare `cargo run` (which doesn't go through the macOS dev
+        // runner) can still find the sidecar.
+        let triple = host_triple();
+        let staged = std::path::PathBuf::from("src-tauri")
+            .join("binaries")
+            .join(format!("claudette-session-host-{triple}{suffix}"));
+        if staged.exists() {
+            return Some(staged);
+        }
+        None
     }
 
     /// Synthesize a wire string for the active interactive host kind.
@@ -1062,24 +1119,19 @@ impl AppState {
         }
         let runtime_dir = self.runtime_dir_for_interactive().await;
         let sidecar_socket = runtime_dir.join("session-host.sock");
-        // For v1 we point the sidecar binary at the bundled CLI's
-        // sibling `claudette-session-host`. Resolution mirrors the
-        // CLI: F4 will harden this.
-        let exe = std::env::current_exe().ok();
-        let sidecar_binary = exe
-            .as_ref()
-            .and_then(|e| e.parent())
-            .map(|p| {
-                #[cfg(windows)]
-                {
-                    p.join("claudette-session-host.exe")
-                }
-                #[cfg(not(windows))]
-                {
-                    p.join("claudette-session-host")
-                }
-            })
-            .unwrap_or_else(|| std::path::PathBuf::from("claudette-session-host"));
+        // Resolve the staged `claudette-session-host` sidecar through
+        // the same Tauri externalBin path the CLI uses. Falls back to
+        // a bare binary name so a PATH-installed
+        // `claudette-session-host` still works when the bundle is
+        // missing (developer running `cargo run` straight out of the
+        // workspace without going through `scripts/dev.sh`).
+        let sidecar_binary = self
+            .bundled_session_host_binary_path()
+            .await
+            .unwrap_or_else(|| {
+                let suffix = std::env::consts::EXE_SUFFIX;
+                std::path::PathBuf::from(format!("claudette-session-host{suffix}"))
+            });
         let host = claudette::agent::interactive_host::select_default_host(
             &runtime_dir,
             &sidecar_socket,
@@ -1143,6 +1195,24 @@ impl AppState {
     /// the Plugins settings page from stalling while env loads.
     pub async fn plugins_snapshot(&self) -> Arc<PluginRegistry> {
         Arc::clone(&*self.plugins.read().await)
+    }
+}
+
+/// Host target triple matching the staged sidecar naming used by
+/// `scripts/stage-*-sidecar.sh`. Mirrors the lookup table in
+/// `claudette::agent::pi_sdk::host_triple` so the repo-relative dev
+/// fallback used by [`AppState::bundled_cli_binary_path`] and
+/// [`AppState::bundled_session_host_binary_path`] picks the same
+/// directory entry the staging scripts wrote.
+fn host_triple() -> &'static str {
+    match (std::env::consts::ARCH, std::env::consts::OS) {
+        ("aarch64", "macos") => "aarch64-apple-darwin",
+        ("x86_64", "macos") => "x86_64-apple-darwin",
+        ("x86_64", "linux") => "x86_64-unknown-linux-gnu",
+        ("aarch64", "linux") => "aarch64-unknown-linux-gnu",
+        ("x86_64", "windows") => "x86_64-pc-windows-msvc",
+        ("aarch64", "windows") => "aarch64-pc-windows-msvc",
+        _ => "unknown",
     }
 }
 
