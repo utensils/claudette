@@ -39,7 +39,22 @@ use interprocess::local_socket::{ListenerOptions, Name};
 use tokio::sync::Mutex;
 
 use crate::SessionSummary;
+use crate::idle::Idle;
 use crate::session::{Session, SessionEvent};
+
+/// RAII guard that decrements an `Idle`'s client counter on drop. The
+/// server wraps each connection task with one so a panic or early `?`
+/// return still re-arms the idle waiter — manual `client_disconnected`
+/// calls would race against any `await` returning early.
+struct ClientGuard {
+    idle: Idle,
+}
+
+impl Drop for ClientGuard {
+    fn drop(&mut self) {
+        self.idle.client_disconnected();
+    }
+}
 
 /// Shared map of active sessions keyed by `sid`. Held by the server task and
 /// cloned into each accepted connection so all connections see the same set
@@ -99,7 +114,20 @@ fn socket_name(path: &Path) -> std::io::Result<Name<'_>> {
 pub async fn run_at_with(map: SessionMap, socket_path: &Path) -> std::io::Result<()> {
     let name = socket_name(socket_path)?;
     let listener = ListenerOptions::new().name(name).create_tokio()?;
-    serve(listener, map).await
+    serve(listener, map, None).await
+}
+
+/// Same as `run_at_with`, but also tracks client connection lifetimes against
+/// the supplied `Idle` so a sibling `wait_for_idle_exit` future can decide
+/// when to shut the sidecar down.
+pub async fn run_at_with_idle(
+    map: SessionMap,
+    socket_path: &Path,
+    idle: Idle,
+) -> std::io::Result<()> {
+    let name = socket_name(socket_path)?;
+    let listener = ListenerOptions::new().name(name).create_tokio()?;
+    serve(listener, map, Some(idle)).await
 }
 
 /// Bind the listener at `socket_path` with a fresh session map. Used by
@@ -114,7 +142,7 @@ pub async fn run_for_test(socket_path: &Path) -> std::io::Result<()> {
     run_at_with(new_session_map(), socket_path).await
 }
 
-async fn serve(listener: Listener, map: SessionMap) -> std::io::Result<()> {
+async fn serve(listener: Listener, map: SessionMap, idle: Option<Idle>) -> std::io::Result<()> {
     loop {
         let stream = match listener.accept().await {
             Ok(s) => s,
@@ -124,7 +152,17 @@ async fn serve(listener: Listener, map: SessionMap) -> std::io::Result<()> {
             }
         };
         let m = map.clone();
+        let idle_for_task = idle.clone();
         tokio::spawn(async move {
+            // Drop-guard pattern: bump the client count before handling the
+            // connection and rely on `ClientGuard`'s `Drop` impl to
+            // decrement it on any exit path (return, `?`, panic). This is
+            // strictly cleaner than explicit `client_disconnected()` calls
+            // because `handle_connection` returns early on bad frames.
+            let _client_guard = idle_for_task.map(|i| {
+                i.client_connected();
+                ClientGuard { idle: i }
+            });
             if let Err(e) = handle_connection(stream, m).await {
                 tracing::warn!(?e, "connection ended with error");
             }
