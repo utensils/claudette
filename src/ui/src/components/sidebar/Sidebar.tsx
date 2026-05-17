@@ -30,6 +30,7 @@ import { resolveScmPrIcon } from "../shared/workspaceStatusIcon";
 import { RepoIcon } from "../shared/RepoIcon";
 import { WorkspaceEnvSpinner } from "./WorkspaceEnvSpinner";
 import { WorkspaceScmLinkIcon } from "./WorkspaceScmLinkIcon";
+import { InteractiveBadge, computeInteractiveBadgeState } from "./InteractiveBadge";
 import { extractRemoteWorkspace } from "./remoteWorkspaceResponse";
 import { HelpMenu } from "./HelpMenu";
 import { UpdateBanner } from "../layout/UpdateBanner";
@@ -116,6 +117,7 @@ export const Sidebar = memo(function Sidebar() {
   const addToast = useAppStore((s) => s.addToast);
   const unreadCompletions = useAppStore((s) => s.unreadCompletions);
   const sessionsByWorkspace = useAppStore((s) => s.sessionsByWorkspace);
+  const interactiveSessionsByWorkspace = useAppStore((s) => s.interactiveSessionsByWorkspace);
   const setSessionsForWorkspace = useAppStore((s) => s.setSessionsForWorkspace);
   const scmSummary = useAppStore((s) => s.scmSummary);
   const workspaceEnvironment = useAppStore((s) => s.workspaceEnvironment);
@@ -754,6 +756,17 @@ export const Sidebar = memo(function Sidebar() {
             </span>
           )}
           <span className={styles.wsBranch}>{ws.branch_name}</span>
+          {(() => {
+            const interactiveBadge = computeInteractiveBadgeState(
+              interactiveSessionsByWorkspace[ws.id],
+            );
+            return interactiveBadge !== null ? (
+              <InteractiveBadge
+                state={interactiveBadge}
+                className={styles.interactiveBadge}
+              />
+            ) : null;
+          })()}
           {(() => {
             if (!showSidebarRunningCommands) return null;
             const wsCommands = workspaceTerminalCommands[ws.id];

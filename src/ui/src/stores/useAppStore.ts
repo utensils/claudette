@@ -74,6 +74,10 @@ import {
   createWorkspaceClaudeFlagsSlice,
   type WorkspaceClaudeFlagsSlice,
 } from "./slices/workspaceClaudeFlagsSlice";
+import {
+  createInteractiveSessionsSlice,
+  type InteractiveSessionsSlice,
+} from "./slices/interactiveSessionsSlice";
 
 export type {
   AgentApproval,
@@ -110,7 +114,8 @@ export type AppState = RepositoriesSlice &
   RemoteSlice &
   SystemSlice &
   TabOrderSlice &
-  WorkspaceClaudeFlagsSlice;
+  WorkspaceClaudeFlagsSlice &
+  InteractiveSessionsSlice;
 
 export const useAppStore = create<AppState>()((...a) => ({
   ...createRepositoriesSlice(...a),
@@ -133,6 +138,7 @@ export const useAppStore = create<AppState>()((...a) => ({
   ...createSystemSlice(...a),
   ...createTabOrderSlice(...a),
   ...createWorkspaceClaudeFlagsSlice(...a),
+  ...createInteractiveSessionsSlice(...a),
 }));
 
 /**
