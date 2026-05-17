@@ -110,6 +110,11 @@ rodio = { version = "0.22", default-features = false, features = ["playback", "s
 # whose 5-minute deadline elapses, so grandchild processes (`npm install`,
 # build helpers) don't survive the kill of the immediate `sh -c` parent.
 libc = "0.2"
+# Used by `agent::interactive_host::tmux` to `mkfifo` the per-session
+# pipe-pane FIFO that bridges tmux output → the FIFO tailer thread →
+# AttachStream subscribers. `fs` enables `nix::unistd::mkfifo` and
+# `nix::sys::stat::Mode`.
+nix = { version = "0.30", features = ["fs"] }
 
 [features]
 # `pi-sdk` gates the Pi coding-agent harness (sidecar wrapper around
