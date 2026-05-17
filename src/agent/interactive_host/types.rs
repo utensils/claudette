@@ -2,7 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
-pub use crate::agent::interactive_protocol::{HookFired, InputPayload, SessionSpec, StopMode};
+use crate::agent::interactive_protocol::HookFired;
 
 /// Stable identifier for an interactive session.
 ///

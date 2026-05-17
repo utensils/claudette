@@ -36,8 +36,8 @@ pub use harness::{
     PersistentSessionStart,
 };
 pub use interactive_host::{
-    AttachEvent, AttachId, AttachStream, HostError, HostHandle, HostStatus, InteractiveHost,
-    ScreenSnapshot, SessionId,
+    AttachEvent, AttachId, AttachStream, HostError, HostHandle, HostSessionSummary, HostStatus,
+    InteractiveHost, ScreenSnapshot, SessionId,
 };
 pub use naming::{
     generate_branch_name, generate_session_name, persist_claude_custom_title, sanitize_branch_name,

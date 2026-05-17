@@ -1,1 +1,1 @@
-//! Placeholder — implementation lands in Task B5.
+//! Placeholder — implementation lands in Task D1.
