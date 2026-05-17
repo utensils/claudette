@@ -145,6 +145,7 @@ export interface AgentInteractionSlice {
 
   queuedMessages: Record<string, QueuedMessage[]>;
   queuedMessageAutoDispatchPaused: Record<string, boolean>;
+  queuedMessageEditing: Record<string, boolean>;
   setQueuedMessage: (
     sessionId: string,
     content: string,
@@ -159,6 +160,7 @@ export interface AgentInteractionSlice {
   removeQueuedMessage: (sessionId: string, queuedMessageId: string) => void;
   clearQueuedMessage: (sessionId: string) => void;
   setQueuedMessageAutoDispatchPaused: (sessionId: string, paused: boolean) => void;
+  setQueuedMessageEditing: (sessionId: string, editing: boolean) => void;
 }
 
 export const createAgentInteractionSlice: StateCreator<
@@ -270,6 +272,7 @@ export const createAgentInteractionSlice: StateCreator<
 
   queuedMessages: {},
   queuedMessageAutoDispatchPaused: {},
+  queuedMessageEditing: {},
   setQueuedMessage: (sessionId, content, mentionedFiles, attachments) =>
     set((s) => ({
       queuedMessages: {
@@ -317,9 +320,14 @@ export const createAgentInteractionSlice: StateCreator<
           [sessionId]: _paused,
           ...pausedRest
         } = s.queuedMessageAutoDispatchPaused;
+        const {
+          [sessionId]: _editing,
+          ...editingRest
+        } = s.queuedMessageEditing;
         return {
           queuedMessages: rest,
           queuedMessageAutoDispatchPaused: pausedRest,
+          queuedMessageEditing: editingRest,
         };
       }
       return {
@@ -336,9 +344,14 @@ export const createAgentInteractionSlice: StateCreator<
         [sessionId]: _paused,
         ...pausedRest
       } = s.queuedMessageAutoDispatchPaused;
+      const {
+        [sessionId]: _editing,
+        ...editingRest
+      } = s.queuedMessageEditing;
       return {
         queuedMessages: rest,
         queuedMessageAutoDispatchPaused: pausedRest,
+        queuedMessageEditing: editingRest,
       };
     }),
   setQueuedMessageAutoDispatchPaused: (sessionId, paused) =>
@@ -355,6 +368,24 @@ export const createAgentInteractionSlice: StateCreator<
       return {
         queuedMessageAutoDispatchPaused: {
           ...s.queuedMessageAutoDispatchPaused,
+          [sessionId]: true,
+        },
+      };
+    }),
+  setQueuedMessageEditing: (sessionId, editing) =>
+    set((s) => {
+      const current = s.queuedMessageEditing[sessionId] === true;
+      if (current === editing) return s;
+      if (!editing) {
+        const {
+          [sessionId]: _,
+          ...rest
+        } = s.queuedMessageEditing;
+        return { queuedMessageEditing: rest };
+      }
+      return {
+        queuedMessageEditing: {
+          ...s.queuedMessageEditing,
           [sessionId]: true,
         },
       };
