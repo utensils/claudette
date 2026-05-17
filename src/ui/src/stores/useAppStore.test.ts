@@ -510,6 +510,10 @@ describe("plugin settings routing", () => {
 });
 
 describe("claudeInteractiveEnabled experimental flag", () => {
+  beforeEach(() => {
+    useAppStore.setState({ claudeInteractiveEnabled: false });
+  });
+
   it("defaults to false and toggles via setClaudeInteractiveEnabled", () => {
     expect(useAppStore.getState().claudeInteractiveEnabled).toBe(false);
     useAppStore.getState().setClaudeInteractiveEnabled(true);
