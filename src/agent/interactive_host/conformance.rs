@@ -124,16 +124,18 @@ async fn stop_graceful_yields_exit_event<H: InteractiveHost>(host: &H, fx: &Conf
     assert!(got_exit, "no exit event after stop");
 }
 
-async fn status_lists_only_running_sessions<H: InteractiveHost>(
-    host: &H,
-    _fx: &ConformanceFixture,
-) {
+async fn status_lists_only_running_sessions<H: InteractiveHost>(host: &H, fx: &ConformanceFixture) {
+    // Independently: spawn a session, stop it, and confirm the host no longer
+    // reports it as running. Doesn't rely on any prior subtest's side-effects.
+    let _ = host.ensure_session(&fx.sid, &fx.spec).await.unwrap();
+    host.stop(&fx.sid, StopMode::Force).await.unwrap();
+    // Give the host a moment to reap.
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
     let st: HostStatus = host.status().await.unwrap();
-    // After stop in the previous test, our session should be gone.
     assert!(
-        !st.sessions
-            .iter()
-            .any(|s| s.running && s.sid.as_str().contains("claudette-"))
+        !st.sessions.iter().any(|s| s.sid == fx.sid && s.running),
+        "session {:?} still listed as running after stop",
+        fx.sid
     );
 }
 
@@ -141,7 +143,6 @@ async fn drain_until_contains<S>(stream: &mut S, needle: &str, total: Duration) 
 where
     S: futures::Stream<Item = AttachEvent> + Unpin,
 {
-    use futures::StreamExt;
     let mut buf = Vec::<u8>::new();
     let deadline = tokio::time::Instant::now() + total;
     while tokio::time::Instant::now() < deadline {
