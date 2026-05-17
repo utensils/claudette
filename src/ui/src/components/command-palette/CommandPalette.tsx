@@ -30,19 +30,11 @@ import {
   buildModelCommands,
   buildEffortCommands,
   buildFileCommands,
-  CATEGORY_ORDER,
-  CATEGORY_LABELS,
-  type Command,
-  type CommandCategory,
+  groupCommandsByCategory,
   type FileEntry,
+  type GroupedCommands,
 } from "./commands";
 import styles from "./CommandPalette.module.css";
-
-interface GroupedCommands {
-  category: CommandCategory;
-  label: string;
-  commands: Command[];
-}
 
 export function CommandPalette() {
   const { t } = useTranslation("chat");
@@ -128,6 +120,16 @@ export function CommandPalette() {
   useEffect(() => {
     loadAllThemes().then(setThemes).catch(console.error);
   }, []);
+
+  // `autoFocus` is best-effort: in the Tauri webview the palette can mount
+  // while the OS still has focus elsewhere, so the search input never picks
+  // it up and Arrow keys fall through to the document. Schedule an explicit
+  // focus on mount and after each sub-mode transition so the keyboard
+  // handler on the input is the one that fires.
+  useEffect(() => {
+    const id = requestAnimationFrame(() => inputRef.current?.focus());
+    return () => cancelAnimationFrame(id);
+  }, [mode]);
 
   const close = toggleCommandPalette;
 
@@ -437,28 +439,39 @@ export function CommandPalette() {
         ? [{ category: "general", label: "Results", commands: filteredCommands }]
         : [];
     }
-    const map = new Map<CommandCategory, Command[]>();
-    for (const cmd of filteredCommands) {
-      const arr = map.get(cmd.category) ?? [];
-      arr.push(cmd);
-      map.set(cmd.category, arr);
-    }
-    return CATEGORY_ORDER.filter((cat) => map.has(cat)).map((cat) => ({
-      category: cat,
-      label: CATEGORY_LABELS[cat],
-      commands: map.get(cat)!,
-    }));
+    return groupCommandsByCategory(filteredCommands);
   }, [filteredCommands, mode]);
+
+  // Rendered (visual) order — what arrow keys must index into so the
+  // highlighted row and the command executed on Enter always agree.
+  // Without this, browsing the main mode (no query) would highlight the
+  // category-sorted row N but Enter would fire activeCommands[N].
+  const flatCommands = useMemo(
+    () => grouped.flatMap((g) => g.commands),
+    [grouped],
+  );
+
+  // Keep the highlight within bounds when filtering shrinks the list
+  // (e.g. typing extra characters that remove matches under the cursor).
+  useEffect(() => {
+    if (flatCommands.length === 0) {
+      if (selectedIndex !== 0) setSelectedIndex(0);
+      return;
+    }
+    if (selectedIndex > flatCommands.length - 1) {
+      setSelectedIndex(flatCommands.length - 1);
+    }
+  }, [flatCommands.length, selectedIndex]);
 
   // Theme live preview on arrow navigation (only in theme mode)
   useEffect(() => {
     if (mode !== "theme" || themes.length === 0) return;
-    const cmd = filteredCommands[selectedIndex];
+    const cmd = flatCommands[selectedIndex];
     if (cmd?.id.startsWith("theme:")) {
       const themeId = cmd.id.slice("theme:".length);
       applyThemeWithFonts(themeId);
     }
-  }, [selectedIndex, filteredCommands, themes, mode]);
+  }, [selectedIndex, flatCommands, themes, mode]);
 
   // Revert theme on unmount (safety net)
   useEffect(() => {
@@ -483,13 +496,15 @@ export function CommandPalette() {
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "ArrowDown") {
       e.preventDefault();
-      setSelectedIndex((i) => Math.min(i + 1, filteredCommands.length - 1));
+      setSelectedIndex((i) =>
+        flatCommands.length === 0 ? 0 : Math.min(i + 1, flatCommands.length - 1),
+      );
     } else if (e.key === "ArrowUp") {
       e.preventDefault();
       setSelectedIndex((i) => Math.max(i - 1, 0));
-    } else if (e.key === "Enter" && filteredCommands[selectedIndex]) {
+    } else if (e.key === "Enter" && flatCommands[selectedIndex]) {
       e.preventDefault();
-      filteredCommands[selectedIndex].execute();
+      flatCommands[selectedIndex].execute();
     } else if (e.key === "Escape") {
       e.preventDefault();
       // Stop propagation so the global keyboard shortcut handler doesn't
@@ -516,11 +531,36 @@ export function CommandPalette() {
     close();
   };
 
+  // Fallback keydown for the whole card: if a click on a result row stole
+  // focus from the search input, arrow keys would otherwise do nothing.
+  // Re-dispatch them through the same handler, and for any printable key
+  // bounce focus back to the input so typing continues to filter.
+  const handleCardKeyDown = (e: React.KeyboardEvent) => {
+    if (e.target === inputRef.current) return;
+    if (
+      e.key === "ArrowDown" ||
+      e.key === "ArrowUp" ||
+      e.key === "Enter" ||
+      e.key === "Escape" ||
+      e.key === "Backspace"
+    ) {
+      handleKeyDown(e);
+      return;
+    }
+    if (e.key.length === 1 && !e.metaKey && !e.ctrlKey && !e.altKey) {
+      inputRef.current?.focus();
+    }
+  };
+
   let flatIndex = 0;
 
   return (
     <div className={styles.backdrop} onClick={handleBackdropClick}>
-      <div className={styles.card} onClick={(e) => e.stopPropagation()}>
+      <div
+        className={styles.card}
+        onClick={(e) => e.stopPropagation()}
+        onKeyDown={handleCardKeyDown}
+      >
         <div className={styles.inputRow}>
           {mode !== "main" ? (
             <button
@@ -551,6 +591,10 @@ export function CommandPalette() {
               : "Type a command..."
             }
             autoFocus
+            autoComplete="off"
+            autoCorrect="off"
+            autoCapitalize="off"
+            spellCheck={false}
           />
           {mode !== "main" && (
             <span className={styles.modeBadge}>
