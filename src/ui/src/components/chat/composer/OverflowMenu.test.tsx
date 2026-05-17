@@ -272,12 +272,13 @@ describe("OverflowMenu — mid-turn reachability", () => {
 
 // --- End-to-end toggle behavior ----------------------------------------
 //
-// These exercise the user-implemented `toggle()` callback per the sketch
-// in `OverflowMenu.tsx`. They will fail against the placeholder body
-// (which fires immediately) and pass once the queue / cancel / defer
-// branches are wired up. Each test names the exact branch it covers.
+// Each test covers one branch of the Remote Control `toggle()` body:
+// queue (mid-turn), cancel (re-click while pending), defer-fire (turn
+// end), idle fire (regression for the pre-existing immediate path),
+// and pending-survives-dropdown-close (regression for the bug where
+// pending state lived inside the conditionally-rendered row).
 
-describe("OverflowMenu — Remote Control mid-turn enable (user toggle)", () => {
+describe("OverflowMenu — Remote Control mid-turn enable", () => {
   it("queues a pending enable instead of firing when clicked mid-turn", async () => {
     const { container } = await renderMenu({ isRunning: true });
     await openDropdown(container);
@@ -391,6 +392,29 @@ describe("OverflowMenu — Remote Control mid-turn enable (user toggle)", () => 
       true,
       expect.any(Object),
     );
+  });
+
+  it("drops a pending intent if Remote Control becomes unavailable mid-turn", async () => {
+    // Regression: queuing while the experimental gate is on, then
+    // flipping the gate off, must not silently fire the enable RPC on
+    // turn end. The gate is the user telling the app "I don't want
+    // this feature" — the queued action must respect that.
+    const { container, root } = await renderMenu({ isRunning: true });
+    await openDropdown(container);
+
+    await act(async () => {
+      findRemoteControlButton(container).click();
+      await Promise.resolve();
+    });
+    expect(serviceMocks.setClaudeRemoteControl).not.toHaveBeenCalled();
+
+    // User flips the experimental gate off before the turn ends.
+    appStore.claudeRemoteControlEnabled = false;
+    await rerenderMenu(root, { isRunning: true });
+
+    // Turn ends — the queued intent must NOT fire.
+    await rerenderMenu(root, { isRunning: false });
+    expect(serviceMocks.setClaudeRemoteControl).not.toHaveBeenCalled();
   });
 
   it("clears the pending intent when the user switches sessions", async () => {

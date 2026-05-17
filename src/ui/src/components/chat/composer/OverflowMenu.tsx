@@ -99,6 +99,16 @@ export function OverflowMenu({ sessionId, disabled, isRunning, isRemote }: Overf
     setPendingEnableForSession((prev) => (prev === sessionId ? prev : null));
   }, [sessionId]);
 
+  // Also wipe the queued intent when Remote Control becomes unavailable
+  // (the experimental gate flipped off, or this is a remote transport
+  // where Remote Control isn't supported). Without this, a pending
+  // intent queued before the gate was turned off would silently fire
+  // the enable RPC on the next turn end, even though the row is hidden.
+  useEffect(() => {
+    if (showRemoteControl) return;
+    setPendingEnableForSession(null);
+  }, [showRemoteControl]);
+
   // `runImmediate` is the actual enable/disable RPC body. Hoisted out of
   // `RemoteControlMenuItem` so the deferred-fire effect below can reuse
   // it even when the dropdown (and thus the row component) is unmounted.
@@ -177,9 +187,23 @@ export function OverflowMenu({ sessionId, disabled, isRunning, isRemote }: Overf
   useEffect(() => {
     if (pendingEnableForSession !== sessionId) return;
     if (isRunning) return;
+    // Don't fire if Remote Control is no longer available (experimental
+    // gate off, remote transport) or while the workspace environment is
+    // still preparing. The session-switch / showRemoteControl cleanup
+    // effects already clear the intent in those cases; this is the
+    // belt-and-suspenders check at the fire site.
+    if (!showRemoteControl) return;
+    if (disabled) return;
     setPendingEnableForSession(null);
     void runImmediate(true);
-  }, [pendingEnableForSession, sessionId, isRunning, runImmediate]);
+  }, [
+    disabled,
+    isRunning,
+    pendingEnableForSession,
+    runImmediate,
+    sessionId,
+    showRemoteControl,
+  ]);
 
   const queuePendingEnable = useCallback(() => {
     setPendingEnableForSession(sessionId);
