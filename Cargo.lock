@@ -850,7 +850,7 @@ checksum = "c8d4a3bb8b1e0c1050499d1815f5ab16d04f0959b233085fb31653fbfc9d98f9"
 
 [[package]]
 name = "claudette"
-version = "0.24.0"
+version = "0.25.0"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -889,7 +889,7 @@ dependencies = [
 
 [[package]]
 name = "claudette-cli"
-version = "0.24.0"
+version = "0.25.0"
 dependencies = [
  "clap",
  "clap_complete",
@@ -907,7 +907,7 @@ dependencies = [
 
 [[package]]
 name = "claudette-mobile"
-version = "0.24.0"
+version = "0.25.0"
 dependencies = [
  "chrono",
  "claudette",
@@ -925,7 +925,7 @@ dependencies = [
 
 [[package]]
 name = "claudette-server"
-version = "0.24.0"
+version = "0.25.0"
 dependencies = [
  "base64 0.22.1",
  "clap",
@@ -954,7 +954,7 @@ dependencies = [
 
 [[package]]
 name = "claudette-tauri"
-version = "0.24.0"
+version = "0.25.0"
 dependencies = [
  "async-trait",
  "base64 0.22.1",

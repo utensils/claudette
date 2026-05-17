@@ -1,6 +1,6 @@
 [package]
 name = "claudette-mobile"
-version = "0.24.0"
+version = "0.25.0"
 edition = "2024"
 description = "Claudette iOS / Android client — thin WSS remote-control client"
 license = "MIT"

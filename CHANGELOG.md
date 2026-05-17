@@ -1,5 +1,66 @@
 # Changelog
 
+## [0.25.0](https://github.com/utensils/claudette/compare/v0.24.0...v0.25.0) (2026-05-17)
+
+
+### Features
+
+* add native codex harness foundation ([#786](https://github.com/utensils/claudette/issues/786)) ([35dc249](https://github.com/utensils/claudette/commit/35dc249d68e77d1d4b776e9de2044508590703bf))
+* add workspace task history ([#773](https://github.com/utensils/claudette/issues/773)) ([e17739e](https://github.com/utensils/claudette/commit/e17739e0a57d5799d71146a20d23428c2801f92d))
+* **agent:** redirect Claude team agents to session tabs ([#787](https://github.com/utensils/claudette/issues/787)) ([fef3c59](https://github.com/utensils/claudette/commit/fef3c5926e9a96b62032dbd3381e9fd22aa323b3))
+* auto-detect local agent providers ([#810](https://github.com/utensils/claudette/issues/810)) ([34ce71e](https://github.com/utensils/claudette/commit/34ce71e25bbc3baa83c9f9766b02aa9210e54177))
+* **chat:** collapse setup-script output in the transcript ([#784](https://github.com/utensils/claudette/issues/784)) ([6c66ef0](https://github.com/utensils/claudette/commit/6c66ef035209b73f1b71878b36c62b804b10109a))
+* **chat:** linkify file paths inside inline code spans ([#803](https://github.com/utensils/claudette/issues/803)) ([a3b561d](https://github.com/utensils/claudette/commit/a3b561de662523988dffae5b2c8d4887f30ebc64))
+* **chat:** render sub-agent transcript details ([#796](https://github.com/utensils/claudette/issues/796)) ([553b4d1](https://github.com/utensils/claudette/commit/553b4d1943e909c4a324a472bceed35d17a9f3dc))
+* **chat:** summarize CLI invocation banner with model and session id ([#811](https://github.com/utensils/claudette/issues/811)) ([a2fb9f2](https://github.com/utensils/claudette/commit/a2fb9f209a294f3c6daf3e568fce1faf921ae284))
+* **chat:** surface skill activations as their own transcript entry ([#777](https://github.com/utensils/claudette/issues/777)) ([ae1629f](https://github.com/utensils/claudette/commit/ae1629faa9de63f3d1454bae5635adbd08921978))
+* edit queued chat messages ([f9a1c22](https://github.com/utensils/claudette/commit/f9a1c2288618bb33cc9bc73013368de9a07c8326))
+* **file-viewer:** add File/Edit/View/Go menubar and swap Cmd+P bindings to match VS Code ([#830](https://github.com/utensils/claudette/issues/830)) ([2153fea](https://github.com/utensils/claudette/commit/2153feaa558c9e29fccf90741657f352a854622a))
+* **mobile:** iOS foundation — pair, browse, chat, approve over WSS ([#840](https://github.com/utensils/claudette/issues/840)) ([ff5f0f5](https://github.com/utensils/claudette/commit/ff5f0f57d87498173e8b163d27e05d9751f806c1))
+* **packaging:** publish to the AUR + harden Linux file-dialog UX + add Arch test container ([#828](https://github.com/utensils/claudette/issues/828)) ([d5ee321](https://github.com/utensils/claudette/commit/d5ee3215455245b6e9fb9ff0c1932a72b4f990d0))
+* **pi:** add Pi SDK harness as a first-class agent backend (+ optional pi-sdk feature gate) ([#822](https://github.com/utensils/claudette/issues/822)) ([16e66b0](https://github.com/utensils/claudette/commit/16e66b0fca5f620645548c4223ec69e009253f1d))
+* **pinned-prompts:** per-prompt toolbar toggle overrides ([#765](https://github.com/utensils/claudette/issues/765)) ([0386a65](https://github.com/utensils/claudette/commit/0386a65dd4a4ae24fba04ebaec2abb69ea515420))
+* promote agent backends to first-class settings ([#808](https://github.com/utensils/claudette/issues/808)) ([38fa24b](https://github.com/utensils/claudette/commit/38fa24b6a00b290a691de4e04305ff35c1718ad5))
+* **settings:** layered Escape — dismiss inner controls, then exit Settings ([#806](https://github.com/utensils/claudette/issues/806)) ([57d8008](https://github.com/utensils/claudette/commit/57d8008842115603038e998f825b666fe70d8f66))
+* **terminal:** add independent terminal zoom ([#794](https://github.com/utensils/claudette/issues/794)) ([d0ddf20](https://github.com/utensils/claudette/commit/d0ddf20d6fafbbb18795e8d39fb3a8a4fea750fe))
+* **terminal:** promote Claudette Terminal + route env-provider output, allow mid-resolve toggle ([#820](https://github.com/utensils/claudette/issues/820)) ([a83bc66](https://github.com/utensils/claudette/commit/a83bc667e0ef48c69ce10df20b5a7271fe3dcd42))
+* **usage:** composer usage indicator + ToS warning on enable ([#815](https://github.com/utensils/claudette/issues/815)) ([6da30c5](https://github.com/utensils/claudette/commit/6da30c5e82611d48240a8c575ad43c82e6bc505f))
+* **workspace:** curate the "Open in app" menu ([#783](https://github.com/utensils/claudette/issues/783)) ([bd16fc0](https://github.com/utensils/claudette/commit/bd16fc0020c9e7f4deb58026e85b27a419a1d120))
+
+
+### Bug Fixes
+
+* **chat:** highlight selected question options ([#793](https://github.com/utensils/claudette/issues/793)) ([59dbfba](https://github.com/utensils/claudette/commit/59dbfba8376356c26889e4caafa81769a787094d))
+* **chat:** keep sticky scroll pinned during live tools ([#831](https://github.com/utensils/claudette/issues/831)) ([94ecfce](https://github.com/utensils/claudette/commit/94ecfce5a23082a492e349832af535589f993f6c))
+* **chat:** preserve context across model swaps, cross-harness migration, rollback ([#834](https://github.com/utensils/claudette/issues/834)) ([611abf5](https://github.com/utensils/claudette/commit/611abf542aa4e7e62de9e064ca0e0552b871fad0))
+* **chat:** resize oversized image attachments ([#766](https://github.com/utensils/claudette/issues/766)) ([aa78e87](https://github.com/utensils/claudette/commit/aa78e87cfe67cc479877570d1fa588ff3a05c26f))
+* **chat:** suppress project context in Haiku rename calls + log silent failures ([#763](https://github.com/utensils/claudette/issues/763)) ([660ddd7](https://github.com/utensils/claudette/commit/660ddd7f52a6cb37de8fecaf7551eddbabfcfa8d))
+* **command-palette:** keep arrow navigation locked to the visible row ([#839](https://github.com/utensils/claudette/issues/839)) ([bdc7cae](https://github.com/utensils/claudette/commit/bdc7cae647da7aae951cd35e565d7f4fc9b18f2c))
+* Copy Image now works via native OS clipboard backend ([#677](https://github.com/utensils/claudette/issues/677)) ([e9c6592](https://github.com/utensils/claudette/commit/e9c65928d1af33e5c37db9d88ca0fe0a8396d367))
+* **dashboard:** make stats strip and analytics grid degrade gracefully at narrow widths ([#805](https://github.com/utensils/claudette/issues/805)) ([1f4c803](https://github.com/utensils/claudette/commit/1f4c8030ac092abd96561233d4d7e84467926660))
+* detect JetBrains Toolbox IDEs ([#781](https://github.com/utensils/claudette/issues/781)) ([8a6b2b2](https://github.com/utensils/claudette/commit/8a6b2b2dcdd2033b76931862f9cee678ce8f9766))
+* **devshell:** forward args ("$@") in build-app / fmt / run-tests wrappers ([#802](https://github.com/utensils/claudette/issues/802)) ([6ac6408](https://github.com/utensils/claudette/commit/6ac6408df8e146b90cc45a03d18aec66fa8442e3))
+* **env-provider:** hydrate repo settings in server ([#809](https://github.com/utensils/claudette/issues/809)) ([f4aa18b](https://github.com/utensils/claudette/commit/f4aa18b5922491620a925323bea2b8c27167ea92))
+* **env:** emit workspace_env_trust_needed from create/fork warmup ([#821](https://github.com/utensils/claudette/issues/821)) ([3f676b8](https://github.com/utensils/claudette/commit/3f676b8cb5c56db1fa19beca5d6675cabab2a5d8))
+* **fork:** hydrate forked workspace with remote_connection_id stamp ([#816](https://github.com/utensils/claudette/issues/816)) ([9dba0fd](https://github.com/utensils/claudette/commit/9dba0fdff391893afd628190c898931c6dae2e22))
+* **help:** route nightly builds to the rolling GitHub release tag ([#814](https://github.com/utensils/claudette/issues/814)) ([1329fbf](https://github.com/utensils/claudette/commit/1329fbfae38f4881b651a0e7624147e4ccc9f3fb))
+* **models:** remove stale \"Experimental Codex\" label from DB-persisted backend configs ([#817](https://github.com/utensils/claudette/issues/817)) ([f243f65](https://github.com/utensils/claudette/commit/f243f651a22bafaa443dbb589aa10cbefc69b5db))
+* open chat file links in Monaco ([#798](https://github.com/utensils/claudette/issues/798)) ([9a21e1f](https://github.com/utensils/claudette/commit/9a21e1ffe91731c865448b6b2bbd66942edad7a5))
+* preserve initial terminal output ([#774](https://github.com/utensils/claudette/issues/774)) ([2c09efe](https://github.com/utensils/claudette/commit/2c09efe78450a485311437a51cce703fda4acc04))
+* preserve queued messages on agent stop ([#771](https://github.com/utensils/claudette/issues/771)) ([81abacc](https://github.com/utensils/claudette/commit/81abacc16c1860c2836021103a1b6c4e2884d803))
+* prevent archived workspace overflow ([#775](https://github.com/utensils/claudette/issues/775)) ([97efccc](https://github.com/utensils/claudette/commit/97efccc31da62e64e381d3a14d51207239123991))
+* require direnv reapproval after envrc changes ([#776](https://github.com/utensils/claudette/issues/776)) ([3d379fd](https://github.com/utensils/claudette/commit/3d379fd9a60850cbcdda904860670c0384059dbb))
+* stabilize chat auth flow when env-providers fail ([#782](https://github.com/utensils/claudette/issues/782)) ([c033552](https://github.com/utensils/claudette/commit/c033552441dd30271045d64c39fb0a0d84d7b9b3))
+* stabilize context meter during env startup ([#779](https://github.com/utensils/claudette/issues/779)) ([e02437e](https://github.com/utensils/claudette/commit/e02437e7a1f481e4548dd9683887cbd395df6c68))
+* **task-tracker:** align with Claude Code's Task* tool family, archive history across sessions ([#836](https://github.com/utensils/claudette/issues/836)) ([45265f1](https://github.com/utensils/claudette/commit/45265f120b65e9e0ebc74a7273e174fc3ad7ca0c))
+* **terminal:** stop panel re-opening on every workspace switch ([#832](https://github.com/utensils/claudette/issues/832)) ([dff084b](https://github.com/utensils/claudette/commit/dff084bed57c7cfce75eadebd76a69f2d5104a4e))
+* **workspace:** self-heal a stale sidebar row when env prep reports it's gone ([#785](https://github.com/utensils/claudette/issues/785)) ([69fac8b](https://github.com/utensils/claudette/commit/69fac8bc0eb0933134929f4f3d8466504f0ca5ee))
+
+
+### Performance Improvements
+
+* **scm:** tier polling by workspace focus and activity to reduce idle churn ([#757](https://github.com/utensils/claudette/issues/757)) ([a146ec5](https://github.com/utensils/claudette/commit/a146ec5d9e2cb9fffa5eb4519c5b884b6953bbb1))
+
 ## [0.24.0](https://github.com/utensils/claudette/compare/v0.23.0...v0.24.0) (2026-05-11)
 
 
