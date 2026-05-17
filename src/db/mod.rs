@@ -35,6 +35,9 @@ mod chat;
 mod workspace;
 pub use workspace::WORKSPACE_ORDER_MODE_PREFIX;
 
+mod interactive_sessions;
+pub use interactive_sessions::InteractiveSessionRow;
+
 mod commands;
 
 mod usage;
