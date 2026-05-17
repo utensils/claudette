@@ -166,8 +166,9 @@ pub async fn stop_sessions_for_workspace(
     for row in rows {
         // Skip rows we already know are dead — there's nothing on the
         // host side to stop and the next-state DB cascade will clean
-        // them up. "crashed" / "exited" rows still get the cascade.
-        if row.state == "crashed" || row.state == "exited" {
+        // them up. "crashed" / "exited" / "stopped" rows still get the
+        // cascade.
+        if row.state == "crashed" || row.state == "exited" || row.state == "stopped" {
             continue;
         }
         let sid = SessionId(row.sid.clone());
@@ -787,13 +788,15 @@ mod tests {
 
     #[tokio::test]
     async fn stop_sessions_skips_already_dead_rows() {
-        // Sessions in `crashed` or `exited` have no live host counterpart;
-        // calling stop on them risks a NotFound from the host. The DB
-        // cascade still removes the row when the workspace goes away.
+        // Sessions in `crashed`, `exited`, or `stopped` have no live host
+        // counterpart; calling stop on them risks a NotFound from the
+        // host. The DB cascade still removes the row when the workspace
+        // goes away.
         let host = StopTrackingHost::new();
         let rows = vec![
             make_row("claudette-ws1-crashed1", "ws-1", "crashed"),
             make_row("claudette-ws1-exited11", "ws-1", "exited"),
+            make_row("claudette-ws1-stopped1", "ws-1", "stopped"),
             make_row("claudette-ws1-runninga", "ws-1", "running"),
         ];
 

@@ -1583,12 +1583,11 @@ async fn stop_interactive_sessions_for_workspace_teardown(
         }
     }
 
-    // Drop the sid → workspace_id mappings regardless of stop outcome
-    // so a later command can't route through them to a now-dead host.
-    // The workspace-keyed host cache in `interactive_hosts` is
-    // intentionally NOT evicted here — it's cheap to keep, and a
-    // sibling workspace sharing a host (future v2) would still need
-    // it.
+    // Drop sid → workspace_id mappings regardless of stop outcome so a
+    // later command can't route through them to a now-dead host. The
+    // workspace-keyed host cache in `interactive_hosts` is intentionally
+    // NOT evicted here — it's cheap to keep, and a sibling workspace
+    // sharing a host (future v2) would still need it.
     for row in &rows {
         state.unregister_interactive_session(&row.sid).await;
     }
