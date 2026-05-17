@@ -121,9 +121,9 @@ describe("computeInteractiveBadgeState", () => {
     expect(computeInteractiveBadgeState(rows, true)).toBe("awaiting");
   });
 
-  it("returns null when only exited / unknown sessions are persisted", () => {
+  it("returns null when only stopped / unknown sessions are persisted", () => {
     const rows = [
-      makeRow({ sid: "a", state: "exited" }),
+      makeRow({ sid: "a", state: "stopped" }),
       makeRow({ sid: "b", state: "unknown" }),
     ];
     expect(computeInteractiveBadgeState(rows)).toBeNull();
@@ -131,9 +131,14 @@ describe("computeInteractiveBadgeState", () => {
 
   it("ignores non-running, non-crashed states when computing 'detached'", () => {
     const rows = [
-      makeRow({ sid: "a", state: "exited" }),
+      makeRow({ sid: "a", state: "stopped" }),
       makeRow({ sid: "b", state: "running" }),
     ];
+    expect(computeInteractiveBadgeState(rows)).toBe("detached");
+  });
+
+  it("treats DB state 'detached' the same as 'running' for badge purposes", () => {
+    const rows = [makeRow({ state: "detached" })];
     expect(computeInteractiveBadgeState(rows)).toBe("detached");
   });
 });

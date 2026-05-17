@@ -32,7 +32,10 @@
 // it stays trivial to test and renders identically under SSR / happy-dom.
 
 import type { CSSProperties } from "react";
-import type { InteractiveSessionRow } from "../../services/interactive";
+import type {
+  InteractiveSessionRow,
+  InteractiveSessionState,
+} from "../../services/interactive";
 
 /** Visual states surfaced by the badge. `null` means "no badge". */
 export type InteractiveBadgeState = "awaiting" | "detached" | "crashed";
@@ -113,24 +116,51 @@ export function InteractiveBadge({
 // ---------------------------------------------------------------------------
 
 /**
+ * Map a single DB-row state to the badge state it contributes (if
+ * any). Written as an exhaustive `switch` over `InteractiveSessionState`
+ * so TypeScript strict mode errors if a future state is added to the
+ * union without updating this selector.
+ *
+ *   - `"running"`   → `"detached"` (v1 treats any DB-`running` row as
+ *                     "detached"; the user-perceived attached state is
+ *                     owned by the active ChatPanel, not the row).
+ *   - `"detached"`  → `"detached"`.
+ *   - `"crashed"`   → `"crashed"`.
+ *   - `"stopped"`   → `null` (cleanly-stopped sessions don't warrant a
+ *                     sidebar badge).
+ *   - `"unknown"`   → `null` (defensive forward-compat fallback).
+ */
+function badgeStateForRow(
+  state: InteractiveSessionState,
+): "awaiting" | "detached" | "crashed" | null {
+  switch (state) {
+    case "running":
+    case "detached":
+      return "detached";
+    case "crashed":
+      return "crashed";
+    case "stopped":
+    case "unknown":
+      return null;
+  }
+}
+
+/**
  * Compute the single badge state to display for a workspace given the
  * persisted interactive sessions for that workspace plus optional
  * runtime signals.
  *
  * Precedence (highest first):
- *   1. `crashed` — any session in DB state `"crashed"`.
+ *   1. `crashed` — any session whose row contributes `"crashed"`.
  *   2. `awaiting` — `awaitingFromAssembler` is `true`. The DB state
  *      column does not currently distinguish "awaiting" from "running"
  *      so the only authoritative awaiting signal in v1 is the live
  *      assembler state (G4).
- *   3. `detached` — any session in DB state `"running"`. v1 treats
- *      every running session as "detached" for badge purposes; a
- *      future revision can refine this once we track which client is
- *      currently attached.
+ *   3. `detached` — any session whose row contributes `"detached"`.
  *   4. `null` — no badge.
  *
- * Sessions in DB states `"exited"` / `"unknown"` are ignored — a
- * cleanly-exited session doesn't warrant a sidebar badge.
+ * Sessions in DB states `"stopped"` / `"unknown"` contribute nothing —
+ * see {@link badgeStateForRow}.
  */
 export function computeInteractiveBadgeState(
   sessions: readonly InteractiveSessionRow[] | undefined,
@@ -142,12 +172,13 @@ export function computeInteractiveBadgeState(
     // before its DB row lands on the next `listInteractive` refresh.
     return awaitingFromAssembler ? "awaiting" : null;
   }
-  let hasRunning = false;
+  let hasDetached = false;
   for (const row of sessions) {
-    if (row.state === "crashed") return "crashed";
-    if (row.state === "running") hasRunning = true;
+    const contribution = badgeStateForRow(row.state);
+    if (contribution === "crashed") return "crashed";
+    if (contribution === "detached") hasDetached = true;
   }
   if (awaitingFromAssembler) return "awaiting";
-  if (hasRunning) return "detached";
+  if (hasDetached) return "detached";
   return null;
 }

@@ -43,6 +43,33 @@ export interface StartInteractiveResult {
 }
 
 /**
+ * Canonical lifecycle states for a persisted `interactive_sessions`
+ * row. Mirrors the discrete `state` values written by the Rust CRUD in
+ * `src/db/interactive_sessions.rs` (A3 migration + A4 commands):
+ *
+ *   - `"running"`   — host has the session alive and Claudette is the
+ *                     active client.
+ *   - `"detached"`  — host has the session alive but Claudette is not
+ *                     currently attached to it.
+ *   - `"stopped"`   — session ended (graceful or forced teardown).
+ *   - `"crashed"`   — session terminated with a non-zero exit / host
+ *                     error; `crashReason` carries the diagnostic.
+ *   - `"unknown"`   — defensive forward-compat fallback so a future DB
+ *                     value doesn't crash the type checker; callers
+ *                     should treat this as "ignore for UI purposes".
+ *
+ * Typing this as a discriminated union (rather than plain `string`)
+ * keeps `computeInteractiveBadgeState` exhaustive — adding a new state
+ * here without updating the badge selector is a compile error.
+ */
+export type InteractiveSessionState =
+  | "running"
+  | "detached"
+  | "stopped"
+  | "crashed"
+  | "unknown";
+
+/**
  * Wire shape for a persisted `interactive_sessions` row, returned by
  * `interactive_list_for_workspace`. Mirrors Rust
  * `commands::interactive::InteractiveSessionListItem` (camelCase via
@@ -56,7 +83,7 @@ export interface InteractiveSessionRow {
   sid: string;
   workspaceId: string;
   hostKind: string;
-  state: string;
+  state: InteractiveSessionState;
   crashReason: string | null;
   createdAt: string;
   lastAttachedAt: string | null;
@@ -154,7 +181,7 @@ export function captureScreen(sid: string): Promise<string> {
  * Stop a running interactive session. `force=true` maps to a
  * `StopMode::Force` (SIGKILL on tmux, immediate teardown on sidecar);
  * the default is `StopMode::Graceful`. The DB row is updated to
- * `state = "exited"` and the sid→workspace_id mapping is dropped.
+ * `state = "stopped"` and the sid→workspace_id mapping is dropped.
  */
 export function stopInteractive(sid: string, force = false): Promise<void> {
   return invoke("interactive_stop", { sid, force });
