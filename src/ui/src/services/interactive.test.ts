@@ -274,7 +274,11 @@ describe("interactive service — normalizeHookPayload", () => {
     // HookEventKind::Unknown.
     expect(
       normalizeHookPayload({ sid: "S-1", kind: "FutureHook" }),
-    ).toEqual<HookEvent>({ sid: "S-1", kind: "unknown" });
+    ).toEqual<HookEvent>({
+      sid: "S-1",
+      kind: "unknown",
+      reason: "FutureHook",
+    });
 
     // Attach-stream: HookFired::Unknown serializes with kind="unknown" and
     // carries raw_kind. We surface that as reason so logs can label the drift.
@@ -287,6 +291,16 @@ describe("interactive service — normalizeHookPayload", () => {
       sid: "S-1",
       kind: "unknown",
       reason: "FutureHook",
+    });
+  });
+
+  it("preserves the original kind label as reason for flat-path unknown kinds", () => {
+    expect(
+      normalizeHookPayload({ sid: "S-2", kind: "SomeFutureHookName" }),
+    ).toEqual<HookEvent>({
+      sid: "S-2",
+      kind: "unknown",
+      reason: "SomeFutureHookName",
     });
   });
 

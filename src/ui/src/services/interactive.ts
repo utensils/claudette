@@ -219,7 +219,7 @@ export function subscribeOutput(
  * G3 accepts either and normalizes to {@link HookEvent} so downstream
  * code (G4 turn assembler) doesn't have to discriminate.
  */
-type NestedHookPayload = {
+export type NestedHookPayload = {
   sid: string;
   hook: {
     kind: string;
@@ -229,13 +229,13 @@ type NestedHookPayload = {
   };
 };
 
-type FlatHookPayload = {
+export type FlatHookPayload = {
   sid: string;
   kind: string;
   reason?: string | null;
 };
 
-type RawHookPayload = NestedHookPayload | FlatHookPayload;
+export type RawHookPayload = NestedHookPayload | FlatHookPayload;
 
 function isNestedHookPayload(p: RawHookPayload): p is NestedHookPayload {
   return (
@@ -285,7 +285,7 @@ export function normalizeHookPayload(raw: RawHookPayload): HookEvent {
       : { sid: raw.sid, kind };
   }
   const kind = coerceHookKind(raw.kind);
-  const reason = raw.reason ?? undefined;
+  const reason = raw.reason ?? (kind === "unknown" ? raw.kind : undefined);
   return reason !== undefined && reason !== null
     ? { sid: raw.sid, kind, reason }
     : { sid: raw.sid, kind };
