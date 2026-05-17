@@ -6,6 +6,21 @@
 
 use std::path::{Path, PathBuf};
 
+/// Long-lived handle to an interactive `claude` session running inside an
+/// `InteractiveHost` (tmux on Unix, sidecar elsewhere).
+///
+/// This is a stub for the F1 harness wiring. The real `start()` /
+/// `send_turn` / `interrupt` plumbing lands in F2 — for now the variant
+/// only needs to compile and route through [`crate::agent::AgentSession`]
+/// so the resolver layer can be exercised end-to-end.
+#[derive(Debug, Clone)]
+pub struct InteractiveSession {
+    /// Stable session identifier (`claudette-<workspace>-<rand>`). Mirrors
+    /// the `sid` embedded in the settings-overlay hook commands so that
+    /// `claudette-cli chat hook` callbacks route back to this session.
+    pub sid: String,
+}
+
 /// A transient `CLAUDE_CONFIG_DIR` overlay that registers three Claude Code
 /// hooks (Stop / Notification / UserPromptSubmit) which call back into the
 /// running GUI via the bundled `claudette-cli` binary.

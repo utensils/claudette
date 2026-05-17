@@ -136,6 +136,11 @@ impl AgentBackendKind {
 pub enum AgentBackendRuntimeHarness {
     #[default]
     ClaudeCode,
+    /// Interactive `claude` running inside an `InteractiveHost` (tmux on
+    /// Unix, sidecar elsewhere). Gated on the `claudeInteractiveEnabled`
+    /// experimental flag — see
+    /// [`AgentBackendConfig::effective_harness_kind`].
+    ClaudeInteractive,
     CodexAppServer,
     #[cfg(feature = "pi-sdk")]
     PiSdk,
@@ -240,6 +245,51 @@ impl AgentBackendConfig {
         match self.runtime_harness {
             Some(harness) if self.kind.available_harnesses().contains(&harness) => harness,
             _ => self.kind.default_harness(),
+        }
+    }
+
+    /// Map the persisted runtime selection onto the internal
+    /// [`crate::agent::AgentHarnessKind`] the chat dispatcher uses to
+    /// pick a session-protocol implementation.
+    ///
+    /// `ClaudeInteractive` is special: it's gated on the experimental
+    /// `claudeInteractiveEnabled` flag and is intentionally absent from
+    /// `available_harnesses()` (which keeps the UI runtime selector
+    /// honest for non-experimental users). The resolver therefore reads
+    /// `runtime_harness` directly here — bypassing the
+    /// `available_harnesses` filter — but only when the flag is on. If
+    /// the flag is off and the user has somehow pinned
+    /// `ClaudeInteractive` (downgrade, hand-edited DB, etc.), we fall
+    /// back to the kind's default harness rather than dispatch into a
+    /// disabled experiment.
+    pub fn effective_harness_kind(
+        &self,
+        claude_interactive_enabled: bool,
+    ) -> crate::agent::AgentHarnessKind {
+        if claude_interactive_enabled
+            && matches!(
+                self.runtime_harness,
+                Some(AgentBackendRuntimeHarness::ClaudeInteractive)
+            )
+        {
+            return crate::agent::AgentHarnessKind::ClaudeInteractive;
+        }
+        match self.effective_harness() {
+            AgentBackendRuntimeHarness::ClaudeCode => crate::agent::AgentHarnessKind::ClaudeCode,
+            AgentBackendRuntimeHarness::ClaudeInteractive => {
+                // `effective_harness()` is filtered by `available_harnesses()`,
+                // which never lists `ClaudeInteractive` today, so this
+                // arm is unreachable in production. Keep it explicit
+                // (over `unreachable!()`) so a future broadening of the
+                // allow-list doesn't silently panic — falling back to
+                // ClaudeCode matches the gate-off behavior above.
+                crate::agent::AgentHarnessKind::ClaudeCode
+            }
+            AgentBackendRuntimeHarness::CodexAppServer => {
+                crate::agent::AgentHarnessKind::CodexAppServer
+            }
+            #[cfg(feature = "pi-sdk")]
+            AgentBackendRuntimeHarness::PiSdk => crate::agent::AgentHarnessKind::PiSdk,
         }
     }
 }
@@ -749,6 +799,7 @@ mod tests {
     fn harness_serde_name(harness: AgentBackendRuntimeHarness) -> &'static str {
         match harness {
             AgentBackendRuntimeHarness::ClaudeCode => "claude_code",
+            AgentBackendRuntimeHarness::ClaudeInteractive => "claude_interactive",
             AgentBackendRuntimeHarness::CodexAppServer => "codex_app_server",
             AgentBackendRuntimeHarness::PiSdk => "pi_sdk",
         }

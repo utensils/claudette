@@ -303,6 +303,7 @@ fn unsupported_remote_control_session_error(ps: &AgentSession) -> String {
 fn remote_control_requires_claude_cli_message(harness: AgentBackendRuntimeHarness) -> String {
     let harness_label = match harness {
         AgentBackendRuntimeHarness::ClaudeCode => "Claude CLI",
+        AgentBackendRuntimeHarness::ClaudeInteractive => "Claude Interactive",
         AgentBackendRuntimeHarness::CodexAppServer => "Codex app-server",
         #[cfg(feature = "pi-sdk")]
         AgentBackendRuntimeHarness::PiSdk => "Pi SDK",

@@ -551,6 +551,7 @@ pub(super) fn backend_kind_hash_key(kind: AgentBackendKind) -> &'static str {
 fn harness_hash_key(harness: AgentBackendRuntimeHarness) -> &'static str {
     match harness {
         AgentBackendRuntimeHarness::ClaudeCode => "claude_code",
+        AgentBackendRuntimeHarness::ClaudeInteractive => "claude_interactive",
         AgentBackendRuntimeHarness::CodexAppServer => "codex_app_server",
         #[cfg(feature = "pi-sdk")]
         AgentBackendRuntimeHarness::PiSdk => "pi_sdk",

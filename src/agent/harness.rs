@@ -3,6 +3,7 @@ use std::path::Path;
 use crate::env::WorkspaceEnv;
 use crate::env_provider::ResolvedEnv;
 
+use super::claude_interactive::InteractiveSession;
 use super::codex_app_server::CodexAppServerSession;
 #[cfg(feature = "pi-sdk")]
 use super::pi_sdk::PiSdkSession;
@@ -15,6 +16,10 @@ use super::{
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AgentHarnessKind {
     ClaudeCode,
+    /// Interactive `claude` session running inside a detachable host
+    /// (tmux on Unix, sidecar elsewhere). Gated at resolve time on the
+    /// `claudeInteractiveEnabled` experimental flag.
+    ClaudeInteractive,
     CodexAppServer,
     #[cfg(feature = "pi-sdk")]
     PiSdk,
@@ -52,6 +57,26 @@ impl AgentHarnessCapabilities {
             remote_control: false,
             mcp_config: true,
             attachments: true,
+        }
+    }
+
+    /// Capabilities preset for the interactive `claude` harness.
+    ///
+    /// v1 mirrors the Claude Code feature set on session persistence and
+    /// MCP configuration, but disables mid-turn steering (the TUI owns
+    /// its own input buffer), host-side permission prompts (claude
+    /// handles them natively in its TUI), remote control, and rich
+    /// attachments — pasted file content has to round-trip through the
+    /// terminal until a follow-up task adds first-class attachment
+    /// forwarding.
+    pub const fn claude_interactive() -> Self {
+        Self {
+            persistent_sessions: true,
+            steer_turn: false,
+            host_permission_prompts: false,
+            remote_control: false,
+            mcp_config: true,
+            attachments: false,
         }
     }
 
@@ -115,6 +140,11 @@ impl ClaudeCodeHarness {
 /// still the only production variant.
 pub enum AgentSession {
     ClaudeCode(PersistentSession),
+    /// Interactive `claude` session running inside an `InteractiveHost`.
+    /// The F1 variant only carries the stub `InteractiveSession`; the
+    /// per-method plumbing (turn dispatch, steering, subscribe, etc.)
+    /// lands in F2.
+    ClaudeInteractive(InteractiveSession),
     CodexAppServer(CodexAppServerSession),
     #[cfg(feature = "pi-sdk")]
     PiSdk(PiSdkSession),
@@ -123,6 +153,13 @@ pub enum AgentSession {
 impl AgentSession {
     pub fn from_claude_code(session: PersistentSession) -> Self {
         Self::ClaudeCode(session)
+    }
+
+    /// Wrap an `InteractiveSession` in the harness-agnostic enum so the
+    /// chat dispatcher can route to the interactive harness alongside
+    /// the other variants. The body of the variant stays a stub until F2.
+    pub fn from_claude_interactive(session: InteractiveSession) -> Self {
+        Self::ClaudeInteractive(session)
     }
 
     pub fn from_codex_app_server(session: CodexAppServerSession) -> Self {
@@ -137,6 +174,7 @@ impl AgentSession {
     pub fn kind(&self) -> AgentHarnessKind {
         match self {
             Self::ClaudeCode(_) => AgentHarnessKind::ClaudeCode,
+            Self::ClaudeInteractive(_) => AgentHarnessKind::ClaudeInteractive,
             Self::CodexAppServer(_) => AgentHarnessKind::CodexAppServer,
             #[cfg(feature = "pi-sdk")]
             Self::PiSdk(_) => AgentHarnessKind::PiSdk,
@@ -146,6 +184,7 @@ impl AgentSession {
     pub fn capabilities(&self) -> AgentHarnessCapabilities {
         match self {
             Self::ClaudeCode(_) => AgentHarnessCapabilities::claude_code(),
+            Self::ClaudeInteractive(_) => AgentHarnessCapabilities::claude_interactive(),
             Self::CodexAppServer(_) => AgentHarnessCapabilities::codex_app_server(),
             #[cfg(feature = "pi-sdk")]
             Self::PiSdk(_) => AgentHarnessCapabilities::pi_sdk(),
@@ -155,6 +194,12 @@ impl AgentSession {
     pub fn pid(&self) -> u32 {
         match self {
             Self::ClaudeCode(session) => session.pid(),
+            // The interactive stub has no spawned process yet — F2 wires
+            // the host-owned PID through. Returning 0 keeps the function
+            // total without lying to callers that perform process
+            // operations on the value (they should branch on `kind()`
+            // first).
+            Self::ClaudeInteractive(_) => 0,
             Self::CodexAppServer(session) => session.pid(),
             #[cfg(feature = "pi-sdk")]
             Self::PiSdk(session) => session.pid(),
@@ -173,6 +218,9 @@ impl AgentSession {
                     .send_turn_with_uuid(prompt, attachments, user_message_uuid)
                     .await
             }
+            Self::ClaudeInteractive(_) => {
+                Err("ClaudeInteractive turn dispatch is not implemented yet (F2)".to_string())
+            }
             Self::CodexAppServer(session) => session.send_turn(prompt, attachments).await,
             #[cfg(feature = "pi-sdk")]
             Self::PiSdk(session) => session.send_turn(prompt, attachments).await,
@@ -186,6 +234,11 @@ impl AgentSession {
     ) -> Result<(), String> {
         match self {
             Self::ClaudeCode(session) => session.steer_user_message(prompt, attachments).await,
+            // Steering is intentionally unsupported in the interactive
+            // harness; the capabilities preset advertises this.
+            Self::ClaudeInteractive(_) => {
+                Err("ClaudeInteractive does not support mid-turn steering".to_string())
+            }
             Self::CodexAppServer(session) => session.steer_turn(prompt, attachments).await,
             #[cfg(feature = "pi-sdk")]
             Self::PiSdk(session) => session.steer_turn(prompt, attachments).await,
@@ -195,6 +248,14 @@ impl AgentSession {
     pub fn subscribe(&self) -> tokio::sync::broadcast::Receiver<AgentEvent> {
         match self {
             Self::ClaudeCode(session) => session.subscribe(),
+            // Stub: hand back a receiver of an immediately-closed channel
+            // so callers that subscribe before F2 wires the real bridge
+            // observe a clean `Closed` instead of panicking. The dropped
+            // sender is intentional.
+            Self::ClaudeInteractive(_) => {
+                let (_tx, rx) = tokio::sync::broadcast::channel(1);
+                rx
+            }
             Self::CodexAppServer(session) => session.subscribe(),
             #[cfg(feature = "pi-sdk")]
             Self::PiSdk(session) => session.subscribe(),
@@ -208,6 +269,9 @@ impl AgentSession {
     ) -> Result<(), String> {
         match self {
             Self::ClaudeCode(session) => session.send_control_response(request_id, response).await,
+            Self::ClaudeInteractive(_) => Err(format!(
+                "ClaudeInteractive does not handle host-side control requests (id `{request_id}`)",
+            )),
             Self::CodexAppServer(session) => {
                 session.send_control_response(request_id, response).await
             }
@@ -219,6 +283,9 @@ impl AgentSession {
     pub async fn send_task_stop(&self, task_id: &str) -> Result<(), String> {
         match self {
             Self::ClaudeCode(session) => session.send_task_stop(task_id).await,
+            Self::ClaudeInteractive(_) => Err(format!(
+                "ClaudeInteractive harness cannot stop task `{task_id}` yet"
+            )),
             Self::CodexAppServer(_) => {
                 Err(format!("Codex app-server cannot stop task `{task_id}` yet"))
             }
@@ -230,6 +297,9 @@ impl AgentSession {
     pub async fn interrupt_turn(&self) -> Result<(), String> {
         match self {
             Self::ClaudeCode(session) => super::process::stop_agent(session.pid()).await,
+            Self::ClaudeInteractive(_) => {
+                Err("ClaudeInteractive interrupt is not implemented yet (F2)".to_string())
+            }
             Self::CodexAppServer(session) => session.interrupt_turn().await,
             #[cfg(feature = "pi-sdk")]
             Self::PiSdk(session) => session.interrupt_turn().await,
@@ -269,6 +339,9 @@ impl AgentSession {
     ) -> Result<ControlResponsePayload, String> {
         match self {
             Self::ClaudeCode(session) => session.set_remote_control(enabled).await,
+            Self::ClaudeInteractive(_) => {
+                Err("ClaudeInteractive does not support Claude Remote Control".to_string())
+            }
             Self::CodexAppServer(_) => {
                 Err("Codex app-server does not support Claude Remote Control".to_string())
             }
@@ -297,6 +370,16 @@ mod tests {
                 mcp_config: true,
                 attachments: true,
             }
+        );
+    }
+
+    #[test]
+    fn claude_interactive_capabilities() {
+        let c = AgentHarnessCapabilities::claude_interactive();
+        assert!(c.persistent_sessions);
+        assert!(
+            !c.attachments,
+            "interactive mode does not yet support rich attachments"
         );
     }
 
