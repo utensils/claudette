@@ -13,6 +13,7 @@ import {
   type AgeFilter,
   ageBucket,
   filterByAge,
+  parseCreatedAt,
 } from "./BulkCleanupArchivedModal.helpers";
 
 export function BulkCleanupArchivedModal() {
@@ -72,7 +73,18 @@ export function BulkCleanupArchivedModal() {
             w.status === "Archived" &&
             !w.remote_connection_id,
         )
-        .sort((a, b) => b.created_at.localeCompare(a.created_at)),
+        // Sort newest-first by parsed Unix-seconds. A lexical
+        // compare on the unpadded string field works today but
+        // silently breaks the day any timestamp grows a digit
+        // (year 2286) or a caller writes a differently-formatted
+        // value — numeric compare doesn't depend on that
+        // invariant. Rows whose `created_at` won't parse sink to
+        // the bottom (treated as `-Infinity`).
+        .sort((a, b) => {
+          const av = parseCreatedAt(a.created_at) ?? Number.NEGATIVE_INFINITY;
+          const bv = parseCreatedAt(b.created_at) ?? Number.NEGATIVE_INFINITY;
+          return bv - av;
+        }),
     [workspaces, repoId],
   );
 
@@ -188,6 +200,14 @@ export function BulkCleanupArchivedModal() {
       setDeleting(false);
     }
   };
+
+  // Hooks above run unconditionally so they're stable across renders;
+  // the render-time bail comes here, AFTER every hook has been called.
+  // The effect above has already scheduled `closeModal()` for the next
+  // tick — this short-circuit suppresses the otherwise-visible flash
+  // of the empty-state "No archived workspaces match" copy on the way
+  // out, which would look like a successful zero-row cleanup.
+  if (!repoId) return null;
 
   return (
     <Modal

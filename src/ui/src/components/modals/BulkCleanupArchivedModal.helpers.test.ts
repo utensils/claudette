@@ -122,11 +122,16 @@ describe("filterByAge", () => {
   it("excludes rows whose age equals the cutoff exactly (matches 'Older than' label)", () => {
     const exactly30 = makeArchived("exactly30", 30);
     expect(filterByAge([exactly30], "30", NOW).map((w) => w.id)).toEqual([]);
-    // One second past the cutoff IS eligible.
-    const justOver = makeArchived("over30", 30);
-    justOver.created_at = String(NOW - 30 * DAY - 1);
+
+    // One second past the cutoff IS eligible. Build inline so the
+    // age is obvious top-to-bottom rather than `makeArchived` +
+    // override.
+    const justOver: Workspace = {
+      ...makeArchived("justOver30", 30),
+      created_at: String(NOW - 30 * DAY - 1),
+    };
     expect(filterByAge([justOver], "30", NOW).map((w) => w.id)).toEqual([
-      "over30",
+      "justOver30",
     ]);
   });
 

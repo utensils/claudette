@@ -818,6 +818,19 @@ pub async fn restore_workspace(
     // refuses any row whose status isn't 'archived', so once the claim
     // succeeds the bulk path can't race in and hard-delete this row
     // while git is restoring its worktree.
+    //
+    // Transitional state during the git restore window: the row is
+    // observable as `(status: Active, worktree_path: None)` until
+    // `git::restore_worktree` returns and we persist the final path
+    // below. This is the same shape an archived row already has
+    // (archive nulls out `worktree_path`), so existing UI null-checks
+    // on `worktree_path` keep working — there's just a longer window
+    // where the row is Active without a path. Callers that open the
+    // worktree on the Active transition must already null-check the
+    // path (they would have hit the same shape pre-archive). If a
+    // future component needs to distinguish "fully restored" from
+    // "restore in flight", model a `Restoring` status; until then
+    // `Active + worktree_path: None` is the contract.
     let claimed = db
         .try_claim_archived_for_restore(&id)
         .map_err(|e| e.to_string())?;
@@ -973,10 +986,16 @@ pub struct BulkDeleteFailure {
 /// supervisor reconciliation — but batched so 72 archived workspaces don't
 /// require 72 round-trips.
 ///
-/// Pre-validates that every target is `Archived` before mutating anything;
-/// returns `Err` if any ID is missing or Active so a buggy caller can't
-/// accidentally hard-delete in-use work. Per-row DB failures inside the
-/// validated set are isolated in the returned `failed` list.
+/// **Per-row failure isolation** is the contract: missing IDs, non-Archived
+/// rows (e.g. raced restores), and transient DB errors all surface as
+/// entries in the returned `failed` list rather than aborting the whole
+/// batch. The authoritative guard against hard-deleting an Active row is
+/// the SQL precondition inside
+/// `Database::try_delete_archived_workspace_with_summary` — a row whose
+/// status flipped to `Active` between the modal snapshot and this call
+/// will be reported as `"workspace no longer archived"` and its worktree
+/// / branch will not be touched. Returns top-level `Err` only for setup
+/// failures (e.g. opening the DB).
 #[tauri::command]
 #[tracing::instrument(
     target = "claudette::workspace",
@@ -1128,25 +1147,23 @@ pub(crate) async fn delete_workspaces_bulk_inner(
         let _ = git::branch_delete(repo_path, &meta.branch_name).await;
     }
 
-    // Env-watcher + cache cleanup, also gated on per-row DB success so
-    // we don't drop OS watch slots for paths that still own a live
-    // workspace row.
+    // Env-watcher unregister + env-cache invalidate, both gated on
+    // per-row DB success so we don't drop OS watch slots (or evict
+    // cached env exports) for paths that still own a live workspace
+    // row. Single pass — acquire the watcher read lock once and do
+    // both invalidations per row.
     {
         let watcher_guard = state.env_watcher.read().await;
-        if let Some(watcher) = watcher_guard.as_ref() {
-            for ws_id in &deleted {
-                if let Some(meta) = target_meta.get(ws_id) {
-                    if let Some(ref wt_path) = meta.worktree_path {
-                        watcher.unregister(Path::new(wt_path), None);
+        let watcher = watcher_guard.as_ref();
+        for ws_id in &deleted {
+            if let Some(meta) = target_meta.get(ws_id) {
+                if let Some(ref wt_path) = meta.worktree_path {
+                    let path = Path::new(wt_path);
+                    if let Some(watcher) = watcher {
+                        watcher.unregister(path, None);
                     }
+                    state.env_cache.invalidate(path, None);
                 }
-            }
-        }
-    }
-    for ws_id in &deleted {
-        if let Some(meta) = target_meta.get(ws_id) {
-            if let Some(ref wt_path) = meta.worktree_path {
-                state.env_cache.invalidate(Path::new(wt_path), None);
             }
         }
     }
