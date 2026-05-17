@@ -67,6 +67,14 @@ pub struct CodexAppServerSession {
     pid: u32,
     stdin: Option<CodexStdin>,
     event_tx: broadcast::Sender<AgentEvent>,
+    /// Side-channel for `account/rateLimits/updated` notifications and
+    /// the initial `account/rateLimits/read` seed. Lives separately
+    /// from `event_tx` so the usage cache can subscribe without having
+    /// to filter every chat event. The Tauri host wires this to
+    /// `AppState.codex_rate_limits` in `chat::send` when it spawns the
+    /// session; non-chat callers (discovery probe, model listing) can
+    /// ignore it.
+    rate_limits_tx: broadcast::Sender<CodexRateLimitSnapshot>,
     pending: PendingRequests,
     next_request_id: AtomicI64,
     working_dir: PathBuf,
@@ -138,10 +146,16 @@ impl CodexAppServerSession {
             .ok_or_else(|| "Failed to capture Codex app-server stderr".to_string())?;
 
         let (event_tx, _) = broadcast::channel(2048);
+        // Rate-limit updates are infrequent (a few per session). A
+        // small buffer is plenty; late subscribers can miss earlier
+        // snapshots without harm — the cache always reflects whichever
+        // value arrived last.
+        let (rate_limits_tx, _) = broadcast::channel(16);
         let session = Self {
             pid,
             stdin: Some(Arc::new(tokio::sync::Mutex::new(stdin))),
             event_tx,
+            rate_limits_tx,
             pending: Arc::new(tokio::sync::Mutex::new(BTreeMap::new())),
             next_request_id: AtomicI64::new(1),
             working_dir: working_dir.to_path_buf(),
@@ -190,16 +204,28 @@ impl CodexAppServerSession {
             return Err(err);
         }
 
+        // Note: we intentionally do NOT call `seed_rate_limits()`
+        // here. The seed would broadcast on `rate_limits_tx` before
+        // any caller has had a chance to subscribe (the
+        // `subscribe_rate_limits()` receiver is created *after*
+        // `start_with_options` returns), so the value would be
+        // dropped, paying an extra RPC for nothing. Callers that
+        // actually want a seed call `seed_rate_limits()` themselves
+        // after subscribing; callers that want a one-shot read
+        // (e.g. `prefetch_codex_rate_limits`) call
+        // [`read_rate_limits`] directly and use the return value.
         Ok(session)
     }
 
     #[doc(hidden)]
     pub fn new_for_test(pid: u32) -> Self {
         let (event_tx, _) = broadcast::channel(128);
+        let (rate_limits_tx, _) = broadcast::channel(16);
         Self {
             pid,
             stdin: None,
             event_tx,
+            rate_limits_tx,
             pending: Arc::new(tokio::sync::Mutex::new(BTreeMap::new())),
             next_request_id: AtomicI64::new(1),
             working_dir: PathBuf::from("/tmp"),
@@ -222,6 +248,38 @@ impl CodexAppServerSession {
 
     pub fn subscribe(&self) -> broadcast::Receiver<AgentEvent> {
         self.event_tx.subscribe()
+    }
+
+    /// Subscribe to live Codex rate-limit snapshots. Receives every
+    /// `account/rateLimits/updated` notification the app-server
+    /// pushes, plus the one-shot seed value sent by [`Self::seed_rate_limits`]
+    /// after a successful `initialize`. The Tauri host drains this
+    /// receiver into `AppState.codex_rate_limits` so the composer
+    /// usage meter renders live quota data without polling.
+    pub fn subscribe_rate_limits(&self) -> broadcast::Receiver<CodexRateLimitSnapshot> {
+        self.rate_limits_tx.subscribe()
+    }
+
+    /// Fire `account/rateLimits/read` and publish the result onto the
+    /// `subscribe_rate_limits` channel so existing subscribers get a
+    /// snapshot before the first `account/rateLimits/updated`
+    /// notification arrives. Best-effort: a failure here just means
+    /// the meter waits for the next push, so we log and move on.
+    pub async fn seed_rate_limits(&self) {
+        match self.read_rate_limits().await {
+            Ok(response) => {
+                let _ = self.rate_limits_tx.send(response.rate_limits);
+            }
+            Err(err) => {
+                tracing::debug!(
+                    target: "claudette::agent",
+                    subsystem = "codex-app-server",
+                    pid = self.pid,
+                    error = %err,
+                    "Codex rateLimits/read seed failed; will rely on push notifications",
+                );
+            }
+        }
     }
 
     pub fn publish_notification_event(&self, event: CodexNotificationEvent) {
@@ -346,6 +404,18 @@ impl CodexAppServerSession {
             .send_request(build_account_read_request(self.next_id(), refresh_token))
             .await?;
         account_status_from_response(&response)
+    }
+
+    /// Issue `account/rateLimits/read` against the live Codex app-server.
+    /// Returns the current quota snapshot keyed by limit id (typically
+    /// just `"codex"`) plus the backward-compatible single-bucket view.
+    /// Notifications (`account/rateLimits/updated`) keep the snapshot
+    /// fresh after this initial seed; see [`CodexNotificationEvent::RateLimitsUpdated`].
+    pub async fn read_rate_limits(&self) -> Result<GetAccountRateLimitsResponse, String> {
+        let response = self
+            .send_request(build_account_rate_limits_read_request(self.next_id()))
+            .await?;
+        rate_limits_from_response(&response)
     }
 
     pub async fn list_models(&self) -> Result<Vec<CodexAppServerModel>, String> {
@@ -474,6 +544,7 @@ impl CodexAppServerSession {
 
     fn spawn_stdout_reader(&self, stdout: tokio::process::ChildStdout) {
         let event_tx = self.event_tx.clone();
+        let rate_limits_tx = self.rate_limits_tx.clone();
         let pending = self.pending.clone();
         let stdin = self.stdin.clone();
         let active_turn_id = self.active_turn_id.clone();
@@ -487,6 +558,7 @@ impl CodexAppServerSession {
                         route_app_server_message(
                             pid,
                             &event_tx,
+                            &rate_limits_tx,
                             &pending,
                             stdin.as_ref(),
                             Some(&active_turn_id),
@@ -569,9 +641,11 @@ impl CodexAppServerSession {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn route_app_server_message(
     pid: u32,
     event_tx: &broadcast::Sender<AgentEvent>,
+    rate_limits_tx: &broadcast::Sender<CodexRateLimitSnapshot>,
     pending: &PendingRequests,
     stdin: Option<&CodexStdin>,
     active_turn_id: Option<&Arc<tokio::sync::Mutex<Option<String>>>>,
@@ -633,6 +707,14 @@ async fn route_app_server_message(
         }
         JsonRpcMessage::Notification(notification) => {
             let notification = decode_notification(notification);
+            // Rate-limit snapshots also go to a dedicated side-channel
+            // so the AppState cache writer can subscribe without
+            // walking every AgentEvent. `send` only fails when there
+            // are no subscribers, which is the expected steady state
+            // for non-chat sessions (discovery probe, model listing).
+            if let CodexNotificationEvent::RateLimitsUpdated { rate_limits } = &notification {
+                let _ = rate_limits_tx.send(rate_limits.clone());
+            }
             if let Some(turn_output) = turn_output {
                 update_turn_output_buffer(turn_output, &notification).await;
             }
@@ -1524,6 +1606,93 @@ pub struct CodexAppServerModelPage {
     pub next_cursor: Option<String>,
 }
 
+// -- v2 rate-limit snapshot -------------------------------------------------
+//
+// Mirror of Codex's `account/rateLimits/read` response (v2 protocol —
+// inspect via `codex app-server generate-json-schema --out <dir>`).
+// We strip the schema down to the fields the usage meter actually
+// renders: per-window utilization + reset time, optional credits
+// balance, plan label. `rate_limits_by_limit_id` is kept as a HashMap
+// so a future multi-meter UI (e.g. "Codex" + "openai" buckets side by
+// side) can grow without further protocol work.
+
+/// Per-window utilization snapshot. `used_percent` is on the 0-100
+/// scale Codex returns. `resets_at` is unix millis; absent means
+/// "no scheduled reset" (e.g. a credit bucket).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CodexRateLimitWindow {
+    pub used_percent: i32,
+    #[serde(default)]
+    pub resets_at: Option<i64>,
+    /// Window length in minutes. 300 → "Session (5h)", 10080 → "Weekly",
+    /// 43200 → "Monthly". Absent for windowless credit-only buckets.
+    #[serde(default)]
+    pub window_duration_mins: Option<i64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CodexCreditsSnapshot {
+    /// Stringified dollar balance (e.g. `"0.103"`). Codex returns this
+    /// as a string to avoid float precision loss for tiny balances.
+    #[serde(default)]
+    pub balance: Option<String>,
+    pub has_credits: bool,
+    /// `true` for plan tiers with no spend cap (e.g. enterprise).
+    pub unlimited: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CodexRateLimitSnapshot {
+    #[serde(default)]
+    pub limit_id: Option<String>,
+    #[serde(default)]
+    pub limit_name: Option<String>,
+    #[serde(default)]
+    pub plan_type: Option<String>,
+    #[serde(default)]
+    pub primary: Option<CodexRateLimitWindow>,
+    #[serde(default)]
+    pub secondary: Option<CodexRateLimitWindow>,
+    #[serde(default)]
+    pub credits: Option<CodexCreditsSnapshot>,
+    /// Set when Codex has flagged the user as over a limit; consumers
+    /// can surface this as an "exhausted" indicator state.
+    #[serde(default)]
+    pub rate_limit_reached_type: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetAccountRateLimitsResponse {
+    /// Backward-compatible single-bucket view that mirrors the
+    /// historical payload. Present even when `rate_limits_by_limit_id`
+    /// is populated.
+    pub rate_limits: CodexRateLimitSnapshot,
+    /// Multi-bucket view keyed by metered `limit_id` (typically
+    /// `"codex"`). `None` on older app-server builds that only emit
+    /// the single-bucket view.
+    #[serde(default)]
+    pub rate_limits_by_limit_id: Option<std::collections::HashMap<String, CodexRateLimitSnapshot>>,
+}
+
+pub fn build_account_rate_limits_read_request(id: i64) -> JsonRpcRequest {
+    JsonRpcRequest {
+        id: JsonRpcId::Integer(id),
+        method: "account/rateLimits/read".to_string(),
+        params: None,
+    }
+}
+
+pub fn rate_limits_from_response(
+    response: &JsonRpcResponse,
+) -> Result<GetAccountRateLimitsResponse, String> {
+    serde_json::from_value(response.result.clone())
+        .map_err(|e| format!("Failed to parse Codex rateLimits response: {e}"))
+}
+
 pub fn account_status_from_response(
     response: &JsonRpcResponse,
 ) -> Result<CodexAppServerAccountStatus, String> {
@@ -1660,6 +1829,11 @@ pub enum CodexNotificationEvent {
         turn_id: String,
         diff: String,
     },
+    /// Pushed by Codex when the account's rate-limit snapshot changes
+    /// — typically after a turn lands or a window resets. The host
+    /// caches the latest snapshot so the composer's usage meter can
+    /// surface live quota data without polling.
+    RateLimitsUpdated { rate_limits: CodexRateLimitSnapshot },
     Unknown {
         method: String,
         params: Option<Value>,
@@ -1792,6 +1966,26 @@ pub fn decode_notification(notification: JsonRpcNotification) -> CodexNotificati
             turn_id: string_field(params, "turnId"),
             usage: token_usage_from_params(params),
         },
+        ("account/rateLimits/updated", Some(params)) => {
+            // Notification body wraps the snapshot under a single
+            // `rateLimits` field — extract and parse. On a malformed
+            // payload we fall through to `Unknown` so the rest of the
+            // stream keeps working; the cache just stays stale until
+            // the next valid update.
+            let rate_limits = params
+                .get("rateLimits")
+                .cloned()
+                .and_then(|v| serde_json::from_value::<CodexRateLimitSnapshot>(v).ok());
+            match rate_limits {
+                Some(snapshot) => CodexNotificationEvent::RateLimitsUpdated {
+                    rate_limits: snapshot,
+                },
+                None => CodexNotificationEvent::Unknown {
+                    method: "account/rateLimits/updated".to_string(),
+                    params: Some(params.clone()),
+                },
+            }
+        }
         ("turn/completed", Some(params)) => {
             let turn = params.get("turn").unwrap_or(&Value::Null);
             CodexNotificationEvent::TurnCompleted {
@@ -1909,6 +2103,10 @@ pub fn map_notification_to_agent_events(event: CodexNotificationEvent) -> Vec<Ag
         | CodexNotificationEvent::ReasoningTextDelta { .. }
         | CodexNotificationEvent::CommandOutputDelta { .. }
         | CodexNotificationEvent::TurnDiffUpdated { .. }
+        // Rate-limit updates flow through `rate_limits_tx` (a dedicated
+        // side-channel consumed by the AppState usage cache) — they
+        // don't translate to AgentEvents in the chat stream.
+        | CodexNotificationEvent::RateLimitsUpdated { .. }
         | CodexNotificationEvent::Unknown { .. } => Vec::new(),
     }
 }
@@ -3405,10 +3603,12 @@ mod tests {
             },
         )])));
         let (event_tx, _) = broadcast::channel(8);
+        let (rate_limits_tx, _) = broadcast::channel(8);
 
         route_app_server_message(
             1,
             &event_tx,
+            &rate_limits_tx,
             &pending,
             None,
             None,
@@ -3432,10 +3632,12 @@ mod tests {
     async fn app_server_router_emits_notification_events() {
         let pending: PendingRequests = Arc::new(tokio::sync::Mutex::new(BTreeMap::new()));
         let (event_tx, mut rx) = broadcast::channel(8);
+        let (rate_limits_tx, _) = broadcast::channel::<CodexRateLimitSnapshot>(8);
 
         route_app_server_message(
             1,
             &event_tx,
+            &rate_limits_tx,
             &pending,
             None,
             None,
@@ -3471,10 +3673,12 @@ mod tests {
         let pending: PendingRequests = Arc::new(tokio::sync::Mutex::new(BTreeMap::new()));
         let active_turn_id = Arc::new(tokio::sync::Mutex::new(Some("turn-1".to_string())));
         let (event_tx, mut rx) = broadcast::channel(8);
+        let (rate_limits_tx, _) = broadcast::channel::<CodexRateLimitSnapshot>(8);
 
         route_app_server_message(
             1,
             &event_tx,
+            &rate_limits_tx,
             &pending,
             None,
             Some(&active_turn_id),
@@ -3502,10 +3706,12 @@ mod tests {
         let pending: PendingRequests = Arc::new(tokio::sync::Mutex::new(BTreeMap::new()));
         let turn_output = Arc::new(tokio::sync::Mutex::new(CodexTurnOutput::default()));
         let (event_tx, mut rx) = broadcast::channel(8);
+        let (rate_limits_tx, _) = broadcast::channel::<CodexRateLimitSnapshot>(8);
 
         route_app_server_message(
             1,
             &event_tx,
+            &rate_limits_tx,
             &pending,
             None,
             None,
@@ -3524,6 +3730,7 @@ mod tests {
         route_app_server_message(
             1,
             &event_tx,
+            &rate_limits_tx,
             &pending,
             None,
             None,
@@ -3542,6 +3749,7 @@ mod tests {
         route_app_server_message(
             1,
             &event_tx,
+            &rate_limits_tx,
             &pending,
             None,
             None,
@@ -3581,11 +3789,13 @@ mod tests {
         let pending: PendingRequests = Arc::new(tokio::sync::Mutex::new(BTreeMap::new()));
         let turn_output = Arc::new(tokio::sync::Mutex::new(CodexTurnOutput::default()));
         let (event_tx, mut rx) = broadcast::channel(8);
+        let (rate_limits_tx, _) = broadcast::channel::<CodexRateLimitSnapshot>(8);
 
         for delta in ["hello ", "world"] {
             route_app_server_message(
                 1,
                 &event_tx,
+                &rate_limits_tx,
                 &pending,
                 None,
                 None,
@@ -3613,10 +3823,12 @@ mod tests {
     async fn app_server_router_surfaces_unknown_server_request() {
         let pending: PendingRequests = Arc::new(tokio::sync::Mutex::new(BTreeMap::new()));
         let (event_tx, mut rx) = broadcast::channel(8);
+        let (rate_limits_tx, _) = broadcast::channel::<CodexRateLimitSnapshot>(8);
 
         route_app_server_message(
             1,
             &event_tx,
+            &rate_limits_tx,
             &pending,
             None,
             None,
@@ -3639,10 +3851,12 @@ mod tests {
     async fn app_server_router_routes_command_approval_requests_to_control_prompt() {
         let pending: PendingRequests = Arc::new(tokio::sync::Mutex::new(BTreeMap::new()));
         let (event_tx, mut rx) = broadcast::channel(8);
+        let (rate_limits_tx, _) = broadcast::channel::<CodexRateLimitSnapshot>(8);
 
         route_app_server_message(
             1,
             &event_tx,
+            &rate_limits_tx,
             &pending,
             None,
             None,

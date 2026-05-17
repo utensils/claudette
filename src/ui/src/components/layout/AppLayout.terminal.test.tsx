@@ -50,6 +50,9 @@ vi.mock("../../hooks/useWorkspaceFileWatcher", () => ({ useWorkspaceFileWatcher:
 vi.mock("../../hooks/useWorkspaceEnvironmentPreparation", () => ({
   useWorkspaceEnvironmentPreparation: vi.fn(),
 }));
+vi.mock("../../hooks/useQueuedMessageAutoDispatch", () => ({
+  useQueuedMessageAutoDispatch: vi.fn(),
+}));
 
 import { AppLayout } from "./AppLayout";
 

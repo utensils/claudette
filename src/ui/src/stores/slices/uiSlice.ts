@@ -29,7 +29,7 @@ export interface UiSlice {
   sidebarWidth: number;
   rightSidebarWidth: number;
   terminalHeight: number;
-  rightSidebarTab: "files" | "changes" | "tasks";
+  rightSidebarTabByWorkspace: Record<string, "files" | "changes" | "tasks">;
   sidebarGroupBy: "status" | "repo";
   sidebarRepoFilter: string; // repo ID or "all"
   sidebarShowArchived: boolean;
@@ -41,7 +41,7 @@ export interface UiSlice {
   commandPaletteInitialMode: "file" | null;
   toggleSidebar: () => void;
   toggleRightSidebar: () => void;
-  setRightSidebarTab: (tab: "files" | "changes" | "tasks") => void;
+  setRightSidebarTabForWorkspace: (workspaceId: string, tab: "files" | "changes" | "tasks") => void;
   setSidebarWidth: (w: number) => void;
   setRightSidebarWidth: (w: number) => void;
   setTerminalHeight: (h: number) => void;
@@ -165,7 +165,7 @@ export const createUiSlice: StateCreator<AppState, [], [], UiSlice> = (
   sidebarWidth: 260,
   rightSidebarWidth: 250,
   terminalHeight: 300,
-  rightSidebarTab: "files",
+  rightSidebarTabByWorkspace: {},
   sidebarGroupBy: "repo",
   sidebarRepoFilter: "all",
   sidebarShowArchived: false,
@@ -176,7 +176,10 @@ export const createUiSlice: StateCreator<AppState, [], [], UiSlice> = (
   toggleSidebar: () => set((s) => ({ sidebarVisible: !s.sidebarVisible })),
   toggleRightSidebar: () =>
     set((s) => ({ rightSidebarVisible: !s.rightSidebarVisible })),
-  setRightSidebarTab: (tab) => set({ rightSidebarTab: tab }),
+  setRightSidebarTabForWorkspace: (workspaceId, tab) =>
+    set((s) => ({
+      rightSidebarTabByWorkspace: { ...s.rightSidebarTabByWorkspace, [workspaceId]: tab },
+    })),
   setSidebarWidth: (w) => set({ sidebarWidth: w }),
   setRightSidebarWidth: (w) => set({ rightSidebarWidth: w }),
   setTerminalHeight: (h) => set({ terminalHeight: h }),

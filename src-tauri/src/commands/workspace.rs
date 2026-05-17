@@ -793,26 +793,90 @@ pub async fn restore_workspace(
 ) -> Result<String, String> {
     let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
 
+    // Find the row + repo BEFORE flipping status, so we know what git
+    // restore is about to run against and can roll back cleanly on
+    // failure.
     let workspaces = db.list_workspaces().map_err(|e| e.to_string())?;
     let ws = workspaces
         .iter()
         .find(|w| w.id == id)
         .ok_or("Workspace not found")?;
+    let branch_name = ws.branch_name.clone();
+    let workspace_name = ws.name.clone();
+    let repository_id = ws.repository_id.clone();
 
     let repos = db.list_repositories().map_err(|e| e.to_string())?;
     let repo = repos
         .iter()
-        .find(|r| r.id == ws.repository_id)
+        .find(|r| r.id == repository_id)
         .ok_or("Repository not found")?;
+    let repo_path = repo.path.clone();
+    let path_slug = repo.path_slug.clone();
+
+    // Atomically claim the row out of Archived BEFORE the async git
+    // restore. Bulk delete's `try_delete_archived_workspace_with_summary`
+    // refuses any row whose status isn't 'archived', so once the claim
+    // succeeds the bulk path can't race in and hard-delete this row
+    // while git is restoring its worktree.
+    //
+    // Transitional state during the git restore window: the row is
+    // observable as `(status: Active, worktree_path: None)` until
+    // `git::restore_worktree` returns and we persist the final path
+    // below. This is the same shape an archived row already has
+    // (archive nulls out `worktree_path`), so existing UI null-checks
+    // on `worktree_path` keep working — there's just a longer window
+    // where the row is Active without a path. Callers that open the
+    // worktree on the Active transition must already null-check the
+    // path (they would have hit the same shape pre-archive). If a
+    // future component needs to distinguish "fully restored" from
+    // "restore in flight", model a `Restoring` status; until then
+    // `Active + worktree_path: None` is the contract.
+    let claimed = db
+        .try_claim_archived_for_restore(&id)
+        .map_err(|e| e.to_string())?;
+    if !claimed {
+        return Err("Workspace is not archived (already restored or deleted)".to_string());
+    }
 
     let worktree_base = state.worktree_base_dir.read().await;
-    let worktree_path: PathBuf = worktree_base.join(&repo.path_slug).join(&ws.name);
+    let worktree_path: PathBuf = worktree_base.join(&path_slug).join(&workspace_name);
     let worktree_path_str = worktree_path.to_string_lossy().to_string();
 
-    let actual_path = git::restore_worktree(&repo.path, &ws.branch_name, &worktree_path_str)
-        .await
-        .map_err(|e| e.to_string())?;
+    // Run git restore. On failure roll the status back to Archived so a
+    // partial restore doesn't leave the user with an Active row that
+    // has no worktree. The rollback window is tiny (one sync UPDATE)
+    // and the failure path matches the pre-fix behavior the user
+    // expects.
+    let actual_path =
+        match git::restore_worktree(&repo_path, &branch_name, &worktree_path_str).await {
+            Ok(p) => p,
+            Err(e) => {
+                // Roll the status back so a partial restore doesn't
+                // leave an Active row with no worktree. If the
+                // rollback itself fails (e.g. transient SQLITE_BUSY)
+                // the row would stay Active with worktree_path: None
+                // indefinitely while the user only sees the git error
+                // — log so the inconsistency is at least visible in
+                // `~/.claudette/logs/`.
+                if let Err(rollback_err) =
+                    db.update_workspace_status(&id, &WorkspaceStatus::Archived, None)
+                {
+                    tracing::error!(
+                        target: "claudette::workspace",
+                        workspace_id = %id,
+                        git_error = %e,
+                        rollback_error = %rollback_err,
+                        "restore_workspace: failed to roll back status to Archived after \
+                         git restore failure; row left as Active with no worktree_path",
+                    );
+                }
+                return Err(e.to_string());
+            }
+        };
 
+    // Persist the resolved worktree path. The claim already set status
+    // to Active; this only fills in the path that the git call just
+    // returned.
     db.update_workspace_status(&id, &WorkspaceStatus::Active, Some(&actual_path))
         .map_err(|e| e.to_string())?;
 
@@ -915,6 +979,239 @@ pub async fn delete_workspace(
     TauriHooks::new(app.clone()).workspace_changed(&id, WorkspaceChangeKind::Deleted);
 
     Ok(())
+}
+
+/// Result of [`delete_workspaces_bulk`]. `deleted` lists IDs that were
+/// successfully hard-deleted; `failed` carries per-ID error messages for
+/// rows that survived (typically due to a transient DB error). The
+/// frontend uses this to drive partial-failure UI and reconcile its
+/// store one row at a time.
+#[derive(Debug, Serialize)]
+pub struct BulkDeleteResult {
+    pub deleted: Vec<String>,
+    pub failed: Vec<BulkDeleteFailure>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct BulkDeleteFailure {
+    pub id: String,
+    pub error: String,
+}
+
+/// Hard-delete a batch of archived workspaces. Mirrors the single-workspace
+/// [`delete_workspace`] flow — agent shutdown, worktree removal, branch
+/// deletion, env-watcher/cache cleanup, summary materialization, MCP
+/// supervisor reconciliation — but batched so 72 archived workspaces don't
+/// require 72 round-trips.
+///
+/// **Per-row failure isolation** is the contract: missing IDs, non-Archived
+/// rows (e.g. raced restores), and transient DB errors all surface as
+/// entries in the returned `failed` list rather than aborting the whole
+/// batch. The authoritative guard against hard-deleting an Active row is
+/// the SQL precondition inside
+/// `Database::try_delete_archived_workspace_with_summary` — a row whose
+/// status flipped to `Active` between the modal snapshot and this call
+/// will be reported as `"workspace no longer archived"` and its worktree
+/// / branch will not be touched. Returns top-level `Err` only for setup
+/// failures (e.g. opening the DB).
+#[tauri::command]
+#[tracing::instrument(
+    target = "claudette::workspace",
+    skip(app, state, supervisor),
+    fields(workspace_count = ids.len()),
+)]
+pub async fn delete_workspaces_bulk(
+    ids: Vec<String>,
+    app: AppHandle,
+    state: State<'_, AppState>,
+    supervisor: State<'_, Arc<McpSupervisor>>,
+) -> Result<BulkDeleteResult, String> {
+    delete_workspaces_bulk_inner(&ids, &app, &state, &supervisor).await
+}
+
+/// Shared body of [`delete_workspaces_bulk`] used by both the Tauri
+/// command (GUI) and the IPC dispatcher (CLI). Pulled into a free
+/// function — same as `archive_workspace_inner` /
+/// `create_workspace_inner` — so the CLI path runs identical agent
+/// teardown, git cleanup, env-watcher reconciliation, and MCP supervisor
+/// updates without needing to construct Tauri `State` wrappers.
+pub(crate) async fn delete_workspaces_bulk_inner(
+    ids: &[String],
+    app: &AppHandle,
+    state: &AppState,
+    supervisor: &McpSupervisor,
+) -> Result<BulkDeleteResult, String> {
+    if ids.is_empty() {
+        return Ok(BulkDeleteResult {
+            deleted: Vec::new(),
+            failed: Vec::new(),
+        });
+    }
+
+    let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
+    let workspaces = db.list_workspaces().map_err(|e| e.to_string())?;
+    let repos = db.list_repositories().map_err(|e| e.to_string())?;
+
+    // Collect the rows we're going to attempt to delete. We do NOT reject
+    // the whole batch when an ID is missing or no longer Archived — the
+    // authoritative guard is the SQL precondition in
+    // `try_delete_archived_workspace_with_summary` (see `src/db/workspace.rs`).
+    // Rejecting the whole batch here would mean a single raced
+    // `restore_workspace` between the modal snapshot and this call could
+    // wipe out cleanup of every other row the user asked for. Rows that
+    // don't make it into `targets` (missing) or whose status changed
+    // before the SQL guard runs (raced) surface as per-row failures
+    // instead.
+    let targets: Vec<&Workspace> = ids
+        .iter()
+        .filter_map(|id| workspaces.iter().find(|w| &w.id == id))
+        .filter(|w| w.status == WorkspaceStatus::Archived)
+        .collect();
+
+    // Snapshot per-target git metadata BEFORE the DB delete so we can
+    // still do worktree/branch cleanup for the rows whose DB transaction
+    // succeeded (post-delete the workspaces table no longer carries
+    // these fields).
+    struct TargetMeta {
+        worktree_path: Option<String>,
+        branch_name: String,
+        repo_path: Option<String>,
+    }
+    let target_meta: std::collections::HashMap<String, TargetMeta> = targets
+        .iter()
+        .map(|ws| {
+            let repo_path = repos
+                .iter()
+                .find(|r| r.id == ws.repository_id)
+                .map(|r| r.path.clone());
+            (
+                ws.id.clone(),
+                TargetMeta {
+                    worktree_path: ws.worktree_path.clone(),
+                    branch_name: ws.branch_name.clone(),
+                    repo_path,
+                },
+            )
+        })
+        .collect();
+
+    // DB deletes + summary materialization + Deleted hooks per row. Each
+    // row is its own transaction, so per-row failures (e.g. SQLITE_BUSY)
+    // are isolated and reported as `failed` rather than rolling back the
+    // whole batch.
+    //
+    // Important: git/env cleanup runs ONLY after the DB delete succeeds
+    // (see below). Reversing that order made a "failed" outcome
+    // destructive — the row would survive but its worktree and branch
+    // were already gone, leaving the user with an archived workspace
+    // pointing at nothing they could restore.
+    let hooks = TauriHooks::new(app.clone());
+    let outcomes = claudette::ops::workspace::delete_workspaces_bulk(&db, hooks.as_ref(), ids)
+        .map_err(|e| e.to_string())?;
+
+    let mut deleted = Vec::with_capacity(outcomes.len());
+    let mut failed = Vec::new();
+    let mut affected_repos: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for outcome in outcomes {
+        match outcome.error {
+            None => {
+                affected_repos.insert(outcome.repository_id.clone());
+                deleted.push(outcome.id);
+            }
+            Some(err) => failed.push(BulkDeleteFailure {
+                id: outcome.id,
+                error: err,
+            }),
+        }
+    }
+
+    // Stop running agents for the rows whose DB delete succeeded — same
+    // gating discipline as the git/env cleanup below. A failed row
+    // keeps its agent running so a retry has a chance of converging,
+    // matching the contract a single retry against `delete_workspace`
+    // would offer.
+    if !deleted.is_empty() {
+        let deleted_set: std::collections::HashSet<String> = deleted.iter().cloned().collect();
+        let pids_to_stop: Vec<u32> = {
+            let mut agents = state.agents.write().await;
+            let to_remove: Vec<String> = agents
+                .iter()
+                .filter(|(_, s)| deleted_set.contains(&s.workspace_id))
+                .map(|(k, _)| k.clone())
+                .collect();
+            to_remove
+                .into_iter()
+                .filter_map(|key| agents.remove(&key).and_then(|s| s.active_pid))
+                .collect()
+        };
+        for pid in pids_to_stop {
+            let _ = claudette::agent::stop_agent(pid).await;
+        }
+    }
+
+    // Git cleanup: best-effort worktree removal + force branch delete,
+    // ONLY for rows whose DB delete succeeded. Worktree/branch state for
+    // a failed row stays intact so the user can retry the cleanup.
+    for ws_id in &deleted {
+        let Some(meta) = target_meta.get(ws_id) else {
+            continue;
+        };
+        let Some(ref repo_path) = meta.repo_path else {
+            continue;
+        };
+        if let Some(ref wt_path) = meta.worktree_path {
+            let _ = git::remove_worktree(repo_path, wt_path, true).await;
+        }
+        let _ = git::branch_delete(repo_path, &meta.branch_name).await;
+    }
+
+    // Env-watcher unregister + env-cache invalidate, both gated on
+    // per-row DB success so we don't drop OS watch slots (or evict
+    // cached env exports) for paths that still own a live workspace
+    // row. Single pass — acquire the watcher read lock once and do
+    // both invalidations per row.
+    {
+        let watcher_guard = state.env_watcher.read().await;
+        let watcher = watcher_guard.as_ref();
+        for ws_id in &deleted {
+            if let Some(meta) = target_meta.get(ws_id) {
+                if let Some(ref wt_path) = meta.worktree_path {
+                    let path = Path::new(wt_path);
+                    if let Some(watcher) = watcher {
+                        watcher.unregister(path, None);
+                    }
+                    state.env_cache.invalidate(path, None);
+                }
+            }
+        }
+    }
+
+    // Per affected repo: if no Active or Archived workspaces remain, drop
+    // its MCP supervisor entry and clear the frontend's MCP status pill.
+    // Skip the reconciliation entirely if the DB re-read fails: an empty
+    // fallback would make every affected repo look empty and remove
+    // every MCP supervisor entry even when workspaces still exist.
+    match db.list_workspaces() {
+        Ok(remaining) => {
+            for repo_id in affected_repos {
+                if !remaining.iter().any(|w| w.repository_id == repo_id) {
+                    supervisor.remove_repo(&repo_id).await;
+                    let _ = app.emit("mcp-status-cleared", &repo_id);
+                }
+            }
+        }
+        Err(e) => {
+            tracing::warn!(
+                target: "claudette::workspace",
+                error = %e,
+                "skipping MCP supervisor reconciliation after bulk delete: \
+                 list_workspaces failed, retaining supervisor entries to \
+                 avoid clearing them for non-empty repos",
+            );
+        }
+    }
+
+    Ok(BulkDeleteResult { deleted, failed })
 }
 
 #[tauri::command]

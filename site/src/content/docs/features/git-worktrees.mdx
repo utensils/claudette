@@ -33,6 +33,35 @@ You can configure branch naming behavior in [Settings > Git](/claudette/features
 
 When archiving a workspace, Claudette can optionally delete the local branch. This setting (`Settings > Git > Auto-delete branch on archive`) only deletes branches that contain only checkpoint commits — if you've made manual commits on the branch, it will be preserved.
 
+## Bulk Cleanup of Archived Workspaces
+
+Archived workspaces still occupy disk space in the database (chat history, terminal tab state, SCM cache). To purge them in batches:
+
+- **Project dashboard** → the **ARCHIVED** section header has a `Clean up…` button. Opens a modal scoped to the current repository.
+- **Settings → Storage** → lists every repository with its archived count and a per-row `Clean up…` button.
+- **Per-repo Settings** → the **Workspace cleanup** field at the bottom of the per-repo settings page opens the same modal.
+
+The cleanup modal lets you:
+
+- Filter to workspaces older than **30 / 60 / 90 days**, **6 months**, or **1 year** (measured from creation), or leave it on **All** to see every archived workspace in the repository.
+- Select rows individually or use **Select all** to grab every eligible row in one click.
+- Permanently delete the selected workspaces — their worktrees, branches, chat history, and terminal state. **Lifetime metrics survive** in the `deleted_workspace_summaries` table so cost/turn dashboards stay accurate.
+
+From the CLI:
+
+```bash
+# Dry-run: show which IDs would be deleted
+claudette workspace purge --repo <repo-id> --older-than-days 90 --dry-run
+
+# Actually delete archived workspaces older than 90 days in this repo
+claudette workspace purge --repo <repo-id> --older-than-days 90
+
+# Delete every archived workspace in the repo
+claudette workspace purge --repo <repo-id>
+```
+
+The CLI rejects non-Archived IDs at the server, so an Active workspace can never be removed via this path even if its ID accidentally slips into the resolved list.
+
 ## Worktree Base Directory
 
 By default, worktrees are created under `~/.claudette/workspaces`. You can change this in `Settings > General > Worktree base directory`.

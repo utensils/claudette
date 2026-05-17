@@ -23,6 +23,7 @@ import { useBranchRefresh } from "../../hooks/useBranchRefresh";
 import { useAutoUpdater } from "../../hooks/useAutoUpdater";
 import { useWorkspaceFileWatcher } from "../../hooks/useWorkspaceFileWatcher";
 import { useWorkspaceEnvironmentPreparation } from "../../hooks/useWorkspaceEnvironmentPreparation";
+import { useQueuedMessageAutoDispatch } from "../../hooks/useQueuedMessageAutoDispatch";
 import styles from "./AppLayout.module.css";
 
 export function AppLayout() {
@@ -48,6 +49,7 @@ export function AppLayout() {
   useAutoUpdater();
   useWorkspaceFileWatcher();
   useWorkspaceEnvironmentPreparation();
+  useQueuedMessageAutoDispatch();
 
 
   // Main-pane priority: an explicitly opened file from the Files tree

@@ -21,7 +21,7 @@ Subagent labels are derived from the agent's `description` field and capped at o
 
 TeamCreate teammates run as **sibling chat sessions** in the same workspace. While a teammate's agent is still running, that session's live tasks (and its own subagents) appear as a dedicated lane in the Tasks panel — distinguished from **Current** by the session name and a pulsing live dot. Only after the teammate goes idle do its leftover tasks graduate into **History** under the session's name.
 
-The right-sidebar tab auto-switches to **Tasks** once per workspace selection when tasks first appear, so you don't have to hunt for the tab on every new session. Manually picking a different tab on that workspace cancels future auto-switches for the rest of the session.
+The right sidebar remembers which tab (**Files**, **Changes**, or **Tasks**) you last selected for each workspace. Switching to a different workspace and back leaves your tab choice intact — every workspace returns to exactly where you left it. On a brand-new workspace, the tab defaults to **Files**; it auto-switches to **Tasks** the first time live tasks appear so you don't have to hunt for the tab. Once you've explicitly chosen a tab for that workspace (or the auto-switch has fired), the choice is locked in for the session and no further auto-switches occur. Restarting the app resets all workspaces to **Files**.
 
 ## Historical Runs
 

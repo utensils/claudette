@@ -867,6 +867,7 @@ dependencies = [
  "notify",
  "open",
  "rand 0.8.5",
+ "reqwest",
  "rodio",
  "rusqlite",
  "rustls",

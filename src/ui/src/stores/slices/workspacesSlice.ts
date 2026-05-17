@@ -275,7 +275,6 @@ export const createWorkspacesSlice: StateCreator<
         workspaces: [...s.workspaces, placeholder],
         selectedWorkspaceId: placeholder.id,
         selectedRepositoryId: null,
-        rightSidebarTab: "files",
         diffSelectionByWorkspace: selectionMap,
         diffSelectedFile: null,
         diffSelectedLayer: null,
@@ -393,7 +392,6 @@ export const createWorkspacesSlice: StateCreator<
         workspaces: [...s.workspaces, placeholder],
         selectedWorkspaceId: placeholder.id,
         selectedRepositoryId: null,
-        rightSidebarTab: "files",
         diffSelectionByWorkspace: selectionMap,
         diffSelectedFile: null,
         diffSelectedLayer: null,
@@ -568,6 +566,8 @@ export const createWorkspacesSlice: StateCreator<
       delete newScmSummary[id];
       const newScmDetails = { ...s.scmDetails };
       delete newScmDetails[id];
+      const newRightSidebarTabByWorkspace = { ...s.rightSidebarTabByWorkspace };
+      delete newRightSidebarTabByWorkspace[id];
       return {
         workspaces: s.workspaces.filter((w) => w.id !== id),
         selectedWorkspaceId:
@@ -586,6 +586,7 @@ export const createWorkspacesSlice: StateCreator<
         workspaceEnvironment: newWorkspaceEnvironment,
         scmSummary: newScmSummary,
         scmDetails: newScmDetails,
+        rightSidebarTabByWorkspace: newRightSidebarTabByWorkspace,
       };
     }),
   selectWorkspace: (id) =>
@@ -629,7 +630,6 @@ export const createWorkspacesSlice: StateCreator<
         // `selectWorkspace(null)` (Back-to-Dashboard) preserves any
         // selectedRepositoryId the user already navigated to.
         selectedRepositoryId: id ? null : s.selectedRepositoryId,
-        rightSidebarTab: "files",
         diffSelectionByWorkspace: selectionMap,
         diffSelectedFile: tabExists ? restored!.path : null,
         diffSelectedLayer: tabExists ? restored!.layer : null,

@@ -53,7 +53,7 @@ See [Agent Configuration](/claudette/features/agent-configuration/) for detailed
 | Plugin Management | Show the Claude Code Plugins settings section and plugin-management slash commands. | Off |
 | Claude Remote Control | Show the local chat Remote Control toggle and allow Claudette to attach live Claude sessions to claude.ai. | On |
 | Community Registry | Show the Community settings section for themes, plugins, and language grammars. | Off |
-| Usage Insights | Show Claude subscription usage data plus a click-to-expand burn-rate-weighted bar indicator in the composer (fills as your most-urgent limit is consumed). Confirmation dialog warns about Anthropic ToS on enable. | Off |
+| Claude Code Usage | Surface Claude Pro / Max subscription quotas (5-hour session, weekly all-model, weekly Sonnet/Opus, extra usage) in the composer's usage meter. The meter itself is always visible for Codex / OpenAI / OpenRouter / Pi / Ollama / LM Studio sessions (driven by local-aggregate token totals); this toggle only controls whether Claude-family sessions surface real subscription buckets versus a greyed-out click-to-enable affordance. Confirmation dialog warns about Anthropic ToS on enable. | Off |
 
 ## Claude CLI Flags
 
@@ -142,6 +142,15 @@ When the workspace is checked out on the base branch itself, "Workspace branch b
 When `RUST_LOG` is set in the process's environment, the **Log level** select is disabled — the env var always wins. Uncaught browser errors and unhandled promise rejections are forwarded regardless of the **Frontend log verbosity** setting; the verbosity only gates the explicit `console.*` calls.
 
 See [Diagnostics & Logging](/claudette/features/diagnostics/) for the full pipeline (where logs go, JSON output, per-domain `RUST_LOG` filtering, multi-instance behavior, bug-report workflow).
+
+## Storage
+
+| Setting | Description | Default |
+|---------|-------------|---------|
+| Archived workspaces per repository | Per-repository count of archived workspaces. Each row's `Clean up…` button opens the bulk cleanup modal scoped to that repo. | — |
+| Clean up… (per row) | Permanently deletes selected archived workspaces — worktree, branch, chat history. Lifetime metrics are preserved in `deleted_workspace_summaries`. | — |
+
+The same modal is reachable from the project dashboard's **ARCHIVED** section header and from each per-repo settings page's **Workspace cleanup** field. See [Bulk Cleanup of Archived Workspaces](/claudette/features/git-worktrees/#bulk-cleanup-of-archived-workspaces) for the full UI walkthrough and the matching CLI subcommand.
 
 ## Git
 

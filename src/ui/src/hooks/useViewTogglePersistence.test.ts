@@ -72,7 +72,7 @@ function resetStore() {
     sidebarWidth: 260,
     rightSidebarWidth: 250,
     terminalHeight: 300,
-    rightSidebarTab: "files",
+    rightSidebarTabByWorkspace: {},
     sidebarGroupBy: "repo",
     sidebarRepoFilter: "all",
     sidebarShowArchived: false,

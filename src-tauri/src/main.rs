@@ -927,6 +927,7 @@ fn main() {
             commands::workspace::rename_workspace,
             commands::workspace::reorder_workspaces,
             commands::workspace::delete_workspace,
+            commands::workspace::delete_workspaces_bulk,
             commands::workspace::generate_workspace_name,
             commands::workspace::refresh_branches,
             commands::workspace::refresh_workspace_branch,
@@ -1122,6 +1123,8 @@ fn main() {
             commands::remote::send_remote_command,
             // Usage
             commands::usage::get_claude_code_usage,
+            commands::usage::get_session_usage,
+            commands::usage::prefetch_codex_rate_limits,
             commands::usage::open_usage_settings,
             commands::usage::open_release_notes,
             // Auth

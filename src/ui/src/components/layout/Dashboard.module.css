@@ -262,6 +262,38 @@
    no active workspaces) so the project view is a complete summary of
    work-in-the-fridge for the repo, not just live work. */
 
+.archivedHeaderRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.archivedCleanupBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 500;
+  background: transparent;
+  color: var(--text-muted);
+  border: 1px solid var(--divider);
+  border-radius: 5px;
+  cursor: pointer;
+  transition:
+    background var(--transition-fast),
+    border-color var(--transition-fast),
+    color var(--transition-fast);
+}
+
+.archivedCleanupBtn:hover {
+  background: var(--hover-bg);
+  border-color: var(--text-faint);
+  color: var(--text-primary);
+}
+
 .archivedIcon {
   color: var(--text-faint);
   flex-shrink: 0;

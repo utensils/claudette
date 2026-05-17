@@ -1,71 +1,158 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
+
 import { useAppStore } from "../../../stores/useAppStore";
-import { formatResetCountdown, resetCountdown } from "../../../utils/usageReset";
-import { selectUsageBucket } from "./selectUsageBucket";
+import { useSessionUsagePoller } from "../../../hooks/useSessionUsagePoller";
+import type { UsageBucket } from "../../../types/usage";
+import { CLAUDE_CODE_USAGE_FOCUS } from "../../settings/focusKeys";
+import { resolveIndicatorMode } from "./usageIndicatorMode";
 import { UsagePopover } from "./UsagePopover";
 import styles from "./UsageIndicator.module.css";
 
+/** Matches the convention used elsewhere in the chat UI
+ *  (ComposerToolbar, ChatToolbar, ChatPanel, OverflowMenu, applySelectedModel)
+ *  for sessions that haven't explicitly saved a provider yet. */
+const DEFAULT_BACKEND_ID = "anthropic";
+
+interface UsageIndicatorProps {
+  workspaceId: string | null;
+  sessionId: string | null;
+}
+
 function barColor(pct: number): string {
-  if (pct >= 85) return "var(--status-stopped)";
-  if (pct >= 60) return "var(--context-meter-warn)";
+  if (pct >= 0.85) return "var(--status-stopped)";
+  if (pct >= 0.6) return "var(--context-meter-warn)";
   return "var(--accent-primary)";
+}
+
+/** Pick the bucket the compact indicator should surface. Bounded
+ *  buckets (subscription quotas, OpenRouter credits) win — they have a
+ *  concrete cap and an `exhausted` state worth showing. Within bounded
+ *  buckets the highest utilization wins. If there are no bounded
+ *  buckets, fall back to the first unbounded bucket so the indicator
+ *  still has something to render. */
+function pickIndicatorBucket(buckets: UsageBucket[]): UsageBucket | null {
+  if (buckets.length === 0) return null;
+  const bounded = buckets.filter((b) => b.is_bounded);
+  if (bounded.length > 0) {
+    return bounded.reduce((best, b) =>
+      b.utilization > best.utilization ? b : best,
+    );
+  }
+  return buckets[0];
 }
 
 /**
  * Compact usage-allocation indicator for the composer toolbar.
  *
- * Vertical bar that fills as the most-urgent Anthropic subscription
- * limit is consumed (burn-rate weighted — see [[selectUsageBucket]]).
- * The readout shows percent *used* to match the popover and Claude
- * Code's own `/usage` panel. Clicking opens a popover with every
- * bucket the API returned.
+ * Rendered for every chat session — the per-backend
+ * [`resolveIndicatorMode`](./usageIndicatorMode.ts) decides whether
+ * the meter is live, greyed-out-pending-opt-in (Claude family), or
+ * hidden entirely (unknown backend kind). Click opens the popover
+ * for live indicators, or jumps to Settings → Experimental for the
+ * disabled variant.
  */
-export function UsageIndicator() {
+export function UsageIndicator({ workspaceId, sessionId }: UsageIndicatorProps) {
   const { t } = useTranslation("settings");
-  const enabled = useAppStore((s) => s.usageInsightsEnabled);
-  const usage = useAppStore((s) => s.claudeCodeUsage);
+
+  const usageInsightsEnabled = useAppStore((s) => s.usageInsightsEnabled);
+  const agentBackends = useAppStore((s) => s.agentBackends);
+  const selectedModelProvider = useAppStore((s) => s.selectedModelProvider);
+  const sessionUsage = useAppStore((s) => s.sessionUsage);
+  const openSettings = useAppStore((s) => s.openSettings);
+
+  const backend = useMemo(() => {
+    if (!sessionId) return null;
+    // Default to "anthropic" when no explicit provider has been saved
+    // for this session — matches the convention every other chat
+    // composer surface uses, so a brand-new default-Claude session
+    // gets the greyed-out enable affordance instead of nothing.
+    const backendId = selectedModelProvider[sessionId] ?? DEFAULT_BACKEND_ID;
+    return agentBackends.find((b) => b.id === backendId) ?? null;
+  }, [agentBackends, selectedModelProvider, sessionId]);
+
+  const mode = resolveIndicatorMode(backend, usageInsightsEnabled);
+  const snapshot = sessionId ? sessionUsage[sessionId] : null;
+
+  // Drive the per-session poll on the active session. The hook
+  // no-ops when `mode === "hidden"` so unsupported backends don't
+  // spin up DB aggregates.
+  useSessionUsagePoller({
+    workspaceId,
+    sessionId,
+    backend,
+    mode,
+    usageInsightsEnabled,
+  });
 
   const triggerRef = useRef<HTMLButtonElement>(null);
   const [open, setOpen] = useState(false);
 
-  // Tick once a minute so the countdown stays fresh without re-rendering
-  // the whole composer on every animation frame.
+  // Re-render once a minute so any future reset countdowns stay fresh
+  // without leaning on every render of the composer.
   const [, setTick] = useState(0);
   useEffect(() => {
-    if (!enabled) return;
-    const id = setInterval(() => setTick((t) => t + 1), 60_000);
+    if (mode !== "active") return;
+    const id = setInterval(() => setTick((n) => n + 1), 60_000);
     return () => clearInterval(id);
-  }, [enabled]);
+  }, [mode]);
 
-  if (!enabled || !usage) return null;
-  const bucket = selectUsageBucket({ usage });
-  if (!bucket) return null;
+  if (mode === "hidden") return null;
 
-  const pct = Math.min(bucket.utilization, 100);
-  const color = barColor(pct);
-  // Avoid "resets in resetting…" — when the reset moment has already passed
-  // but the API hasn't refreshed yet, fall back to a dedicated key.
-  const exhaustedResetting =
-    bucket.exhausted && resetCountdown(bucket.resetsAt).resetting;
-  const tooltip = bucket.exhausted
-    ? exhaustedResetting
-      ? t("usage_indicator_tooltip_exhausted_resetting", { label: bucket.label })
-      : t("usage_indicator_tooltip_exhausted", {
-          label: bucket.label,
-          countdown: formatResetCountdown(bucket.resetsAt),
-        })
-    : t("usage_indicator_tooltip_used", {
-        label: bucket.label,
-        pct: Math.floor(pct),
-      });
+  if (mode === "disabled") {
+    const label = t("usage_indicator_disabled_tooltip", {
+      defaultValue: "Claude Code Usage is off — click to enable",
+    });
+    return (
+      <div className={styles.wrapper}>
+        <button
+          ref={triggerRef}
+          type="button"
+          className={`${styles.indicator} ${styles.disabled}`}
+          title={label}
+          aria-label={label}
+          onClick={() => openSettings("experimental", CLAUDE_CODE_USAGE_FOCUS)}
+        >
+          <div className={styles.bar}>
+            <div className={styles.barFill} />
+          </div>
+          <span className={styles.readout}>—</span>
+        </button>
+      </div>
+    );
+  }
+
+  // Active. Wait for the first snapshot before painting — the poller
+  // resolves it within a single tick, so the gap is invisible.
+  if (!snapshot) return null;
+
+  // Empty-bucket case: the snapshot loaded but the source had nothing
+  // to surface yet (e.g. a brand-new Codex session with zero recorded
+  // turns). Render an empty bar so the user can still open the popover
+  // and read `snapshot.note` ("No turns recorded yet…"). Without this
+  // the meter silently disappears on every first turn.
+  const bucket = pickIndicatorBucket(snapshot.buckets);
+  const pct = bucket?.is_bounded ? Math.min(bucket.utilization, 1.0) : 0;
+  const color = bucket ? barColor(pct) : "var(--accent-primary)";
+  const fillStyle = bucket?.is_bounded
+    ? { height: `${pct * 100}%`, background: color }
+    : bucket
+      ? { height: "100%", background: "var(--accent-primary)", opacity: 0.4 }
+      : { height: "0%", background: "transparent" };
+
+  const readout = bucket
+    ? bucket.primary_text
+    : t("usage_indicator_no_data", { defaultValue: "—" });
+  const tooltip = bucket
+    ? `${bucket.label}: ${bucket.primary_text}`
+    : (snapshot.note ?? snapshot.source_label);
 
   return (
     <div className={styles.wrapper}>
       <button
         ref={triggerRef}
         type="button"
-        className={`${styles.indicator} ${bucket.exhausted ? styles.exhausted : ""}`}
+        className={`${styles.indicator} ${bucket?.exhausted ? styles.exhausted : ""}`}
         title={tooltip}
         aria-label={tooltip}
         aria-expanded={open}
@@ -73,24 +160,16 @@ export function UsageIndicator() {
         onClick={() => setOpen((v) => !v)}
       >
         <div className={styles.bar}>
-          <div
-            className={styles.barFill}
-            style={{ height: `${pct}%`, background: color }}
-          />
+          <div className={styles.barFill} style={fillStyle} />
         </div>
-        {bucket.exhausted ? (
-          <span className={styles.countdown}>
-            ↻ {formatResetCountdown(bucket.resetsAt)}
-          </span>
-        ) : (
-          <span className={styles.readout}>{Math.floor(pct)}%</span>
-        )}
+        <span className={styles.readout}>{readout}</span>
       </button>
       {open && (
         <UsagePopover
           onClose={() => setOpen(false)}
           triggerRef={triggerRef}
-          activeBucketKey={bucket.key}
+          snapshot={snapshot}
+          activeBucketKey={bucket?.key}
         />
       )}
     </div>

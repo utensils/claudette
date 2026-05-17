@@ -103,6 +103,43 @@ describe("useWorkspaceFileIndex", () => {
     expect(serviceMocks.listWorkspaceFiles).toHaveBeenCalledTimes(2);
   });
 
+  it("resolves absolute paths that point into a Claudette worktree to the matching workspace file", async () => {
+    await render("ws-claudette");
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    // Same project, different worktree — the index for the currently
+    // viewed workspace already contains the equivalent file, so the
+    // resolver should return the workspace-relative path so the
+    // MarkdownLink renders a button that opens Monaco rather than
+    // falling through to the OS opener.
+    expect(
+      latestResolve?.(
+        "/Users/me/.claudette/workspaces/Claudette/cosmic-birch/src/main.rs",
+      ),
+    ).toBe("src/main.rs");
+    expect(
+      latestResolve?.(
+        "/Users/me/.claudette/workspaces/Claudette/cosmic-birch/Cargo.toml:7:2-9:4",
+      ),
+    ).toBe("Cargo.toml:7:2-9:4");
+
+    // File doesn't exist in this workspace — resolver still returns null
+    // so the link stays in its OS-opener fallback path.
+    expect(
+      latestResolve?.(
+        "/Users/me/.claudette/workspaces/Claudette/cosmic-birch/src/missing.rs",
+      ),
+    ).toBeNull();
+
+    // Out-of-project absolute paths must NOT collapse to a basename
+    // match — otherwise `/etc/Cargo.toml`-style references could falsely
+    // resolve to a same-named in-workspace file.
+    expect(latestResolve?.("/etc/Cargo.toml")).toBeNull();
+    expect(latestResolve?.("/Users/me/Documents/README.md")).toBeNull();
+  });
+
   it("does not cache rejected workspace file loads", async () => {
     serviceMocks.listWorkspaceFiles
       .mockRejectedValueOnce(new Error("temporary failure"))

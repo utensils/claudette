@@ -172,6 +172,45 @@ describe("workspacesSlice.addWorkspace", () => {
   });
 });
 
+describe("workspacesSlice rightSidebarTabByWorkspace", () => {
+  beforeEach(() => {
+    useAppStore.setState({
+      workspaces: [],
+      selectedWorkspaceId: null,
+      rightSidebarTabByWorkspace: {},
+    });
+  });
+
+  it("preserves per-workspace tab choice on workspace switch and return", () => {
+    useAppStore.getState().addWorkspace(makeWorkspace({ id: "ws-a" }));
+    useAppStore.getState().addWorkspace(makeWorkspace({ id: "ws-b" }));
+    useAppStore.getState().selectWorkspace("ws-a");
+    useAppStore.getState().setRightSidebarTabForWorkspace("ws-a", "changes");
+
+    useAppStore.getState().selectWorkspace("ws-b");
+    // Workspace B has no explicit choice — map entry absent (resolves to "files").
+    expect(useAppStore.getState().rightSidebarTabByWorkspace["ws-b"]).toBeUndefined();
+
+    useAppStore.getState().selectWorkspace("ws-a");
+    expect(useAppStore.getState().rightSidebarTabByWorkspace["ws-a"]).toBe("changes");
+  });
+
+  it("new workspace has no map entry (resolves to files default)", () => {
+    useAppStore.getState().addWorkspace(makeWorkspace({ id: "ws-new" }));
+    useAppStore.getState().selectWorkspace("ws-new");
+    expect(useAppStore.getState().rightSidebarTabByWorkspace["ws-new"]).toBeUndefined();
+  });
+
+  it("removeWorkspace drops the tab entry from the map", () => {
+    useAppStore.getState().addWorkspace(makeWorkspace({ id: "ws-1" }));
+    useAppStore.getState().setRightSidebarTabForWorkspace("ws-1", "tasks");
+    expect(useAppStore.getState().rightSidebarTabByWorkspace["ws-1"]).toBe("tasks");
+
+    useAppStore.getState().removeWorkspace("ws-1");
+    expect(useAppStore.getState().rightSidebarTabByWorkspace["ws-1"]).toBeUndefined();
+  });
+});
+
 describe("workspacesSlice pendingFork lifecycle", () => {
   beforeEach(() => {
     useAppStore.setState({
@@ -304,7 +343,7 @@ describe("workspacesSlice pendingFork lifecycle", () => {
       diffSelectedLayer: "unstaged",
       diffMergeBase: "abc123",
       diffPreviewLoading: true,
-      rightSidebarTab: "changes",
+      rightSidebarTabByWorkspace: { "ws-source": "changes" as const },
     } as Partial<typeof useAppStore extends { getState: () => infer T } ? T : never>);
 
     useAppStore.getState().beginPendingFork(
@@ -320,7 +359,10 @@ describe("workspacesSlice pendingFork lifecycle", () => {
     expect(state.diffPreviewContent).toBeNull();
     expect(state.diffPreviewLoading).toBe(false);
     expect(state.diffPreviewMode).toBe("diff");
-    expect(state.rightSidebarTab).toBe("files");
+    // Placeholder has no tab entry — resolves to the "files" default.
+    expect(state.rightSidebarTabByWorkspace["pending-fork-abc"]).toBeUndefined();
+    // Source's tab choice is preserved across the fork.
+    expect(state.rightSidebarTabByWorkspace["ws-source"]).toBe("changes");
     // The source's diff selection is preserved in the per-workspace
     // map so returning to it (via cancel, or the user navigating back)
     // restores what they were viewing.

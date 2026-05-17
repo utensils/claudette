@@ -98,6 +98,17 @@ pub enum NotificationEvent {
 pub trait OpsHooks: Send + Sync {
     fn workspace_changed(&self, _workspace_id: &str, _kind: WorkspaceChangeKind) {}
     fn notification(&self, _event: NotificationEvent) {}
+
+    /// Bulk variant for callers that perform many workspace changes in a
+    /// single op (e.g. `delete_workspaces_bulk`). The default impl loops
+    /// over per-row [`workspace_changed`] for hook impls that don't
+    /// care; rich impls override to amortize the side effects (e.g. one
+    /// tray rebuild for the whole batch instead of N).
+    fn workspaces_changed_bulk(&self, workspace_ids: &[String], kind: WorkspaceChangeKind) {
+        for id in workspace_ids {
+            self.workspace_changed(id, kind);
+        }
+    }
 }
 
 /// No-op hook impl — used by the WS server and unit tests. Implements

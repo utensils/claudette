@@ -1322,12 +1322,16 @@ export function ChatInputArea({
             sessionId={sessionId}
             workspaceId={selectedWorkspaceId}
             repoId={repoId ?? null}
-            disabled={isRunning || workspaceEnvironmentPreparing}
+            disabled={workspaceEnvironmentPreparing}
+            isRunning={isRunning}
             isRemote={isRemote}
           />
         </div>
         <div className={styles.inputControlsRight}>
-          <UsageIndicator />
+          <UsageIndicator
+            workspaceId={selectedWorkspaceId}
+            sessionId={sessionId}
+          />
           <SegmentedMeter
             ref={meterRef}
             sessionId={sessionId}

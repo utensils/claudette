@@ -20,7 +20,6 @@ import {
   openReleaseNotes,
   openUsageSettings,
   recordSlashCommandUsage,
-  sendChatMessage,
   sendRemoteCommand,
   steerQueuedChatMessage,
   stopAgent,
@@ -38,6 +37,7 @@ import {
 import { applySelectedModel } from "./applySelectedModel";
 import { findLatestPlanFilePath } from "./planFilePath";
 import type { PermissionLevel, QueuedMessage } from "../../stores/useAppStore";
+import { dispatchChatMessage } from "./chatMessageDispatch";
 import { reconstructCompletedTurns } from "../../utils/reconstructTurns";
 import { extractLatestCallUsage } from "../../utils/extractLatestCallUsage";
 import type { AttachmentInput, ChatMessage } from "../../types/chat";
@@ -58,11 +58,6 @@ import {
   parseSlashInput,
   resolveNativeHandler,
 } from "./nativeSlashCommands";
-import {
-  buildSendFailureSystemMessage,
-  shouldRecordSendFailureInChat,
-} from "./chatSendFailure";
-import { resolveUltrathinkEffort } from "./ultrathink";
 import { extractCompactionEvents } from "../../utils/compactionSentinel";
 import { WorkspacePanelHeader } from "../shared/WorkspacePanelHeader";
 import { SessionTabs } from "./SessionTabs";
@@ -75,7 +70,7 @@ import { tooltipWithHotkey } from "../../hotkeys/display";
 import { isMacHotkeyPlatform } from "../../hotkeys/platform";
 import { usePreventScrollBounce } from "../../hooks/usePreventScrollBounce";
 import styles from "./ChatPanel.module.css";
-import { shouldDisable1mContext, formatElapsedSeconds } from "./chatHelpers";
+import { formatElapsedSeconds } from "./chatHelpers";
 import { ScrollContext } from "./ScrollContext";
 import { StreamingThinkingBlock } from "./StreamingThinkingBlock";
 import { StreamingMessage } from "./StreamingMessage";
@@ -87,7 +82,6 @@ import { CurrentTurnTaskProgress } from "./CurrentTurnTaskProgress";
 import { ChatInputArea } from "./ChatInputArea";
 import { EMPTY_ACTIVITIES } from "./chatConstants";
 import { QueuedMessagesPopover } from "./QueuedMessagesPopover";
-import { shouldAutoDispatchQueuedMessage } from "./queuedMessageEditing";
 
 const EMPTY_QUEUED_MESSAGES: QueuedMessage[] = [];
 
@@ -129,7 +123,6 @@ export function ChatPanel() {
   const chatPaginationState = useAppStore((s) =>
     activeSessionId ? s.chatPagination[activeSessionId] : undefined,
   );
-  const updateWorkspace = useAppStore((s) => s.updateWorkspace);
   const openPluginSettings = useAppStore((s) => s.openPluginSettings);
   const pluginManagementEnabled = useAppStore((s) => s.pluginManagementEnabled);
   const usageInsightsEnabled = useAppStore((s) => s.usageInsightsEnabled);
@@ -145,7 +138,8 @@ export function ChatPanel() {
   const [error, setError] = useState<string | null>(null);
   const [isSteeringQueued, setIsSteeringQueued] = useState(false);
   const [pendingSteerContent, setPendingSteerContent] = useState<string | null>(null);
-  const [isEditingQueuedMessage, setIsEditingQueuedMessage] = useState(false);
+  const setQueuedMessageEditing = useAppStore((s) => s.setQueuedMessageEditing);
+  const setQueuedMessageSteering = useAppStore((s) => s.setQueuedMessageSteering);
   const isMac = isMacHotkeyPlatform();
   const steerQueuedTooltip = tooltipWithHotkey(
     t("steer_queued"),
@@ -340,16 +334,11 @@ export function ChatPanel() {
   const completedTurnsCount = useAppStore(
     (s) => (activeSessionId ? (s.completedTurns[activeSessionId] || []).length : 0)
   );
-  const permissionLevelMap = useAppStore((s) => s.permissionLevel);
   const setPermissionLevel = useAppStore((s) => s.setPermissionLevel);
-  const permissionLevel = activeSessionId
-    ? permissionLevelMap[activeSessionId] ?? "full"
-    : "full";
   const pendingQuestion = useAppStore(
     (s) => (activeSessionId ? s.agentQuestions[activeSessionId] ?? null : null)
   );
   const clearAgentQuestion = useAppStore((s) => s.clearAgentQuestion);
-  const finishTypewriterDrainTop = useAppStore((s) => s.finishTypewriterDrain);
   const pendingPlan = useAppStore(
     (s) => (activeSessionId ? s.planApprovals[activeSessionId] ?? null : null)
   );
@@ -364,12 +353,6 @@ export function ChatPanel() {
       activeSessionId
         ? s.queuedMessages[activeSessionId] ?? EMPTY_QUEUED_MESSAGES
         : EMPTY_QUEUED_MESSAGES,
-  );
-  const queuedMessageAutoDispatchPaused = useAppStore(
-    (s) =>
-      activeSessionId
-        ? s.queuedMessageAutoDispatchPaused[activeSessionId] === true
-        : false,
   );
   const setQueuedMessage = useAppStore((s) => s.setQueuedMessage);
   const updateQueuedMessage = useAppStore((s) => s.updateQueuedMessage);
@@ -400,7 +383,7 @@ export function ChatPanel() {
 
   const clearQueuedMessagesAndCancelEdit = (sessionId: string) => {
     clearQueuedMessage(sessionId);
-    setIsEditingQueuedMessage(false);
+    setQueuedMessageEditing(sessionId, false);
   };
 
   const isRemote = !!ws?.remote_connection_id;
@@ -973,48 +956,6 @@ export function ChatPanel() {
     hasStreaming,
   ]);
 
-  // Auto-dispatch queued message when agent becomes idle.
-  const handleSendRef = useRef<((
-    content: string,
-    mentionedFiles?: Set<string>,
-    attachments?: AttachmentInput[],
-  ) => void) | null>(null);
-  const autoDispatchQueuedIdRef = useRef<string | null>(null);
-  useEffect(() => {
-    const nextQueuedMessage = queuedMessages[0];
-    if (!shouldAutoDispatchQueuedMessage({
-      isSteeringQueued,
-      isRunning,
-      activeSessionId,
-      hasNextQueuedMessage: !!nextQueuedMessage,
-      isEditingQueuedMessage,
-      isAutoDispatchPaused: queuedMessageAutoDispatchPaused,
-      autoDispatchQueuedId: autoDispatchQueuedIdRef.current,
-    })) {
-      return;
-    }
-    // Agent just finished — dispatch the queued message.
-    const sessionId = activeSessionId;
-    if (!sessionId) return;
-    const { id, content, mentionedFiles, attachments } = nextQueuedMessage;
-    autoDispatchQueuedIdRef.current = id;
-    removeQueuedMessage(sessionId, id);
-    const filesSet = mentionedFiles?.length ? new Set(mentionedFiles) : undefined;
-    // Use a microtask to avoid calling handleSend during render.
-    queueMicrotask(() => {
-      handleSendRef.current?.(content, filesSet, attachments);
-      autoDispatchQueuedIdRef.current = null;
-    });
-  }, [
-    isSteeringQueued,
-    isRunning,
-    activeSessionId,
-    queuedMessages,
-    isEditingQueuedMessage,
-    queuedMessageAutoDispatchPaused,
-    removeQueuedMessage,
-  ]);
-
   if (!ws) return null;
 
   const addPersistedUserMessageToStore = (
@@ -1091,6 +1032,7 @@ export function ChatPanel() {
       : undefined;
     setError(null);
     setIsSteeringQueued(true);
+    setQueuedMessageSteering(sessionId, true);
     setPendingSteerContent(content.trim() || null);
     try {
       const checkpoint = await steerQueuedChatMessage(
@@ -1117,6 +1059,7 @@ export function ChatPanel() {
       setError(errMsg);
     } finally {
       setIsSteeringQueued(false);
+      setQueuedMessageSteering(sessionId, false);
       setPendingSteerContent(null);
     }
   };
@@ -1143,6 +1086,7 @@ export function ChatPanel() {
     }
 
     setIsSteeringQueued(true);
+    setQueuedMessageSteering(sessionId, true);
     setPendingSteerContent(content.trim() || null);
     removeQueuedMessage(sessionId, queuedMessage.id);
     try {
@@ -1168,6 +1112,7 @@ export function ChatPanel() {
       setError(errMsg);
     } finally {
       setIsSteeringQueued(false);
+      setQueuedMessageSteering(sessionId, false);
       setPendingSteerContent(null);
     }
   };
@@ -1444,18 +1389,6 @@ export function ChatPanel() {
       return;
     }
 
-    setQueuedMessageAutoDispatchPaused(sessionId, false);
-
-    // Clear any pending agent question or approval — the user is sending
-    // a new message (answer from a card or manual override). Also release any
-    // stuck typewriter drain from the previous turn so the completed message
-    // doesn't stay hidden behind pendingTypewriter across turns (the
-    // drain-complete effect cannot fire while isStreaming flips back to true).
-    clearAgentQuestion(sessionId);
-    clearPlanApproval(sessionId);
-    clearAgentApproval(sessionId);
-    finishTypewriterDrainTop(sessionId);
-
     setError(null);
 
     // Push to prompt history.
@@ -1463,99 +1396,20 @@ export function ChatPanel() {
     history.push(trimmed);
     historyIndexRef.current = -1;
     draftRef.current = "";
-    const optimisticMsgId = crypto.randomUUID();
-    addPersistedUserMessageToStore(sessionId, optimisticMsgId, trimmed, attachments);
-    // Keep both the workspace aggregate AND the per-session status fresh.
-    // The tab icon, sidebar badge, and ChatToolbar disable-state all read
-    // session-level status; the workspace row still drives tray + unread.
-    updateWorkspace(selectedWorkspaceId, { agent_status: "Running" });
-    useAppStore.getState().setPromptStartTime(selectedWorkspaceId, Date.now());
-    useAppStore.getState().updateChatSession(sessionId, {
-      agent_status: "Running",
-    });
-    useAppStore.getState().clearUnreadCompletion(selectedWorkspaceId);
 
     try {
-      if (ws?.remote_connection_id) {
-        // Route to remote server via WebSocket.
-        const state = useAppStore.getState();
-        const selectedModel = state.selectedModel[sessionId] || null;
-        const selectedProvider = state.selectedModelProvider[sessionId] || null;
-        const disable1mContext = shouldDisable1mContext(selectedModel);
-        const effort = resolveUltrathinkEffort(
-          trimmed,
-          state.effortLevel[sessionId],
-        );
-        await sendRemoteCommand(ws.remote_connection_id, "send_chat_message", {
-          chat_session_id: sessionId,
-          content: trimmed,
-          mentioned_files: mentionedFilesArray,
-          permission_level: permissionLevel,
-          model: state.selectedModel[sessionId] || null,
-          backend_id: selectedProvider,
-          fast_mode: state.fastMode[sessionId] || false,
-          thinking_enabled: state.thinkingEnabled[sessionId] || false,
-          plan_mode: state.planMode[sessionId] || false,
-          effort: effort ?? null,
-          chrome_enabled: state.chromeEnabled[sessionId] || false,
-          disable_1m_context: disable1mContext,
-        });
-      } else {
-        const state = useAppStore.getState();
-        const model = state.selectedModel[sessionId] || undefined;
-        const backendId = state.selectedModelProvider[sessionId] || undefined;
-        const fastMode = state.fastMode[sessionId] || false;
-        const thinkingEnabled = state.thinkingEnabled[sessionId] || false;
-        const planMode = state.planMode[sessionId] || false;
-        const effort = resolveUltrathinkEffort(
-          trimmed,
-          state.effortLevel[sessionId],
-        );
-        const chromeEnabled = state.chromeEnabled[sessionId] || false;
-        const disable1mContext = shouldDisable1mContext(model ?? null);
-        await sendChatMessage(
-          sessionId,
-          trimmed,
-          mentionedFilesArray,
-          permissionLevel,
-          model,
-          fastMode || undefined,
-          thinkingEnabled || undefined,
-          planMode || undefined,
-          effort,
-          chromeEnabled || undefined,
-          disable1mContext || undefined,
-          backendId,
-          attachments,
-          optimisticMsgId,
-        );
-      }
+      await dispatchChatMessage({
+        sessionId,
+        content: trimmed,
+        mentionedFiles: mentionedFilesArray,
+        attachments,
+      });
     } catch (e) {
       const errMsg = String(e);
-      console.error("sendChatMessage failed:", errMsg);
+      console.error("dispatchChatMessage failed:", errMsg);
       setError(errMsg);
-      updateWorkspace(selectedWorkspaceId, { agent_status: "Idle" });
-      useAppStore.getState().updateChatSession(sessionId, {
-        agent_status: "Idle",
-      });
-      useAppStore.getState().clearPromptStartTime(selectedWorkspaceId);
-      if (shouldRecordSendFailureInChat(errMsg)) {
-        addChatMessage(
-          sessionId,
-          buildSendFailureSystemMessage({
-            error: errMsg,
-            workspaceId: selectedWorkspaceId,
-            sessionId,
-            id: crypto.randomUUID(),
-            createdAt: new Date().toISOString(),
-          }),
-          { persisted: false },
-        );
-      }
     }
   };
-
-  handleSendRef.current = handleSend;
 
   const handleStop = async () => {
     if (!activeSessionId || !selectedWorkspaceId) return;
@@ -1564,7 +1418,7 @@ export function ChatPanel() {
     // queue visible, but stop the idle auto-drain from consuming it.
     if (queuedMessages.length > 0) {
       setQueuedMessageAutoDispatchPaused(sessionId, true);
-      setIsEditingQueuedMessage(false);
+      setQueuedMessageEditing(sessionId, false);
     }
     try {
       if (ws?.remote_connection_id) {
@@ -1871,7 +1725,9 @@ export function ChatPanel() {
           isRunning={isRunning}
           isSteeringQueued={isSteeringQueued}
           steerQueuedTooltip={steerQueuedTooltip}
-          onEditingChange={setIsEditingQueuedMessage}
+          onEditingChange={(isEditing) =>
+            setQueuedMessageEditing(activeSessionId, isEditing)
+          }
           onClearQueue={() => clearQueuedMessagesAndCancelEdit(activeSessionId)}
           onRemoveMessage={(messageId) => removeQueuedMessage(activeSessionId, messageId)}
           onSteerMessage={handleSteerQueuedMessage}

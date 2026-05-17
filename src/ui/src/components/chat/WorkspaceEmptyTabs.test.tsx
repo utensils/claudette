@@ -115,7 +115,7 @@ function resetStore() {
     diffSelectedFile: null,
     diffSelectedLayer: null,
     rightSidebarVisible: false,
-    rightSidebarTab: "files",
+    rightSidebarTabByWorkspace: {},
     requestNewFileNonceByWorkspace: {},
   });
 }

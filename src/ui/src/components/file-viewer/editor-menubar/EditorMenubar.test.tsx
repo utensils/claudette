@@ -24,7 +24,7 @@ interface MenubarStoreShape {
   setAllFilesSelectedPath: ReturnType<typeof vi.fn>;
   setAllFilesDirExpanded: ReturnType<typeof vi.fn>;
   toggleRightSidebar: ReturnType<typeof vi.fn>;
-  setRightSidebarTab: ReturnType<typeof vi.fn>;
+  setRightSidebarTabForWorkspace: ReturnType<typeof vi.fn>;
   openCommandPaletteFileMode: ReturnType<typeof vi.fn>;
   setEditorWordWrap: ReturnType<typeof vi.fn>;
   setEditorMinimapEnabled: ReturnType<typeof vi.fn>;
@@ -47,7 +47,7 @@ const store = vi.hoisted(
     setAllFilesSelectedPath: vi.fn(),
     setAllFilesDirExpanded: vi.fn(),
     toggleRightSidebar: vi.fn(),
-    setRightSidebarTab: vi.fn(),
+    setRightSidebarTabForWorkspace: vi.fn(),
     openCommandPaletteFileMode: vi.fn(),
     setEditorWordWrap: vi.fn(),
     setEditorMinimapEnabled: vi.fn(),

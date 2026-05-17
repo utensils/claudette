@@ -54,8 +54,16 @@ export const RightSidebar = memo(function RightSidebar() {
   const commitHistory = useAppStore((s) => s.commitHistory);
   const diffSelectedCommitHash = useAppStore((s) => s.diffSelectedCommitHash);
   const setDiffSelectedCommitHash = useAppStore((s) => s.setDiffSelectedCommitHash);
-  const activeTab = useAppStore((s) => s.rightSidebarTab);
-  const setActiveTab = useAppStore((s) => s.setRightSidebarTab);
+  const activeTab = useAppStore(
+    (s) => s.rightSidebarTabByWorkspace[s.selectedWorkspaceId ?? ""] ?? "files",
+  );
+  const setRightSidebarTabForWorkspace = useAppStore((s) => s.setRightSidebarTabForWorkspace);
+  const setActiveTab = useCallback(
+    (tab: "files" | "changes" | "tasks") => {
+      if (selectedWorkspaceId) setRightSidebarTabForWorkspace(selectedWorkspaceId, tab);
+    },
+    [selectedWorkspaceId, setRightSidebarTabForWorkspace],
+  );
 
   const ws = workspaces.find((w) => w.id === selectedWorkspaceId);
   const isRunning = isAgentBusy(ws?.agent_status);
@@ -119,21 +127,16 @@ export const RightSidebar = memo(function RightSidebar() {
   const hasLiveTasks =
     taskHistory.current.tasks.length > 0 ||
     taskHistory.subagents.length > 0;
-  // One auto-switch per workspace selection. Tracks the workspace ids
-  // we've already auto-switched for and reset on workspace change so
-  // each workspace gets at most one nudge before it learns the user's
-  // tab preference for the remainder of the session.
-  const autoSwitchedForWorkspaceRef = useRef<Set<string>>(new Set());
+  // Auto-switch to Tasks the first time a workspace has live tasks, but
+  // only when the user hasn't yet made an explicit tab choice for it.
+  // Writing to the per-workspace map via setActiveTab also records the
+  // choice, so subsequent visits to the same workspace skip the nudge.
   useEffect(() => {
     if (!selectedWorkspaceId || !hasLiveTasks) return;
-    if (autoSwitchedForWorkspaceRef.current.has(selectedWorkspaceId)) return;
-    if (activeTab === "tasks") {
-      autoSwitchedForWorkspaceRef.current.add(selectedWorkspaceId);
-      return;
-    }
-    autoSwitchedForWorkspaceRef.current.add(selectedWorkspaceId);
+    const { rightSidebarTabByWorkspace } = useAppStore.getState();
+    if (rightSidebarTabByWorkspace[selectedWorkspaceId] !== undefined) return;
     setActiveTab("tasks");
-  }, [selectedWorkspaceId, hasLiveTasks, activeTab, setActiveTab]);
+  }, [selectedWorkspaceId, hasLiveTasks, setActiveTab]);
 
   // Local-only stage/unstage/discard UI state. None of these git index
   // operations are bridged through the remote server (matches revert_file),

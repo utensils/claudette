@@ -24,7 +24,11 @@ interface ComposerToolbarProps {
   sessionId: string;
   workspaceId: string;
   repoId: string | null;
+  /** Blocks all toolbar interactions — set while the workspace environment is preparing. */
   disabled: boolean;
+  /** True while a turn is in flight. Pills that mutate session state stay locked;
+   *  the overflow menu's Remote Control row uses this to queue mid-turn enables. */
+  isRunning: boolean;
   isRemote: boolean;
 }
 
@@ -33,8 +37,14 @@ export function ComposerToolbar({
   workspaceId,
   repoId,
   disabled,
+  isRunning,
   isRemote,
 }: ComposerToolbarProps) {
+  // Session-mutating pills (model, plan, reasoning) keep their pre-split
+  // behavior: locked whenever a turn is running OR the env is preparing.
+  // The overflow menu deliberately opts out so users can queue Remote
+  // Control mid-turn — see `OverflowMenu` for the per-item gating.
+  const mutationDisabled = disabled || isRunning;
   const selectedModel = useAppStore((s) => s.selectedModel[sessionId] ?? "opus");
   const selectedProvider = useAppStore((s) => s.selectedModelProvider[sessionId] ?? "anthropic");
   const disable1mContext = useAppStore((s) => s.disable1mContext);
@@ -170,7 +180,7 @@ export function ComposerToolbar({
           label={modelLabel}
           chevron
           onClick={() => setModelSelectorOpen(!modelSelectorOpen)}
-          disabled={disabled}
+          disabled={mutationDisabled}
           title={isExtraUsage ? "Change model (extra usage: 1M context billed at API rates)" : "Change model"}
         >
           {isExtraUsage && <CircleDollarSign size={14} className={styles.extraUsage} />}
@@ -190,7 +200,7 @@ export function ComposerToolbar({
         label="Plan"
         active={planMode}
         onClick={togglePlan}
-        disabled={disabled}
+        disabled={mutationDisabled}
         {...tooltipAttributes(
           `${planMode ? "Disable" : "Enable"} plan mode`,
           "global.toggle-plan-mode",
@@ -200,11 +210,16 @@ export function ComposerToolbar({
         ariaPressed={planMode}
       />
 
-      <ReasoningPill sessionId={sessionId} disabled={disabled} />
+      <ReasoningPill sessionId={sessionId} disabled={mutationDisabled} />
 
       <ClaudeFlagsTooltip resolved={resolvedFlags} />
 
-      <OverflowMenu sessionId={sessionId} disabled={disabled} isRemote={isRemote} />
+      <OverflowMenu
+        sessionId={sessionId}
+        disabled={disabled}
+        isRunning={isRunning}
+        isRemote={isRemote}
+      />
     </div>
   );
 }

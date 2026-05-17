@@ -177,6 +177,14 @@ jobs:
           APPLE_PASSWORD: ${{ runner.os == 'macOS' && secrets.APPLE_PASSWORD || '' }}
           APPLE_TEAM_ID: ${{ runner.os == 'macOS' && secrets.APPLE_TEAM_ID || '' }}
         with:
+          # Scope tauri-action to the desktop project. See the matching
+          # comment in nightly.yml for the full failure story — short
+          # version: the default `projectPath: .` walks the repo and
+          # finds `src-mobile/tauri.conf.json` (added in #840) before
+          # `src-tauri/tauri.conf.json`, so the upload step looks for
+          # artifacts under the mobile config's hardcoded version
+          # instead of the desktop bundler's actual filename.
+          projectPath: src-tauri
           tagName: ${{ needs.resolve-tag.outputs.tag }}
           releaseName: ${{ needs.resolve-tag.outputs.tag }}
           releaseDraft: true
@@ -203,6 +211,14 @@ jobs:
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         with:
+          # Scope tauri-action to the desktop project. See the matching
+          # comment in nightly.yml for the full failure story — short
+          # version: the default `projectPath: .` walks the repo and
+          # finds `src-mobile/tauri.conf.json` (added in #840) before
+          # `src-tauri/tauri.conf.json`, so the upload step looks for
+          # artifacts under the mobile config's hardcoded version
+          # instead of the desktop bundler's actual filename.
+          projectPath: src-tauri
           tagName: ${{ needs.resolve-tag.outputs.tag }}
           releaseName: ${{ needs.resolve-tag.outputs.tag }}
           releaseDraft: true
@@ -227,6 +243,14 @@ jobs:
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         with:
+          # Scope tauri-action to the desktop project. See the matching
+          # comment in nightly.yml for the full failure story — short
+          # version: the default `projectPath: .` walks the repo and
+          # finds `src-mobile/tauri.conf.json` (added in #840) before
+          # `src-tauri/tauri.conf.json`, so the upload step looks for
+          # artifacts under the mobile config's hardcoded version
+          # instead of the desktop bundler's actual filename.
+          projectPath: src-tauri
           tagName: ${{ needs.resolve-tag.outputs.tag }}
           releaseName: ${{ needs.resolve-tag.outputs.tag }}
           releaseDraft: true

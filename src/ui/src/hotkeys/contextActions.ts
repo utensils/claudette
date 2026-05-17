@@ -174,7 +174,7 @@ export function executeNewTab(overrides?: Partial<ContextActionDeps>): void {
   const activeFile = store.activeFileTabByWorkspace[wsId] ?? null;
   if (activeFile) {
     if (!store.rightSidebarVisible) store.toggleRightSidebar();
-    if (store.rightSidebarTab !== "files") store.setRightSidebarTab("files");
+    if ((store.rightSidebarTabByWorkspace[wsId] ?? "files") !== "files") store.setRightSidebarTabForWorkspace(wsId, "files");
     store.requestNewFileAtRoot(wsId);
     return;
   }
