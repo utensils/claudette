@@ -75,6 +75,24 @@ impl TmuxHost {
     fn fifo_path(&self, sid: &SessionId) -> PathBuf {
         self.runtime_dir.join(format!("{}.fifo", sid.as_str()))
     }
+
+    /// Compare an externally-supplied set of expected `SessionId`s against the
+    /// host's live sessions (per `status()`) and return the IDs the host no
+    /// longer knows about — i.e. sessions that were killed externally (e.g.
+    /// `tmux kill-session` from another shell, host reboot, OOM) or never
+    /// existed. Callers (the chat-orchestration layer) use this to drive
+    /// periodic reconciliation: anything returned here should be marked dead
+    /// in their bookkeeping.
+    pub async fn reconcile(&self, expected: &[SessionId]) -> Result<Vec<SessionId>, HostError> {
+        let st = self.status().await?;
+        let live: std::collections::HashSet<_> =
+            st.sessions.iter().map(|s| s.sid.clone()).collect();
+        Ok(expected
+            .iter()
+            .filter(|sid| !live.contains(sid))
+            .cloned()
+            .collect())
+    }
 }
 
 /// Spawn the per-session blocking FIFO tailer. Reads bytes and pushes
@@ -604,6 +622,85 @@ mod tests {
 
         // Best-effort cleanup; stop() already removed the FIFO and we
         // don't care about leftover state since the dir name is uuid'd.
+        let _ = std::fs::remove_dir_all(&runtime_dir);
+    }
+
+    #[tokio::test]
+    #[ignore = "requires tmux >= 3.0"]
+    async fn reconciliation_marks_externally_killed_sessions_dead() {
+        match check_tmux().await {
+            TmuxAvailability::Available { .. } => {}
+            other => {
+                eprintln!("skipping: tmux not available: {other:?}");
+                return;
+            }
+        }
+
+        let short = uuid::Uuid::new_v4().simple().to_string();
+        let runtime_dir = PathBuf::from("/tmp").join(format!("th-rec-{}", &short[..8]));
+        let _ = std::fs::create_dir_all(&runtime_dir);
+        let host = TmuxHost::new(runtime_dir.clone());
+
+        let stub = find_workspace_binary("stub-tui", "stub-tui");
+        let sid = SessionId(format!("claudette-tmux-reconcile-{}", &short[..8]));
+        let spec = SessionSpec {
+            working_dir: std::env::temp_dir().to_string_lossy().into(),
+            rows: 24,
+            cols: 80,
+            claude_binary: stub.to_string_lossy().into(),
+            claude_args: vec![],
+            env: vec![],
+            claude_config_dir: std::env::temp_dir().to_string_lossy().into(),
+        };
+
+        host.ensure_session(&sid, &spec)
+            .await
+            .expect("ensure_session failed");
+
+        // Sanity: reconcile with the live sid in expected — nothing should
+        // be reported dead yet.
+        let dead = host
+            .reconcile(std::slice::from_ref(&sid))
+            .await
+            .expect("reconcile failed");
+        assert!(
+            dead.is_empty(),
+            "expected no dead sessions before external kill, got {dead:?}"
+        );
+
+        // Kill the session externally (bypassing TmuxHost::stop).
+        let st = StdCommand::new("tmux")
+            .args(["kill-session", "-t", sid.as_str()])
+            .status()
+            .expect("failed to spawn tmux kill-session");
+        assert!(st.success(), "tmux kill-session did not succeed: {st}");
+
+        // Brief settle window for tmux internal state.
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+        // Reconcile with the killed sid in expected — it should be reported
+        // dead.
+        let dead = host
+            .reconcile(std::slice::from_ref(&sid))
+            .await
+            .expect("reconcile failed");
+        assert_eq!(
+            dead,
+            vec![sid.clone()],
+            "expected reconcile to report the killed sid as dead"
+        );
+
+        // Reconcile with empty expected — nothing to compare against, so
+        // result must be empty regardless of host state.
+        let dead = host.reconcile(&[]).await.expect("reconcile failed");
+        assert!(
+            dead.is_empty(),
+            "expected empty result for empty expected, got {dead:?}"
+        );
+
+        // Best-effort cleanup; the tmux session is already gone but the
+        // FIFO file and runtime dir may linger.
+        let _ = std::fs::remove_file(host.fifo_path(&sid));
         let _ = std::fs::remove_dir_all(&runtime_dir);
     }
 }
