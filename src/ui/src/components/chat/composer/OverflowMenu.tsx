@@ -19,7 +19,13 @@ import styles from "./OverflowMenu.module.css";
 
 interface OverflowMenuProps {
   sessionId: string;
+  /** Blocks all menu interaction (trigger + every row). Set while the
+   *  workspace environment is preparing. */
   disabled: boolean;
+  /** True while a turn is in flight. Session-mutating rows (Fast Mode,
+   *  Claude in Chrome) stay disabled. Remote Control deliberately stays
+   *  clickable so the user can queue a mid-turn enable. */
+  isRunning: boolean;
   isRemote: boolean;
 }
 
@@ -32,7 +38,13 @@ const DISABLED_REMOTE_STATUS: ClaudeRemoteControlStatus = {
   lastError: null,
 };
 
-export function OverflowMenu({ sessionId, disabled, isRemote }: OverflowMenuProps) {
+export function OverflowMenu({ sessionId, disabled, isRunning, isRemote }: OverflowMenuProps) {
+  // Rows that would tear down or reconfigure the live persistent session
+  // (Fast Mode is per-session; Claude in Chrome calls `resetAgentSession`)
+  // stay locked mid-turn. Remote Control opts out: its row remains
+  // clickable, and the click queues a pending enable instead of firing
+  // immediately. See `RemoteControlMenuItem` for the deferred-fire logic.
+  const mutationDisabled = disabled || isRunning;
   const [open, setOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -160,6 +172,7 @@ export function OverflowMenu({ sessionId, disabled, isRemote }: OverflowMenuProp
               active={fastMode}
               meta={fastMode ? "on" : "off"}
               onClick={toggleFast}
+              disabled={mutationDisabled}
             />
           )}
           <MenuItem
@@ -168,11 +181,13 @@ export function OverflowMenu({ sessionId, disabled, isRemote }: OverflowMenuProp
             active={chromeEnabled}
             meta={chromeEnabled ? "on" : "off"}
             onClick={toggleChrome}
+            disabled={mutationDisabled}
           />
           {showRemoteControl && (
             <RemoteControlMenuItem
               sessionId={sessionId}
               disabled={disabled}
+              isRunning={isRunning}
               status={remoteControlStatus}
               permissionLevel={permissionLevel}
               model={selectedModel}
@@ -195,6 +210,7 @@ export function OverflowMenu({ sessionId, disabled, isRemote }: OverflowMenuProp
 function RemoteControlMenuItem({
   sessionId,
   disabled,
+  isRunning,
   status,
   permissionLevel,
   model,
@@ -208,7 +224,13 @@ function RemoteControlMenuItem({
   onStatus,
 }: {
   sessionId: string;
+  /** True while the workspace environment is preparing — hard-blocks
+   *  every interaction (firing OR queuing the toggle). */
   disabled: boolean;
+  /** True while a turn is in flight. Enable clicks during this window
+   *  queue a pending enable; the deferred-fire effect applies it the
+   *  moment the turn ends. */
+  isRunning: boolean;
   status: ClaudeRemoteControlStatus;
   permissionLevel: string;
   model: string;
@@ -225,60 +247,170 @@ function RemoteControlMenuItem({
   const pendingFirstTurn = isPendingFirstTurnRemoteControl(status);
   const busy = status.state === "enabling" && !pendingFirstTurn;
   const active = status.state !== "disabled" && status.state !== "error";
-  const meta = remoteControlMeta(status);
-  const detail = status.lastError ?? status.detail;
-  const displayDetail = remoteControlDisplayDetail(status, detail, url);
+  const addToast = useAppStore((s) => s.addToast);
 
-  const toggle = useCallback(async () => {
+  // Frontend-only "queued enable" intent. Stored as the sessionId the
+  // pending belongs to (or null) — not a plain boolean — so a sessionId
+  // prop change in the same render pass cannot accidentally fire the
+  // deferred enable against the new session before the cleanup effect
+  // wipes the flag. Kept local rather than in the backend
+  // `ClaudeRemoteControlStatus` so the existing lifecycle enum, the
+  // persistent-session monitor, and the `claude-remote-control-status`
+  // event flow remain untouched. Trade-off: a window reload mid-turn
+  // drops the queued intent — acceptable corner case.
+  const [pendingEnableForSession, setPendingEnableForSession] = useState<
+    string | null
+  >(null);
+  const pendingEnable = pendingEnableForSession === sessionId;
+
+  // Hygiene: when the user switches chats, wipe any stale queued intent
+  // belonging to the previous session.
+  useEffect(() => {
+    setPendingEnableForSession((prev) => (prev === sessionId ? prev : null));
+  }, [sessionId]);
+
+  // `runImmediate` is the existing async enable/disable body, lifted out
+  // verbatim so it can be reused by both the user-driven toggle and the
+  // deferred-fire effect below. The behavior here is unchanged from the
+  // pre-mid-turn-enable implementation — the only new caller is the
+  // deferred-fire effect.
+  const runImmediate = useCallback(
+    async (nextEnabled: boolean) => {
+      if (nextEnabled) {
+        onStatus({ ...status, state: "enabling", lastError: null });
+      }
+      try {
+        const next = await setClaudeRemoteControl(sessionId, nextEnabled, {
+          permissionLevel,
+          model,
+          backendId,
+          fastMode,
+          thinkingEnabled,
+          planMode,
+          effort,
+          chromeEnabled,
+          disable1mContext,
+        });
+        onStatus(next);
+      } catch (err) {
+        const message = formatRemoteControlError(err);
+        onStatus({
+          state: "error",
+          sessionUrl: null,
+          connectUrl: null,
+          environmentId: null,
+          detail: null,
+          lastError: message,
+        });
+      }
+    },
+    [
+      backendId,
+      chromeEnabled,
+      disable1mContext,
+      effort,
+      fastMode,
+      model,
+      onStatus,
+      permissionLevel,
+      planMode,
+      sessionId,
+      status,
+      thinkingEnabled,
+    ],
+  );
+
+  // Deferred-fire effect: the moment the turn ends (`isRunning` flips
+  // from true → false) and a pending enable is queued *for this exact
+  // sessionId*, fire the real enable. Piggybacks on the `agent_status`
+  // transition that `useAgentStream.ts` already pushes into the store
+  // on every turn result — no new Tauri event, no backend hook. Also
+  // fires for the "Stopped" path (user-cancelled turn), since
+  // "stopped" still means the persistent session is no longer
+  // mid-flight.
+  //
+  // No-op-message safety net: the backend's cold-enable defer
+  // (`should_defer_enable_until_first_turn` in `remote_control.rs`)
+  // can return `state: "enabling"` with detail "Send your first
+  // message to start Claude Remote Control." when called on a chat
+  // with `turn_count == 0`. The mid-turn-pending path here cannot
+  // reach that branch — queuing the pending intent requires
+  // `isRunning === true`, which in turn requires a turn to be
+  // running, which requires `turn_count >= 1` and a live persistent
+  // session. If a future flow makes that branch reachable, this is
+  // the seam where we'd auto-send a synthetic no-op user message to
+  // anchor the bridge: inspect `next.detail` for the sentinel and
+  // dispatch a chat-send through the appropriate store action.
+  useEffect(() => {
+    if (pendingEnableForSession !== sessionId) return;
+    if (isRunning) return;
+    setPendingEnableForSession(null);
+    void runImmediate(true);
+  }, [pendingEnableForSession, sessionId, isRunning, runImmediate]);
+
+  // The four branches below decide what each click means. The
+  // surrounding wiring (pending state, deferred-fire effect,
+  // `runImmediate`, status chip, toast primitive) is already in place
+  // — this function is the seam where the UX feel of the feature
+  // lives, so tune the details deliberately:
+  //
+  //   1. `busy` (real "enabling" state, not the "pending" intent) —
+  //      ignore the click. Matches pre-refactor behavior.
+  //   2. Re-click while a pending enable is queued — cancel it. The
+  //      cancellation toast is intentionally short; consider whether
+  //      a silent cancel (no toast) feels better in your environment.
+  //   3. Enable while a turn is running — queue the pending intent.
+  //      The deferred-fire effect applies it the moment `isRunning`
+  //      flips false. Toast wording can be adjusted; the pending chip
+  //      and tooltip already carry the primary visual signal.
+  //   4. Idle, or any disable click — fire immediately. Disable
+  //      mid-turn is allowed to fire without waiting because tearing
+  //      down a bridge doesn't need turn quiescence.
+  //
+  // Trade-offs worth revisiting if usage patterns suggest:
+  //   • Cancellation gesture — re-click vs. a dedicated X affordance.
+  //   • Rapid Enable→Disable→Enable — last-write-wins on the single
+  //     boolean is the simplest contract; richer queue semantics are
+  //     possible but rarely worth the surface area.
+  //   • Toast frequency — fewer toasts feel less noisy; pending chip
+  //     alone may suffice.
+  const toggle = useCallback(() => {
     if (busy) return;
-    const nextEnabled = !active;
-    if (nextEnabled) {
-      onStatus({ ...status, state: "enabling", lastError: null });
+    if (pendingEnable) {
+      setPendingEnableForSession(null);
+      addToast("Remote Control enable cancelled.");
+      return;
     }
-    try {
-      const next = await setClaudeRemoteControl(sessionId, nextEnabled, {
-        permissionLevel,
-        model,
-        backendId,
-        fastMode,
-        thinkingEnabled,
-        planMode,
-        effort,
-        chromeEnabled,
-        disable1mContext,
-      });
-      onStatus(next);
-    } catch (err) {
-      const message = formatRemoteControlError(err);
-      onStatus({
-        state: "error",
-        sessionUrl: null,
-        connectUrl: null,
-        environmentId: null,
-        detail: null,
-        lastError: message,
-      });
+    if (!active && isRunning) {
+      setPendingEnableForSession(sessionId);
+      addToast(
+        "Remote Control will enable when the current turn finishes.",
+      );
+      return;
     }
+    void runImmediate(!active);
   }, [
     active,
-    backendId,
+    addToast,
     busy,
-    chromeEnabled,
-    disable1mContext,
-    effort,
-    fastMode,
-    model,
-    onStatus,
-    permissionLevel,
-    planMode,
+    isRunning,
+    pendingEnable,
+    runImmediate,
     sessionId,
-    status,
-    thinkingEnabled,
   ]);
+
+  const meta = remoteControlMeta(status, pendingEnable);
+  const detail = status.lastError ?? status.detail;
+  const displayDetail = remoteControlDisplayDetail(
+    status,
+    detail,
+    url,
+    pendingEnable,
+  );
 
   return (
     <div
-      className={`${styles.remoteGroup} ${active ? styles.remoteGroupActive : ""} ${status.state === "error" ? styles.remoteGroupError : ""}`}
+      className={`${styles.remoteGroup} ${active ? styles.remoteGroupActive : ""} ${status.state === "error" ? styles.remoteGroupError : ""} ${pendingEnable ? styles.remoteGroupPending : ""}`}
     >
       <button
         type="button"
@@ -361,7 +493,11 @@ function remoteControlDisplayDetail(
   status: ClaudeRemoteControlStatus,
   detail: string | null,
   url: string | null,
+  pendingEnable: boolean,
 ): string | null {
+  if (pendingEnable) {
+    return "Pending — will enable when the current turn finishes.";
+  }
   if ((status.state === "ready" || status.state === "connected") && !url) {
     return "Waiting for Claude to publish the session link.";
   }
@@ -397,7 +533,11 @@ function formatRemoteControlError(err: unknown): string {
   return String(err || "Claude Remote Control failed");
 }
 
-function remoteControlMeta(status: ClaudeRemoteControlStatus): string {
+function remoteControlMeta(
+  status: ClaudeRemoteControlStatus,
+  pendingEnable: boolean,
+): string {
+  if (pendingEnable) return "pending";
   if (isPendingFirstTurnRemoteControl(status)) return "armed";
   switch (status.state) {
     case "disabled":
@@ -421,18 +561,21 @@ function MenuItem({
   active,
   meta,
   onClick,
+  disabled = false,
 }: {
   icon: ReactNode;
   label: string;
   active: boolean;
   meta: string;
   onClick: () => void;
+  disabled?: boolean;
 }) {
   return (
     <button
       type="button"
       className={`${styles.item} ${active ? styles.itemActive : ""}`}
       onClick={onClick}
+      disabled={disabled}
     >
       <span className={styles.itemIcon}>{icon}</span>
       <span className={styles.itemLabel}>{label}</span>

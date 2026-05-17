@@ -78,8 +78,13 @@
   transition: background var(--transition-fast);
 }
 
-.item:hover {
+.item:hover:not(:disabled) {
   background: var(--hover-bg);
+}
+
+.item:disabled {
+  cursor: default;
+  opacity: 0.45;
 }
 
 .itemActive {
@@ -155,9 +160,29 @@
   color: var(--diff-removed-text);
 }
 
+/* Mid-turn "queued enable" visual state — Radio icon stays (no spinner —
+ * pending ≠ enabling), accent-primary tint and reduced opacity signal
+ * "armed but not yet active." Mirrors the language of `.queuedLabel` in
+ * ChatPanel.module.css: a small uppercase chip in the meta column. */
+.remoteGroupPending {
+  color: var(--accent-primary);
+}
+
+.remoteGroupPending .itemIcon {
+  opacity: 0.75;
+}
+
+.remoteGroupPending .itemMeta {
+  text-transform: uppercase;
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+
 .remoteGroupActive .itemMeta,
 .remoteGroupError .itemIcon,
-.remoteGroupError .itemMeta {
+.remoteGroupError .itemMeta,
+.remoteGroupPending .itemMeta {
   color: currentColor;
 }
 
