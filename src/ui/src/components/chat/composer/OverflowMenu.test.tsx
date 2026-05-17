@@ -360,6 +360,39 @@ describe("OverflowMenu — Remote Control mid-turn enable (user toggle)", () => 
     expect(appStore.addToast).not.toHaveBeenCalled();
   });
 
+  it("survives a dropdown close (regression: state must live above the dropdown)", async () => {
+    // The pending state used to live inside the conditionally-rendered
+    // `RemoteControlMenuItem`. Closing the dropdown unmounted that
+    // component and discarded the queued intent — the turn would end
+    // and nothing would fire. This regression pins the state at the
+    // higher (always-mounted) level by exercising the close-and-reopen
+    // path end-to-end.
+    const { container, root } = await renderMenu({ isRunning: true });
+    await openDropdown(container);
+
+    // Queue while running, then close the dropdown by clicking outside.
+    await act(async () => {
+      findRemoteControlButton(container).click();
+      await Promise.resolve();
+    });
+    await act(async () => {
+      const evt = new MouseEvent("mousedown", { bubbles: true });
+      document.body.dispatchEvent(evt);
+      await Promise.resolve();
+    });
+
+    // Turn ends while the menu is closed — the deferred enable must
+    // still fire, because the owning state survived the close.
+    await rerenderMenu(root, { isRunning: false });
+
+    expect(serviceMocks.setClaudeRemoteControl).toHaveBeenCalledTimes(1);
+    expect(serviceMocks.setClaudeRemoteControl).toHaveBeenCalledWith(
+      "s1",
+      true,
+      expect.any(Object),
+    );
+  });
+
   it("clears the pending intent when the user switches sessions", async () => {
     const { container, root } = await renderMenu({
       sessionId: "s1",
