@@ -31,6 +31,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 gethostname = "1"
 uuid = { version = "1", features = ["v4"] }
+chrono = "0.4"
 
 # Mobile-only plugins. The barcode-scanner plugin is `#![cfg(mobile)]`
 # upstream — its presence in the dep tree on a desktop build is fine

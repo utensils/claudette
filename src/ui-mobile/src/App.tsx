@@ -20,9 +20,9 @@ type View =
       session: ChatSession;
     };
 
-// Phase 6: pair → workspaces → chat list. Phase 7 fills in the actual
-// `kind: "chat"` view (streaming, composer); for now it falls back to
-// a "Coming soon" placeholder so the navigation flow is fully wired.
+// Top-level navigation: connect → workspaces → chat list → chat. The
+// chat view (streaming, composer, AskUserQuestion sheet, plan approval
+// card) routes through `ChatScreen` below.
 
 export function App() {
   const [view, setView] = useState<View>({ kind: "connect" });

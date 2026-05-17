@@ -115,7 +115,15 @@ pub async fn handle_request(
                 .get("reason")
                 .and_then(|v| v.as_str())
                 .map(String::from);
-            handle_submit_approval(state, &chat_session_id, &tool_use_id, approved, reason).await
+            handle_submit_approval(
+                state,
+                &chat_session_id,
+                &tool_use_id,
+                approved,
+                reason,
+                ApprovalKind::PlanModeOnly,
+            )
+            .await
         }
         "submit_agent_approval" => {
             let chat_session_id = param_chat_session_id(&params);
@@ -128,7 +136,15 @@ pub async fn handle_request(
                 .get("reason")
                 .and_then(|v| v.as_str())
                 .map(String::from);
-            handle_submit_approval(state, &chat_session_id, &tool_use_id, approved, reason).await
+            handle_submit_approval(
+                state,
+                &chat_session_id,
+                &tool_use_id,
+                approved,
+                reason,
+                ApprovalKind::AnyApprovalTool,
+            )
+            .await
         }
         "stop_agent" => {
             let chat_session_id = param_chat_session_id(&params);
@@ -703,7 +719,21 @@ async fn handle_send_chat_message(
     let ps_arc = match session.persistent_session.as_ref() {
         Some(existing) => Arc::clone(existing),
         None => {
-            let ps = PersistentSession::start(
+            tracing::info!(
+                target: "claudette::ws",
+                chat_session_id = %chat_session_id,
+                workspace_id = %workspace_id,
+                session_id = %session_id,
+                is_resume,
+                "starting persistent claude session for remote chat"
+            );
+            // If `PersistentSession::start` fails (missing `claude`
+            // binary, invalid worktree, env-resolution error baked into
+            // a bad spawn) the per-session entry we just created above
+            // is left in `state.agents` with `turn_count == 1` but no
+            // running CLI. Drop it on the failure path so the next
+            // attempt re-enters the session-init branch cleanly.
+            let ps = match PersistentSession::start(
                 std::path::Path::new(&worktree_path),
                 &session_id,
                 is_resume,
@@ -713,7 +743,14 @@ async fn handle_send_chat_message(
                 Some(&ws_env),
                 Some(&resolved_env),
             )
-            .await?;
+            .await
+            {
+                Ok(ps) => ps,
+                Err(e) => {
+                    agents.remove(&chat_session_id);
+                    return Err(e);
+                }
+            };
             let arc = Arc::new(ps);
             session.persistent_session = Some(Arc::clone(&arc));
             arc
@@ -724,16 +761,78 @@ async fn handle_send_chat_message(
     session.session_resolved_env = resolved_env.vars.clone();
     drop(agents);
 
-    let turn_handle = ps_arc.send_turn(&prompt, &[]).await?;
+    // Same cleanup discipline for `send_turn`: if the CLI rejects the
+    // user message (e.g. the persistent process died between turns),
+    // we drop the now-half-broken session so the next attempt
+    // respawns rather than retrying against a corpse.
+    let turn_handle = match ps_arc.send_turn(&prompt, &[]).await {
+        Ok(handle) => handle,
+        Err(e) => {
+            let mut agents = state.agents.write().await;
+            agents.remove(&chat_session_id);
+            return Err(e);
+        }
+    };
 
-    // Bridge agent events to WebSocket.
-    let ws_id = workspace_id.clone();
-    let chat_session_id_for_stream = chat_session_id.clone();
+    spawn_turn_event_bridge(
+        Arc::clone(state),
+        Arc::clone(writer),
+        TurnBridgeContext {
+            workspace_id: workspace_id.clone(),
+            chat_session_id: chat_session_id.clone(),
+            worktree_path: worktree_path.clone(),
+            user_msg_id: user_msg.id.clone(),
+        },
+        turn_handle,
+    );
+
+    Ok(json!(null))
+}
+
+/// Bookkeeping passed into [`spawn_turn_event_bridge`]. Bundled into a
+/// struct so the two call sites (initial `send_chat_message` and the
+/// post-Result `dispatch_queued_message` follow-up) can't accidentally
+/// disagree on what each turn forwards / persists.
+pub struct TurnBridgeContext {
+    pub workspace_id: String,
+    pub chat_session_id: String,
+    pub worktree_path: String,
+    /// Anchor for the per-turn checkpoint when the assistant emits no
+    /// text (e.g. a turn that only produced tool calls). Mirrors the
+    /// desktop's `anchor_msg_id` fallback in
+    /// `src-tauri/src/commands/chat/send.rs`.
+    pub user_msg_id: String,
+}
+
+/// Spawn the per-turn event-bridge task. Reads `AgentEvent`s from
+/// the running `claude` subprocess and:
+///   - Forwards each as an `agent-stream` event on the WS.
+///   - Routes `ControlRequest::CanUseTool` events to per-session
+///     `pending_permissions` and emits `agent-permission-prompt` so
+///     the client can render AskUserQuestion / ExitPlanMode UI.
+///   - Persists assistant messages + usage to the DB.
+///   - On `Result` (turn complete) creates a checkpoint and dispatches
+///     the head of `pending_message_queue` if a steered message is
+///     waiting.
+///   - On `ProcessExited` clears the persistent session and drops the
+///     map entry on a non-zero / pre-init exit.
+///
+/// Extracted so the queued-message path also gets all of the above —
+/// before this lived only inline in `handle_send_chat_message`, so
+/// steered turns silently lost their AskUserQuestion routing.
+pub fn spawn_turn_event_bridge(
+    state: Arc<ServerState>,
+    writer: Arc<Writer>,
+    ctx: TurnBridgeContext,
+    turn_handle: claudette::agent::TurnHandle,
+) {
+    let TurnBridgeContext {
+        workspace_id: ws_id,
+        chat_session_id: chat_session_id_for_stream,
+        worktree_path: wt_path,
+        user_msg_id,
+    } = ctx;
     let db_path = state.db_path.clone();
-    let wt_path = worktree_path.clone();
-    let user_msg_id = user_msg.id.clone();
-    let state = Arc::clone(state);
-    let writer = Arc::clone(writer);
     tokio::spawn(async move {
         let mut rx = turn_handle.event_rx;
         let mut got_init = false;
@@ -821,22 +920,27 @@ async fn handle_send_chat_message(
             }
 
             if let AgentEvent::ProcessExited(code) = &event {
-                // The CLI subprocess died — clear the persistent session and
-                // pending state so the next `send_chat_message` starts fresh.
-                // For a clean exit (got_init && code == 0) we also drop the
-                // session: PersistentSession only stays alive when the CLI is
-                // alive, and a `claude --print` exit is the canonical "session
-                // ended" signal even if we expected long-lived behavior.
+                // The CLI subprocess died — drop the session entry entirely
+                // so the next `send_chat_message` starts a fresh
+                // `PersistentSession` instead of trying to write to a
+                // dead stdin. Doing the full `remove(...)` here (rather
+                // than the previous "clear-then-conditionally-remove"
+                // dance) avoids leaving a half-stale `AgentSessionState`
+                // around when the CLI exits with `code == Some(0)` after
+                // a normal turn — `PersistentSession` only stays alive
+                // when the CLI is alive, so an exit is the canonical
+                // "session ended" signal regardless of code. The unused
+                // `got_init` / `code` are kept for the trace-level log
+                // so a regression in process startup is still visible.
+                tracing::info!(
+                    target: "claudette::ws",
+                    chat_session_id = %chat_session_id_for_stream,
+                    got_init,
+                    exit_code = ?code,
+                    "claude subprocess exited — dropping session entry"
+                );
                 let mut agents = state.agents.write().await;
-                if let Some(session) = agents.get_mut(&chat_session_id_for_stream) {
-                    session.persistent_session = None;
-                    session.pending_permissions.clear();
-                    session.pending_message_queue.clear();
-                    session.active_pid = None;
-                }
-                if !got_init || *code != Some(0) {
-                    agents.remove(&chat_session_id_for_stream);
-                }
+                agents.remove(&chat_session_id_for_stream);
             }
 
             // Track per-assistant-message cumulative usage as the CLI streams
@@ -963,8 +1067,6 @@ async fn handle_send_chat_message(
             send_message(&writer, &event_msg).await;
         }
     });
-
-    Ok(json!(null))
 }
 
 async fn handle_stop_agent(
@@ -1082,17 +1184,55 @@ pub async fn handle_submit_agent_answer(
     Ok(json!(null))
 }
 
+/// Which approval-style tool kinds a given handler accepts. Mirrors the
+/// desktop's split between `submit_plan_approval` (ExitPlanMode only —
+/// the plan-mode UX shows specialized copy) and `submit_agent_approval`
+/// (any approval-style tool — Codex variants etc.).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ApprovalKind {
+    PlanModeOnly,
+    AnyApprovalTool,
+}
+
+impl ApprovalKind {
+    fn accepts(&self, tool_name: &str) -> bool {
+        match self {
+            ApprovalKind::PlanModeOnly => tool_name == "ExitPlanMode",
+            // Match the desktop's `is_user_approval_tool` predicate
+            // (`src-tauri/src/commands/chat/interaction.rs`) — ExitPlanMode
+            // plus the Codex approval tool family. The Codex names are
+            // gated behind the `alternative-backends` feature on the
+            // desktop, but listing them here unconditionally is harmless:
+            // if the WS server never spawns a Codex agent, these strings
+            // simply never appear in `pending_permissions`.
+            ApprovalKind::AnyApprovalTool => {
+                matches!(
+                    tool_name,
+                    "ExitPlanMode"
+                        | "codex_request_approval"
+                        | "codex_request_command_approval"
+                        | "codex_request_patch_approval"
+                )
+            }
+        }
+    }
+}
+
 /// Resolve a pending `ExitPlanMode` (or other approval-style) tool
 /// request. `approved=true` allows with the model's original input;
 /// `approved=false` denies with the supplied reason (or a sensible
 /// default that nudges the model to revise and resubmit the plan).
-/// Used by both `submit_plan_approval` and `submit_agent_approval`.
+/// `kind` controls which pending `tool_name` values are accepted —
+/// callers from `submit_plan_approval` pass `PlanModeOnly` (the UX
+/// shows plan-specific copy and would mis-render for a Codex
+/// approval), while `submit_agent_approval` passes `AnyApprovalTool`.
 pub async fn handle_submit_approval(
     state: &ServerState,
     chat_session_id: &str,
     tool_use_id: &str,
     approved: bool,
     reason: Option<String>,
+    kind: ApprovalKind,
 ) -> Result<serde_json::Value, String> {
     let (pending, ps) = {
         let mut agents = state.agents.write().await;
@@ -1109,9 +1249,9 @@ pub async fn handle_submit_approval(
                     "No pending permission request for tool_use_id {tool_use_id} (pending: {pending_ids:?})"
                 ));
             }
-            Some(p) if p.tool_name != "ExitPlanMode" => {
+            Some(p) if !kind.accepts(&p.tool_name) => {
                 return Err(format!(
-                    "Pending tool for {tool_use_id} is {}, not an approval request",
+                    "Pending tool for {tool_use_id} is {}, not an approval request accepted by this handler",
                     p.tool_name
                 ));
             }
@@ -1175,13 +1315,21 @@ pub async fn handle_steer_queued_chat_message(
 /// re-applies settings, and re-spawns — we want the lighter "next turn
 /// on the same persistent session" path. The user message is persisted
 /// so the chat transcript matches an interactive send.
+///
+/// Reuses [`spawn_turn_event_bridge`] so a queued turn gets the same
+/// `ControlRequest::CanUseTool` routing as an initial turn — i.e. an
+/// AskUserQuestion or ExitPlanMode emitted by the model during a
+/// steered turn still surfaces as `agent-permission-prompt` to the
+/// client and can be answered via `submit_agent_answer` /
+/// `submit_plan_approval`. Before the helper was extracted, queued
+/// turns silently dropped those prompts.
 async fn dispatch_queued_message(
     state: Arc<ServerState>,
     writer: Arc<Writer>,
     chat_session_id: String,
     queued: QueuedMessage,
 ) -> Result<(), String> {
-    let (ps_arc, workspace_id) = {
+    let (ps_arc, workspace_id, worktree_path) = {
         let agents = state.agents.read().await;
         let session = agents
             .get(&chat_session_id)
@@ -1190,7 +1338,21 @@ async fn dispatch_queued_message(
             .persistent_session
             .as_ref()
             .ok_or("No persistent session for queued message")?;
-        (Arc::clone(ps), session.workspace_id.clone())
+        (
+            Arc::clone(ps),
+            session.workspace_id.clone(),
+            // Re-resolve the worktree path so the checkpoint anchor in
+            // the event bridge has the same value the initial turn used.
+            Database::open(&state.db_path)
+                .ok()
+                .and_then(|db| db.list_workspaces().ok())
+                .and_then(|ws| {
+                    ws.into_iter()
+                        .find(|w| w.id == session.workspace_id)
+                        .and_then(|w| w.worktree_path)
+                })
+                .unwrap_or_default(),
+        )
     };
 
     let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
@@ -1222,27 +1384,17 @@ async fn dispatch_queued_message(
         }
     }
 
-    // Spawn a minimal event-bridge — just forward `agent-stream` events so
-    // the client transcript stays in sync. DB persistence + checkpointing
-    // for queued turns is intentionally simplified here; users who care
-    // about per-turn cost / checkpoints on queued sends should use full
-    // `send_chat_message` calls instead.
-    let ws_id_for_stream = workspace_id;
-    let chat_session_id_for_stream = chat_session_id;
-    tokio::spawn(async move {
-        let mut rx = turn_handle.event_rx;
-        while let Some(event) = rx.recv().await {
-            let event_msg = json!({
-                "event": "agent-stream",
-                "payload": {
-                    "workspace_id": ws_id_for_stream,
-                    "session_id": chat_session_id_for_stream,
-                    "event": event,
-                }
-            });
-            send_message(&writer, &event_msg).await;
-        }
-    });
+    spawn_turn_event_bridge(
+        Arc::clone(&state),
+        writer,
+        TurnBridgeContext {
+            workspace_id,
+            chat_session_id,
+            worktree_path,
+            user_msg_id: user_msg.id,
+        },
+        turn_handle,
+    );
 
     Ok(())
 }

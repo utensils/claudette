@@ -22,7 +22,7 @@ The mobile app is being built incrementally on the `james-brink/ios-foundation` 
 
 1. On the desktop, click **Share this machine** in the sidebar. The embedded server spawns as a subprocess and prints a connection string of the form `claudette://hostname:7683/<pairing-token>`.
 2. The same modal now shows that string as a QR code.
-3. On the iPhone, open **Claudette**, tap **Scan to pair**, and point the camera at the QR. The app reads the host, port, and one-time pairing token, opens a WSS connection, exchanges the pairing token for a long-lived session token, and stores the session token in the iOS Keychain.
+3. On the iPhone, open **Claudette**, tap **Scan to pair**, and point the camera at the QR. The app reads the host, port, and one-time pairing token, opens a WSS connection, exchanges the pairing token for a long-lived session token, and persists the session token in the app's sandboxed data directory (iOS Data Protection encrypts the sandbox at rest). Migrating to the iOS Keychain via a custom Swift plugin is on the follow-up list — see [What the iOS app cannot do today](#what-the-ios-app-cannot-do-today).
 4. The phone navigates to the workspace list. Tap a workspace to open it; tap a chat session to start sending prompts.
 
 The pairing token is consumed on first use — pair a second device by regenerating the token (`claudette-server regenerate-token` for standalone, or use **Stop sharing** / **Share this machine** again on the desktop).
@@ -40,9 +40,10 @@ See [Remote Workspaces — Headless Server](/claudette/features/remote-workspace
 ## Security model
 
 - TLS 1.2+ with a self-signed certificate; the iOS app pins the certificate fingerprint on first pair (TOFU — Trust On First Use). If the fingerprint changes on a later connection (server reinstalled, MITM, IP reuse), the app refuses to connect and displays the mismatch.
-- The pairing token is a 32-byte cryptographically random value, base64-encoded. It's transmitted once over the already-encrypted WSS to exchange for a session token; the session token is the long-lived credential stored in the iOS Keychain.
+- **What TOFU does and doesn't protect on the first pair**: pinning the fingerprint protects every connection *after* the initial pair. The initial pair itself happens with `expected_fingerprint = None` — the app accepts whatever cert is presented and pins it. If an attacker sits between your phone and the server during that first connection (e.g. malicious Wi-Fi), they can substitute their own cert and the app will trust it forever. The pairing token in the QR is the out-of-band authenticator that closes this gap — an attacker can't produce the same token without seeing the QR — but for that to hold, the QR scan must happen over a trusted channel (your own screen, not a screen-share or photo of the QR posted publicly). Treat the QR like a password during pairing.
+- The pairing token is a 32-byte cryptographically random value, base64-encoded. It's transmitted once over the already-encrypted WSS to exchange for a session token; the session token is the long-lived credential persisted in the app's sandboxed data directory (iOS Data Protection encrypts at rest).
 - Regenerating the pairing token (`claudette-server regenerate-token`) revokes all existing session tokens — useful if you lose your phone.
-- The iOS Keychain entry is scoped to the Claudette app's bundle ID; another app on the same device cannot read it.
+- The app sandbox is scoped to the Claudette bundle ID; another app on the same device cannot read it. (When the Keychain plugin lands as a follow-up, credentials move there for the additional "survives uninstall" property.)
 
 ## What the iOS app cannot do today
 

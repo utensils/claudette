@@ -16,7 +16,8 @@ use std::sync::Arc;
 
 use claudette::plugin_runtime::PluginRegistry;
 use claudette_server::handler::{
-    handle_steer_queued_chat_message, handle_submit_agent_answer, handle_submit_approval,
+    ApprovalKind, handle_steer_queued_chat_message, handle_submit_agent_answer,
+    handle_submit_approval,
 };
 use claudette_server::ws::{AgentSessionState, PendingPermission, ServerState};
 
@@ -124,9 +125,16 @@ async fn submit_plan_approval_errors_on_missing_pending() {
         let mut agents = state.agents.write().await;
         agents.insert("chat-3".to_string(), session_empty("ws-1"));
     }
-    let err = handle_submit_approval(&state, "chat-3", "tool-stale", true, None)
-        .await
-        .expect_err("must error when nothing pending");
+    let err = handle_submit_approval(
+        &state,
+        "chat-3",
+        "tool-stale",
+        true,
+        None,
+        ApprovalKind::PlanModeOnly,
+    )
+    .await
+    .expect_err("must error when nothing pending");
     assert!(
         err.contains("not active") || err.contains("No pending permission request"),
         "unexpected error: {err}"

@@ -909,6 +909,7 @@ dependencies = [
 name = "claudette-mobile"
 version = "0.24.0"
 dependencies = [
+ "chrono",
  "claudette",
  "gethostname",
  "serde",

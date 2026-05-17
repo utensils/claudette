@@ -82,6 +82,7 @@ pub fn version() -> VersionInfo {
 /// string. Lives here (rather than as a generic URL parse) so the
 /// error messages are tuned to the pairing UX — "Invalid scheme",
 /// "Missing token", etc. — rather than a generic url-crate error.
+#[derive(Debug)]
 struct ParsedConnectionString {
     host: String,
     port: u16,
@@ -100,6 +101,14 @@ fn parse_connection_string(input: &str) -> Result<ParsedConnectionString, String
 
     if token.is_empty() {
         return Err("Invalid connection string — pairing token is empty".to_string());
+    }
+    // The server-issued pairing token is base64-URL-safe (no `/`) — see
+    // `src-server/src/auth.rs::generate_pairing_token`. Reject embedded
+    // slashes so a malformed string like `claudette://host/abc/def`
+    // doesn't silently parse with `abc/def` as the token (split_once
+    // stops at the first `/`).
+    if token.contains('/') {
+        return Err("Invalid connection string — pairing token must not contain '/'".to_string());
     }
 
     let (host, port) = if let Some((h, p)) = host_port.rsplit_once(':') {
@@ -163,7 +172,7 @@ pub async fn pair_with_connection_string(
         port: parsed.port,
         session_token,
         fingerprint: fingerprint.clone(),
-        created_at: chrono_like_now(),
+        created_at: chrono::Utc::now().to_rfc3339(),
     };
 
     storage::upsert(&app, saved.clone())?;
@@ -221,6 +230,24 @@ pub async fn connect_saved(
     let transport = result.transport;
 
     transport.authenticate_session(&saved.session_token).await?;
+
+    // If a connection already exists for this id (e.g. user tapped the
+    // saved-server row twice), close the old transport explicitly
+    // before replacing it. The `Connection::Drop` impl already aborts
+    // the event-forwarder task, but `WebSocketTransport`'s underlying
+    // tungstenite write half only closes when its last `Arc` clone is
+    // dropped — and any RPC commands mid-flight may still hold clones.
+    // An explicit `close()` here sends the WS close frame immediately
+    // so the server doesn't see a lingering peer.
+    if let Some(old) = manager.remove(&saved.id).await
+        && let Err(e) = old.transport.close().await
+    {
+        tracing::warn!(
+            target: "claudette::mobile",
+            error = %e,
+            "failed to close prior transport on reconnect"
+        );
+    }
 
     let transport_arc: Arc<dyn Transport> = Arc::from(transport);
     let forwarder =
@@ -297,34 +324,6 @@ pub async fn forget_connection(
     storage::remove(&app, &id)
 }
 
-/// Hand-rolled ISO 8601 timestamp without pulling in `chrono` as a
-/// direct dep — UTC, second precision, sortable. Matches the shape of
-/// the desktop's `now_iso` helper so the two stores look interchangeable
-/// when viewed side-by-side.
-fn chrono_like_now() -> String {
-    let dur = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default();
-    let secs = dur.as_secs();
-    let days = secs / 86400;
-    let time_secs = secs % 86400;
-    let h = time_secs / 3600;
-    let m = (time_secs % 3600) / 60;
-    let s = time_secs % 60;
-    // Hinnant's algorithm — epoch days → calendar date.
-    let z = days + 719468;
-    let era = z / 146097;
-    let doe = z - era * 146097;
-    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
-    let y = yoe + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let mo = if mp < 10 { mp + 3 } else { mp - 9 };
-    let y = if mo <= 2 { y + 1 } else { y };
-    format!("{y:04}-{mo:02}-{d:02}T{h:02}:{m:02}:{s:02}Z")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -354,6 +353,15 @@ mod tests {
     #[test]
     fn rejects_empty_token() {
         assert!(parse_connection_string("claudette://host:7683/").is_err());
+    }
+
+    #[test]
+    fn rejects_token_with_embedded_slash() {
+        // A malformed string with extra slashes must error rather than
+        // silently parsing `abc/def` as the token — matches the server's
+        // base64-URL-safe token guarantee.
+        let err = parse_connection_string("claudette://host:7683/abc/def").unwrap_err();
+        assert!(err.contains("must not contain '/'"), "unexpected: {err}");
     }
 
     #[test]

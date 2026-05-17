@@ -34,10 +34,17 @@ interface Props {
 // appear as the agent generates it. Cleared on `Result` since the
 // server persists the final assistant message and `load_chat_history`
 // will replay it on next mount.
+//
+// Each StreamEvent::Assistant emits the *full* current content array,
+// not a delta. We therefore REPLACE rather than concatenate — appending
+// would duplicate the entire prior text on every subsequent assistant
+// event, producing increasingly long garbled bubbles.
 interface StreamingDraft {
   text: string;
   thinking: string;
 }
+
+const DISMISS_REASON = "User dismissed the prompt without responding.";
 
 export function ChatScreen({ connection, workspace, session, onBack }: Props) {
   const [messages, setMessages] = useState<ChatMessage[] | null>(null);
@@ -46,9 +53,16 @@ export function ChatScreen({ connection, workspace, session, onBack }: Props) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [agentActive, setAgentActive] = useState(false);
-  const [pendingPrompt, setPendingPrompt] =
-    useState<PermissionPromptPayload | null>(null);
+  // Queue of pending permission prompts. The active prompt is queue[0];
+  // a second prompt arriving while the first is open is appended rather
+  // than clobbering, so neither the UI nor the server's pending_permissions
+  // entry is lost. Most chats only ever have one pending at a time, but
+  // a sequential AskUserQuestion + ExitPlanMode flow needs both.
+  const [pendingQueue, setPendingQueue] = useState<PermissionPromptPayload[]>(
+    [],
+  );
   const scrollRef = useRef<HTMLDivElement | null>(null);
+  const pendingPrompt = pendingQueue[0] ?? null;
 
   // Load history on mount, and re-load every time the agent finishes a
   // turn so the persisted final messages replace the streaming draft
@@ -79,7 +93,14 @@ export function ChatScreen({ connection, workspace, session, onBack }: Props) {
       });
       unlistenPrompt = await onPermissionPrompt(connection.id, (payload) => {
         if (payload.chat_session_id !== session.id) return;
-        setPendingPrompt(payload);
+        setPendingQueue((prev) => {
+          // De-dupe — if the same tool_use_id is already queued (e.g.
+          // a forwarder retry), don't add it twice.
+          if (prev.some((p) => p.tool_use_id === payload.tool_use_id)) {
+            return prev;
+          }
+          return [...prev, payload];
+        });
       });
     })();
     return () => {
@@ -92,11 +113,15 @@ export function ChatScreen({ connection, workspace, session, onBack }: Props) {
   const handleStreamEvent = (payload: AgentStreamPayload) => {
     const parsed = parseAgentEvent(payload.event);
 
-    if (parsed.assistantText || parsed.thinkingText) {
-      setDraft((prev) => ({
-        text: (prev?.text ?? "") + (parsed.assistantText ?? ""),
-        thinking: (prev?.thinking ?? "") + (parsed.thinkingText ?? ""),
-      }));
+    // Each assistant event carries the *full* current message content,
+    // not a delta. Replace rather than append, otherwise the bubble
+    // shows duplicated text growing each event. Thinking is treated
+    // the same way for consistency.
+    if (parsed.assistantText !== null || parsed.thinkingText !== null) {
+      setDraft({
+        text: parsed.assistantText ?? "",
+        thinking: parsed.thinkingText ?? "",
+      });
       setAgentActive(true);
     }
 
@@ -162,27 +187,106 @@ export function ChatScreen({ connection, workspace, session, onBack }: Props) {
     }
   };
 
+  const dequeuePrompt = (toolUseId: string) => {
+    setPendingQueue((prev) => prev.filter((p) => p.tool_use_id !== toolUseId));
+  };
+
   const handleAnswerQuestion = async (answers: Record<string, string>) => {
     if (!pendingPrompt) return;
-    await submitAgentAnswer(
-      connection.id,
-      session.id,
-      pendingPrompt.tool_use_id,
-      answers,
-    );
-    setPendingPrompt(null);
+    const tooId = pendingPrompt.tool_use_id;
+    await submitAgentAnswer(connection.id, session.id, tooId, answers);
+    dequeuePrompt(tooId);
+  };
+
+  // Dismiss handler for AskUserQuestion. The agent is mid-turn waiting
+  // on a `control_response` — silently dropping the modal would hang the
+  // CLI subprocess. Send an empty-answer deny so the agent can either
+  // re-ask or surface the situation to itself in plain text.
+  const handleDismissAsk = async () => {
+    if (!pendingPrompt) return;
+    const tooId = pendingPrompt.tool_use_id;
+    try {
+      // No `submitAgentAnswer` deny path exists today — fall back to
+      // `submitPlanApproval(false, reason)` which routes through the
+      // generic `submit_agent_approval` deny payload the server
+      // accepts. AskUserQuestion isn't in the approval-tool allow-list
+      // though, so we use submit_agent_answer with an "I dismissed it"
+      // synthetic answer instead.
+      await submitAgentAnswer(connection.id, session.id, tooId, {
+        __dismissed: DISMISS_REASON,
+      });
+    } catch (e) {
+      // If the server rejects the dismiss, surface it but still drop
+      // the prompt locally — the user has indicated they don't want
+      // to deal with it, and forcing them to is a worse outcome.
+      console.warn("Dismiss-deny failed:", e);
+    }
+    dequeuePrompt(tooId);
   };
 
   const handleApprovePlan = async (approved: boolean, reason?: string) => {
     if (!pendingPrompt) return;
+    const tooId = pendingPrompt.tool_use_id;
     await submitPlanApproval(
       connection.id,
       session.id,
-      pendingPrompt.tool_use_id,
+      tooId,
       approved,
       reason,
     );
-    setPendingPrompt(null);
+    dequeuePrompt(tooId);
+  };
+
+  // Dismiss handler for ExitPlanMode. Auto-denies so the agent gets a
+  // chance to revise; without this, dismissing the card would leave
+  // the CLI subprocess blocked on stdin waiting for a `control_response`.
+  const handleDismissPlan = async () => {
+    if (!pendingPrompt) return;
+    const tooId = pendingPrompt.tool_use_id;
+    try {
+      await submitPlanApproval(
+        connection.id,
+        session.id,
+        tooId,
+        false,
+        DISMISS_REASON,
+      );
+    } catch (e) {
+      console.warn("Plan dismiss-deny failed:", e);
+    }
+    dequeuePrompt(tooId);
+  };
+
+  // Back-navigation guard. If a prompt is pending, the agent is hung on
+  // stdin waiting for an answer. Leaving without responding would orphan
+  // the pending_permissions entry on the server. Auto-deny everything
+  // pending before navigating away.
+  const handleBack = () => {
+    if (pendingQueue.length > 0) {
+      void Promise.all(
+        pendingQueue.map(async (p) => {
+          try {
+            if (p.tool_name === "AskUserQuestion") {
+              await submitAgentAnswer(connection.id, session.id, p.tool_use_id, {
+                __dismissed: DISMISS_REASON,
+              });
+            } else {
+              await submitPlanApproval(
+                connection.id,
+                session.id,
+                p.tool_use_id,
+                false,
+                DISMISS_REASON,
+              );
+            }
+          } catch (e) {
+            console.warn("Auto-deny on back-nav failed:", e);
+          }
+        }),
+      );
+      setPendingQueue([]);
+    }
+    onBack();
   };
 
   const isAskQuestion = pendingPrompt?.tool_name === "AskUserQuestion";
@@ -191,7 +295,7 @@ export function ChatScreen({ connection, workspace, session, onBack }: Props) {
   return (
     <div className="shell">
       <header className="header header-row">
-        <button className="ghost-btn" onClick={onBack}>
+        <button className="ghost-btn" onClick={handleBack}>
           ← Back
         </button>
         <div className="header-center">
@@ -228,7 +332,7 @@ export function ChatScreen({ connection, workspace, session, onBack }: Props) {
             toolUseId={pendingPrompt.tool_use_id}
             input={(pendingPrompt.input as PlanInput) ?? {}}
             onSubmit={handleApprovePlan}
-            onClose={() => setPendingPrompt(null)}
+            onDismiss={handleDismissPlan}
           />
         )}
       </div>
@@ -237,7 +341,7 @@ export function ChatScreen({ connection, workspace, session, onBack }: Props) {
           toolUseId={pendingPrompt.tool_use_id}
           input={(pendingPrompt.input as AskQuestionInput) ?? { questions: [] }}
           onSubmit={handleAnswerQuestion}
-          onClose={() => setPendingPrompt(null)}
+          onDismiss={handleDismissAsk}
         />
       )}
       <footer className="composer">
