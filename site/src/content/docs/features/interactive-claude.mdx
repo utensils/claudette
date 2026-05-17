@@ -1,0 +1,79 @@
+---
+title: Claude (Interactive)
+description: Run interactive claude inside a detachable host that survives Claudette closing.
+---
+
+import { Aside } from "@astrojs/starlight/components";
+
+<Aside type="caution">Experimental. Enable in **Settings → Experimental → Claude (Interactive)**.</Aside>
+
+## What it is
+
+Claude (Interactive) is an alternate agent backend that runs the interactive
+`claude` TUI (no `--print`) inside a host process that outlives Claudette:
+
+- On macOS and Linux: tmux (≥ 3.0).
+- On Windows: a bundled sidecar `claudette-session-host`.
+
+Sessions survive closing Claudette, OS sleep, and Claudette crashes. They do
+not survive a host crash (tmux server kill, sidecar crash).
+
+## When to use it
+
+- You want claude's native plan-mode and slash-command UI.
+- You want to keep a long-running session open across Claudette restarts.
+- On Unix, you want to attach to the same session from an external terminal.
+
+## When not to use it
+
+- You rely on attachments (images, files) sent through the chat composer —
+  v1 does not pipe stream-json into interactive claude; use slash commands
+  (`/file …`) instead.
+- You want fully cross-machine session sharing — v1 is local-only.
+
+## Enabling it
+
+1. Settings → Experimental → toggle **Claude (Interactive)** on.
+2. Open a workspace → Settings → Models → Runtime → pick **Claude (Interactive)**.
+3. (Unix only) Confirm `tmux -V` reports ≥ 3.0; otherwise install tmux first.
+
+## Hooks that fire
+
+Claudette registers three Claude Code hooks via a transient
+`CLAUDE_CONFIG_DIR` overlay:
+
+| Hook | Effect inside Claudette |
+|---|---|
+| `Stop` | Marks the turn complete. |
+| `Notification` | Surfaces an "Awaiting input" badge + OS notification. |
+| `UserPromptSubmit` | Clears the awaiting badge and starts a new turn. |
+
+The overlay is removed when the session is stopped.
+
+## Attaching from an external terminal (Unix)
+
+Right-click the session in the sidebar → **Copy tmux attach command**, then
+paste into any terminal:
+
+```bash
+tmux attach-session -t claudette-<workspace>-<sid>
+```
+
+<Aside type="note">Typing in an external attach bypasses Claudette's hook-delimited turn assembly. Use it for inspection; type new prompts in Claudette.</Aside>
+
+## Stopping a session
+
+Sidebar → session row → **Stop**. Graceful by default (`Ctrl+C`, then SIGTERM, then SIGKILL).
+The "Force" link in the confirm dialog skips straight to SIGKILL.
+
+## Crash recovery
+
+If tmux or the sidecar dies, sessions are marked **Crashed**. Start a new
+session from the same workspace — there is no recovery beyond what claude's
+own `/resume` provides.
+
+## Limitations (v1)
+
+- Attachments (image / file uploads) are not routed through the chat composer.
+- A separate xterm.js renders the session — native renderer is a follow-up.
+- External tmux input can confuse turn assembly (documented above).
