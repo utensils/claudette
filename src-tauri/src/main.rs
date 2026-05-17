@@ -1075,6 +1075,13 @@ fn main() {
             commands::chat::session::reorder_chat_sessions,
             commands::chat::session::archive_chat_session,
             commands::chat::session::restore_chat_session,
+            // Claude (Interactive) experimental backend
+            commands::interactive::interactive_start,
+            commands::interactive::interactive_send_input,
+            commands::interactive::interactive_capture_screen,
+            commands::interactive::interactive_stop,
+            commands::interactive::interactive_list_for_workspace,
+            commands::interactive::interactive_attach,
             // Plan
             commands::plan::read_plan_file,
             // Agent-managed files (plans, memory, …)

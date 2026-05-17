@@ -5,6 +5,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use claudette::agent::AgentSession;
+use claudette::agent::interactive_host::InteractiveHost;
 use tokio::sync::{RwLock, Semaphore, mpsc};
 
 use claudette::claude_help::ClaudeFlagDef;
@@ -792,6 +793,18 @@ pub struct AppState {
     /// await held inside it.
     pub interactive_hook_channels:
         Arc<Mutex<HashMap<String, mpsc::UnboundedSender<InteractiveHookEvent>>>>,
+    /// Cached `InteractiveHost` keyed by `workspace_id`. The host trait
+    /// owns connections to tmux / sidecar, so we want to share a single
+    /// instance per workspace across `interactive_start` / `_send_input`
+    /// / `_attach` calls. `select_default_host` is awaited lazily on
+    /// first use through [`AppState::interactive_host_for`].
+    pub interactive_hosts: RwLock<HashMap<String, Arc<dyn InteractiveHost>>>,
+    /// Reverse index from synthetic interactive `sid` to its owning
+    /// `workspace_id`. Used by [`AppState::host_for_session`] to route a
+    /// per-session command back to the workspace-cached host. Populated
+    /// by [`AppState::register_interactive_session`] and dropped by
+    /// [`AppState::unregister_interactive_session`].
+    pub interactive_sessions: RwLock<HashMap<String, String>>,
 }
 
 impl AppState {
@@ -849,6 +862,8 @@ impl AppState {
             workspace_creates_in_flight: Mutex::new(HashSet::new()),
             scheduler_notify: Arc::new(tokio::sync::Notify::new()),
             interactive_hook_channels: Arc::new(Mutex::new(HashMap::new())),
+            interactive_hosts: RwLock::new(HashMap::new()),
+            interactive_sessions: RwLock::new(HashMap::new()),
         }
     }
 
@@ -958,6 +973,158 @@ impl AppState {
                 );
             }
         }
+    }
+
+    /// Read the `claudeInteractiveEnabled` experimental flag from the
+    /// `app_settings` table. Treats any value other than the literal
+    /// string `"true"` as disabled (matches the F1 stub semantics) and
+    /// returns `false` if the DB can't be opened — the interactive
+    /// commands surface the user-facing error themselves.
+    pub async fn claude_interactive_enabled(&self) -> bool {
+        let db_path = self.db_path.clone();
+        tokio::task::spawn_blocking(move || {
+            let Ok(db) = claudette::db::Database::open(&db_path) else {
+                return false;
+            };
+            matches!(
+                db.get_app_setting("claudeInteractiveEnabled"),
+                Ok(Some(v)) if v.trim() == "true"
+            )
+        })
+        .await
+        .unwrap_or(false)
+    }
+
+    /// Per-user runtime directory used for the interactive overlay tree
+    /// and the sidecar socket. Lives under `claudette_home()` so it
+    /// honors `$CLAUDETTE_HOME` overrides and the test harness can swap
+    /// it out by setting `CLAUDETTE_HOME` to a tempdir.
+    ///
+    /// `create_dir_all` is best-effort — the host implementations will
+    /// surface a concrete error if the directory cannot be created when
+    /// they try to materialize overlays / sockets inside it.
+    pub async fn runtime_dir_for_interactive(&self) -> std::path::PathBuf {
+        let dir = claudette::path::claudette_home().join("interactive");
+        // Best-effort: ignore errors here so callers see the
+        // host-layer error if the directory is truly unusable.
+        let _ = std::fs::create_dir_all(&dir);
+        dir
+    }
+
+    /// Path to the bundled `claudette-cli` binary that interactive
+    /// hooks will shell out to. Resolves relative to `current_exe()`
+    /// so it works in dev (next to `claudette-app`) and in packaged
+    /// builds (Contents/MacOS/ on macOS, alongside the .exe on
+    /// Windows).
+    ///
+    /// Task F4 will replace this with a more robust resolution that
+    /// understands bundled sidecars and Tauri resource paths. For F3
+    /// the placeholder is sufficient — the path is only used to embed
+    /// hook commands inside per-session settings overlays.
+    pub async fn bundled_cli_binary_path(&self) -> Option<std::path::PathBuf> {
+        let exe = std::env::current_exe().ok()?;
+        let dir = exe.parent()?.to_path_buf();
+        #[cfg(windows)]
+        let candidate = dir.join("claudette-cli.exe");
+        #[cfg(not(windows))]
+        let candidate = dir.join("claudette-cli");
+        Some(candidate)
+    }
+
+    /// Synthesize a wire string for the active interactive host kind.
+    /// The plan distinguishes `"tmux"` vs `"sidecar"` for the
+    /// `interactive_sessions.host_kind` column. For F3 we use the
+    /// same `tmux >= 3.0` probe `select_default_host` uses; if the
+    /// probe says tmux is available we report `"tmux"`, otherwise
+    /// `"sidecar"`. The probe result is cached for 30s so this is
+    /// cheap on the second call within a workspace bringup.
+    pub async fn interactive_host_kind_for(&self, _workspace_id: &str) -> &'static str {
+        #[cfg(unix)]
+        {
+            use claudette::agent::interactive_host::availability::{TmuxAvailability, check_tmux};
+            if matches!(check_tmux().await, TmuxAvailability::Available { .. }) {
+                return "tmux";
+            }
+        }
+        "sidecar"
+    }
+
+    /// Return (or lazily construct) the cached `InteractiveHost` for
+    /// `workspace_id`. For v1 every workspace shares the same default
+    /// host (tmux when available on Unix, sidecar otherwise); the map
+    /// is keyed by workspace so a future per-workspace override can
+    /// land without touching call sites.
+    pub async fn interactive_host_for(
+        &self,
+        workspace_id: &str,
+    ) -> Result<Arc<dyn InteractiveHost>, claudette::agent::interactive_host::HostError> {
+        if let Some(host) = self.interactive_hosts.read().await.get(workspace_id) {
+            return Ok(Arc::clone(host));
+        }
+        let runtime_dir = self.runtime_dir_for_interactive().await;
+        let sidecar_socket = runtime_dir.join("session-host.sock");
+        // For v1 we point the sidecar binary at the bundled CLI's
+        // sibling `claudette-session-host`. Resolution mirrors the
+        // CLI: F4 will harden this.
+        let exe = std::env::current_exe().ok();
+        let sidecar_binary = exe
+            .as_ref()
+            .and_then(|e| e.parent())
+            .map(|p| {
+                #[cfg(windows)]
+                {
+                    p.join("claudette-session-host.exe")
+                }
+                #[cfg(not(windows))]
+                {
+                    p.join("claudette-session-host")
+                }
+            })
+            .unwrap_or_else(|| std::path::PathBuf::from("claudette-session-host"));
+        let host = claudette::agent::interactive_host::select_default_host(
+            &runtime_dir,
+            &sidecar_socket,
+            &sidecar_binary,
+            false,
+        )
+        .await?;
+        let mut hosts = self.interactive_hosts.write().await;
+        // Re-check under the write lock to avoid clobbering a host
+        // another concurrent caller just inserted.
+        if let Some(existing) = hosts.get(workspace_id) {
+            return Ok(Arc::clone(existing));
+        }
+        hosts.insert(workspace_id.to_string(), Arc::clone(&host));
+        Ok(host)
+    }
+
+    /// Look up the cached host that owns `sid`. Returns `None` if the
+    /// session is unknown or the host cache entry was evicted (e.g.
+    /// because the workspace was archived).
+    pub async fn host_for_session(&self, sid: &str) -> Option<Arc<dyn InteractiveHost>> {
+        let workspace_id = self.interactive_sessions.read().await.get(sid).cloned()?;
+        self.interactive_hosts
+            .read()
+            .await
+            .get(&workspace_id)
+            .map(Arc::clone)
+    }
+
+    /// Register a new interactive session in the sid→workspace_id map
+    /// so subsequent commands can route by `sid` alone.
+    pub async fn register_interactive_session(&self, sid: &str, workspace_id: String) {
+        self.interactive_sessions
+            .write()
+            .await
+            .insert(sid.to_string(), workspace_id);
+    }
+
+    /// Drop the sid→workspace_id mapping. Safe to call for an unknown
+    /// `sid` (no-op). The matching host stays cached against the
+    /// workspace because other sessions in the same workspace may
+    /// still need it.
+    pub async fn unregister_interactive_session(&self, sid: &str) {
+        self.interactive_sessions.write().await.remove(sid);
     }
 
     /// Snapshot the plugin registry for use across `await` points.
