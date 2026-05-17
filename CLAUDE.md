@@ -81,12 +81,13 @@ CI also enforces `bun install --frozen-lockfile` — do not modify `bun.lock` wi
 - **Data persistence**: SQLite via rusqlite (bundled)
 - **Git operations**: Shelling out to `git` via `tokio::process::Command` for worktree ops
 - **Agent integration**: Claude CLI subprocess with JSON streaming, bridged to frontend via Tauri events. The chat-send resolver dispatches on a per-backend `runtime_harness` (`AgentBackendConfig::effective_harness` in `src/agent_backend.rs`), not on `AgentBackendKind` directly — `kind` only declares which harnesses are valid; the user picks the active one in Settings > Models > Runtime. Ollama / LM Studio default to Pi, OpenAI cards to the Claude CLI gateway, Codex Native to the Codex app-server. Anthropic / Custom Anthropic / Codex Subscription are locked to Claude CLI so subscription OAuth tokens never reach Pi.
+- **Interactive Claude (experimental)**: a second Anthropic harness, `AgentHarnessKind::ClaudeInteractive` (`src/agent/claude_interactive.rs`), runs the real `claude` TUI inside a long-lived PTY instead of the JSON-streaming subprocess. It is gated behind the `claudeInteractiveEnabled` experimental flag and surfaced as a "Claude (Interactive)" card in Settings > Models > Runtime. Two hosts back it: a `TmuxHost` (`src/agent/interactive_host/tmux.rs`) preferred on Unix when `tmux >= 3.4` is available and the flag is on, and a `SidecarHost` (`src/agent/interactive_host/sidecar.rs`) client that talks to the bundled `claudette-session-host` binary — required on Windows, opt-in fallback on Unix. Both implement the shared `InteractiveHost` trait (`src/agent/interactive_host/mod.rs`). The wire protocol between Tauri and the sidecar lives in `src/agent/interactive_protocol.rs` (length-prefixed JSON-line framing, request/event envelopes). Turn boundaries flow over Claude Code hooks: `claudette chat hook` (CLI subcommand) sends a `chat_hook` IPC request that the Tauri side routes via `AppState::dispatch_interactive_hook` into the matching per-session channel, which the frontend assembler (`useInteractiveTurnAssembler`) turns into per-turn xterm.js views (`InteractiveTurnView`).
 - **Terminal emulation**: portable-pty (Rust) + xterm.js (frontend)
 - **IPC**: Tauri commands (`#[tauri::command]`) for request/response, Tauri events for streaming
 
 ### Crate structure
 
-Five crates in a Cargo workspace:
+Six crates in a Cargo workspace:
 
 | Crate | Path | Purpose |
 |---|---|---|
@@ -95,6 +96,7 @@ Five crates in a Cargo workspace:
 | `claudette-server` | `src-server/` | WebSocket server for remote access. Also embeddable in the Tauri binary. Uses `PersistentSession` so interactive controls (AskUserQuestion / ExitPlanMode) work over WSS. |
 | `claudette-cli` | `src-cli/` | Command-line client (`claudette` binary) that drives the running GUI over a local IPC socket. |
 | `claudette-mobile` | `src-mobile/` | Tauri 2 iOS / Android client — thin WSS remote-control app. Pairs with a running desktop or headless server; doesn't run agents locally. See `src-mobile/README.md` for the `cargo tauri ios init` setup. |
+| `claudette-session-host` | `src-session-host/` | Sidecar binary that owns interactive Claude PTYs via `portable-pty` for the `ClaudeInteractive` harness. Required on Windows, opt-in fallback on Unix when tmux is unavailable or the user prefers it. Bundled as a Tauri `externalBin`; speaks the framed JSON protocol in `src/agent/interactive_protocol.rs`. |
 
 Feature flags in `claudette-tauri`:
 - `default = ["server", "voice", "devtools", "alternative-backends", "pi-sdk"]`
@@ -110,14 +112,15 @@ Feature flags in `claudette-tauri`:
 - TypeScript enforces `noUnusedLocals`, `noUnusedParameters`, `noFallthroughCasesInSwitch`
 - Test runner is **vitest** (not Jest)
 - macOS uses overlay title bar (`titleBarStyle: "Overlay"`) — affects layout near top of window
+- **Interactive Claude UI** lives in sibling files next to `ChatPanel.tsx` (which stays a god file — see below): `InteractiveTurnView` and `InteractiveTurns` render per-turn xterm.js views, `InteractiveTerminalMode` / `InteractiveTerminalModeToggle` provide the full-terminal embed, `useInteractiveTurnAssembler` assembles hook events into turns, `useInteractiveChatMode` picks the embedded-vs-terminal mode, and `services/interactive.ts` is the Tauri bridge (start / send_input / attach / capture_screen / stop and the hook-event subscription).
 
 ### Tauri commands
 
-Commands in `src-tauri/src/commands/` are organized by domain: `agent_backends`, `apps`, `auth`, `boot`, `cesp`, `chat`, `claude_flags`, `cli`, `community`, `data`, `debug`, `devtools`, `diagnostics`, `dialog`, `diff`, `env`, `files`, `grammars`, `mcp`, `metrics`, `pinned_prompts`, `plan`, `plugin`, `plugins_runtime`, `remote`, `repository`, `scheduling`, `scm`, `settings`, `shell`, `slash_commands`, `storage`, `terminal`, `updater`, `usage`, `voice`, `workspace`. Each is a thin wrapper — business logic belongs in the `claudette` crate.
+Commands in `src-tauri/src/commands/` are organized by domain: `agent_backends`, `apps`, `auth`, `boot`, `cesp`, `chat`, `claude_flags`, `cli`, `community`, `data`, `debug`, `devtools`, `diagnostics`, `dialog`, `diff`, `env`, `files`, `grammars`, `interactive`, `mcp`, `metrics`, `pinned_prompts`, `plan`, `plugin`, `plugins_runtime`, `remote`, `repository`, `scheduling`, `scm`, `settings`, `shell`, `slash_commands`, `storage`, `terminal`, `updater`, `usage`, `voice`, `workspace`. Each is a thin wrapper — business logic belongs in the `claudette` crate.
 
 ### CLI client
 
-`claudette` (in `src-cli/`) drives the running GUI over a local IPC socket (Unix domain socket on macOS/Linux, Named Pipes on Windows; `interprocess` crate). It reuses the same command core as the GUI, so tray, notifications, and workspace list update live. Top-level subcommands include `version`, `capabilities`, `rpc`, `workspace` (alias `ws`), `chat`, `repo`, `batch`, `plugin`, `pr`, `routine`, and `completion`. IPC server lives in `src-tauri/src/ipc.rs`; CLI surface in `src-tauri/src/commands/cli.rs`. The CLI requires the GUI to be running — prefer it over poking the SQLite DB directly.
+`claudette` (in `src-cli/`) drives the running GUI over a local IPC socket (Unix domain socket on macOS/Linux, Named Pipes on Windows; `interprocess` crate). It reuses the same command core as the GUI, so tray, notifications, and workspace list update live. Top-level subcommands include `version`, `capabilities`, `rpc`, `workspace` (alias `ws`), `chat`, `repo`, `batch`, `plugin`, `pr`, `routine`, and `completion`. `chat hook` is the hook target wired into the materialized Claude Code settings overlay for interactive sessions — it carries the hook kind (`UserPromptSubmit`, `Stop`, `AwaitingUserInput`, …) and the session id, and lands on the Tauri side as a `chat_hook` IPC method that `AppState::dispatch_interactive_hook` routes into the matching per-session channel. IPC server lives in `src-tauri/src/ipc.rs`; CLI surface in `src-tauri/src/commands/cli.rs`. The CLI requires the GUI to be running — prefer it over poking the SQLite DB directly.
 
 ## Project structure
 
@@ -133,6 +136,11 @@ src/
                           plus alternative backends (`codex_app_server.rs`, `harness.rs` shared
                           scaffolding). The Pi modules (`pi_sdk.rs`, `pi_control.rs`) are gated
                           behind the lib crate's `pi-sdk` feature.
+                          Interactive Claude (experimental): `claude_interactive.rs`,
+                          `interactive_host/` (tmux + sidecar implementations of the
+                          `InteractiveHost` trait, plus `availability.rs` / `conformance.rs`),
+                          and `interactive_protocol.rs` (framed JSON wire types shared with
+                          `claudette-session-host`).
   fork.rs               — session forking / checkpoint branching
   snapshot.rs           — workspace snapshots
   process.rs            — cross-platform process spawning helpers
@@ -174,6 +182,11 @@ src-pi-harness/         — TypeScript/Bun sidecar wrapping `@earendil-works/pi-
                           shipped via Tauri `bundle.externalBin`. Glue lives in
                           `src/agent/pi_sdk.rs`; only built/loaded when the
                           `pi-sdk` feature is on.
+src-session-host/       — `claudette-session-host` sidecar binary. Owns interactive Claude
+                          PTYs via `portable-pty` and serves `EnsureSession` / `SendInput` /
+                          `Attach` / `Resize` / `CaptureScreen` / `Stop` over the framed JSON
+                          protocol in `src/agent/interactive_protocol.rs`. Required on
+                          Windows, opt-in on Unix. Bundled as a Tauri `externalBin`.
 tests/                  — workspace-level Rust integration tests (e.g. `grants_enforcement.rs`
                           covering the community-plugin granted_capabilities flow).
 ```
@@ -187,6 +200,8 @@ A single sandboxed Lua runtime (`src/plugin_runtime/`) serves multiple plugin ki
 **Settings UI** separates two plugin concepts:
 - **Plugins** (`src/ui/src/components/settings/sections/PluginsSettings.tsx`) — Claudette's own Lua plugins (SCM + env-provider). Always visible. Shows status, per-plugin toggle, and the manifest-declared settings form.
 - **Claude Code Plugins** (`ClaudeCodePluginsSettings.tsx`, route key `claude-code-plugins`) — the Claude CLI marketplace integration from `src/plugin.rs` (marketplaces, channels, install/uninstall). Always visible in the Settings sidebar nav.
+
+**Experimental flags** persist as rows in `app_settings`. Current entries include `pluginManagementEnabled` (Claude Code Plugins section) and `claudeInteractiveEnabled` (Claude (Interactive) runtime card in Settings > Models > Runtime, the interactive PTY/host wiring described in the Architecture section, and the matching `claude_interactive` harness override in `effectiveHarness`). Add new flags via `ExperimentalSettings.tsx` so they show up under Settings > Experimental.
 
 ### Guidelines for new code
 
@@ -205,7 +220,7 @@ These files are already large enough that adding more responsibility makes them 
 - **Rust**: `src/diff.rs`, `src/git.rs`, `src/plugin.rs`, `src/mcp.rs`, `src/mcp_supervisor.rs`, `src-tauri/src/ipc.rs`, `src-tauri/src/voice.rs`, the largest siblings of the recently-split `src-tauri/src/commands/agent_backends/` directory (`gateway_translate.rs`, `runtime_dispatch.rs`, `discovery.rs`, `config.rs`), and anything else in `src-tauri/src/commands/*` that's already a few hundred lines.
 - **Frontend**: `src/ui/src/components/sidebar/Sidebar.tsx`, `src/ui/src/components/chat/ChatPanel.tsx`, `src/ui/src/components/chat/ChatInputArea.tsx`, `src/ui/src/components/terminal/TerminalPanel.tsx`, `src/ui/src/services/tauri.ts`, large CSS modules (e.g. `Settings.module.css`).
 
-If a god file grew because the right home for the new behavior didn't exist yet, build that home first and land it as a separate (or stacked) commit before adding the new responsibility.
+If a god file grew because the right home for the new behavior didn't exist yet, build that home first and land it as a separate (or stacked) commit before adding the new responsibility. Concrete example: the interactive-Claude UI lives in sibling files (`InteractiveTurnView`, `InteractiveTurns`, `InteractiveTerminalMode*`, `useInteractiveTurnAssembler`, `useInteractiveChatMode`, `services/interactive.ts`) and `ChatPanel.tsx` only branches into them — do the same for any future runtime-specific surface.
 
 ### Regression discipline
 
