@@ -74,26 +74,23 @@ async fn check_tmux_uncached() -> TmuxAvailability {
 }
 
 fn version_at_least(ver: &str, want_major: u32, want_minor: u32) -> bool {
+    fn leading_u32(s: &str) -> u32 {
+        s.chars()
+            .take_while(|c| c.is_ascii_digit())
+            .collect::<String>()
+            .parse::<u32>()
+            .unwrap_or(0)
+    }
     let mut parts = ver.split('.');
-    let major = parts
-        .next()
-        .and_then(|p| p.parse::<u32>().ok())
-        .unwrap_or(0);
-    let minor = parts
-        .next()
-        .and_then(|p| {
-            p.trim_end_matches(|c: char| !c.is_ascii_digit())
-                .parse::<u32>()
-                .ok()
-        })
-        .unwrap_or(0);
+    let major = leading_u32(parts.next().unwrap_or(""));
+    let minor = leading_u32(parts.next().unwrap_or(""));
     (major, minor) >= (want_major, want_minor)
 }
 
 /// Clear the tmux cache (test-only helper).
 #[cfg(test)]
 pub fn clear_tmux_cache_for_test() {
-    *TMUX_CACHE.lock().unwrap() = None;
+    *TMUX_CACHE.lock().expect("poisoned") = None;
 }
 
 #[cfg(test)]
@@ -107,6 +104,7 @@ mod tests {
         assert!(!version_at_least("2.9", 3, 0));
         assert!(!version_at_least("", 3, 0));
         assert!(version_at_least("3.4a", 3, 0));
+        assert!(version_at_least("3.4-rc1", 3, 0));
     }
 
     #[tokio::test]
