@@ -17,7 +17,8 @@ use std::sync::Arc;
 
 use claudette::db::Database;
 use claudette::model::{
-    Attachment, AttachmentOrigin, ChatMessage, ChatRole, Repository, Workspace, WorkspaceStatus,
+    AgentStatus, Attachment, AttachmentOrigin, AttentionKind, ChatMessage, ChatRole, Repository,
+    Workspace, WorkspaceStatus,
 };
 use claudette::plugin_runtime::PluginRegistry;
 use claudette_server::snapshot::{self, PendingAgentControlKind};
@@ -371,4 +372,67 @@ async fn snapshot_attachments_follow_message_order() {
         vec!["att-m1", "att-m2"],
         "attachments must be ordered by message position, not insertion order"
     );
+}
+
+/// `ChatSession` has runtime-only fields (`agent_status`, `needs_attention`,
+/// `attention_kind`) the DB always loads as defaults. Snapshot must overlay
+/// live `AgentSessionState` so a recovery call returns the actual status —
+/// otherwise the mobile client sees `Idle` for a running agent and may
+/// incorrectly assume the turn ended.
+#[tokio::test]
+async fn snapshot_hydrates_runtime_fields_from_live_agent() {
+    let (state, _temp) = make_state().await;
+    let db = Database::open(&state.db_path).unwrap();
+    let (session_id, ws_id) = seed_session(&db);
+
+    // No agent in state.agents → DB defaults pass through untouched.
+    let snap = snapshot::build(&state, &session_id, 50, None)
+        .await
+        .unwrap();
+    assert_eq!(snap.session.agent_status, AgentStatus::Idle);
+    assert!(!snap.session.needs_attention);
+    assert_eq!(snap.session.attention_kind, None);
+
+    // Live agent with an active subprocess + a pending AskUserQuestion.
+    let mut pending = HashMap::new();
+    pending.insert(
+        "tool-ask".into(),
+        PendingPermission {
+            request_id: "r1".into(),
+            tool_name: "AskUserQuestion".into(),
+            original_input: serde_json::json!({}),
+        },
+    );
+    {
+        let mut agents = state.agents.write().await;
+        let mut s = empty_session(&ws_id);
+        s.active_pid = Some(4242);
+        s.pending_permissions = pending;
+        agents.insert(session_id.clone(), s);
+    }
+
+    let snap = snapshot::build(&state, &session_id, 50, None)
+        .await
+        .unwrap();
+    assert_eq!(snap.session.agent_status, AgentStatus::Running);
+    assert!(snap.session.needs_attention);
+    assert_eq!(snap.session.attention_kind, Some(AttentionKind::Ask));
+
+    // Add an ExitPlanMode — it must outrank Ask in attention_kind.
+    {
+        let mut agents = state.agents.write().await;
+        let s = agents.get_mut(&session_id).unwrap();
+        s.pending_permissions.insert(
+            "tool-plan".into(),
+            PendingPermission {
+                request_id: "r2".into(),
+                tool_name: "ExitPlanMode".into(),
+                original_input: serde_json::json!({"plan": "x"}),
+            },
+        );
+    }
+    let snap = snapshot::build(&state, &session_id, 50, None)
+        .await
+        .unwrap();
+    assert_eq!(snap.session.attention_kind, Some(AttentionKind::Plan));
 }

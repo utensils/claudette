@@ -16,7 +16,8 @@ use std::collections::HashMap;
 
 use claudette::db::Database;
 use claudette::model::{
-    Attachment, AttachmentOrigin, ChatMessage, ChatRole, ChatSession, CompletedTurnData,
+    AgentStatus, Attachment, AttachmentOrigin, AttentionKind, ChatMessage, ChatRole, ChatSession,
+    CompletedTurnData,
 };
 use serde::Serialize;
 
@@ -139,9 +140,13 @@ pub async fn build(
 
     let attachments = load_safe_attachments_for_messages(&db, chat_session_id, &messages)?;
 
-    let pending_controls = {
+    let (pending_controls, session) = {
         let agents = state.agents.read().await;
-        pending_controls_for_session(agents.get(chat_session_id))
+        let agent = agents.get(chat_session_id);
+        (
+            pending_controls_for_session(agent),
+            hydrate_session_runtime(session, agent),
+        )
     };
 
     Ok(ChatSnapshot {
@@ -153,6 +158,54 @@ pub async fn build(
         has_more,
         total_count,
     })
+}
+
+/// Overlay live agent state (status + attention) onto a session loaded from
+/// the DB, mirroring the desktop's `hydrate_session` in `src-tauri/src/ipc.rs`.
+/// `ChatSession::agent_status` / `needs_attention` / `attention_kind` are
+/// runtime-only fields the DB always returns as `Idle` / `false` / `None`;
+/// without this overlay the snapshot would report an actively-running
+/// session as idle, defeating the recovery use case.
+///
+/// The server's `AgentSessionState` is leaner than the desktop's (no
+/// `running_background_tasks`, no pre-computed attention fields), so this
+/// derives `needs_attention` / `attention_kind` from `pending_permissions`
+/// and collapses status to `Running` vs `Idle`.
+fn hydrate_session_runtime(
+    mut session: ChatSession,
+    agent: Option<&AgentSessionState>,
+) -> ChatSession {
+    let Some(agent) = agent else {
+        return session;
+    };
+    session.agent_status = if agent.active_pid.is_some() {
+        AgentStatus::Running
+    } else {
+        AgentStatus::Idle
+    };
+    session.needs_attention = !agent.pending_permissions.is_empty();
+    session.attention_kind = attention_kind_from_pending(&agent.pending_permissions);
+    session
+}
+
+/// `ExitPlanMode` outranks `AskUserQuestion` because plan approval blocks
+/// the whole turn until the user decides — clients should surface it first.
+fn attention_kind_from_pending(
+    pending: &std::collections::HashMap<String, crate::ws::PendingPermission>,
+) -> Option<AttentionKind> {
+    let mut has_ask = false;
+    for p in pending.values() {
+        match p.tool_name.as_str() {
+            "ExitPlanMode" => return Some(AttentionKind::Plan),
+            "AskUserQuestion" => has_ask = true,
+            _ => {}
+        }
+    }
+    if has_ask {
+        Some(AttentionKind::Ask)
+    } else {
+        None
+    }
 }
 
 fn trim_peeked_message_page(messages: &mut Vec<ChatMessage>, limit: i64) -> bool {
@@ -192,6 +245,13 @@ fn load_safe_attachments_for_messages(
         .enumerate()
         .map(|(idx, id)| (id.as_str(), idx))
         .collect();
+    // TODO(perf): `list_attachments_for_messages` pulls full BLOB bytes for
+    // every attachment, even ones that will be returned as metadata-only.
+    // A metadata-first query (skipping `data`) followed by a targeted body
+    // fetch for inlineable candidates would avoid materializing large
+    // images/PDFs in server memory on every recovery call. Same shape
+    // applies to the desktop IPC path — should land as a shared
+    // `claudette::db` change in a follow-up.
     let att_map = db
         .list_attachments_for_messages(&message_ids)
         .map_err(|e| e.to_string())?;
