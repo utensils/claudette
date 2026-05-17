@@ -140,4 +140,7 @@ if [ "$triple_explicit" = "true" ]; then
   session_host_args+=("$triple")
 fi
 session_host_args+=("--profile" "$profile")
+if [ "$release_built" = "true" ]; then
+  session_host_args+=("--release-built")
+fi
 "$repo_root/scripts/stage-session-host-sidecar.sh" "${session_host_args[@]}"

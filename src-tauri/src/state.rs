@@ -1026,6 +1026,9 @@ impl AppState {
     /// "claudette-cli binary not found" error so the user knows to
     /// re-run `scripts/stage-cli-sidecar.sh`.
     pub async fn bundled_cli_binary_path(&self) -> Option<std::path::PathBuf> {
+        if let Ok(p) = std::env::var("CLAUDETTE_CLI") {
+            return Some(PathBuf::from(p));
+        }
         let exe = std::env::current_exe().ok()?;
         let dir = exe.parent()?;
         let suffix = std::env::consts::EXE_SUFFIX;
