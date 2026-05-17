@@ -189,6 +189,10 @@ pub async fn handle_request(
             let workspace_id = param_str(&params, "workspace_id");
             handle_archive_workspace(state, &workspace_id).await
         }
+        "restore_workspace" => {
+            let workspace_id = param_str(&params, "workspace_id");
+            handle_restore_workspace(state, &workspace_id).await
+        }
         "load_diff_files" => {
             let workspace_id = param_str(&params, "workspace_id");
             handle_load_diff_files(state, &workspace_id).await
@@ -1503,6 +1507,30 @@ async fn handle_archive_workspace(
     .map_err(|e| e.to_string())?;
 
     Ok(json!(null))
+}
+
+pub async fn handle_restore_workspace(
+    state: &ServerState,
+    workspace_id: &str,
+) -> Result<serde_json::Value, String> {
+    use claudette::ops::{NoopHooks, workspace as ops_workspace};
+
+    let mut db = open_db(state)?;
+    let worktree_base = state.worktree_base_dir.read().await.clone();
+
+    let out = ops_workspace::restore(
+        &mut db,
+        &NoopHooks,
+        worktree_base.as_path(),
+        ops_workspace::RestoreParams { workspace_id },
+    )
+    .await
+    .map_err(|e| e.to_string())?;
+
+    Ok(json!({
+        "workspace": out.workspace,
+        "worktree_path": out.worktree_path,
+    }))
 }
 
 async fn handle_load_diff_files(

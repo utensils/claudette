@@ -945,6 +945,78 @@ pub fn delete_workspaces_bulk(
     Ok(outcomes)
 }
 
+/// Inputs to [`restore`].
+pub struct RestoreParams<'a> {
+    pub workspace_id: &'a str,
+}
+
+/// Result of a successful [`restore`]. `worktree_path` is the
+/// canonicalized path returned by `git worktree add` — the same value
+/// has already been written back onto the workspace row via
+/// [`Database::update_workspace_status`], so the caller can surface it
+/// to remote clients without re-reading the DB.
+#[derive(Debug, Serialize)]
+pub struct RestoreOutput {
+    pub workspace: Workspace,
+    pub worktree_path: String,
+}
+
+/// Restore a previously archived workspace: re-create the git worktree
+/// for its existing branch, flip the DB row back to `Active`, and fire
+/// [`WorkspaceChangeKind::Restored`].
+///
+/// The worktree directory is recomputed from `worktree_base /
+/// repo.path_slug / ws.name` — archive cleared `ws.worktree_path` to
+/// `None`, so the row itself can't tell us where the worktree used to
+/// live; the `path_slug` + name convention is the same one [`create`]
+/// uses, which keeps restore predictable.
+///
+/// No state guard is performed: calling `restore` on a workspace that is
+/// already `Active` falls through to `git::restore_worktree`, which
+/// errors because the worktree directory already exists. Matches the
+/// inline behavior of the pre-extraction `restore_workspace` Tauri
+/// command — adding a friendlier state-check is a follow-up.
+pub async fn restore(
+    db: &mut Database,
+    hooks: &dyn OpsHooks,
+    worktree_base: &Path,
+    params: RestoreParams<'_>,
+) -> Result<RestoreOutput, OpsError> {
+    let workspaces = db.list_workspaces()?;
+    let ws = workspaces
+        .iter()
+        .find(|w| w.id == params.workspace_id)
+        .ok_or_else(|| OpsError::NotFound("Workspace not found".to_string()))?;
+
+    let repos = db.list_repositories()?;
+    let repo = repos
+        .iter()
+        .find(|r| r.id == ws.repository_id)
+        .ok_or_else(|| OpsError::NotFound("Repository not found".to_string()))?;
+
+    let workspace_id = ws.id.clone();
+    let branch_name = ws.branch_name.clone();
+    let repo_path = repo.path.clone();
+    let worktree_path = worktree_base.join(&repo.path_slug).join(&ws.name);
+    let worktree_path_str = worktree_path.to_string_lossy().to_string();
+
+    let actual_path = git::restore_worktree(&repo_path, &branch_name, &worktree_path_str).await?;
+
+    db.update_workspace_status(&workspace_id, &WorkspaceStatus::Active, Some(&actual_path))?;
+
+    let updated = db
+        .list_workspaces()?
+        .into_iter()
+        .find(|w| w.id == workspace_id)
+        .ok_or_else(|| OpsError::NotFound("Workspace not found after restore".to_string()))?;
+
+    hooks.workspace_changed(&workspace_id, WorkspaceChangeKind::Restored);
+
+    Ok(RestoreOutput {
+        workspace: updated,
+        worktree_path: actual_path,
+    })
+}
 /// Read the two app-settings keys that drive the branch prefix. Synchronous
 /// so callers can read while the `Database` (`rusqlite::Connection` —
 /// `!Send`) is in scope, then drop the handle before awaiting
