@@ -155,6 +155,15 @@ export interface UiSlice {
   setChatInputPrefill: (text: string | null) => void;
   pendingAttachmentsPrefill: AttachmentInput[] | null;
   setPendingAttachmentsPrefill: (atts: AttachmentInput[] | null) => void;
+
+  /** Per-workspace toggle that swaps the ChatPanel from the default
+   *  embedded interactive-turn list into a full-size xterm.js view of
+   *  the same interactive session. Only meaningful when the workspace's
+   *  active backend's effective harness is `claude_interactive` —
+   *  ignored by ChatPanel otherwise. Absent key === embedded mode
+   *  (the default). */
+  interactiveTerminalModeByWorkspace: Record<string, boolean>;
+  toggleInteractiveTerminalMode: (workspaceId: string) => void;
 }
 
 export const createUiSlice: StateCreator<AppState, [], [], UiSlice> = (
@@ -424,4 +433,24 @@ export const createUiSlice: StateCreator<AppState, [], [], UiSlice> = (
   pendingAttachmentsPrefill: null,
   setPendingAttachmentsPrefill: (atts) =>
     set({ pendingAttachmentsPrefill: atts }),
+
+  interactiveTerminalModeByWorkspace: {},
+  toggleInteractiveTerminalMode: (workspaceId) =>
+    set((s) => {
+      // Mirror the "absence === default" invariant used by `repoCollapsed`:
+      // flipping back to embedded mode deletes the key rather than writing
+      // `false`, so the map stays canonical and selectors can use
+      // `Boolean(...)` without worrying about stale entries.
+      if (s.interactiveTerminalModeByWorkspace[workspaceId]) {
+        const next = { ...s.interactiveTerminalModeByWorkspace };
+        delete next[workspaceId];
+        return { interactiveTerminalModeByWorkspace: next };
+      }
+      return {
+        interactiveTerminalModeByWorkspace: {
+          ...s.interactiveTerminalModeByWorkspace,
+          [workspaceId]: true,
+        },
+      };
+    }),
 });
