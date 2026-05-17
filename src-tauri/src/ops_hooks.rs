@@ -73,6 +73,57 @@ impl OpsHooks for TauriHooks {
         let _ = self.app.emit("workspaces-changed", payload);
     }
 
+    fn workspaces_changed_bulk(&self, workspace_ids: &[String], kind: WorkspaceChangeKind) {
+        if workspace_ids.is_empty() {
+            return;
+        }
+
+        // One tray rebuild for the whole batch — the 72-archived case
+        // (the motivating example for bulk cleanup) used to fire 72
+        // rebuilds + 72 DB re-opens inside one IPC call.
+        rebuild_tray(&self.app);
+
+        // One DB query to look up every still-extant workspace row
+        // referenced by the batch. For `Deleted` the rows are gone, so
+        // we skip the lookup entirely and emit `{ workspace: null }`.
+        let workspaces_by_id = if kind == WorkspaceChangeKind::Deleted {
+            None
+        } else {
+            self.app
+                .try_state::<AppState>()
+                .and_then(|state| {
+                    claudette::db::Database::open(&state.db_path)
+                        .ok()
+                        .and_then(|db| db.list_workspaces().ok())
+                })
+                .map(|all| {
+                    all.into_iter()
+                        .map(|w| (w.id.clone(), w))
+                        .collect::<std::collections::HashMap<_, _>>()
+                })
+        };
+
+        let kind_str = match kind {
+            WorkspaceChangeKind::Created => "created",
+            WorkspaceChangeKind::Archived => "archived",
+            WorkspaceChangeKind::Restored => "restored",
+            WorkspaceChangeKind::Deleted => "deleted",
+            WorkspaceChangeKind::Renamed => "renamed",
+        };
+
+        for id in workspace_ids {
+            let workspace = workspaces_by_id
+                .as_ref()
+                .and_then(|map| map.get(id).cloned());
+            let payload = WorkspacesChangedEvent {
+                kind: kind_str,
+                workspace_id: id.clone(),
+                workspace,
+            };
+            let _ = self.app.emit("workspaces-changed", payload);
+        }
+    }
+
     fn notification(&self, event: OpsNotificationEvent) {
         let state = self.app.try_state::<AppState>();
         if let Some(state) = state {

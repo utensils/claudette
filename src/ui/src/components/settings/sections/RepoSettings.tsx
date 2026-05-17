@@ -853,7 +853,12 @@ function RepoArchivedCleanupField({ repoId }: RepoArchivedCleanupFieldProps) {
     <div className={styles.fieldGroup}>
       <div className={styles.fieldLabel}>{t("repo_workspace_cleanup_label")}</div>
       <div className={`${styles.fieldHint} ${styles.fieldHintSpaced}`}>
-        {t("repo_workspace_cleanup_hint", { count: archivedCount })}
+        {t(
+          archivedCount === 1
+            ? "repo_workspace_cleanup_hint_singular"
+            : "repo_workspace_cleanup_hint_plural",
+          { count: archivedCount },
+        )}
       </div>
       <button
         className={styles.iconBtn}

@@ -23,9 +23,9 @@
 
 .filterChip,
 .filterChipActive {
-  appearance: none;
+  display: inline-flex;
+  align-items: center;
   background: transparent;
-  border: none;
   padding: 4px 10px;
   border-radius: 4px;
   font-size: 12px;
@@ -45,6 +45,36 @@
 .filterChipActive {
   background: var(--selected-bg);
   color: var(--text-primary);
+}
+
+/* Keep the native radio input in the DOM (so keyboard navigation +
+   screen-reader announcement come for free via the browser's radiogroup
+   semantics) but visually present it as a chip. The label wraps the
+   input so click anywhere selects the radio. */
+.filterRadio {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.filterRadio:focus-visible + * {
+  outline: 2px solid var(--accent-bg);
+  outline-offset: 2px;
+}
+
+/* When the input is :focus-visible, give the wrapping label a focus
+   ring. Two-step rule because `:focus-visible` lives on the input and
+   we want the visible outline on the label. */
+.filterChip:has(.filterRadio:focus-visible),
+.filterChipActive:has(.filterRadio:focus-visible) {
+  outline: 2px solid var(--accent-bg);
+  outline-offset: 2px;
 }
 
 .headerRow {

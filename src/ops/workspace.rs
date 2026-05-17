@@ -910,6 +910,7 @@ pub fn delete_workspaces_bulk(
 ) -> Result<Vec<DeleteWorkspaceOutcome>, OpsError> {
     let workspaces = db.list_workspaces()?;
     let mut outcomes = Vec::with_capacity(ids.len());
+    let mut deleted_ids: Vec<String> = Vec::new();
 
     for id in ids {
         let repository_id = workspaces
@@ -920,7 +921,7 @@ pub fn delete_workspaces_bulk(
 
         let error = match db.try_delete_archived_workspace_with_summary(id) {
             Ok(true) => {
-                hooks.workspace_changed(id, WorkspaceChangeKind::Deleted);
+                deleted_ids.push(id.clone());
                 None
             }
             Ok(false) => Some("workspace no longer archived".to_string()),
@@ -932,6 +933,13 @@ pub fn delete_workspaces_bulk(
             repository_id,
             error,
         });
+    }
+
+    // One bulk hook for the whole batch — the GUI's hook impl amortizes
+    // the tray rebuild and the workspace-row lookup so a 72-row delete
+    // doesn't fan out to 72 tray rebuilds + 72 DB list scans.
+    if !deleted_ids.is_empty() {
+        hooks.workspaces_changed_bulk(&deleted_ids, WorkspaceChangeKind::Deleted);
     }
 
     Ok(outcomes)

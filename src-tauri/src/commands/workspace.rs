@@ -994,25 +994,6 @@ pub(crate) async fn delete_workspaces_bulk_inner(
         }
     }
 
-    // Stop running agents for every target in one lock acquisition, then
-    // signal the processes outside the lock (matches `delete_workspace`).
-    let id_set: std::collections::HashSet<String> = ids.iter().cloned().collect();
-    let pids_to_stop: Vec<u32> = {
-        let mut agents = state.agents.write().await;
-        let to_remove: Vec<String> = agents
-            .iter()
-            .filter(|(_, s)| id_set.contains(&s.workspace_id))
-            .map(|(k, _)| k.clone())
-            .collect();
-        to_remove
-            .into_iter()
-            .filter_map(|key| agents.remove(&key).and_then(|s| s.active_pid))
-            .collect()
-    };
-    for pid in pids_to_stop {
-        let _ = claudette::agent::stop_agent(pid).await;
-    }
-
     // Snapshot per-target git metadata BEFORE the DB delete so we can
     // still do worktree/branch cleanup for the rows whose DB transaction
     // succeeded (post-delete the workspaces table no longer carries
@@ -1067,6 +1048,30 @@ pub(crate) async fn delete_workspaces_bulk_inner(
                 id: outcome.id,
                 error: err,
             }),
+        }
+    }
+
+    // Stop running agents for the rows whose DB delete succeeded — same
+    // gating discipline as the git/env cleanup below. A failed row
+    // keeps its agent running so a retry has a chance of converging,
+    // matching the contract a single retry against `delete_workspace`
+    // would offer.
+    if !deleted.is_empty() {
+        let deleted_set: std::collections::HashSet<String> = deleted.iter().cloned().collect();
+        let pids_to_stop: Vec<u32> = {
+            let mut agents = state.agents.write().await;
+            let to_remove: Vec<String> = agents
+                .iter()
+                .filter(|(_, s)| deleted_set.contains(&s.workspace_id))
+                .map(|(k, _)| k.clone())
+                .collect();
+            to_remove
+                .into_iter()
+                .filter_map(|key| agents.remove(&key).and_then(|s| s.active_pid))
+                .collect()
+        };
+        for pid in pids_to_stop {
+            let _ = claudette::agent::stop_agent(pid).await;
         }
     }
 

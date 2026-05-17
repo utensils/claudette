@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import type { Workspace } from "../../types";
 import {
-  ageLabel,
+  ageBucket,
   filterByAge,
   parseCreatedAt,
 } from "./BulkCleanupArchivedModal.helpers";
@@ -40,32 +40,50 @@ describe("parseCreatedAt", () => {
   });
 });
 
-describe("ageLabel", () => {
-  it("renders today for sub-day ages", () => {
-    expect(ageLabel(String(NOW - 60), NOW)).toBe("today");
+describe("ageBucket", () => {
+  it("buckets sub-day ages as today", () => {
+    expect(ageBucket(String(NOW - 60), NOW)).toEqual({ kind: "today" });
   });
 
-  it("renders Nd ago between 1 and 29 days", () => {
-    expect(ageLabel(String(NOW - 5 * DAY), NOW)).toBe("5d ago");
-    expect(ageLabel(String(NOW - 29 * DAY), NOW)).toBe("29d ago");
+  it("buckets 1-29 days as days with the exact count", () => {
+    expect(ageBucket(String(NOW - 5 * DAY), NOW)).toEqual({
+      kind: "days",
+      count: 5,
+    });
+    expect(ageBucket(String(NOW - 29 * DAY), NOW)).toEqual({
+      kind: "days",
+      count: 29,
+    });
   });
 
   it("rolls over to months at 30 days", () => {
-    expect(ageLabel(String(NOW - 30 * DAY), NOW)).toBe("1mo ago");
-    expect(ageLabel(String(NOW - 200 * DAY), NOW)).toBe("6mo ago");
+    expect(ageBucket(String(NOW - 30 * DAY), NOW)).toEqual({
+      kind: "months",
+      count: 1,
+    });
+    expect(ageBucket(String(NOW - 200 * DAY), NOW)).toEqual({
+      kind: "months",
+      count: 6,
+    });
   });
 
   it("rolls over to years at 365 days", () => {
-    expect(ageLabel(String(NOW - 365 * DAY), NOW)).toBe("1y ago");
-    expect(ageLabel(String(NOW - 800 * DAY), NOW)).toBe("2y ago");
+    expect(ageBucket(String(NOW - 365 * DAY), NOW)).toEqual({
+      kind: "years",
+      count: 1,
+    });
+    expect(ageBucket(String(NOW - 800 * DAY), NOW)).toEqual({
+      kind: "years",
+      count: 2,
+    });
   });
 
   it("clamps negative deltas (created_at in the future) to today", () => {
-    expect(ageLabel(String(NOW + 999), NOW)).toBe("today");
+    expect(ageBucket(String(NOW + 999), NOW)).toEqual({ kind: "today" });
   });
 
-  it("returns an empty string when created_at is unparseable", () => {
-    expect(ageLabel("nope", NOW)).toBe("");
+  it("returns null when created_at is unparseable", () => {
+    expect(ageBucket("nope", NOW)).toBeNull();
   });
 });
 
@@ -86,7 +104,7 @@ describe("filterByAge", () => {
     ]);
   });
 
-  it("returns rows strictly older than the chosen window", () => {
+  it("returns rows at least N days old (inclusive boundary)", () => {
     expect(filterByAge(workspaces, "30", NOW).map((w) => w.id)).toEqual([
       "midaged",
       "old",
@@ -98,6 +116,13 @@ describe("filterByAge", () => {
     ]);
     expect(filterByAge(workspaces, "365", NOW).map((w) => w.id)).toEqual([
       "ancient",
+    ]);
+  });
+
+  it("includes rows whose age equals the cutoff exactly", () => {
+    const exactly30 = makeArchived("exactly30", 30);
+    expect(filterByAge([exactly30], "30", NOW).map((w) => w.id)).toEqual([
+      "exactly30",
     ]);
   });
 

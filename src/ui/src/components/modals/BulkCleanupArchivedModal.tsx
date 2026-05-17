@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { GitBranch } from "lucide-react";
 import { useAppStore } from "../../stores/useAppStore";
@@ -9,8 +9,9 @@ import shared from "./shared.module.css";
 import styles from "./BulkCleanupArchivedModal.module.css";
 import {
   AGE_FILTERS,
+  type AgeBucket,
   type AgeFilter,
-  ageLabel,
+  ageBucket,
   filterByAge,
 } from "./BulkCleanupArchivedModal.helpers";
 
@@ -19,16 +20,42 @@ export function BulkCleanupArchivedModal() {
   const { t: tCommon } = useTranslation("common");
   const closeModal = useAppStore((s) => s.closeModal);
   const modalData = useAppStore((s) => s.modalData);
-  const repoId = modalData.repoId as string;
+  // `repoId` lives in `modalData`, which is typed as `Record<string,
+  // unknown>` — every entry surface in this PR populates it, but a
+  // future deep link / command-palette item could open the modal
+  // without it. Guard so the modal closes loudly instead of rendering
+  // an empty selection that looks like the cleanup just succeeded.
+  const repoId =
+    typeof modalData.repoId === "string" && modalData.repoId.length > 0
+      ? modalData.repoId
+      : null;
   const workspaces = useAppStore((s) => s.workspaces);
   const repositories = useAppStore((s) => s.repositories);
   const removeWorkspace = useAppStore((s) => s.removeWorkspace);
   const addToast = useAppStore((s) => s.addToast);
 
+  useEffect(() => {
+    if (!repoId) closeModal();
+  }, [repoId, closeModal]);
+
   const repo = useMemo(
-    () => repositories.find((r) => r.id === repoId) ?? null,
+    () => (repoId ? repositories.find((r) => r.id === repoId) ?? null : null),
     [repositories, repoId],
   );
+
+  const ageBucketLabel = (bucket: AgeBucket | null): string => {
+    if (!bucket) return "";
+    switch (bucket.kind) {
+      case "today":
+        return t("bulk_cleanup_age_today");
+      case "days":
+        return t("bulk_cleanup_age_days", { count: bucket.count });
+      case "months":
+        return t("bulk_cleanup_age_months", { count: bucket.count });
+      case "years":
+        return t("bulk_cleanup_age_years", { count: bucket.count });
+    }
+  };
 
   const archived = useMemo<Workspace[]>(
     () =>
@@ -113,7 +140,12 @@ export function BulkCleanupArchivedModal() {
       }
       if (result.failed.length === 0) {
         addToast(
-          t("bulk_cleanup_success", { count: result.deleted.length }),
+          t(
+            result.deleted.length === 1
+              ? "bulk_cleanup_success_singular"
+              : "bulk_cleanup_success_plural",
+            { count: result.deleted.length },
+          ),
         );
         closeModal();
         return;
@@ -158,20 +190,24 @@ export function BulkCleanupArchivedModal() {
         </span>
         <div className={styles.filterChoices} role="radiogroup">
           {AGE_FILTERS.map((f) => (
-            <button
+            <label
               key={f.key}
-              type="button"
-              role="radio"
-              aria-checked={ageFilter === f.key}
               className={
                 ageFilter === f.key
                   ? styles.filterChipActive
                   : styles.filterChip
               }
-              onClick={() => setAgeFilter(f.key)}
             >
+              <input
+                type="radio"
+                name="bulk-cleanup-age"
+                value={f.key}
+                checked={ageFilter === f.key}
+                onChange={() => setAgeFilter(f.key)}
+                className={styles.filterRadio}
+              />
               {t(`bulk_cleanup_filter_${f.key}`)}
-            </button>
+            </label>
           ))}
         </div>
       </div>
@@ -215,7 +251,7 @@ export function BulkCleanupArchivedModal() {
                     {ws.branch_name}
                   </span>
                   <span className={styles.rowAge}>
-                    {ageLabel(ws.created_at, nowSecs)}
+                    {ageBucketLabel(ageBucket(ws.created_at, nowSecs))}
                   </span>
                 </label>
                 {err && <div className={styles.rowError}>{err}</div>}

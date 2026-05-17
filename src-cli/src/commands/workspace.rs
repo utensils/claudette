@@ -149,7 +149,31 @@ pub async fn run(action: Action, json: bool) -> Result<(), Box<dyn Error>> {
                 serde_json::json!({ "ids": ids }),
             )
             .await?;
-            output::print_json(&value)?;
+
+            if json {
+                output::print_json(&value)?;
+            } else {
+                let deleted = value
+                    .get("deleted")
+                    .and_then(|v| v.as_array())
+                    .map(|arr| arr.len())
+                    .unwrap_or(0);
+                let failures = value
+                    .get("failed")
+                    .and_then(|v| v.as_array())
+                    .cloned()
+                    .unwrap_or_default();
+                if failures.is_empty() {
+                    println!("deleted {deleted} workspace(s)");
+                } else {
+                    println!("deleted {deleted} workspace(s), {} failed:", failures.len(),);
+                    for f in &failures {
+                        let id = f.get("id").and_then(|v| v.as_str()).unwrap_or("?");
+                        let err = f.get("error").and_then(|v| v.as_str()).unwrap_or("?");
+                        println!("  {id}: {err}");
+                    }
+                }
+            }
         }
     }
     Ok(())

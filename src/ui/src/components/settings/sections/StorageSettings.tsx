@@ -57,7 +57,12 @@ export function StorageSettings() {
                 {repo.name}
               </div>
               <div className={styles.settingDescription}>
-                {t("storage_archived_count", { count: archivedCount })}
+                {t(
+                  archivedCount === 1
+                    ? "storage_archived_count_singular"
+                    : "storage_archived_count_plural",
+                  { count: archivedCount },
+                )}
               </div>
             </div>
             <div className={styles.settingControl}>
