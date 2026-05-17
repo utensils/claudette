@@ -137,16 +137,47 @@ impl SettingsOverlay {
     }
 }
 
-/// POSIX-style shell quoting for the hook command. A bare path that only
-/// contains alphanumerics plus `/ _ - .` is left as-is; anything else is
-/// single-quoted with embedded `'` escaped as `'\''`.
+/// Platform-correct shell quoting for the hook command.
+///
+/// On Unix, hooks are invoked via `sh -c`, so POSIX single-quote escaping is
+/// used: a bare path that only contains alphanumerics plus `/ _ - .` is left
+/// as-is; anything else is single-quoted with embedded `'` escaped as `'\''`.
+///
+/// On Windows, hooks are invoked via `cmd.exe /S /C`, which does not treat
+/// single quotes as quoting delimiters. Use double-quote escaping instead: a
+/// bare path that only contains alphanumerics plus `/ \ _ - . :` is left
+/// as-is; anything else is wrapped in double quotes with embedded `"`
+/// doubled (cmd.exe's escape convention).
 fn shell_quote(s: &str) -> String {
-    if s.chars()
-        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '/' | '_' | '-' | '.'))
+    #[cfg(unix)]
     {
-        s.to_string()
-    } else {
-        format!("'{}'", s.replace('\'', "'\\''"))
+        if s.chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '/' | '_' | '-' | '.'))
+        {
+            s.to_string()
+        } else {
+            format!("'{}'", s.replace('\'', "'\\''"))
+        }
+    }
+    #[cfg(windows)]
+    {
+        if s.chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '/' | '\\' | '_' | '-' | '.' | ':'))
+        {
+            s.to_string()
+        } else {
+            format!("\"{}\"", s.replace('"', "\"\""))
+        }
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        if s.chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '/' | '_' | '-' | '.'))
+        {
+            s.to_string()
+        } else {
+            format!("'{}'", s.replace('\'', "'\\''"))
+        }
     }
 }
 
@@ -188,6 +219,7 @@ mod tests {
         assert!(!overlay.dir.exists());
     }
 
+    #[cfg(unix)]
     #[test]
     fn shell_quote_leaves_plain_paths_alone() {
         assert_eq!(
@@ -196,6 +228,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn shell_quote_wraps_paths_with_spaces() {
         assert_eq!(
@@ -204,9 +237,34 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn shell_quote_escapes_embedded_single_quotes() {
         assert_eq!(shell_quote("foo'bar"), "'foo'\\''bar'");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn shell_quote_windows_wraps_path_with_spaces_in_double_quotes() {
+        assert_eq!(
+            shell_quote("C:\\Program Files\\claudette-cli.exe"),
+            "\"C:\\Program Files\\claudette-cli.exe\""
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn shell_quote_windows_doubles_embedded_double_quotes() {
+        assert_eq!(shell_quote("foo\"bar"), "\"foo\"\"bar\"");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn shell_quote_windows_leaves_plain_paths_alone() {
+        assert_eq!(
+            shell_quote("C:\\Tools\\claudette-cli.exe"),
+            "C:\\Tools\\claudette-cli.exe"
+        );
     }
 
     #[test]
