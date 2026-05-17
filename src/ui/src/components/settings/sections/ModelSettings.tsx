@@ -639,6 +639,11 @@ export function ModelSettings() {
         </div>
       </div>
 
+      {/* TODO(G2 follow-up): card is currently display-only. Actual runtime
+          selection happens in RuntimeSelector. When that flow is wired to
+          accept claude_interactive (via Fix 1 to effectiveHarness), revisit
+          whether this card should also offer a direct "Use this runtime"
+          affordance. */}
       <div
         className={styles.settingRow}
         data-testid="runtime-card-claude-interactive"

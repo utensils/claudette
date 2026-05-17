@@ -64,7 +64,8 @@ export function RuntimeSelector({ backend, onSaved, onError }: RuntimeSelectorPr
     return piSdkAvailable ? all : all.filter((h) => h !== "pi_sdk");
   }, [backend.kind, piSdkAvailable]);
   const defaultHarness = defaultHarnessForKind(backend.kind);
-  const current = effectiveHarness(backend);
+  const claudeInteractiveEnabled = useAppStore((s) => s.claudeInteractiveEnabled);
+  const current = effectiveHarness(backend, { claudeInteractiveEnabled });
   const piEnabled = useAppStore((s) =>
     s.agentBackends.some((b) => b.kind === "pi_sdk" && b.enabled),
   );

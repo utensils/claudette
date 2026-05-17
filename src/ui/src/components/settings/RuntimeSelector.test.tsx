@@ -11,6 +11,10 @@ const appStore = vi.hoisted(() => ({
   // to the same shape a real Pi-compiled binary would produce. A
   // dedicated test below pins the no-Pi behaviour.
   piSdkAvailable: true,
+  // Experimental gate consumed by RuntimeSelector via effectiveHarness.
+  // Defaults to off because the selector's existing matrix tests don't
+  // care about the interactive harness.
+  claudeInteractiveEnabled: false,
 }));
 
 vi.mock("../../stores/useAppStore", () => {
