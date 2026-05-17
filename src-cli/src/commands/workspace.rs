@@ -181,10 +181,13 @@ pub async fn run(action: Action, json: bool) -> Result<(), Box<dyn Error>> {
 
 /// Filter the `list_workspaces` response to archived rows matching the
 /// CLI's `--repo` (required) and `--older-than-days` (optional) filters.
-/// `created_at` is a Unix-seconds-as-string field (`now_iso()` in
-/// `ops::workspace`); we parse it as an integer and compare against the
-/// current epoch. Rows with malformed timestamps are skipped from age
-/// filtering (kept if no age filter, dropped if `--older-than-days` set).
+/// `created_at` is a Unix-seconds-as-string field (despite the
+/// misleadingly-named `now_iso()` helper in `ops::workspace` that
+/// produces it — the value is `SystemTime::duration_since(UNIX_EPOCH).as_secs()`
+/// formatted as a decimal string, not an ISO 8601 timestamp). We parse
+/// it as an integer and compare against the current epoch. Rows with
+/// malformed timestamps are dropped from age filtering when
+/// `--older-than-days` is set, kept otherwise.
 fn resolve_purge_ids(
     value: &serde_json::Value,
     repo_id: &str,
@@ -216,12 +219,15 @@ fn resolve_purge_ids(
             continue;
         }
         if let Some(cutoff) = cutoff_secs {
+            // "Older than N days" is exclusive: a row whose age is
+            // exactly N days is NOT eligible. Matches the modal's
+            // `filterByAge` semantics.
             let created_secs = item
                 .get("created_at")
                 .and_then(|v| v.as_str())
                 .and_then(|s| s.parse::<u64>().ok());
             match created_secs {
-                Some(c) if c <= cutoff => {}
+                Some(c) if c < cutoff => {}
                 _ => continue,
             }
         }

@@ -73,6 +73,20 @@ impl OpsHooks for TauriHooks {
         let _ = self.app.emit("workspaces-changed", payload);
     }
 
+    /// Override note: this implementation **intentionally diverges from
+    /// the default trait impl** (which loops per-row over
+    /// [`workspace_changed`]). The reason is amortization — the 72-row
+    /// motivating case would do 72 tray rebuilds + 72 DB re-opens + 72
+    /// `list_workspaces` scans otherwise.
+    ///
+    /// Contract: this method must produce the same observable side
+    /// effects as N calls to [`workspace_changed`] would — same tray
+    /// state, same set of `workspaces-changed` events on the frontend,
+    /// same notification semantics. If a new side effect is ever added
+    /// to [`workspace_changed`], it must also be added here (or pulled
+    /// out into a shared helper that both call). The bulk variant is
+    /// not a "subset of per-row side effects" — it's the same surface
+    /// computed more cheaply.
     fn workspaces_changed_bulk(&self, workspace_ids: &[String], kind: WorkspaceChangeKind) {
         if workspace_ids.is_empty() {
             return;

@@ -112,7 +112,22 @@ export function BulkCleanupArchivedModal() {
   const allEligibleSelected =
     eligible.length > 0 && effectiveSelection.size === eligible.length;
 
+  // Whenever the user interacts with selection or the filter, drop any
+  // lingering per-row error from a previous partial-failure run.
+  // Otherwise a `"workspace no longer archived"` message from attempt N
+  // sits next to a freshly-selected row in attempt N+1 and the user
+  // can't tell whether it's stale or live.
+  const clearStaleFailures = () => {
+    setFailures((prev) => (prev.size === 0 ? prev : new Map()));
+  };
+
+  const handleAgeFilterChange = (next: AgeFilter) => {
+    setAgeFilter(next);
+    clearStaleFailures();
+  };
+
   const toggleRow = (id: string) => {
+    clearStaleFailures();
     setSelected((prev) => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id);
@@ -122,6 +137,7 @@ export function BulkCleanupArchivedModal() {
   };
 
   const toggleSelectAll = () => {
+    clearStaleFailures();
     if (allEligibleSelected) {
       setSelected(new Set());
     } else {
@@ -203,7 +219,7 @@ export function BulkCleanupArchivedModal() {
                 name="bulk-cleanup-age"
                 value={f.key}
                 checked={ageFilter === f.key}
-                onChange={() => setAgeFilter(f.key)}
+                onChange={() => handleAgeFilterChange(f.key)}
                 className={styles.filterRadio}
               />
               {t(`bulk_cleanup_filter_${f.key}`)}

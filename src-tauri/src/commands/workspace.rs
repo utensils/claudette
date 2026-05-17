@@ -1015,17 +1015,21 @@ pub(crate) async fn delete_workspaces_bulk_inner(
     let workspaces = db.list_workspaces().map_err(|e| e.to_string())?;
     let repos = db.list_repositories().map_err(|e| e.to_string())?;
 
-    // Resolve every ID up front. Reject the whole batch if any row is
-    // missing or not Archived — a server-side guard so a UI bug can't
-    // hard-delete an Active workspace via this path.
-    let mut targets: Vec<&Workspace> = Vec::with_capacity(ids.len());
-    for id in ids {
-        match workspaces.iter().find(|w| &w.id == id) {
-            Some(ws) if ws.status == WorkspaceStatus::Archived => targets.push(ws),
-            Some(_) => return Err(format!("Workspace {id} is not archived")),
-            None => return Err(format!("Workspace {id} not found")),
-        }
-    }
+    // Collect the rows we're going to attempt to delete. We do NOT reject
+    // the whole batch when an ID is missing or no longer Archived — the
+    // authoritative guard is the SQL precondition in
+    // `try_delete_archived_workspace_with_summary` (see `src/db/workspace.rs`).
+    // Rejecting the whole batch here would mean a single raced
+    // `restore_workspace` between the modal snapshot and this call could
+    // wipe out cleanup of every other row the user asked for. Rows that
+    // don't make it into `targets` (missing) or whose status changed
+    // before the SQL guard runs (raced) surface as per-row failures
+    // instead.
+    let targets: Vec<&Workspace> = ids
+        .iter()
+        .filter_map(|id| workspaces.iter().find(|w| &w.id == id))
+        .filter(|w| w.status == WorkspaceStatus::Archived)
+        .collect();
 
     // Snapshot per-target git metadata BEFORE the DB delete so we can
     // still do worktree/branch cleanup for the rows whose DB transaction
@@ -1149,11 +1153,26 @@ pub(crate) async fn delete_workspaces_bulk_inner(
 
     // Per affected repo: if no Active or Archived workspaces remain, drop
     // its MCP supervisor entry and clear the frontend's MCP status pill.
-    let remaining = db.list_workspaces().unwrap_or_default();
-    for repo_id in affected_repos {
-        if !remaining.iter().any(|w| w.repository_id == repo_id) {
-            supervisor.remove_repo(&repo_id).await;
-            let _ = app.emit("mcp-status-cleared", &repo_id);
+    // Skip the reconciliation entirely if the DB re-read fails: an empty
+    // fallback would make every affected repo look empty and remove
+    // every MCP supervisor entry even when workspaces still exist.
+    match db.list_workspaces() {
+        Ok(remaining) => {
+            for repo_id in affected_repos {
+                if !remaining.iter().any(|w| w.repository_id == repo_id) {
+                    supervisor.remove_repo(&repo_id).await;
+                    let _ = app.emit("mcp-status-cleared", &repo_id);
+                }
+            }
+        }
+        Err(e) => {
+            tracing::warn!(
+                target: "claudette::workspace",
+                error = %e,
+                "skipping MCP supervisor reconciliation after bulk delete: \
+                 list_workspaces failed, retaining supervisor entries to \
+                 avoid clearing them for non-empty repos",
+            );
         }
     }
 

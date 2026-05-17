@@ -51,12 +51,12 @@ export function ageBucket(createdAt: string, nowSecs: number): AgeBucket | null 
   return { kind: "years", count: Math.floor(days / 365) };
 }
 
-/** Filter the archived list by the chosen age window. "Older than N
- *  days" is inclusive at the boundary — a row whose age is exactly N
- *  days old is treated as eligible (`age >= N`). Rows whose
- *  `created_at` won't parse are dropped when a window is active —
- *  better to omit one mystery row than risk hard-deleting it under a
- *  filter the user can't actually verify. */
+/** Filter the archived list by the chosen age window. The user-facing
+ *  label is "Older than N days" so the boundary is strictly exclusive
+ *  — a row aged exactly N days is NOT eligible under the `N` filter.
+ *  Rows whose `created_at` won't parse are dropped when a window is
+ *  active — better to omit one mystery row than risk hard-deleting it
+ *  under a filter the user can't actually verify. */
 export function filterByAge(
   workspaces: Workspace[],
   ageFilter: AgeFilter,
@@ -67,6 +67,6 @@ export function filterByAge(
   const cutoffSecs = nowSecs - cutoffDays * 86_400;
   return workspaces.filter((w) => {
     const c = parseCreatedAt(w.created_at);
-    return c !== null && c <= cutoffSecs;
+    return c !== null && c < cutoffSecs;
   });
 }
