@@ -1,0 +1,23 @@
+/* Per-turn embedded xterm.js view. Sized via xterm.js's own viewport
+ * (rows/cols passed in as props); we just give the host container a
+ * predictable layout so adjacent turns stack cleanly in the chat panel.
+ */
+
+.interactiveTurnView {
+  width: 100%;
+  display: block;
+  background: var(--terminal-bg);
+  color: var(--terminal-fg);
+  border: 1px solid var(--divider);
+  border-radius: 4px;
+  padding: 4px;
+  overflow: hidden;
+}
+
+/* xterm.js writes its DOM into a child .xterm element; let it claim the
+ * full width of our host so the renderer's column math matches what the
+ * FitAddon measures.
+ */
+.interactiveTurnView :global(.xterm) {
+  width: 100%;
+}
