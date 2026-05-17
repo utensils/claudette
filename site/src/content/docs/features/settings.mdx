@@ -143,6 +143,15 @@ When `RUST_LOG` is set in the process's environment, the **Log level** select is
 
 See [Diagnostics & Logging](/claudette/features/diagnostics/) for the full pipeline (where logs go, JSON output, per-domain `RUST_LOG` filtering, multi-instance behavior, bug-report workflow).
 
+## Storage
+
+| Setting | Description | Default |
+|---------|-------------|---------|
+| Archived workspaces per repository | Per-repository count of archived workspaces. Each row's `Clean up…` button opens the bulk cleanup modal scoped to that repo. | — |
+| Clean up… (per row) | Permanently deletes selected archived workspaces — worktree, branch, chat history. Lifetime metrics are preserved in `deleted_workspace_summaries`. | — |
+
+The same modal is reachable from the project dashboard's **ARCHIVED** section header and from each per-repo settings page's **Workspace cleanup** field. See [Bulk Cleanup of Archived Workspaces](/claudette/features/git-worktrees/#bulk-cleanup-of-archived-workspaces) for the full UI walkthrough and the matching CLI subcommand.
+
 ## Git
 
 | Setting | Description | Default |

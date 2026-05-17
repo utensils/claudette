@@ -63,6 +63,20 @@ export function deleteWorkspace(id: string): Promise<void> {
   return invoke("delete_workspace", { id });
 }
 
+export interface BulkDeleteFailure {
+  id: string;
+  error: string;
+}
+
+export interface BulkDeleteResult {
+  deleted: string[];
+  failed: BulkDeleteFailure[];
+}
+
+export function deleteWorkspacesBulk(ids: string[]): Promise<BulkDeleteResult> {
+  return invoke("delete_workspaces_bulk", { ids });
+}
+
 /**
  * Tell the Rust SCM polling loop which workspace the user is currently
  * viewing. Pass `null` when navigating to the dashboard or a repository

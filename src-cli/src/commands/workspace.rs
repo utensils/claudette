@@ -39,6 +39,24 @@ pub enum Action {
         )]
         no_delete_branch: bool,
     },
+    /// Hard-delete archived workspaces in bulk. Removes worktrees,
+    /// branches, and chat history; lifetime metrics are preserved in
+    /// `deleted_workspace_summaries`. Active workspaces are never
+    /// touched — the IPC handler rejects any non-Archived ID.
+    Purge {
+        /// Restrict the purge to workspaces in this repository ID. Get
+        /// one from `claudette repo list`.
+        #[arg(long)]
+        repo: String,
+        /// Only purge workspaces older than N days (measured from
+        /// `created_at`). Omit to purge every archived workspace in
+        /// the repo.
+        #[arg(long)]
+        older_than_days: Option<u32>,
+        /// Print the resolved ID list without deleting anything.
+        #[arg(long)]
+        dry_run: bool,
+    },
 }
 
 pub async fn run(action: Action, json: bool) -> Result<(), Box<dyn Error>> {
@@ -88,8 +106,213 @@ pub async fn run(action: Action, json: bool) -> Result<(), Box<dyn Error>> {
             let value = ipc::call(&info, "archive_workspace", params).await?;
             output::print_json(&value)?;
         }
+        Action::Purge {
+            repo,
+            older_than_days,
+            dry_run,
+        } => {
+            let workspaces = ipc::call(&info, "list_workspaces", serde_json::json!({})).await?;
+            let ids = resolve_purge_ids(&workspaces, &repo, older_than_days)?;
+
+            if dry_run {
+                if json {
+                    output::print_json(&serde_json::json!({
+                        "dry_run": true,
+                        "ids": ids,
+                    }))?;
+                } else if ids.is_empty() {
+                    println!("no archived workspaces match");
+                } else {
+                    println!("would delete {} workspace(s):", ids.len());
+                    for id in &ids {
+                        println!("  {id}");
+                    }
+                }
+                return Ok(());
+            }
+
+            if ids.is_empty() {
+                if json {
+                    output::print_json(&serde_json::json!({
+                        "deleted": [],
+                        "failed": [],
+                    }))?;
+                } else {
+                    println!("no archived workspaces match");
+                }
+                return Ok(());
+            }
+
+            let value = ipc::call(
+                &info,
+                "delete_workspaces_bulk",
+                serde_json::json!({ "ids": ids }),
+            )
+            .await?;
+
+            if json {
+                output::print_json(&value)?;
+            } else {
+                let deleted = value
+                    .get("deleted")
+                    .and_then(|v| v.as_array())
+                    .map(|arr| arr.len())
+                    .unwrap_or(0);
+                let failures = value
+                    .get("failed")
+                    .and_then(|v| v.as_array())
+                    .cloned()
+                    .unwrap_or_default();
+                if failures.is_empty() {
+                    println!("deleted {deleted} workspace(s)");
+                } else {
+                    println!("deleted {deleted} workspace(s), {} failed:", failures.len(),);
+                    for f in &failures {
+                        let id = f.get("id").and_then(|v| v.as_str()).unwrap_or("?");
+                        let err = f.get("error").and_then(|v| v.as_str()).unwrap_or("?");
+                        println!("  {id}: {err}");
+                    }
+                }
+            }
+        }
     }
     Ok(())
+}
+
+/// Filter the `list_workspaces` response to archived rows matching the
+/// CLI's `--repo` (required) and `--older-than-days` (optional) filters.
+///
+/// `workspaces.created_at` is stored in one of two formats:
+///
+/// 1. **SQLite `datetime('now')`** — `"YYYY-MM-DD HH:MM:SS"` (UTC).
+///    The DB column has `DEFAULT (datetime('now'))` and
+///    `Database::insert_workspace` omits `created_at` from its INSERT,
+///    so the DEFAULT wins for every workspace today.
+/// 2. **Unix-seconds-as-string** — `"1700000000"`. What
+///    `ops::workspace::now_iso()` produces. Currently unused for
+///    workspace rows but supported here so a future migration that
+///    switches the INSERT to set `created_at = now_iso()` doesn't
+///    require a CLI change.
+///
+/// Rows with malformed timestamps are dropped from age filtering when
+/// `--older-than-days` is set, kept otherwise.
+fn resolve_purge_ids(
+    value: &serde_json::Value,
+    repo_id: &str,
+    older_than_days: Option<u32>,
+) -> Result<Vec<String>, Box<dyn Error>> {
+    let items = value
+        .as_array()
+        .ok_or("unexpected list_workspaces response shape")?;
+
+    let cutoff_secs = older_than_days.map(|days| {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        now.saturating_sub(u64::from(days) * 86_400)
+    });
+
+    let mut out = Vec::new();
+    for item in items {
+        let status = item.get("status").and_then(|v| v.as_str()).unwrap_or("");
+        if status != "Archived" {
+            continue;
+        }
+        let row_repo = item
+            .get("repository_id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        if row_repo != repo_id {
+            continue;
+        }
+        if let Some(cutoff) = cutoff_secs {
+            // "Older than N days" is exclusive: a row whose age is
+            // exactly N days is NOT eligible. Matches the modal's
+            // `filterByAge` semantics.
+            let created_secs = item
+                .get("created_at")
+                .and_then(|v| v.as_str())
+                .and_then(parse_created_at);
+            match created_secs {
+                Some(c) if c < cutoff => {}
+                _ => continue,
+            }
+        }
+        let Some(id) = item.get("id").and_then(|v| v.as_str()) else {
+            continue;
+        };
+        out.push(id.to_string());
+    }
+    Ok(out)
+}
+
+/// Parse a `workspace.created_at` value into Unix seconds. Mirrors the
+/// frontend's `parseCreatedAt` in
+/// `src/ui/src/components/modals/BulkCleanupArchivedModal.helpers.ts`
+/// — see that file for the format rationale.
+///
+/// Accepts:
+/// - All-digits → Unix-seconds-as-string.
+/// - SQLite `datetime('now')` (`"YYYY-MM-DD HH:MM:SS"`, treated as UTC).
+/// - ISO 8601 with `T` separator: only the first 19 characters
+///   (`YYYY-MM-DDTHH:MM:SS`) are parsed, and the value is treated as
+///   UTC regardless of any trailing `Z` or `±HH:MM` offset. A
+///   non-UTC timezone suffix is therefore tolerated but ignored —
+///   acceptable for a day-granularity filter, where a few hours of
+///   timezone slop never crosses a "30 days" cutoff in practice.
+///   Don't use this parser for sub-day-precision work.
+fn parse_created_at(value: &str) -> Option<u64> {
+    if value.is_empty() {
+        return None;
+    }
+    if value.chars().all(|c| c.is_ascii_digit()) {
+        return value.parse::<u64>().ok();
+    }
+    // Hand-rolled UTC parser for `YYYY-MM-DD[T ]HH:MM:SS[.fff][Z|±HH:MM]`.
+    // We don't pull `chrono` in for one date — every observed format
+    // has the same first-19-char shape, and the timezone suffix
+    // (currently always missing for SQLite datetime, optional for ISO)
+    // doesn't affect a day-granularity filter beyond a few hours of
+    // edge cases.
+    let bytes = value.as_bytes();
+    if bytes.len() < 19 {
+        return None;
+    }
+    let part = |start: usize, len: usize| -> Option<u32> {
+        std::str::from_utf8(&bytes[start..start + len])
+            .ok()?
+            .parse::<u32>()
+            .ok()
+    };
+    let year = part(0, 4)? as i32;
+    let month = part(5, 2)?;
+    let day = part(8, 2)?;
+    let hour = part(11, 2)?;
+    let minute = part(14, 2)?;
+    let second = part(17, 2)?;
+    if !(1..=12).contains(&month)
+        || !(1..=31).contains(&day)
+        || hour >= 24
+        || minute >= 60
+        || second >= 60
+    {
+        return None;
+    }
+    // Days-from-epoch for the UTC midnight of (year, month, day).
+    // Howard Hinnant's civil-from-days inverse, adapted to be const-friendly.
+    let y = if month <= 2 { year - 1 } else { year };
+    let era = y.div_euclid(400);
+    let yoe = y.rem_euclid(400) as u32;
+    let m = month as i32;
+    let doy = (153 * (m + if m > 2 { -3 } else { 9 }) + 2) as u32 / 5 + (day - 1);
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    let days_from_epoch = era as i64 * 146097 + doe as i64 - 719468;
+    let secs = days_from_epoch * 86_400
+        + i64::from(hour) * 3600
+        + i64::from(minute) * 60
+        + i64::from(second);
+    u64::try_from(secs).ok()
 }
 
 /// Minimal table renderer for `workspace list`. Format is intentionally
@@ -114,5 +337,36 @@ fn render_workspace_table(value: &serde_json::Value) {
             .and_then(|v| v.as_str())
             .unwrap_or("?");
         println!("{id:<36}  {name:<24}  {status:<10}  {branch}");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_created_at;
+
+    #[test]
+    fn parses_unix_seconds_string() {
+        assert_eq!(parse_created_at("1700000000"), Some(1_700_000_000));
+    }
+
+    #[test]
+    fn parses_sqlite_datetime_now_as_utc() {
+        // `datetime('now')` output for the same instant as 1700000000.
+        assert_eq!(parse_created_at("2023-11-14 22:13:20"), Some(1_700_000_000));
+    }
+
+    #[test]
+    fn parses_iso_with_t_separator() {
+        assert_eq!(
+            parse_created_at("2023-11-14T22:13:20Z"),
+            Some(1_700_000_000),
+        );
+    }
+
+    #[test]
+    fn rejects_garbage() {
+        assert_eq!(parse_created_at(""), None);
+        assert_eq!(parse_created_at("nope"), None);
+        assert_eq!(parse_created_at("2023-13-01 00:00:00"), None);
     }
 }

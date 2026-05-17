@@ -766,6 +766,8 @@ export function RepoSettings({ repoId }: RepoSettingsProps) {
         </button>
       </div>
 
+      <RepoArchivedCleanupField repoId={repoId} />
+
       <div className={styles.dangerZone}>
         <div className={styles.dangerLabel}>{t("repo_danger_zone")}</div>
         <button
@@ -817,6 +819,63 @@ function RepoPinnedPromptsField({ repoId }: RepoPinnedPromptsFieldProps) {
       </div>
       <PinnedPromptsManager scope={{ kind: "repo", repoId }} projectPath={repoPath} />
       <InheritedGlobalsList globals={globalPrompts} repoNames={repoNames} />
+    </div>
+  );
+}
+
+interface RepoArchivedCleanupFieldProps {
+  repoId: string;
+}
+
+function RepoArchivedCleanupField({ repoId }: RepoArchivedCleanupFieldProps) {
+  const { t } = useTranslation("settings");
+  const openModal = useAppStore((s) => s.openModal);
+  const isRemote = useAppStore(
+    (s) =>
+      Boolean(
+        s.repositories.find((r) => r.id === repoId)?.remote_connection_id,
+      ),
+  );
+  // Mirror the modal's `!w.remote_connection_id` filter
+  // (`BulkCleanupArchivedModal.tsx`). Without this, an archived row
+  // tagged with a remote connection would inflate the hint count
+  // here ("1 archived workspace") while the modal would render zero
+  // rows — same row needs to be invisible to both surfaces or the
+  // counts drift.
+  const archivedCount = useAppStore(
+    (s) =>
+      s.workspaces.filter(
+        (w) =>
+          w.repository_id === repoId &&
+          w.status === "Archived" &&
+          !w.remote_connection_id,
+      ).length,
+  );
+
+  // Bulk cleanup currently dispatches to the local Tauri command, which
+  // only validates IDs in the desktop app's local DB. Remote workspaces
+  // would fail with "Workspace not found"; hide the entry point until
+  // we route through the owning remote connection.
+  if (isRemote) return null;
+
+  return (
+    <div className={styles.fieldGroup}>
+      <div className={styles.fieldLabel}>{t("repo_workspace_cleanup_label")}</div>
+      <div className={`${styles.fieldHint} ${styles.fieldHintSpaced}`}>
+        {t(
+          archivedCount === 1
+            ? "repo_workspace_cleanup_hint_singular"
+            : "repo_workspace_cleanup_hint_plural",
+          { count: archivedCount },
+        )}
+      </div>
+      <button
+        className={styles.iconBtn}
+        onClick={() => openModal("bulkCleanupArchived", { repoId })}
+        disabled={archivedCount === 0}
+      >
+        {t("repo_workspace_cleanup_button")}
+      </button>
     </div>
   );
 }
