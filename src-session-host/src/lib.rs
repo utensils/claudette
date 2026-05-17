@@ -8,3 +8,8 @@
 pub mod idle;
 pub mod server;
 pub mod session;
+
+/// Re-exported so `server::dispatch` can construct `SessionSummary` instances
+/// without spelling out the full `claudette::agent::interactive_protocol` path
+/// at every call site.
+pub use claudette::agent::interactive_protocol::SessionSummary;
