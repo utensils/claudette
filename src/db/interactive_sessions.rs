@@ -108,6 +108,36 @@ impl Database {
         rows.collect()
     }
 
+    /// Return every `interactive_sessions` row currently in `state =
+    /// 'running'`, across all workspaces. Used by the startup
+    /// reconciler (`claudette::interactive::reattach_pending`) to find
+    /// rows that need to be reclassified against the live host.
+    pub fn list_running_interactive_sessions(
+        &self,
+    ) -> rusqlite::Result<Vec<InteractiveSessionRow>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT sid, workspace_id, host_kind, state, crash_reason, created_at,
+                    last_attached_at, last_screen_blob, claude_flags_json, pid
+             FROM interactive_sessions WHERE state = 'running'
+             ORDER BY created_at DESC",
+        )?;
+        let rows = stmt.query_map([], |r| {
+            Ok(InteractiveSessionRow {
+                sid: r.get(0)?,
+                workspace_id: r.get(1)?,
+                host_kind: r.get(2)?,
+                state: r.get(3)?,
+                crash_reason: r.get(4)?,
+                created_at: r.get(5)?,
+                last_attached_at: r.get(6)?,
+                last_screen_blob: r.get(7)?,
+                claude_flags_json: r.get(8)?,
+                pid: r.get(9)?,
+            })
+        })?;
+        rows.collect()
+    }
+
     pub fn set_interactive_session_state(
         &self,
         sid: &str,
