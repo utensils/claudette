@@ -529,11 +529,7 @@ export const Sidebar = memo(function Sidebar() {
         copyTmuxAttachCommand: tmuxAttachSid
           ? async () => {
               const cmd = buildTmuxAttachCommand(tmuxAttachSid);
-              // Task spec calls navigator.clipboard.writeText
-              // directly (rather than the Tauri plugin used by the
-              // sibling copy actions) so the action keeps working in
-              // the webview without an additional capability grant.
-              await navigator.clipboard.writeText(cmd);
+              await clipboardWriteText(cmd);
               addToast(t("context_copied_tmux_attach_command", { cmd }));
             }
           : undefined,
