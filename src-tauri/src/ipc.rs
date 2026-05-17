@@ -74,6 +74,7 @@ const METHODS: &[&str] = &[
     "archive_chat_session",
     "create_workspace",
     "archive_workspace",
+    "delete_workspaces_bulk",
     "send_chat_message",
     "steer_queued_chat_message",
     "stop_agent",
@@ -409,6 +410,7 @@ async fn dispatch(app: &AppHandle, req: RpcRequest) -> RpcResponse {
         "archive_chat_session" => handle_archive_chat_session(app, &req.params).await,
         "create_workspace" => handle_create_workspace(app, &req.params).await,
         "archive_workspace" => handle_archive_workspace(app, &req.params).await,
+        "delete_workspaces_bulk" => handle_delete_workspaces_bulk(app, &req.params).await,
         "send_chat_message" => handle_send_chat_message(app, &req.params).await,
         "steer_queued_chat_message" => handle_steer_queued_chat_message(app, &req.params).await,
         "stop_agent" => handle_stop_agent(app, &req.params).await,
@@ -1136,6 +1138,32 @@ async fn handle_archive_workspace(
         "delete_branch": out.delete_branch,
         "archive_result": out.archive_result,
     }))
+}
+
+/// Delegates to the shared `commands::workspace::delete_workspaces_bulk_inner`
+/// helper so CLI-driven `workspace purge` runs the same agent teardown,
+/// git cleanup, env-watcher reconciliation, and MCP supervisor update
+/// the GUI uses. Validation (Archived-status guard) is done inside the
+/// helper, so this surface stays trivial.
+async fn handle_delete_workspaces_bulk(
+    app: &AppHandle,
+    params: &serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let ids: Vec<String> = match params.get("ids") {
+        Some(v) => serde_json::from_value(v.clone()).map_err(|e| format!("invalid `ids`: {e}"))?,
+        None => return Err("missing `ids`".to_string()),
+    };
+
+    let state = app_state(app)?;
+    let supervisor = app
+        .try_state::<Arc<claudette::mcp_supervisor::McpSupervisor>>()
+        .ok_or_else(|| "McpSupervisor not initialised".to_string())?;
+
+    let result =
+        crate::commands::workspace::delete_workspaces_bulk_inner(&ids, app, &state, &supervisor)
+            .await?;
+
+    serde_json::to_value(result).map_err(|e| e.to_string())
 }
 
 /// `plugin.list` IPC method — snapshot of every discovered Lua plugin
