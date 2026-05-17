@@ -5,20 +5,74 @@
 //! `CLAUDE_CONFIG_DIR` pointing at the overlay.
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
+use crate::agent::interactive_host::{HostError, InteractiveHost, SessionId, SessionSpec};
 
 /// Long-lived handle to an interactive `claude` session running inside an
 /// `InteractiveHost` (tmux on Unix, sidecar elsewhere).
 ///
-/// This is a stub for the F1 harness wiring. The real `start()` /
-/// `send_turn` / `interrupt` plumbing lands in F2 — for now the variant
-/// only needs to compile and route through [`crate::agent::AgentSession`]
-/// so the resolver layer can be exercised end-to-end.
-#[derive(Debug, Clone)]
+/// Holds the stable session id, a shared handle to the host that owns the
+/// session, and the per-session settings overlay (so callers can clean it
+/// up when the session is torn down). The actual turn dispatch / steering
+/// plumbing lands in subsequent tasks — this type's job for F2 is to bind
+/// the three pieces together at construction time.
 pub struct InteractiveSession {
     /// Stable session identifier (`claudette-<workspace>-<rand>`). Mirrors
     /// the `sid` embedded in the settings-overlay hook commands so that
     /// `claudette-cli chat hook` callbacks route back to this session.
     pub sid: String,
+    /// The interactive host that owns the live session. Shared with the
+    /// rest of the app so attach / send_input / stop can be routed
+    /// through the same handle that spawned the session.
+    pub host: Arc<dyn InteractiveHost>,
+    /// Per-session `CLAUDE_CONFIG_DIR` overlay. Owned by the session so
+    /// the directory is cleaned up alongside the session itself.
+    pub overlay: SettingsOverlay,
+}
+
+impl InteractiveSession {
+    /// Spin up a new interactive session: pick a session id, materialize
+    /// a settings overlay, point `SessionSpec::claude_config_dir` at it,
+    /// and ask the host to `ensure_session`.
+    ///
+    /// `overlay_parent` is the directory under which the per-session
+    /// overlay subtree (`<sid>/claude-config/settings.json`) is written.
+    /// `cli_bin_abs` is the absolute path to the `claudette-cli` binary
+    /// that the hooks will shell out to — kept as an argument (rather
+    /// than resolved internally) so dev / test callers can swap in a
+    /// stub.
+    pub async fn start(
+        workspace_short: &str,
+        host: Arc<dyn InteractiveHost>,
+        spec: SessionSpec,
+        overlay_parent: &Path,
+        cli_bin_abs: &Path,
+    ) -> Result<Self, HostError> {
+        let sid_str = format!("claudette-{}-{}", workspace_short, random_hex8());
+        let overlay = SettingsOverlay::materialize(overlay_parent, &sid_str, cli_bin_abs)
+            .map_err(|e| HostError::Other(e.to_string()))?;
+        let spec = SessionSpec {
+            claude_config_dir: overlay.dir.to_string_lossy().into_owned(),
+            ..spec
+        };
+        let sid = SessionId(sid_str.clone());
+        host.ensure_session(&sid, &spec).await?;
+        Ok(Self {
+            sid: sid_str,
+            host,
+            overlay,
+        })
+    }
+}
+
+/// 4 cryptographically-random bytes formatted as 8 lowercase hex chars.
+/// Used to disambiguate sessions within a single workspace.
+fn random_hex8() -> String {
+    use rand::RngCore;
+    let mut buf = [0u8; 4];
+    rand::thread_rng().fill_bytes(&mut buf);
+    buf.iter().map(|b| format!("{b:02x}")).collect()
 }
 
 /// A transient `CLAUDE_CONFIG_DIR` overlay that registers three Claude Code
@@ -153,5 +207,16 @@ mod tests {
     #[test]
     fn shell_quote_escapes_embedded_single_quotes() {
         assert_eq!(shell_quote("foo'bar"), "'foo'\\''bar'");
+    }
+
+    #[test]
+    fn random_hex8_returns_8_lowercase_hex_chars() {
+        let s = random_hex8();
+        assert_eq!(s.len(), 8, "expected 8 chars, got {s:?}");
+        assert!(
+            s.chars()
+                .all(|c| c.is_ascii_hexdigit() && !c.is_uppercase()),
+            "expected lowercase hex digits, got {s:?}"
+        );
     }
 }

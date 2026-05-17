@@ -48,3 +48,38 @@ pub enum HostError {
     #[error("other: {0}")]
     Other(String),
 }
+
+/// Pick the default `InteractiveHost` for the current platform.
+///
+/// On Unix, prefers a tmux-backed host when `tmux >= 3.0` is on `PATH` and
+/// the caller hasn't asked for the sidecar explicitly (`prefer_sidecar_on_unix
+/// = false`). On Windows, or when tmux is missing / too old, falls back to
+/// the sidecar host backed by `sidecar_binary` over `sidecar_socket`.
+pub async fn select_default_host(
+    runtime_dir: &std::path::Path,
+    sidecar_socket: &std::path::Path,
+    sidecar_binary: &std::path::Path,
+    prefer_sidecar_on_unix: bool,
+) -> Result<std::sync::Arc<dyn InteractiveHost>, HostError> {
+    // Silence unused-arg warnings on Windows, where the tmux path is
+    // unreachable. The sidecar branch consumes the other two.
+    #[cfg(not(unix))]
+    let _ = (runtime_dir, prefer_sidecar_on_unix);
+
+    #[cfg(unix)]
+    if !prefer_sidecar_on_unix
+        && matches!(
+            availability::check_tmux().await,
+            availability::TmuxAvailability::Available { .. }
+        )
+    {
+        return Ok(std::sync::Arc::new(tmux::TmuxHost::new(
+            runtime_dir.to_path_buf(),
+        )));
+    }
+
+    Ok(std::sync::Arc::new(sidecar::SidecarHost::new(
+        sidecar_socket.to_path_buf(),
+        sidecar_binary.to_path_buf(),
+    )))
+}
