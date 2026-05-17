@@ -114,10 +114,13 @@ impl Database {
         state: &str,
         crash_reason: Option<&str>,
     ) -> rusqlite::Result<()> {
-        self.conn.execute(
+        let changed = self.conn.execute(
             "UPDATE interactive_sessions SET state = ?1, crash_reason = ?2 WHERE sid = ?3",
             params![state, crash_reason, sid],
         )?;
+        if changed == 0 {
+            return Err(rusqlite::Error::QueryReturnedNoRows);
+        }
         Ok(())
     }
 
@@ -126,12 +129,15 @@ impl Database {
         sid: &str,
         blob: &[u8],
     ) -> rusqlite::Result<()> {
-        self.conn.execute(
+        let changed = self.conn.execute(
             "UPDATE interactive_sessions SET last_screen_blob = ?1,
              last_attached_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
              WHERE sid = ?2",
             params![blob, sid],
         )?;
+        if changed == 0 {
+            return Err(rusqlite::Error::QueryReturnedNoRows);
+        }
         Ok(())
     }
 
@@ -172,6 +178,96 @@ mod tests {
             claude_flags_json: "[]".into(),
             pid: Some(1234),
         }
+    }
+
+    fn make_row_with_created_at(
+        sid: &str,
+        workspace_id: &str,
+        created_at: &str,
+    ) -> InteractiveSessionRow {
+        InteractiveSessionRow {
+            sid: sid.into(),
+            workspace_id: workspace_id.into(),
+            host_kind: "sidecar".into(),
+            state: "running".into(),
+            crash_reason: None,
+            created_at: created_at.into(),
+            last_attached_at: None,
+            last_screen_blob: None,
+            claude_flags_json: "[]".into(),
+            pid: Some(1234),
+        }
+    }
+
+    #[test]
+    fn list_interactive_sessions_for_workspace_isolates_and_orders_desc() {
+        let db = setup_db_with_named_workspace("ws-1");
+        // Add a second workspace via the same helper. It re-uses the same
+        // in-memory DB only when called on the same instance, so insert a
+        // second workspace directly into the existing DB.
+        db.insert_workspace(&make_workspace("ws-2", "r1", "other-bug"))
+            .unwrap();
+
+        // ws-1 gets two sessions with distinct created_at; the second is
+        // newer so it should appear first in DESC order.
+        db.create_interactive_session(&make_row_with_created_at(
+            "claudette-ws1-older",
+            "ws-1",
+            "2026-05-15T10:00:00Z",
+        ))
+        .unwrap();
+        db.create_interactive_session(&make_row_with_created_at(
+            "claudette-ws1-newer",
+            "ws-1",
+            "2026-05-16T10:00:00Z",
+        ))
+        .unwrap();
+
+        // ws-2 gets a session that must NOT appear in the ws-1 listing.
+        db.create_interactive_session(&make_row_with_created_at(
+            "claudette-ws2-only",
+            "ws-2",
+            "2026-05-16T12:00:00Z",
+        ))
+        .unwrap();
+
+        let listed = db.list_interactive_sessions_for_workspace("ws-1").unwrap();
+        assert_eq!(listed.len(), 2, "should only see ws-1 sessions");
+        assert_eq!(
+            listed[0].sid, "claudette-ws1-newer",
+            "newer session should sort first (created_at DESC)"
+        );
+        assert_eq!(listed[1].sid, "claudette-ws1-older");
+        for row in &listed {
+            assert_ne!(
+                row.workspace_id, "ws-2",
+                "ws-2 sessions must be excluded from ws-1 listing"
+            );
+        }
+    }
+
+    #[test]
+    fn set_interactive_session_state_returns_no_rows_when_missing() {
+        let db = setup_db_with_named_workspace("ws-1");
+        let err = db
+            .set_interactive_session_state("nonexistent-sid", "running", None)
+            .expect_err("missing sid should error");
+        assert!(
+            matches!(err, rusqlite::Error::QueryReturnedNoRows),
+            "expected QueryReturnedNoRows, got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn update_interactive_session_screen_returns_no_rows_when_missing() {
+        let db = setup_db_with_named_workspace("ws-1");
+        let err = db
+            .update_interactive_session_screen("nonexistent-sid", b"hello")
+            .expect_err("missing sid should error");
+        assert!(
+            matches!(err, rusqlite::Error::QueryReturnedNoRows),
+            "expected QueryReturnedNoRows, got: {err:?}"
+        );
     }
 
     #[test]
