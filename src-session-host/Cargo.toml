@@ -5,6 +5,10 @@ edition = "2024"
 license = "MIT"
 description = "Long-lived sidecar that owns interactive Claude PTYs for Claudette"
 
+[lib]
+name = "claudette_session_host"
+path = "src/lib.rs"
+
 [[bin]]
 name = "claudette-session-host"
 path = "src/main.rs"
@@ -39,6 +43,9 @@ async-trait = "0.1"
 thiserror = "2"
 futures = "0.3"
 tokio-stream = "0.1"
+# Per-user socket path scheme picks up the current username so concurrent
+# users on the same host don't collide on `$TMPDIR/claudette-session-host/`.
+whoami = "1"
 
 [dev-dependencies]
 tempfile = "3"

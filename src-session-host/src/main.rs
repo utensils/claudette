@@ -4,17 +4,23 @@
 //! socket protocol (Unix-domain socket / Named Pipe). See
 //! `claudette::agent::interactive_protocol`.
 
-fn main() -> std::io::Result<()> {
+use claudette_session_host::server;
+
+#[tokio::main]
+async fn main() -> std::io::Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
                 .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
         )
         .init();
+
+    let socket_path = server::default_socket_path();
     tracing::info!(
-        "claudette-session-host {} starting",
-        env!("CARGO_PKG_VERSION")
+        version = env!("CARGO_PKG_VERSION"),
+        socket = %socket_path.display(),
+        "claudette-session-host starting"
     );
-    // Stub: just exit. Real server logic comes in Task C2+.
-    Ok(())
+
+    server::run_at(&socket_path).await
 }
