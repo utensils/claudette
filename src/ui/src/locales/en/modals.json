@@ -124,5 +124,24 @@
   "env_trust_details_show": "Show raw error",
   "env_trust_details_hide": "Hide raw error",
   "env_trust_cancel": "Decide later",
-  "env_trust_done": "Close"
+  "env_trust_done": "Close",
+
+  "bulk_cleanup_title": "Clean up archived workspaces in {{repo}}",
+  "bulk_cleanup_title_fallback_repo": "this project",
+  "bulk_cleanup_warning": "Deleting an archived workspace permanently removes its git branch and chat history. Lifetime metrics are preserved.",
+  "bulk_cleanup_older_than": "Older than",
+  "bulk_cleanup_filter_all": "All",
+  "bulk_cleanup_filter_30": "30 days",
+  "bulk_cleanup_filter_60": "60 days",
+  "bulk_cleanup_filter_90": "90 days",
+  "bulk_cleanup_filter_180": "6 months",
+  "bulk_cleanup_filter_365": "1 year",
+  "bulk_cleanup_select_all": "Select all",
+  "bulk_cleanup_counter": "{{selected}} of {{total}} selected",
+  "bulk_cleanup_no_eligible": "No archived workspaces match this filter.",
+  "bulk_cleanup_deleting": "Deleting…",
+  "bulk_cleanup_confirm": "Delete selected ({{count}})",
+  "bulk_cleanup_success": "Cleaned up {{count}} workspaces",
+  "bulk_cleanup_partial": "Cleaned up {{succeeded}}; {{failed}} failed",
+  "bulk_cleanup_failed": "Bulk cleanup failed: {{error}}"
 }

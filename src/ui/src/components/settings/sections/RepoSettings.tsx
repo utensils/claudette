@@ -766,6 +766,8 @@ export function RepoSettings({ repoId }: RepoSettingsProps) {
         </button>
       </div>
 
+      <RepoArchivedCleanupField repoId={repoId} />
+
       <div className={styles.dangerZone}>
         <div className={styles.dangerLabel}>{t("repo_danger_zone")}</div>
         <button
@@ -817,6 +819,37 @@ function RepoPinnedPromptsField({ repoId }: RepoPinnedPromptsFieldProps) {
       </div>
       <PinnedPromptsManager scope={{ kind: "repo", repoId }} projectPath={repoPath} />
       <InheritedGlobalsList globals={globalPrompts} repoNames={repoNames} />
+    </div>
+  );
+}
+
+interface RepoArchivedCleanupFieldProps {
+  repoId: string;
+}
+
+function RepoArchivedCleanupField({ repoId }: RepoArchivedCleanupFieldProps) {
+  const { t } = useTranslation("settings");
+  const openModal = useAppStore((s) => s.openModal);
+  const archivedCount = useAppStore(
+    (s) =>
+      s.workspaces.filter(
+        (w) => w.repository_id === repoId && w.status === "Archived",
+      ).length,
+  );
+
+  return (
+    <div className={styles.fieldGroup}>
+      <div className={styles.fieldLabel}>{t("repo_workspace_cleanup_label")}</div>
+      <div className={`${styles.fieldHint} ${styles.fieldHintSpaced}`}>
+        {t("repo_workspace_cleanup_hint", { count: archivedCount })}
+      </div>
+      <button
+        className={styles.iconBtn}
+        onClick={() => openModal("bulkCleanupArchived", { repoId })}
+        disabled={archivedCount === 0}
+      >
+        {t("repo_workspace_cleanup_button")}
+      </button>
     </div>
   );
 }

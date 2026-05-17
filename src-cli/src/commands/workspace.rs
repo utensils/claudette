@@ -39,6 +39,24 @@ pub enum Action {
         )]
         no_delete_branch: bool,
     },
+    /// Hard-delete archived workspaces in bulk. Removes worktrees,
+    /// branches, and chat history; lifetime metrics are preserved in
+    /// `deleted_workspace_summaries`. Active workspaces are never
+    /// touched — the IPC handler rejects any non-Archived ID.
+    Purge {
+        /// Restrict the purge to workspaces in this repository ID. Get
+        /// one from `claudette repo list`.
+        #[arg(long)]
+        repo: String,
+        /// Only purge workspaces older than N days (measured from
+        /// `created_at`). Omit to purge every archived workspace in
+        /// the repo.
+        #[arg(long)]
+        older_than_days: Option<u32>,
+        /// Print the resolved ID list without deleting anything.
+        #[arg(long)]
+        dry_run: bool,
+    },
 }
 
 pub async fn run(action: Action, json: bool) -> Result<(), Box<dyn Error>> {
@@ -88,8 +106,107 @@ pub async fn run(action: Action, json: bool) -> Result<(), Box<dyn Error>> {
             let value = ipc::call(&info, "archive_workspace", params).await?;
             output::print_json(&value)?;
         }
+        Action::Purge {
+            repo,
+            older_than_days,
+            dry_run,
+        } => {
+            let workspaces = ipc::call(&info, "list_workspaces", serde_json::json!({})).await?;
+            let ids = resolve_purge_ids(&workspaces, &repo, older_than_days)?;
+
+            if dry_run {
+                if json {
+                    output::print_json(&serde_json::json!({
+                        "dry_run": true,
+                        "ids": ids,
+                    }))?;
+                } else if ids.is_empty() {
+                    println!("no archived workspaces match");
+                } else {
+                    println!("would delete {} workspace(s):", ids.len());
+                    for id in &ids {
+                        println!("  {id}");
+                    }
+                }
+                return Ok(());
+            }
+
+            if ids.is_empty() {
+                if json {
+                    output::print_json(&serde_json::json!({
+                        "deleted": [],
+                        "failed": [],
+                    }))?;
+                } else {
+                    println!("no archived workspaces match");
+                }
+                return Ok(());
+            }
+
+            let value = ipc::call(
+                &info,
+                "delete_workspaces_bulk",
+                serde_json::json!({ "ids": ids }),
+            )
+            .await?;
+            output::print_json(&value)?;
+        }
     }
     Ok(())
+}
+
+/// Filter the `list_workspaces` response to archived rows matching the
+/// CLI's `--repo` (required) and `--older-than-days` (optional) filters.
+/// `created_at` is a Unix-seconds-as-string field (`now_iso()` in
+/// `ops::workspace`); we parse it as an integer and compare against the
+/// current epoch. Rows with malformed timestamps are skipped from age
+/// filtering (kept if no age filter, dropped if `--older-than-days` set).
+fn resolve_purge_ids(
+    value: &serde_json::Value,
+    repo_id: &str,
+    older_than_days: Option<u32>,
+) -> Result<Vec<String>, Box<dyn Error>> {
+    let items = value
+        .as_array()
+        .ok_or("unexpected list_workspaces response shape")?;
+
+    let cutoff_secs = older_than_days.map(|days| {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        now.saturating_sub(u64::from(days) * 86_400)
+    });
+
+    let mut out = Vec::new();
+    for item in items {
+        let status = item.get("status").and_then(|v| v.as_str()).unwrap_or("");
+        if status != "Archived" {
+            continue;
+        }
+        let row_repo = item
+            .get("repository_id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        if row_repo != repo_id {
+            continue;
+        }
+        if let Some(cutoff) = cutoff_secs {
+            let created_secs = item
+                .get("created_at")
+                .and_then(|v| v.as_str())
+                .and_then(|s| s.parse::<u64>().ok());
+            match created_secs {
+                Some(c) if c <= cutoff => {}
+                _ => continue,
+            }
+        }
+        let Some(id) = item.get("id").and_then(|v| v.as_str()) else {
+            continue;
+        };
+        out.push(id.to_string());
+    }
+    Ok(out)
 }
 
 /// Minimal table renderer for `workspace list`. Format is intentionally

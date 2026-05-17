@@ -425,19 +425,30 @@ export function Dashboard() {
           )}
           {scopedArchivedWorkspaces.length > 0 && (
             <div className={styles.workspacesSection}>
-              <button
-                type="button"
-                className={styles.workspacesHeader}
-                onClick={() => setArchivedOpen((v) => !v)}
-                aria-expanded={archivedOpen}
-              >
-                {archivedOpen ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
-                <Archive size={12} className={styles.archivedIcon} aria-hidden="true" />
-                <span className={styles.workspacesTitle}>Archived</span>
-                <span className={styles.headerCount}>
-                  {scopedArchivedWorkspaces.length}
-                </span>
-              </button>
+              <div className={styles.archivedHeaderRow}>
+                <button
+                  type="button"
+                  className={styles.workspacesHeader}
+                  onClick={() => setArchivedOpen((v) => !v)}
+                  aria-expanded={archivedOpen}
+                >
+                  {archivedOpen ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+                  <Archive size={12} className={styles.archivedIcon} aria-hidden="true" />
+                  <span className={styles.workspacesTitle}>Archived</span>
+                  <span className={styles.headerCount}>
+                    {scopedArchivedWorkspaces.length}
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  className={styles.archivedCleanupBtn}
+                  onClick={() =>
+                    openModal("bulkCleanupArchived", { repoId: scopedRepo.id })
+                  }
+                >
+                  Clean up…
+                </button>
+              </div>
               {archivedOpen && (
                 <ul className={styles.archivedList}>
                   {scopedArchivedWorkspaces.map((ws) => (
