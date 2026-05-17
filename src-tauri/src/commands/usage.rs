@@ -176,7 +176,6 @@ fn is_claude_family(kind: &AgentBackendKind) -> bool {
 #[tauri::command]
 pub async fn prefetch_codex_rate_limits(
     state: State<'_, AppState>,
-    app_handle: tauri::AppHandle,
     backend: AgentBackendConfig,
 ) -> Result<(), String> {
     if !matches!(
@@ -245,11 +244,12 @@ pub async fn prefetch_codex_rate_limits(
                 }
             });
 
-            // Nudge the UI to re-poll so the freshly-cached snapshot
-            // surfaces without waiting for the 5-minute poller tick.
-            // The poller already keys on the active session, so a
-            // simple custom event is enough.
-            let _ = tauri::Emitter::emit(&app_handle, "codex-rate-limits-updated", ());
+            // No event emit — the frontend caller chains a fresh
+            // `getSessionUsage` fetch after this command resolves
+            // (see `useSessionUsagePoller`'s
+            // `prefetchCodexRateLimits(backend).then(() => fetchOnce())`),
+            // so the cached snapshot surfaces on the next IPC call
+            // without needing a separate broadcast.
         }
         Err(err) => {
             tracing::debug!(

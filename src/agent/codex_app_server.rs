@@ -204,13 +204,16 @@ impl CodexAppServerSession {
             return Err(err);
         }
 
-        // Seed the rate-limit cache with a one-shot read so the
-        // composer's usage meter has live quota data before the user
-        // even sends their first turn. Best-effort: failures fall
-        // back to push notifications (and ultimately local-aggregate
-        // if the user is on an account without quota visibility).
-        session.seed_rate_limits().await;
-
+        // Note: we intentionally do NOT call `seed_rate_limits()`
+        // here. The seed would broadcast on `rate_limits_tx` before
+        // any caller has had a chance to subscribe (the
+        // `subscribe_rate_limits()` receiver is created *after*
+        // `start_with_options` returns), so the value would be
+        // dropped, paying an extra RPC for nothing. Callers that
+        // actually want a seed call `seed_rate_limits()` themselves
+        // after subscribing; callers that want a one-shot read
+        // (e.g. `prefetch_codex_rate_limits`) call
+        // [`read_rate_limits`] directly and use the return value.
         Ok(session)
     }
 

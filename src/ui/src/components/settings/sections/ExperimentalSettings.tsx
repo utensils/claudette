@@ -3,12 +3,13 @@ import { useTranslation } from "react-i18next";
 import { useAppStore } from "../../../stores/useAppStore";
 import { setAppSetting } from "../../../services/tauri";
 import { UsageInsightsConfirmModal } from "./UsageInsightsConfirmModal";
+import { CLAUDE_CODE_USAGE_FOCUS } from "../focusKeys";
 import styles from "../Settings.module.css";
 
-/** Deep-link focus key for the Claude Code Usage row, dispatched from
- *  the composer's greyed-out usage indicator click handler. Mirrors
- *  AUTH_SETTINGS_FOCUS in claudeAuth.ts. */
-export const CLAUDE_CODE_USAGE_FOCUS = "claude-code-usage";
+// Re-export for legacy callers; new code should import from
+// `../focusKeys` directly to keep settings imports out of the
+// composer chunk.
+export { CLAUDE_CODE_USAGE_FOCUS };
 
 export function ExperimentalSettings() {
   const { t } = useTranslation("settings");

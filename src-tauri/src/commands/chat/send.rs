@@ -1838,13 +1838,20 @@ pub async fn send_chat_message(
                     )
                     .await?;
                     // Drain Codex's `account/rateLimits/updated` pushes
-                    // (and the one-shot seed from `start_with_options`)
-                    // into `AppState.codex_rate_limits` so the composer
+                    // (and the one-shot seed we fire below) into
+                    // `AppState.codex_rate_limits` so the composer
                     // usage meter shows live quota data instead of
-                    // local-aggregate token totals.  The task ends
+                    // local-aggregate token totals. The task ends
                     // when the session is dropped — the broadcast
                     // sender goes away and `recv()` returns Closed.
+                    //
+                    // `seed_rate_limits` is fired AFTER subscribing
+                    // so the seed value is captured by this
+                    // receiver. `start_with_options` no longer seeds
+                    // implicitly (the value would be dropped before
+                    // any subscriber existed).
                     let mut rate_limits_rx = started.subscribe_rate_limits();
+                    started.seed_rate_limits().await;
                     let app_handle = app_handle_for_this_call.clone();
                     tokio::spawn(async move {
                         loop {

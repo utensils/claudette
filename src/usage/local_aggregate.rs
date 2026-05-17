@@ -209,7 +209,13 @@ pub fn snapshot_from_locals(
     // strict trailing 24-hour UTC range, not "since local midnight".
     push_bucket(&mut buckets, "local_24h", "Last 24h", &today);
 
-    let note = if buckets.is_empty() {
+    // Base the note on whether any local-aggregate bucket was added,
+    // not on `buckets.is_empty()` — extras like the OpenRouter
+    // credit balance start in the bucket list before the local rows,
+    // so a session with no recorded turns but a credit-balance
+    // bucket would otherwise be mislabeled "Local tracking".
+    let has_local_data = session.message_count > 0 || today.message_count > 0;
+    let note = if !has_local_data {
         Some(String::from(
             "No turns recorded yet for this session. The meter will fill in as you chat.",
         ))

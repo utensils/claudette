@@ -4,7 +4,7 @@ import { useTranslation } from "react-i18next";
 import { useAppStore } from "../../../stores/useAppStore";
 import { useSessionUsagePoller } from "../../../hooks/useSessionUsagePoller";
 import type { UsageBucket } from "../../../types/usage";
-import { CLAUDE_CODE_USAGE_FOCUS } from "../../settings/sections/ExperimentalSettings";
+import { CLAUDE_CODE_USAGE_FOCUS } from "../../settings/focusKeys";
 import { resolveIndicatorMode } from "./usageIndicatorMode";
 import { UsagePopover } from "./UsagePopover";
 import styles from "./UsageIndicator.module.css";
