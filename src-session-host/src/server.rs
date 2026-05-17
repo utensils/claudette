@@ -253,47 +253,60 @@ async fn handle_connection(stream: Stream, map: SessionMap) -> std::io::Result<(
 /// Pump session events onto an attached client connection until the session
 /// exits or the write side errors (i.e. the client disconnected).
 ///
-/// Broadcast `Lagged` errors silently terminate the stream — clients are
+/// On broadcast `Lagged` we log a warn and close the stream — clients are
 /// expected to re-sync via `CaptureScreen` after re-attaching. Per the plan
-/// this is acceptable for v1.
+/// this is acceptable for v1. `Closed` ends the stream silently.
 async fn stream_attach<W>(w: &mut W, sess: Arc<Session>, sid: String) -> std::io::Result<()>
 where
     W: tokio::io::AsyncWrite + Unpin,
 {
     let mut rx = sess.tx.subscribe();
-    while let Ok(ev) = rx.recv().await {
-        let (event, is_exit) = match ev {
-            SessionEvent::Output { bytes, seq } => (
-                Event::Output {
-                    sid: sid.clone(),
-                    bytes_b64: base64::engine::general_purpose::STANDARD.encode(&bytes),
-                    seq,
-                },
-                false,
-            ),
-            SessionEvent::Hook(h) => (
-                Event::Hook {
-                    sid: sid.clone(),
-                    hook: h,
-                },
-                false,
-            ),
-            SessionEvent::Exit {
-                exit_status,
-                reason,
-            } => (
-                Event::Exit {
-                    sid: sid.clone(),
-                    exit_status,
-                    reason,
-                },
-                true,
-            ),
-        };
-        let bytes = serde_json::to_vec(&event).map_err(std::io::Error::other)?;
-        write_frame(w, &bytes).await?;
-        if is_exit {
-            break;
+    loop {
+        match rx.recv().await {
+            Ok(ev) => {
+                let (event, is_exit) = match ev {
+                    SessionEvent::Output { bytes, seq } => (
+                        Event::Output {
+                            sid: sid.clone(),
+                            bytes_b64: base64::engine::general_purpose::STANDARD.encode(&bytes),
+                            seq,
+                        },
+                        false,
+                    ),
+                    SessionEvent::Hook(h) => (
+                        Event::Hook {
+                            sid: sid.clone(),
+                            hook: h,
+                        },
+                        false,
+                    ),
+                    SessionEvent::Exit {
+                        exit_status,
+                        reason,
+                    } => (
+                        Event::Exit {
+                            sid: sid.clone(),
+                            exit_status,
+                            reason,
+                        },
+                        true,
+                    ),
+                };
+                let bytes = serde_json::to_vec(&event).map_err(std::io::Error::other)?;
+                write_frame(w, &bytes).await?;
+                if is_exit {
+                    break;
+                }
+            }
+            Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                tracing::warn!(
+                    sid = %sid,
+                    skipped = n,
+                    "attach subscriber lagged; closing stream",
+                );
+                break;
+            }
+            Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
         }
     }
     Ok(())
@@ -435,6 +448,8 @@ async fn dispatch(map: &SessionMap, req: Request) -> Response {
                 };
             };
             let bytes = s.capture_screen().await;
+            // Two-step read: a concurrent Resize could split between rows/cols.
+            // Acceptable for v1 — dimensions are display hints, not load-bearing.
             let rows = *s.rows.lock().await;
             let cols = *s.cols.lock().await;
             Response::ScreenSnapshot {
