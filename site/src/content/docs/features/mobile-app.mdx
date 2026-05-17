@@ -1,0 +1,62 @@
+---
+title: Mobile App (iPhone)
+description: Pair your iPhone with a running Claudette desktop or headless server to drive chat sessions remotely.
+---
+
+Claudette ships a first-party iOS client (built with Tauri 2 Mobile) that pairs with a running Claudette desktop or a headless `claudette-server` and lets you drive chat sessions from your phone — browse workspaces, send prompts, watch agents stream replies, answer `AskUserQuestion` prompts, and approve `ExitPlanMode` plans.
+
+:::note[Status]
+The mobile app is being built incrementally on the `james-brink/ios-foundation` branch. This page describes the design and pairing flow that's currently shipping. The Phase 4+ pieces (the iOS binary itself) are still being assembled — see the [project tracker](https://github.com/utensils/Claudette/pulls) for live status.
+:::
+
+## What's there today
+
+- **Encrypted WebSocket transport** — same WSS + TOFU-pinned TLS the desktop's remote-workspace feature uses (see [Remote Workspaces](/claudette/features/remote-workspaces/)). No protocol changes on the wire.
+- **Persistent CLI session per chat** — the server keeps a long-lived `claude` subprocess alive across turns with stdin piped, so the mobile app can write `control_response` lines back to answer `AskUserQuestion` and approve `ExitPlanMode`.
+- **QR pairing** — the desktop's **Share this machine** modal renders the connection string as a QR code. Open the iOS app, tap **Scan to pair**, point at the QR, done.
+- **Headless server support** — works against both the GUI's embedded server and a standalone `claudette-server` daemon. For headless deployments, the iOS app's **Advanced** entry lets you paste a connection string by hand instead of scanning.
+
+## Pairing flow
+
+### Option A — Pair with the desktop GUI
+
+1. On the desktop, click **Share this machine** in the sidebar. The embedded server spawns as a subprocess and prints a connection string of the form `claudette://hostname:7683/<pairing-token>`.
+2. The same modal now shows that string as a QR code.
+3. On the iPhone, open **Claudette**, tap **Scan to pair**, and point the camera at the QR. The app reads the host, port, and one-time pairing token, opens a WSS connection, exchanges the pairing token for a long-lived session token, and persists the session token in the app's sandboxed data directory (iOS Data Protection encrypts the sandbox at rest). Migrating to the iOS Keychain via a custom Swift plugin is on the follow-up list — see [What the iOS app cannot do today](#what-the-ios-app-cannot-do-today).
+4. The phone navigates to the workspace list. Tap a workspace to open it; tap a chat session to start sending prompts.
+
+The pairing token is consumed on first use — pair a second device by regenerating the token (`claudette-server regenerate-token` for standalone, or use **Stop sharing** / **Share this machine** again on the desktop).
+
+### Option B — Pair with a headless server
+
+If you're running `claudette-server` on a Linux VM or Mac mini without a GUI, there's no desktop modal to scan. Use one of:
+
+- **Copy-paste** — start the server and copy the printed `claudette://...` connection string. On the iPhone, tap **Scan to pair** → **Advanced** → **Enter connection string** and paste it.
+- **`claudette-server show-connection-string`** — prints the current string without restarting the server. Paste it into the iOS app's Advanced entry.
+- **mDNS** — if your phone and the server are on the same Wi-Fi network, the server's mDNS advertisement (`_claudette._tcp.local.`) will surface in a future iOS app update under **Nearby**. Until that lands, use copy-paste.
+
+See [Remote Workspaces — Headless Server](/claudette/features/remote-workspaces/#headless-server-standalone) for the full headless install + run flow.
+
+## Security model
+
+- TLS 1.2+ with a self-signed certificate; the iOS app pins the certificate fingerprint on first pair (TOFU — Trust On First Use). If the fingerprint changes on a later connection (server reinstalled, MITM, IP reuse), the app refuses to connect and displays the mismatch.
+- **What TOFU does and doesn't protect on the first pair**: pinning the fingerprint protects every connection *after* the initial pair. The initial pair itself happens with `expected_fingerprint = None` — the app accepts whatever cert is presented and pins it. If an attacker sits between your phone and the server during that first connection (e.g. malicious Wi-Fi), they can substitute their own cert and the app will trust it forever. The pairing token in the QR is the out-of-band authenticator that closes this gap — an attacker can't produce the same token without seeing the QR — but for that to hold, the QR scan must happen over a trusted channel (your own screen, not a screen-share or photo of the QR posted publicly). Treat the QR like a password during pairing.
+- The pairing token is a 32-byte cryptographically random value, base64-encoded. It's transmitted once over the already-encrypted WSS to exchange for a session token; the session token is the long-lived credential persisted in the app's sandboxed data directory (iOS Data Protection encrypts at rest).
+- Regenerating the pairing token (`claudette-server regenerate-token`) revokes all existing session tokens — useful if you lose your phone.
+- The app sandbox is scoped to the Claudette bundle ID; another app on the same device cannot read it. (When the Keychain plugin lands as a follow-up, credentials move there for the additional "survives uninstall" property.)
+
+## What the iOS app cannot do today
+
+These are tracked but intentionally out of scope for the first release:
+
+- **No agent runtime on the phone.** All `claude` subprocesses run on the paired desktop or server — the phone is a thin remote-control client. (This is what makes a single-codebase Tauri Mobile build feasible.)
+- **No diff viewer / terminal / file editor / voice.** These desktop features stay on the desktop; the mobile app focuses on chat.
+- **No file-mention attachments.** Sending images, screenshots, or files alongside a prompt isn't wired yet.
+- **No push notifications.** Agent-finished and `AskUserQuestion` events come in over the active WSS connection only; close the app and you'll miss prompts until you reopen.
+- **No App Store / TestFlight distribution yet.** First release ships via local Xcode install to your own paired iPhone.
+
+## Privacy implications
+
+The mobile app inherits the same single-account contract as desktop sharing — agents on the server run under the server machine's Claude credentials, not the phone's. The [Pro/Max account-sharing note on Remote Workspaces](/claudette/features/remote-workspaces/) applies identically: pair only your own devices to a server tied to your own subscription.
+
+Camera access is requested only when you tap **Scan to pair**. The QR scan happens entirely on-device — the camera frame is never transmitted off the phone.

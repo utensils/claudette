@@ -1,5 +1,5 @@
 [workspace]
-members = ["src-tauri", "src-server", "src-cli"]
+members = ["src-tauri", "src-server", "src-cli", "src-mobile"]
 resolver = "2"
 
 [package]
@@ -41,6 +41,19 @@ rand = "0.8"
 sha2 = "0.10"
 tar = "0.4"
 tempfile = "3"
+# WSS client transport shared between the desktop binary (`claudette-tauri`)
+# and the mobile binary (`claudette-mobile`). Lives in `src/transport/`.
+# `rustls-tls-webpki-roots` matches the existing `claudette-tauri` setup so
+# feature unification keeps a single tokio-tungstenite build across the
+# workspace.
+tokio-tungstenite = { version = "0.26", features = ["rustls-tls-webpki-roots"] }
+# Direct `rustls` for the TOFU `ServerCertVerifier` in `transport::ws`.
+# `aws-lc-rs` matches the crypto provider already installed at desktop /
+# server startup, so we don't end up with two providers in the same binary.
+rustls = { version = "0.23", features = ["aws-lc-rs"] }
+hex = "0.4"
+async-trait = "0.1"
+futures-util = "0.3"
 # Cross-platform local IPC: Unix domain sockets on macOS/Linux, Named Pipes
 # on Windows. One async API for both, used by `agent_mcp::bridge` to talk to
 # the Claudette-hosted MCP grandchild that the Claude CLI spawns over stdio.

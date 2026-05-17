@@ -1,0 +1,12 @@
+{
+  "$schema": "../gen/schemas/mobile-schema.json",
+  "identifier": "mobile-default",
+  "description": "Mobile-only permissions. Currently grants barcode-scanner access for QR-based pairing (Phase 5+). Scoped to iOS and Android via `platforms` so the desktop fallback build doesn't fail on the missing plugin permission.",
+  "platforms": ["iOS", "android"],
+  "windows": [
+    "main"
+  ],
+  "permissions": [
+    "barcode-scanner:default"
+  ]
+}

@@ -37,6 +37,7 @@ pub mod rpc;
 pub mod scm;
 pub mod slash_commands;
 pub mod snapshot;
+pub mod transport;
 pub mod workspace_alloc;
 pub mod workspace_sync;
 

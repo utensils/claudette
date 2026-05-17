@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::io::Write as IoWrite;
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -6,6 +6,7 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use claudette::agent::PersistentSession;
 use claudette::claude_help::ClaudeFlagDef;
 use claudette::env_provider::EnvCache;
 use claudette::env_provider::types::EnvMap;
@@ -63,6 +64,39 @@ pub struct AgentSessionState {
     /// respawns with the new env. Mirrors `AppState::session_resolved_env`
     /// on the Tauri side.
     pub session_resolved_env: EnvMap,
+    /// Long-lived Claude CLI subprocess. Established lazily on the first
+    /// `send_chat_message` call and reused for every subsequent turn so the
+    /// CLI's stdin stays open for `control_response` writes (which is what
+    /// makes `AskUserQuestion` / `ExitPlanMode` answerable over WSS — a
+    /// one-shot `claude --print` has `stdin = null` and can't be answered).
+    /// `None` means "no live session yet" or "session torn down".
+    pub persistent_session: Option<Arc<PersistentSession>>,
+    /// Outstanding `can_use_tool` requests observed in the agent stream,
+    /// keyed by `tool_use_id`. Filled when the CLI emits a `ControlRequest`,
+    /// drained by `submit_agent_answer` / `submit_plan_approval` /
+    /// `submit_agent_approval`. Mirrors the desktop's
+    /// `AgentSessionState::pending_permissions`.
+    pub pending_permissions: HashMap<String, PendingPermission>,
+    /// Queue of additional user messages submitted while a turn is in flight.
+    /// `steer_queued_chat_message` either appends here (turn active) or
+    /// writes directly to stdin (turn idle). Drained on `Result` /
+    /// `ProcessExited` events.
+    pub pending_message_queue: VecDeque<QueuedMessage>,
+}
+
+/// Snapshot of a `can_use_tool` request waiting for a client response.
+#[derive(Debug, Clone)]
+pub struct PendingPermission {
+    pub request_id: String,
+    pub tool_name: String,
+    pub original_input: serde_json::Value,
+}
+
+/// User message that arrived while a turn was in flight, waiting to be
+/// dispatched as the next turn (or steered into the current one).
+#[derive(Debug, Clone)]
+pub struct QueuedMessage {
+    pub content: String,
 }
 
 pub struct PtyHandle {

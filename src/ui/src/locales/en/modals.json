@@ -57,6 +57,9 @@
   "share_title": "Share this machine",
   "share_conn_label": "Connection string",
   "share_conn_hint": "Share this string with others so they can connect to your workspaces from their Claudette app.",
+  "share_qr_label": "Pair with iPhone",
+  "share_qr_hint": "Scan this QR code in the Claudette iOS app to pair your phone with this machine. The encoded value is the same connection string above.",
+  "share_qr_alt": "QR code encoding the connection string",
   "share_stop": "Stop sharing",
   "share_done": "Done",
 

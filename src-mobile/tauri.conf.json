@@ -1,0 +1,40 @@
+{
+  "$schema": "https://schema.tauri.app/config/2.0.0",
+  "productName": "Claudette",
+  "mainBinaryName": "claudette-mobile",
+  "version": "0.24.0",
+  "identifier": "dev.claudette.mobile",
+  "build": {
+    "frontendDist": "../src/ui-mobile/dist",
+    "devUrl": "http://localhost:14254",
+    "beforeDevCommand": "cd ../src/ui-mobile && bun run dev",
+    "beforeBuildCommand": "cd ../src/ui-mobile && bun run build"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Claudette",
+        "width": 390,
+        "height": 844,
+        "minWidth": 320,
+        "minHeight": 480,
+        "resizable": true
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self' ipc: http://ipc.localhost; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; connect-src 'self' ws: wss: http: https:"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "category": "DeveloperTool",
+    "shortDescription": "Claudette mobile client",
+    "longDescription": "Pair your iPhone with a running Claudette desktop or headless claudette-server to drive chat sessions remotely.",
+    "icon": [
+      "icons/icon.png"
+    ],
+    "iOS": {
+      "minimumSystemVersion": "16.0"
+    }
+  }
+}

@@ -14,12 +14,19 @@ lcov.info
 # Node / Frontend
 node_modules/
 src/ui/dist/
+src/ui-mobile/dist/
+src/ui-mobile/tsconfig.tsbuildinfo
 src-pi-harness/dist/
 site/dist/
 site/.astro/
 
 # Tauri generated
 src-tauri/gen/
+# Tauri Mobile generated scaffolding (Xcode + Android Studio projects).
+# Created locally by `cargo tauri ios init` / `cargo tauri android init`;
+# contains signing identities and per-machine artifacts. Commit
+# selectively if you want to share signing config — see src-mobile/README.md.
+src-mobile/gen/
 # Generated bundle icons — regenerated from src-tauri/icons/icon.png by build.rs
 # (see issue #516). Only icon.png is tracked.
 src-tauri/icons/*.png

@@ -4,8 +4,8 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter};
 use tokio::sync::RwLock;
 
-use crate::transport::Transport;
-use crate::transport::ws::WebSocketTransport;
+use claudette::transport::Transport;
+use claudette::transport::ws::WebSocketTransport;
 
 /// Persisted remote connection configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]

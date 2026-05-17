@@ -1,0 +1,11 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Default permissions for the Claudette mobile webview. Phase 4 grants only the core IPC surface; the barcode-scanner permission is split into a mobile-only capability so the desktop fallback build (`cargo tauri dev --bin claudette-mobile`) still compiles without the mobile-only plugin in the dep tree.",
+  "windows": [
+    "main"
+  ],
+  "permissions": [
+    "core:default"
+  ]
+}
