@@ -5,6 +5,7 @@ pub mod codex_app_server;
 mod environment;
 pub mod harness;
 pub mod history_seeder;
+pub mod interactive_protocol;
 mod naming;
 #[cfg(feature = "pi-sdk")]
 pub mod pi_control;
