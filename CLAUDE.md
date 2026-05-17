@@ -35,6 +35,8 @@ cargo test -p claudette -p claudette-server -p claudette-cli --all-features  # R
 cargo test -p claudette --test diff_tests        # Run a single test file
 cargo test -p claudette parse_unified -- --exact # Run a single test by name
 cargo clippy -p claudette -p claudette-server -p claudette-cli --all-targets --all-features  # Lint (CI command — must pass with zero warnings)
+cargo clippy -p claudette-mobile --target aarch64-apple-darwin --all-targets --locked  # Mobile lint (CI command — macOS only)
+cargo test -p claudette-mobile --locked          # Mobile tests (CI command — macOS only)
 cargo fmt --all --check                          # Check formatting
 
 # Frontend (React/TypeScript)
@@ -55,7 +57,7 @@ IMPORTANT: CI sets `RUSTFLAGS="-Dwarnings"` — all compiler warnings are errors
 
 IMPORTANT: Always run `cd src/ui && bunx tsc -b` after modifying TypeScript files (including tests). CI runs `tsc -b` via `bun run build` — `vitest` does **not** type-check (it uses esbuild), so tests can pass locally while types are broken. Run `tsc -b` as the final check before committing any frontend change.
 
-CI also enforces `bun install --frozen-lockfile` — do not modify `bun.lock` without intention. CI runs `cargo llvm-cov` for Rust test coverage (uploaded to Codecov, informational/non-blocking). CI clippy lints `claudette`, `claudette-server`, and `claudette-cli` (not `claudette-tauri`, which requires system libs that aren't installed on the lint runner). Frontend CI runs `bunx tsc --noEmit` as a dedicated type-check step before `bun run build`.
+CI also enforces `bun install --frozen-lockfile` — do not modify `bun.lock` without intention. CI runs `cargo llvm-cov` for Rust test coverage (uploaded to Codecov, informational/non-blocking). CI clippy lints `claudette`, `claudette-server`, and `claudette-cli` on Linux, plus `claudette-mobile` on macOS (host target `aarch64-apple-darwin`, desktop-fallback build — iOS target compilation is intentionally not in CI; it requires Xcode + Apple SDK + `cargo tauri ios init` scaffolding). `claudette-tauri` is still excluded because it requires system libs not installed on the lint runner. Frontend CI runs `bunx tsc --noEmit` as a dedicated type-check step before `bun run build`.
 
 ## Code style
 

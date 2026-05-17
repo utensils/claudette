@@ -76,6 +76,21 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo clippy -p claudette -p claudette-server -p claudette-cli --all-targets --all-features
 
+  mobile:
+    name: Mobile (macOS)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+          targets: aarch64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+      - name: Clippy (claudette-mobile, desktop-fallback target)
+        run: cargo clippy -p claudette-mobile --target aarch64-apple-darwin --all-targets --locked
+      - name: Test (claudette-mobile)
+        run: cargo test -p claudette-mobile --locked
+
   test:
     name: Test
     runs-on: ubuntu-latest
