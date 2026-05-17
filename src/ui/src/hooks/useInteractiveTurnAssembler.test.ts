@@ -47,20 +47,44 @@ function reduce(
 // ---------------------------------------------------------------------------
 
 describe("useInteractiveTurnAssembler reducer", () => {
-  it("emits a turn on Stop", () => {
+  it("emits a turn on Stop with the spec-defined id numbering", () => {
+    // Feed pre-prompt output first so the transient "turn 0" exists,
+    // then run the prompt → output → stop sequence. That way the
+    // post-prompt turn is unambiguously id=1, which pins the contract
+    // (transient pre-prompt turn = 0; first user-submitted turn = 1).
     const state = reduce(initialAssemblerState, [
+      output("welcome banner"),
       { type: "hook", kind: "prompt_submitted" },
       output("hello "),
       output("world"),
       { type: "hook", kind: "stop" },
     ]);
 
-    expect(state.turns).toHaveLength(1);
+    expect(state.turns).toHaveLength(2);
     expect(state.turns[0].id).toBe(0);
-    expect(state.turns[0].status).toBe("done");
-    expect(decode(state.turns[0].bytes)).toBe("hello world");
+    expect(state.turns[0].status).toBe("done"); // closed by prompt_submitted
+    expect(decode(state.turns[0].bytes)).toBe("welcome banner");
+    expect(state.turns[1].id).toBe(1);
+    expect(state.turns[1].status).toBe("done");
+    expect(decode(state.turns[1].bytes)).toBe("hello world");
     expect(state.awaitingInput).toBe(false);
     expect(state.crashed).toBe(false);
+  });
+
+  it("resets accumulated state on a reset event", () => {
+    const before = reduce(initialAssemblerState, [
+      { type: "hook", kind: "prompt_submitted" },
+      output("hello"),
+      { type: "hook", kind: "awaiting" },
+    ]);
+    expect(before.turns).toHaveLength(1);
+    expect(before.awaitingInput).toBe(true);
+
+    const after = assemblerReducer(before, { type: "reset" });
+    expect(after).toBe(initialAssemblerState);
+    expect(after.turns).toEqual([]);
+    expect(after.awaitingInput).toBe(false);
+    expect(after.crashed).toBe(false);
   });
 
   it("preserves pre-prompt output as a transient turn 0", () => {
@@ -298,6 +322,84 @@ describe("useInteractiveTurnAssembler hook wiring", () => {
     // Cleanup invoked all three unlisten functions.
     for (const u of harness.unlistens) {
       expect(u).toHaveBeenCalledTimes(1);
+    }
+  });
+
+  it("resets accumulated state when sid changes", async () => {
+    const { act } = await import("react");
+    const { createRoot } = await import("react-dom/client");
+    const React = await import("react");
+    const { useInteractiveTurnAssembler } = await import(
+      "./useInteractiveTurnAssembler"
+    );
+
+    let capturedState: ReturnType<typeof useInteractiveTurnAssembler> | null =
+      null;
+
+    function Probe({ sid }: { sid: string | null }) {
+      capturedState = useInteractiveTurnAssembler(sid);
+      return null;
+    }
+
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    try {
+      // Mount with sid-A and accumulate a finished turn.
+      await act(async () => {
+        root.render(React.createElement(Probe, { sid: "sid-A" }));
+      });
+
+      expect(harness.outputHandlers).toHaveLength(1);
+      expect(harness.hookHandlers).toHaveLength(1);
+
+      await act(async () => {
+        harness.hookHandlers[0]({
+          sid: "sid-A",
+          kind: "prompt_submitted",
+        });
+        // "ok" -> base64 "b2s="
+        harness.outputHandlers[0]({
+          sid: "sid-A",
+          bytesB64: "b2s=",
+          seq: 1,
+        });
+        harness.hookHandlers[0]({ sid: "sid-A", kind: "stop" });
+      });
+
+      {
+        const state = capturedState as unknown as AssemblerState;
+        expect(state.turns).toHaveLength(1);
+        expect(decode(state.turns[0].bytes)).toBe("ok");
+      }
+
+      // Re-render with sid-B. The hook should dispatch a reset before
+      // re-subscribing, so the assembled turn list goes back to empty.
+      await act(async () => {
+        root.render(React.createElement(Probe, { sid: "sid-B" }));
+      });
+
+      {
+        const state = capturedState as unknown as AssemblerState;
+        expect(state.turns).toEqual([]);
+        expect(state.awaitingInput).toBe(false);
+        expect(state.crashed).toBe(false);
+      }
+
+      // Re-render with null (deselect) — state stays empty.
+      await act(async () => {
+        root.render(React.createElement(Probe, { sid: null }));
+      });
+
+      {
+        const state = capturedState as unknown as AssemblerState;
+        expect(state.turns).toEqual([]);
+      }
+    } finally {
+      await act(async () => {
+        root.unmount();
+      });
+      container.remove();
     }
   });
 });

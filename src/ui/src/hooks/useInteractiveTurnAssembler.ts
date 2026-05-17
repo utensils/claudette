@@ -68,7 +68,8 @@ export interface AssemblerState {
 export type AssemblerEvent =
   | { type: "output"; bytes: Uint8Array; seq: number }
   | { type: "hook"; kind: HookKind; reason?: string }
-  | { type: "exit"; reason: string };
+  | { type: "exit"; reason: string }
+  | { type: "reset" };
 
 export const initialAssemblerState: AssemblerState = {
   turns: [],
@@ -256,6 +257,13 @@ export function assemblerReducer(
             });
       return { ...state, turns, crashed: true };
     }
+    case "reset": {
+      // Drop all accumulated turns + aux state. Used by the hook when
+      // `sid` changes so events from a stale session don't bleed into
+      // the next one. Returns a fresh reference even when state is
+      // already empty so callers can rely on the dispatch landing.
+      return initialAssemblerState;
+    }
   }
 }
 
@@ -280,6 +288,14 @@ export function useInteractiveTurnAssembler(
   sid: string | null,
 ): UseInteractiveTurnAssembler {
   const [state, dispatch] = useReducer(assemblerReducer, initialAssemblerState);
+
+  // Reset accumulated turns / aux state whenever `sid` changes (including
+  // the `sid -> null` deselect case). The subscription effect below
+  // re-registers listeners for the new sid; without this, the previous
+  // session's turns would remain visible after the switch.
+  useEffect(() => {
+    dispatch({ type: "reset" });
+  }, [sid]);
 
   useEffect(() => {
     if (!sid) return;
