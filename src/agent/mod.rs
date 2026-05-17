@@ -1,6 +1,7 @@
 mod args;
 pub mod background;
 mod binary;
+pub mod claude_interactive;
 pub mod codex_app_server;
 mod environment;
 pub mod harness;

@@ -1,0 +1,142 @@
+//! ClaudeInteractive backend.
+//!
+//! Materializes a per-session settings overlay that registers Claude Code
+//! hooks, then asks an `InteractiveHost` to spawn `claude` with
+//! `CLAUDE_CONFIG_DIR` pointing at the overlay.
+
+use std::path::{Path, PathBuf};
+
+/// A transient `CLAUDE_CONFIG_DIR` overlay that registers three Claude Code
+/// hooks (Stop / Notification / UserPromptSubmit) which call back into the
+/// running GUI via the bundled `claudette-cli` binary.
+///
+/// The overlay is per-session: every interactive session gets its own
+/// directory keyed by `sid`, and its hook commands embed that same `sid` so
+/// the IPC callback can route events to the right channel.
+#[derive(Debug, Clone)]
+pub struct SettingsOverlay {
+    /// Absolute path to the overlay directory. Suitable for use as
+    /// `CLAUDE_CONFIG_DIR` when spawning `claude`.
+    pub dir: PathBuf,
+}
+
+impl SettingsOverlay {
+    /// Create a fresh per-session overlay directory and write `settings.json`
+    /// registering hooks that call back via `cli_bin_abs` with `--sid <sid>`.
+    ///
+    /// The hook schema matches the shape used by
+    /// `crate::agent::args::build_settings_json` — `hooks.<HookName>[]` with
+    /// `matcher` plus a nested `hooks[]` list of `{type, command}` entries.
+    pub fn materialize(parent: &Path, sid: &str, cli_bin_abs: &Path) -> std::io::Result<Self> {
+        let dir = parent.join(sid).join("claude-config");
+        std::fs::create_dir_all(&dir)?;
+
+        let cli = shell_quote(cli_bin_abs.to_string_lossy().as_ref());
+        let stop_cmd = format!("{cli} chat hook --sid {sid} --kind stop");
+        let awaiting_cmd = format!("{cli} chat hook --sid {sid} --kind awaiting");
+        let prompt_cmd = format!("{cli} chat hook --sid {sid} --kind prompt_submitted");
+
+        let settings = serde_json::json!({
+            "hooks": {
+                "Stop": [{
+                    "matcher": "",
+                    "hooks": [{ "type": "command", "command": stop_cmd }],
+                }],
+                "Notification": [{
+                    "matcher": "",
+                    "hooks": [{ "type": "command", "command": awaiting_cmd }],
+                }],
+                "UserPromptSubmit": [{
+                    "matcher": "",
+                    "hooks": [{ "type": "command", "command": prompt_cmd }],
+                }],
+            }
+        });
+        std::fs::write(
+            dir.join("settings.json"),
+            serde_json::to_vec_pretty(&settings)?,
+        )?;
+        Ok(Self { dir })
+    }
+
+    /// Remove the overlay directory. Idempotent — returns Ok if already gone.
+    pub fn cleanup(&self) -> std::io::Result<()> {
+        if self.dir.exists() {
+            std::fs::remove_dir_all(&self.dir)?;
+        }
+        Ok(())
+    }
+}
+
+/// POSIX-style shell quoting for the hook command. A bare path that only
+/// contains alphanumerics plus `/ _ - .` is left as-is; anything else is
+/// single-quoted with embedded `'` escaped as `'\''`.
+fn shell_quote(s: &str) -> String {
+    if s.chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '/' | '_' | '-' | '.'))
+    {
+        s.to_string()
+    } else {
+        format!("'{}'", s.replace('\'', "'\\''"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn overlay_writes_settings_with_three_hooks() {
+        let dir = tempfile::tempdir().unwrap();
+        let overlay = SettingsOverlay::materialize(
+            dir.path(),
+            "claudette-x-y",
+            Path::new("/abs/path/to/claudette-cli"),
+        )
+        .unwrap();
+        let json: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(overlay.dir.join("settings.json")).unwrap())
+                .unwrap();
+        let hooks = json.get("hooks").unwrap();
+        for key in ["Stop", "Notification", "UserPromptSubmit"] {
+            assert!(hooks.get(key).is_some(), "missing hook: {key}");
+            let arr = hooks.get(key).unwrap().as_array().unwrap();
+            assert_eq!(arr.len(), 1, "hook {key} should have one matcher entry");
+            let entry = &arr[0];
+            assert_eq!(entry.get("matcher").and_then(|v| v.as_str()), Some(""));
+            let inner = entry.get("hooks").unwrap().as_array().unwrap();
+            assert_eq!(inner.len(), 1);
+            assert_eq!(
+                inner[0].get("type").and_then(|v| v.as_str()),
+                Some("command")
+            );
+            let cmd = inner[0].get("command").and_then(|v| v.as_str()).unwrap();
+            assert!(cmd.contains("/abs/path/to/claudette-cli"), "cmd: {cmd}");
+            assert!(cmd.contains("--sid claudette-x-y"), "cmd: {cmd}");
+            assert!(cmd.contains("chat hook"), "cmd: {cmd}");
+        }
+        overlay.cleanup().unwrap();
+        assert!(!overlay.dir.exists());
+    }
+
+    #[test]
+    fn shell_quote_leaves_plain_paths_alone() {
+        assert_eq!(
+            shell_quote("/usr/local/bin/claudette-cli"),
+            "/usr/local/bin/claudette-cli"
+        );
+    }
+
+    #[test]
+    fn shell_quote_wraps_paths_with_spaces() {
+        assert_eq!(
+            shell_quote("/Users/me/Application Support/cli"),
+            "'/Users/me/Application Support/cli'"
+        );
+    }
+
+    #[test]
+    fn shell_quote_escapes_embedded_single_quotes() {
+        assert_eq!(shell_quote("foo'bar"), "'foo'\\''bar'");
+    }
+}
