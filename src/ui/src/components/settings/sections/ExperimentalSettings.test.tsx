@@ -11,6 +11,10 @@ const appStore = vi.hoisted(() => ({
   }),
   settingsFocus: null as string | null,
   clearSettingsFocus: vi.fn(),
+  claudeInteractiveEnabled: false,
+  setClaudeInteractiveEnabled: vi.fn((next: boolean) => {
+    appStore.claudeInteractiveEnabled = next;
+  }),
 }));
 
 const serviceMocks = vi.hoisted(() => ({
@@ -156,6 +160,35 @@ describe("ExperimentalSettings — Usage Insights consent gate", () => {
     expect(switches).toHaveLength(1);
     expect(switches[0]?.getAttribute("aria-label")).toBe(
       "experimental_claude_code_usage_aria",
+    );
+  });
+});
+
+describe("ExperimentalSettings — Claude (Interactive) toggle", () => {
+  beforeEach(() => {
+    appStore.claudeInteractiveEnabled = false;
+    appStore.setClaudeInteractiveEnabled.mockClear();
+  });
+
+  it("toggles claudeInteractiveEnabled when the switch is clicked", async () => {
+    const container = await renderSettings();
+    const toggle = container.querySelector(
+      'button[aria-label="experimental_claude_interactive_aria"]',
+    ) as HTMLButtonElement | null;
+    if (!toggle) throw new Error("Claude (Interactive) toggle not found");
+
+    expect(toggle.getAttribute("aria-checked")).toBe("false");
+
+    await act(async () => {
+      toggle.click();
+      await Promise.resolve();
+    });
+
+    expect(appStore.setClaudeInteractiveEnabled).toHaveBeenCalledWith(true);
+    expect(appStore.claudeInteractiveEnabled).toBe(true);
+    expect(serviceMocks.setAppSetting).toHaveBeenCalledWith(
+      "claude_interactive_enabled",
+      "true",
     );
   });
 });

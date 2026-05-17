@@ -461,6 +461,9 @@
   "git_project_view_issues_prs_aria": "Show open issues and pull requests in project view",
 
   "experimental_title": "Experimental",
+  "experimental_claude_interactive": "Claude (Interactive)",
+  "experimental_claude_interactive_desc": "Run interactive claude inside a detachable host (tmux on Unix, sidecar on Windows). Survives Claudette closing.",
+  "experimental_claude_interactive_aria": "Claude (Interactive)",
   "experimental_claude_code_usage": "Claude Code Usage",
   "experimental_claude_code_usage_desc": "Surface Claude Pro / Max subscription quotas (5-hour session, weekly all-model, weekly Sonnet/Opus, extra usage) in the chat composer's usage meter. Requires a standard Pro or Max login — does not apply to API-key sessions or to Codex / OpenAI / OpenRouter / Pi backends, which already show local-aggregate token totals.",
   "experimental_claude_code_usage_aria": "Claude Code Usage",
