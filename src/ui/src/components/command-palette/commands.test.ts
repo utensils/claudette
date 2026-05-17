@@ -14,7 +14,9 @@ import { afterAll } from "vitest";
 vi.stubGlobal("navigator", { platform: "MacIntel", userAgentData: undefined });
 afterAll(() => { vi.unstubAllGlobals(); });
 
-const { buildCommands, buildModelCommands, buildEffortCommands, buildFileCommands } = await import("./commands");
+const { buildCommands, buildModelCommands, buildEffortCommands, buildFileCommands, groupCommandsByCategory, CATEGORY_ORDER, CATEGORY_LABELS } = await import("./commands");
+const { Search: stubIcon } = await import("lucide-react");
+type Command = ReturnType<typeof buildCommands>[number];
 
 /** Minimal CommandContext stub — only the fields buildCommands needs. */
 function makeContext(overrides: Partial<CommandContext> = {}): CommandContext {
@@ -325,5 +327,88 @@ describe("zoom command discoverability via searchScore", () => {
   it("'reset' query matches reset-zoom", () => {
     const score = scoreCommand("Reset Zoom", "Reset UI font size to default (13px)", ["zoom", "reset", "actual", "default", "font", "size"], "reset");
     expect(score).toBeGreaterThan(0);
+  });
+});
+
+describe("groupCommandsByCategory — keyboard navigation invariant", () => {
+  // Build a small set spanning multiple categories with the **input order**
+  // deliberately different from `CATEGORY_ORDER`. The bug fixed in
+  // CommandPalette.tsx was: `selectedIndex` indexed the input-order array
+  // while the highlight indexed the rendered (grouped) order. Pressing
+  // Enter on row N executed input[N], not rendered[N]. This test pins the
+  // invariant that the flattened group order is what callers must index.
+  const makeCmd = (id: string, category: Command["category"]): Command => ({
+    id,
+    name: id,
+    category,
+    icon: stubIcon,
+    execute: () => {},
+  });
+
+  const filtered: Command[] = [
+    // Input order intentionally mixes categories so grouping must shuffle.
+    makeCmd("ws-1", "workspace"),
+    makeCmd("nav-1", "navigation"),
+    makeCmd("gen-1", "general"),
+    makeCmd("ws-2", "workspace"),
+    makeCmd("ui-1", "ui"),
+    makeCmd("gen-2", "general"),
+  ];
+
+  it("orders buckets by CATEGORY_ORDER", () => {
+    const groups = groupCommandsByCategory(filtered);
+    expect(groups.map((g) => g.category)).toEqual([
+      "general",
+      "ui",
+      "workspace",
+      "navigation",
+    ]);
+  });
+
+  it("preserves input order within each bucket", () => {
+    const groups = groupCommandsByCategory(filtered);
+    const general = groups.find((g) => g.category === "general")!;
+    expect(general.commands.map((c) => c.id)).toEqual(["gen-1", "gen-2"]);
+    const workspace = groups.find((g) => g.category === "workspace")!;
+    expect(workspace.commands.map((c) => c.id)).toEqual(["ws-1", "ws-2"]);
+  });
+
+  it("flattened group order is what arrow keys must index — not the input order", () => {
+    const groups = groupCommandsByCategory(filtered);
+    const flat = groups.flatMap((g) => g.commands);
+
+    // The visible/rendered order:
+    expect(flat.map((c) => c.id)).toEqual([
+      "gen-1", "gen-2",   // general bucket first per CATEGORY_ORDER
+      "ui-1",             // then ui
+      "ws-1", "ws-2",     // then workspace
+      "nav-1",            // then navigation
+    ]);
+
+    // Sanity check that the input order differs — i.e. without the helper
+    // (or with the old `filteredCommands[selectedIndex]` lookup) row 0
+    // would execute "ws-1" while the user sees "gen-1" highlighted.
+    expect(filtered.map((c) => c.id)[0]).toBe("ws-1");
+    expect(flat.map((c) => c.id)[0]).toBe("gen-1");
+  });
+
+  it("handles empty filtered list", () => {
+    expect(groupCommandsByCategory([])).toEqual([]);
+  });
+
+  it("CATEGORY_ORDER includes every declared CommandCategory", () => {
+    // Source of truth: CATEGORY_LABELS is keyed by every CommandCategory
+    // (TypeScript enforces it via Record<CommandCategory, string>). If a
+    // future commit adds a category to the type but forgets to register
+    // it in CATEGORY_ORDER, that bucket would be silently dropped from
+    // the rendered list — catch that here instead of in the wild.
+    const declared = Object.keys(CATEGORY_LABELS);
+    for (const cat of declared) {
+      expect(CATEGORY_ORDER).toContain(cat);
+    }
+    // And vice versa — no stale entries in CATEGORY_ORDER.
+    for (const cat of CATEGORY_ORDER) {
+      expect(declared).toContain(cat);
+    }
   });
 });
