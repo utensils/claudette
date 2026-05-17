@@ -1212,42 +1212,69 @@ async fn handle_submit_agent_approval(
 /// - `sid` (string, required): interactive session id the GUI handed
 ///   to the Claude process when it spawned.
 /// - `kind` (string, required): hook kind (e.g. `stop`, `awaiting`,
-///   `prompt_submitted`).
-/// - `reason` (string, optional): human-readable detail.
+///   `prompt_submitted`, `subagent_stop`). Unknown kinds are preserved
+///   as `HookEventKind::Unknown { raw_kind }` so a Claude-Code release
+///   that adds a new hook still surfaces in logs instead of failing
+///   the wire call.
+/// - `reason` (string, optional): human-readable detail, only meaningful
+///   for `awaiting`.
 /// - `payload_stdin` (string, optional): the raw stdin payload Claude
-///   Code passed to the hook command (JSON, or empty if the hook
-///   produced no stdin).
+///   Code passed to the hook command. Accepted on the wire for forward
+///   compatibility (Task G4 may want it) but not yet plumbed into
+///   `InteractiveHookEvent`.
 ///
-/// The full event routing — registering per-session channels and
-/// dispatching parsed events onto them — lands in Task E2. This
-/// handler currently validates the request shape and returns an
-/// explicit "not yet implemented" error so a misconfigured hook or a
-/// premature integration shows up loudly instead of being silently
-/// swallowed.
+/// Parses the params into an [`InteractiveHookEvent`] and hands it to
+/// [`AppState::dispatch_interactive_hook`]. Returns `{"dispatched": true}`
+/// regardless of whether a listener was registered — the absence of a
+/// channel is a "log and drop" condition (handled inside `dispatch_…`),
+/// not a wire error, because hooks legitimately fire during startup and
+/// teardown when no runner is listening yet.
 async fn handle_chat_hook(
-    _app: &AppHandle,
+    app: &AppHandle,
     params: &serde_json::Value,
 ) -> Result<serde_json::Value, String> {
-    let _sid = params
+    let sid = params
         .get("sid")
         .and_then(|v| v.as_str())
         .ok_or("missing sid")?
         .to_string();
-    let _kind = params
+    let kind_raw = params
         .get("kind")
         .and_then(|v| v.as_str())
         .ok_or("missing kind")?
         .to_string();
-    let _reason = params
+    let reason = params
         .get("reason")
         .and_then(|v| v.as_str())
         .map(String::from);
+    // Accepted but currently unused; see doc comment.
     let _payload_stdin = params
         .get("payload_stdin")
         .and_then(|v| v.as_str())
         .map(String::from)
         .unwrap_or_default();
-    Err("chat_hook not yet implemented".to_string())
+
+    let kind = parse_hook_event_kind(&kind_raw, reason);
+    let state = app_state(app)?;
+    state.dispatch_interactive_hook(crate::state::InteractiveHookEvent { sid, kind });
+    Ok(json!({"dispatched": true}))
+}
+
+/// Map a wire `kind` string into a typed [`crate::state::HookEventKind`].
+/// `reason` is only consumed by the `awaiting` variant; for other kinds
+/// it is intentionally dropped (the wire surface accepts it on every
+/// hook for symmetry, but only `awaiting` needs to thread the reason
+/// through to the runner).
+fn parse_hook_event_kind(kind: &str, reason: Option<String>) -> crate::state::HookEventKind {
+    match kind {
+        "stop" => crate::state::HookEventKind::Stop,
+        "awaiting" => crate::state::HookEventKind::Awaiting { reason },
+        "prompt_submitted" => crate::state::HookEventKind::PromptSubmitted,
+        "subagent_stop" => crate::state::HookEventKind::SubagentStop,
+        other => crate::state::HookEventKind::Unknown {
+            raw_kind: other.to_string(),
+        },
+    }
 }
 
 /// Delegates to the shared `commands::workspace::archive_workspace_inner`
@@ -1932,5 +1959,129 @@ mod tests {
         .expect("must parse");
         assert_eq!(parsed.plan_mode, None);
         assert_eq!(parsed.model, None);
+    }
+
+    // ---- chat_hook routing (Task E2) ------------------------------------
+    //
+    // `handle_chat_hook` itself takes an `&AppHandle` so it can pull
+    // `AppState` out of Tauri's managed-state container, which can't be
+    // synthesized in a pure-Rust unit test. We exercise the two pieces
+    // of logic that handler stitches together — `parse_hook_event_kind`
+    // (wire-string → typed kind) and `AppState::dispatch_interactive_hook`
+    // (typed event → registered channel) — directly. That's the
+    // equivalent of running the handler end-to-end: the handler is a
+    // thin compose of those two functions plus param extraction.
+
+    fn fresh_app_state() -> crate::state::AppState {
+        // Same construction shape used by tray.rs's `fresh_state`. The
+        // DB path / worktree dir are not exercised here; only the
+        // interactive-hook channel map is.
+        let plugins = claudette::plugin_runtime::PluginRegistry::discover(std::path::Path::new(
+            "/nonexistent",
+        ));
+        crate::state::AppState::new(
+            std::path::PathBuf::from(":memory:"),
+            std::path::PathBuf::from("/tmp"),
+            plugins,
+        )
+    }
+
+    #[test]
+    fn parse_hook_event_kind_maps_known_kinds() {
+        use crate::state::HookEventKind;
+        assert_eq!(parse_hook_event_kind("stop", None), HookEventKind::Stop);
+        assert_eq!(
+            parse_hook_event_kind("awaiting", Some("perm".to_string())),
+            HookEventKind::Awaiting {
+                reason: Some("perm".to_string())
+            }
+        );
+        assert_eq!(
+            parse_hook_event_kind("awaiting", None),
+            HookEventKind::Awaiting { reason: None }
+        );
+        assert_eq!(
+            parse_hook_event_kind("prompt_submitted", None),
+            HookEventKind::PromptSubmitted
+        );
+        assert_eq!(
+            parse_hook_event_kind("subagent_stop", None),
+            HookEventKind::SubagentStop
+        );
+        match parse_hook_event_kind("future_hook", None) {
+            HookEventKind::Unknown { raw_kind } => assert_eq!(raw_kind, "future_hook"),
+            other => panic!("expected Unknown, got {other:?}"),
+        }
+    }
+
+    /// End-to-end E2 contract: a hook with `kind: "awaiting"` plus a
+    /// reason, dispatched to the sid the runner registered, lands on
+    /// the runner's receiver as the matching typed event.
+    #[tokio::test]
+    async fn dispatch_interactive_hook_delivers_awaiting_to_registered_channel() {
+        use crate::state::{HookEventKind, InteractiveHookEvent};
+        use tokio::sync::mpsc;
+
+        let state = fresh_app_state();
+        let (tx, mut rx) = mpsc::unbounded_channel::<InteractiveHookEvent>();
+        state.register_interactive_hook_channel("claudette-x-y", tx);
+
+        // Simulate the parse step `handle_chat_hook` runs on incoming
+        // wire params, then drive the same dispatch entry point.
+        let kind = parse_hook_event_kind("awaiting", Some("perm".to_string()));
+        state.dispatch_interactive_hook(InteractiveHookEvent {
+            sid: "claudette-x-y".to_string(),
+            kind,
+        });
+
+        let received = rx.recv().await.expect("channel should receive event");
+        assert_eq!(received.sid, "claudette-x-y");
+        assert_eq!(
+            received.kind,
+            HookEventKind::Awaiting {
+                reason: Some("perm".to_string())
+            }
+        );
+    }
+
+    /// Hooks that arrive before any runner has registered must NOT
+    /// crash, panic, or block; they're expected during startup races
+    /// and the dispatcher's contract is "log and drop". The handler
+    /// still returns success on the wire (the caller did its job).
+    #[tokio::test]
+    async fn dispatch_interactive_hook_drops_event_with_no_listener() {
+        use crate::state::{HookEventKind, InteractiveHookEvent};
+
+        let state = fresh_app_state();
+        // Intentionally do not register a channel for this sid.
+        state.dispatch_interactive_hook(InteractiveHookEvent {
+            sid: "claudette-unknown".to_string(),
+            kind: HookEventKind::Stop,
+        });
+        // Nothing to assert beyond "did not panic". If the future test
+        // adds a metric or log capture, this is the seam to extend.
+    }
+
+    /// Unregister must close the receiver loop in the runner: after
+    /// teardown, a hook for the same sid takes the "no listener" path
+    /// and the previously-registered receiver no longer receives.
+    #[tokio::test]
+    async fn unregister_interactive_hook_channel_stops_delivery() {
+        use crate::state::{HookEventKind, InteractiveHookEvent};
+        use tokio::sync::mpsc;
+
+        let state = fresh_app_state();
+        let (tx, mut rx) = mpsc::unbounded_channel::<InteractiveHookEvent>();
+        state.register_interactive_hook_channel("claudette-x-y", tx);
+        state.unregister_interactive_hook_channel("claudette-x-y");
+
+        state.dispatch_interactive_hook(InteractiveHookEvent {
+            sid: "claudette-x-y".to_string(),
+            kind: HookEventKind::Stop,
+        });
+
+        // The sender was dropped by unregister; the only sender held
+        // outside the map is gone, so the channel is closed.
+        assert!(rx.recv().await.is_none(), "channel should be closed");
     }
 }

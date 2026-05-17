@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use claudette::agent::AgentSession;
-use tokio::sync::{RwLock, Semaphore};
+use tokio::sync::{RwLock, Semaphore, mpsc};
 
 use claudette::claude_help::ClaudeFlagDef;
 use claudette::env_provider::{EnvCache, EnvWatcher};
@@ -57,6 +57,50 @@ pub enum AttentionKind {
     Ask,
     /// Agent wants plan approval (ExitPlanMode).
     Plan,
+}
+
+/// Lifecycle signal received from a Claude Code hook (relayed by
+/// `claudette-cli chat hook`) for an interactive session. Variants
+/// mirror the Claude Code hook surface the interactive runner cares
+/// about; the `Unknown` arm preserves forward-compatibility so an
+/// unrecognized hook name shows up in logs instead of silently
+/// failing on the wire.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HookEventKind {
+    /// `Stop` hook — the active turn finished. The runner uses this to
+    /// know it can dispatch the next queued prompt or hand control back
+    /// to the user.
+    Stop,
+    /// `Notification` hook fired with an `awaiting`-style reason
+    /// (permission prompt, idle-while-waiting-for-input, etc). The
+    /// optional `reason` carries the raw Claude-Code reason string so
+    /// the runner can distinguish permission asks from generic
+    /// awaits when surfacing UI.
+    Awaiting { reason: Option<String> },
+    /// `UserPromptSubmit` hook — Claude Code accepted a prompt and is
+    /// about to start work on it. Emitted by the cli relay when the
+    /// interactive driver wants to know that its enqueued prompt was
+    /// actually delivered (rather than buffered in the CLI's input
+    /// queue).
+    PromptSubmitted,
+    /// `SubagentStop` hook — a nested Task subagent finished. Distinct
+    /// from `Stop` because the top-level turn is still in flight.
+    SubagentStop,
+    /// Any hook kind the runner doesn't know about. Carries the raw
+    /// kind string so log lines can still identify what arrived.
+    Unknown { raw_kind: String },
+}
+
+/// One hook event delivered to a single interactive session. The `sid`
+/// is the synthetic interactive session id Claudette stamps onto the
+/// child Claude Code process via `--session-id` (or env var) at spawn
+/// time; the cli relay echoes that back via `claudette-cli chat hook
+/// --sid …` so dispatch can fan a single CLI invocation to the right
+/// session-scoped channel.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InteractiveHookEvent {
+    pub sid: String,
+    pub kind: HookEventKind,
 }
 
 /// A `control_request: can_use_tool` the CLI is waiting on the host to
@@ -735,6 +779,19 @@ pub struct AppState {
     /// deleted, or manually fired so the polling loop can recompute its next
     /// deadline immediately instead of waiting for the fallback tick.
     pub scheduler_notify: Arc<tokio::sync::Notify>,
+    /// Per-interactive-session hook delivery channels, keyed by the
+    /// synthetic interactive session id (`sid`). Producers are
+    /// `claudette-cli chat hook` invocations routed through `ipc.rs`;
+    /// consumers are the per-session interactive runners (Task F3/G4)
+    /// that own the receiving end of the matching `mpsc::UnboundedReceiver`.
+    /// A sender registered here without a live receiver is fine — the
+    /// receiver simply isn't draining yet — but a hook arriving with no
+    /// registered sender is logged and dropped, since there is nobody to
+    /// hand the event to. `Arc<Mutex<…>>` (the std mutex) is sufficient
+    /// because the critical section is a single HashMap op; there's no
+    /// await held inside it.
+    pub interactive_hook_channels:
+        Arc<Mutex<HashMap<String, mpsc::UnboundedSender<InteractiveHookEvent>>>>,
 }
 
 impl AppState {
@@ -791,6 +848,7 @@ impl AppState {
             bulk_cleanup_cancels: RwLock::new(HashMap::new()),
             workspace_creates_in_flight: Mutex::new(HashSet::new()),
             scheduler_notify: Arc::new(tokio::sync::Notify::new()),
+            interactive_hook_channels: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -819,6 +877,87 @@ impl AppState {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .remove(repo_id);
+    }
+
+    /// Register the sender half of a per-session hook channel. Replaces
+    /// any existing sender for `sid` (the previous receiver will see its
+    /// stream end on the next poll). The interactive runner is expected
+    /// to call [`Self::unregister_interactive_hook_channel`] in its
+    /// teardown path so the map doesn't grow without bound across
+    /// session restarts.
+    ///
+    /// Not yet wired into a production call site: the interactive
+    /// runner (Tasks F3 / G4) is the eventual caller. Exposed now so
+    /// the routing pipeline lands and tests as a whole and so the
+    /// public surface is stable before the consumer arrives.
+    #[allow(dead_code)]
+    pub fn register_interactive_hook_channel(
+        &self,
+        sid: &str,
+        tx: mpsc::UnboundedSender<InteractiveHookEvent>,
+    ) {
+        let mut map = self
+            .interactive_hook_channels
+            .lock()
+            .expect("interactive_hook_channels poisoned");
+        map.insert(sid.to_string(), tx);
+    }
+
+    /// Drop the sender half of a per-session hook channel. Safe to call
+    /// for an unknown `sid` (no-op). Doing this on session teardown
+    /// closes the receiver loop in the runner.
+    ///
+    /// See [`Self::register_interactive_hook_channel`] for the F3 / G4
+    /// production caller; tracked here so the public surface lands
+    /// with E2.
+    #[allow(dead_code)]
+    pub fn unregister_interactive_hook_channel(&self, sid: &str) {
+        let mut map = self
+            .interactive_hook_channels
+            .lock()
+            .expect("interactive_hook_channels poisoned");
+        map.remove(sid);
+    }
+
+    /// Deliver `event` to whichever interactive runner is registered for
+    /// `event.sid`. If no channel is registered, log a warning and drop
+    /// the event — this is the common case during startup (CLI hook
+    /// fires before the runner has wired up its receiver) and during
+    /// shutdown (runner already torn down, late hook still draining).
+    /// Send failures (receiver dropped without `unregister`) are also
+    /// logged and the stale entry is evicted so the next event takes
+    /// the "no listener" path instead of repeatedly failing to send.
+    pub fn dispatch_interactive_hook(&self, event: InteractiveHookEvent) {
+        // Hold the lock long enough to send; the channel is unbounded
+        // so send is non-blocking. Evicting on send failure has to
+        // happen under the same lock to avoid racing with a fresh
+        // re-registration on the same sid.
+        let mut map = self
+            .interactive_hook_channels
+            .lock()
+            .expect("interactive_hook_channels poisoned");
+        let sid = event.sid.clone();
+        match map.get(&sid) {
+            Some(tx) => {
+                if let Err(err) = tx.send(event) {
+                    tracing::warn!(
+                        target: "claudette::interactive",
+                        sid = %sid,
+                        error = %err,
+                        "interactive hook receiver dropped before unregister; evicting channel"
+                    );
+                    map.remove(&sid);
+                }
+            }
+            None => {
+                tracing::warn!(
+                    target: "claudette::interactive",
+                    sid = %sid,
+                    kind = ?event.kind,
+                    "no interactive hook channel registered for sid; dropping event"
+                );
+            }
+        }
     }
 
     /// Snapshot the plugin registry for use across `await` points.
