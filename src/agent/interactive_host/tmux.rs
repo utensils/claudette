@@ -93,6 +93,13 @@ fn spawn_fifo_tailer(
         let mut f = match std::fs::OpenOptions::new().read(true).open(&fifo) {
             Ok(f) => f,
             Err(e) => {
+                tracing::warn!(
+                    target: "claudette::agent",
+                    subsystem = "tmux-host",
+                    sid = %sid.as_str(),
+                    error = %e,
+                    "tmux fifo open failed"
+                );
                 let _ = events.send(AttachEvent::Error {
                     message: format!("fifo open failed: {e}"),
                     recoverable: false,
@@ -110,6 +117,12 @@ fn spawn_fifo_tailer(
                     // tmux can briefly close pipe-pane on `respawn-pane`
                     // and similar without the session ending.
                     if !tmux_session_exists_blocking(sid.as_str()) {
+                        tracing::info!(
+                            target: "claudette::agent",
+                            subsystem = "tmux-host",
+                            sid = %sid.as_str(),
+                            "tmux session ended, emitting Exit"
+                        );
                         let _ = events.send(AttachEvent::Exit {
                             exit_status: -1,
                             reason: "session ended".into(),
@@ -130,6 +143,13 @@ fn spawn_fifo_tailer(
                     });
                 }
                 Err(e) => {
+                    tracing::warn!(
+                        target: "claudette::agent",
+                        subsystem = "tmux-host",
+                        sid = %sid.as_str(),
+                        error = %e,
+                        "tmux fifo reader exiting on error"
+                    );
                     let _ = events.send(AttachEvent::Error {
                         message: format!("fifo read failed: {e}"),
                         recoverable: false,
@@ -195,8 +215,23 @@ impl InteractiveHost for TmuxHost {
             }
             let st = cmd.status().await.map_err(HostError::Io)?;
             if !st.success() {
+                tracing::warn!(
+                    target: "claudette::agent",
+                    subsystem = "tmux-host",
+                    sid = %sid.as_str(),
+                    status = %st,
+                    "tmux new-session failed"
+                );
                 return Err(HostError::Other(format!("tmux new-session failed: {st}")));
             }
+            tracing::info!(
+                target: "claudette::agent",
+                subsystem = "tmux-host",
+                sid = %sid.as_str(),
+                rows = spec.rows,
+                cols = spec.cols,
+                "tmux session spawned"
+            );
 
             // 3. (Re)create the FIFO and wire pipe-pane to it.
             let fifo = self.fifo_path(sid);
@@ -214,6 +249,13 @@ impl InteractiveHost for TmuxHost {
                 .await
                 .map_err(HostError::Io)?;
             if !st.success() {
+                tracing::warn!(
+                    target: "claudette::agent",
+                    subsystem = "tmux-host",
+                    sid = %sid.as_str(),
+                    status = %st,
+                    "tmux pipe-pane setup failed"
+                );
                 return Err(HostError::Other(format!("tmux pipe-pane failed: {st}")));
             }
 
@@ -418,12 +460,20 @@ impl InteractiveHost for TmuxHost {
             }
             StopMode::Force => {}
         }
-        // Always kill — graceful path is best-effort.
-        let _ = Command::new("tmux")
+        // Always kill — graceful path is best-effort. Propagate spawn
+        // / wait errors via `?`; previously a stray `let _ =` swallowed
+        // the `Result` so I/O failures here disappeared silently.
+        Command::new("tmux")
             .args(["kill-session", "-t", sid.as_str()])
             .status()
             .await
             .map_err(HostError::Io)?;
+        tracing::info!(
+            target: "claudette::agent",
+            subsystem = "tmux-host",
+            sid = %sid.as_str(),
+            "tmux session stopped"
+        );
 
         // Drop the broadcast hub. Subscribers see `RecvError::Closed`
         // which closes their attach streams. The FIFO tailer thread will
