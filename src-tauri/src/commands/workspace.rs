@@ -751,6 +751,18 @@ pub(crate) async fn archive_workspace_inner(
         let _ = db.end_agent_session(sid, true);
     }
 
+    // Gracefully stop any interactive (long-lived `claude` TUI) sessions
+    // belonging to this workspace BEFORE we touch the workspace row. The
+    // `interactive_sessions` table has `ON DELETE CASCADE` against
+    // `workspaces(id)`, so the hard-delete path below would otherwise
+    // remove the rows while the tmux/sidecar host still has live
+    // sessions — orphaning them with no Claudette tracking.
+    //
+    // Failures inside `stop_sessions_for_workspace` are logged and
+    // skipped so a misbehaving host can't block archive. The DB
+    // cascade still runs and cleans up the rows.
+    stop_interactive_sessions_for_workspace_teardown(state, &state.db_path, id).await;
+
     // Resolve and run the archive script before removing the worktree so it
     // still has filesystem access. Best-effort: failure logs to chat but
     // does not block the archive. The frontend gates this via
@@ -1026,6 +1038,13 @@ pub async fn delete_workspace(
     for pid in pids_to_stop {
         let _ = claudette::agent::stop_agent(pid).await;
     }
+
+    // Gracefully stop any interactive (long-lived `claude` TUI) sessions
+    // belonging to this workspace BEFORE the `delete_workspace_with_summary`
+    // call below cascades through `interactive_sessions`. Doing this
+    // after the cascade would leave orphan tmux / sidecar sessions
+    // running with no Claudette row tracking them.
+    stop_interactive_sessions_for_workspace_teardown(&state, &state.db_path, &id).await;
 
     if let Some(repo) = repo {
         // Remove worktree if active.
@@ -1485,6 +1504,94 @@ async fn delete_workspaces_bulk_body(
         failed,
         cancelled,
     })
+}
+
+/// Shared interactive-session teardown used by both the archive and
+/// delete paths. Enumerates the persisted `interactive_sessions` rows
+/// for `workspace_id`, resolves the workspace's `InteractiveHost`, and
+/// calls `host.stop(sid, Graceful)` on each live row through the
+/// lib-level [`claudette::interactive::stop_sessions_for_workspace`]
+/// helper. Also drops the sid → workspace_id entries in
+/// [`AppState::interactive_sessions`] so a stale lookup can't route a
+/// later command to a torn-down host.
+///
+/// `Database` is `!Sync` (rusqlite's `Connection`), so this helper
+/// takes `db_path` and opens its own short-lived connection scoped to
+/// the row enumeration. That connection is dropped before the first
+/// `.await` on the host, keeping the resulting future `Send` and safe
+/// to call from a Tauri command body.
+///
+/// All errors are logged and swallowed: the user-facing operation
+/// (archive / delete) must still complete. If we can't read the rows,
+/// or the host can't be resolved, the FK `ON DELETE CASCADE` will
+/// still clean up the DB rows once the workspace is gone — the worst
+/// case is an orphan host session, not a wedged workspace teardown.
+async fn stop_interactive_sessions_for_workspace_teardown(
+    state: &AppState,
+    db_path: &Path,
+    workspace_id: &str,
+) {
+    // Scope the !Sync Database to a synchronous block so it's dropped
+    // before any await below. Opening a fresh connection here mirrors
+    // the pattern every Tauri command uses for the same reason.
+    let rows: Vec<claudette::db::InteractiveSessionRow> = {
+        let db = match Database::open(db_path) {
+            Ok(db) => db,
+            Err(err) => {
+                tracing::warn!(
+                    target: "claudette::workspace",
+                    %workspace_id,
+                    error = %err,
+                    "failed to open db for interactive-session teardown; skipping host.stop",
+                );
+                return;
+            }
+        };
+        match db.list_interactive_sessions_for_workspace(workspace_id) {
+            Ok(rows) => rows,
+            Err(err) => {
+                tracing::warn!(
+                    target: "claudette::workspace",
+                    %workspace_id,
+                    error = %err,
+                    "failed to enumerate interactive sessions for teardown; skipping host.stop",
+                );
+                return;
+            }
+        }
+    };
+
+    if rows.is_empty() {
+        // Fast path: no rows means no host resolution (which can
+        // spawn the sidecar binary). Mirrors the boot reconciler's
+        // empty-rows fast path.
+        return;
+    }
+
+    match state.interactive_host_for(workspace_id).await {
+        Ok(host) => {
+            claudette::interactive::stop_sessions_for_workspace(&rows, host.as_ref()).await;
+        }
+        Err(err) => {
+            tracing::warn!(
+                target: "claudette::workspace",
+                %workspace_id,
+                rows = rows.len(),
+                error = %err,
+                "could not resolve interactive host for teardown; letting cascade clean up rows",
+            );
+        }
+    }
+
+    // Drop the sid → workspace_id mappings regardless of stop outcome
+    // so a later command can't route through them to a now-dead host.
+    // The workspace-keyed host cache in `interactive_hosts` is
+    // intentionally NOT evicted here — it's cheap to keep, and a
+    // sibling workspace sharing a host (future v2) would still need
+    // it.
+    for row in &rows {
+        state.unregister_interactive_session(&row.sid).await;
+    }
 }
 
 #[tauri::command]

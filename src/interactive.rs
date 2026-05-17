@@ -136,6 +136,55 @@ pub enum ReattachError {
     Host(#[from] crate::agent::interactive_host::HostError),
 }
 
+/// Gracefully stop every interactive session in `rows` against `host`.
+///
+/// Used by the workspace archive / delete code paths to tear down the
+/// HOST side of an interactive session BEFORE the `interactive_sessions`
+/// row is removed by `ON DELETE CASCADE`. Without this, a workspace
+/// delete would orphan a live tmux session / sidecar tab — Claudette
+/// would no longer track it, but it would keep running.
+///
+/// Failures from individual `host.stop` calls are logged at WARN and
+/// skipped. We do NOT propagate them: the user-facing operation
+/// (archive / delete) must still complete even if one host session
+/// can't be reached (e.g. tmux server already gone, sidecar socket
+/// closed). Cascading the failure would leave the user unable to clear
+/// a workspace whose host has already crashed, which is exactly the
+/// case where they need the cleanup most.
+///
+/// Pure function over a host trait so it can be unit-tested without
+/// booting Tauri — see the `stop_sessions_calls_host_stop_for_each`
+/// test below for the MockHost pattern.
+#[tracing::instrument(level = "info", target = "claudette::interactive", skip_all)]
+pub async fn stop_sessions_for_workspace(
+    rows: &[crate::db::InteractiveSessionRow],
+    host: &dyn crate::agent::interactive_host::InteractiveHost,
+) {
+    use crate::agent::interactive_host::SessionId;
+    use crate::agent::interactive_protocol::StopMode;
+
+    for row in rows {
+        // Skip rows we already know are dead — there's nothing on the
+        // host side to stop and the next-state DB cascade will clean
+        // them up. "crashed" / "exited" rows still get the cascade.
+        if row.state == "crashed" || row.state == "exited" {
+            continue;
+        }
+        let sid = SessionId(row.sid.clone());
+        if let Err(err) = host.stop(&sid, StopMode::Graceful).await {
+            tracing::warn!(
+                target: "claudette::interactive",
+                sid = %row.sid,
+                workspace_id = %row.workspace_id,
+                state = %row.state,
+                error = %err,
+                "failed to gracefully stop interactive session during workspace teardown; \
+                 continuing so workspace delete/archive can proceed",
+            );
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -631,5 +680,277 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(row.state, "running");
+    }
+
+    // ----- stop_sessions_for_workspace -----------------------------------
+    //
+    // The MockHost below tracks every `stop` call (sid + mode) so the
+    // tests can assert exact graceful-shutdown ordering. Every other
+    // trait method panics because workspace teardown should never need
+    // to attach, send input, capture screen, etc. — only `stop` is
+    // valid on this path.
+
+    struct StopTrackingHost {
+        stops: Mutex<Vec<(String, StopMode)>>,
+        /// When `Some(sid)`, the matching `stop` call returns Err
+        /// instead of Ok, so we can assert that one failure doesn't
+        /// poison the rest of the batch.
+        fail_for_sid: Option<String>,
+    }
+
+    use std::sync::Mutex;
+
+    impl StopTrackingHost {
+        fn new() -> Self {
+            Self {
+                stops: Mutex::new(Vec::new()),
+                fail_for_sid: None,
+            }
+        }
+
+        fn with_failure_for(sid: &str) -> Self {
+            Self {
+                stops: Mutex::new(Vec::new()),
+                fail_for_sid: Some(sid.into()),
+            }
+        }
+
+        fn stopped_sids(&self) -> Vec<String> {
+            self.stops
+                .lock()
+                .unwrap()
+                .iter()
+                .map(|(s, _)| s.clone())
+                .collect()
+        }
+    }
+
+    #[async_trait]
+    impl InteractiveHost for StopTrackingHost {
+        async fn ensure_session(
+            &self,
+            _sid: &SessionId,
+            _spec: &SessionSpec,
+        ) -> Result<HostHandle, HostError> {
+            unimplemented!("stop_sessions_for_workspace must not call ensure_session")
+        }
+        async fn attach(&self, _sid: &SessionId) -> Result<(AttachId, AttachStream), HostError> {
+            unimplemented!("stop_sessions_for_workspace must not call attach")
+        }
+        async fn send_input(
+            &self,
+            _sid: &SessionId,
+            _payload: InputPayload,
+        ) -> Result<(), HostError> {
+            unimplemented!("stop_sessions_for_workspace must not call send_input")
+        }
+        async fn capture_screen(&self, _sid: &SessionId) -> Result<ScreenSnapshot, HostError> {
+            unimplemented!("stop_sessions_for_workspace must not call capture_screen")
+        }
+        async fn resize(&self, _sid: &SessionId, _rows: u16, _cols: u16) -> Result<(), HostError> {
+            unimplemented!("stop_sessions_for_workspace must not call resize")
+        }
+        async fn detach(&self, _sid: &SessionId, _attach_id: AttachId) -> Result<(), HostError> {
+            unimplemented!("stop_sessions_for_workspace must not call detach")
+        }
+        async fn stop(&self, sid: &SessionId, mode: StopMode) -> Result<(), HostError> {
+            self.stops.lock().unwrap().push((sid.0.clone(), mode));
+            if let Some(ref fail) = self.fail_for_sid
+                && fail == &sid.0
+            {
+                return Err(HostError::Unavailable("mock stop failure".into()));
+            }
+            Ok(())
+        }
+        async fn status(&self) -> Result<HostStatus, HostError> {
+            unimplemented!("stop_sessions_for_workspace must not call status")
+        }
+    }
+
+    #[tokio::test]
+    async fn stop_sessions_calls_host_stop_for_each_live_row() {
+        let host = StopTrackingHost::new();
+        let rows = vec![
+            make_row("claudette-ws1-aaaaaaaa", "ws-1", "running"),
+            make_row("claudette-ws1-bbbbbbbb", "ws-1", "detached"),
+        ];
+
+        stop_sessions_for_workspace(&rows, &host).await;
+
+        let stops = host.stops.lock().unwrap().clone();
+        assert_eq!(stops.len(), 2, "both running+detached rows must be stopped");
+        assert_eq!(stops[0].0, "claudette-ws1-aaaaaaaa");
+        assert_eq!(stops[0].1, StopMode::Graceful);
+        assert_eq!(stops[1].0, "claudette-ws1-bbbbbbbb");
+        assert_eq!(stops[1].1, StopMode::Graceful);
+    }
+
+    #[tokio::test]
+    async fn stop_sessions_skips_already_dead_rows() {
+        // Sessions in `crashed` or `exited` have no live host counterpart;
+        // calling stop on them risks a NotFound from the host. The DB
+        // cascade still removes the row when the workspace goes away.
+        let host = StopTrackingHost::new();
+        let rows = vec![
+            make_row("claudette-ws1-crashed1", "ws-1", "crashed"),
+            make_row("claudette-ws1-exited11", "ws-1", "exited"),
+            make_row("claudette-ws1-runninga", "ws-1", "running"),
+        ];
+
+        stop_sessions_for_workspace(&rows, &host).await;
+
+        let stopped = host.stopped_sids();
+        assert_eq!(
+            stopped,
+            vec!["claudette-ws1-runninga".to_string()],
+            "only the running row should reach host.stop",
+        );
+    }
+
+    #[tokio::test]
+    async fn stop_sessions_continues_after_per_row_host_failure() {
+        // The user-facing operation (archive / delete) must still
+        // complete when one host.stop call errors out, so the batch
+        // keeps going and the surviving sessions get their graceful
+        // shutdown.
+        let host = StopTrackingHost::with_failure_for("claudette-ws1-bbbbbbbb");
+        let rows = vec![
+            make_row("claudette-ws1-aaaaaaaa", "ws-1", "running"),
+            make_row("claudette-ws1-bbbbbbbb", "ws-1", "running"),
+            make_row("claudette-ws1-cccccccc", "ws-1", "detached"),
+        ];
+
+        stop_sessions_for_workspace(&rows, &host).await;
+
+        let stopped = host.stopped_sids();
+        assert_eq!(
+            stopped,
+            vec![
+                "claudette-ws1-aaaaaaaa".to_string(),
+                "claudette-ws1-bbbbbbbb".to_string(),
+                "claudette-ws1-cccccccc".to_string(),
+            ],
+            "host.stop must be attempted for every live row even when one fails",
+        );
+    }
+
+    #[tokio::test]
+    async fn stop_sessions_is_noop_for_empty_rows() {
+        // Empty row slice must not call any host method. Mirrors the
+        // boot-reconciler contract: workspaces with no interactive
+        // sessions shouldn't spin up the host at teardown time.
+        struct PanickyHost;
+        #[async_trait]
+        impl InteractiveHost for PanickyHost {
+            async fn ensure_session(
+                &self,
+                _sid: &SessionId,
+                _spec: &SessionSpec,
+            ) -> Result<HostHandle, HostError> {
+                unimplemented!()
+            }
+            async fn attach(
+                &self,
+                _sid: &SessionId,
+            ) -> Result<(AttachId, AttachStream), HostError> {
+                unimplemented!()
+            }
+            async fn send_input(
+                &self,
+                _sid: &SessionId,
+                _payload: InputPayload,
+            ) -> Result<(), HostError> {
+                unimplemented!()
+            }
+            async fn capture_screen(&self, _sid: &SessionId) -> Result<ScreenSnapshot, HostError> {
+                unimplemented!()
+            }
+            async fn resize(
+                &self,
+                _sid: &SessionId,
+                _rows: u16,
+                _cols: u16,
+            ) -> Result<(), HostError> {
+                unimplemented!()
+            }
+            async fn detach(
+                &self,
+                _sid: &SessionId,
+                _attach_id: AttachId,
+            ) -> Result<(), HostError> {
+                unimplemented!()
+            }
+            async fn stop(&self, _sid: &SessionId, _mode: StopMode) -> Result<(), HostError> {
+                panic!("stop must not be called when rows is empty")
+            }
+            async fn status(&self) -> Result<HostStatus, HostError> {
+                unimplemented!()
+            }
+        }
+
+        stop_sessions_for_workspace(&[], &PanickyHost).await;
+    }
+
+    // ----- End-to-end: workspace delete tears down interactive sessions ----
+    //
+    // This is the H2 acceptance test from the plan: insert an
+    // interactive_sessions row, call the workspace teardown helper, and
+    // assert (a) host.stop was called for the session and (b) the row is
+    // gone from the DB after the cascade. We exercise the lib-level
+    // helper plus a manual cascade-trigger (`delete_workspace_with_summary`)
+    // rather than the Tauri command, since the lib crate cannot depend
+    // on the Tauri command surface.
+
+    #[tokio::test]
+    async fn workspace_delete_stops_sessions_then_cascade_removes_row() {
+        let db = Database::open_in_memory().unwrap();
+        insert_test_workspace(&db, "ws-1");
+
+        // Seed two live interactive sessions and one crashed one. After
+        // workspace teardown we expect:
+        //   - host.stop called for the two live sessions, NOT the crashed one
+        //   - all three rows gone from the DB (cascade removes everything)
+        db.create_interactive_session(&make_row("claudette-ws1-running1", "ws-1", "running"))
+            .unwrap();
+        db.create_interactive_session(&make_row("claudette-ws1-detach1", "ws-1", "detached"))
+            .unwrap();
+        db.create_interactive_session(&make_row("claudette-ws1-crashe1", "ws-1", "crashed"))
+            .unwrap();
+
+        // Step 1: enumerate sessions, stop hosts (mimics the command path).
+        let rows = db.list_interactive_sessions_for_workspace("ws-1").unwrap();
+        assert_eq!(rows.len(), 3, "all three rows present before teardown");
+
+        let host = StopTrackingHost::new();
+        stop_sessions_for_workspace(&rows, &host).await;
+
+        let stopped = host.stopped_sids();
+        // Order is created_at DESC from the list query, so most-recently
+        // created comes first. The fixture sets created_at to the same
+        // value, so we just assert membership.
+        assert_eq!(stopped.len(), 2, "two live sessions stopped");
+        assert!(stopped.contains(&"claudette-ws1-running1".to_string()));
+        assert!(stopped.contains(&"claudette-ws1-detach1".to_string()));
+        assert!(
+            !stopped.contains(&"claudette-ws1-crashe1".to_string()),
+            "crashed row must not trigger host.stop",
+        );
+
+        // Step 2: cascade-delete the workspace.
+        db.delete_workspace_with_summary("ws-1").unwrap();
+
+        // The interactive_sessions rows must be gone via FK ON DELETE
+        // CASCADE — proves the host stop happened BEFORE the cascade
+        // (otherwise we'd have no rows to enumerate above).
+        for sid in [
+            "claudette-ws1-running1",
+            "claudette-ws1-detach1",
+            "claudette-ws1-crashe1",
+        ] {
+            assert!(
+                db.get_interactive_session(sid).unwrap().is_none(),
+                "row {sid} should be cascade-deleted with the workspace",
+            );
+        }
     }
 }
