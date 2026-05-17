@@ -1859,10 +1859,10 @@ pub async fn send_chat_message(
                                         // chat turn. Best-effort: log and continue.
                                         let db_path = state.db_path.clone();
                                         tokio::task::spawn_blocking(move || {
-                                            if let Err(err) =
-                                                claudette::db::Database::open(&db_path).and_then(
-                                                    |db| db.save_codex_rate_limits(&snapshot),
-                                                )
+                                            if let Err(err) = claudette::db::Database::open(
+                                                &db_path,
+                                            )
+                                            .and_then(|db| db.save_codex_rate_limits(&snapshot))
                                             {
                                                 tracing::warn!(
                                                     target: "claudette::usage",
