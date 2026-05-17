@@ -9,17 +9,25 @@
 //! `Response::HelloNack` depending on protocol_version compatibility.
 //!
 //! After the handshake the connection enters a request/response loop. Task C3
-//! wires `EnsureSession`, `Status`, `SendInput`, and `Stop`; `Resize`,
-//! `Detach`, `CaptureScreen`, and `Attach` land in C4 (they currently return
-//! `Response::Error { "not yet implemented" }`).
+//! wired `EnsureSession`, `Status`, `SendInput`, and `Stop`; C4 adds `Resize`,
+//! `CaptureScreen`, `Detach`, and the streaming `Attach` handler.
+//!
+//! `Attach` does not flow through the regular request/response loop: after
+//! ack-ing with `Response::AttachStarted { attach_id }` the connection
+//! becomes an event stream of `Event::Output` / `Event::Hook` / `Event::Exit`
+//! frames until the client closes the socket or the session exits. Per the
+//! plan's "simpler v1 model", a client detaches by closing the connection;
+//! the explicit `Detach` request is accepted (returns `Response::Ok`) for
+//! symmetry but is otherwise a no-op.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
+use base64::Engine as _;
 use claudette::agent::interactive_protocol::{
-    PROTOCOL_VERSION, Request, Response, StopMode,
+    Event, PROTOCOL_VERSION, Request, Response, StopMode,
     frame::{read_frame, write_frame},
 };
 use interprocess::local_socket::tokio::{Listener, Stream, prelude::*};
@@ -31,7 +39,7 @@ use interprocess::local_socket::{ListenerOptions, Name};
 use tokio::sync::Mutex;
 
 use crate::SessionSummary;
-use crate::session::Session;
+use crate::session::{Session, SessionEvent};
 
 /// Shared map of active sessions keyed by `sid`. Held by the server task and
 /// cloned into each accepted connection so all connections see the same set
@@ -168,7 +176,13 @@ async fn handle_connection(stream: Stream, map: SessionMap) -> std::io::Result<(
         return Ok(());
     }
 
-    // Post-handshake dispatch loop. Each frame is one Request + one Response.
+    // Post-handshake dispatch loop. Most requests are one Request + one
+    // Response; `Attach` is special — it ack-s with `AttachStarted` and then
+    // streams session events on the same connection until the session exits
+    // or the client closes the socket. `attach_id_counter` is bumped each
+    // time so clients can correlate later `Detach` requests if needed (v1
+    // detaches just close the socket).
+    let mut attach_id_counter: u64 = 0;
     loop {
         let frame_bytes = match read_frame(&mut r).await {
             Ok(b) => b,
@@ -190,13 +204,99 @@ async fn handle_connection(stream: Stream, map: SessionMap) -> std::io::Result<(
                 continue;
             }
         };
-        let resp = dispatch(&map, req).await;
-        write_frame(
-            &mut w,
-            &serde_json::to_vec(&resp).map_err(std::io::Error::other)?,
-        )
-        .await?;
+        match req {
+            Request::Attach { sid } => {
+                let session: Option<Arc<Session>> = {
+                    let m = map.lock().await;
+                    m.get(&sid).cloned()
+                };
+                let Some(s) = session else {
+                    let r = Response::Error {
+                        message: format!("not found: {sid}"),
+                        recoverable: true,
+                    };
+                    write_frame(
+                        &mut w,
+                        &serde_json::to_vec(&r).map_err(std::io::Error::other)?,
+                    )
+                    .await?;
+                    continue;
+                };
+                attach_id_counter += 1;
+                let attach_id = attach_id_counter;
+                let ack = Response::AttachStarted { attach_id };
+                write_frame(
+                    &mut w,
+                    &serde_json::to_vec(&ack).map_err(std::io::Error::other)?,
+                )
+                .await?;
+                // Stream events on this connection until the session exits or
+                // the client disconnects. After streaming ends we return — the
+                // connection is no longer in a dispatch state because we may
+                // have written `Event` frames where the client expects
+                // `Response` frames; the cleanest contract is to close.
+                stream_attach(&mut w, s, sid).await?;
+                return Ok(());
+            }
+            other => {
+                let resp = dispatch(&map, other).await;
+                write_frame(
+                    &mut w,
+                    &serde_json::to_vec(&resp).map_err(std::io::Error::other)?,
+                )
+                .await?;
+            }
+        }
     }
+}
+
+/// Pump session events onto an attached client connection until the session
+/// exits or the write side errors (i.e. the client disconnected).
+///
+/// Broadcast `Lagged` errors silently terminate the stream — clients are
+/// expected to re-sync via `CaptureScreen` after re-attaching. Per the plan
+/// this is acceptable for v1.
+async fn stream_attach<W>(w: &mut W, sess: Arc<Session>, sid: String) -> std::io::Result<()>
+where
+    W: tokio::io::AsyncWrite + Unpin,
+{
+    let mut rx = sess.tx.subscribe();
+    while let Ok(ev) = rx.recv().await {
+        let (event, is_exit) = match ev {
+            SessionEvent::Output { bytes, seq } => (
+                Event::Output {
+                    sid: sid.clone(),
+                    bytes_b64: base64::engine::general_purpose::STANDARD.encode(&bytes),
+                    seq,
+                },
+                false,
+            ),
+            SessionEvent::Hook(h) => (
+                Event::Hook {
+                    sid: sid.clone(),
+                    hook: h,
+                },
+                false,
+            ),
+            SessionEvent::Exit {
+                exit_status,
+                reason,
+            } => (
+                Event::Exit {
+                    sid: sid.clone(),
+                    exit_status,
+                    reason,
+                },
+                true,
+            ),
+        };
+        let bytes = serde_json::to_vec(&event).map_err(std::io::Error::other)?;
+        write_frame(w, &bytes).await?;
+        if is_exit {
+            break;
+        }
+    }
+    Ok(())
 }
 
 async fn dispatch(map: &SessionMap, req: Request) -> Response {
@@ -304,12 +404,59 @@ async fn dispatch(map: &SessionMap, req: Request) -> Response {
             // `SessionEvent::Exit` (see C4 for the streamed Exit event).
             Response::Stopped { exit_status: -1 }
         }
-        // Resize / Detach / CaptureScreen / Attach come in later tasks.
-        Request::Resize { .. }
-        | Request::Detach { .. }
-        | Request::CaptureScreen { .. }
-        | Request::Attach { .. } => Response::Error {
-            message: "not yet implemented".into(),
+        Request::Resize { sid, rows, cols } => {
+            let session: Option<Arc<Session>> = {
+                let m = map.lock().await;
+                m.get(&sid).cloned()
+            };
+            let Some(s) = session else {
+                return Response::Error {
+                    message: format!("not found: {sid}"),
+                    recoverable: true,
+                };
+            };
+            match s.resize(rows, cols).await {
+                Ok(()) => Response::Ok,
+                Err(e) => Response::Error {
+                    message: e.to_string(),
+                    recoverable: true,
+                },
+            }
+        }
+        Request::CaptureScreen { sid } => {
+            let session: Option<Arc<Session>> = {
+                let m = map.lock().await;
+                m.get(&sid).cloned()
+            };
+            let Some(s) = session else {
+                return Response::Error {
+                    message: format!("not found: {sid}"),
+                    recoverable: true,
+                };
+            };
+            let bytes = s.capture_screen().await;
+            let rows = *s.rows.lock().await;
+            let cols = *s.cols.lock().await;
+            Response::ScreenSnapshot {
+                rows,
+                cols,
+                ansi_bytes_b64: base64::engine::general_purpose::STANDARD.encode(&bytes),
+            }
+        }
+        // Per the simplified v1 model the canonical way to detach is to
+        // close the connection — `stream_attach` exits on the resulting
+        // write error / EOF. We accept the explicit Detach request for
+        // symmetry and treat it as a no-op `Ok`. (Note: Detach can never
+        // actually reach this branch on the attaching connection, which is
+        // in streaming mode and not reading frames. It can arrive on a
+        // sibling control connection that knows the `(sid, attach_id)` but
+        // has no per-attach receiver to drop, so "no-op" is the honest
+        // behavior.)
+        Request::Detach { .. } => Response::Ok,
+        // Attach is handled directly in `handle_connection` because it
+        // switches the connection into streaming mode after the ack frame.
+        Request::Attach { .. } => Response::Error {
+            message: "Attach must be handled by handle_connection".into(),
             recoverable: false,
         },
     }
