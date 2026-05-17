@@ -7,6 +7,7 @@ import {
   detectFileReferences,
   detectFilePaths,
   encodeFilePathHref,
+  extractClaudetteWorktreeRelativePath,
   FILE_PATH_SCHEME,
   formatFilePathDisplayLabel,
   isExplicitFilePathTarget,
@@ -258,6 +259,63 @@ describe("localhost file URL decoding", () => {
     expect(formatFilePathDisplayLabel("/tmp/report.md:2:4-5:8")).toBe(
       "report.md:2:4-5:8",
     );
+  });
+});
+
+describe("extractClaudetteWorktreeRelativePath", () => {
+  it("returns the workspace-relative tail of a Claudette worktree path", () => {
+    expect(
+      extractClaudetteWorktreeRelativePath(
+        "/Users/me/.claudette/workspaces/Claudette/cosmic-birch/src/main.rs",
+      ),
+    ).toBe("src/main.rs");
+    expect(
+      extractClaudetteWorktreeRelativePath(
+        "/Users/me/.claudette/workspaces/Claudette/cosmic-birch/src/ui/src/components/chat/composer/OverflowMenu.tsx",
+      ),
+    ).toBe("src/ui/src/components/chat/composer/OverflowMenu.tsx");
+  });
+
+  it("normalizes Windows-style separators before matching", () => {
+    expect(
+      extractClaudetteWorktreeRelativePath(
+        "C:\\Users\\me\\.claudette\\workspaces\\Claudette\\cosmic-birch\\src\\main.rs",
+      ),
+    ).toBe("src/main.rs");
+  });
+
+  it("returns null for paths outside any Claudette worktree", () => {
+    expect(
+      extractClaudetteWorktreeRelativePath("/Users/me/Documents/notes.md"),
+    ).toBeNull();
+    expect(
+      extractClaudetteWorktreeRelativePath(
+        "/Users/me/.claudette/workspaces/Claudette",
+      ),
+    ).toBeNull();
+    expect(extractClaudetteWorktreeRelativePath("src/main.rs")).toBeNull();
+  });
+
+  it("rejects captures containing parent-traversal segments", () => {
+    // The captured tail is fed back into the Monaco-opener pipeline, which
+    // would otherwise treat `../other.rs` as a valid workspace-relative
+    // path and escape the worktree. Reject traversal at the helper level
+    // so every consumer is protected by default.
+    expect(
+      extractClaudetteWorktreeRelativePath(
+        "/Users/me/.claudette/workspaces/Claudette/cosmic-birch/../other.rs",
+      ),
+    ).toBeNull();
+    expect(
+      extractClaudetteWorktreeRelativePath(
+        "/Users/me/.claudette/workspaces/Claudette/cosmic-birch/src/../../etc/passwd",
+      ),
+    ).toBeNull();
+    expect(
+      extractClaudetteWorktreeRelativePath(
+        "/Users/me/.claudette/workspaces/Claudette/cosmic-birch/src/..",
+      ),
+    ).toBeNull();
   });
 });
 

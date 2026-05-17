@@ -1,7 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
 import { listWorkspaceFiles } from "../../services/tauri";
 import { useAppStore } from "../../stores/useAppStore";
-import { parseFilePathTarget } from "../../utils/filePathLinks";
+import {
+  extractClaudetteWorktreeRelativePath,
+  parseFilePathTarget,
+} from "../../utils/filePathLinks";
 
 export interface WorkspaceFileIndex {
   resolve: (path: string) => string | null;
@@ -71,6 +74,19 @@ export function useWorkspaceFileIndex(
         if (!normalized || normalized.startsWith("../")) return null;
         const lineSuffix = formatLineSuffix(parsed);
         if (data.paths.has(normalized)) return `${normalized}${lineSuffix}`;
+        // Absolute paths under a Claudette-managed worktree (this one or a
+        // sibling worktree of the same repo) collapse to their workspace-
+        // relative form. If the collapsed path is tracked in the index, the
+        // file lives in this worktree too and can open in Monaco.
+        const isAbsolute =
+          normalized.startsWith("/") || /^[A-Za-z]:\//.test(normalized);
+        if (isAbsolute) {
+          const fromWorktree = extractClaudetteWorktreeRelativePath(normalized);
+          if (fromWorktree && data.paths.has(fromWorktree)) {
+            return `${fromWorktree}${lineSuffix}`;
+          }
+          return null;
+        }
         if (normalized.includes("/")) return null;
         const basenamePath = data.uniqueBasenames.get(normalized.toLowerCase());
         return basenamePath ? `${basenamePath}${lineSuffix}` : null;

@@ -1,5 +1,8 @@
 import { relativizePath } from "../../hooks/toolSummary";
-import { parseFilePathTarget } from "../../utils/filePathLinks";
+import {
+  extractClaudetteWorktreeRelativePath,
+  parseFilePathTarget,
+} from "../../utils/filePathLinks";
 
 export interface MonacoFileRevealTarget {
   startLine: number;
@@ -25,12 +28,22 @@ export function monacoFileLinkTarget(
   worktreePath: string | null | undefined,
 ): MonacoFileLinkTarget | null {
   const parsed = parseFilePathTarget(filePath);
-  const rel = relativizePath(parsed.path, worktreePath);
+  let rel = relativizePath(parsed.path, worktreePath);
   if (
     /^([a-zA-Z]:[\\/]|[\\/])/.test(rel) ||
     rel === "~" ||
     rel.startsWith("~/") ||
-    rel.startsWith("~\\") ||
+    rel.startsWith("~\\")
+  ) {
+    // Absolute or home-relative after stripping the current worktree —
+    // the path points outside `worktreePath`. If it's still inside *some*
+    // Claudette-managed worktree of the same project, fall through to the
+    // workspace-relative form so the equivalent file opens in the current
+    // worktree's Monaco. Otherwise let the caller defer to the OS opener.
+    const fromOtherWorktree = extractClaudetteWorktreeRelativePath(rel);
+    if (!fromOtherWorktree) return null;
+    rel = fromOtherWorktree;
+  } else if (
     rel === "." ||
     rel === ".." ||
     rel.startsWith("../") ||
