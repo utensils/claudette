@@ -901,11 +901,11 @@ impl AppState {
     /// teardown path so the map doesn't grow without bound across
     /// session restarts.
     ///
-    /// Not yet wired into a production call site: the interactive
-    /// runner (Tasks F3 / G4) is the eventual caller. Exposed now so
-    /// the routing pipeline lands and tests as a whole and so the
-    /// public surface is stable before the consumer arrives.
-    #[allow(dead_code)]
+    /// Called from `commands::interactive::interactive_start` (Task F3)
+    /// to bridge CLI-relayed hooks (`claudette-cli chat hook` → IPC
+    /// `chat_hook` → [`Self::dispatch_interactive_hook`]) into the
+    /// `interactive://<sid>/hook` Tauri event stream the frontend
+    /// subscribes to.
     pub fn register_interactive_hook_channel(
         &self,
         sid: &str,
@@ -922,10 +922,9 @@ impl AppState {
     /// for an unknown `sid` (no-op). Doing this on session teardown
     /// closes the receiver loop in the runner.
     ///
-    /// See [`Self::register_interactive_hook_channel`] for the F3 / G4
-    /// production caller; tracked here so the public surface lands
-    /// with E2.
-    #[allow(dead_code)]
+    /// Paired with [`Self::register_interactive_hook_channel`]; called
+    /// from `commands::interactive::interactive_stop` (Task F3) on
+    /// session teardown.
     pub fn unregister_interactive_hook_channel(&self, sid: &str) {
         let mut map = self
             .interactive_hook_channels

@@ -38,7 +38,7 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, State};
 use tokio_stream::StreamExt;
 
-use crate::state::AppState;
+use crate::state::{AppState, HookEventKind, InteractiveHookEvent};
 
 /// Arguments for [`interactive_start`]. Mirrors
 /// [`SessionSpec`](claudette::agent::interactive_protocol::SessionSpec)
@@ -119,6 +119,7 @@ fn workspace_short(workspace_id: &str) -> &str {
 /// sid→workspace_id index.
 #[tauri::command]
 pub async fn interactive_start(
+    app: AppHandle,
     state: State<'_, AppState>,
     args: StartInteractiveArgs,
 ) -> Result<StartInteractiveResult, String> {
@@ -183,10 +184,55 @@ pub async fn interactive_start(
     state
         .register_interactive_session(&sess.sid, workspace_id)
         .await;
+
+    // Wire the per-session hook channel populated by `claudette-cli chat
+    // hook` → IPC `chat_hook` → `dispatch_interactive_hook`. The CLI-side
+    // hooks land on this channel; we forward them to the same
+    // `interactive://<sid>/hook` Tauri event topic that the attach stream
+    // uses so the frontend has a single subscription point regardless of
+    // event origin (host-observed vs CLI-relayed).
+    let (hook_tx, mut hook_rx) = tokio::sync::mpsc::unbounded_channel::<InteractiveHookEvent>();
+    state.register_interactive_hook_channel(&sess.sid, hook_tx);
+    let app_clone = app.clone();
+    let sid_clone = sess.sid.clone();
+    tokio::spawn(async move {
+        let topic = format!("interactive://{sid_clone}/hook");
+        while let Some(ev) = hook_rx.recv().await {
+            let payload = serde_json::json!({
+                "sid": ev.sid,
+                "kind": kind_to_wire(&ev.kind),
+                "reason": kind_reason(&ev.kind),
+            });
+            let _ = app_clone.emit(&topic, payload);
+        }
+    });
+
     Ok(StartInteractiveResult {
         sid: sess.sid,
         host_kind,
     })
+}
+
+/// Wire-format `kind` string for an [`InteractiveHookEvent`]. Mirrors
+/// the parsing in `ipc.rs::parse_hook_event_kind` so a hook round-trips
+/// through CLI → channel → frontend without renaming.
+fn kind_to_wire(kind: &HookEventKind) -> &str {
+    match kind {
+        HookEventKind::Stop => "stop",
+        HookEventKind::Awaiting { .. } => "awaiting",
+        HookEventKind::PromptSubmitted => "prompt_submitted",
+        HookEventKind::SubagentStop => "subagent_stop",
+        HookEventKind::Unknown { raw_kind } => raw_kind.as_str(),
+    }
+}
+
+/// Extract the optional `reason` carried alongside a hook kind. Only
+/// `Awaiting` has a reason; every other variant returns `None`.
+fn kind_reason(kind: &HookEventKind) -> Option<&str> {
+    match kind {
+        HookEventKind::Awaiting { reason } => reason.as_deref(),
+        _ => None,
+    }
 }
 
 /// Forward a UTF-8 text payload to the interactive session as a
@@ -236,7 +282,7 @@ pub async fn interactive_capture_screen(
     let db_path = state.db_path.clone();
     let blob = ansi_bytes.clone();
     let sid_for_db = sid.clone();
-    let _ = tokio::task::spawn_blocking(move || -> Result<(), String> {
+    let persist_result = tokio::task::spawn_blocking(move || -> Result<(), String> {
         let db = Database::open(&db_path).map_err(|e| e.to_string())?;
         // Persistence is best-effort: a missing row (session was
         // already torn down) shouldn't fail the capture command.
@@ -252,6 +298,20 @@ pub async fn interactive_capture_screen(
     })
     .await
     .map_err(|e| e.to_string())?;
+
+    // Don't fail the capture command on DB errors — the host already
+    // produced the snapshot the caller asked for — but surface the
+    // underlying error so a persist regression doesn't go silent.
+    match persist_result {
+        Ok(()) => {}
+        Err(error) => {
+            tracing::warn!(
+                sid = %sid,
+                ?error,
+                "capture_screen DB persist failed"
+            );
+        }
+    }
 
     Ok(base64::engine::general_purpose::STANDARD.encode(&ansi_bytes))
 }
@@ -300,6 +360,10 @@ pub async fn interactive_stop(
     .await
     .map_err(|e| e.to_string())?;
     state.unregister_interactive_session(&sid).await;
+    // Drop the sender half of the hook channel so the forwarder task
+    // spawned in `interactive_start` exits cleanly. Safe to call for an
+    // unknown sid (no-op) per `AppState::unregister_interactive_hook_channel`.
+    state.unregister_interactive_hook_channel(&sid);
     stop_result.map_err(|e| e.to_string())
 }
 
