@@ -531,10 +531,12 @@ export function CommandPalette() {
     close();
   };
 
-  // Fallback keydown for the whole card: if a click on a result row stole
-  // focus from the search input, arrow keys would otherwise do nothing.
-  // Re-dispatch them through the same handler, and for any printable key
-  // bounce focus back to the input so typing continues to filter.
+  // Fallback keydown for the whole card: result rows preventDefault on
+  // mousedown so the input keeps focus, but any other focus drift (browser
+  // weirdness, an injected button taking focus) would leave arrow keys
+  // dead. Re-dispatch them through the same handler, and for any printable
+  // key bounce focus back to the input AND apply the character so the
+  // triggering keystroke isn't dropped.
   const handleCardKeyDown = (e: React.KeyboardEvent) => {
     if (e.target === inputRef.current) return;
     if (
@@ -548,7 +550,10 @@ export function CommandPalette() {
       return;
     }
     if (e.key.length === 1 && !e.metaKey && !e.ctrlKey && !e.altKey) {
+      e.preventDefault();
       inputRef.current?.focus();
+      setQuery((q) => q + e.key);
+      setSelectedIndex(0);
     }
   };
 
@@ -634,6 +639,7 @@ export function CommandPalette() {
                     data-index={idx}
                     className={`${styles.result} ${idx === selectedIndex ? styles.resultSelected : ""}`}
                     onClick={() => cmd.execute()}
+                    onMouseDown={(e) => e.preventDefault()}
                     onMouseEnter={() => setSelectedIndex(idx)}
                   >
                     {themeColor ? (

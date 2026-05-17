@@ -14,7 +14,7 @@ import { afterAll } from "vitest";
 vi.stubGlobal("navigator", { platform: "MacIntel", userAgentData: undefined });
 afterAll(() => { vi.unstubAllGlobals(); });
 
-const { buildCommands, buildModelCommands, buildEffortCommands, buildFileCommands, groupCommandsByCategory, CATEGORY_ORDER } = await import("./commands");
+const { buildCommands, buildModelCommands, buildEffortCommands, buildFileCommands, groupCommandsByCategory, CATEGORY_ORDER, CATEGORY_LABELS } = await import("./commands");
 const { Search: stubIcon } = await import("lucide-react");
 type Command = ReturnType<typeof buildCommands>[number];
 
@@ -396,13 +396,19 @@ describe("groupCommandsByCategory — keyboard navigation invariant", () => {
     expect(groupCommandsByCategory([])).toEqual([]);
   });
 
-  it("CATEGORY_ORDER includes every category referenced in commands", () => {
-    // Smoke check: if a future commit adds a new CommandCategory but
-    // forgets to register it in CATEGORY_ORDER, that bucket would be
-    // silently dropped from the rendered list.
-    const seen = new Set(filtered.map((c) => c.category));
-    for (const cat of seen) {
+  it("CATEGORY_ORDER includes every declared CommandCategory", () => {
+    // Source of truth: CATEGORY_LABELS is keyed by every CommandCategory
+    // (TypeScript enforces it via Record<CommandCategory, string>). If a
+    // future commit adds a category to the type but forgets to register
+    // it in CATEGORY_ORDER, that bucket would be silently dropped from
+    // the rendered list — catch that here instead of in the wild.
+    const declared = Object.keys(CATEGORY_LABELS);
+    for (const cat of declared) {
       expect(CATEGORY_ORDER).toContain(cat);
+    }
+    // And vice versa — no stale entries in CATEGORY_ORDER.
+    for (const cat of CATEGORY_ORDER) {
+      expect(declared).toContain(cat);
     }
   });
 });
