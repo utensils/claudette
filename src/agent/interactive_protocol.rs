@@ -157,6 +157,35 @@ pub enum HookFired {
 
 pub const PROTOCOL_VERSION: u32 = 1;
 
+pub mod frame {
+    use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+
+    pub const MAX_FRAME: usize = 8 * 1024 * 1024; // 8 MB ceiling.
+
+    pub async fn write_frame<W: AsyncWrite + Unpin>(
+        w: &mut W,
+        payload: &[u8],
+    ) -> std::io::Result<()> {
+        let len =
+            u32::try_from(payload.len()).map_err(|_| std::io::Error::other("frame too large"))?;
+        w.write_all(&len.to_be_bytes()).await?;
+        w.write_all(payload).await?;
+        Ok(())
+    }
+
+    pub async fn read_frame<R: AsyncRead + Unpin>(r: &mut R) -> std::io::Result<Vec<u8>> {
+        let mut hdr = [0u8; 4];
+        r.read_exact(&mut hdr).await?;
+        let len = u32::from_be_bytes(hdr) as usize;
+        if len > MAX_FRAME {
+            return Err(std::io::Error::other("frame too large"));
+        }
+        let mut buf = vec![0u8; len];
+        r.read_exact(&mut buf).await?;
+        Ok(buf)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -222,5 +251,30 @@ mod tests {
             raw_payload: "{\"a\":1}".into(),
         };
         roundtrip(&v);
+    }
+}
+
+#[cfg(test)]
+mod frame_tests {
+    use super::frame::{read_frame, write_frame};
+    use tokio::io::{AsyncWriteExt, duplex};
+
+    #[tokio::test]
+    async fn frame_round_trip() {
+        let (mut a, mut b) = duplex(64 * 1024);
+        write_frame(&mut a, b"{\"hi\":1}").await.unwrap();
+        a.shutdown().await.unwrap();
+        let buf = read_frame(&mut b).await.unwrap();
+        assert_eq!(buf, b"{\"hi\":1}");
+    }
+
+    #[tokio::test]
+    async fn frame_rejects_oversized() {
+        let (mut a, mut b) = duplex(64 * 1024);
+        // 100 MB header — must reject without allocating.
+        let header = (100u32 * 1024 * 1024).to_be_bytes();
+        a.write_all(&header).await.unwrap();
+        let err = read_frame(&mut b).await.unwrap_err();
+        assert!(err.to_string().contains("frame too large"), "got: {err}");
     }
 }
