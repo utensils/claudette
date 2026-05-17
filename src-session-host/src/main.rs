@@ -16,6 +16,22 @@ use claudette_session_host::{idle, server};
 /// demand. Mirrors the value referenced by the C5 plan section.
 const IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(600);
 
+/// Parse the optional `--socket <path>` CLI argument. If absent, the
+/// session-host uses `server::default_socket_path()`. This is the only flag
+/// we currently support — anything more elaborate belongs in clap once the
+/// surface grows.
+fn parse_socket_arg() -> Option<std::path::PathBuf> {
+    let mut args = std::env::args().skip(1);
+    while let Some(a) = args.next() {
+        if a == "--socket"
+            && let Some(p) = args.next()
+        {
+            return Some(std::path::PathBuf::from(p));
+        }
+    }
+    None
+}
+
 #[tokio::main]
 async fn main() -> std::io::Result<()> {
     tracing_subscriber::fmt()
@@ -25,7 +41,7 @@ async fn main() -> std::io::Result<()> {
         )
         .init();
 
-    let socket_path = server::default_socket_path();
+    let socket_path = parse_socket_arg().unwrap_or_else(server::default_socket_path);
     tracing::info!(
         version = env!("CARGO_PKG_VERSION"),
         socket = %socket_path.display(),

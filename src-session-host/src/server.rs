@@ -27,7 +27,7 @@ use std::sync::atomic::Ordering;
 
 use base64::Engine as _;
 use claudette::agent::interactive_protocol::{
-    Event, PROTOCOL_VERSION, Request, Response, StopMode,
+    Event, InboundFrame, PROTOCOL_VERSION, Request, RequestEnvelope, Response, StopMode,
     frame::{read_frame, write_frame},
 };
 use interprocess::local_socket::tokio::{Listener, Stream, prelude::*};
@@ -172,16 +172,22 @@ async fn serve(listener: Listener, map: SessionMap, idle: Option<Idle>) -> std::
 
 async fn handle_connection(stream: Stream, map: SessionMap) -> std::io::Result<()> {
     let (mut r, mut w) = stream.split();
-    // First frame must be Hello.
+    // First frame must be a RequestEnvelope wrapping `Request::Hello`. By
+    // convention the Hello envelope carries `request_id == 0`, but we echo
+    // back whatever the client sent so a buggy client gets a useful match.
     let first = read_frame(&mut r).await?;
-    let req: Request = serde_json::from_slice(&first).map_err(std::io::Error::other)?;
+    let env: RequestEnvelope = serde_json::from_slice(&first).map_err(std::io::Error::other)?;
+    let hello_request_id = env.request_id;
     let Request::Hello {
         protocol_version, ..
-    } = req
+    } = env.request
     else {
-        let bad = Response::Error {
-            message: "first frame was not Hello".into(),
-            recoverable: false,
+        let bad = InboundFrame::Response {
+            request_id: hello_request_id,
+            response: Response::Error {
+                message: "first frame was not Hello".into(),
+                recoverable: false,
+            },
         };
         write_frame(
             &mut w,
@@ -202,9 +208,13 @@ async fn handle_connection(stream: Stream, map: SessionMap) -> std::io::Result<(
             supported_versions: vec![PROTOCOL_VERSION],
         }
     };
+    let outbound = InboundFrame::Response {
+        request_id: hello_request_id,
+        response: resp,
+    };
     write_frame(
         &mut w,
-        &serde_json::to_vec(&resp).map_err(std::io::Error::other)?,
+        &serde_json::to_vec(&outbound).map_err(std::io::Error::other)?,
     )
     .await?;
 
@@ -227,12 +237,18 @@ async fn handle_connection(stream: Stream, map: SessionMap) -> std::io::Result<(
             Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => return Ok(()),
             Err(e) => return Err(e),
         };
-        let req: Request = match serde_json::from_slice(&frame_bytes) {
+        let env: RequestEnvelope = match serde_json::from_slice(&frame_bytes) {
             Ok(v) => v,
             Err(e) => {
-                let r = Response::Error {
-                    message: format!("bad request: {e}"),
-                    recoverable: false,
+                // We couldn't decode an envelope, so we have no request_id to
+                // correlate against. Use `0` (the Hello slot) since the client
+                // is already in an undefined state.
+                let r = InboundFrame::Response {
+                    request_id: 0,
+                    response: Response::Error {
+                        message: format!("bad request envelope: {e}"),
+                        recoverable: false,
+                    },
                 };
                 write_frame(
                     &mut w,
@@ -242,16 +258,20 @@ async fn handle_connection(stream: Stream, map: SessionMap) -> std::io::Result<(
                 continue;
             }
         };
-        match req {
+        let request_id = env.request_id;
+        match env.request {
             Request::Attach { sid } => {
                 let session: Option<Arc<Session>> = {
                     let m = map.lock().await;
                     m.get(&sid).cloned()
                 };
                 let Some(s) = session else {
-                    let r = Response::Error {
-                        message: format!("not found: {sid}"),
-                        recoverable: true,
+                    let r = InboundFrame::Response {
+                        request_id,
+                        response: Response::Error {
+                            message: format!("not found: {sid}"),
+                            recoverable: true,
+                        },
                     };
                     write_frame(
                         &mut w,
@@ -262,7 +282,10 @@ async fn handle_connection(stream: Stream, map: SessionMap) -> std::io::Result<(
                 };
                 attach_id_counter += 1;
                 let attach_id = attach_id_counter;
-                let ack = Response::AttachStarted { attach_id };
+                let ack = InboundFrame::Response {
+                    request_id,
+                    response: Response::AttachStarted { attach_id },
+                };
                 write_frame(
                     &mut w,
                     &serde_json::to_vec(&ack).map_err(std::io::Error::other)?,
@@ -278,9 +301,13 @@ async fn handle_connection(stream: Stream, map: SessionMap) -> std::io::Result<(
             }
             other => {
                 let resp = dispatch(&map, other).await;
+                let outbound = InboundFrame::Response {
+                    request_id,
+                    response: resp,
+                };
                 write_frame(
                     &mut w,
-                    &serde_json::to_vec(&resp).map_err(std::io::Error::other)?,
+                    &serde_json::to_vec(&outbound).map_err(std::io::Error::other)?,
                 )
                 .await?;
             }
@@ -330,7 +357,8 @@ where
                         true,
                     ),
                 };
-                let bytes = serde_json::to_vec(&event).map_err(std::io::Error::other)?;
+                let frame = InboundFrame::Event(event);
+                let bytes = serde_json::to_vec(&frame).map_err(std::io::Error::other)?;
                 write_frame(w, &bytes).await?;
                 if is_exit {
                     break;

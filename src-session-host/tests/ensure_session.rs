@@ -23,10 +23,16 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use claudette::agent::interactive_protocol::{
-    PROTOCOL_VERSION, Request, Response, SessionSpec, frame,
+    InboundFrame, PROTOCOL_VERSION, Request, RequestEnvelope, Response, SessionSpec, frame,
 };
 use interprocess::local_socket::tokio::{Stream, prelude::*};
 use interprocess::local_socket::{GenericFilePath, ToFsName};
+use std::sync::atomic::{AtomicU64, Ordering};
+
+/// Monotonic request-id counter shared by `send_req`. Reset implicitly per
+/// test process; tests do not run in parallel against the same socket so a
+/// process-wide counter is fine.
+static NEXT_REQ_ID: AtomicU64 = AtomicU64::new(1);
 
 #[tokio::test]
 async fn ensure_session_starts_and_status_lists_it() {
@@ -143,20 +149,41 @@ async fn open_conn(path: &Path) -> Stream {
     Stream::connect(name).await.unwrap()
 }
 
+/// Send a `Request` wrapped in a `RequestEnvelope` with a fresh `request_id`.
+///
+/// The Hello path needs `request_id == 0`, so we treat that as a special case:
+/// `Request::Hello` always goes out as `request_id = 0`. All other requests
+/// allocate a monotonic id from `NEXT_REQ_ID`.
 async fn send_req<W>(w: &mut W, req: &Request)
 where
     W: tokio::io::AsyncWrite + Unpin,
 {
-    let bytes = serde_json::to_vec(req).unwrap();
+    let request_id = if matches!(req, Request::Hello { .. }) {
+        0
+    } else {
+        NEXT_REQ_ID.fetch_add(1, Ordering::SeqCst)
+    };
+    let env = RequestEnvelope {
+        request_id,
+        request: req.clone(),
+    };
+    let bytes = serde_json::to_vec(&env).unwrap();
     frame::write_frame(w, &bytes).await.unwrap();
 }
 
+/// Read an `InboundFrame::Response` off the wire and unwrap to the inner
+/// `Response`. Panics if an `Event` arrives — these tests only run on the
+/// request/response control connection (no `Attach`).
 async fn recv_resp<R>(r: &mut R) -> Response
 where
     R: tokio::io::AsyncRead + Unpin,
 {
     let buf = frame::read_frame(r).await.unwrap();
-    serde_json::from_slice(&buf).unwrap()
+    let inbound: InboundFrame = serde_json::from_slice(&buf).unwrap();
+    match inbound {
+        InboundFrame::Response { response, .. } => response,
+        InboundFrame::Event(ev) => panic!("expected Response, got Event: {ev:?}"),
+    }
 }
 
 async fn expect_helloack<R>(r: &mut R)

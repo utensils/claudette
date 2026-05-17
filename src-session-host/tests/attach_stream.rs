@@ -20,12 +20,21 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
 
+use std::sync::atomic::{AtomicU64, Ordering};
+
 use base64::Engine as _;
 use claudette::agent::interactive_protocol::{
-    Event, InputPayload, PROTOCOL_VERSION, Request, Response, SessionSpec, frame,
+    Event, InboundFrame, InputPayload, PROTOCOL_VERSION, Request, RequestEnvelope, Response,
+    SessionSpec, frame,
 };
 use interprocess::local_socket::tokio::{Stream, prelude::*};
 use interprocess::local_socket::{GenericFilePath, ToFsName};
+
+/// Monotonic request-id counter shared by `send_req`. Reset implicitly per
+/// test process; the multiple connections opened by this test do not need
+/// distinct namespaces because each connection-id correlation only flows
+/// over one socket at a time.
+static NEXT_REQ_ID: AtomicU64 = AtomicU64::new(1);
 
 #[tokio::test]
 async fn attach_streams_echoed_output() {
@@ -141,7 +150,16 @@ async fn send_req<W>(w: &mut W, req: &Request)
 where
     W: tokio::io::AsyncWrite + Unpin,
 {
-    let bytes = serde_json::to_vec(req).unwrap();
+    let request_id = if matches!(req, Request::Hello { .. }) {
+        0
+    } else {
+        NEXT_REQ_ID.fetch_add(1, Ordering::SeqCst)
+    };
+    let env = RequestEnvelope {
+        request_id,
+        request: req.clone(),
+    };
+    let bytes = serde_json::to_vec(&env).unwrap();
     frame::write_frame(w, &bytes).await.unwrap();
 }
 
@@ -150,13 +168,19 @@ where
     R: tokio::io::AsyncRead + Unpin,
 {
     let buf = frame::read_frame(r).await.unwrap();
-    serde_json::from_slice(&buf).unwrap()
+    let inbound: InboundFrame = serde_json::from_slice(&buf).unwrap();
+    match inbound {
+        InboundFrame::Response { response, .. } => response,
+        InboundFrame::Event(ev) => panic!("expected Response, got Event: {ev:?}"),
+    }
 }
 
 /// Pump `Event::Output` frames off `r` for up to `total`, decoding their
 /// base64 bodies into a rolling buffer. Returns `true` as soon as the
 /// accumulated decoded bytes contain `needle`. Non-output events (Hook,
 /// Exit, StreamError) are ignored — the test only cares about stdout echo.
+///
+/// Events arrive wrapped in `InboundFrame::Event(...)` post-envelope cutover.
 async fn drain_until_contains<R>(r: &mut R, needle: &str, total: Duration) -> bool
 where
     R: tokio::io::AsyncRead + Unpin,
@@ -167,9 +191,15 @@ where
         let frame_res =
             tokio::time::timeout(Duration::from_millis(200), frame::read_frame(r)).await;
         let Ok(Ok(bytes)) = frame_res else { continue };
-        let ev: Event = match serde_json::from_slice(&bytes) {
+        let inbound: InboundFrame = match serde_json::from_slice(&bytes) {
             Ok(v) => v,
             Err(_) => continue,
+        };
+        let ev = match inbound {
+            InboundFrame::Event(ev) => ev,
+            // Stray Responses on an attach stream are unexpected but not
+            // fatal for this helper — just skip them.
+            InboundFrame::Response { .. } => continue,
         };
         if let Event::Output { bytes_b64, .. } = ev {
             let decoded = base64::engine::general_purpose::STANDARD

@@ -157,6 +157,33 @@ pub enum HookFired {
 
 pub const PROTOCOL_VERSION: u32 = 1;
 
+/// Wire-level envelope for client→host requests.
+///
+/// Every request frame on the socket is one of these. The `request_id` is a
+/// client-side monotonic u64 that the server echoes back in the matching
+/// `InboundFrame::Response` so a single connection can multiplex multiple
+/// in-flight requests. By convention the initial `Request::Hello` carries
+/// `request_id == 0`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RequestEnvelope {
+    pub request_id: u64,
+    pub request: Request,
+}
+
+/// Wire-level envelope for host→client frames.
+///
+/// Responses carry the originating `request_id` for correlation; events are
+/// fire-and-forget (the per-session `sid` inside the `Event` is the only
+/// routing key). Encoded as an untagged enum so the wire shape stays
+/// `{ "request_id": .., "response": .. }` for responses and the bare event
+/// JSON for events — distinguishable by the presence of `request_id`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(untagged)]
+pub enum InboundFrame {
+    Response { request_id: u64, response: Response },
+    Event(Event),
+}
+
 pub mod frame {
     use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
@@ -251,6 +278,45 @@ mod tests {
             raw_payload: "{\"a\":1}".into(),
         };
         roundtrip(&v);
+    }
+
+    #[test]
+    fn request_envelope_round_trips() {
+        let env = RequestEnvelope {
+            request_id: 42,
+            request: Request::Status,
+        };
+        let s = serde_json::to_string(&env).unwrap();
+        let back: RequestEnvelope = serde_json::from_str(&s).unwrap();
+        assert_eq!(back.request_id, 42);
+        assert_eq!(back, env);
+    }
+
+    #[test]
+    fn inbound_frame_response_round_trips() {
+        let frame = InboundFrame::Response {
+            request_id: 7,
+            response: Response::Ok,
+        };
+        let s = serde_json::to_string(&frame).unwrap();
+        let back: InboundFrame = serde_json::from_str(&s).unwrap();
+        assert_eq!(back, frame);
+    }
+
+    #[test]
+    fn inbound_frame_event_round_trips() {
+        let ev = Event::Output {
+            sid: "x".into(),
+            bytes_b64: "aGk=".into(),
+            seq: 1,
+        };
+        let frame = InboundFrame::Event(ev.clone());
+        let s = serde_json::to_string(&frame).unwrap();
+        let back: InboundFrame = serde_json::from_str(&s).unwrap();
+        match back {
+            InboundFrame::Event(got) => assert_eq!(got, ev),
+            other => panic!("expected Event variant, got {other:?}"),
+        }
     }
 }
 

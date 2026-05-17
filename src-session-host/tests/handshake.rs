@@ -6,7 +6,9 @@
 //! sends `Request::Hello`, and asserts that the server replies with
 //! `Response::HelloAck` for the current `PROTOCOL_VERSION`.
 
-use claudette::agent::interactive_protocol::{PROTOCOL_VERSION, Request, Response, frame};
+use claudette::agent::interactive_protocol::{
+    InboundFrame, PROTOCOL_VERSION, Request, RequestEnvelope, Response, frame,
+};
 use interprocess::local_socket::tokio::{Stream, prelude::*};
 use interprocess::local_socket::{GenericFilePath, ToFsName};
 
@@ -36,23 +38,35 @@ async fn handshake_round_trip() {
     let s = Stream::connect(name).await.unwrap();
     let (mut r, mut w) = s.split();
 
-    let req = serde_json::to_vec(&Request::Hello {
-        protocol_version: PROTOCOL_VERSION,
-        claudette_version: "test".into(),
-    })
-    .unwrap();
-    frame::write_frame(&mut w, &req).await.unwrap();
+    // Hello is wrapped in a `RequestEnvelope` with the conventional
+    // `request_id = 0`. The server echoes this in the matching
+    // `InboundFrame::Response`.
+    let env = RequestEnvelope {
+        request_id: 0,
+        request: Request::Hello {
+            protocol_version: PROTOCOL_VERSION,
+            claudette_version: "test".into(),
+        },
+    };
+    let bytes = serde_json::to_vec(&env).unwrap();
+    frame::write_frame(&mut w, &bytes).await.unwrap();
 
     let resp_bytes = frame::read_frame(&mut r).await.unwrap();
-    let resp: Response = serde_json::from_slice(&resp_bytes).unwrap();
-    match resp {
-        Response::HelloAck {
-            protocol_version, ..
-        } => assert_eq!(
-            protocol_version, PROTOCOL_VERSION,
-            "handshake should echo our protocol version"
-        ),
-        other => panic!("expected HelloAck, got {other:?}"),
+    let inbound: InboundFrame = serde_json::from_slice(&resp_bytes).unwrap();
+    match inbound {
+        InboundFrame::Response {
+            request_id,
+            response: Response::HelloAck {
+                protocol_version, ..
+            },
+        } => {
+            assert_eq!(request_id, 0, "handshake reply should echo request_id 0");
+            assert_eq!(
+                protocol_version, PROTOCOL_VERSION,
+                "handshake should echo our protocol version"
+            );
+        }
+        other => panic!("expected InboundFrame::Response(HelloAck), got {other:?}"),
     }
 
     server.abort();
