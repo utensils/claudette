@@ -65,6 +65,21 @@ struct OrphansDetectedPayload {
 #[tracing::instrument(level = "info", target = "claudette::interactive", skip_all)]
 pub async fn reattach_interactive_sessions_on_boot(app: AppHandle) {
     let state = app.state::<AppState>();
+
+    // Gate the reconciler on the experimental flag so users who have
+    // never enabled `claudeInteractiveEnabled` don't pay the cost of
+    // spawning the bundled `claudette-session-host` sidecar at every
+    // boot. Stale `running` rows from a prior install or a flag-toggle
+    // are left as-is in the DB; the next boot after the user re-enables
+    // the flag will reconcile them.
+    if !state.claude_interactive_enabled().await {
+        tracing::info!(
+            target: "claudette::interactive",
+            "boot reconciler: claudeInteractiveEnabled is off; skipping",
+        );
+        return;
+    }
+
     let db_path = state.db_path.clone();
 
     // Phase 1: fetch (a) all running rows for reclassification and
@@ -74,7 +89,7 @@ pub async fn reattach_interactive_sessions_on_boot(app: AppHandle) {
     // rusqlite I/O.
     //
     // We snapshot ALL sids (not just running ones) because a
-    // crashed/detached/exited row is still a row the DB knows about —
+    // crashed/detached/stopped row is still a row the DB knows about —
     // its sid must NOT count as an orphan even though the host might
     // happen to still be holding the session under the same name.
     let (pending, known_sids) = match tokio::task::spawn_blocking({
@@ -175,7 +190,7 @@ pub async fn reattach_interactive_sessions_on_boot(app: AppHandle) {
         // points at a workspace we can look up. In practice this is
         // rare — running rows would normally cover the same workspaces
         // — but it matters when the only known DB rows are
-        // crashed/exited and the user wants stale host sessions
+        // crashed/stopped and the user wants stale host sessions
         // cleaned up.
         let mut probed: Option<Arc<dyn InteractiveHost>> = None;
         // The list_workspaces query is cheap; do it once.

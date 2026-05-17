@@ -3,7 +3,7 @@
 //! Claudette persists one row per interactive `claude` session in the
 //! `interactive_sessions` table, with a `state` column that tracks
 //! whether the session is live (`running`), idle but reattachable
-//! (`detached`), or gone (`crashed` / `exited`). The transitions
+//! (`detached`), or gone (`crashed` / `stopped`). The transitions
 //! between those states normally run while Claudette is up and
 //! talking to its `InteractiveHost`. But when Claudette itself crashes
 //! or is force-quit, any rows that were last seen as `running` are
@@ -22,7 +22,7 @@
 //!   `crash_reason = "host missing"`. The session is unrecoverable;
 //!   the row stays in the listing so the user can clear it.
 //!
-//! Rows already in `detached`, `crashed`, `exited`, etc. are left
+//! Rows already in `detached`, `crashed`, `stopped`, etc. are left
 //! alone — the reconciliation is intentionally scoped to "the set of
 //! rows whose state can be wrong after a Claudette restart".
 //!
@@ -210,9 +210,8 @@ pub async fn stop_sessions_for_workspace(
     for row in rows {
         // Skip rows we already know are dead — there's nothing on the
         // host side to stop and the next-state DB cascade will clean
-        // them up. "crashed" / "exited" / "stopped" rows still get the
-        // cascade.
-        if row.state == "crashed" || row.state == "exited" || row.state == "stopped" {
+        // them up. "crashed" / "stopped" rows still get the cascade.
+        if row.state == "crashed" || row.state == "stopped" {
             continue;
         }
         let sid = SessionId(row.sid.clone());
@@ -414,7 +413,7 @@ mod tests {
         // is nothing to reconcile.
         let db = Database::open_in_memory().unwrap();
         insert_test_workspace(&db, "ws-1");
-        db.create_interactive_session(&make_row("claudette-ws1-exited", "ws-1", "exited"))
+        db.create_interactive_session(&make_row("claudette-ws1-stopped", "ws-1", "stopped"))
             .unwrap();
 
         struct FailingHost;
@@ -470,10 +469,10 @@ mod tests {
 
         // Pre-existing non-running row is untouched.
         let row = db
-            .get_interactive_session("claudette-ws1-exited")
+            .get_interactive_session("claudette-ws1-stopped")
             .unwrap()
             .unwrap();
-        assert_eq!(row.state, "exited");
+        assert_eq!(row.state, "stopped");
     }
 
     #[tokio::test]
@@ -1076,14 +1075,13 @@ mod tests {
 
     #[tokio::test]
     async fn stop_sessions_skips_already_dead_rows() {
-        // Sessions in `crashed`, `exited`, or `stopped` have no live host
+        // Sessions in `crashed` or `stopped` have no live host
         // counterpart; calling stop on them risks a NotFound from the
         // host. The DB cascade still removes the row when the workspace
         // goes away.
         let host = StopTrackingHost::new();
         let rows = vec![
             make_row("claudette-ws1-crashed1", "ws-1", "crashed"),
-            make_row("claudette-ws1-exited11", "ws-1", "exited"),
             make_row("claudette-ws1-stopped1", "ws-1", "stopped"),
             make_row("claudette-ws1-runninga", "ws-1", "running"),
         ];

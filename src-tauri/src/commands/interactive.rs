@@ -70,6 +70,12 @@ pub struct StartInteractiveResult {
 /// [`InteractiveSessionRow`] directly; using a separate frontend type
 /// keeps the wire surface stable if the DB row grows columns the
 /// frontend doesn't need.
+///
+/// `last_screen_blob` carries the most recently captured ANSI screen
+/// bytes (or `None` if `interactive_capture_screen` was never called
+/// for this sid). Tauri serializes `Vec<u8>` as a JSON number array,
+/// matching the `lastScreenBlob: number[] | null` declared by the
+/// TypeScript `InteractiveSessionRow`.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct InteractiveSessionListItem {
@@ -80,6 +86,7 @@ pub struct InteractiveSessionListItem {
     pub crash_reason: Option<String>,
     pub created_at: String,
     pub last_attached_at: Option<String>,
+    pub last_screen_blob: Option<Vec<u8>>,
     pub claude_flags_json: String,
     pub pid: Option<i64>,
 }
@@ -94,6 +101,7 @@ impl From<InteractiveSessionRow> for InteractiveSessionListItem {
             crash_reason: row.crash_reason,
             created_at: row.created_at,
             last_attached_at: row.last_attached_at,
+            last_screen_blob: row.last_screen_blob,
             claude_flags_json: row.claude_flags_json,
             pid: row.pid,
         }
@@ -319,7 +327,7 @@ pub async fn interactive_capture_screen(
 /// Stop an interactive session. `force=true` maps to
 /// [`StopMode::Force`] (SIGKILL on tmux, immediate teardown on the
 /// sidecar); otherwise [`StopMode::Graceful`]. The DB row is updated
-/// to `state = "exited"` and the sid→workspace_id mapping is dropped
+/// to `state = "stopped"` and the sid→workspace_id mapping is dropped
 /// so the frontend's list view reflects the new state on the next
 /// refresh.
 #[tauri::command]
@@ -346,12 +354,12 @@ pub async fn interactive_stop(
     // partial failure doesn't leave a stale "running" row behind.
     let db_path = state.db_path.clone();
     let sid_for_db = sid.clone();
-    let _ = tokio::task::spawn_blocking(move || -> Result<(), String> {
+    let persist_result = tokio::task::spawn_blocking(move || -> Result<(), String> {
         let db = Database::open(&db_path).map_err(|e| e.to_string())?;
         // See `interactive_capture_screen` for the rationale on
         // string-matching the "no rows" error instead of pattern-
         // matching on `rusqlite::Error`.
-        match db.set_interactive_session_state(&sid_for_db, "exited", None) {
+        match db.set_interactive_session_state(&sid_for_db, "stopped", None) {
             Ok(()) => Ok(()),
             Err(e) if e.to_string() == "Query returned no rows" => Ok(()),
             Err(e) => Err(e.to_string()),
@@ -359,6 +367,18 @@ pub async fn interactive_stop(
     })
     .await
     .map_err(|e| e.to_string())?;
+
+    // Surface DB-write failures so an interactive_stop that succeeded on
+    // the host but failed to persist `state = "stopped"` doesn't go
+    // silently — otherwise the row stays `"running"` forever and the
+    // sidebar badge / list view never recover.
+    if let Err(error) = persist_result {
+        tracing::warn!(
+            sid = %sid,
+            ?error,
+            "interactive_stop: DB state write failed; row may stay marked running until next reconcile"
+        );
+    }
     state.unregister_interactive_session(&sid).await;
     // Drop the sender half of the hook channel so the forwarder task
     // spawned in `interactive_start` exits cleanly. Safe to call for an

@@ -364,7 +364,20 @@ impl InteractiveHost for TmuxHost {
                 let raw = base64::engine::general_purpose::STANDARD
                     .decode(&bytes_b64)
                     .map_err(|e| HostError::Other(format!("invalid bytes_b64: {e}")))?;
-                let s = String::from_utf8_lossy(&raw).to_string();
+                // `tmux send-keys -l` takes the literal payload as
+                // argv, which means it must be valid UTF-8 — we can't
+                // smuggle arbitrary bytes through. Silently
+                // `from_utf8_lossy`-replacing breaks the `Bytes`
+                // contract by mangling non-UTF-8 input into U+FFFD;
+                // surface the unsupported case as an explicit error
+                // instead so the caller sees the failure.
+                let s = std::str::from_utf8(&raw)
+                    .map_err(|_| {
+                        HostError::Other(
+                            "tmux send-keys does not support non-UTF-8 binary input".into(),
+                        )
+                    })?
+                    .to_string();
                 args.push("-l".into());
                 args.push("--".into());
                 args.push(s);
