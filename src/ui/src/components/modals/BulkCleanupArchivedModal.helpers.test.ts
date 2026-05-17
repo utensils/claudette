@@ -90,6 +90,22 @@ describe("ageBucket", () => {
     });
   });
 
+  it("pins the months→years boundary at exactly 365 days", () => {
+    // 364 days stays in `months` (math: floor(364/30) = 12, so the
+    // label reads "12mo ago"). Day 365 promotes to `years`. The
+    // jump from `12mo ago` straight to `1y ago` (skipping "13mo
+    // ago") is intentional — once the age crosses a year the
+    // months count becomes a worse summary than the years count.
+    expect(ageBucket(String(NOW - 364 * DAY), NOW)).toEqual({
+      kind: "months",
+      count: 12,
+    });
+    expect(ageBucket(String(NOW - 365 * DAY), NOW)).toEqual({
+      kind: "years",
+      count: 1,
+    });
+  });
+
   it("clamps negative deltas (created_at in the future) to today", () => {
     expect(ageBucket(String(NOW + 999), NOW)).toEqual({ kind: "today" });
   });

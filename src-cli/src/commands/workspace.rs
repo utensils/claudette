@@ -255,7 +255,13 @@ fn resolve_purge_ids(
 /// Accepts:
 /// - All-digits → Unix-seconds-as-string.
 /// - SQLite `datetime('now')` (`"YYYY-MM-DD HH:MM:SS"`, treated as UTC).
-/// - RFC 3339 / ISO 8601 with `T` separator and explicit timezone.
+/// - ISO 8601 with `T` separator: only the first 19 characters
+///   (`YYYY-MM-DDTHH:MM:SS`) are parsed, and the value is treated as
+///   UTC regardless of any trailing `Z` or `±HH:MM` offset. A
+///   non-UTC timezone suffix is therefore tolerated but ignored —
+///   acceptable for a day-granularity filter, where a few hours of
+///   timezone slop never crosses a "30 days" cutoff in practice.
+///   Don't use this parser for sub-day-precision work.
 fn parse_created_at(value: &str) -> Option<u64> {
     if value.is_empty() {
         return None;

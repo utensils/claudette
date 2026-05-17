@@ -14,6 +14,13 @@ export function StorageSettings() {
     const counts = new Map<string, number>();
     for (const ws of workspaces) {
       if (ws.status !== "Archived") continue;
+      // Mirror the modal's `!w.remote_connection_id` filter
+      // (`BulkCleanupArchivedModal.tsx`). If a local repo somehow
+      // owns an archived row tagged with a remote connection, the
+      // Storage badge here would otherwise say N while the modal
+      // would render N-1 — same row needs to be invisible to both
+      // sides or the count drifts.
+      if (ws.remote_connection_id) continue;
       counts.set(ws.repository_id, (counts.get(ws.repository_id) ?? 0) + 1);
     }
     // Filter to local repos only — bulk cleanup dispatches to the local

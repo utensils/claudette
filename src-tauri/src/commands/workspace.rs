@@ -851,7 +851,25 @@ pub async fn restore_workspace(
         match git::restore_worktree(&repo_path, &branch_name, &worktree_path_str).await {
             Ok(p) => p,
             Err(e) => {
-                let _ = db.update_workspace_status(&id, &WorkspaceStatus::Archived, None);
+                // Roll the status back so a partial restore doesn't
+                // leave an Active row with no worktree. If the
+                // rollback itself fails (e.g. transient SQLITE_BUSY)
+                // the row would stay Active with worktree_path: None
+                // indefinitely while the user only sees the git error
+                // — log so the inconsistency is at least visible in
+                // `~/.claudette/logs/`.
+                if let Err(rollback_err) =
+                    db.update_workspace_status(&id, &WorkspaceStatus::Archived, None)
+                {
+                    tracing::error!(
+                        target: "claudette::workspace",
+                        workspace_id = %id,
+                        git_error = %e,
+                        rollback_error = %rollback_err,
+                        "restore_workspace: failed to roll back status to Archived after \
+                         git restore failure; row left as Active with no worktree_path",
+                    );
+                }
                 return Err(e.to_string());
             }
         };

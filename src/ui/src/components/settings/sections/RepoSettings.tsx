@@ -836,10 +836,19 @@ function RepoArchivedCleanupField({ repoId }: RepoArchivedCleanupFieldProps) {
         s.repositories.find((r) => r.id === repoId)?.remote_connection_id,
       ),
   );
+  // Mirror the modal's `!w.remote_connection_id` filter
+  // (`BulkCleanupArchivedModal.tsx`). Without this, an archived row
+  // tagged with a remote connection would inflate the hint count
+  // here ("1 archived workspace") while the modal would render zero
+  // rows — same row needs to be invisible to both surfaces or the
+  // counts drift.
   const archivedCount = useAppStore(
     (s) =>
       s.workspaces.filter(
-        (w) => w.repository_id === repoId && w.status === "Archived",
+        (w) =>
+          w.repository_id === repoId &&
+          w.status === "Archived" &&
+          !w.remote_connection_id,
       ).length,
   );
 
