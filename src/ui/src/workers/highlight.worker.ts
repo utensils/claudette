@@ -30,6 +30,10 @@ import { createHighlighterCore, type HighlighterCore } from "shiki/core";
 import { createOnigurumaEngine } from "shiki/engine/oniguruma";
 import { toHtml } from "hast-util-to-html";
 import type { Element, ElementContent, Root } from "hast";
+import {
+  buildClaudetteShikiTheme,
+  CLAUDETTE_SHIKI_THEME_NAME,
+} from "../styles/shikiClaudetteTheme";
 
 // Each entry imports a single grammar. Vite code-splits each into its own
 // chunk; only languages actually used are downloaded.
@@ -100,10 +104,10 @@ const failedLangs = new Set<string>();
 function getHighlighter(): Promise<HighlighterCore> {
   if (!highlighterPromise) {
     highlighterPromise = createHighlighterCore({
-      themes: [
-        import("@shikijs/themes/github-light"),
-        import("@shikijs/themes/github-dark"),
-      ],
+      // Single Claudette theme whose token colors are `var(--syntax-*)`
+      // references. The cascade resolves them per-theme at render time —
+      // no separate light/dark themes needed.
+      themes: [buildClaudetteShikiTheme()],
       langs: [],
       engine: createOnigurumaEngine(import("shiki/wasm")),
     });
@@ -200,8 +204,7 @@ async function highlight(code: string, lang: string): Promise<string | null> {
     const useLang = lang ? await ensureLang(hl, lang) : "text";
     const root = hl.codeToHast(code, {
       lang: useLang,
-      themes: { light: "github-light", dark: "github-dark" },
-      defaultColor: false,
+      theme: CLAUDETTE_SHIKI_THEME_NAME,
     });
     const codeEl = findCodeElement(root);
     if (!codeEl) return null;

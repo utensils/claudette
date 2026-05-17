@@ -23,6 +23,9 @@
 //     to resolve, especially in the foreign-bundle case it's catching).
 //     Theme tokens cannot be the source of truth for an error overlay
 //     designed to render even when the surrounding app's CSS hasn't loaded.
+//   * `src/utils/theme.test.ts` — vitest cases that assert Base16 → Claudette
+//     token conversion produces specific hex values. The hex literals are
+//     fixtures and expected outputs, not styling.
 //
 // Runs from src/ui. Exits non-zero with a report when violations are found.
 //
@@ -67,6 +70,23 @@ const HEX_EXCLUSIONS = [
 const HEX_EXCLUDED_FILES = new Set([
   // Path is relative to uiRoot, with forward slashes.
   "src/utils/bootIdentityGuard.ts",
+  // Base16 conversion tests need hex fixtures and expected output values.
+  "src/utils/theme.test.ts",
+]);
+
+// Rgba file-level exclusions (entire file is exempt from Rule 2).
+const RGBA_EXCLUDED_FILES = new Set([
+  // theme.test.ts test names mention the `rgba(var(...), alpha)` pattern
+  // abstractly in `it()` descriptions.
+  "src/utils/theme.test.ts",
+  // theme.ts's base16 converter emits `rgba(${rgb-triplet}, ${alpha})`
+  // strings from template literals as it synthesizes the -bg / -border
+  // companion tokens for imported palettes. This is the one place in the
+  // app where building an rgba string from JS is the right answer — the
+  // alternative (calling out to a CSS-token derivation in `theme.css`) is
+  // impossible because the input is a per-theme palette only known at
+  // runtime. Do not extend this exemption to other files.
+  "src/utils/theme.ts",
 ]);
 
 // --- Walker ---
@@ -120,6 +140,7 @@ for (const absPath of walk(SCAN_ROOT)) {
   const lines = source.split(/\r?\n/);
 
   const hexFileExcluded = HEX_EXCLUDED_FILES.has(rel);
+  const rgbaFileExcluded = RGBA_EXCLUDED_FILES.has(rel);
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
@@ -134,7 +155,7 @@ for (const absPath of walk(SCAN_ROOT)) {
     }
 
     // --- Rule 2: rgb/rgba literals ---
-    if (RGBA_OPEN_RE.test(line) && !RGBA_TOKEN_RE.test(line)) {
+    if (!rgbaFileExcluded && RGBA_OPEN_RE.test(line) && !RGBA_TOKEN_RE.test(line)) {
       rgbaHits.push(formatHit(rel, lineno, line));
     }
   }

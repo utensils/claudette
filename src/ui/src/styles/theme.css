@@ -88,6 +88,103 @@
   --badge-plan:          #8cb8e0;
   --badge-ask:           #f5a0b8;
 
+  /* ---- Semantic accents — success / warning / error / info.
+     Each family is a triplet: -bg (tinted surface), -border (outline),
+     -fg (text color). All three derive from -rgb, so a theme that wants
+     a different green only needs to override --accent-success and
+     --accent-success-rgb — the bg/border/fg layers update in lockstep.
+     Authors MUST co-emit -rgb when overriding the base color; the bg/border
+     alpha layers cannot be expressed in terms of a `var()` color in CSS. */
+  --accent-success:        #6ccc80;
+  --accent-success-rgb:    108, 204, 128;
+  --accent-success-bg:     rgba(var(--accent-success-rgb), 0.10);
+  --accent-success-border: rgba(var(--accent-success-rgb), 0.30);
+  --accent-success-hover:  rgba(var(--accent-success-rgb), 0.15);
+  --accent-success-fg:     var(--accent-success);
+
+  --accent-warning:        #f0a050;
+  --accent-warning-rgb:    240, 160, 80;
+  --accent-warning-bg:     rgba(var(--accent-warning-rgb), 0.10);
+  --accent-warning-border: rgba(var(--accent-warning-rgb), 0.30);
+  --accent-warning-hover:  rgba(var(--accent-warning-rgb), 0.15);
+  --accent-warning-fg:     var(--accent-warning);
+
+  --accent-error:          #e85050;
+  --accent-error-rgb:      232, 80, 80;
+  --accent-error-bg:       rgba(var(--accent-error-rgb), 0.10);
+  --accent-error-border:   rgba(var(--accent-error-rgb), 0.30);
+  --accent-error-hover:    rgba(var(--accent-error-rgb), 0.15);
+  --accent-error-fg:       var(--accent-error);
+
+  --accent-info:           #8cb8e0;
+  --accent-info-rgb:       140, 184, 224;
+  --accent-info-bg:        rgba(var(--accent-info-rgb), 0.10);
+  --accent-info-border:    rgba(var(--accent-info-rgb), 0.30);
+  --accent-info-hover:     rgba(var(--accent-info-rgb), 0.15);
+  --accent-info-fg:        var(--accent-info);
+
+  /* ---- UI-role tokens — neutral emphasis + secondary/tertiary brand accents.
+     Secondary and tertiary follow the full triplet pattern so chip-style UIs
+     can compose filled-and-bordered surfaces from tokens alone. */
+  --accent-neutral:        var(--text-muted);
+
+  --accent-secondary:      #f5a0b8;
+  --accent-secondary-rgb:  245, 160, 184;
+  --accent-secondary-bg:     rgba(var(--accent-secondary-rgb), 0.10);
+  --accent-secondary-border: rgba(var(--accent-secondary-rgb), 0.30);
+  --accent-secondary-fg:     var(--accent-secondary);
+
+  --accent-tertiary:       #c0a0f0;
+  --accent-tertiary-rgb:   192, 160, 240;
+  --accent-tertiary-bg:      rgba(var(--accent-tertiary-rgb), 0.10);
+  --accent-tertiary-border:  rgba(var(--accent-tertiary-rgb), 0.30);
+  --accent-tertiary-fg:      var(--accent-tertiary);
+
+  /* ---- Category slots A–H — eight distinguishable hues for "item N of a
+     set" UI like workspace tags, plugin badges, env-provider chips. Each
+     slot ships bg/border/fg directly (no -rgb here, no consumer expected
+     to layer custom alpha). Like --tool-* and --syntax-*, categories are
+     intentionally brand-invariant: a workspace's category color stays
+     stable across themes so muscle memory holds. */
+  --category-a-bg:     rgba(232, 88, 88, 0.12);
+  --category-a-border: rgba(232, 88, 88, 0.32);
+  --category-a-fg:     #e85858;
+  --category-b-bg:     rgba(240, 160, 80, 0.12);
+  --category-b-border: rgba(240, 160, 80, 0.32);
+  --category-b-fg:     #f0a050;
+  --category-c-bg:     rgba(230, 200, 77, 0.12);
+  --category-c-border: rgba(230, 200, 77, 0.32);
+  --category-c-fg:     #e6c84d;
+  --category-d-bg:     rgba(108, 204, 128, 0.12);
+  --category-d-border: rgba(108, 204, 128, 0.32);
+  --category-d-fg:     #6ccc80;
+  --category-e-bg:     rgba(108, 200, 184, 0.12);
+  --category-e-border: rgba(108, 200, 184, 0.32);
+  --category-e-fg:     #6cc8b8;
+  --category-f-bg:     rgba(108, 182, 255, 0.12);
+  --category-f-border: rgba(108, 182, 255, 0.32);
+  --category-f-fg:     #6cb6ff;
+  --category-g-bg:     rgba(192, 160, 240, 0.12);
+  --category-g-border: rgba(192, 160, 240, 0.32);
+  --category-g-fg:     #c0a0f0;
+  --category-h-bg:     rgba(245, 160, 184, 0.12);
+  --category-h-border: rgba(245, 160, 184, 0.32);
+  --category-h-fg:     #f5a0b8;
+
+  /* ---- Syntax highlight palette — mirrors base16 base08–base0F roles so
+     base16 themes can map directly. Intentionally brand-invariant (like the
+     --tool-* tokens above): the default-dark palette ships these to :root
+     and themes inherit unless they have a specific reason to override
+     (e.g. high-contrast bumps saturation). */
+  --syntax-keyword:      #c0a0f0;
+  --syntax-string:       #6ccc80;
+  --syntax-number:       #f0a050;
+  --syntax-comment:      var(--text-faint);
+  --syntax-function:     #8cb8e0;
+  --syntax-type:         #e0c050;
+  --syntax-variable:     #f07070;
+  --syntax-operator:     #6cb6ff;
+
   /* ---- Tool activity — per-category hues used in chat tool chips.
      Intentionally brand-invariant: tool chips keep the same hue across
      every theme so users build a stable read/write/bash/etc. muscle
@@ -283,6 +380,19 @@
   --badge-plan: #6848a8;
   --badge-ask:  #a04828;
 
+  /* Semantic accents tuned for cream paper — track --badge-done/--status-stopped/
+     --badge-plan above. Deeper orange for warning since #f0a050 washes out. */
+  --accent-success:       #1a7f37;
+  --accent-success-rgb:   26, 127, 55;
+  --accent-warning:       #c27430;
+  --accent-warning-rgb:   194, 116, 48;
+  --accent-error:         #c42020;
+  --accent-error-rgb:     196, 32, 32;
+  --accent-info:          #6848a8;
+  --accent-info-rgb:      104, 72, 168;
+  --accent-secondary:     #d7827e;
+  --accent-secondary-rgb: 215, 130, 126;
+
   --diff-added-bg:   rgba(26, 127, 55, 0.10);
   --diff-removed-bg: rgba(196, 32, 32, 0.10);
   --diff-added-text: #1a7f37;
@@ -347,6 +457,15 @@
   --badge-plan: #8fbfdc;
   --badge-ask:  #fad07a;
 
+  --accent-success:       #99ad6a;
+  --accent-success-rgb:   153, 173, 106;
+  --accent-warning:       #fad07a;
+  --accent-warning-rgb:   250, 208, 122;
+  --accent-error:         #cf6a4c;
+  --accent-error-rgb:     207, 106, 76;
+  --accent-info:          #8fbfdc;
+  --accent-info-rgb:      143, 191, 220;
+
   --diff-added-bg: rgba(67, 112, 25, 0.25);
   --diff-removed-bg: rgba(112, 0, 9, 0.25);
   --diff-added-text: #d2ebbe;
@@ -381,6 +500,29 @@
   --badge-done: #00ffdd;
   --badge-plan: #66bbff;
   --badge-ask:  #ffbb44;
+
+  /* Max-saturation semantic + syntax palette for legibility on near-black. */
+  --accent-success:       #00ffdd;
+  --accent-success-rgb:   0, 255, 221;
+  --accent-warning:       #ffaa00;
+  --accent-warning-rgb:   255, 170, 0;
+  --accent-error:         #ff4444;
+  --accent-error-rgb:     255, 68, 68;
+  --accent-info:          #66bbff;
+  --accent-info-rgb:      102, 187, 255;
+  --accent-secondary:     #ff66cc;
+  --accent-secondary-rgb: 255, 102, 204;
+  --accent-tertiary:      #d090ff;
+  --accent-tertiary-rgb:  208, 144, 255;
+
+  --syntax-keyword:     #d090ff;
+  --syntax-string:      #44ff44;
+  --syntax-number:      #ffaa00;
+  --syntax-comment:     #888899;
+  --syntax-function:    #66bbff;
+  --syntax-type:        #ffdd00;
+  --syntax-variable:    #ff4444;
+  --syntax-operator:    #00ffdd;
 }
 
 /* ============================================================
@@ -421,6 +563,17 @@
   --badge-done: #31748f;
   --badge-plan: #9ccfd8;
   --badge-ask:  #f6c177;
+
+  --accent-success:       #31748f;
+  --accent-success-rgb:   49, 116, 143;
+  --accent-warning:       #f6c177;
+  --accent-warning-rgb:   246, 193, 119;
+  --accent-error:         #eb6f92;
+  --accent-error-rgb:     235, 111, 146;
+  --accent-info:          #9ccfd8;
+  --accent-info-rgb:      156, 207, 216;
+  --accent-secondary:     #ebbcba;
+  --accent-secondary-rgb: 235, 188, 186;
 
   --mascot-pink: #ebbcba;
 
@@ -470,6 +623,17 @@
   --badge-done: #3e8fb0;
   --badge-plan: #9ccfd8;
   --badge-ask:  #f6c177;
+
+  --accent-success:       #3e8fb0;
+  --accent-success-rgb:   62, 143, 176;
+  --accent-warning:       #f6c177;
+  --accent-warning-rgb:   246, 193, 119;
+  --accent-error:         #eb6f92;
+  --accent-error-rgb:     235, 111, 146;
+  --accent-info:          #9ccfd8;
+  --accent-info-rgb:      156, 207, 216;
+  --accent-secondary:     #ea9a97;
+  --accent-secondary-rgb: 234, 154, 151;
 
   --mascot-pink: #ea9a97;
 
@@ -523,6 +687,18 @@
   --badge-plan: #56949f;
   --badge-ask:  #ea9d34;
 
+  /* Rosé Pine palette tuned semantic accents. */
+  --accent-success:       #286983;
+  --accent-success-rgb:   40, 105, 131;
+  --accent-warning:       #ea9d34;
+  --accent-warning-rgb:   234, 157, 52;
+  --accent-error:         #b4637a;
+  --accent-error-rgb:     180, 99, 122;
+  --accent-info:          #56949f;
+  --accent-info-rgb:      86, 148, 159;
+  --accent-secondary:     #d7827e;
+  --accent-secondary-rgb: 215, 130, 126;
+
   --mascot-pink: #d7827e;
 
   --diff-added-bg:   rgba(40, 105, 131, 0.12);
@@ -573,6 +749,17 @@
   --badge-done: #859900;
   --badge-plan: #2aa198;
   --badge-ask:  #b58900;
+
+  --accent-success:       #859900;
+  --accent-success-rgb:   133, 153, 0;
+  --accent-warning:       #b58900;
+  --accent-warning-rgb:   181, 137, 0;
+  --accent-error:         #dc322f;
+  --accent-error-rgb:     220, 50, 47;
+  --accent-info:          #2aa198;
+  --accent-info-rgb:      42, 161, 152;
+  --accent-secondary:     #d33682;
+  --accent-secondary-rgb: 211, 54, 130;
 
   --mascot-pink: #d33682;
 
@@ -626,6 +813,18 @@
   --badge-plan: #2aa198;
   --badge-ask:  #b58900;
 
+  /* Solarized palette tuned semantic accents. */
+  --accent-success:       #859900;
+  --accent-success-rgb:   133, 153, 0;
+  --accent-warning:       #b58900;
+  --accent-warning-rgb:   181, 137, 0;
+  --accent-error:         #dc322f;
+  --accent-error-rgb:     220, 50, 47;
+  --accent-info:          #2aa198;
+  --accent-info-rgb:      42, 161, 152;
+  --accent-secondary:     #d33682;
+  --accent-secondary-rgb: 211, 54, 130;
+
   --mascot-pink: #d33682;
 
   --diff-added-bg:   rgba(133, 153, 0, 0.14);
@@ -674,6 +873,17 @@
   --badge-done: #85dacc;
   --badge-plan: #a8a9eb;
   --badge-ask:  #f38d70;
+
+  --accent-success:       #85dacc;
+  --accent-success-rgb:   133, 218, 204;
+  --accent-warning:       #f9cc6c;
+  --accent-warning-rgb:   249, 204, 108;
+  --accent-error:         #fd6883;
+  --accent-error-rgb:     253, 104, 131;
+  --accent-info:          #a8a9eb;
+  --accent-info-rgb:      168, 169, 235;
+  --accent-secondary:     #f38d70;
+  --accent-secondary-rgb: 243, 141, 112;
 
   --mascot-pink: #fd6883;
 
@@ -724,6 +934,17 @@
   --badge-plan: #7aa8c0;
   --badge-ask:  #d4b880;
 
+  --accent-success:       #829868;
+  --accent-success-rgb:   130, 152, 104;
+  --accent-warning:       #d4b880;
+  --accent-warning-rgb:   212, 184, 128;
+  --accent-error:         #b56a53;
+  --accent-error-rgb:     181, 106, 83;
+  --accent-info:          #7aa8c0;
+  --accent-info-rgb:      122, 168, 192;
+  --accent-secondary:     #b56a53;
+  --accent-secondary-rgb: 181, 106, 83;
+
   --mascot-pink: #b56a53;
 
   --diff-added-bg:   rgba(60, 95, 25, 0.20);
@@ -772,6 +993,17 @@
   --badge-done: #4a9eff;
   --badge-plan: rgb(100, 160, 240);
   --badge-ask:  #f0a050;
+
+  --accent-success:       rgb(80, 220, 120);
+  --accent-success-rgb:   80, 220, 120;
+  --accent-warning:       #f0a050;
+  --accent-warning-rgb:   240, 160, 80;
+  --accent-error:         #f05050;
+  --accent-error-rgb:     240, 80, 80;
+  --accent-info:          #4a9eff;
+  --accent-info-rgb:      74, 158, 255;
+  --accent-secondary:     #f05080;
+  --accent-secondary-rgb: 240, 80, 128;
 
   --mascot-pink: #f05080;
 
@@ -822,6 +1054,17 @@
   --badge-plan: rgb(120, 170, 230);
   --badge-ask:  #f0a050;
 
+  --accent-success:       #50d8a0;
+  --accent-success-rgb:   80, 216, 160;
+  --accent-warning:       #f0a050;
+  --accent-warning-rgb:   240, 160, 80;
+  --accent-error:         #e85050;
+  --accent-error-rgb:     232, 80, 80;
+  --accent-info:          rgb(120, 170, 230);
+  --accent-info-rgb:      120, 170, 230;
+  --accent-secondary:     #e85080;
+  --accent-secondary-rgb: 232, 80, 128;
+
   --mascot-pink: #e85080;
 
   --diff-added-bg:   rgba(0, 180, 80, 0.12);
@@ -871,6 +1114,19 @@
   --badge-done: #08a363;
   --badge-plan: #8adcff;
   --badge-ask:  #ffba75;
+
+  --accent-success:       #08a363;
+  --accent-success-rgb:   8, 163, 99;
+  --accent-warning:       #ffba75;
+  --accent-warning-rgb:   255, 186, 117;
+  --accent-error:         #d92828;
+  --accent-error-rgb:     217, 40, 40;
+  --accent-info:          #8adcff;
+  --accent-info-rgb:      138, 220, 255;
+  --accent-secondary:     #ed87ae;
+  --accent-secondary-rgb: 237, 135, 174;
+  --accent-tertiary:      #dcaeff;
+  --accent-tertiary-rgb:  220, 174, 255;
 
   --mascot-pink: #ed87ae;
 
@@ -1106,30 +1362,12 @@ select:disabled {
 }
 
 /*
- * Shiki dual-theme code highlighting.
+ * Shiki code highlighting.
  *
- * The Shiki worker emits each token span with both `--shiki-light` and
- * `--shiki-dark` CSS variables and no inline `color`. The rules below pick
- * the correct variable based on the active color scheme. Built-in themes
- * are matched by `[data-theme]`; user themes signal their scheme via an
- * inline `color-scheme: light|dark` on `<html>` (set in theme.ts:applyTheme).
- *
- * Selector targets only the Shiki-emitted token spans (those carrying the
- * `--shiki-light` custom property inline) regardless of ancestor. The
- * diff viewer mounts Shiki HTML directly inside a `<span>` (no
- * `<pre><code>` wrapper), so an ancestor-constrained selector misses
- * those tokens and they render with no token color. The line-wrapper
- * spans Shiki also emits don't carry the inline property and so
- * harmlessly miss this rule and inherit `currentColor`. Using the
- * inline-style attribute selector keeps the rule independent of
- * CSS-module class hashing.
+ * The Shiki worker uses a single Claudette theme whose foreground colors
+ * are `var(--syntax-*)` references (see styles/shikiClaudetteTheme.ts).
+ * Token spans render with inline `style="color: var(--syntax-keyword)"`
+ * etc., which the cascade resolves per-theme — no JS-side dual-theme
+ * switching needed. Light/dark adaptation comes from each theme's
+ * `--syntax-*` declarations in this file.
  */
-[style*="--shiki-light"] {
-  color: var(--shiki-dark);
-}
-[data-theme="default-light"] [style*="--shiki-light"],
-[data-theme="rose-pine-dawn"] [style*="--shiki-light"],
-[data-theme="solarized-light"] [style*="--shiki-light"],
-html[style*="color-scheme: light"] [style*="--shiki-light"] {
-  color: var(--shiki-light);
-}

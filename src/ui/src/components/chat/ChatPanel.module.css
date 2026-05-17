@@ -151,12 +151,12 @@
 }
 
 .errorBanner {
-  background: var(--error-bg);
-  border: 1px solid var(--error-border);
+  background: var(--accent-error-bg);
+  border: 1px solid var(--accent-error-border);
   border-radius: 8px;
   padding: 10px 14px;
   font-size: 13px;
-  color: var(--status-stopped);
+  color: var(--accent-error);
   white-space: pre-wrap;
   word-break: break-word;
 }
@@ -1562,9 +1562,9 @@
 }
 
 .queuedCancel:hover {
-  color: var(--status-stopped);
-  background: var(--error-bg);
-  border-color: var(--error-border);
+  color: var(--accent-error);
+  background: var(--accent-error-bg);
+  border-color: var(--accent-error-border);
 }
 
 /* Input area — Composer wrapper */
