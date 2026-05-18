@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Play, RefreshCw, Trash2 } from "lucide-react";
+import type { TFunction } from "i18next";
 import { useTranslation } from "react-i18next";
 import {
   deleteScheduledRoutine,
@@ -9,8 +10,8 @@ import {
 } from "../../../services/tauri";
 import styles from "../Settings.module.css";
 
-function formatFireTime(value: string | null): string {
-  if (!value) return "Not scheduled";
+function formatFireTime(value: string | null, t: TFunction<"settings">): string {
+  if (!value) return t("automation_not_scheduled");
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
   return date.toLocaleString();
@@ -20,14 +21,20 @@ function routineLabel(task: ScheduledTask): string {
   return task.name || task.id;
 }
 
-function routineDescription(task: ScheduledTask): string {
-  const status = task.enabled ? "enabled" : "disabled";
+function routineDescription(task: ScheduledTask, t: TFunction<"settings">): string {
+  const status = task.enabled
+    ? t("automation_status_enabled")
+    : t("automation_status_disabled");
+  const nextFire = `${t("automation_next_fire")}: ${formatFireTime(task.next_fire_at, t)}`;
   if (task.kind === "wakeup") {
-    return `One-shot wakeup, ${status}. Next fire: ${formatFireTime(task.next_fire_at)}.`;
+    return `${t("automation_kind_wakeup")}, ${status}. ${nextFire}.`;
   }
-  const schedule = task.human_schedule || task.cron_expr || "Unknown schedule";
-  const mode = task.recurring ? "recurring" : "one-shot";
-  return `${schedule}, ${mode}, ${status}. Next fire: ${formatFireTime(task.next_fire_at)}.`;
+  const schedule =
+    task.human_schedule || task.cron_expr || t("automation_unknown_schedule");
+  const mode = task.recurring
+    ? t("automation_mode_recurring")
+    : t("automation_mode_one_shot");
+  return `${schedule}, ${mode}, ${status}. ${nextFire}.`;
 }
 
 export function AutomationSettings() {
@@ -111,7 +118,7 @@ export function AutomationSettings() {
             <div className={styles.settingInfo}>
               <div className={styles.settingLabel}>{routineLabel(task)}</div>
               <div className={styles.settingDescription}>
-                {routineDescription(task)}
+                {routineDescription(task, t)}
               </div>
               <div className={styles.settingDescription}>{task.prompt}</div>
             </div>

@@ -103,6 +103,22 @@ impl Database {
         stmt.query_map([], parse_scheduled_task_row)?.collect()
     }
 
+    pub fn list_agent_scheduled_tasks_for_chat_session(
+        &self,
+        chat_session_id: &str,
+    ) -> Result<Vec<ScheduledTask>, rusqlite::Error> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, chat_session_id, workspace_id, kind, name, prompt, reason,
+                    fire_at, cron_expr, recurring, enabled, created_at, updated_at,
+                    last_fired_at, next_fire_at
+             FROM agent_scheduled_tasks
+             WHERE chat_session_id = ?1
+             ORDER BY enabled DESC, next_fire_at IS NULL, next_fire_at, created_at",
+        )?;
+        stmt.query_map(params![chat_session_id], parse_scheduled_task_row)?
+            .collect()
+    }
+
     pub fn due_agent_scheduled_tasks(
         &self,
         now: DateTime<Utc>,
@@ -138,17 +154,18 @@ impl Database {
         &self,
         task: &ScheduledTask,
         fired_at: DateTime<Utc>,
-    ) -> Result<(), rusqlite::Error> {
+    ) -> Result<usize, rusqlite::Error> {
         let fired = fired_at.to_rfc3339();
         match task.kind {
-            ScheduledTaskKind::Wakeup => {
-                self.conn.execute(
-                    "UPDATE agent_scheduled_tasks
+            ScheduledTaskKind::Wakeup => self.conn.execute(
+                "UPDATE agent_scheduled_tasks
                      SET enabled = 0, last_fired_at = ?2, next_fire_at = NULL, updated_at = ?2
-                     WHERE id = ?1",
-                    params![task.id, fired],
-                )?;
-            }
+                     WHERE id = ?1
+                       AND enabled = 1
+                       AND next_fire_at IS NOT NULL
+                       AND next_fire_at <= ?2",
+                params![task.id, fired],
+            ),
             ScheduledTaskKind::Cron => {
                 if task.recurring {
                     let next = task
@@ -159,26 +176,43 @@ impl Database {
                     self.conn.execute(
                         "UPDATE agent_scheduled_tasks
                          SET last_fired_at = ?2, next_fire_at = ?3, updated_at = ?2
-                         WHERE id = ?1",
+                         WHERE id = ?1
+                           AND enabled = 1
+                           AND next_fire_at IS NOT NULL
+                           AND next_fire_at <= ?2",
                         params![task.id, fired, next],
-                    )?;
+                    )
                 } else {
                     self.conn.execute(
                         "UPDATE agent_scheduled_tasks
                          SET enabled = 0, last_fired_at = ?2, next_fire_at = NULL, updated_at = ?2
-                         WHERE id = ?1",
+                         WHERE id = ?1
+                           AND enabled = 1
+                           AND next_fire_at IS NOT NULL
+                           AND next_fire_at <= ?2",
                         params![task.id, fired],
-                    )?;
+                    )
                 }
             }
         }
-        Ok(())
     }
 
     pub fn delete_agent_scheduled_task(&self, id_or_name: &str) -> Result<usize, rusqlite::Error> {
         self.conn.execute(
             "DELETE FROM agent_scheduled_tasks WHERE id = ?1 OR name = ?1",
             params![id_or_name],
+        )
+    }
+
+    pub fn delete_agent_scheduled_task_for_chat_session(
+        &self,
+        chat_session_id: &str,
+        id_or_name: &str,
+    ) -> Result<usize, rusqlite::Error> {
+        self.conn.execute(
+            "DELETE FROM agent_scheduled_tasks
+             WHERE chat_session_id = ?1 AND (id = ?2 OR name = ?2)",
+            params![chat_session_id, id_or_name],
         )
     }
 
@@ -261,5 +295,68 @@ mod tests {
         assert_eq!(task.kind, ScheduledTaskKind::Cron);
         assert_eq!(task.name.as_deref(), Some("hourly"));
         assert!(task.next_fire_at.is_some());
+    }
+
+    #[test]
+    fn scoped_list_and_delete_stay_within_chat_session() {
+        let db = Database::open_in_memory().unwrap();
+        let repo = make_repo("repo", "/tmp/repo", "repo");
+        db.insert_repository(&repo).unwrap();
+        let ws = make_workspace("ws", &repo.id, "work");
+        db.insert_workspace(&ws).unwrap();
+        let session_a = db.create_chat_session(&ws.id).unwrap();
+        let session_b = db.create_chat_session(&ws.id).unwrap();
+
+        let task_a = db
+            .create_agent_cron_task(&session_a.id, Some("same-name"), "0 * * * *", "a", true)
+            .unwrap();
+        let task_b = db
+            .create_agent_cron_task(&session_b.id, None, "0 * * * *", "b", true)
+            .unwrap();
+
+        let rows = db
+            .list_agent_scheduled_tasks_for_chat_session(&session_a.id)
+            .unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].id, task_a.id);
+
+        assert_eq!(
+            db.delete_agent_scheduled_task_for_chat_session(&session_a.id, &task_b.id)
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            db.delete_agent_scheduled_task_for_chat_session(&session_a.id, "same-name")
+                .unwrap(),
+            1
+        );
+        assert!(db.get_agent_scheduled_task(&task_b.id).unwrap().is_some());
+    }
+
+    #[test]
+    fn mark_fired_skips_deleted_or_no_longer_due_rows() {
+        let db = Database::open_in_memory().unwrap();
+        let repo = make_repo("repo", "/tmp/repo", "repo");
+        db.insert_repository(&repo).unwrap();
+        let ws = make_workspace("ws", &repo.id, "work");
+        db.insert_workspace(&ws).unwrap();
+        let session = db.create_chat_session(&ws.id).unwrap();
+        let now = Utc::now();
+        let task = db
+            .create_agent_wakeup(
+                &session.id,
+                now - chrono::Duration::minutes(1),
+                "check",
+                None,
+            )
+            .unwrap();
+
+        assert_eq!(
+            db.mark_agent_scheduled_task_fired(&task, now - chrono::Duration::minutes(2))
+                .unwrap(),
+            0
+        );
+        db.delete_agent_scheduled_task(&task.id).unwrap();
+        assert_eq!(db.mark_agent_scheduled_task_fired(&task, now).unwrap(), 0);
     }
 }

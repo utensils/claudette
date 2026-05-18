@@ -163,8 +163,8 @@ async fn handle_payload(
             prompt,
             recurring,
         ),
-        BridgePayload::CronList => list_crons(db_path),
-        BridgePayload::CronDelete { id } => delete_cron(app, db_path, id),
+        BridgePayload::CronList => list_crons(db_path, chat_session_id),
+        BridgePayload::CronDelete { id } => delete_cron(app, db_path, chat_session_id, id),
         BridgePayload::Monitor { task_id, until } => {
             monitor_background_task(app, db_path, workspace_id, chat_session_id, task_id, until)
                 .await
@@ -236,12 +236,12 @@ fn create_cron(
     }
 }
 
-fn list_crons(db_path: PathBuf) -> BridgeResponse {
+fn list_crons(db_path: PathBuf, chat_session_id: String) -> BridgeResponse {
     let db = match Database::open(&db_path) {
         Ok(db) => db,
         Err(err) => return BridgeResponse::err(format!("open db: {err}")),
     };
-    match db.list_agent_scheduled_tasks() {
+    match db.list_agent_scheduled_tasks_for_chat_session(&chat_session_id) {
         Ok(tasks) => {
             let message = if tasks.is_empty() {
                 "No scheduled wakeups or routines.".to_string()
@@ -257,12 +257,17 @@ fn list_crons(db_path: PathBuf) -> BridgeResponse {
     }
 }
 
-fn delete_cron(app: AppHandle, db_path: PathBuf, id: String) -> BridgeResponse {
+fn delete_cron(
+    app: AppHandle,
+    db_path: PathBuf,
+    chat_session_id: String,
+    id: String,
+) -> BridgeResponse {
     let db = match Database::open(&db_path) {
         Ok(db) => db,
         Err(err) => return BridgeResponse::err(format!("open db: {err}")),
     };
-    match db.delete_agent_scheduled_task(&id) {
+    match db.delete_agent_scheduled_task_for_chat_session(&chat_session_id, &id) {
         Ok(0) => BridgeResponse::err(format!("No scheduled routine named {id:?}")),
         Ok(n) => {
             app.state::<AppState>().scheduler_notify.notify_waiters();
@@ -280,14 +285,28 @@ async fn monitor_background_task(
     task_id: String,
     until: Option<String>,
 ) -> BridgeResponse {
-    let output_path = {
+    let target = {
         let state = app.state::<AppState>();
         let agents = state.agents.read().await;
-        agents
-            .get(&chat_session_id)
-            .and_then(|session| session.background_task_output_paths.get(&task_id).cloned())
+        agents.get(&chat_session_id).and_then(|session| {
+            let output_path = session.background_task_output_paths.get(&task_id)?.clone();
+            let canonical_task_id = session
+                .background_task_output_paths
+                .iter()
+                .find_map(|(candidate_id, candidate_path)| {
+                    if candidate_path == &output_path
+                        && session.running_background_tasks.contains(candidate_id)
+                    {
+                        Some(candidate_id.clone())
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or_else(|| task_id.clone());
+            Some((canonical_task_id, output_path))
+        })
     };
-    let Some(output_path) = output_path else {
+    let Some((task_id, output_path)) = target else {
         return BridgeResponse::err(format!(
             "no trusted output path for background task {task_id}"
         ));
@@ -342,6 +361,7 @@ fn spawn_monitor_tailer(
                 continue;
             }
             let mut buf = vec![0_u8; 8192];
+            let mut lines = Vec::new();
             loop {
                 match file.read(&mut buf).await {
                     Ok(0) => break,
@@ -352,29 +372,31 @@ fn spawn_monitor_tailer(
                             let line = pending[..idx].trim_end_matches('\r').to_string();
                             pending = pending[idx + 1..].to_string();
                             if !line.trim().is_empty() {
-                                let prompt =
-                                    monitor_event_prompt(&task_id, until.as_deref(), &line);
-                                if let Err(err) =
-                                    crate::commands::scheduling::dispatch_prompt_to_session(
-                                        app.clone(),
-                                        chat_session_id.clone(),
-                                        prompt,
-                                    )
-                                    .await
-                                {
-                                    tracing::warn!(
-                                        target: "claudette::scheduling",
-                                        workspace_id = %workspace_id,
-                                        chat_session_id = %chat_session_id,
-                                        task_id = %task_id,
-                                        error = %err,
-                                        "failed to dispatch monitor event"
-                                    );
-                                }
+                                lines.push(line);
                             }
                         }
                     }
                     Err(_) => break,
+                }
+            }
+            if !lines.is_empty() {
+                wait_for_session_idle(&app, &chat_session_id).await;
+                let prompt = monitor_event_prompt(&task_id, until.as_deref(), &lines);
+                if let Err(err) = crate::commands::scheduling::dispatch_prompt_to_session(
+                    app.clone(),
+                    chat_session_id.clone(),
+                    prompt,
+                )
+                .await
+                {
+                    tracing::warn!(
+                        target: "claudette::scheduling",
+                        workspace_id = %workspace_id,
+                        chat_session_id = %chat_session_id,
+                        task_id = %task_id,
+                        error = %err,
+                        "failed to dispatch monitor event"
+                    );
                 }
             }
             if !is_running && offset >= len {
@@ -384,18 +406,34 @@ fn spawn_monitor_tailer(
     });
 }
 
-fn monitor_event_prompt(task_id: &str, until: Option<&str>, line: &str) -> String {
+async fn wait_for_session_idle(app: &AppHandle, chat_session_id: &str) {
+    loop {
+        let is_idle = {
+            let state = app.state::<AppState>();
+            let agents = state.agents.read().await;
+            agents
+                .get(chat_session_id)
+                .is_none_or(|session| session.active_pid.is_none())
+        };
+        if is_idle {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+}
+
+fn monitor_event_prompt(task_id: &str, until: Option<&str>, lines: &[String]) -> String {
     let mut prompt = format!(
-        "A monitored background task emitted a new output line.\n\n<monitor-event>\n<task-id>{}</task-id>",
+        "A monitored background task emitted new output.\n\n<monitor-event>\n<task-id>{}</task-id>",
         escape_xml(task_id)
     );
     if let Some(until) = until.filter(|s| !s.trim().is_empty()) {
         prompt.push_str(&format!("\n<until>{}</until>", escape_xml(until)));
     }
-    prompt.push_str(&format!(
-        "\n<line>{}</line>\n</monitor-event>",
-        escape_xml(line)
-    ));
+    for line in lines {
+        prompt.push_str(&format!("\n<line>{}</line>", escape_xml(line)));
+    }
+    prompt.push_str("\n</monitor-event>");
     prompt
 }
 

@@ -167,8 +167,12 @@ async fn mark_and_dispatch_due_task(
     {
         let state = app.state::<AppState>();
         let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
-        db.mark_agent_scheduled_task_fired(&task, now)
+        let updated = db
+            .mark_agent_scheduled_task_fired(&task, now)
             .map_err(|e| e.to_string())?;
+        if updated == 0 {
+            return Ok(());
+        }
     }
     dispatch_task_prompt(app, task, "scheduled").await
 }

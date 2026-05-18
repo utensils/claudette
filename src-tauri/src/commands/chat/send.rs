@@ -2844,6 +2844,10 @@ pub async fn send_chat_message(
                                                     binding.task_id.clone(),
                                                     binding.output_path.clone(),
                                                 );
+                                                session.background_task_output_paths.insert(
+                                                    tool_use_id.clone(),
+                                                    binding.output_path.clone(),
+                                                );
                                             }
                                         }
                                         let aggregate_path =
