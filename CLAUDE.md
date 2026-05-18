@@ -38,6 +38,7 @@ cargo clippy -p claudette -p claudette-server -p claudette-cli --all-targets --a
 cargo clippy -p claudette-mobile --target aarch64-apple-darwin --all-targets --locked  # Mobile lint (CI command — macOS only)
 cargo test -p claudette-mobile --locked          # Mobile tests (CI command — macOS only)
 cargo fmt --all --check                          # Check formatting
+./scripts/coverage-interactive.sh && ./scripts/check-coverage-interactive.sh  # Claude Interactive patch-coverage gate (informational; blocking gate lands in Task G1)
 
 # Frontend (React/TypeScript)
 cd src/ui && bun install                         # Install frontend dependencies

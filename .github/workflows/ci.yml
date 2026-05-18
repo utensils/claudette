@@ -148,6 +148,15 @@ jobs:
           slug: utensils/claudette
           files: lcov.info
           fail_ci_if_error: false
+      # Claude Interactive patch-coverage gate (informational for now;
+      # flipped to blocking by Task G1 once we hit the 85% threshold).
+      # See scripts/check-coverage-interactive.sh and CLAUDE.md.
+      - name: Run llvm-cov (interactive patch JSON)
+        run: ./scripts/coverage-interactive.sh
+      - name: Check interactive patch coverage (informational)
+        env:
+          COVERAGE_GATE_BLOCKING: "0"
+        run: ./scripts/check-coverage-interactive.sh
 
   frontend:
     name: Frontend
