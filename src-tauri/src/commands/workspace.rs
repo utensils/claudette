@@ -792,7 +792,7 @@ pub async fn restore_workspace(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<String, String> {
-    let mut db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
+    let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
 
     // Find the row + repo BEFORE flipping status, so we know what git
     // restore is about to run against and can roll back cleanly on
