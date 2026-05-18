@@ -1219,15 +1219,17 @@ pub fn start_scm_polling(app_handle: tauri::AppHandle) {
                                 settings.ci_auto_fix_model_provider.as_deref(),
                             )
                             .await;
-                            if handled {
-                                app_state.ci_last_status.write().await.insert(
-                                    ws_id.clone(),
-                                    crate::state::CiTransitionState {
-                                        overall_status: current_status,
-                                        last_auto_fix_triggered: Some(Instant::now()),
-                                    },
-                                );
-                            }
+                            let next_state = next_ci_transition_state(
+                                current_status,
+                                prev_triggered,
+                                handled,
+                                Instant::now(),
+                            );
+                            app_state
+                                .ci_last_status
+                                .write()
+                                .await
+                                .insert(ws_id.clone(), next_state);
                         }
                     }
                 }
@@ -1290,6 +1292,24 @@ fn is_ci_failure_transition(
         (previous, current),
         (Some(prev), Some(CiOverallStatus::Failure)) if prev != CiOverallStatus::Failure
     )
+}
+
+/// Compute the next `CiTransitionState` after observing `current_status`
+/// and (when a failure transition fired) attempting to create an
+/// auto-fix session. Recording the observed status is unconditional so
+/// a transient `handled == false` doesn't leave `overall_status` at the
+/// prior non-failure value and re-fire every poll tick. The cooldown
+/// stamp only advances on success.
+fn next_ci_transition_state(
+    current_status: Option<CiOverallStatus>,
+    prev_triggered: Option<Instant>,
+    handled: bool,
+    now: Instant,
+) -> crate::state::CiTransitionState {
+    crate::state::CiTransitionState {
+        overall_status: current_status,
+        last_auto_fix_triggered: if handled { Some(now) } else { prev_triggered },
+    }
 }
 
 fn format_failure_logs(logs: &[CiFailureLog]) -> String {
@@ -2224,5 +2244,38 @@ mod ci_auto_fix_tests {
             Some(CiOverallStatus::Pending),
             Some(CiOverallStatus::Success),
         ));
+    }
+
+    #[test]
+    fn next_ci_transition_state_records_status_even_when_unhandled() {
+        // Persistent DB / session-create failure: `handled == false`. We
+        // must still update `overall_status` so the next poll's
+        // `is_ci_failure_transition` returns false against the new
+        // value, preventing a 30s retry storm. The cooldown stamp keeps
+        // its prior value (None here, since this is the first transition).
+        let now = Instant::now();
+        let state = next_ci_transition_state(Some(CiOverallStatus::Failure), None, false, now);
+        assert_eq!(state.overall_status, Some(CiOverallStatus::Failure));
+        assert!(state.last_auto_fix_triggered.is_none());
+    }
+
+    #[test]
+    fn next_ci_transition_state_advances_cooldown_on_success() {
+        let now = Instant::now();
+        let state = next_ci_transition_state(Some(CiOverallStatus::Failure), None, true, now);
+        assert_eq!(state.overall_status, Some(CiOverallStatus::Failure));
+        assert_eq!(state.last_auto_fix_triggered, Some(now));
+    }
+
+    #[test]
+    fn next_ci_transition_state_preserves_prior_cooldown_when_unhandled() {
+        // A previous successful auto-fix set `last_auto_fix_triggered`.
+        // A later unhandled retry must not erase that stamp, otherwise
+        // the cooldown effectively resets and the user can be re-prompted.
+        let earlier = Instant::now();
+        let later = earlier + std::time::Duration::from_secs(10);
+        let state =
+            next_ci_transition_state(Some(CiOverallStatus::Failure), Some(earlier), false, later);
+        assert_eq!(state.last_auto_fix_triggered, Some(earlier));
     }
 }
