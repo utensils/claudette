@@ -187,6 +187,35 @@ function M.ci_status(args)
 end
 
 local MAX_LOG_CHARS = 4000
+-- Hard cap on how many failing runs we fetch logs for in one poll
+-- tick. Each `gh run view --log-failed` is a sequential network call,
+-- and the SCM polling semaphore caps workspace concurrency but not
+-- per-workspace fan-out. 3 is enough for typical CI fan-out without
+-- stretching a single poll into minutes.
+local MAX_FAILED_RUNS = 3
+
+local function fetch_run_log(run, logs)
+    local result = host.exec("gh", {
+        "run", "view", tostring(run.databaseId), "--log-failed",
+    })
+    if result.code ~= 0 then
+        host.log("warn", "ci_failure_logs failed for GitHub run "
+            .. tostring(run.databaseId) .. ": " .. tostring(result.stderr or ""))
+        return
+    end
+    local log_text = result.stdout or ""
+    if #log_text > MAX_LOG_CHARS then
+        -- Take tail: CI errors are at the end of the log.
+        log_text = string.sub(log_text, -MAX_LOG_CHARS)
+    end
+    if #log_text > 0 then
+        table.insert(logs, {
+            check_name = run.name,
+            log = log_text,
+            url = run.url,
+        })
+    end
+end
 
 function M.ci_failure_logs(args)
     local ok, runs = pcall(gh, {
@@ -208,28 +237,24 @@ function M.ci_failure_logs(args)
 
     local logs = {}
     for _, run in ipairs(runs) do
+        if #logs >= MAX_FAILED_RUNS then break end
         if (not has_wanted) or wanted[run.name] then
-            local result = host.exec("gh", {
-                "run", "view", tostring(run.databaseId), "--log-failed",
-            })
-            if result.code ~= 0 then
-                host.log("warn", "ci_failure_logs failed for GitHub run "
-                    .. tostring(run.databaseId) .. ": " .. tostring(result.stderr or ""))
-            else
-                local log_text = result.stdout or ""
-                if #log_text > MAX_LOG_CHARS then
-                    log_text = string.sub(log_text, -MAX_LOG_CHARS)
-                end
-                if #log_text > 0 then
-                    table.insert(logs, {
-                        check_name = run.name,
-                        log = log_text,
-                        url = run.url,
-                    })
-                end
-            end
+            fetch_run_log(run, logs)
         end
     end
+
+    -- Fallback: `gh pr checks` returns job/check names while `gh run
+    -- list` returns workflow names, so exact-name matching often
+    -- misses (e.g. job "Lint" inside workflow "CI"). When we know
+    -- there were failed checks but matched none, pull logs from the
+    -- most recent failed runs as a best-effort signal.
+    if has_wanted and #logs == 0 then
+        for _, run in ipairs(runs) do
+            if #logs >= MAX_FAILED_RUNS then break end
+            fetch_run_log(run, logs)
+        end
+    end
+
     return logs
 end
 
