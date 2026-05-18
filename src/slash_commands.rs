@@ -58,7 +58,7 @@ pub fn native_command_registry() -> Vec<SlashCommand> {
     let mut commands = vec![
         SlashCommand {
             name: "plugin".to_string(),
-            description: "Browse and manage plugins in settings".to_string(),
+            description: "Browse and manage Claude Code plugins in settings".to_string(),
             source: "builtin".to_string(),
             aliases: vec!["plugins".to_string()],
             argument_hint: Some(
@@ -68,7 +68,7 @@ pub fn native_command_registry() -> Vec<SlashCommand> {
         },
         SlashCommand {
             name: "marketplace".to_string(),
-            description: "Manage plugin marketplaces in settings".to_string(),
+            description: "Manage Claude Code plugin marketplaces in settings".to_string(),
             source: "builtin".to_string(),
             aliases: Vec::new(),
             argument_hint: Some("[add|remove|update] <source>".to_string()),

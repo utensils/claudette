@@ -1302,7 +1302,7 @@ describe("formatHelpMessage", () => {
     const withAngles: SlashCommand[] = [
       {
         name: "marketplace",
-        description: "Manage plugin marketplaces in settings",
+        description: "Manage Claude Code plugin marketplaces in settings",
         source: "builtin",
         aliases: [],
         argument_hint: "[add|remove|update] <source>",
