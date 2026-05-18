@@ -66,18 +66,12 @@ fn remote_control_requested_or_active(status: &ClaudeRemoteControlStatus) -> boo
     !matches!(status.state, ClaudeRemoteControlLifecycle::Disabled)
 }
 
-fn remote_control_should_restore_for_turn(
-    feature_enabled: bool,
-    status: &ClaudeRemoteControlStatus,
-) -> bool {
-    feature_enabled && remote_control_should_survive_local_respawn(status)
+fn remote_control_should_restore_for_turn(status: &ClaudeRemoteControlStatus) -> bool {
+    remote_control_should_survive_local_respawn(status)
 }
 
-fn remote_control_requested_or_active_for_turn(
-    feature_enabled: bool,
-    status: &ClaudeRemoteControlStatus,
-) -> bool {
-    feature_enabled && remote_control_requested_or_active(status)
+fn remote_control_requested_or_active_for_turn(status: &ClaudeRemoteControlStatus) -> bool {
+    remote_control_requested_or_active(status)
 }
 
 fn env_provider_drifted(
@@ -336,21 +330,14 @@ fn should_reenable_remote_control_after_turn_result(
 /// next disable→enable cycle. Mirrors `should_defer_persistent_restart`'s
 /// pattern for in-flight background tasks.
 ///
-/// Gated behind the experimental feature flag — when Remote Control is
-/// disabled in settings, behavior matches the pre-feature implementation
-/// regardless of any stale lifecycle state in the agent session.
-fn remote_control_should_defer_drift_teardown_for_turn(
-    feature_enabled: bool,
-    status: &ClaudeRemoteControlStatus,
-) -> bool {
-    feature_enabled
-        && matches!(
-            status.state,
-            ClaudeRemoteControlLifecycle::Enabling
-                | ClaudeRemoteControlLifecycle::Ready
-                | ClaudeRemoteControlLifecycle::Connected
-                | ClaudeRemoteControlLifecycle::Reconnecting
-        )
+fn remote_control_should_defer_drift_teardown_for_turn(status: &ClaudeRemoteControlStatus) -> bool {
+    matches!(
+        status.state,
+        ClaudeRemoteControlLifecycle::Enabling
+            | ClaudeRemoteControlLifecycle::Ready
+            | ClaudeRemoteControlLifecycle::Connected
+            | ClaudeRemoteControlLifecycle::Reconnecting
+    )
 }
 
 fn remote_control_reconnecting_status(
@@ -1223,17 +1210,10 @@ pub async fn send_chat_message(
     // for any agent-authored attachments produced during this turn (see
     // `agent_mcp_sink::ChatBridgeSink`).
     session.last_user_msg_id = Some(user_msg.id.clone());
-    let remote_control_feature_enabled =
-        super::remote_control::remote_control_feature_enabled_for_db_path(&state.db_path)
-            .unwrap_or(false);
-    let restore_remote_control_after_respawn = remote_control_should_restore_for_turn(
-        remote_control_feature_enabled,
-        &session.claude_remote_control,
-    );
-    let remote_control_active_for_turn = remote_control_requested_or_active_for_turn(
-        remote_control_feature_enabled,
-        &session.claude_remote_control,
-    );
+    let restore_remote_control_after_respawn =
+        remote_control_should_restore_for_turn(&session.claude_remote_control);
+    let remote_control_active_for_turn =
+        remote_control_requested_or_active_for_turn(&session.claude_remote_control);
 
     // MCP config changed while a previous turn was in flight — tear down the
     // persistent session so the next spawn picks up updated --mcp-config.
@@ -1253,10 +1233,7 @@ pub async fn send_chat_message(
             "MCP config dirty — deferring persistent session restart"
         );
     } else if session.mcp_config_dirty
-        && remote_control_should_defer_drift_teardown_for_turn(
-            remote_control_feature_enabled,
-            &session.claude_remote_control,
-        )
+        && remote_control_should_defer_drift_teardown_for_turn(&session.claude_remote_control)
     {
         tracing::info!(
             target: "claudette::chat",
@@ -1465,10 +1442,8 @@ pub async fn send_chat_message(
             reason = "background_tasks_running",
             "session flags drifted — deferring persistent session restart"
         );
-    } else if remote_control_should_defer_drift_teardown_for_turn(
-        remote_control_feature_enabled,
-        &session.claude_remote_control,
-    ) && session.persistent_session.is_some()
+    } else if remote_control_should_defer_drift_teardown_for_turn(&session.claude_remote_control)
+        && session.persistent_session.is_some()
         && persistent_session_flags_drifted(
             SessionFlags {
                 plan_mode: session.session_plan_mode,
@@ -1654,10 +1629,8 @@ pub async fn send_chat_message(
             workspace_id = %workspace_id,
             "env-provider output changed but background tasks are running — deferring persistent session restart"
         );
-    } else if remote_control_should_defer_drift_teardown_for_turn(
-        remote_control_feature_enabled,
-        &session.claude_remote_control,
-    ) && session.persistent_session.is_some()
+    } else if remote_control_should_defer_drift_teardown_for_turn(&session.claude_remote_control)
+        && session.persistent_session.is_some()
         && env_drifted
     {
         // Env-provider output can drift spuriously between turns when the
@@ -3605,7 +3578,7 @@ mod tests {
     }
 
     #[test]
-    fn remote_control_feature_flag_disables_turn_restore_and_active_state() {
+    fn remote_control_turn_restore_and_active_state_track_lifecycle() {
         let status = ClaudeRemoteControlStatus {
             state: ClaudeRemoteControlLifecycle::Connected,
             session_url: None,
@@ -3615,10 +3588,8 @@ mod tests {
             last_error: None,
         };
 
-        assert!(remote_control_should_restore_for_turn(true, &status));
-        assert!(remote_control_requested_or_active_for_turn(true, &status));
-        assert!(!remote_control_should_restore_for_turn(false, &status));
-        assert!(!remote_control_requested_or_active_for_turn(false, &status));
+        assert!(remote_control_should_restore_for_turn(&status));
+        assert!(remote_control_requested_or_active_for_turn(&status));
     }
 
     #[test]
@@ -3654,7 +3625,7 @@ mod tests {
             42,
             true,
         ));
-        // Restore disabled (e.g. feature flag off): no re-enable.
+        // Restore disabled: no re-enable.
         assert!(!should_reenable_remote_control_after_turn_result(
             false,
             &status,
@@ -3802,11 +3773,11 @@ mod tests {
 
         // Disabled / Error: drift teardowns proceed normally.
         assert!(!remote_control_should_defer_drift_teardown_for_turn(
-            true, &status
+            &status
         ));
         status.state = ClaudeRemoteControlLifecycle::Error;
         assert!(!remote_control_should_defer_drift_teardown_for_turn(
-            true, &status
+            &status
         ));
 
         // Live states: defer drift teardowns to keep bridge identity stable.
@@ -3818,16 +3789,14 @@ mod tests {
         ] {
             status.state = state;
             assert!(
-                remote_control_should_defer_drift_teardown_for_turn(true, &status),
+                remote_control_should_defer_drift_teardown_for_turn(&status),
                 "expected defer for state {state:?}"
             );
         }
     }
 
     #[test]
-    fn remote_control_drift_teardown_deferral_respects_feature_flag() {
-        // Feature flag off: never defer drift teardowns, even if a stale
-        // session lifecycle state somehow lingered after the flag flipped.
+    fn remote_control_drift_teardown_defers_for_connected_state() {
         let status = ClaudeRemoteControlStatus {
             state: ClaudeRemoteControlLifecycle::Connected,
             session_url: Some("https://claude.ai/code/sess-1".to_string()),
@@ -3836,12 +3805,7 @@ mod tests {
             detail: None,
             last_error: None,
         };
-        assert!(!remote_control_should_defer_drift_teardown_for_turn(
-            false, &status
-        ));
-        assert!(remote_control_should_defer_drift_teardown_for_turn(
-            true, &status
-        ));
+        assert!(remote_control_should_defer_drift_teardown_for_turn(&status));
     }
 
     fn dummy_attachment() -> FileAttachment {

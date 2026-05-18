@@ -309,7 +309,6 @@ describe("queued message auto-dispatch pause", () => {
 describe("plugin settings routing", () => {
   beforeEach(() => {
     useAppStore.setState({
-      pluginManagementEnabled: true,
       settingsOpen: false,
       settingsSection: null,
       pluginSettingsTab: "installed",
@@ -388,38 +387,22 @@ describe("plugin settings routing", () => {
     expect(state.pluginSettingsTab).toBe("available");
   });
 
-  it("defaults plugin management to disabled", () => {
-    useAppStore.setState({ pluginManagementEnabled: false });
-    expect(useAppStore.getState().pluginManagementEnabled).toBe(false);
-  });
-
-  it("redirects claude-code-plugins section to experimental when management disabled", () => {
-    useAppStore.setState({ pluginManagementEnabled: false });
-
+  it("opens the claude-code-plugins section directly", () => {
     useAppStore.getState().setSettingsSection("claude-code-plugins");
 
     const state = useAppStore.getState();
-    expect(state.settingsSection).toBe("experimental");
+    expect(state.settingsSection).toBe("claude-code-plugins");
     expect(state.pluginSettingsIntent).toBeNull();
     expect(state.pluginSettingsRepoId).toBeNull();
   });
 
-  it("keeps the new plugins (Claudette) section accessible regardless of management flag", () => {
-    useAppStore.setState({ pluginManagementEnabled: false });
-
+  it("keeps the Plugins (Claudette) section accessible", () => {
     useAppStore.getState().setSettingsSection("plugins");
 
     expect(useAppStore.getState().settingsSection).toBe("plugins");
   });
 
-  it("openSettings('plugins') opens the Claudette plugins section even when plugin management is disabled", () => {
-    // Regression: voice-error → "Open Plugins settings" was rerouting to
-    // the Experimental pane when the user hadn't opted into plugin
-    // management, hiding the Distil-Whisper "Download model" row the
-    // error chip pointed them at. Only `claude-code-plugins` (the Claude
-    // CLI marketplace integration) should be gated behind that flag.
-    useAppStore.setState({ pluginManagementEnabled: false });
-
+  it("openSettings('plugins') opens the Claudette plugins section", () => {
     useAppStore.getState().openSettings("plugins");
 
     const state = useAppStore.getState();
@@ -427,12 +410,10 @@ describe("plugin settings routing", () => {
     expect(state.settingsSection).toBe("plugins");
   });
 
-  it("openSettings('claude-code-plugins') still routes to experimental when management is disabled", () => {
-    useAppStore.setState({ pluginManagementEnabled: false });
-
+  it("openSettings('claude-code-plugins') opens Claude Code Plugins", () => {
     useAppStore.getState().openSettings("claude-code-plugins");
 
-    expect(useAppStore.getState().settingsSection).toBe("experimental");
+    expect(useAppStore.getState().settingsSection).toBe("claude-code-plugins");
   });
 
   it("routes the Claude auth focus target to Models and clears it on manual section changes", () => {
@@ -470,23 +451,6 @@ describe("plugin settings routing", () => {
     useAppStore.getState().setClaudeAuthFailure(null);
 
     expect(useAppStore.getState().claudeAuthFailure).toBeNull();
-  });
-
-  it("ignores openPluginSettings when plugin management is disabled", () => {
-    useAppStore.setState({ pluginManagementEnabled: false });
-
-    useAppStore.getState().openPluginSettings({
-      action: "install",
-      repoId: "repo-1",
-      scope: "project",
-      source: "demo@market",
-      tab: "available",
-    });
-
-    const state = useAppStore.getState();
-    expect(state.settingsOpen).toBe(false);
-    expect(state.settingsSection).toBeNull();
-    expect(state.pluginSettingsIntent).toBeNull();
   });
 
   it("bumpPluginRefreshToken increments monotonically", () => {

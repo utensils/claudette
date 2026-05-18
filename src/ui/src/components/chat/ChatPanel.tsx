@@ -124,7 +124,6 @@ export function ChatPanel() {
     activeSessionId ? s.chatPagination[activeSessionId] : undefined,
   );
   const openPluginSettings = useAppStore((s) => s.openPluginSettings);
-  const pluginManagementEnabled = useAppStore((s) => s.pluginManagementEnabled);
   const usageInsightsEnabled = useAppStore((s) => s.usageInsightsEnabled);
   const openSettings = useAppStore((s) => s.openSettings);
   const appVersion = useAppStore((s) => s.appVersion);
@@ -1319,7 +1318,6 @@ export function ChatPanel() {
         const result = await nativeHandler.execute(
           {
             repoId: repo?.remote_connection_id ? null : repo?.id ?? null,
-            pluginManagementEnabled,
             usageInsightsEnabled,
             openPluginSettings,
             repository: repo ? { name: repo.name, path: repo.path } : null,

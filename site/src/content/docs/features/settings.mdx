@@ -51,10 +51,9 @@ See [Agent Configuration](/claudette/features/agent-configuration/) for detailed
 
 | Setting | Description | Default |
 |---------|-------------|---------|
-| Plugin Management | Show the Claude Code Plugins settings section and plugin-management slash commands. | Off |
-| Claude Remote Control | Show the local chat Remote Control toggle and allow Claudette to attach live Claude sessions to claude.ai. | On |
-| Community Registry | Show the Community settings section for themes, plugins, and language grammars. | Off |
 | Claude Code Usage | Surface Claude Pro / Max subscription quotas (5-hour session, weekly all-model, weekly Sonnet/Opus, extra usage) in the composer's usage meter. The meter itself is always visible for Codex / OpenAI / OpenRouter / Pi / Ollama / LM Studio sessions (driven by local-aggregate token totals); this toggle only controls whether Claude-family sessions surface real subscription buckets versus a greyed-out click-to-enable affordance. Confirmation dialog warns about Anthropic ToS on enable. | Off |
+
+Claude Code Plugins, Claude Remote Control, and Community Registry are first-class settings surfaces and are visible by default. Legacy Experimental off values for these graduated features are ignored after upgrading and no longer hide their settings surfaces.
 
 ## Automation
 

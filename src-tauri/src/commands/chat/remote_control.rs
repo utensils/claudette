@@ -25,8 +25,6 @@ use super::{
     start_chat_bridge,
 };
 
-const CLAUDE_REMOTE_CONTROL_ENABLED_KEY: &str = "claude_remote_control_enabled";
-
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 struct RemoteChatTurnStartedPayload<'a> {
@@ -60,9 +58,6 @@ pub async fn get_claude_remote_control_status(
     chat_session_id: String,
     state: State<'_, AppState>,
 ) -> Result<ClaudeRemoteControlStatus, String> {
-    if !remote_control_feature_enabled(&state)? {
-        return Ok(ClaudeRemoteControlStatus::disabled());
-    }
     let agents = state.agents.read().await;
     Ok(agents
         .get(&chat_session_id)
@@ -87,10 +82,6 @@ pub async fn set_claude_remote_control(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<ClaudeRemoteControlStatus, String> {
-    if enabled && !remote_control_feature_enabled(&state)? {
-        return Err("Claude Remote Control is disabled in Experimental settings".to_string());
-    }
-
     let launch_options = RemoteControlLaunchOptions {
         permission_level,
         model,
@@ -224,24 +215,6 @@ pub async fn set_claude_remote_control(
             Err(err)
         }
     }
-}
-
-fn remote_control_feature_enabled_from_value(value: Option<&str>) -> bool {
-    value != Some("false")
-}
-
-fn remote_control_feature_enabled(state: &State<'_, AppState>) -> Result<bool, String> {
-    remote_control_feature_enabled_for_db_path(&state.db_path)
-}
-
-pub(super) fn remote_control_feature_enabled_for_db_path(
-    db_path: &std::path::Path,
-) -> Result<bool, String> {
-    let db = Database::open(db_path).map_err(|e| e.to_string())?;
-    let value = db
-        .get_app_setting(CLAUDE_REMOTE_CONTROL_ENABLED_KEY)
-        .map_err(|e| e.to_string())?;
-    Ok(remote_control_feature_enabled_from_value(value.as_deref()))
 }
 
 fn should_defer_enable_until_first_turn(chat_session: &ChatSession) -> bool {
@@ -897,13 +870,6 @@ async fn ensure_remote_control_monitor(
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
                 Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
             };
-            if !remote_control_feature_enabled_for_db_path(&db_path).unwrap_or(false) {
-                let _ = ps.set_remote_control(false).await;
-                clear_monitor_when_feature_disabled(&app, &workspace_id, &chat_session_id, pid)
-                    .await;
-                break;
-            }
-
             if let AgentEvent::Stream(StreamEvent::System {
                 subtype,
                 state,
@@ -1343,41 +1309,12 @@ async fn clear_monitor_on_exit(
     crate::tray::rebuild_tray(app);
 }
 
-async fn clear_monitor_when_feature_disabled(
-    app: &AppHandle,
-    workspace_id: &str,
-    chat_session_id: &str,
-    pid: u32,
-) {
-    let app_state = app.state::<AppState>();
-    let status = {
-        let mut agents = app_state.agents.write().await;
-        let Some(session) = agents.get_mut(chat_session_id) else {
-            return;
-        };
-        if session.claude_remote_control_monitor_pid != Some(pid) {
-            return;
-        }
-        session.claude_remote_control_monitor_pid = None;
-        session.claude_remote_control = ClaudeRemoteControlStatus::disabled();
-        session.claude_remote_control.clone()
-    };
-    let payload = ClaudeRemoteControlStatusPayload {
-        workspace_id: workspace_id.to_string(),
-        chat_session_id: chat_session_id.to_string(),
-        status,
-    };
-    let _ = app.emit("claude-remote-control-status", &payload);
-    crate::tray::rebuild_tray(app);
-}
-
 #[cfg(test)]
 mod tests {
     use super::{
-        AgentBackendRuntimeHarness, remote_control_feature_enabled_from_value,
-        remote_control_requires_claude_cli_message, remote_control_title,
-        should_defer_enable_until_first_turn, should_pin_title_before_control_request,
-        status_from_control_response, user_visible_text,
+        AgentBackendRuntimeHarness, remote_control_requires_claude_cli_message,
+        remote_control_title, should_defer_enable_until_first_turn,
+        should_pin_title_before_control_request, status_from_control_response, user_visible_text,
     };
     use crate::state::ClaudeRemoteControlLifecycle;
     use claudette::agent::{UserContentBlock, UserEventMessage, UserMessageContent};
@@ -1576,17 +1513,6 @@ mod tests {
             remote_control_title(&chat_session, &workspace, &messages),
             "ping 1"
         );
-    }
-
-    #[test]
-    fn remote_control_feature_flag_defaults_on() {
-        assert!(remote_control_feature_enabled_from_value(None));
-        assert!(remote_control_feature_enabled_from_value(Some("true")));
-    }
-
-    #[test]
-    fn remote_control_feature_flag_disables_only_on_false() {
-        assert!(!remote_control_feature_enabled_from_value(Some("false")));
     }
 
     #[cfg(feature = "pi-sdk")]

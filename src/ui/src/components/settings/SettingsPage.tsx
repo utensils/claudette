@@ -84,10 +84,6 @@ const ClaudeFlagsSettings = lazy(() =>
 );
 
 function SectionContent({ section }: { section: string | null }) {
-  const pluginManagementEnabled = useAppStore((s) => s.pluginManagementEnabled);
-  const communityRegistryEnabled = useAppStore(
-    (s) => s.communityRegistryEnabled,
-  );
   if (!section || section === "general") return <GeneralSettings />;
   if (section === "apps") return <AppsSettings />;
   if (section === "models") return <ModelSettings />;
@@ -106,20 +102,8 @@ function SectionContent({ section }: { section: string | null }) {
   if (section === "help") return <HelpSettings />;
   if (section === "pinned-prompts") return <PinnedPromptsSettings />;
   if (section === "plugins") return <PluginsSettings />;
-  if (section === "claude-code-plugins") {
-    return pluginManagementEnabled ? (
-      <ClaudeCodePluginsSettings />
-    ) : (
-      <ExperimentalSettings />
-    );
-  }
-  if (section === "community") {
-    return communityRegistryEnabled ? (
-      <CommunitySettings />
-    ) : (
-      <ExperimentalSettings />
-    );
-  }
+  if (section === "claude-code-plugins") return <ClaudeCodePluginsSettings />;
+  if (section === "community") return <CommunitySettings />;
   if (section === "experimental") return <ExperimentalSettings />;
   if (section.startsWith("repo:"))
     return <RepoSettings repoId={section.slice(5)} />;

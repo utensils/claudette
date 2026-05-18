@@ -21,7 +21,6 @@ interface MockState {
   planMode: Record<string, boolean>;
   effortLevel: Record<string, string>;
   chromeEnabled: Record<string, boolean>;
-  claudeRemoteControlEnabled: boolean;
   setFastMode: ReturnType<typeof vi.fn>;
   setChromeEnabled: ReturnType<typeof vi.fn>;
   clearAgentQuestion: ReturnType<typeof vi.fn>;
@@ -41,7 +40,6 @@ const appStore = vi.hoisted(
       planMode: {},
       effortLevel: {},
       chromeEnabled: {},
-      claudeRemoteControlEnabled: true,
       setFastMode: vi.fn(),
       setChromeEnabled: vi.fn(),
       clearAgentQuestion: vi.fn(),
@@ -214,7 +212,6 @@ beforeEach(() => {
   appStore.addToast.mockClear();
   appStore.setFastMode.mockClear();
   appStore.setChromeEnabled.mockClear();
-  appStore.claudeRemoteControlEnabled = true;
 });
 
 afterEach(async () => {
@@ -394,11 +391,7 @@ describe("OverflowMenu — Remote Control mid-turn enable", () => {
     );
   });
 
-  it("drops a pending intent if Remote Control becomes unavailable mid-turn", async () => {
-    // Regression: queuing while the experimental gate is on, then
-    // flipping the gate off, must not silently fire the enable RPC on
-    // turn end. The gate is the user telling the app "I don't want
-    // this feature" — the queued action must respect that.
+  it("keeps a pending Remote Control intent until the turn ends", async () => {
     const { container, root } = await renderMenu({ isRunning: true });
     await openDropdown(container);
 
@@ -408,13 +401,13 @@ describe("OverflowMenu — Remote Control mid-turn enable", () => {
     });
     expect(serviceMocks.setClaudeRemoteControl).not.toHaveBeenCalled();
 
-    // User flips the experimental gate off before the turn ends.
-    appStore.claudeRemoteControlEnabled = false;
-    await rerenderMenu(root, { isRunning: true });
-
-    // Turn ends — the queued intent must NOT fire.
+    // Turn ends — the queued intent still fires.
     await rerenderMenu(root, { isRunning: false });
-    expect(serviceMocks.setClaudeRemoteControl).not.toHaveBeenCalled();
+    expect(serviceMocks.setClaudeRemoteControl).toHaveBeenCalledWith(
+      "s1",
+      true,
+      expect.any(Object),
+    );
   });
 
   it("clears the pending intent when the user switches sessions", async () => {

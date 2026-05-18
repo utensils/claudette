@@ -19,7 +19,6 @@ import {
 function makeCtx(overrides: Partial<NativeCommandContext> = {}): NativeCommandContext {
   return {
     repoId: "repo-1",
-    pluginManagementEnabled: true,
     usageInsightsEnabled: true,
     openPluginSettings: vi.fn<(intent: Partial<PluginSettingsIntent>) => void>(),
     repository: { name: "claudette", path: "/tmp/repos/claudette" },
@@ -159,13 +158,6 @@ describe("plugin native handler", () => {
     );
   });
 
-  it("swallows /plugin when plugin management is disabled without opening settings", async () => {
-    const ctx = makeCtx({ pluginManagementEnabled: false });
-    const handler = resolveNativeHandler("plugin")!;
-    const result = await handler.execute(ctx, "install demo");
-    expect(result).toEqual({ kind: "handled", canonicalName: "plugin" });
-    expect(ctx.openPluginSettings).not.toHaveBeenCalled();
-  });
 });
 
 describe("dispatcher across native kinds", () => {
@@ -1324,7 +1316,7 @@ describe("formatHelpMessage", () => {
     const withAngles: SlashCommand[] = [
       {
         name: "marketplace",
-        description: "Manage plugin marketplaces in settings",
+        description: "Manage Claude Code plugin marketplaces in settings",
         source: "builtin",
         aliases: [],
         argument_hint: "[add|remove|update] <source>",

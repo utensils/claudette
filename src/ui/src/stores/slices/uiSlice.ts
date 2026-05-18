@@ -264,21 +264,9 @@ export const createUiSlice: StateCreator<AppState, [], [], UiSlice> = (
   chatAuthLoginStartedRequestId: null,
   openSettings: (section = "general", focus = null) =>
     set((state) => {
-      // Only `claude-code-plugins` (the Claude CLI marketplace integration)
-      // is gated behind `pluginManagementEnabled`. The `plugins` section
-      // (Claudette's own built-in Lua plugins — voice providers, SCM, env
-      // providers) is always reachable. Routing `"plugins"` to
-      // `"experimental"` was a bug where the voice-error → Plugins flow
-      // landed on the wrong page when plugin management was off, hiding
-      // the Distil-Whisper "Download model" button the user was sent
-      // there to click. setSettingsSection (below) already gets this
-      // distinction right; openSettings now matches.
       let nextSection = section;
       if (focus === "claude-auth" && nextSection === "general") {
         nextSection = "models";
-      }
-      if (nextSection === "claude-code-plugins" && !state.pluginManagementEnabled) {
-        nextSection = "experimental";
       }
       const resetMarketplaceIntent = nextSection === "claude-code-plugins";
       return {
@@ -307,14 +295,7 @@ export const createUiSlice: StateCreator<AppState, [], [], UiSlice> = (
     }),
   setSettingsSection: (section) =>
     set((state) => {
-      // Claude Code Plugins requires plugin management to be on; when
-      // disabled, fall through to the experimental pane so the setting
-      // stays reachable. The new "plugins" section (Claudette's own
-      // Lua plugins) is always available.
-      const nextSection =
-        section === "claude-code-plugins" && !state.pluginManagementEnabled
-          ? "experimental"
-          : section;
+      const nextSection = section;
       const resetMarketplaceIntent = nextSection === "claude-code-plugins";
       return {
         settingsSection: nextSection,
@@ -352,9 +333,6 @@ export const createUiSlice: StateCreator<AppState, [], [], UiSlice> = (
   pluginRefreshToken: 0,
   openPluginSettings: (intent = {}) =>
     set((state) => {
-      if (!state.pluginManagementEnabled) {
-        return {};
-      }
       const mergedIntent: PluginSettingsIntent = {
         action: intent.action ?? null,
         repoId: intent.repoId ?? null,

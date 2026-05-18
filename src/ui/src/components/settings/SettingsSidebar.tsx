@@ -24,10 +24,7 @@ import { useAppStore } from "../../stores/useAppStore";
 import { RepoIcon } from "../shared/RepoIcon";
 import styles from "./Settings.module.css";
 
-export function getAppSections(
-  pluginManagementEnabled: boolean,
-  communityRegistryEnabled: boolean,
-) {
+export function getAppSections() {
   return [
     { id: "general", icon: SlidersHorizontal },
     { id: "apps", icon: AppWindow },
@@ -44,12 +41,8 @@ export function getAppSections(
     { id: "claude-flags", icon: Flag },
     { id: "pinned-prompts", icon: Bookmark },
     { id: "plugins", icon: Puzzle },
-    ...(communityRegistryEnabled
-      ? [{ id: "community", icon: Globe }]
-      : []),
-    ...(pluginManagementEnabled
-      ? [{ id: "claude-code-plugins", icon: Puzzle }]
-      : []),
+    { id: "community", icon: Globe },
+    { id: "claude-code-plugins", icon: Puzzle },
     { id: "help", icon: HelpCircle },
   ] as const;
 }
@@ -61,10 +54,6 @@ export function SettingsSidebar() {
   const closeSettings = useAppStore((s) => s.closeSettings);
   const repositories = useAppStore((s) => s.repositories);
   const usageInsightsEnabled = useAppStore((s) => s.usageInsightsEnabled);
-  const pluginManagementEnabled = useAppStore((s) => s.pluginManagementEnabled);
-  const communityRegistryEnabled = useAppStore(
-    (s) => s.communityRegistryEnabled,
-  );
 
   const sectionLabel = (id: string) => {
     if (id === "general") return t("settings:nav_general");
@@ -94,7 +83,7 @@ export function SettingsSidebar() {
         {t("common:back_to_app")}
       </button>
 
-      {getAppSections(pluginManagementEnabled, communityRegistryEnabled).map((s) => (
+      {getAppSections().map((s) => (
         <button
           key={s.id}
           className={
