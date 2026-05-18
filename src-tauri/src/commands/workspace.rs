@@ -2554,4 +2554,395 @@ mod tests {
         assert!(!wrote);
         assert!(session.pending_history_prelude.is_none());
     }
+
+    // ----- Interactive-session teardown on archive + delete -------------
+    //
+    // The Tauri-side `archive_workspace_inner` and `delete_workspace`
+    // both route interactive-session shutdown through
+    // `stop_interactive_sessions_for_workspace_teardown`. The helper
+    // lives in this module (private) and is the single seam between
+    // workspace teardown and the `InteractiveHost` trait, so these
+    // tests exercise it directly. The shared lib-level
+    // `claudette::interactive::stop_sessions_for_workspace` already has
+    // its own coverage in `src/interactive.rs::tests`; this block adds
+    // the *Tauri-side* contract:
+    //
+    //   1. The helper, when called with a workspace that has live
+    //      `interactive_sessions` rows, resolves the cached host and
+    //      invokes `host.stop(sid, Graceful)` for each row (Step 2 in
+    //      the plan — what `delete_workspace` / `archive_workspace_inner`
+    //      rely on).
+    //   2. The helper also drops the sid → workspace_id entries from
+    //      `AppState::interactive_sessions` so a later command can't
+    //      route a stale lookup to a now-dead host.
+    //   3. After the workspace row goes away, the FK `ON DELETE
+    //      CASCADE` on `interactive_sessions.workspace_id` actually
+    //      fires and removes the rows (Step 3 in the plan — proves the
+    //      "cascade fired" half of the delete contract).
+    //   4. The archive op leaves the workspace row in place but the
+    //      helper is the sole owner of host-side teardown, so calling
+    //      the helper still stops the host sessions even though the DB
+    //      rows survive (Step 4 in the plan).
+
+    use crate::state::AppState;
+    use async_trait::async_trait;
+    use claudette::agent::interactive_host::{
+        AttachId, AttachStream, HostError, HostHandle, HostSessionSummary, HostStatus,
+        InteractiveHost, ScreenSnapshot, SessionId,
+    };
+    use claudette::agent::interactive_protocol::{InputPayload, SessionSpec, StopMode};
+    use claudette::db::{Database, InteractiveSessionRow};
+    use claudette::model::{AgentStatus, Repository, Workspace, WorkspaceStatus};
+    use claudette::plugin_runtime::PluginRegistry;
+    use std::path::PathBuf;
+    use std::sync::Arc;
+    use std::sync::Mutex as StdMutex;
+    use tempfile::TempDir;
+
+    /// Build a fresh on-disk DB under a tempdir and seed a repository
+    /// row so the FK on `workspaces.repository_id` is satisfied when
+    /// each test inserts its workspace.
+    fn make_db() -> (TempDir, PathBuf) {
+        let tmp = tempfile::tempdir().unwrap();
+        let db_path = tmp.path().join("claudette.db");
+        let db = Database::open(&db_path).unwrap();
+        db.insert_repository(&Repository {
+            id: "repo-1".into(),
+            path: "/tmp/repo1".into(),
+            name: "repo-1".into(),
+            path_slug: "repo-1".into(),
+            icon: None,
+            created_at: String::new(),
+            setup_script: None,
+            custom_instructions: None,
+            sort_order: 0,
+            branch_rename_preferences: None,
+            setup_script_auto_run: false,
+            archive_script: None,
+            archive_script_auto_run: false,
+            base_branch: None,
+            default_remote: None,
+            path_valid: true,
+        })
+        .unwrap();
+        (tmp, db_path)
+    }
+
+    fn make_app_state(db_path: PathBuf) -> AppState {
+        let plugins = PluginRegistry::discover(std::path::Path::new("/nonexistent"));
+        AppState::new(db_path, std::path::PathBuf::from("/tmp"), plugins)
+    }
+
+    fn make_workspace(id: &str, repo_id: &str, name: &str) -> Workspace {
+        Workspace {
+            id: id.into(),
+            repository_id: repo_id.into(),
+            name: name.into(),
+            branch_name: format!("claudette/{name}"),
+            worktree_path: None,
+            status: WorkspaceStatus::Active,
+            agent_status: AgentStatus::Idle,
+            status_line: String::new(),
+            created_at: String::new(),
+            sort_order: 0,
+        }
+    }
+
+    fn make_row(sid: &str, ws_id: &str, state: &str) -> InteractiveSessionRow {
+        InteractiveSessionRow {
+            sid: sid.into(),
+            workspace_id: ws_id.into(),
+            host_kind: "tmux".into(),
+            state: state.into(),
+            crash_reason: None,
+            created_at: "2026-05-18T00:00:00Z".into(),
+            last_attached_at: None,
+            last_screen_blob: None,
+            claude_flags_json: "[]".into(),
+            pid: None,
+        }
+    }
+
+    /// Mock `InteractiveHost` that records every `stop(sid, mode)`
+    /// invocation and panics on any other method — workspace teardown
+    /// should only ever call `stop`.
+    struct StopTrackingHost {
+        stops: StdMutex<Vec<(String, StopMode)>>,
+    }
+
+    impl StopTrackingHost {
+        fn new() -> Self {
+            Self {
+                stops: StdMutex::new(Vec::new()),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl InteractiveHost for StopTrackingHost {
+        async fn ensure_session(
+            &self,
+            _sid: &SessionId,
+            _spec: &SessionSpec,
+        ) -> Result<HostHandle, HostError> {
+            unreachable!("workspace teardown must not call ensure_session")
+        }
+        async fn attach(&self, _sid: &SessionId) -> Result<(AttachId, AttachStream), HostError> {
+            unreachable!("workspace teardown must not call attach")
+        }
+        async fn send_input(
+            &self,
+            _sid: &SessionId,
+            _payload: InputPayload,
+        ) -> Result<(), HostError> {
+            unreachable!("workspace teardown must not call send_input")
+        }
+        async fn capture_screen(&self, _sid: &SessionId) -> Result<ScreenSnapshot, HostError> {
+            unreachable!("workspace teardown must not call capture_screen")
+        }
+        async fn resize(&self, _sid: &SessionId, _rows: u16, _cols: u16) -> Result<(), HostError> {
+            unreachable!("workspace teardown must not call resize")
+        }
+        async fn detach(&self, _sid: &SessionId, _attach_id: AttachId) -> Result<(), HostError> {
+            unreachable!("workspace teardown must not call detach")
+        }
+        async fn stop(&self, sid: &SessionId, mode: StopMode) -> Result<(), HostError> {
+            self.stops.lock().unwrap().push((sid.0.clone(), mode));
+            Ok(())
+        }
+        async fn status(&self) -> Result<HostStatus, HostError> {
+            Ok(HostStatus {
+                host_version: "stop-tracking".into(),
+                sessions: Vec::<HostSessionSummary>::new(),
+            })
+        }
+    }
+
+    /// Step 2 (delete path) + Step 4 (archive path) — the shared
+    /// teardown helper resolves the cached host and calls
+    /// `host.stop(sid, Graceful)` for each live interactive_sessions
+    /// row belonging to the workspace, and clears the
+    /// sid → workspace_id mappings. This is the common contract both
+    /// `delete_workspace` and `archive_workspace_inner` depend on; the
+    /// "live" tests below (cascade + archive-row-survival) layer on
+    /// the DB-side assertions.
+    #[tokio::test]
+    async fn teardown_helper_stops_each_live_session_and_clears_sid_map() {
+        let (_tmp, db_path) = make_db();
+        let db = Database::open(&db_path).unwrap();
+        db.insert_workspace(&make_workspace("ws-1", "repo-1", "fix-bug"))
+            .unwrap();
+        // Two live rows in the target workspace and one row in a
+        // sibling workspace — the helper must NOT touch the sibling.
+        db.insert_workspace(&make_workspace("ws-other", "repo-1", "other"))
+            .unwrap();
+        db.create_interactive_session(&make_row("claudette-ws1-aaaaaaaa", "ws-1", "running"))
+            .unwrap();
+        db.create_interactive_session(&make_row("claudette-ws1-bbbbbbbb", "ws-1", "detached"))
+            .unwrap();
+        db.create_interactive_session(&make_row("claudette-wso-cccccccc", "ws-other", "running"))
+            .unwrap();
+
+        let state = make_app_state(db_path.clone());
+        let host = Arc::new(StopTrackingHost::new());
+        state
+            .interactive_hosts
+            .write()
+            .await
+            .insert("ws-1".to_string(), Arc::clone(&host) as _);
+        // Seed the sid → workspace mapping so we can pin the
+        // helper's "unregister_interactive_session" sweep.
+        state
+            .register_interactive_session("claudette-ws1-aaaaaaaa", "ws-1".into())
+            .await;
+        state
+            .register_interactive_session("claudette-ws1-bbbbbbbb", "ws-1".into())
+            .await;
+        state
+            .register_interactive_session("claudette-wso-cccccccc", "ws-other".into())
+            .await;
+
+        super::stop_interactive_sessions_for_workspace_teardown(&state, &db_path, "ws-1").await;
+
+        // host.stop fired once per live ws-1 row, both with Graceful.
+        {
+            let stops = host.stops.lock().unwrap();
+            assert_eq!(
+                stops.len(),
+                2,
+                "host.stop must run once per live ws-1 row, got {stops:?}",
+            );
+            for (_, mode) in stops.iter() {
+                assert!(
+                    matches!(mode, StopMode::Graceful),
+                    "teardown must use Graceful stop mode, got {mode:?}",
+                );
+            }
+            let stopped_sids: Vec<String> = stops.iter().map(|(s, _)| s.clone()).collect();
+            assert!(stopped_sids.contains(&"claudette-ws1-aaaaaaaa".into()));
+            assert!(stopped_sids.contains(&"claudette-ws1-bbbbbbbb".into()));
+            assert!(
+                !stopped_sids.contains(&"claudette-wso-cccccccc".into()),
+                "sibling workspace's session must not be stopped",
+            );
+        }
+
+        // sid → workspace_id mappings for the torn-down workspace are
+        // gone; the sibling's mapping survives so its still-live
+        // session keeps routing.
+        let sessions = state.interactive_sessions.read().await;
+        assert!(
+            !sessions.contains_key("claudette-ws1-aaaaaaaa"),
+            "ws-1 sid mapping must be cleared after teardown",
+        );
+        assert!(
+            !sessions.contains_key("claudette-ws1-bbbbbbbb"),
+            "ws-1 sid mapping must be cleared after teardown",
+        );
+        assert_eq!(
+            sessions.get("claudette-wso-cccccccc"),
+            Some(&"ws-other".to_string()),
+            "sibling workspace's sid mapping must survive teardown",
+        );
+    }
+
+    /// Step 3 — after `delete_workspace_with_summary` runs (the SQL
+    /// that backs `delete_workspace`'s body), the FK `ON DELETE
+    /// CASCADE` on `interactive_sessions.workspace_id` actually fires
+    /// and removes the rows. Together with the helper test above this
+    /// pins the delete path's full contract: the host sees `stop` for
+    /// each live sid, and the DB rows are gone after the workspace
+    /// row is deleted.
+    #[tokio::test]
+    async fn delete_workspace_with_summary_cascades_interactive_sessions() {
+        let (_tmp, db_path) = make_db();
+        let db = Database::open(&db_path).unwrap();
+        db.insert_workspace(&make_workspace("ws-1", "repo-1", "fix-bug"))
+            .unwrap();
+        db.create_interactive_session(&make_row("claudette-ws1-aaaaaaaa", "ws-1", "running"))
+            .unwrap();
+        db.create_interactive_session(&make_row("claudette-ws1-bbbbbbbb", "ws-1", "detached"))
+            .unwrap();
+
+        // Sanity: both rows present before delete.
+        let pre = db
+            .list_interactive_sessions_for_workspace("ws-1")
+            .expect("list before delete");
+        assert_eq!(pre.len(), 2, "two rows seeded for ws-1");
+
+        // Drive the same DB call the production `delete_workspace`
+        // body runs (after the teardown helper). We assert the DB
+        // shape because that's the "cascade fired" half of Step 3;
+        // the host-side teardown is covered by the helper test
+        // above.
+        db.delete_workspace_with_summary("ws-1")
+            .expect("delete_workspace_with_summary");
+
+        let post = db
+            .list_interactive_sessions_for_workspace("ws-1")
+            .expect("list after delete");
+        assert!(
+            post.is_empty(),
+            "FK ON DELETE CASCADE must drop all interactive_sessions rows for the deleted workspace; got {post:?}",
+        );
+    }
+
+    /// Step 4 — archive does NOT remove the workspace row, so the FK
+    /// cascade does not fire. The teardown helper is the only thing
+    /// that brings host-side sessions down on the archive path; this
+    /// pins that contract: after archive_workspace_inner's helper
+    /// call, the host saw stop() for each session, even though the
+    /// DB rows would still be present until a later hard-delete.
+    #[tokio::test]
+    async fn teardown_helper_for_archive_path_stops_host_without_relying_on_cascade() {
+        let (_tmp, db_path) = make_db();
+        let db = Database::open(&db_path).unwrap();
+        db.insert_workspace(&make_workspace("ws-1", "repo-1", "fix-bug"))
+            .unwrap();
+        db.create_interactive_session(&make_row("claudette-ws1-aaaaaaaa", "ws-1", "running"))
+            .unwrap();
+
+        let state = make_app_state(db_path.clone());
+        let host = Arc::new(StopTrackingHost::new());
+        state
+            .interactive_hosts
+            .write()
+            .await
+            .insert("ws-1".to_string(), Arc::clone(&host) as _);
+        state
+            .register_interactive_session("claudette-ws1-aaaaaaaa", "ws-1".into())
+            .await;
+
+        // Archive path: the helper runs BEFORE
+        // `ops_workspace::archive` flips the row to Archived. We call
+        // the helper directly (the archive op is covered by its own
+        // tests) and then prove the DB row is intact — the helper's
+        // job is host-side teardown, not row mutation.
+        super::stop_interactive_sessions_for_workspace_teardown(&state, &db_path, "ws-1").await;
+
+        {
+            let stops = host.stops.lock().unwrap();
+            assert_eq!(
+                stops.len(),
+                1,
+                "archive teardown must stop the one live interactive session, got {stops:?}",
+            );
+            assert_eq!(stops[0].0, "claudette-ws1-aaaaaaaa");
+            assert!(matches!(stops[0].1, StopMode::Graceful));
+        }
+
+        // Archive does not delete `interactive_sessions` rows on its
+        // own; the helper purely tears down the host side. The DB
+        // row therefore survives until a later hard-delete (which
+        // would re-run the cascade tested above). This pins the
+        // separation of responsibilities.
+        let rows = db
+            .list_interactive_sessions_for_workspace("ws-1")
+            .expect("list after archive teardown");
+        assert_eq!(
+            rows.len(),
+            1,
+            "archive teardown must leave DB rows in place for the cascade to handle later",
+        );
+        // sid mapping was still cleared so a stale command can't
+        // route through a torn-down host.
+        assert!(
+            !state
+                .interactive_sessions
+                .read()
+                .await
+                .contains_key("claudette-ws1-aaaaaaaa"),
+            "sid mapping must be cleared on archive path too",
+        );
+    }
+
+    /// Empty-rows fast path — when no interactive_sessions rows
+    /// exist for the workspace, the helper skips host resolution
+    /// entirely (no `interactive_host_for` call, which would
+    /// otherwise spawn a sidecar / probe tmux). This is the
+    /// production-safety pin for the "workspace with no Claude
+    /// (Interactive) sessions" case, which is the overwhelmingly
+    /// common path for delete/archive today.
+    #[tokio::test]
+    async fn teardown_helper_skips_host_resolution_when_no_rows() {
+        let (_tmp, db_path) = make_db();
+        let db = Database::open(&db_path).unwrap();
+        db.insert_workspace(&make_workspace("ws-1", "repo-1", "fix-bug"))
+            .unwrap();
+        // No interactive_sessions rows seeded.
+
+        let state = make_app_state(db_path.clone());
+        // Intentionally DO NOT seed `interactive_hosts`. If the
+        // helper tried to resolve a host it would fall into
+        // `select_default_host` and spawn the sidecar binary, which
+        // would either hang or fail under the test runtime. The fact
+        // that this test completes proves the empty-rows fast path
+        // returns before host resolution.
+
+        super::stop_interactive_sessions_for_workspace_teardown(&state, &db_path, "ws-1").await;
+
+        // No mappings to clear either; just assert state is sane.
+        assert!(state.interactive_sessions.read().await.is_empty());
+        assert!(state.interactive_hosts.read().await.is_empty());
+    }
 }
