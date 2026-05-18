@@ -16,7 +16,7 @@ export interface RepoStorageStats {
   workspaces: WorkspaceStorageEntry[];
 }
 
-export interface RogueWorktree {
+export interface OrphanedWorktree {
   path: string;
   size_bytes: number;
   inferred_repo_slug: string;
@@ -27,10 +27,10 @@ export function computeStorageStats(): Promise<RepoStorageStats[]> {
   return invoke("compute_storage_stats");
 }
 
-export function scanRogueWorktrees(): Promise<RogueWorktree[]> {
-  return invoke("scan_rogue_worktrees");
+export function scanOrphanedWorktrees(): Promise<OrphanedWorktree[]> {
+  return invoke("scan_orphaned_worktrees");
 }
 
-export function purgeRogueWorktree(path: string): Promise<void> {
-  return invoke("purge_rogue_worktree", { path });
+export function purgeOrphanedWorktree(path: string): Promise<void> {
+  return invoke("purge_orphaned_worktree", { path });
 }

@@ -1,8 +1,8 @@
-//! Storage-related Tauri commands: per-repo disk usage stats and a
-//! "rogue worktree" scanner that surfaces orphan worktree directories
-//! sitting under the configured workspace base dir but not tracked by
-//! any DB workspace row (e.g. survived a `~/.claudette/data.db` reset
-//! or a dev-build crash).
+//! Storage-related Tauri commands: per-repo disk usage stats and an
+//! orphaned-worktree scanner that surfaces worktree directories sitting
+//! under the configured workspace base dir but not tracked by any DB
+//! workspace row (e.g. survived a `~/.claudette/data.db` reset or a
+//! dev-build crash).
 
 use std::path::{Path, PathBuf};
 
@@ -37,7 +37,7 @@ pub struct RepoStorageStats {
 }
 
 #[derive(Serialize, Debug, Clone)]
-pub struct RogueWorktree {
+pub struct OrphanedWorktree {
     pub path: String,
     pub size_bytes: u64,
     /// The path-slug component of `<base>/<slug>/<wt_name>` — i.e. the
@@ -144,7 +144,7 @@ pub async fn compute_storage_stats(
 /// leaf-dir-path-plus-slug pair whose canonical path is not in
 /// `tracked_paths`. Pure (no DB / state access) so it can be unit-tested
 /// with a tempdir.
-fn detect_rogue_dirs(
+fn detect_orphaned_dirs(
     base: &Path,
     tracked_paths: &std::collections::HashSet<String>,
 ) -> Vec<(String, String)> {
@@ -190,10 +190,10 @@ fn detect_rogue_dirs(
     found
 }
 
-/// Pure validation logic for `purge_rogue_worktree`. The Tauri command
+/// Pure validation logic for `purge_orphaned_worktree`. The Tauri command
 /// resolves `base` + workspace claims and delegates the safety checks
 /// to this function so they can be unit-tested.
-fn validate_rogue_purge_target(
+fn validate_orphaned_purge_target(
     target_path: &str,
     base: &Path,
     workspace_paths: &[String],
@@ -249,17 +249,17 @@ fn validate_rogue_purge_target(
 /// Looks at `<base>/<slug>/<wt_name>/` two levels deep. Any leaf dir
 /// whose canonical path doesn't match a tracked workspace's
 /// `worktree_path` is reported. The slug is whatever was at the first
-/// level — when it matches a DB repo's `path_slug`, the rogue worktree
-/// is "inferred" to belong to that repo; otherwise the slug stands
-/// alone (the user nuked the DB but kept the worktrees, or imported
-/// from another machine).
+/// level — when it matches a DB repo's `path_slug`, the orphan is
+/// "inferred" to belong to that repo; otherwise the slug stands alone
+/// (the user nuked the DB but kept the worktrees, or imported from
+/// another machine).
 ///
 /// Does not modify anything. Callers pair this with
-/// `purge_rogue_worktree` to delete.
+/// `purge_orphaned_worktree` to delete.
 #[tauri::command]
-pub async fn scan_rogue_worktrees(
+pub async fn scan_orphaned_worktrees(
     state: State<'_, AppState>,
-) -> Result<Vec<RogueWorktree>, String> {
+) -> Result<Vec<OrphanedWorktree>, String> {
     let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
     let workspaces = db.list_workspaces().map_err(|e| e.to_string())?;
     let repos = db.list_repositories().map_err(|e| e.to_string())?;
@@ -269,9 +269,9 @@ pub async fn scan_rogue_worktrees(
     // doesn't repeatedly hit the filesystem. `canon_with_parent_fallback`
     // handles the case where the leaf dir was deleted but the parent
     // still exists — without it, a stale row pointing at a no-longer-
-    // existing path would only mask a same-raw-string rogue dir, and
+    // existing path would only mask a same-raw-string orphan dir, and
     // any `/tmp` vs `/private/tmp` canonical-form difference would
-    // surface the same dir as both tracked AND rogue.
+    // surface the same dir as both tracked AND orphan.
     let tracked_paths: std::collections::HashSet<String> = workspaces
         .iter()
         .filter_map(|w| w.worktree_path.as_deref())
@@ -284,22 +284,22 @@ pub async fn scan_rogue_worktrees(
         })
         .collect();
 
-    // Map slug -> display name so we can label rogue worktrees by their
-    // owning repo. Slug duplicates shouldn't happen (DB enforces unique
+    // Map slug -> display name so we can label orphans by their owning
+    // repo. Slug duplicates shouldn't happen (DB enforces unique
     // path_slug), but if they did, last-write-wins is fine.
     let slug_to_repo_name: std::collections::HashMap<String, String> = repos
         .iter()
         .map(|r| (r.path_slug.clone(), r.name.clone()))
         .collect();
 
-    let rogue = tokio::task::spawn_blocking(move || detect_rogue_dirs(&base, &tracked_paths))
+    let orphaned = tokio::task::spawn_blocking(move || detect_orphaned_dirs(&base, &tracked_paths))
         .await
-        .map_err(|e| format!("rogue scan join error: {e}"))?;
+        .map_err(|e| format!("orphaned scan join error: {e}"))?;
 
     // Second pass: compute sizes (also on blocking pool) and look up
     // inferred repo names. Sizes run concurrently.
     let mut size_handles: Vec<(String, String, tokio::task::JoinHandle<u64>)> = Vec::new();
-    for (path, slug) in rogue {
+    for (path, slug) in orphaned {
         let p = PathBuf::from(&path);
         let handle = tokio::task::spawn_blocking(move || directory_size_bytes(&p));
         size_handles.push((path, slug, handle));
@@ -309,7 +309,7 @@ pub async fn scan_rogue_worktrees(
     for (path, slug, handle) in size_handles {
         let size = handle.await.unwrap_or(0);
         let inferred_repo_name = slug_to_repo_name.get(&slug).cloned();
-        results.push(RogueWorktree {
+        results.push(OrphanedWorktree {
             path,
             size_bytes: size,
             inferred_repo_slug: slug,
@@ -320,11 +320,14 @@ pub async fn scan_rogue_worktrees(
     Ok(results)
 }
 
-/// Delete a rogue worktree dir. Refuses anything not under the
+/// Delete an orphaned worktree dir. Refuses anything not under the
 /// configured worktree base — a caller cannot use this command to
 /// remove arbitrary filesystem paths even via prompt injection.
 #[tauri::command]
-pub async fn purge_rogue_worktree(path: String, state: State<'_, AppState>) -> Result<(), String> {
+pub async fn purge_orphaned_worktree(
+    path: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
     let base = state.worktree_base_dir.read().await.clone();
     let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
     let workspaces = db.list_workspaces().map_err(|e| e.to_string())?;
@@ -333,7 +336,7 @@ pub async fn purge_rogue_worktree(path: String, state: State<'_, AppState>) -> R
         .filter_map(|w| w.worktree_path.clone())
         .collect();
 
-    validate_rogue_purge_target(&path, &base, &workspace_paths)?;
+    validate_orphaned_purge_target(&path, &base, &workspace_paths)?;
 
     let target = path.clone();
     tokio::task::spawn_blocking(move || std::fs::remove_dir_all(&target))
@@ -346,7 +349,7 @@ pub async fn purge_rogue_worktree(path: String, state: State<'_, AppState>) -> R
 
 #[cfg(test)]
 mod tests {
-    use super::{detect_rogue_dirs, validate_rogue_purge_target};
+    use super::{detect_orphaned_dirs, validate_orphaned_purge_target};
     use std::collections::HashSet;
 
     /// Build the standard `<base>/<slug>/<wt_name>/` two-level tree
@@ -368,7 +371,7 @@ mod tests {
     }
 
     #[test]
-    fn detect_rogue_returns_empty_when_every_dir_is_tracked() {
+    fn detect_orphaned_returns_empty_when_every_dir_is_tracked() {
         let tree = make_tree(&[("my-repo", &["alpha", "beta"])]);
         let tracked: HashSet<String> = [
             tree.base
@@ -387,12 +390,15 @@ mod tests {
                 tracked_full.insert(c.to_string_lossy().to_string());
             }
         }
-        let rogue = detect_rogue_dirs(&tree.base, &tracked_full);
-        assert!(rogue.is_empty(), "expected no rogue dirs, got {rogue:?}");
+        let orphaned = detect_orphaned_dirs(&tree.base, &tracked_full);
+        assert!(
+            orphaned.is_empty(),
+            "expected no orphaned dirs, got {orphaned:?}"
+        );
     }
 
     #[test]
-    fn detect_rogue_finds_untracked_leaf_dirs() {
+    fn detect_orphaned_finds_untracked_leaf_dirs() {
         let tree = make_tree(&[
             ("my-repo", &["tracked", "orphan-a"]),
             ("dead-slug", &["orphan-b"]),
@@ -410,40 +416,48 @@ mod tests {
                 tracked_full.insert(c.to_string_lossy().to_string());
             }
         }
-        let rogue = detect_rogue_dirs(&tree.base, &tracked_full);
-        assert_eq!(rogue.len(), 2, "expected 2 rogue dirs, got {rogue:?}");
-        let slugs: HashSet<&str> = rogue.iter().map(|(_, s)| s.as_str()).collect();
+        let orphaned = detect_orphaned_dirs(&tree.base, &tracked_full);
+        assert_eq!(
+            orphaned.len(),
+            2,
+            "expected 2 orphaned dirs, got {orphaned:?}"
+        );
+        let slugs: HashSet<&str> = orphaned.iter().map(|(_, s)| s.as_str()).collect();
         assert!(slugs.contains("my-repo"));
         assert!(slugs.contains("dead-slug"));
     }
 
     #[test]
-    fn detect_rogue_ignores_files_at_either_level() {
+    fn detect_orphaned_ignores_files_at_either_level() {
         let tree = make_tree(&[("my-repo", &["wt-a"])]);
         // Drop a stray file at base level — should not be reported.
         std::fs::write(tree.base.join("loose-file"), "x").unwrap();
         // Drop a file inside the slug dir — also should not be reported.
         std::fs::write(tree.base.join("my-repo/README.md"), "x").unwrap();
-        let rogue = detect_rogue_dirs(&tree.base, &HashSet::new());
-        assert_eq!(rogue.len(), 1, "expected only the wt-a dir, got {rogue:?}");
-        assert_eq!(rogue[0].1, "my-repo");
+        let orphaned = detect_orphaned_dirs(&tree.base, &HashSet::new());
+        assert_eq!(
+            orphaned.len(),
+            1,
+            "expected only the wt-a dir, got {orphaned:?}"
+        );
+        assert_eq!(orphaned[0].1, "my-repo");
     }
 
     #[test]
-    fn detect_rogue_returns_empty_for_missing_base() {
+    fn detect_orphaned_returns_empty_for_missing_base() {
         let dir = tempfile::tempdir().unwrap();
         let missing = dir.path().join("does-not-exist");
-        let rogue = detect_rogue_dirs(&missing, &HashSet::new());
-        assert!(rogue.is_empty());
+        let orphaned = detect_orphaned_dirs(&missing, &HashSet::new());
+        assert!(orphaned.is_empty());
     }
 
     #[test]
-    fn validate_rogue_purge_rejects_path_outside_base() {
+    fn validate_orphaned_purge_rejects_path_outside_base() {
         let tree = make_tree(&[("my-repo", &["wt-a"])]);
         let other = tempfile::tempdir().unwrap();
         let outside = other.path().join("not-in-base");
         std::fs::create_dir_all(&outside).unwrap();
-        let result = validate_rogue_purge_target(outside.to_str().unwrap(), &tree.base, &[]);
+        let result = validate_orphaned_purge_target(outside.to_str().unwrap(), &tree.base, &[]);
         assert!(result.is_err(), "expected rejection, got {result:?}");
         assert!(
             result.unwrap_err().contains("outside the workspace base"),
@@ -452,9 +466,9 @@ mod tests {
     }
 
     #[test]
-    fn validate_rogue_purge_rejects_base_itself() {
+    fn validate_orphaned_purge_rejects_base_itself() {
         let tree = make_tree(&[("my-repo", &["wt-a"])]);
-        let result = validate_rogue_purge_target(tree.base.to_str().unwrap(), &tree.base, &[]);
+        let result = validate_orphaned_purge_target(tree.base.to_str().unwrap(), &tree.base, &[]);
         assert!(
             result.is_err(),
             "expected base-path rejection, got {result:?}"
@@ -462,12 +476,12 @@ mod tests {
     }
 
     #[test]
-    fn validate_rogue_purge_rejects_path_claimed_by_workspace() {
+    fn validate_orphaned_purge_rejects_path_claimed_by_workspace() {
         let tree = make_tree(&[("my-repo", &["wt-a"])]);
         let wt = tree.base.join("my-repo/wt-a");
         let wt_str = wt.to_str().unwrap().to_string();
         // Workspace row still claims this path → must reject.
-        let result = validate_rogue_purge_target(&wt_str, &tree.base, &[wt_str.clone()]);
+        let result = validate_orphaned_purge_target(&wt_str, &tree.base, &[wt_str.clone()]);
         assert!(
             result.is_err(),
             "expected workspace-claim rejection, got {result:?}"
@@ -481,20 +495,20 @@ mod tests {
     }
 
     #[test]
-    fn validate_rogue_purge_accepts_rogue_dir_under_base_with_no_claim() {
-        let tree = make_tree(&[("my-repo", &["rogue-wt"])]);
-        let wt = tree.base.join("my-repo/rogue-wt");
-        let result = validate_rogue_purge_target(wt.to_str().unwrap(), &tree.base, &[]);
+    fn validate_orphaned_purge_accepts_dir_under_base_with_no_claim() {
+        let tree = make_tree(&[("my-repo", &["orphan-wt"])]);
+        let wt = tree.base.join("my-repo/orphan-wt");
+        let result = validate_orphaned_purge_target(wt.to_str().unwrap(), &tree.base, &[]);
         assert!(result.is_ok(), "expected accept, got {result:?}");
     }
 
     #[test]
-    fn validate_rogue_purge_rejects_relative_unresolvable_path_with_clear_error() {
-        let tree = make_tree(&[("my-repo", &["rogue-wt"])]);
+    fn validate_orphaned_purge_rejects_relative_unresolvable_path_with_clear_error() {
+        let tree = make_tree(&[("my-repo", &["orphan-wt"])]);
         // A relative path that doesn't exist — canonicalize fails AND
         // it isn't absolute, so the early-return clear-error branch
         // should fire instead of the misleading "outside base" message.
-        let result = validate_rogue_purge_target("./does-not-exist", &tree.base, &[]);
+        let result = validate_orphaned_purge_target("./does-not-exist", &tree.base, &[]);
         assert!(result.is_err(), "expected rejection, got {result:?}");
         let err = result.unwrap_err();
         assert!(
