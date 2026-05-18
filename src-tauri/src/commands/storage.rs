@@ -292,9 +292,18 @@ pub async fn scan_orphaned_worktrees(
         .map(|r| (r.path_slug.clone(), r.name.clone()))
         .collect();
 
+    let base_for_log = base.display().to_string();
+    let tracked_count = tracked_paths.len();
     let orphaned = tokio::task::spawn_blocking(move || detect_orphaned_dirs(&base, &tracked_paths))
         .await
         .map_err(|e| format!("orphaned scan join error: {e}"))?;
+    tracing::info!(
+        target: "claudette::storage",
+        base = %base_for_log,
+        tracked_path_keys = tracked_count,
+        orphan_count = orphaned.len(),
+        "scan_orphaned_worktrees complete"
+    );
 
     // Second pass: compute sizes (also on blocking pool) and look up
     // inferred repo names. Sizes run concurrently.

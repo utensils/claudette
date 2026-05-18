@@ -56,7 +56,15 @@ export function StorageSettings() {
   const [error, setError] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [purging, setPurging] = useState<Set<string>>(new Set());
-  const [confirmPath, setConfirmPath] = useState<string | null>(null);
+  // Bulk confirm: a list of one or more paths the user has staged for
+  // deletion. Single-path (per-row trash) and multi-path (per-card
+  // "Delete N orphans" or global "Delete all orphans") share the same
+  // confirm UI — only the wording changes.
+  const [confirmPaths, setConfirmPaths] = useState<string[] | null>(null);
+  const [bulkProgress, setBulkProgress] = useState<{
+    done: number;
+    total: number;
+  } | null>(null);
 
   const refresh = useCallback(() => {
     setLoading(true);
@@ -184,23 +192,52 @@ export function StorageSettings() {
     });
   };
 
-  const handleOrphanPurge = async (path: string) => {
-    setPurging((prev) => new Set(prev).add(path));
+  /**
+   * Delete an array of orphan paths sequentially. We purposefully do
+   * NOT Promise.all — sequential keeps the user's progress readout
+   * accurate (1/N, 2/N, …) and avoids spawning N concurrent
+   * `remove_dir_all`s against the same parent dir. Continues past
+   * individual failures and surfaces the first error at the end.
+   */
+  const handleBulkOrphanPurge = async (paths: string[]) => {
     setError(null);
-    try {
-      await purgeOrphanedWorktree(path);
-      setOrphans((prev) => prev?.filter((r) => r.path !== path) ?? null);
-      // Re-pull stats so totals stay accurate.
-      computeStorageStats().then(setStats).catch(() => {});
-      setConfirmPath(null);
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setPurging((prev) => {
-        const next = new Set(prev);
-        next.delete(path);
-        return next;
-      });
+    setPurging((prev) => {
+      const next = new Set(prev);
+      for (const p of paths) next.add(p);
+      return next;
+    });
+    setBulkProgress({ done: 0, total: paths.length });
+
+    const failures: string[] = [];
+    let done = 0;
+    for (const path of paths) {
+      try {
+        await purgeOrphanedWorktree(path);
+        setOrphans((prev) => prev?.filter((r) => r.path !== path) ?? null);
+      } catch (e) {
+        failures.push(`${path}: ${e}`);
+      }
+      done++;
+      setBulkProgress({ done, total: paths.length });
+    }
+
+    setPurging((prev) => {
+      const next = new Set(prev);
+      for (const p of paths) next.delete(p);
+      return next;
+    });
+    setBulkProgress(null);
+
+    // Re-pull stats so totals stay accurate after a bulk purge.
+    computeStorageStats().then(setStats).catch(() => {});
+
+    if (failures.length > 0) {
+      setError(
+        `${failures.length}/${paths.length} delete(s) failed:\n${failures.join("\n")}`,
+      );
+      // Leave the confirm box open so the user can read the error.
+    } else {
+      setConfirmPaths(null);
     }
   };
 
@@ -226,6 +263,24 @@ export function StorageSettings() {
             <RefreshCw size={12} />
             {loading ? t("storage_rescanning") : t("storage_rescan")}
           </button>
+          {totalOrphanedCount > 0 && (
+            <button
+              type="button"
+              className={`${styles.iconBtn} ${styles.storageDeleteAllOrphansBtn}`}
+              onClick={() =>
+                setConfirmPaths((orphans ?? []).map((o) => o.path))
+              }
+              title={t("storage_delete_all_orphans_tooltip")}
+            >
+              <Trash2 size={12} />
+              {t(
+                totalOrphanedCount === 1
+                  ? "storage_delete_all_orphans_button_singular"
+                  : "storage_delete_all_orphans_button_plural",
+                { count: totalOrphanedCount },
+              )}
+            </button>
+          )}
           <button
             type="button"
             className={styles.iconBtn}
@@ -239,7 +294,7 @@ export function StorageSettings() {
         </div>
       </div>
 
-      {error && !confirmPath && (
+      {error && !confirmPaths && (
         <div className={styles.storageError}>{error}</div>
       )}
 
@@ -263,7 +318,10 @@ export function StorageSettings() {
           card={card}
           expanded={expanded.has(card.key)}
           onToggle={() => toggleExpanded(card.key)}
-          onPurgeOrphan={(p) => setConfirmPath(p)}
+          onPurgeOrphan={(p) => setConfirmPaths([p])}
+          onPurgeAllOrphansForRepo={() =>
+            setConfirmPaths(card.orphans.map((o) => o.path))
+          }
           onOpenArchivedCleanup={(repoId) =>
             openModal("bulkCleanupArchived", { repoId })
           }
@@ -271,12 +329,31 @@ export function StorageSettings() {
         />
       ))}
 
-      {confirmPath && (
+      {confirmPaths && confirmPaths.length > 0 && (
         <div className={styles.storageOrphanConfirmOverlay}>
           <div className={styles.storageOrphanConfirmCard}>
             <div className={styles.storageOrphanConfirmText}>
-              {t("storage_orphaned_confirm", { path: confirmPath })}
+              {confirmPaths.length === 1
+                ? t("storage_orphaned_confirm", { path: confirmPaths[0] })
+                : t("storage_orphaned_bulk_confirm", {
+                    count: confirmPaths.length,
+                  })}
             </div>
+            {confirmPaths.length > 1 && (
+              <ul className={styles.storageOrphanConfirmList}>
+                {confirmPaths.map((p) => (
+                  <li key={p}>{p}</li>
+                ))}
+              </ul>
+            )}
+            {bulkProgress && (
+              <div className={styles.storageOrphanConfirmProgress}>
+                {t("storage_orphaned_bulk_progress", {
+                  done: bulkProgress.done,
+                  total: bulkProgress.total,
+                })}
+              </div>
+            )}
             {error && (
               <div className={styles.storageOrphanConfirmError}>{error}</div>
             )}
@@ -285,23 +362,27 @@ export function StorageSettings() {
                 type="button"
                 className={styles.iconBtn}
                 onClick={() => {
-                  setConfirmPath(null);
+                  setConfirmPaths(null);
                   setError(null);
                 }}
-                disabled={purging.has(confirmPath)}
+                disabled={bulkProgress !== null}
               >
                 {tCommon("cancel")}
               </button>
               <button
                 type="button"
                 className={`${styles.iconBtn} ${styles.storageOrphanConfirmDelete}`}
-                onClick={() => handleOrphanPurge(confirmPath)}
-                disabled={purging.has(confirmPath)}
+                onClick={() => handleBulkOrphanPurge(confirmPaths)}
+                disabled={bulkProgress !== null}
               >
                 <Trash2 size={12} />
-                {purging.has(confirmPath)
+                {bulkProgress
                   ? t("storage_orphaned_deleting")
-                  : t("storage_orphaned_confirm_button")}
+                  : confirmPaths.length === 1
+                    ? t("storage_orphaned_confirm_button")
+                    : t("storage_orphaned_bulk_confirm_button", {
+                        count: confirmPaths.length,
+                      })}
               </button>
             </div>
           </div>
@@ -316,6 +397,7 @@ interface RepoCardProps {
   expanded: boolean;
   onToggle: () => void;
   onPurgeOrphan: (path: string) => void;
+  onPurgeAllOrphansForRepo: () => void;
   onOpenArchivedCleanup: (repoId: string) => void;
   purging: Set<string>;
 }
@@ -325,6 +407,7 @@ function RepoCard({
   expanded,
   onToggle,
   onPurgeOrphan,
+  onPurgeAllOrphansForRepo,
   onOpenArchivedCleanup,
   purging,
 }: RepoCardProps) {
@@ -394,6 +477,22 @@ function RepoCard({
           </div>
         </div>
         <div className={styles.storageCardActions}>
+          {card.orphans.length > 0 && (
+            <button
+              type="button"
+              className={`${styles.iconBtn} ${styles.storageCardOrphanBtn}`}
+              onClick={onPurgeAllOrphansForRepo}
+              title={t("storage_delete_orphans_tooltip")}
+            >
+              <Trash2 size={12} />
+              {t(
+                card.orphans.length === 1
+                  ? "storage_delete_orphans_button_singular"
+                  : "storage_delete_orphans_button_plural",
+                { count: card.orphans.length },
+              )}
+            </button>
+          )}
           {!isUnknown && card.archivedCount > 0 && card.repo && (
             <button
               type="button"

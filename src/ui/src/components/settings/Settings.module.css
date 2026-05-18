@@ -471,6 +471,50 @@
   border-color: var(--status-stopped);
 }
 
+.storageOrphanConfirmList {
+  margin: 4px 0 8px;
+  padding-left: 18px;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  color: var(--text-dim);
+  max-height: 160px;
+  overflow-y: auto;
+  list-style: disc;
+}
+
+.storageOrphanConfirmList li {
+  word-break: break-all;
+  margin-bottom: 2px;
+}
+
+.storageOrphanConfirmProgress {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin: 0 0 8px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* "Delete N orphans" button variants — uses the destructive accent
+   so it reads as different from the (safe) archived cleanup button
+   sitting next to it. */
+.storageCardOrphanBtn {
+  color: var(--status-stopped);
+  border-color: color-mix(in srgb, var(--status-stopped) 45%, transparent);
+}
+
+.storageCardOrphanBtn:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--status-stopped) 8%, transparent);
+}
+
+.storageDeleteAllOrphansBtn {
+  color: var(--status-stopped);
+  border-color: color-mix(in srgb, var(--status-stopped) 45%, transparent);
+}
+
+.storageDeleteAllOrphansBtn:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--status-stopped) 8%, transparent);
+}
+
 .storageError {
   font-size: 12px;
   color: var(--status-stopped);
