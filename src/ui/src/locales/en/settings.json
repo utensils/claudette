@@ -314,6 +314,7 @@
   "storage_unknown_repo_hint": "Worktree dirs whose parent slug doesn't match any registered repository. Likely from a DB reset, a cross-machine import, or a dev sandbox.",
   "storage_orphaned_delete": "Delete",
   "storage_orphaned_deleting": "Deleting…",
+  "storage_orphaned_cancelling": "Cancelling…",
   "storage_orphaned_confirm": "Permanently delete this orphaned worktree directory and all its files?\n\n{{path}}",
   "storage_orphaned_confirm_button": "Delete from disk",
   "storage_orphaned_bulk_confirm": "Permanently delete {{count}} orphaned worktree directories and all their files?",

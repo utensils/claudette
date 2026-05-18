@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
   AlertTriangle,
@@ -65,6 +65,15 @@ export function StorageSettings() {
     done: number;
     total: number;
   } | null>(null);
+  // Set to true when the user clicks Cancel during a bulk purge. The
+  // sequential loop inside `handleBulkOrphanPurge` checks this between
+  // iterations so the currently-running `purgeOrphanedWorktree` call
+  // is allowed to complete (filesystem `remove_dir_all` is not safely
+  // interruptible at JS boundaries) but no further paths are touched.
+  // Uses a ref instead of state so the loop sees the latest value
+  // without re-running setState → re-render → new closure.
+  const cancelOrphanPurgeRef = useRef(false);
+  const [bulkCancelling, setBulkCancelling] = useState(false);
 
   const refresh = useCallback(() => {
     setLoading(true);
@@ -198,9 +207,17 @@ export function StorageSettings() {
    * accurate (1/N, 2/N, …) and avoids spawning N concurrent
    * `remove_dir_all`s against the same parent dir. Continues past
    * individual failures and surfaces the first error at the end.
+   *
+   * Cancellation: the loop checks `cancelOrphanPurgeRef` at the top of
+   * each iteration. The currently-running `purgeOrphanedWorktree` call
+   * is allowed to finish (the backend's `remove_dir_all` can't be
+   * safely interrupted partway), then the loop breaks and every
+   * remaining path is preserved — matching the spec the user asked for.
    */
   const handleBulkOrphanPurge = async (paths: string[]) => {
     setError(null);
+    cancelOrphanPurgeRef.current = false;
+    setBulkCancelling(false);
     setPurging((prev) => {
       const next = new Set(prev);
       for (const p of paths) next.add(p);
@@ -210,7 +227,16 @@ export function StorageSettings() {
 
     const failures: string[] = [];
     let done = 0;
+    let skipped = 0;
     for (const path of paths) {
+      if (cancelOrphanPurgeRef.current) {
+        // Stop before touching this path. Everything from `done` onward
+        // stays on disk, exactly as the user intended when they hit
+        // Cancel. Re-count the remainder so the readout / toast can
+        // tell them what's still there.
+        skipped = paths.length - done;
+        break;
+      }
       try {
         await purgeOrphanedWorktree(path);
         setOrphans((prev) => prev?.filter((r) => r.path !== path) ?? null);
@@ -227,19 +253,35 @@ export function StorageSettings() {
       return next;
     });
     setBulkProgress(null);
+    setBulkCancelling(false);
+    cancelOrphanPurgeRef.current = false;
 
-    // Re-pull stats so totals stay accurate after a bulk purge.
+    // Re-pull stats so totals stay accurate after a partial / full bulk
+    // purge.
     computeStorageStats().then(setStats).catch(() => {});
 
-    if (failures.length > 0) {
-      setError(
-        `${failures.length}/${paths.length} delete(s) failed:\n${failures.join("\n")}`,
-      );
-      // Leave the confirm box open so the user can read the error.
+    if (failures.length > 0 || skipped > 0) {
+      const parts: string[] = [];
+      if (failures.length > 0) {
+        parts.push(
+          `${failures.length}/${paths.length} delete(s) failed:\n${failures.join("\n")}`,
+        );
+      }
+      if (skipped > 0) {
+        parts.push(`${skipped} skipped (cancelled).`);
+      }
+      setError(parts.join("\n\n"));
+      // Leave the confirm box open so the user can read the error /
+      // skip summary and re-run on the remaining paths if they want.
     } else {
       setConfirmPaths(null);
     }
   };
+
+  const handleBulkOrphanCancel = useCallback(() => {
+    cancelOrphanPurgeRef.current = true;
+    setBulkCancelling(true);
+  }, []);
 
   return (
     <div>
@@ -362,12 +404,24 @@ export function StorageSettings() {
                 type="button"
                 className={styles.iconBtn}
                 onClick={() => {
-                  setConfirmPaths(null);
-                  setError(null);
+                  // Two roles on the same button:
+                  // - If a purge is in flight, Cancel signals the loop
+                  //   to stop after the current item completes. The
+                  //   overlay stays open so the user sees the partial
+                  //   summary and the remaining paths.
+                  // - Otherwise, Cancel just dismisses the overlay.
+                  if (bulkProgress !== null) {
+                    handleBulkOrphanCancel();
+                  } else {
+                    setConfirmPaths(null);
+                    setError(null);
+                  }
                 }}
-                disabled={bulkProgress !== null}
+                disabled={bulkCancelling}
               >
-                {tCommon("cancel")}
+                {bulkCancelling
+                  ? t("storage_orphaned_cancelling")
+                  : tCommon("cancel")}
               </button>
               <button
                 type="button"
