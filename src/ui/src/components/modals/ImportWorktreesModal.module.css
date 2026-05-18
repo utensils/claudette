@@ -87,7 +87,11 @@
   color: var(--text-dim);
   text-transform: uppercase;
   letter-spacing: 0.5px;
-  flex-shrink: 0;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .worktreePath {
@@ -106,6 +110,7 @@
   text-transform: none;
   letter-spacing: 0;
   font-variant-numeric: tabular-nums;
+  flex: none;
 }
 
 .deleteButton {

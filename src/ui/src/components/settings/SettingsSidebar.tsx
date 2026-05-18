@@ -79,6 +79,7 @@ export function SettingsSidebar() {
 
   return (
     <div className={styles.sidebar}>
+      <div className={styles.sidebarTopSpacer} />
       <button className={styles.backLink} onClick={closeSettings}>
         {t("common:back_to_app")}
       </button>

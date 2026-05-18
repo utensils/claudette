@@ -37,8 +37,25 @@
 }
 
 [data-platform="mac"] .sidebar {
-  padding-top: 38px;
   background: color-mix(in srgb, var(--sidebar-bg) 88%, transparent);
+}
+
+/* Sticky spacer that covers the macOS traffic-light zone while the
+   sidebar scrolls. padding-top alone would scroll away; a sticky
+   child stays pinned to the top of the scroll viewport. */
+.sidebarTopSpacer {
+  display: none;
+}
+
+[data-platform="mac"] .sidebarTopSpacer {
+  display: block;
+  position: sticky;
+  top: 0;
+  height: 38px;
+  flex-shrink: 0;
+  background: color-mix(in srgb, var(--sidebar-bg) 88%, transparent);
+  z-index: 2;
+  margin: -16px 0 0;
 }
 
 .backLink {
