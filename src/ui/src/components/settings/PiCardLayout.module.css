@@ -107,3 +107,60 @@
   font-size: 11px;
   margin-top: 6px;
 }
+
+/* Available-models sub-disclosure: one row per Pi sub-provider with
+ * a chevron + chip grid of concrete model labels on expand. Restores
+ * the per-model visibility the old `PiDiscoveredModelsList`
+ * provided; without it, users couldn't verify which models Pi
+ * actually returned for a configured provider. */
+.modelGroupList {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.modelGroupHeader {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: transparent;
+  border: none;
+  padding: 4px 6px;
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font-size: 12px;
+  text-align: left;
+  width: 100%;
+  transition: background var(--transition-fast);
+}
+
+.modelGroupHeader:hover {
+  background: var(--hover-bg);
+}
+
+.modelGroupLabel {
+  flex: 1;
+}
+
+.modelGroupCount {
+  color: var(--text-dim);
+  font-size: 11px;
+}
+
+.modelChips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 4px 6px 8px 24px;
+}
+
+.modelChip {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 12px;
+  background: var(--hover-bg);
+  color: var(--text-primary);
+  border: 1px solid var(--divider);
+  white-space: nowrap;
+}

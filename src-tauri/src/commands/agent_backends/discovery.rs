@@ -291,7 +291,13 @@ async fn discover_pi_models(
     // user who configured OpenRouter with "Keep this key private to
     // Claudette" would see the provider as configured in the Pi card
     // but Refresh would still return zero models for it.
-    let extras = super::pi_auth::pi_local_secret_env().unwrap_or_default();
+    //
+    // Propagate keychain-read errors instead of dropping them — a
+    // dead secure store has the same symptom (no models discovered)
+    // as a misconfigured provider, and the user needs to know it's
+    // the store, not Pi. `pi_list_providers` and chat startup already
+    // surface this error; mirror that here.
+    let extras = super::pi_auth::pi_local_secret_env()?;
     let extras_slice: Option<&[(String, String)]> = if extras.is_empty() {
         None
     } else {

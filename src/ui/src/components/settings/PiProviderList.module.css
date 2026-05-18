@@ -96,8 +96,11 @@
   border-radius: 10px;
   padding: 2px 8px;
   white-space: nowrap;
-  text-transform: lowercase;
   letter-spacing: 0.02em;
+  /* No text-transform — pill content includes env-var names such as
+   * `$OPENROUTER_API_KEY` whose casing is meaningful in a shell. The
+   * earlier `text-transform: lowercase` rendered them as
+   * `$openrouter_api_key`, which is an invalid env var name. */
 }
 
 .sourcePillEnvHint {

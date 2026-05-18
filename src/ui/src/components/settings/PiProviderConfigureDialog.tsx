@@ -13,6 +13,7 @@ import { useTranslation } from "react-i18next";
 
 import { Modal } from "../modals/Modal";
 import shared from "../modals/shared.module.css";
+import { openUrl } from "../../services/tauri";
 import {
   piClearProviderApiKey,
   piSetProviderApiKey,
@@ -107,10 +108,11 @@ export function PiProviderConfigureDialog({
         errors.push(`keychain: ${String(e)}`);
       }
       if (errors.length > 0) {
-        // Refresh so the UI reflects whichever scope WAS cleared, but
-        // hold the dialog open with the error so the user knows the
-        // other scope still has a key.
-        onSaved();
+        // Render the failure inline. Do NOT call `onSaved()` here:
+        // the manager's onSaved closes the dialog before the user
+        // sees `setError(...)`, masking the partial-failure message.
+        // The "Clear" action becomes a no-op visually if any scope
+        // failed — the user can retry or cancel to dismiss.
         setError(
           t("pi_provider_dialog_clear_partial", {
             details: errors.join("; "),
@@ -125,6 +127,32 @@ export function PiProviderConfigureDialog({
       setSubmitting(false);
     }
   };
+
+  // Match the row-level Clear gate: only show the dialog's "Clear
+  // key" button for credentials Claudette can actually delete. For
+  // env / models.json / fallback sources the action would close the
+  // dialog as if successful while the credential still lives outside
+  // Claudette's stores; the inline copy explains the situation
+  // instead.
+  const clearableAuthSource = !provider.authSource
+    || provider.authSource === "stored"
+    || provider.authSource === "runtime";
+  const showClearButton = provider.configured && clearableAuthSource;
+  const externalSourceLabel = (() => {
+    if (clearableAuthSource) return undefined;
+    switch (provider.authSource) {
+      case "environment":
+        return provider.envHint
+          ? `$${provider.envHint}`
+          : t("pi_provider_dialog_env_var", "an environment variable");
+      case "fallback":
+      case "models_json_key":
+      case "models_json_command":
+        return "~/.pi/agent/models.json";
+      default:
+        return undefined;
+    }
+  })();
 
   // Provider-specific env var hint can't be derived from a static
   // string — pull it from the curated entry.
@@ -173,8 +201,16 @@ export function PiProviderConfigureDialog({
           <p className={shared.hint}>
             <a
               href={provider.docsUrl}
-              target="_blank"
-              rel="noopener noreferrer"
+              onClick={(e) => {
+                // Route external launches through Tauri's `open_url`
+                // command — bare `target="_blank"` opens inside the
+                // webview on macOS / Linux Tauri builds. Same pattern
+                // as PiOAuthModal + CommunitySettings.
+                e.preventDefault();
+                if (provider.docsUrl) {
+                  void openUrl(provider.docsUrl).catch(() => {});
+                }
+              }}
             >
               {t("pi_provider_dialog_get_key", "Get an API key →")}
             </a>
@@ -198,8 +234,18 @@ export function PiProviderConfigureDialog({
 
       {error && <p className={shared.error}>{error}</p>}
 
+      {externalSourceLabel && (
+        <p className={shared.hint}>
+          {t("pi_provider_dialog_external_source", {
+            source: externalSourceLabel,
+            defaultValue:
+              "This provider is currently configured via {{source}}. Saving a new key below will store it in Claudette; to remove the existing credential, edit {{source}} outside the app.",
+          })}
+        </p>
+      )}
+
       <div className={shared.actions}>
-        {provider.configured && (
+        {showClearButton && (
           <button
             type="button"
             className={shared.btnDanger}

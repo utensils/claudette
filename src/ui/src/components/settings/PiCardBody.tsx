@@ -135,18 +135,72 @@ function AvailableModelsDisclosure({ models }: AvailableModelsDisclosureProps) {
           )}
         </p>
       ) : (
-        <ul style={{ listStyle: "none", padding: 0, margin: 0, display: "flex", flexDirection: "column", gap: 4 }}>
-          {groups.map((group) => (
-            <li key={group.key} style={{ fontSize: 12 }}>
-              <span style={{ color: "var(--text-primary)" }}>{group.label}</span>
-              <span style={{ color: "var(--text-dim)", marginLeft: 8 }}>
-                {group.models.length}
-              </span>
-            </li>
-          ))}
-        </ul>
+        <ModelGroupList groups={groups} />
       )}
     </Disclosure>
+  );
+}
+
+interface ModelGroupListProps {
+  groups: ReturnType<typeof groupPiDiscoveredModels<AgentBackendModel>>;
+}
+
+function ModelGroupList({ groups }: ModelGroupListProps) {
+  // Each Pi sub-provider gets its own nested disclosure so users can
+  // drill into the concrete `provider/model-id` chips and confirm
+  // exactly which models Pi reports as available. Restores the
+  // visibility the old top-level `PiDiscoveredModelsList` had —
+  // without this, the Pi card collapsed every model behind a count
+  // and the user had no way to verify Pi's auto-discovery from
+  // Settings.
+  const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
+  const toggle = (key: string) =>
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+
+  return (
+    <div className={styles.modelGroupList}>
+      {groups.map((group) => {
+        const isOpen = expanded.has(group.key);
+        return (
+          <div key={group.key}>
+            <button
+              type="button"
+              className={styles.modelGroupHeader}
+              aria-expanded={isOpen}
+              onClick={() => toggle(group.key)}
+            >
+              <ChevronRight
+                size={12}
+                className={`${styles.disclosureChevron} ${
+                  isOpen ? styles.disclosureChevronOpen : ""
+                }`}
+                aria-hidden
+              />
+              <span className={styles.modelGroupLabel}>{group.label}</span>
+              <span className={styles.modelGroupCount}>{group.models.length}</span>
+            </button>
+            {isOpen && (
+              <div className={styles.modelChips}>
+                {group.models.map((model) => (
+                  <span
+                    key={model.id}
+                    className={styles.modelChip}
+                    title={model.id}
+                  >
+                    {model.label || model.id}
+                  </span>
+                ))}
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
   );
 }
 

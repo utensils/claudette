@@ -12,7 +12,7 @@
 
 import { writeText as clipboardWriteText } from "@tauri-apps/plugin-clipboard-manager";
 import { Copy, ExternalLink, Loader2 } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { Modal } from "../modals/Modal";
@@ -228,6 +228,14 @@ function PhaseBody({
   error,
 }: PhaseBodyProps) {
   const { t } = useTranslation("settings");
+  // Stable IDs so the prompt-message, verification URL, and user-code
+  // inputs all get programmatic label/aria-describedby relationships
+  // (placeholder + visual label don't satisfy that for screen
+  // readers).
+  const promptInputId = useId();
+  const promptDescriptionId = useId();
+  const urlInputId = useId();
+  const userCodeInputId = useId();
 
   if (phase.kind === "starting") {
     return (
@@ -241,12 +249,21 @@ function PhaseBody({
   if (phase.kind === "prompt") {
     return (
       <>
-        <p className={shared.warning}>{phase.message}</p>
+        <p id={promptDescriptionId} className={shared.warning}>
+          {phase.message}
+        </p>
         <div className={shared.field}>
+          {/* The prompt input has no visible label of its own — Pi
+              writes the message as the warning paragraph above. Use
+              `aria-labelledby` on the input so screen readers
+              announce the prompt text when the field receives focus
+              (placeholder alone is not an accessible name). */}
           <input
+            id={promptInputId}
             type="text"
             className={shared.input}
             autoFocus
+            aria-labelledby={promptDescriptionId}
             value={promptValue}
             placeholder={phase.placeholder}
             onChange={(e) => setPromptValue(e.target.value)}
@@ -291,11 +308,16 @@ function PhaseBody({
           )}
         </p>
         <div className={shared.field}>
-          <label className={shared.label}>
+          <label className={shared.label} htmlFor={urlInputId}>
             {t("pi_oauth_url_label", "Verification URL")}
           </label>
           <div className={shared.inputRow}>
-            <input className={shared.input} value={phase.url} readOnly />
+            <input
+              id={urlInputId}
+              className={shared.input}
+              value={phase.url}
+              readOnly
+            />
             <button
               type="button"
               className={shared.btn}
@@ -316,10 +338,11 @@ function PhaseBody({
         </div>
         {phase.instructions && (
           <div className={shared.field}>
-            <label className={shared.label}>
+            <label className={shared.label} htmlFor={userCodeInputId}>
               {t("pi_oauth_user_code", "User code")}
             </label>
             <input
+              id={userCodeInputId}
               className={shared.input}
               value={phase.instructions}
               readOnly

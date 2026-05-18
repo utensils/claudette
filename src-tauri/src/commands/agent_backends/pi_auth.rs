@@ -192,7 +192,20 @@ pub async fn pi_set_provider_api_key(
     match scope {
         ProviderSecretScope::Shared => {
             pi_control::set_api_key(working_dir_path(&working_dir), &provider_id, &trimmed).await?;
-            let _ = delete_secure_secret(KEYCHAIN_BUCKET, &keychain_key(&provider_id));
+            // If the user previously stored a private (keychain) key
+            // and switches to shared, the stale private copy would
+            // silently come back to life if they later remove the
+            // auth.json entry from a terminal. Surface a delete
+            // failure so the user knows the old secret is still in
+            // place — the shared write already succeeded, so the
+            // primary action is intact and this becomes advisory.
+            delete_secure_secret(KEYCHAIN_BUCKET, &keychain_key(&provider_id)).map_err(|e| {
+                format!(
+                    "Saved shared key, but failed to remove the previously-stored \
+                     keychain copy ({e}). If you want the keychain copy gone, retry \
+                     after restoring secure-store access."
+                )
+            })?;
             Ok(())
         }
         ProviderSecretScope::Local => {
