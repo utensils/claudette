@@ -31,10 +31,7 @@ import {
 } from "./components/settings/codexBackendMigration";
 import { autoDetectStartupAgentBackends } from "./components/settings/agentBackendStartupRefresh";
 import { findLeafByPtyId } from "./stores/terminalPaneTree";
-import {
-  cleanupOrphans as cleanupInteractiveOrphans,
-  type OrphansDetectedEvent,
-} from "./services/interactive";
+import { OrphanListener } from "./OrphanListener";
 import type { CommandEvent } from "./types";
 import i18n, { isSupportedLanguage } from "./i18n";
 import "./styles/theme.css";
@@ -920,47 +917,10 @@ function App() {
       store.updateWorkspace(workspaceId, { agent_status: "Running" });
     });
 
-    // Listen for the one-shot boot-time orphan-detection event emitted by
-    // `claudette::interactive_lifecycle`. The event fires when the host
-    // (tmux / sidecar) reports `claudette-` sessions Claudette's DB
-    // doesn't track — typically left over from a previous Claudette
-    // process that crashed. We log them and surface a single toast with
-    // a "Clean up" hint. The toast doesn't render an interactive button
-    // (the ToastContainer is a one-line component); the cleanup command
-    // is exposed via the Command Palette in a follow-up. For now, log +
-    // toast gives the user a recoverable signal without dropping into a
-    // modal blocking startup.
-    const unlistenOrphans = listen<OrphansDetectedEvent>(
-      "interactive://orphans-detected",
-      (event) => {
-        const sids = event.payload?.sids ?? [];
-        if (sids.length === 0) return;
-        console.warn(
-          `[interactive] detected ${sids.length} orphan session(s) on the host:`,
-          sids,
-          "— invoke interactive_cleanup_orphans to stop them.",
-        );
-        // One-shot toast: surface the count so the user knows something
-        // recoverable happened, and run the cleanup invocation right
-        // from this listener. Failing the cleanup is logged but doesn't
-        // throw — the orphan map clears itself on the Rust side either
-        // way, so a second toast won't appear on the next boot.
-        const store = useAppStore.getState();
-        store.addToast(
-          `Cleaning up ${sids.length} orphan interactive session${sids.length === 1 ? "" : "s"} from a previous run.`,
-        );
-        cleanupInteractiveOrphans()
-          .then((stopped) => {
-            console.info(
-              `[interactive] cleaned up ${stopped.length} of ${sids.length} orphan session(s)`,
-              stopped,
-            );
-          })
-          .catch((err) => {
-            console.error("[interactive] cleanupOrphans failed", err);
-          });
-      },
-    );
+    // Orphan-detection (`interactive://orphans-detected`) lives in
+    // `<OrphanListener />` so the listener-effect can be tested without
+    // pulling the rest of App's provider graph into the suite — see
+    // `App.orphans.test.tsx`.
 
     const unlistenAutoArchived = listen<{ workspace_id: string; workspace_name: string; pr_number?: number; deleted?: boolean }>("workspace-auto-archived", (event) => {
       const { workspace_id, workspace_name, pr_number, deleted } = event.payload;
@@ -1003,7 +963,6 @@ function App() {
       unlistenChatTurnStarted.then((fn) => fn());
       unlistenMissingCli.then((fn) => fn());
       unlistenMissingWorktree.then((fn) => fn());
-      unlistenOrphans.then((fn) => fn());
     };
   }, [setRepositories, setWorkspaces, setWorktreeBaseDir, setDefaultTerminalAppId, setWorkspaceAppsMenuShown, setDefaultBranches, setTerminalFontSize, setLastMessages, setRemoteConnections, setDiscoveredServers, setLocalServerRunning, setLocalServerConnectionString, setCurrentThemeId, setThemeMode, setThemeDark, setThemeLight, setUiFontSize, setFontFamilySans, setFontFamilyMono, setSystemFonts, setDetectedApps, setUsageInsightsEnabled, setProjectViewIssuesPrsEnabled, setClaudetteTerminalEnabled, setShowSidebarRunningCommands, setToolDisplayMode, setExtendedToolCallOutput, setAlternativeBackendsAvailable, setPiSdkAvailable, setAlternativeBackendsEnabled, setCodexEnabled, setAgentBackends, setDefaultAgentBackendId, setClaudeAuthMethod, setEditorGitGutterBase, setEditorMinimapEnabled, setRevealActiveFileInTree, setEditorWordWrap, setEditorLineNumbersEnabled, setEditorFontZoom, setDisable1mContext, setAppVersion, setVoiceToggleHotkey, setVoiceHoldHotkey, setKeybindings, setManualWorkspaceOrderByRepo, hydrateWorkspaceScmLinks]);
 
@@ -1128,7 +1087,12 @@ function App() {
   }, []);
 
   if (!viewStateHydrated) return null;
-  return <AppLayout />;
+  return (
+    <>
+      <OrphanListener />
+      <AppLayout />
+    </>
+  );
 }
 
 export default App;
