@@ -336,6 +336,17 @@
   color: var(--text-primary);
   margin-bottom: 8px;
   word-break: break-all;
+  /* The i18n string uses `\n\n{{path}}` so the path renders on its
+     own visual line beneath the question — same trick the import
+     dialog uses (`.confirmText` in ImportWorktreesModal.module.css). */
+  white-space: pre-wrap;
+}
+
+.storageRogueConfirmError {
+  font-size: 11px;
+  color: var(--status-stopped);
+  margin: 0 0 8px;
+  word-break: break-word;
 }
 
 .storageRogueConfirmActions {

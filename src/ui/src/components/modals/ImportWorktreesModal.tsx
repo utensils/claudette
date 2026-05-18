@@ -97,6 +97,9 @@ export function ImportWorktreesModal() {
         next.delete(path);
         return next;
       });
+      // Only dismiss the confirm box on success — leaving it open on
+      // error keeps the user in the path context they were acting on.
+      setConfirmPath(null);
     } catch (e) {
       setError(String(e));
     } finally {
@@ -105,7 +108,6 @@ export function ImportWorktreesModal() {
         next.delete(path);
         return next;
       });
-      setConfirmPath(null);
     }
   };
 
@@ -217,10 +219,14 @@ export function ImportWorktreesModal() {
           <div className={styles.confirmText}>
             {t("import_worktrees_delete_confirm", { path: confirmPath })}
           </div>
+          {error && <div className={styles.confirmError}>{error}</div>}
           <div className={styles.confirmActions}>
             <button
               className={shared.btn}
-              onClick={() => setConfirmPath(null)}
+              onClick={() => {
+                setConfirmPath(null);
+                setError(null);
+              }}
               disabled={purging.has(confirmPath)}
             >
               {tCommon("cancel")}
@@ -238,7 +244,11 @@ export function ImportWorktreesModal() {
         </div>
       )}
 
-      {error && <div className={shared.error}>{error}</div>}
+      {/* Top-level error surfaces only when the confirm box isn't open
+          — purge errors live inside the confirm box so the user keeps
+          path context. Imports / other top-level failures still show
+          here. */}
+      {error && !confirmPath && <div className={shared.error}>{error}</div>}
 
       <div className={shared.actions}>
         <button className={shared.btn} onClick={chainOrClose}>

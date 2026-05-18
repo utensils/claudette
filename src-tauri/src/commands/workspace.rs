@@ -1650,18 +1650,7 @@ pub async fn discover_worktrees(
     Ok(discovered)
 }
 
-/// Best-effort canonicalize: returns the canonical path string when
-/// canonicalize succeeds, otherwise the raw string unchanged. Falls back
-/// on *any* error (NotFound, permission denied, broken symlink, etc.)
-/// — the returned path is NOT validated to exist. Comparisons that need
-/// to handle deleted-on-disk paths should compare both `(canon, raw)`
-/// pairs to avoid macOS `/tmp` vs `/private/tmp` mismatches when one
-/// side canonicalized and the other couldn't.
-fn canon_or_raw(p: &str) -> String {
-    std::fs::canonicalize(p)
-        .map(|c| c.to_string_lossy().to_string())
-        .unwrap_or_else(|_| p.to_string())
-}
+use crate::commands::path_util::canon_or_raw;
 
 /// Pure validation logic for `purge_stray_worktree`. Extracted from the
 /// Tauri command so it can be tested with tempdir + handcrafted inputs

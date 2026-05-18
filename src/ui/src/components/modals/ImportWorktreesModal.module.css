@@ -153,3 +153,10 @@
   justify-content: flex-end;
   gap: 8px;
 }
+
+.confirmError {
+  font-size: 11px;
+  color: var(--status-stopped);
+  margin: 0 0 8px;
+  word-break: break-word;
+}

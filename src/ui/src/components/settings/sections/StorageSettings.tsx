@@ -97,6 +97,9 @@ export function StorageSettings() {
       setRogues((prev) => prev?.filter((r) => r.path !== path) ?? null);
       // Re-pull stats so totals stay accurate after a purge.
       refreshStats();
+      // Only dismiss the confirm box on success — leaving it open on
+      // error keeps the user in the path context they were acting on.
+      setRogueConfirmPath(null);
     } catch (e) {
       setRogueError(String(e));
     } finally {
@@ -105,7 +108,6 @@ export function StorageSettings() {
         next.delete(path);
         return next;
       });
-      setRogueConfirmPath(null);
     }
   };
 
@@ -152,7 +154,13 @@ export function StorageSettings() {
               : t("storage_rogue_rescan")}
           </button>
         </div>
-        {rogueError && <div className={styles.storageError}>{rogueError}</div>}
+        {/* Errors are surfaced inside the confirm box when one is open
+            (so the user keeps the path context). Show a top-level
+            error only when no confirm is open — typically a scan
+            failure rather than a purge failure. */}
+        {rogueError && !rogueConfirmPath && (
+          <div className={styles.storageError}>{rogueError}</div>
+        )}
         {!rogueScanning && rogues && rogues.length === 0 && (
           <div className={styles.fieldHint}>{t("storage_rogue_none")}</div>
         )}
@@ -205,10 +213,18 @@ export function StorageSettings() {
             <div className={styles.storageRogueConfirmText}>
               {t("storage_rogue_confirm", { path: rogueConfirmPath })}
             </div>
+            {rogueError && (
+              <div className={styles.storageRogueConfirmError}>
+                {rogueError}
+              </div>
+            )}
             <div className={styles.storageRogueConfirmActions}>
               <button
                 className={styles.iconBtn}
-                onClick={() => setRogueConfirmPath(null)}
+                onClick={() => {
+                  setRogueConfirmPath(null);
+                  setRogueError(null);
+                }}
                 disabled={purgingRogue.has(rogueConfirmPath)}
               >
                 {tCommon("cancel")}

@@ -23,6 +23,7 @@ pub mod files;
 pub mod grammars;
 pub mod mcp;
 pub mod metrics;
+pub mod path_util;
 pub mod pinned_prompts;
 pub mod plan;
 pub mod plugin;

@@ -11,6 +11,7 @@ use claudette::model::WorkspaceStatus;
 use serde::Serialize;
 use tauri::State;
 
+use crate::commands::path_util::{canon_or_raw, canon_with_parent_fallback};
 use crate::commands::workspace::directory_size_bytes;
 use crate::state::AppState;
 
@@ -197,9 +198,7 @@ fn validate_rogue_purge_target(
     base: &Path,
     workspace_paths: &[String],
 ) -> Result<(), String> {
-    let base_canon = std::fs::canonicalize(base)
-        .map(|c| c.to_string_lossy().to_string())
-        .unwrap_or_else(|_| base.to_string_lossy().to_string());
+    let base_canon = canon_or_raw(base.to_string_lossy().as_ref());
 
     // Fail fast on unresolvable / relative target paths. The scan
     // command only ever returns canonical absolute paths, so the only
@@ -214,6 +213,7 @@ fn validate_rogue_purge_target(
             return Err(format!("Could not resolve path '{target_path}': {e}"));
         }
     };
+    let target_raw = target_path.to_string();
 
     // Hard guard: target must be a strict descendant of base.
     if target_canon == base_canon || !Path::new(&target_canon).starts_with(&base_canon) {
@@ -223,11 +223,16 @@ fn validate_rogue_purge_target(
     }
 
     // Refuse if any active or archived workspace still claims this path.
+    // 4-way pair compare mirrors validate_purge_target in workspace.rs —
+    // every combination of {canonical, raw} on each side, so a stored
+    // path whose dir was deleted (canonicalize falls back to raw on the
+    // workspace side) still matches against a canonicalized target.
     let claimed = workspace_paths.iter().any(|p| {
-        let p_canon = std::fs::canonicalize(p)
-            .map(|c| c.to_string_lossy().to_string())
-            .unwrap_or_else(|_| p.clone());
-        p_canon == target_canon || p.as_str() == target_canon.as_str() || p.as_str() == target_path
+        let p_canon = canon_or_raw(p);
+        p_canon == target_canon
+            || p_canon == target_raw
+            || p.as_str() == target_canon.as_str()
+            || p.as_str() == target_raw.as_str()
     });
     if claimed {
         return Err(
@@ -260,16 +265,22 @@ pub async fn scan_rogue_worktrees(
     let repos = db.list_repositories().map_err(|e| e.to_string())?;
     let base = state.worktree_base_dir.read().await.clone();
 
-    // Canonicalize every tracked workspace path once so the comparison
-    // doesn't repeatedly hit the filesystem.
+    // Canonicalize every tracked workspace path so the comparison
+    // doesn't repeatedly hit the filesystem. `canon_with_parent_fallback`
+    // handles the case where the leaf dir was deleted but the parent
+    // still exists — without it, a stale row pointing at a no-longer-
+    // existing path would only mask a same-raw-string rogue dir, and
+    // any `/tmp` vs `/private/tmp` canonical-form difference would
+    // surface the same dir as both tracked AND rogue.
     let tracked_paths: std::collections::HashSet<String> = workspaces
         .iter()
         .filter_map(|w| w.worktree_path.as_deref())
         .flat_map(|p| {
-            let canon = std::fs::canonicalize(p)
-                .map(|c| c.to_string_lossy().to_string())
-                .unwrap_or_else(|_| p.to_string());
-            [p.to_string(), canon]
+            [
+                p.to_string(),
+                canon_or_raw(p),
+                canon_with_parent_fallback(p),
+            ]
         })
         .collect();
 
