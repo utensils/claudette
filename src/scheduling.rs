@@ -182,13 +182,13 @@ pub fn next_cron_run_utc(expr: &str, from: DateTime<Utc>) -> Option<DateTime<Utc
     let dow_wild = day_of_week.len() == 7;
 
     let mut candidate = from.with_timezone(&Local);
-    candidate = candidate + Duration::minutes(1);
+    candidate += Duration::minutes(1);
     candidate = candidate.with_second(0)?.with_nanosecond(0)?;
 
     for _ in 0..(366 * 24 * 60) {
         let mon = candidate.month();
         if !month.contains(&mon) {
-            candidate = candidate + Duration::minutes(1);
+            candidate += Duration::minutes(1);
             continue;
         }
         let dom = candidate.day();
@@ -205,7 +205,7 @@ pub fn next_cron_run_utc(expr: &str, from: DateTime<Utc>) -> Option<DateTime<Utc
         if day_matches && hour.contains(&candidate.hour()) && minute.contains(&candidate.minute()) {
             return Some(candidate.with_timezone(&Utc));
         }
-        candidate = candidate + Duration::minutes(1);
+        candidate += Duration::minutes(1);
     }
     None
 }
