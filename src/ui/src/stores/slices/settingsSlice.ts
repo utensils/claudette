@@ -56,16 +56,6 @@ export interface SettingsSlice {
   // Experimental
   usageInsightsEnabled: boolean;
   setUsageInsightsEnabled: (enabled: boolean) => void;
-  pluginManagementEnabled: boolean;
-  setPluginManagementEnabled: (enabled: boolean) => void;
-  claudeRemoteControlEnabled: boolean;
-  setClaudeRemoteControlEnabled: (enabled: boolean) => void;
-  /// Gate the Settings → Community section. When false, the section is
-  /// hidden from the sidebar and direct navigation falls back to
-  /// Experimental. The backend community_* commands ship unconditionally
-  /// — flipping this flag exposes them to the user.
-  communityRegistryEnabled: boolean;
-  setCommunityRegistryEnabled: (enabled: boolean) => void;
   disable1mContext: boolean;
   setDisable1mContext: (v: boolean) => void;
   alternativeBackendsAvailable: boolean;
@@ -183,15 +173,6 @@ export const createSettingsSlice: StateCreator<
     set({ claudetteTerminalEnabled: enabled }),
   usageInsightsEnabled: false,
   setUsageInsightsEnabled: (enabled) => set({ usageInsightsEnabled: enabled }),
-  pluginManagementEnabled: true,
-  setPluginManagementEnabled: (enabled) =>
-    set({ pluginManagementEnabled: enabled }),
-  claudeRemoteControlEnabled: true,
-  setClaudeRemoteControlEnabled: (enabled) =>
-    set({ claudeRemoteControlEnabled: enabled }),
-  communityRegistryEnabled: true,
-  setCommunityRegistryEnabled: (enabled) =>
-    set({ communityRegistryEnabled: enabled }),
   disable1mContext: false,
   setDisable1mContext: (v) => set({ disable1mContext: v }),
   alternativeBackendsAvailable: false,

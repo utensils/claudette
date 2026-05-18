@@ -387,10 +387,6 @@ describe("plugin settings routing", () => {
     expect(state.pluginSettingsTab).toBe("available");
   });
 
-  it("defaults Claude Code Plugin Management to enabled", () => {
-    expect(useAppStore.getState().pluginManagementEnabled).toBe(true);
-  });
-
   it("opens the claude-code-plugins section directly", () => {
     useAppStore.getState().setSettingsSection("claude-code-plugins");
 
@@ -414,7 +410,7 @@ describe("plugin settings routing", () => {
     expect(state.settingsSection).toBe("plugins");
   });
 
-  it("openSettings('claude-code-plugins') opens Claude Code Plugin Management", () => {
+  it("openSettings('claude-code-plugins') opens Claude Code Plugins", () => {
     useAppStore.getState().openSettings("claude-code-plugins");
 
     expect(useAppStore.getState().settingsSection).toBe("claude-code-plugins");

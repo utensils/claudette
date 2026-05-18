@@ -21,7 +21,6 @@ interface MockState {
   planMode: Record<string, boolean>;
   effortLevel: Record<string, string>;
   chromeEnabled: Record<string, boolean>;
-  claudeRemoteControlEnabled: boolean;
   setFastMode: ReturnType<typeof vi.fn>;
   setChromeEnabled: ReturnType<typeof vi.fn>;
   clearAgentQuestion: ReturnType<typeof vi.fn>;
@@ -41,7 +40,6 @@ const appStore = vi.hoisted(
       planMode: {},
       effortLevel: {},
       chromeEnabled: {},
-      claudeRemoteControlEnabled: true,
       setFastMode: vi.fn(),
       setChromeEnabled: vi.fn(),
       clearAgentQuestion: vi.fn(),
@@ -214,7 +212,6 @@ beforeEach(() => {
   appStore.addToast.mockClear();
   appStore.setFastMode.mockClear();
   appStore.setChromeEnabled.mockClear();
-  appStore.claudeRemoteControlEnabled = true;
 });
 
 afterEach(async () => {
@@ -394,7 +391,7 @@ describe("OverflowMenu — Remote Control mid-turn enable", () => {
     );
   });
 
-  it("keeps a pending Remote Control intent independent of the legacy gate", async () => {
+  it("keeps a pending Remote Control intent until the turn ends", async () => {
     const { container, root } = await renderMenu({ isRunning: true });
     await openDropdown(container);
 
@@ -403,10 +400,6 @@ describe("OverflowMenu — Remote Control mid-turn enable", () => {
       await Promise.resolve();
     });
     expect(serviceMocks.setClaudeRemoteControl).not.toHaveBeenCalled();
-
-    // Legacy persisted values no longer gate this graduated feature.
-    appStore.claudeRemoteControlEnabled = false;
-    await rerenderMenu(root, { isRunning: true });
 
     // Turn ends — the queued intent still fires.
     await rerenderMenu(root, { isRunning: false });
