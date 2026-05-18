@@ -12,7 +12,7 @@ import type { ToolActivity, CompletedTurn } from "../stores/useAppStore";
 function activity(
   toolName: string,
   inputJson: Record<string, unknown>,
-  resultText = ""
+  resultText = "",
 ): ToolActivity {
   return {
     toolUseId: crypto.randomUUID(),
@@ -253,9 +253,7 @@ describe("deriveTasks", () => {
     ];
     const second = [
       activity("TodoWrite", {
-        todos: [
-          { id: "c", content: "Replaced", status: "in_progress" },
-        ],
+        todos: [{ id: "c", content: "Replaced", status: "in_progress" }],
       }),
     ];
     const result = deriveTasks([turn(first)], second);
@@ -283,16 +281,101 @@ describe("deriveTasks", () => {
     expect(result.tasks[1].priority).toBe("low");
   });
 
+  it("handles Codex update_plan snapshots with explanations", () => {
+    const activities = [
+      activity("update_plan", {
+        explanation: "Working through the issue in order.",
+        plan: [
+          { step: "Read the issue", status: "completed" },
+          { step: "Patch the bridge", status: "inProgress" },
+          { step: "Validate", status: "pending" },
+        ],
+      }),
+    ];
+
+    const result = deriveTasks([], activities);
+
+    expect(result.explanation).toBe("Working through the issue in order.");
+    expect(result.tasks).toMatchObject([
+      {
+        description: "Read the issue",
+        status: "completed",
+        source: "plan",
+      },
+      {
+        description: "Patch the bridge",
+        status: "in_progress",
+        source: "plan",
+      },
+      {
+        description: "Validate",
+        status: "pending",
+        source: "plan",
+      },
+    ]);
+  });
+
+  it("treats Codex update_plan as a full snapshot for explanations and ids", () => {
+    const first = turn([
+      activity("update_plan", {
+        explanation: "Initial plan.",
+        plan: [{ id: "ignored-wire-id", step: "Read", status: "completed" }],
+      }),
+    ]);
+    const result = deriveTasks(
+      [first],
+      [
+        activity("update_plan", {
+          plan: [
+            { id: "ignored-wire-id", step: "Validate", status: "pending" },
+          ],
+        }),
+      ],
+    );
+
+    expect(result.explanation).toBeUndefined();
+    expect(result.tasks).toHaveLength(1);
+    expect(result.tasks[0]).toMatchObject({
+      id: "_p2",
+      description: "Validate",
+      source: "plan",
+    });
+  });
+
+  it("keeps at most one Codex plan item in progress", () => {
+    const result = deriveTasks(
+      [],
+      [
+        activity("update_plan", {
+          plan: [
+            { step: "First", status: "in_progress" },
+            { step: "Second", status: "inProgress" },
+            { step: "Third", status: "completed" },
+          ],
+        }),
+      ],
+    );
+
+    expect(result.tasks.map((task) => task.status)).toEqual([
+      "in_progress",
+      "pending",
+      "completed",
+    ]);
+  });
+
   it("merges task and todo sources", () => {
     const activities = [
       activity("TaskCreate", { description: "A task" }, '{"task_id": 1}'),
       activity("TodoWrite", {
         todos: [{ id: "t1", content: "A todo", status: "pending" }],
       }),
+      activity("update_plan", {
+        plan: [{ step: "A plan item", status: "pending" }],
+      }),
     ];
     const result = deriveTasks([], activities);
-    expect(result.totalCount).toBe(2);
-    expect(result.tasks.map((t) => t.source)).toEqual(["task", "todo"]);
+    expect(result.totalCount).toBe(3);
+    expect(result.tasks.map((t) => t.source)).toEqual(["task", "todo", "plan"]);
   });
 
   it("processes completed turns before current activities", () => {
@@ -329,19 +412,33 @@ describe("deriveTasks", () => {
   });
 
   it("handles TodoWrite with non-array todos field", () => {
-    const activities = [
-      activity("TodoWrite", { todos: "not-an-array" }),
-    ];
+    const activities = [activity("TodoWrite", { todos: "not-an-array" })];
     const result = deriveTasks([], activities);
     expect(result.totalCount).toBe(0);
   });
 
   it("normalizes various status strings", () => {
     const activities = [
-      activity("TaskCreate", { description: "A", status: "done" }, '{"task_id": 1}'),
-      activity("TaskCreate", { description: "B", status: "started" }, '{"task_id": 2}'),
-      activity("TaskCreate", { description: "C", status: "canceled" }, '{"task_id": 3}'),
-      activity("TaskCreate", { description: "D", status: "running" }, '{"task_id": 4}'),
+      activity(
+        "TaskCreate",
+        { description: "A", status: "done" },
+        '{"task_id": 1}',
+      ),
+      activity(
+        "TaskCreate",
+        { description: "B", status: "started" },
+        '{"task_id": 2}',
+      ),
+      activity(
+        "TaskCreate",
+        { description: "C", status: "canceled" },
+        '{"task_id": 3}',
+      ),
+      activity(
+        "TaskCreate",
+        { description: "D", status: "running" },
+        '{"task_id": 4}',
+      ),
     ];
     const result = deriveTasks([], activities);
     expect(result.tasks[0].status).toBe("completed");
@@ -398,6 +495,144 @@ describe("deriveTaskState", () => {
       "Write release notes",
       "Update screenshots",
     ]);
+  });
+
+  it("archives Codex update_plan only when the checklist is materially replaced", () => {
+    const first = turn([
+      activity("update_plan", {
+        explanation: "Initial pass.",
+        plan: [
+          { step: "Read the issue", status: "completed" },
+          { step: "Patch the bridge", status: "in_progress" },
+        ],
+      }),
+    ]);
+    const second = [
+      activity("update_plan", {
+        explanation: "Validation pass.",
+        plan: [
+          { step: "Write release notes", status: "completed" },
+          { step: "Update screenshots", status: "inProgress" },
+        ],
+      }),
+    ];
+
+    const result = deriveTaskState([first], second);
+
+    expect(result.history).toHaveLength(1);
+    expect(result.history[0]).toMatchObject({
+      explanation: "Initial pass.",
+      completedCount: 1,
+      totalCount: 2,
+    });
+    expect(result.history[0].tasks.map((task) => task.source)).toEqual([
+      "plan",
+      "plan",
+    ]);
+    expect(result.current.explanation).toBe("Validation pass.");
+    expect(result.current.tasks.map((task) => task.description)).toEqual([
+      "Write release notes",
+      "Update screenshots",
+    ]);
+  });
+
+  it("does not archive status-only Codex update_plan updates", () => {
+    const first = turn([
+      activity("update_plan", {
+        explanation: "Initial pass.",
+        plan: [
+          { step: "Inspect fake project", status: "in_progress" },
+          { step: "Draft fake implementation", status: "pending" },
+          { step: "Run fake verification", status: "pending" },
+        ],
+      }),
+    ]);
+    const second = [
+      activity("update_plan", {
+        explanation: "Initial pass.",
+        plan: [
+          { step: "Inspect fake project", status: "completed" },
+          { step: "Draft fake implementation", status: "inProgress" },
+          { step: "Run fake verification", status: "pending" },
+        ],
+      }),
+      activity("update_plan", {
+        explanation: "Initial pass.",
+        plan: [
+          { step: "Inspect fake project", status: "completed" },
+          { step: "Draft fake implementation", status: "completed" },
+          { step: "Run fake verification", status: "completed" },
+        ],
+      }),
+    ];
+
+    const result = deriveTaskState([first], second);
+
+    expect(result.history).toHaveLength(0);
+    expect(result.current).toMatchObject({
+      explanation: "Initial pass.",
+      completedCount: 3,
+      totalCount: 3,
+    });
+    expect(result.current.tasks.map((task) => task.description)).toEqual([
+      "Inspect fake project",
+      "Draft fake implementation",
+      "Run fake verification",
+    ]);
+  });
+
+  it("keeps Claude TodoWrite replacement history independent from Codex plan updates", () => {
+    const first = turn([
+      activity("TodoWrite", {
+        todos: [
+          { content: "Inspect auth flow", status: "completed" },
+          { content: "Patch token refresh", status: "completed" },
+        ],
+      }),
+      activity("update_plan", {
+        plan: [
+          { step: "Inspect fake project", status: "in_progress" },
+          { step: "Draft fake implementation", status: "pending" },
+        ],
+      }),
+    ]);
+    const second = [
+      activity("TodoWrite", {
+        todos: [
+          { content: "Write release notes", status: "in_progress" },
+          { content: "Update screenshots", status: "pending" },
+        ],
+      }),
+      activity("update_plan", {
+        plan: [
+          { step: "Inspect fake project", status: "completed" },
+          { step: "Draft fake implementation", status: "inProgress" },
+        ],
+      }),
+    ];
+
+    const result = deriveTaskState([first], second);
+
+    expect(result.history).toHaveLength(1);
+    expect(result.history[0].tasks.map((task) => task.source)).toEqual([
+      "todo",
+      "todo",
+    ]);
+    expect(result.history[0].tasks.map((task) => task.description)).toEqual([
+      "Inspect auth flow",
+      "Patch token refresh",
+    ]);
+    expect(result.current.tasks.map((task) => task.source)).toEqual([
+      "todo",
+      "todo",
+      "plan",
+      "plan",
+    ]);
+    expect(
+      result.current.tasks
+        .filter((task) => task.source === "plan")
+        .map((task) => task.status),
+    ).toEqual(["completed", "in_progress"]);
   });
 
   it("does not archive status-only TodoWrite updates", () => {
@@ -918,9 +1153,7 @@ describe("deriveTaskState — TaskCreate/TaskUpdate history regression", () => {
     );
 
     expect(result.history).toHaveLength(0);
-    expect(
-      result.current.tasks.map((t) => [t.description, t.status]),
-    ).toEqual([
+    expect(result.current.tasks.map((t) => [t.description, t.status])).toEqual([
       ["A", "completed"],
       ["B", "cancelled"],
       ["C", "pending"],
@@ -998,9 +1231,7 @@ describe("deriveTaskState — TaskCreate/TaskUpdate history regression", () => {
       ],
     });
     const todoReplacement = activity("TodoWrite", {
-      todos: [
-        { content: "fresh todo X", status: "pending" },
-      ],
+      todos: [{ content: "fresh todo X", status: "pending" }],
     });
 
     const result = deriveTaskState(
@@ -1076,7 +1307,10 @@ describe("deriveTaskState — subagent task tracking", () => {
   });
 
   /** Build a parent `Agent` activity wrapping a list of subagent calls. */
-  const agentActivity = (description: string, calls: ReturnType<typeof agentCall>[]) => {
+  const agentActivity = (
+    description: string,
+    calls: ReturnType<typeof agentCall>[],
+  ) => {
     const act = activity("Agent", { prompt: description }, "agent done");
     return {
       ...act,
@@ -1101,7 +1335,9 @@ describe("deriveTaskState — subagent task tracking", () => {
             description: "Cursor-based, page size 25.",
             activeForm: "Adding pagination",
           },
-          response: { task: { id: "9", subject: "Add pagination to /api/sessions" } },
+          response: {
+            task: { id: "9", subject: "Add pagination to /api/sessions" },
+          },
         }),
         agentCall({
           toolName: "TaskCreate",
@@ -1273,7 +1509,9 @@ describe("deriveTaskState — subagent task tracking", () => {
 
     const result = deriveTaskState([], [mainCreate, subagent]);
 
-    expect(result.current.tasks.map((t) => t.description)).toEqual(["Main task"]);
+    expect(result.current.tasks.map((t) => t.description)).toEqual([
+      "Main task",
+    ]);
     expect(result.subagents).toHaveLength(1);
     expect(result.subagents[0].tasks.map((t) => t.description)).toEqual([
       "Subagent task",
@@ -1282,8 +1520,16 @@ describe("deriveTaskState — subagent task tracking", () => {
 
   it("ignores subagent calls that aren't task-related", () => {
     const subagent = agentActivity("Agent E", [
-      agentCall({ toolName: "Bash", agentId: "sub-e", input: { command: "ls" } }),
-      agentCall({ toolName: "Read", agentId: "sub-e", input: { file_path: "/tmp/x" } }),
+      agentCall({
+        toolName: "Bash",
+        agentId: "sub-e",
+        input: { command: "ls" },
+      }),
+      agentCall({
+        toolName: "Read",
+        agentId: "sub-e",
+        input: { file_path: "/tmp/x" },
+      }),
     ]);
     const result = deriveTaskState([], [subagent]);
     // No task tools → no subagent run.

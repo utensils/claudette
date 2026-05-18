@@ -1,13 +1,13 @@
 ---
 title: Task History
-description: Review current and previous Claude task lists for a workspace.
+description: Review current and previous agent task lists for a workspace.
 ---
 
-Claude often rewrites its task list as work shifts. Claudette keeps the latest checklist visible while preserving earlier runs in the workspace's **Tasks** tab.
+Agents often rewrite their task list as work shifts. Claudette keeps the latest checklist visible while preserving earlier runs in the workspace's **Tasks** tab.
 
 ## Current Tasks
 
-Open the right sidebar and choose **Tasks**. The **Current** section shows the selected chat session's active task list, including status updates from Claude's task and todo tools.
+Open the right sidebar and choose **Tasks**. The **Current** section shows the selected chat session's active task list, including status updates from Claude's task and todo tools and Codex's `update_plan` snapshots. When Codex includes a plan explanation, Claudette shows it above the checklist.
 
 The tab badge counts every task the panel would surface — the active checklist plus any subagent buckets plus every task across archived history runs — so a workspace with older task lists still signals that there is task context to review.
 
@@ -25,7 +25,7 @@ The right sidebar remembers which tab (**Files**, **Changes**, or **Tasks**) you
 
 ## Historical Runs
 
-When Claude replaces a checklist with a materially different one, Claudette moves the previous checklist into **History**. Runs are grouped by chat session and start collapsed so the current work stays easy to scan.
+When Claude replaces a checklist with a materially different one, Claudette moves the previous checklist into **History**. Codex plan updates are also full snapshots, but status-only updates to the same step list stay in **Current** so normal progress does not flood history; a materially different `update_plan` checklist archives the previous plan run. Runs are grouped by chat session and start collapsed so the current work stays easy to scan.
 
 Each run header shows the run number and completion count. Expand a run to see the final saved checklist snapshot, including completed and pending items. Archived chat sessions are included and labeled so long-running workspace history stays available even after you clean up old tabs.
 

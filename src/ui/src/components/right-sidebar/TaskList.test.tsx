@@ -192,4 +192,47 @@ describe("TaskList", () => {
 
     expect(container.textContent).toContain("Preserve old checklist");
   });
+
+  it("renders Codex plan explanations for current and historical runs", async () => {
+    const history = taskHistory();
+    history.current = {
+      explanation: "Working through the issue in order.",
+      tasks: [
+        {
+          id: "plan-1",
+          description: "Patch the bridge",
+          status: "in_progress",
+          source: "plan",
+        },
+      ],
+      completedCount: 0,
+      totalCount: 1,
+    };
+    history.sessions[0].runs[0] = {
+      ...history.sessions[0].runs[0],
+      explanation: "Initial plan snapshot.",
+      tasks: [
+        {
+          id: "plan-old-1",
+          description: "Read the issue",
+          status: "completed",
+          source: "plan",
+        },
+      ],
+    };
+
+    const container = await render(<TaskList taskHistory={history} />);
+    expect(container.textContent).toContain(
+      "Working through the issue in order.",
+    );
+
+    const runButton = Array.from(container.querySelectorAll("button")).find(
+      (button) => button.textContent?.includes("Run 1"),
+    ) as HTMLButtonElement;
+    await act(async () => {
+      runButton.click();
+    });
+
+    expect(container.textContent).toContain("Initial plan snapshot.");
+  });
 });

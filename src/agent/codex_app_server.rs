@@ -1792,6 +1792,12 @@ pub fn model_list_from_response(
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct CodexPlanStep {
+    pub step: String,
+    pub status: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub enum CodexNotificationEvent {
     AgentMessageDelta {
         thread_id: String,
@@ -1833,6 +1839,12 @@ pub enum CodexNotificationEvent {
         thread_id: String,
         turn_id: Option<String>,
         message: String,
+    },
+    TurnPlanUpdated {
+        thread_id: String,
+        turn_id: String,
+        explanation: Option<String>,
+        plan: Vec<CodexPlanStep>,
     },
     ItemStarted {
         thread_id: String,
@@ -2109,6 +2121,37 @@ pub fn decode_notification(notification: JsonRpcNotification) -> CodexNotificati
                 },
             }
         }
+        ("turn/plan/updated", Some(params)) => CodexNotificationEvent::TurnPlanUpdated {
+            thread_id: string_field(params, "threadId"),
+            turn_id: string_field(params, "turnId"),
+            explanation: params
+                .get("explanation")
+                .and_then(Value::as_str)
+                .map(str::to_string),
+            plan: params
+                .get("plan")
+                .and_then(Value::as_array)
+                .map(|steps| {
+                    steps
+                        .iter()
+                        .filter_map(|step| {
+                            let label = string_field(step, "step");
+                            if label.is_empty() {
+                                return None;
+                            }
+                            let raw_status = step
+                                .get("status")
+                                .and_then(Value::as_str)
+                                .unwrap_or_default();
+                            Some(CodexPlanStep {
+                                step: label,
+                                status: normalize_codex_plan_status(raw_status),
+                            })
+                        })
+                        .collect()
+                })
+                .unwrap_or_default(),
+        },
         ("item/started", Some(params)) => CodexNotificationEvent::ItemStarted {
             thread_id: string_field(params, "threadId"),
             turn_id: string_field(params, "turnId"),
@@ -2190,6 +2233,9 @@ pub fn map_notification_to_agent_events(event: CodexNotificationEvent) -> Vec<Ag
                 usage: None,
             })]
         }
+        CodexNotificationEvent::TurnPlanUpdated {
+            explanation, plan, ..
+        } => map_codex_plan_updated_to_agent_events(explanation, plan),
         CodexNotificationEvent::ItemStarted { item, .. } => {
             map_codex_item_started_to_agent_events(&item)
         }
@@ -2207,6 +2253,76 @@ pub fn map_notification_to_agent_events(event: CodexNotificationEvent) -> Vec<Ag
         | CodexNotificationEvent::RateLimitsUpdated { .. }
         | CodexNotificationEvent::Unknown { .. } => Vec::new(),
     }
+}
+
+fn normalize_codex_plan_status(status: &str) -> String {
+    match status {
+        "pending" | "Pending" => "pending".to_string(),
+        "completed" | "Completed" => "completed".to_string(),
+        "in_progress" | "inProgress" | "InProgress" => "in_progress".to_string(),
+        other => {
+            tracing::warn!(
+                target: "claudette::codex",
+                status = %other,
+                "unknown Codex plan step status"
+            );
+            other.to_string()
+        }
+    }
+}
+
+fn map_codex_plan_updated_to_agent_events(
+    explanation: Option<String>,
+    plan: Vec<CodexPlanStep>,
+) -> Vec<AgentEvent> {
+    let tool_use_id = format!("update_plan-{}", uuid::Uuid::new_v4());
+    let input = json!({
+        "explanation": explanation,
+        "plan": plan
+            .iter()
+            .map(|step| json!({
+                "step": step.step,
+                "status": step.status,
+            }))
+            .collect::<Vec<_>>(),
+    });
+    let index = codex_item_index(&tool_use_id);
+
+    vec![
+        AgentEvent::Stream(StreamEvent::Stream {
+            event: InnerStreamEvent::ContentBlockStart {
+                index,
+                content_block: Some(StartContentBlock::ToolUse {
+                    id: tool_use_id.clone(),
+                    name: "update_plan".to_string(),
+                }),
+            },
+        }),
+        AgentEvent::Stream(StreamEvent::Stream {
+            event: InnerStreamEvent::ContentBlockDelta {
+                index,
+                delta: Delta::ToolUse {
+                    partial_json: Some(input.to_string()),
+                },
+            },
+        }),
+        AgentEvent::Stream(StreamEvent::Stream {
+            event: InnerStreamEvent::ContentBlockStop { index },
+        }),
+        AgentEvent::Stream(StreamEvent::User {
+            message: super::UserEventMessage {
+                content: super::UserMessageContent::Blocks(vec![
+                    super::UserContentBlock::ToolResult {
+                        tool_use_id,
+                        content: Value::String("Plan updated".to_string()),
+                    },
+                ]),
+            },
+            uuid: None,
+            is_replay: false,
+            is_synthetic: true,
+        }),
+    ]
 }
 
 fn map_codex_item_started_to_agent_events(item: &Value) -> Vec<AgentEvent> {
@@ -3397,6 +3513,51 @@ mod tests {
     }
 
     #[test]
+    fn parses_turn_plan_updated_notification() {
+        let event = decode_notification(JsonRpcNotification {
+            method: "turn/plan/updated".to_string(),
+            params: Some(json!({
+                "threadId": "thread-1",
+                "turnId": "turn-1",
+                "explanation": "Working in phases.",
+                "plan": [
+                    {"step": "Read the issue", "status": "completed"},
+                    {"step": "Patch the bridge", "status": "inProgress"},
+                    {"step": "Validate", "status": "pending"},
+                    {"step": "Handle drift", "status": "cancelled"}
+                ]
+            })),
+        });
+
+        assert_eq!(
+            event,
+            CodexNotificationEvent::TurnPlanUpdated {
+                thread_id: "thread-1".to_string(),
+                turn_id: "turn-1".to_string(),
+                explanation: Some("Working in phases.".to_string()),
+                plan: vec![
+                    CodexPlanStep {
+                        step: "Read the issue".to_string(),
+                        status: "completed".to_string(),
+                    },
+                    CodexPlanStep {
+                        step: "Patch the bridge".to_string(),
+                        status: "in_progress".to_string(),
+                    },
+                    CodexPlanStep {
+                        step: "Validate".to_string(),
+                        status: "pending".to_string(),
+                    },
+                    CodexPlanStep {
+                        step: "Handle drift".to_string(),
+                        status: "cancelled".to_string(),
+                    },
+                ],
+            }
+        );
+    }
+
+    #[test]
     fn maps_token_usage_notification_to_claudette_usage() {
         let event = decode_notification(JsonRpcNotification {
             method: "thread/tokenUsage/updated".to_string(),
@@ -3799,6 +3960,72 @@ mod tests {
             session.interrupt_turn().await.unwrap_err(),
             "Codex app-server has no thread to interrupt"
         );
+    }
+
+    #[test]
+    fn maps_turn_plan_updated_to_update_plan_tool_activity() {
+        let events = map_notification_to_agent_events(CodexNotificationEvent::TurnPlanUpdated {
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-1".to_string(),
+            explanation: Some("Working in phases.".to_string()),
+            plan: vec![
+                CodexPlanStep {
+                    step: "Read the issue".to_string(),
+                    status: "completed".to_string(),
+                },
+                CodexPlanStep {
+                    step: "Patch the bridge".to_string(),
+                    status: "in_progress".to_string(),
+                },
+            ],
+        });
+
+        assert_eq!(events.len(), 4);
+        let AgentEvent::Stream(StreamEvent::Stream {
+            event:
+                InnerStreamEvent::ContentBlockStart {
+                    content_block: Some(StartContentBlock::ToolUse { id, name }),
+                    ..
+                },
+        }) = &events[0]
+        else {
+            panic!("expected tool-use start");
+        };
+        assert!(id.starts_with("update_plan-"));
+        assert_eq!(name, "update_plan");
+
+        let AgentEvent::Stream(StreamEvent::Stream {
+            event:
+                InnerStreamEvent::ContentBlockDelta {
+                    delta: Delta::ToolUse { partial_json },
+                    ..
+                },
+        }) = &events[1]
+        else {
+            panic!("expected tool-use input");
+        };
+        let input: Value =
+            serde_json::from_str(partial_json.as_deref().expect("plan input")).unwrap();
+        assert_eq!(input["explanation"], "Working in phases.");
+        assert_eq!(input["plan"][0]["step"], "Read the issue");
+        assert_eq!(input["plan"][0]["status"], "completed");
+        assert_eq!(input["plan"][1]["status"], "in_progress");
+
+        let AgentEvent::Stream(StreamEvent::User { message, .. }) = &events[3] else {
+            panic!("expected synthetic tool result");
+        };
+        let crate::agent::UserMessageContent::Blocks(blocks) = &message.content else {
+            panic!("expected tool-result block");
+        };
+        let crate::agent::UserContentBlock::ToolResult {
+            tool_use_id,
+            content,
+        } = &blocks[0]
+        else {
+            panic!("expected tool-result block");
+        };
+        assert_eq!(tool_use_id, id);
+        assert_eq!(content, &Value::String("Plan updated".to_string()));
     }
 
     #[tokio::test]

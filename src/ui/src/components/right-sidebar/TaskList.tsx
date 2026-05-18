@@ -76,7 +76,10 @@ function TaskRows({ tasks }: { tasks: TrackedTask[] }) {
   return (
     <>
       {tasks.map((task) => (
-        <TaskItem key={`${task.source}-${task.id}-${task.description}`} task={task} />
+        <TaskItem
+          key={`${task.source}-${task.id}-${task.description}`}
+          task={task}
+        />
       ))}
     </>
   );
@@ -132,6 +135,9 @@ function RunSummary({
       </button>
       {expanded && (
         <div className={styles.runTasks}>
+          {run.explanation && (
+            <div className={styles.explanation}>{run.explanation}</div>
+          )}
           <TaskRows tasks={run.tasks} />
         </div>
       )}
@@ -154,7 +160,9 @@ export const TaskList = memo(function TaskList({
   if (!hasCurrent && !hasHistory && !hasSubagents && !hasSiblings) {
     return (
       <div className={styles.list}>
-        <div className={styles.empty}>{loading ? "Loading tasks..." : "No tasks"}</div>
+        <div className={styles.empty}>
+          {loading ? "Loading tasks..." : "No tasks"}
+        </div>
       </div>
     );
   }
@@ -169,14 +177,15 @@ export const TaskList = memo(function TaskList({
               {current.completedCount}/{current.totalCount}
             </span>
           </div>
+          {current.explanation && (
+            <div className={styles.explanation}>{current.explanation}</div>
+          )}
           <TaskRows tasks={current.tasks} />
         </section>
       )}
 
       {hasSubagents &&
-        subagents.map((run) => (
-          <SubagentSection key={run.id} run={run} />
-        ))}
+        subagents.map((run) => <SubagentSection key={run.id} run={run} />)}
 
       {hasSiblings &&
         siblings.map((sibling) => (
@@ -186,7 +195,10 @@ export const TaskList = memo(function TaskList({
             aria-label={`Sibling session: ${sibling.session.name}`}
           >
             <div className={styles.sectionHeader}>
-              <span className={styles.subagentLabel} title={sibling.session.name}>
+              <span
+                className={styles.subagentLabel}
+                title={sibling.session.name}
+              >
                 {sibling.session.name}
                 <span className={styles.liveDot} aria-hidden="true" />
               </span>
