@@ -72,3 +72,64 @@ async fn handshake_round_trip() {
     server.abort();
     let _ = std::fs::remove_file(&socket_path);
 }
+
+#[tokio::test]
+async fn handshake_rejects_unsupported_protocol_version() {
+    let socket_path = std::env::temp_dir().join(format!(
+        "claudette-handshake-mismatch-test-{}.sock",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_file(&socket_path);
+
+    let server = tokio::spawn({
+        let sp = socket_path.clone();
+        async move {
+            claudette_session_host::server::run_for_test(&sp)
+                .await
+                .unwrap()
+        }
+    });
+    // Give the listener time to bind.
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+    let name = socket_path
+        .as_path()
+        .to_fs_name::<GenericFilePath>()
+        .unwrap();
+    let s = Stream::connect(name).await.unwrap();
+    let (mut r, mut w) = s.split();
+
+    // Send a Hello with a protocol_version the server does not support.
+    let env = RequestEnvelope {
+        request_id: 0,
+        request: Request::Hello {
+            protocol_version: 999,
+            claudette_version: "test".into(),
+        },
+    };
+    let bytes = serde_json::to_vec(&env).unwrap();
+    frame::write_frame(&mut w, &bytes).await.unwrap();
+
+    let resp_bytes = frame::read_frame(&mut r).await.unwrap();
+    let inbound: InboundFrame = serde_json::from_slice(&resp_bytes).unwrap();
+    match inbound {
+        InboundFrame::Response {
+            request_id,
+            response:
+                Response::HelloNack {
+                    supported_versions, ..
+                },
+        } => {
+            assert_eq!(request_id, 0, "Nack reply should echo request_id 0");
+            assert_eq!(
+                supported_versions,
+                vec![PROTOCOL_VERSION],
+                "HelloNack should advertise only the server's supported protocol version"
+            );
+        }
+        other => panic!("expected InboundFrame::Response(HelloNack), got {other:?}"),
+    }
+
+    server.abort();
+    let _ = std::fs::remove_file(&socket_path);
+}
