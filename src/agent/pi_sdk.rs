@@ -39,6 +39,13 @@ struct PiTurnOutput {
     thinking: String,
     tool_block_indices: HashMap<String, u32>,
     next_tool_block_index: u32,
+    /// Latest mid-turn error from the sidecar. Pi's `agent_end` does
+    /// NOT carry an errorMessage at the event level, so we capture
+    /// the `AssistantMessageEvent { type: "error" }` and
+    /// `auto_retry_end { success: false, finalError }` events the
+    /// harness now forwards as `turn_error`, and fold the latest
+    /// into the eventual `turn_end`. Cleared on every `turn_end`.
+    pending_error: Option<String>,
 }
 
 impl PiTurnOutput {
@@ -48,6 +55,7 @@ impl PiTurnOutput {
             thinking: String::new(),
             tool_block_indices: HashMap::new(),
             next_tool_block_index: FIRST_TOOL_BLOCK_INDEX,
+            pending_error: None,
         }
     }
 
@@ -95,12 +103,22 @@ pub struct PiSdkOptions {
     /// through Pi without the user having to maintain a separate
     /// `~/.pi/agent/models.json`.
     pub pi_provider_override: Option<crate::agent_backend::PiProviderOverride>,
+    /// Extra env vars injected into the harness process, populated
+    /// from Claudette's keychain-backed "keep this key private" path
+    /// in the provider auth UI. Maps a Pi-recognized env var name
+    /// (e.g. `OPENROUTER_API_KEY`) to its value. Empty by default.
+    pub pi_provider_env: Vec<(String, String)>,
 }
 
 pub struct PiSdkSession {
     pid: u32,
     stdin: Option<PiStdin>,
     event_tx: broadcast::Sender<AgentEvent>,
+    /// Side channel for control-plane events that don't belong on the
+    /// chat AgentEvent stream — OAuth challenge URLs, OAuth progress
+    /// updates, and OAuth completion. Subscribed to by `pi_control.rs`
+    /// for the Settings provider-management flow.
+    control_tx: broadcast::Sender<PiControlEvent>,
     pending: PendingRequests,
     next_request_id: AtomicI64,
     working_dir: PathBuf,
@@ -118,6 +136,12 @@ struct PiSpawnConfig<'a> {
     working_dir: &'a Path,
     resolved_env: Option<&'a crate::env_provider::ResolvedEnv>,
     workspace_env: Option<&'a crate::env::WorkspaceEnv>,
+    /// Extra env vars injected after `resolved_env` / `workspace_env`
+    /// (so they win when keys collide). Used by Claudette's
+    /// "keychain-only" provider auth path to push `OPENROUTER_API_KEY`,
+    /// `OPENAI_API_KEY`, etc. into the harness process without
+    /// touching `~/.pi/agent/auth.json`.
+    extra_env: Option<&'a [(String, String)]>,
     cache_command_line: bool,
 }
 
@@ -131,6 +155,11 @@ impl PiSdkSession {
             working_dir,
             resolved_env: options.resolved_env.as_ref(),
             workspace_env: options.workspace_env.as_ref(),
+            extra_env: if options.pi_provider_env.is_empty() {
+                None
+            } else {
+                Some(&options.pi_provider_env)
+            },
             cache_command_line: true,
         })
         .await?;
@@ -145,7 +174,21 @@ impl PiSdkSession {
     }
 
     pub async fn discover_models(working_dir: &Path) -> Result<Vec<PiSdkModel>, String> {
-        let session = Self::start_control(working_dir).await?;
+        Self::discover_models_with_env(working_dir, None).await
+    }
+
+    /// Same as `discover_models`, but threads Claudette's keychain-
+    /// only provider secrets into the control session's env so
+    /// `getAvailable()` sees those providers as configured. The Tauri
+    /// layer passes the `pi_local_secret_env()` snapshot here so
+    /// "Refresh models" surfaces keychain-stored OpenRouter / OpenAI /
+    /// etc. credentials without the user having to also write them to
+    /// `~/.pi/agent/auth.json`.
+    pub async fn discover_models_with_env(
+        working_dir: &Path,
+        extra_env: Option<&[(String, String)]>,
+    ) -> Result<Vec<PiSdkModel>, String> {
+        let session = Self::start_control(working_dir, extra_env).await?;
         let value = session
             .send_request(json!({ "type": "discover_models" }))
             .await?;
@@ -159,14 +202,49 @@ impl PiSdkSession {
         Ok(models)
     }
 
-    async fn start_control(working_dir: &Path) -> Result<Self, String> {
+    /// Spawn a short-lived harness used purely for control-plane
+    /// IPC (discovery, provider auth, etc.) — no chat session, no
+    /// resolved env, no init-event cache. Exposed to the sibling
+    /// `pi_control` module so the Settings provider-management flow
+    /// can reuse the same spawn/init pipeline.
+    ///
+    /// `extra_env` lets callers push Claudette-private provider
+    /// secrets (keychain-only path) into the control session so
+    /// `list_providers` reports `configured: true` even when nothing
+    /// is in `~/.pi/agent/auth.json`.
+    pub(super) async fn start_control(
+        working_dir: &Path,
+        extra_env: Option<&[(String, String)]>,
+    ) -> Result<Self, String> {
         Self::spawn_initialized(PiSpawnConfig {
             working_dir,
             resolved_env: None,
             workspace_env: None,
+            extra_env,
             cache_command_line: false,
         })
         .await
+    }
+
+    /// Subscribe to control-plane events (OAuth challenges, progress,
+    /// completion). Subscribe BEFORE issuing the corresponding request
+    /// or early events can race past you.
+    pub fn subscribe_control(&self) -> broadcast::Receiver<PiControlEvent> {
+        self.control_tx.subscribe()
+    }
+
+    /// Send a raw IPC request and await its response. Exposed to the
+    /// `pi_control` module so it can dispatch new request types
+    /// without re-implementing the request/response correlation here.
+    pub(super) async fn send_request_raw(&self, request: Value) -> Result<Value, String> {
+        self.send_request(request).await
+    }
+
+    /// Tell the sidecar to release its session state. Idempotent; safe
+    /// to call on a session that was never started.
+    pub async fn dispose(&self) -> Result<(), String> {
+        self.send_request(json!({ "type": "dispose" })).await?;
+        Ok(())
     }
 
     /// Spawn the Pi sidecar, wire its stdio readers + exit watcher, and
@@ -190,6 +268,11 @@ impl PiSdkSession {
         }
         if let Some(env) = config.workspace_env {
             env.apply(&mut cmd);
+        }
+        if let Some(extras) = config.extra_env {
+            for (k, v) in extras {
+                cmd.env(k, v);
+            }
         }
         if let Some(package_dir) = resolve_pi_package_dir(&pi_path) {
             cmd.env("PI_PACKAGE_DIR", package_dir);
@@ -220,10 +303,12 @@ impl PiSdkSession {
             .ok_or_else(|| "Failed to capture Pi SDK harness stderr".to_string())?;
 
         let (event_tx, _) = broadcast::channel(2048);
+        let (control_tx, _) = broadcast::channel(64);
         let session = Self {
             pid,
             stdin: Some(Arc::new(tokio::sync::Mutex::new(stdin))),
             event_tx,
+            control_tx,
             pending: Arc::new(tokio::sync::Mutex::new(BTreeMap::new())),
             next_request_id: AtomicI64::new(1),
             working_dir: config.working_dir.to_path_buf(),
@@ -256,10 +341,12 @@ impl PiSdkSession {
     #[doc(hidden)]
     pub fn new_for_test(pid: u32) -> Self {
         let (event_tx, _) = broadcast::channel(128);
+        let (control_tx, _) = broadcast::channel(64);
         Self {
             pid,
             stdin: None,
             event_tx,
+            control_tx,
             pending: Arc::new(tokio::sync::Mutex::new(BTreeMap::new())),
             next_request_id: AtomicI64::new(1),
             working_dir: PathBuf::from("/tmp"),
@@ -469,6 +556,7 @@ impl PiSdkSession {
 
     fn spawn_stdout_reader(&self, stdout: tokio::process::ChildStdout) {
         let event_tx = self.event_tx.clone();
+        let control_tx = self.control_tx.clone();
         let pending = self.pending.clone();
         let turn_output = self.turn_output.clone();
         let init_cache = self.init_cache.clone();
@@ -481,8 +569,15 @@ impl PiSdkSession {
                 }
                 match serde_json::from_str::<PiHarnessMessage>(&line) {
                     Ok(message) => {
-                        route_pi_message(&event_tx, &pending, &turn_output, &init_cache, message)
-                            .await;
+                        route_pi_message(
+                            &event_tx,
+                            &control_tx,
+                            &pending,
+                            &turn_output,
+                            &init_cache,
+                            message,
+                        )
+                        .await;
                     }
                     Err(err) => {
                         let msg = format!("Failed to parse Pi SDK harness line: {err}: {line}");
@@ -585,8 +680,61 @@ enum PiHarnessMessage {
         #[serde(default)]
         error: Option<String>,
     },
+    /// Mid-turn failure surfaced by the harness when Pi's
+    /// `AssistantMessageEvent` returns an `error` variant or
+    /// `auto_retry_end` fails. The handler folds the error into
+    /// `turn_output` so the eventual `turn_end` carries it even if
+    /// pi-agent-core's top-level `agent_end` carries no
+    /// errorMessage (which is the common case — see the helper in
+    /// `main.ts`).
+    #[serde(rename = "turn_error")]
+    TurnError {
+        #[serde(default)]
+        error: Option<String>,
+    },
     #[serde(rename = "error")]
     Error {
+        #[serde(default)]
+        error: Option<String>,
+    },
+    // Pi provider-auth flow events. The harness emits these unsolicited
+    // during an OAuth login (the request/response pair only carries the
+    // "we started" / "we finished" signal; the URL + user code live in
+    // the asynchronous events below). Forwarded to `control_tx` so the
+    // Settings UI subscriber can render the device-code modal.
+    #[serde(rename = "oauth_challenge")]
+    OAuthChallenge {
+        #[serde(rename = "challengeId")]
+        challenge_id: String,
+        #[serde(rename = "providerId")]
+        provider_id: String,
+        kind: String,
+        #[serde(default)]
+        url: Option<String>,
+        #[serde(default)]
+        instructions: Option<String>,
+        #[serde(default)]
+        message: Option<String>,
+        #[serde(default)]
+        placeholder: Option<String>,
+        #[serde(default, rename = "allowEmpty")]
+        allow_empty: bool,
+    },
+    #[serde(rename = "oauth_progress")]
+    OAuthProgress {
+        #[serde(rename = "challengeId")]
+        challenge_id: String,
+        #[serde(rename = "providerId")]
+        provider_id: String,
+        message: String,
+    },
+    #[serde(rename = "oauth_complete")]
+    OAuthComplete {
+        #[serde(rename = "challengeId")]
+        challenge_id: String,
+        #[serde(rename = "providerId")]
+        provider_id: String,
+        ok: bool,
         #[serde(default)]
         error: Option<String>,
     },
@@ -594,8 +742,55 @@ enum PiHarnessMessage {
     Unknown,
 }
 
+/// Control-plane events that flow over a side channel separate from the
+/// main agent event stream. Used by the Settings provider-management UI
+/// to drive the OAuth device-code modal.
+///
+/// The `type` discriminant stays snake_case to match the harness wire
+/// shape (`oauth_challenge` / `oauth_progress` / `oauth_complete`), but
+/// the *fields* serialize camelCase so the React modal can read
+/// `challengeId` / `providerId` / `allowEmpty` directly. Without the
+/// inner camelCase rename, the frontend received every id as
+/// `undefined` and the OAuth flow's challenge filtering and prompt
+/// submission both broke silently.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type")]
+pub enum PiControlEvent {
+    // Variants get explicit `rename` because serde's default conversion
+    // of `OAuthChallenge` to snake_case is `o_auth_challenge` (it
+    // treats the leading capitalized "O" + "Auth" as two words).
+    // Pin to the wire shape the harness emits.
+    #[serde(rename = "oauth_challenge", rename_all = "camelCase")]
+    OAuthChallenge {
+        challenge_id: String,
+        provider_id: String,
+        /// `"auth"` → display URL + instructions; `"prompt"` → display
+        /// `message` and an input field (e.g. GHES domain).
+        kind: String,
+        url: Option<String>,
+        instructions: Option<String>,
+        message: Option<String>,
+        placeholder: Option<String>,
+        allow_empty: bool,
+    },
+    #[serde(rename = "oauth_progress", rename_all = "camelCase")]
+    OAuthProgress {
+        challenge_id: String,
+        provider_id: String,
+        message: String,
+    },
+    #[serde(rename = "oauth_complete", rename_all = "camelCase")]
+    OAuthComplete {
+        challenge_id: String,
+        provider_id: String,
+        ok: bool,
+        error: Option<String>,
+    },
+}
+
 async fn route_pi_message(
     event_tx: &broadcast::Sender<AgentEvent>,
+    control_tx: &broadcast::Sender<PiControlEvent>,
     pending: &PendingRequests,
     turn_output: &TurnOutput,
     init_cache: &InitCacheHandle,
@@ -819,12 +1014,33 @@ async fn route_pi_message(
                 is_synthetic: false,
             }));
         }
-        PiHarnessMessage::TurnEnd { error } => {
-            let mut output = turn_output.lock().await;
-            let error_text = error
+        PiHarnessMessage::TurnError { error } => {
+            // Defer surfacing — `turn_end` carries the consolidated
+            // error block. Stashing here lets a turn that emits
+            // multiple errors (e.g. retry-then-final-fail) collapse
+            // into one assistant block instead of three.
+            let trimmed = error
                 .as_ref()
                 .map(|e| e.trim().to_string())
                 .filter(|e| !e.is_empty());
+            if let Some(err) = trimmed {
+                let mut output = turn_output.lock().await;
+                output.pending_error = Some(err);
+            }
+        }
+        PiHarnessMessage::TurnEnd { error } => {
+            let mut output = turn_output.lock().await;
+            // Merge any mid-turn `turn_error` events the harness
+            // forwarded with the `agent_end` errorMessage walk.
+            // Either source can carry the user-facing failure, and
+            // we prefer the explicit end-of-turn error when both
+            // exist (it's the authoritative final state).
+            let pending_error = output.pending_error.take();
+            let from_turn_end = error
+                .as_ref()
+                .map(|e| e.trim().to_string())
+                .filter(|e| !e.is_empty());
+            let error_text = from_turn_end.or(pending_error);
             let mut content = Vec::new();
             if !output.thinking.trim().is_empty() {
                 content.push(ContentBlock::Thinking {
@@ -842,10 +1058,14 @@ async fn route_pi_message(
             // `Result.result`, so without this an error after partial
             // text would finalize with only the partial text visible and
             // the failure invisible.
+            //
+            // The harness pre-formats `err` as markdown via
+            // `renderProviderErrorMarkdown` (the **Error · HTTP X** label
+            // + parsed message), so we embed it verbatim instead of
+            // adding our own "Pi turn failed:" prefix that would
+            // duplicate the label.
             if let Some(err) = error_text.as_ref() {
-                content.push(ContentBlock::Text {
-                    text: format!("Pi turn failed: {err}"),
-                });
+                content.push(ContentBlock::Text { text: err.clone() });
             }
             if !content.is_empty() {
                 let _ = event_tx.send(AgentEvent::Stream(StreamEvent::Assistant {
@@ -879,6 +1099,51 @@ async fn route_pi_message(
             let _ = event_tx.send(AgentEvent::Stderr(
                 error.unwrap_or_else(|| "Pi SDK harness error".to_string()),
             ));
+        }
+        PiHarnessMessage::OAuthChallenge {
+            challenge_id,
+            provider_id,
+            kind,
+            url,
+            instructions,
+            message,
+            placeholder,
+            allow_empty,
+        } => {
+            let _ = control_tx.send(PiControlEvent::OAuthChallenge {
+                challenge_id,
+                provider_id,
+                kind,
+                url,
+                instructions,
+                message,
+                placeholder,
+                allow_empty,
+            });
+        }
+        PiHarnessMessage::OAuthProgress {
+            challenge_id,
+            provider_id,
+            message,
+        } => {
+            let _ = control_tx.send(PiControlEvent::OAuthProgress {
+                challenge_id,
+                provider_id,
+                message,
+            });
+        }
+        PiHarnessMessage::OAuthComplete {
+            challenge_id,
+            provider_id,
+            ok,
+            error,
+        } => {
+            let _ = control_tx.send(PiControlEvent::OAuthComplete {
+                challenge_id,
+                provider_id,
+                ok,
+                error,
+            });
         }
         PiHarnessMessage::Unknown => {}
     }
@@ -970,21 +1235,25 @@ mod tests {
     use tokio::sync::Mutex;
     use tokio::time::{Duration, timeout};
 
-    /// Build the four route_pi_message dependencies pre-wired together.
-    /// Returns the sender alongside a receiver so tests can drain the
-    /// emitted stream events.
+    /// Build the route_pi_message dependencies pre-wired together.
+    /// Returns the senders alongside a receiver so tests can drain the
+    /// emitted stream events. `control_tx` is created but no test
+    /// receiver is wired by default — pin a subscriber yourself if
+    /// you need to assert on control-plane events.
     fn pi_state() -> (
         broadcast::Sender<AgentEvent>,
+        broadcast::Sender<PiControlEvent>,
         broadcast::Receiver<AgentEvent>,
         PendingRequests,
         TurnOutput,
         InitCacheHandle,
     ) {
         let (event_tx, rx) = broadcast::channel::<AgentEvent>(64);
+        let (control_tx, _) = broadcast::channel::<PiControlEvent>(64);
         let pending: PendingRequests = Arc::new(Mutex::new(BTreeMap::new()));
         let turn_output: TurnOutput = Arc::new(Mutex::new(PiTurnOutput::fresh()));
         let init_cache: InitCacheHandle = Arc::new(Mutex::new(InitCache::default()));
-        (event_tx, rx, pending, turn_output, init_cache)
+        (event_tx, control_tx, rx, pending, turn_output, init_cache)
     }
 
     async fn next_event(rx: &mut broadcast::Receiver<AgentEvent>) -> AgentEvent {
@@ -1083,10 +1352,11 @@ mod tests {
     /// app-server path leaves the field absent, so this is Pi-only.
     #[tokio::test]
     async fn pi_tool_request_injects_codex_agent_label() {
-        let (event_tx, mut rx, pending, turn_output, init_cache) = pi_state();
+        let (event_tx, control_tx, mut rx, pending, turn_output, init_cache) = pi_state();
 
         route_pi_message(
             &event_tx,
+            &control_tx,
             &pending,
             &turn_output,
             &init_cache,
@@ -1118,9 +1388,10 @@ mod tests {
     /// route file changes through the wrong card.
     #[tokio::test]
     async fn pi_tool_request_file_change_uses_file_change_approval() {
-        let (event_tx, mut rx, pending, turn_output, init_cache) = pi_state();
+        let (event_tx, control_tx, mut rx, pending, turn_output, init_cache) = pi_state();
         route_pi_message(
             &event_tx,
+            &control_tx,
             &pending,
             &turn_output,
             &init_cache,
@@ -1159,9 +1430,10 @@ mod tests {
     /// without the metadata it can't inject.
     #[tokio::test]
     async fn pi_tool_request_with_non_object_input_skips_injection() {
-        let (event_tx, mut rx, pending, turn_output, init_cache) = pi_state();
+        let (event_tx, control_tx, mut rx, pending, turn_output, init_cache) = pi_state();
         route_pi_message(
             &event_tx,
+            &control_tx,
             &pending,
             &turn_output,
             &init_cache,
@@ -1188,7 +1460,7 @@ mod tests {
     /// failure delivers the harness-reported error string verbatim.
     #[tokio::test]
     async fn response_success_wakes_pending_oneshot() {
-        let (event_tx, _rx, pending, turn_output, init_cache) = pi_state();
+        let (event_tx, control_tx, _rx, pending, turn_output, init_cache) = pi_state();
         let (tx, rx) = oneshot::channel();
         pending.lock().await.insert(
             "id-1".to_string(),
@@ -1199,6 +1471,7 @@ mod tests {
         );
         route_pi_message(
             &event_tx,
+            &control_tx,
             &pending,
             &turn_output,
             &init_cache,
@@ -1218,7 +1491,7 @@ mod tests {
 
     #[tokio::test]
     async fn response_failure_propagates_error_string() {
-        let (event_tx, _rx, pending, turn_output, init_cache) = pi_state();
+        let (event_tx, control_tx, _rx, pending, turn_output, init_cache) = pi_state();
         let (tx, rx) = oneshot::channel();
         pending.lock().await.insert(
             "id-2".to_string(),
@@ -1229,6 +1502,7 @@ mod tests {
         );
         route_pi_message(
             &event_tx,
+            &control_tx,
             &pending,
             &turn_output,
             &init_cache,
@@ -1249,9 +1523,10 @@ mod tests {
     /// poison the pending map — the harness logs and continues.
     #[tokio::test]
     async fn response_for_unknown_id_is_swallowed() {
-        let (event_tx, _rx, pending, turn_output, init_cache) = pi_state();
+        let (event_tx, control_tx, _rx, pending, turn_output, init_cache) = pi_state();
         route_pi_message(
             &event_tx,
+            &control_tx,
             &pending,
             &turn_output,
             &init_cache,
@@ -1271,9 +1546,10 @@ mod tests {
     /// subscribers — the chat bridge's `got_init` flag depends on this.
     #[tokio::test]
     async fn ready_emits_and_caches_init_event() {
-        let (event_tx, mut rx, pending, turn_output, init_cache) = pi_state();
+        let (event_tx, control_tx, mut rx, pending, turn_output, init_cache) = pi_state();
         route_pi_message(
             &event_tx,
+            &control_tx,
             &pending,
             &turn_output,
             &init_cache,
@@ -1300,11 +1576,12 @@ mod tests {
     /// pre-allocated ContentBlockStart events (text=0, thinking=1).
     #[tokio::test]
     async fn turn_start_emits_message_and_block_starts() {
-        let (event_tx, mut rx, pending, turn_output, init_cache) = pi_state();
+        let (event_tx, control_tx, mut rx, pending, turn_output, init_cache) = pi_state();
         // Pollute prior state so we can verify the reset.
         turn_output.lock().await.text.push_str("stale");
         route_pi_message(
             &event_tx,
+            &control_tx,
             &pending,
             &turn_output,
             &init_cache,
@@ -1324,9 +1601,10 @@ mod tests {
 
     #[tokio::test]
     async fn assistant_delta_appends_text_and_streams_block() {
-        let (event_tx, mut rx, pending, turn_output, init_cache) = pi_state();
+        let (event_tx, control_tx, mut rx, pending, turn_output, init_cache) = pi_state();
         route_pi_message(
             &event_tx,
+            &control_tx,
             &pending,
             &turn_output,
             &init_cache,
@@ -1337,6 +1615,7 @@ mod tests {
         .await;
         route_pi_message(
             &event_tx,
+            &control_tx,
             &pending,
             &turn_output,
             &init_cache,
@@ -1365,9 +1644,10 @@ mod tests {
 
     #[tokio::test]
     async fn thinking_delta_appends_thinking_and_streams_block_one() {
-        let (event_tx, mut rx, pending, turn_output, init_cache) = pi_state();
+        let (event_tx, control_tx, mut rx, pending, turn_output, init_cache) = pi_state();
         route_pi_message(
             &event_tx,
+            &control_tx,
             &pending,
             &turn_output,
             &init_cache,
@@ -1395,9 +1675,10 @@ mod tests {
     /// streams the args as an InputJson delta in the same block.
     #[tokio::test]
     async fn tool_update_start_opens_block_and_streams_args() {
-        let (event_tx, mut rx, pending, turn_output, init_cache) = pi_state();
+        let (event_tx, control_tx, mut rx, pending, turn_output, init_cache) = pi_state();
         route_pi_message(
             &event_tx,
+            &control_tx,
             &pending,
             &turn_output,
             &init_cache,
@@ -1444,10 +1725,11 @@ mod tests {
     /// block.
     #[tokio::test]
     async fn tool_update_update_phase_emits_synthetic_user_result() {
-        let (event_tx, mut rx, pending, turn_output, init_cache) = pi_state();
+        let (event_tx, control_tx, mut rx, pending, turn_output, init_cache) = pi_state();
         // Prime the index by emitting a start first
         route_pi_message(
             &event_tx,
+            &control_tx,
             &pending,
             &turn_output,
             &init_cache,
@@ -1464,6 +1746,7 @@ mod tests {
 
         route_pi_message(
             &event_tx,
+            &control_tx,
             &pending,
             &turn_output,
             &init_cache,
@@ -1499,12 +1782,13 @@ mod tests {
     /// the SDK transcript reflects the tool output.
     #[tokio::test]
     async fn tool_result_closes_block_and_forwards_payload() {
-        let (event_tx, mut rx, pending, turn_output, init_cache) = pi_state();
+        let (event_tx, control_tx, mut rx, pending, turn_output, init_cache) = pi_state();
         // Open block first
         turn_output.lock().await.tool_index("call-r");
 
         route_pi_message(
             &event_tx,
+            &control_tx,
             &pending,
             &turn_output,
             &init_cache,
@@ -1552,9 +1836,10 @@ mod tests {
     /// an invalid index and confuse the frontend's block table.
     #[tokio::test]
     async fn tool_result_without_prior_start_skips_block_stop() {
-        let (event_tx, mut rx, pending, turn_output, init_cache) = pi_state();
+        let (event_tx, control_tx, mut rx, pending, turn_output, init_cache) = pi_state();
         route_pi_message(
             &event_tx,
+            &control_tx,
             &pending,
             &turn_output,
             &init_cache,
@@ -1588,7 +1873,7 @@ mod tests {
     /// final Assistant message and a Result with subtype `success`.
     #[tokio::test]
     async fn turn_end_success_finalizes_assistant_and_result() {
-        let (event_tx, mut rx, pending, turn_output, init_cache) = pi_state();
+        let (event_tx, control_tx, mut rx, pending, turn_output, init_cache) = pi_state();
         {
             let mut output = turn_output.lock().await;
             output.text.push_str("final answer");
@@ -1596,6 +1881,7 @@ mod tests {
         }
         route_pi_message(
             &event_tx,
+            &control_tx,
             &pending,
             &turn_output,
             &init_cache,
@@ -1629,10 +1915,11 @@ mod tests {
     /// only read the Result still see it).
     #[tokio::test]
     async fn turn_end_error_surfaces_error_in_assistant_and_result() {
-        let (event_tx, mut rx, pending, turn_output, init_cache) = pi_state();
+        let (event_tx, control_tx, mut rx, pending, turn_output, init_cache) = pi_state();
         turn_output.lock().await.text.push_str("partial");
         route_pi_message(
             &event_tx,
+            &control_tx,
             &pending,
             &turn_output,
             &init_cache,
@@ -1673,9 +1960,10 @@ mod tests {
     /// still emitted so the chat bridge knows the turn closed.
     #[tokio::test]
     async fn turn_end_with_empty_output_skips_assistant() {
-        let (event_tx, mut rx, pending, turn_output, init_cache) = pi_state();
+        let (event_tx, control_tx, mut rx, pending, turn_output, init_cache) = pi_state();
         route_pi_message(
             &event_tx,
+            &control_tx,
             &pending,
             &turn_output,
             &init_cache,
@@ -1691,11 +1979,170 @@ mod tests {
         assert!(try_recv_now(&mut rx).is_none());
     }
 
+    /// A mid-turn `turn_error` (forwarded by the harness from a Pi
+    /// `AssistantMessageEvent { type: "error" }` or a failed
+    /// `auto_retry_end`) followed by a clean-looking `turn_end` must
+    /// still surface the error to the user. Without this, every
+    /// Copilot 401 / OpenRouter 5xx came through as "Agent stopped"
+    /// with no chat message.
     #[tokio::test]
-    async fn error_message_emits_stderr() {
-        let (event_tx, mut rx, pending, turn_output, init_cache) = pi_state();
+    async fn turn_error_promotes_pending_error_into_turn_end() {
+        let (event_tx, control_tx, mut rx, pending, turn_output, init_cache) = pi_state();
         route_pi_message(
             &event_tx,
+            &control_tx,
+            &pending,
+            &turn_output,
+            &init_cache,
+            PiHarnessMessage::TurnError {
+                error: Some("401 Unauthorized".to_string()),
+            },
+        )
+        .await;
+        // turn_error itself produces no chat event — it stashes the
+        // error on turn_output until turn_end finalizes the turn.
+        assert!(try_recv_now(&mut rx).is_none());
+        route_pi_message(
+            &event_tx,
+            &control_tx,
+            &pending,
+            &turn_output,
+            &init_cache,
+            PiHarnessMessage::TurnEnd { error: None },
+        )
+        .await;
+        match next_event(&mut rx).await {
+            AgentEvent::Stream(StreamEvent::Assistant { message }) => {
+                let last = message.content.last().expect("error block");
+                match last {
+                    ContentBlock::Text { text } => {
+                        assert!(text.contains("401 Unauthorized"), "got {text:?}")
+                    }
+                    other => panic!("expected Text, got {other:?}"),
+                }
+            }
+            other => panic!("expected Assistant, got {other:?}"),
+        }
+        match next_event(&mut rx).await {
+            AgentEvent::Stream(StreamEvent::Result {
+                subtype, result, ..
+            }) => {
+                assert_eq!(subtype, "error");
+                assert!(result.unwrap().contains("401 Unauthorized"));
+            }
+            other => panic!("expected Result, got {other:?}"),
+        }
+    }
+
+    /// When BOTH `turn_error` (mid-turn) and `turn_end { error }`
+    /// (agent_end walk surfaced one too) arrive, `turn_end`'s error
+    /// wins. It's the authoritative final state — if Pi reports a
+    /// different message there, that's what the user should see.
+    #[tokio::test]
+    async fn turn_end_error_wins_over_pending_error() {
+        let (event_tx, control_tx, mut rx, pending, turn_output, init_cache) = pi_state();
+        route_pi_message(
+            &event_tx,
+            &control_tx,
+            &pending,
+            &turn_output,
+            &init_cache,
+            PiHarnessMessage::TurnError {
+                error: Some("retry-time error".to_string()),
+            },
+        )
+        .await;
+        route_pi_message(
+            &event_tx,
+            &control_tx,
+            &pending,
+            &turn_output,
+            &init_cache,
+            PiHarnessMessage::TurnEnd {
+                error: Some("final 500".to_string()),
+            },
+        )
+        .await;
+        match next_event(&mut rx).await {
+            AgentEvent::Stream(StreamEvent::Assistant { message }) => {
+                let last = message.content.last().expect("error block");
+                match last {
+                    ContentBlock::Text { text } => {
+                        assert!(text.contains("final 500"), "got {text:?}");
+                        assert!(!text.contains("retry-time error"), "got {text:?}");
+                    }
+                    other => panic!("expected Text, got {other:?}"),
+                }
+            }
+            other => panic!("expected Assistant, got {other:?}"),
+        }
+        let _ = next_event(&mut rx).await;
+    }
+
+    /// Pending error must be cleared between turns so a successful
+    /// turn N+1 doesn't inherit turn N's failure.
+    #[tokio::test]
+    async fn pending_error_is_cleared_between_turns() {
+        let (event_tx, control_tx, mut rx, pending, turn_output, init_cache) = pi_state();
+        route_pi_message(
+            &event_tx,
+            &control_tx,
+            &pending,
+            &turn_output,
+            &init_cache,
+            PiHarnessMessage::TurnError {
+                error: Some("turn1 failed".to_string()),
+            },
+        )
+        .await;
+        route_pi_message(
+            &event_tx,
+            &control_tx,
+            &pending,
+            &turn_output,
+            &init_cache,
+            PiHarnessMessage::TurnEnd { error: None },
+        )
+        .await;
+        // Drain turn-1 finalize events.
+        let _ = next_event(&mut rx).await;
+        let _ = next_event(&mut rx).await;
+
+        // Turn 2: clean run; must NOT re-surface the turn-1 error.
+        turn_output.lock().await.text.push_str("hello");
+        route_pi_message(
+            &event_tx,
+            &control_tx,
+            &pending,
+            &turn_output,
+            &init_cache,
+            PiHarnessMessage::TurnEnd { error: None },
+        )
+        .await;
+        match next_event(&mut rx).await {
+            AgentEvent::Stream(StreamEvent::Assistant { message }) => {
+                for block in &message.content {
+                    if let ContentBlock::Text { text } = block {
+                        assert!(!text.contains("turn1 failed"));
+                    }
+                }
+            }
+            other => panic!("expected Assistant, got {other:?}"),
+        }
+        match next_event(&mut rx).await {
+            AgentEvent::Stream(StreamEvent::Result { subtype, .. }) => {
+                assert_eq!(subtype, "success");
+            }
+            other => panic!("expected Result, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn error_message_emits_stderr() {
+        let (event_tx, control_tx, mut rx, pending, turn_output, init_cache) = pi_state();
+        route_pi_message(
+            &event_tx,
+            &control_tx,
             &pending,
             &turn_output,
             &init_cache,
@@ -1715,9 +2162,10 @@ mod tests {
     /// strand the user.
     #[tokio::test]
     async fn error_message_with_no_text_falls_back_to_default() {
-        let (event_tx, mut rx, pending, turn_output, init_cache) = pi_state();
+        let (event_tx, control_tx, mut rx, pending, turn_output, init_cache) = pi_state();
         route_pi_message(
             &event_tx,
+            &control_tx,
             &pending,
             &turn_output,
             &init_cache,
@@ -1734,9 +2182,10 @@ mod tests {
     /// doesn't recognize yet) must not crash the reader loop.
     #[tokio::test]
     async fn unknown_variant_is_silently_ignored() {
-        let (event_tx, mut rx, pending, turn_output, init_cache) = pi_state();
+        let (event_tx, control_tx, mut rx, pending, turn_output, init_cache) = pi_state();
         route_pi_message(
             &event_tx,
+            &control_tx,
             &pending,
             &turn_output,
             &init_cache,
@@ -1827,6 +2276,44 @@ mod tests {
             }
             other => panic!("expected System command_line, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn pi_control_event_uses_camel_case_field_names() {
+        // The React OAuth modal reads `challengeId` / `providerId` /
+        // `allowEmpty` straight off the Tauri event payload. If these
+        // serialize as snake_case the UI receives undefined ids,
+        // silently dropping every challenge into the filter check.
+        // Pin the wire shape so a future struct rename can't regress.
+        let event = PiControlEvent::OAuthChallenge {
+            challenge_id: "c1".to_string(),
+            provider_id: "github-copilot".to_string(),
+            kind: "auth".to_string(),
+            url: Some("https://github.com/login/device".to_string()),
+            instructions: Some("ABCD-1234".to_string()),
+            message: None,
+            placeholder: None,
+            allow_empty: false,
+        };
+        let json = serde_json::to_value(&event).unwrap();
+        assert_eq!(json["type"], "oauth_challenge");
+        assert_eq!(json["challengeId"], "c1");
+        assert_eq!(json["providerId"], "github-copilot");
+        assert_eq!(json["allowEmpty"], false);
+        assert!(json.get("challenge_id").is_none());
+        assert!(json.get("provider_id").is_none());
+        assert!(json.get("allow_empty").is_none());
+
+        let complete = PiControlEvent::OAuthComplete {
+            challenge_id: "c1".to_string(),
+            provider_id: "openrouter".to_string(),
+            ok: true,
+            error: None,
+        };
+        let json = serde_json::to_value(&complete).unwrap();
+        assert_eq!(json["type"], "oauth_complete");
+        assert_eq!(json["challengeId"], "c1");
+        assert_eq!(json["providerId"], "openrouter");
     }
 
     #[test]

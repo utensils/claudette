@@ -15,6 +15,7 @@ import { ConfirmNightlyChannelModal } from "./ConfirmNightlyChannelModal";
 import { MissingCliModal } from "./MissingCliModal";
 import { KeyboardShortcutsModal } from "./KeyboardShortcutsModal";
 import { EnvTrustModal } from "./EnvTrustModal";
+import { PiLoginModalRoute } from "./PiLoginModalRoute";
 
 export function ModalRouter() {
   const activeModal = useAppStore((s) => s.activeModal);
@@ -52,6 +53,8 @@ export function ModalRouter() {
       return <KeyboardShortcutsModal />;
     case "envTrust":
       return <EnvTrustModal />;
+    case "piLogin":
+      return <PiLoginModalRoute />;
     default:
       return null;
   }

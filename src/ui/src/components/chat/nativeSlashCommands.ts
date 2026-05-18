@@ -44,6 +44,11 @@ export interface NativeCommandContext {
   addLocalMessage: (text: string) => void;
   startClaudeAuthLogin: () => Promise<void>;
   startCodexLogin: () => Promise<void>;
+  /** Open the Pi provider picker modal (multi-provider — Pi has no
+   *  single OAuth flow like Codex/Claude). Caller resolves once the
+   *  modal is mounted; the modal closes on its own when the user
+   *  finishes or cancels. */
+  startPiLogin: () => Promise<void>;
   openUsageSettingsExternal: () => void;
   openReleaseNotes: () => void;
 
@@ -384,8 +389,9 @@ const loginHandler: NativeHandler = {
           "Codex sign-in opened. Complete the browser flow, then retry the turn.",
         );
       } else if (target === "pi") {
+        await ctx.startPiLogin();
         ctx.addLocalMessage(
-          "Pi auth is managed by Pi. Run `pi auth` in a terminal, refresh Pi models in Settings > Models, then retry the turn.",
+          "Pi sign-in opened. Pick a provider, complete the flow, then retry the turn.",
         );
       } else {
         await ctx.startClaudeAuthLogin();

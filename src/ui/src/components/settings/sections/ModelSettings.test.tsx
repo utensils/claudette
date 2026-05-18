@@ -158,6 +158,26 @@ vi.mock("../../../stores/useAppStore", () => {
 
 vi.mock("../../../services/tauri", () => serviceMocks);
 
+// Stub the Pi provider-auth Tauri commands so the embedded
+// `PiProviderManager` in the Pi card doesn't error in jsdom (no real
+// Tauri IPC, no harness sidecar). Tests that need to assert on the
+// manager's behavior should override individual mocks rather than
+// adding logic here.
+vi.mock("../../../services/tauri/piProviders", () => ({
+  piListProviders: vi.fn(() =>
+    Promise.resolve({ defaultVisibleCount: 6, providers: [] }),
+  ),
+  piSetProviderApiKey: vi.fn(() => Promise.resolve()),
+  piClearProviderApiKey: vi.fn(() => Promise.resolve()),
+  piOAuthStart: vi.fn(() =>
+    Promise.resolve({ challengeId: "test", providerId: "openrouter" }),
+  ),
+  piOAuthSubmitInput: vi.fn(() => Promise.resolve()),
+  piOAuthCancel: vi.fn(() => Promise.resolve()),
+  listenPiOAuthEvents: vi.fn(() => Promise.resolve(() => {})),
+  PI_OAUTH_EVENT_CHANNEL: "pi://oauth/event",
+}));
+
 vi.mock("@tauri-apps/api/event", () => ({
   listen: vi.fn((event: string, callback: (event: { payload: unknown }) => void) => {
     const listeners = eventMocks.listeners.get(event) ?? [];

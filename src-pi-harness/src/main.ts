@@ -17,6 +17,16 @@ import {
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+import {
+  cancelOAuth,
+  clearApiKey,
+  handleOAuthInput,
+  listProviders,
+  oauthStart,
+  setApiKey,
+  type ProviderAuthDeps,
+} from "./provider-auth.js";
+import { renderProviderErrorMarkdown } from "./format-error.js";
 
 type RequestMessage = {
   id?: string;
@@ -55,6 +65,19 @@ const state: HarnessState = {
 
 function send(message: Record<string, unknown>): void {
   output.write(`${JSON.stringify(message)}\n`);
+}
+
+/** Snapshot the harness state's AuthStorage / ModelRegistry into the
+ *  ProviderAuthDeps shape the `provider-auth.ts` handlers expect. Both
+ *  references are replaced on every `start_session` (so a re-auth or a
+ *  cwd change picks up new credentials), which is why we read them
+ *  fresh on each call rather than caching at startup. */
+function providerAuthDeps(): ProviderAuthDeps {
+  return {
+    authStorage: state.authStorage,
+    modelRegistry: state.modelRegistry,
+    send,
+  };
 }
 
 function respond(id: unknown, command: string, success: boolean, data?: unknown, error?: unknown): void {
@@ -840,6 +863,44 @@ function findModel(value: string) {
   return state.modelRegistry.getAll().find((model) => model.id === modelId);
 }
 
+/**
+ * Pull a human-readable error out of pi-agent-core's `agent_end` event.
+ *
+ * The event carries `messages: AgentMessage[]` (no top-level
+ * errorMessage). The actual failure lives on the last assistant
+ * message's `errorMessage` when its `stopReason` is "error" or
+ * "aborted". We walk the tail of the array because the final message
+ * is always the assistant's last attempt — earlier messages may be
+ * tool results or successful assistant turns from this same run.
+ *
+ * Returns `undefined` when the run ended cleanly (no error to
+ * surface). Defensive about shape because Pi may change this event
+ * later — we only need a string when there's one to surface.
+ */
+function extractAgentEndError(event: { messages?: unknown }): string | undefined {
+  const messages = Array.isArray(event.messages) ? event.messages : [];
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const message = messages[i];
+    if (!message || typeof message !== "object") continue;
+    const m = message as {
+      role?: string;
+      stopReason?: string;
+      errorMessage?: unknown;
+    };
+    if (m.role !== "assistant") continue;
+    const failed = m.stopReason === "error" || m.stopReason === "aborted";
+    if (!failed) return undefined;
+    if (typeof m.errorMessage === "string" && m.errorMessage.trim()) {
+      return m.errorMessage.trim();
+    }
+    // Failure flagged but no human-readable message — return a stub
+    // so Rust still produces a turn_end with an error indicator
+    // rather than silently succeeding.
+    return `Pi turn ${m.stopReason ?? "failed"}`;
+  }
+  return undefined;
+}
+
 function routeSessionEvent(event: AgentSessionEvent): void {
   switch (event.type) {
     // Pi distinguishes the agent-loop boundary (`agent_start` /
@@ -854,7 +915,13 @@ function routeSessionEvent(event: AgentSessionEvent): void {
       send({ type: "turn_start" });
       break;
     case "message_update": {
-      const update = event.assistantMessageEvent as { type?: string; delta?: string; text?: string };
+      const update = event.assistantMessageEvent as {
+        type?: string;
+        delta?: string;
+        text?: string;
+        reason?: string;
+        error?: { errorMessage?: string };
+      };
       // Pi SDK `AssistantMessageEvent` is a tagged union covering text,
       // thinking, and tool-call streaming. Each tool call streams its
       // raw JSON arguments as a series of `toolcall_delta` events; if
@@ -877,9 +944,21 @@ function routeSessionEvent(event: AgentSessionEvent): void {
         if (delta) send({ type: "assistant_delta", delta });
         break;
       }
+      if (type === "error") {
+        // `AssistantMessageEvent` `error` variant fires when the LLM
+        // call fails mid-turn (e.g. a Copilot model returns 401 or a
+        // provider 5xxs). The error message lives on the carried
+        // partial AssistantMessage. Format with the shared markdown
+        // renderer so the chat doesn't render raw provider JSON.
+        const errorMessage = update.error?.errorMessage?.trim();
+        const raw =
+          errorMessage ?? `Pi model call failed (${update.reason ?? "error"})`;
+        send({ type: "turn_error", error: renderProviderErrorMarkdown(raw) });
+        break;
+      }
       // start / text_start / text_end / thinking_start / thinking_end /
-      // toolcall_start / toolcall_delta / toolcall_end / done / error
-      // carry no user-visible chat text — drop them.
+      // toolcall_start / toolcall_delta / toolcall_end / done — no
+      // user-visible chat text. Drop them.
       break;
     }
     case "tool_execution_start":
@@ -909,12 +988,64 @@ function routeSessionEvent(event: AgentSessionEvent): void {
         isError: event.isError,
       });
       break;
-    case "agent_end":
+    case "agent_end": {
+      // pi-agent-core's `agent_end` does NOT carry a top-level
+      // `errorMessage` (only `messages: AgentMessage[]`). The
+      // `"errorMessage" in event` check therefore always failed and
+      // every turn_end propagated with `error: undefined`, leaving
+      // the chat silent when a model call 401'd / 5xx'd. Walk the
+      // tail of `messages` for the last assistant entry and forward
+      // its errorMessage when `stopReason` is "error" or "aborted".
+      const raw = extractAgentEndError(event as { messages?: unknown });
       send({
         type: "turn_end",
-        error: "errorMessage" in event ? event.errorMessage : undefined,
+        error: raw ? renderProviderErrorMarkdown(raw) : undefined,
       });
       break;
+    }
+    case "auto_retry_start": {
+      // Surface "retrying after <reason>" as a turn-thinking line so
+      // users seeing a long pause know Pi is re-trying instead of
+      // assuming the agent froze. Best-effort — the reason live on
+      // the event's errorMessage in current Pi versions.
+      const reason = "errorMessage" in event ? (event as { errorMessage?: string }).errorMessage : undefined;
+      const attempt = (event as { attempt?: number }).attempt;
+      const max = (event as { maxAttempts?: number }).maxAttempts;
+      if (reason) {
+        send({
+          type: "thinking_delta",
+          delta: `[Pi retry ${attempt ?? "?"}/${max ?? "?"}] ${reason}\n`,
+        });
+      }
+      break;
+    }
+    case "auto_retry_end": {
+      // Final retry failed: surface `finalError` as a turn_error so
+      // it reaches the chat even if `agent_end` walks back into the
+      // no-errorMessage path. Run through the formatter so a JSON
+      // envelope from the provider gets unwrapped into a friendly
+      // line just like the other error paths.
+      const finalError = (event as { finalError?: string }).finalError?.trim();
+      const success = (event as { success?: boolean }).success;
+      if (success === false && finalError) {
+        send({
+          type: "turn_error",
+          error: renderProviderErrorMarkdown(finalError),
+        });
+      }
+      break;
+    }
+    case "compaction_end": {
+      // Compaction failure is surfaced in passing — it doesn't abort
+      // the turn on its own, but the next prompt may behave oddly,
+      // so the user should know. Same shape as auto_retry_end.
+      const errorMessage = (event as { errorMessage?: string }).errorMessage?.trim();
+      const aborted = (event as { aborted?: boolean }).aborted;
+      if (aborted && errorMessage) {
+        send({ type: "thinking_delta", delta: `[Pi compaction failed] ${errorMessage}\n` });
+      }
+      break;
+    }
     // Per-LLM-turn boundaries fire N times inside the agent loop —
     // intentionally swallowed here (see the `agent_start` case for
     // the full rationale). Listed explicitly so a future SDK upgrade
@@ -923,13 +1054,10 @@ function routeSessionEvent(event: AgentSessionEvent): void {
     // the double-Result bug.
     case "turn_start":
     case "turn_end":
-    case "auto_retry_start":
     case "compaction_start":
-    case "compaction_end":
     case "queue_update":
     case "session_info_changed":
     case "thinking_level_changed":
-    case "auto_retry_end":
       break;
     default:
       break;
@@ -991,6 +1119,44 @@ async function handle(message: RequestMessage): Promise<void> {
         models: listAvailableModels().length,
         authFile: join(getAgentDir(), "auth.json"),
       });
+      break;
+    case "list_providers":
+      respond(message.id, message.type, true, listProviders(providerAuthDeps()));
+      break;
+    case "set_api_key":
+      setApiKey(
+        providerAuthDeps(),
+        asString(message.providerId) ?? "",
+        asString(message.key) ?? "",
+      );
+      respond(message.id, message.type, true);
+      break;
+    case "clear_api_key":
+      clearApiKey(providerAuthDeps(), asString(message.providerId) ?? "");
+      respond(message.id, message.type, true);
+      break;
+    case "oauth_start":
+      // Don't `await` — Pi's `login()` resolves only after the user
+      // finishes the browser flow. Returning immediately lets the UI
+      // receive the synchronous response while the device-code events
+      // stream asynchronously via `oauth_challenge` / `oauth_complete`.
+      void oauthStart(
+        providerAuthDeps(),
+        asString(message.providerId) ?? "",
+        asString(message.challengeId) ?? "",
+      );
+      respond(message.id, message.type, true);
+      break;
+    case "oauth_input":
+      handleOAuthInput(
+        asString(message.challengeId) ?? "",
+        typeof message.value === "string" ? message.value : "",
+      );
+      respond(message.id, message.type, true);
+      break;
+    case "oauth_cancel":
+      cancelOAuth(asString(message.challengeId) ?? "");
+      respond(message.id, message.type, true);
       break;
     case "approve_tool": {
       const requestId = asString(message.requestId);

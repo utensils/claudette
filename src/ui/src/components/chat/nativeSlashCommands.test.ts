@@ -30,6 +30,7 @@ function makeCtx(overrides: Partial<NativeCommandContext> = {}): NativeCommandCo
     addLocalMessage: vi.fn<(text: string) => void>(),
     startClaudeAuthLogin: vi.fn(async () => {}),
     startCodexLogin: vi.fn(async () => {}),
+    startPiLogin: vi.fn(async () => {}),
     openUsageSettingsExternal: vi.fn<() => void>(),
     openReleaseNotes: vi.fn<() => void>(),
     workspaceId: "ws-1",
@@ -637,6 +638,19 @@ describe("login native handler", () => {
     await handler.execute(ctx, "");
     expect(ctx.startCodexLogin).toHaveBeenCalledTimes(1);
     expect(ctx.startClaudeAuthLogin).not.toHaveBeenCalled();
+  });
+
+  it("opens the Pi provider picker for Pi-selected workspaces", async () => {
+    const ctx = makeCtx({ selectedModelProvider: "pi" });
+    const handler = resolveNativeHandler("login")!;
+    const result = await handler.execute(ctx, "");
+    expect(result).toEqual({ kind: "handled", canonicalName: "login" });
+    expect(ctx.startPiLogin).toHaveBeenCalledTimes(1);
+    expect(ctx.startCodexLogin).not.toHaveBeenCalled();
+    expect(ctx.startClaudeAuthLogin).not.toHaveBeenCalled();
+    expect(ctx.addLocalMessage).toHaveBeenCalledWith(
+      "Pi sign-in opened. Pick a provider, complete the flow, then retry the turn.",
+    );
   });
 
   it("surfaces login start failures as local messages", async () => {

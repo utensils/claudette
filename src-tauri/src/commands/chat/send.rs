@@ -1933,6 +1933,8 @@ pub async fn send_chat_message(
                                 .backend_runtime
                                 .pi_provider_override
                                 .clone(),
+                            pi_provider_env:
+                                crate::commands::agent_backends::pi_auth::pi_local_secret_env()?,
                         },
                     )
                     .await?;

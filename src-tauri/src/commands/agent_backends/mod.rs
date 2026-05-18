@@ -20,6 +20,8 @@ mod config;
 mod discovery;
 mod gateway;
 mod gateway_translate;
+#[cfg(feature = "pi-sdk")]
+pub mod pi_auth;
 mod runtime_dispatch;
 
 pub use gateway::BackendGateway;

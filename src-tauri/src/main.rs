@@ -1075,6 +1075,18 @@ fn main() {
             commands::agent_backends::refresh_agent_backend_models,
             commands::agent_backends::test_agent_backend,
             commands::agent_backends::launch_codex_login,
+            #[cfg(feature = "pi-sdk")]
+            commands::agent_backends::pi_auth::pi_list_providers,
+            #[cfg(feature = "pi-sdk")]
+            commands::agent_backends::pi_auth::pi_set_provider_api_key,
+            #[cfg(feature = "pi-sdk")]
+            commands::agent_backends::pi_auth::pi_clear_provider_api_key,
+            #[cfg(feature = "pi-sdk")]
+            commands::agent_backends::pi_auth::pi_oauth_start,
+            #[cfg(feature = "pi-sdk")]
+            commands::agent_backends::pi_auth::pi_oauth_submit_input,
+            #[cfg(feature = "pi-sdk")]
+            commands::agent_backends::pi_auth::pi_oauth_cancel,
             // Claude flags
             commands::claude_flags::list_claude_flags,
             commands::claude_flags::refresh_claude_flags,

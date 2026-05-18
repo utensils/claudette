@@ -1332,6 +1332,11 @@ export function ChatPanel() {
             addLocalMessage,
             startClaudeAuthLogin: startChatClaudeAuthLogin,
             startCodexLogin: launchCodexLogin,
+            startPiLogin: async () => {
+              useAppStore.getState().openModal("piLogin", {
+                workingDir: ws?.worktree_path ?? "",
+              });
+            },
             openUsageSettingsExternal: () => {
               void openUsageSettings().catch((err) =>
                 console.error("Failed to open usage settings:", err),

@@ -9,12 +9,30 @@ This is a production provider path. It is always available in normal builds and 
 
 ## Setup
 
-1. Install and configure Pi normally.
-2. Run `pi auth` in a terminal and connect the providers you want Pi to use.
-3. Launch Claudette. Pi's model list is refreshed automatically on startup — the Bun sidecar runs `ModelRegistry.getAvailable()` and the chat-header model picker shows the result. Use **Settings > Models > Pi > Refresh models** to re-run discovery if you change provider credentials while Claudette is running.
+1. Install Pi (the `pi` CLI is optional but useful for `pi auth` and `pi /login` outside Claudette).
+2. Launch Claudette and open **Settings > Models > Pi**. The card now embeds a per-provider configuration list (see [Configuring providers](#configuring-providers) below) — configure GitHub Copilot, OpenRouter, OpenAI, Anthropic, Google Gemini, DeepSeek, and a handful of others without leaving Claudette.
+3. The model list refreshes automatically after each configure / sign-in round-trip. Use **Refresh models** to force a re-discovery if you change credentials outside Claudette.
 4. Pick a Pi model as the default in **Settings > Models > Default model**, or choose one per chat from the model picker.
 
-The Pi card does not ask for a base URL or API key. Provider credentials stay in Pi's own auth/config storage.
+The Pi card does not need a base URL or a card-level API key — keys are scoped per provider via the inline list.
+
+### Configuring providers
+
+The Pi card surfaces a curated list of providers Pi knows how to talk to:
+
+- **Default visible** — GitHub Copilot (OAuth, supports GHES), OpenRouter, OpenAI, Anthropic, Google Gemini, DeepSeek (API keys).
+- **More providers…** disclosure — xAI, Groq, Cerebras, Mistral, Fireworks, OpenCode Zen (API keys).
+- **Env-only** — Amazon Bedrock, Google Vertex AI, Azure OpenAI — these need too many environment variables to model in a dialog; the row links to Pi's docs and reflects the configured state once the env vars are set.
+
+For each row:
+
+- API-key providers open a **Configure** dialog where you paste the key. A **"Keep this key private to Claudette"** checkbox controls storage scope:
+  - Unchecked (default) → key is written to Pi's `~/.pi/agent/auth.json`. Visible to the terminal `pi` CLI too.
+  - Checked → key is stored in Claudette's OS keychain under bucket `piProviderSecrets` and pushed to the harness as the matching env var (e.g. `OPENROUTER_API_KEY`) at spawn time. Invisible to terminal `pi`.
+- OAuth providers (currently GitHub Copilot) open a **Sign in** modal that drives Pi's device-code flow. For Copilot the modal prompts for an optional GitHub Enterprise Server domain, displays the verification URL + user code, and closes when Pi reports success.
+- Env-only providers open the relevant Pi docs page in a browser; the row's status dot turns green once Pi detects the env vars on next refresh.
+
+The card also shows a per-row source label once configured (`via auth.json`, `via $OPENROUTER_API_KEY`, `via models.json`, …) so you can tell which credential path Pi will actually use.
 
 ## Harness Architecture
 
@@ -61,7 +79,7 @@ Beyond the dedicated Pi card, Ollama, LM Studio, OpenAI API, Custom OpenAI, and 
 ## Slash Commands
 
 - `/model` lists Pi models when they are available and accepts provider-qualified ids such as `pi/openai/gpt-5.4`.
-- `/login` for a Pi-selected chat points you back to Pi auth/config guidance; run `pi auth` in a terminal.
+- `/login` for a Pi-selected chat opens the **Pi provider picker** modal (Pi is multi-provider, so `/login` doesn't blind-launch one OAuth flow the way it does for Codex or Claude Code — you pick which provider to configure).
 - `/permissions` keeps controlling Claudette's permission mode for Pi, Claude Code, and Codex.
 
 ## Troubleshooting
