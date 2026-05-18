@@ -687,10 +687,7 @@ mod tests {
             "row before the failing write must still be classified",
         );
 
-        let after_row = db
-            .get_interactive_session(&after.sid)
-            .unwrap()
-            .unwrap();
+        let after_row = db.get_interactive_session(&after.sid).unwrap().unwrap();
         assert_eq!(
             after_row.state, "crashed",
             "row after the failing write must still be classified — \
@@ -1082,6 +1079,97 @@ mod tests {
         assert!(
             matches!(err, ReattachError::Host(_)),
             "expected ReattachError::Host, got {err:?}",
+        );
+    }
+
+    #[tokio::test]
+    async fn reattach_pending_skips_host_status_when_no_running_rows_in_db() {
+        // Complement of `reattach_rows_is_noop_when_rows_empty`: prove
+        // that `reattach_pending` (the variant that queries the DB
+        // itself) also short-circuits before touching `host.status()`
+        // when the `list_running_interactive_sessions()` query returns
+        // an empty list. Boot-time reconciliation against a workspace
+        // with zero pending rows must not spin up the host.
+        let db = Database::open_in_memory().unwrap();
+        insert_test_workspace(&db, "ws-1");
+        // Intentionally insert NO interactive_sessions rows — the
+        // running-list query will return empty.
+
+        struct PanickyHost;
+        #[async_trait]
+        impl InteractiveHost for PanickyHost {
+            async fn ensure_session(
+                &self,
+                _sid: &SessionId,
+                _spec: &SessionSpec,
+            ) -> Result<HostHandle, HostError> {
+                unimplemented!()
+            }
+            async fn attach(
+                &self,
+                _sid: &SessionId,
+            ) -> Result<(AttachId, AttachStream), HostError> {
+                unimplemented!()
+            }
+            async fn send_input(
+                &self,
+                _sid: &SessionId,
+                _payload: InputPayload,
+            ) -> Result<(), HostError> {
+                unimplemented!()
+            }
+            async fn capture_screen(&self, _sid: &SessionId) -> Result<ScreenSnapshot, HostError> {
+                unimplemented!()
+            }
+            async fn resize(
+                &self,
+                _sid: &SessionId,
+                _rows: u16,
+                _cols: u16,
+            ) -> Result<(), HostError> {
+                unimplemented!()
+            }
+            async fn detach(
+                &self,
+                _sid: &SessionId,
+                _attach_id: AttachId,
+            ) -> Result<(), HostError> {
+                unimplemented!()
+            }
+            async fn stop(&self, _sid: &SessionId, _mode: StopMode) -> Result<(), HostError> {
+                unimplemented!()
+            }
+            async fn status(&self) -> Result<HostStatus, HostError> {
+                panic!("status must not be called when running list is empty")
+            }
+        }
+
+        reattach_pending(&db, &PanickyHost).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn detect_orphans_returns_empty_when_host_status_has_no_sessions() {
+        // Mirror image of the cold-start case: the host's `status()`
+        // returns an empty `sessions` list (e.g. fresh tmux server with
+        // nothing on it yet). Even if the DB tracks several sids, the
+        // orphan set must be empty — there are no host sessions to
+        // classify as orphans.
+        let host = MockHost {
+            status_response: HostStatus {
+                host_version: "mock".into(),
+                sessions: vec![],
+            },
+        };
+
+        let db_known = vec![
+            "claudette-ws1-aaaaaaaa".to_string(),
+            "claudette-ws1-bbbbbbbb".to_string(),
+        ];
+        let orphans = detect_orphans(&db_known, &host).await.unwrap();
+        assert!(
+            orphans.is_empty(),
+            "empty host status must yield empty orphan list; got {:?}",
+            orphans.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
         );
     }
 
