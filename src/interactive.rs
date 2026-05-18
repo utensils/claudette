@@ -585,6 +585,121 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn reattach_rows_partial_db_write_failure_isolates_to_one_row() {
+        // Contract: a per-row DB-write failure inside reattach_rows
+        // (e.g. the row vanished between `list_running_*` and the
+        // update, returning rusqlite::Error::QueryReturnedNoRows) must
+        // NOT abort the remaining iterations. The bad row is logged at
+        // WARN and skipped; every other row still reaches its expected
+        // terminal state.
+        //
+        // Construction: we pass `reattach_rows` two row values, but
+        // only persist the SECOND one in the DB. The first row's sid
+        // does not exist as a DB row, so `set_interactive_session_state`
+        // returns QueryReturnedNoRows for it. The surviving row must
+        // still be reclassified.
+        let db = Database::open_in_memory().unwrap();
+        insert_test_workspace(&db, "ws-1");
+
+        // Only the survivor is persisted. The "ghost" row is passed
+        // into reattach_rows but never inserted, so its UPDATE matches
+        // zero rows and triggers QueryReturnedNoRows.
+        let ghost = make_row("claudette-ws1-ghostghost", "ws-1", "running");
+        let survivor = make_row("claudette-ws1-survivor1", "ws-1", "running");
+        db.create_interactive_session(&survivor).unwrap();
+
+        // Host knows about neither sid → both should be classified as
+        // "crashed / host missing". Ghost's UPDATE fails (no row),
+        // survivor's UPDATE succeeds.
+        let host = MockHost {
+            status_response: HostStatus {
+                host_version: "mock".into(),
+                sessions: vec![],
+            },
+        };
+
+        // The function returns Ok(()) — per-row DB errors are
+        // swallowed, not propagated.
+        reattach_rows(&db, &[ghost, survivor], &host).await.unwrap();
+
+        // Surviving row reached the expected terminal state.
+        let row = db
+            .get_interactive_session("claudette-ws1-survivor1")
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            row.state, "crashed",
+            "survivor must be classified even though an earlier row's UPDATE failed",
+        );
+        assert_eq!(row.crash_reason.as_deref(), Some("host missing"));
+
+        // Ghost still doesn't exist — the failed UPDATE didn't create it.
+        assert!(
+            db.get_interactive_session("claudette-ws1-ghostghost")
+                .unwrap()
+                .is_none(),
+            "ghost row must not be resurrected by a failed UPDATE",
+        );
+    }
+
+    #[tokio::test]
+    async fn reattach_rows_partial_db_write_failure_processes_later_rows() {
+        // Complementary to the previous test: put the FAILING row in
+        // the MIDDLE of a three-row batch and verify both the
+        // before-failure row AND the after-failure row reach the
+        // expected terminal state. This pins down the "skip, don't
+        // abort" semantics: if reattach_rows used `?` on the DB write,
+        // the third row would never be touched.
+        let db = Database::open_in_memory().unwrap();
+        insert_test_workspace(&db, "ws-1");
+
+        let before = make_row("claudette-ws1-beforeone", "ws-1", "running");
+        let ghost = make_row("claudette-ws1-ghostmid1", "ws-1", "running");
+        let after = make_row("claudette-ws1-afterone1", "ws-1", "running");
+        db.create_interactive_session(&before).unwrap();
+        db.create_interactive_session(&after).unwrap();
+        // `ghost` intentionally NOT inserted, so its UPDATE will match
+        // zero rows and trigger QueryReturnedNoRows mid-loop.
+
+        // Host reports `before` as alive → "detached"; nothing else
+        // claimed alive → ghost + after classified as "crashed".
+        let host = MockHost {
+            status_response: HostStatus {
+                host_version: "mock".into(),
+                sessions: vec![HostSessionSummary {
+                    sid: SessionId("claudette-ws1-beforeone".into()),
+                    pid: None,
+                    running: true,
+                }],
+            },
+        };
+
+        reattach_rows(&db, &[before, ghost, after.clone()], &host)
+            .await
+            .unwrap();
+
+        let before_row = db
+            .get_interactive_session("claudette-ws1-beforeone")
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            before_row.state, "detached",
+            "row before the failing write must still be classified",
+        );
+
+        let after_row = db
+            .get_interactive_session(&after.sid)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            after_row.state, "crashed",
+            "row after the failing write must still be classified — \
+             a failure in the middle of the loop must not short-circuit it",
+        );
+        assert_eq!(after_row.crash_reason.as_deref(), Some("host missing"));
+    }
+
+    #[tokio::test]
     async fn reattach_rows_surfaces_host_status_errors() {
         let db = Database::open_in_memory().unwrap();
         insert_test_workspace(&db, "ws-1");
