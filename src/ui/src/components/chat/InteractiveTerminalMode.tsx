@@ -95,13 +95,20 @@ export function InteractiveTerminalMode({ sid }: InteractiveTerminalModeProps) {
 
     void subscribeOutput(sid, (ev) => {
       term.write(base64ToBytes(ev.bytesB64));
-    }).then((unlisten) => {
-      if (cancelled) {
-        unlisten();
-        return;
-      }
-      unlistenOutput = unlisten;
-    });
+    })
+      .then((unlisten) => {
+        if (cancelled) {
+          unlisten();
+          return;
+        }
+        unlistenOutput = unlisten;
+      })
+      .catch((err) => {
+        // Symmetric with the `attach` catch below: log and continue so
+        // the terminal still mounts. Without this, a rejected
+        // subscribe surfaces as an unhandled promise rejection.
+        console.warn("[interactive] subscribeOutput failed:", err);
+      });
 
     // Re-attach the host so it knows we want to receive output again
     // after a reconnect. The Rust side is idempotent — re-attaching a
@@ -131,7 +138,16 @@ export function InteractiveTerminalMode({ sid }: InteractiveTerminalModeProps) {
       cancelled = true;
       ro.disconnect();
       dataDisposable.dispose();
-      if (unlistenOutput) unlistenOutput();
+      if (unlistenOutput) {
+        try {
+          unlistenOutput();
+        } catch (err) {
+          // Guard against a throwing unlisten so the terminal still
+          // gets disposed — otherwise we'd leak the xterm instance
+          // and its DOM nodes if the listener teardown failed.
+          console.warn("[interactive] unlistenOutput threw:", err);
+        }
+      }
       term.dispose();
     };
   }, [sid]);
