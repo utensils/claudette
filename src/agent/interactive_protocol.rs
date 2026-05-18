@@ -343,4 +343,38 @@ mod frame_tests {
         let err = read_frame(&mut b).await.unwrap_err();
         assert!(err.to_string().contains("frame too large"), "got: {err}");
     }
+
+    #[tokio::test]
+    async fn frame_rejects_truncated_header() {
+        let (mut a, mut b) = duplex(64 * 1024);
+        // Write only 2 bytes of the 4-byte length prefix, then close the
+        // writer so the reader observes EOF instead of hanging.
+        a.write_all(&[0u8, 0u8]).await.unwrap();
+        a.shutdown().await.unwrap();
+        let err = read_frame(&mut b).await.unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::UnexpectedEof, "got: {err}");
+    }
+
+    #[tokio::test]
+    async fn frame_rejects_partial_payload() {
+        let (mut a, mut b) = duplex(64 * 1024);
+        // Announce a 100-byte payload but only deliver 50 before closing.
+        let header = 100u32.to_be_bytes();
+        a.write_all(&header).await.unwrap();
+        a.write_all(&[0u8; 50]).await.unwrap();
+        a.shutdown().await.unwrap();
+        let err = read_frame(&mut b).await.unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::UnexpectedEof, "got: {err}");
+    }
+
+    #[tokio::test]
+    async fn frame_accepts_zero_length_payload() {
+        let (mut a, mut b) = duplex(64 * 1024);
+        // A zero-length payload is a valid frame: just the 4-byte length=0
+        // header with no body.
+        a.write_all(&[0u8, 0u8, 0u8, 0u8]).await.unwrap();
+        a.shutdown().await.unwrap();
+        let buf = read_frame(&mut b).await.unwrap();
+        assert_eq!(buf, Vec::<u8>::new());
+    }
 }
