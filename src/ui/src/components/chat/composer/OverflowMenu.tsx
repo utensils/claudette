@@ -65,15 +65,12 @@ export function OverflowMenu({ sessionId, disabled, isRunning, isRemote }: Overf
   const clearAgentQuestion = useAppStore((s) => s.clearAgentQuestion);
   const clearPlanApproval = useAppStore((s) => s.clearPlanApproval);
   const clearAgentApproval = useAppStore((s) => s.clearAgentApproval);
-  const claudeRemoteControlEnabled = useAppStore(
-    (s) => s.claudeRemoteControlEnabled,
-  );
 
   const currentModel = useSelectedModelEntry(sessionId);
   const showFast = currentModel?.supportsFastMode ?? isFastSupported(selectedModel);
   const [remoteControlStatus, setRemoteControlStatus] =
     useState<ClaudeRemoteControlStatus>(DISABLED_REMOTE_STATUS);
-  const showRemoteControl = !isRemote && claudeRemoteControlEnabled;
+  const showRemoteControl = !isRemote;
   const remoteControlActive = showRemoteControl && remoteControlStatus.state !== "disabled";
   const anyActive = fastMode || chromeEnabled || remoteControlActive;
 

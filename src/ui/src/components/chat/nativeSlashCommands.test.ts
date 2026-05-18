@@ -19,7 +19,6 @@ import {
 function makeCtx(overrides: Partial<NativeCommandContext> = {}): NativeCommandContext {
   return {
     repoId: "repo-1",
-    pluginManagementEnabled: true,
     usageInsightsEnabled: true,
     openPluginSettings: vi.fn<(intent: Partial<PluginSettingsIntent>) => void>(),
     repository: { name: "claudette", path: "/tmp/repos/claudette" },
@@ -158,13 +157,6 @@ describe("plugin native handler", () => {
     );
   });
 
-  it("swallows /plugin when plugin management is disabled without opening settings", async () => {
-    const ctx = makeCtx({ pluginManagementEnabled: false });
-    const handler = resolveNativeHandler("plugin")!;
-    const result = await handler.execute(ctx, "install demo");
-    expect(result).toEqual({ kind: "handled", canonicalName: "plugin" });
-    expect(ctx.openPluginSettings).not.toHaveBeenCalled();
-  });
 });
 
 describe("dispatcher across native kinds", () => {

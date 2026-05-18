@@ -9,18 +9,6 @@ const appStore = vi.hoisted(() => ({
   setUsageInsightsEnabled: vi.fn((next: boolean) => {
     appStore.usageInsightsEnabled = next;
   }),
-  pluginManagementEnabled: false,
-  setPluginManagementEnabled: vi.fn((next: boolean) => {
-    appStore.pluginManagementEnabled = next;
-  }),
-  claudeRemoteControlEnabled: false,
-  setClaudeRemoteControlEnabled: vi.fn((next: boolean) => {
-    appStore.claudeRemoteControlEnabled = next;
-  }),
-  communityRegistryEnabled: false,
-  setCommunityRegistryEnabled: vi.fn((next: boolean) => {
-    appStore.communityRegistryEnabled = next;
-  }),
 }));
 
 const serviceMocks = vi.hoisted(() => ({

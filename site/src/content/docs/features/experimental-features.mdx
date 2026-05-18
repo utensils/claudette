@@ -5,35 +5,7 @@ description: Opt-in toggles for features that are still maturing — what each o
 
 **Settings > Experimental** holds toggles for features that are still maturing. "Experimental" doesn't mean unsafe — these are shipped and tested — but the surface area, defaults, or persistence shape may shift between releases. Toggling one off is always reversible.
 
-Five toggles live there today. Agent backend choices such as Ollama, LM Studio, OpenAI API, and Codex now live in **Settings > Models** as first-class model/provider controls.
-
-## Claudette Terminal
-
-Adds a **read-only** terminal tab that mirrors the agent's shell commands and any background-task output as the agent runs. Useful for watching what an agent is actually doing in real time without scrubbing through the chat transcript, and for catching long-running shell processes the agent forgot to wait on.
-
-Background-task completion handling stays enabled even when this toggle is off — the toggle only controls whether the dedicated tab shows up in the terminal panel.
-
-## Plugin Management
-
-Surfaces the Claude Code plugin marketplace inside Claudette: install, enable, disable, update, and remove Claude Code plugins from a settings panel rather than the CLI. Adds the `/plugin` and `/marketplace` slash commands to the picker (these are reserved when the toggle is on, so user/project commands of the same name yield).
-
-This is distinct from Claudette's own [Lua plugin system](/claudette/features/scm-providers/) (SCM providers, env-providers, etc.), which is always available.
-
-→ Where the commands live: **[Slash Commands](/claudette/features/slash-commands/#built-in-commands)**
-
-## Claude Remote Control
-
-Bridges your local Claudette workspace to a Claude Code session running on `claude.ai` (web or mobile). Drive an agent from your phone while looking at the diff on a laptop, or hand off a session between devices.
-
-Has its own setup flow, troubleshooting steps, and constraints (some Claudette features are deferred while a bridge is live).
-
-→ Full doc: **[Claude Remote Control](/claudette/features/claude-remote-control/)**
-
-## Community Registry
-
-Enables the Plugins / Themes / Grammars community catalog inside Claudette. Browse third-party content, verify signatures, and install with one click. Off by default because it broadens the trust surface — you're running code from people who aren't you or Anthropic.
-
-→ Trust model and signature verification: **[Community Registry & Trust](/claudette/features/community-registry-trust/)**
+Only **Claude Code Usage** lives there today. Agent backend choices such as Ollama, LM Studio, OpenAI API, and Codex live in **Settings > Models** as first-class model/provider controls. Claude Code Plugin Management, Claude Remote Control, Community Registry, and Claudette Terminal are visible by default in their normal settings locations.
 
 ## Claude Code Usage
 
@@ -51,10 +23,6 @@ Enabling this toggle opens a confirmation dialog that explains how the data flow
 
 | Toggle | What's still moving |
 |---|---|
-| Claudette Terminal | Layout and persistence story for the read-only tab. |
-| Plugin Management | Marketplace UI; settings persistence for per-plugin config. |
-| Claude Remote Control | Reconnect / device-handoff UX; deferred-feature list. |
-| Community Registry | Content moderation; revocation flow; theme runtime loading. |
 | Claude Code Usage | Cache invalidation around tier changes; richer breakdown views; (non-Anthropic providers already render local-aggregate totals unconditionally). |
 
 If a toggle moves to "default-on" or graduates out of experimental, the release notes for that feature describe any one-time migration. Experimental toggles are otherwise independent, never bundled.

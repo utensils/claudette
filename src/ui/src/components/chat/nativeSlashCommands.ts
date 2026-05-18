@@ -24,7 +24,6 @@ export type ConfigSection = (typeof CONFIG_SECTIONS)[number];
 
 export interface NativeCommandContext {
   repoId: string | null;
-  pluginManagementEnabled: boolean;
   usageInsightsEnabled: boolean;
   openPluginSettings: (intent: Partial<PluginSettingsIntent>) => void;
   /** Repository metadata for the current workspace — used by review-workflow handlers. */
@@ -168,16 +167,10 @@ function pluginHandler(root: "plugin" | "marketplace"): NativeHandler {
     aliases: root === "plugin" ? ["plugins"] : [],
     kind: "settings_route",
     execute: (ctx, args) => {
-      if (!ctx.pluginManagementEnabled) {
-        // Plugin management disabled — swallow the command so it never reaches
-        // the agent, but do not mutate settings.
-        return { kind: "handled", canonicalName: root };
-      }
       const reconstructed = args.length > 0 ? `/${root} ${args}` : `/${root}`;
       const parsed = parsePluginSlashCommand(
         reconstructed,
         ctx.repoId,
-        ctx.pluginManagementEnabled,
       );
       if (!parsed) {
         return { kind: "handled", canonicalName: root };

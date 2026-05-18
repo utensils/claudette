@@ -663,7 +663,7 @@ export function ClaudeCodePluginsSettings() {
 
   return (
     <div>
-      <h1 className={styles.sectionTitle}>Plugins</h1>
+      <h1 className={styles.sectionTitle}>Claude Code Plugin Management</h1>
       <div className={styles.settingDescription}>
         Browse marketplace plugins, manage installed ones, and refresh marketplace metadata using the real Claude CLI.
       </div>

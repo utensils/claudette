@@ -183,33 +183,15 @@ export const createSettingsSlice: StateCreator<
     set({ claudetteTerminalEnabled: enabled }),
   usageInsightsEnabled: false,
   setUsageInsightsEnabled: (enabled) => set({ usageInsightsEnabled: enabled }),
-  pluginManagementEnabled: false,
+  pluginManagementEnabled: true,
   setPluginManagementEnabled: (enabled) =>
-    set((state) => ({
-      pluginManagementEnabled: enabled,
-      settingsSection:
-        !enabled && state.settingsSection === "claude-code-plugins"
-          ? "experimental"
-          : state.settingsSection,
-      pluginSettingsIntent: enabled ? state.pluginSettingsIntent : null,
-      pluginSettingsRepoId: enabled ? state.pluginSettingsRepoId : null,
-      pluginSettingsTab: enabled ? state.pluginSettingsTab : "available",
-    })),
+    set({ pluginManagementEnabled: enabled }),
   claudeRemoteControlEnabled: true,
   setClaudeRemoteControlEnabled: (enabled) =>
     set({ claudeRemoteControlEnabled: enabled }),
-  communityRegistryEnabled: false,
+  communityRegistryEnabled: true,
   setCommunityRegistryEnabled: (enabled) =>
-    set((state) => ({
-      communityRegistryEnabled: enabled,
-      // Bounce out of the Community section if the user disables the
-      // flag while it's open. Same shape as the claude-code-plugins
-      // bounce above.
-      settingsSection:
-        !enabled && state.settingsSection === "community"
-          ? "experimental"
-          : state.settingsSection,
-    })),
+    set({ communityRegistryEnabled: enabled }),
   disable1mContext: false,
   setDisable1mContext: (v) => set({ disable1mContext: v }),
   alternativeBackendsAvailable: false,
