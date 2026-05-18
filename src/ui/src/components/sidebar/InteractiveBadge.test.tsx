@@ -4,7 +4,10 @@ import {
   InteractiveBadge,
   computeInteractiveBadgeState,
 } from "./InteractiveBadge";
-import type { InteractiveSessionRow } from "../../services/interactive";
+import type {
+  InteractiveSessionRow,
+  InteractiveSessionState,
+} from "../../services/interactive";
 
 // ---------------------------------------------------------------------------
 // Test helpers
@@ -140,5 +143,56 @@ describe("computeInteractiveBadgeState", () => {
   it("treats DB state 'detached' the same as 'running' for badge purposes", () => {
     const rows = [makeRow({ state: "detached" })];
     expect(computeInteractiveBadgeState(rows)).toBe("detached");
+  });
+
+  // F6 Step 1 — Mixed-state precedence. Workspace with a crashed row *and* an
+  // additional "awaiting" signal (delivered via the assembler flag, since the
+  // DB `state` column does not encode awaiting) plus an additional detached
+  // row, must still resolve to "crashed" — confirming the documented
+  // precedence: crashed > awaiting > detached > null.
+  it("resolves to 'crashed' when a workspace mixes crashed + awaiting + detached signals", () => {
+    const rows = [
+      makeRow({ sid: "a", state: "detached" }),
+      makeRow({ sid: "b", state: "crashed" }),
+      makeRow({ sid: "c", state: "running" }),
+    ];
+    expect(computeInteractiveBadgeState(rows, true)).toBe("crashed");
+  });
+
+  // F6 Step 2 — Exhaustiveness. `badgeStateForRow` is not exported, but the
+  // contract it pins is observable through `computeInteractiveBadgeState`
+  // when called with a single row of each `InteractiveSessionState` value.
+  // Strict-mode `switch` exhaustiveness in the source guards this at compile
+  // time; this test pins the runtime mapping so the contract can't drift
+  // silently if a future state is added without a corresponding test update.
+  it("maps every InteractiveSessionState value through to the expected badge state", () => {
+    const expected: Record<
+      InteractiveSessionState,
+      "awaiting" | "detached" | "crashed" | null
+    > = {
+      running: "detached",
+      detached: "detached",
+      crashed: "crashed",
+      stopped: null,
+      unknown: null,
+    };
+    const allStates: InteractiveSessionState[] = [
+      "running",
+      "detached",
+      "crashed",
+      "stopped",
+      "unknown",
+    ];
+    // Catch any drift between the literal union and the keys above — if a
+    // new state lands in the union without an entry in `expected`, this
+    // count check fails before the per-state assertions even run.
+    expect(allStates.length).toBe(Object.keys(expected).length);
+    for (const state of allStates) {
+      const rows = [makeRow({ state })];
+      expect(
+        computeInteractiveBadgeState(rows),
+        `state="${state}" should map to ${expected[state]}`,
+      ).toBe(expected[state]);
+    }
   });
 });
