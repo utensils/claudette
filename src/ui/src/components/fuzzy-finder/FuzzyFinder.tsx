@@ -34,6 +34,11 @@ export function FuzzyFinder() {
     } else if (e.key === "Enter" && results[selectedIndex]) {
       handleSelect(results[selectedIndex].id);
     } else if (e.key === "Escape") {
+      // Stop the native event so the global dismiss-or-stop handler in
+      // useKeyboardShortcuts doesn't also fire with a stale `fuzzyFinderOpen`
+      // closure and fall through to stopping the running agent.
+      e.preventDefault();
+      e.nativeEvent.stopImmediatePropagation();
       toggleFuzzyFinder();
     }
   };
