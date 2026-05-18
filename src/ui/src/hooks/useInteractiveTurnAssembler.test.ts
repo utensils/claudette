@@ -199,6 +199,67 @@ describe("useInteractiveTurnAssembler reducer", () => {
     });
     expect(after).toBe(initialAssemblerState);
   });
+
+  it("buffers multiple pre-prompt outputs into a single transient turn 0", () => {
+    // Two outputs before any prompt_submitted should both land in the
+    // pre-prompt transient turn (id=0). The first output opens the turn
+    // in `live`, the second appends to it. prompt_submitted then closes
+    // turn 0 as `done` and opens turn 1; stop closes turn 1.
+    const state = reduce(initialAssemblerState, [
+      output("first banner line\n"),
+      output("second banner line\n"),
+      { type: "hook", kind: "prompt_submitted" },
+      { type: "hook", kind: "stop" },
+    ]);
+
+    expect(state.turns).toHaveLength(2);
+    expect(state.turns[0].id).toBe(0);
+    expect(state.turns[0].status).toBe("done");
+    expect(decode(state.turns[0].bytes)).toBe(
+      "first banner line\nsecond banner line\n",
+    );
+    expect(state.turns[1].id).toBe(1);
+    expect(state.turns[1].status).toBe("done");
+    expect(decode(state.turns[1].bytes)).toBe("");
+    expect(state.crashed).toBe(false);
+    expect(state.awaitingInput).toBe(false);
+  });
+
+  it("handles Exit arriving after Stop without corrupting state", () => {
+    // Stop already closed the live turn as `done`. A late `exit` event
+    // should still flip the global `crashed` flag but must not crash the
+    // reducer or rewrite the already-`done` turn's status to `crashed`
+    // (there is no live turn left to mark).
+    const state = reduce(initialAssemblerState, [
+      { type: "hook", kind: "prompt_submitted" },
+      output("answer body"),
+      { type: "hook", kind: "stop" },
+      { type: "exit", reason: "exit_status: 0" },
+    ]);
+
+    expect(state.turns).toHaveLength(1);
+    expect(state.turns[0].id).toBe(0);
+    // Already closed by `stop` — exit must not retroactively mark it
+    // crashed because no turn was live when exit landed.
+    expect(state.turns[0].status).toBe("done");
+    expect(decode(state.turns[0].bytes)).toBe("answer body");
+    expect(state.crashed).toBe(true);
+    expect(state.awaitingInput).toBe(false);
+  });
+
+  it("flips to crashed with empty turns when Exit fires first", () => {
+    // No prompt, no output — just an exit. The reducer must mark the
+    // session as crashed and leave the turns list empty rather than
+    // synthesizing a phantom crashed turn.
+    const state = assemblerReducer(initialAssemblerState, {
+      type: "exit",
+      reason: "signal: SIGTERM",
+    });
+
+    expect(state.crashed).toBe(true);
+    expect(state.turns).toEqual([]);
+    expect(state.awaitingInput).toBe(false);
+  });
 });
 
 // ---------------------------------------------------------------------------
