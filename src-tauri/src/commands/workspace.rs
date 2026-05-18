@@ -1102,10 +1102,11 @@ pub(crate) async fn delete_workspaces_bulk_inner(
         });
     }
 
-    // Register the cancel flag before the first DB call. The flag is
-    // unregistered in `finish_bulk_cleanup` at the end of this function,
-    // and the body is wrapped in an inner async block so a `?` early
-    // return below still hits the unregister step.
+    // Register the cancel flag before the first DB call. The body is
+    // pulled into `delete_workspaces_bulk_body` so we can unregister
+    // the flag (the `state.bulk_cleanup_cancels.write().await.remove(...)`
+    // below) unconditionally after it returns, including the `?`
+    // early-return paths inside the body.
     let cancel_flag: Option<Arc<AtomicBool>> = if let Some(req_id) = request_id {
         let flag = Arc::new(AtomicBool::new(false));
         state
@@ -1203,93 +1204,109 @@ async fn delete_workspaces_bulk_body(
         .map(|w| (w.id.clone(), w.name.clone()))
         .collect();
 
-    // DB deletes + summary materialization + Deleted hooks per row. Each
-    // row is its own transaction, so per-row failures (e.g. SQLITE_BUSY)
-    // are isolated and reported as `failed` rather than rolling back the
-    // whole batch.
+    // Per-row interleaved DB + agent-stop + worktree + branch + env
+    // cleanup. One loop, one cancel-check site, one terminal status
+    // per row. This shape was chosen over the prior two-batch design
+    // (DB pass → worktree pass) because:
     //
-    // Important: git/env cleanup runs ONLY after the DB delete succeeds
-    // (see below). Reversing that order made a "failed" outcome
-    // destructive — the row would survive but its worktree and branch
-    // were already gone, leaving the user with an archived workspace
-    // pointing at nothing they could restore.
+    // 1. Cancel between rows must skip both phases for the remaining
+    //    rows. With separate batches, a cancel after the fast DB pass
+    //    would still let the user wait through the slow worktree pass,
+    //    or — if we broke out of the worktree pass — would orphan
+    //    worktrees and branches for rows whose DB row was already
+    //    deleted. (PR #857 review, Copilot finding #3256083554.)
+    //
+    // 2. The `bulk-cleanup-progress` event for a row fires AFTER its
+    //    worktree cleanup completes, so the modal's per-row "deleted"
+    //    check matches when work is actually done — not when the
+    //    quick DB transaction committed. (PR #857 review, finding
+    //    #3256083564.)
+    //
+    // Order within each row: DB delete first (fails closed on raced
+    // restore via the in-transaction Archived guard in
+    // `try_delete_archived_workspace_with_summary`) → agent stop →
+    // worktree remove → branch delete → env unwatch + cache
+    // invalidate → emit progress. Worktree/agent/env teardown only
+    // runs when the DB delete succeeded; a failed row keeps its
+    // disk and branch state intact so retry can converge.
     let hooks = TauriHooks::new(app.clone());
-    // Bridge the ops-layer progress callback to a Tauri event the modal
-    // can subscribe to. Captures `request_id`, `name_by_id`, and
-    // `AppHandle` so the closure can emit on the same thread it's
-    // called from (synchronous — no .await available, no Send required).
-    let progress_emit = |outcome: &claudette::ops::workspace::DeleteWorkspaceOutcome| {
+    let mut deleted: Vec<String> = Vec::with_capacity(ids.len());
+    let mut failed: Vec<BulkDeleteFailure> = Vec::new();
+    let mut cancelled: Vec<String> = Vec::new();
+    let mut affected_repos: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut env_cleanup_paths: Vec<String> = Vec::new();
+
+    let emit_progress = |workspace_id: &str, status: &'static str, error: Option<String>| {
         let Some(req_id) = request_id else {
             return;
         };
-        let status: &'static str = if outcome.cancelled {
-            "cancelled"
-        } else if outcome.error.is_some() {
-            "failed"
-        } else {
-            "deleted"
-        };
         let payload = BulkCleanupProgress {
             request_id: req_id.to_string(),
-            workspace_id: outcome.id.clone(),
+            workspace_id: workspace_id.to_string(),
             name: name_by_id
-                .get(&outcome.id)
+                .get(workspace_id)
                 .cloned()
-                .unwrap_or_else(|| outcome.id.clone()),
+                .unwrap_or_else(|| workspace_id.to_string()),
             status,
-            error: outcome.error.clone(),
+            error,
         };
         if let Err(e) = app.emit("bulk-cleanup-progress", &payload) {
             tracing::warn!(
                 target: "claudette::workspace",
                 error = %e,
-                workspace_id = %outcome.id,
+                workspace_id = workspace_id,
                 "failed to emit bulk-cleanup-progress",
             );
         }
     };
-    let outcomes = claudette::ops::workspace::delete_workspaces_bulk(
-        &db,
-        hooks.as_ref(),
-        ids,
-        cancel_flag,
-        Some(&progress_emit),
-    )
-    .map_err(|e| e.to_string())?;
 
-    let mut deleted = Vec::with_capacity(outcomes.len());
-    let mut failed = Vec::new();
-    let mut cancelled = Vec::new();
-    let mut affected_repos: std::collections::HashSet<String> = std::collections::HashSet::new();
-    for outcome in outcomes {
-        if outcome.cancelled {
-            cancelled.push(outcome.id);
+    for id in ids {
+        // Cancel check: every row after the user clicked Cancel is
+        // reported as `cancelled` with no DB, agent, or disk touch.
+        if cancel_flag.is_some_and(|f| f.load(Ordering::Relaxed)) {
+            cancelled.push(id.clone());
+            emit_progress(id, "cancelled", None);
             continue;
         }
-        match outcome.error {
-            None => {
-                affected_repos.insert(outcome.repository_id.clone());
-                deleted.push(outcome.id);
-            }
-            Some(err) => failed.push(BulkDeleteFailure {
-                id: outcome.id,
-                error: err,
-            }),
-        }
-    }
 
-    // Stop running agents for the rows whose DB delete succeeded — same
-    // gating discipline as the git/env cleanup below. A failed row
-    // keeps its agent running so a retry has a chance of converging,
-    // matching the contract a single retry against `delete_workspace`
-    // would offer.
-    if !deleted.is_empty() {
-        let deleted_set: std::collections::HashSet<String> = deleted.iter().cloned().collect();
+        let repo_id_for_row = workspaces
+            .iter()
+            .find(|w| &w.id == id)
+            .map(|w| w.repository_id.clone())
+            .unwrap_or_default();
+
+        // DB delete (in-transaction Archived guard inside).
+        match db.try_delete_archived_workspace_with_summary(id) {
+            Ok(true) => {} // success — fall through to cleanup
+            Ok(false) => {
+                let err = "workspace no longer archived".to_string();
+                failed.push(BulkDeleteFailure {
+                    id: id.clone(),
+                    error: err.clone(),
+                });
+                emit_progress(id, "failed", Some(err));
+                continue;
+            }
+            Err(e) => {
+                let err = e.to_string();
+                failed.push(BulkDeleteFailure {
+                    id: id.clone(),
+                    error: err.clone(),
+                });
+                emit_progress(id, "failed", Some(err));
+                continue;
+            }
+        }
+
+        // Stop any agents running against this workspace's chat
+        // sessions. Acquire-release the write lock per row instead of
+        // holding it across the whole batch so concurrent agent
+        // operations on unrelated workspaces aren't blocked.
         let pids_to_stop: Vec<u32> = {
             let mut agents = state.agents.write().await;
             let to_remove: Vec<String> = agents
                 .iter()
-                .filter(|(_, s)| deleted_set.contains(&s.workspace_id))
+                .filter(|(_, s)| s.workspace_id == *id)
                 .map(|(k, _)| k.clone())
                 .collect();
             to_remove
@@ -1300,64 +1317,48 @@ async fn delete_workspaces_bulk_body(
         for pid in pids_to_stop {
             let _ = claudette::agent::stop_agent(pid).await;
         }
-    }
 
-    // Git cleanup: best-effort worktree removal + force branch delete,
-    // ONLY for rows whose DB delete succeeded. Worktree/branch state for
-    // a failed row stays intact so the user can retry the cleanup.
-    //
-    // Cancel check between rows: a 50-workspace batch can spend most of
-    // its wall-clock time here (worktrees with `node_modules` are slow
-    // to `rm -rf`). Without this check, clicking Cancel after the fast
-    // DB pass would still leave the user waiting through every
-    // remaining worktree removal. The trade-off is that a cancelled
-    // mid-batch leaves orphan worktree directories on disk for rows
-    // that DB-committed but didn't get to git cleanup — the user can
-    // re-run cleanup (the orphans aren't visible in the UI since
-    // their DB row is gone) or remove them by hand. We accept the
-    // orphans because the alternative — making Cancel a no-op during
-    // the slow phase — is the bug we're fixing.
-    for ws_id in &deleted {
-        if cancel_flag.is_some_and(|f| f.load(Ordering::Relaxed)) {
-            tracing::info!(
-                target: "claudette::workspace",
-                request_id = request_id.unwrap_or(""),
-                "cancel observed mid-worktree-cleanup; \
-                 skipping remaining git/env work for this batch",
-            );
-            break;
-        }
-        let Some(meta) = target_meta.get(ws_id) else {
-            continue;
-        };
-        let Some(ref repo_path) = meta.repo_path else {
-            continue;
-        };
-        if let Some(ref wt_path) = meta.worktree_path {
-            let _ = git::remove_worktree(repo_path, wt_path, true).await;
-        }
-        let _ = git::branch_delete(repo_path, &meta.branch_name).await;
-    }
-
-    // Env-watcher unregister + env-cache invalidate, both gated on
-    // per-row DB success so we don't drop OS watch slots (or evict
-    // cached env exports) for paths that still own a live workspace
-    // row. Single pass — acquire the watcher read lock once and do
-    // both invalidations per row.
-    {
-        let watcher_guard = state.env_watcher.read().await;
-        let watcher = watcher_guard.as_ref();
-        for ws_id in &deleted {
-            if let Some(meta) = target_meta.get(ws_id) {
+        // Worktree + branch cleanup. Best-effort: a failed worktree
+        // removal (e.g. on-disk dir is gone, manual user cleanup) is
+        // logged-and-ignored — the DB row is already gone, so the
+        // "row deleted" contract holds even if disk lags.
+        if let Some(meta) = target_meta.get(id) {
+            if let Some(ref repo_path) = meta.repo_path {
                 if let Some(ref wt_path) = meta.worktree_path {
-                    let path = Path::new(wt_path);
-                    if let Some(watcher) = watcher {
-                        watcher.unregister(path, None);
-                    }
-                    state.env_cache.invalidate(path, None);
+                    let _ = git::remove_worktree(repo_path, wt_path, true).await;
+                    env_cleanup_paths.push(wt_path.clone());
                 }
+                let _ = git::branch_delete(repo_path, &meta.branch_name).await;
             }
         }
+
+        affected_repos.insert(repo_id_for_row);
+        deleted.push(id.clone());
+        emit_progress(id, "deleted", None);
+    }
+
+    // Env-watcher unregister + env-cache invalidate batched at the
+    // end so we acquire the watcher read lock once instead of
+    // per-row. Drops `watcher_guard` before MCP reconciliation so
+    // the read lock isn't held across the next `await`.
+    if !env_cleanup_paths.is_empty() {
+        let watcher_guard = state.env_watcher.read().await;
+        let watcher = watcher_guard.as_ref();
+        for wt_path in &env_cleanup_paths {
+            let path = Path::new(wt_path);
+            if let Some(watcher) = watcher {
+                watcher.unregister(path, None);
+            }
+            state.env_cache.invalidate(path, None);
+        }
+    }
+
+    // Single bulk hook fires the tray rebuild and emits one
+    // `workspaces-changed` event per actually-deleted id. See
+    // `TauriHooks::workspaces_changed_bulk` for the amortization
+    // rationale — 72 rows must not produce 72 tray rebuilds.
+    if !deleted.is_empty() {
+        hooks.workspaces_changed_bulk(&deleted, WorkspaceChangeKind::Deleted);
     }
 
     // Per affected repo: if no Active or Archived workspaces remain, drop

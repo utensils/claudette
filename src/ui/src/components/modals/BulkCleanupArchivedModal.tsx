@@ -163,13 +163,15 @@ export function BulkCleanupArchivedModal() {
     return runIds.map((id) => {
       const live = byId.get(id);
       if (live) return live;
-      // Synthesized fallback for evicted rows. Only the fields the
-      // row renderer reads are populated; the rest stay defaults.
-      const progressEntry = progress.get(id);
-      const placeholder: Workspace = {
+      // Synthesized fallback for evicted rows. `name` is left empty
+      // so the row renderer's `ws.name || runNamesRef.current.get(ws.id)
+      // || ws.id` chain falls through to the dispatch-time snapshot
+      // (or the event payload), giving the user a real workspace
+      // name instead of a UUID-looking id.
+      return {
         id,
         repository_id: "",
-        name: progressEntry ? `${id}` : id,
+        name: "",
         branch_name: "",
         worktree_path: null,
         status: "Archived",
@@ -178,28 +180,41 @@ export function BulkCleanupArchivedModal() {
         created_at: "",
         sort_order: 0,
         remote_connection_id: null,
-      };
-      // If we captured a friendly name in progress events, expose it.
-      // The event payload uses `name`, but progress map values today
-      // only carry status + error. Names are looked up from the
-      // pre-run snapshot below instead.
-      return placeholder;
+      } satisfies Workspace;
     });
-  }, [runIds, workspaces, progress]);
+  }, [runIds, workspaces]);
 
   // Name snapshot captured at run start so evicted rows can still show
   // their original workspace name in the live list. Keyed by
   // workspace_id; survives until the next run begins.
   const runNamesRef = useRef<Map<string, string>>(new Map());
 
-  // Repo display info captured at run start so we can keep rendering
-  // per-repo headers even after a repo's last workspace evicts.
-  const runReposRef = useRef<Map<string, Repository>>(new Map());
-
   // workspace_id → repository_id snapshot at dispatch time. Used in
   // run mode to reconstruct grouping even after Zustand evictions
   // null out `row.repository_id` on the synthesized placeholder.
   const runIdToRepoIdRef = useRef<Map<string, string>>(new Map());
+
+  // Tracks whether the modal is still mounted. Prevents the
+  // dispatched `handleDelete` promise from calling `closeModal()`
+  // (a global store action that dismisses *whatever* modal is open)
+  // after the user has closed this modal and opened a different one.
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
+  // Active request id for the in-flight run. The progress listener
+  // reads this ref to filter events instead of subscribing per-run,
+  // which avoids three lifecycle hazards from the prior per-run
+  // effect design: a listen()-race where fast events emit before
+  // the subscribe resolves; an unsubscribe/resubscribe gap when the
+  // user clicks Cancel and flips `runState.cancelling`; and an
+  // `unlisten` leak when the effect cleans up before the async
+  // listen() resolves.
+  const currentRequestIdRef = useRef<string | null>(null);
 
   const clearStaleFailures = () => {
     setFailures((prev) => (prev.size === 0 ? prev : new Map()));
@@ -232,22 +247,20 @@ export function BulkCleanupArchivedModal() {
     }
   };
 
-  // Subscribe to per-row progress events for the current run only.
-  // Filter by requestId so a concurrent cleanup in another window
-  // doesn't bleed into our state.
+  // Install the progress listener once at mount, filter inside the
+  // handler via `currentRequestIdRef`. Replaces the prior per-run
+  // effect that had three race / leak hazards (see ref comment).
+  // The listener is unregistered when the modal unmounts.
   useEffect(() => {
-    if (runState.kind !== "running") return;
-    const activeRequestId = runState.requestId;
     let unlisten: UnlistenFn | undefined;
     let cancelled = false;
     (async () => {
       try {
-        unlisten = await listen<BulkCleanupProgress>(
+        const fn = await listen<BulkCleanupProgress>(
           "bulk-cleanup-progress",
           (event) => {
-            if (cancelled) return;
             const payload = event.payload;
-            if (payload.requestId !== activeRequestId) return;
+            if (payload.requestId !== currentRequestIdRef.current) return;
             setProgress((prev) => {
               const next = new Map(prev);
               next.set(payload.workspaceId, {
@@ -256,16 +269,20 @@ export function BulkCleanupArchivedModal() {
               });
               return next;
             });
-            // Capture the friendly name from the event payload too —
-            // some rows arrive after the Deleted hook has already
-            // evicted them from the store, and the snapshot built
-            // before dispatch may miss future-runs of the same
-            // workspace if a later cleanup-all races with restore.
             if (payload.name) {
               runNamesRef.current.set(payload.workspaceId, payload.name);
             }
           },
         );
+        if (cancelled) {
+          // The effect cleaned up before listen() resolved (modal
+          // unmounted very fast). Immediately invoke the returned
+          // unlisten so we don't leave a stale handler registered for
+          // the lifetime of the webview.
+          fn();
+          return;
+        }
+        unlisten = fn;
       } catch {
         // No event bridge → the live list won't update incrementally,
         // but the final result still resolves. The modal still works,
@@ -276,21 +293,19 @@ export function BulkCleanupArchivedModal() {
       cancelled = true;
       unlisten?.();
     };
-  }, [runState]);
+  }, []);
 
   const handleDelete = async () => {
     const ids = [...effectiveSelection];
     if (ids.length === 0) return;
 
-    // Snapshot names + repos before dispatch so the live list keeps
-    // labels even after the Deleted hook evicts rows from the store.
+    // Snapshot names + repo ids before dispatch so the live list
+    // keeps labels and grouping even after the `Deleted` hook
+    // evicts rows from the Zustand store.
     runNamesRef.current = new Map(
-      eligible.filter((w) => effectiveSelection.has(w.id)).map((w) => [w.id, w.name]),
-    );
-    runReposRef.current = new Map(
-      repositories
-        .filter((r) => ids.some((id) => workspaces.find((w) => w.id === id)?.repository_id === r.id))
-        .map((r) => [r.id, r]),
+      eligible
+        .filter((w) => effectiveSelection.has(w.id))
+        .map((w) => [w.id, w.name]),
     );
     runIdToRepoIdRef.current = new Map(
       ids.map((id) => [
@@ -300,10 +315,15 @@ export function BulkCleanupArchivedModal() {
     );
 
     const requestId = crypto.randomUUID();
-    setRunState({ kind: "running", requestId, cancelling: false });
+    // Set the ref BEFORE invoking the backend so the at-mount
+    // listener filters in any events that fire before React commits
+    // the `setRunState` below — the DB pass can complete a few
+    // rows in single-digit milliseconds.
+    currentRequestIdRef.current = requestId;
     setRunIds(ids);
     setProgress(new Map());
     setFailures(new Map());
+    setRunState({ kind: "running", requestId, cancelling: false });
 
     try {
       const result = await deleteWorkspacesBulk(ids, requestId);
@@ -323,7 +343,11 @@ export function BulkCleanupArchivedModal() {
             { count: succeeded },
           ),
         );
-        closeModal();
+        // Background-completion guard: if the modal was closed (or
+        // replaced) while the run was in flight, `closeModal()` would
+        // dismiss whatever modal is now open. Only close when we're
+        // still mounted.
+        if (mountedRef.current) closeModal();
         return;
       }
 
@@ -335,20 +359,26 @@ export function BulkCleanupArchivedModal() {
             cancelled: skipped,
           }),
         );
-        closeModal();
+        if (mountedRef.current) closeModal();
         return;
       }
 
-      // Partial failure (with or without cancellations).
+      // Partial failure (with or without cancellations). When the
+      // user also cancelled, surface the skipped count too — they
+      // need to know some rows were intentionally left untouched
+      // and require a re-run, separate from the failures.
       const failureMap = new Map<string, string>();
       for (const f of result.failed) failureMap.set(f.id, f.error);
       setFailures(failureMap);
       setSelected(new Set(result.failed.map((f) => f.id)));
       addToast(
-        t("bulk_cleanup_partial", {
-          succeeded,
-          failed,
-        }),
+        skipped > 0
+          ? t("bulk_cleanup_partial_with_cancelled", {
+              succeeded,
+              failed,
+              cancelled: skipped,
+            })
+          : t("bulk_cleanup_partial", { succeeded, failed }),
       );
     } catch (e) {
       addToast(
@@ -357,6 +387,13 @@ export function BulkCleanupArchivedModal() {
         }),
       );
     } finally {
+      currentRequestIdRef.current = null;
+      // Clear `runIds` so `renderingRun` (keyed on `runIds.length`,
+      // not `progress.size`) flips back to false. We intentionally
+      // leave `progress` populated for the partial-failure path so
+      // failed rows can keep their per-row error string visible in
+      // idle mode — the renderer reads `failures.get(id)` first and
+      // falls back to `progress.get(id)?.error` if absent.
       setRunState({ kind: "idle" });
       setRunIds([]);
     }
@@ -426,7 +463,14 @@ export function BulkCleanupArchivedModal() {
   // - Running: render `runRows` (the dispatched snapshot), still
   //   grouped by repo in cleanup-all mode. Selection checkboxes are
   //   replaced with status icons.
-  const renderingRun = isRunning || progress.size > 0;
+  //
+  // Keyed on `runIds.length`, not `progress.size`. The partial-failure
+  // path clears `runIds` (so the modal flips back to idle and the
+  // failed rows render in the eligible list with their per-row error)
+  // but intentionally leaves `progress` populated so a fast Cancel→
+  // retry round-trip doesn't lose context. Using `progress.size`
+  // would trap the modal in run-mode with an empty `runRows` list.
+  const renderingRun = isRunning || runIds.length > 0;
   const rowsForRender = renderingRun ? runRows : eligible;
   const groupedForRender = useMemo(() => {
     if (repoId !== null) {
@@ -515,7 +559,14 @@ export function BulkCleanupArchivedModal() {
           // During a run, the select-all checkbox is meaningless — the
           // selection is locked. Show the live progress counter
           // instead so the user can read forward motion at a glance.
-          <span className={styles.progressCounter}>
+          // `role=status` + `aria-live=polite` mirrors the convention
+          // used in ChatPanel and SettingsPage so screen readers
+          // announce each per-row completion.
+          <span
+            className={styles.progressCounter}
+            role="status"
+            aria-live="polite"
+          >
             {t("bulk_cleanup_live_counter", {
               deleted: counts.deleted,
               total: totalForCounter,
@@ -563,64 +614,71 @@ export function BulkCleanupArchivedModal() {
                 const err = failures.get(ws.id) ?? rowProgress?.error;
                 const displayName =
                   ws.name || runNamesRef.current.get(ws.id) || ws.id;
-                return (
-                  <li key={ws.id} className={styles.row}>
-                    <div
-                      className={
-                        renderingRun
-                          ? styles.rowLabelRunning
-                          : styles.rowLabel
-                      }
-                    >
-                      {renderingRun ? (
-                        <span className={styles.rowStatus}>
-                          {rowProgress?.status === "deleted" ? (
-                            <Check
-                              size={12}
-                              className={styles.rowStatusDeleted}
-                              aria-label={t("bulk_cleanup_row_deleted")}
-                            />
-                          ) : rowProgress?.status === "failed" ? (
-                            <X
-                              size={12}
-                              className={styles.rowStatusFailed}
-                              aria-label={t("bulk_cleanup_row_failed")}
-                            />
-                          ) : rowProgress?.status === "cancelled" ? (
-                            <MinusCircle
-                              size={12}
-                              className={styles.rowStatusCancelled}
-                              aria-label={t("bulk_cleanup_row_cancelled")}
-                            />
-                          ) : (
-                            <span
-                              className={styles.spinner}
-                              aria-label={t("bulk_cleanup_row_pending")}
-                            />
-                          )}
-                        </span>
-                      ) : null}
-                      <input
-                        type="checkbox"
-                        checked={isSelected}
-                        disabled={renderingRun}
-                        onChange={() => toggleRow(ws.id)}
-                        aria-label={displayName}
-                      />
-                      <span className={styles.rowName}>{displayName}</span>
-                      <span className={styles.rowBranch}>
-                        {ws.branch_name && (
-                          <>
-                            <GitBranch size={11} aria-hidden="true" />
-                            {ws.branch_name}
-                          </>
+                // Idle rows wrap in a <label> so clicking the workspace
+                // name / branch / age toggles the checkbox (matches the
+                // pre-multirepo UX). Running rows can't be toggled, and
+                // the status icon takes the click target slot — render
+                // a non-label <div> in that case so the spinner /
+                // check / X / dash isn't bound to a no-op input.
+                const rowInner = (
+                  <>
+                    {renderingRun ? (
+                      <span className={styles.rowStatus}>
+                        {rowProgress?.status === "deleted" ? (
+                          <Check
+                            size={12}
+                            className={styles.rowStatusDeleted}
+                            aria-label={t("bulk_cleanup_row_deleted")}
+                          />
+                        ) : rowProgress?.status === "failed" ? (
+                          <X
+                            size={12}
+                            className={styles.rowStatusFailed}
+                            aria-label={t("bulk_cleanup_row_failed")}
+                          />
+                        ) : rowProgress?.status === "cancelled" ? (
+                          <MinusCircle
+                            size={12}
+                            className={styles.rowStatusCancelled}
+                            aria-label={t("bulk_cleanup_row_cancelled")}
+                          />
+                        ) : (
+                          <span
+                            className={styles.spinner}
+                            aria-label={t("bulk_cleanup_row_pending")}
+                          />
                         )}
                       </span>
-                      <span className={styles.rowAge}>
-                        {ws.created_at &&
-                          ageBucketLabel(ageBucket(ws.created_at, nowSecs))}
-                      </span>
-                    </div>
+                    ) : null}
+                    <input
+                      type="checkbox"
+                      checked={isSelected}
+                      disabled={renderingRun}
+                      onChange={() => toggleRow(ws.id)}
+                      aria-label={displayName}
+                    />
+                    <span className={styles.rowName}>{displayName}</span>
+                    <span className={styles.rowBranch}>
+                      {ws.branch_name && (
+                        <>
+                          <GitBranch size={11} aria-hidden="true" />
+                          {ws.branch_name}
+                        </>
+                      )}
+                    </span>
+                    <span className={styles.rowAge}>
+                      {ws.created_at &&
+                        ageBucketLabel(ageBucket(ws.created_at, nowSecs))}
+                    </span>
+                  </>
+                );
+                return (
+                  <li key={ws.id} className={styles.row}>
+                    {renderingRun ? (
+                      <div className={styles.rowLabelRunning}>{rowInner}</div>
+                    ) : (
+                      <label className={styles.rowLabel}>{rowInner}</label>
+                    )}
                     {err && <div className={styles.rowError}>{err}</div>}
                   </li>
                 );

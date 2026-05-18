@@ -244,6 +244,16 @@
   }
 }
 
+/* Respect reduced-motion: same convention as SetupScriptBanner /
+   SessionStatusIcon. The spinner becomes a static border ring so
+   the user still sees a visual indicator for "pending" without the
+   rotation. */
+@media (prefers-reduced-motion: reduce) {
+  .spinner {
+    animation: none;
+  }
+}
+
 /* Live progress counter shown in the header row while a run is in
    flight ("X of N deleted, Y failed"). Replaces the selection counter
    for the duration of the run. */

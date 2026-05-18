@@ -147,6 +147,7 @@
   "bulk_cleanup_success_singular": "Cleaned up {{count}} workspace",
   "bulk_cleanup_success_plural": "Cleaned up {{count}} workspaces",
   "bulk_cleanup_partial": "Cleaned up {{succeeded}}; {{failed}} failed",
+  "bulk_cleanup_partial_with_cancelled": "Cleaned up {{succeeded}}; {{failed}} failed, {{cancelled}} skipped — re-run to finish.",
   "bulk_cleanup_cancelled_toast": "Cancelled. Cleaned up {{succeeded}}; {{cancelled}} skipped — re-run to finish.",
   "bulk_cleanup_failed": "Bulk cleanup failed: {{error}}",
   "bulk_cleanup_age_today": "today",
