@@ -16,12 +16,15 @@ export interface WorkspaceFileOpener {
   resolveFilePath: (path: string) => string | null;
 }
 
-/** Build the `{ openFile, resolveFilePath }` pair every chat-surface
- *  `<MessageMarkdown>` needs to route file-path clicks into Monaco. Centralizing
- *  it here keeps PlanApprovalCard, MessagesWithTurns, and StreamingMessage in
- *  sync so a fix or change reaches every chat-rendered markdown surface at
- *  once — the previous duplication is exactly why plan content fell through
- *  to the OS default editor. */
+/** Build the `{ openFile, resolveFilePath }` pair a chat-surface
+ *  `<MessageMarkdown>` needs to route file-path clicks into Monaco.
+ *
+ *  Currently used by `PlanApprovalCard`; the same pattern still lives
+ *  inline in `MessagesWithTurns` (`openFileInMonaco` at ~L481) and
+ *  `StreamingMessage` (~L59). Those callers were intentionally left
+ *  alone in the bug-fix PR to keep the diff surgical — folding them
+ *  into this hook is a deliberate follow-up so a future change reaches
+ *  every chat-rendered markdown surface in one place rather than three. */
 export function useWorkspaceFileOpener(
   workspaceId: string | null | undefined,
 ): WorkspaceFileOpener {
