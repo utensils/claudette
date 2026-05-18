@@ -2136,6 +2136,14 @@ fn map_codex_item_started_to_agent_events(item: &Value) -> Vec<AgentEvent> {
             },
         }));
     }
+    if item_type == Some("commandExecution") {
+        events.push(codex_command_execution_status_event(
+            item,
+            item.get("status")
+                .and_then(Value::as_str)
+                .unwrap_or("running"),
+        ));
+    }
     events
 }
 
@@ -2145,6 +2153,14 @@ fn map_codex_item_completed_to_agent_events(item: &Value) -> Vec<AgentEvent> {
     };
     let index = codex_item_index(&item_id);
     let mut events = Vec::new();
+    if item.get("type").and_then(Value::as_str) == Some("commandExecution") {
+        events.push(codex_command_execution_status_event(
+            item,
+            item.get("status")
+                .and_then(Value::as_str)
+                .unwrap_or("completed"),
+        ));
+    }
     if item.get("type").and_then(Value::as_str) == Some("fileChange") {
         events.push(AgentEvent::Stream(StreamEvent::Stream {
             event: InnerStreamEvent::ContentBlockDelta {
@@ -2174,6 +2190,48 @@ fn map_codex_item_completed_to_agent_events(item: &Value) -> Vec<AgentEvent> {
         }),
     ]);
     events
+}
+
+fn codex_command_execution_status_event(item: &Value, status: &str) -> AgentEvent {
+    let item_id = string_field(item, "id");
+    let terminal_status = match status {
+        "inProgress" | "starting" | "running" => "running",
+        "failed" => "failed",
+        "cancelled" | "canceled" => "cancelled",
+        "completed" => "completed",
+        other => other,
+    };
+    let command = item
+        .get("command")
+        .and_then(Value::as_str)
+        .filter(|command| !command.trim().is_empty());
+    let exit_code = item.get("exitCode").and_then(Value::as_i64);
+    let summary = match (terminal_status, exit_code, command) {
+        ("completed", Some(0), _) => Some("Command completed".to_string()),
+        ("completed", Some(code), _) => Some(format!("Command failed ({code})")),
+        ("failed", Some(code), _) => Some(format!("Command failed ({code})")),
+        ("failed", None, _) => Some("Command failed".to_string()),
+        (_, _, Some(command)) => Some(command.to_string()),
+        _ => None,
+    };
+
+    AgentEvent::Stream(StreamEvent::System {
+        subtype: "task_notification".to_string(),
+        session_id: None,
+        state: None,
+        detail: None,
+        task_id: Some(item_id.clone()),
+        tool_use_id: Some(item_id),
+        output_file: None,
+        summary,
+        description: None,
+        last_tool_name: None,
+        usage: None,
+        status: Some(terminal_status.to_string()),
+        compact_result: None,
+        compact_metadata: None,
+        command_line: None,
+    })
 }
 
 fn codex_item_tool_use(item: &Value) -> Option<(String, String, Value)> {
@@ -3448,6 +3506,70 @@ mod tests {
     }
 
     #[test]
+    fn maps_command_execution_started_to_running_task_notification() {
+        let events = map_notification_to_agent_events(CodexNotificationEvent::ItemStarted {
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-1".to_string(),
+            item: json!({
+                "type": "commandExecution",
+                "id": "cmd-1",
+                "status": "inProgress",
+                "command": "rg completed src",
+                "cwd": "/repo"
+            }),
+        });
+
+        assert_eq!(events.len(), 3);
+        let AgentEvent::Stream(StreamEvent::System {
+            subtype,
+            task_id,
+            tool_use_id,
+            status,
+            summary,
+            ..
+        }) = &events[2]
+        else {
+            panic!("expected task notification");
+        };
+        assert_eq!(subtype, "task_notification");
+        assert_eq!(task_id.as_deref(), Some("cmd-1"));
+        assert_eq!(tool_use_id.as_deref(), Some("cmd-1"));
+        assert_eq!(status.as_deref(), Some("running"));
+        assert_eq!(summary.as_deref(), Some("rg completed src"));
+    }
+
+    #[test]
+    fn maps_command_execution_completed_to_completed_task_notification() {
+        let events = map_notification_to_agent_events(CodexNotificationEvent::ItemCompleted {
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-1".to_string(),
+            item: json!({
+                "type": "commandExecution",
+                "id": "cmd-1",
+                "status": "completed",
+                "exitCode": 0,
+                "aggregatedOutput": "done\n"
+            }),
+        });
+
+        assert_eq!(events.len(), 3);
+        let AgentEvent::Stream(StreamEvent::System {
+            subtype,
+            task_id,
+            status,
+            summary,
+            ..
+        }) = &events[0]
+        else {
+            panic!("expected task notification");
+        };
+        assert_eq!(subtype, "task_notification");
+        assert_eq!(task_id.as_deref(), Some("cmd-1"));
+        assert_eq!(status.as_deref(), Some("completed"));
+        assert_eq!(summary.as_deref(), Some("Command completed"));
+    }
+
+    #[test]
     fn maps_file_change_completed_to_tool_result() {
         let events = map_notification_to_agent_events(CodexNotificationEvent::ItemCompleted {
             thread_id: "thread-1".to_string(),
@@ -3461,6 +3583,14 @@ mod tests {
         });
 
         assert_eq!(events.len(), 3);
+        assert!(
+            !events.iter().any(|event| matches!(
+                event,
+                AgentEvent::Stream(StreamEvent::System { subtype, .. })
+                    if subtype == "task_notification"
+            )),
+            "file changes must not drive the terminal task badge"
+        );
         let AgentEvent::Stream(StreamEvent::Stream {
             event:
                 InnerStreamEvent::ContentBlockDelta {

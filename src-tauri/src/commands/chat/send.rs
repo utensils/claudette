@@ -45,7 +45,8 @@ mod team_agents;
 
 use self::background_tasks::{
     BackgroundTaskInputTracker, append_agent_bash_output, apply_task_notification_status,
-    emit_agent_background_task_event, mirror_background_task_output, schedule_background_task_wake,
+    emit_agent_background_task_event, get_or_create_agent_shell_terminal_tab,
+    is_final_terminal_task_status, mirror_background_task_output, schedule_background_task_wake,
     should_defer_persistent_restart, terminal_text,
 };
 use self::team_agents::TeamAgentInputTracker;
@@ -447,6 +448,17 @@ fn tool_result_content_text(content: &serde_json::Value) -> String {
             .join("\n");
     }
     content.to_string()
+}
+
+fn shell_result_summary(content: &serde_json::Value) -> &'static str {
+    let exit_code = content
+        .get("exitCode")
+        .or_else(|| content.get("exit_code"))
+        .and_then(serde_json::Value::as_i64);
+    match exit_code {
+        Some(0) | None => "Command completed",
+        Some(_) => "Command failed",
+    }
 }
 
 #[derive(serde::Serialize)]
@@ -2546,6 +2558,14 @@ pub async fn send_chat_message(
                     output_file.as_deref(),
                 )
                 .await;
+                if status == "running" && tool_use_id.as_deref() == Some(task_id.as_str()) {
+                    background_task_inputs.mark_bash_tool_started(task_id);
+                }
+                if is_final_terminal_task_status(status)
+                    && tool_use_id.as_deref() == Some(task_id.as_str())
+                {
+                    background_task_inputs.finish_bash_tool_result(task_id);
+                }
             }
 
             background_task_inputs.observe_bash_input_delta(&event);
@@ -2811,6 +2831,10 @@ pub async fn send_chat_message(
                                 } => {
                                     let text = tool_result_content_text(content);
                                     let background_binding = parse_background_task_binding(&text);
+                                    let is_known_bash_tool_result =
+                                        background_task_inputs.is_bash_tool_result(tool_use_id);
+                                    let is_active_bash_tool_result =
+                                        background_task_inputs.is_bash_tool_active(tool_use_id);
                                     let is_trusted_background_binding =
                                         if background_binding.is_some() {
                                             let app_state = app.state::<AppState>();
@@ -2846,6 +2870,7 @@ pub async fn send_chat_message(
                                                 );
                                             }
                                         }
+                                        background_task_inputs.finish_bash_tool_result(tool_use_id);
                                         let aggregate_path =
                                             claudette::agent::background::workspace_terminal_output_path(&ws_id);
                                         mirror_background_task_output(
@@ -2871,7 +2896,7 @@ pub async fn send_chat_message(
                                                 );
                                             }
                                         }
-                                    } else {
+                                    } else if is_known_bash_tool_result {
                                         let path =
                                             claudette::agent::background::workspace_terminal_output_path(&ws_id);
                                         let text = terminal_text(&text);
@@ -2890,11 +2915,26 @@ pub async fn send_chat_message(
                                             );
                                         }
                                         if let Ok(db) = Database::open(&db_path) {
+                                            let status = if is_active_bash_tool_result {
+                                                "running"
+                                            } else {
+                                                "completed"
+                                            };
+                                            let summary = if is_active_bash_tool_result {
+                                                None
+                                            } else {
+                                                Some(shell_result_summary(content))
+                                            };
+                                            let _ = get_or_create_agent_shell_terminal_tab(
+                                                &db_path,
+                                                &ws_id,
+                                                &chat_session_id_for_stream,
+                                            );
                                             let _ = db.update_agent_shell_terminal_tab_status(
                                                 &chat_session_id_for_stream,
                                                 None,
-                                                "completed",
-                                                Some("Command completed"),
+                                                status,
+                                                summary,
                                             );
                                             if let Ok(Some(tab)) = db.get_agent_shell_terminal_tab(
                                                 &chat_session_id_for_stream,
@@ -2907,6 +2947,10 @@ pub async fn send_chat_message(
                                                     tab,
                                                 );
                                             }
+                                        }
+                                        if !is_active_bash_tool_result {
+                                            background_task_inputs
+                                                .finish_bash_tool_result(tool_use_id);
                                         }
                                     }
                                 }

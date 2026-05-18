@@ -1,4 +1,8 @@
-use std::{collections::HashMap, path::Path, time::Duration};
+use std::{
+    collections::{HashMap, HashSet},
+    path::Path,
+    time::Duration,
+};
 
 use tauri::{AppHandle, Emitter, Manager};
 
@@ -182,6 +186,10 @@ fn is_terminal_task_status(status: &str) -> bool {
     )
 }
 
+pub(super) fn is_final_terminal_task_status(status: &str) -> bool {
+    is_terminal_task_status(status)
+}
+
 pub(super) fn should_defer_persistent_restart(session: &AgentSessionState) -> bool {
     should_defer_persistent_restart_for_state(
         session.persistent_session.is_some(),
@@ -198,7 +206,14 @@ fn should_defer_persistent_restart_for_state(
 
 #[derive(Default)]
 pub(super) struct BackgroundTaskInputTracker {
-    bash_inputs: HashMap<usize, (String, String)>,
+    bash_inputs: HashMap<usize, BashInput>,
+    bash_tool_use_ids: HashSet<String>,
+}
+
+struct BashInput {
+    tool_use_id: String,
+    input_json: String,
+    start_observed: bool,
 }
 
 impl BackgroundTaskInputTracker {
@@ -212,13 +227,21 @@ impl BackgroundTaskInputTracker {
         }) = event
             && name == "Bash"
         {
-            self.bash_inputs.insert(*index, (id.clone(), String::new()));
+            self.bash_tool_use_ids.insert(id.clone());
+            self.bash_inputs.insert(
+                *index,
+                BashInput {
+                    tool_use_id: id.clone(),
+                    input_json: String::new(),
+                    start_observed: false,
+                },
+            );
         }
 
         if let AgentEvent::Stream(StreamEvent::Stream {
             event: InnerStreamEvent::ContentBlockDelta { index, delta },
         }) = event
-            && let Some((_tool_use_id, input)) = self.bash_inputs.get_mut(index)
+            && let Some(input) = self.bash_inputs.get_mut(index)
         {
             match delta {
                 claudette::agent::Delta::ToolUse {
@@ -226,8 +249,30 @@ impl BackgroundTaskInputTracker {
                 }
                 | claudette::agent::Delta::InputJson {
                     partial_json: Some(part),
-                } => input.push_str(part),
+                } => input.input_json.push_str(part),
                 _ => {}
+            }
+        }
+    }
+
+    pub(super) fn is_bash_tool_result(&self, tool_use_id: &str) -> bool {
+        self.bash_tool_use_ids.contains(tool_use_id)
+    }
+
+    pub(super) fn is_bash_tool_active(&self, tool_use_id: &str) -> bool {
+        self.bash_inputs
+            .values()
+            .any(|input| input.tool_use_id == tool_use_id)
+    }
+
+    pub(super) fn finish_bash_tool_result(&mut self, tool_use_id: &str) {
+        self.bash_tool_use_ids.remove(tool_use_id);
+    }
+
+    pub(super) fn mark_bash_tool_started(&mut self, tool_use_id: &str) {
+        for input in self.bash_inputs.values_mut() {
+            if input.tool_use_id == tool_use_id {
+                input.start_observed = true;
             }
         }
     }
@@ -246,10 +291,10 @@ impl BackgroundTaskInputTracker {
         else {
             return;
         };
-        let Some((tool_use_id, input_json)) = self.bash_inputs.remove(index) else {
+        let Some(input) = self.bash_inputs.remove(index) else {
             return;
         };
-        let Some(start) = parse_bash_start(&input_json) else {
+        let Some(start) = parse_bash_start(&input.input_json) else {
             return;
         };
 
@@ -258,8 +303,13 @@ impl BackgroundTaskInputTracker {
             let app_state = app.state::<AppState>();
             let mut agents = app_state.agents.write().await;
             if let Some(session) = agents.get_mut(chat_session_id) {
-                session.running_background_tasks.insert(tool_use_id.clone());
+                session
+                    .running_background_tasks
+                    .insert(input.tool_use_id.clone());
             }
+        }
+        if input.start_observed {
+            return;
         }
         // Workspace-scoped path: every agent shell command across every
         // chat session appends to the same workspace transcript. The
@@ -313,6 +363,7 @@ pub(super) async fn apply_task_notification_status(
     summary: Option<&str>,
     output_file: Option<&str>,
 ) {
+    let _ = get_or_create_agent_shell_terminal_tab(db_path, workspace_id, chat_session_id);
     let Ok(db) = Database::open(db_path) else {
         return;
     };
@@ -849,9 +900,15 @@ pub(super) fn schedule_background_task_wake(
 #[cfg(test)]
 mod tests {
     use super::{
-        BackgroundTaskCompletion, build_background_task_completion_prompt, markdown_code_fence_for,
+        BackgroundTaskCompletion, BackgroundTaskInputTracker,
+        build_background_task_completion_prompt, markdown_code_fence_for,
         should_defer_persistent_restart_for_state, terminal_text,
     };
+    use claudette::agent::{
+        AgentEvent, InnerStreamEvent, StartContentBlock, StreamEvent, UserContentBlock,
+        UserEventMessage, UserMessageContent,
+    };
+    use serde_json::json;
     #[test]
     fn terminal_text_converts_newlines_to_terminal_newlines() {
         assert_eq!(terminal_text("one\ntwo\r\nthree"), "one\r\ntwo\r\nthree");
@@ -884,6 +941,63 @@ mod tests {
         assert!(!should_defer_persistent_restart_for_state(true, false));
         assert!(!should_defer_persistent_restart_for_state(false, true));
         assert!(!should_defer_persistent_restart_for_state(false, false));
+    }
+
+    #[test]
+    fn tool_results_are_shell_owned_only_after_bash_tool_start() {
+        let mut tracker = BackgroundTaskInputTracker::default();
+        let non_bash_result = AgentEvent::Stream(StreamEvent::User {
+            message: UserEventMessage {
+                content: UserMessageContent::Blocks(vec![UserContentBlock::ToolResult {
+                    tool_use_id: "file-1".to_string(),
+                    content: json!({"status": "completed"}),
+                }]),
+            },
+            uuid: None,
+            is_replay: false,
+            is_synthetic: true,
+        });
+
+        tracker.observe_bash_input_delta(&non_bash_result);
+        assert!(!tracker.is_bash_tool_result("file-1"));
+
+        tracker.observe_bash_input_delta(&AgentEvent::Stream(StreamEvent::Stream {
+            event: InnerStreamEvent::ContentBlockStart {
+                index: 7,
+                content_block: Some(StartContentBlock::ToolUse {
+                    id: "cmd-1".to_string(),
+                    name: "Bash".to_string(),
+                }),
+            },
+        }));
+
+        assert!(tracker.is_bash_tool_result("cmd-1"));
+        assert!(tracker.is_bash_tool_active("cmd-1"));
+        tracker.finish_bash_tool_result("cmd-1");
+        assert!(!tracker.is_bash_tool_result("cmd-1"));
+    }
+
+    #[test]
+    fn completed_structured_status_can_claim_bash_tool_result_before_fallback() {
+        let mut tracker = BackgroundTaskInputTracker::default();
+
+        tracker.observe_bash_input_delta(&AgentEvent::Stream(StreamEvent::Stream {
+            event: InnerStreamEvent::ContentBlockStart {
+                index: 3,
+                content_block: Some(StartContentBlock::ToolUse {
+                    id: "cmd-1".to_string(),
+                    name: "Bash".to_string(),
+                }),
+            },
+        }));
+        tracker.mark_bash_tool_started("cmd-1");
+
+        assert!(tracker.is_bash_tool_result("cmd-1"));
+        tracker.finish_bash_tool_result("cmd-1");
+        assert!(
+            !tracker.is_bash_tool_result("cmd-1"),
+            "a structured Codex terminal completion must prevent the legacy ToolResult fallback"
+        );
     }
 
     #[test]
