@@ -42,6 +42,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
+use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::{Mutex, OnceCell, mpsc, oneshot};
 
 /// Outbound frame the writer task picks off the mpsc.
@@ -61,8 +62,20 @@ struct ConnHandle {
 impl ConnHandle {
     async fn connect(socket_path: &Path) -> std::io::Result<Self> {
         let stream = open_handshaked(socket_path).await?;
-        let (mut r, mut w) = stream.split();
+        let (r, w) = stream.split();
+        Ok(Self::spawn_tasks(r, w))
+    }
 
+    /// Spawn the reader/writer tasks against a pre-handshaked split stream.
+    /// Generic over any `AsyncRead`/`AsyncWrite` halves so unit tests can
+    /// drive the reader/writer fault paths with `tokio::io::duplex` rather
+    /// than a real socket. Production callers go through
+    /// [`ConnHandle::connect`].
+    fn spawn_tasks<R, W>(mut r: R, mut w: W) -> Self
+    where
+        R: AsyncRead + Unpin + Send + 'static,
+        W: AsyncWrite + Unpin + Send + 'static,
+    {
         let (tx_out, mut rx_out) = mpsc::channel::<OutFrame>(256);
         let inflight: Arc<Mutex<HashMap<u64, oneshot::Sender<Response>>>> =
             Arc::new(Mutex::new(HashMap::new()));
@@ -121,11 +134,11 @@ impl ConnHandle {
             }
         });
 
-        Ok(Self {
+        Self {
             tx: tx_out,
             inflight,
             next_id,
-        })
+        }
     }
 
     /// Issue a request and await the matching response. Allocates a fresh
@@ -157,9 +170,23 @@ impl ConnHandle {
 async fn open_handshaked(socket_path: &Path) -> std::io::Result<SockStream> {
     let name = socket_name(socket_path)?;
     let stream = SockStream::connect(name).await?;
-    let (mut r, mut w) = (&stream, &stream);
+    {
+        let (mut r, mut w) = (&stream, &stream);
+        handshake_streams(&mut r, &mut w).await?;
+    }
+    Ok(stream)
+}
 
-    // Send Hello (envelope, request_id = 0 by convention).
+/// Run the Hello / HelloAck handshake against an arbitrary
+/// `AsyncRead`/`AsyncWrite` pair. Extracted from [`open_handshaked`] so the
+/// fault paths (non-HelloAck response, `HelloNack`, malformed first frame,
+/// EOF before any frame) can be exercised by unit tests over
+/// `tokio::io::duplex` without a real socket binary in the way.
+async fn handshake_streams<R, W>(r: &mut R, w: &mut W) -> std::io::Result<()>
+where
+    R: AsyncRead + Unpin,
+    W: AsyncWrite + Unpin,
+{
     let hello = Request::Hello {
         protocol_version: PROTOCOL_VERSION,
         claudette_version: env!("CARGO_PKG_VERSION").to_string(),
@@ -169,14 +196,14 @@ async fn open_handshaked(socket_path: &Path) -> std::io::Result<SockStream> {
         request: hello,
     };
     let bytes = serde_json::to_vec(&env).map_err(std::io::Error::other)?;
-    write_frame(&mut w, &bytes).await?;
-    let first = read_frame(&mut r).await?;
+    write_frame(w, &bytes).await?;
+    let first = read_frame(r).await?;
     let inbound: InboundFrame = serde_json::from_slice(&first).map_err(std::io::Error::other)?;
     match inbound {
         InboundFrame::Response {
             response: Response::HelloAck { .. },
             ..
-        } => Ok(stream),
+        } => Ok(()),
         InboundFrame::Response { response, .. } => Err(std::io::Error::other(format!(
             "handshake failed: {response:?}"
         ))),
@@ -633,5 +660,239 @@ mod tests {
         // Clean up the socket file on the way out (the sidecar will idle-exit
         // on its own; we just don't want a stale path lying around).
         let _ = std::fs::remove_file(&socket);
+    }
+
+    // --- ConnHandle / handshake fault-path unit tests (Task B1) ------------
+    //
+    // These tests drive `handshake_streams` and `ConnHandle::spawn_tasks`
+    // against `tokio::io::duplex` rather than a real `claudette-session-host`
+    // socket, so they pin the reader/writer/handshake fault paths in plain
+    // unit-test scope (no spawned sidecar, no `--ignored` gate).
+
+    use crate::agent::interactive_protocol::frame::{read_frame, write_frame};
+    use crate::agent::interactive_protocol::{InboundFrame, Request, RequestEnvelope, Response};
+    use tokio::io::duplex;
+
+    /// Read the client's Hello envelope off `r`. Used by the duplex-backed
+    /// handshake tests so the server side advances past the client's first
+    /// write before doing anything fault-y.
+    async fn drain_client_hello<R>(r: &mut R) -> RequestEnvelope
+    where
+        R: tokio::io::AsyncRead + Unpin,
+    {
+        let bytes = read_frame(r).await.expect("client hello frame");
+        serde_json::from_slice::<RequestEnvelope>(&bytes).expect("hello envelope parses")
+    }
+
+    /// Helper: serialize an `InboundFrame` to a length-prefixed wire frame.
+    async fn write_inbound<W>(w: &mut W, frame: &InboundFrame)
+    where
+        W: tokio::io::AsyncWrite + Unpin,
+    {
+        let bytes = serde_json::to_vec(frame).expect("frame serializes");
+        write_frame(w, &bytes).await.expect("write inbound frame");
+    }
+
+    /// Step 1: Malformed first frame. The server writes valid framing
+    /// (length-prefix + payload) but the payload is not JSON, so the
+    /// handshake parse fails. We expect `handshake_streams` to surface the
+    /// `serde_json` parse error as an `io::Error::other(...)`.
+    #[tokio::test]
+    async fn handshake_rejects_non_hello_first_frame() {
+        let (mut client_r, mut server_w) = duplex(4096);
+        let (mut server_r, mut client_w) = duplex(4096);
+
+        // Server side: consume the client Hello, then send a malformed
+        // JSON payload as the "first" response frame.
+        let server = tokio::spawn(async move {
+            let _hello = drain_client_hello(&mut server_r).await;
+            // Length prefix says 5 bytes, payload is literally "hello" —
+            // valid framing, invalid JSON.
+            write_frame(&mut server_w, b"hello")
+                .await
+                .expect("server writes garbage payload");
+        });
+
+        let res = handshake_streams(&mut client_r, &mut client_w).await;
+        server.await.expect("server task");
+        let err = res.expect_err("handshake should reject malformed first frame");
+        assert_eq!(err.kind(), std::io::ErrorKind::Other);
+    }
+
+    /// Step 2: `HelloNack` branch. The server completes a real framed
+    /// response, but with a `HelloNack` instead of `HelloAck`. The
+    /// production code surfaces this via `io::Error::other` formatted with
+    /// the response debug — so the error message must mention HelloNack.
+    #[tokio::test]
+    async fn handshake_surfaces_hello_nack() {
+        let (mut client_r, mut server_w) = duplex(4096);
+        let (mut server_r, mut client_w) = duplex(4096);
+
+        let server = tokio::spawn(async move {
+            let _hello = drain_client_hello(&mut server_r).await;
+            let nack = InboundFrame::Response {
+                request_id: 0,
+                response: Response::HelloNack {
+                    reason: "protocol mismatch".into(),
+                    supported_versions: vec![2, 3],
+                },
+            };
+            write_inbound(&mut server_w, &nack).await;
+        });
+
+        let res = handshake_streams(&mut client_r, &mut client_w).await;
+        server.await.expect("server task");
+        let err = res.expect_err("handshake should surface HelloNack");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("HelloNack"),
+            "expected HelloNack in error message, got: {msg}"
+        );
+        assert!(
+            msg.contains("protocol mismatch"),
+            "expected nack reason in error message, got: {msg}"
+        );
+    }
+
+    /// Step 3: EOF mid-stream wakes inflight waiters. Build a `ConnHandle`
+    /// against a duplex stream that's already past the handshake, submit a
+    /// `request()`, then drop the server side. The reader task should
+    /// notice EOF and drain the inflight table with a synthetic error
+    /// response, so the awaiter resolves promptly with `HostError::Other`
+    /// rather than hanging forever.
+    #[tokio::test]
+    async fn request_wakes_when_reader_sees_eof() {
+        // client-write -> server-read so the writer task can flush; the
+        // server side immediately closes after consuming one envelope.
+        let (client_r, server_w) = duplex(4096);
+        let (mut server_r, client_w) = duplex(4096);
+
+        let conn = ConnHandle::spawn_tasks(client_r, client_w);
+
+        // Wait for the writer task to flush the request, then close both
+        // halves of the server side. Dropping `server_w` and `server_r`
+        // closes the duplex pair from the peer's perspective — the reader
+        // task's `read_frame` then returns Err and the inflight drain
+        // path runs.
+        let server = tokio::spawn(async move {
+            let _envelope = read_frame(&mut server_r).await.expect("server reads req");
+            // Drop both halves to surface EOF to the client side.
+            drop(server_r);
+            drop(server_w);
+        });
+
+        // request() awaits the inflight oneshot. The reader task's
+        // synthetic Error response keeps this from hanging.
+        let resp = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            conn.request(Request::Status),
+        )
+        .await
+        .expect("request() must not hang after EOF")
+        .expect("inflight resolves to a Response, not a channel-drop error");
+        server.await.expect("server task");
+
+        match resp {
+            Response::Error {
+                message,
+                recoverable,
+            } => {
+                assert!(!recoverable, "synthetic close error is not recoverable");
+                assert!(
+                    message.contains("connection closed"),
+                    "expected 'connection closed' in synthetic error, got: {message}"
+                );
+            }
+            other => panic!("expected synthetic Error on EOF, got: {other:?}"),
+        }
+    }
+
+    /// Step 4: Writer task dies → next `request()` fails. We can't kill the
+    /// writer task directly, but closing the *reader* side of the duplex
+    /// pair (the side the writer task writes to) makes `write_frame` fail
+    /// and the writer task exits via its `break`. After the writer task is
+    /// gone the mpsc receiver is dropped, so `conn.request()`'s
+    /// `tx_out.send(...)` returns `Err`, which the production code maps to
+    /// `HostError::Other("conn closed")`.
+    #[tokio::test]
+    async fn request_fails_when_writer_task_dies() {
+        let (client_r, server_w) = duplex(4096);
+        let (server_r, client_w) = duplex(4096);
+
+        let conn = ConnHandle::spawn_tasks(client_r, client_w);
+
+        // Close the server side so writes fail. We have to drop both
+        // halves: the writer task writes into `client_w` whose peer is
+        // `server_r` — dropping `server_r` makes the next write_all fail.
+        // We also drop `server_w` so the reader task sees EOF and won't
+        // race with us.
+        drop(server_r);
+        drop(server_w);
+
+        // Give the writer task a chance to attempt a write and fail. The
+        // mpsc channel has capacity 256, so the *first* request just
+        // queues; the writer task picks it up, the write_all fails, and
+        // the task exits. We loop a few times to be robust against
+        // scheduling.
+        let mut saw_err = None;
+        for _ in 0..32 {
+            match tokio::time::timeout(
+                std::time::Duration::from_millis(200),
+                conn.request(Request::Status),
+            )
+            .await
+            {
+                Ok(Ok(_resp)) => {
+                    // The reader task may have raced ahead and drained
+                    // inflight with a synthetic Error before the writer
+                    // task even noticed — that's also valid evidence
+                    // that the connection is unusable, but we want to
+                    // exercise the `tx_out.send` failure path
+                    // specifically, so keep trying until the mpsc is
+                    // actually closed.
+                    continue;
+                }
+                Ok(Err(e)) => {
+                    saw_err = Some(e);
+                    break;
+                }
+                Err(_) => {
+                    panic!("request() hung after writer was supposed to die");
+                }
+            }
+        }
+
+        let err = saw_err.expect("request() must error once the writer task has dropped rx_out");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("conn closed") || msg.contains("connection closed"),
+            "expected closed-connection error, got: {msg}"
+        );
+    }
+
+    /// Step 5: `try_connect` failure variants. Pointing at a path that
+    /// definitely doesn't exist must surface as an `io::Error` — typically
+    /// `NotFound` on Unix domain sockets (the file isn't there) or
+    /// `ConnectionRefused` on Windows named pipes (no server listening).
+    #[tokio::test]
+    async fn try_connect_fails_on_missing_path() {
+        // Build a path that cannot exist: a temp dir we just removed.
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let socket_path = tmp.path().join("definitely-not-a-socket.sock");
+        // Ensure the path doesn't exist by being inside a still-live
+        // tempdir but never created.
+        assert!(!socket_path.exists());
+
+        let err = try_connect(&socket_path)
+            .await
+            .expect_err("try_connect should fail for a non-existent socket path");
+        let kind = err.kind();
+        assert!(
+            matches!(
+                kind,
+                std::io::ErrorKind::NotFound | std::io::ErrorKind::ConnectionRefused
+            ),
+            "expected NotFound or ConnectionRefused, got {kind:?}: {err}"
+        );
     }
 }
