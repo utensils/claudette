@@ -1126,15 +1126,24 @@ mod tests {
     async fn interactive_start_returns_error_when_cli_binary_missing() {
         let _env_guard = env_lock().lock().await;
         let home_tmp = tempfile::tempdir().unwrap();
-        // Clear `CLAUDETTE_CLI` so `bundled_cli_binary_path` falls
-        // through to its current_exe + dev fallback. In `cargo test
-        // -p claudette-tauri` the cwd is the `src-tauri/` package root,
-        // so the repo-relative `src-tauri/binaries/...` dev-fallback
-        // path resolves to `src-tauri/src-tauri/binaries/...` (missing).
+        // Force `bundled_cli_binary_path` to fail by pointing
+        // `CLAUDETTE_CLI` at a guaranteed-nonexistent path that is
+        // unique to this test run. This bypasses the
+        // current_exe + dev-fallback resolution entirely and pins the
+        // missing-CLI error branch on every runner — including CI
+        // machines that happen to have a staged sidecar on disk.
         // SAFETY: env mutation serialized via `env_lock()`.
+        let bogus_cli = format!(
+            "/nonexistent/path/claudette-cli-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0),
+        );
         unsafe {
             std::env::set_var("CLAUDETTE_HOME", home_tmp.path());
-            std::env::remove_var("CLAUDETTE_CLI");
+            std::env::set_var("CLAUDETTE_CLI", &bogus_cli);
         }
 
         let (_db_tmp, db_path) = make_db();
@@ -1151,33 +1160,21 @@ mod tests {
             .await
             .insert("ws-1".to_string(), Arc::clone(&host) as _);
 
-        let result =
-            interactive_start_inner(&state, make_start_args("ws-1"), null_hook_emitter()).await;
-        // The resolved binary path is None when the staged sidecar
-        // isn't on disk and CLAUDETTE_CLI is unset; the command surfaces
-        // that as the canonical "claudette-cli binary not found".
-        // Some dev environments (the macOS app runner) leave the
-        // candidate in place even under tests — accept either the
-        // missing-cli failure OR a happy-path success, but rule out
-        // any other panic path or unrelated error.
-        match result {
-            Err(ref msg) if msg == "claudette-cli binary not found" => {
-                assert!(host.ensure_calls.lock().unwrap().is_empty());
-            }
-            Ok(ref ok) => {
-                // Some dev environments (the macOS app runner) stage the
-                // CLI next to the test binary; if so, the start path
-                // succeeds and we just sanity-check the sid contract.
-                assert!(
-                    ok.sid.starts_with("claudette-ws-1-"),
-                    "if start succeeded the sid still has to follow the contract",
-                );
-            }
-            Err(other) => panic!("unexpected error from interactive_start_inner: {other}"),
-        }
+        let err = interactive_start_inner(&state, make_start_args("ws-1"), null_hook_emitter())
+            .await
+            .expect_err("missing CLI must surface as Err");
+        assert_eq!(
+            err, "claudette-cli binary not found",
+            "missing CLI binary must surface the canonical error string",
+        );
+        assert!(
+            host.ensure_calls.lock().unwrap().is_empty(),
+            "ensure_session must not be called when the CLI binary is missing",
+        );
 
         unsafe {
             std::env::remove_var("CLAUDETTE_HOME");
+            std::env::remove_var("CLAUDETTE_CLI");
         }
     }
 

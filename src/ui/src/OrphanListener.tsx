@@ -55,14 +55,18 @@ export function OrphanListener(): null {
         });
     };
 
-    void subscribeOrphansDetected(handle).then((fn) => {
-      if (cancelled) {
-        // Listener resolved after unmount — drop it immediately.
-        fn();
-        return;
-      }
-      unlisten = fn;
-    });
+    void subscribeOrphansDetected(handle)
+      .then((fn) => {
+        if (cancelled) {
+          // Listener resolved after unmount — drop it immediately.
+          fn();
+          return;
+        }
+        unlisten = fn;
+      })
+      .catch((err) => {
+        console.warn("[OrphanListener] subscribeOrphansDetected failed:", err);
+      });
 
     return () => {
       cancelled = true;

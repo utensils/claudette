@@ -237,6 +237,15 @@ pub struct SidecarHost {
     binary_path: PathBuf,
     /// Lazy-initialized once on first trait call. Wrapped in `OnceCell` so
     /// concurrent first calls share a single control connection.
+    ///
+    /// **Known limitation (tracked in CLAUDE.md):** the cached `ConnHandle`
+    /// in `OnceCell` is never reset if the underlying connection dies.
+    /// If the bundled `claudette-session-host` sidecar exits (e.g., 600s
+    /// idle timer) while Claudette is still running, subsequent
+    /// `interactive_*` commands fail with "conn closed" until Claudette
+    /// is restarted. Resolution: replace `OnceCell` with
+    /// `Mutex<Option<ConnHandle>>` and reconnect on dead-conn detection.
+    /// FIXME: implement reconnect (see CLAUDE.md "Known limitations").
     conn: OnceCell<ConnHandle>,
 }
 

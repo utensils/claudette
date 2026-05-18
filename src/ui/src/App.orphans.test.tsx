@@ -22,13 +22,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 let capturedHandler: ((ev: { sids: string[] }) => void) | null = null;
 let unlistenSpy: ReturnType<typeof vi.fn> | null = null;
 const cleanupOrphansSpy = vi.fn();
+const subscribeOrphansSpy = vi.fn();
 
 vi.mock("./services/interactive", () => ({
-  subscribeOrphansDetected: (fn: (ev: { sids: string[] }) => void) => {
-    capturedHandler = fn;
-    unlistenSpy = vi.fn();
-    return Promise.resolve(unlistenSpy);
-  },
+  subscribeOrphansDetected: (fn: (ev: { sids: string[] }) => void) =>
+    subscribeOrphansSpy(fn),
   cleanupOrphans: (): Promise<string[]> => cleanupOrphansSpy(),
 }));
 
@@ -61,6 +59,14 @@ beforeEach(() => {
   unlistenSpy = null;
   cleanupOrphansSpy.mockReset();
   cleanupOrphansSpy.mockResolvedValue([] as string[]);
+  subscribeOrphansSpy.mockReset();
+  subscribeOrphansSpy.mockImplementation(
+    (fn: (ev: { sids: string[] }) => void) => {
+      capturedHandler = fn;
+      unlistenSpy = vi.fn();
+      return Promise.resolve(unlistenSpy);
+    },
+  );
   useAppStore.setState({ toasts: [] });
 });
 
@@ -144,5 +150,32 @@ describe("OrphanListener (App-level orphan-detected wiring)", () => {
 
     expect(useAppStore.getState().toasts).toHaveLength(0);
     expect(cleanupOrphansSpy).not.toHaveBeenCalled();
+  });
+
+  it("catches subscribeOrphansDetected rejection without crashing", async () => {
+    // Mirror the `.catch` pattern in `InteractiveTerminalMode.tsx`: if
+    // the subscription promise rejects, the component must swallow the
+    // error (with a `console.warn`) instead of bubbling an unhandled
+    // rejection that would crash the React tree.
+    const rejection = new Error("subscribe failed");
+    subscribeOrphansSpy.mockReset();
+    subscribeOrphansSpy.mockImplementation(() => Promise.reject(rejection));
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    // Mount must not throw, despite the rejected subscribe promise.
+    await mountListener();
+
+    // The .catch handler is queued as a microtask — flush so the
+    // console.warn fires before we assert.
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(warnSpy).toHaveBeenCalledWith(
+      "[OrphanListener] subscribeOrphansDetected failed:",
+      rejection,
+    );
+    warnSpy.mockRestore();
   });
 });

@@ -1037,7 +1037,16 @@ impl AppState {
     /// re-run `scripts/stage-cli-sidecar.sh`.
     pub async fn bundled_cli_binary_path(&self) -> Option<std::path::PathBuf> {
         if let Ok(p) = std::env::var("CLAUDETTE_CLI") {
-            return Some(PathBuf::from(p));
+            let candidate = PathBuf::from(p);
+            // Honour the documented contract: returning `None` when the
+            // resolved candidate does not exist on disk. Without this
+            // check, a stale or test-only `CLAUDETTE_CLI` override would
+            // bypass the existence guard that applies to the
+            // current_exe + dev-fallback branches below.
+            if candidate.exists() {
+                return Some(candidate);
+            }
+            return None;
         }
         let exe = std::env::current_exe().ok()?;
         let dir = exe.parent()?;

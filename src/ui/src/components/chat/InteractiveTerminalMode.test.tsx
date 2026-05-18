@@ -120,7 +120,6 @@ describe("InteractiveTerminalMode", () => {
       root.unmount();
     });
     container.remove();
-    // No assertion needed beyond "did not throw".
-    expect(true).toBe(true);
+    // No assertion needed — vitest treats no-throw as pass.
   });
 });
