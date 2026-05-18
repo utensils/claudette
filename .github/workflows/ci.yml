@@ -148,14 +148,15 @@ jobs:
           slug: utensils/claudette
           files: lcov.info
           fail_ci_if_error: false
-      # Claude Interactive patch-coverage gate (informational for now;
-      # flipped to blocking by Task G1 once we hit the 85% threshold).
-      # See scripts/check-coverage-interactive.sh and CLAUDE.md.
+      # Claude Interactive patch-coverage gate (blocking — Task G1).
+      # See scripts/check-coverage-interactive.sh and CLAUDE.md. Files
+      # excluded from the gate (e.g. tmux.rs, sidecar.rs) are documented
+      # inline in the check script with their structural rationale.
       - name: Run llvm-cov (interactive patch JSON)
         run: ./scripts/coverage-interactive.sh
-      - name: Check interactive patch coverage (informational)
+      - name: Check interactive patch coverage
         env:
-          COVERAGE_GATE_BLOCKING: "0"
+          COVERAGE_GATE_BLOCKING: "1"
         run: ./scripts/check-coverage-interactive.sh
 
   frontend:
@@ -174,6 +175,10 @@ jobs:
       - run: bun run lint:css
       - run: bun run build
       - run: bun run test
+      # Claude Interactive patch-coverage gate for the frontend (blocking —
+      # Task G1). Per-file thresholds live in `vitest.config.ts` and vitest
+      # exits non-zero if any of them regresses.
+      - run: bun run test:coverage:interactive
 
   frontend-smoke:
     name: Frontend Bundle Smoke

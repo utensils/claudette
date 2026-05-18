@@ -115,10 +115,9 @@ async fn handshake_rejects_unsupported_protocol_version() {
     match inbound {
         InboundFrame::Response {
             request_id,
-            response:
-                Response::HelloNack {
-                    supported_versions, ..
-                },
+            response: Response::HelloNack {
+                supported_versions, ..
+            },
         } => {
             assert_eq!(request_id, 0, "Nack reply should echo request_id 0");
             assert_eq!(

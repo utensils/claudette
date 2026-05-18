@@ -8,9 +8,9 @@ import react from "@vitejs/plugin-react";
 //
 // The include list below is the explicit set of files the interactive-claude
 // coverage plan gates on (>=85% across statements/branches/functions/lines).
-// Subsequent tasks (B-F) in the plan raise coverage until the gate passes;
-// for now the thresholds are intentionally aspirational — see the
-// TODO(coverage-plan) comment below.
+// Tasks B-F raised coverage on each file until the patch met the gate; the
+// thresholds below are enforced — vitest exits non-zero if any of them
+// regresses. See the interactive-claude coverage plan (Task G1) for context.
 export default defineConfig({
   plugins: [react()],
   test: {
@@ -28,9 +28,6 @@ export default defineConfig({
         "src/components/sidebar/InteractiveBadge.tsx",
         "src/stores/slices/interactiveSessionsSlice.ts",
       ],
-      // TODO(coverage-plan): tasks B-F raise per-file coverage to >=85%.
-      // Do NOT lower these thresholds when baseline is red — the whole point
-      // of the plan is to drive coverage up to meet them.
       thresholds: {
         statements: 85,
         branches: 85,

@@ -319,4 +319,183 @@ mod tests {
             "expected lowercase hex digits, got {s:?}"
         );
     }
+
+    /// Cover `InteractiveSession::start` happy + failure paths without
+    /// requiring a real host. The mock host's `ensure_session` is the
+    /// only method exercised by `start`; the recorded call lets us pin
+    /// that the overlay path is passed through `SessionSpec::claude_config_dir`
+    /// rather than the caller-supplied value.
+    mod start_tests {
+        use super::*;
+        use crate::agent::interactive_host::{
+            AttachId, AttachStream, HostError, HostHandle, HostSessionSummary, HostStatus,
+            InteractiveHost, ScreenSnapshot, SessionId,
+        };
+        use crate::agent::interactive_protocol::{InputPayload, SessionSpec, StopMode};
+        use async_trait::async_trait;
+        use std::sync::{Arc, Mutex};
+
+        #[derive(Default)]
+        struct RecordingHost {
+            ensure_calls: Mutex<Vec<(SessionId, SessionSpec)>>,
+            fail_with: Mutex<Option<HostError>>,
+        }
+
+        #[async_trait]
+        impl InteractiveHost for RecordingHost {
+            async fn ensure_session(
+                &self,
+                sid: &SessionId,
+                spec: &SessionSpec,
+            ) -> Result<HostHandle, HostError> {
+                if let Some(err) = self.fail_with.lock().unwrap().take() {
+                    return Err(err);
+                }
+                self.ensure_calls
+                    .lock()
+                    .unwrap()
+                    .push((sid.clone(), spec.clone()));
+                Ok(HostHandle {
+                    sid: sid.clone(),
+                    pid: Some(42),
+                    rows: spec.rows,
+                    cols: spec.cols,
+                })
+            }
+            async fn attach(
+                &self,
+                _sid: &SessionId,
+            ) -> Result<(AttachId, AttachStream), HostError> {
+                unimplemented!("attach should not be called by start()")
+            }
+            async fn send_input(
+                &self,
+                _sid: &SessionId,
+                _payload: InputPayload,
+            ) -> Result<(), HostError> {
+                unimplemented!("send_input should not be called by start()")
+            }
+            async fn capture_screen(&self, _sid: &SessionId) -> Result<ScreenSnapshot, HostError> {
+                unimplemented!("capture_screen should not be called by start()")
+            }
+            async fn resize(
+                &self,
+                _sid: &SessionId,
+                _rows: u16,
+                _cols: u16,
+            ) -> Result<(), HostError> {
+                unimplemented!("resize should not be called by start()")
+            }
+            async fn detach(
+                &self,
+                _sid: &SessionId,
+                _attach_id: AttachId,
+            ) -> Result<(), HostError> {
+                unimplemented!("detach should not be called by start()")
+            }
+            async fn stop(&self, _sid: &SessionId, _mode: StopMode) -> Result<(), HostError> {
+                unimplemented!("stop should not be called by start()")
+            }
+            async fn status(&self) -> Result<HostStatus, HostError> {
+                Ok(HostStatus {
+                    host_version: "mock".into(),
+                    sessions: Vec::<HostSessionSummary>::new(),
+                })
+            }
+        }
+
+        fn make_spec() -> SessionSpec {
+            SessionSpec {
+                working_dir: "/tmp/wd".into(),
+                rows: 24,
+                cols: 80,
+                claude_binary: "/usr/local/bin/claude".into(),
+                claude_args: vec![],
+                env: vec![],
+                claude_config_dir: "/caller-supplied/should-be-overwritten".into(),
+            }
+        }
+
+        #[tokio::test]
+        async fn start_materializes_overlay_and_overrides_config_dir() {
+            let parent = tempfile::tempdir().unwrap();
+            let host = Arc::new(RecordingHost::default());
+            let session = InteractiveSession::start(
+                "ws1",
+                host.clone(),
+                make_spec(),
+                parent.path(),
+                Path::new("/abs/path/to/claudette-cli"),
+            )
+            .await
+            .expect("start should succeed");
+
+            // Sid prefix is correct + overlay was materialized on disk.
+            assert!(
+                session.sid.starts_with("claudette-ws1-"),
+                "unexpected sid: {}",
+                session.sid
+            );
+            assert!(
+                session.overlay.dir.join("settings.json").exists(),
+                "settings.json missing in {:?}",
+                session.overlay.dir
+            );
+
+            // ensure_session was called once with the overlay dir piped
+            // into spec.claude_config_dir (not the caller-supplied one).
+            let calls = host.ensure_calls.lock().unwrap();
+            assert_eq!(calls.len(), 1, "expected exactly one ensure_session call");
+            let (sid, spec) = &calls[0];
+            assert_eq!(sid.as_str(), session.sid);
+            assert_eq!(
+                spec.claude_config_dir,
+                session.overlay.dir.to_string_lossy()
+            );
+            assert_ne!(
+                spec.claude_config_dir, "/caller-supplied/should-be-overwritten",
+                "start() must overwrite the caller-supplied config dir with the overlay path"
+            );
+        }
+
+        #[tokio::test]
+        async fn start_propagates_host_error_from_ensure_session() {
+            let parent = tempfile::tempdir().unwrap();
+            let host = Arc::new(RecordingHost::default());
+            *host.fail_with.lock().unwrap() = Some(HostError::Unavailable("no host".into()));
+
+            let result = InteractiveSession::start(
+                "ws1",
+                host.clone(),
+                make_spec(),
+                parent.path(),
+                Path::new("/abs/path/to/claudette-cli"),
+            )
+            .await;
+
+            assert!(matches!(result, Err(HostError::Unavailable(_))));
+        }
+
+        #[tokio::test]
+        async fn start_propagates_overlay_materialize_failure() {
+            // Use a regular file as `overlay_parent` so create_dir_all
+            // returns NotADirectory and start() maps it into HostError::Other.
+            let file = tempfile::NamedTempFile::new().unwrap();
+            let host = Arc::new(RecordingHost::default());
+
+            let result = InteractiveSession::start(
+                "ws1",
+                host.clone(),
+                make_spec(),
+                file.path(),
+                Path::new("/abs/path/to/claudette-cli"),
+            )
+            .await;
+
+            assert!(matches!(result, Err(HostError::Other(_))));
+            // ensure_session must NOT have been called: overlay failure is
+            // fatal before we touch the host.
+            assert!(host.ensure_calls.lock().unwrap().is_empty());
+        }
+    }
 }
