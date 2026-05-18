@@ -29,6 +29,7 @@ pub mod plugin;
 pub mod plugins_runtime;
 pub mod remote;
 pub mod repository;
+pub mod scheduling;
 pub mod scm;
 pub mod settings;
 pub mod shell;

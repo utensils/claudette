@@ -103,6 +103,7 @@ export default defineConfig({
           items: [
             { slug: 'features/agent-configuration' },
             { slug: 'features/plan-mode' },
+            { slug: 'features/agent-scheduling' },
             { slug: 'features/slash-commands' },
             { slug: 'features/pinned-prompts' },
             { slug: 'features/authentication' },

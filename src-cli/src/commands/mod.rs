@@ -4,6 +4,7 @@ pub mod chat;
 pub mod plugin;
 pub mod pr;
 pub mod repo;
+pub mod routine;
 pub mod rpc;
 pub mod version;
 pub mod workspace;

@@ -4,6 +4,7 @@ import {
   Cpu,
   Palette,
   Bell,
+  Clock,
   FileCode,
   GitBranch,
   FlaskConical,
@@ -33,6 +34,7 @@ export function getAppSections(
     { id: "models", icon: Cpu },
     { id: "appearance", icon: Palette },
     { id: "notifications", icon: Bell },
+    { id: "automation", icon: Clock },
     { id: "editor", icon: FileCode },
     { id: "diagnostics", icon: Stethoscope },
     { id: "storage", icon: HardDrive },
@@ -70,6 +72,7 @@ export function SettingsSidebar() {
     if (id === "models") return t("settings:nav_models");
     if (id === "appearance") return t("settings:nav_appearance");
     if (id === "notifications") return t("settings:nav_notifications");
+    if (id === "automation") return t("settings:nav_automation");
     if (id === "editor") return t("settings:nav_editor");
     if (id === "diagnostics") return t("settings:nav_diagnostics");
     if (id === "storage") return t("settings:nav_storage");

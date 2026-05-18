@@ -22,6 +22,9 @@ const AppearanceSettings = lazy(() =>
 const NotificationsSettings = lazy(() =>
   import("./sections/NotificationsSettings").then((m) => ({ default: m.NotificationsSettings })),
 );
+const AutomationSettings = lazy(() =>
+  import("./sections/AutomationSettings").then((m) => ({ default: m.AutomationSettings })),
+);
 const EditorSettings = lazy(() =>
   import("./sections/EditorSettings").then((m) => ({ default: m.EditorSettings })),
 );
@@ -91,6 +94,7 @@ function SectionContent({ section }: { section: string | null }) {
   if (section === "usage") return <UsageSettings />;
   if (section === "appearance") return <AppearanceSettings />;
   if (section === "notifications") return <NotificationsSettings />;
+  if (section === "automation") return <AutomationSettings />;
   if (section === "editor") return <EditorSettings />;
   if (section === "diagnostics") return <DiagnosticsSettings />;
   if (section === "storage") return <StorageSettings />;

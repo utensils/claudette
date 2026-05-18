@@ -18,7 +18,7 @@ mod output;
 use clap::{CommandFactory, Parser, Subcommand};
 
 use crate::commands::{
-    batch as batch_cmd, capabilities, chat, plugin, pr, repo, rpc, version, workspace,
+    batch as batch_cmd, capabilities, chat, plugin, pr, repo, routine, rpc, version, workspace,
 };
 
 #[derive(Parser)]
@@ -108,6 +108,12 @@ enum Command {
         action: pr::Action,
     },
 
+    /// Scheduled agent routines.
+    Routine {
+        #[command(subcommand)]
+        action: routine::Action,
+    },
+
     /// Generate shell completion script for the named shell.
     /// Pipe to your shell's completion file:
     ///   `claudette completion zsh > ~/.zsh/completions/_claudette`
@@ -130,6 +136,7 @@ async fn main() {
         Command::Batch { action } => batch_cmd::run(action).await,
         Command::Plugin { action } => plugin::run(action, cli.json).await,
         Command::Pr { action } => pr::run(action, cli.json).await,
+        Command::Routine { action } => routine::run(action, cli.json).await,
         Command::Completion { shell } => {
             let mut cmd = Cli::command();
             let bin_name = cmd.get_name().to_string();

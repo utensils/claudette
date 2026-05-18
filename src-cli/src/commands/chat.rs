@@ -492,7 +492,7 @@ fn build_send_params(input: SendParamInput<'_>) -> serde_json::Value {
 /// - `@path` reads from the named file (most common for batch use)
 /// - `-` reads from stdin (pipe-friendly)
 /// - anything else is used verbatim
-fn resolve_prompt(arg: &str) -> Result<String, Box<dyn Error>> {
+pub(crate) fn resolve_prompt(arg: &str) -> Result<String, Box<dyn Error>> {
     if arg == "-" {
         let mut buf = String::new();
         std::io::Read::read_to_string(&mut std::io::stdin(), &mut buf)?;

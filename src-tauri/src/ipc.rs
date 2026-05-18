@@ -83,6 +83,11 @@ const METHODS: &[&str] = &[
     "submit_agent_answer",
     "submit_agent_approval",
     "submit_plan_approval",
+    "schedule_wakeup",
+    "routine.create",
+    "routine.list",
+    "routine.delete",
+    "routine.run",
     "plugin.list",
     "plugin.invoke",
     "scm.detect_provider",
@@ -419,6 +424,11 @@ async fn dispatch(app: &AppHandle, req: RpcRequest) -> RpcResponse {
         "submit_agent_answer" => handle_submit_agent_answer(app, &req.params).await,
         "submit_agent_approval" => handle_submit_agent_approval(app, &req.params).await,
         "submit_plan_approval" => handle_submit_plan_approval(app, &req.params).await,
+        "schedule_wakeup" => handle_schedule_wakeup(app, &req.params).await,
+        "routine.create" => handle_routine_create(app, &req.params).await,
+        "routine.list" => handle_routine_list(app).await,
+        "routine.delete" => handle_routine_delete(app, &req.params).await,
+        "routine.run" => handle_routine_run(app, &req.params).await,
         "plugin.list" => handle_plugin_list(app).await,
         "plugin.invoke" => handle_plugin_invoke(app, &req.params).await,
         "scm.detect_provider" => handle_scm_detect_provider(app, &req.params).await,
@@ -497,6 +507,14 @@ fn param_chat_session_id(params: &serde_json::Value) -> Result<String, String> {
         .and_then(|v| v.as_str())
         .map(String::from)
         .ok_or_else(|| "missing session_id".to_string())
+}
+
+fn string_param(params: &serde_json::Value, key: &str) -> Result<String, String> {
+    params
+        .get(key)
+        .and_then(|v| v.as_str())
+        .map(String::from)
+        .ok_or_else(|| format!("missing {key}"))
 }
 
 fn hydrate_session(
@@ -900,6 +918,86 @@ async fn handle_send_chat_message(
     )
     .await?;
     Ok(json!({ "ok": true }))
+}
+
+async fn handle_schedule_wakeup(
+    app: &AppHandle,
+    params: &serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let session_id = string_param(params, "session_id")
+        .or_else(|_| string_param(params, "chat_session_id"))
+        .or_else(|_| string_param(params, "session"))?;
+    let prompt = string_param(params, "prompt")?;
+    let delay_seconds = params
+        .get("delay_seconds")
+        .or_else(|| params.get("delaySeconds"))
+        .and_then(|v| v.as_i64());
+    let fire_at = params
+        .get("fire_at")
+        .or_else(|| params.get("fireAt"))
+        .and_then(|v| v.as_str())
+        .map(ToOwned::to_owned);
+    let reason = params
+        .get("reason")
+        .and_then(|v| v.as_str())
+        .map(ToOwned::to_owned);
+    let state = app_state(app)?;
+    let value = crate::commands::scheduling::schedule_wakeup(
+        session_id,
+        delay_seconds,
+        fire_at,
+        prompt,
+        reason,
+        state,
+    )
+    .await?;
+    serde_json::to_value(value).map_err(|e| e.to_string())
+}
+
+async fn handle_routine_create(
+    app: &AppHandle,
+    params: &serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let session_id = string_param(params, "session_id")
+        .or_else(|_| string_param(params, "chat_session_id"))
+        .or_else(|_| string_param(params, "session"))?;
+    let cron_expr = string_param(params, "cron_expr").or_else(|_| string_param(params, "cron"))?;
+    let prompt = string_param(params, "prompt")?;
+    let name = params
+        .get("name")
+        .and_then(|v| v.as_str())
+        .map(ToOwned::to_owned);
+    let recurring = params.get("recurring").and_then(|v| v.as_bool());
+    let state = app_state(app)?;
+    let value = crate::commands::scheduling::create_cron_routine(
+        session_id, name, cron_expr, prompt, recurring, state,
+    )
+    .await?;
+    serde_json::to_value(value).map_err(|e| e.to_string())
+}
+
+async fn handle_routine_list(app: &AppHandle) -> Result<serde_json::Value, String> {
+    let state = app_state(app)?;
+    let value = crate::commands::scheduling::list_scheduled_routines(state).await?;
+    serde_json::to_value(value).map_err(|e| e.to_string())
+}
+
+async fn handle_routine_delete(
+    app: &AppHandle,
+    params: &serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let id = string_param(params, "id").or_else(|_| string_param(params, "name"))?;
+    let state = app_state(app)?;
+    crate::commands::scheduling::delete_scheduled_routine(id, state).await
+}
+
+async fn handle_routine_run(
+    app: &AppHandle,
+    params: &serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let id = string_param(params, "id").or_else(|_| string_param(params, "name"))?;
+    let state = app_state(app)?;
+    crate::commands::scheduling::run_scheduled_routine(id, app.clone(), state).await
 }
 
 /// Every agent setting the GUI's chat input bar can flip, modeled here

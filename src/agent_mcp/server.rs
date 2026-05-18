@@ -31,7 +31,12 @@ use crate::agent_mcp::tools::send_to_user::{
 
 pub const ENV_SOCKET_ADDR: &str = "CLAUDETTE_MCP_SOCKET";
 pub const ENV_TOKEN: &str = "CLAUDETTE_MCP_TOKEN";
-pub const TOOL_NAME: &str = "send_to_user";
+pub const SEND_TO_USER_TOOL_NAME: &str = "send_to_user";
+pub const SCHEDULE_WAKEUP_TOOL_NAME: &str = "ScheduleWakeup";
+pub const CRON_CREATE_TOOL_NAME: &str = "CronCreate";
+pub const CRON_LIST_TOOL_NAME: &str = "CronList";
+pub const CRON_DELETE_TOOL_NAME: &str = "CronDelete";
+pub const MONITOR_TOOL_NAME: &str = "Monitor";
 pub const SERVER_NAME: &str = "claudette";
 
 /// Run the stdio MCP server until stdin EOFs.
@@ -129,13 +134,13 @@ fn initialize_result() -> Value {
             "version": env!("CARGO_PKG_VERSION"),
         },
         "instructions": "The Claudette MCP server lets the agent deliver a \
-            file inline in the user's chat surface. Use `send_to_user` whenever \
-            you produce a deliverable artifact the user should be able to view \
-            or download immediately — generated images, PDFs, or short \
-            text-shaped data files (CSV, Markdown, JSON, plain text). Do NOT \
-            use it for arbitrary binaries, archives, or oversized files; for \
-            those, tell the user the absolute path on disk so they can open \
-            them themselves."
+            file inline in the user's chat surface and gives agents native \
+            scheduling tools. Use `send_to_user` for deliverable artifacts. \
+            Do NOT use it for arbitrary binaries, archives, or oversized \
+            files; for those, tell the user the absolute path on disk. \
+            Use `ScheduleWakeup` for one-shot delayed re-entry, `CronCreate`, \
+            `CronList`, and `CronDelete` for recurring routines, and `Monitor` \
+            to subscribe to background task output without polling."
     })
 }
 
@@ -149,7 +154,7 @@ fn tools_list_result() -> Value {
 
     json!({
         "tools": [{
-            "name": TOOL_NAME,
+            "name": SEND_TO_USER_TOOL_NAME,
             "description": "Deliver a file to the user inline in the Claudette chat surface. \
                            Supported types: images (PNG/JPEG/GIF/WebP/SVG), PDF, plain text, \
                            CSV, JSON, and Markdown. Each type has its own size cap; the call \
@@ -179,6 +184,63 @@ fn tools_list_result() -> Value {
                 },
                 "required": ["file_path", "media_type"]
             }
+        }, {
+            "name": SCHEDULE_WAKEUP_TOOL_NAME,
+            "description": "Schedule a one-shot native Claudette wakeup for this chat session. \
+                           Provide either delaySeconds or fireAt. When it fires, Claudette \
+                           persists a user-visible scheduled prompt and re-enters the agent.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "delaySeconds": { "type": "integer", "description": "Positive delay in seconds." },
+                    "fireAt": { "type": "string", "description": "RFC3339 UTC/local timestamp to fire at." },
+                    "prompt": { "type": "string", "description": "Prompt to send when the wakeup fires." },
+                    "reason": { "type": "string", "description": "Optional short reason shown in the wakeup context." }
+                },
+                "required": ["prompt"]
+            }
+        }, {
+            "name": CRON_CREATE_TOOL_NAME,
+            "description": "Create a native Claudette scheduled routine using a standard 5-field cron expression in local time.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "name": { "type": "string", "description": "Optional stable name for manual run/delete." },
+                    "cron": { "type": "string", "description": "Standard 5-field cron: minute hour day-of-month month day-of-week." },
+                    "prompt": { "type": "string", "description": "Prompt to send each time the routine fires." },
+                    "recurring": { "type": "boolean", "description": "true by default. false fires once at the next match then disables itself." }
+                },
+                "required": ["cron", "prompt"]
+            }
+        }, {
+            "name": CRON_LIST_TOOL_NAME,
+            "description": "List native Claudette scheduled wakeups and routines.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {}
+            }
+        }, {
+            "name": CRON_DELETE_TOOL_NAME,
+            "description": "Delete a native Claudette scheduled routine by id or name.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "id": { "type": "string", "description": "Routine id or name." }
+                },
+                "required": ["id"]
+            }
+        }, {
+            "name": MONITOR_TOOL_NAME,
+            "description": "Subscribe this chat session to future output lines from a background Bash task. \
+                           The task id must come from a prior Bash run_in_background result.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "task_id": { "type": "string", "description": "Background task id or originating tool_use_id." },
+                    "until": { "type": "string", "description": "Optional condition the agent is waiting for." }
+                },
+                "required": ["task_id"]
+            }
         }]
     })
 }
@@ -201,15 +263,32 @@ async fn handle_tools_call(
     };
 
     let name = params.get("name").and_then(|v| v.as_str()).unwrap_or("");
-    if name != TOOL_NAME {
-        return JsonRpcResponse::error(
+    let args = params.get("arguments").cloned().unwrap_or(Value::Null);
+    match name {
+        SEND_TO_USER_TOOL_NAME => handle_send_to_user_tool(id, args, socket_addr, token).await,
+        SCHEDULE_WAKEUP_TOOL_NAME => {
+            handle_schedule_wakeup_tool(id, args, socket_addr, token).await
+        }
+        CRON_CREATE_TOOL_NAME => handle_cron_create_tool(id, args, socket_addr, token).await,
+        CRON_LIST_TOOL_NAME => {
+            handle_simple_bridge_tool(id, BridgePayload::CronList, socket_addr, token).await
+        }
+        CRON_DELETE_TOOL_NAME => handle_cron_delete_tool(id, args, socket_addr, token).await,
+        MONITOR_TOOL_NAME => handle_monitor_tool(id, args, socket_addr, token).await,
+        _ => JsonRpcResponse::error(
             id,
             error_codes::METHOD_NOT_FOUND,
             format!("no tool named {name:?}"),
-        );
+        ),
     }
+}
 
-    let args = params.get("arguments").cloned().unwrap_or(Value::Null);
+async fn handle_send_to_user_tool(
+    id: Value,
+    args: Value,
+    socket_addr: &str,
+    token: &str,
+) -> JsonRpcResponse {
     let file_path = match args.get("file_path").and_then(|v| v.as_str()) {
         Some(s) => s.to_string(),
         None => {
@@ -250,6 +329,145 @@ async fn handle_tools_call(
     }
 }
 
+async fn handle_schedule_wakeup_tool(
+    id: Value,
+    args: Value,
+    socket_addr: &str,
+    token: &str,
+) -> JsonRpcResponse {
+    let prompt = match args.get("prompt").and_then(|v| v.as_str()) {
+        Some(s) => s.to_string(),
+        None => return tool_error_result(id, "prompt is required"),
+    };
+    let payload = BridgePayload::ScheduleWakeup {
+        delay_seconds: args
+            .get("delaySeconds")
+            .or_else(|| args.get("delay_seconds"))
+            .and_then(|v| v.as_i64()),
+        fire_at: args
+            .get("fireAt")
+            .or_else(|| args.get("fire_at"))
+            .and_then(|v| v.as_str())
+            .map(ToOwned::to_owned),
+        prompt,
+        reason: args
+            .get("reason")
+            .and_then(|v| v.as_str())
+            .map(ToOwned::to_owned),
+    };
+    handle_simple_bridge_tool(id, payload, socket_addr, token).await
+}
+
+async fn handle_cron_create_tool(
+    id: Value,
+    args: Value,
+    socket_addr: &str,
+    token: &str,
+) -> JsonRpcResponse {
+    let cron_expr = match args
+        .get("cron")
+        .or_else(|| args.get("cron_expr"))
+        .and_then(|v| v.as_str())
+    {
+        Some(s) => s.to_string(),
+        None => return tool_error_result(id, "cron is required"),
+    };
+    let prompt = match args.get("prompt").and_then(|v| v.as_str()) {
+        Some(s) => s.to_string(),
+        None => return tool_error_result(id, "prompt is required"),
+    };
+    let payload = BridgePayload::CronCreate {
+        name: args
+            .get("name")
+            .and_then(|v| v.as_str())
+            .map(ToOwned::to_owned),
+        cron_expr,
+        prompt,
+        recurring: args
+            .get("recurring")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true),
+    };
+    handle_simple_bridge_tool(id, payload, socket_addr, token).await
+}
+
+async fn handle_cron_delete_tool(
+    id: Value,
+    args: Value,
+    socket_addr: &str,
+    token: &str,
+) -> JsonRpcResponse {
+    let id_or_name = match args
+        .get("id")
+        .or_else(|| args.get("name"))
+        .and_then(|v| v.as_str())
+    {
+        Some(s) => s.to_string(),
+        None => return tool_error_result(id, "id is required"),
+    };
+    handle_simple_bridge_tool(
+        id,
+        BridgePayload::CronDelete { id: id_or_name },
+        socket_addr,
+        token,
+    )
+    .await
+}
+
+async fn handle_monitor_tool(
+    id: Value,
+    args: Value,
+    socket_addr: &str,
+    token: &str,
+) -> JsonRpcResponse {
+    let task_id = match args
+        .get("task_id")
+        .or_else(|| args.get("taskId"))
+        .and_then(|v| v.as_str())
+    {
+        Some(s) => s.to_string(),
+        None => return tool_error_result(id, "task_id is required"),
+    };
+    handle_simple_bridge_tool(
+        id,
+        BridgePayload::Monitor {
+            task_id,
+            until: args
+                .get("until")
+                .and_then(|v| v.as_str())
+                .map(ToOwned::to_owned),
+        },
+        socket_addr,
+        token,
+    )
+    .await
+}
+
+async fn handle_simple_bridge_tool(
+    id: Value,
+    payload: BridgePayload,
+    socket_addr: &str,
+    token: &str,
+) -> JsonRpcResponse {
+    let bridge_req = BridgeRequest {
+        token: token.to_string(),
+        payload,
+    };
+    match send_to_bridge(socket_addr, &bridge_req).await {
+        Ok(BridgeResponse {
+            ok: true,
+            message,
+            data,
+            ..
+        }) => generic_tool_success_result(id, message.unwrap_or_else(|| "ok".to_string()), data),
+        Ok(BridgeResponse {
+            error: Some(msg), ..
+        }) => tool_error_result(id, &msg),
+        Ok(_) => tool_error_result(id, "bridge returned malformed response"),
+        Err(e) => tool_error_result(id, &format!("bridge IPC failed: {e}")),
+    }
+}
+
 fn tool_success_result(
     id: Value,
     attachment_id: String,
@@ -279,6 +497,24 @@ fn tool_error_result(id: Value, message: &str) -> JsonRpcResponse {
         json!({
             "content": [{ "type": "text", "text": format!("send_to_user failed: {message}") }],
             "isError": true,
+        }),
+    )
+}
+
+fn generic_tool_success_result(id: Value, message: String, data: Option<Value>) -> JsonRpcResponse {
+    let text = if let Some(data) = data {
+        format!(
+            "{message}\n{}",
+            serde_json::to_string_pretty(&data).unwrap_or(data.to_string())
+        )
+    } else {
+        message
+    };
+    JsonRpcResponse::success(
+        id,
+        json!({
+            "content": [{ "type": "text", "text": text }],
+            "isError": false,
         }),
     )
 }
@@ -429,9 +665,12 @@ mod tests {
             .filter_map(|t| t["name"].as_str())
             .collect();
         assert!(
-            names.contains(&TOOL_NAME),
-            "{names:?} should contain {TOOL_NAME}"
+            names.contains(&SEND_TO_USER_TOOL_NAME),
+            "{names:?} should contain {SEND_TO_USER_TOOL_NAME}"
         );
+        assert!(names.contains(&SCHEDULE_WAKEUP_TOOL_NAME));
+        assert!(names.contains(&CRON_CREATE_TOOL_NAME));
+        assert!(names.contains(&MONITOR_TOOL_NAME));
     }
 
     #[tokio::test]
@@ -495,7 +734,7 @@ mod tests {
             "id": 7,
             "method": "tools/call",
             "params": {
-                "name": TOOL_NAME,
+                "name": SEND_TO_USER_TOOL_NAME,
                 "arguments": {
                     "file_path": "/tmp/example.png",
                     "media_type": "image/png",
@@ -529,7 +768,7 @@ mod tests {
             "id": 9,
             "method": "tools/call",
             "params": {
-                "name": TOOL_NAME,
+                "name": SEND_TO_USER_TOOL_NAME,
                 "arguments": {
                     "file_path": "/tmp/x.png",
                     "media_type": "image/png"

@@ -645,6 +645,10 @@ pub struct AppState {
     /// the post-DB worktree/branch cleanup loop check the same flag, so
     /// the user's Cancel click really does stop further work.
     pub bulk_cleanup_cancels: RwLock<HashMap<String, Arc<AtomicBool>>>,
+    /// Nudges the native agent scheduler after a wakeup/routine is created,
+    /// deleted, or manually fired so the polling loop can recompute its next
+    /// deadline immediately instead of waiting for the fallback tick.
+    pub scheduler_notify: Arc<tokio::sync::Notify>,
 }
 
 impl AppState {
@@ -696,6 +700,7 @@ impl AppState {
             auth_login_cancel: tokio::sync::Mutex::new(None),
             auth_login_stdin: tokio::sync::Mutex::new(None),
             bulk_cleanup_cancels: RwLock::new(HashMap::new()),
+            scheduler_notify: Arc::new(tokio::sync::Notify::new()),
         }
     }
 

@@ -55,6 +55,14 @@ See [Agent Configuration](/claudette/features/agent-configuration/) for detailed
 | Community Registry | Show the Community settings section for themes, plugins, and language grammars. | Off |
 | Claude Code Usage | Surface Claude Pro / Max subscription quotas (5-hour session, weekly all-model, weekly Sonnet/Opus, extra usage) in the composer's usage meter. The meter itself is always visible for Codex / OpenAI / OpenRouter / Pi / Ollama / LM Studio sessions (driven by local-aggregate token totals); this toggle only controls whether Claude-family sessions surface real subscription buckets versus a greyed-out click-to-enable affordance. Confirmation dialog warns about Anthropic ToS on enable. | Off |
 
+## Automation
+
+Native agent wakeups and routines are managed by the scheduler described in [Agent Scheduling](/claudette/features/agent-scheduling/). The current surface is CLI and agent-tool driven; scheduled rows persist in the app database and re-arm when Claudette starts.
+
+| Setting | Description | Default |
+|---------|-------------|---------|
+| Native scheduled routines | Agents can create one-shot wakeups and cron-style routines through the Claudette MCP bridge, and scripts can manage them with `claudette routine`. | On |
+
 ## Claude CLI Flags
 
 | Setting | Description | Default |

@@ -34,6 +34,7 @@ pub mod plugin;
 pub mod plugin_runtime;
 pub mod process;
 pub mod rpc;
+pub mod scheduling;
 pub mod scm;
 pub mod slash_commands;
 pub mod snapshot;

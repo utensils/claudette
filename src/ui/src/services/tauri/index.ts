@@ -4,6 +4,7 @@ export * from "./apps";
 export * from "./localServer";
 export * from "./remote";
 export * from "./scm";
+export * from "./scheduling";
 export * from "./plugins";
 export * from "./agentBackends";
 export * from "./auth";

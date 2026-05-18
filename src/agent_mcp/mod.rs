@@ -82,7 +82,13 @@ Supported types: images (PNG/JPEG/GIF/WebP/SVG), PDF, plain text, CSV, \
 JSON, Markdown — each with its own size cap. For any other type \
 (binaries, archives, oversized files), do NOT call this tool; the call \
 will be rejected. Instead, tell the user the absolute path on disk so \
-they can open it manually.";
+they can open it manually.\n\
+\n\
+Native scheduling: this same server exposes `ScheduleWakeup`, `CronCreate`, \
+`CronList`, `CronDelete`, and `Monitor`. Use `ScheduleWakeup` when you need \
+Claudette to wake this chat later with a prompt. Use the cron tools for \
+recurring routines. Use `Monitor` to subscribe to future output from a \
+background Bash task instead of polling.";
 
 /// Claude-CLI-only rules that reference MCP tools shipped by the Claude
 /// Code runtime (`AskUserQuestion`, `ExitPlanMode`). These tools do not

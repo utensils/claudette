@@ -807,6 +807,11 @@ fn main() {
             // Start background SCM polling for PR status and CI checks.
             commands::scm::start_scm_polling(app.handle().clone());
 
+            // Start the native agent scheduler. It rehydrates persisted
+            // wakeups/routines on boot and dispatches overdue rows through
+            // the same chat-send path as user-entered prompts.
+            commands::scheduling::start_scheduler(app.handle().clone());
+
             // Build the env-provider fs watcher now that the AppHandle
             // exists. On a change: invalidate the matching cache entry
             // and emit a Tauri event so the EnvPanel (and other
@@ -1024,6 +1029,12 @@ fn main() {
             commands::terminal::start_agent_task_tail,
             commands::terminal::stop_agent_task_tail,
             commands::terminal::stop_agent_background_task,
+            // Native agent scheduling
+            commands::scheduling::schedule_wakeup,
+            commands::scheduling::create_cron_routine,
+            commands::scheduling::list_scheduled_routines,
+            commands::scheduling::delete_scheduled_routine,
+            commands::scheduling::run_scheduled_routine,
             // PTY
             pty::spawn_pty,
             pty::write_pty,
