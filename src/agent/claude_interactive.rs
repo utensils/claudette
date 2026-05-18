@@ -268,6 +268,48 @@ mod tests {
     }
 
     #[test]
+    fn settings_overlay_materialize_fails_when_parent_is_a_regular_file() {
+        // Use a regular file as the `parent` arg. `create_dir_all` will then
+        // attempt to create a directory beneath a non-directory component,
+        // which fails (NotADirectory on Unix; similar error class on Windows).
+        let file = tempfile::NamedTempFile::new().unwrap();
+        let parent_as_file = file.path();
+        assert!(
+            parent_as_file.is_file(),
+            "precondition: tempfile path must exist as a regular file"
+        );
+
+        let result = SettingsOverlay::materialize(
+            parent_as_file,
+            "claudette-x-y",
+            Path::new("/abs/path/to/claudette-cli"),
+        );
+        assert!(
+            result.is_err(),
+            "expected Err when parent path is a regular file, got Ok"
+        );
+    }
+
+    #[test]
+    fn settings_overlay_cleanup_is_idempotent_when_dir_already_removed() {
+        let tmp = tempfile::tempdir().unwrap();
+        let overlay = SettingsOverlay::materialize(
+            tmp.path(),
+            "claudette-x-y",
+            Path::new("/abs/path/to/claudette-cli"),
+        )
+        .unwrap();
+        // Yank the overlay out from under cleanup() by deleting the directory
+        // tree manually first.
+        std::fs::remove_dir_all(&overlay.dir).unwrap();
+        assert!(!overlay.dir.exists());
+        // Second cleanup must still succeed (idempotent).
+        overlay
+            .cleanup()
+            .expect("cleanup() on a missing overlay should be Ok");
+    }
+
+    #[test]
     fn random_hex8_returns_8_lowercase_hex_chars() {
         let s = random_hex8();
         assert_eq!(s.len(), 8, "expected 8 chars, got {s:?}");
