@@ -1,12 +1,12 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
   getAppSetting,
   setAppSetting,
   getGitUsername,
 } from "../../../services/tauri";
-import { useAppStore } from "../../../stores/useAppStore";
-import { buildModelRegistry, resolveModelSelection } from "../../chat/modelRegistry";
+import { resolveModelSelection } from "../../chat/modelRegistry";
+import { useModelRegistry } from "../../chat/useModelRegistry";
 import styles from "../Settings.module.css";
 
 type PrefixMode = "username" | "custom" | "none";
@@ -47,12 +47,12 @@ export function GitSettings() {
   const [ciModel, setCiModel] = useState("");
   const [ciModelProvider, setCiModelProvider] = useState("");
   const [error, setError] = useState<string | null>(null);
-  const alternativeBackendsEnabled = useAppStore((s) => s.alternativeBackendsEnabled);
-  const agentBackends = useAppStore((s) => s.agentBackends);
-  const modelRegistry = useMemo(
-    () => buildModelRegistry(alternativeBackendsEnabled, agentBackends),
-    [alternativeBackendsEnabled, agentBackends],
-  );
+  // Use the gated registry hook so the CI auto-fix model picker
+  // applies the same `codexEnabled` / Pi-SDK / Claude-OAuth filters as
+  // every other chat-side model selector. Saving a model the Rust
+  // resolver later rejects would leave auto-fix sessions silently
+  // failing at send time.
+  const modelRegistry = useModelRegistry();
   const selectedCiModel = ciModel
     ? ciModelProvider
       ? `${ciModelProvider}/${ciModel}`
