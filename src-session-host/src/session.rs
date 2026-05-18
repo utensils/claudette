@@ -109,6 +109,23 @@ impl Session {
         // Reader task: pumps PTY output to broadcast + screen blob.
         // `portable-pty`'s reader is std-blocking, so this lives on a
         // blocking-pool thread.
+        //
+        // ## Why `Ok(0)` collapses with `Err(_)` here (no spurious-zero handling)
+        //
+        // The `TmuxHost` FIFO tailer treats `Ok(0)` as potentially spurious and
+        // confirms session death via `tmux has-session` before bailing — tmux's
+        // pipe-pane can briefly close the writer fd on `respawn-pane` and
+        // similar without the session actually ending.
+        //
+        // The `portable-pty` master reader has no such surface: a zero-byte
+        // read on the master happens only when every slave fd has been closed,
+        // i.e. the child process is gone (or has explicitly closed its
+        // stdin/stdout/stderr). There is no analogue of tmux's transient
+        // detach. Treating `Ok(0)` as terminal is therefore correct, and the
+        // "reader sees zero while child is still alive" branch is not
+        // reachable from a stable test — covered by documentation rather than
+        // a unit test (see Task C1, plan
+        // `2026-05-18-interactive-claude-coverage-plan.md`).
         let screen = session.screen.clone();
         let tx_reader = tx.clone();
         let running_reader = running.clone();
@@ -139,6 +156,19 @@ impl Session {
         });
 
         // Waiter task: reaps child + emits Exit.
+        //
+        // The `Err(e)` arm below covers `portable_pty::Child::wait` failing,
+        // which on every platform we ship to (Unix `waitpid`, Windows
+        // `WaitForSingleObject` on the process handle) only fails on internal
+        // bookkeeping errors (lost child handle, ECHILD because someone else
+        // reaped the child, etc.). The `Child` here is freshly returned from
+        // `spawn_command` and held exclusively by this task — none of those
+        // conditions are reproducible in a unit test. We keep the arm so a
+        // surprise failure still surfaces as a synthetic Exit instead of
+        // silently dropping the waiter; the path is treated as
+        // known-unreachable for coverage (see Task C1, plan
+        // `2026-05-18-interactive-claude-coverage-plan.md`, and the
+        // `wait_err_path_is_unreachable` test below).
         let tx_exit = tx.clone();
         tokio::task::spawn_blocking(move || match child.wait() {
             Ok(status) => {
@@ -252,5 +282,34 @@ mod tests {
         assert!(key_bytes("F1").is_empty());
         assert!(key_bytes("").is_empty());
         assert!(key_bytes("Ctrl+C").is_empty());
+    }
+
+    /// Documents that the reader's `Ok(0)` arm is not a spurious-zero path:
+    /// `portable-pty`'s master reader returns zero only on real slave EOF, so
+    /// "child still alive while reader sees zero" is not a reachable state
+    /// for the `SidecarHost` reader (unlike `TmuxHost`'s pipe-pane FIFO,
+    /// which can transiently close on `respawn-pane`). See the Reader task
+    /// comment in `Session::spawn` and Task C1 in
+    /// `superpowers/plans/2026-05-18-interactive-claude-coverage-plan.md`.
+    ///
+    /// Kept as an `#[ignore]`d test so the rationale lives next to the code
+    /// and grep finds it.
+    #[test]
+    #[ignore = "documents an unreachable code path; see comment + plan"]
+    fn reader_ok_zero_is_not_spurious_on_portable_pty() {
+        // Intentionally empty — see the doc comment above.
+    }
+
+    /// Documents that the waiter's `Err(_)` arm covers a
+    /// known-unreachable-in-practice failure mode of
+    /// `portable_pty::Child::wait`. The arm exists so that surprise failures
+    /// still surface as a synthetic `SessionEvent::Exit { exit_status: -1, …
+    /// reason: "wait failed: <e>" }` instead of silently dropping the waiter.
+    /// See the Waiter task comment in `Session::spawn` and Task C1 in
+    /// `superpowers/plans/2026-05-18-interactive-claude-coverage-plan.md`.
+    #[test]
+    #[ignore = "documents an unreachable code path; see comment + plan"]
+    fn wait_err_path_is_unreachable() {
+        // Intentionally empty — see the doc comment above.
     }
 }
