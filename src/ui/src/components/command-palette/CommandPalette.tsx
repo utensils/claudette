@@ -115,6 +115,14 @@ export function CommandPalette() {
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [themes, setThemes] = useState<ThemeDefinition[]>([]);
   const [mode, setMode] = useState<"main" | "theme" | "model" | "effort" | "file">("main");
+  // Snapshot the mode the palette was opened in (main via Cmd+Shift+P,
+  // file via Cmd+P). Escape closes when we're back at the entry mode;
+  // otherwise it pops up one level to main. Read once via getState() so
+  // we capture the initial mode synchronously at mount, before the
+  // effect below clears `commandPaletteInitialMode`.
+  const [entryMode] = useState<"main" | "file">(() =>
+    useAppStore.getState().commandPaletteInitialMode === "file" ? "file" : "main",
+  );
   const [fileEntries, setFileEntries] = useState<FileEntry[]>([]);
   const [filesLoading, setFilesLoading] = useState(false);
   const [filesLoadError, setFilesLoadError] = useState<string | null>(null);
@@ -533,13 +541,16 @@ export function CommandPalette() {
       // Stop propagation so the global keyboard shortcut handler doesn't
       // also close the palette when we just want to exit theme mode.
       e.nativeEvent.stopImmediatePropagation();
-      if (mode !== "main") {
-        exitSubMenu();
-      } else {
+      // Close when we're at the mode the palette opened in. Otherwise
+      // pop one level back to main. This makes Cmd+P → Esc dismiss the
+      // palette instead of revealing the Cmd+Shift+P main menu.
+      if (mode === entryMode) {
         if (themes.length > 0) {
           applyThemeWithFonts(originalThemeIdRef.current);
         }
         close();
+      } else {
+        exitSubMenu();
       }
     } else if (e.key === "Backspace" && query === "" && mode !== "main") {
       // Backspace on empty input in sub-menu → go back
