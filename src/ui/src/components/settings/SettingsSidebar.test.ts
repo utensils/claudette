@@ -11,7 +11,7 @@ describe("getAppSections", () => {
     );
   });
 
-  it("shows the Claude Code Plugin Management section", () => {
+  it("shows the Claude Code Plugins section", () => {
     expect(getAppSections().map((section) => section.id)).toContain(
       "claude-code-plugins",
     );
