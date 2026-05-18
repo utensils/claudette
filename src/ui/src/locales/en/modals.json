@@ -88,6 +88,10 @@
   "import_worktrees_importing": "Importing...",
   "import_worktrees_confirm_singular": "Import {{count}} Workspace",
   "import_worktrees_confirm_plural": "Import {{count}} Workspaces",
+  "import_worktrees_delete_tooltip": "Delete this stray worktree from disk",
+  "import_worktrees_delete_confirm": "Permanently delete this worktree and all its files?\n\n{{path}}",
+  "import_worktrees_delete_confirm_button": "Delete from disk",
+  "import_worktrees_deleting": "Deleting...",
 
   "mcp_servers_title": "MCP servers",
   "mcp_servers_detecting": "Detecting MCP servers...",
@@ -139,6 +143,7 @@
   "bulk_cleanup_filter_365": "1 year",
   "bulk_cleanup_select_all": "Select all",
   "bulk_cleanup_counter": "{{selected}} of {{total}} selected",
+  "bulk_cleanup_selected_size": "{{size}} to free",
   "bulk_cleanup_live_counter": "{{deleted}} of {{total}} deleted, {{failed}} failed",
   "bulk_cleanup_no_eligible": "No archived workspaces match this filter.",
   "bulk_cleanup_deleting": "Deleting…",
@@ -157,5 +162,6 @@
   "bulk_cleanup_row_pending": "Pending",
   "bulk_cleanup_row_deleted": "Deleted",
   "bulk_cleanup_row_failed": "Failed",
-  "bulk_cleanup_row_cancelled": "Skipped"
+  "bulk_cleanup_row_cancelled": "Skipped",
+  "bulk_cleanup_pending_archive": "Still archiving — will be selectable in a moment"
 }

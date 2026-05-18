@@ -727,6 +727,14 @@ pub async fn remove_worktree(
     Ok(())
 }
 
+/// Run `git worktree prune` to clear `.git/worktrees/` entries whose
+/// directory is missing on disk. Safe to call unconditionally — a no-op
+/// when nothing is stale.
+pub async fn prune_worktrees(repo_path: &str) -> Result<(), GitError> {
+    run_git(repo_path, &["worktree", "prune"]).await?;
+    Ok(())
+}
+
 #[allow(dead_code)]
 #[tracing::instrument(
     level = "trace",

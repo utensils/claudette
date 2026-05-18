@@ -5,10 +5,12 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { useAppStore } from "../../stores/useAppStore";
 import {
   cancelWorkspacesBulk,
+  computeStorageStats,
   deleteWorkspacesBulk,
   type BulkCleanupProgress,
 } from "../../services/tauri";
 import { RepoIcon } from "../shared/RepoIcon";
+import { formatBytes } from "../../utils/formatBytes";
 import type { Repository, Workspace } from "../../types";
 import { Modal } from "./Modal";
 import shared from "./shared.module.css";
@@ -128,6 +130,72 @@ export function BulkCleanupArchivedModal() {
   // terminal status.
   const [runIds, setRunIds] = useState<string[]>([]);
 
+  // workspace_id → on-disk worktree size in bytes. Populated by a single
+  // `compute_storage_stats` call when the modal mounts so the user can
+  // see what each archived workspace will free up before confirming
+  // cleanup. `null` while the scan is in flight; missing keys after the
+  // scan mean the worktree dir doesn't exist on disk (still safe to
+  // delete the DB row — the size column just renders a dash).
+  const [sizeById, setSizeById] = useState<Map<string, number> | null>(null);
+  // Set of workspace ids the *backend* currently sees as Archived (from
+  // the same `compute_storage_stats` scan). Used to suppress rows whose
+  // optimistic store update hasn't been committed to the DB yet — see
+  // `useWorkspaceLifecycle.archive`, which flips the store entry to
+  // Archived *before* awaiting the backend call. Without this guard a
+  // user who archives N workspaces and immediately opens the cleanup
+  // modal sees the row, clicks Delete, and gets N copies of
+  // "workspace no longer archived" because the DB rows are still
+  // `active`. `null` while the scan runs; we fall back to trusting the
+  // store on scan failure (matches pre-fix behavior).
+  const [backendArchivedIds, setBackendArchivedIds] = useState<Set<
+    string
+  > | null>(null);
+  // Re-scan whenever the set of archived ids in the store changes —
+  // catches the moment an in-flight archive resolves and the
+  // `useWorkspaceLifecycle.archive` optimistic update is confirmed by
+  // the backend. Keyed on a stable join string so an unrelated row
+  // edit (status_line, agent_status) doesn't refire the scan. Inlined
+  // into the effect (rather than extracted to a `useCallback`) so the
+  // per-invocation `cancelled` flag and the cleanup closure share one
+  // scope — `useCallback` returning a cleanup is non-idiomatic React.
+  const archivedIdJoin = useMemo(
+    () =>
+      workspaces
+        .filter((w) => w.status === "Archived" && !w.remote_connection_id)
+        .map((w) => w.id)
+        .sort()
+        .join(","),
+    [workspaces],
+  );
+  useEffect(() => {
+    let cancelled = false;
+    computeStorageStats()
+      .then((stats) => {
+        if (cancelled) return;
+        const nextSize = new Map<string, number>();
+        const nextArchived = new Set<string>();
+        for (const r of stats) {
+          for (const w of r.workspaces) {
+            if (w.size_bytes != null) nextSize.set(w.id, w.size_bytes);
+            if (w.status === "Archived") nextArchived.add(w.id);
+          }
+        }
+        setSizeById(nextSize);
+        setBackendArchivedIds(nextArchived);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        // Treat a failed scan as "no info available" — render dashes
+        // in the size column and trust the store snapshot rather than
+        // blocking cleanup entirely.
+        setSizeById(new Map());
+        setBackendArchivedIds(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [archivedIdJoin]);
+
   const nowSecs = useMemo(() => Math.floor(Date.now() / 1000), []);
 
   const eligible = useMemo<Workspace[]>(
@@ -135,9 +203,31 @@ export function BulkCleanupArchivedModal() {
     [archived, ageFilter, nowSecs],
   );
 
+  // Rows the store says are Archived but the DB scan does NOT see as
+  // Archived (e.g. archive call is still in flight after an optimistic
+  // `useWorkspaceLifecycle.archive` update). Surfaced as a disabled
+  // "archiving…" badge so the user understands why those rows aren't
+  // selectable yet, instead of seeing an opaque "workspace no longer
+  // archived" error after clicking Delete.
+  const pendingArchiveIds = useMemo(() => {
+    if (backendArchivedIds === null) return new Set<string>();
+    const out = new Set<string>();
+    for (const w of archived) {
+      if (!backendArchivedIds.has(w.id)) out.add(w.id);
+    }
+    return out;
+  }, [archived, backendArchivedIds]);
+
+  // Eligible IDs exclude pending-archive rows so neither "Select all"
+  // nor a stale `selected` set ever sends an in-flight workspace to the
+  // backend — that's the path that produced the "workspace no longer
+  // archived" failures on first click.
   const eligibleIds = useMemo(
-    () => new Set(eligible.map((w) => w.id)),
-    [eligible],
+    () =>
+      new Set(
+        eligible.filter((w) => !pendingArchiveIds.has(w.id)).map((w) => w.id),
+      ),
+    [eligible, pendingArchiveIds],
   );
 
   const effectiveSelection = useMemo(() => {
@@ -590,6 +680,19 @@ export function BulkCleanupArchivedModal() {
               selected: effectiveSelection.size,
               total: eligible.length,
             })}
+            {sizeById !== null && effectiveSelection.size > 0 && (
+              <>
+                {" · "}
+                {t("bulk_cleanup_selected_size", {
+                  size: formatBytes(
+                    [...effectiveSelection].reduce(
+                      (sum, id) => sum + (sizeById.get(id) ?? 0),
+                      0,
+                    ),
+                  ),
+                })}
+              </>
+            )}
           </span>
         )}
       </div>
@@ -611,6 +714,7 @@ export function BulkCleanupArchivedModal() {
               {group.workspaces.map((ws) => {
                 const rowProgress = progress.get(ws.id);
                 const isSelected = effectiveSelection.has(ws.id);
+                const isPending = pendingArchiveIds.has(ws.id);
                 const err = failures.get(ws.id) ?? rowProgress?.error;
                 const displayName =
                   ws.name || runNamesRef.current.get(ws.id) || ws.id;
@@ -653,9 +757,12 @@ export function BulkCleanupArchivedModal() {
                     <input
                       type="checkbox"
                       checked={isSelected}
-                      disabled={renderingRun}
+                      disabled={renderingRun || isPending}
                       onChange={() => toggleRow(ws.id)}
                       aria-label={displayName}
+                      title={
+                        isPending ? t("bulk_cleanup_pending_archive") : undefined
+                      }
                     />
                     <span className={styles.rowName}>{displayName}</span>
                     <span className={styles.rowBranch}>
@@ -665,6 +772,13 @@ export function BulkCleanupArchivedModal() {
                           {ws.branch_name}
                         </>
                       )}
+                    </span>
+                    <span className={styles.rowSize}>
+                      {sizeById === null
+                        ? "…"
+                        : sizeById.has(ws.id)
+                          ? formatBytes(sizeById.get(ws.id)!)
+                          : "—"}
                     </span>
                     <span className={styles.rowAge}>
                       {ws.created_at &&
@@ -680,6 +794,11 @@ export function BulkCleanupArchivedModal() {
                       <label className={styles.rowLabel}>{rowInner}</label>
                     )}
                     {err && <div className={styles.rowError}>{err}</div>}
+                    {!err && isPending && (
+                      <div className={styles.rowPending}>
+                        {t("bulk_cleanup_pending_archive")}
+                      </div>
+                    )}
                   </li>
                 );
               })}

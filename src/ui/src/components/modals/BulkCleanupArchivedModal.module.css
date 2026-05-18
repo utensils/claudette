@@ -118,12 +118,21 @@
 
 .rowLabel {
   display: grid;
-  grid-template-columns: auto 1fr auto auto;
+  grid-template-columns: auto 1fr auto auto auto;
   align-items: center;
   gap: 12px;
   padding: 8px 12px;
   cursor: pointer;
   min-width: 0;
+}
+
+.rowSize {
+  font-size: 11px;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+  min-width: 56px;
+  text-align: right;
 }
 
 .rowName {
@@ -159,6 +168,13 @@
   padding: 4px 12px 8px 36px;
   font-size: 11px;
   color: var(--status-stopped);
+}
+
+.rowPending {
+  padding: 4px 12px 8px 36px;
+  font-size: 11px;
+  color: var(--text-faint);
+  font-style: italic;
 }
 
 .empty {
@@ -198,7 +214,7 @@
    slide right to make room for the spinner / check / X. */
 .rowLabelRunning {
   display: grid;
-  grid-template-columns: auto auto 1fr auto auto;
+  grid-template-columns: auto auto 1fr auto auto auto;
   align-items: center;
   gap: 12px;
   padding: 8px 12px;

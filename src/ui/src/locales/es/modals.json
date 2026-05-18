@@ -85,6 +85,10 @@
   "import_worktrees_importing": "Importando...",
   "import_worktrees_confirm_singular": "Importar {{count}} espacio",
   "import_worktrees_confirm_plural": "Importar {{count}} espacios",
+  "import_worktrees_delete_tooltip": "Eliminar este worktree huérfano del disco",
+  "import_worktrees_delete_confirm": "¿Eliminar permanentemente este worktree y todos sus archivos?\n\n{{path}}",
+  "import_worktrees_delete_confirm_button": "Eliminar del disco",
+  "import_worktrees_deleting": "Eliminando...",
 
   "mcp_servers_title": "Servidores MCP",
   "mcp_servers_detecting": "Detectando servidores MCP...",

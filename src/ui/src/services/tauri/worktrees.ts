@@ -7,6 +7,7 @@ export interface DiscoveredWorktree {
   head_sha: string;
   suggested_name: string;
   name_valid: boolean;
+  size_bytes: number | null;
 }
 
 export function discoverWorktrees(repoId: string): Promise<DiscoveredWorktree[]> {
@@ -24,4 +25,11 @@ export function importWorktrees(
   imports: WorktreeImport[]
 ): Promise<Workspace[]> {
   return invoke("import_worktrees", { repoId, imports });
+}
+
+export function purgeStrayWorktree(
+  repoId: string,
+  path: string
+): Promise<void> {
+  return invoke("purge_stray_worktree", { repoId, path });
 }

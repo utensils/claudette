@@ -157,10 +157,26 @@ See [Diagnostics & Logging](/claudette/features/diagnostics/) for the full pipel
 | Setting | Description | Default |
 |---------|-------------|---------|
 | Clean up all (N) | Top-level action that opens the bulk cleanup modal in **cleanup-all mode** — every archived workspace across every local repository, grouped by repo. Disabled when nothing is archived. | — |
-| Archived workspaces per repository | Per-repository count of archived workspaces. Each row's `Clean up…` button opens the bulk cleanup modal scoped to that repo. | — |
-| Clean up… (per row) | Permanently deletes selected archived workspaces — worktree, branch, chat history. Lifetime metrics are preserved in `deleted_workspace_summaries`. | — |
+| Rescan | Re-runs the orphan scan and refreshes every per-repo size. | — |
+| Repository card | One unified row per repository showing: icon + name, a **total** on-disk badge, and meta pills for `active X`, `archived Y · N archived`, and `orphaned Z · N orphaned` (only the pills that apply). | — |
+| Per-workspace breakdown chevron | Expands a repo card to list every workspace under it (with per-workspace size + active/archived status) **and** every orphaned worktree dir attributed to that repo (with size + path + per-row trash). | — |
+| Clean up… (per row) | Permanently deletes selected archived workspaces for that repo — worktree, branch, chat history. Lifetime metrics are preserved in `deleted_workspace_summaries`. Only rendered when the repo has at least one archived workspace. | — |
+| Per-orphan trash icon | Inline destructive action on an expanded card. Opens a sticky confirm box at the bottom of the page, then permanently removes the orphan directory via `std::fs::remove_dir_all`. Refuses anything not strictly under the workspace base or still claimed by a workspace row. | — |
+| Bulk orphan delete: Cancel | While a per-repo or "Delete all N orphans" purge is running, the Cancel button signals cooperative cancellation. The currently-running `remove_dir_all` finishes (the OS call can't be safely interrupted partway), then the loop stops and every remaining orphan is preserved. The confirm box stays open with a partial-progress summary so the user can re-run on what's left. | — |
+| Unknown repository card | Synthetic card at the top of the list grouping orphans whose parent-dir slug doesn't match any registered repository. Styled to call attention (red border, alert icon). Same per-orphan trash interaction as known-repo cards. | — |
+
+The size readouts use binary units (KiB / MiB / GiB) and come from the `compute_storage_stats` Tauri command, which walks every workspace's worktree directory concurrently on the blocking pool. The orphan scan uses `scan_orphaned_worktrees`, which only looks at the configured `worktree_base_dir/<slug>/<wt_name>/` two-level layout — it does not scan arbitrary filesystem locations. Both run together on every Storage page mount and on Rescan.
+
+**Orphaned worktrees** typically appear when:
+- A user resets or deletes `~/.claudette/data.db` but the worktree directories survive on disk.
+- A dev sandbox under `/tmp/claudette-dev/new-NNNN/` (from `scripts/dev.sh --new`) was `kill -9`'d before the cleanup trap could fire.
+- Workspaces were imported on another machine and the SQLite DB diverged.
+
+The per-orphan delete action only removes the directory itself — it does not touch the parent git repository or its `.git/worktrees/` index, since orphan dirs are by definition no longer registered there. For worktrees still registered with a parent repo, use the per-row trash icon in the **Existing worktrees found** import dialog instead.
 
 The cleanup modal shows live per-row progress while a run is in flight: a spinner next to pending rows, a green check as each row deletes, an X for failures, and a circled dash for rows the user cancelled. The Cancel button stays active during a run — clicking it (or closing the modal) signals cooperative cancellation, the in-flight row finishes, and every remaining row is skipped. Cancelled rows are untouched in the DB, so re-running cleanup picks them up.
+
+Each row in the cleanup modal also shows the on-disk size of its worktree (binary units, sourced from the same `compute_storage_stats` scan the Storage page uses), and the selection counter renders a running "X B to free" total so the user can see the disk impact before confirming. Rows whose archive is still in flight — i.e. `useWorkspaceLifecycle.archive` flipped the store entry to Archived but the backend hasn't yet committed the status flip — render disabled with a "still archiving" hint instead of letting the user click Delete and get a misleading "workspace no longer archived" failure. The modal re-runs the storage scan whenever the archived-id set in the store changes, so those rows become selectable as soon as the backend confirms.
 
 The same modal is reachable from the project dashboard's **ARCHIVED** section header and from each per-repo settings page's **Workspace cleanup** field. See [Bulk Cleanup of Archived Workspaces](/claudette/features/git-worktrees/#bulk-cleanup-of-archived-workspaces) for the full UI walkthrough and the matching CLI subcommand.
 

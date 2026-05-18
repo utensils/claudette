@@ -1500,6 +1500,43 @@ pub struct DiscoveredWorktree {
     pub head_sha: String,
     pub suggested_name: String,
     pub name_valid: bool,
+    /// Recursive on-disk size of the worktree directory. `None` only when
+    /// the `spawn_blocking` task itself panics or is cancelled (the only
+    /// way `JoinHandle::await.ok()` returns `None`). Per-entry I/O errors
+    /// inside `directory_size_bytes` are silently skipped and contribute 0
+    /// — they never produce `None`.
+    pub size_bytes: Option<u64>,
+}
+
+/// Recursively sum the apparent size of regular files under `root`.
+///
+/// Symlinks are not followed (would risk cycles and double-counting). I/O
+/// errors on individual entries are silently skipped so one unreadable
+/// subdir doesn't disqualify the whole worktree — the size is best-effort
+/// for UI display, not accounting. Returns `u64` directly because there
+/// is no fatal-error path: an unreadable root yields `0`, same as an
+/// empty dir.
+pub(super) fn directory_size_bytes(root: &Path) -> u64 {
+    let mut total: u64 = 0;
+    let mut stack: Vec<PathBuf> = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let entries = match std::fs::read_dir(&dir) {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+        for entry in entries.flatten() {
+            let Ok(meta) = entry.metadata() else { continue };
+            if meta.file_type().is_symlink() {
+                continue;
+            }
+            if meta.is_dir() {
+                stack.push(entry.path());
+            } else if meta.is_file() {
+                total = total.saturating_add(meta.len());
+            }
+        }
+    }
+    total
 }
 
 /// Validate a workspace name: ASCII alphanumeric + hyphens, no leading/trailing hyphens.
@@ -1541,29 +1578,42 @@ pub async fn discover_worktrees(
         .map(|p| p.to_string_lossy().to_string())
         .unwrap_or_else(|_| repo.path.clone());
 
-    let mut discovered = Vec::new();
+    // First pass: filter the worktree list down to entries that need a
+    // size computed. Spawn all the (blocking) size walks up front so they
+    // run in parallel on Tokio's blocking pool instead of one-at-a-time
+    // (a repo with dozens of multi-GiB sandboxes would otherwise stall
+    // the dialog open).
+    struct Pending {
+        path: String,
+        branch: String,
+        head: String,
+        suggested_name: String,
+        name_valid: bool,
+        size_handle: tokio::task::JoinHandle<u64>,
+    }
 
+    let mut pending: Vec<Pending> = Vec::new();
     for wt in worktrees {
-        // Skip the main repo entry.
         let wt_canon = std::fs::canonicalize(&wt.path)
             .map(|p| p.to_string_lossy().to_string())
             .unwrap_or_else(|_| wt.path.clone());
+        // Skip the main repo entry and bare clones — neither is importable.
         if wt_canon == repo_canon || wt.is_bare {
             continue;
         }
-
-        // Skip detached HEAD worktrees.
+        // Skip detached HEAD worktrees — Claudette workspaces require a branch.
         let branch = match &wt.branch {
             Some(b) => b.clone(),
             None => continue,
         };
-
-        // Skip worktrees that don't exist on disk.
+        // Skip worktrees git knows about but that no longer exist on disk
+        // (these survive in `.git/worktrees/` until `git worktree prune`).
         if !Path::new(&wt.path).is_dir() {
             continue;
         }
-
-        // Skip already-tracked worktrees.
+        // Skip worktrees already claimed by a Claudette workspace row — the
+        // user already imported them once. Match by canonical path OR by
+        // branch name so a manually-checked-out duplicate is also filtered.
         if tracked_paths.contains(&wt_canon) || tracked_branches.contains(branch.as_str()) {
             continue;
         }
@@ -1572,19 +1622,163 @@ pub async fn discover_worktrees(
             .file_name()
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_default();
-
         let name_valid = is_valid_workspace_name(&suggested_name);
 
-        discovered.push(DiscoveredWorktree {
-            path: wt_path_display(&wt.path),
-            branch_name: branch,
-            head_sha: wt.head,
+        let size_path = PathBuf::from(&wt.path);
+        let size_handle = tokio::task::spawn_blocking(move || directory_size_bytes(&size_path));
+
+        pending.push(Pending {
+            path: wt.path,
+            branch,
+            head: wt.head,
             suggested_name,
             name_valid,
+            size_handle,
+        });
+    }
+
+    let mut discovered = Vec::with_capacity(pending.len());
+    for p in pending {
+        let size_bytes = p.size_handle.await.ok();
+        discovered.push(DiscoveredWorktree {
+            path: wt_path_display(&p.path),
+            branch_name: p.branch,
+            head_sha: p.head,
+            suggested_name: p.suggested_name,
+            name_valid: p.name_valid,
+            size_bytes,
         });
     }
 
     Ok(discovered)
+}
+
+use crate::commands::path_util::canon_or_raw;
+
+/// Pure validation logic for `purge_stray_worktree`. Extracted from the
+/// Tauri command so it can be tested with tempdir + handcrafted inputs
+/// instead of needing a Tauri `State`. The command wires DB + git output
+/// into this function and acts on its result.
+///
+/// Returns `Ok(())` when the target is safe to purge; an error string
+/// when any guard rejects it.
+fn validate_purge_target(
+    target_path: &str,
+    repo_path: &str,
+    git_worktrees: &[git::WorktreeInfo],
+    workspace_paths: &[String],
+) -> Result<(), String> {
+    let target_canon = canon_or_raw(target_path);
+    let target_raw = target_path.to_string();
+    let repo_canon = canon_or_raw(repo_path);
+
+    if target_canon == repo_canon || target_raw == repo_canon {
+        return Err("Refusing to delete the main repository directory".into());
+    }
+
+    // Re-validate the path against the live `git worktree list` for this
+    // repo. A caller (including any future XSS injecting into a Tauri
+    // invoke) cannot use this command to delete arbitrary filesystem
+    // paths.
+    let valid_worktree_paths: std::collections::HashSet<String> = git_worktrees
+        .iter()
+        .filter(|wt| !wt.is_bare)
+        .flat_map(|wt| {
+            // Accept both canonical and raw forms — `git worktree list`
+            // may report `/tmp/foo` while the canonical is `/private/tmp/foo`.
+            let raw = wt.path.clone();
+            let canon = canon_or_raw(&wt.path);
+            [raw, canon]
+        })
+        .collect();
+    if !valid_worktree_paths.contains(&target_canon) && !valid_worktree_paths.contains(&target_raw)
+    {
+        return Err(format!(
+            "'{target_path}' is not a linked worktree of this repository"
+        ));
+    }
+
+    // Refuse if any active or archived workspace still claims this path.
+    // Compare both canonical and raw forms — a stored path whose dir was
+    // deleted will fail to canonicalize and would otherwise slip the guard.
+    let claimed = workspace_paths.iter().any(|p| {
+        let p_canon = canon_or_raw(p);
+        p_canon == target_canon
+            || p_canon == target_raw
+            || p.as_str() == target_canon.as_str()
+            || p.as_str() == target_raw.as_str()
+    });
+    if claimed {
+        return Err(
+            "Path is tracked as a Claudette workspace — archive and clean it from the workspace list instead"
+                .into(),
+        );
+    }
+
+    Ok(())
+}
+
+/// Force-remove a stray worktree the user picked from the import dialog.
+///
+/// Two-phase cleanup:
+/// 1. `git worktree remove --force` — unregisters the worktree from the
+///    parent repo's `.git/worktrees/` index and (when possible) deletes
+///    the dir.
+/// 2. If the dir still exists (git lost track, or refused), fall back to
+///    `std::fs::remove_dir_all`.
+///
+/// Safety guards delegate to `validate_purge_target` — see its docs for
+/// the full guard list. All guards are enforced server-side because the
+/// frontend isn't the only possible caller of a Tauri command.
+#[tauri::command]
+pub async fn purge_stray_worktree(
+    repo_id: String,
+    path: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
+    let repos = db.list_repositories().map_err(|e| e.to_string())?;
+    let repo = repos
+        .iter()
+        .find(|r| r.id == repo_id)
+        .ok_or("Repository not found")?;
+
+    let worktrees = git::list_worktrees(&repo.path)
+        .await
+        .map_err(|e| e.to_string())?;
+    let workspaces = db.list_workspaces().map_err(|e| e.to_string())?;
+    let workspace_paths: Vec<String> = workspaces
+        .iter()
+        .filter_map(|w| w.worktree_path.clone())
+        .collect();
+
+    validate_purge_target(&path, &repo.path, &worktrees, &workspace_paths)?;
+
+    // Phase 1: ask git to unregister + remove. Don't error out on failure;
+    // git may refuse if the worktree is locked or already gone.
+    let git_result = git::remove_worktree(&repo.path, &path, true).await;
+    if let Err(e) = &git_result {
+        tracing::warn!(
+            target: "claudette::workspace",
+            path = %path,
+            error = %e,
+            "git worktree remove failed during purge; will attempt fs cleanup"
+        );
+    }
+
+    // Phase 2: if anything's left on disk, nuke it.
+    if Path::new(&path).exists() {
+        let rm_path = path.clone();
+        tokio::task::spawn_blocking(move || std::fs::remove_dir_all(&rm_path))
+            .await
+            .map_err(|e| format!("join error during fs cleanup: {e}"))?
+            .map_err(|e| format!("fs cleanup failed: {e}"))?;
+    }
+
+    // Best-effort: prune stale git/worktrees index entries.
+    let _ = git::prune_worktrees(&repo.path).await;
+
+    Ok(())
 }
 
 /// Return a display-friendly path (use the raw path, not canonicalized).
@@ -1916,10 +2110,107 @@ pub async fn notify_workspace_selected(
 
 #[cfg(test)]
 mod tests {
-    use super::apply_fork_prelude;
+    use super::{apply_fork_prelude, validate_purge_target};
     use crate::state::{AgentSessionState, ClaudeRemoteControlStatus};
+    use claudette::git::WorktreeInfo;
     use claudette::model::{ChatMessage, ChatRole};
     use std::collections::HashMap;
+
+    /// Make a WorktreeInfo for tests. Only `path` matters for validation.
+    fn wt(path: &str, branch: &str) -> WorktreeInfo {
+        WorktreeInfo {
+            path: path.to_string(),
+            head: "deadbeef".into(),
+            branch: Some(branch.to_string()),
+            is_bare: false,
+        }
+    }
+
+    #[test]
+    fn validate_purge_rejects_repo_root() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().to_str().unwrap();
+        let result = validate_purge_target(repo, repo, &[], &[]);
+        assert!(
+            result.is_err(),
+            "expected repo root rejection, got {result:?}"
+        );
+        assert!(
+            result.unwrap_err().contains("main repository"),
+            "wrong rejection reason"
+        );
+    }
+
+    #[test]
+    fn validate_purge_rejects_path_not_in_worktree_list() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().to_str().unwrap();
+        // A real worktree exists, but the target is something else entirely.
+        let real_wt = dir.path().join("real-wt");
+        std::fs::create_dir_all(&real_wt).unwrap();
+        let arbitrary = dir.path().join("not-a-worktree");
+        std::fs::create_dir_all(&arbitrary).unwrap();
+
+        let worktrees = vec![wt(real_wt.to_str().unwrap(), "feature-branch")];
+        let result = validate_purge_target(arbitrary.to_str().unwrap(), repo, &worktrees, &[]);
+        assert!(
+            result.is_err(),
+            "expected arbitrary-path rejection, got {result:?}"
+        );
+        assert!(
+            result.unwrap_err().contains("not a linked worktree"),
+            "wrong rejection reason"
+        );
+    }
+
+    #[test]
+    fn validate_purge_rejects_path_still_claimed_by_workspace_even_when_dir_deleted() {
+        // The canonicalize-fails-on-deleted-dir hazard from the prior
+        // review. Stored DB path is `/tmp/foo-XYZ/wt` (which does NOT
+        // exist on disk, so canonicalize errors); target the same path
+        // canonicalized via `/private/tmp/...`. A buggy guard would
+        // compare raw stored vs canonical target and let the purge slip
+        // through.
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().to_str().unwrap();
+        let wt_path = dir.path().join("claimed-wt");
+        std::fs::create_dir_all(&wt_path).unwrap();
+        let wt_str = wt_path.to_str().unwrap();
+
+        // Workspace row still claims this path (raw stored).
+        let workspace_paths = vec![wt_str.to_string()];
+        // git also still reports it (so it passes the "in git list" guard).
+        let worktrees = vec![wt(wt_str, "claimed-branch")];
+
+        let result = validate_purge_target(wt_str, repo, &worktrees, &workspace_paths);
+        assert!(
+            result.is_err(),
+            "expected workspace-claim rejection, got {result:?}"
+        );
+        assert!(
+            result
+                .unwrap_err()
+                .contains("tracked as a Claudette workspace"),
+            "wrong rejection reason"
+        );
+    }
+
+    #[test]
+    fn validate_purge_accepts_stray_worktree_in_git_list_with_no_workspace_claim() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().to_str().unwrap();
+        let stray = dir.path().join("stray-wt");
+        std::fs::create_dir_all(&stray).unwrap();
+        let stray_str = stray.to_str().unwrap();
+
+        let worktrees = vec![wt(stray_str, "stray-branch")];
+        // No workspace claims this path.
+        let result = validate_purge_target(stray_str, repo, &worktrees, &[]);
+        assert!(
+            result.is_ok(),
+            "expected stray worktree to validate, got {result:?}"
+        );
+    }
 
     fn fresh_session() -> AgentSessionState {
         AgentSessionState {

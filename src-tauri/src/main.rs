@@ -939,6 +939,10 @@ fn main() {
             commands::workspace::refresh_workspace_branch,
             commands::workspace::discover_worktrees,
             commands::workspace::import_worktrees,
+            commands::workspace::purge_stray_worktree,
+            commands::storage::compute_storage_stats,
+            commands::storage::scan_orphaned_worktrees,
+            commands::storage::purge_orphaned_worktree,
             commands::workspace::open_workspace_in_terminal,
             commands::workspace::notify_workspace_selected,
             // Slash commands

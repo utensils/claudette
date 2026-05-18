@@ -187,6 +187,346 @@
   flex: 1;
 }
 
+.storageHeaderActions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.storageEmptyHint {
+  font-size: 12px;
+  color: var(--text-dim);
+  padding: 12px 0;
+  font-style: italic;
+}
+
+/* Unified repo card. Each card shows one repo (or one "unknown repo"
+   slug) with all its workspaces + orphans rolled together so the page
+   doesn't duplicate the same repo across multiple sections. */
+.storageRepoCard {
+  display: flex;
+  flex-direction: column;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--divider);
+}
+
+.storageUnknownCard {
+  composes: storageRepoCard;
+  background: color-mix(in srgb, var(--status-stopped) 6%, transparent);
+  border: 1px solid color-mix(in srgb, var(--status-stopped) 35%, transparent);
+  border-radius: 6px;
+  padding: 12px;
+  margin-bottom: 12px;
+}
+
+.storageCardHeader {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.storageCardChevron {
+  background: transparent;
+  border: none;
+  color: var(--text-dim);
+  cursor: pointer;
+  padding: 4px 2px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  align-self: flex-start;
+  margin-top: 2px;
+}
+
+.storageCardChevron:disabled {
+  cursor: default;
+  opacity: 0.35;
+}
+
+.storageCardChevronSpacer {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+}
+
+.storageCardMain {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.storageCardTitle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary);
+  flex-wrap: wrap;
+}
+
+.storageUnknownIcon {
+  color: var(--status-stopped);
+  flex-shrink: 0;
+}
+
+.storageCardName {
+  /* let the rest of the title shrink before the name does */
+  flex-shrink: 0;
+}
+
+.storageCardSlugBadge {
+  font-size: 10px;
+  font-family: var(--font-mono);
+  color: var(--text-dim);
+  background: var(--selected-bg);
+  border-radius: 3px;
+  padding: 1px 5px;
+}
+
+.storageCardTotal {
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-dim);
+  border: 1px solid var(--divider);
+  border-radius: 3px;
+  padding: 1px 5px;
+  margin-left: auto;
+}
+
+.storageCardMeta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--text-muted);
+  align-items: center;
+}
+
+.storageMetaPill {
+  font-variant-numeric: tabular-nums;
+  background: transparent;
+  border: 1px solid var(--divider);
+  border-radius: 10px;
+  padding: 1px 8px;
+  color: var(--text-dim);
+}
+
+.storageMetaPillOrphaned {
+  composes: storageMetaPill;
+  border-color: color-mix(in srgb, var(--status-stopped) 50%, transparent);
+  color: var(--status-stopped);
+}
+
+.storageCardActions {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 8px;
+}
+
+.storageCardBreakdown {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 8px 0 0 30px;
+  padding: 8px 10px;
+  background: var(--selected-bg);
+  border-radius: 4px;
+}
+
+/* Workspace row inside a card's breakdown — name | status | size. */
+.storageWorkspaceRow {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+  padding: 2px 0;
+}
+
+.storageWorkspaceName {
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.storageWorkspaceSize {
+  font-variant-numeric: tabular-nums;
+  color: var(--text-dim);
+  min-width: 60px;
+  text-align: right;
+}
+
+/* Orphan row inside a card's breakdown — path | status | size | trash. */
+.storageOrphanRow {
+  display: grid;
+  grid-template-columns: 1fr auto auto auto;
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+  padding: 2px 0;
+}
+
+.storageOrphanPath {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.storageOrphanDeleteBtn {
+  background: transparent;
+  border: none;
+  color: var(--text-dim);
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: 3px;
+  display: flex;
+  align-items: center;
+}
+
+.storageOrphanDeleteBtn:hover:not(:disabled) {
+  color: var(--status-stopped);
+  background: var(--hover-bg);
+}
+
+.storageOrphanDeleteBtn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+/* Status pills shared across workspace + orphan rows. */
+.storageStatusPillActive {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-muted);
+  border: 1px solid var(--divider);
+  border-radius: 9px;
+  padding: 0 6px;
+}
+
+.storageStatusPillArchived {
+  composes: storageStatusPillActive;
+}
+
+.storageStatusPillOrphaned {
+  composes: storageStatusPillActive;
+  color: var(--status-stopped);
+  border-color: color-mix(in srgb, var(--status-stopped) 50%, transparent);
+}
+
+/* Orphan-purge confirm: floats below the card list, scoped to the
+   selected path. */
+.storageOrphanConfirmOverlay {
+  position: sticky;
+  bottom: 0;
+  margin-top: 16px;
+  padding: 12px 0;
+  background: linear-gradient(
+    to bottom,
+    transparent,
+    var(--app-bg) 16px
+  );
+}
+
+.storageOrphanConfirmCard {
+  border: 1px solid var(--status-stopped);
+  border-radius: 6px;
+  padding: 12px;
+  background: var(--bg-primary);
+}
+
+.storageOrphanConfirmText {
+  font-size: 12px;
+  color: var(--text-primary);
+  margin: 0 0 8px;
+  word-break: break-all;
+  white-space: pre-wrap;
+}
+
+.storageOrphanConfirmError {
+  font-size: 11px;
+  color: var(--status-stopped);
+  margin: 0 0 8px;
+  word-break: break-word;
+  /* `handleBulkOrphanPurge` joins per-failure lines with "\n" and the
+     "failures / skipped" sections with "\n\n". Without pre-wrap those
+     literal newlines collapse to single spaces and the user sees one
+     unbroken run of "path: error path: error" instead of a per-failure
+     list. Matches the sibling .storageOrphanConfirmText rule. */
+  white-space: pre-wrap;
+}
+
+.storageOrphanConfirmActions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.storageOrphanConfirmDelete {
+  color: var(--status-stopped);
+  border-color: var(--status-stopped);
+}
+
+.storageOrphanConfirmList {
+  margin: 4px 0 8px;
+  padding-left: 18px;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  color: var(--text-dim);
+  max-height: 160px;
+  overflow-y: auto;
+  list-style: disc;
+}
+
+.storageOrphanConfirmList li {
+  word-break: break-all;
+  margin-bottom: 2px;
+}
+
+.storageOrphanConfirmProgress {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin: 0 0 8px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* "Delete N orphans" button variants — uses the destructive accent
+   so it reads as different from the (safe) archived cleanup button
+   sitting next to it. */
+.storageCardOrphanBtn {
+  color: var(--status-stopped);
+  border-color: color-mix(in srgb, var(--status-stopped) 45%, transparent);
+}
+
+.storageCardOrphanBtn:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--status-stopped) 8%, transparent);
+}
+
+.storageDeleteAllOrphansBtn {
+  color: var(--status-stopped);
+  border-color: color-mix(in srgb, var(--status-stopped) 45%, transparent);
+}
+
+.storageDeleteAllOrphansBtn:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--status-stopped) 8%, transparent);
+}
+
+.storageError {
+  font-size: 12px;
+  color: var(--status-stopped);
+  margin: 8px 0;
+}
+
 .subsectionTitle {
   font-size: 16px;
   font-weight: 500;
