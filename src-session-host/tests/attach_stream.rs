@@ -120,6 +120,167 @@ async fn attach_streams_echoed_output() {
     let _ = std::fs::remove_file(&socket);
 }
 
+/// Drive the broadcast channel past its 2048-slot capacity with one fast
+/// consumer draining and one slow consumer falling behind, then assert the
+/// slow consumer's attach stream terminates.
+///
+/// The session host wires every attach connection to the per-session
+/// `broadcast::Sender<SessionEvent>` (capacity 2048 in `Session::spawn`). When
+/// a subscriber falls more than 2048 messages behind the writer, `rx.recv()`
+/// returns `RecvError::Lagged(n)`. `stream_attach` logs a warn and breaks out
+/// of its pump loop — from the client's perspective the attach socket just
+/// hits EOF cleanly. We can't assert against `tracing` output portably, so we
+/// assert the observable contract instead: the slow attach reaches stream
+/// end (EOF on `read_frame`) within a bounded time window.
+///
+/// The fast consumer is drained in a background task to keep its
+/// `stream_attach` write loop unblocked — without it the server would apply
+/// socket-write backpressure on the fast attach and we wouldn't have a clean
+/// reference subscriber to compare against. The slow consumer reads at a
+/// throttled cadence (one frame per `SLOW_DELAY_MS`) so its per-attach task
+/// keeps cycling through `rx.recv()` rather than getting stuck on
+/// `write_frame` once its OS send buffer fills — without that pacing the
+/// `Lagged` arm would never be reached because `recv()` is never called.
+#[tokio::test]
+async fn attach_lagged_subscriber_stream_ends() {
+    let stub = find_stub_tui();
+
+    let socket = std::env::temp_dir().join(format!("attach-lag-test-{}.sock", std::process::id()));
+    let _ = std::fs::remove_file(&socket);
+    let server = tokio::spawn({
+        let sp = socket.clone();
+        async move {
+            claudette_session_host::server::run_for_test(&sp)
+                .await
+                .unwrap()
+        }
+    });
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    // Control connection.
+    let ctrl = open_conn(&socket).await;
+    let (mut ctrl_r, mut ctrl_w) = ctrl.split();
+    handshake(&mut ctrl_r, &mut ctrl_w).await;
+
+    let sid = "claudette-attach-lagged".to_string();
+    send_req(
+        &mut ctrl_w,
+        &Request::EnsureSession {
+            sid: sid.clone(),
+            spec: SessionSpec {
+                working_dir: std::env::temp_dir().to_string_lossy().into(),
+                rows: 24,
+                cols: 80,
+                claude_binary: stub.to_string_lossy().into(),
+                claude_args: vec![],
+                env: vec![],
+                claude_config_dir: std::env::temp_dir().to_string_lossy().into(),
+            },
+        },
+    )
+    .await;
+    match recv_resp(&mut ctrl_r).await {
+        Response::SessionStarted { sid: got_sid, .. } => assert_eq!(got_sid, sid),
+        other => panic!("expected SessionStarted, got {other:?}"),
+    }
+
+    // Fast attach: drained continuously by a background task.
+    let fast = open_conn(&socket).await;
+    let (mut fast_r, mut fast_w) = fast.split();
+    handshake(&mut fast_r, &mut fast_w).await;
+    send_req(&mut fast_w, &Request::Attach { sid: sid.clone() }).await;
+    match recv_resp(&mut fast_r).await {
+        Response::AttachStarted { .. } => {}
+        other => panic!("expected AttachStarted on fast attach, got {other:?}"),
+    }
+    // Wait for stub-tui's READY before kicking off the drainer, to make sure
+    // the session reader task is wired up before we start blasting input.
+    assert!(
+        drain_until_contains(&mut fast_r, "READY", Duration::from_secs(2)).await,
+        "fast attach never saw READY"
+    );
+
+    let fast_drainer = tokio::spawn(async move {
+        // Read frames as fast as they arrive; ignore content. Exits when
+        // the connection closes (server abort at end of test).
+        while frame::read_frame(&mut fast_r).await.is_ok() {}
+    });
+
+    // Slow attach: handshake + Attach, then read at a deliberately slow
+    // rate. We can't simply never read — the server's per-attach task
+    // would block on `write_frame` (TCP send buffer full) and never call
+    // `rx.recv()` again, so the `Lagged` arm would be unreachable. By
+    // pacing reads slower than production we keep the server task cycling
+    // through `recv()` while the producer outpaces it; eventually `recv()`
+    // returns `Lagged` and the server logs the warn + closes the stream.
+    let slow = open_conn(&socket).await;
+    let (mut slow_r, mut slow_w) = slow.split();
+    handshake(&mut slow_r, &mut slow_w).await;
+    send_req(&mut slow_w, &Request::Attach { sid: sid.clone() }).await;
+    match recv_resp(&mut slow_r).await {
+        Response::AttachStarted { .. } => {}
+        other => panic!("expected AttachStarted on slow attach, got {other:?}"),
+    }
+
+    // The slow drainer reads at most one frame every `SLOW_DELAY_MS` ms
+    // and returns the first read error it encounters (the lag-induced
+    // close). It hands back the count of frames seen so a regression
+    // toward "no frames at all" is also visible in the assertion below.
+    const SLOW_DELAY_MS: u64 = 25;
+    let slow_drainer = tokio::spawn(async move {
+        let mut frames_seen: u64 = 0;
+        loop {
+            tokio::time::sleep(Duration::from_millis(SLOW_DELAY_MS)).await;
+            match frame::read_frame(&mut slow_r).await {
+                Ok(_) => frames_seen += 1,
+                Err(_) => return frames_seen,
+            }
+        }
+    });
+
+    // Push enough output through stub-tui to overflow the 2048-slot
+    // broadcast channel. Each iteration sends a small line and awaits its
+    // `Ok` reply (so the test client never falls behind on responses and
+    // we never block on socket buffers). The PTY reader produces one
+    // broadcast event per read; with 4096 line-by-line sends the producer
+    // far outpaces the 25 ms-per-frame slow drainer, eventually lapping
+    // it past the 2048-slot window.
+    const ITERATIONS: usize = 4096;
+    for i in 0..ITERATIONS {
+        send_req(
+            &mut ctrl_w,
+            &Request::SendInput {
+                sid: sid.clone(),
+                payload: InputPayload::Text {
+                    text: format!("l{i}\n"),
+                },
+            },
+        )
+        .await;
+        let resp = recv_resp(&mut ctrl_r).await;
+        assert!(
+            matches!(resp, Response::Ok),
+            "expected Ok for SendInput at iteration {i}, got {resp:?}"
+        );
+    }
+
+    // The slow drainer should observe its stream close once the broadcast
+    // overruns it. Give it a generous timeout — production might continue
+    // for a moment after the loop above as PTY echoes drain.
+    let frames_seen = tokio::time::timeout(Duration::from_secs(20), slow_drainer)
+        .await
+        .expect("slow drainer never reported stream end — lagged-broadcast path not exercised")
+        .expect("slow drainer task panicked");
+    assert!(
+        frames_seen > 0,
+        "slow drainer never saw any frames before close — fast attach pipeline may be broken"
+    );
+
+    fast_drainer.abort();
+    server.abort();
+    let _ = std::fs::remove_file(&socket);
+}
+
 // -- helpers ---------------------------------------------------------------
 
 async fn open_conn(p: &Path) -> Stream {
