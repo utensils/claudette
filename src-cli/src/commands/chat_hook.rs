@@ -150,4 +150,111 @@ mod tests {
             "missing --kind must fail"
         );
     }
+
+    /// Build an [`AppInfo`] whose `socket` points at the supplied path.
+    /// `pid` is set to the current process — `discovery::pid_alive`
+    /// isn't consulted by the IPC path; the GUI's socket is the only
+    /// thing that matters here.
+    fn fake_app_info(socket: &str) -> AppInfo {
+        AppInfo {
+            pid: std::process::id(),
+            socket: socket.to_string(),
+            token: "test-token".to_string(),
+            app_version: String::new(),
+            started_at: String::new(),
+        }
+    }
+
+    /// Allocate a unique path under the OS temp dir. Uses the current
+    /// PID and an atomic counter so parallel tests can't collide.
+    fn unique_temp_path(label: &str) -> std::path::PathBuf {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+        std::env::temp_dir().join(format!(
+            "claudette-chat-hook-test-{label}-{}-{n}",
+            std::process::id()
+        ))
+    }
+
+    /// Step 1: socket path doesn't exist on disk. The CLI must surface
+    /// a `Connect` error (not a panic, not a transport-mid-stream
+    /// error) with a user-readable message — the user needs to be
+    /// told the GUI socket is gone, not handed a stack trace.
+    #[tokio::test]
+    async fn chat_hook_fails_clearly_when_socket_missing() {
+        let missing = unique_temp_path("missing");
+        // Sanity: the path must not exist before we dial it. If a
+        // previous test run somehow left a file here, scrub it so the
+        // assertion below tests what it claims to.
+        let _ = std::fs::remove_file(&missing);
+        assert!(
+            !missing.exists(),
+            "precondition: socket path must not exist"
+        );
+
+        let info = fake_app_info(missing.to_str().unwrap());
+        let args = ChatHookArgs {
+            sid: "sid-test".to_string(),
+            kind: "stop".to_string(),
+            reason: None,
+        };
+
+        let err = run(&info, args)
+            .await
+            .expect_err("missing socket must error");
+        let message = err.to_string();
+        // The error should clearly indicate a connection failure —
+        // "connect failed: ..." is what `CallError::Connect` renders.
+        // We assert on the user-facing string so a future refactor
+        // that swallows or reformats this message gets caught.
+        assert!(
+            message.to_lowercase().contains("connect"),
+            "error must mention connect failure, got: {message}"
+        );
+        // And it must not be empty / placeholder.
+        assert!(
+            message.len() > 10,
+            "error message must be user-readable, got: {message:?}"
+        );
+    }
+
+    /// Step 2: a regular file exists at the socket path, but nothing
+    /// is listening on it (stale socket file). On Unix this is the
+    /// "Claudette crashed without unlinking" shape. The CLI must
+    /// still report a connect-level error, not silently succeed and
+    /// not hang.
+    #[tokio::test]
+    async fn chat_hook_fails_clearly_on_stale_socket_path() {
+        // Create a regular file (not a Unix socket) at the path.
+        // `interprocess`'s connect will refuse it on every supported
+        // platform — Unix because the inode isn't `SOCK_STREAM`, and
+        // Windows because the path doesn't name a live pipe.
+        let stale = unique_temp_path("stale");
+        std::fs::write(&stale, b"not a socket").expect("setup: write stale placeholder file");
+
+        // Guard the temp file with a drop helper so the test cleans
+        // up even if it panics partway through.
+        struct Cleanup<'a>(&'a std::path::Path);
+        impl Drop for Cleanup<'_> {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_file(self.0);
+            }
+        }
+        let _cleanup = Cleanup(&stale);
+
+        let info = fake_app_info(stale.to_str().unwrap());
+        let args = ChatHookArgs {
+            sid: "sid-test".to_string(),
+            kind: "stop".to_string(),
+            reason: None,
+        };
+
+        let err = run(&info, args).await.expect_err("stale socket must error");
+        let message = err.to_string();
+        assert!(
+            message.to_lowercase().contains("connect"),
+            "stale-socket error must mention connect failure, got: {message}"
+        );
+    }
 }
