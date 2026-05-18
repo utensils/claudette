@@ -167,3 +167,98 @@
   font-size: 13px;
   color: var(--text-muted);
 }
+
+/* Per-repo group header in cleanup-all mode. Renders as a thin label
+   bar above each repo's row block. */
+.repoHeader {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 4px 4px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+}
+
+/* Indent rows beneath a repo header so the visual hierarchy reads as
+   "repo → its workspaces" rather than a flat list mixing the two. */
+.repoSection {
+  list-style: none;
+  margin: 0 0 8px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+/* Status icon column added to rowLabel when a run is in flight. The
+   grid template grows by one column on .rowLabelRunning so checkboxes
+   slide right to make room for the spinner / check / X. */
+.rowLabelRunning {
+  display: grid;
+  grid-template-columns: auto auto 1fr auto auto;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 12px;
+  cursor: default;
+  min-width: 0;
+}
+
+.rowStatus {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+}
+
+.rowStatusDeleted {
+  color: var(--status-running);
+}
+
+.rowStatusFailed {
+  color: var(--status-stopped);
+}
+
+.rowStatusCancelled {
+  color: var(--text-faint);
+}
+
+/* Pure-CSS spinner used while a row is still being processed. */
+.spinner {
+  display: inline-block;
+  width: 11px;
+  height: 11px;
+  border: 1.5px solid var(--divider);
+  border-top-color: var(--text-primary);
+  border-radius: 50%;
+  animation: bulkCleanupSpin 0.8s linear infinite;
+}
+
+@keyframes bulkCleanupSpin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Respect reduced-motion: same convention as SetupScriptBanner /
+   SessionStatusIcon. The spinner becomes a static border ring so
+   the user still sees a visual indicator for "pending" without the
+   rotation. */
+@media (prefers-reduced-motion: reduce) {
+  .spinner {
+    animation: none;
+  }
+}
+
+/* Live progress counter shown in the header row while a run is in
+   flight ("X of N deleted, Y failed"). Replaces the selection counter
+   for the duration of the run. */
+.progressCounter {
+  font-size: 12px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}

@@ -16,6 +16,7 @@
 
 use std::path::Path;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use serde::Serialize;
@@ -866,16 +867,30 @@ pub async fn archive(
     })
 }
 
-/// Per-workspace outcome from a [`delete_workspaces_bulk`] call. `error`
-/// is `None` on success; populated with the DB error message if the row
-/// couldn't be deleted (e.g. a transient SQLITE_BUSY). `repository_id` is
-/// surfaced so the caller can dedupe affected repos for MCP supervisor
-/// reconciliation without re-querying the DB.
+/// Per-workspace outcome from a [`delete_workspaces_bulk`] call.
+///
+/// Three terminal states, mutually exclusive:
+/// - **Deleted** — `error: None`, `cancelled: false`. The DB row is gone
+///   and the bulk hook has fired.
+/// - **Failed** — `error: Some(_)`, `cancelled: false`. The row survives;
+///   caller should not run worktree/branch cleanup for it.
+/// - **Cancelled** — `error: None`, `cancelled: true`. The cancel token
+///   was tripped before this row was attempted; the DB call never ran and
+///   the row's state is untouched. Frontend labels these as "skipped",
+///   not "failed", so the user knows a retry will pick them up cleanly.
+///
+/// `repository_id` is surfaced for every outcome so the caller can dedupe
+/// affected repos for MCP supervisor reconciliation without re-querying
+/// the DB.
 #[derive(Debug, Serialize)]
 pub struct DeleteWorkspaceOutcome {
     pub id: String,
     pub repository_id: String,
     pub error: Option<String>,
+    /// True iff this row was skipped because the cancel token was tripped
+    /// before its DB delete ran. See struct-level docs for full semantics.
+    #[serde(default)]
+    pub cancelled: bool,
 }
 
 /// Hard-delete a batch of workspaces. Each delete runs in its own
@@ -888,17 +903,33 @@ pub struct DeleteWorkspaceOutcome {
 /// `restore_workspace` could flip a row to `Active` in that window.
 ///
 /// Per-row outcomes:
-/// - DB row deleted → `error: None`, hook emits `Deleted`.
+/// - DB row deleted → `error: None, cancelled: false`, hook emits `Deleted`.
 /// - Row missing or no longer Archived → `error: Some("workspace no
-///   longer archived")`, no hook (a `restore_workspace` already fired
-///   its own).
-/// - SQLite error → `error: Some(...)`, no hook.
+///   longer archived"), cancelled: false`, no hook (a `restore_workspace`
+///   already fired its own).
+/// - SQLite error → `error: Some(...), cancelled: false`, no hook.
+/// - Cancel token tripped before the row was attempted →
+///   `error: None, cancelled: true`, no hook, no DB call.
+///
+/// Cancellation is cooperative: the loop checks `cancel` at the top of
+/// each iteration. The row currently mid-flight is allowed to complete
+/// (its DB transaction is short — milliseconds — and worktree/branch
+/// cleanup runs later in the caller, where the same flag is re-checked).
+/// Every subsequent row is recorded as `cancelled: true` with no DB
+/// touch. This matches the spec in issue #854: in-flight finishes,
+/// remaining work skips.
+///
+/// `on_progress` fires once per outcome immediately after the outcome is
+/// built — same thread, no async, no allocations beyond what the caller's
+/// closure does. The Tauri command bridges this to a per-row Tauri event
+/// so the modal can render live status; the CLI ignores it.
 ///
 /// Caller responsibilities (matching the single-workspace
 /// `delete_workspace` Tauri command):
 /// - Stop any running agents whose `workspace_id` matches before invoking.
 /// - Remove worktrees + delete git branches *for IDs whose outcome
-///   reports success* — never for rows where this op reported a failure.
+///   reports success* — never for rows where this op reported a failure
+///   or a cancellation.
 /// - Invalidate env-provider watcher entries and cache entries rooted at
 ///   each successful row's worktree path.
 /// - Run the "is this the last workspace in its repo?" MCP supervisor
@@ -907,6 +938,8 @@ pub fn delete_workspaces_bulk(
     db: &Database,
     hooks: &dyn OpsHooks,
     ids: &[String],
+    cancel: Option<&Arc<AtomicBool>>,
+    on_progress: Option<&dyn Fn(&DeleteWorkspaceOutcome)>,
 ) -> Result<Vec<DeleteWorkspaceOutcome>, OpsError> {
     let workspaces = db.list_workspaces()?;
     let mut outcomes = Vec::with_capacity(ids.len());
@@ -919,25 +952,46 @@ pub fn delete_workspaces_bulk(
             .map(|w| w.repository_id.clone())
             .unwrap_or_default();
 
-        let error = match db.try_delete_archived_workspace_with_summary(id) {
-            Ok(true) => {
-                deleted_ids.push(id.clone());
-                None
+        // Cooperative cancel: trip the flag and every subsequent row
+        // records as `cancelled: true` without touching the DB. The
+        // currently-running iteration (if any) already passed this check
+        // and runs to completion — its DB transaction is short and
+        // there's no safe interrupt point inside SQLite.
+        let outcome = if cancel.is_some_and(|c| c.load(Ordering::Relaxed)) {
+            DeleteWorkspaceOutcome {
+                id: id.clone(),
+                repository_id,
+                error: None,
+                cancelled: true,
             }
-            Ok(false) => Some("workspace no longer archived".to_string()),
-            Err(e) => Some(e.to_string()),
+        } else {
+            let error = match db.try_delete_archived_workspace_with_summary(id) {
+                Ok(true) => {
+                    deleted_ids.push(id.clone());
+                    None
+                }
+                Ok(false) => Some("workspace no longer archived".to_string()),
+                Err(e) => Some(e.to_string()),
+            };
+            DeleteWorkspaceOutcome {
+                id: id.clone(),
+                repository_id,
+                error,
+                cancelled: false,
+            }
         };
 
-        outcomes.push(DeleteWorkspaceOutcome {
-            id: id.clone(),
-            repository_id,
-            error,
-        });
+        if let Some(cb) = on_progress {
+            cb(&outcome);
+        }
+        outcomes.push(outcome);
     }
 
     // One bulk hook for the whole batch — the GUI's hook impl amortizes
     // the tray rebuild and the workspace-row lookup so a 72-row delete
-    // doesn't fan out to 72 tray rebuilds + 72 DB list scans.
+    // doesn't fan out to 72 tray rebuilds + 72 DB list scans. Fires for
+    // whatever ran before cancel tripped; an entirely-cancelled batch
+    // (`deleted_ids.is_empty()`) skips the hook.
     if !deleted_ids.is_empty() {
         hooks.workspaces_changed_bulk(&deleted_ids, WorkspaceChangeKind::Deleted);
     }
@@ -1297,10 +1351,14 @@ mod tests {
             ids.push(created.workspace.id);
         }
 
-        let outcomes = delete_workspaces_bulk(&db, &hooks, &ids).unwrap();
+        let outcomes = delete_workspaces_bulk(&db, &hooks, &ids, None, None).unwrap();
         assert_eq!(outcomes.len(), 3);
         for outcome in &outcomes {
             assert!(outcome.error.is_none(), "expected success for {outcome:?}");
+            assert!(
+                !outcome.cancelled,
+                "no cancel token passed, no row should be cancelled: {outcome:?}",
+            );
             assert_eq!(outcome.repository_id, repo.id);
         }
 
@@ -1371,7 +1429,7 @@ mod tests {
             active.workspace.id.clone(),
             "does-not-exist".to_string(),
         ];
-        let outcomes = delete_workspaces_bulk(&db, &hooks, &ids).unwrap();
+        let outcomes = delete_workspaces_bulk(&db, &hooks, &ids, None, None).unwrap();
         assert_eq!(outcomes.len(), 3);
 
         // Archived row deleted.
@@ -1399,6 +1457,97 @@ mod tests {
             remaining.iter().any(|w| w.id == active.workspace.id),
             "active workspace must survive a bulk delete that included its id",
         );
+    }
+
+    /// Cancel-mid-batch semantics from issue #854: rows already past the
+    /// per-iteration check finish; the rest skip without touching the DB
+    /// and surface as `cancelled: true` outcomes. The progress callback
+    /// fires once per outcome, in order, so the frontend's live counter
+    /// matches the final outcomes list exactly.
+    #[tokio::test]
+    async fn delete_workspaces_bulk_short_circuits_on_cancel() {
+        use std::sync::Mutex as StdMutex;
+
+        let (_repo_dir, _db_dir, mut db, repo) = setup_repo_and_db().await;
+        let worktree_base = tempfile::tempdir().unwrap();
+        let hooks = RecordingHooks::default();
+
+        let mut ids = Vec::new();
+        for name in ["a", "b", "c", "d"] {
+            let created = create(
+                &mut db,
+                &hooks,
+                worktree_base.path(),
+                CreateParams {
+                    repo_id: &repo.id,
+                    name,
+                    branch_prefix: "test/",
+                },
+            )
+            .await
+            .unwrap();
+            db.update_workspace_status(&created.workspace.id, &WorkspaceStatus::Archived, None)
+                .unwrap();
+            ids.push(created.workspace.id);
+        }
+
+        // Trip the cancel flag from inside the progress callback, after
+        // the first row reports. Mirrors the real user pressing Cancel
+        // mid-flight: the second iteration sees the flag at its top-of-
+        // loop check and short-circuits without a DB call.
+        let cancel = Arc::new(AtomicBool::new(false));
+        let progress_log: Arc<StdMutex<Vec<(String, bool, bool)>>> =
+            Arc::new(StdMutex::new(Vec::new()));
+        let log_for_cb = Arc::clone(&progress_log);
+        let cancel_for_cb = Arc::clone(&cancel);
+        let on_progress = move |outcome: &DeleteWorkspaceOutcome| {
+            let mut log = log_for_cb.lock().unwrap();
+            log.push((
+                outcome.id.clone(),
+                outcome.error.is_none() && !outcome.cancelled,
+                outcome.cancelled,
+            ));
+            // After the first outcome lands, simulate the user pressing
+            // Cancel. Everything from row 2 onward must skip the DB.
+            if log.len() == 1 {
+                cancel_for_cb.store(true, Ordering::Relaxed);
+            }
+        };
+
+        let outcomes =
+            delete_workspaces_bulk(&db, &hooks, &ids, Some(&cancel), Some(&on_progress)).unwrap();
+
+        assert_eq!(outcomes.len(), 4, "every requested id must report once");
+        assert!(
+            outcomes[0].error.is_none() && !outcomes[0].cancelled,
+            "row 0 ran before cancel: {:?}",
+            outcomes[0],
+        );
+        for outcome in &outcomes[1..] {
+            assert!(
+                outcome.cancelled && outcome.error.is_none(),
+                "post-cancel row must be cancelled with no error: {outcome:?}",
+            );
+        }
+
+        // The remaining archived rows survive (the cancelled iterations
+        // never touched the DB).
+        let remaining = db.list_workspaces().unwrap();
+        let surviving: Vec<_> = remaining.iter().filter(|w| ids.contains(&w.id)).collect();
+        assert_eq!(
+            surviving.len(),
+            3,
+            "rows b/c/d should still be in the DB after cancel",
+        );
+
+        // Progress callback fired once per outcome, in declaration order.
+        let log = progress_log.lock().unwrap();
+        assert_eq!(log.len(), 4);
+        assert_eq!(log[0].0, ids[0]);
+        assert!(log[0].1, "first row reported as success");
+        for entry in &log[1..] {
+            assert!(entry.2, "row {} should be reported as cancelled", entry.0);
+        }
     }
 
     /// `build_script_command` must produce a Command that actually runs

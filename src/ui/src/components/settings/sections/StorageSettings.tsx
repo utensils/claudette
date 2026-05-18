@@ -42,10 +42,25 @@ export function StorageSettings() {
 
   return (
     <div>
-      <h2 className={styles.sectionTitle}>{t("storage_section_title")}</h2>
-      <p className={styles.sectionDescription}>
-        {t("storage_section_description", { total: totalArchived })}
-      </p>
+      <div className={styles.storageHeader}>
+        <div className={styles.storageHeaderText}>
+          <h2 className={styles.sectionTitle}>{t("storage_section_title")}</h2>
+          <p className={styles.sectionDescription}>
+            {t("storage_section_description", { total: totalArchived })}
+          </p>
+        </div>
+        <button
+          className={styles.iconBtn}
+          onClick={() =>
+            // `repoId: null` tells BulkCleanupArchivedModal to enter
+            // cleanup-all mode (flatten across every local repo).
+            openModal("bulkCleanupArchived", { repoId: null })
+          }
+          disabled={totalArchived === 0}
+        >
+          {t("storage_cleanup_all_button", { count: totalArchived })}
+        </button>
+      </div>
 
       {rows.length === 0 ? (
         <div className={styles.fieldHint}>{t("storage_no_repos")}</div>

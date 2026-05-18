@@ -928,6 +928,7 @@ fn main() {
             commands::workspace::reorder_workspaces,
             commands::workspace::delete_workspace,
             commands::workspace::delete_workspaces_bulk,
+            commands::workspace::cancel_workspaces_bulk,
             commands::workspace::generate_workspace_name,
             commands::workspace::refresh_branches,
             commands::workspace::refresh_workspace_branch,

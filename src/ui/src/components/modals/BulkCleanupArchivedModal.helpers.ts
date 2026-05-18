@@ -1,4 +1,4 @@
-import type { Workspace } from "../../types";
+import type { Repository, Workspace } from "../../types";
 
 /**
  * Pure helpers for `BulkCleanupArchivedModal`. Extracted so the age filter
@@ -84,6 +84,40 @@ export function ageBucket(createdAt: string, nowSecs: number): AgeBucket | null 
   if (days < 30) return { kind: "days", count: days };
   if (days < 365) return { kind: "months", count: Math.floor(days / 30) };
   return { kind: "years", count: Math.floor(days / 365) };
+}
+
+/** Group workspaces by their owning repository, preserving the input
+ *  workspace ordering inside each group and ordering groups themselves
+ *  by `repositories` order. Repos with no eligible workspaces are
+ *  omitted from the result. Used by the cleanup-all variant of the
+ *  modal to render per-repo headers in a stable order.
+ *
+ *  A workspace whose `repository_id` doesn't match any repo in
+ *  `repositories` is silently dropped — typically a remote-owned
+ *  workspace that slipped through the caller's filter; better to omit
+ *  it than render under a synthetic "unknown" header that the user
+ *  can't action on. */
+export function groupByRepository(
+  workspaces: Workspace[],
+  repositories: Repository[],
+): { repo: Repository; workspaces: Workspace[] }[] {
+  const byRepo = new Map<string, Workspace[]>();
+  for (const ws of workspaces) {
+    const bucket = byRepo.get(ws.repository_id);
+    if (bucket) {
+      bucket.push(ws);
+    } else {
+      byRepo.set(ws.repository_id, [ws]);
+    }
+  }
+  const out: { repo: Repository; workspaces: Workspace[] }[] = [];
+  for (const repo of repositories) {
+    const ws = byRepo.get(repo.id);
+    if (ws && ws.length > 0) {
+      out.push({ repo, workspaces: ws });
+    }
+  }
+  return out;
 }
 
 /** Filter the archived list by the chosen age window. The user-facing

@@ -275,6 +275,7 @@
   "storage_archived_count_singular": "{{count}} archived workspace",
   "storage_archived_count_plural": "{{count}} archived workspaces",
   "storage_cleanup_button": "Clean up…",
+  "storage_cleanup_all_button": "Clean up all ({{count}})",
   "repo_workspace_cleanup_label": "Workspace cleanup",
   "repo_workspace_cleanup_hint_singular": "{{count}} archived workspace in this project. Cleanup permanently deletes worktrees, branches, and chat history; lifetime metrics are preserved.",
   "repo_workspace_cleanup_hint_plural": "{{count}} archived workspaces in this project. Cleanup permanently deletes worktrees, branches, and chat history; lifetime metrics are preserved.",

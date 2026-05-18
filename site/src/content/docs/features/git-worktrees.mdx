@@ -37,15 +37,20 @@ When archiving a workspace, Claudette can optionally delete the local branch. Th
 
 Archived workspaces still occupy disk space in the database (chat history, terminal tab state, SCM cache). To purge them in batches:
 
-- **Project dashboard** → the **ARCHIVED** section header has a `Clean up…` button. Opens a modal scoped to the current repository.
-- **Settings → Storage** → lists every repository with its archived count and a per-row `Clean up…` button.
+- **Project dashboard** → the **ARCHIVED** section header has a `Clean up…` button. Opens the modal scoped to the current repository.
+- **Settings → Storage** → lists every local repository with its archived count and a per-row `Clean up…` button, plus a top-level **Clean up all (N)** button next to the section header that runs cleanup across **every** local repository in a single pass.
 - **Per-repo Settings** → the **Workspace cleanup** field at the bottom of the per-repo settings page opens the same modal.
 
 The cleanup modal lets you:
 
-- Filter to workspaces older than **30 / 60 / 90 days**, **6 months**, or **1 year** (measured from creation), or leave it on **All** to see every archived workspace in the repository.
+- Filter to workspaces older than **30 / 60 / 90 days**, **6 months**, or **1 year** (measured from creation), or leave it on **All** to see every archived workspace.
+- In cleanup-all mode, browse all eligible workspaces grouped by repository header (single-repo mode renders a flat list).
 - Select rows individually or use **Select all** to grab every eligible row in one click.
 - Permanently delete the selected workspaces — their worktrees, branches, chat history, and terminal state. **Lifetime metrics survive** in the `deleted_workspace_summaries` table so cost/turn dashboards stay accurate.
+
+While the run is in flight the modal shows **live per-row progress**: a spinner next to pending rows, a green check as each row completes its full DB + worktree + branch + env cleanup, an X for failures, and a circled dash for rows the user cancelled. A running counter at the top reports `X of N deleted, Y failed`. The `bulk-cleanup-progress` Tauri event drives the UI; a unique request id is generated per run so concurrent cleanups (e.g. from two Settings windows) stay isolated.
+
+**Cancel** stays enabled throughout the run. Clicking it (or closing the modal) flips the button to "Cancelling…" and signals cooperative cancellation: the in-flight row finishes its own DB + worktree teardown, then every remaining row is reported as `cancelled`. Cancelled rows are untouched in the DB and on disk, so re-running cleanup picks them up cleanly. Cleanup is atomic per row — each row either finishes its full DB + worktree + branch cleanup before its `deleted` event fires, or stays entirely intact, so a cancellation never leaves orphan worktrees behind a deleted database row.
 
 From the CLI:
 

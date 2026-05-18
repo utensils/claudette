@@ -629,6 +629,14 @@ pub struct AppState {
     /// the frontend forwards that code here so clean profiles can complete
     /// login without an attached terminal.
     pub auth_login_stdin: tokio::sync::Mutex<Option<tokio::process::ChildStdin>>,
+    /// Cancellation flags for in-flight bulk-cleanup runs, keyed by the
+    /// frontend-supplied `request_id`. The Tauri command inserts an
+    /// `Arc<AtomicBool>` on start and removes it on completion;
+    /// `cancel_workspaces_bulk(request_id)` flips the flag. Both the
+    /// per-row DB loop (in `ops::workspace::delete_workspaces_bulk`) and
+    /// the post-DB worktree/branch cleanup loop check the same flag, so
+    /// the user's Cancel click really does stop further work.
+    pub bulk_cleanup_cancels: RwLock<HashMap<String, Arc<AtomicBool>>>,
 }
 
 impl AppState {
@@ -678,6 +686,7 @@ impl AppState {
             claude_flag_defs: Arc::new(RwLock::new(ClaudeFlagDiscovery::Loading)),
             auth_login_cancel: tokio::sync::Mutex::new(None),
             auth_login_stdin: tokio::sync::Mutex::new(None),
+            bulk_cleanup_cancels: RwLock::new(HashMap::new()),
         }
     }
 

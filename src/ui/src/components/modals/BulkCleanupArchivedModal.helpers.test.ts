@@ -1,8 +1,9 @@
 import { describe, it, expect } from "vitest";
-import type { Workspace } from "../../types";
+import type { Repository, Workspace } from "../../types";
 import {
   ageBucket,
   filterByAge,
+  groupByRepository,
   parseCreatedAt,
 } from "./BulkCleanupArchivedModal.helpers";
 
@@ -172,5 +173,66 @@ describe("filterByAge", () => {
     expect(filterByAge(all, "30", NOW).some((w) => w.id === "mystery")).toBe(
       false,
     );
+  });
+});
+
+describe("groupByRepository", () => {
+  function makeRepo(id: string, name: string): Repository {
+    return {
+      id,
+      path: `/tmp/${id}`,
+      name,
+      path_slug: id,
+      icon: null,
+      created_at: "0",
+      setup_script: null,
+      custom_instructions: null,
+      sort_order: 0,
+      branch_rename_preferences: null,
+      setup_script_auto_run: false,
+      archive_script: null,
+      archive_script_auto_run: false,
+      base_branch: null,
+      default_remote: null,
+      path_valid: true,
+      remote_connection_id: null,
+    };
+  }
+
+  function makeWs(id: string, repoId: string): Workspace {
+    return {
+      ...makeArchived(id, 0),
+      repository_id: repoId,
+    };
+  }
+
+  it("returns groups in `repositories` order, not workspace order", () => {
+    const repos = [makeRepo("r1", "first"), makeRepo("r2", "second")];
+    const ws = [makeWs("w1", "r2"), makeWs("w2", "r1"), makeWs("w3", "r2")];
+    const out = groupByRepository(ws, repos);
+    expect(out.map((g) => g.repo.id)).toEqual(["r1", "r2"]);
+    expect(out[0].workspaces.map((w) => w.id)).toEqual(["w2"]);
+    expect(out[1].workspaces.map((w) => w.id)).toEqual(["w1", "w3"]);
+  });
+
+  it("preserves input workspace order within each group", () => {
+    const repos = [makeRepo("r1", "first")];
+    const ws = [makeWs("c", "r1"), makeWs("a", "r1"), makeWs("b", "r1")];
+    const out = groupByRepository(ws, repos);
+    expect(out[0].workspaces.map((w) => w.id)).toEqual(["c", "a", "b"]);
+  });
+
+  it("omits repos with no workspaces", () => {
+    const repos = [makeRepo("r1", "has"), makeRepo("r2", "empty")];
+    const ws = [makeWs("w1", "r1")];
+    expect(groupByRepository(ws, repos).map((g) => g.repo.id)).toEqual(["r1"]);
+  });
+
+  it("drops workspaces whose repository_id is not in `repositories`", () => {
+    const repos = [makeRepo("r1", "known")];
+    const ws = [makeWs("w1", "r1"), makeWs("w2", "r-missing")];
+    const out = groupByRepository(ws, repos);
+    expect(out).toHaveLength(1);
+    expect(out[0].workspaces.map((w) => w.id)).toEqual(["w1"]);
   });
 });

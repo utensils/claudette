@@ -147,8 +147,11 @@ See [Diagnostics & Logging](/claudette/features/diagnostics/) for the full pipel
 
 | Setting | Description | Default |
 |---------|-------------|---------|
+| Clean up all (N) | Top-level action that opens the bulk cleanup modal in **cleanup-all mode** — every archived workspace across every local repository, grouped by repo. Disabled when nothing is archived. | — |
 | Archived workspaces per repository | Per-repository count of archived workspaces. Each row's `Clean up…` button opens the bulk cleanup modal scoped to that repo. | — |
 | Clean up… (per row) | Permanently deletes selected archived workspaces — worktree, branch, chat history. Lifetime metrics are preserved in `deleted_workspace_summaries`. | — |
+
+The cleanup modal shows live per-row progress while a run is in flight: a spinner next to pending rows, a green check as each row deletes, an X for failures, and a circled dash for rows the user cancelled. The Cancel button stays active during a run — clicking it (or closing the modal) signals cooperative cancellation, the in-flight row finishes, and every remaining row is skipped. Cancelled rows are untouched in the DB, so re-running cleanup picks them up.
 
 The same modal is reachable from the project dashboard's **ARCHIVED** section header and from each per-repo settings page's **Workspace cleanup** field. See [Bulk Cleanup of Archived Workspaces](/claudette/features/git-worktrees/#bulk-cleanup-of-archived-workspaces) for the full UI walkthrough and the matching CLI subcommand.
 

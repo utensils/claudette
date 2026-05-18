@@ -1159,9 +1159,14 @@ async fn handle_delete_workspaces_bulk(
         .try_state::<Arc<claudette::mcp_supervisor::McpSupervisor>>()
         .ok_or_else(|| "McpSupervisor not initialised".to_string())?;
 
-    let result =
-        crate::commands::workspace::delete_workspaces_bulk_inner(&ids, app, &state, &supervisor)
-            .await?;
+    let result = crate::commands::workspace::delete_workspaces_bulk_inner(
+        &ids,
+        None,
+        app,
+        &state,
+        &supervisor,
+    )
+    .await?;
 
     serde_json::to_value(result).map_err(|e| e.to_string())
 }

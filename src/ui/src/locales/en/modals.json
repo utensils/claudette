@@ -127,6 +127,7 @@
   "env_trust_done": "Close",
 
   "bulk_cleanup_title": "Clean up archived workspaces in {{repo}}",
+  "bulk_cleanup_title_all": "Clean up archived workspaces across all repositories",
   "bulk_cleanup_title_fallback_repo": "this project",
   "bulk_cleanup_warning": "Deleting an archived workspace permanently removes its worktree, git branch, and chat history. Lifetime metrics are preserved.",
   "bulk_cleanup_older_than": "Older than",
@@ -138,15 +139,23 @@
   "bulk_cleanup_filter_365": "1 year",
   "bulk_cleanup_select_all": "Select all",
   "bulk_cleanup_counter": "{{selected}} of {{total}} selected",
+  "bulk_cleanup_live_counter": "{{deleted}} of {{total}} deleted, {{failed}} failed",
   "bulk_cleanup_no_eligible": "No archived workspaces match this filter.",
   "bulk_cleanup_deleting": "Deleting…",
+  "bulk_cleanup_cancelling": "Cancelling…",
   "bulk_cleanup_confirm": "Delete selected ({{count}})",
   "bulk_cleanup_success_singular": "Cleaned up {{count}} workspace",
   "bulk_cleanup_success_plural": "Cleaned up {{count}} workspaces",
   "bulk_cleanup_partial": "Cleaned up {{succeeded}}; {{failed}} failed",
+  "bulk_cleanup_partial_with_cancelled": "Cleaned up {{succeeded}}; {{failed}} failed, {{cancelled}} skipped — re-run to finish.",
+  "bulk_cleanup_cancelled_toast": "Cancelled. Cleaned up {{succeeded}}; {{cancelled}} skipped — re-run to finish.",
   "bulk_cleanup_failed": "Bulk cleanup failed: {{error}}",
   "bulk_cleanup_age_today": "today",
   "bulk_cleanup_age_days": "{{count}}d ago",
   "bulk_cleanup_age_months": "{{count}}mo ago",
-  "bulk_cleanup_age_years": "{{count}}y ago"
+  "bulk_cleanup_age_years": "{{count}}y ago",
+  "bulk_cleanup_row_pending": "Pending",
+  "bulk_cleanup_row_deleted": "Deleted",
+  "bulk_cleanup_row_failed": "Failed",
+  "bulk_cleanup_row_cancelled": "Skipped"
 }

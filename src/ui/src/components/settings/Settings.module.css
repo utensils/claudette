@@ -170,6 +170,23 @@
   margin: 0;
 }
 
+/* Storage section header: title + description block on the left,
+   cleanup-all action button aligned to the right. Title and
+   description keep their default margins so the rest of the page
+   matches the existing visual rhythm; the button shrinks to its
+   content width. */
+.storageHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 24px;
+}
+
+.storageHeaderText {
+  min-width: 0;
+  flex: 1;
+}
+
 /* ── Setting rows ── */
 
 .settingRow {
