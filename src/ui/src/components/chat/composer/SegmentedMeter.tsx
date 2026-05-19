@@ -37,6 +37,15 @@ function SegmentedMeter({ sessionId, onClick, suspended = false }, ref) {
       type="button"
       className={`${styles.meter} ${urgent ? styles.meterUrgent : ""}`}
       onClick={onClick}
+      // Right-click should toggle the popover too (not surface the
+      // OS-native Reload / Inspect Element menu). The meter is a
+      // first-class app control, so either mouse button does the same
+      // thing — `preventDefault` suppresses the WebView default and
+      // `onClick()` runs the same toggle the left button would.
+      onContextMenu={(event) => {
+        event.preventDefault();
+        onClick();
+      }}
       aria-label={`Context ${state.percentRounded}% used`}
     >
       <div className={styles.cells}>
