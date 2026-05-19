@@ -427,26 +427,73 @@ impl CodexAppServerSession {
     }
 
     /// Trigger Codex's native context compaction via the `thread/compact/start`
-    /// JSON-RPC method. The compaction itself is asynchronous: Codex enqueues a
-    /// non-steerable turn and, on completion, emits an `item/completed`
-    /// notification carrying a `contextCompaction` thread item. That item is
-    /// translated into a `compact_boundary` `StreamEvent` by
-    /// [`map_codex_item_completed_to_agent_events`], so the chat pipeline
-    /// persists the existing `COMPACTION:...` sentinel and the timeline renders
-    /// a `CompactionDivider` consistent with the Claude CLI path.
-    pub async fn start_compact(&self) -> Result<(), String> {
-        let thread_id = self
-            .thread_id
-            .lock()
-            .await
-            .clone()
-            .ok_or_else(|| "Codex app-server has no active thread to compact".to_string())?;
+    /// JSON-RPC method. Returns a [`TurnHandle`] shaped exactly like
+    /// [`Self::send_turn`]'s so the caller (`send_chat_message`) can plug it
+    /// into the same per-turn event pump without branching.
+    ///
+    /// The compaction itself is asynchronous: Codex enqueues a non-steerable
+    /// turn and, on completion, emits an `item/completed` notification
+    /// carrying a `contextCompaction` thread item. That item is translated
+    /// into a `compact_boundary` + synthetic `Result` event pair by
+    /// [`map_codex_item_completed_to_agent_events`]. The boundary persists
+    /// the existing `COMPACTION:...` sentinel; the Result terminates the
+    /// per-turn pump so `session.agent_status` flips back to `"Idle"`.
+    ///
+    /// Immediately after the RPC accepts, broadcasts a synthetic
+    /// `subtype: "status", status: "compacting"` event so the frontend
+    /// `useAgentStream` listener flips `workspace.agent_status` to
+    /// `"Compacting"` and shows the "Compacting context…" affordance the
+    /// Claude CLI emits natively. Without this, the UI sees nothing happen
+    /// for the entire wait between the RPC and the eventual
+    /// `ContextCompaction` item.
+    pub async fn start_compact(&self) -> Result<TurnHandle, String> {
+        if self.is_auth_expired() {
+            return Err(CODEX_AUTH_EXPIRED_MESSAGE.to_string());
+        }
+        // Subscribe BEFORE the RPC so neither the synthetic "compacting"
+        // status nor the eventual ContextCompaction item slip through
+        // before the per-turn pump exists.
+        let mut broadcast_rx = self.event_tx.subscribe();
+        let thread_id = self.ensure_thread().await?;
         self.send_request(build_thread_compact_start_request(
             self.next_id(),
             &thread_id,
         ))
         .await?;
-        Ok(())
+        let _ = self.event_tx.send(codex_compacting_status_event());
+
+        let (mpsc_tx, mpsc_rx) = mpsc::channel::<AgentEvent>(128);
+        tokio::spawn(async move {
+            loop {
+                match broadcast_rx.recv().await {
+                    Ok(event) => {
+                        let is_turn_end =
+                            matches!(&event, AgentEvent::Stream(StreamEvent::Result { .. }));
+                        let is_process_exit = matches!(&event, AgentEvent::ProcessExited(_));
+                        if mpsc_tx.send(event).await.is_err() {
+                            break;
+                        }
+                        if is_turn_end || is_process_exit {
+                            break;
+                        }
+                    }
+                    Err(broadcast::error::RecvError::Closed) => break,
+                    Err(broadcast::error::RecvError::Lagged(n)) => {
+                        tracing::warn!(
+                            target: "claudette::agent",
+                            subsystem = "codex-app-server",
+                            dropped_events = n,
+                            "broadcast lag — codex compact pump missed events"
+                        );
+                    }
+                }
+            }
+        });
+
+        Ok(TurnHandle {
+            event_rx: mpsc_rx,
+            pid: self.pid,
+        })
     }
 
     pub async fn read_account(
@@ -2371,10 +2418,13 @@ pub fn map_notification_to_agent_events(event: CodexNotificationEvent) -> Vec<Ag
         }
         // Transitional fallback: older Codex builds emit `thread/compacted`
         // as a notification rather than a `ContextCompaction` thread item.
-        // Surface the same compact_boundary event so the timeline divider
-        // renders identically.
+        // Surface the same compact_boundary + Result pair so the timeline
+        // divider renders identically and the per-turn pump terminates.
         CodexNotificationEvent::ContextCompacted { .. } => {
-            vec![codex_context_compaction_event()]
+            vec![
+                codex_context_compaction_event(),
+                codex_compaction_finish_event(),
+            ]
         }
         CodexNotificationEvent::AgentMessageDelta { .. }
         | CodexNotificationEvent::ReasoningSummaryDelta { .. }
@@ -2500,9 +2550,16 @@ fn map_codex_item_completed_to_agent_events(item: &Value) -> Vec<AgentEvent> {
     // the canonical signal that a `thread/compact/start`-initiated compaction
     // landed. Translate into the existing `compact_boundary` system event
     // shape so `send.rs` persists the `COMPACTION:...` sentinel via
-    // `build_compaction_sentinel`, and the timeline divider renders.
+    // `build_compaction_sentinel`, and the timeline divider renders. The
+    // synthetic `Result` event that follows terminates whichever per-turn
+    // pump is listening on `event_tx` (real send_turn() or the dedicated
+    // compact_chat_session pump) so `session.agent_status` flips back to
+    // `"Idle"` instead of staying stuck after the boundary lands.
     if item.get("type").and_then(Value::as_str) == Some("contextCompaction") {
-        return vec![codex_context_compaction_event()];
+        return vec![
+            codex_context_compaction_event(),
+            codex_compaction_finish_event(),
+        ];
     }
     let Some((item_id, _tool_name, input)) = codex_item_tool_use(item) else {
         return Vec::new();
@@ -2548,6 +2605,30 @@ fn map_codex_item_completed_to_agent_events(item: &Value) -> Vec<AgentEvent> {
     events
 }
 
+/// Build the in-flight indicator for a Codex compaction. The frontend
+/// `useAgentStream` listener flips `workspace.agent_status` to `"Compacting"`
+/// when it sees this event, mirroring the Claude CLI's native
+/// `subtype: "status", status: "compacting"` emission.
+fn codex_compacting_status_event() -> AgentEvent {
+    AgentEvent::Stream(StreamEvent::System {
+        subtype: "status".to_string(),
+        session_id: None,
+        state: None,
+        detail: None,
+        task_id: None,
+        tool_use_id: None,
+        output_file: None,
+        summary: None,
+        description: None,
+        last_tool_name: None,
+        usage: None,
+        status: Some("compacting".to_string()),
+        compact_result: None,
+        compact_metadata: None,
+        command_line: None,
+    })
+}
+
 /// Build the `compact_boundary` system event for a Codex `contextCompaction`
 /// item. Codex's item carries only an `id`, not pre/post token counts or a
 /// duration, so we synthesize a metadata stub with `trigger="codex"` and
@@ -2575,6 +2656,22 @@ fn codex_context_compaction_event() -> AgentEvent {
             duration_ms: 0,
         }),
         command_line: None,
+    })
+}
+
+/// Synthetic terminal event emitted after `codex_context_compaction_event()`
+/// so any per-turn pump driven by `event_tx` (real or the one in
+/// `compact_chat_session`) terminates and flips `session.agent_status` back
+/// to `"Idle"`. Mirrors the `subtype: "success"` Result that Claude's CLI
+/// emits at the end of its `/compact` turn — without it, the UI would stay
+/// stuck in the Compacting state indefinitely.
+fn codex_compaction_finish_event() -> AgentEvent {
+    AgentEvent::Stream(StreamEvent::Result {
+        subtype: "success".to_string(),
+        result: None,
+        total_cost_usd: None,
+        duration_ms: None,
+        usage: None,
     })
 }
 
@@ -3535,19 +3632,20 @@ mod tests {
     }
 
     #[test]
-    fn context_compaction_item_completed_emits_compact_boundary_event() {
+    fn context_compaction_item_completed_emits_compact_boundary_and_finish_events() {
         // Regression for issue #881: Codex delivers compaction completion as
         // an `item/completed` with `type: "contextCompaction"`. Make sure we
-        // translate it into the `compact_boundary` system event that
-        // `send.rs` persists via `build_compaction_sentinel`, rather than
-        // routing it through the tool-use pipeline (which would silently
-        // drop it because contextCompaction is not a tool use).
+        // translate it into a `compact_boundary` system event PLUS a
+        // synthetic `Result` event. The boundary triggers sentinel
+        // persistence + divider render; the Result terminates whichever
+        // per-turn pump is listening so `session.agent_status` flips back
+        // to `"Idle"` (without it, the UI stays stuck in "Compacting").
         let item = json!({
             "id": "item-1",
             "type": "contextCompaction",
         });
         let events = map_codex_item_completed_to_agent_events(&item);
-        assert_eq!(events.len(), 1);
+        assert_eq!(events.len(), 2);
         match &events[0] {
             AgentEvent::Stream(StreamEvent::System {
                 subtype,
@@ -3569,14 +3667,39 @@ mod tests {
             }
             other => panic!("expected compact_boundary System event, got {other:?}"),
         }
+        match &events[1] {
+            AgentEvent::Stream(StreamEvent::Result { subtype, .. }) => {
+                assert_eq!(subtype, "success");
+            }
+            other => panic!("expected synthetic Result event after boundary, got {other:?}"),
+        }
     }
 
     #[test]
-    fn deprecated_thread_compacted_notification_still_maps_to_compact_boundary() {
+    fn codex_compacting_status_event_carries_in_flight_marker() {
+        // Subscribers (the `compact_chat_session` Tauri command) flip the
+        // workspace agent_status to "Compacting" when they see this exact
+        // shape — `subtype: "status"` + `status: Some("compacting")`. Pin
+        // both so a future rename doesn't silently break the UI affordance.
+        match codex_compacting_status_event() {
+            AgentEvent::Stream(StreamEvent::System {
+                subtype, status, ..
+            }) => {
+                assert_eq!(subtype, "status");
+                assert_eq!(status.as_deref(), Some("compacting"));
+            }
+            other => panic!("expected status System event, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn deprecated_thread_compacted_notification_emits_boundary_and_finish() {
         // Older Codex builds emit `thread/compacted` as a top-level
         // notification rather than embedding the boundary in a thread item.
         // Keep the transitional decode path until we can rely on the new
-        // item shape across all supported Codex versions.
+        // item shape across all supported Codex versions — and make sure
+        // the synthetic Result fires here too so the per-turn pump
+        // terminates the same way it does for the item-path.
         let notification = JsonRpcNotification {
             method: "thread/compacted".to_string(),
             params: Some(json!({
@@ -3590,10 +3713,14 @@ mod tests {
             CodexNotificationEvent::ContextCompacted { .. }
         ));
         let events = map_notification_to_agent_events(decoded);
-        assert_eq!(events.len(), 1);
+        assert_eq!(events.len(), 2);
         assert!(matches!(
             &events[0],
             AgentEvent::Stream(StreamEvent::System { subtype, .. }) if subtype == "compact_boundary"
+        ));
+        assert!(matches!(
+            &events[1],
+            AgentEvent::Stream(StreamEvent::Result { subtype, .. }) if subtype == "success"
         ));
     }
 

@@ -776,6 +776,22 @@ pub(super) fn ensure_harness_accepts_attachments(
     Ok(())
 }
 
+/// True when this turn should be intercepted as a native compaction
+/// instead of a normal user turn. Only the Codex app-server path needs
+/// the intercept: Claude Code handles `/compact` natively as user input,
+/// and the Pi SDK harness is short-circuited at the UI layer.
+///
+/// Routing /compact through `send_chat_message` (and only swapping
+/// `send_turn` for `start_compact` at the very last step) lets us reuse
+/// the full spawn-or-reuse machinery, so /compact works whether or not
+/// a Codex process is currently alive — matching the Claude UX.
+pub(super) fn is_codex_compact_intent(
+    harness: AgentBackendRuntimeHarness,
+    prompt: &str,
+) -> bool {
+    harness == AgentBackendRuntimeHarness::CodexAppServer && prompt.trim() == "/compact"
+}
+
 fn cleanup_failed_steer_persistence(
     db: &Database,
     checkpoint_id: &str,
@@ -1384,7 +1400,7 @@ pub async fn send_chat_message(
         mcp_config,
         disable_1m_context: disable_1m_context.unwrap_or(false),
         team_agent_session_tabs_enabled: team_agent_tabs_enabled,
-        backend_runtime,
+        backend_runtime: backend_runtime.clone(),
         hook_bridge: None,
         extra_claude_flags,
     };
@@ -1561,6 +1577,13 @@ pub async fn send_chat_message(
         ),
         None => expanded_user_content,
     };
+
+    // Detect `/compact` against the Codex app-server harness so the call
+    // sites below swap `send_turn_with_uuid` for `start_compact` after the
+    // session has been spawned or reused. The spawn-or-reuse machinery
+    // (lines ~1791-1916) is shared; only the very last "issue the turn"
+    // step diverges.
+    let is_codex_compact = is_codex_compact_intent(backend_runtime.harness, &prompt);
 
     let repo_path = repo.as_ref().map(|r| r.path.as_str()).unwrap_or("");
     let default_branch = match repo.as_ref().and_then(|r| r.base_branch.as_deref()) {
@@ -1926,10 +1949,13 @@ pub async fn send_chat_message(
         let local_user_message_uuid = uuid::Uuid::new_v4().to_string();
         session.active_pid = Some(reuse_pid);
         session.remember_local_user_message_uuid(local_user_message_uuid.clone());
-        match ps
-            .send_turn_with_uuid(&prompt, &image_attachments, &local_user_message_uuid)
-            .await
-        {
+        let turn_result = if is_codex_compact {
+            ps.start_compact().await
+        } else {
+            ps.send_turn_with_uuid(&prompt, &image_attachments, &local_user_message_uuid)
+                .await
+        };
+        match turn_result {
             Ok(handle) => handle,
             Err(e) => {
                 // Persistent session died — drop lock before async spawn to
@@ -2091,9 +2117,12 @@ pub async fn send_chat_message(
                     let session = agents.get_mut(&chat_session_id).ok_or("Session lost")?;
                     session.remember_local_user_message_uuid(local_user_message_uuid.clone());
                 }
-                let handle = ps
-                    .send_turn_with_uuid(&prompt, &image_attachments, &local_user_message_uuid)
-                    .await?;
+                let handle = if is_codex_compact {
+                    ps.start_compact().await?
+                } else {
+                    ps.send_turn_with_uuid(&prompt, &image_attachments, &local_user_message_uuid)
+                        .await?
+                };
 
                 agents = state.agents.write().await;
                 let session = agents.get_mut(&chat_session_id).ok_or("Session lost")?;
@@ -2249,9 +2278,12 @@ pub async fn send_chat_message(
             let session = agents.get_mut(&chat_session_id).ok_or("Session lost")?;
             session.remember_local_user_message_uuid(local_user_message_uuid.clone());
         }
-        let handle = ps
-            .send_turn_with_uuid(&prompt, &image_attachments, &local_user_message_uuid)
-            .await?;
+        let handle = if is_codex_compact {
+            ps.start_compact().await?
+        } else {
+            ps.send_turn_with_uuid(&prompt, &image_attachments, &local_user_message_uuid)
+                .await?
+        };
 
         agents = state.agents.write().await;
         let session = agents.get_mut(&chat_session_id).ok_or("Session lost")?;
@@ -3864,5 +3896,46 @@ mod tests {
             ensure_harness_accepts_attachments(AgentBackendRuntimeHarness::CodexAppServer, &atts)
                 .is_ok()
         );
+    }
+
+    #[test]
+    fn codex_compact_intent_detects_literal_slash_compact() {
+        // The send pipeline checks this exactly: harness == Codex AND
+        // the prompt (post @-mention expansion) is literally "/compact".
+        // Anything else — whitespace around it is fine, but adding an
+        // argument like "/compact foo" is NOT a compact intent and must
+        // continue down the normal send_turn path.
+        assert!(super::is_codex_compact_intent(
+            AgentBackendRuntimeHarness::CodexAppServer,
+            "/compact",
+        ));
+        assert!(super::is_codex_compact_intent(
+            AgentBackendRuntimeHarness::CodexAppServer,
+            "  /compact  \n",
+        ));
+        assert!(!super::is_codex_compact_intent(
+            AgentBackendRuntimeHarness::CodexAppServer,
+            "/compact please",
+        ));
+        assert!(!super::is_codex_compact_intent(
+            AgentBackendRuntimeHarness::CodexAppServer,
+            "tell me about compaction",
+        ));
+    }
+
+    #[test]
+    fn codex_compact_intent_excludes_other_harnesses() {
+        // Claude Code interprets the literal `/compact` natively; we
+        // must NOT swap in start_compact for it. Same for Pi (which
+        // wouldn't have a start_compact to call anyway).
+        assert!(!super::is_codex_compact_intent(
+            AgentBackendRuntimeHarness::ClaudeCode,
+            "/compact",
+        ));
+        #[cfg(feature = "pi-sdk")]
+        assert!(!super::is_codex_compact_intent(
+            AgentBackendRuntimeHarness::PiSdk,
+            "/compact",
+        ));
     }
 }

@@ -988,7 +988,6 @@ fn main() {
             commands::chat::lifecycle::reset_agent_session,
             commands::chat::lifecycle::prepare_cross_harness_migration,
             commands::chat::interaction::clear_attention,
-            commands::chat::interaction::compact_chat_session,
             commands::chat::interaction::submit_agent_answer,
             commands::chat::interaction::submit_agent_approval,
             commands::chat::interaction::submit_plan_approval,

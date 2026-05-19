@@ -23,7 +23,6 @@ import {
   sendRemoteCommand,
   steerQueuedChatMessage,
   stopAgent,
-  compactChatSession,
   submitAgentAnswer,
   submitAgentApproval,
   submitPlanApproval,
@@ -1379,32 +1378,32 @@ export function ChatPanel() {
           if (!trimmed) return;
         }
         if (result.kind === "harness_action" && result.action === "compact") {
-          // Resolve the active backend's effective harness and dispatch the
-          // compact action accordingly. Claude Code falls through to the
-          // normal send path with the literal `/compact` so the CLI keeps
-          // interpreting it natively; Codex invokes the dedicated
-          // `thread/compact/start` Tauri command; Pi has no native
-          // compaction so we short-circuit with a local message.
+          // Resolve the active backend's effective harness to decide how
+          // to dispatch. Claude Code and Codex both fall through to the
+          // normal send path with the literal `/compact`: Claude's CLI
+          // interprets it natively, and `send_chat_message` (Rust side)
+          // intercepts the same string when the harness is Codex and
+          // swaps `send_turn` for `start_compact` at the last possible
+          // step. This reuses the spawn-or-reuse machinery so /compact
+          // works even when no Codex process is currently alive (e.g.
+          // first action after an app restart). Pi has no native
+          // compaction protocol — short-circuit with a local message.
           const harness = (() => {
             const providerId = currentModelProvider;
             const backend = state.agentBackends.find((b) => b.id === providerId);
             return backend ? effectiveHarness(backend) : "claude_code";
           })();
-          if (harness === "codex_app_server") {
-            try {
-              await compactChatSession(sessionId);
-            } catch (err) {
-              addLocalMessage(`/compact failed: ${String(err)}`);
-            }
-            return;
-          }
           if (harness === "pi_sdk") {
             addLocalMessage("/compact: not supported on this backend.");
             return;
           }
-          // claude_code — fall through with the literal `/compact` so the
-          // CLI handles it (existing behavior; user-visible `/compact`
-          // message + native `compact_boundary` event).
+          // claude_code or codex_app_server — fall through with the
+          // literal `/compact`. The send pipeline (frontend
+          // dispatchChatMessage + backend send_chat_message) handles
+          // session spawn-or-reuse, user-message persistence, and turn
+          // setup uniformly. For Codex, send_chat_message branches at
+          // the very last step to issue `start_compact` instead of
+          // `send_turn`.
           trimmed = "/compact";
         }
       }

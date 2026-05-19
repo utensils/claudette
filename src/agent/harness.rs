@@ -236,17 +236,20 @@ impl AgentSession {
         }
     }
 
-    /// Trigger native context compaction on the active session. Each harness
-    /// has a different protocol:
+    /// Trigger native context compaction on the active session. Returns a
+    /// [`TurnHandle`] shaped exactly like `send_turn_with_uuid()`'s so the
+    /// caller (`send_chat_message`) can plug it into the same per-turn
+    /// event pump without branching. Each harness has a different protocol:
     /// - Claude CLI: the literal `"/compact"` user-input string is handled
     ///   by the CLI itself, so callers route it through `send_turn_with_uuid`
     ///   instead of this method.
-    /// - Codex app-server: issues the `thread/compact/start` JSON-RPC and
-    ///   returns immediately; the `ContextCompaction` item later flows
-    ///   through the stream as a `compact_boundary` event.
+    /// - Codex app-server: issues `thread/compact/start` and broadcasts a
+    ///   synthetic `compacting` status event; the `ContextCompaction` item
+    ///   later flows through the stream as a `compact_boundary` + `Result`
+    ///   pair.
     /// - Pi SDK: no native compaction protocol exists, so callers should
     ///   surface "not supported" in the UI rather than invoking this method.
-    pub async fn start_compact(&self) -> Result<(), String> {
+    pub async fn start_compact(&self) -> Result<TurnHandle, String> {
         match self {
             Self::ClaudeCode(_) => Err(
                 "Claude Code compaction is handled by the CLI via the `/compact` user input — \
