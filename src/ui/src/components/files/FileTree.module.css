@@ -46,6 +46,12 @@
   color: var(--text-primary);
 }
 
+.rowActive {
+  background: var(--selected-bg);
+  box-shadow: inset 2px 0 0 var(--accent-primary);
+  color: var(--text-primary);
+}
+
 .rowDeleted .name {
   text-decoration: line-through;
   text-decoration-color: var(--diff-removed-text);
@@ -72,7 +78,9 @@
 }
 
 .rowSelected .icon,
-.rowSelected .chevron {
+.rowSelected .chevron,
+.rowActive .icon,
+.rowActive .chevron {
   color: var(--text-muted);
 }
 

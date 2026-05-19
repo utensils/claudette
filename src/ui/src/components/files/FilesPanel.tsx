@@ -60,6 +60,13 @@ export function FilesPanel() {
   const openDiffTab = useAppStore((s) => s.openDiffTab);
   const setDiffSelectedCommitHash = useAppStore((s) => s.setDiffSelectedCommitHash);
   const setAllFilesDirExpanded = useAppStore((s) => s.setAllFilesDirExpanded);
+  const revealFileInTree = useAppStore((s) => s.revealFileInTree);
+  const revealActiveFileInTree = useAppStore((s) => s.revealActiveFileInTree);
+  const activeFilePath = useAppStore((s) =>
+    selectedWorkspaceId
+      ? (s.activeFileTabByWorkspace[selectedWorkspaceId] ?? null)
+      : null,
+  );
   const keybindings = useAppStore((s) => s.keybindings);
 
   const [entries, setEntries] = useState<FileEntry[]>([]);
@@ -215,6 +222,16 @@ export function FilesPanel() {
     return () => clearInterval(interval);
   }, [isRunning, selectedWorkspaceId, refreshNonce, loadFiles, isPendingPlaceholder]);
 
+  useEffect(() => {
+    if (!selectedWorkspaceId || !activeFilePath || !revealActiveFileInTree) return;
+    revealFileInTree(selectedWorkspaceId, activeFilePath);
+  }, [
+    activeFilePath,
+    revealActiveFileInTree,
+    revealFileInTree,
+    selectedWorkspaceId,
+  ]);
+
   // React to the `requestNewFileAtRoot` nonce: open the inline create
   // editor at the workspace root.
   //
@@ -300,6 +317,7 @@ export function FilesPanel() {
           <FileTree
             workspaceId={selectedWorkspaceId}
             entries={entries}
+            activeFilePath={revealActiveFileInTree ? activeFilePath : null}
             onActivateFile={handleActivateFile}
             onActivateDiff={handleActivateDiff}
             onContextMenu={(target, x, y) => setContextMenu({ target, x, y })}

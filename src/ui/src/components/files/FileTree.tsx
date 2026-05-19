@@ -36,6 +36,7 @@ interface FileTreeProps {
    *  from one repo onto another. */
   workspaceId: string;
   entries: FileEntry[];
+  activeFilePath: string | null;
   /** Called when the user activates a file row (click / Enter / Space).
    *  The parent decides whether to actually open it (e.g. it may show a
    *  discard-changes modal first if there are unsaved changes). */
@@ -59,6 +60,7 @@ const EMPTY_EXPANDED: Record<string, boolean> = {};
 export const FileTree = memo(function FileTree({
   workspaceId,
   entries,
+  activeFilePath,
   onActivateFile,
   onActivateDiff,
   onContextMenu,
@@ -110,6 +112,7 @@ export const FileTree = memo(function FileTree({
   // move focus on keyboard navigation — the WAI-ARIA tree pattern requires
   // focus to follow the selection so the screen reader announces the row.
   const rowRefsRef = useRef<Map<string, HTMLDivElement>>(new Map());
+  const scrolledActivePathRef = useRef<string | null>(null);
 
   /** The row that should currently be in the tab order (roving tabindex).
    *  Falls back to the first visible row when no row is selected, so the
@@ -139,6 +142,15 @@ export const FileTree = memo(function FileTree({
       el.focus();
     }
   }, [focusedPath]);
+
+  useEffect(() => {
+    if (!activeFilePath) return;
+    if (scrolledActivePathRef.current === activeFilePath) return;
+    const el = rowRefsRef.current.get(activeFilePath);
+    if (!el) return;
+    el.scrollIntoView({ block: "nearest" });
+    scrolledActivePathRef.current = activeFilePath;
+  }, [activeFilePath, visible]);
 
   useEffect(() => {
     const previous = previousRenamingPathRef.current;
@@ -296,6 +308,8 @@ export const FileTree = memo(function FileTree({
       {visible.map(({ node, depth }, idx) => {
         const showCreateAfter =
           creatingParentPath !== null && createRowIndex === idx + 1;
+        const isActiveFile =
+          node.kind === "file" && activeFilePath === node.path;
         return (
           <Fragment key={node.path}>
             <Row
@@ -303,6 +317,7 @@ export const FileTree = memo(function FileTree({
               depth={depth}
               expanded={node.kind === "dir" ? !!expanded[node.path] : false}
               selected={selected === node.path}
+              active={isActiveFile}
               renaming={renamingPath === node.path}
               isLight={isLight}
               // Roving tabindex: exactly one row in the tree is in the tab
@@ -421,6 +436,7 @@ interface RowProps {
   depth: number;
   expanded: boolean;
   selected: boolean;
+  active: boolean;
   renaming: boolean;
   tabbable: boolean;
   isLight: boolean;
@@ -436,6 +452,7 @@ function Row({
   depth,
   expanded,
   selected,
+  active,
   renaming,
   tabbable,
   isLight,
@@ -467,6 +484,7 @@ function Row({
   const rowClassName = [
     styles.row,
     selected ? styles.rowSelected : "",
+    active ? styles.rowActive : "",
     status === "Deleted" ? styles.rowDeleted : "",
     tintStatus ? styles.rowStatusTinted : "",
   ]
@@ -491,6 +509,7 @@ function Row({
       role="treeitem"
       tabIndex={tabbable ? 0 : -1}
       aria-selected={selected}
+      aria-current={active ? "true" : undefined}
       // WAI-ARIA tree levels are 1-indexed; root rows are level 1.
       aria-level={depth + 1}
       // Per the spec, `aria-expanded` is meaningful only on rows that have

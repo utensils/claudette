@@ -1,6 +1,9 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { useAppStore } from "./useAppStore";
-import { snapshotRemovedFilePath } from "./slices/fileTreeSlice";
+import {
+  getRevealAncestorDirs,
+  snapshotRemovedFilePath,
+} from "./slices/fileTreeSlice";
 
 const WS = "workspace-a";
 
@@ -14,6 +17,7 @@ function reset() {
     allFilesSelectedPathByWorkspace: {},
     tabOrderByWorkspace: {},
     filePathUndoStackByWorkspace: {},
+    revealActiveFileInTree: true,
   });
 }
 
@@ -31,6 +35,56 @@ function openLoadedFile(path: string, content = "saved") {
 
 describe("file path store updates", () => {
   beforeEach(reset);
+
+  it("computes ancestor directories for active-file tree reveal", () => {
+    expect(getRevealAncestorDirs("src/foo/bar.rs")).toEqual([
+      "src/",
+      "src/foo/",
+    ]);
+    expect(getRevealAncestorDirs("README.md")).toEqual([]);
+    expect(getRevealAncestorDirs("~/.claude/plans/plan.md")).toEqual([]);
+    expect(getRevealAncestorDirs("/tmp/memory.md")).toEqual([]);
+  });
+
+  it("reveals ancestor directories when opening a nested file tab", () => {
+    useAppStore.getState().openFileTab(WS, "src/foo/bar.rs");
+
+    expect(useAppStore.getState().allFilesExpandedDirsByWorkspace[WS]).toEqual({
+      "src/": true,
+      "src/foo/": true,
+    });
+  });
+
+  it("reveals ancestor directories when selecting an already-open file tab", () => {
+    useAppStore.getState().openFileTab(WS, "src/one.ts");
+    useAppStore.getState().openFileTab(WS, "tests/fixtures/two.ts");
+    useAppStore.setState({
+      allFilesExpandedDirsByWorkspace: { [WS]: {} },
+      activeFileTabByWorkspace: { [WS]: "src/one.ts" },
+    });
+
+    useAppStore.getState().selectFileTab(WS, "tests/fixtures/two.ts");
+
+    expect(useAppStore.getState().allFilesExpandedDirsByWorkspace[WS]).toEqual({
+      "tests/": true,
+      "tests/fixtures/": true,
+    });
+  });
+
+  it("does not reveal tree directories when the editor setting is disabled", () => {
+    useAppStore.setState({ revealActiveFileInTree: false });
+
+    useAppStore.getState().openFileTab(WS, "src/foo/bar.rs");
+
+    expect(useAppStore.getState().allFilesExpandedDirsByWorkspace[WS]).toBeUndefined();
+  });
+
+  it("does not reveal tree directories for non-worktree file paths", () => {
+    useAppStore.getState().openFileTab(WS, "~/.claude/plans/plan.md");
+    useAppStore.getState().openFileTab(WS, "/tmp/claudette-memory.md");
+
+    expect(useAppStore.getState().allFilesExpandedDirsByWorkspace[WS]).toBeUndefined();
+  });
 
   it("renames an open file tab and preserves its buffer", () => {
     openLoadedFile("src/app.ts");

@@ -82,6 +82,9 @@ function App() {
   const setExtendedToolCallOutput = useAppStore((s) => s.setExtendedToolCallOutput);
   const setEditorGitGutterBase = useAppStore((s) => s.setEditorGitGutterBase);
   const setEditorMinimapEnabled = useAppStore((s) => s.setEditorMinimapEnabled);
+  const setRevealActiveFileInTree = useAppStore(
+    (s) => s.setRevealActiveFileInTree,
+  );
   const setEditorWordWrap = useAppStore((s) => s.setEditorWordWrap);
   const setEditorLineNumbersEnabled = useAppStore(
     (s) => s.setEditorLineNumbersEnabled,
@@ -489,6 +492,9 @@ function App() {
       .catch(() => {});
     getAppSetting("editor_minimap_enabled")
       .then((val) => { if (val === "true") setEditorMinimapEnabled(true); })
+      .catch(() => {});
+    getAppSetting("editor_reveal_active_file_in_tree")
+      .then((val) => { if (val === "false") setRevealActiveFileInTree(false); })
       .catch(() => {});
     // Editor view-state mirrors the minimap pattern: stored as strings
     // in app_settings, hydrated once at boot. Word wrap and line numbers
@@ -946,7 +952,7 @@ function App() {
       unlistenMissingCli.then((fn) => fn());
       unlistenMissingWorktree.then((fn) => fn());
     };
-  }, [setRepositories, setWorkspaces, setWorktreeBaseDir, setDefaultTerminalAppId, setWorkspaceAppsMenuShown, setDefaultBranches, setTerminalFontSize, setLastMessages, setRemoteConnections, setDiscoveredServers, setLocalServerRunning, setLocalServerConnectionString, setCurrentThemeId, setThemeMode, setThemeDark, setThemeLight, setUiFontSize, setFontFamilySans, setFontFamilyMono, setSystemFonts, setDetectedApps, setUsageInsightsEnabled, setShowOpenRouterBalanceInUsageMeter, setOpenRouterBalanceSettingLoaded, setClaudetteTerminalEnabled, setShowSidebarRunningCommands, setToolDisplayMode, setExtendedToolCallOutput, setAlternativeBackendsAvailable, setPiSdkAvailable, setAlternativeBackendsEnabled, setCodexEnabled, setAgentBackends, setDefaultAgentBackendId, setClaudeAuthMethod, setEditorGitGutterBase, setEditorMinimapEnabled, setEditorWordWrap, setEditorLineNumbersEnabled, setEditorFontZoom, setDisable1mContext, setAppVersion, setVoiceToggleHotkey, setVoiceHoldHotkey, setKeybindings, setManualWorkspaceOrderByRepo]);
+  }, [setRepositories, setWorkspaces, setWorktreeBaseDir, setDefaultTerminalAppId, setWorkspaceAppsMenuShown, setDefaultBranches, setTerminalFontSize, setLastMessages, setRemoteConnections, setDiscoveredServers, setLocalServerRunning, setLocalServerConnectionString, setCurrentThemeId, setThemeMode, setThemeDark, setThemeLight, setUiFontSize, setFontFamilySans, setFontFamilyMono, setSystemFonts, setDetectedApps, setUsageInsightsEnabled, setShowOpenRouterBalanceInUsageMeter, setOpenRouterBalanceSettingLoaded, setClaudetteTerminalEnabled, setShowSidebarRunningCommands, setToolDisplayMode, setExtendedToolCallOutput, setAlternativeBackendsAvailable, setPiSdkAvailable, setAlternativeBackendsEnabled, setCodexEnabled, setAgentBackends, setDefaultAgentBackendId, setClaudeAuthMethod, setEditorGitGutterBase, setEditorMinimapEnabled, setRevealActiveFileInTree, setEditorWordWrap, setEditorLineNumbersEnabled, setEditorFontZoom, setDisable1mContext, setAppVersion, setVoiceToggleHotkey, setVoiceHoldHotkey, setKeybindings, setManualWorkspaceOrderByRepo]);
 
   // Live freshness for LM Studio's `loaded_context_length`.
   //
