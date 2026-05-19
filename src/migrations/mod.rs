@@ -234,4 +234,9 @@ pub const MIGRATIONS: &[Migration] = &[
         sql: include_str!("20260517190000_agent_scheduled_tasks.sql"),
         legacy_version: None,
     },
+    Migration {
+        id: "20260519231159_deleted_workspace_metric_details",
+        sql: include_str!("20260519231159_deleted_workspace_metric_details.sql"),
+        legacy_version: None,
+    },
 ];
