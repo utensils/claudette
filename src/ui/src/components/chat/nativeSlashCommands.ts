@@ -81,9 +81,18 @@ export interface NativeCommandContext {
   slashCommands: SlashCommand[];
 }
 
+/**
+ * Names of harness-dispatched actions a `harness_action` handler can
+ * produce. The chat send pipeline branches on this discriminant to choose
+ * the right per-backend implementation (e.g. `compact` → Codex's
+ * `thread/compact/start` RPC vs. Claude's literal `/compact` user input).
+ */
+export type HarnessAction = "compact";
+
 export type NativeCommandResult =
   | { kind: "handled"; canonicalName: string }
   | { kind: "expand"; canonicalName: string; prompt: string }
+  | { kind: "harness_action"; canonicalName: string; action: HarnessAction }
   | { kind: "skipped" };
 
 export interface NativeHandler {
@@ -483,7 +492,7 @@ const clearHandler: NativeHandler = {
 const compactHandler: NativeHandler = {
   name: "compact",
   aliases: [],
-  kind: "prompt_expansion",
+  kind: "harness_action",
   execute: (ctx, args) => {
     if (!ctx.workspaceId) {
       ctx.addLocalMessage("/compact: no active workspace");
@@ -493,7 +502,11 @@ const compactHandler: NativeHandler = {
       ctx.addLocalMessage("/compact: does not accept arguments. Usage: /compact");
       return { kind: "handled" as const, canonicalName: "compact" };
     }
-    return { kind: "expand" as const, canonicalName: "compact", prompt: "/compact" };
+    return {
+      kind: "harness_action" as const,
+      canonicalName: "compact",
+      action: "compact",
+    };
   },
 };
 
@@ -796,6 +809,10 @@ export function formatHelpMessage(commands: SlashCommand[]): string {
       heading: "_Actions (stay local, do not contact the agent)_",
     },
     { kind: "settings_route", heading: "_Settings shortcuts_" },
+    {
+      kind: "harness_action",
+      heading: "_Agent actions (dispatched per backend)_",
+    },
     {
       kind: "prompt_expansion",
       heading: "_Prompt expansions (seed a prompt, then send to the agent)_",
