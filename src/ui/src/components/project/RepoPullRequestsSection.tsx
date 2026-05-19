@@ -13,9 +13,14 @@ import { useAppStore } from "../../stores/useAppStore";
 import { useRepoOpenPullRequests } from "../../hooks/useRepoOpenPullRequests";
 import { createWorkspaceOrchestrated } from "../../hooks/useCreateWorkspace";
 import { ContextMenu, type ContextMenuItem } from "../shared/ContextMenu";
+import { useModelRegistry } from "../chat/useModelRegistry";
 import type { PullRequest, PullRequestScope } from "../../types/plugin";
 import dashStyles from "../layout/Dashboard.module.css";
 import styles from "./RepoListsSection.module.css";
+import {
+  buildModelSubmenuItems,
+  sendToNewWorkspace,
+} from "./sendToNewWorkspace";
 
 const DEFAULT_VISIBLE = 10;
 const ALL_VISIBLE_LIMIT = 50;
@@ -60,8 +65,8 @@ export const RepoPullRequestsSection = memo(function RepoPullRequestsSection({
   };
 
   const handleCreateWorkspaceForBranch = async (pr: PullRequest) => {
-    // TODO(#890 follow-up): once `create_workspace` accepts a base
-    // branch arg, plumb pr.branch through so the new worktree is
+    // TODO (issue 890 follow-up): once `create_workspace` accepts a
+    // base branch arg, plumb pr.branch through so the new worktree is
     // checked out at that PR's head. For v1 we create a workspace
     // on the repo's default base and surface the PR branch via a
     // toast so the user knows the follow-up `git checkout` is on
@@ -133,6 +138,7 @@ export const RepoPullRequestsSection = memo(function RepoPullRequestsSection({
 
       {open && (
         <RepoPullRequestsBody
+          repoId={repoId}
           payload={payload}
           loading={loading}
           visible={visible}
@@ -154,6 +160,7 @@ export const RepoPullRequestsSection = memo(function RepoPullRequestsSection({
 });
 
 interface RepoPullRequestsBodyProps {
+  repoId: string;
   payload: ReturnType<typeof useRepoOpenPullRequests>["payload"];
   loading: boolean;
   visible: PullRequest[];
@@ -167,6 +174,7 @@ interface RepoPullRequestsBodyProps {
 }
 
 function RepoPullRequestsBody({
+  repoId,
   payload,
   loading,
   visible,
@@ -211,6 +219,7 @@ function RepoPullRequestsBody({
       {visible.map((pr) => (
         <PullRequestRow
           key={pr.number}
+          repoId={repoId}
           pr={pr}
           onOpen={onOpen}
           onCopyUrl={onCopyUrl}
@@ -233,6 +242,7 @@ function RepoPullRequestsBody({
 }
 
 interface PullRequestRowProps {
+  repoId: string;
   pr: PullRequest;
   onOpen: (url: string) => void;
   onCopyUrl: (url: string) => void;
@@ -240,12 +250,15 @@ interface PullRequestRowProps {
 }
 
 function PullRequestRow({
+  repoId,
   pr,
   onOpen,
   onCopyUrl,
   onCreateWorkspaceForBranch,
 }: PullRequestRowProps) {
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
+  const registry = useModelRegistry();
+  const addToast = useAppStore((s) => s.addToast);
 
   const items: ContextMenuItem[] = [
     { label: "Open in browser", onSelect: () => onOpen(pr.url) },
@@ -253,6 +266,31 @@ function PullRequestRow({
     {
       label: "Create workspace for this branch",
       onSelect: () => onCreateWorkspaceForBranch(pr),
+    },
+    { type: "separator" },
+    {
+      type: "submenu",
+      label: "Send to new workspace",
+      children: buildModelSubmenuItems(registry, async (model) => {
+        try {
+          await sendToNewWorkspace({
+            repoId,
+            kind: "pr",
+            number: pr.number,
+            title: pr.title,
+            url: pr.url,
+            branch: pr.branch,
+            modelId: model.id,
+            providerQualifiedId: model.providerQualifiedId,
+          });
+        } catch (e) {
+          addToast(
+            `Failed to send to new workspace: ${
+              e instanceof Error ? e.message : String(e)
+            }`,
+          );
+        }
+      }),
     },
   ];
 

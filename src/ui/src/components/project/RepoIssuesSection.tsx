@@ -10,10 +10,15 @@ import { openUrl } from "../../services/tauri";
 import { useAppStore } from "../../stores/useAppStore";
 import { useRepoOpenIssues } from "../../hooks/useRepoOpenIssues";
 import { ContextMenu, type ContextMenuItem } from "../shared/ContextMenu";
+import { useModelRegistry } from "../chat/useModelRegistry";
 import type { Issue, IssueLabel } from "../../types/plugin";
 import dashStyles from "../layout/Dashboard.module.css";
 import styles from "./RepoListsSection.module.css";
 import { formatTimeAgo } from "./timeAgo";
+import {
+  buildModelSubmenuItems,
+  sendToNewWorkspace,
+} from "./sendToNewWorkspace";
 
 /// Maximum visible label chips per row before collapsing the rest into a
 /// "+N" overflow indicator. Two preserves room for the title + comment
@@ -96,6 +101,7 @@ export const RepoIssuesSection = memo(function RepoIssuesSection({
 
       {open && (
         <RepoIssuesBody
+          repoId={repoId}
           payload={payload}
           loading={loading}
           visible={visible}
@@ -114,6 +120,7 @@ export const RepoIssuesSection = memo(function RepoIssuesSection({
 });
 
 interface RepoIssuesBodyProps {
+  repoId: string;
   payload: ReturnType<typeof useRepoOpenIssues>["payload"];
   loading: boolean;
   visible: Issue[];
@@ -126,6 +133,7 @@ interface RepoIssuesBodyProps {
 }
 
 function RepoIssuesBody({
+  repoId,
   payload,
   loading,
   visible,
@@ -169,6 +177,7 @@ function RepoIssuesBody({
       {visible.map((issue) => (
         <IssueRow
           key={issue.number}
+          repoId={repoId}
           issue={issue}
           onOpen={onOpen}
           onCopyUrl={onCopyUrl}
@@ -190,19 +199,46 @@ function RepoIssuesBody({
 }
 
 interface IssueRowProps {
+  repoId: string;
   issue: Issue;
   onOpen: (url: string) => void;
   onCopyUrl: (url: string) => void;
 }
 
-function IssueRow({ issue, onOpen, onCopyUrl }: IssueRowProps) {
+function IssueRow({ repoId, issue, onOpen, onCopyUrl }: IssueRowProps) {
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
+  const registry = useModelRegistry();
+  const addToast = useAppStore((s) => s.addToast);
   const visibleLabels = issue.labels.slice(0, MAX_LABELS_VISIBLE);
   const overflow = Math.max(0, issue.labels.length - visibleLabels.length);
 
   const items: ContextMenuItem[] = [
     { label: "Open in browser", onSelect: () => onOpen(issue.url) },
     { label: "Copy URL", onSelect: () => onCopyUrl(issue.url) },
+    { type: "separator" },
+    {
+      type: "submenu",
+      label: "Send to new workspace",
+      children: buildModelSubmenuItems(registry, async (model) => {
+        try {
+          await sendToNewWorkspace({
+            repoId,
+            kind: "issue",
+            number: issue.number,
+            title: issue.title,
+            url: issue.url,
+            modelId: model.id,
+            providerQualifiedId: model.providerQualifiedId,
+          });
+        } catch (e) {
+          addToast(
+            `Failed to send to new workspace: ${
+              e instanceof Error ? e.message : String(e)
+            }`,
+          );
+        }
+      }),
+    },
   ];
 
   return (

@@ -74,7 +74,12 @@ describe("buildFileContextMenuItems", () => {
         rename: vi.fn(),
         delete: vi.fn(),
       },
-    ).filter((item) => item.type !== "separator");
+    ).filter(
+      (item): item is Extract<typeof item, { onSelect: unknown }> =>
+        item.type !== "separator" &&
+        item.type !== "submenu" &&
+        item.type !== "header",
+    );
 
     expect(items.find((item) => item.label === "Open")?.disabled).toBe(true);
     expect(items.find((item) => item.label === "Copy Path")?.disabled).toBe(true);

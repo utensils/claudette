@@ -17,7 +17,21 @@ Between the "Start a workspace" card and the Workspaces section, two new collaps
   - **Mine** — open PRs authored by you (`@me` via `gh` / `glab`)
   - **Review** — open PRs where review is requested from you
 
-Each PR row shows the PR's number, a CI-tinted state icon (open / draft / merged / closed; the open variant tints by CI status), title, `base ← branch`, and author. Right-click for Open / Copy URL / Create workspace for this branch.
+Each PR row shows the PR's number, a CI-tinted state icon (open / draft / merged / closed; the open variant tints by CI status), title, `base ← branch`, and author.
+
+Right-click any issue or PR row for:
+
+- **Open in browser** — opens the row's URL in your default browser.
+- **Copy URL** — copies the URL to the clipboard.
+- **Create workspace for this branch** (PR rows only) — creates a workspace on the repo's default base branch and surfaces the PR head branch in a toast.
+- **Send to new workspace ▶ &lt;model&gt;** — opens a submenu of available models. Pick one to (1) create a fresh workspace in the repo, (2) apply the chosen model to the new session so the toolbar reflects it and any cross-harness setup runs, and (3) auto-send a templated starter prompt as the first turn so the agent begins working immediately.
+
+  The starter prompts link back to the source:
+
+  - Issues: `Please investigate and address issue #<N>: <title>\n\nSource: <URL>`
+  - Pull requests: `Please review PR #<N> and continue or refactor as needed: <title>\n\nSource: <URL>\nBranch: <branch>`
+
+  The submenu lists the same models the chat panel's model picker would show, with the same alternative-backends and OAuth gating. If you have no models available (alt-backends off and no Claude auth), the submenu shows a single disabled "No models available" row instead of silently swallowing the click.
 
 Both sections poll every 60 seconds while the project view is visible. Polling pauses on `visibilitychange` to hidden — Claudette doesn't burn your `gh` / `glab` rate-limit budget for a tab you walked away from. The Refresh button in each section header forces an immediate fresh fetch.
 
