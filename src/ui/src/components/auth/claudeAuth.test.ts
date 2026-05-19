@@ -19,6 +19,13 @@ const serviceMocks = vi.hoisted(() => ({
   claudeAuthLogin: vi.fn(() => Promise.resolve()),
   cancelClaudeAuthLogin: vi.fn(() => Promise.resolve()),
   submitClaudeAuthCode: vi.fn(() => Promise.resolve()),
+  // `claudeAuth.ts` now imports `launchCodexLogin` for the Codex
+  // sign-in controller. `vi.mock` replaces the whole module with
+  // exactly what this factory returns — anything not listed comes
+  // back as `undefined` to importers, so a future test that wires up
+  // `useCodexAuthLogin` would explode with `TypeError: ... is not a
+  // function`. Keep the mock surface in sync with the real module.
+  launchCodexLogin: vi.fn(() => Promise.resolve()),
 }));
 
 vi.mock("@tauri-apps/api/event", () => ({
@@ -28,8 +35,11 @@ vi.mock("@tauri-apps/api/event", () => ({
 vi.mock("../../services/tauri", () => serviceMocks);
 
 import {
+  classifyAuthError,
   cleanClaudeAuthError,
+  cleanCodexAuthError,
   isClaudeAuthError,
+  isCodexAuthError,
   useClaudeAuthRecovery,
 } from "./claudeAuth";
 import { useAppStore } from "../../stores/useAppStore";
@@ -115,6 +125,64 @@ describe("isClaudeAuthError", () => {
     expect(
       isClaudeAuthError("ENV_AUTH: Usage Insights requires standard OAuth login."),
     ).toBe(false);
+  });
+
+  it("treats the Codex auth-expired sentinel as an auth error", () => {
+    expect(
+      isClaudeAuthError(
+        "Codex authentication expired. Run /login (or `codex login` in a terminal), then send the message again.",
+      ),
+    ).toBe(true);
+  });
+});
+
+describe("classifyAuthError", () => {
+  it("returns codex for the Codex auth-expired sentinel (case-insensitive)", () => {
+    expect(
+      classifyAuthError(
+        "Codex authentication expired. Run /login (or `codex login` in a terminal), then send the message again.",
+      ),
+    ).toBe("codex");
+    expect(classifyAuthError("CODEX AUTHENTICATION EXPIRED")).toBe("codex");
+  });
+
+  it("returns claude for Claude CLI auth failures", () => {
+    expect(classifyAuthError("API Error: 401 Invalid credentials")).toBe(
+      "claude",
+    );
+    expect(classifyAuthError("Token refresh failed: HTTP 401")).toBe("claude");
+  });
+
+  it("returns null for ENV_AUTH usage-scope errors", () => {
+    expect(
+      classifyAuthError("ENV_AUTH: Usage Insights requires standard OAuth login."),
+    ).toBeNull();
+  });
+
+  it("returns null for unrelated errors", () => {
+    expect(classifyAuthError("Workspace not found")).toBeNull();
+    expect(classifyAuthError("Network unreachable")).toBeNull();
+  });
+});
+
+describe("isCodexAuthError", () => {
+  it("matches only the Codex sentinel, not Claude errors", () => {
+    expect(
+      isCodexAuthError(
+        "Codex authentication expired. Run /login (or `codex login` in a terminal), then send the message again.",
+      ),
+    ).toBe(true);
+    expect(isCodexAuthError("Token refresh failed: HTTP 401")).toBe(false);
+  });
+});
+
+describe("cleanCodexAuthError", () => {
+  it("strips the recovery hint so the inline banner stays short", () => {
+    expect(
+      cleanCodexAuthError(
+        "Codex authentication expired. Run /login (or `codex login` in a terminal), then send the message again.",
+      ),
+    ).toBe("Codex authentication expired. Run /login");
   });
 });
 

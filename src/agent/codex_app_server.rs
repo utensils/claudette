@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -87,6 +87,14 @@ pub struct CodexAppServerSession {
     /// ignore it.
     rate_limits_tx: broadcast::Sender<CodexRateLimitSnapshot>,
     pending: PendingRequests,
+    /// Set the first time the stderr reader recognises an unrecoverable
+    /// Codex auth-expiry message. Once set, the session is considered
+    /// terminally broken: in-flight requests are failed with a user-facing
+    /// re-auth hint, and subsequent matching stderr lines are silenced so
+    /// the log isn't flooded with the same line per second. Persists for
+    /// the lifetime of the session; the user must re-spawn (e.g. by
+    /// resending after running `codex login`) to clear it.
+    auth_expired: Arc<AtomicBool>,
     next_request_id: AtomicI64,
     working_dir: PathBuf,
     model: Option<String>,
@@ -168,6 +176,7 @@ impl CodexAppServerSession {
             event_tx,
             rate_limits_tx,
             pending: Arc::new(tokio::sync::Mutex::new(BTreeMap::new())),
+            auth_expired: Arc::new(AtomicBool::new(false)),
             next_request_id: AtomicI64::new(1),
             working_dir: working_dir.to_path_buf(),
             model: options.model,
@@ -238,6 +247,7 @@ impl CodexAppServerSession {
             event_tx,
             rate_limits_tx,
             pending: Arc::new(tokio::sync::Mutex::new(BTreeMap::new())),
+            auth_expired: Arc::new(AtomicBool::new(false)),
             next_request_id: AtomicI64::new(1),
             working_dir: PathBuf::from("/tmp"),
             model: None,
@@ -305,6 +315,15 @@ impl CodexAppServerSession {
         attachments: &[FileAttachment],
     ) -> Result<TurnHandle, String> {
         validate_codex_attachments(attachments)?;
+        // The codex-app-server subprocess is still running, but its
+        // refresh token has rotated and every websocket call will 401.
+        // Without this guard the user types a message and we sit on
+        // `turn/start` forever waiting for a notification that will
+        // never arrive (Codex's responses websocket can't open, but
+        // the JSON-RPC channel stays nominally healthy).
+        if self.is_auth_expired() {
+            return Err(CODEX_AUTH_EXPIRED_MESSAGE.to_string());
+        }
         let mut broadcast_rx = self.event_tx.subscribe();
         let thread_id = self.ensure_thread().await?;
         let response = self
@@ -628,6 +647,8 @@ impl CodexAppServerSession {
 
     fn spawn_stderr_reader(&self, stderr: tokio::process::ChildStderr) {
         let event_tx = self.event_tx.clone();
+        let pending = self.pending.clone();
+        let auth_expired = self.auth_expired.clone();
         let pid = self.pid;
         tokio::spawn(async move {
             let mut reader = tokio::io::BufReader::new(stderr);
@@ -638,16 +659,55 @@ impl CodexAppServerSession {
                     Ok(0) => break,
                     Ok(_) => {
                         let line = line.trim();
-                        if !line.is_empty() {
-                            tracing::warn!(
-                                target: "claudette::agent",
-                                subsystem = "codex-app-server",
-                                pid,
-                                line,
-                                "codex stderr"
-                            );
-                            let _ = event_tx.send(AgentEvent::Stderr(line.to_string()));
+                        if line.is_empty() {
+                            continue;
                         }
+                        // Codex's own login subsystem emits these phrases on
+                        // stderr when the cached refresh token has been
+                        // consumed (e.g. another `codex login` session
+                        // rotated it) and the websocket to ChatGPT 401s
+                        // before any notification flows back through stdout.
+                        // From Claudette's side this looks like a silent
+                        // hang on `turn/start`. Detect once, fail in-flight
+                        // RPCs with a user-readable hint, then mute further
+                        // matching lines so we don't WARN-flood the log at
+                        // ~5 Hz while Codex keeps retrying.
+                        let already_signalled = auth_expired.load(Ordering::SeqCst);
+                        if codex_stderr_indicates_auth_expiry(line) {
+                            if !already_signalled
+                                && auth_expired
+                                    .compare_exchange(
+                                        false,
+                                        true,
+                                        Ordering::SeqCst,
+                                        Ordering::SeqCst,
+                                    )
+                                    .is_ok()
+                            {
+                                tracing::warn!(
+                                    target: "claudette::agent",
+                                    subsystem = "codex-app-server",
+                                    pid,
+                                    line,
+                                    "Codex auth expired — failing pending requests"
+                                );
+                                fail_pending_requests(&pending, CODEX_AUTH_EXPIRED_MESSAGE).await;
+                                let _ = event_tx.send(AgentEvent::Stderr(
+                                    CODEX_AUTH_EXPIRED_MESSAGE.to_string(),
+                                ));
+                            }
+                            // Either we just signalled or a previous line
+                            // already did — silence the duplicate.
+                            continue;
+                        }
+                        tracing::warn!(
+                            target: "claudette::agent",
+                            subsystem = "codex-app-server",
+                            pid,
+                            line,
+                            "codex stderr"
+                        );
+                        let _ = event_tx.send(AgentEvent::Stderr(line.to_string()));
                     }
                     Err(err) => {
                         tracing::warn!(
@@ -662,6 +722,14 @@ impl CodexAppServerSession {
                 }
             }
         });
+    }
+
+    /// True once the stderr reader has flagged the session as terminally
+    /// auth-broken. Caller can use this to skip a doomed `turn/start` RPC
+    /// or to decide whether to tear down the session and respawn after a
+    /// successful `codex login`.
+    pub fn is_auth_expired(&self) -> bool {
+        self.auth_expired.load(Ordering::SeqCst)
     }
 
     fn spawn_exit_watcher(&self, mut child: tokio::process::Child) {
@@ -844,6 +912,23 @@ async fn route_app_server_message(
             }
         }
     }
+}
+
+/// User-facing message shown in chat when the Codex app-server's refresh
+/// token has been rotated out from under us. The exact phrasing matches
+/// what the UI surfaces verbatim — keep it short and actionable.
+pub(crate) const CODEX_AUTH_EXPIRED_MESSAGE: &str = "Codex authentication expired. Run /login (or `codex login` in a terminal), then send the message again.";
+
+/// Recognise stderr lines emitted by Codex's `codex_login::auth::manager`
+/// and `codex_api::endpoint::responses_websocket` subsystems that indicate
+/// the cached OAuth credentials are dead and a re-login is required.
+/// Substring match because the lines are wrapped in ANSI escapes and a
+/// timestamp prefix that varies per call.
+pub(crate) fn codex_stderr_indicates_auth_expiry(line: &str) -> bool {
+    line.contains("Failed to refresh token")
+        || line.contains("Please log out and sign in again")
+        || (line.contains("401 Unauthorized")
+            && line.contains("wss://chatgpt.com/backend-api/codex/responses"))
 }
 
 async fn fail_pending_requests(pending: &PendingRequests, reason: &str) {
@@ -4884,5 +4969,58 @@ mod tests {
         assert_eq!(error.id, Some(JsonRpcId::Integer(99)));
         assert_eq!(error.error.message, "gone");
         assert!(pending.lock().await.is_empty());
+    }
+
+    #[test]
+    fn detects_codex_refresh_token_failure_line() {
+        let line = "\u{1b}[2m2026-05-19T18:52:20Z\u{1b}[0m \u{1b}[31mERROR\u{1b}[0m \
+                    \u{1b}[2mcodex_login::auth::manager\u{1b}[0m: Failed to refresh token: \
+                    Your access token could not be refreshed because your refresh token \
+                    was already used. Please log out and sign in again.";
+        assert!(codex_stderr_indicates_auth_expiry(line));
+    }
+
+    #[test]
+    fn detects_responses_websocket_401() {
+        let line = "ERROR codex_api::endpoint::responses_websocket: failed to connect to \
+                    websocket: HTTP error: 401 Unauthorized, url: \
+                    wss://chatgpt.com/backend-api/codex/responses";
+        assert!(codex_stderr_indicates_auth_expiry(line));
+    }
+
+    #[test]
+    fn ignores_unrelated_401_lines() {
+        // 401 against a different host (e.g. an MCP server) must not be
+        // classified as Codex auth-expiry — it would tear down healthy
+        // sessions over an unrelated upstream failure.
+        let line = "HTTP error: 401 Unauthorized, url: https://example.com/api";
+        assert!(!codex_stderr_indicates_auth_expiry(line));
+    }
+
+    #[test]
+    fn ignores_routine_stderr_lines() {
+        for line in [
+            "INFO codex starting up",
+            "tool exec started",
+            "thread/started: thread-1",
+        ] {
+            assert!(
+                !codex_stderr_indicates_auth_expiry(line),
+                "false positive on routine line: {line}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn send_turn_short_circuits_when_auth_expired() {
+        let session = CodexAppServerSession::new_for_test(7777);
+        session.auth_expired.store(true, Ordering::SeqCst);
+        match session.send_turn("hello", &[]).await {
+            Ok(_) => panic!("auth-expired must fail send_turn"),
+            Err(err) => assert!(
+                err.contains("Codex authentication expired"),
+                "expected user-facing re-auth message, got: {err}"
+            ),
+        }
     }
 }

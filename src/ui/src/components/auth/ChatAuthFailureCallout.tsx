@@ -2,8 +2,11 @@ import { useCallback, useEffect, useMemo, useRef } from "react";
 import { useAppStore } from "../../stores/useAppStore";
 import { ClaudeCodeAuthPanelView } from "./ClaudeCodeAuthPanel";
 import {
+  type AuthErrorProvider,
+  classifyAuthError,
   useClaudeAuthLogin,
   useClaudeAuthRecovery,
+  useCodexAuthLogin,
 } from "./claudeAuth";
 
 export function ChatAuthFailureCallout({
@@ -19,16 +22,29 @@ export function ChatAuthFailureCallout({
   autoStartedKey?: number | null;
   onAutoStarted?: (key: number) => void;
 }) {
+  // Pick the sign-in controller that matches the error's harness, not
+  // the workspace's *currently selected* provider — the error string is
+  // the authoritative signal (a Codex turn failed → show Codex
+  // recovery), and reading from settings would drift if the user
+  // switched providers between the failure and the callout render.
+  const provider: AuthErrorProvider = error
+    ? (classifyAuthError(error) ?? "claude")
+    : "claude";
   const setClaudeAuthFailure = useAppStore((s) => s.setClaudeAuthFailure);
   const closeChatAuthLoginPanel = useAppStore(
     (s) => s.closeChatAuthLoginPanel,
   );
   const { validateAuthLoginSuccess } = useClaudeAuthRecovery();
-  const controller = useClaudeAuthLogin({
+  // Both hooks must be called unconditionally — React rules-of-hooks.
+  // The unused controller stays inert (idle authState, never invoked).
+  const claudeController = useClaudeAuthLogin({
     onSuccess: async () => {
       await validateAuthLoginSuccess();
     },
   });
+  const codexController = useCodexAuthLogin();
+  const controller =
+    provider === "codex" ? codexController : claudeController;
   const {
     authState,
     startAuthLogin: startControllerAuthLogin,
@@ -86,6 +102,7 @@ export function ChatAuthFailureCallout({
       controller={chatController}
       error={error}
       showDescription={false}
+      provider={provider}
     />
   );
 }

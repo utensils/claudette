@@ -4,7 +4,7 @@
 //! into focused submodules. See each `mod` declaration's owning file
 //! for the relevant cluster.
 
-use tauri::State;
+use tauri::{AppHandle, Manager, State};
 
 use claudette::agent::resolve_codex_path;
 use claudette::agent_backend::{AgentBackendConfig, AgentBackendRuntimeHarness};
@@ -340,7 +340,7 @@ pub async fn test_agent_backend(
 }
 
 #[tauri::command]
-pub async fn launch_codex_login(state: State<'_, AppState>) -> Result<(), String> {
+pub async fn launch_codex_login(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
     let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
     ensure_native_codex_enabled(&db)?;
     let codex_path = resolve_codex_path().await;
@@ -349,8 +349,99 @@ pub async fn launch_codex_login(state: State<'_, AppState>) -> Result<(), String
         .arg("login")
         .spawn()
         .map_err(|e| format!("Failed to launch `codex login`: {e}"))?;
+    // After `codex login` exits successfully, drop every persistent
+    // Codex app-server session held in AppState. The browser flow
+    // rotates the refresh token on disk, but any codex-app-server
+    // subprocess we already spawned still holds the old credentials
+    // in memory and would 401 on every subsequent `turn/start`. Setting
+    // `persistent_session = None` makes the next `send_chat_message`
+    // respawn a fresh subprocess that picks up the new tokens.
+    //
+    // Dropping the `Arc<AgentSession>` is *not* enough on its own —
+    // the session's stdout/stderr reader and exit-watcher tasks own
+    // their own handles to `tokio::process::Child` and stdio, so they
+    // outlive the Arc and keep the subprocess alive. The pattern
+    // established in `chat/send.rs` (MCP-config teardown ~L1253, plan
+    // mode ~L1510, env-drift ~L1658) is: capture PIDs under the lock,
+    // null out `persistent_session` + `active_pid`, *release the
+    // lock*, then call `agent::stop_agent_graceful(pid)` for each.
+    // Mirror that here so we don't orphan a doomed app-server that
+    // keeps retrying its 401s, holding fds and a thread pool worker
+    // until Claudette quits.
+    //
+    // Non-zero exits (user cancelled the browser flow, etc.) leave
+    // existing sessions alone — the user can retry without losing
+    // their working session.
     tokio::spawn(async move {
-        let _ = child.wait().await;
+        let status = child.wait().await;
+        let success = match status.as_ref() {
+            Ok(s) if s.success() => true,
+            Ok(s) => {
+                // User cancelled the browser flow or `codex login`
+                // exited non-zero for any other reason — leave
+                // existing sessions alone, but record the exit so
+                // anyone debugging "why didn't /login take effect?"
+                // can correlate.
+                tracing::info!(
+                    target: "claudette::agent",
+                    code = ?s.code(),
+                    "`codex login` exited non-zero; skipping Codex session sweep"
+                );
+                false
+            }
+            Err(err) => {
+                // wait() failure is rare (e.g. the Child handle was
+                // taken or the process was reaped under us) but it
+                // surfaces here as the *same* silent skip path as a
+                // user-cancel. Logging keeps the failure mode visible
+                // — without this, the sweep gets quietly bypassed
+                // and the user re-types /login wondering what changed.
+                tracing::warn!(
+                    target: "claudette::agent",
+                    error = %err,
+                    "failed to wait for `codex login` child; skipping Codex session sweep"
+                );
+                false
+            }
+        };
+        if !success {
+            return;
+        }
+        let state = app.state::<AppState>();
+        let stale_pids: Vec<(String, u32)> = {
+            let mut agents = state.agents.write().await;
+            let mut collected = Vec::new();
+            for (chat_session_id, session_state) in agents.iter_mut() {
+                let codex_pid = session_state.persistent_session.as_ref().and_then(|s| {
+                    (s.kind() == claudette::agent::AgentHarnessKind::CodexAppServer)
+                        .then(|| s.pid())
+                });
+                if let Some(pid) = codex_pid {
+                    tracing::info!(
+                        target: "claudette::agent",
+                        chat_session_id = %chat_session_id,
+                        pid,
+                        "dropping Codex persistent session after successful `codex login` so next turn picks up fresh tokens"
+                    );
+                    session_state.persistent_session = None;
+                    session_state.active_pid = None;
+                    collected.push((chat_session_id.clone(), pid));
+                }
+            }
+            collected
+        };
+        // Lock released — now kill the orphaned subprocesses.
+        for (chat_session_id, pid) in stale_pids {
+            if let Err(err) = claudette::agent::stop_agent_graceful(pid).await {
+                tracing::warn!(
+                    target: "claudette::agent",
+                    chat_session_id = %chat_session_id,
+                    pid,
+                    error = %err,
+                    "failed to stop stale codex-app-server after `codex login`"
+                );
+            }
+        }
     });
     Ok(())
 }
