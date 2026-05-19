@@ -73,6 +73,84 @@ impl Database {
         )?;
         Ok(())
     }
+
+    // --- Repo-wide SCM lists cache (issues / PRs by scope) ---
+
+    /// `row.fetched_at` is ignored; the database sets it to `datetime('now')`
+    /// on every upsert. `list_kind` is one of `"issues"` or
+    /// `"pull_requests:<scope>"`.
+    pub fn upsert_repo_scm_list_cache(
+        &self,
+        row: &RepoScmListCacheRow,
+    ) -> Result<(), rusqlite::Error> {
+        self.conn.execute(
+            "INSERT OR REPLACE INTO repo_scm_lists_cache
+                (repo_id, list_kind, provider, payload, error, fetched_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, datetime('now'))",
+            params![
+                row.repo_id,
+                row.list_kind,
+                row.provider,
+                row.payload,
+                row.error,
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn load_all_repo_scm_list_cache(
+        &self,
+    ) -> Result<Vec<RepoScmListCacheRow>, rusqlite::Error> {
+        let mut stmt = self.conn.prepare(
+            "SELECT repo_id, list_kind, provider, payload, error, fetched_at
+             FROM repo_scm_lists_cache",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(RepoScmListCacheRow {
+                repo_id: row.get(0)?,
+                list_kind: row.get(1)?,
+                provider: row.get(2)?,
+                payload: row.get(3)?,
+                error: row.get(4)?,
+                fetched_at: row.get(5)?,
+            })
+        })?;
+        rows.collect()
+    }
+
+    pub fn delete_repo_scm_list_cache(
+        &self,
+        repo_id: &str,
+        list_kind: &str,
+    ) -> Result<(), rusqlite::Error> {
+        self.conn.execute(
+            "DELETE FROM repo_scm_lists_cache WHERE repo_id = ?1 AND list_kind = ?2",
+            params![repo_id, list_kind],
+        )?;
+        Ok(())
+    }
+
+    pub fn delete_repo_scm_list_cache_for_repo(&self, repo_id: &str) -> Result<(), rusqlite::Error> {
+        self.conn.execute(
+            "DELETE FROM repo_scm_lists_cache WHERE repo_id = ?1",
+            params![repo_id],
+        )?;
+        Ok(())
+    }
+}
+
+/// Persisted repo-wide SCM list (issues or PRs by scope).
+/// Payload is a JSON-encoded array of items; on the wire it is always a
+/// list, never wrapped in `{ items: [...] }` — the wrapper lives in the
+/// Tauri command return shape, not the cache row.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RepoScmListCacheRow {
+    pub repo_id: String,
+    pub list_kind: String,
+    pub provider: Option<String>,
+    pub payload: String,
+    pub error: Option<String>,
+    pub fetched_at: String,
 }
 
 #[cfg(test)]

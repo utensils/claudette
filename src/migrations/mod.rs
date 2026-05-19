@@ -235,6 +235,11 @@ pub const MIGRATIONS: &[Migration] = &[
         legacy_version: None,
     },
     Migration {
+        id: "20260519210359_repo_scm_lists_cache",
+        sql: include_str!("20260519210359_repo_scm_lists_cache.sql"),
+        legacy_version: None,
+    },
+    Migration {
         id: "20260519231159_deleted_workspace_metric_details",
         sql: include_str!("20260519231159_deleted_workspace_metric_details.sql"),
         legacy_version: None,

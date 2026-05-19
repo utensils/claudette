@@ -9,15 +9,36 @@ local function gh(args)
 end
 
 function M.list_pull_requests(args)
+    -- Two call-sites:
+    --   1. per-workspace branch lookup (args.branch set) — feeds the
+    --      sidebar PR badge. Keep the existing --state all behaviour so
+    --      a merged/closed PR on a branch still resolves.
+    --   2. project-view aggregation (args.scope set, no branch) —
+    --      always open PRs, filtered by scope.
+    local limit = tostring(args.limit or 30)
     local gh_args = {
         "pr", "list",
-        "--state", "all",
         "--json", "number,title,state,url,author,headRefName,baseRefName,isDraft,statusCheckRollup",
-        "--limit", "30",
+        "--limit", limit,
     }
     if args.branch then
+        table.insert(gh_args, "--state")
+        table.insert(gh_args, "all")
         table.insert(gh_args, "--head")
         table.insert(gh_args, args.branch)
+    elseif args.scope == "mine" then
+        table.insert(gh_args, "--state")
+        table.insert(gh_args, "open")
+        table.insert(gh_args, "--author")
+        table.insert(gh_args, "@me")
+    elseif args.scope == "review_requested" then
+        -- `gh pr list --search` overrides --state, so embed the filter.
+        table.insert(gh_args, "--search")
+        table.insert(gh_args, "is:open is:pr review-requested:@me")
+    else
+        -- Default scope = "open" (also matches a missing scope arg).
+        table.insert(gh_args, "--state")
+        table.insert(gh_args, "open")
     end
     local data = gh(gh_args)
     local prs = {}
@@ -57,6 +78,50 @@ function M.list_pull_requests(args)
         })
     end
     return prs
+end
+
+function M.list_issues(args)
+    -- `gh issue list` excludes pull requests (unlike the REST /issues
+    -- endpoint), so no extra filtering is needed. State defaults to
+    -- open; callers can override via args.state.
+    local limit = tostring(args.limit or 25)
+    local state = args.state or "open"
+    local gh_args = {
+        "issue", "list",
+        "--state", state,
+        "--limit", limit,
+        "--json", "number,title,url,state,author,labels,comments,createdAt,updatedAt",
+    }
+    local ok, data = pcall(gh, gh_args)
+    if not ok then
+        error(data)
+    end
+    local issues = {}
+    for _, item in ipairs(data) do
+        local labels = {}
+        for _, lbl in ipairs(item.labels or {}) do
+            table.insert(labels, {
+                name = lbl.name,
+                color = lbl.color or "",
+            })
+        end
+        local author = nil
+        if item.author and item.author.login then
+            author = item.author.login
+        end
+        table.insert(issues, {
+            number = item.number,
+            title = item.title,
+            url = item.url,
+            state = string.lower(item.state or "open"),
+            author = author,
+            labels = labels,
+            comment_count = item.comments or 0,
+            created_at = item.createdAt or "",
+            updated_at = item.updatedAt or "",
+        })
+    end
+    return issues
 end
 
 function M.get_pull_request(args)

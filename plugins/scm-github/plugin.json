@@ -7,6 +7,7 @@
   "remote_patterns": ["github.com"],
   "operations": [
     "list_pull_requests",
+    "list_issues",
     "get_pull_request",
     "create_pull_request",
     "merge_pull_request",

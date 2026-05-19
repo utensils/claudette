@@ -9,14 +9,31 @@ local function glab(args)
 end
 
 function M.list_pull_requests(args)
+    -- Two call-sites: per-branch sidebar lookup (args.branch) and the
+    -- repo-wide project-view aggregation (args.scope). Match the
+    -- semantics of the GitHub plugin so the Rust side sees one shape.
+    local limit = tostring(args.limit or 30)
     local glab_args = {
         "mr", "list",
-        "--state", "all",
         "--output-format", "json",
+        "--per-page", limit,
     }
     if args.branch then
+        -- All-state for the badge: a merged/closed MR on a branch
+        -- should still resolve.
+        table.insert(glab_args, "--all")
         table.insert(glab_args, "--source-branch")
         table.insert(glab_args, args.branch)
+    elseif args.scope == "mine" then
+        table.insert(glab_args, "--opened")
+        table.insert(glab_args, "--mine")
+    elseif args.scope == "review_requested" then
+        table.insert(glab_args, "--opened")
+        table.insert(glab_args, "--reviewer")
+        table.insert(glab_args, "@me")
+    else
+        -- Default scope = "open".
+        table.insert(glab_args, "--opened")
     end
     local data = glab(glab_args)
     local prs = {}
@@ -33,6 +50,61 @@ function M.list_pull_requests(args)
         })
     end
     return prs
+end
+
+function M.list_issues(args)
+    local limit = tostring(args.limit or 25)
+    local state = args.state or "open"
+    local glab_args = {
+        "issue", "list",
+        "--per-page", limit,
+        "--output-format", "json",
+    }
+    if state == "open" then
+        table.insert(glab_args, "--opened")
+    elseif state == "closed" then
+        table.insert(glab_args, "--closed")
+    else
+        table.insert(glab_args, "--all")
+    end
+    local ok, data = pcall(glab, glab_args)
+    if not ok then
+        error(data)
+    end
+    local issues = {}
+    for _, item in ipairs(data) do
+        local labels = {}
+        -- glab returns labels as either an array of strings or an array of
+        -- objects depending on version; normalize both shapes.
+        for _, lbl in ipairs(item.labels or {}) do
+            if type(lbl) == "table" then
+                table.insert(labels, {
+                    name = lbl.name or "",
+                    color = (lbl.color and string.gsub(lbl.color, "^#", "")) or "",
+                })
+            else
+                table.insert(labels, { name = tostring(lbl), color = "" })
+            end
+        end
+        local author = nil
+        if item.author and item.author.username then
+            author = item.author.username
+        end
+        local state_norm = item.state or "open"
+        if state_norm == "opened" then state_norm = "open" end
+        table.insert(issues, {
+            number = item.iid,
+            title = item.title,
+            url = item.web_url,
+            state = state_norm,
+            author = author,
+            labels = labels,
+            comment_count = item.user_notes_count or 0,
+            created_at = item.created_at or "",
+            updated_at = item.updated_at or "",
+        })
+    end
+    return issues
 end
 
 function M.get_pull_request(args)

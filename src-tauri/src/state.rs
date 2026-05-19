@@ -459,6 +459,44 @@ impl ScmCache {
     }
 }
 
+/// One cached repo-wide SCM list: open issues or open PRs (per scope).
+///
+/// Separate from [`ScmCacheEntry`] because the data shape is fundamentally
+/// different (a list of items vs. a single PR + its checks) and the key
+/// space is `(repo_id, list_kind)` rather than `(repo_id, branch_name)`.
+/// Co-locating both in `ScmCache` would force an enum payload and conflate
+/// two independent TTL / invalidation cycles.
+pub struct RepoListEntry {
+    /// Plugin operation result, deserialized as a JSON array of items.
+    /// The Tauri command extracts `Vec<Issue>` or `Vec<PullRequest>` from
+    /// this on read. Stored as `Value` so we don't need a typed enum in
+    /// state and so the eventual SQLite persist is a single JSON string.
+    pub payload: serde_json::Value,
+    pub last_fetched: Instant,
+    pub error: Option<String>,
+    /// `true` when the resolved plugin's manifest does not declare the
+    /// operation (e.g. a user-authored SCM plugin without `list_issues`).
+    /// Distinct from `error` so the UI can render a muted "not supported"
+    /// hint instead of treating it as a transient failure.
+    pub unsupported: bool,
+    pub provider: Option<String>,
+}
+
+/// In-memory cache for repo-wide SCM lists (open issues, open PRs by scope).
+/// Persisted to `repo_scm_lists_cache` so the project view has data on
+/// boot without waiting for the first poll.
+pub struct RepoScmListsCache {
+    pub entries: RwLock<HashMap<(String, String), RepoListEntry>>,
+}
+
+impl RepoScmListsCache {
+    pub fn new() -> Self {
+        Self {
+            entries: RwLock::new(HashMap::new()),
+        }
+    }
+}
+
 /// Cached `git merge-base <base_branch> HEAD` lookup for a single workspace.
 ///
 /// Note `base_branch` is intentionally NOT part of the entry. If the user
@@ -591,6 +629,9 @@ pub struct AppState {
     pub file_watcher: RwLock<Option<Arc<FileWatcher>>>,
     /// Cached PR/CI status data keyed by (repo_id, branch_name).
     pub scm_cache: ScmCache,
+    /// Cached repo-wide SCM lists (open issues / open PRs by scope) keyed
+    /// by `(repo_id, list_kind)`. Powers the project-view sections.
+    pub repo_scm_lists_cache: RepoScmListsCache,
     /// Short-TTL cache for `git merge-base <base_branch> HEAD`, keyed by
     /// workspace_id. See `MergeBaseCache` doc comment for the full rationale.
     pub merge_base_cache: MergeBaseCache,
@@ -687,6 +728,7 @@ impl AppState {
             env_watcher: RwLock::new(None),
             file_watcher: RwLock::new(None),
             scm_cache: ScmCache::new(),
+            repo_scm_lists_cache: RepoScmListsCache::new(),
             merge_base_cache: MergeBaseCache::new(),
             ci_last_status: RwLock::new(HashMap::new()),
             scm_semaphore: Arc::new(Semaphore::new(4)),
