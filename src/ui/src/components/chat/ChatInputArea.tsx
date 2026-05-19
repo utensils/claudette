@@ -367,10 +367,10 @@ export function ChatInputArea({
     : composerMode === "shell"
       ? t("run_shell_command")
       : t("send_message");
-  const sendButtonTooltip = workspaceEnvironmentPreparing
-    ? t("send_disabled_preparing_env")
-    : isRunning
-      ? tooltipWithHotkey(sendButtonLabel, "global.dismiss-or-stop", keybindings, isMac)
+  const sendButtonTooltip = isRunning
+    ? tooltipWithHotkey(sendButtonLabel, "global.dismiss-or-stop", keybindings, isMac)
+    : workspaceEnvironmentPreparing
+      ? t("send_disabled_preparing_env")
       : sendButtonLabel;
 
   // VU meter dynamic-vs-static decision lives in the parent because it
