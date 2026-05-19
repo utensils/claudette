@@ -157,6 +157,20 @@ function App() {
   useViewTogglePersistence(viewStateHydrated);
 
   useEffect(() => {
+    const hydrateOpenRouterBalanceSetting = async () => {
+      try {
+        const val = await getAppSetting("openrouter_balance_in_usage_meter");
+        setShowOpenRouterBalanceInUsageMeter(val !== "false");
+      } catch {
+        // If settings are unavailable during degraded startup, keep
+        // the network opt-out conservative instead of polling credits
+        // from the default-on in-memory value.
+        setShowOpenRouterBalanceInUsageMeter(false);
+      } finally {
+        setOpenRouterBalanceSettingLoaded(true);
+      }
+    };
+
     loadInitialData()
       .then(async (data) => {
         // Tag local data with null remote_connection_id (backend omits this field).
@@ -180,12 +194,7 @@ function App() {
         }
         setLastMessages(msgMap);
         await hydratePersistedViewState(localWorkspaces);
-        await getAppSetting("openrouter_balance_in_usage_meter")
-          .then((val) => {
-            if (val === "false") setShowOpenRouterBalanceInUsageMeter(false);
-          })
-          .catch(() => {})
-          .finally(() => setOpenRouterBalanceSettingLoaded(true));
+        await hydrateOpenRouterBalanceSetting();
         setViewStateHydrated(true);
         // Boot-health gate: only ack on the success path. The
         // `.catch()` branch below also flips `viewStateHydrated` so
@@ -238,7 +247,7 @@ function App() {
       .catch(async (err) => {
         console.error("Failed to load initial data:", err);
         await hydratePersistedViewState([]);
-        setOpenRouterBalanceSettingLoaded(true);
+        await hydrateOpenRouterBalanceSetting();
         setViewStateHydrated(true);
       });
     getAppSetting("terminal_font_size")

@@ -24,9 +24,9 @@ pub async fn get_claude_code_usage(state: State<'_, AppState>) -> Result<ClaudeC
 /// default_model) rather than letting Rust look it up — the active
 /// `selectedModelProvider` mapping lives in the Zustand toolbar slice
 /// and isn't persisted to SQLite, so the frontend is the source of
-/// truth. Any secret the backend needs (currently only the OpenRouter
-/// `/auth/key` token) is loaded server-side via [`load_backend_secret`]
-/// against the keychain, so the API key never crosses the IPC boundary.
+/// truth. Any secret the backend needs for provider usage endpoints
+/// (currently OpenRouter `/credits`) is loaded server-side, so the API
+/// key never crosses the IPC boundary.
 #[tauri::command]
 pub async fn get_session_usage(
     state: State<'_, AppState>,

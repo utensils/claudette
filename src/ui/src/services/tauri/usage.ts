@@ -9,8 +9,9 @@ export function getClaudeCodeUsage(): Promise<ClaudeCodeUsage> {
 /** Per-session usage snapshot. Backend chooses the data source based on
  *  the active backend kind and the user's experimental-flag preference;
  *  see `src-tauri/src/commands/usage.rs::get_session_usage`. Any secret
- *  the dispatcher needs (e.g. the OpenRouter `/auth/key` token) is
- *  loaded server-side from the keychain — the frontend never holds it. */
+ *  the dispatcher needs to call provider usage endpoints (e.g.
+ *  OpenRouter `/credits`) is loaded server-side — the frontend never
+ *  holds it. */
 export function getSessionUsage(args: {
   workspaceId: string;
   chatSessionId: string;
