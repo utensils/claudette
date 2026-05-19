@@ -30,39 +30,49 @@
   width: 220px;
   flex-shrink: 0;
   border-right: 1px solid var(--divider);
-  padding: 16px 0;
   display: flex;
   flex-direction: column;
-  overflow-y: auto;
+  overflow: hidden;
 }
 
 [data-platform="mac"] .sidebar {
   background: color-mix(in srgb, var(--sidebar-bg) 88%, transparent);
 }
 
-/* Sticky spacer that covers the macOS traffic-light zone while the
-   sidebar scrolls. padding-top alone would scroll away; a sticky
-   child stays pinned to the top of the scroll viewport. */
-.sidebarTopSpacer {
-  display: none;
+/* Non-scrolling header — lives outside the scrollable nav so macOS
+   elastic-bounce scroll never moves it. On macOS the top padding
+   clears the 38px overlay title bar zone. */
+.sidebarHeader {
+  flex-shrink: 0;
+  padding: 16px 0 8px;
+  border-bottom: 1px solid var(--divider);
 }
 
-[data-platform="mac"] .sidebarTopSpacer {
-  display: block;
-  position: sticky;
-  top: 0;
-  height: 38px;
-  flex-shrink: 0;
-  background: color-mix(in srgb, var(--sidebar-bg) 88%, transparent);
-  z-index: 2;
-  margin: -16px 0 0;
+[data-platform="mac"] .sidebarHeader {
+  padding-top: 38px;
+}
+
+.sidebarTitle {
+  margin: 0;
+  padding: 4px 16px 0;
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--text-primary);
+  letter-spacing: -0.2px;
+}
+
+/* Scrollable nav list below the fixed header. */
+.sidebarNav {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px 0 16px;
 }
 
 .backLink {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 8px 16px 16px;
+  padding: 4px 16px;
   color: var(--text-dim);
   font-size: 13px;
   cursor: pointer;

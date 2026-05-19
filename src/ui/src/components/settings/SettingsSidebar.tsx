@@ -79,10 +79,13 @@ export function SettingsSidebar() {
 
   return (
     <div className={styles.sidebar}>
-      <div className={styles.sidebarTopSpacer} data-tauri-drag-region aria-hidden="true" />
-      <button className={styles.backLink} onClick={closeSettings}>
-        {t("common:back_to_app")}
-      </button>
+      <div className={styles.sidebarHeader}>
+        <button className={styles.backLink} onClick={closeSettings}>
+          {t("common:back_to_app")}
+        </button>
+        <h2 className={styles.sidebarTitle}>{t("settings:settings_title")}</h2>
+      </div>
+      <div className={styles.sidebarNav}>
 
       {getAppSections().map((s) => (
         <button
@@ -138,6 +141,7 @@ export function SettingsSidebar() {
           </button>
         );
       })}
+      </div>
     </div>
   );
 }
