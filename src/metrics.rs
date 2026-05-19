@@ -17,6 +17,45 @@ use crate::model::{
 /// 8 turn-count buckets: [1,2], [3,4], [5,8], [9,16], [17,32], [33,64], [65,128], [129+].
 const TURN_BUCKET_UPPER_BOUNDS: [i64; 7] = [2, 4, 8, 16, 32, 64, 128];
 
+const MERGED_SESSIONS_CTE: &str = r#"
+WITH merged_sessions AS (
+    SELECT started_at,
+           ended_at,
+           completed_ok,
+           workspace_id,
+           turn_count,
+           1 AS session_count,
+           CASE WHEN completed_ok THEN 1 ELSE 0 END AS success_count
+    FROM agent_sessions
+    UNION ALL
+    SELECT started_at,
+           ended_at,
+           completed_ok,
+           workspace_id,
+           turn_count,
+           1 AS session_count,
+           CASE WHEN completed_ok THEN 1 ELSE 0 END AS success_count
+    FROM deleted_agent_sessions
+    UNION ALL
+    SELECT COALESCE(first_message_at, workspace_created_at) AS started_at,
+           last_message_at AS ended_at,
+           CASE WHEN sessions_completed > 0 THEN 1 ELSE 0 END AS completed_ok,
+           workspace_id,
+           CASE
+               WHEN total_turns > 0 THEN CAST(ROUND(total_turns * 1.0 / sessions_started) AS INTEGER)
+               ELSE 0
+           END AS turn_count,
+           sessions_started AS session_count,
+           sessions_completed AS success_count
+    FROM deleted_workspace_summaries s
+    WHERE sessions_started > 0
+      AND NOT EXISTS (
+          SELECT 1 FROM deleted_agent_sessions ds
+          WHERE ds.workspace_id = s.workspace_id
+      )
+)
+"#;
+
 pub fn dashboard_metrics(db_path: &Path) -> Result<DashboardMetrics, rusqlite::Error> {
     let conn = Connection::open(db_path)?;
     dashboard_metrics_with(&conn)
@@ -121,26 +160,16 @@ fn dashboard_metrics_with(conn: &Connection) -> Result<DashboardMetrics, rusqlit
     // Range form on raw `started_at` keeps `idx_agent_sessions_started` usable.
     // `started_at` is stored as naive UTC (`datetime('now')` form), so comparing
     // it against UTC boundary timestamps is well-defined lexicographically.
-    let sessions_today: u32 = conn.query_row(
-        "SELECT COALESCE(SUM(session_count), 0) FROM (
-             SELECT started_at, 1 AS session_count FROM agent_sessions
-             UNION ALL
-             SELECT started_at, 1 AS session_count FROM deleted_agent_sessions
-             UNION ALL
-             SELECT COALESCE(first_message_at, workspace_created_at) AS started_at,
-                    sessions_started AS session_count
-             FROM deleted_workspace_summaries s
-             WHERE sessions_started > 0
-               AND NOT EXISTS (
-                   SELECT 1 FROM deleted_agent_sessions ds
-                   WHERE ds.workspace_id = s.workspace_id
-               )
-         )
+    let sessions_today_sql = format!(
+        "{MERGED_SESSIONS_CTE}
+         SELECT COALESCE(SUM(session_count), 0)
+         FROM merged_sessions
          WHERE started_at >= datetime('now', 'localtime', 'start of day', 'utc')
-           AND started_at <  datetime('now', 'localtime', 'start of day', '+1 day', 'utc')",
-        [],
-        |row| row.get::<_, i64>(0).map(|n| n as u32),
-    )?;
+           AND started_at <  datetime('now', 'localtime', 'start of day', '+1 day', 'utc')"
+    );
+    let sessions_today: u32 = conn.query_row(&sessions_today_sql, [], |row| {
+        row.get::<_, i64>(0).map(|n| n as u32)
+    })?;
 
     let commits_today: u32 = conn.query_row(
         "SELECT COUNT(*) FROM (
@@ -180,35 +209,17 @@ fn dashboard_metrics_with(conn: &Connection) -> Result<DashboardMetrics, rusqlit
     )?;
     let cost_30d_usd = live_cost_30d + deleted_cost_30d;
 
-    let (successes_30d, completed_30d): (u64, u64) = conn.query_row(
-        "SELECT COALESCE(SUM(success_count), 0), COALESCE(SUM(session_count), 0)
-         FROM (
-             SELECT started_at, ended_at,
-                    CASE WHEN completed_ok THEN 1 ELSE 0 END AS success_count,
-                    1 AS session_count
-             FROM agent_sessions
-             UNION ALL
-             SELECT started_at, ended_at,
-                    CASE WHEN completed_ok THEN 1 ELSE 0 END AS success_count,
-                    1 AS session_count
-             FROM deleted_agent_sessions
-             UNION ALL
-             SELECT COALESCE(first_message_at, workspace_created_at) AS started_at,
-                    last_message_at AS ended_at,
-                    sessions_completed AS success_count,
-                    sessions_started AS session_count
-             FROM deleted_workspace_summaries s
-             WHERE sessions_started > 0
-               AND NOT EXISTS (
-                   SELECT 1 FROM deleted_agent_sessions ds
-                   WHERE ds.workspace_id = s.workspace_id
-               )
-         )
+    let success_rate_sql = format!(
+        "{MERGED_SESSIONS_CTE}
+         SELECT COALESCE(SUM(success_count), 0), COALESCE(SUM(session_count), 0)
+         FROM merged_sessions
          WHERE ended_at IS NOT NULL
-           AND started_at >= datetime('now', 'localtime', 'start of day', '-29 days', 'utc')",
-        [],
-        |row| Ok((row.get::<_, i64>(0)? as u64, row.get::<_, i64>(1)? as u64)),
-    )?;
+           AND started_at >= datetime('now', 'localtime', 'start of day', '-29 days', 'utc')"
+    );
+    let (successes_30d, completed_30d): (u64, u64) =
+        conn.query_row(&success_rate_sql, [], |row| {
+            Ok((row.get::<_, i64>(0)? as u64, row.get::<_, i64>(1)? as u64))
+        })?;
     let success_rate_30d = if completed_30d > 0 {
         successes_30d as f32 / completed_30d as f32
     } else {
@@ -539,27 +550,16 @@ fn repo_leaderboard(conn: &Connection) -> Result<Vec<RepoLeaderRow>, rusqlite::E
 
 fn heatmap(conn: &Connection) -> Result<Vec<HeatmapCell>, rusqlite::Error> {
     // 13 weeks × 7 days = 91 cells. Week index = days-ago / 7 (0 = most recent).
-    let mut stmt = conn.prepare(
-        "SELECT CAST(strftime('%w', started_at, 'localtime') AS INTEGER) AS dow,
+    let sql = format!(
+        "{MERGED_SESSIONS_CTE}
+         SELECT CAST(strftime('%w', started_at, 'localtime') AS INTEGER) AS dow,
                 CAST((julianday(date('now', 'localtime')) - julianday(date(started_at, 'localtime'))) / 7 AS INTEGER) AS week,
                 COALESCE(SUM(session_count), 0) AS c
-         FROM (
-             SELECT started_at, 1 AS session_count FROM agent_sessions
-             UNION ALL
-             SELECT started_at, 1 AS session_count FROM deleted_agent_sessions
-             UNION ALL
-             SELECT COALESCE(first_message_at, workspace_created_at) AS started_at,
-                    sessions_started AS session_count
-             FROM deleted_workspace_summaries s
-             WHERE sessions_started > 0
-               AND NOT EXISTS (
-                   SELECT 1 FROM deleted_agent_sessions ds
-                   WHERE ds.workspace_id = s.workspace_id
-               )
-         )
+         FROM merged_sessions
          WHERE started_at >= datetime('now', 'localtime', 'start of day', '-90 days', 'utc')
-         GROUP BY dow, week",
-    )?;
+         GROUP BY dow, week"
+    );
+    let mut stmt = conn.prepare(&sql)?;
     let mut grid = [[0u32; 13]; 7];
     for row in stmt.query_map([], |row| {
         Ok((
@@ -587,25 +587,13 @@ fn heatmap(conn: &Connection) -> Result<Vec<HeatmapCell>, rusqlite::Error> {
 }
 
 fn turn_histogram(conn: &Connection) -> Result<Vec<u32>, rusqlite::Error> {
-    let mut stmt = conn.prepare(
-        "SELECT turn_count, 1 AS session_count
-         FROM agent_sessions
-         WHERE turn_count > 0
-         UNION ALL
-         SELECT turn_count, 1 AS session_count
-         FROM deleted_agent_sessions
-         WHERE turn_count > 0
-         UNION ALL
-         SELECT CAST(ROUND(total_turns * 1.0 / sessions_started) AS INTEGER) AS turn_count,
-                sessions_started AS session_count
-         FROM deleted_workspace_summaries s
-         WHERE sessions_started > 0
-           AND total_turns > 0
-           AND NOT EXISTS (
-               SELECT 1 FROM deleted_agent_sessions ds
-               WHERE ds.workspace_id = s.workspace_id
-           )",
-    )?;
+    let sql = format!(
+        "{MERGED_SESSIONS_CTE}
+         SELECT turn_count, session_count
+         FROM merged_sessions
+         WHERE turn_count > 0"
+    );
+    let mut stmt = conn.prepare(&sql)?;
     let mut buckets = vec![0u32; 8];
     for row in stmt.query_map([], |row| {
         Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)? as u32))
@@ -649,29 +637,16 @@ fn recent_sessions_24h(conn: &Connection) -> Result<Vec<SessionDot>, rusqlite::E
     // local time by V8, which would shift every dot by the user's UTC
     // offset — mirroring the backend's `ensure_utc_tz` treatment of
     // SQLite timestamps elsewhere.
-    let mut stmt = conn.prepare(
-        "SELECT strftime('%Y-%m-%dT%H:%M:%SZ', ended_at), completed_ok, workspace_id
-         FROM (
-             SELECT ended_at, completed_ok, workspace_id FROM agent_sessions
-             UNION ALL
-             SELECT ended_at, completed_ok, workspace_id FROM deleted_agent_sessions
-             UNION ALL
-             SELECT last_message_at AS ended_at,
-                    CASE WHEN sessions_completed > 0 THEN 1 ELSE 0 END AS completed_ok,
-                    workspace_id
-             FROM deleted_workspace_summaries s
-             WHERE last_message_at IS NOT NULL
-               AND sessions_started > 0
-               AND NOT EXISTS (
-                   SELECT 1 FROM deleted_agent_sessions ds
-                   WHERE ds.workspace_id = s.workspace_id
-               )
-         )
+    let sql = format!(
+        "{MERGED_SESSIONS_CTE}
+         SELECT strftime('%Y-%m-%dT%H:%M:%SZ', ended_at), completed_ok, workspace_id
+         FROM merged_sessions
          WHERE ended_at IS NOT NULL
            AND workspace_id IS NOT NULL
            AND ended_at >= datetime('now','-24 hours')
-         ORDER BY ended_at DESC",
-    )?;
+         ORDER BY ended_at DESC"
+    );
+    let mut stmt = conn.prepare(&sql)?;
     stmt.query_map([], |row| {
         Ok(SessionDot {
             ended_at: row.get(0)?,

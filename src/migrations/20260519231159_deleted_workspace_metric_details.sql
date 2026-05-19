@@ -10,6 +10,7 @@ CREATE TABLE deleted_agent_sessions (
 );
 CREATE INDEX idx_deleted_agent_sessions_workspace ON deleted_agent_sessions(workspace_id);
 CREATE INDEX idx_deleted_agent_sessions_started   ON deleted_agent_sessions(started_at);
+CREATE INDEX idx_deleted_agent_sessions_ended     ON deleted_agent_sessions(ended_at);
 CREATE INDEX idx_deleted_agent_sessions_repo      ON deleted_agent_sessions(repository_id);
 
 CREATE TABLE deleted_agent_commits (
