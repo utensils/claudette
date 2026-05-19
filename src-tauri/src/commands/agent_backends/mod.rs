@@ -356,6 +356,19 @@ pub async fn launch_codex_login(app: AppHandle, state: State<'_, AppState>) -> R
     // in memory and would 401 on every subsequent `turn/start`. Setting
     // `persistent_session = None` makes the next `send_chat_message`
     // respawn a fresh subprocess that picks up the new tokens.
+    //
+    // Dropping the `Arc<AgentSession>` is *not* enough on its own —
+    // the session's stdout/stderr reader and exit-watcher tasks own
+    // their own handles to `tokio::process::Child` and stdio, so they
+    // outlive the Arc and keep the subprocess alive. The pattern
+    // established in `chat/send.rs` (MCP-config teardown ~L1253, plan
+    // mode ~L1510, env-drift ~L1658) is: capture PIDs under the lock,
+    // null out `persistent_session` + `active_pid`, *release the
+    // lock*, then call `agent::stop_agent_graceful(pid)` for each.
+    // Mirror that here so we don't orphan a doomed app-server that
+    // keeps retrying its 401s, holding fds and a thread pool worker
+    // until Claudette quits.
+    //
     // Non-zero exits (user cancelled the browser flow, etc.) leave
     // existing sessions alone — the user can retry without losing
     // their working session.
@@ -366,20 +379,38 @@ pub async fn launch_codex_login(app: AppHandle, state: State<'_, AppState>) -> R
             return;
         }
         let state = app.state::<AppState>();
-        let mut agents = state.agents.write().await;
-        for (chat_session_id, session_state) in agents.iter_mut() {
-            let is_codex = session_state
-                .persistent_session
-                .as_ref()
-                .map(|s| s.kind() == claudette::agent::AgentHarnessKind::CodexAppServer)
-                .unwrap_or(false);
-            if is_codex {
-                tracing::info!(
+        let stale_pids: Vec<(String, u32)> = {
+            let mut agents = state.agents.write().await;
+            let mut collected = Vec::new();
+            for (chat_session_id, session_state) in agents.iter_mut() {
+                let codex_pid = session_state.persistent_session.as_ref().and_then(|s| {
+                    (s.kind() == claudette::agent::AgentHarnessKind::CodexAppServer)
+                        .then(|| s.pid())
+                });
+                if let Some(pid) = codex_pid {
+                    tracing::info!(
+                        target: "claudette::agent",
+                        chat_session_id = %chat_session_id,
+                        pid,
+                        "dropping Codex persistent session after successful `codex login` so next turn picks up fresh tokens"
+                    );
+                    session_state.persistent_session = None;
+                    session_state.active_pid = None;
+                    collected.push((chat_session_id.clone(), pid));
+                }
+            }
+            collected
+        };
+        // Lock released — now kill the orphaned subprocesses.
+        for (chat_session_id, pid) in stale_pids {
+            if let Err(err) = claudette::agent::stop_agent_graceful(pid).await {
+                tracing::warn!(
                     target: "claudette::agent",
                     chat_session_id = %chat_session_id,
-                    "dropping Codex persistent session after successful `codex login` so next turn picks up fresh tokens"
+                    pid,
+                    error = %err,
+                    "failed to stop stale codex-app-server after `codex login`"
                 );
-                session_state.persistent_session = None;
             }
         }
     });
