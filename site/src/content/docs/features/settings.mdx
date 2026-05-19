@@ -130,6 +130,8 @@ curl -X POST "$SLACK_WEBHOOK_URL" \
 | Setting | Description | Default |
 |---------|-------------|---------|
 | Git gutter base | Which revision the editor's git gutter compares your buffer against. `Last commit (HEAD)` shows uncommitted changes only; `Workspace branch base` shows every change made on this workspace's branch since it diverged from the repository's base branch (matches the [Changes panel](/claudette/features/diff-viewer/)). | Last commit (HEAD) |
+| Show minimap | Displays Monaco's scaled-down file overview along the right edge of the editor. | Off |
+| Reveal active file in Files tree | Auto-expands ancestor folders, highlights the active editor file, and scrolls it into view in the Files tree. | On |
 
 ### Git Gutter Base
 

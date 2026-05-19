@@ -141,6 +141,53 @@ export function pathMatchesTarget(
   return cleanPath === cleanTarget || cleanPath.startsWith(`${cleanTarget}/`);
 }
 
+export function getRevealAncestorDirs(path: string): string[] {
+  if (
+    path === "" ||
+    path.startsWith("/") ||
+    path.startsWith("~") ||
+    path.includes("\\")
+  ) {
+    return [];
+  }
+
+  const segments = path.split("/");
+  if (
+    segments.length < 2 ||
+    segments.some((segment) => segment === "" || segment === "." || segment === "..")
+  ) {
+    return [];
+  }
+
+  segments.pop();
+  const dirs: string[] = [];
+  let current = "";
+  for (const segment of segments) {
+    current = `${current}${segment}/`;
+    dirs.push(current);
+  }
+  return dirs;
+}
+
+function revealExpandedDirs(
+  expandedByWorkspace: Record<string, Record<string, boolean>>,
+  workspaceId: string,
+  path: string,
+): Record<string, Record<string, boolean>> {
+  const dirs = getRevealAncestorDirs(path);
+  if (dirs.length === 0) return expandedByWorkspace;
+
+  const current = expandedByWorkspace[workspaceId] ?? {};
+  if (dirs.every((dir) => current[dir])) return expandedByWorkspace;
+
+  const next = { ...current };
+  for (const dir of dirs) next[dir] = true;
+  return {
+    ...expandedByWorkspace,
+    [workspaceId]: next,
+  };
+}
+
 export interface FileTreeSlice {
   /** Per-workspace map of folder paths (with trailing "/") that are
    *  expanded in the All-Files tree. Scoped per workspace so two repos
@@ -192,6 +239,7 @@ export interface FileTreeSlice {
     workspaceId: string,
     path: string | null,
   ) => void;
+  revealFileInTree: (workspaceId: string, path: string) => void;
   requestFileTreeRefresh: (workspaceId: string) => void;
   /** Ask the FilesPanel for `workspaceId` to enter "create file at root"
    *  mode. The hotkey handler also flips the right sidebar to the Files
@@ -380,6 +428,17 @@ export const createFileTreeSlice: StateCreator<AppState, [], [], FileTreeSlice> 
         [workspaceId]: path,
       },
     })),
+  revealFileInTree: (workspaceId, path) =>
+    set((s) => {
+      if (!s.revealActiveFileInTree) return s;
+      const nextExpanded = revealExpandedDirs(
+        s.allFilesExpandedDirsByWorkspace,
+        workspaceId,
+        path,
+      );
+      if (nextExpanded === s.allFilesExpandedDirsByWorkspace) return s;
+      return { allFilesExpandedDirsByWorkspace: nextExpanded };
+    }),
   requestFileTreeRefresh: (workspaceId) =>
     set((s) => ({
       fileTreeRefreshNonceByWorkspace: {
@@ -428,6 +487,9 @@ export const createFileTreeSlice: StateCreator<AppState, [], [], FileTreeSlice> 
       const nextBuffers = s.fileBuffers[key]
         ? s.fileBuffers
         : { ...s.fileBuffers, [key]: makeUnloadedBuffer() };
+      const nextExpanded = s.revealActiveFileInTree
+        ? revealExpandedDirs(s.allFilesExpandedDirsByWorkspace, workspaceId, path)
+        : s.allFilesExpandedDirsByWorkspace;
       return {
         fileTabsByWorkspace: nextTabs,
         activeFileTabByWorkspace: {
@@ -446,6 +508,7 @@ export const createFileTreeSlice: StateCreator<AppState, [], [], FileTreeSlice> 
             }
           : s.fileRevealTargetByWorkspace,
         fileBuffers: nextBuffers,
+        allFilesExpandedDirsByWorkspace: nextExpanded,
       };
     }),
 
@@ -466,11 +529,15 @@ export const createFileTreeSlice: StateCreator<AppState, [], [], FileTreeSlice> 
       const tabs = s.fileTabsByWorkspace[workspaceId] ?? [];
       if (!tabs.includes(path)) return s;
       if (s.activeFileTabByWorkspace[workspaceId] === path) return s;
+      const nextExpanded = s.revealActiveFileInTree
+        ? revealExpandedDirs(s.allFilesExpandedDirsByWorkspace, workspaceId, path)
+        : s.allFilesExpandedDirsByWorkspace;
       return {
         activeFileTabByWorkspace: {
           ...s.activeFileTabByWorkspace,
           [workspaceId]: path,
         },
+        allFilesExpandedDirsByWorkspace: nextExpanded,
       };
     }),
 

@@ -12,6 +12,10 @@ export function EditorSettings() {
   const setEditorGitGutterBase = useAppStore((s) => s.setEditorGitGutterBase);
   const minimapEnabled = useAppStore((s) => s.editorMinimapEnabled);
   const setMinimapEnabled = useAppStore((s) => s.setEditorMinimapEnabled);
+  const revealActiveFileInTree = useAppStore((s) => s.revealActiveFileInTree);
+  const setRevealActiveFileInTree = useAppStore(
+    (s) => s.setRevealActiveFileInTree,
+  );
   const [error, setError] = useState<string | null>(null);
   // Lock controls while a persistence write is in flight. Without this,
   // a rapid sequence whose writes reject in interleaved order would have
@@ -47,6 +51,25 @@ export function EditorSettings() {
       await setAppSetting("editor_minimap_enabled", next ? "true" : "false");
     } catch (e) {
       setMinimapEnabled(!next);
+      setError(String(e));
+    } finally {
+      setPending(false);
+    }
+  };
+
+  const handleRevealActiveFileToggle = async () => {
+    if (pending) return;
+    const next = !revealActiveFileInTree;
+    setRevealActiveFileInTree(next);
+    setPending(true);
+    try {
+      setError(null);
+      await setAppSetting(
+        "editor_reveal_active_file_in_tree",
+        next ? "true" : "false",
+      );
+    } catch (e) {
+      setRevealActiveFileInTree(!next);
       setError(String(e));
     } finally {
       setPending(false);
@@ -115,6 +138,31 @@ export function EditorSettings() {
             data-checked={minimapEnabled}
             disabled={pending}
             onClick={handleMinimapToggle}
+          >
+            <div className={styles.toggleKnob} />
+          </button>
+        </div>
+      </div>
+
+      <div className={styles.settingRow}>
+        <div className={styles.settingInfo}>
+          <div className={styles.settingLabel}>
+            {t("editor_reveal_active_file_label")}
+          </div>
+          <div className={styles.settingDescription}>
+            {t("editor_reveal_active_file_desc")}
+          </div>
+        </div>
+        <div className={styles.settingControl}>
+          <button
+            className={styles.toggle}
+            role="switch"
+            aria-checked={revealActiveFileInTree}
+            aria-label={t("editor_reveal_active_file_label")}
+            aria-disabled={pending}
+            data-checked={revealActiveFileInTree}
+            disabled={pending}
+            onClick={handleRevealActiveFileToggle}
           >
             <div className={styles.toggleKnob} />
           </button>

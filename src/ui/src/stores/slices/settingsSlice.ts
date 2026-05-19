@@ -99,6 +99,8 @@ export interface SettingsSlice {
   setEditorGitGutterBase: (value: "head" | "merge_base") => void;
   editorMinimapEnabled: boolean;
   setEditorMinimapEnabled: (enabled: boolean) => void;
+  revealActiveFileInTree: boolean;
+  setRevealActiveFileInTree: (enabled: boolean) => void;
   /// File-viewer chrome: soft-wrap long lines in Monaco. Mirrors the
   /// `editorMinimapEnabled` persistence pattern — hydrated from
   /// `editor_word_wrap` in app_settings on app boot, written through
@@ -214,6 +216,9 @@ export const createSettingsSlice: StateCreator<
   setEditorGitGutterBase: (value) => set({ editorGitGutterBase: value }),
   editorMinimapEnabled: false,
   setEditorMinimapEnabled: (enabled) => set({ editorMinimapEnabled: enabled }),
+  revealActiveFileInTree: true,
+  setRevealActiveFileInTree: (enabled) =>
+    set({ revealActiveFileInTree: enabled }),
   editorWordWrap: true,
   setEditorWordWrap: (enabled) => set({ editorWordWrap: enabled }),
   editorLineNumbersEnabled: true,

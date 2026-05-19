@@ -288,6 +288,8 @@
   "editor_gutter_base_merge_base_desc": "Show every change made on this workspace's branch since it diverged from the repository's base branch. Matches the Changes panel.",
   "editor_minimap_label": "Show minimap",
   "editor_minimap_desc": "Display Monaco's scaled-down overview of the file along the right edge of the editor.",
+  "editor_reveal_active_file_label": "Reveal active file in Files tree",
+  "editor_reveal_active_file_desc": "Auto-expand, highlight, and scroll to the active editor file in the Files tree.",
 
   "nav_diagnostics": "Diagnostics",
   "nav_storage": "Storage",
