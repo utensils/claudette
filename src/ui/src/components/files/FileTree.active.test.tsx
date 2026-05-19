@@ -17,8 +17,32 @@ const entries: FileEntry[] = [
 const roots: Root[] = [];
 const containers: HTMLElement[] = [];
 const scrolledRows: string[] = [];
+const originalScrollIntoView = Element.prototype.scrollIntoView;
 
-async function renderTree(activeFilePath: string | null): Promise<HTMLElement> {
+function treeNode(activeFilePath: string | null, treeEntries = entries) {
+  return (
+    <FileTree
+      workspaceId={WS}
+      entries={treeEntries}
+      activeFilePath={activeFilePath}
+      onActivateFile={() => {}}
+      onActivateDiff={() => {}}
+      onContextMenu={() => {}}
+      creatingParentPath={null}
+      onCreateCommit={() => Promise.resolve(true)}
+      onCreateCancel={() => {}}
+      focusRequest={0}
+      renamingPath={null}
+      onRenameCommit={() => Promise.resolve(true)}
+      onRenameCancel={() => {}}
+    />
+  );
+}
+
+async function renderTree(activeFilePath: string | null): Promise<{
+  container: HTMLElement;
+  root: Root;
+}> {
   const container = document.createElement("div");
   document.body.appendChild(container);
   const root = createRoot(container);
@@ -26,35 +50,19 @@ async function renderTree(activeFilePath: string | null): Promise<HTMLElement> {
   containers.push(container);
 
   await act(async () => {
-    root.render(
-      <FileTree
-        workspaceId={WS}
-        entries={entries}
-        activeFilePath={activeFilePath}
-        onActivateFile={() => {}}
-        onActivateDiff={() => {}}
-        onContextMenu={() => {}}
-        creatingParentPath={null}
-        onCreateCommit={() => Promise.resolve(true)}
-        onCreateCancel={() => {}}
-        focusRequest={0}
-        renamingPath={null}
-        onRenameCommit={() => Promise.resolve(true)}
-        onRenameCancel={() => {}}
-      />,
-    );
+    root.render(treeNode(activeFilePath));
   });
 
-  return container;
+  return { container, root };
 }
 
 beforeEach(() => {
   scrolledRows.length = 0;
-  Element.prototype.scrollIntoView = vi.fn(function (
-    this: Element,
-    _options?: ScrollIntoViewOptions,
-  ) {
-    scrolledRows.push(this.textContent ?? "");
+  Object.defineProperty(Element.prototype, "scrollIntoView", {
+    configurable: true,
+    value: vi.fn(function (this: Element, _options?: ScrollIntoViewOptions) {
+      scrolledRows.push(this.textContent ?? "");
+    }),
   });
   useAppStore.setState({
     allFilesExpandedDirsByWorkspace: {
@@ -69,11 +77,15 @@ afterEach(async () => {
     await act(async () => root.unmount());
   }
   for (const container of containers.splice(0)) container.remove();
+  Object.defineProperty(Element.prototype, "scrollIntoView", {
+    configurable: true,
+    value: originalScrollIntoView,
+  });
 });
 
 describe("FileTree active file reveal", () => {
   it("marks the active file row and scrolls it into view", async () => {
-    const container = await renderTree("src/foo/bar.rs");
+    const { container } = await renderTree("src/foo/bar.rs");
 
     const activeRow = container.querySelector('[aria-current="true"]');
     expect(activeRow?.textContent).toContain("bar.rs");
@@ -84,5 +96,22 @@ describe("FileTree active file reveal", () => {
     ).map((row) => row.textContent ?? "");
     expect(expandedRows.some((row) => row.includes("src"))).toBe(true);
     expect(expandedRows.some((row) => row.includes("foo"))).toBe(true);
+  });
+
+  it("does not re-scroll the same active file on routine tree refreshes", async () => {
+    const { root } = await renderTree("src/foo/bar.rs");
+    expect(scrolledRows.some((row) => row.includes("bar.rs"))).toBe(true);
+    scrolledRows.length = 0;
+
+    await act(async () => {
+      root.render(
+        treeNode("src/foo/bar.rs", [
+          ...entries,
+          { path: "src/foo/qux.rs", is_directory: false },
+        ]),
+      );
+    });
+
+    expect(scrolledRows).toEqual([]);
   });
 });

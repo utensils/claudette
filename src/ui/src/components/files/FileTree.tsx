@@ -112,6 +112,7 @@ export const FileTree = memo(function FileTree({
   // move focus on keyboard navigation — the WAI-ARIA tree pattern requires
   // focus to follow the selection so the screen reader announces the row.
   const rowRefsRef = useRef<Map<string, HTMLDivElement>>(new Map());
+  const scrolledActivePathRef = useRef<string | null>(null);
 
   /** The row that should currently be in the tab order (roving tabindex).
    *  Falls back to the first visible row when no row is selected, so the
@@ -144,9 +145,11 @@ export const FileTree = memo(function FileTree({
 
   useEffect(() => {
     if (!activeFilePath) return;
+    if (scrolledActivePathRef.current === activeFilePath) return;
     const el = rowRefsRef.current.get(activeFilePath);
     if (!el) return;
     el.scrollIntoView({ block: "nearest" });
+    scrolledActivePathRef.current = activeFilePath;
   }, [activeFilePath, visible]);
 
   useEffect(() => {
