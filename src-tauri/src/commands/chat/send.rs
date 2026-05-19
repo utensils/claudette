@@ -785,10 +785,7 @@ pub(super) fn ensure_harness_accepts_attachments(
 /// `send_turn` for `start_compact` at the very last step) lets us reuse
 /// the full spawn-or-reuse machinery, so /compact works whether or not
 /// a Codex process is currently alive — matching the Claude UX.
-pub(super) fn is_codex_compact_intent(
-    harness: AgentBackendRuntimeHarness,
-    prompt: &str,
-) -> bool {
+pub(super) fn is_codex_compact_intent(harness: AgentBackendRuntimeHarness, prompt: &str) -> bool {
     harness == AgentBackendRuntimeHarness::CodexAppServer && prompt.trim() == "/compact"
 }
 
