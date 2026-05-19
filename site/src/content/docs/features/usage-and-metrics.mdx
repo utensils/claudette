@@ -17,10 +17,12 @@ The composer indicator picks a data source per backend:
 |---|---|---|
 | Anthropic / Custom Anthropic | Anthropic OAuth Usage API (subscription quotas) | Off by default — gated by the **Claude Code Usage** toggle |
 | Codex Native / Codex Subscription | Live Codex `account/rateLimits/*` quotas (Session 5h + Weekly) when available; falls back to local-aggregate tokens with a plain `Codex` label until the first rate-limits push lands | Yes |
-| OpenAI API / Custom OpenAI / OpenRouter | Local-aggregate tokens + OpenRouter `/auth/key` credit balance (when applicable) | Yes |
-| Ollama / LM Studio / Pi | Local-aggregate tokens | Yes |
+| OpenAI API / Custom OpenAI / OpenRouter | Local-aggregate tokens + OpenRouter `/credits` balance (when applicable and enabled) | Yes |
+| Ollama / LM Studio / Pi | Local-aggregate tokens; Pi OpenRouter models also show OpenRouter `/credits` balance when enabled | Yes |
 
 Local-aggregate data comes from the `chat_messages.input_tokens` / `output_tokens` / `cost_usd` columns Claudette already writes for every turn. Nothing leaves your machine for those backends.
+
+Pi sessions record token usage and provider-reported cost at the end of each turn when Pi exposes it. For OpenRouter-backed Pi models, Claudette can also poll OpenRouter's account credits endpoint with the same OpenRouter key configured for Pi; disable **OpenRouter balance in usage meter** in **Settings > Experimental** if you only want local token totals.
 
 ## Claude Code subscription panel
 
@@ -85,6 +87,7 @@ Archiving a workspace doesn't drop its activity from the metrics. Closed-out wor
 | Source | Data | Trigger |
 |---|---|---|
 | Anthropic usage API | Subscription, tier, token totals | Opening the Usage panel; cached 5 min |
+| OpenRouter credits API | Total, used, and remaining credits for OpenRouter-backed sessions | Composer meter refresh; 5-min cadence while active |
 | Local SQLite | Everything else | On view; never network |
 
 See [Privacy](/claudette/privacy/) for the full network-activity ledger.

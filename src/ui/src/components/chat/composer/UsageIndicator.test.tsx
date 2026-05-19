@@ -14,12 +14,19 @@ import type { UsageSnapshot } from "../../../types/usage";
 // useAppStore mock below.
 const appStore = vi.hoisted(() => ({
   usageInsightsEnabled: false,
+  showOpenRouterBalanceInUsageMeter: true,
+  openRouterBalanceSettingLoaded: true,
   agentBackends: [] as AgentBackendConfig[],
+  selectedModel: {} as Record<string, string>,
   selectedModelProvider: {} as Record<string, string>,
   sessionUsage: {} as Record<string, UsageSnapshot>,
   openSettings: vi.fn(),
   setSessionUsage: vi.fn(),
   clearSessionUsage: vi.fn(),
+}));
+
+const pollerMock = vi.hoisted(() => ({
+  useSessionUsagePoller: vi.fn(),
 }));
 
 vi.mock("../../../stores/useAppStore", () => ({
@@ -29,7 +36,7 @@ vi.mock("../../../stores/useAppStore", () => ({
 
 // Stub the poller so the indicator test doesn't try to invoke Tauri.
 vi.mock("../../../hooks/useSessionUsagePoller", () => ({
-  useSessionUsagePoller: () => {},
+  useSessionUsagePoller: pollerMock.useSessionUsagePoller,
 }));
 
 vi.mock("react-i18next", () => ({
@@ -120,10 +127,14 @@ function makeSnapshot(overrides: Partial<UsageSnapshot> = {}): UsageSnapshot {
 
 beforeEach(() => {
   appStore.usageInsightsEnabled = false;
+  appStore.showOpenRouterBalanceInUsageMeter = true;
+  appStore.openRouterBalanceSettingLoaded = true;
   appStore.agentBackends = [];
+  appStore.selectedModel = {};
   appStore.selectedModelProvider = {};
   appStore.sessionUsage = {};
   appStore.openSettings = vi.fn();
+  pollerMock.useSessionUsagePoller.mockClear();
 });
 
 afterEach(async () => {
@@ -243,6 +254,32 @@ describe("UsageIndicator", () => {
     await act(async () => button.click());
     expect(button.getAttribute("aria-expanded")).toBe("false");
     expect(document.querySelector('[role="dialog"]')).toBeNull();
+  });
+
+  it("passes the selected Pi OpenRouter model to the usage poller", async () => {
+    const pi = makeBackend("pi_sdk", "pi");
+    appStore.agentBackends = [pi];
+    appStore.selectedModelProvider = { s1: "pi" };
+    appStore.selectedModel = { s1: "openrouter/anthropic/claude-sonnet-4" };
+    appStore.sessionUsage = {
+      s1: makeSnapshot({
+        provider_kind: "pi_sdk",
+        source_label: "Pi",
+      }),
+    };
+
+    await render();
+
+    expect(pollerMock.useSessionUsagePoller).toHaveBeenCalledWith(
+      expect.objectContaining({
+        backend: expect.objectContaining({
+          id: "pi",
+          kind: "pi_sdk",
+          default_model: "openrouter/anthropic/claude-sonnet-4",
+        }),
+        showOpenRouterBalance: true,
+      }),
+    );
   });
 
   it("closes the popover on Escape", async () => {

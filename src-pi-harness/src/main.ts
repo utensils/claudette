@@ -44,6 +44,7 @@ type HarnessState = {
   authStorage: AuthStorage;
   modelRegistry: ModelRegistry;
   pendingTools: Map<string, PendingTool>;
+  activeTurnStartedAt?: number;
   // True when Claudette's permission level is `full` — i.e. the user
   // ran `/permissions full` and Claudette's tools-for-level resolver
   // returned the wildcard sentinel `["*"]`. In that mode the bash /
@@ -901,6 +902,68 @@ function extractAgentEndError(event: { messages?: unknown }): string | undefined
   return undefined;
 }
 
+type PiTurnUsage = {
+  totalTokens?: number;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheCreationTokens: number;
+  totalCostUsd: number;
+  durationMs?: number;
+};
+
+function finiteNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function extractAgentEndUsage(
+  event: { messages?: unknown },
+  startedAt?: number,
+): PiTurnUsage | undefined {
+  const messages = Array.isArray(event.messages) ? event.messages : [];
+  const totals: PiTurnUsage = {
+    inputTokens: 0,
+    outputTokens: 0,
+    cacheReadTokens: 0,
+    cacheCreationTokens: 0,
+    totalCostUsd: 0,
+  };
+  let sawUsage = false;
+  for (const message of messages) {
+    if (!message || typeof message !== "object") continue;
+    const m = message as {
+      role?: string;
+      usage?: {
+        input?: unknown;
+        output?: unknown;
+        cacheRead?: unknown;
+        cacheWrite?: unknown;
+        totalTokens?: unknown;
+        cost?: { total?: unknown };
+      };
+    };
+    if (m.role !== "assistant" || !m.usage) continue;
+    sawUsage = true;
+    const input = finiteNumber(m.usage.input) ?? 0;
+    const output = finiteNumber(m.usage.output) ?? 0;
+    const cacheRead = finiteNumber(m.usage.cacheRead) ?? 0;
+    const cacheWrite = finiteNumber(m.usage.cacheWrite) ?? 0;
+    totals.inputTokens += input;
+    totals.outputTokens += output;
+    totals.cacheReadTokens += cacheRead;
+    totals.cacheCreationTokens += cacheWrite;
+    totals.totalCostUsd += finiteNumber(m.usage.cost?.total) ?? 0;
+    totals.totalTokens =
+      (totals.totalTokens ?? 0) +
+      (finiteNumber(m.usage.totalTokens) ?? input + output + cacheRead + cacheWrite);
+  }
+  if (!sawUsage) return undefined;
+  if (startedAt !== undefined) {
+    totals.durationMs = Math.max(0, Date.now() - startedAt);
+  }
+  return totals;
+}
+
 function routeSessionEvent(event: AgentSessionEvent): void {
   switch (event.type) {
     // Pi distinguishes the agent-loop boundary (`agent_start` /
@@ -912,6 +975,7 @@ function routeSessionEvent(event: AgentSessionEvent): void {
     // the per-LLM-turn events so a multi-round agent doesn't emit N
     // duplicate `Result` events on the Rust side.
     case "agent_start":
+      state.activeTurnStartedAt = Date.now();
       send({ type: "turn_start" });
       break;
     case "message_update": {
@@ -997,9 +1061,15 @@ function routeSessionEvent(event: AgentSessionEvent): void {
       // tail of `messages` for the last assistant entry and forward
       // its errorMessage when `stopReason` is "error" or "aborted".
       const raw = extractAgentEndError(event as { messages?: unknown });
+      const usage = extractAgentEndUsage(
+        event as { messages?: unknown },
+        state.activeTurnStartedAt,
+      );
+      state.activeTurnStartedAt = undefined;
       send({
         type: "turn_end",
         error: raw ? renderProviderErrorMarkdown(raw) : undefined,
+        ...usage,
       });
       break;
     }

@@ -1,11 +1,10 @@
 //! OpenRouter credit-balance source.
 //!
-//! OpenRouter exposes `GET https://openrouter.ai/api/v1/auth/key`
-//! which returns `{ data: { limit, usage, is_free_tier, label, ... } }`.
-//! `limit` may be `null` for unlimited tiers; `usage` is dollars spent
-//! against the key. We surface a single `openrouter_credits` bucket
-//! and let [`local_aggregate`](super::local_aggregate) add the
-//! token-totals buckets on top.
+//! OpenRouter exposes `GET https://openrouter.ai/api/v1/credits`
+//! which returns `{ data: { total_credits, total_usage } }`. We
+//! surface a single `openrouter_credits` bucket and let
+//! [`local_aggregate`](super::local_aggregate) add the token-totals
+//! buckets on top.
 //!
 //! Detection: a `CustomOpenAi` backend whose `base_url` resolves to a
 //! host under `openrouter.ai` routes here. Other OpenAI-compatible
@@ -15,7 +14,7 @@ use serde::Deserialize;
 
 use super::UsageBucket;
 
-const OPENROUTER_KEY_URL: &str = "https://openrouter.ai/api/v1/auth/key";
+const OPENROUTER_CREDITS_URL: &str = "https://openrouter.ai/api/v1/credits";
 
 /// Shared `reqwest::Client` reused across every credit-balance fetch
 /// so the recurring poll doesn't pay TLS/handshake costs on each tick.
@@ -27,21 +26,22 @@ fn http_client() -> &'static reqwest::Client {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-struct AuthKeyResponse {
-    data: AuthKeyData,
+struct CreditsResponse {
+    data: CreditsData,
 }
 
 #[derive(Debug, Clone, Deserialize)]
-struct AuthKeyData {
-    /// Dollars used against this key so far.
-    #[serde(default)]
-    usage: f64,
-    /// Spending cap in dollars, or `None` for unlimited tiers.
-    #[serde(default)]
-    limit: Option<f64>,
-    /// `true` for free-tier keys with daily request caps rather than $.
-    #[serde(default)]
-    is_free_tier: bool,
+struct CreditsData {
+    total_credits: f64,
+    total_usage: f64,
+}
+
+#[derive(Debug, Clone, serde::Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct OpenRouterCredits {
+    pub total_credits: f64,
+    pub used_credits: f64,
+    pub remaining_credits: f64,
 }
 
 /// Detect whether a backend's `base_url` points at OpenRouter. Matches
@@ -64,50 +64,62 @@ pub fn is_openrouter_base_url(base_url: Option<&str>) -> bool {
         .unwrap_or(false)
 }
 
-/// Fetch the OpenRouter credit balance and convert it into a single
-/// `openrouter_credits` bucket. Returns `Ok(None)` for free-tier keys
-/// (no dollar limit to surface) and `Err` only on network / API errors
-/// — the caller decides whether to still emit a snapshot from local
-/// aggregates alone.
-pub async fn fetch_credit_bucket(api_key: &str) -> Result<Option<UsageBucket>, String> {
+/// Fetch the OpenRouter credit balance.
+pub async fn fetch_credits(api_key: &str) -> Result<OpenRouterCredits, String> {
     let resp = http_client()
-        .get(OPENROUTER_KEY_URL)
+        .get(OPENROUTER_CREDITS_URL)
         .header("Authorization", format!("Bearer {api_key}"))
         .timeout(std::time::Duration::from_secs(10))
         .send()
         .await
-        .map_err(|e| format!("OpenRouter key fetch failed: {e}"))?;
+        .map_err(|e| format!("OpenRouter credits fetch failed: {e}"))?;
 
     if !resp.status().is_success() {
         return Err(format!("OpenRouter API error: {}", resp.status()));
     }
 
-    let parsed: AuthKeyResponse = resp
+    let parsed: CreditsResponse = resp
         .json()
         .await
         .map_err(|e| format!("Failed to parse OpenRouter response: {e}"))?;
 
-    Ok(credit_bucket_from(&parsed.data))
+    Ok(credits_from(&parsed.data))
 }
 
-fn credit_bucket_from(data: &AuthKeyData) -> Option<UsageBucket> {
-    if data.is_free_tier {
-        return None;
+/// Fetch the OpenRouter credit balance and convert it into a single
+/// `openrouter_credits` bucket. Returns `Err` only on network / API
+/// errors — the caller decides whether to still emit a snapshot from
+/// local aggregates alone.
+pub async fn fetch_credit_bucket(api_key: &str) -> Result<Option<UsageBucket>, String> {
+    fetch_credits(api_key)
+        .await
+        .map(|credits| Some(credit_bucket_from(&credits)))
+}
+
+fn credits_from(data: &CreditsData) -> OpenRouterCredits {
+    let remaining = (data.total_credits - data.total_usage).max(0.0);
+    OpenRouterCredits {
+        total_credits: data.total_credits,
+        used_credits: data.total_usage,
+        remaining_credits: remaining,
     }
-    let limit = data.limit?;
-    if limit <= 0.0 {
-        return None;
-    }
-    let utilization = (data.usage / limit).clamp(0.0, 1.0) as f32;
-    Some(UsageBucket {
+}
+
+pub fn credit_bucket_from(credits: &OpenRouterCredits) -> UsageBucket {
+    let utilization = if credits.total_credits > 0.0 {
+        (credits.used_credits / credits.total_credits).clamp(0.0, 1.0) as f32
+    } else {
+        0.0
+    };
+    UsageBucket {
         key: String::from("openrouter_credits"),
-        label: String::from("Credits"),
+        label: String::from("OpenRouter balance"),
         utilization,
-        primary_text: format!("${:.2} / ${:.2}", data.usage, limit),
-        secondary_text: Some(format!("{}% used", (utilization * 100.0).floor() as i64)),
+        primary_text: format!("${:.2} remaining", credits.remaining_credits),
+        secondary_text: Some(format!("${:.2} used", credits.used_credits)),
         is_bounded: true,
-        exhausted: data.usage >= limit,
-    })
+        exhausted: credits.remaining_credits <= 0.0,
+    }
 }
 
 #[cfg(test)]
@@ -136,50 +148,49 @@ mod tests {
 
     #[test]
     fn credit_bucket_with_limit() {
-        let data = AuthKeyData {
-            usage: 2.41,
-            limit: Some(5.0),
-            is_free_tier: false,
+        let data = OpenRouterCredits {
+            total_credits: 5.0,
+            used_credits: 2.41,
+            remaining_credits: 2.59,
         };
-        let bucket = credit_bucket_from(&data).unwrap();
+        let bucket = credit_bucket_from(&data);
         assert_eq!(bucket.key, "openrouter_credits");
-        assert!(bucket.primary_text.contains("$2.41"));
-        assert!(bucket.primary_text.contains("$5.00"));
+        assert!(bucket.primary_text.contains("$2.59"));
+        assert!(bucket.secondary_text.unwrap().contains("$2.41"));
         assert!(!bucket.exhausted);
         assert!((bucket.utilization - 0.482).abs() < 0.001);
     }
 
     #[test]
-    fn credit_bucket_free_tier_returns_none() {
-        let data = AuthKeyData {
-            usage: 0.0,
-            limit: None,
-            is_free_tier: true,
-        };
-        assert!(credit_bucket_from(&data).is_none());
+    fn credits_from_clamps_remaining_at_zero() {
+        let credits = credits_from(&CreditsData {
+            total_credits: 5.0,
+            total_usage: 7.0,
+        });
+        assert_eq!(credits.remaining_credits, 0.0);
     }
 
     #[test]
-    fn credit_bucket_unlimited_tier_returns_none() {
-        // Paid but unlimited — no dollar bucket to surface; the local
-        // aggregate carries the spend visualization on its own.
-        let data = AuthKeyData {
-            usage: 12.34,
-            limit: None,
-            is_free_tier: false,
+    fn credit_bucket_exhausted_when_usage_meets_credits() {
+        let data = OpenRouterCredits {
+            total_credits: 5.0,
+            used_credits: 5.0,
+            remaining_credits: 0.0,
         };
-        assert!(credit_bucket_from(&data).is_none());
-    }
-
-    #[test]
-    fn credit_bucket_exhausted_when_usage_meets_limit() {
-        let data = AuthKeyData {
-            usage: 5.0,
-            limit: Some(5.0),
-            is_free_tier: false,
-        };
-        let bucket = credit_bucket_from(&data).unwrap();
+        let bucket = credit_bucket_from(&data);
         assert!(bucket.exhausted);
         assert!((bucket.utilization - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn credit_bucket_exhausted_when_total_credits_are_zero() {
+        let data = OpenRouterCredits {
+            total_credits: 0.0,
+            used_credits: 0.0,
+            remaining_credits: 0.0,
+        };
+        let bucket = credit_bucket_from(&data);
+        assert!(bucket.exhausted);
+        assert_eq!(bucket.utilization, 0.0);
     }
 }

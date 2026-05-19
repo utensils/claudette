@@ -8,6 +8,7 @@
 //!   pi_oauth_start(working_dir, provider_id, app_handle)   → PiOAuthStarted
 //!   pi_oauth_submit_input(challenge_id, value)             → ()
 //!   pi_oauth_cancel(challenge_id)                          → ()
+//!   pi_openrouter_credits()                                → PiOpenRouterCredits
 //!
 //! The OAuth flow keeps its `PiOAuthSession` alive across Tauri
 //! commands by stashing it in the module-level `ACTIVE_OAUTH` map.
@@ -27,7 +28,8 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{Arc, LazyLock};
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use tauri::{AppHandle, Emitter};
 use tokio::sync::Mutex;
 
@@ -35,6 +37,7 @@ use claudette::agent::{
     PiControlEvent, PiOAuthSession, PiOAuthStarted, PiProviderList, pi_control,
 };
 use claudette::plugin::{delete_secure_secret, load_secure_secret, save_secure_secret};
+use claudette::usage::openrouter::{self, OpenRouterCredits};
 
 /// Keychain bucket for the "private to Claudette" provider keys.
 /// Disjoint from `agentBackendSecrets` (which stores per-backend
@@ -133,6 +136,106 @@ pub fn pi_local_secret_env() -> Result<Vec<(String, String)>, String> {
         }
     }
     Ok(out)
+}
+
+fn extract_auth_key(value: &Value) -> Option<String> {
+    match value {
+        Value::String(s) => {
+            let trimmed = s.trim();
+            (!trimmed.is_empty()).then(|| trimmed.to_string())
+        }
+        Value::Object(map) => ["key", "apiKey", "api_key", "token"]
+            .iter()
+            .find_map(|field| map.get(*field).and_then(extract_auth_key)),
+        _ => None,
+    }
+}
+
+fn auth_json_provider_key(value: &Value, provider_id: &str) -> Option<String> {
+    let root = value.as_object()?;
+    if let Some(value) = root.get(provider_id).and_then(extract_auth_key) {
+        return Some(value);
+    }
+    ["providers", "auth", "credentials", "apiKeys", "api_keys"]
+        .iter()
+        .find_map(|field| {
+            root.get(*field)?
+                .get(provider_id)
+                .and_then(extract_auth_key)
+        })
+}
+
+async fn pi_shared_auth_json_key(provider_id: &str) -> Result<Option<String>, String> {
+    let Some(home) = dirs::home_dir() else {
+        return Ok(None);
+    };
+    let path = home.join(".pi").join("agent").join("auth.json");
+    let raw = match tokio::fs::read_to_string(&path).await {
+        Ok(raw) => raw,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => return Err(format!("Failed to read Pi auth.json: {err}")),
+    };
+    let value: Value =
+        serde_json::from_str(&raw).map_err(|e| format!("Failed to parse Pi auth.json: {e}"))?;
+    Ok(auth_json_provider_key(&value, provider_id))
+}
+
+async fn pi_provider_api_key(provider_id: &str) -> Result<Option<String>, String> {
+    // Pi's auth.json has priority over env-var fallback in the sidecar.
+    // Mirror that here so the balance probe reads the same OpenRouter
+    // account a Pi turn would actually charge. Claudette-private keys
+    // are injected into the sidecar as env vars, so they take the same
+    // slot as process env but should win when both are present.
+    if let Some(key) = pi_shared_auth_json_key(provider_id).await? {
+        return Ok(Some(key));
+    }
+    let stored = load_secure_secret(KEYCHAIN_BUCKET, &keychain_key(provider_id))
+        .map_err(|e| format!("Failed to read pi provider secret: {e}"))?;
+    if let Some(key) = stored
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+    {
+        return Ok(Some(key));
+    }
+    Ok(pi_env_var_for_provider(provider_id)
+        .and_then(|env| std::env::var(env).ok())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty()))
+}
+
+pub async fn fetch_pi_openrouter_credits() -> Result<OpenRouterCredits, String> {
+    let key = pi_provider_api_key("openrouter")
+        .await?
+        .ok_or_else(|| "OpenRouter key is not configured for Pi".to_string())?;
+    openrouter::fetch_credits(&key).await
+}
+
+pub async fn fetch_pi_openrouter_credit_bucket() -> Result<claudette::usage::UsageBucket, String> {
+    let credits = fetch_pi_openrouter_credits().await?;
+    Ok(openrouter::credit_bucket_from(&credits))
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct PiOpenRouterCredits {
+    pub total_credits: f64,
+    pub used_credits: f64,
+    pub remaining_credits: f64,
+}
+
+impl From<OpenRouterCredits> for PiOpenRouterCredits {
+    fn from(value: OpenRouterCredits) -> Self {
+        Self {
+            total_credits: value.total_credits,
+            used_credits: value.used_credits,
+            remaining_credits: value.remaining_credits,
+        }
+    }
+}
+
+#[tauri::command]
+pub async fn pi_openrouter_credits() -> Result<PiOpenRouterCredits, String> {
+    fetch_pi_openrouter_credits().await.map(Into::into)
 }
 
 #[derive(Debug, Deserialize)]
@@ -383,5 +486,29 @@ mod tests {
         // someone might wedge into this bucket later.
         assert_eq!(keychain_key("openrouter"), "pi_provider:openrouter");
         assert!(keychain_key("github-copilot").starts_with("pi_provider:"));
+    }
+
+    #[test]
+    fn auth_json_provider_key_reads_direct_pi_shape() {
+        let value = serde_json::json!({
+            "openrouter": { "type": "api_key", "key": "sk-or-test" }
+        });
+        assert_eq!(
+            auth_json_provider_key(&value, "openrouter").as_deref(),
+            Some("sk-or-test")
+        );
+    }
+
+    #[test]
+    fn auth_json_provider_key_reads_nested_provider_shape() {
+        let value = serde_json::json!({
+            "providers": {
+                "openrouter": { "apiKey": "sk-or-nested" }
+            }
+        });
+        assert_eq!(
+            auth_json_provider_key(&value, "openrouter").as_deref(),
+            Some("sk-or-nested")
+        );
     }
 }

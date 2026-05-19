@@ -42,6 +42,12 @@ export interface PiOAuthStarted {
   providerId: string;
 }
 
+export interface PiOpenRouterCredits {
+  totalCredits: number;
+  usedCredits: number;
+  remainingCredits: number;
+}
+
 export type PiOAuthEvent =
   | {
       type: "oauth_challenge";
@@ -112,6 +118,10 @@ export function piOAuthSubmitInput(args: {
 
 export function piOAuthCancel(challengeId: string): Promise<void> {
   return invoke("pi_oauth_cancel", { challengeId });
+}
+
+export function piOpenRouterCredits(): Promise<PiOpenRouterCredits> {
+  return invoke("pi_openrouter_credits");
 }
 
 /** Subscribe to the OAuth event stream. Returns an unlisten fn that

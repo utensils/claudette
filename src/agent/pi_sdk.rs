@@ -16,7 +16,7 @@ use crate::process::CommandWindowExt as _;
 use super::environment::apply_resolved_env_to_command;
 use super::{
     AgentEvent, AssistantMessage, ContentBlock, ControlRequestInner, Delta, FileAttachment,
-    InnerStreamEvent, StartContentBlock, StreamEvent, TurnHandle, UserContentBlock,
+    InnerStreamEvent, StartContentBlock, StreamEvent, TokenUsage, TurnHandle, UserContentBlock,
     UserEventMessage, UserMessageContent,
 };
 
@@ -679,6 +679,20 @@ enum PiHarnessMessage {
     TurnEnd {
         #[serde(default)]
         error: Option<String>,
+        #[serde(default, rename = "totalTokens")]
+        total_tokens: Option<u64>,
+        #[serde(default, rename = "inputTokens")]
+        input_tokens: Option<u64>,
+        #[serde(default, rename = "outputTokens")]
+        output_tokens: Option<u64>,
+        #[serde(default, rename = "cacheReadTokens")]
+        cache_read_tokens: Option<u64>,
+        #[serde(default, rename = "cacheCreationTokens")]
+        cache_creation_tokens: Option<u64>,
+        #[serde(default, rename = "totalCostUsd")]
+        total_cost_usd: Option<f64>,
+        #[serde(default, rename = "durationMs")]
+        duration_ms: Option<i64>,
     },
     /// Mid-turn failure surfaced by the harness when Pi's
     /// `AssistantMessageEvent` returns an `error` variant or
@@ -1028,7 +1042,16 @@ async fn route_pi_message(
                 output.pending_error = Some(err);
             }
         }
-        PiHarnessMessage::TurnEnd { error } => {
+        PiHarnessMessage::TurnEnd {
+            error,
+            total_tokens,
+            input_tokens,
+            output_tokens,
+            cache_read_tokens,
+            cache_creation_tokens,
+            total_cost_usd,
+            duration_ms,
+        } => {
             let mut output = turn_output.lock().await;
             // Merge any mid-turn `turn_error` events the harness
             // forwarded with the `agent_end` errorMessage walk.
@@ -1088,9 +1111,19 @@ async fn route_pi_message(
             let _ = event_tx.send(AgentEvent::Stream(StreamEvent::Result {
                 subtype: subtype.to_string(),
                 result: Some(result_text),
-                total_cost_usd: None,
-                duration_ms: None,
-                usage: None,
+                total_cost_usd,
+                duration_ms,
+                usage: input_tokens
+                    .zip(output_tokens)
+                    .map(|(input_tokens, output_tokens)| TokenUsage {
+                        total_tokens,
+                        input_tokens,
+                        output_tokens,
+                        cache_creation_input_tokens: cache_creation_tokens,
+                        cache_read_input_tokens: cache_read_tokens,
+                        model_context_window: None,
+                        iterations: None,
+                    }),
             }));
             output.text.clear();
             output.thinking.clear();
@@ -1265,6 +1298,32 @@ mod tests {
 
     fn try_recv_now(rx: &mut broadcast::Receiver<AgentEvent>) -> Option<AgentEvent> {
         rx.try_recv().ok()
+    }
+
+    fn turn_end(error: Option<&str>) -> PiHarnessMessage {
+        PiHarnessMessage::TurnEnd {
+            error: error.map(str::to_string),
+            total_tokens: None,
+            input_tokens: None,
+            output_tokens: None,
+            cache_read_tokens: None,
+            cache_creation_tokens: None,
+            total_cost_usd: None,
+            duration_ms: None,
+        }
+    }
+
+    fn turn_end_with_usage() -> PiHarnessMessage {
+        PiHarnessMessage::TurnEnd {
+            error: None,
+            total_tokens: Some(175),
+            input_tokens: Some(100),
+            output_tokens: Some(50),
+            cache_read_tokens: Some(20),
+            cache_creation_tokens: Some(5),
+            total_cost_usd: Some(0.0123),
+            duration_ms: Some(4321),
+        }
     }
 
     #[test]
@@ -1885,7 +1944,7 @@ mod tests {
             &pending,
             &turn_output,
             &init_cache,
-            PiHarnessMessage::TurnEnd { error: None },
+            turn_end(None),
         )
         .await;
         let assistant = next_event(&mut rx).await;
@@ -1909,6 +1968,43 @@ mod tests {
         }
     }
 
+    /// Pi's agent_end carries per-assistant-message usage. The harness
+    /// sums it into turn_end, and Rust must preserve it on Result so
+    /// the regular chat bridge updates the footer and Usage meter.
+    #[tokio::test]
+    async fn turn_end_maps_usage_cost_and_duration_to_result() {
+        let (event_tx, control_tx, mut rx, pending, turn_output, init_cache) = pi_state();
+        turn_output.lock().await.text.push_str("metered answer");
+        route_pi_message(
+            &event_tx,
+            &control_tx,
+            &pending,
+            &turn_output,
+            &init_cache,
+            turn_end_with_usage(),
+        )
+        .await;
+        let _assistant = next_event(&mut rx).await;
+        match next_event(&mut rx).await {
+            AgentEvent::Stream(StreamEvent::Result {
+                usage,
+                total_cost_usd,
+                duration_ms,
+                ..
+            }) => {
+                let usage = usage.expect("Pi usage should be forwarded");
+                assert_eq!(usage.total_tokens, Some(175));
+                assert_eq!(usage.input_tokens, 100);
+                assert_eq!(usage.output_tokens, 50);
+                assert_eq!(usage.cache_read_input_tokens, Some(20));
+                assert_eq!(usage.cache_creation_input_tokens, Some(5));
+                assert_eq!(total_cost_usd, Some(0.0123));
+                assert_eq!(duration_ms, Some(4321));
+            }
+            other => panic!("expected Result, got {other:?}"),
+        }
+    }
+
     /// Turn-end with an error must surface the error text both as a
     /// trailing assistant block (so the chat shows the failure even
     /// after partial output) and inside Result.result (consumers that
@@ -1923,9 +2019,7 @@ mod tests {
             &pending,
             &turn_output,
             &init_cache,
-            PiHarnessMessage::TurnEnd {
-                error: Some("rate limit".to_string()),
-            },
+            turn_end(Some("rate limit")),
         )
         .await;
         match next_event(&mut rx).await {
@@ -1967,7 +2061,7 @@ mod tests {
             &pending,
             &turn_output,
             &init_cache,
-            PiHarnessMessage::TurnEnd { error: None },
+            turn_end(None),
         )
         .await;
         match next_event(&mut rx).await {
@@ -2008,7 +2102,7 @@ mod tests {
             &pending,
             &turn_output,
             &init_cache,
-            PiHarnessMessage::TurnEnd { error: None },
+            turn_end(None),
         )
         .await;
         match next_event(&mut rx).await {
@@ -2058,9 +2152,7 @@ mod tests {
             &pending,
             &turn_output,
             &init_cache,
-            PiHarnessMessage::TurnEnd {
-                error: Some("final 500".to_string()),
-            },
+            turn_end(Some("final 500")),
         )
         .await;
         match next_event(&mut rx).await {
@@ -2101,7 +2193,7 @@ mod tests {
             &pending,
             &turn_output,
             &init_cache,
-            PiHarnessMessage::TurnEnd { error: None },
+            turn_end(None),
         )
         .await;
         // Drain turn-1 finalize events.
@@ -2116,7 +2208,7 @@ mod tests {
             &pending,
             &turn_output,
             &init_cache,
-            PiHarnessMessage::TurnEnd { error: None },
+            turn_end(None),
         )
         .await;
         match next_event(&mut rx).await {

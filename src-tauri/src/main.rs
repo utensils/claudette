@@ -1091,6 +1091,8 @@ fn main() {
             commands::agent_backends::pi_auth::pi_oauth_submit_input,
             #[cfg(feature = "pi-sdk")]
             commands::agent_backends::pi_auth::pi_oauth_cancel,
+            #[cfg(feature = "pi-sdk")]
+            commands::agent_backends::pi_auth::pi_openrouter_credits,
             // Claude flags
             commands::claude_flags::list_claude_flags,
             commands::claude_flags::refresh_claude_flags,
