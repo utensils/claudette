@@ -1,8 +1,10 @@
 import { KeyRound, LogIn, RefreshCw, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import {
+  type AuthErrorProvider,
   type ClaudeAuthLoginController,
   cleanClaudeAuthError,
+  cleanCodexAuthError,
   useClaudeAuthLogin,
 } from "./claudeAuth";
 import { ClaudeAuthCodeForm } from "./ClaudeAuthCodeForm";
@@ -38,28 +40,42 @@ export function ClaudeCodeAuthPanelView({
   error,
   onRetry,
   showDescription = true,
+  provider = "claude",
 }: {
   controller: ClaudeAuthLoginController;
   error?: string | null;
   onRetry?: () => void | Promise<void>;
   showDescription?: boolean;
+  /** Which agent backend's sign-in flow this panel is rendering. Drives
+   *  the title, description, and the "manual auth code" form (only the
+   *  Claude CLI supports paste-back; Codex's `codex login` is browser-
+   *  only). Same chrome, branded per provider. */
+  provider?: AuthErrorProvider;
 }) {
   const { t } = useTranslation("settings");
   const { t: tCommon } = useTranslation("common");
   const { authState, startAuthLogin, cancelAuthLogin, submitAuthCode } =
     controller;
-  const displayError = error ? cleanClaudeAuthError(error) : null;
+  const cleanError =
+    provider === "codex" ? cleanCodexAuthError : cleanClaudeAuthError;
+  const displayError = error ? cleanError(error) : null;
+  const titleKey =
+    provider === "codex" ? "auth_panel_title_codex" : "auth_panel_title";
+  const descKey =
+    provider === "codex" ? "auth_panel_desc_codex" : "auth_panel_desc";
+  const signingInKey =
+    provider === "codex" ? "auth_signing_in_codex" : "auth_signing_in";
+  const signingInHintKey =
+    provider === "codex" ? "auth_signing_in_hint_codex" : "auth_signing_in_hint";
 
   return (
     <div className={styles.authPanel}>
       <div className={styles.authPanelHeader}>
         <KeyRound size={18} />
         <div>
-          <div className={styles.authPanelTitle}>{t("auth_panel_title")}</div>
+          <div className={styles.authPanelTitle}>{t(titleKey)}</div>
           {showDescription && (
-            <div className={styles.authPanelDescription}>
-              {t("auth_panel_desc")}
-            </div>
+            <div className={styles.authPanelDescription}>{t(descKey)}</div>
           )}
         </div>
       </div>
@@ -70,10 +86,12 @@ export function ClaudeCodeAuthPanelView({
 
       {authState.status === "running" && (
         <div className={styles.authPanelStatus}>
-          <span>{t("auth_signing_in")}</span>
-          <span className={styles.usageTimestamp}>
-            {t("auth_signing_in_hint")}
-          </span>
+          <span>{t(signingInKey)}</span>
+          <span className={styles.usageTimestamp}>{t(signingInHintKey)}</span>
+          {/* Manual-URL + paste-back code form are Claude-CLI-specific.
+              The Codex CLI's `codex login` runs an unattended browser
+              flow with no progress events, so neither bit applies — the
+              controller's manualUrl stays null for Codex. */}
           {authState.manualUrl && (
             <a
               className={styles.usageManageLink}
@@ -94,7 +112,7 @@ export function ClaudeCodeAuthPanelView({
 
       {authState.status === "error" && (
         <div className={styles.authPanelError}>
-          {cleanClaudeAuthError(authState.error)}
+          {cleanError(authState.error)}
         </div>
       )}
 
