@@ -183,13 +183,22 @@ async fn pi_shared_auth_json_key(provider_id: &str) -> Result<Option<String>, St
 async fn pi_provider_api_key(provider_id: &str) -> Result<Option<String>, String> {
     // Pi's auth.json has priority over env-var fallback in the sidecar.
     // Mirror that here so the balance probe reads the same OpenRouter
-    // account a Pi turn would actually charge.
+    // account a Pi turn would actually charge. Claudette-private keys
+    // are injected into the sidecar as env vars, so they take the same
+    // slot as process env but should win when both are present.
     if let Some(key) = pi_shared_auth_json_key(provider_id).await? {
         return Ok(Some(key));
     }
     let stored = load_secure_secret(KEYCHAIN_BUCKET, &keychain_key(provider_id))
         .map_err(|e| format!("Failed to read pi provider secret: {e}"))?;
-    Ok(stored
+    if let Some(key) = stored
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+    {
+        return Ok(Some(key));
+    }
+    Ok(pi_env_var_for_provider(provider_id)
+        .and_then(|env| std::env::var(env).ok())
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty()))
 }

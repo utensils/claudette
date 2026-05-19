@@ -180,6 +180,12 @@ function App() {
         }
         setLastMessages(msgMap);
         await hydratePersistedViewState(localWorkspaces);
+        await getAppSetting("openrouter_balance_in_usage_meter")
+          .then((val) => {
+            if (val === "false") setShowOpenRouterBalanceInUsageMeter(false);
+          })
+          .catch(() => {})
+          .finally(() => setOpenRouterBalanceSettingLoaded(true));
         setViewStateHydrated(true);
         // Boot-health gate: only ack on the success path. The
         // `.catch()` branch below also flips `viewStateHydrated` so
@@ -232,6 +238,7 @@ function App() {
       .catch(async (err) => {
         console.error("Failed to load initial data:", err);
         await hydratePersistedViewState([]);
+        setOpenRouterBalanceSettingLoaded(true);
         setViewStateHydrated(true);
       });
     getAppSetting("terminal_font_size")
@@ -361,12 +368,6 @@ function App() {
     getAppSetting("usage_insights_enabled")
       .then((val) => { if (val === "true") setUsageInsightsEnabled(true); })
       .catch(() => {});
-    getAppSetting("openrouter_balance_in_usage_meter")
-      .then((val) => {
-        if (val === "false") setShowOpenRouterBalanceInUsageMeter(false);
-      })
-      .catch(() => {})
-      .finally(() => setOpenRouterBalanceSettingLoaded(true));
     getAppSetting("claudette_terminal_enabled")
       .then((val) => {
         // Default ON: only an explicit "false" disables. Absent / any other
