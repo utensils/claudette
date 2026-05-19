@@ -4,7 +4,7 @@
 //! into focused submodules. See each `mod` declaration's owning file
 //! for the relevant cluster.
 
-use tauri::State;
+use tauri::{AppHandle, Manager, State};
 
 use claudette::agent::resolve_codex_path;
 use claudette::agent_backend::{AgentBackendConfig, AgentBackendRuntimeHarness};
@@ -340,7 +340,7 @@ pub async fn test_agent_backend(
 }
 
 #[tauri::command]
-pub async fn launch_codex_login(state: State<'_, AppState>) -> Result<(), String> {
+pub async fn launch_codex_login(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
     let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
     ensure_native_codex_enabled(&db)?;
     let codex_path = resolve_codex_path().await;
@@ -349,8 +349,39 @@ pub async fn launch_codex_login(state: State<'_, AppState>) -> Result<(), String
         .arg("login")
         .spawn()
         .map_err(|e| format!("Failed to launch `codex login`: {e}"))?;
+    // After `codex login` exits successfully, drop every persistent
+    // Codex app-server session held in AppState. The browser flow
+    // rotates the refresh token on disk, but any codex-app-server
+    // subprocess we already spawned still holds the old credentials
+    // in memory and would 401 on every subsequent `turn/start`. Setting
+    // `persistent_session = None` makes the next `send_chat_message`
+    // respawn a fresh subprocess that picks up the new tokens.
+    // Non-zero exits (user cancelled the browser flow, etc.) leave
+    // existing sessions alone — the user can retry without losing
+    // their working session.
     tokio::spawn(async move {
-        let _ = child.wait().await;
+        let status = child.wait().await;
+        let success = status.as_ref().map(|s| s.success()).unwrap_or(false);
+        if !success {
+            return;
+        }
+        let state = app.state::<AppState>();
+        let mut agents = state.agents.write().await;
+        for (chat_session_id, session_state) in agents.iter_mut() {
+            let is_codex = session_state
+                .persistent_session
+                .as_ref()
+                .map(|s| s.kind() == claudette::agent::AgentHarnessKind::CodexAppServer)
+                .unwrap_or(false);
+            if is_codex {
+                tracing::info!(
+                    target: "claudette::agent",
+                    chat_session_id = %chat_session_id,
+                    "dropping Codex persistent session after successful `codex login` so next turn picks up fresh tokens"
+                );
+                session_state.persistent_session = None;
+            }
+        }
     });
     Ok(())
 }
