@@ -237,6 +237,62 @@ mod tests {
     }
 
     #[test]
+    fn test_repo_scm_list_cache_upsert_and_delete() {
+        let db = Database::open_in_memory().unwrap();
+        db.insert_repository(&make_repo("r1", "/tmp/repo1", "repo1"))
+            .unwrap();
+
+        // Upsert issues + PRs:open + PRs:mine for the same repo.
+        for (kind, payload) in [
+            ("issues", r#"[{"number":1}]"#),
+            ("pull_requests:open", r#"[{"number":42}]"#),
+            ("pull_requests:mine", r#"[]"#),
+        ] {
+            db.upsert_repo_scm_list_cache(&RepoScmListCacheRow {
+                repo_id: "r1".into(),
+                list_kind: kind.into(),
+                provider: Some("github".into()),
+                payload: payload.into(),
+                error: None,
+                fetched_at: String::new(),
+            })
+            .unwrap();
+        }
+
+        let rows = db.load_all_repo_scm_list_cache().unwrap();
+        assert_eq!(rows.len(), 3);
+
+        // Upserting an existing key replaces (not duplicates).
+        db.upsert_repo_scm_list_cache(&RepoScmListCacheRow {
+            repo_id: "r1".into(),
+            list_kind: "issues".into(),
+            provider: Some("github".into()),
+            payload: r#"[{"number":2}]"#.into(),
+            error: None,
+            fetched_at: String::new(),
+        })
+        .unwrap();
+        let rows = db.load_all_repo_scm_list_cache().unwrap();
+        assert_eq!(rows.len(), 3);
+        let issues_row = rows
+            .iter()
+            .find(|r| r.list_kind == "issues")
+            .expect("issues row");
+        assert!(issues_row.payload.contains("\"number\":2"));
+
+        // Per-kind delete drops only that row.
+        db.delete_repo_scm_list_cache("r1", "issues").unwrap();
+        let rows = db.load_all_repo_scm_list_cache().unwrap();
+        assert_eq!(rows.len(), 2);
+        assert!(rows.iter().all(|r| r.list_kind != "issues"));
+
+        // Per-repo delete drops everything for that repo.
+        db.delete_repo_scm_list_cache_for_repo("r1").unwrap();
+        let rows = db.load_all_repo_scm_list_cache().unwrap();
+        assert!(rows.is_empty());
+    }
+
+    #[test]
     fn test_scm_status_cache_nullable_pr() {
         let db = Database::open_in_memory().unwrap();
         db.insert_repository(&make_repo("r1", "/tmp/repo1", "repo1"))
