@@ -58,6 +58,8 @@ export interface SettingsSlice {
   setUsageInsightsEnabled: (enabled: boolean) => void;
   showOpenRouterBalanceInUsageMeter: boolean;
   setShowOpenRouterBalanceInUsageMeter: (enabled: boolean) => void;
+  openRouterBalanceSettingLoaded: boolean;
+  setOpenRouterBalanceSettingLoaded: (loaded: boolean) => void;
   disable1mContext: boolean;
   setDisable1mContext: (v: boolean) => void;
   alternativeBackendsAvailable: boolean;
@@ -178,6 +180,9 @@ export const createSettingsSlice: StateCreator<
   showOpenRouterBalanceInUsageMeter: true,
   setShowOpenRouterBalanceInUsageMeter: (enabled) =>
     set({ showOpenRouterBalanceInUsageMeter: enabled }),
+  openRouterBalanceSettingLoaded: false,
+  setOpenRouterBalanceSettingLoaded: (loaded) =>
+    set({ openRouterBalanceSettingLoaded: loaded }),
   disable1mContext: false,
   setDisable1mContext: (v) => set({ disable1mContext: v }),
   alternativeBackendsAvailable: false,

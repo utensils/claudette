@@ -72,6 +72,14 @@ function findUsageToggle(container: HTMLElement): HTMLButtonElement {
   return toggle as HTMLButtonElement;
 }
 
+function findOpenRouterBalanceToggle(container: HTMLElement): HTMLButtonElement {
+  const toggle = container.querySelector(
+    'button[aria-label="experimental_openrouter_balance_aria"]',
+  );
+  if (!toggle) throw new Error("OpenRouter balance toggle not found");
+  return toggle as HTMLButtonElement;
+}
+
 function findConfirmButton(container: HTMLElement): HTMLButtonElement | null {
   const modal = container.querySelector('[data-testid="modal"]');
   if (!modal) return null;
@@ -153,6 +161,44 @@ describe("ExperimentalSettings — Usage Insights consent gate", () => {
     expect(serviceMocks.setAppSetting).toHaveBeenCalledWith(
       "usage_insights_enabled",
       "false",
+    );
+  });
+});
+
+describe("ExperimentalSettings — OpenRouter balance toggle", () => {
+  it("persists openrouter_balance_in_usage_meter=false when disabled", async () => {
+    const container = await renderSettings();
+
+    await act(async () => {
+      findOpenRouterBalanceToggle(container).click();
+      await Promise.resolve();
+    });
+
+    expect(appStore.setShowOpenRouterBalanceInUsageMeter).toHaveBeenCalledWith(
+      false,
+    );
+    expect(serviceMocks.setAppSetting).toHaveBeenCalledWith(
+      "openrouter_balance_in_usage_meter",
+      "false",
+    );
+  });
+
+  it("rolls back the OpenRouter toggle when persistence fails", async () => {
+    serviceMocks.setAppSetting.mockRejectedValueOnce(new Error("disk full"));
+    const container = await renderSettings();
+
+    await act(async () => {
+      findOpenRouterBalanceToggle(container).click();
+      await Promise.resolve();
+    });
+
+    expect(appStore.setShowOpenRouterBalanceInUsageMeter).toHaveBeenNthCalledWith(
+      1,
+      false,
+    );
+    expect(appStore.setShowOpenRouterBalanceInUsageMeter).toHaveBeenNthCalledWith(
+      2,
+      true,
     );
   });
 });

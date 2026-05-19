@@ -59,6 +59,9 @@ export function UsageIndicator({ workspaceId, sessionId }: UsageIndicatorProps) 
   const showOpenRouterBalance = useAppStore(
     (s) => s.showOpenRouterBalanceInUsageMeter,
   );
+  const openRouterBalanceSettingLoaded = useAppStore(
+    (s) => s.openRouterBalanceSettingLoaded,
+  );
   const agentBackends = useAppStore((s) => s.agentBackends);
   const selectedModel = useAppStore((s) => s.selectedModel);
   const selectedModelProvider = useAppStore((s) => s.selectedModelProvider);
@@ -94,7 +97,8 @@ export function UsageIndicator({ workspaceId, sessionId }: UsageIndicatorProps) 
     backend: usageBackend,
     mode,
     usageInsightsEnabled,
-    showOpenRouterBalance,
+    showOpenRouterBalance:
+      openRouterBalanceSettingLoaded && showOpenRouterBalance,
   });
 
   const triggerRef = useRef<HTMLButtonElement>(null);

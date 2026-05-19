@@ -118,7 +118,7 @@ pub fn credit_bucket_from(credits: &OpenRouterCredits) -> UsageBucket {
         primary_text: format!("${:.2} remaining", credits.remaining_credits),
         secondary_text: Some(format!("${:.2} used", credits.used_credits)),
         is_bounded: true,
-        exhausted: credits.remaining_credits <= 0.0 && credits.total_credits > 0.0,
+        exhausted: credits.remaining_credits <= 0.0,
     }
 }
 
@@ -180,5 +180,17 @@ mod tests {
         let bucket = credit_bucket_from(&data);
         assert!(bucket.exhausted);
         assert!((bucket.utilization - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn credit_bucket_exhausted_when_total_credits_are_zero() {
+        let data = OpenRouterCredits {
+            total_credits: 0.0,
+            used_credits: 0.0,
+            remaining_credits: 0.0,
+        };
+        let bucket = credit_bucket_from(&data);
+        assert!(bucket.exhausted);
+        assert_eq!(bucket.utilization, 0.0);
     }
 }
