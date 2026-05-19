@@ -43,10 +43,11 @@ export function ContextPopover({ sessionId, onClose, onCompact, onClear, trigger
   // matches the send pipeline's fallback (per-session provider →
   // default backend → first available), so a fresh session with no
   // explicit provider still gates correctly when the default backend
-  // is Pi. Fail-closed: if we can't resolve a harness at all (backends
-  // not loaded yet), keep the button enabled (resolution returns null
-  // → we treat as "not Pi" so the user isn't blocked unnecessarily on
-  // the more common Claude/Codex case).
+  // is Pi. Fail-open on `null` (agent_backends not loaded yet): keep
+  // the button enabled rather than block the much more common
+  // Claude/Codex case on a transient empty state. ChatPanel's
+  // `/compact` dispatch surfaces a "backend not ready" local message
+  // if the click actually races the backend load.
   const compactSupported = useMemo(() => {
     const harness = resolveSessionHarness({
       sessionId,
