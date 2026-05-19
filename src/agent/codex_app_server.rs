@@ -43,6 +43,19 @@ struct CodexTurnOutput {
     /// arriving as one mega-block after the turn ends.
     thinking_item_id: Option<String>,
     command_outputs: BTreeMap<String, String>,
+    /// True while a `thread/compact/start`-initiated turn is in flight.
+    /// Set by [`CodexAppServerSession::start_compact`] right before the
+    /// RPC; cleared when the `contextCompaction` `ItemCompleted` arrives
+    /// (or as a safety net by `drain_turn_output_buffer` on turn end /
+    /// `TurnFailed`). While set, `flush_text_buffer` emits the buffered
+    /// summary text as a synthetic `User { Text(...), is_synthetic: true }`
+    /// event so `send.rs` persists it as a `SYNTHETIC_SUMMARY:` system
+    /// message — the exact same shape Claude CLI produces — and the
+    /// frontend renders it via the shared `SyntheticContinuationMessage`
+    /// disclosure ("Pre-compaction summary"). Reasoning content stays
+    /// as a normal `Thinking` block; only the user-visible recap text
+    /// is rerouted.
+    compact_mode: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -455,6 +468,18 @@ impl CodexAppServerSession {
         // before the per-turn pump exists.
         let mut broadcast_rx = self.event_tx.subscribe();
         let thread_id = self.ensure_thread().await?;
+        // Mark the upcoming turn's output as compact-mode so
+        // `flush_text_buffer` emits the model-generated summary text as a
+        // synthetic `User { Text(...), is_synthetic: true }` event instead
+        // of a normal `Assistant` block. send.rs already persists that
+        // shape as a `SYNTHETIC_SUMMARY:` system message — the same path
+        // the Claude CLI's `/compact` output flows through — so the
+        // frontend's `SyntheticContinuationMessage` ("Pre-compaction
+        // summary") disclosure renders with real content instead of an
+        // empty body. The flag is cleared when the `contextCompaction`
+        // `ItemCompleted` arrives (with `drain_turn_output_buffer` as a
+        // defense-in-depth fallback on TurnFailed / out-of-order events).
+        self.turn_output.lock().await.compact_mode = true;
         self.send_request(build_thread_compact_start_request(
             self.next_id(),
             &thread_id,
@@ -2110,6 +2135,20 @@ async fn update_turn_output_buffer(
                         flushed.push(event);
                     }
                 }
+                // End of a compact turn — Codex emits the agentMessage
+                // ItemCompleted (which already flushed the summary text as
+                // synthetic User Text via flush_text_buffer's compact_mode
+                // branch above) and then this `contextCompaction` item.
+                // Drain any remaining buffered text as a safety net (in
+                // case Codex skipped the trailing agentMessage completion),
+                // then clear the flag so subsequent normal turns route
+                // text back through the regular Assistant pipeline.
+                "contextCompaction" => {
+                    if let Some(event) = flush_text_buffer(&mut buffer) {
+                        flushed.push(event);
+                    }
+                    buffer.compact_mode = false;
+                }
                 _ => {}
             }
         }
@@ -2122,6 +2161,11 @@ async fn update_turn_output_buffer(
 /// above usually leave both buffers empty by the time TurnCompleted
 /// fires, but if Codex ever omits the trailing `item/completed` we
 /// don't want to lose the content.
+///
+/// Also clears `compact_mode` here as a defense-in-depth fallback: if a
+/// compact turn fails or Codex never delivers the `contextCompaction`
+/// item, the next regular turn must NOT route its assistant text through
+/// the synthetic-User-Text branch in `flush_text_buffer`.
 async fn drain_turn_output_buffer(buffer: &TurnOutputBuffer) -> Vec<AgentEvent> {
     let mut buffer = buffer.lock().await;
     let mut events = Vec::new();
@@ -2132,6 +2176,7 @@ async fn drain_turn_output_buffer(buffer: &TurnOutputBuffer) -> Vec<AgentEvent> 
         events.push(event);
     }
     buffer.command_outputs.clear();
+    buffer.compact_mode = false;
     events
 }
 
@@ -2140,6 +2185,16 @@ async fn drain_turn_output_buffer(buffer: &TurnOutputBuffer) -> Vec<AgentEvent> 
 /// Returns `None` if the buffer is whitespace-only (no point persisting
 /// a blank message; we still clear the buffer so the next item starts
 /// fresh).
+///
+/// During a Codex compact turn (`buffer.compact_mode == true`), emits a
+/// synthetic `User { Text(...), is_synthetic: true }` event instead.
+/// `send.rs` matches that exact shape (`UserMessageContent::Text` +
+/// `is_synthetic: true`) and persists it as a `SYNTHETIC_SUMMARY:` system
+/// message, which the frontend's `SyntheticContinuationMessage`
+/// ("Pre-compaction summary" disclosure) renders. This routes Codex's
+/// compaction summary through the SAME persistence + render pipeline the
+/// Claude CLI uses — the only harness-specific work is detecting we're
+/// in a compact turn.
 fn flush_text_buffer(buffer: &mut CodexTurnOutput) -> Option<AgentEvent> {
     if buffer.text.trim().is_empty() {
         buffer.text.clear();
@@ -2148,6 +2203,16 @@ fn flush_text_buffer(buffer: &mut CodexTurnOutput) -> Option<AgentEvent> {
     }
     let text = std::mem::take(&mut buffer.text);
     buffer.text_item_id = None;
+    if buffer.compact_mode {
+        return Some(AgentEvent::Stream(StreamEvent::User {
+            message: super::UserEventMessage {
+                content: super::UserMessageContent::Text(text),
+            },
+            uuid: None,
+            is_replay: false,
+            is_synthetic: true,
+        }));
+    }
     Some(AgentEvent::Stream(StreamEvent::Assistant {
         message: AssistantMessage {
             content: vec![ContentBlock::Text { text }],
@@ -3721,6 +3786,120 @@ mod tests {
         assert!(matches!(
             &events[1],
             AgentEvent::Stream(StreamEvent::Result { subtype, .. }) if subtype == "success"
+        ));
+    }
+
+    #[tokio::test]
+    async fn compact_mode_routes_assistant_text_as_synthetic_user_text() {
+        // When the turn output buffer's compact_mode is set (by
+        // start_compact), agentMessage deltas accumulate as before but
+        // their flush emits a synthetic User { Text(...), is_synthetic:
+        // true } event instead of a normal Assistant block. This routes
+        // the Codex compaction summary through send.rs's existing
+        // SYNTHETIC_SUMMARY persistence (same path Claude CLI uses), so
+        // the frontend's SyntheticContinuationMessage disclosure renders
+        // with real content.
+        let buffer = Arc::new(tokio::sync::Mutex::new(CodexTurnOutput {
+            compact_mode: true,
+            ..Default::default()
+        }));
+
+        // Stream the summary text as a single agentMessage item.
+        let delta = CodexNotificationEvent::AgentMessageDelta {
+            thread_id: "t".to_string(),
+            turn_id: "u".to_string(),
+            item_id: "item-summary".to_string(),
+            delta: "Previously we discussed the parser layout.".to_string(),
+        };
+        let _ = update_turn_output_buffer(&buffer, &delta).await;
+
+        // The agentMessage item completes — flushes the accumulated text.
+        let completed = CodexNotificationEvent::ItemCompleted {
+            thread_id: "t".to_string(),
+            turn_id: "u".to_string(),
+            item: json!({"id": "item-summary", "type": "agentMessage"}),
+        };
+        let flushed = update_turn_output_buffer(&buffer, &completed).await;
+        assert_eq!(flushed.len(), 1);
+        match &flushed[0] {
+            AgentEvent::Stream(StreamEvent::User {
+                message,
+                is_synthetic,
+                ..
+            }) => {
+                assert!(*is_synthetic, "compact-turn flush must be is_synthetic");
+                match &message.content {
+                    super::super::UserMessageContent::Text(body) => {
+                        assert_eq!(body, "Previously we discussed the parser layout.");
+                    }
+                    other => panic!("expected Text content, got {other:?}"),
+                }
+            }
+            other => panic!("expected synthetic User event during compact, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn context_compaction_item_clears_compact_mode() {
+        // After the `contextCompaction` ItemCompleted lands, compact_mode
+        // must reset so subsequent regular turns route their assistant
+        // text back through the normal Assistant pipeline. Without this,
+        // every reply after /compact would render as a "Pre-compaction
+        // summary" disclosure.
+        let buffer = Arc::new(tokio::sync::Mutex::new(CodexTurnOutput {
+            compact_mode: true,
+            ..Default::default()
+        }));
+
+        let completed = CodexNotificationEvent::ItemCompleted {
+            thread_id: "t".to_string(),
+            turn_id: "u".to_string(),
+            item: json!({"id": "item-cc", "type": "contextCompaction"}),
+        };
+        let _ = update_turn_output_buffer(&buffer, &completed).await;
+        assert!(
+            !buffer.lock().await.compact_mode,
+            "compact_mode must be cleared after contextCompaction"
+        );
+    }
+
+    #[tokio::test]
+    async fn drain_turn_output_buffer_clears_compact_mode_fallback() {
+        // Defense-in-depth: if Codex never delivers the contextCompaction
+        // ItemCompleted (failed turn, lost connection, etc.), the
+        // end-of-turn drain still clears the flag so the next normal turn
+        // doesn't get its text misrouted as a synthetic summary.
+        let buffer = Arc::new(tokio::sync::Mutex::new(CodexTurnOutput {
+            compact_mode: true,
+            ..Default::default()
+        }));
+        let _ = drain_turn_output_buffer(&buffer).await;
+        assert!(!buffer.lock().await.compact_mode);
+    }
+
+    #[tokio::test]
+    async fn normal_turn_flush_stays_as_assistant_block() {
+        // Regression guard: a regular (non-compact) turn must keep
+        // emitting Assistant blocks. The compact-mode branch in
+        // flush_text_buffer only fires when start_compact() set the flag.
+        let buffer = Arc::new(tokio::sync::Mutex::new(CodexTurnOutput::default()));
+        let delta = CodexNotificationEvent::AgentMessageDelta {
+            thread_id: "t".to_string(),
+            turn_id: "u".to_string(),
+            item_id: "item-1".to_string(),
+            delta: "Hi there.".to_string(),
+        };
+        let _ = update_turn_output_buffer(&buffer, &delta).await;
+        let completed = CodexNotificationEvent::ItemCompleted {
+            thread_id: "t".to_string(),
+            turn_id: "u".to_string(),
+            item: json!({"id": "item-1", "type": "agentMessage"}),
+        };
+        let flushed = update_turn_output_buffer(&buffer, &completed).await;
+        assert_eq!(flushed.len(), 1);
+        assert!(matches!(
+            &flushed[0],
+            AgentEvent::Stream(StreamEvent::Assistant { .. })
         ));
     }
 
