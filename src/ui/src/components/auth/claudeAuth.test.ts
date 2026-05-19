@@ -19,6 +19,13 @@ const serviceMocks = vi.hoisted(() => ({
   claudeAuthLogin: vi.fn(() => Promise.resolve()),
   cancelClaudeAuthLogin: vi.fn(() => Promise.resolve()),
   submitClaudeAuthCode: vi.fn(() => Promise.resolve()),
+  // `claudeAuth.ts` now imports `launchCodexLogin` for the Codex
+  // sign-in controller. `vi.mock` replaces the whole module with
+  // exactly what this factory returns — anything not listed comes
+  // back as `undefined` to importers, so a future test that wires up
+  // `useCodexAuthLogin` would explode with `TypeError: ... is not a
+  // function`. Keep the mock surface in sync with the real module.
+  launchCodexLogin: vi.fn(() => Promise.resolve()),
 }));
 
 vi.mock("@tauri-apps/api/event", () => ({

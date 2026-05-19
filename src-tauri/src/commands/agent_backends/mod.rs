@@ -374,7 +374,36 @@ pub async fn launch_codex_login(app: AppHandle, state: State<'_, AppState>) -> R
     // their working session.
     tokio::spawn(async move {
         let status = child.wait().await;
-        let success = status.as_ref().map(|s| s.success()).unwrap_or(false);
+        let success = match status.as_ref() {
+            Ok(s) if s.success() => true,
+            Ok(s) => {
+                // User cancelled the browser flow or `codex login`
+                // exited non-zero for any other reason — leave
+                // existing sessions alone, but record the exit so
+                // anyone debugging "why didn't /login take effect?"
+                // can correlate.
+                tracing::info!(
+                    target: "claudette::agent",
+                    code = ?s.code(),
+                    "`codex login` exited non-zero; skipping Codex session sweep"
+                );
+                false
+            }
+            Err(err) => {
+                // wait() failure is rare (e.g. the Child handle was
+                // taken or the process was reaped under us) but it
+                // surfaces here as the *same* silent skip path as a
+                // user-cancel. Logging keeps the failure mode visible
+                // — without this, the sweep gets quietly bypassed
+                // and the user re-types /login wondering what changed.
+                tracing::warn!(
+                    target: "claudette::agent",
+                    error = %err,
+                    "failed to wait for `codex login` child; skipping Codex session sweep"
+                );
+                false
+            }
+        };
         if !success {
             return;
         }
