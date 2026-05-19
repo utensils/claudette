@@ -461,6 +461,37 @@ impl Database {
                 total_output_tokens,
             ],
         )?;
+        tx.execute(
+            "INSERT OR IGNORE INTO deleted_agent_sessions (
+                id, workspace_id, repository_id, started_at, last_message_at,
+                ended_at, turn_count, completed_ok
+             )
+             SELECT id, workspace_id, repository_id, started_at, last_message_at,
+                    ended_at, turn_count, completed_ok
+             FROM agent_sessions
+             WHERE workspace_id = ?1",
+            params![workspace_id],
+        )?;
+        tx.execute(
+            "INSERT OR IGNORE INTO deleted_agent_commits (
+                commit_hash, workspace_id, repository_id, session_id,
+                additions, deletions, files_changed, committed_at
+             )
+             SELECT commit_hash, workspace_id, repository_id, session_id,
+                    additions, deletions, files_changed, committed_at
+             FROM agent_commits
+             WHERE workspace_id = ?1",
+            params![workspace_id],
+        )?;
+        tx.execute(
+            "INSERT OR IGNORE INTO deleted_slash_command_usage (
+                workspace_id, repository_id, command_name, use_count, last_used_at
+             )
+             SELECT s.workspace_id, ?2, s.command_name, s.use_count, s.last_used_at
+             FROM slash_command_usage s
+             WHERE s.workspace_id = ?1",
+            params![workspace_id, repo_id],
+        )?;
         Ok(())
     }
 
@@ -1127,6 +1158,18 @@ mod tests {
             count_rows(&db, "SELECT COUNT(*) FROM deleted_workspace_summaries"),
             1
         );
+        assert_eq!(
+            count_rows(&db, "SELECT COUNT(*) FROM deleted_agent_sessions"),
+            1
+        );
+        assert_eq!(
+            count_rows(&db, "SELECT COUNT(*) FROM deleted_agent_commits"),
+            1
+        );
+        assert_eq!(
+            count_rows(&db, "SELECT COUNT(*) FROM deleted_slash_command_usage"),
+            1
+        );
 
         let (sessions, turns, commits, adds, dels, msgs_u, msgs_a, msgs_s, slash_used): (
             i64,
@@ -1182,6 +1225,39 @@ mod tests {
             .unwrap();
         assert_eq!(total_in, 12000);
         assert_eq!(total_out, 3000);
+
+        let (turns, completed_ok): (i64, i64) = db
+            .conn
+            .query_row(
+                "SELECT turn_count, completed_ok
+                 FROM deleted_agent_sessions WHERE workspace_id = 'w1'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!((turns, completed_ok), (5, 1));
+
+        let (adds, dels): (i64, i64) = db
+            .conn
+            .query_row(
+                "SELECT additions, deletions
+                 FROM deleted_agent_commits WHERE workspace_id = 'w1'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!((adds, dels), (50, 10));
+
+        let (command_name, use_count): (String, i64) = db
+            .conn
+            .query_row(
+                "SELECT command_name, use_count
+                 FROM deleted_slash_command_usage WHERE workspace_id = 'w1'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!((command_name, use_count), ("/foo".to_string(), 7));
     }
 
     #[test]
@@ -1196,6 +1272,13 @@ mod tests {
                 "SELECT COUNT(*) FROM deleted_workspace_summaries WHERE workspace_id = 'w1'"
             ),
             1
+        );
+        assert_eq!(
+            count_rows(
+                &db,
+                "SELECT COUNT(*) FROM deleted_agent_sessions WHERE workspace_id = 'w1'"
+            ),
+            0
         );
     }
 
