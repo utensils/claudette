@@ -445,6 +445,10 @@
   "git_ci_cooldown": "Cooldown (seconds)",
   "git_ci_cooldown_hint": "Minimum time between auto-fix session creations per workspace (60-3600).",
   "ci_auto_fix_session_created": "CI failed - auto-fix session created",
+  "git_project_view_section": "Project view",
+  "git_project_view_issues_prs": "Show open issues & PRs in project view",
+  "git_project_view_issues_prs_desc": "Surface open issues and pull requests from the resolved SCM provider on the repo overview page. Requires a configured SCM provider such as scm-github or scm-gitlab.",
+  "git_project_view_issues_prs_aria": "Show open issues and pull requests in project view",
 
   "experimental_title": "Experimental",
   "experimental_claude_code_usage": "Claude Code Usage",

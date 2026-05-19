@@ -7,6 +7,7 @@ import {
 } from "../../../services/tauri";
 import { resolveModelSelection } from "../../chat/modelRegistry";
 import { useModelRegistry } from "../../chat/useModelRegistry";
+import { useAppStore } from "../../../stores/useAppStore";
 import styles from "../Settings.module.css";
 
 type PrefixMode = "username" | "custom" | "none";
@@ -47,6 +48,12 @@ export function GitSettings() {
   const [ciModel, setCiModel] = useState("");
   const [ciModelProvider, setCiModelProvider] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const projectViewIssuesPrsEnabled = useAppStore(
+    (s) => s.projectViewIssuesPrsEnabled,
+  );
+  const setProjectViewIssuesPrsEnabled = useAppStore(
+    (s) => s.setProjectViewIssuesPrsEnabled,
+  );
   // Use the gated registry hook so the CI auto-fix model picker
   // applies the same `codexEnabled` / Pi-SDK / Claude-OAuth filters as
   // every other chat-side model selector. Saving a model the Rust
@@ -142,6 +149,21 @@ export function GitSettings() {
       await setAppSetting("ci_auto_fix_enabled", next ? "true" : "false");
     } catch (e) {
       setCiAutoFix(!next);
+      setError(String(e));
+    }
+  };
+
+  const handleProjectViewIssuesPrsToggle = async () => {
+    const next = !projectViewIssuesPrsEnabled;
+    setProjectViewIssuesPrsEnabled(next);
+    try {
+      setError(null);
+      await setAppSetting(
+        "project_view_issues_prs_enabled",
+        next ? "true" : "false",
+      );
+    } catch (e) {
+      setProjectViewIssuesPrsEnabled(!next);
       setError(String(e));
     }
   };
@@ -366,6 +388,33 @@ export function GitSettings() {
           </div>
         </>
       )}
+
+      <h3 className={styles.subsectionTitle}>
+        {t("git_project_view_section")}
+      </h3>
+
+      <div className={styles.settingRow}>
+        <div className={styles.settingInfo}>
+          <div className={styles.settingLabel}>
+            {t("git_project_view_issues_prs")}
+          </div>
+          <div className={styles.settingDescription}>
+            {t("git_project_view_issues_prs_desc")}
+          </div>
+        </div>
+        <div className={styles.settingControl}>
+          <button
+            className={styles.toggle}
+            role="switch"
+            aria-checked={projectViewIssuesPrsEnabled}
+            aria-label={t("git_project_view_issues_prs_aria")}
+            data-checked={projectViewIssuesPrsEnabled}
+            onClick={handleProjectViewIssuesPrsToggle}
+          >
+            <div className={styles.toggleKnob} />
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

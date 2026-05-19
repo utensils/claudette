@@ -58,3 +58,44 @@ export interface ScmStatusCacheRow {
   error: string | null;
   fetched_at: string;
 }
+
+export interface IssueLabel {
+  name: string;
+  /** Hex color without leading '#'. May be empty when the provider
+   *  doesn't expose label colors. */
+  color: string;
+}
+
+export interface Issue {
+  number: number;
+  title: string;
+  url: string;
+  state: "open" | "closed";
+  author: string | null;
+  labels: IssueLabel[];
+  comment_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export type PullRequestScope = "open" | "mine" | "review_requested";
+
+export interface RepoIssuesPayload {
+  issues: Issue[];
+  fetched_at: string;
+  error: string | null;
+  /** True when the resolved provider doesn't implement `list_issues`.
+   *  Distinct from `error`: surface a muted "not supported" hint, not
+   *  a retry-able error banner. */
+  unsupported: boolean;
+  provider: string | null;
+}
+
+export interface RepoPullRequestsPayload {
+  pull_requests: PullRequest[];
+  scope: PullRequestScope;
+  fetched_at: string;
+  error: string | null;
+  unsupported: boolean;
+  provider: string | null;
+}

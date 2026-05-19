@@ -70,6 +70,9 @@ function App() {
   const setSystemFonts = useAppStore((s) => s.setSystemFonts);
   const setDetectedApps = useAppStore((s) => s.setDetectedApps);
   const setUsageInsightsEnabled = useAppStore((s) => s.setUsageInsightsEnabled);
+  const setProjectViewIssuesPrsEnabled = useAppStore(
+    (s) => s.setProjectViewIssuesPrsEnabled,
+  );
   const setShowOpenRouterBalanceInUsageMeter = useAppStore(
     (s) => s.setShowOpenRouterBalanceInUsageMeter,
   );
@@ -379,6 +382,9 @@ function App() {
 
     getAppSetting("usage_insights_enabled")
       .then((val) => { if (val === "true") setUsageInsightsEnabled(true); })
+      .catch(() => {});
+    getAppSetting("project_view_issues_prs_enabled")
+      .then((val) => { if (val === "true") setProjectViewIssuesPrsEnabled(true); })
       .catch(() => {});
     getAppSetting("claudette_terminal_enabled")
       .then((val) => {
@@ -952,7 +958,7 @@ function App() {
       unlistenMissingCli.then((fn) => fn());
       unlistenMissingWorktree.then((fn) => fn());
     };
-  }, [setRepositories, setWorkspaces, setWorktreeBaseDir, setDefaultTerminalAppId, setWorkspaceAppsMenuShown, setDefaultBranches, setTerminalFontSize, setLastMessages, setRemoteConnections, setDiscoveredServers, setLocalServerRunning, setLocalServerConnectionString, setCurrentThemeId, setThemeMode, setThemeDark, setThemeLight, setUiFontSize, setFontFamilySans, setFontFamilyMono, setSystemFonts, setDetectedApps, setUsageInsightsEnabled, setShowOpenRouterBalanceInUsageMeter, setOpenRouterBalanceSettingLoaded, setClaudetteTerminalEnabled, setShowSidebarRunningCommands, setToolDisplayMode, setExtendedToolCallOutput, setAlternativeBackendsAvailable, setPiSdkAvailable, setAlternativeBackendsEnabled, setCodexEnabled, setAgentBackends, setDefaultAgentBackendId, setClaudeAuthMethod, setEditorGitGutterBase, setEditorMinimapEnabled, setRevealActiveFileInTree, setEditorWordWrap, setEditorLineNumbersEnabled, setEditorFontZoom, setDisable1mContext, setAppVersion, setVoiceToggleHotkey, setVoiceHoldHotkey, setKeybindings, setManualWorkspaceOrderByRepo]);
+  }, [setRepositories, setWorkspaces, setWorktreeBaseDir, setDefaultTerminalAppId, setWorkspaceAppsMenuShown, setDefaultBranches, setTerminalFontSize, setLastMessages, setRemoteConnections, setDiscoveredServers, setLocalServerRunning, setLocalServerConnectionString, setCurrentThemeId, setThemeMode, setThemeDark, setThemeLight, setUiFontSize, setFontFamilySans, setFontFamilyMono, setSystemFonts, setDetectedApps, setUsageInsightsEnabled, setProjectViewIssuesPrsEnabled, setShowOpenRouterBalanceInUsageMeter, setOpenRouterBalanceSettingLoaded, setClaudetteTerminalEnabled, setShowSidebarRunningCommands, setToolDisplayMode, setExtendedToolCallOutput, setAlternativeBackendsAvailable, setPiSdkAvailable, setAlternativeBackendsEnabled, setCodexEnabled, setAgentBackends, setDefaultAgentBackendId, setClaudeAuthMethod, setEditorGitGutterBase, setEditorMinimapEnabled, setRevealActiveFileInTree, setEditorWordWrap, setEditorLineNumbersEnabled, setEditorFontZoom, setDisable1mContext, setAppVersion, setVoiceToggleHotkey, setVoiceHoldHotkey, setKeybindings, setManualWorkspaceOrderByRepo]);
 
   // Live freshness for LM Studio's `loaded_context_length`.
   //

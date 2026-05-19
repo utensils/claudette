@@ -1,0 +1,273 @@
+/* Shared styles for the project-view Issues and Pull Requests sections.
+ * Reuses Dashboard tokens (--divider, --text-faint, --hover-bg-subtle) so
+ * spacing matches the workspace card grid above and the archived list
+ * below it.
+ */
+
+.headerRight {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.refreshButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  font-family: inherit;
+  background: transparent;
+  color: var(--text-faint);
+  border: 1px solid transparent;
+  border-radius: 5px;
+  cursor: pointer;
+  transition:
+    background var(--transition-fast),
+    border-color var(--transition-fast),
+    color var(--transition-fast);
+}
+
+.refreshButton:hover:not(:disabled) {
+  background: var(--hover-bg);
+  border-color: var(--divider);
+  color: var(--text-muted);
+}
+
+.refreshButton:disabled {
+  opacity: 0.5;
+  cursor: progress;
+}
+
+.refreshSpinning {
+  animation: rotate 1s linear infinite;
+}
+
+@keyframes rotate {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.scopeTabs {
+  display: inline-flex;
+  gap: 2px;
+  margin-left: 6px;
+  background: var(--hover-bg-subtle);
+  border: 1px solid var(--divider);
+  border-radius: 999px;
+  padding: 2px;
+}
+
+.scopeTab {
+  font-family: inherit;
+  font-size: 10.5px;
+  font-weight: 500;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  background: transparent;
+  border: none;
+  border-radius: 999px;
+  padding: 3px 10px;
+  cursor: pointer;
+}
+
+.scopeTab:hover {
+  color: var(--text-muted);
+}
+
+.scopeTabActive {
+  background: var(--hover-bg);
+  color: var(--text-primary);
+}
+
+.list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 12px;
+  background: var(--hover-bg-subtle);
+  border: 1px solid var(--divider);
+  border-radius: 6px;
+  cursor: pointer;
+  transition:
+    background var(--transition-fast),
+    border-color var(--transition-fast);
+}
+
+.row:hover {
+  background: var(--hover-bg);
+  border-color: var(--text-faint);
+}
+
+.rowNumber {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-dim);
+  flex-shrink: 0;
+  min-width: 48px;
+}
+
+.rowIcon {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.rowTitle {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rowMeta {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+  color: var(--text-faint);
+  font-size: 11px;
+}
+
+.rowBranch {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-dim);
+  flex-shrink: 0;
+}
+
+.rowCommentCount {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-variant-numeric: tabular-nums;
+}
+
+.rowAge {
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+}
+
+.labels {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.label {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  border: 1px solid var(--divider);
+  background: var(--hover-bg);
+  color: var(--text-muted);
+  max-width: 100px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.labelMore {
+  font-size: 10px;
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+}
+
+.muted {
+  font-size: 12px;
+  color: var(--text-faint);
+  padding: 6px 12px;
+}
+
+.error {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text-muted);
+  padding: 6px 12px;
+}
+
+.retryButton {
+  font-family: inherit;
+  font-size: 11px;
+  background: transparent;
+  color: var(--text-muted);
+  border: 1px solid var(--divider);
+  border-radius: 5px;
+  padding: 3px 10px;
+  cursor: pointer;
+}
+
+.retryButton:hover {
+  background: var(--hover-bg);
+  border-color: var(--text-faint);
+  color: var(--text-primary);
+}
+
+.skeletonRow {
+  height: 28px;
+  background: var(--hover-bg-subtle);
+  border: 1px solid var(--divider);
+  border-radius: 6px;
+  animation: skeleton-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes skeleton-pulse {
+  0%,
+  100% {
+    opacity: 0.6;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+.contextMenu {
+  position: fixed;
+  z-index: 1000;
+  min-width: 200px;
+  background: var(--hover-bg);
+  border: 1px solid var(--divider);
+  border-radius: 6px;
+  padding: 4px;
+  box-shadow: var(--shadow-card-hover);
+}
+
+.contextMenuItem {
+  display: block;
+  width: 100%;
+  padding: 6px 10px;
+  text-align: left;
+  font-family: inherit;
+  font-size: 12px;
+  color: var(--text-primary);
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.contextMenuItem:hover {
+  background: var(--hover-bg-subtle);
+}
