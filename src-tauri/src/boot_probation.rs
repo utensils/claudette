@@ -11,7 +11,7 @@ use tokio::sync::Notify;
 
 const SENTINEL_FILE: &str = "boot-probation.json";
 const REPORT_FILE: &str = "boot-rollback-report.json";
-const DEFAULT_PROBATION_SECS: u64 = 10;
+const DEFAULT_PROBATION_SECS: u64 = 20;
 /// Hard floor / ceiling for the env-var override. A 0-second probation
 /// would never let `boot_ok` race the timer; a 10-minute probation makes
 /// the rollback feel broken to users on the unhappy path.
