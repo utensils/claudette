@@ -122,7 +122,8 @@ const mountedContainers: HTMLElement[] = [];
 
 async function renderMenu(props: {
   sessionId?: string;
-  disabled?: boolean;
+  configDisabled?: boolean;
+  sendDisabled?: boolean;
   isRunning?: boolean;
   isRemote?: boolean;
 }): Promise<{ container: HTMLElement; root: Root }> {
@@ -135,7 +136,8 @@ async function renderMenu(props: {
     root.render(
       <OverflowMenu
         sessionId={props.sessionId ?? "s1"}
-        disabled={props.disabled ?? false}
+        configDisabled={props.configDisabled ?? false}
+        sendDisabled={props.sendDisabled ?? false}
         isRunning={props.isRunning ?? false}
         isRemote={props.isRemote ?? false}
       />,
@@ -151,7 +153,8 @@ async function rerenderMenu(
   root: Root,
   props: {
     sessionId?: string;
-    disabled?: boolean;
+    configDisabled?: boolean;
+    sendDisabled?: boolean;
     isRunning?: boolean;
     isRemote?: boolean;
   },
@@ -160,7 +163,8 @@ async function rerenderMenu(
     root.render(
       <OverflowMenu
         sessionId={props.sessionId ?? "s1"}
-        disabled={props.disabled ?? false}
+        configDisabled={props.configDisabled ?? false}
+        sendDisabled={props.sendDisabled ?? false}
         isRunning={props.isRunning ?? false}
         isRemote={props.isRemote ?? false}
       />,
@@ -237,8 +241,13 @@ describe("OverflowMenu — mid-turn reachability", () => {
     expect(triggerButton(container).disabled).toBe(false);
   });
 
-  it("disables the trigger button when the workspace is preparing", async () => {
-    const { container } = await renderMenu({ disabled: true });
+  it("does not disable the trigger button while the workspace is preparing", async () => {
+    const { container } = await renderMenu({ sendDisabled: true });
+    expect(triggerButton(container).disabled).toBe(false);
+  });
+
+  it("disables the trigger button when config changes are blocked", async () => {
+    const { container } = await renderMenu({ configDisabled: true });
     expect(triggerButton(container).disabled).toBe(true);
   });
 
@@ -253,6 +262,15 @@ describe("OverflowMenu — mid-turn reachability", () => {
 
   it("keeps Fast mode and Claude in Chrome enabled when idle", async () => {
     const { container } = await renderMenu({ isRunning: false });
+    await openDropdown(container);
+    expect(findMenuItemByLabel(container, "Fast mode").disabled).toBe(false);
+    expect(findMenuItemByLabel(container, "Claude in Chrome").disabled).toBe(
+      false,
+    );
+  });
+
+  it("keeps Fast mode and Claude in Chrome enabled while only send is blocked", async () => {
+    const { container } = await renderMenu({ sendDisabled: true });
     await openDropdown(container);
     expect(findMenuItemByLabel(container, "Fast mode").disabled).toBe(false);
     expect(findMenuItemByLabel(container, "Claude in Chrome").disabled).toBe(

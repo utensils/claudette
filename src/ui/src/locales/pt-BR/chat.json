@@ -17,6 +17,7 @@
   "steer_pending_attachment": "Enviando anexo…",
   "stop_agent": "Parar agente",
   "send_message": "Enviar mensagem",
+  "send_disabled_preparing_env": "O ambiente do workspace ainda está sendo preparado",
   "run_shell_command": "Executar comando shell",
   "add_files_connectors": "Adicionar arquivos ou conectores",
   "attachments_not_supported": "Anexos não são suportados em workspaces remotos",

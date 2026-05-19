@@ -17,6 +17,7 @@
   "steer_pending_attachment": "Enviando archivo adjunto…",
   "stop_agent": "Detener agente",
   "send_message": "Enviar mensaje",
+  "send_disabled_preparing_env": "El entorno del espacio de trabajo aún se está preparando",
   "run_shell_command": "Ejecutar comando shell",
   "add_files_connectors": "Añadir archivos o conectores",
   "attachments_not_supported": "Adjuntos no soportados para espacios de trabajo remotos",

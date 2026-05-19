@@ -19,9 +19,10 @@ import styles from "./OverflowMenu.module.css";
 
 interface OverflowMenuProps {
   sessionId: string;
-  /** Blocks all menu interaction (trigger + every row). Set while the
-   *  workspace environment is preparing. */
-  disabled: boolean;
+  /** Blocks controls that mutate turn configuration. Env preparation must not set this. */
+  configDisabled: boolean;
+  /** Blocks actions that require a ready workspace environment. */
+  sendDisabled: boolean;
   /** True while a turn is in flight. Session-mutating rows (Fast Mode,
    *  Claude in Chrome) stay disabled. Remote Control deliberately stays
    *  clickable so the user can queue a mid-turn enable. */
@@ -38,7 +39,13 @@ const DISABLED_REMOTE_STATUS: ClaudeRemoteControlStatus = {
   lastError: null,
 };
 
-export function OverflowMenu({ sessionId, disabled, isRunning, isRemote }: OverflowMenuProps) {
+export function OverflowMenu({
+  sessionId,
+  configDisabled,
+  sendDisabled,
+  isRunning,
+  isRemote,
+}: OverflowMenuProps) {
   // Rows that would tear down or reconfigure the live persistent session
   // (Fast Mode is per-session; Claude in Chrome calls `resetAgentSession`)
   // stay locked mid-turn. Remote Control opts out: its row remains
@@ -47,7 +54,7 @@ export function OverflowMenu({ sessionId, disabled, isRunning, isRemote }: Overf
   // (not inside `RemoteControlMenuItem`) so they survive the dropdown
   // unmount that fires whenever the menu closes — clicking outside the
   // menu would otherwise discard the queued intent before the turn ends.
-  const mutationDisabled = disabled || isRunning;
+  const mutationDisabled = configDisabled || isRunning;
   const [open, setOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const addToast = useAppStore((s) => s.addToast);
@@ -185,19 +192,19 @@ export function OverflowMenu({ sessionId, disabled, isRunning, isRemote }: Overf
     if (pendingEnableForSession !== sessionId) return;
     if (isRunning) return;
     // Don't fire if Remote Control is no longer available (experimental
-    // gate off, remote transport) or while the workspace environment is
-    // still preparing. The session-switch / showRemoteControl cleanup
-    // effects already clear the intent in those cases; this is the
+    // gate off or remote transport). The session-switch /
+    // showRemoteControl cleanup effects already clear the intent in those
+    // cases; this is the
     // belt-and-suspenders check at the fire site.
     if (!showRemoteControl) return;
-    if (disabled) return;
+    if (sendDisabled) return;
     setPendingEnableForSession(null);
     void runImmediate(true);
   }, [
-    disabled,
     isRunning,
     pendingEnableForSession,
     runImmediate,
+    sendDisabled,
     sessionId,
     showRemoteControl,
   ]);
@@ -292,7 +299,7 @@ export function OverflowMenu({ sessionId, disabled, isRunning, isRemote }: Overf
         type="button"
         className={styles.trigger}
         onClick={() => setOpen((v) => !v)}
-        disabled={disabled}
+        disabled={configDisabled}
         aria-label="More options"
         aria-expanded={open}
       >
@@ -324,7 +331,7 @@ export function OverflowMenu({ sessionId, disabled, isRunning, isRemote }: Overf
           />
           {showRemoteControl && (
             <RemoteControlMenuItem
-              disabled={disabled}
+              disabled={sendDisabled}
               isRunning={isRunning}
               status={remoteControlStatus}
               pendingEnable={pendingEnable}
@@ -348,8 +355,7 @@ function RemoteControlMenuItem({
   onQueuePending,
   onCancelPending,
 }: {
-  /** True while the workspace environment is preparing — hard-blocks
-   *  every interaction (firing OR queuing the toggle). */
+  /** True while send/env-dependent actions are unavailable. */
   disabled: boolean;
   /** True while a turn is in flight. Enable clicks during this window
    *  queue a pending enable; the deferred-fire effect (owned by the

@@ -73,7 +73,7 @@ The decision is per-repo, not global, so trusting one project's `.envrc` doesn't
 
 ### Loading state
 
-While an env-provider is resolving, Claudette surfaces the active plugin and elapsed time in three places: the workspace's row in the sidebar (spinner + tooltip), the chat composer placeholder, and an overlay above the integrated terminal. The terminal won't open a prompt and the agent won't spawn until the env layer is ready or fails.
+While an env-provider is resolving, Claudette surfaces the active plugin and elapsed time in three places: the workspace's row in the sidebar (spinner + tooltip), the chat composer placeholder, and an overlay above the integrated terminal. The terminal won't open a prompt and the agent won't spawn until the env layer is ready or fails. You can still prepare the next chat turn while this runs: pick a model, toggle Plan mode, adjust Thinking/effort, attach files, or open the composer overflow menu; only sending stays blocked until the environment is ready.
 
 ### Live provisioning output in the Claudette Terminal
 

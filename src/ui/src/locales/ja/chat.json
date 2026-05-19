@@ -17,6 +17,7 @@
   "steer_pending_attachment": "添付ファイルを送信中…",
   "stop_agent": "エージェントを停止",
   "send_message": "メッセージを送信",
+  "send_disabled_preparing_env": "ワークスペース環境をまだ準備中です",
   "run_shell_command": "シェルコマンドを実行",
   "add_files_connectors": "ファイルまたはコネクタを追加",
   "attachments_not_supported": "リモートワークスペースでは添付ファイルはサポートされていません",
