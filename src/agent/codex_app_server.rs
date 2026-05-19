@@ -422,8 +422,11 @@ impl CodexAppServerSession {
             .await
             .clone()
             .ok_or_else(|| "Codex app-server has no active thread to compact".to_string())?;
-        self.send_request(build_thread_compact_start_request(self.next_id(), &thread_id))
-            .await?;
+        self.send_request(build_thread_compact_start_request(
+            self.next_id(),
+            &thread_id,
+        ))
+        .await?;
         Ok(())
     }
 
@@ -1895,10 +1898,7 @@ pub enum CodexNotificationEvent {
     /// `ContextCompaction` thread item via `item/completed`. Kept as a
     /// transitional fallback so older Codex builds still produce the timeline
     /// divider when a `thread/compact/start` lands.
-    ContextCompacted {
-        thread_id: String,
-        turn_id: String,
-    },
+    ContextCompacted { thread_id: String, turn_id: String },
     /// Pushed by Codex when the account's rate-limit snapshot changes
     /// — typically after a turn lands or a window resets. The host
     /// caches the latest snapshot so the composer's usage meter can
