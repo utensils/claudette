@@ -5,7 +5,7 @@ import { formatTokens } from "../formatTokens";
 import { useSelectedModelEntry } from "../useSelectedModelEntry";
 import { segmentedBand, segmentedColor, stateLabel } from "./segmentedMeterLogic";
 import { estimateCost, formatCost } from "./formatCost";
-import { effectiveHarness } from "../../../services/tauri/agentBackends";
+import { resolveSessionHarness } from "../resolveSessionHarness";
 import styles from "./ContextPopover.module.css";
 
 interface ContextPopoverProps {
@@ -33,21 +33,29 @@ export function ContextPopover({ sessionId, onClose, onCompact, onClear, trigger
   const usage = useAppStore((s) => s.latestTurnUsage[sessionId]);
   const agentBackends = useAppStore((s) => s.agentBackends);
   const selectedModelProvider = useAppStore((s) => s.selectedModelProvider);
+  const defaultAgentBackendId = useAppStore((s) => s.defaultAgentBackendId);
 
   const model = useSelectedModelEntry(sessionId);
   const state = computeMeterState(usage, model?.contextWindowTokens);
 
   // The Pi SDK harness has no native compaction protocol. Disable the
-  // button instead of letting the user click into a "/compact: not
-  // supported" local message — the click would close the popover and the
-  // user has to re-open it to see why nothing happened.
+  // button so clicking can't produce a confusing no-op. Resolution
+  // matches the send pipeline's fallback (per-session provider →
+  // default backend → first available), so a fresh session with no
+  // explicit provider still gates correctly when the default backend
+  // is Pi. Fail-closed: if we can't resolve a harness at all (backends
+  // not loaded yet), keep the button enabled (resolution returns null
+  // → we treat as "not Pi" so the user isn't blocked unnecessarily on
+  // the more common Claude/Codex case).
   const compactSupported = useMemo(() => {
-    const providerId = selectedModelProvider[sessionId];
-    if (!providerId) return true;
-    const backend = agentBackends.find((b) => b.id === providerId);
-    if (!backend) return true;
-    return effectiveHarness(backend) !== "pi_sdk";
-  }, [agentBackends, selectedModelProvider, sessionId]);
+    const harness = resolveSessionHarness({
+      sessionId,
+      selectedModelProvider,
+      agentBackends,
+      defaultAgentBackendId,
+    });
+    return harness !== "pi_sdk";
+  }, [agentBackends, defaultAgentBackendId, selectedModelProvider, sessionId]);
 
   useEffect(() => {
     function handleKey(e: KeyboardEvent) {
@@ -145,19 +153,31 @@ export function ContextPopover({ sessionId, onClose, onCompact, onClear, trigger
       </div>
 
       <div className={styles.actions}>
-        <button
-          type="button"
-          className={styles.actionBtn}
-          onClick={() => { onCompact(); onClose(); }}
-          disabled={!compactSupported}
-          title={
+        {/* Wrap the disabled-state button in a tooltip-bearing span:
+            Chromium swallows `title`/hover events on disabled <button>
+            elements, so users would get no explanation. The shared
+            AppTooltip pattern reads `data-tooltip` via document-level
+            pointerover, which still fires over the wrapper span. The
+            wrapper has zero visual effect when the button is enabled
+            (no data-tooltip attribute, no styles). */}
+        <span
+          className={styles.actionBtnWrap}
+          data-tooltip={
             compactSupported
               ? undefined
               : "Compaction is not supported on this backend."
           }
         >
+        <button
+          type="button"
+          className={styles.actionBtn}
+          onClick={() => { onCompact(); onClose(); }}
+          disabled={!compactSupported}
+          aria-disabled={!compactSupported || undefined}
+        >
           Compact
         </button>
+        </span>
         <button
           type="button"
           className={styles.actionBtn}

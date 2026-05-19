@@ -468,6 +468,18 @@ impl CodexAppServerSession {
         // before the per-turn pump exists.
         let mut broadcast_rx = self.event_tx.subscribe();
         let thread_id = self.ensure_thread().await?;
+        // Send the RPC FIRST. Only flip `compact_mode` after the request
+        // accepts — if the RPC errors, returning early would leave the
+        // flag stuck `true`, causing the next regular turn's assistant
+        // output to be misrouted as a synthetic summary. The accept→
+        // contextCompaction event sequence is asynchronous, so deltas
+        // can't arrive before this `await` returns: setting the flag
+        // after success is still in time for the per-turn pump.
+        self.send_request(build_thread_compact_start_request(
+            self.next_id(),
+            &thread_id,
+        ))
+        .await?;
         // Mark the upcoming turn's output as compact-mode so
         // `flush_text_buffer` emits the model-generated summary text as a
         // synthetic `User { Text(...), is_synthetic: true }` event instead
@@ -480,11 +492,6 @@ impl CodexAppServerSession {
         // `ItemCompleted` arrives (with `drain_turn_output_buffer` as a
         // defense-in-depth fallback on TurnFailed / out-of-order events).
         self.turn_output.lock().await.compact_mode = true;
-        self.send_request(build_thread_compact_start_request(
-            self.next_id(),
-            &thread_id,
-        ))
-        .await?;
         let _ = self.event_tx.send(codex_compacting_status_event());
 
         let (mpsc_tx, mpsc_rx) = mpsc::channel::<AgentEvent>(128);
@@ -2125,8 +2132,28 @@ async fn update_turn_output_buffer(
             let item_type = item.get("type").and_then(Value::as_str).unwrap_or_default();
             let item_id = string_field(item, "id");
             match item_type {
-                "agentMessage" if buffer.text_item_id.as_deref() == Some(item_id.as_str()) => {
-                    if let Some(event) = flush_text_buffer(&mut buffer) {
+                "agentMessage" => {
+                    // During a compact turn, Codex may deliver the summary
+                    // as a single `ItemCompleted` carrying the full `text`
+                    // field — without any preceding `item/agentMessage/delta`
+                    // events. The default `text_item_id == Some(item_id)`
+                    // guard below only fires when deltas were observed; if
+                    // we skipped that path while `compact_mode` is set,
+                    // backfill the buffer from `item.text` so the flush has
+                    // content to emit as the synthetic User Text summary.
+                    if buffer.compact_mode
+                        && buffer.text.is_empty()
+                        && let Some(text) = item
+                            .get("text")
+                            .and_then(Value::as_str)
+                            .filter(|t| !t.is_empty())
+                    {
+                        buffer.text.push_str(text);
+                        buffer.text_item_id = Some(item_id.clone());
+                    }
+                    if buffer.text_item_id.as_deref() == Some(item_id.as_str())
+                        && let Some(event) = flush_text_buffer(&mut buffer)
+                    {
                         flushed.push(event);
                     }
                 }
@@ -2616,10 +2643,11 @@ fn map_codex_item_completed_to_agent_events(item: &Value) -> Vec<AgentEvent> {
     // landed. Translate into the existing `compact_boundary` system event
     // shape so `send.rs` persists the `COMPACTION:...` sentinel via
     // `build_compaction_sentinel`, and the timeline divider renders. The
-    // synthetic `Result` event that follows terminates whichever per-turn
-    // pump is listening on `event_tx` (real send_turn() or the dedicated
-    // compact_chat_session pump) so `session.agent_status` flips back to
-    // `"Idle"` instead of staying stuck after the boundary lands.
+    // synthetic `Result` event that follows terminates the per-turn pump set
+    // up by `start_compact()` (which `send_chat_message` invokes at the
+    // intercept point in place of `send_turn_with_uuid`) so
+    // `session.agent_status` flips back to `"Idle"` instead of staying
+    // stuck after the boundary lands.
     if item.get("type").and_then(Value::as_str) == Some("contextCompaction") {
         return vec![
             codex_context_compaction_event(),
@@ -2699,6 +2727,11 @@ fn codex_compacting_status_event() -> AgentEvent {
 /// duration, so we synthesize a metadata stub with `trigger="codex"` and
 /// zeros. The `CompactionDivider` recognizes the `codex` trigger and renders
 /// without the misleading `0 → 0` token arrow.
+///
+/// `compact_result` stays `None` here: the established `StreamEvent::System`
+/// contract reserves that field for an end-of-compaction *status* event
+/// (Claude CLI's emission pattern). The `subtype: "compact_boundary"` event
+/// carries its payload in `compact_metadata` only.
 fn codex_context_compaction_event() -> AgentEvent {
     AgentEvent::Stream(StreamEvent::System {
         subtype: "compact_boundary".to_string(),
@@ -2713,7 +2746,7 @@ fn codex_context_compaction_event() -> AgentEvent {
         last_tool_name: None,
         usage: None,
         status: None,
-        compact_result: Some("success".to_string()),
+        compact_result: None,
         compact_metadata: Some(crate::agent::types::CompactMetadata {
             trigger: "codex".to_string(),
             pre_tokens: 0,
@@ -2725,11 +2758,12 @@ fn codex_context_compaction_event() -> AgentEvent {
 }
 
 /// Synthetic terminal event emitted after `codex_context_compaction_event()`
-/// so any per-turn pump driven by `event_tx` (real or the one in
-/// `compact_chat_session`) terminates and flips `session.agent_status` back
-/// to `"Idle"`. Mirrors the `subtype: "success"` Result that Claude's CLI
-/// emits at the end of its `/compact` turn — without it, the UI would stay
-/// stuck in the Compacting state indefinitely.
+/// so the per-turn pump that `start_compact()` set up (subscribed via
+/// `event_tx`, consumed by `send_chat_message`'s stream loop) terminates and
+/// flips `session.agent_status` back to `"Idle"`. Mirrors the
+/// `subtype: "success"` Result that Claude's CLI emits at the end of its
+/// `/compact` turn — without it, the UI would stay stuck in the Compacting
+/// state indefinitely.
 fn codex_compaction_finish_event() -> AgentEvent {
     AgentEvent::Stream(StreamEvent::Result {
         subtype: "success".to_string(),
@@ -3719,7 +3753,10 @@ mod tests {
                 ..
             }) => {
                 assert_eq!(subtype, "compact_boundary");
-                assert_eq!(compact_result.as_deref(), Some("success"));
+                // compact_result is reserved for the end-of-compaction
+                // status event in the StreamEvent::System contract — the
+                // boundary event carries its payload in compact_metadata.
+                assert!(compact_result.is_none());
                 let meta = compact_metadata.as_ref().expect("compact_metadata set");
                 // Codex's ContextCompaction item carries only an id, so we
                 // synthesize zeros + a `codex` trigger; the CompactionDivider
@@ -3742,10 +3779,10 @@ mod tests {
 
     #[test]
     fn codex_compacting_status_event_carries_in_flight_marker() {
-        // Subscribers (the `compact_chat_session` Tauri command) flip the
-        // workspace agent_status to "Compacting" when they see this exact
-        // shape — `subtype: "status"` + `status: Some("compacting")`. Pin
-        // both so a future rename doesn't silently break the UI affordance.
+        // The frontend `useAgentStream` listener flips `workspace.agent_status`
+        // to "Compacting" when it sees this exact shape — `subtype: "status"`
+        // + `status: Some("compacting")`. Pin both so a future rename doesn't
+        // silently break the UI affordance.
         match codex_compacting_status_event() {
             AgentEvent::Stream(StreamEvent::System {
                 subtype, status, ..

@@ -1040,6 +1040,20 @@ pub async fn send_chat_message(
         resolved_model = Some(rewritten);
     }
     ensure_harness_accepts_attachments(backend_runtime.harness, &prepared_user_send.cli_atts)?;
+    // Codex `/compact` doesn't take attachments — `start_compact()` ignores
+    // them. Reject up-front so attachments never get persisted as orphan
+    // rows under the synthesized `/compact` user message (the body
+    // wouldn't reference them and the compaction RPC has no slot for
+    // them either). The check runs after attachment validation so the
+    // generic shape rules still apply first.
+    if is_codex_compact_intent(backend_runtime.harness, &content)
+        && !prepared_user_send.cli_atts.is_empty()
+    {
+        return Err(
+            "/compact does not accept attachments — clear the attachments before invoking it."
+                .to_string(),
+        );
+    }
     persist_user_send(&db, &prepared_user_send)?;
     let user_msg = prepared_user_send.user_msg.clone();
     let image_attachments = prepared_user_send.cli_atts;
@@ -1567,20 +1581,32 @@ pub async fn send_chat_message(
     // migration: after this turn the new harness has the full prior
     // context in its native turn-1 input and subsequent turns flow
     // through unchanged.
-    let prompt = match session.pending_history_prelude.take() {
-        Some(prelude) => claudette::agent::history_seeder::merge_prelude_with_user_message(
-            &prelude,
-            &expanded_user_content,
-        ),
-        None => expanded_user_content,
-    };
+    // Detect `/compact` against the Codex app-server harness from the
+    // raw `content` (the slash command the user typed) — **before** the
+    // cross-harness migration prelude is merged below. A queued prelude
+    // would make `prompt` look like `"{prelude…}\n/compact"`, defeating
+    // the literal-string check in `is_codex_compact_intent` and routing
+    // the compact intent as a regular user turn (reintroducing the
+    // original Codex-narrates-/compact bug).
+    let is_codex_compact = is_codex_compact_intent(backend_runtime.harness, &content);
 
-    // Detect `/compact` against the Codex app-server harness so the call
-    // sites below swap `send_turn_with_uuid` for `start_compact` after the
-    // session has been spawned or reused. The spawn-or-reuse machinery
-    // (lines ~1791-1916) is shared; only the very last "issue the turn"
-    // step diverges.
-    let is_codex_compact = is_codex_compact_intent(backend_runtime.harness, &prompt);
+    let prompt = if is_codex_compact {
+        // Don't consume a pending cross-harness migration prelude for a
+        // compaction action — there's no model-visible prompt for
+        // `start_compact()` to attach the prelude to. Leave the prelude
+        // queued so the next *real* user turn picks it up. Compaction
+        // operates on the existing thread state, which already contains
+        // the prelude's intent.
+        expanded_user_content
+    } else {
+        match session.pending_history_prelude.take() {
+            Some(prelude) => claudette::agent::history_seeder::merge_prelude_with_user_message(
+                &prelude,
+                &expanded_user_content,
+            ),
+            None => expanded_user_content,
+        }
+    };
 
     let repo_path = repo.as_ref().map(|r| r.path.as_str()).unwrap_or("");
     let default_branch = match repo.as_ref().and_then(|r| r.base_branch.as_deref()) {

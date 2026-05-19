@@ -34,7 +34,7 @@ import {
   forkWorkspaceAtCheckpoint,
   launchCodexLogin,
 } from "../../services/tauri";
-import { effectiveHarness } from "../../services/tauri/agentBackends";
+import { resolveSessionHarness } from "./resolveSessionHarness";
 import { applySelectedModel } from "./applySelectedModel";
 import { findLatestPlanFilePath } from "./planFilePath";
 import type { PermissionLevel, QueuedMessage } from "../../stores/useAppStore";
@@ -1378,21 +1378,29 @@ export function ChatPanel() {
           if (!trimmed) return;
         }
         if (result.kind === "harness_action" && result.action === "compact") {
-          // Resolve the active backend's effective harness to decide how
-          // to dispatch. Claude Code and Codex both fall through to the
-          // normal send path with the literal `/compact`: Claude's CLI
-          // interprets it natively, and `send_chat_message` (Rust side)
-          // intercepts the same string when the harness is Codex and
-          // swaps `send_turn` for `start_compact` at the last possible
-          // step. This reuses the spawn-or-reuse machinery so /compact
-          // works even when no Codex process is currently alive (e.g.
-          // first action after an app restart). Pi has no native
-          // compaction protocol — short-circuit with a local message.
-          const harness = (() => {
-            const providerId = currentModelProvider;
-            const backend = state.agentBackends.find((b) => b.id === providerId);
-            return backend ? effectiveHarness(backend) : "claude_code";
-          })();
+          // Resolve the active backend's effective harness via the same
+          // fallback chain the send pipeline uses
+          // (per-session provider → default backend → first available).
+          // Claude Code and Codex both fall through to the normal send
+          // path with the literal `/compact`: Claude's CLI interprets it
+          // natively, and `send_chat_message` (Rust side) intercepts the
+          // same string when the harness is Codex and swaps `send_turn`
+          // for `start_compact` at the last possible step. Pi has no
+          // native compaction protocol — short-circuit with a local
+          // message. If we can't resolve a harness yet (agentBackends
+          // hasn't loaded), surface a local error rather than guess.
+          const harness = resolveSessionHarness({
+            sessionId,
+            selectedModelProvider: state.selectedModelProvider,
+            agentBackends: state.agentBackends,
+            defaultAgentBackendId: state.defaultAgentBackendId,
+          });
+          if (harness === null) {
+            addLocalMessage(
+              "/compact: backend not ready yet — try again in a moment.",
+            );
+            return;
+          }
           if (harness === "pi_sdk") {
             addLocalMessage("/compact: not supported on this backend.");
             return;
