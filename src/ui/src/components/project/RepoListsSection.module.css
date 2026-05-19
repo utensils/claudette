@@ -243,31 +243,3 @@
   }
 }
 
-.contextMenu {
-  position: fixed;
-  z-index: 1000;
-  min-width: 200px;
-  background: var(--hover-bg);
-  border: 1px solid var(--divider);
-  border-radius: 6px;
-  padding: 4px;
-  box-shadow: var(--shadow-card-hover);
-}
-
-.contextMenuItem {
-  display: block;
-  width: 100%;
-  padding: 6px 10px;
-  text-align: left;
-  font-family: inherit;
-  font-size: 12px;
-  color: var(--text-primary);
-  background: transparent;
-  border: none;
-  border-radius: 4px;
-  cursor: pointer;
-}
-
-.contextMenuItem:hover {
-  background: var(--hover-bg-subtle);
-}

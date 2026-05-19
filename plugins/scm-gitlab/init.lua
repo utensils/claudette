@@ -92,17 +92,23 @@ function M.list_issues(args)
         end
         local state_norm = item.state or "open"
         if state_norm == "opened" then state_norm = "open" end
-        table.insert(issues, {
+        local issue = {
             number = item.iid,
             title = item.title,
             url = item.web_url,
             state = state_norm,
             author = author,
-            labels = labels,
             comment_count = item.user_notes_count or 0,
             created_at = item.created_at or "",
             updated_at = item.updated_at or "",
-        })
+        }
+        -- See scm-github/init.lua: empty Lua tables serialize as JSON
+        -- `{}`, which fails Rust's Vec<IssueLabel> deserialization.
+        -- Omit the key when empty and let serde's default kick in.
+        if #labels > 0 then
+            issue.labels = labels
+        end
+        table.insert(issues, issue)
     end
     return issues
 end

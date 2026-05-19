@@ -1,4 +1,4 @@
-import { memo, useEffect, useMemo, useState } from "react";
+import { memo, useMemo, useState } from "react";
 import {
   ChevronDown,
   ChevronRight,
@@ -12,6 +12,7 @@ import { openUrl } from "../../services/tauri";
 import { useAppStore } from "../../stores/useAppStore";
 import { useRepoOpenPullRequests } from "../../hooks/useRepoOpenPullRequests";
 import { createWorkspaceOrchestrated } from "../../hooks/useCreateWorkspace";
+import { ContextMenu, type ContextMenuItem } from "../shared/ContextMenu";
 import type { PullRequest, PullRequestScope } from "../../types/plugin";
 import dashStyles from "../layout/Dashboard.module.css";
 import styles from "./RepoListsSection.module.css";
@@ -34,26 +35,11 @@ export const RepoPullRequestsSection = memo(function RepoPullRequestsSection({
 }: RepoPullRequestsSectionProps) {
   const [scope, setScope] = useState<PullRequestScope>("open");
   const { payload, loading, refresh } = useRepoOpenPullRequests(repoId, scope);
-  const [open, setOpen] = useState(true);
+  // Collapsed by default — header surfaces the count, clicking the
+  // chevron expands. Symmetrical with RepoIssuesSection.
+  const [open, setOpen] = useState(false);
   const [showAll, setShowAll] = useState(false);
   const addToast = useAppStore((s) => s.addToast);
-
-  const autoCollapsedRef = useState(false);
-  useEffect(() => {
-    if (
-      !autoCollapsedRef[0] &&
-      scope === "open" &&
-      payload &&
-      !payload.unsupported &&
-      !payload.error &&
-      payload.pull_requests.length === 0
-    ) {
-      setOpen(false);
-      autoCollapsedRef[1](true);
-    }
-    // Re-evaluation only when the open-scope count first lands.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [scope, payload?.pull_requests.length, payload?.unsupported, payload?.error]);
 
   const prs = useMemo(
     () => payload?.pull_requests ?? [],
@@ -261,6 +247,15 @@ function PullRequestRow({
 }: PullRequestRowProps) {
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
 
+  const items: ContextMenuItem[] = [
+    { label: "Open in browser", onSelect: () => onOpen(pr.url) },
+    { label: "Copy URL", onSelect: () => onCopyUrl(pr.url) },
+    {
+      label: "Create workspace for this branch",
+      onSelect: () => onCreateWorkspaceForBranch(pr),
+    },
+  ];
+
   return (
     <li>
       <div
@@ -294,21 +289,8 @@ function PullRequestRow({
         <ContextMenu
           x={menu.x}
           y={menu.y}
+          items={items}
           onClose={() => setMenu(null)}
-          items={[
-            {
-              label: "Open in browser",
-              onClick: () => onOpen(pr.url),
-            },
-            {
-              label: "Copy URL",
-              onClick: () => onCopyUrl(pr.url),
-            },
-            {
-              label: "Create workspace for this branch",
-              onClick: () => onCreateWorkspaceForBranch(pr),
-            },
-          ]}
         />
       )}
     </li>
@@ -354,45 +336,3 @@ function SkeletonList() {
   );
 }
 
-interface ContextMenuProps {
-  x: number;
-  y: number;
-  onClose: () => void;
-  items: { label: string; onClick: () => void }[];
-}
-
-function ContextMenu({ x, y, onClose, items }: ContextMenuProps) {
-  useEffect(() => {
-    const dismiss = () => onClose();
-    document.addEventListener("click", dismiss);
-    document.addEventListener("keydown", dismiss);
-    return () => {
-      document.removeEventListener("click", dismiss);
-      document.removeEventListener("keydown", dismiss);
-    };
-  }, [onClose]);
-
-  return (
-    <div
-      className={styles.contextMenu}
-      style={{ left: x, top: y }}
-      role="menu"
-    >
-      {items.map((item) => (
-        <button
-          key={item.label}
-          type="button"
-          className={styles.contextMenuItem}
-          onClick={(e) => {
-            e.stopPropagation();
-            item.onClick();
-            onClose();
-          }}
-          role="menuitem"
-        >
-          {item.label}
-        </button>
-      ))}
-    </div>
-  );
-}

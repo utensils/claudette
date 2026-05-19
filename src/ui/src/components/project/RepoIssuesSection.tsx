@@ -1,4 +1,4 @@
-import { memo, useEffect, useMemo, useState } from "react";
+import { memo, useMemo, useState } from "react";
 import {
   ChevronDown,
   ChevronRight,
@@ -9,6 +9,7 @@ import {
 import { openUrl } from "../../services/tauri";
 import { useAppStore } from "../../stores/useAppStore";
 import { useRepoOpenIssues } from "../../hooks/useRepoOpenIssues";
+import { ContextMenu, type ContextMenuItem } from "../shared/ContextMenu";
 import type { Issue, IssueLabel } from "../../types/plugin";
 import dashStyles from "../layout/Dashboard.module.css";
 import styles from "./RepoListsSection.module.css";
@@ -36,29 +37,14 @@ export interface RepoIssuesSectionProps {
 export const RepoIssuesSection = memo(function RepoIssuesSection({
   repoId,
 }: RepoIssuesSectionProps) {
+  // Sections render collapsed by default. The header still surfaces the
+  // open-count badge so the project view tells you what's outstanding
+  // upstream without forcing two long lists into the layout above the
+  // workspaces grid. User clicks the chevron to expand.
+  const [open, setOpen] = useState(false);
   const { payload, loading, refresh } = useRepoOpenIssues(repoId);
-  const [open, setOpen] = useState(true);
   const [showAll, setShowAll] = useState(false);
   const addToast = useAppStore((s) => s.addToast);
-
-  // Auto-collapse on first observation of an empty list. Subsequent
-  // expansions are user-controlled.
-  const autoCollapsedRef = useState(false);
-  useEffect(() => {
-    if (
-      !autoCollapsedRef[0] &&
-      payload &&
-      !payload.unsupported &&
-      !payload.error &&
-      payload.issues.length === 0
-    ) {
-      setOpen(false);
-      autoCollapsedRef[1](true);
-    }
-    // We only react when the payload becomes available; later refreshes
-    // don't toggle the user's choice.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [payload?.issues.length, payload?.unsupported, payload?.error]);
 
   const issues = useMemo(() => payload?.issues ?? [], [payload?.issues]);
   const visible = useMemo(() => {
@@ -214,6 +200,11 @@ function IssueRow({ issue, onOpen, onCopyUrl }: IssueRowProps) {
   const visibleLabels = issue.labels.slice(0, MAX_LABELS_VISIBLE);
   const overflow = Math.max(0, issue.labels.length - visibleLabels.length);
 
+  const items: ContextMenuItem[] = [
+    { label: "Open in browser", onSelect: () => onOpen(issue.url) },
+    { label: "Copy URL", onSelect: () => onCopyUrl(issue.url) },
+  ];
+
   return (
     <li>
       <div
@@ -257,17 +248,8 @@ function IssueRow({ issue, onOpen, onCopyUrl }: IssueRowProps) {
         <ContextMenu
           x={menu.x}
           y={menu.y}
+          items={items}
           onClose={() => setMenu(null)}
-          items={[
-            {
-              label: "Open in browser",
-              onClick: () => onOpen(issue.url),
-            },
-            {
-              label: "Copy URL",
-              onClick: () => onCopyUrl(issue.url),
-            },
-          ]}
         />
       )}
     </li>
@@ -306,45 +288,3 @@ function SkeletonList() {
   );
 }
 
-interface ContextMenuProps {
-  x: number;
-  y: number;
-  onClose: () => void;
-  items: { label: string; onClick: () => void }[];
-}
-
-function ContextMenu({ x, y, onClose, items }: ContextMenuProps) {
-  useEffect(() => {
-    const dismiss = () => onClose();
-    document.addEventListener("click", dismiss);
-    document.addEventListener("keydown", dismiss);
-    return () => {
-      document.removeEventListener("click", dismiss);
-      document.removeEventListener("keydown", dismiss);
-    };
-  }, [onClose]);
-
-  return (
-    <div
-      className={styles.contextMenu}
-      style={{ left: x, top: y }}
-      role="menu"
-    >
-      {items.map((item) => (
-        <button
-          key={item.label}
-          type="button"
-          className={styles.contextMenuItem}
-          onClick={(e) => {
-            e.stopPropagation();
-            item.onClick();
-            onClose();
-          }}
-          role="menuitem"
-        >
-          {item.label}
-        </button>
-      ))}
-    </div>
-  );
-}

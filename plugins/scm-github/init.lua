@@ -119,17 +119,24 @@ function M.list_issues(args)
         elseif type(item.comments) == "number" then
             comment_count = item.comments
         end
-        table.insert(issues, {
+        local issue = {
             number = item.number,
             title = item.title,
             url = item.url,
             state = string.lower(item.state or "open"),
             author = author,
-            labels = labels,
             comment_count = comment_count,
             created_at = item.createdAt or "",
             updated_at = item.updatedAt or "",
-        })
+        }
+        -- mlua serializes empty Lua tables as JSON `{}` not `[]`, which
+        -- fails Rust's Vec<IssueLabel> deserialization and silently
+        -- drops the entire issue. Only attach `labels` when we have at
+        -- least one entry; missing key + serde default = empty vec.
+        if #labels > 0 then
+            issue.labels = labels
+        end
+        table.insert(issues, issue)
     end
     return issues
 end

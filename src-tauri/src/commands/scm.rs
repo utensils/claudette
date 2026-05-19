@@ -450,7 +450,11 @@ const PROJECT_VIEW_ISSUES_PRS_ENABLED_KEY: &str = "project_view_issues_prs_enabl
 const REPO_LIST_CACHE_TTL_SECS: u64 = 10;
 
 /// Default number of items requested from the plugin per list operation.
-const REPO_LIST_DEFAULT_LIMIT: u32 = 25;
+/// Sized to cover the "Show all" expander (`ALL_VISIBLE_LIMIT = 50` on the
+/// frontend) so the user never sees fewer rows than what would fit. Beyond
+/// 50 the UI links out to the provider's web list — Claudette is not an
+/// issue tracker.
+const REPO_LIST_DEFAULT_LIMIT: u32 = 50;
 
 #[derive(Serialize)]
 pub struct RepoIssuesPayload {
