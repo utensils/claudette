@@ -55,7 +55,10 @@ export const RepoPullRequestsSection = memo(function RepoPullRequestsSection({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scope, payload?.pull_requests.length, payload?.unsupported, payload?.error]);
 
-  const prs = payload?.pull_requests ?? [];
+  const prs = useMemo(
+    () => payload?.pull_requests ?? [],
+    [payload?.pull_requests],
+  );
   const visible = useMemo(() => {
     if (showAll) return prs.slice(0, ALL_VISIBLE_LIMIT);
     return prs.slice(0, DEFAULT_VISIBLE);

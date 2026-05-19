@@ -130,7 +130,10 @@ impl Database {
         Ok(())
     }
 
-    pub fn delete_repo_scm_list_cache_for_repo(&self, repo_id: &str) -> Result<(), rusqlite::Error> {
+    pub fn delete_repo_scm_list_cache_for_repo(
+        &self,
+        repo_id: &str,
+    ) -> Result<(), rusqlite::Error> {
         self.conn.execute(
             "DELETE FROM repo_scm_lists_cache WHERE repo_id = ?1",
             params![repo_id],

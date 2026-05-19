@@ -193,6 +193,7 @@ The same modal is reachable from the project dashboard's **ARCHIVED** section he
 | CI auto-fix model | Model used for auto-fix sessions. Leave unset to use the global default model. | Use default model |
 | CI auto-fix prompt template | Prompt template for the created session. Supports `{{failed_checks}}`, `{{failure_logs}}`, `{{branch}}`, `{{pr_title}}`, `{{pr_url}}`, `{{pr_number}}`, and `{{all_checks}}`. | Built-in template |
 | CI auto-fix cooldown | Minimum seconds between auto-fix session creations per workspace. Values are clamped to 60-3600. | 300 seconds |
+| Show open issues & PRs in project view | Surface open issues and pull requests from the resolved SCM provider on the repo overview screen. Requires a configured SCM provider (`scm-github`, `scm-gitlab`). See [Project view — Issues & PRs](project-view-issues-prs). | Off |
 
 ### Branch Prefix Mode
 

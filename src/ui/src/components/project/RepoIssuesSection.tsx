@@ -60,7 +60,7 @@ export const RepoIssuesSection = memo(function RepoIssuesSection({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [payload?.issues.length, payload?.unsupported, payload?.error]);
 
-  const issues = payload?.issues ?? [];
+  const issues = useMemo(() => payload?.issues ?? [], [payload?.issues]);
   const visible = useMemo(() => {
     if (showAll) return issues.slice(0, ALL_VISIBLE_LIMIT);
     return issues.slice(0, DEFAULT_VISIBLE);

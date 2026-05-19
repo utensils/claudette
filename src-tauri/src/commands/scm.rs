@@ -521,15 +521,14 @@ async fn resolve_repo_provider(
     // Best-effort remote-URL detection; a missing/unreadable remote isn't
     // an error here — the project view simply doesn't render the panel
     // when there's no provider.
-    let provider_name = match claudette::git::get_remote_url(&repo.path, repo.default_remote.as_deref())
-        .await
-    {
-        Ok(url) => {
-            let registry = state.plugins.read().await;
-            detect::detect_provider(&url, &registry.plugins)
-        }
-        Err(_) => None,
-    };
+    let provider_name =
+        match claudette::git::get_remote_url(&repo.path, repo.default_remote.as_deref()).await {
+            Ok(url) => {
+                let registry = state.plugins.read().await;
+                detect::detect_provider(&url, &registry.plugins)
+            }
+            Err(_) => None,
+        };
     Ok((provider_name, repo))
 }
 
@@ -903,10 +902,7 @@ async fn build_repo_list_entry(
     }
 }
 
-fn issues_payload_from_entry(
-    entry: &RepoListEntry,
-    provider: Option<String>,
-) -> RepoIssuesPayload {
+fn issues_payload_from_entry(entry: &RepoListEntry, provider: Option<String>) -> RepoIssuesPayload {
     let issues = serde_json::from_value::<Vec<Issue>>(entry.payload.clone()).unwrap_or_default();
     RepoIssuesPayload {
         issues,
@@ -1570,11 +1566,8 @@ pub fn start_scm_polling(app_handle: tauri::AppHandle) {
         {
             let app_state = handle.state::<AppState>();
             seed_scm_cache_from_db(&app_state.db_path, &app_state.scm_cache).await;
-            seed_repo_scm_lists_cache_from_db(
-                &app_state.db_path,
-                &app_state.repo_scm_lists_cache,
-            )
-            .await;
+            seed_repo_scm_lists_cache_from_db(&app_state.db_path, &app_state.repo_scm_lists_cache)
+                .await;
             seed_workspace_activity_from_db(&app_state.db_path, &app_state.workspace_activity)
                 .await;
         }
