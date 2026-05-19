@@ -79,7 +79,7 @@ export function SettingsSidebar() {
 
   return (
     <div className={styles.sidebar}>
-      <div className={styles.sidebarTopSpacer} />
+      <div className={styles.sidebarTopSpacer} data-tauri-drag-region aria-hidden="true" />
       <button className={styles.backLink} onClick={closeSettings}>
         {t("common:back_to_app")}
       </button>
