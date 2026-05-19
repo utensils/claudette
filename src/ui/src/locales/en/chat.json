@@ -17,6 +17,7 @@
   "steer_pending_attachment": "Sending attachment…",
   "stop_agent": "Stop agent",
   "send_message": "Send message",
+  "send_disabled_preparing_env": "Workspace environment is still preparing",
   "run_shell_command": "Run shell command",
   "add_files_connectors": "Add files or connectors",
   "attachments_not_supported": "Attachments not supported for remote workspaces",

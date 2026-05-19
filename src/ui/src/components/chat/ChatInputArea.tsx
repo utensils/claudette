@@ -369,7 +369,9 @@ export function ChatInputArea({
       : t("send_message");
   const sendButtonTooltip = isRunning
     ? tooltipWithHotkey(sendButtonLabel, "global.dismiss-or-stop", keybindings, isMac)
-    : sendButtonLabel;
+    : workspaceEnvironmentPreparing
+      ? t("send_disabled_preparing_env")
+      : sendButtonLabel;
 
   // VU meter dynamic-vs-static decision lives in the parent because it
   // depends on the OS reduced-motion preference and the active provider's
@@ -1145,6 +1147,9 @@ export function ChatInputArea({
   };
 
   const showUltrathinkOverlay = composerMode === "prompt" && hasUltrathink(chatInput);
+  const sendDisabled = workspaceEnvironmentPreparing;
+  // Env warmup only blocks dispatch; composer configuration remains editable.
+  const configDisabled = false;
 
   return (
     <div
@@ -1302,7 +1307,7 @@ export function ChatInputArea({
               className={`${styles.attachBtn} ${attachMenuOpen ? styles.attachBtnActive : ""}`}
               onClick={() => setAttachMenuOpen((v) => !v)}
               title={t("add_files_connectors")}
-              disabled={workspaceEnvironmentPreparing}
+              disabled={configDisabled}
             >
               <Plus size={16} />
             </button>
@@ -1322,7 +1327,8 @@ export function ChatInputArea({
             sessionId={sessionId}
             workspaceId={selectedWorkspaceId}
             repoId={repoId ?? null}
-            disabled={workspaceEnvironmentPreparing}
+            configDisabled={configDisabled}
+            sendDisabled={sendDisabled}
             isRunning={isRunning}
             isRemote={isRemote}
           />

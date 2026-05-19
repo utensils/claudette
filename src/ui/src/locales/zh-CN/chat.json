@@ -17,6 +17,7 @@
   "steer_pending_attachment": "正在发送附件…",
   "stop_agent": "停止智能体",
   "send_message": "发送消息",
+  "send_disabled_preparing_env": "工作区环境仍在准备中",
   "run_shell_command": "运行 shell 命令",
   "add_files_connectors": "添加文件或连接器",
   "attachments_not_supported": "远程工作区不支持附件",

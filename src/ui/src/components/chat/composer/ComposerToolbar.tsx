@@ -24,8 +24,10 @@ interface ComposerToolbarProps {
   sessionId: string;
   workspaceId: string;
   repoId: string | null;
-  /** Blocks all toolbar interactions — set while the workspace environment is preparing. */
-  disabled: boolean;
+  /** Blocks controls that mutate turn configuration. Env preparation must not set this. */
+  configDisabled: boolean;
+  /** Blocks actions that require a ready workspace environment. */
+  sendDisabled: boolean;
   /** True while a turn is in flight. Pills that mutate session state stay locked;
    *  the overflow menu's Remote Control row uses this to queue mid-turn enables. */
   isRunning: boolean;
@@ -36,15 +38,18 @@ export function ComposerToolbar({
   sessionId,
   workspaceId,
   repoId,
-  disabled,
+  configDisabled,
+  sendDisabled,
   isRunning,
   isRemote,
 }: ComposerToolbarProps) {
   // Session-mutating pills (model, plan, reasoning) keep their pre-split
-  // behavior: locked whenever a turn is running OR the env is preparing.
+  // behavior: locked whenever a turn is running.
+  // Env preparation only blocks actions that need the resolved environment;
+  // users can still configure the first turn while that warmup runs.
   // The overflow menu deliberately opts out so users can queue Remote
   // Control mid-turn — see `OverflowMenu` for the per-item gating.
-  const mutationDisabled = disabled || isRunning;
+  const mutationDisabled = configDisabled || isRunning;
   const selectedModel = useAppStore((s) => s.selectedModel[sessionId] ?? "opus");
   const selectedProvider = useAppStore((s) => s.selectedModelProvider[sessionId] ?? "anthropic");
   const disable1mContext = useAppStore((s) => s.disable1mContext);
@@ -216,7 +221,8 @@ export function ComposerToolbar({
 
       <OverflowMenu
         sessionId={sessionId}
-        disabled={disabled}
+        configDisabled={configDisabled}
+        sendDisabled={sendDisabled}
         isRunning={isRunning}
         isRemote={isRemote}
       />
