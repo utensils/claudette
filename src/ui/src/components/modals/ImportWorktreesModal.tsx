@@ -156,7 +156,7 @@ export function ImportWorktreesModal() {
   }
 
   return (
-    <Modal title={t("import_worktrees_found_title")} onClose={chainOrClose}>
+    <Modal title={t("import_worktrees_found_title")} onClose={chainOrClose} wide>
       <p className={styles.description}>
         {t("import_worktrees_found_desc")}
       </p>
