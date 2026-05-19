@@ -239,6 +239,41 @@ pub async fn submit_agent_approval(
     submit_approval_response(session_id, tool_use_id, approved, reason, state).await
 }
 
+/// Trigger native context compaction on the running agent session. This is
+/// the harness-dispatched counterpart to typing `/compact` in the composer —
+/// only the Codex app-server path reaches this command. Claude Code sessions
+/// continue to interpret the literal `"/compact"` string the CLI receives as
+/// normal user input (see `nativeSlashCommands.ts`'s expand path), so the
+/// CLI's built-in `compact_boundary` flow stays unchanged. Pi SDK sessions
+/// short-circuit on the frontend before invoking this command.
+///
+/// Codex's `thread/compact/start` returns immediately; the compaction itself
+/// is delivered asynchronously as a `ContextCompaction` thread item, which
+/// the codex agent layer translates into a `compact_boundary` event so the
+/// timeline divider renders identically to the Claude CLI path.
+#[tauri::command]
+#[tracing::instrument(
+    target = "claudette::chat",
+    skip(state),
+    fields(chat_session_id = %session_id),
+)]
+pub async fn compact_chat_session(
+    session_id: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let ps = {
+        let agents = state.agents.read().await;
+        let session = agents
+            .get(&session_id)
+            .ok_or_else(|| "Chat session has no active agent to compact".to_string())?;
+        session
+            .persistent_session
+            .clone()
+            .ok_or_else(|| "Chat session has no active agent to compact".to_string())?
+    };
+    ps.start_compact().await
+}
+
 /// Synchronously drain any pending permission requests from `session` and
 /// snapshot the [`AgentSession`] needed to deny them. Designed to be
 /// called while holding the agents write lock — does no async work itself.

@@ -129,6 +129,18 @@ export function clearAttention(sessionId: string): Promise<void> {
 }
 
 /**
+ * Trigger native context compaction on the running agent session via the
+ * harness's own protocol (currently only Codex's `thread/compact/start`).
+ * The Claude Code path does not call this — the literal `/compact` text is
+ * handed to the CLI as user input and the CLI emits the `compact_boundary`
+ * stream event itself. The Pi SDK harness has no compaction protocol and
+ * is short-circuited on the frontend before invocation.
+ */
+export function compactChatSession(sessionId: string): Promise<void> {
+  return invoke("compact_chat_session", { sessionId });
+}
+
+/**
  * Send the user's answers for a pending AskUserQuestion tool_use, keyed by
  * question text. The Rust side layers them onto the tool's original input as
  * `updatedInput.answers` and writes a `control_response` to the CLI.

@@ -778,22 +778,22 @@ describe("/clear handler", () => {
 });
 
 describe("/compact handler", () => {
-  it("is registered as prompt_expansion with no aliases", () => {
+  it("is registered as harness_action with no aliases", () => {
     const handler = resolveNativeHandler("compact")!;
     expect(handler).toBeDefined();
     expect(handler.name).toBe("compact");
-    expect(handler.kind).toBe("prompt_expansion");
+    expect(handler.kind).toBe("harness_action");
     expect(handler.aliases).toEqual([]);
   });
 
-  it("expands to /compact prompt text for the CLI", async () => {
+  it("returns a harness_action that the chat send pipeline dispatches per backend", async () => {
     const ctx = makeCtx();
     const handler = resolveNativeHandler("compact")!;
     const result = await handler.execute(ctx, "");
     expect(result).toEqual({
-      kind: "expand",
+      kind: "harness_action",
       canonicalName: "compact",
-      prompt: "/compact",
+      action: "compact",
     });
   });
 

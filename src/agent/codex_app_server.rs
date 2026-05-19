@@ -407,6 +407,26 @@ impl CodexAppServerSession {
         Ok(())
     }
 
+    /// Trigger Codex's native context compaction via the `thread/compact/start`
+    /// JSON-RPC method. The compaction itself is asynchronous: Codex enqueues a
+    /// non-steerable turn and, on completion, emits an `item/completed`
+    /// notification carrying a `contextCompaction` thread item. That item is
+    /// translated into a `compact_boundary` `StreamEvent` by
+    /// [`map_codex_item_completed_to_agent_events`], so the chat pipeline
+    /// persists the existing `COMPACTION:...` sentinel and the timeline renders
+    /// a `CompactionDivider` consistent with the Claude CLI path.
+    pub async fn start_compact(&self) -> Result<(), String> {
+        let thread_id = self
+            .thread_id
+            .lock()
+            .await
+            .clone()
+            .ok_or_else(|| "Codex app-server has no active thread to compact".to_string())?;
+        self.send_request(build_thread_compact_start_request(self.next_id(), &thread_id))
+            .await?;
+        Ok(())
+    }
+
     pub async fn read_account(
         &self,
         refresh_token: bool,
@@ -1581,6 +1601,16 @@ pub fn build_turn_interrupt_request(id: i64, thread_id: &str, turn_id: &str) -> 
     }
 }
 
+pub fn build_thread_compact_start_request(id: i64, thread_id: &str) -> JsonRpcRequest {
+    JsonRpcRequest {
+        id: JsonRpcId::Integer(id),
+        method: "thread/compact/start".to_string(),
+        params: Some(json!({
+            "threadId": thread_id,
+        })),
+    }
+}
+
 pub fn build_account_read_request(id: i64, refresh_token: bool) -> JsonRpcRequest {
     JsonRpcRequest {
         id: JsonRpcId::Integer(id),
@@ -1860,6 +1890,14 @@ pub enum CodexNotificationEvent {
         thread_id: String,
         turn_id: String,
         diff: String,
+    },
+    /// Deprecated upstream — Codex now delivers compaction completion as a
+    /// `ContextCompaction` thread item via `item/completed`. Kept as a
+    /// transitional fallback so older Codex builds still produce the timeline
+    /// divider when a `thread/compact/start` lands.
+    ContextCompacted {
+        thread_id: String,
+        turn_id: String,
     },
     /// Pushed by Codex when the account's rate-limit snapshot changes
     /// — typically after a turn lands or a window resets. The host
@@ -2167,6 +2205,10 @@ pub fn decode_notification(notification: JsonRpcNotification) -> CodexNotificati
             turn_id: string_field(params, "turnId"),
             diff: string_field(params, "diff"),
         },
+        ("thread/compacted", Some(params)) => CodexNotificationEvent::ContextCompacted {
+            thread_id: string_field(params, "threadId"),
+            turn_id: string_field(params, "turnId"),
+        },
         (method, params) => CodexNotificationEvent::Unknown {
             method: method.to_string(),
             params: params.cloned(),
@@ -2241,6 +2283,13 @@ pub fn map_notification_to_agent_events(event: CodexNotificationEvent) -> Vec<Ag
         }
         CodexNotificationEvent::ItemCompleted { item, .. } => {
             map_codex_item_completed_to_agent_events(&item)
+        }
+        // Transitional fallback: older Codex builds emit `thread/compacted`
+        // as a notification rather than a `ContextCompaction` thread item.
+        // Surface the same compact_boundary event so the timeline divider
+        // renders identically.
+        CodexNotificationEvent::ContextCompacted { .. } => {
+            vec![codex_context_compaction_event()]
         }
         CodexNotificationEvent::AgentMessageDelta { .. }
         | CodexNotificationEvent::ReasoningSummaryDelta { .. }
@@ -2362,6 +2411,14 @@ fn map_codex_item_started_to_agent_events(item: &Value) -> Vec<AgentEvent> {
 }
 
 fn map_codex_item_completed_to_agent_events(item: &Value) -> Vec<AgentEvent> {
+    // ContextCompaction items don't map to a tool use — Codex emits them as
+    // the canonical signal that a `thread/compact/start`-initiated compaction
+    // landed. Translate into the existing `compact_boundary` system event
+    // shape so `send.rs` persists the `COMPACTION:...` sentinel via
+    // `build_compaction_sentinel`, and the timeline divider renders.
+    if item.get("type").and_then(Value::as_str) == Some("contextCompaction") {
+        return vec![codex_context_compaction_event()];
+    }
     let Some((item_id, _tool_name, input)) = codex_item_tool_use(item) else {
         return Vec::new();
     };
@@ -2404,6 +2461,36 @@ fn map_codex_item_completed_to_agent_events(item: &Value) -> Vec<AgentEvent> {
         }),
     ]);
     events
+}
+
+/// Build the `compact_boundary` system event for a Codex `contextCompaction`
+/// item. Codex's item carries only an `id`, not pre/post token counts or a
+/// duration, so we synthesize a metadata stub with `trigger="codex"` and
+/// zeros. The `CompactionDivider` recognizes the `codex` trigger and renders
+/// without the misleading `0 → 0` token arrow.
+fn codex_context_compaction_event() -> AgentEvent {
+    AgentEvent::Stream(StreamEvent::System {
+        subtype: "compact_boundary".to_string(),
+        session_id: None,
+        state: None,
+        detail: None,
+        task_id: None,
+        tool_use_id: None,
+        output_file: None,
+        summary: None,
+        description: None,
+        last_tool_name: None,
+        usage: None,
+        status: None,
+        compact_result: Some("success".to_string()),
+        compact_metadata: Some(crate::agent::types::CompactMetadata {
+            trigger: "codex".to_string(),
+            pre_tokens: 0,
+            post_tokens: 0,
+            duration_ms: 0,
+        }),
+        command_line: None,
+    })
 }
 
 fn codex_command_execution_status_event(item: &Value, status: &str) -> AgentEvent {
@@ -3350,6 +3437,79 @@ mod tests {
         assert_eq!(value["method"], "turn/interrupt");
         assert_eq!(value["params"]["threadId"], "thread-1");
         assert_eq!(value["params"]["turnId"], "turn-1");
+    }
+
+    #[test]
+    fn thread_compact_start_request_carries_thread_id() {
+        let request = build_thread_compact_start_request(11, "thread-9");
+        let value = serde_json::to_value(request).unwrap();
+
+        assert_eq!(value["method"], "thread/compact/start");
+        assert_eq!(value["params"]["threadId"], "thread-9");
+        assert!(value["params"].get("turnId").is_none());
+    }
+
+    #[test]
+    fn context_compaction_item_completed_emits_compact_boundary_event() {
+        // Regression for issue #881: Codex delivers compaction completion as
+        // an `item/completed` with `type: "contextCompaction"`. Make sure we
+        // translate it into the `compact_boundary` system event that
+        // `send.rs` persists via `build_compaction_sentinel`, rather than
+        // routing it through the tool-use pipeline (which would silently
+        // drop it because contextCompaction is not a tool use).
+        let item = json!({
+            "id": "item-1",
+            "type": "contextCompaction",
+        });
+        let events = map_codex_item_completed_to_agent_events(&item);
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            AgentEvent::Stream(StreamEvent::System {
+                subtype,
+                compact_metadata,
+                compact_result,
+                ..
+            }) => {
+                assert_eq!(subtype, "compact_boundary");
+                assert_eq!(compact_result.as_deref(), Some("success"));
+                let meta = compact_metadata.as_ref().expect("compact_metadata set");
+                // Codex's ContextCompaction item carries only an id, so we
+                // synthesize zeros + a `codex` trigger; the CompactionDivider
+                // recognizes that and renders without the misleading 0→0
+                // token arrow.
+                assert_eq!(meta.trigger, "codex");
+                assert_eq!(meta.pre_tokens, 0);
+                assert_eq!(meta.post_tokens, 0);
+                assert_eq!(meta.duration_ms, 0);
+            }
+            other => panic!("expected compact_boundary System event, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn deprecated_thread_compacted_notification_still_maps_to_compact_boundary() {
+        // Older Codex builds emit `thread/compacted` as a top-level
+        // notification rather than embedding the boundary in a thread item.
+        // Keep the transitional decode path until we can rely on the new
+        // item shape across all supported Codex versions.
+        let notification = JsonRpcNotification {
+            method: "thread/compacted".to_string(),
+            params: Some(json!({
+                "threadId": "thread-x",
+                "turnId": "turn-y",
+            })),
+        };
+        let decoded = decode_notification(notification);
+        assert!(matches!(
+            decoded,
+            CodexNotificationEvent::ContextCompacted { .. }
+        ));
+        let events = map_notification_to_agent_events(decoded);
+        assert_eq!(events.len(), 1);
+        assert!(matches!(
+            &events[0],
+            AgentEvent::Stream(StreamEvent::System { subtype, .. }) if subtype == "compact_boundary"
+        ));
     }
 
     #[test]

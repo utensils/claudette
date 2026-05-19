@@ -23,6 +23,7 @@ import {
   sendRemoteCommand,
   steerQueuedChatMessage,
   stopAgent,
+  compactChatSession,
   submitAgentAnswer,
   submitAgentApproval,
   submitPlanApproval,
@@ -34,6 +35,7 @@ import {
   forkWorkspaceAtCheckpoint,
   launchCodexLogin,
 } from "../../services/tauri";
+import { effectiveHarness } from "../../services/tauri/agentBackends";
 import { applySelectedModel } from "./applySelectedModel";
 import { findLatestPlanFilePath } from "./planFilePath";
 import type { PermissionLevel, QueuedMessage } from "../../stores/useAppStore";
@@ -1375,6 +1377,35 @@ export function ChatPanel() {
           // to the normal agent send path (queue, optimistic message, stream).
           trimmed = result.prompt.trim();
           if (!trimmed) return;
+        }
+        if (result.kind === "harness_action" && result.action === "compact") {
+          // Resolve the active backend's effective harness and dispatch the
+          // compact action accordingly. Claude Code falls through to the
+          // normal send path with the literal `/compact` so the CLI keeps
+          // interpreting it natively; Codex invokes the dedicated
+          // `thread/compact/start` Tauri command; Pi has no native
+          // compaction so we short-circuit with a local message.
+          const harness = (() => {
+            const providerId = currentModelProvider;
+            const backend = state.agentBackends.find((b) => b.id === providerId);
+            return backend ? effectiveHarness(backend) : "claude_code";
+          })();
+          if (harness === "codex_app_server") {
+            try {
+              await compactChatSession(sessionId);
+            } catch (err) {
+              addLocalMessage(`/compact failed: ${String(err)}`);
+            }
+            return;
+          }
+          if (harness === "pi_sdk") {
+            addLocalMessage("/compact: not supported on this backend.");
+            return;
+          }
+          // claude_code — fall through with the literal `/compact` so the
+          // CLI handles it (existing behavior; user-visible `/compact`
+          // message + native `compact_boundary` event).
+          trimmed = "/compact";
         }
       }
     }

@@ -1,10 +1,11 @@
-import { type RefObject, useEffect, useRef } from "react";
+import { type RefObject, useEffect, useMemo, useRef } from "react";
 import { useAppStore } from "../../../stores/useAppStore";
 import { computeMeterState } from "../contextMeterLogic";
 import { formatTokens } from "../formatTokens";
 import { useSelectedModelEntry } from "../useSelectedModelEntry";
 import { segmentedBand, segmentedColor, stateLabel } from "./segmentedMeterLogic";
 import { estimateCost, formatCost } from "./formatCost";
+import { effectiveHarness } from "../../../services/tauri/agentBackends";
 import styles from "./ContextPopover.module.css";
 
 interface ContextPopoverProps {
@@ -30,9 +31,23 @@ const SEGMENT_COLORS = [
 export function ContextPopover({ sessionId, onClose, onCompact, onClear, triggerRef }: ContextPopoverProps) {
   const popoverRef = useRef<HTMLDivElement>(null);
   const usage = useAppStore((s) => s.latestTurnUsage[sessionId]);
+  const agentBackends = useAppStore((s) => s.agentBackends);
+  const selectedModelProvider = useAppStore((s) => s.selectedModelProvider);
 
   const model = useSelectedModelEntry(sessionId);
   const state = computeMeterState(usage, model?.contextWindowTokens);
+
+  // The Pi SDK harness has no native compaction protocol. Disable the
+  // button instead of letting the user click into a "/compact: not
+  // supported" local message — the click would close the popover and the
+  // user has to re-open it to see why nothing happened.
+  const compactSupported = useMemo(() => {
+    const providerId = selectedModelProvider[sessionId];
+    if (!providerId) return true;
+    const backend = agentBackends.find((b) => b.id === providerId);
+    if (!backend) return true;
+    return effectiveHarness(backend) !== "pi_sdk";
+  }, [agentBackends, selectedModelProvider, sessionId]);
 
   useEffect(() => {
     function handleKey(e: KeyboardEvent) {
@@ -134,6 +149,12 @@ export function ContextPopover({ sessionId, onClose, onCompact, onClear, trigger
           type="button"
           className={styles.actionBtn}
           onClick={() => { onCompact(); onClose(); }}
+          disabled={!compactSupported}
+          title={
+            compactSupported
+              ? undefined
+              : "Compaction is not supported on this backend."
+          }
         >
           Compact
         </button>

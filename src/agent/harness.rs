@@ -236,6 +236,29 @@ impl AgentSession {
         }
     }
 
+    /// Trigger native context compaction on the active session. Each harness
+    /// has a different protocol:
+    /// - Claude CLI: the literal `"/compact"` user-input string is handled
+    ///   by the CLI itself, so callers route it through `send_turn_with_uuid`
+    ///   instead of this method.
+    /// - Codex app-server: issues the `thread/compact/start` JSON-RPC and
+    ///   returns immediately; the `ContextCompaction` item later flows
+    ///   through the stream as a `compact_boundary` event.
+    /// - Pi SDK: no native compaction protocol exists, so callers should
+    ///   surface "not supported" in the UI rather than invoking this method.
+    pub async fn start_compact(&self) -> Result<(), String> {
+        match self {
+            Self::ClaudeCode(_) => Err(
+                "Claude Code compaction is handled by the CLI via the `/compact` user input — \
+                 do not call start_compact() on this harness."
+                    .to_string(),
+            ),
+            Self::CodexAppServer(session) => session.start_compact().await,
+            #[cfg(feature = "pi-sdk")]
+            Self::PiSdk(_) => Err("Compaction is not supported on the Pi SDK harness.".to_string()),
+        }
+    }
+
     pub async fn set_remote_control(
         &self,
         enabled: bool,
