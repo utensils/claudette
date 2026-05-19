@@ -2,7 +2,11 @@ import type {
   AgentBackendConfig,
   AgentBackendRuntimeHarness,
 } from "../../services/tauri/agentBackends";
-import { effectiveHarness } from "../../services/tauri/agentBackends";
+import {
+  availableHarnessesForKind,
+  defaultHarnessForKind,
+  effectiveHarness,
+} from "../../services/tauri/agentBackends";
 
 /**
  * Resolve the runtime harness for a chat session using the same fallback
@@ -12,6 +16,13 @@ import { effectiveHarness } from "../../services/tauri/agentBackends";
  * loaded yet). Callers should treat `null` as "don't know — be
  * conservative" (disable destructive actions, fail closed) rather than
  * assuming a specific harness.
+ *
+ * Mirrors `resolve_dispatch_harness` for the Pi downgrade case: a non-Pi
+ * backend (Ollama, LM Studio, OpenAI, …) configured to dispatch through
+ * Pi gets downgraded to the first non-Pi allowed harness when no enabled
+ * Pi card exists. Without this the Compact button is incorrectly disabled
+ * and `/compact` is rejected with "not supported on this backend" even
+ * though the actual send path routes through Claude CLI and supports it.
  *
  * Used by both `ChatPanel`'s `/compact` dispatch and `ContextPopover`'s
  * "Compact" button gate so the two surfaces stay in sync — if either
@@ -35,5 +46,18 @@ export function resolveSessionHarness(args: {
     agentBackends.find((b) => b.id === defaultAgentBackendId) ??
     agentBackends[0];
   if (!backend) return null;
-  return effectiveHarness(backend);
+  const harness = effectiveHarness(backend);
+  if (harness !== "pi_sdk") return harness;
+  // The Pi card itself stays "pi_sdk" — its own `enabled` check is
+  // enforced upstream (the resolver gives up on disabled backends).
+  if (backend.kind === "pi_sdk") return harness;
+  const piAvailable = agentBackends.some(
+    (other) => other.kind === "pi_sdk" && other.enabled,
+  );
+  if (piAvailable) return harness;
+  return (
+    availableHarnessesForKind(backend.kind).find(
+      (candidate) => candidate !== "pi_sdk",
+    ) ?? defaultHarnessForKind(backend.kind)
+  );
 }

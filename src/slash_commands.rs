@@ -15,6 +15,11 @@ pub enum NativeKind {
     SettingsRoute,
     /// Expands into seeded prompt text that then flows through the agent pipeline.
     PromptExpansion,
+    /// Dispatched per backend — the frontend resolves the active harness and
+    /// either short-circuits locally (e.g. Pi has no native compaction) or
+    /// falls through to the normal send pipeline with the literal slash text
+    /// for the harness to intercept (Claude CLI, Codex app-server).
+    HarnessAction,
 }
 
 /// A discovered slash command or skill.
@@ -163,7 +168,7 @@ pub fn native_command_registry() -> Vec<SlashCommand> {
         source: "builtin".to_string(),
         aliases: Vec::new(),
         argument_hint: None,
-        kind: Some(NativeKind::PromptExpansion),
+        kind: Some(NativeKind::HarnessAction),
     });
     commands.push(SlashCommand {
         name: "plan".to_string(),
