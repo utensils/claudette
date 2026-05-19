@@ -2,6 +2,7 @@ import { lazy, Suspense } from "react";
 import { useTranslation } from "react-i18next";
 import { useAppStore } from "../../stores/useAppStore";
 import { SettingsSidebar } from "./SettingsSidebar";
+import { BoundedScrollPane } from "../shared/BoundedScrollPane";
 import styles from "./Settings.module.css";
 
 // Each section is split into its own chunk so cold start doesn't pay for
@@ -120,7 +121,7 @@ export function SettingsPage() {
       <div className={styles.dragRegion} data-tauri-drag-region />
       <SettingsSidebar />
       <div className={styles.contentArea}>
-        <div className={styles.content}>
+        <BoundedScrollPane className={styles.content}>
           <Suspense
             fallback={
               <div
@@ -135,7 +136,7 @@ export function SettingsPage() {
           >
             <SectionContent section={settingsSection} />
           </Suspense>
-        </div>
+        </BoundedScrollPane>
         <div className={styles.attributionBar}>{t("attribution")}</div>
       </div>
     </div>

@@ -18,10 +18,12 @@ import {
   Flag,
   Stethoscope,
   HardDrive,
+  ArrowLeft,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { useAppStore } from "../../stores/useAppStore";
 import { RepoIcon } from "../shared/RepoIcon";
+import { BoundedScrollPane } from "../shared/BoundedScrollPane";
 import styles from "./Settings.module.css";
 
 export function getAppSections() {
@@ -81,11 +83,12 @@ export function SettingsSidebar() {
     <div className={styles.sidebar}>
       <div className={styles.sidebarHeader}>
         <button className={styles.backLink} onClick={closeSettings}>
-          {t("common:back_to_app")}
+          <ArrowLeft size={13} aria-hidden="true" />
+          <span>{t("common:back_to_app")}</span>
         </button>
         <h2 className={styles.sidebarTitle}>{t("settings:settings_title")}</h2>
       </div>
-      <div className={styles.sidebarNav}>
+      <BoundedScrollPane className={styles.sidebarNav}>
 
       {getAppSections().map((s) => (
         <button
@@ -141,7 +144,7 @@ export function SettingsSidebar() {
           </button>
         );
       })}
-      </div>
+      </BoundedScrollPane>
     </div>
   );
 }

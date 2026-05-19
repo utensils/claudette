@@ -44,45 +44,54 @@
    clears the 38px overlay title bar zone. */
 .sidebarHeader {
   flex-shrink: 0;
-  padding: 16px 0 8px;
+  display: flex;
+  flex-direction: column;
+  padding: 10px 0 10px;
   border-bottom: 1px solid var(--divider);
 }
 
 [data-platform="mac"] .sidebarHeader {
-  padding-top: 38px;
+  padding-top: 42px;
 }
 
 .sidebarTitle {
   margin: 0;
-  padding: 4px 16px 0;
-  font-size: 18px;
+  padding: 6px 16px 0;
+  font-size: 17px;
   font-weight: 600;
   color: var(--text-primary);
   letter-spacing: -0.2px;
 }
 
-/* Scrollable nav list below the fixed header. */
+/* Scrollable nav list below the fixed header. The JS hook on
+   BoundedScrollPane handles WebKit's elastic gesture; this CSS rule
+   catches the trackpad-flick edge before the wheel listener fires. */
 .sidebarNav {
   flex: 1;
   overflow-y: auto;
+  overscroll-behavior-y: none;
   padding: 8px 0 16px;
 }
 
 .backLink {
-  display: flex;
+  display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 4px 16px;
+  margin: 0 8px 2px;
+  padding: 4px 8px;
+  border-radius: 6px;
   color: var(--text-dim);
-  font-size: 13px;
+  font-size: 12px;
   cursor: pointer;
   border: none;
   background: none;
   text-align: left;
+  align-self: flex-start;
 }
 
 .backLink:hover {
   color: var(--text-primary);
+  background: var(--hover-bg);
 }
 
 .groupLabel {
@@ -146,6 +155,7 @@
 .content {
   flex: 1;
   overflow-y: auto;
+  overscroll-behavior-y: none;
   padding: 32px 48px;
   background: var(--app-bg);
 }
