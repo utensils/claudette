@@ -109,6 +109,16 @@ function M.list_issues(args)
         if item.author and item.author.login then
             author = item.author.login
         end
+        -- `gh issue list --json comments` returns the comments array
+        -- itself, not a count. Use the array length so we send Rust a
+        -- u32 (passing a table here makes the Issue fail to deserialize
+        -- on the Rust side and silently drops every row).
+        local comment_count = 0
+        if type(item.comments) == "table" then
+            comment_count = #item.comments
+        elseif type(item.comments) == "number" then
+            comment_count = item.comments
+        end
         table.insert(issues, {
             number = item.number,
             title = item.title,
@@ -116,7 +126,7 @@ function M.list_issues(args)
             state = string.lower(item.state or "open"),
             author = author,
             labels = labels,
-            comment_count = item.comments or 0,
+            comment_count = comment_count,
             created_at = item.createdAt or "",
             updated_at = item.updatedAt or "",
         })

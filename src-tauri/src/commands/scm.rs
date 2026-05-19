@@ -902,8 +902,38 @@ async fn build_repo_list_entry(
     }
 }
 
+/// Deserialize a JSON array into `Vec<T>`, tolerating per-row failures.
+/// A single malformed item used to take down the entire list via
+/// `unwrap_or_default()` returning empty — masking real bugs behind a
+/// "No open issues" empty-state. We walk the array item by item, log
+/// rows that fail to deserialize, and keep the successful ones.
+fn deserialize_list_tolerant<T: serde::de::DeserializeOwned>(
+    value: &serde_json::Value,
+    kind: &str,
+) -> Vec<T> {
+    let Some(arr) = value.as_array() else {
+        return Vec::new();
+    };
+    let mut out = Vec::with_capacity(arr.len());
+    for (idx, raw) in arr.iter().enumerate() {
+        match serde_json::from_value::<T>(raw.clone()) {
+            Ok(v) => out.push(v),
+            Err(e) => {
+                tracing::warn!(
+                    target: "claudette::scm",
+                    kind = %kind,
+                    index = idx,
+                    error = %e,
+                    "dropping row that failed to deserialize"
+                );
+            }
+        }
+    }
+    out
+}
+
 fn issues_payload_from_entry(entry: &RepoListEntry, provider: Option<String>) -> RepoIssuesPayload {
-    let issues = serde_json::from_value::<Vec<Issue>>(entry.payload.clone()).unwrap_or_default();
+    let issues = deserialize_list_tolerant::<Issue>(&entry.payload, "issue");
     RepoIssuesPayload {
         issues,
         fetched_at: now_iso(),
@@ -918,8 +948,7 @@ fn pull_requests_payload_from_entry(
     scope: PullRequestScope,
     provider: Option<String>,
 ) -> RepoPullRequestsPayload {
-    let pull_requests =
-        serde_json::from_value::<Vec<PullRequest>>(entry.payload.clone()).unwrap_or_default();
+    let pull_requests = deserialize_list_tolerant::<PullRequest>(&entry.payload, "pull_request");
     RepoPullRequestsPayload {
         pull_requests,
         scope,
