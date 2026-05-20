@@ -320,20 +320,25 @@ describe("sendToNewWorkspace", () => {
     expect(useAppStore.getState().workspaceScmLinks["ws-5"]).toBeUndefined();
   });
 
-  it("does not persist the link when the send itself fails", async () => {
+  it("records the link before the send so the badge is instant", async () => {
     mockedCreate.mockResolvedValue({
       workspaceId: "ws-6",
       sessionId: "sess-6",
     });
     mockedSend.mockRejectedValueOnce(new Error("network down"));
 
-    // The gesture failed — the error propagates to the caller and the
-    // association must NOT be recorded, or the project view would show
-    // a misleading "in progress" badge for a send that never landed.
+    // `sendChatMessage` blocks on the new workspace's env prep (direnv
+    // / nix, ~20-30s) and can fail outright. The association is keyed
+    // on workspace *creation*, so it is recorded before the send — the
+    // badge appears immediately, and a later send failure still leaves
+    // a valid link (the workspace exists; the user can retry from it).
     await expect(sendToNewWorkspace(ISSUE_ARGS)).rejects.toThrow(
       "network down",
     );
-    expect(mockedCreateLink).not.toHaveBeenCalled();
-    expect(useAppStore.getState().workspaceScmLinks["ws-6"]).toBeUndefined();
+    expect(mockedCreateLink).toHaveBeenCalled();
+    expect(useAppStore.getState().workspaceScmLinks["ws-6"]).toMatchObject({
+      workspace_id: "ws-6",
+      number: ISSUE_ARGS.number,
+    });
   });
 });

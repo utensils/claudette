@@ -38,7 +38,7 @@ Right-click any issue or PR row for:
 
 When you send an issue or PR to a workspace, Claudette records the link — which workspace was spun up for which upstream item — and surfaces it on both sides:
 
-- **In the project view**, a row that already has a workspace shows an accent-tinted **"in progress" badge** carrying that workspace's name. Click the badge (or the right-click **Go to workspace** item) to jump straight to it. No more sending the same issue to two workspaces by accident.
+- **In the project view**, dispatched issues/PRs are lifted into a collapsible **"In progress"** group at the top of the list, above the plain **"Open"** group — so they stay visible even if they'd otherwise sit past the row cap. Each dispatched row also carries an accent-tinted **badge** with its workspace's name; click the badge (or the right-click **Go to workspace** item) to jump straight to it. No more sending the same issue to two workspaces by accident.
 - **On the workspace**, the chat header breadcrumb gains a `#<N> — <title>` pill (click it to open the issue/PR in your browser), and the sidebar workspace row gains a small accent dot whose tooltip names the item. Both make it obvious what each workspace is for.
 
 The link is keyed on the workspace — one workspace owns at most one item. It survives an **archive → restore** round-trip: archiving a workspace only hides its badge, it doesn't drop the link. Hard-deleting the workspace drops the link for good.

@@ -19,6 +19,8 @@ import type { PullRequest, PullRequestScope } from "../../types/plugin";
 import dashStyles from "../layout/Dashboard.module.css";
 import styles from "./RepoListsSection.module.css";
 import { WorkspaceLinkBadge } from "./WorkspaceLinkBadge";
+import { RepoListGroup } from "./RepoListGroup";
+import { partitionByWorkspaceLink } from "./workspaceScmLink";
 import {
   buildModelSubmenuItems,
   sendToNewWorkspace,
@@ -52,10 +54,25 @@ export const RepoPullRequestsSection = memo(function RepoPullRequestsSection({
     () => payload?.pull_requests ?? [],
     [payload?.pull_requests],
   );
-  const visible = useMemo(() => {
-    if (showAll) return prs.slice(0, ALL_VISIBLE_LIMIT);
-    return prs.slice(0, DEFAULT_VISIBLE);
-  }, [prs, showAll]);
+  // Dispatched PRs (ones that already have a workspace) get their own
+  // "In progress" group above the rest (issue #898). The row cap
+  // applies only to `rest`.
+  const workspaceScmLinks = useAppStore((s) => s.workspaceScmLinks);
+  const workspaces = useAppStore((s) => s.workspaces);
+  const { inProgress, rest } = useMemo(
+    () =>
+      partitionByWorkspaceLink(
+        prs,
+        { repoId, kind: "pr" },
+        workspaceScmLinks,
+        workspaces,
+      ),
+    [prs, repoId, workspaceScmLinks, workspaces],
+  );
+  const visibleRest = useMemo(() => {
+    if (showAll) return rest.slice(0, ALL_VISIBLE_LIMIT);
+    return rest.slice(0, DEFAULT_VISIBLE);
+  }, [rest, showAll]);
 
   const handleCopyUrl = async (url: string) => {
     try {
@@ -141,7 +158,9 @@ export const RepoPullRequestsSection = memo(function RepoPullRequestsSection({
           repoId={repoId}
           payload={payload}
           loading={loading}
-          visible={visible}
+          inProgress={inProgress}
+          visibleRest={visibleRest}
+          restTotal={rest.length}
           totalCount={prs.length}
           showAll={showAll}
           onShowAll={() => setShowAll(true)}
@@ -163,7 +182,13 @@ interface RepoPullRequestsBodyProps {
   repoId: string;
   payload: ReturnType<typeof useRepoOpenPullRequests>["payload"];
   loading: boolean;
-  visible: PullRequest[];
+  /// PRs that already have a workspace — rendered in their own group.
+  inProgress: PullRequest[];
+  /// The remaining PRs, already capped to the visible-row limit.
+  visibleRest: PullRequest[];
+  /// Total count of `rest` before the cap — drives the "Show all" row.
+  restTotal: number;
+  /// Total count of all open PRs — drives the empty/error branches.
   totalCount: number;
   showAll: boolean;
   onShowAll: () => void;
@@ -177,7 +202,9 @@ function RepoPullRequestsBody({
   repoId,
   payload,
   loading,
-  visible,
+  inProgress,
+  visibleRest,
+  restTotal,
   totalCount,
   showAll,
   onShowAll,
@@ -218,6 +245,24 @@ function RepoPullRequestsBody({
     return <div className={styles.muted}>No open pull requests.</div>;
   }
 
+  const renderRow = (pr: PullRequest) => (
+    <PullRequestRow
+      key={pr.number}
+      repoId={repoId}
+      pr={pr}
+      onOpen={onOpen}
+      onCopyUrl={onCopyUrl}
+      onCreateWorkspaceForBranch={onCreateWorkspaceForBranch}
+    />
+  );
+  const showAllRow = !showAll && restTotal > visibleRest.length && (
+    <li>
+      <button type="button" className={styles.retryButton} onClick={onShowAll}>
+        Show all ({restTotal})
+      </button>
+    </li>
+  );
+
   return (
     <>
       {payload?.error && (
@@ -232,29 +277,26 @@ function RepoPullRequestsBody({
           </button>
         </div>
       )}
-      <ul className={styles.list}>
-        {visible.map((pr) => (
-          <PullRequestRow
-            key={pr.number}
-            repoId={repoId}
-            pr={pr}
-            onOpen={onOpen}
-            onCopyUrl={onCopyUrl}
-            onCreateWorkspaceForBranch={onCreateWorkspaceForBranch}
-          />
-        ))}
-        {!showAll && totalCount > visible.length && (
-          <li>
-            <button
-              type="button"
-              className={styles.retryButton}
-              onClick={onShowAll}
-            >
-              Show all ({totalCount})
-            </button>
-          </li>
-        )}
-      </ul>
+      {inProgress.length > 0 ? (
+        // Dispatched PRs get their own group above the rest; flat list
+        // when nothing is dispatched keeps the common case unchanged.
+        <>
+          <RepoListGroup label="In progress" count={inProgress.length} accent>
+            <ul className={styles.list}>{inProgress.map(renderRow)}</ul>
+          </RepoListGroup>
+          <RepoListGroup label="Open" count={restTotal}>
+            <ul className={styles.list}>
+              {visibleRest.map(renderRow)}
+              {showAllRow}
+            </ul>
+          </RepoListGroup>
+        </>
+      ) : (
+        <ul className={styles.list}>
+          {visibleRest.map(renderRow)}
+          {showAllRow}
+        </ul>
+      )}
     </>
   );
 }

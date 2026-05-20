@@ -76,3 +76,28 @@ export function resolveWorkspaceLink(
   }
   return null;
 }
+
+/// Split SCM items into the ones a workspace is already working on
+/// ("in progress") and the rest, preserving input order within each
+/// group. Powers the project-view "In progress" group (issue #898) —
+/// dispatched items surface in their own section regardless of where
+/// they fall in the provider's `updated_at`-sorted list, so one that
+/// would otherwise sit past the row cap stays visible.
+export function partitionByWorkspaceLink<T extends { number: number }>(
+  items: readonly T[],
+  target: { repoId: string; kind: "issue" | "pr" },
+  links: Record<string, WorkspaceScmLink>,
+  workspaces: Workspace[],
+): { inProgress: T[]; rest: T[] } {
+  const inProgress: T[] = [];
+  const rest: T[] = [];
+  for (const item of items) {
+    const linked = resolveWorkspaceLink(links, workspaces, {
+      repoId: target.repoId,
+      kind: target.kind,
+      number: item.number,
+    });
+    (linked ? inProgress : rest).push(item);
+  }
+  return { inProgress, rest };
+}

@@ -54,6 +54,30 @@ export async function sendToNewWorkspace(
   const { workspaceId, sessionId } = outcome;
   const provider = args.providerId ?? "anthropic";
   await applySelectedModel(sessionId, args.modelId, provider);
+  // Persist the issue/PR -> workspace association the moment the
+  // workspace exists. The link records "a workspace was created for
+  // this item" — true as soon as creation succeeds — so recording it
+  // here keeps the project-view "in progress" badge instant. The
+  // alternative (after `sendChatMessage`) would delay the badge by the
+  // new workspace's env-prep time: direnv / nix can block the first
+  // turn for 20-30s, and the dispatch should read as done immediately.
+  // Best-effort: a link-write failure only costs the badge, never the
+  // send. The FK cascade still drops the row if the workspace is later
+  // deleted, so a failed first turn leaves nothing orphaned — the
+  // workspace is real and the user can retry the turn from it.
+  try {
+    const link = await createWorkspaceScmLink({
+      workspaceId,
+      repoId: args.repoId,
+      kind: args.kind,
+      number: args.number,
+      url: args.url,
+      title: args.title,
+    });
+    useAppStore.getState().setWorkspaceScmLink(link);
+  } catch (e) {
+    console.error("[sendToNewWorkspace] failed to persist SCM link:", e);
+  }
   const prompt = renderStarterPrompt(args);
   // Optimistically insert the user's prompt into the chat store BEFORE
   // firing the send. Without this the new workspace opens straight to
@@ -100,25 +124,6 @@ export async function sendToNewWorkspace(
     /* attachments */ undefined,
     messageId,
   );
-  // Persist the issue/PR -> workspace association only once the send has
-  // actually landed — `sendChatMessage` throwing above propagates out of
-  // this function and skips this block, so a failed gesture never leaves
-  // a misleading "in progress" badge. Best-effort past this point: the
-  // workspace and its first turn already succeeded, so a link-write
-  // failure only costs the badge — never surface it as a send failure.
-  try {
-    const link = await createWorkspaceScmLink({
-      workspaceId,
-      repoId: args.repoId,
-      kind: args.kind,
-      number: args.number,
-      url: args.url,
-      title: args.title,
-    });
-    useAppStore.getState().setWorkspaceScmLink(link);
-  } catch (e) {
-    console.error("[sendToNewWorkspace] failed to persist SCM link:", e);
-  }
   store.addToast(`Sent #${args.number} to a new workspace`);
 }
 

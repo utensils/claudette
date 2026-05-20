@@ -1,5 +1,8 @@
 import { describe, it, expect } from "vitest";
-import { resolveWorkspaceLink } from "./workspaceScmLink";
+import {
+  partitionByWorkspaceLink,
+  resolveWorkspaceLink,
+} from "./workspaceScmLink";
 import type { Workspace } from "../../types/workspace";
 import type { WorkspaceScmLink } from "../../types/plugin";
 
@@ -120,5 +123,50 @@ describe("resolveWorkspaceLink", () => {
     expect(resolveWorkspaceLink(links, workspaces, TARGET)?.workspaceId).toBe(
       "ws-new",
     );
+  });
+});
+
+describe("partitionByWorkspaceLink", () => {
+  const items = [{ number: 1 }, { number: 898 }, { number: 3 }];
+
+  it("splits dispatched items from the rest, preserving order", () => {
+    const links = {
+      "ws-1": makeLink({ workspace_id: "ws-1", number: 898 }),
+    };
+    const workspaces = [makeWorkspace({ id: "ws-1" })];
+    const { inProgress, rest } = partitionByWorkspaceLink(
+      items,
+      { repoId: "repo-1", kind: "issue" },
+      links,
+      workspaces,
+    );
+    expect(inProgress.map((i) => i.number)).toEqual([898]);
+    expect(rest.map((i) => i.number)).toEqual([1, 3]);
+  });
+
+  it("treats an item whose workspace is archived as not in progress", () => {
+    const links = {
+      "ws-1": makeLink({ workspace_id: "ws-1", number: 898 }),
+    };
+    const workspaces = [makeWorkspace({ id: "ws-1", status: "Archived" })];
+    const { inProgress, rest } = partitionByWorkspaceLink(
+      items,
+      { repoId: "repo-1", kind: "issue" },
+      links,
+      workspaces,
+    );
+    expect(inProgress).toEqual([]);
+    expect(rest.map((i) => i.number)).toEqual([1, 898, 3]);
+  });
+
+  it("puts everything in `rest` when no links exist", () => {
+    const { inProgress, rest } = partitionByWorkspaceLink(
+      items,
+      { repoId: "repo-1", kind: "issue" },
+      {},
+      [],
+    );
+    expect(inProgress).toEqual([]);
+    expect(rest).toEqual(items);
   });
 });
