@@ -36,3 +36,39 @@ export function deleteScheduledRoutine(id: string): Promise<{ deleted: number }>
 export function runScheduledRoutine(id: string): Promise<{ ok: boolean }> {
   return invoke("run_scheduled_routine", { id });
 }
+
+/** Schedule a one-shot wakeup. Either `delaySeconds` or `fireAt` (RFC3339)
+ *  must be provided. */
+export function scheduleWakeup(args: {
+  sessionId: string;
+  delaySeconds?: number;
+  fireAt?: string;
+  prompt: string;
+  reason?: string;
+}): Promise<ScheduledTask> {
+  return invoke("schedule_wakeup", {
+    sessionId: args.sessionId,
+    delaySeconds: args.delaySeconds ?? null,
+    fireAt: args.fireAt ?? null,
+    prompt: args.prompt,
+    reason: args.reason ?? null,
+  });
+}
+
+/** Create a recurring cron routine. `cronExpr` is the standard 5-field
+ *  cron expression interpreted in local time. */
+export function createCronRoutine(args: {
+  sessionId: string;
+  name?: string;
+  cronExpr: string;
+  prompt: string;
+  recurring?: boolean;
+}): Promise<ScheduledTask> {
+  return invoke("create_cron_routine", {
+    sessionId: args.sessionId,
+    name: args.name ?? null,
+    cronExpr: args.cronExpr,
+    prompt: args.prompt,
+    recurring: args.recurring ?? true,
+  });
+}

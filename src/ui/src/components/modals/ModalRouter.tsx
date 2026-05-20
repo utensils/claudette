@@ -17,6 +17,7 @@ import { KeyboardShortcutsModal } from "./KeyboardShortcutsModal";
 import { EnvTrustModal } from "./EnvTrustModal";
 import { PiLoginModalRoute } from "./PiLoginModalRoute";
 import { RequiredInputsModal } from "./RequiredInputsModal";
+import { CreateScheduledTaskModal } from "./CreateScheduledTaskModal";
 
 export function ModalRouter() {
   const activeModal = useAppStore((s) => s.activeModal);
@@ -58,6 +59,8 @@ export function ModalRouter() {
       return <PiLoginModalRoute />;
     case "requiredInputs":
       return <RequiredInputsModal />;
+    case "createScheduledTask":
+      return <CreateScheduledTaskModal />;
     default:
       return null;
   }
