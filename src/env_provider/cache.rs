@@ -207,19 +207,49 @@ impl EnvCache {
     /// to evict, nothing to notify.
     pub fn invalidate_if_stale(&self, worktree: &Path, plugin: &str) -> bool {
         let key = (worktree.to_path_buf(), plugin.to_string());
-        let mut guard = self.entries.write().unwrap();
-        let Some(entry) = guard.get_mut(&key) else {
-            return false;
+        // Snapshot the watched list under a read lock, then release it
+        // before `check_freshness` runs its stat/read syscalls — same
+        // discipline as `get_fresh`. An IO-heavy watcher burst must not
+        // block unrelated `get_fresh` / `put` calls (the cache is one
+        // `RwLock` shared across all worktrees and plugins).
+        let (watched, evaluated_at) = {
+            let guard = self.entries.read().unwrap();
+            match guard.get(&key) {
+                Some(entry) => (entry.watched.clone(), entry.evaluated_at),
+                None => return false,
+            }
         };
-        match check_freshness(&entry.watched) {
+
+        match check_freshness(&watched) {
             Freshness::Fresh => false,
             Freshness::Rehashed(refreshed) => {
-                entry.watched = refreshed;
+                // Heal the stored mtimes — best-effort, and only if the
+                // entry is still the one we checked (a concurrent `put`
+                // would have replaced it with a fresher snapshot).
+                if let Ok(mut guard) = self.entries.write()
+                    && let Some(stored) = guard.get_mut(&key)
+                    && stored.evaluated_at == evaluated_at
+                {
+                    stored.watched = refreshed;
+                }
                 false
             }
             Freshness::Stale => {
-                guard.remove(&key);
-                true
+                // Evict — but only if the entry is still the one we
+                // checked. A `put` racing between our read snapshot and
+                // here means a fresh export already landed; don't drop
+                // that one (and report "not invalidated" so the caller
+                // skips the UI event).
+                let mut guard = self.entries.write().unwrap();
+                if guard
+                    .get(&key)
+                    .is_some_and(|stored| stored.evaluated_at == evaluated_at)
+                {
+                    guard.remove(&key);
+                    true
+                } else {
+                    false
+                }
             }
         }
     }
@@ -273,7 +303,22 @@ fn check_freshness(watched: &[WatchedFile]) -> Freshness {
         // the entry stale. `git checkout`, `touch`, nix-direnv
         // re-evaluation, and save-on-noop editors all bump mtime
         // forward without changing a byte; those must NOT invalidate.
-        if content_hash(&wf.path) != wf.hash {
+        //
+        // The hash equality only proves "unchanged" when BOTH the
+        // stored and current hashes exist. `content_hash` returns
+        // `None` for anything it can't read as a byte stream — most
+        // importantly a watched *directory* (a `watch_dir` target),
+        // but also a file gone unreadable. For those we cannot prove
+        // byte-equality, so an mtime change is treated as stale: the
+        // correct conservative fallback (a directory's mtime moving
+        // means an entry was added/removed inside it). Without the
+        // `Some`/`Some` guard a watched directory would hash to
+        // `None == None` and be wrongly healed.
+        let unchanged = matches!(
+            (wf.hash, content_hash(&wf.path)),
+            (Some(stored), Some(current)) if stored == current
+        );
+        if !unchanged {
             return Freshness::Stale;
         }
         // Same bytes, new mtime: heal the stored mtime so the next
@@ -413,6 +458,37 @@ mod tests {
         assert!(
             cache.get_fresh(tmp.path(), "env-direnv").is_none(),
             "an actual content change must still invalidate"
+        );
+    }
+
+    #[test]
+    fn get_fresh_invalidates_on_watched_directory_mtime_change() {
+        // A `watch_dir` target is a directory — `content_hash` can't
+        // read it as a byte stream, so its stored hash is `None`. An
+        // mtime bump (a file added/removed inside) must still
+        // invalidate: with no content hash to compare, mtime is the
+        // only signal, and a directory's mtime moving is a real
+        // change. Guards against a `None == None` hash compare wrongly
+        // "healing" a directory whose contents changed.
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("watched_dir");
+        std::fs::create_dir(&dir).unwrap();
+
+        let cache = EnvCache::new();
+        assert!(
+            cache
+                .put(tmp.path(), "env-direnv", &export_with_watched(&dir))
+                .is_some()
+        );
+        assert!(cache.get_fresh(tmp.path(), "env-direnv").is_some());
+
+        // Add a file inside → the directory's own mtime moves.
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+        std::fs::write(dir.join("new.txt"), "x").unwrap();
+
+        assert!(
+            cache.get_fresh(tmp.path(), "env-direnv").is_none(),
+            "a watched directory whose contents changed must invalidate"
         );
     }
 
