@@ -10,8 +10,9 @@ import {
 } from "./sendToNewWorkspace";
 import { createWorkspaceOrchestrated } from "../../hooks/useCreateWorkspace";
 import { applySelectedModel } from "../chat/applySelectedModel";
-import { sendChatMessage } from "../../services/tauri";
+import { createWorkspaceScmLink, sendChatMessage } from "../../services/tauri";
 import type { Model } from "../chat/modelRegistry";
+import type { WorkspaceScmLink } from "../../types/plugin";
 
 vi.mock("../../hooks/useCreateWorkspace", () => ({
   createWorkspaceOrchestrated: vi.fn(),
@@ -21,11 +22,13 @@ vi.mock("../chat/applySelectedModel", () => ({
 }));
 vi.mock("../../services/tauri", () => ({
   sendChatMessage: vi.fn().mockResolvedValue(undefined),
+  createWorkspaceScmLink: vi.fn(),
 }));
 
 const mockedCreate = vi.mocked(createWorkspaceOrchestrated);
 const mockedApplyModel = vi.mocked(applySelectedModel);
 const mockedSend = vi.mocked(sendChatMessage);
+const mockedCreateLink = vi.mocked(createWorkspaceScmLink);
 
 function makeModel(overrides: Partial<Model> & { id: string }): Model {
   return {
@@ -56,11 +59,31 @@ const PR_ARGS: SendToNewWorkspaceArgs = {
   modelId: "sonnet",
 };
 
+/// Echo a `createWorkspaceScmLink` call back as a persisted row — mirrors
+/// what the Rust command returns (DB-assigned `created_at`).
+function makeLinkFromArgs(
+  callArgs: Parameters<typeof createWorkspaceScmLink>[0],
+): WorkspaceScmLink {
+  return {
+    workspace_id: callArgs.workspaceId,
+    repo_id: callArgs.repoId,
+    kind: callArgs.kind,
+    number: callArgs.number,
+    url: callArgs.url,
+    title: callArgs.title,
+    created_at: "2026-05-20 15:30:00",
+  };
+}
+
 beforeEach(() => {
   mockedCreate.mockReset();
   mockedApplyModel.mockClear();
   mockedSend.mockClear();
-  useAppStore.setState({ chatMessages: {}, toasts: [] });
+  mockedCreateLink.mockReset();
+  mockedCreateLink.mockImplementation((a) =>
+    Promise.resolve(makeLinkFromArgs(a)),
+  );
+  useAppStore.setState({ chatMessages: {}, toasts: [], workspaceScmLinks: {} });
 });
 
 afterEach(() => {
@@ -257,5 +280,43 @@ describe("sendToNewWorkspace", () => {
     mockedCreate.mockRejectedValue(new Error("disk full"));
     await expect(sendToNewWorkspace(ISSUE_ARGS)).rejects.toThrow("disk full");
     expect(mockedSend).not.toHaveBeenCalled();
+  });
+
+  it("persists the issue/PR -> workspace link into the store", async () => {
+    mockedCreate.mockResolvedValue({
+      workspaceId: "ws-4",
+      sessionId: "sess-4",
+    });
+
+    await sendToNewWorkspace(ISSUE_ARGS);
+
+    expect(mockedCreateLink).toHaveBeenCalledWith({
+      workspaceId: "ws-4",
+      repoId: "repo-1",
+      kind: "issue",
+      number: ISSUE_ARGS.number,
+      url: ISSUE_ARGS.url,
+      title: ISSUE_ARGS.title,
+    });
+    const link = useAppStore.getState().workspaceScmLinks["ws-4"];
+    expect(link).toMatchObject({
+      workspace_id: "ws-4",
+      kind: "issue",
+      number: ISSUE_ARGS.number,
+    });
+  });
+
+  it("still completes the send when link persistence fails", async () => {
+    mockedCreate.mockResolvedValue({
+      workspaceId: "ws-5",
+      sessionId: "sess-5",
+    });
+    mockedCreateLink.mockRejectedValueOnce(new Error("db locked"));
+
+    await sendToNewWorkspace(ISSUE_ARGS);
+
+    // The send is non-negotiable; only the badge is lost.
+    expect(mockedSend).toHaveBeenCalled();
+    expect(useAppStore.getState().workspaceScmLinks["ws-5"]).toBeUndefined();
   });
 });

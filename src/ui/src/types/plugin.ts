@@ -59,6 +59,21 @@ export interface ScmStatusCacheRow {
   fetched_at: string;
 }
 
+/** A persisted association between an SCM item (issue or PR) and the
+ *  workspace created for it via the project-view "Send to new
+ *  workspace" gesture. Keyed on `workspace_id` server-side — one
+ *  workspace owns at most one item. Mirrors `WorkspaceScmLinkRow` in
+ *  `src/db/scm.rs`. */
+export interface WorkspaceScmLink {
+  workspace_id: string;
+  repo_id: string;
+  kind: "issue" | "pr";
+  number: number;
+  url: string;
+  title: string;
+  created_at: string;
+}
+
 export interface IssueLabel {
   name: string;
   /** Hex color without leading '#'. May be empty when the provider

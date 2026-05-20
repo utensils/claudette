@@ -482,6 +482,18 @@
   gap: 2px;
 }
 
+/* Issue/PR -> workspace link indicator (issue #898). Sits between the
+   workspace info column and the hover action buttons; accent-tinted so
+   it reads as "this workspace has an upstream item" at a glance. */
+.wsScmLink {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  flex-shrink: 0;
+  color: var(--accent-primary);
+}
+
 .wsInfo {
   display: flex;
   flex-direction: column;

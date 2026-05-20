@@ -1,7 +1,7 @@
 import { useAppStore } from "../../stores/useAppStore";
 import { createWorkspaceOrchestrated } from "../../hooks/useCreateWorkspace";
 import { applySelectedModel } from "../chat/applySelectedModel";
-import { sendChatMessage } from "../../services/tauri";
+import { createWorkspaceScmLink, sendChatMessage } from "../../services/tauri";
 import type { Model } from "../chat/modelRegistry";
 import type { ContextMenuItem } from "../shared/ContextMenu";
 
@@ -54,6 +54,23 @@ export async function sendToNewWorkspace(
   const { workspaceId, sessionId } = outcome;
   const provider = args.providerId ?? "anthropic";
   await applySelectedModel(sessionId, args.modelId, provider);
+  // Persist the issue/PR -> workspace association so the project view can
+  // show an "in progress" badge and the workspace knows what it is for.
+  // Best-effort: the workspace and its first turn already succeeded, so a
+  // failure here only costs the badge — never abort the send for it.
+  try {
+    const link = await createWorkspaceScmLink({
+      workspaceId,
+      repoId: args.repoId,
+      kind: args.kind,
+      number: args.number,
+      url: args.url,
+      title: args.title,
+    });
+    useAppStore.getState().setWorkspaceScmLink(link);
+  } catch (e) {
+    console.error("[sendToNewWorkspace] failed to persist SCM link:", e);
+  }
   const prompt = renderStarterPrompt(args);
   // Optimistically insert the user's prompt into the chat store BEFORE
   // firing the send. Without this the new workspace opens straight to

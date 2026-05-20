@@ -11,10 +11,12 @@ import { useAppStore } from "../../stores/useAppStore";
 import { useRepoOpenIssues } from "../../hooks/useRepoOpenIssues";
 import { ContextMenu, type ContextMenuItem } from "../shared/ContextMenu";
 import { useModelRegistry } from "../chat/useModelRegistry";
+import { useWorkspaceScmLink } from "../../hooks/useWorkspaceScmLink";
 import type { Issue, IssueLabel } from "../../types/plugin";
 import dashStyles from "../layout/Dashboard.module.css";
 import styles from "./RepoListsSection.module.css";
 import { formatTimeAgo } from "./timeAgo";
+import { WorkspaceLinkBadge } from "./WorkspaceLinkBadge";
 import {
   buildModelSubmenuItems,
   sendToNewWorkspace,
@@ -224,6 +226,8 @@ function IssueRow({ repoId, issue, onOpen, onCopyUrl }: IssueRowProps) {
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const registry = useModelRegistry();
   const addToast = useAppStore((s) => s.addToast);
+  const selectWorkspace = useAppStore((s) => s.selectWorkspace);
+  const linked = useWorkspaceScmLink(repoId, "issue", issue.number);
   const visibleLabels = issue.labels.slice(0, MAX_LABELS_VISIBLE);
   const overflow = Math.max(0, issue.labels.length - visibleLabels.length);
 
@@ -231,6 +235,17 @@ function IssueRow({ repoId, issue, onOpen, onCopyUrl }: IssueRowProps) {
     { label: "Open in browser", onSelect: () => onOpen(issue.url) },
     { label: "Copy URL", onSelect: () => onCopyUrl(issue.url) },
     { type: "separator" },
+    // When a workspace is already on this issue, offer a jump to it
+    // *above* — not instead of — "Send to new workspace": a second
+    // workspace on the same issue is still one deliberate click away.
+    ...(linked
+      ? ([
+          {
+            label: `Go to workspace “${linked.workspaceName}”`,
+            onSelect: () => selectWorkspace(linked.workspaceId),
+          },
+        ] satisfies ContextMenuItem[])
+      : []),
     {
       type: "submenu",
       label: "Send to new workspace",
@@ -290,6 +305,7 @@ function IssueRow({ repoId, issue, onOpen, onCopyUrl }: IssueRowProps) {
             )}
           </span>
         )}
+        {linked && <WorkspaceLinkBadge link={linked} />}
         <span className={styles.rowMeta}>
           {issue.comment_count > 0 && (
             <span className={styles.rowCommentCount}>

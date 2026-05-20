@@ -29,6 +29,7 @@ import { Settings, Link, X, Share2, Plus, Globe, Archive, Trash2, CircleCheck, C
 import { resolveScmPrIcon } from "../shared/workspaceStatusIcon";
 import { RepoIcon } from "../shared/RepoIcon";
 import { WorkspaceEnvSpinner } from "./WorkspaceEnvSpinner";
+import { WorkspaceScmLinkIcon } from "./WorkspaceScmLinkIcon";
 import { extractRemoteWorkspace } from "./remoteWorkspaceResponse";
 import { HelpMenu } from "./HelpMenu";
 import { UpdateBanner } from "../layout/UpdateBanner";
@@ -785,6 +786,7 @@ export const Sidebar = memo(function Sidebar() {
             );
           })()}
         </div>
+        <WorkspaceScmLinkIcon workspaceId={ws.id} />
         <div className={styles.wsActions}>
           {ws.status === "Active" ? (
             <button

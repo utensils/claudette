@@ -14,9 +14,11 @@ import { useRepoOpenPullRequests } from "../../hooks/useRepoOpenPullRequests";
 import { createWorkspaceOrchestrated } from "../../hooks/useCreateWorkspace";
 import { ContextMenu, type ContextMenuItem } from "../shared/ContextMenu";
 import { useModelRegistry } from "../chat/useModelRegistry";
+import { useWorkspaceScmLink } from "../../hooks/useWorkspaceScmLink";
 import type { PullRequest, PullRequestScope } from "../../types/plugin";
 import dashStyles from "../layout/Dashboard.module.css";
 import styles from "./RepoListsSection.module.css";
+import { WorkspaceLinkBadge } from "./WorkspaceLinkBadge";
 import {
   buildModelSubmenuItems,
   sendToNewWorkspace,
@@ -275,6 +277,8 @@ function PullRequestRow({
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const registry = useModelRegistry();
   const addToast = useAppStore((s) => s.addToast);
+  const selectWorkspace = useAppStore((s) => s.selectWorkspace);
+  const linked = useWorkspaceScmLink(repoId, "pr", pr.number);
 
   const items: ContextMenuItem[] = [
     { label: "Open in browser", onSelect: () => onOpen(pr.url) },
@@ -287,6 +291,16 @@ function PullRequestRow({
       onSelect: () => onCreateWorkspaceForBranch(pr),
     },
     { type: "separator" },
+    // Jump to an existing workspace for this PR, kept *alongside* the
+    // "Send to new workspace" submenu rather than replacing it.
+    ...(linked
+      ? ([
+          {
+            label: `Go to workspace “${linked.workspaceName}”`,
+            onSelect: () => selectWorkspace(linked.workspaceId),
+          },
+        ] satisfies ContextMenuItem[])
+      : []),
     {
       type: "submenu",
       label: "Send to new workspace",
@@ -343,6 +357,7 @@ function PullRequestRow({
         <span className={styles.rowBranch} title={`${pr.base} ← ${pr.branch}`}>
           {pr.base} ← {pr.branch}
         </span>
+        {linked && <WorkspaceLinkBadge link={linked} />}
         <span className={styles.rowMeta}>
           {pr.author && <span>{pr.author}</span>}
         </span>

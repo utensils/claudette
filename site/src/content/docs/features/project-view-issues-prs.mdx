@@ -24,6 +24,7 @@ Right-click any issue or PR row for:
 - **Open in browser** — opens the row's URL in your default browser.
 - **Copy URL** — copies the URL to the clipboard.
 - **Create workspace for this branch** (PR rows only) — creates a workspace on the repo's default base branch and surfaces the PR head branch in a toast.
+- **Go to workspace “&lt;name&gt;”** — shown only when a workspace has already been sent this issue/PR. Jumps straight to that workspace. It sits *above* "Send to new workspace", not in place of it, so spinning up a second workspace on the same item stays one deliberate click away.
 - **Send to new workspace ▶ &lt;model&gt;** — opens a submenu of available models. Pick one to (1) create a fresh workspace in the repo, (2) apply the chosen model to the new session so the toolbar reflects it and any cross-harness setup runs, and (3) auto-send a templated starter prompt as the first turn so the agent begins working immediately.
 
   The starter prompts link back to the source:
@@ -32,6 +33,17 @@ Right-click any issue or PR row for:
   - Pull requests: `Please review PR #<N> and continue or refactor as needed: <title>\n\nSource: <URL>\nBranch: <branch>`
 
   The submenu lists the same models the chat panel's model picker would show, with the same alternative-backends and OAuth gating. If you have no models available (alt-backends off and no Claude auth), the submenu shows a single disabled "No models available" row instead of silently swallowing the click.
+
+## Issue / PR ↔ workspace association
+
+When you send an issue or PR to a workspace, Claudette records the link — which workspace was spun up for which upstream item — and surfaces it on both sides:
+
+- **In the project view**, a row that already has a workspace shows an accent-tinted **"in progress" badge** carrying that workspace's name. Click the badge (or the right-click **Go to workspace** item) to jump straight to it. No more sending the same issue to two workspaces by accident.
+- **On the workspace**, the chat header breadcrumb gains a `#<N> — <title>` pill (click it to open the issue/PR in your browser), and the sidebar workspace row gains a small accent dot whose tooltip names the item. Both make it obvious what each workspace is for.
+
+The link is keyed on the workspace — one workspace owns at most one item. It survives an **archive → restore** round-trip: archiving a workspace only hides its badge, it doesn't drop the link. Hard-deleting the workspace drops the link for good.
+
+The association is part of this feature: with **Show open issues & PRs in project view** turned off, no links are written and none of the badges, breadcrumbs, or sidebar dots appear.
 
 Both sections poll every 60 seconds while the project view is visible. Polling pauses on `visibilitychange` to hidden — Claudette doesn't burn your `gh` / `glab` rate-limit budget for a tab you walked away from. The Refresh button in each section header forces an immediate fresh fetch.
 
@@ -60,6 +72,8 @@ User-authored SCM plugins can implement `list_issues` to participate. Plugins th
 All data is fetched on your machine using the credentials in your own `gh` / `glab` CLI. Claudette does not phone home, does not store an OAuth token, and does not proxy through any third-party server.
 
 A small SQLite cache (`repo_scm_lists_cache`) keeps the most recent response per `(repo_id, list_kind)` so the project view paints instantly on app launch instead of waiting for the first poll. Entries are anchored 60 seconds in the past on boot so the first visible visit always triggers a fresh fetch.
+
+Issue/PR ↔ workspace associations live in a separate local table (`workspace_scm_links`) — just the item number, URL, and title alongside the workspace id. Like everything else here it never leaves your machine.
 
 ## Limits
 

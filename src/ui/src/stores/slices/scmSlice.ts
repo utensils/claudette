@@ -5,6 +5,7 @@ import type {
   RepoPullRequestsPayload,
   ScmDetail,
   ScmSummary,
+  WorkspaceScmLink,
 } from "../../types/plugin";
 import type { AppState } from "../useAppStore";
 
@@ -41,6 +42,20 @@ export interface ScmSlice {
    *  refresh clears the backend cache so a stale frontend store doesn't
    *  beat the next fetch. */
   clearRepoScmLists: (repoId: string) => void;
+
+  // --- Workspace <-> SCM item links ---
+
+  /** Issue/PR associations keyed by `workspace_id`. Hydrated at boot from
+   *  `load_initial_data` and appended to when `sendToNewWorkspace`
+   *  succeeds. Powers the project-view "in progress" badge and the
+   *  workspace-side breadcrumb. Rows for archived/deleted workspaces are
+   *  filtered out at read time (see `resolveWorkspaceLink`) rather than
+   *  evicted here, so an archive -> restore round-trip keeps the link. */
+  workspaceScmLinks: Record<string, WorkspaceScmLink>;
+  /** Replace the boot snapshot of workspace -> SCM links. */
+  hydrateWorkspaceScmLinks: (links: WorkspaceScmLink[]) => void;
+  /** Record a single workspace -> SCM link (after `sendToNewWorkspace`). */
+  setWorkspaceScmLink: (link: WorkspaceScmLink) => void;
 }
 
 export const createScmSlice: StateCreator<AppState, [], [], ScmSlice> = (
@@ -86,4 +101,19 @@ export const createScmSlice: StateCreator<AppState, [], [], ScmSlice> = (
         repoPullRequestsByRepoId: nextPrs,
       };
     }),
+
+  workspaceScmLinks: {},
+  hydrateWorkspaceScmLinks: (links) =>
+    set(() => ({
+      workspaceScmLinks: Object.fromEntries(
+        links.map((l) => [l.workspace_id, l]),
+      ),
+    })),
+  setWorkspaceScmLink: (link) =>
+    set((s) => ({
+      workspaceScmLinks: {
+        ...s.workspaceScmLinks,
+        [link.workspace_id]: link,
+      },
+    })),
 });

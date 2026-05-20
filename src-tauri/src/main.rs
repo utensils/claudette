@@ -1175,6 +1175,7 @@ fn main() {
             commands::scm::list_repo_open_issues,
             commands::scm::list_repo_open_pull_requests,
             commands::scm::refresh_repo_scm_lists,
+            commands::scm::create_workspace_scm_link,
             // Env-provider diagnostic UI
             commands::env::get_env_sources,
             commands::env::get_env_target_worktree,

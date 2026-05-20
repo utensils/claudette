@@ -26,6 +26,9 @@ pub struct InitialData {
     /// Most recent chat message per workspace (for dashboard display).
     pub last_messages: Vec<ChatMessage>,
     pub scm_cache: Vec<claudette::db::ScmStatusCacheRow>,
+    /// Workspace -> SCM item (issue/PR) associations, for the project-view
+    /// "in progress" badge and the workspace-side breadcrumb.
+    pub workspace_scm_links: Vec<claudette::db::WorkspaceScmLinkRow>,
     /// Repository ids whose sidebar workspace order is user-defined.
     pub manual_workspace_order_repo_ids: Vec<String>,
 }
@@ -182,6 +185,9 @@ pub async fn load_initial_data(state: State<'_, AppState>) -> Result<InitialData
 
     let last_messages = db.last_message_per_workspace().map_err(|e| e.to_string())?;
     let scm_cache = db.load_all_scm_status_cache().map_err(|e| e.to_string())?;
+    let workspace_scm_links = db
+        .load_all_workspace_scm_links()
+        .map_err(|e| e.to_string())?;
     let manual_workspace_order_repo_ids = db
         .list_app_settings_with_prefix(WORKSPACE_ORDER_MODE_PREFIX)
         .map_err(|e| e.to_string())?
@@ -203,6 +209,7 @@ pub async fn load_initial_data(state: State<'_, AppState>) -> Result<InitialData
         default_branches,
         last_messages,
         scm_cache,
+        workspace_scm_links,
         manual_workspace_order_repo_ids,
     })
 }
