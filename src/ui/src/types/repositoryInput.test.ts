@@ -157,4 +157,41 @@ describe("toPluginSettingField", () => {
       expect(adapted.default).toBe(3);
     }
   });
+
+  it("boolean without a declared default propagates as undefined", () => {
+    // Used to coerce missing defaults to `false`, which made
+    // "no opinion" indistinguishable from "explicitly off" downstream.
+    // Now `undefined` flows through so renderers can pick their own
+    // initial state.
+    const adapted = toPluginSettingField({
+      type: "boolean",
+      key: "DEBUG",
+      label: "Debug",
+    });
+    expect(adapted.type).toBe("boolean");
+    if (adapted.type === "boolean") {
+      expect(adapted.default).toBeUndefined();
+    }
+  });
+
+  it("boolean with an explicit default preserves the value", () => {
+    const explicitTrue = toPluginSettingField({
+      type: "boolean",
+      key: "DEBUG",
+      label: "Debug",
+      default: true,
+    });
+    if (explicitTrue.type === "boolean") {
+      expect(explicitTrue.default).toBe(true);
+    }
+    const explicitFalse = toPluginSettingField({
+      type: "boolean",
+      key: "DEBUG",
+      label: "Debug",
+      default: false,
+    });
+    if (explicitFalse.type === "boolean") {
+      expect(explicitFalse.default).toBe(false);
+    }
+  });
 });

@@ -205,10 +205,24 @@ impl Database {
                 |row| row.get(0),
             )
             .optional()?;
+        // Match `list_workspaces`'s warn-and-degrade behavior: a corrupt
+        // JSON blob is logged at warn level and treated as empty, so the
+        // env merge silently dropping input values can be diagnosed from
+        // logs rather than guessed at. Empty maps round-trip to `None` so
+        // callers can early-return without a contains-key check.
         Ok(raw.flatten().and_then(|s| {
             match serde_json::from_str::<std::collections::HashMap<String, String>>(&s) {
                 Ok(m) if !m.is_empty() => Some(m),
-                _ => None,
+                Ok(_) => None,
+                Err(e) => {
+                    tracing::warn!(
+                        target: "claudette::db",
+                        workspace_id,
+                        error = %e,
+                        "failed to parse workspaces.input_values JSON; treating as empty"
+                    );
+                    None
+                }
             }
         }))
     }

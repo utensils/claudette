@@ -140,8 +140,11 @@ export function coerceInputValue(
 
 /** Adapt a `RepositoryInputField` to the `PluginSettingField` shape so the
  *  shared `PluginSettingInput` component can render it. Maps `string → text`
- *  (the only structural difference) and drops the boolean `default` null
- *  variant to undefined so the renderer's existing logic applies cleanly.
+ *  (the only structural difference) and propagates `null`/`undefined`
+ *  defaults through as `undefined` so the renderer can distinguish
+ *  "unset" from an explicit `false` — without that, an author who left
+ *  the boolean default blank in the editor would see the toggle render
+ *  as off-on-purpose rather than off-because-no-opinion.
  */
 export function toPluginSettingField(
   field: RepositoryInputField,
@@ -153,7 +156,7 @@ export function toPluginSettingField(
         key: field.key,
         label: field.label,
         description: field.description ?? null,
-        default: field.default ?? false,
+        default: field.default ?? undefined,
       };
     case "string":
       return {
