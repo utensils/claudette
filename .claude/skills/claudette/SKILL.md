@@ -13,7 +13,7 @@ Drive the running Claudette desktop app over a per-user local socket. Every comm
 ## Prerequisites
 
 - The Claudette desktop app must be **open and running**. Every command discovers it via `${state_dir}/Claudette/app.json`. If it isn't running, commands exit with a clear error — do not try to start the app yourself; ask the user to launch it.
-- The `claudette` CLI must be on `PATH`. The cleanest install path: open the desktop app and use **Settings → CLI → Install on PATH** (one click; symlinks on macOS/Linux, copies + per-user PATH update on Windows). On Linux `.deb` installs the CLI is already on `/usr/bin/claudette` automatically. Standalone `claudette-cli-<platform>` release assets are also published per release for headless / CI consumers.
+- The `claudette` CLI must be on `PATH`. The cleanest install path: open the desktop app and use **Settings → CLI → Install on PATH** (one click; symlinks on macOS/Linux, copies + per-user PATH update on Windows). On Linux, `.deb` installs place the CLI at `/usr/bin/claudette` automatically. Standalone `claudette-cli-<platform>` release assets are also published per release for headless / CI consumers.
 
 ## Quick start
 
