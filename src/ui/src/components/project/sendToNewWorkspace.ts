@@ -44,11 +44,15 @@ export async function sendToNewWorkspace(
   const store = useAppStore.getState();
   const outcome = await createWorkspaceOrchestrated(args.repoId, {
     selectOnCreate: true,
+    idempotencyKey: sendIdempotencyKey(args),
   });
   if (!outcome) {
-    // The single-flight guard fired — another create is mid-flight.
-    // Surface a toast so the click doesn't appear to silently no-op.
-    store.addToast("A workspace is already being created. Try again in a moment.");
+    // The idempotency guard fired — this exact item is already queued
+    // or creating. Surface a toast so the click doesn't appear to
+    // silently no-op, while distinct issue/PR sends continue to queue.
+    store.addToast(
+      `#${args.number} is already being sent to a new workspace.`,
+    );
     return;
   }
   const { workspaceId, sessionId } = outcome;
@@ -125,6 +129,16 @@ export async function sendToNewWorkspace(
     messageId,
   );
   store.addToast(`Sent #${args.number} to a new workspace`);
+}
+
+function sendIdempotencyKey(args: SendToNewWorkspaceArgs): string {
+  return [
+    "project-send",
+    args.repoId,
+    args.kind,
+    String(args.number),
+    args.url,
+  ].join(":");
 }
 
 export function renderStarterPrompt(args: SendToNewWorkspaceArgs): string {

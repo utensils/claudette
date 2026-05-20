@@ -206,6 +206,13 @@ describe("sendToNewWorkspace", () => {
 
     expect(mockedCreate).toHaveBeenCalledWith("repo-1", {
       selectOnCreate: true,
+      idempotencyKey: [
+        "project-send",
+        ISSUE_ARGS.repoId,
+        ISSUE_ARGS.kind,
+        String(ISSUE_ARGS.number),
+        ISSUE_ARGS.url,
+      ].join(":"),
     });
     expect(mockedApplyModel).toHaveBeenCalledWith(
       "sess-1",
@@ -249,7 +256,7 @@ describe("sendToNewWorkspace", () => {
     expect(mockedSend.mock.calls[0][11]).toBe("openrouter");
   });
 
-  it("surfaces a toast and skips the send when the create single-flight guard fires", async () => {
+  it("surfaces a toast and skips the send when the create idempotency guard fires", async () => {
     mockedCreate.mockResolvedValue(null);
 
     await sendToNewWorkspace(ISSUE_ARGS);
@@ -257,7 +264,7 @@ describe("sendToNewWorkspace", () => {
     expect(mockedApplyModel).not.toHaveBeenCalled();
     expect(mockedSend).not.toHaveBeenCalled();
     const toasts = useAppStore.getState().toasts;
-    expect(toasts.some((t) => /already being created/i.test(t.message))).toBe(
+    expect(toasts.some((t) => /already being sent/i.test(t.message))).toBe(
       true,
     );
   });

@@ -25,7 +25,10 @@ vi.mock("../services/tauri", () => ({
   notifyWorkspaceSelected: vi.fn(() => Promise.resolve()),
 }));
 
-import { createWorkspaceOrchestrated } from "./useCreateWorkspace";
+import {
+  __resetCreateWorkspaceOrchestrationForTests,
+  createWorkspaceOrchestrated,
+} from "./useCreateWorkspace";
 import { useAppStore } from "../stores/useAppStore";
 import type { Repository } from "../types/repository";
 import type { Workspace } from "../types";
@@ -71,6 +74,7 @@ function makeWorkspace(id: string, repoId = "repo-1"): Workspace {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  __resetCreateWorkspaceOrchestrationForTests();
   // Reset only the slices the orchestrator touches; leave the rest of the
   // store at its initial value so unrelated selectors don't surprise us.
   useAppStore.setState({
@@ -86,9 +90,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  // Belt-and-suspenders: even if a test forgot to await a returned promise,
-  // make sure the module-level single-flight latch is cleared so the next
-  // test starts from a clean slate.
+  __resetCreateWorkspaceOrchestrationForTests();
   useAppStore.setState({ creatingWorkspaceRepoId: null });
 });
 
@@ -125,7 +127,7 @@ describe("createWorkspaceOrchestrated", () => {
     expect(useAppStore.getState().creatingWorkspaceRepoId).toBeNull();
   });
 
-  it("single-flight: a second concurrent call returns null without re-entering", async () => {
+  it("dedupes a second concurrent call with the same default key", async () => {
     // Hold createWorkspace open until we've fired the second call. This is
     // the regression we care about — without the module-level guard, the
     // welcome card's CTA + Cmd+Shift+N hotkey could double-create when
@@ -151,7 +153,7 @@ describe("createWorkspaceOrchestrated", () => {
     mockGetRepoConfig.mockRejectedValue(new Error("no config"));
 
     const first = createWorkspaceOrchestrated("repo-1");
-    // Yield once so `first` reaches the `creationInFlight = true` line and
+    // Yield once so `first` claims the default idempotency key and
     // the awaited generateWorkspaceName resolves.
     await Promise.resolve();
     await Promise.resolve();
@@ -168,7 +170,7 @@ describe("createWorkspaceOrchestrated", () => {
     const firstResult = await first;
     expect(firstResult).toEqual({ workspaceId: "w1", sessionId: "s1" });
 
-    // After the first resolves the latch must release so a fresh call
+    // After the first resolves the key must release so a fresh call
     // can proceed — the guard is not a permanent kill switch.
     mockCreateWorkspace.mockResolvedValueOnce({
       workspace: makeWorkspace("w2"),
@@ -177,6 +179,84 @@ describe("createWorkspaceOrchestrated", () => {
     });
     const third = await createWorkspaceOrchestrated("repo-1");
     expect(third).toEqual({ workspaceId: "w2", sessionId: "s2" });
+  });
+
+  it("queues concurrent calls with distinct idempotency keys", async () => {
+    let releaseFirst!: (v: {
+      workspace: Workspace;
+      default_session_id: string;
+      setup_result: null;
+    }) => void;
+    const firstPending = new Promise<{
+      workspace: Workspace;
+      default_session_id: string;
+      setup_result: null;
+    }>((resolve) => {
+      releaseFirst = resolve;
+    });
+    mockGenerateWorkspaceName
+      .mockResolvedValueOnce({
+        slug: "calm-protea",
+        display: "calm protea",
+        message: null,
+      })
+      .mockResolvedValueOnce({
+        slug: "bold-aster",
+        display: "bold aster",
+        message: null,
+      });
+    mockCreateWorkspace
+      .mockReturnValueOnce(firstPending)
+      .mockResolvedValueOnce({
+        workspace: makeWorkspace("w2"),
+        default_session_id: "s2",
+        setup_result: null,
+      });
+    mockGetRepoConfig.mockRejectedValue(new Error("no config"));
+
+    const first = createWorkspaceOrchestrated("repo-1", {
+      idempotencyKey: "issue-1",
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const second = createWorkspaceOrchestrated("repo-1", {
+      idempotencyKey: "issue-2",
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // The second create is queued behind the first, not rejected and
+    // not allowed to collide with the backend's per-repo guard.
+    expect(mockGenerateWorkspaceName).toHaveBeenCalledTimes(1);
+    expect(mockCreateWorkspace).toHaveBeenCalledTimes(1);
+
+    releaseFirst({
+      workspace: makeWorkspace("w1"),
+      default_session_id: "s1",
+      setup_result: null,
+    });
+
+    await expect(first).resolves.toEqual({
+      workspaceId: "w1",
+      sessionId: "s1",
+    });
+    await expect(second).resolves.toEqual({
+      workspaceId: "w2",
+      sessionId: "s2",
+    });
+    expect(mockCreateWorkspace).toHaveBeenNthCalledWith(
+      1,
+      "repo-1",
+      "calm-protea",
+      true,
+    );
+    expect(mockCreateWorkspace).toHaveBeenNthCalledWith(
+      2,
+      "repo-1",
+      "bold-aster",
+      true,
+    );
   });
 
   it("auto-runs the setup script when the repo opted in", async () => {
@@ -286,7 +366,7 @@ describe("createWorkspaceOrchestrated", () => {
     expect(useAppStore.getState().selectedWorkspaceId).toBeNull();
   });
 
-  it("clears the in-flight latch even when createWorkspace throws", async () => {
+  it("clears the in-flight key even when createWorkspace throws", async () => {
     mockGenerateWorkspaceName.mockResolvedValue({
       slug: "calm-protea",
       display: "calm protea",
@@ -318,9 +398,9 @@ describe("createWorkspaceOrchestrated", () => {
   it("treats the backend in-flight rejection as benign: toast, null, restored selection, no error log", async () => {
     // The backend's `create_workspace` refuses a second create for a repo
     // that already has one running (issue #896). That guard survives a
-    // webview reload — unlike the module-level latch — so the orchestrator
+    // webview reload — unlike the module-level key set — so the orchestrator
     // must treat the rejection as benign: surface a calm toast, return
-    // null (the same shape as the in-process single-flight early-return),
+    // null (the same shape as the in-process idempotency early-return),
     // restore the pre-create selection rather than yanking the user to
     // the dashboard, and not log it at error level (nothing failed).
     const addToast = vi.fn();
@@ -349,7 +429,7 @@ describe("createWorkspaceOrchestrated", () => {
     const out = await createWorkspaceOrchestrated("repo-1");
     expect(out).toBeNull();
 
-    // A toast was surfaced and the latch released so a retry can proceed.
+    // A toast was surfaced and the key released so a retry can proceed.
     expect(addToast).toHaveBeenCalledTimes(1);
     expect(addToast.mock.calls[0][0]).toMatch(/already being created/i);
     expect(useAppStore.getState().creatingWorkspaceRepoId).toBeNull();
