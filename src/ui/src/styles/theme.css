@@ -537,9 +537,12 @@
   --text-separator: #403d52;
   --divider: #26233a;
 
-  --hover-bg: #21202e;
-  --selected-bg: rgba(196, 167, 231, 0.14);
-  --toolbar-active: rgba(196, 167, 231, 0.14);
+  /* hover-bg / selected-bg use Rosé Pine's prescribed Highlight Low/Med
+     layers instead of arbitrary accent-rgba — matches the canonical
+     palette's "highlight" role per rosepinetheme.com/palette/ingredients. */
+  --hover-bg: #21202e;          /* Highlight Low  */
+  --selected-bg: #403d52;       /* Highlight Med  */
+  --toolbar-active: #403d52;
   --toolbar-active-text: #c4a7e7;
 
   --status-running: #9ccfd8;
@@ -550,6 +553,40 @@
   --accent-warning: #f6c177;  /* warning has no upstream source */
 
   --mascot-pink: #ebbcba;
+
+  /* Category slots A–F = the six named Rosé Pine accents in the order
+     Love/Gold/Rose/Pine/Foam/Iris. Slots G/H stay on the default-dark
+     palette since Rosé Pine doesn't ship a canonical hue for them. */
+  --category-a-fg: #eb6f92;  /* Love  */
+  --category-a-bg: color-mix(in srgb, #eb6f92 12%, transparent);
+  --category-a-border: color-mix(in srgb, #eb6f92 32%, transparent);
+  --category-b-fg: #f6c177;  /* Gold  */
+  --category-b-bg: color-mix(in srgb, #f6c177 12%, transparent);
+  --category-b-border: color-mix(in srgb, #f6c177 32%, transparent);
+  --category-c-fg: #ebbcba;  /* Rose  */
+  --category-c-bg: color-mix(in srgb, #ebbcba 12%, transparent);
+  --category-c-border: color-mix(in srgb, #ebbcba 32%, transparent);
+  --category-d-fg: #31748f;  /* Pine  */
+  --category-d-bg: color-mix(in srgb, #31748f 12%, transparent);
+  --category-d-border: color-mix(in srgb, #31748f 32%, transparent);
+  --category-e-fg: #9ccfd8;  /* Foam  */
+  --category-e-bg: color-mix(in srgb, #9ccfd8 12%, transparent);
+  --category-e-border: color-mix(in srgb, #9ccfd8 32%, transparent);
+  --category-f-fg: #c4a7e7;  /* Iris  */
+  --category-f-bg: color-mix(in srgb, #c4a7e7 12%, transparent);
+  --category-f-border: color-mix(in srgb, #c4a7e7 32%, transparent);
+
+  /* Syntax tokens follow the community-consensus Rosé Pine mapping (used
+     by official Neovim/VSCode plugins): Iris for keywords/types, Gold for
+     strings, Rose for numbers, Foam for functions, Muted for comments. */
+  --syntax-keyword:  #c4a7e7;  /* Iris   */
+  --syntax-string:   #f6c177;  /* Gold   */
+  --syntax-number:   #ebbcba;  /* Rose   */
+  --syntax-comment:  #6e6a86;  /* Muted  */
+  --syntax-function: #9ccfd8;  /* Foam   */
+  --syntax-type:     #9ccfd8;  /* Foam   */
+  --syntax-variable: #e0def4;  /* Text   */
+  --syntax-operator: #908caa;  /* Subtle */
 
   --diff-added-bg:   rgba(49, 116, 143, 0.22);
   --diff-removed-bg: rgba(235, 111, 146, 0.18);
@@ -587,9 +624,10 @@
   --text-separator: #44415a;
   --divider: #393552;
 
-  --hover-bg: #2a283e;
-  --selected-bg: rgba(196, 167, 231, 0.14);
-  --toolbar-active: rgba(196, 167, 231, 0.14);
+  /* Highlight Low/Med per the Moon variant of the canonical palette. */
+  --hover-bg: #2a283e;     /* Highlight Low (Moon) */
+  --selected-bg: #44415a;  /* Highlight Med (Moon) */
+  --toolbar-active: #44415a;
   --toolbar-active-text: #c4a7e7;
 
   --status-running: #9ccfd8;
@@ -600,6 +638,37 @@
   --accent-warning: #f6c177;  /* warning has no upstream source */
 
   --mascot-pink: #ea9a97;
+
+  /* Category slots A–F = Love/Gold/Rose/Pine/Foam/Iris. The Moon variant
+     uses a different Rose hue (#ea9a97 vs main's #ebbcba) per spec. */
+  --category-a-fg: #eb6f92;
+  --category-a-bg: color-mix(in srgb, #eb6f92 12%, transparent);
+  --category-a-border: color-mix(in srgb, #eb6f92 32%, transparent);
+  --category-b-fg: #f6c177;
+  --category-b-bg: color-mix(in srgb, #f6c177 12%, transparent);
+  --category-b-border: color-mix(in srgb, #f6c177 32%, transparent);
+  --category-c-fg: #ea9a97;  /* Rose (Moon)  */
+  --category-c-bg: color-mix(in srgb, #ea9a97 12%, transparent);
+  --category-c-border: color-mix(in srgb, #ea9a97 32%, transparent);
+  --category-d-fg: #3e8fb0;  /* Pine (Moon)  */
+  --category-d-bg: color-mix(in srgb, #3e8fb0 12%, transparent);
+  --category-d-border: color-mix(in srgb, #3e8fb0 32%, transparent);
+  --category-e-fg: #9ccfd8;
+  --category-e-bg: color-mix(in srgb, #9ccfd8 12%, transparent);
+  --category-e-border: color-mix(in srgb, #9ccfd8 32%, transparent);
+  --category-f-fg: #c4a7e7;
+  --category-f-bg: color-mix(in srgb, #c4a7e7 12%, transparent);
+  --category-f-border: color-mix(in srgb, #c4a7e7 32%, transparent);
+
+  /* Syntax tokens mirror rose-pine-main with Moon's tuned Rose/Pine. */
+  --syntax-keyword:  #c4a7e7;
+  --syntax-string:   #f6c177;
+  --syntax-number:   #ea9a97;  /* Rose (Moon) */
+  --syntax-comment:  #6e6a86;
+  --syntax-function: #9ccfd8;
+  --syntax-type:     #9ccfd8;
+  --syntax-variable: #e0def4;
+  --syntax-operator: #908caa;
 
   --diff-added-bg:   rgba(62, 143, 176, 0.22);
   --diff-removed-bg: rgba(235, 111, 146, 0.18);
@@ -640,9 +709,10 @@
   --text-separator: #dfdad9;
   --divider: #f2e9e1;
 
-  --hover-bg: #f4ede8;
-  --selected-bg: rgba(144, 122, 169, 0.14);
-  --toolbar-active: rgba(144, 122, 169, 0.14);
+  /* Highlight Low/Med per Dawn — pale parchment tints. */
+  --hover-bg: #f4ede8;     /* Highlight Low (Dawn) */
+  --selected-bg: #dfdad9;  /* Highlight Med (Dawn) */
+  --toolbar-active: #dfdad9;
   --toolbar-active-text: #907aa9;
 
   --status-running: #56949f;
@@ -651,6 +721,37 @@
   --badge-plan: #56949f;
   --badge-ask:  #ea9d34;
   --accent-warning: #ea9d34;  /* warning has no upstream source */
+
+  /* Category slots A–F = Love/Gold/Rose/Pine/Foam/Iris (Dawn variant
+     ships darker/more saturated values so chips read on cream paper). */
+  --category-a-fg: #b4637a;  /* Love (Dawn)  */
+  --category-a-bg: color-mix(in srgb, #b4637a 14%, transparent);
+  --category-a-border: color-mix(in srgb, #b4637a 34%, transparent);
+  --category-b-fg: #ea9d34;  /* Gold (Dawn)  */
+  --category-b-bg: color-mix(in srgb, #ea9d34 14%, transparent);
+  --category-b-border: color-mix(in srgb, #ea9d34 34%, transparent);
+  --category-c-fg: #d7827e;  /* Rose (Dawn)  */
+  --category-c-bg: color-mix(in srgb, #d7827e 14%, transparent);
+  --category-c-border: color-mix(in srgb, #d7827e 34%, transparent);
+  --category-d-fg: #286983;  /* Pine (Dawn)  */
+  --category-d-bg: color-mix(in srgb, #286983 14%, transparent);
+  --category-d-border: color-mix(in srgb, #286983 34%, transparent);
+  --category-e-fg: #56949f;  /* Foam (Dawn)  */
+  --category-e-bg: color-mix(in srgb, #56949f 14%, transparent);
+  --category-e-border: color-mix(in srgb, #56949f 34%, transparent);
+  --category-f-fg: #907aa9;  /* Iris (Dawn)  */
+  --category-f-bg: color-mix(in srgb, #907aa9 14%, transparent);
+  --category-f-border: color-mix(in srgb, #907aa9 34%, transparent);
+
+  /* Syntax tokens — Dawn-tuned palette mirrors community plugins. */
+  --syntax-keyword:  #907aa9;  /* Iris (Dawn)  */
+  --syntax-string:   #ea9d34;  /* Gold (Dawn)  */
+  --syntax-number:   #d7827e;  /* Rose (Dawn)  */
+  --syntax-comment:  #9893a5;  /* Muted (Dawn) */
+  --syntax-function: #56949f;  /* Foam (Dawn)  */
+  --syntax-type:     #56949f;  /* Foam (Dawn)  */
+  --syntax-variable: #575279;  /* Text (Dawn)  */
+  --syntax-operator: #797593;  /* Subtle (Dawn)*/
 
   --mascot-pink: #d7827e;
 
