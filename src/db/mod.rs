@@ -1,9 +1,15 @@
 use std::collections::HashSet;
 use std::path::Path;
+use std::time::Duration;
 
 use rusqlite::{Connection, params};
 
 use crate::migrations::{MIGRATIONS, Migration};
+
+const SQLITE_AUTO_VACUUM_FULL: i64 = 1;
+const SQLITE_AUTO_VACUUM_INCREMENTAL: i64 = 2;
+const SQLITE_BUSY_TIMEOUT: Duration = Duration::from_secs(30);
+const INCREMENTAL_VACUUM_PAGES_AFTER_DELETE: i64 = 4096;
 
 mod repository;
 pub use repository::is_duplicate_repository_path_error;
@@ -55,20 +61,33 @@ impl Database {
                 )
             })?;
         }
+        let is_fresh_file = is_fresh_database_file(path);
         let conn = Connection::open(path)?;
-        conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")?;
+        Self::configure_connection(&conn, is_fresh_file)?;
         let db = Self { conn };
         db.migrate()?;
+        db.run_space_maintenance();
         Ok(db)
     }
 
     #[allow(dead_code)]
     pub fn open_in_memory() -> Result<Self, rusqlite::Error> {
         let conn = Connection::open_in_memory()?;
-        conn.execute_batch("PRAGMA foreign_keys=ON;")?;
+        Self::configure_connection(&conn, true)?;
         let db = Self { conn };
         db.migrate()?;
         Ok(db)
+    }
+
+    fn configure_connection(
+        conn: &Connection,
+        enable_incremental_auto_vacuum_before_schema: bool,
+    ) -> Result<(), rusqlite::Error> {
+        conn.busy_timeout(SQLITE_BUSY_TIMEOUT)?;
+        if enable_incremental_auto_vacuum_before_schema {
+            conn.execute_batch("PRAGMA auto_vacuum=INCREMENTAL;")?;
+        }
+        conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")
     }
 
     /// Execute raw SQL. Intended for test setup only.
@@ -94,6 +113,83 @@ impl Database {
         self.bootstrap_and_backfill(MIGRATIONS)?;
         Self::run_migrations(&self.conn, MIGRATIONS)?;
         self.heal_orphaned_sessions()
+    }
+
+    fn run_space_maintenance(&self) {
+        if let Err(e) = self.ensure_incremental_auto_vacuum() {
+            tracing::warn!(
+                target: "claudette::db",
+                error = %e,
+                "database space maintenance skipped"
+            );
+        }
+    }
+
+    /// Ensure freed pages can be returned to the OS.
+    ///
+    /// SQLite only honors `PRAGMA auto_vacuum` immediately before any tables
+    /// exist. Existing field databases therefore need a one-time `VACUUM`
+    /// after flipping the pragma; this must live outside the SQL migration
+    /// runner because migrations execute inside transactions and `VACUUM`
+    /// is prohibited there.
+    fn ensure_incremental_auto_vacuum(&self) -> Result<bool, rusqlite::Error> {
+        let mode = self.auto_vacuum_mode()?;
+        if mode == SQLITE_AUTO_VACUUM_INCREMENTAL {
+            return Ok(false);
+        }
+        if mode == SQLITE_AUTO_VACUUM_FULL {
+            // FULL already returns freed pages to the OS on each commit. Avoid
+            // rewriting a user/dev DB just to change to incremental mode.
+            return Ok(false);
+        }
+
+        self.conn.execute_batch("PRAGMA auto_vacuum=INCREMENTAL;")?;
+        tracing::info!(
+            target: "claudette::db",
+            "converting database to incremental auto-vacuum; running one-time VACUUM"
+        );
+        self.conn.execute_batch("VACUUM;")?;
+        Ok(true)
+    }
+
+    fn auto_vacuum_mode(&self) -> Result<i64, rusqlite::Error> {
+        self.conn
+            .query_row("PRAGMA auto_vacuum", [], |row| row.get(0))
+    }
+
+    fn best_effort_incremental_vacuum_after_delete(&self, rows_deleted: usize) {
+        if rows_deleted > 0 {
+            self.best_effort_incremental_vacuum(INCREMENTAL_VACUUM_PAGES_AFTER_DELETE);
+        }
+    }
+
+    fn best_effort_incremental_vacuum(&self, max_pages: i64) {
+        if let Err(e) = self.incremental_vacuum(max_pages) {
+            tracing::warn!(
+                target: "claudette::db",
+                max_pages,
+                error = %e,
+                "incremental vacuum skipped"
+            );
+        }
+    }
+
+    fn incremental_vacuum(&self, max_pages: i64) -> Result<(), rusqlite::Error> {
+        if max_pages <= 0 {
+            return Ok(());
+        }
+        if self.auto_vacuum_mode()? != SQLITE_AUTO_VACUUM_INCREMENTAL {
+            return Ok(());
+        }
+        let freelist_count: i64 = self
+            .conn
+            .query_row("PRAGMA freelist_count", [], |row| row.get(0))?;
+        if freelist_count <= 0 {
+            return Ok(());
+        }
+        let pages = freelist_count.min(max_pages);
+        self.conn
+            .execute_batch(&format!("PRAGMA incremental_vacuum({pages});"))
     }
 
     /// Ensure `schema_migrations` exists; seed it from `PRAGMA user_version`
@@ -315,6 +411,14 @@ fn is_already_exists_error(err: &rusqlite::Error) -> bool {
     msg.contains("already exists") || msg.contains("duplicate column name")
 }
 
+fn is_fresh_database_file(path: &Path) -> bool {
+    match std::fs::metadata(path) {
+        Ok(metadata) => metadata.len() == 0,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => true,
+        Err(_) => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -336,6 +440,24 @@ mod tests {
         stmt.query_map([], |r| r.get::<_, String>(0))
             .unwrap()
             .collect::<Result<Vec<_>, _>>()
+            .unwrap()
+    }
+
+    fn auto_vacuum_mode(db: &Database) -> i64 {
+        db.conn()
+            .query_row("PRAGMA auto_vacuum", [], |r| r.get(0))
+            .unwrap()
+    }
+
+    fn busy_timeout_ms(db: &Database) -> i64 {
+        db.conn()
+            .query_row("PRAGMA busy_timeout", [], |r| r.get(0))
+            .unwrap()
+    }
+
+    fn freelist_count(db: &Database) -> i64 {
+        db.conn()
+            .query_row("PRAGMA freelist_count", [], |r| r.get(0))
             .unwrap()
     }
 
@@ -393,6 +515,106 @@ mod tests {
     fn test_fresh_db_applies_all_migrations() {
         let db = Database::open_in_memory().unwrap();
         assert_eq!(count_applied(&db) as usize, MIGRATIONS.len());
+    }
+
+    #[test]
+    fn test_fresh_file_db_uses_incremental_auto_vacuum() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("claudette.db");
+
+        let db = Database::open(&path).unwrap();
+
+        assert_eq!(auto_vacuum_mode(&db), SQLITE_AUTO_VACUUM_INCREMENTAL);
+    }
+
+    #[test]
+    fn test_database_connections_wait_on_busy_locks() {
+        let db = Database::open_in_memory().unwrap();
+        assert_eq!(busy_timeout_ms(&db), SQLITE_BUSY_TIMEOUT.as_millis() as i64);
+    }
+
+    #[test]
+    fn test_existing_file_db_converts_to_incremental_auto_vacuum() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("claudette.db");
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch(
+                "PRAGMA auto_vacuum=NONE;
+                 CREATE TABLE preexisting_table (id INTEGER PRIMARY KEY, payload BLOB);
+                 INSERT INTO preexisting_table (payload) VALUES (zeroblob(65536));",
+            )
+            .unwrap();
+            assert_eq!(
+                conn.query_row("PRAGMA auto_vacuum", [], |r| r.get::<_, i64>(0))
+                    .unwrap(),
+                0
+            );
+        }
+
+        let db = Database::open(&path).unwrap();
+
+        assert_eq!(auto_vacuum_mode(&db), SQLITE_AUTO_VACUUM_INCREMENTAL);
+        let preserved: i64 = db
+            .conn()
+            .query_row("SELECT COUNT(*) FROM preexisting_table", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(preserved, 1);
+    }
+
+    #[test]
+    fn test_open_does_not_incrementally_vacuum_converted_db() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("claudette.db");
+        let freelist_before = {
+            let db = Database::open(&path).unwrap();
+            db.conn()
+                .execute_batch(
+                    "CREATE TABLE vacuum_probe (id INTEGER PRIMARY KEY, payload BLOB);
+                     INSERT INTO vacuum_probe (payload) VALUES (zeroblob(1048576));
+                     DELETE FROM vacuum_probe;",
+                )
+                .unwrap();
+            let freelist_before = freelist_count(&db);
+            assert!(
+                freelist_before > 0,
+                "test setup should leave free pages to reclaim"
+            );
+            freelist_before
+        };
+
+        let db = Database::open(&path).unwrap();
+
+        assert_eq!(freelist_count(&db), freelist_before);
+    }
+
+    #[test]
+    fn test_full_auto_vacuum_db_is_left_unchanged() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("claudette.db");
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch(
+                "PRAGMA auto_vacuum=FULL;
+                 CREATE TABLE preexisting_table (id INTEGER PRIMARY KEY, payload BLOB);
+                 INSERT INTO preexisting_table (payload) VALUES (zeroblob(65536));",
+            )
+            .unwrap();
+            assert_eq!(
+                conn.query_row("PRAGMA auto_vacuum", [], |r| r.get::<_, i64>(0))
+                    .unwrap(),
+                SQLITE_AUTO_VACUUM_FULL
+            );
+        }
+
+        let db = Database::open(&path).unwrap();
+
+        assert_eq!(auto_vacuum_mode(&db), SQLITE_AUTO_VACUUM_FULL);
+        let preserved: i64 = db
+            .conn()
+            .query_row("SELECT COUNT(*) FROM preexisting_table", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(preserved, 1);
     }
 
     /// Pin the keybinding rename: after the renaming migration runs,

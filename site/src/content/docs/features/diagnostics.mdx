@@ -70,6 +70,7 @@ Established domains:
 |--------|--------|
 | `claudette::startup` | process boot, paths, multi-instance warning |
 | `claudette::panic` | Rust panic hook output (with backtrace) |
+| `claudette::db` | database open, migrations, and compaction |
 | `claudette::chat` | turn lifecycle, persistent session reuse / respawn |
 | `claudette::agent` | Claude CLI subprocess events |
 | `claudette::backend` | alternative-provider gateway |
@@ -118,6 +119,14 @@ CLAUDETTE_LOG_FORMAT=json cargo tauri dev
 jq 'select(.target=="claudette::chat" and .level=="ERROR")' \
   ~/.claudette/logs/claudette.2026-05-08.log
 ```
+
+## Database compaction on upgrade
+
+Claudette stores app state in `claudette.db` under the OS data directory (`~/Library/Application Support/claudette/` on macOS, `$XDG_DATA_HOME/claudette/` on Linux, and `%APPDATA%/claudette/` on Windows unless `CLAUDETTE_DATA_DIR` overrides it).
+
+Older builds left SQLite auto-vacuum disabled, so deleting checkpoint snapshots could free pages inside SQLite without shrinking the database file on disk. The first launch of a build with database compaction may run a one-time SQLite `VACUUM` to apply incremental auto-vacuum and reclaim those stranded pages. For very large databases, startup can pause while that rewrite finishes. Other database connections wait up to 30 seconds for the maintenance lock before retrying on a later open.
+
+After conversion, routine database opens only check that the compaction mode is in place. High-churn delete paths, such as checkpoint and workspace cleanup, run bounded incremental vacuum work after the delete commits. To inspect this lifecycle, filter logs for the `claudette::db` target.
 
 ## Multiple dev instances
 

@@ -500,8 +500,9 @@ impl Database {
     pub fn delete_workspace_with_summary(&self, id: &str) -> Result<(), rusqlite::Error> {
         let tx = self.conn.unchecked_transaction()?;
         Self::materialize_workspace_summary_tx(&tx, id)?;
-        tx.execute("DELETE FROM workspaces WHERE id = ?1", params![id])?;
+        let deleted = tx.execute("DELETE FROM workspaces WHERE id = ?1", params![id])?;
         tx.commit()?;
+        self.best_effort_incremental_vacuum_after_delete(deleted);
         Ok(())
     }
 
@@ -552,8 +553,9 @@ impl Database {
             return Ok(false);
         }
         Self::materialize_workspace_summary_tx(&tx, id)?;
-        tx.execute("DELETE FROM workspaces WHERE id = ?1", params![id])?;
+        let deleted = tx.execute("DELETE FROM workspaces WHERE id = ?1", params![id])?;
         tx.commit()?;
+        self.best_effort_incremental_vacuum_after_delete(deleted);
         Ok(true)
     }
 
@@ -570,8 +572,9 @@ impl Database {
         for ws_id in &ws_ids {
             Self::materialize_workspace_summary_tx(&tx, ws_id)?;
         }
-        tx.execute("DELETE FROM repositories WHERE id = ?1", params![id])?;
+        let deleted = tx.execute("DELETE FROM repositories WHERE id = ?1", params![id])?;
         tx.commit()?;
+        self.best_effort_incremental_vacuum_after_delete(deleted);
         Ok(())
     }
 
@@ -657,8 +660,10 @@ impl Database {
     }
 
     pub fn delete_workspace(&self, id: &str) -> Result<(), rusqlite::Error> {
-        self.conn
+        let deleted = self
+            .conn
             .execute("DELETE FROM workspaces WHERE id = ?1", params![id])?;
+        self.best_effort_incremental_vacuum_after_delete(deleted);
         Ok(())
     }
 }

@@ -90,14 +90,16 @@ impl Database {
             "DELETE FROM conversation_checkpoints WHERE chat_session_id = ?1 AND turn_index > ?2",
             params![chat_session_id, turn_index],
         )?;
+        self.best_effort_incremental_vacuum_after_delete(deleted);
         Ok(deleted)
     }
 
     pub fn delete_checkpoint(&self, checkpoint_id: &str) -> Result<(), rusqlite::Error> {
-        self.conn.execute(
+        let deleted = self.conn.execute(
             "DELETE FROM conversation_checkpoints WHERE id = ?1",
             params![checkpoint_id],
         )?;
+        self.best_effort_incremental_vacuum_after_delete(deleted);
         Ok(())
     }
 
@@ -137,6 +139,7 @@ impl Database {
             "DELETE FROM conversation_checkpoints WHERE workspace_id = ?1 AND turn_index > ?2",
             params![workspace_id, turn_index],
         )?;
+        self.best_effort_incremental_vacuum_after_delete(deleted);
         Ok(deleted)
     }
 
@@ -445,6 +448,7 @@ impl Database {
                AND rowid > (SELECT rowid FROM chat_messages WHERE id = ?2)",
             params![workspace_id, after_message_id],
         )?;
+        self.best_effort_incremental_vacuum_after_delete(deleted);
         Ok(deleted)
     }
 
@@ -462,6 +466,7 @@ impl Database {
                AND rowid > (SELECT rowid FROM chat_messages WHERE id = ?2)",
             params![chat_session_id, after_message_id],
         )?;
+        self.best_effort_incremental_vacuum_after_delete(deleted);
         Ok(deleted)
     }
 
@@ -541,7 +546,7 @@ impl Database {
 mod tests {
     use super::*;
     use crate::db::test_support::*;
-    use crate::model::ChatRole;
+    use crate::model::{ChatRole, CheckpointFile};
 
     /// Build a `ConversationCheckpoint` anchored to the workspace's default
     /// active session.
@@ -773,6 +778,53 @@ mod tests {
         assert_eq!(turns[0].checkpoint_id, "cp2");
         assert_eq!(turns[0].activities.len(), 1);
         assert_eq!(turns[0].activities[0].id, "a2");
+    }
+
+    #[test]
+    fn test_delete_checkpoint_reclaims_checkpoint_file_pages() {
+        fn setup_checkpoint_file_db() -> (tempfile::TempDir, Database) {
+            let dir = tempfile::tempdir().unwrap();
+            let db = Database::open(&dir.path().join("claudette.db")).unwrap();
+            db.insert_repository(&make_repo("r1", "/tmp/repo1", "repo1"))
+                .unwrap();
+            db.insert_workspace(&make_workspace("w1", "r1", "fix-bug"))
+                .unwrap();
+            db.insert_chat_message(&make_chat_msg(&db, "m1", "w1", ChatRole::Assistant, "a1"))
+                .unwrap();
+            db.insert_checkpoint(&make_checkpoint(&db, "cp1", "w1", "m1", 0))
+                .unwrap();
+            db.insert_checkpoint_files(&[CheckpointFile {
+                id: "cf1".into(),
+                checkpoint_id: "cp1".into(),
+                file_path: "large.bin".into(),
+                content: Some(vec![7; 1024 * 1024]),
+                file_mode: 0o100644,
+            }])
+            .unwrap();
+            (dir, db)
+        }
+
+        let (_raw_dir, raw_db) = setup_checkpoint_file_db();
+        raw_db
+            .conn()
+            .execute("DELETE FROM conversation_checkpoints WHERE id = 'cp1'", [])
+            .unwrap();
+        let freelist_after_raw_delete: i64 = raw_db
+            .conn()
+            .query_row("PRAGMA freelist_count", [], |row| row.get(0))
+            .unwrap();
+
+        let (_vacuum_dir, vacuum_db) = setup_checkpoint_file_db();
+        vacuum_db.delete_checkpoint("cp1").unwrap();
+        let freelist_after_vacuuming_delete: i64 = vacuum_db
+            .conn()
+            .query_row("PRAGMA freelist_count", [], |row| row.get(0))
+            .unwrap();
+
+        assert!(
+            freelist_after_vacuuming_delete < freelist_after_raw_delete,
+            "checkpoint file delete should drain some free pages; raw={freelist_after_raw_delete} vacuumed={freelist_after_vacuuming_delete}"
+        );
     }
 
     #[test]
