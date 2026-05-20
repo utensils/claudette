@@ -45,14 +45,16 @@ export async function sendToNewWorkspace(
   const outcome = await createWorkspaceOrchestrated(args.repoId, {
     selectOnCreate: true,
     idempotencyKey: sendIdempotencyKey(args),
+    onIdempotencyDuplicate: () => {
+      store.addToast(
+        `#${args.number} is already being sent to a new workspace.`,
+      );
+    },
   });
   if (!outcome) {
-    // The idempotency guard fired — this exact item is already queued
-    // or creating. Surface a toast so the click doesn't appear to
-    // silently no-op, while distinct issue/PR sends continue to queue.
-    store.addToast(
-      `#${args.number} is already being sent to a new workspace.`,
-    );
+    // Either the duplicate callback above already surfaced the true
+    // same-item repeat, or the orchestrator handled a backend in-flight
+    // rejection with its own repo-scoped toast.
     return;
   }
   const { workspaceId, sessionId } = outcome;

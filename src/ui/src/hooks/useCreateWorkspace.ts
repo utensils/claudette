@@ -71,6 +71,9 @@ export interface CreateWorkspaceOptions {
    *  issue/PR sends pass an item-specific key so distinct sends queue while
    *  an accidental re-fire of the same row still collapses to one create. */
   idempotencyKey?: string;
+  /** Called only when `idempotencyKey` is already in flight. Other `null`
+   *  outcomes, such as a backend in-flight rejection, do not call this. */
+  onIdempotencyDuplicate?: () => void;
 }
 
 // Module-level queue/idempotency state. Lives outside the hook so the
@@ -112,7 +115,10 @@ export async function createWorkspaceOrchestrated(
 ): Promise<CreateWorkspaceOutcome | null> {
   const idempotencyKey =
     options.idempotencyKey ?? DEFAULT_CREATE_IDEMPOTENCY_KEY;
-  if (createKeysInFlight.has(idempotencyKey)) return null;
+  if (createKeysInFlight.has(idempotencyKey)) {
+    options.onIdempotencyDuplicate?.();
+    return null;
+  }
   createKeysInFlight.add(idempotencyKey);
 
   const runAfterPrior = createQueueTail.then(
@@ -313,7 +319,7 @@ async function runCreateWorkspaceOrchestrated(
 
 export type UseCreateWorkspaceOptions = Omit<
   CreateWorkspaceOptions,
-  "idempotencyKey"
+  "idempotencyKey" | "onIdempotencyDuplicate"
 >;
 
 /** React hook wrapping `createWorkspaceOrchestrated` with local React

@@ -213,6 +213,7 @@ describe("sendToNewWorkspace", () => {
         String(ISSUE_ARGS.number),
         ISSUE_ARGS.url,
       ].join(":"),
+      onIdempotencyDuplicate: expect.any(Function),
     });
     expect(mockedApplyModel).toHaveBeenCalledWith(
       "sess-1",
@@ -257,7 +258,10 @@ describe("sendToNewWorkspace", () => {
   });
 
   it("surfaces a toast and skips the send when the create idempotency guard fires", async () => {
-    mockedCreate.mockResolvedValue(null);
+    mockedCreate.mockImplementationOnce((_repoId, options) => {
+      options?.onIdempotencyDuplicate?.();
+      return Promise.resolve(null);
+    });
 
     await sendToNewWorkspace(ISSUE_ARGS);
 
@@ -267,6 +271,20 @@ describe("sendToNewWorkspace", () => {
     expect(toasts.some((t) => /already being sent/i.test(t.message))).toBe(
       true,
     );
+  });
+
+  it("does not add a duplicate toast when create returns null for another reason", async () => {
+    mockedCreate.mockResolvedValue(null);
+
+    await sendToNewWorkspace(ISSUE_ARGS);
+
+    expect(mockedApplyModel).not.toHaveBeenCalled();
+    expect(mockedSend).not.toHaveBeenCalled();
+    expect(
+      useAppStore
+        .getState()
+        .toasts.some((t) => /already being sent/i.test(t.message)),
+    ).toBe(false);
   });
 
   it("toasts a confirmation after a successful send", async () => {
