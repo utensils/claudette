@@ -338,10 +338,11 @@ impl Database {
         &self,
         workspace_id: &str,
     ) -> Result<(), rusqlite::Error> {
-        self.conn.execute(
+        let deleted = self.conn.execute(
             "DELETE FROM chat_messages WHERE workspace_id = ?1",
             params![workspace_id],
         )?;
+        self.best_effort_incremental_vacuum_after_delete(deleted);
         Ok(())
     }
 
@@ -350,18 +351,20 @@ impl Database {
         &self,
         chat_session_id: &str,
     ) -> Result<(), rusqlite::Error> {
-        self.conn.execute(
+        let deleted = self.conn.execute(
             "DELETE FROM chat_messages WHERE chat_session_id = ?1",
             params![chat_session_id],
         )?;
+        self.best_effort_incremental_vacuum_after_delete(deleted);
         Ok(())
     }
 
     pub fn delete_chat_message(&self, message_id: &str) -> Result<(), rusqlite::Error> {
-        self.conn.execute(
+        let deleted = self.conn.execute(
             "DELETE FROM chat_messages WHERE id = ?1",
             params![message_id],
         )?;
+        self.best_effort_incremental_vacuum_after_delete(deleted);
         Ok(())
     }
 
