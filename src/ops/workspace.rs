@@ -30,7 +30,6 @@ use crate::env::{WorkspaceEnv, enriched_path};
 use crate::env_provider::ResolvedEnv;
 use crate::git;
 use crate::model::{AgentStatus, Workspace, WorkspaceStatus};
-use crate::process::CommandWindowExt as _;
 use crate::workspace_alloc::{allocate_workspace_name, is_valid_workspace_name};
 
 use super::{NotificationEvent, OpsError, OpsHooks, WorkspaceChangeKind};
@@ -263,7 +262,6 @@ fn build_script_command(script: &str, worktree_path: &Path) -> TokioCommand {
         c.arg("/S").arg("/C").arg(script);
         c
     };
-    cmd.no_console_window();
     cmd.current_dir(worktree_path)
         .env("PATH", enriched_path())
         .stdout(std::process::Stdio::piped())
@@ -296,7 +294,6 @@ fn build_script_command(script: &str, worktree_path: &Path) -> TokioCommand {
 #[cfg(windows)]
 async fn kill_script_subtree(pid: u32) {
     let _ = crate::process::command("taskkill")
-        .no_console_window()
         .args(["/PID", &pid.to_string(), "/T", "/F"])
         .output()
         .await;
@@ -1598,7 +1595,6 @@ mod tests {
         use std::time::Duration;
 
         let mut child = crate::process::command("cmd.exe")
-            .no_console_window()
             .args([
                 "/C",
                 "start /B ping -n 30 127.0.0.1 >NUL & ping -n 30 127.0.0.1 >NUL",

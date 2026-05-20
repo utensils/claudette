@@ -10,8 +10,6 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use tokio::time::timeout;
 
-use crate::process::CommandWindowExt as _;
-
 /// One option parsed out of `claude --help`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ClaudeFlagDef {
@@ -257,7 +255,6 @@ fn parse_description_choices(desc: &str) -> Option<Vec<String>> {
 pub async fn discover_claude_flags() -> Result<Vec<ClaudeFlagDef>, String> {
     let claude_path = crate::agent::resolve_claude_path().await;
     let mut cmd = crate::process::command(&claude_path);
-    cmd.no_console_window();
     cmd.arg("--help")
         .env("PATH", crate::env::enriched_path())
         .stdin(std::process::Stdio::null())

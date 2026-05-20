@@ -6,7 +6,7 @@ use tokio::io::BufReader;
 use tokio::sync::mpsc;
 
 use crate::env::WorkspaceEnv;
-use crate::process::{CommandWindowExt as _, sanitize_claude_subprocess_env};
+use crate::process::sanitize_claude_subprocess_env;
 
 use super::AgentSettings;
 use super::args::{build_claude_args, build_stdin_message};
@@ -90,7 +90,6 @@ pub async fn run_turn(
 
     let claude_path = resolve_claude_path().await;
     let mut cmd = crate::process::command(&claude_path);
-    cmd.no_console_window();
     cmd.args(&args)
         .current_dir(working_dir)
         .stdout(std::process::Stdio::piped())
@@ -262,7 +261,6 @@ async fn stop_agent_force(pid: u32) -> std::io::Result<std::process::Output> {
     #[cfg(unix)]
     {
         crate::process::command("kill")
-            .no_console_window()
             .args(["-9", &pid.to_string()])
             .output()
             .await
@@ -270,7 +268,6 @@ async fn stop_agent_force(pid: u32) -> std::io::Result<std::process::Output> {
     #[cfg(windows)]
     {
         crate::process::command("taskkill")
-            .no_console_window()
             .args(["/PID", &pid.to_string(), "/T", "/F"])
             .output()
             .await
@@ -290,13 +287,11 @@ pub async fn stop_agent_graceful(pid: u32) -> Result<(), String> {
     // escalation below covers any "process didn't respond" case.
     #[cfg(unix)]
     let _ = crate::process::command("kill")
-        .no_console_window()
         .args(["-15", &pid.to_string()])
         .output()
         .await;
     #[cfg(windows)]
     let _ = crate::process::command("taskkill")
-        .no_console_window()
         .args(["/PID", &pid.to_string(), "/T"])
         .output()
         .await;
@@ -326,7 +321,6 @@ async fn pid_is_alive(pid: u32) -> bool {
     #[cfg(unix)]
     {
         let probe = crate::process::command("kill")
-            .no_console_window()
             .args(["-0", &pid.to_string()])
             .output()
             .await;
@@ -335,7 +329,6 @@ async fn pid_is_alive(pid: u32) -> bool {
     #[cfg(windows)]
     {
         let probe = crate::process::command("tasklist")
-            .no_console_window()
             .args(["/FI", &format!("PID eq {pid}"), "/NH", "/FO", "CSV"])
             .output()
             .await;
@@ -365,7 +358,6 @@ mod tests {
     async fn test_stop_agent_graceful_stops_process_before_escalation() {
         // Spawn a process that traps SIGTERM and exits cleanly.
         let mut child = crate::process::command("sh")
-            .no_console_window()
             .args(["-c", "trap 'exit 0' TERM; sleep 5"])
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
@@ -387,7 +379,6 @@ mod tests {
 
         // kill -0 should fail for a dead process.
         let probe = crate::process::command("kill")
-            .no_console_window()
             .args(["-0", &pid.to_string()])
             .output()
             .await;

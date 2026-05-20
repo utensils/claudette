@@ -1,10 +1,8 @@
+use serde::Serialize;
 use std::ffi::OsString;
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
-
-use crate::process::CommandWindowExt as _;
-use serde::Serialize;
 
 /// Resolve the `git` binary once and reuse the absolute path for every
 /// subsequent call. Caching matters because git is invoked dozens of times
@@ -207,7 +205,6 @@ impl std::error::Error for GitError {}
 
 async fn run_git(repo_path: &str, args: &[&str]) -> Result<String, GitError> {
     let output = crate::process::command(crate::git::resolve_git_path_blocking())
-        .no_console_window()
         .args(["-C", repo_path])
         .args(args)
         .output()
@@ -226,7 +223,6 @@ async fn run_git(repo_path: &str, args: &[&str]) -> Result<String, GitError> {
 /// Returns `None` if not configured.
 pub async fn get_git_username() -> Result<Option<String>, GitError> {
     let output = crate::process::command(crate::git::resolve_git_path_blocking())
-        .no_console_window()
         .args(["config", "--global", "user.name"])
         .output()
         .await
@@ -320,7 +316,6 @@ pub async fn read_blob_at_revision(
 
     let spec = format!("{revision}:{file_path}");
     let exists = crate::process::command(crate::git::resolve_git_path_blocking())
-        .no_console_window()
         .args(["-C", worktree_path])
         .args(["cat-file", "-e", &spec])
         .output()
@@ -339,7 +334,6 @@ pub async fn read_blob_at_revision(
     // frontend disables the gutter regardless, so we short-circuit here to
     // skip a wasteful IPC roundtrip.
     let size_out = crate::process::command(crate::git::resolve_git_path_blocking())
-        .no_console_window()
         .args(["-C", worktree_path])
         .args(["cat-file", "-s", &spec])
         .output()
@@ -364,7 +358,6 @@ pub async fn read_blob_at_revision(
     }
 
     let bytes_out = crate::process::command(crate::git::resolve_git_path_blocking())
-        .no_console_window()
         .args(["-C", worktree_path])
         .args(["cat-file", "blob", &spec])
         .output()
@@ -515,7 +508,6 @@ pub async fn fetch_remote(repo_path: &str, remote_override: Option<&str>) -> Res
 
     // Spawn with kill_on_drop so the child is terminated if the timeout fires.
     let mut child = match crate::process::command(crate::git::resolve_git_path_blocking())
-        .no_console_window()
         .args(["-C", repo_path, "fetch", &remote])
         .kill_on_drop(true)
         .stdout(std::process::Stdio::null())
@@ -1356,7 +1348,6 @@ mod tests {
         let clone_dir = tempfile::tempdir().unwrap();
         let clone_path = clone_dir.path().to_str().unwrap();
         let output = crate::process::command(crate::git::resolve_git_path_blocking())
-            .no_console_window()
             .args(["clone", remote_path, clone_path])
             .output()
             .await
@@ -1389,7 +1380,6 @@ mod tests {
         let pusher = tempfile::tempdir().unwrap();
         let pusher_path = pusher.path().to_str().unwrap();
         let out = crate::process::command(crate::git::resolve_git_path_blocking())
-            .no_console_window()
             .args(["clone", remote_path, pusher_path])
             .output()
             .await

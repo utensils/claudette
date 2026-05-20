@@ -217,11 +217,12 @@ mod tests {
     /// `CommandExt::creation_flags` code path end-to-end.
     #[cfg(windows)]
     #[test]
-    fn windows_spawn_with_flag_succeeds() {
-        // `cmd /C exit 0` is always available on Windows.
+    fn windows_std_command_default_flag_spawns() {
+        // `cmd /C exit 0` is always available on Windows. Do not call
+        // `.no_console_window()` here: this test exercises the std helper's
+        // default constructor path.
         let status = crate::process::std_command("cmd")
             .args(["/C", "exit", "0"])
-            .no_console_window()
             .status()
             .expect("cmd.exe should be spawnable");
         assert!(status.success());

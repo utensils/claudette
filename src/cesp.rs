@@ -6,11 +6,6 @@ use std::time::{Duration, Instant};
 use rand::seq::SliceRandom;
 
 use crate::model::cesp::{CespManifest, CespSound, InstalledPack, InstalledPackMeta, RegistryPack};
-// Sound-playback spawns only live under macOS/Linux cfg branches — the
-// trait import is likewise macOS/Linux-only so Windows doesn't flag it
-// as unused.
-#[cfg(any(target_os = "macos", target_os = "linux"))]
-use crate::process::CommandWindowExt as _;
 
 const MANIFEST_FILE: &str = "openpeon.json";
 const META_FILE: &str = "_meta.json";
@@ -422,7 +417,6 @@ pub fn play_audio_file(path: &Path, volume: f64) {
             .to_lowercase();
         let result = if ext == "ogg" || ext == "oga" {
             crate::process::std_command("ffplay")
-                .no_console_window()
                 .args(["-nodisp", "-autoexit", "-volume"])
                 .arg(format!("{}", (volume * 100.0) as u32))
                 .arg(path)
@@ -431,7 +425,6 @@ pub fn play_audio_file(path: &Path, volume: f64) {
                 .spawn()
         } else {
             crate::process::std_command("afplay")
-                .no_console_window()
                 .arg("-v")
                 .arg(format!("{volume}"))
                 .arg(path)
@@ -451,7 +444,6 @@ pub fn play_audio_file(path: &Path, volume: f64) {
             .to_lowercase();
         let result = if ext == "mp3" {
             crate::process::std_command("ffplay")
-                .no_console_window()
                 .args(["-nodisp", "-autoexit", "-volume"])
                 .arg(format!("{}", (volume * 100.0) as u32))
                 .arg(path)
@@ -461,14 +453,12 @@ pub fn play_audio_file(path: &Path, volume: f64) {
         } else {
             let pa_volume = (volume * 65536.0) as u32;
             crate::process::std_command("paplay")
-                .no_console_window()
                 .arg("--volume")
                 .arg(pa_volume.to_string())
                 .arg(path)
                 .spawn()
                 .or_else(|_| {
                     crate::process::std_command("ffplay")
-                        .no_console_window()
                         .args(["-nodisp", "-autoexit", "-volume"])
                         .arg(format!("{}", (volume * 100.0) as u32))
                         .arg(path)

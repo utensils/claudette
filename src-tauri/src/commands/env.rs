@@ -1019,17 +1019,17 @@ pub async fn run_env_trust(
     let mut errors: Vec<String> = Vec::new();
     let mut approved_envrc_sha256s: Vec<String> = Vec::new();
     for path in &scope.paths {
-        let mut command = command(cmd[0]);
-        command.args(&cmd[1..]);
-        command.current_dir(path);
-        command.env("PATH", claudette::env::enriched_path());
+        let mut process = command(cmd[0]);
+        process.args(&cmd[1..]);
+        process.current_dir(path);
+        process.env("PATH", claudette::env::enriched_path());
         for key in ENV_PROVIDER_PASSTHROUGH_KEYS {
             if let Ok(val) = std::env::var(key) {
-                command.env(key, val);
+                process.env(key, val);
             }
         }
 
-        let output = command
+        let output = process
             .output()
             .await
             .map_err(|e| format!("failed to spawn {}: {e}", cmd[0]))?;

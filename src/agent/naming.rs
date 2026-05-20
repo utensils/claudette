@@ -2,7 +2,7 @@ use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
 use crate::env::WorkspaceEnv;
-use crate::process::{CommandWindowExt as _, sanitize_claude_subprocess_env};
+use crate::process::sanitize_claude_subprocess_env;
 
 use super::binary::resolve_claude_path;
 
@@ -177,7 +177,6 @@ pub async fn generate_branch_name(
 
     let claude_path = resolve_claude_path().await;
     let mut cmd = crate::process::command(&claude_path);
-    cmd.no_console_window();
     cmd.stdin(std::process::Stdio::null())
         .env("PATH", crate::env::enriched_path());
     cmd.current_dir(worktree_path);
@@ -266,11 +265,8 @@ pub async fn generate_session_name(
 
     let claude_path = resolve_claude_path().await;
     let mut cmd = crate::process::command(&claude_path);
-    // Without CREATE_NO_WINDOW the background `claude --print` spawn allocates
-    // a fresh console and a black cmd.exe window flashes on screen for the
-    // duration of the Haiku call. The sibling `generate_branch_name` already
-    // does this; keep them in sync.
-    cmd.no_console_window();
+    // The process helper applies CREATE_NO_WINDOW so the background
+    // `claude --print` spawn cannot flash a cmd.exe window in release builds.
     cmd.stdin(std::process::Stdio::null())
         .env("PATH", crate::env::enriched_path());
     cmd.current_dir(worktree_path);

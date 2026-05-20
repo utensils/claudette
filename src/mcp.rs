@@ -10,10 +10,8 @@
 //! Sources 1 and 3 are auto-discovered by the CLI in worktrees, but are
 //! detected here for UI display purposes (connectors menu, settings).
 
-use std::path::Path;
-
-use crate::process::CommandWindowExt as _;
 use serde::{Deserialize, Serialize};
+use std::path::Path;
 
 /// A detected MCP server with its full configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -467,7 +465,6 @@ fn detect_repo_local_mcps(repo_path: &Path) -> Option<Vec<McpServer>> {
 /// Check if a file is explicitly gitignored (returns true if ignored).
 fn is_gitignored(repo_path: &Path, file: &str) -> bool {
     crate::process::std_command(crate::git::resolve_git_path_blocking())
-        .no_console_window()
         .args(["check-ignore", "-q", file])
         .current_dir(repo_path)
         .stdout(std::process::Stdio::null())
@@ -489,7 +486,6 @@ mod tests {
 
         // Init git repo
         crate::process::std_command(crate::git::resolve_git_path_blocking())
-            .no_console_window()
             .args(["init"])
             .current_dir(repo)
             .stdout(std::process::Stdio::null())
@@ -505,7 +501,6 @@ mod tests {
 
         // Stage and commit .gitignore so git is functional
         crate::process::std_command(crate::git::resolve_git_path_blocking())
-            .no_console_window()
             .args(["add", ".gitignore"])
             .current_dir(repo)
             .stdout(std::process::Stdio::null())
@@ -513,7 +508,6 @@ mod tests {
             .status()
             .unwrap();
         crate::process::std_command(crate::git::resolve_git_path_blocking())
-            .no_console_window()
             .args(["commit", "-m", "init", "--allow-empty"])
             .current_dir(repo)
             .stdout(std::process::Stdio::null())
@@ -552,7 +546,6 @@ mod tests {
 
         // Init git repo WITHOUT .gitignore
         crate::process::std_command(crate::git::resolve_git_path_blocking())
-            .no_console_window()
             .args(["init"])
             .current_dir(repo)
             .stdout(std::process::Stdio::null())
@@ -676,7 +669,6 @@ mod tests {
     fn test_is_gitignored_false_not_ignored() {
         let dir = TempDir::new().unwrap();
         crate::process::std_command(crate::git::resolve_git_path_blocking())
-            .no_console_window()
             .args(["init"])
             .current_dir(dir.path())
             .stdout(std::process::Stdio::null())

@@ -14,9 +14,9 @@ use claudette::model::{AgentStatus, ChatMessage, ChatRole, Workspace, WorkspaceS
 use claudette::names::NameGenerator;
 use claudette::ops::workspace::{self as ops_workspace, CreateParams, SetupResult};
 use claudette::ops::{NoopHooks, NotificationEvent, OpsHooks, WorkspaceChangeKind};
-// All three platforms call into the trait now: Linux/macOS via
-// `.no_console_window()`, Windows via `.new_console_window()` for the
-// fallback terminal launchers below.
+// Windows fallback terminal launchers intentionally allocate a visible
+// console via `.new_console_window()`.
+#[cfg(target_os = "windows")]
 use claudette::process::CommandWindowExt as _;
 
 use crate::commands::apps::{self, DEFAULT_TERMINAL_APP_SETTING_KEY};
@@ -1995,7 +1995,6 @@ pub async fn open_workspace_in_terminal(
         let mut errors = Vec::new();
         for (terminal, args) in &terminals {
             let mut cmd = claudette::process::command(terminal);
-            cmd.no_console_window();
             for arg in args {
                 cmd.arg(arg);
             }
@@ -2042,7 +2041,6 @@ pub async fn open_workspace_in_terminal(
         );
 
         claudette::process::command("osascript")
-            .no_console_window()
             .arg("-e")
             .arg(&script)
             .spawn()

@@ -6,7 +6,6 @@ use crate::usage::{self, ClaudeCodeUsage};
 use claudette::agent::{CodexAppServerOptions, CodexAppServerSession};
 use claudette::agent_backend::{AgentBackendConfig, AgentBackendKind};
 use claudette::db::Database;
-use claudette::process::CommandWindowExt as _;
 use claudette::usage::{
     UsageSnapshot, anthropic_oauth, codex_account, local_aggregate, openrouter,
 };
@@ -293,7 +292,6 @@ async fn open_external_url(url: &str) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     {
         claudette::process::command("open")
-            .no_console_window()
             .arg(url)
             .spawn()
             .map_err(|e| format!("Failed to open URL: {e}"))?;
@@ -306,7 +304,6 @@ async fn open_external_url(url: &str) -> Result<(), String> {
         // quirk — current callers pass controlled URLs, but the defensive
         // form costs nothing and protects future callers.
         claudette::process::command("cmd")
-            .no_console_window()
             .args(["/C", "start", "", url])
             .spawn()
             .map_err(|e| format!("Failed to open URL: {e}"))?;
@@ -314,7 +311,6 @@ async fn open_external_url(url: &str) -> Result<(), String> {
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
         claudette::process::command("xdg-open")
-            .no_console_window()
             .arg(url)
             .spawn()
             .map_err(|e| format!("Failed to open URL: {e}"))?;

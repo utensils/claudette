@@ -11,8 +11,6 @@ use tokio::sync::broadcast;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 
-use crate::process::CommandWindowExt as _;
-
 use super::{
     AgentEvent, AssistantMessage, ContentBlock, ControlRequestInner, Delta, FileAttachment,
     InnerStreamEvent, StartContentBlock, StreamEvent, TokenUsage, TurnHandle,
@@ -132,7 +130,6 @@ impl CodexAppServerSession {
 
         let codex_path = super::binary::resolve_codex_path().await;
         let mut cmd = crate::process::command(codex_path);
-        cmd.no_console_window();
         cmd.args(codex_app_server_args())
             .current_dir(working_dir)
             .stdin(std::process::Stdio::piped())

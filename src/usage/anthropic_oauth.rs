@@ -11,10 +11,8 @@
 //! [`ENV_AUTH_ERROR`] — that token only has `user:inference` scope and
 //! the usage endpoint requires the full OAuth scope set.
 
-use std::time::{SystemTime, UNIX_EPOCH};
-
-use crate::process::CommandWindowExt as _;
 use serde::{Deserialize, Serialize};
+use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::RwLock;
 
 // ---------------------------------------------------------------------------
@@ -156,7 +154,6 @@ static USER_AGENT_CACHE: std::sync::OnceLock<String> = std::sync::OnceLock::new(
 pub fn warm_user_agent_cache_sync() {
     let claude_path = crate::agent::resolve_claude_path_blocking();
     let output = crate::process::std_command(&claude_path)
-        .no_console_window()
         .arg("--version")
         .env("PATH", crate::env::enriched_path())
         .output();
@@ -192,7 +189,6 @@ async fn read_credentials_platform() -> Result<CredentialFile, String> {
     // Claude Code stores credentials under $USER, not a fixed account name.
     let user = std::env::var("USER").unwrap_or_else(|_| "root".to_string());
     let output = crate::process::command("security")
-        .no_console_window()
         .args([
             "find-generic-password",
             "-s",

@@ -808,14 +808,12 @@ impl AppState {
 #[cfg(unix)]
 mod tests {
     use super::*;
-    use claudette::process::CommandWindowExt as _;
 
     /// Helper: spawn a long-running `sleep` process and return its PID.
     fn spawn_sleep() -> (tokio::process::Child, u32) {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
             let child = claudette::process::command("sleep")
-                .no_console_window()
                 .arg("3600")
                 .kill_on_drop(true)
                 .spawn()
@@ -874,7 +872,6 @@ mod tests {
         let rt = tokio::runtime::Runtime::new().unwrap();
         let (child, pid) = rt.block_on(async {
             let child = claudette::process::command("sleep")
-                .no_console_window()
                 .arg("3600")
                 .kill_on_drop(true)
                 .spawn()

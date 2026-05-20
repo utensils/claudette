@@ -6,7 +6,7 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{ChildStderr, ChildStdout};
 use tokio::time::timeout;
 
-use claudette::process::{CommandWindowExt as _, sanitize_claude_subprocess_env};
+use claudette::process::sanitize_claude_subprocess_env;
 
 use crate::state::AppState;
 
@@ -75,7 +75,6 @@ pub async fn get_claude_auth_status(
     let claude_path = claudette::agent::resolve_claude_path().await;
     let mut command = claudette::process::command(&claude_path);
     command
-        .no_console_window()
         .args(["auth", "status", "--json"])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -142,7 +141,6 @@ pub async fn is_claude_oauth_authenticated() -> bool {
     let claude_path = claudette::agent::resolve_claude_path().await;
     let mut command = claudette::process::command(&claude_path);
     command
-        .no_console_window()
         .args(["auth", "status", "--json"])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -221,7 +219,6 @@ async fn validate_claude_auth(
 ) -> Result<ClaudeAuthStatus, String> {
     let mut command = claudette::process::command(&claude_path);
     command
-        .no_console_window()
         .arg("-p")
         .arg("Reply with exactly: OK")
         .arg("--output-format")
@@ -355,7 +352,6 @@ pub async fn claude_auth_login(app: AppHandle, state: State<'_, AppState>) -> Re
 
     let mut command = claudette::process::command(&claude_path);
     command
-        .no_console_window()
         .args(["auth", "login"])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())

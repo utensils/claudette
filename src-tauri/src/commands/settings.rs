@@ -6,7 +6,6 @@ use tauri::{AppHandle, State};
 use claudette::db::Database;
 
 use crate::state::AppState;
-use claudette::process::CommandWindowExt as _;
 
 /// Spawn a short-lived process and reap it in a background thread to prevent zombies.
 pub(crate) fn spawn_and_reap(mut child: std::process::Child) {
@@ -174,7 +173,6 @@ pub async fn list_system_fonts() -> Vec<String> {
         // Swift is always available on macOS; NSFontManager is the canonical API.
         let script = r#"import AppKit; NSFontManager.shared.availableFontFamilies.sorted().forEach { print($0) }"#;
         if let Ok(output) = claudette::process::command("/usr/bin/swift")
-            .no_console_window()
             .arg("-e")
             .arg(script)
             .output()
@@ -194,7 +192,6 @@ pub async fn list_system_fonts() -> Vec<String> {
     {
         // fontconfig is standard on all Linux desktops.
         if let Ok(output) = claudette::process::command("fc-list")
-            .no_console_window()
             .args([":", "family"])
             .output()
             .await
@@ -242,7 +239,6 @@ pub fn play_notification_sound(sound: String, volume: Option<f64>) {
             format!("/System/Library/Sounds/{sound}.aiff")
         };
         if let Ok(child) = claudette::process::std_command("afplay")
-            .no_console_window()
             .arg("-v")
             .arg(format!("{vol}"))
             .arg(&path)
@@ -260,13 +256,11 @@ pub fn play_notification_sound(sound: String, volume: Option<f64>) {
         };
         let pa_volume = (vol * 65536.0) as u32;
         if let Ok(child) = claudette::process::std_command("canberra-gtk-play")
-            .no_console_window()
             .arg("-i")
             .arg(&sound_name)
             .spawn()
             .or_else(|_| {
                 claudette::process::std_command("paplay")
-                    .no_console_window()
                     .arg("--volume")
                     .arg(pa_volume.to_string())
                     .arg(format!(
@@ -363,7 +357,6 @@ pub(crate) fn build_notification_command(
         c.arg("/S").arg("/C").arg(cmd);
         c
     };
-    command.no_console_window();
     ws_env.apply_std(&mut command);
     Some(command)
 }

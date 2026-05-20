@@ -25,9 +25,6 @@ use std::time::{Duration, Instant};
 #[cfg(unix)]
 use std::collections::HashMap;
 
-#[cfg(windows)]
-use claudette::process::CommandWindowExt as _;
-
 /// Walk the process tree from each root and return every descendant PID
 /// (not including the roots themselves). Single `ps` invocation regardless
 /// of how many roots are provided.
@@ -123,7 +120,6 @@ pub fn kill_processes_with_descendants(roots: &[i32], grace_ms: u64) {
     // Phase 1: graceful taskkill /T (per-root subtree).
     for &pid in &roots {
         let _ = claudette::process::std_command("taskkill")
-            .no_console_window()
             .args(["/PID", &pid.to_string(), "/T"])
             .output();
     }
@@ -143,7 +139,6 @@ pub fn kill_processes_with_descendants(roots: &[i32], grace_ms: u64) {
     // Phase 3: force-kill the subtree.
     for &pid in &roots {
         let _ = claudette::process::std_command("taskkill")
-            .no_console_window()
             .args(["/PID", &pid.to_string(), "/T", "/F"])
             .output();
     }

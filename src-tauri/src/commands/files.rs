@@ -10,7 +10,6 @@ use claudette::file_watcher::FileWatcher;
 use claudette::model::diff::{FileStatus, GitFileLayer};
 
 use crate::state::AppState;
-use claudette::process::CommandWindowExt as _;
 
 const MAX_FILES: usize = 10_000;
 
@@ -297,7 +296,6 @@ async fn stream_ls_files(
     use tokio::io::{AsyncBufReadExt, BufReader};
 
     let mut child = claudette::process::command(claudette::git::resolve_git_path_blocking())
-        .no_console_window()
         .args(["-C", worktree_path])
         .args(args)
         .stdout(std::process::Stdio::piped())
@@ -1019,7 +1017,6 @@ fn reveal_path(path: &Path) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     {
         let output = claudette::process::std_command("open")
-            .no_console_window()
             .arg("-R")
             .arg(path)
             .output()
@@ -1033,7 +1030,6 @@ fn reveal_path(path: &Path) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
         claudette::process::std_command("explorer")
-            .no_console_window()
             .arg(format!("/select,{}", path.to_string_lossy()))
             .spawn()
             .map(|_| ())
@@ -1894,7 +1890,6 @@ fn copy_image_bytes_to_clipboard(
          [System.Windows.Clipboard]::SetImage($frame)"
     );
     let output = claudette::process::std_command("powershell")
-        .no_console_window()
         .args(["-NoProfile", "-NonInteractive", "-Command", &script])
         .output()
         .map_err(|e| format!("failed to run powershell: {e}"))?;

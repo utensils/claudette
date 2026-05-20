@@ -9,7 +9,7 @@ use tokio::process::Command;
 use tokio::sync::mpsc;
 
 use crate::env::WorkspaceEnv;
-use crate::process::{CommandWindowExt as _, sanitize_claude_subprocess_env};
+use crate::process::sanitize_claude_subprocess_env;
 
 use super::AgentSettings;
 use super::args::{
@@ -93,7 +93,6 @@ impl PersistentSession {
 
         let claude_path = resolve_claude_path().await;
         let mut cmd = crate::process::command(&claude_path);
-        cmd.no_console_window();
         cmd.args(&args)
             .current_dir(working_dir)
             .stdin(std::process::Stdio::piped())

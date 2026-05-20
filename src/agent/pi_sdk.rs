@@ -11,8 +11,6 @@ use tokio::sync::broadcast;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 
-use crate::process::CommandWindowExt as _;
-
 use super::environment::apply_resolved_env_to_command;
 use super::{
     AgentEvent, AssistantMessage, ContentBlock, ControlRequestInner, Delta, FileAttachment,
@@ -257,7 +255,6 @@ impl PiSdkSession {
 
         let pi_path = resolve_pi_harness_path().await;
         let mut cmd = crate::process::command(&pi_path);
-        cmd.no_console_window();
         cmd.current_dir(config.working_dir)
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())

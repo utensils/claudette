@@ -10,8 +10,6 @@
 //!
 //! It also defines [`WorkspaceEnv`], the set of `CLAUDETTE_*` environment
 //! variables injected into every subprocess.
-
-use crate::process::CommandWindowExt as _;
 use std::ffi::OsString;
 use std::path::Path;
 use std::sync::OnceLock;
@@ -254,7 +252,6 @@ fn login_shell_path_probe() -> Option<OsString> {
     };
 
     let mut child = crate::process::std_command(&shell)
-        .no_console_window()
         .args(["-l", "-c", cmd_arg])
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
@@ -486,7 +483,6 @@ mod tests {
     fn apply_std_sets_env_on_command() {
         let env = sample_env();
         let mut cmd = crate::process::std_command("echo");
-        cmd.no_console_window();
         env.apply_std(&mut cmd);
 
         let envs: Vec<_> = cmd.get_envs().collect();
