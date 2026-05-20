@@ -136,8 +136,12 @@ export function ChatPanel() {
   const chatScrollTopBySessionRef = useRef(new Map<string, number>());
   const restoringChatScrollSessionsRef = useRef(new Set<string>());
   const [error, setError] = useState<string | null>(null);
-  const [isSteeringQueued, setIsSteeringQueued] = useState(false);
-  const [pendingSteerContent, setPendingSteerContent] = useState<string | null>(null);
+  const isSteeringQueued = useAppStore((s) =>
+    activeSessionId ? s.queuedMessageSteering[activeSessionId] === true : false,
+  );
+  const pendingSteerContent = useAppStore((s) =>
+    activeSessionId ? s.queuedMessageSteeringContent[activeSessionId] ?? null : null,
+  );
   const setQueuedMessageEditing = useAppStore((s) => s.setQueuedMessageEditing);
   const setQueuedMessageSteering = useAppStore((s) => s.setQueuedMessageSteering);
   const isMac = isMacHotkeyPlatform();
@@ -910,12 +914,6 @@ export function ChatPanel() {
     // Re-attach on session switch so the sessionId ref stays in sync.
   }, [activeSessionId]);
 
-  // Clear any in-flight steer indicator when the active session changes so
-  // the banner from session A never leaks into session B's view.
-  useEffect(() => {
-    setPendingSteerContent(null);
-  }, [activeSessionId]);
-
   // Auto-scroll when new content arrives — respects user intent via useStickyScroll.
   // Only scrolls if the user is already at/near the bottom.
   const prevMsgCountRef = useRef<Record<string, number>>({});
@@ -1031,9 +1029,7 @@ export function ChatPanel() {
       ? [...mentionedFiles]
       : undefined;
     setError(null);
-    setIsSteeringQueued(true);
-    setQueuedMessageSteering(sessionId, true);
-    setPendingSteerContent(content.trim() || null);
+    setQueuedMessageSteering(sessionId, true, content);
     try {
       const checkpoint = await steerQueuedChatMessage(
         sessionId,
@@ -1058,9 +1054,7 @@ export function ChatPanel() {
       setQueuedMessage(sessionId, content, mentionedFilesArray, attachments);
       setError(errMsg);
     } finally {
-      setIsSteeringQueued(false);
       setQueuedMessageSteering(sessionId, false);
-      setPendingSteerContent(null);
     }
   };
 
@@ -1085,10 +1079,8 @@ export function ChatPanel() {
       return;
     }
 
-    setIsSteeringQueued(true);
-    setQueuedMessageSteering(sessionId, true);
-    setPendingSteerContent(content.trim() || null);
     removeQueuedMessage(sessionId, queuedMessage.id);
+    setQueuedMessageSteering(sessionId, true, content);
     try {
       const checkpoint = await steerQueuedChatMessage(
         sessionId,
@@ -1111,9 +1103,7 @@ export function ChatPanel() {
       setQueuedMessage(sessionId, content, mentionedFiles, attachments);
       setError(errMsg);
     } finally {
-      setIsSteeringQueued(false);
       setQueuedMessageSteering(sessionId, false);
-      setPendingSteerContent(null);
     }
   };
 

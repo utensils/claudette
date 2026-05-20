@@ -141,6 +141,8 @@ export const createChatSessionsSlice: StateCreator<
       delete nextQueuedEditing[sessionId];
       const nextQueuedSteering = { ...s.queuedMessageSteering };
       delete nextQueuedSteering[sessionId];
+      const nextQueuedSteeringContent = { ...s.queuedMessageSteeringContent };
+      delete nextQueuedSteeringContent[sessionId];
       return {
         sessionsByWorkspace: next,
         selectedSessionIdByWorkspaceId: nextSelected,
@@ -150,6 +152,7 @@ export const createChatSessionsSlice: StateCreator<
         queuedMessageAutoDispatchPaused: nextQueuedPaused,
         queuedMessageEditing: nextQueuedEditing,
         queuedMessageSteering: nextQueuedSteering,
+        queuedMessageSteeringContent: nextQueuedSteeringContent,
       };
     }),
   selectSession: (workspaceId, sessionId) =>
