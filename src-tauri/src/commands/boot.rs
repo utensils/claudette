@@ -8,8 +8,9 @@ use crate::{
 #[tauri::command]
 pub fn boot_stage(stage: BootStage, detail: Option<String>) -> Result<(), String> {
     let data_dir = claudette::path::data_dir();
-    boot_probation::record_boot_stage(&data_dir, stage.clone(), detail)?;
-    tracing::debug!(target: "claudette::updater", ?stage, "boot probation stage recorded");
+    if boot_probation::record_boot_stage(&data_dir, stage.clone(), detail)? {
+        tracing::debug!(target: "claudette::updater", ?stage, "boot probation stage recorded");
+    }
     Ok(())
 }
 

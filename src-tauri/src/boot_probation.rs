@@ -212,13 +212,13 @@ pub fn record_boot_stage(
     data_dir: &Path,
     stage: BootStage,
     detail: Option<String>,
-) -> Result<(), String> {
+) -> Result<bool, String> {
     let _guard = PROBATION_FILE_LOCK
         .lock()
         .unwrap_or_else(|p| p.into_inner());
     let path = sentinel_path(data_dir);
     if !path.exists() {
-        return Ok(());
+        return Ok(false);
     }
     let mut probation = match read_probation_path(&path) {
         Ok(p) => p,
@@ -226,13 +226,14 @@ pub fn record_boot_stage(
     };
 
     if !matches!(probation.status, ProbationStatus::Pending) {
-        return Ok(());
+        return Ok(false);
     }
 
     if !apply_boot_stage(&mut probation, stage, detail) {
-        return Ok(());
+        return Ok(false);
     }
-    write_probation(data_dir, &probation)
+    write_probation(data_dir, &probation)?;
+    Ok(true)
 }
 
 /// Mark this boot as healthy so the in-memory timer is cancelled and
@@ -1178,6 +1179,15 @@ mod tests {
             got.latest_stage.as_ref().map(|stage| &stage.stage),
             Some(&BootStage::InitialDataLoading)
         );
+    }
+
+    #[test]
+    fn record_boot_stage_reports_noop_when_sentinel_is_absent() {
+        let tmp = tempdir().unwrap();
+
+        let changed = record_boot_stage(tmp.path(), BootStage::ReactMounted, None).unwrap();
+
+        assert!(!changed);
     }
 
     #[test]
