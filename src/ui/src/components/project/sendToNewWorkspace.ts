@@ -54,23 +54,6 @@ export async function sendToNewWorkspace(
   const { workspaceId, sessionId } = outcome;
   const provider = args.providerId ?? "anthropic";
   await applySelectedModel(sessionId, args.modelId, provider);
-  // Persist the issue/PR -> workspace association so the project view can
-  // show an "in progress" badge and the workspace knows what it is for.
-  // Best-effort: the workspace and its first turn already succeeded, so a
-  // failure here only costs the badge — never abort the send for it.
-  try {
-    const link = await createWorkspaceScmLink({
-      workspaceId,
-      repoId: args.repoId,
-      kind: args.kind,
-      number: args.number,
-      url: args.url,
-      title: args.title,
-    });
-    useAppStore.getState().setWorkspaceScmLink(link);
-  } catch (e) {
-    console.error("[sendToNewWorkspace] failed to persist SCM link:", e);
-  }
   const prompt = renderStarterPrompt(args);
   // Optimistically insert the user's prompt into the chat store BEFORE
   // firing the send. Without this the new workspace opens straight to
@@ -117,6 +100,25 @@ export async function sendToNewWorkspace(
     /* attachments */ undefined,
     messageId,
   );
+  // Persist the issue/PR -> workspace association only once the send has
+  // actually landed — `sendChatMessage` throwing above propagates out of
+  // this function and skips this block, so a failed gesture never leaves
+  // a misleading "in progress" badge. Best-effort past this point: the
+  // workspace and its first turn already succeeded, so a link-write
+  // failure only costs the badge — never surface it as a send failure.
+  try {
+    const link = await createWorkspaceScmLink({
+      workspaceId,
+      repoId: args.repoId,
+      kind: args.kind,
+      number: args.number,
+      url: args.url,
+      title: args.title,
+    });
+    useAppStore.getState().setWorkspaceScmLink(link);
+  } catch (e) {
+    console.error("[sendToNewWorkspace] failed to persist SCM link:", e);
+  }
   store.addToast(`Sent #${args.number} to a new workspace`);
 }
 

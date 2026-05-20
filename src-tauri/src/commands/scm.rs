@@ -870,6 +870,16 @@ pub async fn create_workspace_scm_link(
     if !read_project_view_flag(&db) {
         return Err("project-view issues/PRs feature is disabled".to_string());
     }
+    // Validate `kind` server-side: the frontend resolver matches and
+    // filters on it, so an unexpected value would silently break badge
+    // resolution. The `workspace_scm_links.kind` CHECK constraint also
+    // rejects it at the DB layer — this guard just fails earlier with a
+    // clearer message than a raw SQLite constraint error.
+    if kind != "issue" && kind != "pr" {
+        return Err(format!(
+            "invalid SCM link kind {kind:?}: expected \"issue\" or \"pr\""
+        ));
+    }
     let row = WorkspaceScmLinkRow {
         workspace_id,
         repo_id,

@@ -435,4 +435,26 @@ mod tests {
         let rows = db.load_all_workspace_scm_links().unwrap();
         assert!(rows.is_empty());
     }
+
+    #[test]
+    fn test_workspace_scm_link_kind_check_constraint() {
+        let db = Database::open_in_memory().unwrap();
+        db.insert_repository(&make_repo("r1", "/tmp/repo1", "repo1"))
+            .unwrap();
+        db.insert_workspace(&make_workspace("w1", "r1", "fix-bug"))
+            .unwrap();
+
+        // The migration's `CHECK (kind IN ('issue', 'pr'))` rejects any
+        // other value, so a bad `kind` can never reach link resolution.
+        let mut bad = make_scm_link("w1", "r1", 1);
+        bad.kind = "epic".into();
+        assert!(db.upsert_workspace_scm_link(&bad).is_err());
+
+        // The two valid values still insert.
+        for kind in ["issue", "pr"] {
+            let mut ok = make_scm_link("w1", "r1", 2);
+            ok.kind = kind.into();
+            db.upsert_workspace_scm_link(&ok).unwrap();
+        }
+    }
 }

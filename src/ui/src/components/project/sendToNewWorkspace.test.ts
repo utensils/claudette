@@ -319,4 +319,21 @@ describe("sendToNewWorkspace", () => {
     expect(mockedSend).toHaveBeenCalled();
     expect(useAppStore.getState().workspaceScmLinks["ws-5"]).toBeUndefined();
   });
+
+  it("does not persist the link when the send itself fails", async () => {
+    mockedCreate.mockResolvedValue({
+      workspaceId: "ws-6",
+      sessionId: "sess-6",
+    });
+    mockedSend.mockRejectedValueOnce(new Error("network down"));
+
+    // The gesture failed — the error propagates to the caller and the
+    // association must NOT be recorded, or the project view would show
+    // a misleading "in progress" badge for a send that never landed.
+    await expect(sendToNewWorkspace(ISSUE_ARGS)).rejects.toThrow(
+      "network down",
+    );
+    expect(mockedCreateLink).not.toHaveBeenCalled();
+    expect(useAppStore.getState().workspaceScmLinks["ws-6"]).toBeUndefined();
+  });
 });

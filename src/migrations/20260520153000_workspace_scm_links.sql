@@ -18,7 +18,7 @@
 CREATE TABLE IF NOT EXISTS workspace_scm_links (
     workspace_id  TEXT PRIMARY KEY REFERENCES workspaces(id) ON DELETE CASCADE,
     repo_id       TEXT NOT NULL,
-    kind          TEXT NOT NULL,
+    kind          TEXT NOT NULL CHECK (kind IN ('issue', 'pr')),
     number        INTEGER NOT NULL,
     url           TEXT NOT NULL,
     title         TEXT NOT NULL,
