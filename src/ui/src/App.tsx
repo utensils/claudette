@@ -73,12 +73,6 @@ function App() {
   const setProjectViewIssuesPrsEnabled = useAppStore(
     (s) => s.setProjectViewIssuesPrsEnabled,
   );
-  const setShowOpenRouterBalanceInUsageMeter = useAppStore(
-    (s) => s.setShowOpenRouterBalanceInUsageMeter,
-  );
-  const setOpenRouterBalanceSettingLoaded = useAppStore(
-    (s) => s.setOpenRouterBalanceSettingLoaded,
-  );
   const setClaudetteTerminalEnabled = useAppStore((s) => s.setClaudetteTerminalEnabled);
   const setShowSidebarRunningCommands = useAppStore((s) => s.setShowSidebarRunningCommands);
   const setToolDisplayMode = useAppStore((s) => s.setToolDisplayMode);
@@ -163,20 +157,6 @@ function App() {
   useViewTogglePersistence(viewStateHydrated);
 
   useEffect(() => {
-    const hydrateOpenRouterBalanceSetting = async () => {
-      try {
-        const val = await getAppSetting("openrouter_balance_in_usage_meter");
-        setShowOpenRouterBalanceInUsageMeter(val !== "false");
-      } catch {
-        // If settings are unavailable during degraded startup, keep
-        // the network opt-out conservative instead of polling credits
-        // from the default-on in-memory value.
-        setShowOpenRouterBalanceInUsageMeter(false);
-      } finally {
-        setOpenRouterBalanceSettingLoaded(true);
-      }
-    };
-
     loadInitialData()
       .then(async (data) => {
         // Tag local data with null remote_connection_id (backend omits this field).
@@ -200,7 +180,6 @@ function App() {
         }
         setLastMessages(msgMap);
         await hydratePersistedViewState(localWorkspaces);
-        await hydrateOpenRouterBalanceSetting();
         setViewStateHydrated(true);
         // Boot-health gate: only ack on the success path. The
         // `.catch()` branch below also flips `viewStateHydrated` so
@@ -253,7 +232,6 @@ function App() {
       .catch(async (err) => {
         console.error("Failed to load initial data:", err);
         await hydratePersistedViewState([]);
-        await hydrateOpenRouterBalanceSetting();
         setViewStateHydrated(true);
       });
     getAppSetting("terminal_font_size")
@@ -958,7 +936,7 @@ function App() {
       unlistenMissingCli.then((fn) => fn());
       unlistenMissingWorktree.then((fn) => fn());
     };
-  }, [setRepositories, setWorkspaces, setWorktreeBaseDir, setDefaultTerminalAppId, setWorkspaceAppsMenuShown, setDefaultBranches, setTerminalFontSize, setLastMessages, setRemoteConnections, setDiscoveredServers, setLocalServerRunning, setLocalServerConnectionString, setCurrentThemeId, setThemeMode, setThemeDark, setThemeLight, setUiFontSize, setFontFamilySans, setFontFamilyMono, setSystemFonts, setDetectedApps, setUsageInsightsEnabled, setProjectViewIssuesPrsEnabled, setShowOpenRouterBalanceInUsageMeter, setOpenRouterBalanceSettingLoaded, setClaudetteTerminalEnabled, setShowSidebarRunningCommands, setToolDisplayMode, setExtendedToolCallOutput, setAlternativeBackendsAvailable, setPiSdkAvailable, setAlternativeBackendsEnabled, setCodexEnabled, setAgentBackends, setDefaultAgentBackendId, setClaudeAuthMethod, setEditorGitGutterBase, setEditorMinimapEnabled, setRevealActiveFileInTree, setEditorWordWrap, setEditorLineNumbersEnabled, setEditorFontZoom, setDisable1mContext, setAppVersion, setVoiceToggleHotkey, setVoiceHoldHotkey, setKeybindings, setManualWorkspaceOrderByRepo]);
+  }, [setRepositories, setWorkspaces, setWorktreeBaseDir, setDefaultTerminalAppId, setWorkspaceAppsMenuShown, setDefaultBranches, setTerminalFontSize, setLastMessages, setRemoteConnections, setDiscoveredServers, setLocalServerRunning, setLocalServerConnectionString, setCurrentThemeId, setThemeMode, setThemeDark, setThemeLight, setUiFontSize, setFontFamilySans, setFontFamilyMono, setSystemFonts, setDetectedApps, setUsageInsightsEnabled, setProjectViewIssuesPrsEnabled, setClaudetteTerminalEnabled, setShowSidebarRunningCommands, setToolDisplayMode, setExtendedToolCallOutput, setAlternativeBackendsAvailable, setPiSdkAvailable, setAlternativeBackendsEnabled, setCodexEnabled, setAgentBackends, setDefaultAgentBackendId, setClaudeAuthMethod, setEditorGitGutterBase, setEditorMinimapEnabled, setRevealActiveFileInTree, setEditorWordWrap, setEditorLineNumbersEnabled, setEditorFontZoom, setDisable1mContext, setAppVersion, setVoiceToggleHotkey, setVoiceHoldHotkey, setKeybindings, setManualWorkspaceOrderByRepo]);
 
   // Live freshness for LM Studio's `loaded_context_length`.
   //

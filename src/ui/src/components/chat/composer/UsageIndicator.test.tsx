@@ -14,8 +14,6 @@ import type { UsageSnapshot } from "../../../types/usage";
 // useAppStore mock below.
 const appStore = vi.hoisted(() => ({
   usageInsightsEnabled: false,
-  showOpenRouterBalanceInUsageMeter: true,
-  openRouterBalanceSettingLoaded: true,
   agentBackends: [] as AgentBackendConfig[],
   selectedModel: {} as Record<string, string>,
   selectedModelProvider: {} as Record<string, string>,
@@ -127,8 +125,6 @@ function makeSnapshot(overrides: Partial<UsageSnapshot> = {}): UsageSnapshot {
 
 beforeEach(() => {
   appStore.usageInsightsEnabled = false;
-  appStore.showOpenRouterBalanceInUsageMeter = true;
-  appStore.openRouterBalanceSettingLoaded = true;
   appStore.agentBackends = [];
   appStore.selectedModel = {};
   appStore.selectedModelProvider = {};
@@ -277,7 +273,6 @@ describe("UsageIndicator", () => {
           kind: "pi_sdk",
           default_model: "openrouter/anthropic/claude-sonnet-4",
         }),
-        showOpenRouterBalance: true,
       }),
     );
   });

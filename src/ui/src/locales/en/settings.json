@@ -454,9 +454,6 @@
   "experimental_claude_code_usage": "Claude Code Usage",
   "experimental_claude_code_usage_desc": "Surface Claude Pro / Max subscription quotas (5-hour session, weekly all-model, weekly Sonnet/Opus, extra usage) in the chat composer's usage meter. Requires a standard Pro or Max login — does not apply to API-key sessions or to Codex / OpenAI / OpenRouter / Pi backends, which already show local-aggregate token totals.",
   "experimental_claude_code_usage_aria": "Claude Code Usage",
-  "experimental_openrouter_balance": "OpenRouter balance in usage meter",
-  "experimental_openrouter_balance_desc": "Show live OpenRouter credit balance alongside local token totals for OpenRouter-backed sessions, including Pi OpenRouter models. Turn this off to avoid polling the OpenRouter credits endpoint.",
-  "experimental_openrouter_balance_aria": "OpenRouter balance in usage meter",
   "usage_indicator_disabled_tooltip": "Claude Code Usage is off — click to enable",
 
   "plugins_title": "Plugins",
