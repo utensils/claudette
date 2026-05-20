@@ -252,12 +252,14 @@ describe("createWorkspaceOrchestrated", () => {
       "repo-1",
       "calm-protea",
       true,
+      null,
     );
     expect(mockCreateWorkspace).toHaveBeenNthCalledWith(
       2,
       "repo-1",
       "bold-aster",
       true,
+      null,
     );
   });
 
