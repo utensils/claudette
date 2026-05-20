@@ -30,7 +30,8 @@ function M.detect(args)
 end
 
 function M.export(args)
-    local envrc_path = join(worktree_of(args), ".envrc")
+    local worktree = worktree_of(args)
+    local envrc_path = join(worktree, ".envrc")
     -- Streaming so direnv's own informative stderr (e.g.
     -- `direnv: loading .envrc`, `direnv: using flake`, the `+VAR -VAR`
     -- diff) flows into the EnvProvisioningConsole as it happens. The
@@ -135,10 +136,41 @@ function M.export(args)
         -- hash-format change in direnv.
         return basename:match("^[0-9a-f]+$") ~= nil and #basename >= 32
     end
+    -- We also DROP anything under the worktree's own `.direnv/`
+    -- directory. nix-direnv (and `layout`-based plain direnv) write
+    -- derived build artifacts there on every evaluation —
+    -- `flake-profile-<sha>` symlinks, `flake-inputs/`, `added_paths`,
+    -- `bin/nix-direnv-reload`, profile rc files — and direnv lists
+    -- them in `DIRENV_WATCHES` so its *shell hook* re-runs after a
+    -- rebuild. For the EnvCache, though, those files are OUTPUT, not
+    -- source: watching them means every successful direnv evaluation
+    -- re-touches a watched path and primes the next spurious
+    -- invalidation (the same post-`cache.put` FSEvents race the
+    -- allow/deny stamp filter above documents, in a new spot). The
+    -- legitimate source files — `.envrc`, `flake.nix`, `flake.lock`,
+    -- and anything `watch_file`/`dotenv` pulls in — live OUTSIDE
+    -- `.direnv/`, so dropping the whole directory loses no real
+    -- invalidation trigger.
+    --
+    -- The match is anchored to the `<worktree>/.direnv/` prefix on
+    -- purpose. A bare `.direnv` path-component check would mis-fire
+    -- and filter out the real `.envrc` / `flake.lock` of a workspace
+    -- that itself happens to live under some unrelated `.direnv/`
+    -- ancestor directory. `.direnv` is direnv's reserved, default
+    -- layout-dir name, so the prefix test reliably identifies these
+    -- artifacts without enumerating nix-direnv's version-dependent
+    -- internal filenames.
+    local direnv_layout_prefix = worktree .. "/.direnv/"
+    local function is_direnv_layout_artifact(path)
+        if type(path) ~= "string" then return false end
+        return path:sub(1, #direnv_layout_prefix) == direnv_layout_prefix
+    end
     local watched = {}
     local seen = {}
     local function add(path)
-        if path and not seen[path] and not is_direnv_stamp(path) then
+        if path and not seen[path]
+            and not is_direnv_stamp(path)
+            and not is_direnv_layout_artifact(path) then
             seen[path] = true
             table.insert(watched, path)
         end

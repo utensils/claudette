@@ -182,6 +182,19 @@ impl EnvWatcher {
             // re-acquire the lock).
             drop(state);
             for (worktree, plugin) in fired {
+                // One line per invalidation so a "direnv reloaded but I
+                // changed nothing" report can be traced back to the
+                // exact watched path that fired. `event.paths` is the
+                // raw backend report; the matched key is what the
+                // callback evicts.
+                tracing::debug!(
+                    target: "claudette::env-watcher",
+                    worktree = %worktree.display(),
+                    plugin = %plugin,
+                    paths = ?event.paths,
+                    kind = ?event.kind,
+                    "watched path changed; invalidating env cache",
+                );
                 cb(&worktree, &plugin);
             }
         };
