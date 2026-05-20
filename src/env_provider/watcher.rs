@@ -114,11 +114,19 @@ struct WatcherState {
 impl EnvWatcher {
     /// Build a watcher. The callback fires on every detected change
     /// to any registered path, once per `(worktree, plugin)` key that
-    /// was subscribed to it. Typical implementation:
+    /// was subscribed to it. A filesystem event is necessary but not
+    /// sufficient for eviction — `touch` / `git checkout` /
+    /// save-on-noop bump mtimes without changing bytes — so the
+    /// callback should funnel through `EnvCache::invalidate_if_stale`
+    /// (content-aware) rather than `invalidate` (unconditional), and
+    /// only notify the UI when it actually evicted. Typical
+    /// implementation:
     ///
     /// ```ignore
     /// EnvWatcher::new(Arc::new(move |worktree, plugin| {
-    ///     cache.invalidate(worktree, Some(plugin));
+    ///     if !cache.invalidate_if_stale(worktree, plugin) {
+    ///         return;
+    ///     }
     ///     let _ = app_handle.emit("env-cache-invalidated",
     ///         EnvCacheInvalidatedPayload {
     ///             worktree_path: worktree.to_string_lossy().into(),

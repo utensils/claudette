@@ -1370,7 +1370,16 @@ pub fn setup_env_watcher(app: AppHandle) {
     let trust_probe_versions: Arc<Mutex<HashMap<(String, String), u64>>> =
         Arc::new(Mutex::new(HashMap::new()));
     let watcher = match EnvWatcher::new(Arc::new(move |worktree, plugin| {
-        cache.invalidate(worktree, Some(plugin));
+        // A watcher event means *some* watched path was touched, but
+        // `touch`, `git checkout`, save-on-noop editors, and
+        // nix-direnv re-evaluation all fire events without changing
+        // bytes. `invalidate_if_stale` re-checks content and evicts
+        // only on a real change (issue #888) — when it keeps the
+        // entry there is nothing for the UI to refetch and no trust
+        // state to re-probe, so skip both the event and the probe.
+        if !cache.invalidate_if_stale(worktree, plugin) {
+            return;
+        }
         let worktree_path = worktree.to_string_lossy().into_owned();
         let plugin_name = plugin.to_string();
         let _ = app_for_cb.emit(

@@ -186,6 +186,44 @@ impl EnvCache {
         }
     }
 
+    /// Re-check a single `(worktree, plugin)` entry against the
+    /// filesystem and evict it **only if a watched file's content
+    /// actually changed**. Returns `true` if the entry was evicted.
+    ///
+    /// This is the content-aware counterpart to [`invalidate`], meant
+    /// for the fs-watcher callback. A watcher event means *some*
+    /// watched path was touched — but `touch`, `git checkout`,
+    /// save-on-noop editors, and nix-direnv re-evaluation all fire
+    /// events without changing bytes. Evicting unconditionally on
+    /// every event is exactly the cache thrash issue #888 is about:
+    /// the reactive watcher would otherwise drop the entry before
+    /// [`get_fresh`]'s own two-tier check ever gets to run.
+    ///
+    /// So this applies the same [`check_freshness`] test the lazy
+    /// path uses: unchanged content keeps the entry (and heals its
+    /// stored mtimes so the next `get_fresh` is cheap); genuinely
+    /// changed content removes it and returns `true` so the caller
+    /// can notify the UI. A missing entry returns `false` — nothing
+    /// to evict, nothing to notify.
+    pub fn invalidate_if_stale(&self, worktree: &Path, plugin: &str) -> bool {
+        let key = (worktree.to_path_buf(), plugin.to_string());
+        let mut guard = self.entries.write().unwrap();
+        let Some(entry) = guard.get_mut(&key) else {
+            return false;
+        };
+        match check_freshness(&entry.watched) {
+            Freshness::Fresh => false,
+            Freshness::Rehashed(refreshed) => {
+                entry.watched = refreshed;
+                false
+            }
+            Freshness::Stale => {
+                guard.remove(&key);
+                true
+            }
+        }
+    }
+
     /// Forget every cache entry for a given plugin, across all
     /// worktrees. Called when a plugin's global enable state or
     /// settings change — any cached export is potentially stale.
@@ -424,6 +462,55 @@ mod tests {
         assert_eq!(cache.len(), 1);
         assert!(cache.get_fresh(tmp.path(), "env-direnv").is_none());
         assert!(cache.get_fresh(tmp.path(), "env-mise").is_some());
+    }
+
+    #[test]
+    fn invalidate_if_stale_keeps_entry_on_byte_identical_change() {
+        // The reactive-watcher counterpart to
+        // `get_fresh_survives_mtime_bump_with_identical_content`: a
+        // watcher event fired by a `touch` / checkout / save-on-noop
+        // must NOT evict when the bytes are unchanged (issue #888).
+        // Without this, the watcher drops the entry before
+        // `get_fresh`'s own two-tier check can run.
+        let tmp = tempfile::tempdir().unwrap();
+        let file = tmp.path().join("flake.lock");
+        let content = r#"{ "nodes": {}, "version": 7 }"#;
+        std::fs::write(&file, content).unwrap();
+
+        let cache = EnvCache::new();
+        assert!(
+            cache
+                .put(tmp.path(), "env-direnv", &export_with_watched(&file))
+                .is_some()
+        );
+
+        // mtime bump, identical content → watcher event, but no evict.
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+        std::fs::write(&file, content).unwrap();
+        assert!(
+            !cache.invalidate_if_stale(tmp.path(), "env-direnv"),
+            "a byte-identical change must not evict"
+        );
+        assert!(
+            cache.get_fresh(tmp.path(), "env-direnv").is_some(),
+            "entry must survive a byte-identical watcher event"
+        );
+
+        // A real content change → eviction, returns true.
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+        std::fs::write(&file, r#"{ "nodes": { "x": 1 }, "version": 7 }"#).unwrap();
+        assert!(
+            cache.invalidate_if_stale(tmp.path(), "env-direnv"),
+            "a real content change must evict"
+        );
+        assert!(cache.get_fresh(tmp.path(), "env-direnv").is_none());
+    }
+
+    #[test]
+    fn invalidate_if_stale_on_missing_entry_is_a_noop() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cache = EnvCache::new();
+        assert!(!cache.invalidate_if_stale(tmp.path(), "env-direnv"));
     }
 
     #[test]
