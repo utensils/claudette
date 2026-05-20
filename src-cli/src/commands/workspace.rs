@@ -63,7 +63,14 @@ pub async fn run(action: Action, json: bool) -> Result<(), Box<dyn Error>> {
     let info = discovery::read_app_info()?;
     match action {
         Action::List => {
+            // `list_workspaces` returns every row regardless of status,
+            // but `workspace list` is documented as listing *active*
+            // workspaces — filter here so the command matches its
+            // contract. The shared IPC method is intentionally left
+            // untouched: `purge` (below) and `pr` resolution both rely
+            // on seeing archived / all rows. See issue #896.
             let value = ipc::call(&info, "list_workspaces", serde_json::json!({})).await?;
+            let value = active_workspaces(value);
             if json {
                 output::print_json(&value)?;
             } else {
@@ -315,6 +322,30 @@ fn parse_created_at(value: &str) -> Option<u64> {
     u64::try_from(secs).ok()
 }
 
+/// Keep only `Active` rows from a `list_workspaces` response.
+///
+/// `claudette workspace list` is documented as listing *active*
+/// workspaces, but the underlying `list_workspaces` IPC method has no
+/// `WHERE status` clause and returns archived rows too. Filtering in the
+/// CLI keeps the command faithful to its contract without changing the
+/// shared IPC method — `workspace purge` and `pr` resolution both depend
+/// on it returning every row. `WorkspaceStatus` serializes capitalized
+/// (`"Active"` / `"Archived"`), matching `resolve_purge_ids` above.
+/// See issue #896.
+///
+/// A non-array value (unexpected shape) is returned untouched so the
+/// caller's existing "unexpected response shape" handling still fires.
+fn active_workspaces(value: serde_json::Value) -> serde_json::Value {
+    match value {
+        serde_json::Value::Array(rows) => serde_json::Value::Array(
+            rows.into_iter()
+                .filter(|row| row.get("status").and_then(|v| v.as_str()) == Some("Active"))
+                .collect(),
+        ),
+        other => other,
+    }
+}
+
 /// Minimal table renderer for `workspace list`. Format is intentionally
 /// simple — we'll switch to a real table crate (`tabled`?) when more
 /// commands need column-aware rendering.
@@ -342,7 +373,7 @@ fn render_workspace_table(value: &serde_json::Value) {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_created_at;
+    use super::{active_workspaces, parse_created_at};
 
     #[test]
     fn parses_unix_seconds_string() {
@@ -368,5 +399,42 @@ mod tests {
         assert_eq!(parse_created_at(""), None);
         assert_eq!(parse_created_at("nope"), None);
         assert_eq!(parse_created_at("2023-13-01 00:00:00"), None);
+    }
+
+    #[test]
+    fn active_workspaces_drops_archived_rows() {
+        // `workspace list` is documented active-only; the IPC method is
+        // not — this filter is what bridges the gap (issue #896).
+        let input = serde_json::json!([
+            { "id": "w1", "status": "Active" },
+            { "id": "w2", "status": "Archived" },
+            { "id": "w3", "status": "Active" },
+        ]);
+        let out = active_workspaces(input);
+        let ids: Vec<&str> = out
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|r| r.get("id").and_then(|v| v.as_str()))
+            .collect();
+        assert_eq!(ids, ["w1", "w3"]);
+    }
+
+    #[test]
+    fn active_workspaces_empty_when_all_archived() {
+        let input = serde_json::json!([
+            { "id": "w1", "status": "Archived" },
+            { "id": "w2", "status": "Archived" },
+        ]);
+        let out = active_workspaces(input);
+        assert!(out.as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn active_workspaces_passes_through_non_array() {
+        // An unexpected (non-array) shape is returned untouched so the
+        // caller's "unexpected response shape" handling still triggers.
+        let input = serde_json::json!({ "error": "boom" });
+        assert_eq!(active_workspaces(input.clone()), input);
     }
 }

@@ -686,6 +686,16 @@ pub struct AppState {
     /// the post-DB worktree/branch cleanup loop check the same flag, so
     /// the user's Cancel click really does stop further work.
     pub bulk_cleanup_cancels: RwLock<HashMap<String, Arc<AtomicBool>>>,
+    /// Repository IDs with a GUI-initiated `create_workspace` currently in
+    /// flight. A create runs for several seconds (git worktree add + setup
+    /// script + env resolve). The frontend's `creationInFlight` latch is a
+    /// webview-scoped JS variable that a reload resets to `false`, so on its
+    /// own it can't stop a reload-then-reclick from minting a duplicate `-N`
+    /// workspace. This set lives in the Rust process — unaffected by webview
+    /// reloads — and `create_workspace` consults it before each create.
+    /// Keyed per repo so unrelated repos still create concurrently. See
+    /// issue #896.
+    pub workspace_creates_in_flight: Mutex<HashSet<String>>,
     /// Nudges the native agent scheduler after a wakeup/routine is created,
     /// deleted, or manually fired so the polling loop can recompute its next
     /// deadline immediately instead of waiting for the fallback tick.
@@ -742,12 +752,36 @@ impl AppState {
             auth_login_cancel: tokio::sync::Mutex::new(None),
             auth_login_stdin: tokio::sync::Mutex::new(None),
             bulk_cleanup_cancels: RwLock::new(HashMap::new()),
+            workspace_creates_in_flight: Mutex::new(HashSet::new()),
             scheduler_notify: Arc::new(tokio::sync::Notify::new()),
         }
     }
 
     pub fn next_pty_id(&self) -> u64 {
         self.next_pty_id.fetch_add(1, Ordering::Relaxed)
+    }
+
+    /// Try to claim the workspace-creation slot for `repo_id`.
+    ///
+    /// Returns `true` if the slot was free (the caller may proceed with the
+    /// create) and `false` if a create for this repo is already in flight.
+    /// The matching release is [`AppState::end_workspace_create`], normally
+    /// run from a `Drop` guard so it fires on every exit path. See the
+    /// `workspace_creates_in_flight` field and issue #896.
+    pub fn try_begin_workspace_create(&self, repo_id: &str) -> bool {
+        self.workspace_creates_in_flight
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .insert(repo_id.to_string())
+    }
+
+    /// Release the workspace-creation slot for `repo_id`. Idempotent —
+    /// releasing a repo that holds no slot is a harmless no-op.
+    pub fn end_workspace_create(&self, repo_id: &str) {
+        self.workspace_creates_in_flight
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .remove(repo_id);
     }
 
     /// Snapshot the plugin registry for use across `await` points.
@@ -963,5 +997,51 @@ mod tests {
         // Cleanup.
         finish_tx.send(()).unwrap();
         holder.await.unwrap();
+    }
+}
+
+// ---- Regression: duplicate workspace creation (issue #896) --------------
+//
+// Cross-platform (not `#[cfg(unix)]`) because the in-flight slot logic has
+// no OS-specific code. Pins the per-repo single-flight contract that stops
+// a webview reload + re-click from minting a duplicate `-N` workspace.
+#[cfg(test)]
+mod create_slot_tests {
+    use super::AppState;
+    use claudette::plugin_runtime::PluginRegistry;
+
+    /// Build a throwaway `AppState`. The temp dir is returned so the caller
+    /// keeps it alive — `AppState::new` opens a SQLite DB under it during
+    /// construction, but the slot methods under test never touch disk.
+    fn test_state() -> (AppState, tempfile::TempDir) {
+        let dir = tempfile::tempdir().unwrap();
+        let registry = PluginRegistry::discover(dir.path());
+        let state = AppState::new(
+            dir.path().join("claudette.db"),
+            dir.path().join("worktrees"),
+            registry,
+        );
+        (state, dir)
+    }
+
+    #[test]
+    fn workspace_create_slot_is_single_flight_per_repo() {
+        let (state, _dir) = test_state();
+
+        // First claim for a repo wins.
+        assert!(state.try_begin_workspace_create("repo-a"));
+        // A second claim while the first is in flight is rejected — this is
+        // the guard that survives a webview reload.
+        assert!(!state.try_begin_workspace_create("repo-a"));
+        // A different repo is unaffected: concurrent creates across repos
+        // are still allowed.
+        assert!(state.try_begin_workspace_create("repo-b"));
+
+        // Releasing repo-a's slot makes it claimable again.
+        state.end_workspace_create("repo-a");
+        assert!(state.try_begin_workspace_create("repo-a"));
+
+        // Releasing a repo that holds no slot is a harmless no-op.
+        state.end_workspace_create("never-claimed");
     }
 }

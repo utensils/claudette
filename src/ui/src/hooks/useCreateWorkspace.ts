@@ -37,6 +37,19 @@ function buildPlaceholderWorkspace(repoId: string, slug: string): Workspace {
   };
 }
 
+/** Detect the backend's "a create is already running for this repo"
+ *  rejection (issue #896). `create_workspace` returns it as a plain
+ *  string across the Tauri IPC boundary, so message text is the only
+ *  signal available — the error reaching the catch block is typically a
+ *  `string`, occasionally an `Error`. Matching on a stable, distinctive
+ *  substring keeps this resilient to minor wording tweaks on the Rust
+ *  side (`WORKSPACE_CREATE_IN_FLIGHT_ERR` in
+ *  `src-tauri/src/commands/workspace.rs` — keep the two in sync). */
+function isCreateInFlightRejection(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.includes("already being created for this repository");
+}
+
 /** Outcome surfaced to callers so they can show toasts or chain follow-up work
  *  without prying into the store. The orchestration still performs the core
  *  side-effects (addWorkspace, selectWorkspace, addChatMessage, openModal)
@@ -222,6 +235,20 @@ export async function createWorkspaceOrchestrated(
     // recovery surface).
     if (placeholderId) {
       useAppStore.getState().cancelPendingCreate(placeholderId, null);
+    }
+    // A backend in-flight rejection is not a failure: the user (or a
+    // webview reload) re-triggered a create that is already running for
+    // this repo, and the backend correctly refused to mint a duplicate.
+    // Surface it as a calm toast and return null — the same shape as the
+    // module-level `creationInFlight` early-return — so the caller does
+    // not pop a scary "Failed to create workspace" alert. See issue #896.
+    if (isCreateInFlightRejection(e)) {
+      useAppStore
+        .getState()
+        .addToast(
+          "A workspace is already being created for this repository. Please wait for it to finish.",
+        );
+      return null;
     }
     // Re-throw so the caller decides whether to alert / toast.
     throw e;

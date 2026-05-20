@@ -314,4 +314,36 @@ describe("createWorkspaceOrchestrated", () => {
 
     errSpy.mockRestore();
   });
+
+  it("treats the backend in-flight rejection as benign: toast + null, no throw", async () => {
+    // The backend's `create_workspace` refuses a second create for a repo
+    // that already has one running (issue #896). That guard survives a
+    // webview reload — unlike the module-level latch — so the orchestrator
+    // must surface the rejection calmly (toast) and return null, the same
+    // shape as the in-process single-flight early-return, rather than
+    // throwing a "Failed to create workspace" error at the caller.
+    const addToast = vi.fn();
+    useAppStore.setState({ addToast });
+    mockGenerateWorkspaceName.mockResolvedValue({
+      slug: "calm-protea",
+      display: "calm protea",
+      message: null,
+    });
+    mockCreateWorkspace.mockRejectedValue(
+      new Error(
+        "A workspace is already being created for this repository. Please wait for it to finish.",
+      ),
+    );
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const out = await createWorkspaceOrchestrated("repo-1");
+    expect(out).toBeNull();
+
+    // A toast was surfaced and the latch released so a retry can proceed.
+    expect(addToast).toHaveBeenCalledTimes(1);
+    expect(addToast.mock.calls[0][0]).toMatch(/already being created/i);
+    expect(useAppStore.getState().creatingWorkspaceRepoId).toBeNull();
+
+    errSpy.mockRestore();
+  });
 });

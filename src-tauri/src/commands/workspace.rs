@@ -35,6 +35,32 @@ pub struct CreateWorkspaceResult {
     pub setup_result: Option<SetupResult>,
 }
 
+/// Error returned by [`create_workspace`] when a create for the same
+/// repository is already running. The frontend (`useCreateWorkspace.ts`)
+/// matches on the `"already being created for this repository"` substring
+/// to surface a calm toast instead of a failure alert — keep the wording
+/// in sync if you touch this. See issue #896.
+const WORKSPACE_CREATE_IN_FLIGHT_ERR: &str =
+    "A workspace is already being created for this repository. Please wait for it to finish.";
+
+/// RAII release for the per-repo workspace-creation slot claimed via
+/// [`AppState::try_begin_workspace_create`].
+///
+/// Holding this for the lifetime of [`create_workspace`] frees the slot
+/// on every exit path — the normal return, an error bubbled up from
+/// `create_workspace_inner`, or an unwind — so a failed or panicking
+/// create can never wedge a repo into a permanently un-creatable state.
+struct WorkspaceCreateGuard<'a> {
+    state: &'a AppState,
+    repo_id: String,
+}
+
+impl Drop for WorkspaceCreateGuard<'_> {
+    fn drop(&mut self) {
+        self.state.end_workspace_create(&self.repo_id);
+    }
+}
+
 #[tauri::command]
 #[tracing::instrument(
     target = "claudette::workspace",
@@ -48,6 +74,22 @@ pub async fn create_workspace(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<CreateWorkspaceResult, String> {
+    // Single-flight guard against duplicate workspace creation. The
+    // frontend's `creationInFlight` latch (useCreateWorkspace.ts) is a
+    // module-level JS variable that a webview reload resets to `false`,
+    // while the Rust command spawned by the first create keeps running
+    // across that reload. Without this process-side guard a reload — or
+    // any re-click while a slow create is in flight — issues a second
+    // `create_workspace` that mints a duplicate `-N` row. The slot is
+    // keyed per repo so creates in *different* repos still run
+    // concurrently. See issue #896.
+    if !state.try_begin_workspace_create(&repo_id) {
+        return Err(WORKSPACE_CREATE_IN_FLIGHT_ERR.to_string());
+    }
+    let _create_guard = WorkspaceCreateGuard {
+        state: state.inner(),
+        repo_id: repo_id.clone(),
+    };
     create_workspace_inner(
         &repo_id,
         &name,
