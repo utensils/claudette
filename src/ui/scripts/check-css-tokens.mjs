@@ -61,6 +61,11 @@ const HEX_EXCLUSIONS = [
   /getPropertyValue\(.*\)\.trim\(\)\s*\|\| \(.*\?.*"#/,
   // `accentPreview: "#..."` / `accent_preview: "#..."`
   /(accentPreview|accent_preview):\s*"#/,
+  // GitHub issue / PR number reference: `issue #896`, `PR #905`,
+  // `fix #123`, etc. Decimal digits only — issue / PR numbers are never
+  // hex, and a `[0-9a-fA-F]+` class would wrongly exempt genuine hex
+  // colors written after one of these keywords (e.g. `fix #fff`).
+  /(issue|pull request|PR|fix|fixes|close|closes|ref|refs|see)\s+#[0-9]+\b/i,
 ];
 
 // Hex file-level exclusions (entire file is exempt from Rule 1).

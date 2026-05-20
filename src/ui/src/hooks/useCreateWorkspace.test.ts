@@ -314,4 +314,50 @@ describe("createWorkspaceOrchestrated", () => {
 
     errSpy.mockRestore();
   });
+
+  it("treats the backend in-flight rejection as benign: toast, null, restored selection, no error log", async () => {
+    // The backend's `create_workspace` refuses a second create for a repo
+    // that already has one running (issue #896). That guard survives a
+    // webview reload — unlike the module-level latch — so the orchestrator
+    // must treat the rejection as benign: surface a calm toast, return
+    // null (the same shape as the in-process single-flight early-return),
+    // restore the pre-create selection rather than yanking the user to
+    // the dashboard, and not log it at error level (nothing failed).
+    const addToast = vi.fn();
+    // A workspace the user was viewing before clicking New — the
+    // optimistic placeholder briefly steals selection, so the benign
+    // rejection must restore selection to this row, not null it.
+    const prior = makeWorkspace("prior");
+    useAppStore.setState({
+      addToast,
+      workspaces: [prior],
+      selectedWorkspaceId: prior.id,
+    });
+    mockGenerateWorkspaceName.mockResolvedValue({
+      slug: "calm-protea",
+      display: "calm protea",
+      message: null,
+    });
+    // The backend returns the bare error code (not a sentence) so the
+    // cross-process contract is a fixed token — see
+    // `WORKSPACE_CREATE_IN_FLIGHT_ERR` in `commands/workspace.rs`.
+    mockCreateWorkspace.mockRejectedValue(
+      new Error("WORKSPACE_CREATE_IN_FLIGHT"),
+    );
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const out = await createWorkspaceOrchestrated("repo-1");
+    expect(out).toBeNull();
+
+    // A toast was surfaced and the latch released so a retry can proceed.
+    expect(addToast).toHaveBeenCalledTimes(1);
+    expect(addToast.mock.calls[0][0]).toMatch(/already being created/i);
+    expect(useAppStore.getState().creatingWorkspaceRepoId).toBeNull();
+    // Selection is restored to where the user was — not nulled to the
+    // dashboard — and the benign rejection is never logged as a failure.
+    expect(useAppStore.getState().selectedWorkspaceId).toBe(prior.id);
+    expect(errSpy).not.toHaveBeenCalled();
+
+    errSpy.mockRestore();
+  });
 });

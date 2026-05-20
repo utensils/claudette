@@ -37,6 +37,21 @@ function buildPlaceholderWorkspace(repoId: string, slug: string): Workspace {
   };
 }
 
+/** Detect the backend's "a create is already running for this repo"
+ *  rejection (issue #896). `create_workspace` returns the bare error
+ *  code `WORKSPACE_CREATE_IN_FLIGHT` across the Tauri IPC boundary — a
+ *  fixed token rather than a human sentence, so this match can't
+ *  silently break on a Rust-side wording tweak or future localization
+ *  (mirrors the `WORKSPACE_FILE_NOT_FOUND` convention in
+ *  `FileViewer.tsx`). The error reaching the catch block is typically a
+ *  `string`, occasionally an `Error`, so normalize before comparing.
+ *  Keep this code in sync with `WORKSPACE_CREATE_IN_FLIGHT_ERR` in
+ *  `src-tauri/src/commands/workspace.rs`. */
+function isCreateInFlightRejection(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return message === "WORKSPACE_CREATE_IN_FLIGHT";
+}
+
 /** Outcome surfaced to callers so they can show toasts or chain follow-up work
  *  without prying into the store. The orchestration still performs the core
  *  side-effects (addWorkspace, selectWorkspace, addChatMessage, openModal)
@@ -85,6 +100,12 @@ export async function createWorkspaceOrchestrated(
   creationInFlight = true;
   const { selectOnCreate = true } = options;
   const store = useAppStore.getState();
+  // Selection in effect before this create runs. If a benign backend
+  // in-flight rejection tears the optimistic placeholder back down
+  // (issue #896), selection is restored to this rather than nulled —
+  // nothing actually failed, so the user should land where they were
+  // instead of being yanked to the dashboard.
+  const priorSelectedWorkspaceId = store.selectedWorkspaceId;
   // Publish to the store so the sidebar's optimistic "preparing
   // workspace…" indicator row appears immediately, regardless of
   // which UI surface (sidebar +, welcome card, project view, hotkey)
@@ -213,6 +234,29 @@ export async function createWorkspaceOrchestrated(
 
     return { workspaceId: result.workspace.id, sessionId };
   } catch (e) {
+    // A backend in-flight rejection is not a failure: the user (or a
+    // webview reload) re-triggered a create that is already running for
+    // this repo, and the backend correctly refused to mint a duplicate.
+    // Handle it ahead of the error-level log and null-selection teardown
+    // below — it is a benign outcome, so it must not surface in
+    // logs/telemetry as a failure, and it should leave the user where
+    // they were rather than yanking them to the dashboard. Tear the
+    // placeholder down restoring the pre-create selection, surface a
+    // calm toast, and return null — the same shape as the module-level
+    // `creationInFlight` early-return. See issue #896.
+    if (isCreateInFlightRejection(e)) {
+      if (placeholderId) {
+        useAppStore
+          .getState()
+          .cancelPendingCreate(placeholderId, priorSelectedWorkspaceId);
+      }
+      useAppStore
+        .getState()
+        .addToast(
+          "A workspace is already being created for this repository. Please wait for it to finish.",
+        );
+      return null;
+    }
     console.error("Failed to create workspace:", e);
     // Tear down the optimistic placeholder so the user isn't stranded
     // on a selected row that will never resolve. Restore selection to
