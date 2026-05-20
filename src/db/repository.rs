@@ -377,6 +377,7 @@ mod tests {
                 description: None,
                 default: None,
                 placeholder: Some("PROJ-123".into()),
+                required: true,
             },
             RepositoryInputField::Number {
                 key: "RETRIES".into(),
@@ -387,6 +388,7 @@ mod tests {
                 max: Some(10.0),
                 step: None,
                 unit: None,
+                required: true,
             },
         ];
         db.update_repository_required_inputs("r1", Some(&schema))

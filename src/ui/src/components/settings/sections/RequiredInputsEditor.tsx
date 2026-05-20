@@ -41,6 +41,11 @@ interface EditorRow {
   defaultNumber: string;
   min: string;
   max: string;
+  /** Whether the workspace-create modal blocks submit while this field is
+   *  blank. Defaults to `true` — same behavior every declared input has had
+   *  historically. Setting to `false` lets the user submit without filling
+   *  it in; the env var is then set to `""` for scripts to consume. */
+  required: boolean;
 }
 
 function blankRow(): EditorRow {
@@ -58,6 +63,7 @@ function blankRow(): EditorRow {
     defaultNumber: "",
     min: "",
     max: "",
+    required: true,
   };
 }
 
@@ -67,6 +73,9 @@ function rowFromField(field: RepositoryInputField): EditorRow {
   base.label = field.label;
   base.description = field.description ?? "";
   base.type = field.type;
+  // `required` defaults to true server-side too — `?? true` matches the
+  // wire contract for schemas saved before this field existed.
+  base.required = field.required ?? true;
   switch (field.type) {
     case "boolean":
       base.defaultBool = field.default ?? false;
@@ -108,6 +117,7 @@ function rowToField(
           label,
           description,
           default: row.defaultBool,
+          required: row.required,
         },
       };
     case "string":
@@ -120,6 +130,7 @@ function rowToField(
           description,
           default: row.defaultString.trim() || null,
           placeholder: row.placeholder.trim() || null,
+          required: row.required,
         },
       };
     case "number": {
@@ -156,6 +167,7 @@ function rowToField(
           max: maxN,
           step: null,
           unit: null,
+          required: row.required,
         },
       };
     }
@@ -429,6 +441,20 @@ function RequiredInputRow({ row, onChange, onRemove }: RowProps) {
             onChange={(e) => onChange({ defaultBool: e.target.checked })}
           />
           Default to enabled
+        </label>
+      )}
+      {/* "Required" is meaningless for booleans — they always carry a
+       *  true/false value — so we only surface the toggle for string /
+       *  number variants. The schema still serializes the field for
+       *  booleans (defaulting to `true`) for wire-shape symmetry. */}
+      {row.type !== "boolean" && (
+        <label className={styles.autoRunLabel}>
+          <input
+            type="checkbox"
+            checked={row.required}
+            onChange={(e) => onChange({ required: e.target.checked })}
+          />
+          Required at workspace creation
         </label>
       )}
     </div>

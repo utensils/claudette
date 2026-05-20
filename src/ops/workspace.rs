@@ -98,9 +98,22 @@ pub fn validate_repository_inputs(
     let mut coerced = HashMap::with_capacity(schema.len());
     for field in schema {
         let key = field.key();
-        let raw = supplied_map
-            .get(key)
-            .ok_or_else(|| format!("Missing value for required input {key:?}."))?;
+        // For non-required fields, an omitted key is treated as an empty
+        // string: the workspace's env var is set to "" so downstream scripts
+        // can uniformly `[ -z "$X" ]` instead of having to distinguish
+        // "missing from map" vs "explicitly blank". For required fields,
+        // a missing key is still a hard error.
+        let raw_owned: String;
+        let raw: &str = match supplied_map.get(key) {
+            Some(value) => value.as_str(),
+            None if !field.is_required() => {
+                raw_owned = String::new();
+                raw_owned.as_str()
+            }
+            None => {
+                return Err(format!("Missing value for required input {key:?}."));
+            }
+        };
         let value = coerce_input_value(field, raw)?;
         coerced.insert(key.to_string(), value);
     }
@@ -1310,6 +1323,7 @@ mod tests {
                 description: None,
                 default: None,
                 placeholder: None,
+                required: true,
             }]),
         )
         .unwrap();
@@ -1363,6 +1377,7 @@ mod tests {
                 description: None,
                 default: None,
                 placeholder: None,
+                required: true,
             }]),
         )
         .unwrap();

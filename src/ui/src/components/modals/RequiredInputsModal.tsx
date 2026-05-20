@@ -21,6 +21,7 @@ import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react"
 import { useAppStore } from "../../stores/useAppStore";
 import {
   coerceInputValue,
+  isFieldRequired,
   type RepositoryInputField,
 } from "../../types/repositoryInput";
 import { Modal } from "./Modal";
@@ -311,12 +312,16 @@ interface FieldLabelProps {
 
 /** Two-line label: the human label + env-key in parens up top, optional
  *  description below in a smaller muted font. The env key is in mono so it
- *  visually reads as the identifier the agent/scripts will see. */
+ *  visually reads as the identifier the agent/scripts will see. Adds a
+ *  muted "(optional)" suffix when the field is non-required so the user
+ *  knows blank is OK before they hit submit and the validator passes them. */
 function FieldLabel({ field, htmlFor }: FieldLabelProps) {
+  const optional = !isFieldRequired(field);
   return (
     <label className={styles.labelGroup} htmlFor={htmlFor}>
       <span className={styles.labelText}>
         {field.label} <span className={styles.envKey}>({field.key})</span>
+        {optional && <span className={styles.optional}> · optional</span>}
       </span>
       {field.description && (
         <span className={styles.description}>{field.description}</span>

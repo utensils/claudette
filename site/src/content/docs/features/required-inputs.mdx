@@ -19,12 +19,13 @@ Open `Settings > Repository` and find the **Required inputs** section between **
 - **Label** — what the workspace-create prompt shows next to the field. Defaults to the name when empty.
 - **Description** — optional helper text shown under the label.
 - **Placeholder / Default / Min / Max** — type-specific extras.
+- **Required at workspace creation** — defaults to on. Turn it off when a script can tolerate the env var being empty: the workspace-create modal will let the user submit without filling the field in, and the env var is set to the empty string `""` (so downstream scripts can `[ -z "$X" ]` uniformly). Booleans are always required — they always carry a `true`/`false` value.
 
 Changes save automatically (~400 ms after you stop typing). An empty schema clears the column and new workspaces no longer prompt.
 
 ## Creating a workspace
 
-When a repo has declared inputs, creating a workspace opens a prompt that collects values for every declared field. The prompt validates against each type — typing `abc` for a number, or leaving a required string blank, blocks the **Create workspace** button — so a misconfigured workspace can't be created.
+When a repo has declared inputs, creating a workspace opens a prompt that collects values for every declared field. The prompt validates against each type — typing `abc` for a number, or leaving a *required* string blank, blocks the **Create workspace** button — so a misconfigured workspace can't be created. Non-required fields show a muted "· optional" cue next to the label and accept blank submissions; their env var ends up as the empty string.
 
 Cancelling the prompt aborts the entire create flow; no worktree is allocated and no branch is created.
 

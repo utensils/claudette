@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   coerceInputValue,
+  isFieldRequired,
   toPluginSettingField,
   validateInputKey,
   type RepositoryInputField,
@@ -51,7 +52,7 @@ describe("coerceInputValue", () => {
     expect(coerceInputValue(field, "").ok).toBe(false);
   });
 
-  it("string rejects empty values (every declared input is required)", () => {
+  it("string rejects empty values when the field is required", () => {
     const field: RepositoryInputField = {
       type: "string",
       key: "TICKET_ID",
@@ -60,6 +61,68 @@ describe("coerceInputValue", () => {
     expect(coerceInputValue(field, "PROJ-123")).toEqual({ ok: true, value: "PROJ-123" });
     expect(coerceInputValue(field, "   ").ok).toBe(false);
     expect(coerceInputValue(field, "").ok).toBe(false);
+  });
+
+  it("non-required string accepts blank values", () => {
+    const field: RepositoryInputField = {
+      type: "string",
+      key: "NOTES",
+      label: "Notes",
+      required: false,
+    };
+    expect(coerceInputValue(field, "")).toEqual({ ok: true, value: "" });
+    expect(coerceInputValue(field, "   ")).toEqual({ ok: true, value: "   " });
+    expect(coerceInputValue(field, "anything")).toEqual({
+      ok: true,
+      value: "anything",
+    });
+  });
+
+  it("non-required number accepts blank but still validates non-blank input", () => {
+    const field: RepositoryInputField = {
+      type: "number",
+      key: "BUDGET",
+      label: "Budget",
+      min: 0,
+      max: 100,
+      required: false,
+    };
+    // Blank ⇒ "" so scripts can `[ -z "$BUDGET" ]`.
+    expect(coerceInputValue(field, "")).toEqual({ ok: true, value: "" });
+    expect(coerceInputValue(field, "   ")).toEqual({ ok: true, value: "" });
+    // Non-blank still goes through the full numeric path.
+    expect(coerceInputValue(field, "42")).toEqual({ ok: true, value: "42" });
+    expect(coerceInputValue(field, "abc").ok).toBe(false);
+    expect(coerceInputValue(field, "200").ok).toBe(false);
+  });
+});
+
+describe("isFieldRequired", () => {
+  it("defaults to true when `required` is absent (legacy schemas)", () => {
+    expect(isFieldRequired({ type: "string", key: "X", label: "X" })).toBe(true);
+    expect(isFieldRequired({ type: "number", key: "X", label: "X" })).toBe(true);
+  });
+
+  it("honors explicit required: false for string/number", () => {
+    expect(
+      isFieldRequired({ type: "string", key: "X", label: "X", required: false }),
+    ).toBe(false);
+    expect(
+      isFieldRequired({ type: "number", key: "X", label: "X", required: false }),
+    ).toBe(false);
+  });
+
+  it("always returns true for booleans regardless of the flag", () => {
+    // Booleans always carry a value (true / false); the `required` flag is
+    // meaningless for them and the UI/coerce paths treat them as required.
+    expect(
+      isFieldRequired({
+        type: "boolean",
+        key: "FLAG",
+        label: "Flag",
+        required: false,
+      }),
+    ).toBe(true);
   });
 });
 

@@ -16,6 +16,10 @@ export type RepositoryInputField =
       label: string;
       description?: string | null;
       default?: boolean | null;
+      /** Defaults to `true` when absent (legacy schemas predate the field).
+       *  Booleans always carry a value, so this is effectively informational
+       *  for the boolean variant — `isFieldRequired` returns true regardless. */
+      required?: boolean;
     }
   | {
       type: "string";
@@ -24,6 +28,10 @@ export type RepositoryInputField =
       description?: string | null;
       default?: string | null;
       placeholder?: string | null;
+      /** Defaults to `true` when absent. Setting to `false` lets the user
+       *  submit the workspace-create modal without filling this field; the
+       *  env var is still set, but to an empty string. */
+      required?: boolean;
     }
   | {
       type: "number";
@@ -35,6 +43,7 @@ export type RepositoryInputField =
       max?: number | null;
       step?: number | null;
       unit?: string | null;
+      required?: boolean;
     };
 
 export type RepositoryInputType = RepositoryInputField["type"];
@@ -69,6 +78,16 @@ export function validateInputKey(key: string): string | null {
   return null;
 }
 
+/** Whether `field` requires the user to supply a non-blank value at
+ *  workspace-create time. Booleans always have a value so this returns
+ *  `true` for them regardless of the schema flag; for string/number, the
+ *  schema's `required` field controls (defaulting to `true` when absent
+ *  so legacy schemas keep mandatory behavior). */
+export function isFieldRequired(field: RepositoryInputField): boolean {
+  if (field.type === "boolean") return true;
+  return field.required ?? true;
+}
+
 /** Coerce a user-supplied value against its field's type. Returns the
  *  canonicalized string to send to the backend, or a human-readable error.
  *  Mirrors `coerce_value` in `src/model/repository_input.rs` — the backend
@@ -78,6 +97,7 @@ export function coerceInputValue(
   field: RepositoryInputField,
   raw: string,
 ): { ok: true; value: string } | { ok: false; error: string } {
+  const required = isFieldRequired(field);
   switch (field.type) {
     case "boolean":
       if (raw === "true" || raw === "false") return { ok: true, value: raw };
@@ -88,6 +108,11 @@ export function coerceInputValue(
     case "number": {
       const trimmed = raw.trim();
       if (trimmed === "") {
+        // Non-required numeric inputs round-trip as an empty string so
+        // downstream scripts get `$X=""` (uniformly checkable via
+        // `[ -z "$X" ]`) instead of having to know whether the field
+        // was declared.
+        if (!required) return { ok: true, value: "" };
         return { ok: false, error: `"${field.label}" is required.` };
       }
       const n = Number(trimmed);
@@ -106,9 +131,7 @@ export function coerceInputValue(
       return { ok: true, value: trimmed };
     }
     case "string":
-      // String inputs always have *some* requirement (the schema field is
-      // declared = the workspace must supply a value). Empty trims block.
-      if (raw.trim() === "") {
+      if (required && raw.trim() === "") {
         return { ok: false, error: `"${field.label}" is required.` };
       }
       return { ok: true, value: raw };

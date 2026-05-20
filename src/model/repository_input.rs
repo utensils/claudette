@@ -10,6 +10,12 @@ use serde::{Deserialize, Serialize};
 /// Everything ultimately crosses the env boundary as a string — the type is
 /// purely a UX/validation aid.
 ///
+/// `required` defaults to `true` (via `default_required` below) so existing
+/// schemas keep their "value mandatory at create time" behavior. Marking a
+/// field `required: false` lets the user submit the workspace-create modal
+/// without filling that field in — the env var is still set, but to an empty
+/// string for string/number, so downstream scripts can `[ -z "$X" ]` check.
+///
 /// Shape intentionally mirrors `PluginSettingField` (Lua plugin manifests) so
 /// the frontend can render both with the same `PluginSettingInput` component.
 /// `select` is not supported in v1.
@@ -23,6 +29,11 @@ pub enum RepositoryInputField {
         description: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         default: Option<bool>,
+        /// Booleans always carry a value (`true` / `false`), so this flag is
+        /// effectively informational for the boolean variant — the coercer
+        /// ignores it. Kept for schema symmetry across variants.
+        #[serde(default = "default_required")]
+        required: bool,
     },
     String {
         key: String,
@@ -33,6 +44,8 @@ pub enum RepositoryInputField {
         default: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         placeholder: Option<String>,
+        #[serde(default = "default_required")]
+        required: bool,
     },
     Number {
         key: String,
@@ -49,13 +62,33 @@ pub enum RepositoryInputField {
         step: Option<f64>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         unit: Option<String>,
+        #[serde(default = "default_required")]
+        required: bool,
     },
+}
+
+/// serde's `#[serde(default)]` on a `bool` would default to `false`. We want
+/// the opposite — existing schemas (and any third-party producer that omits
+/// the field) should be treated as required. A free function gives us that.
+fn default_required() -> bool {
+    true
 }
 
 impl RepositoryInputField {
     pub fn key(&self) -> &str {
         match self {
             Self::Boolean { key, .. } | Self::String { key, .. } | Self::Number { key, .. } => key,
+        }
+    }
+
+    /// Whether the user must supply a non-blank value when creating a
+    /// workspace. Booleans always have a value so this returns `true` for
+    /// them regardless of the schema flag — the flag is meaningless for
+    /// booleans (see comment on the variant).
+    pub fn is_required(&self) -> bool {
+        match self {
+            Self::Boolean { .. } => true,
+            Self::String { required, .. } | Self::Number { required, .. } => *required,
         }
     }
 }
@@ -103,10 +136,10 @@ pub fn validate_schema(schema: &[RepositoryInputField]) -> Result<(), String> {
 /// to persist, or an error explaining why it was rejected.
 ///
 /// Boolean: accepts `"true"`/`"false"` (lowercase), canonicalizes to those.
-/// Number: must parse as a finite `f64`; min/max checked when set; canonical
-/// form is the original string trimmed (we don't reformat e.g. "1.0" → "1").
-/// String: any non-empty value accepted (whitespace-only is rejected so the
-/// CLI / IPC path can't silently bypass the modal's "required" contract).
+/// Number: must parse as a finite `f64` when supplied; min/max checked when
+/// set. A blank input is rejected when the field is `required`, accepted as
+/// `""` when not (downstream scripts get an empty env var to test with).
+/// String: required ⇒ non-blank; not required ⇒ any value (including blank).
 pub fn coerce_value(field: &RepositoryInputField, raw: &str) -> Result<String, String> {
     match field {
         RepositoryInputField::Boolean { key, .. } => match raw {
@@ -115,8 +148,23 @@ pub fn coerce_value(field: &RepositoryInputField, raw: &str) -> Result<String, S
                 "Input {key:?} must be a boolean (\"true\" or \"false\"), got {other:?}."
             )),
         },
-        RepositoryInputField::Number { key, min, max, .. } => {
+        RepositoryInputField::Number {
+            key,
+            min,
+            max,
+            required,
+            ..
+        } => {
             let trimmed = raw.trim();
+            if trimmed.is_empty() {
+                // Non-required numeric inputs pass through as an empty string
+                // — the workspace's env var is set to `""` so scripts can
+                // detect "user didn't supply" uniformly via `[ -z "$X" ]`.
+                if !required {
+                    return Ok(String::new());
+                }
+                return Err(format!("Input {key:?} is required."));
+            }
             let parsed: f64 = trimmed
                 .parse()
                 .map_err(|_| format!("Input {key:?} must be a number, got {raw:?}."))?;
@@ -141,13 +189,13 @@ pub fn coerce_value(field: &RepositoryInputField, raw: &str) -> Result<String, S
             }
             Ok(trimmed.to_string())
         }
-        RepositoryInputField::String { key, .. } => {
-            // Match the frontend's "required" contract — every declared input
-            // must carry a non-blank value. Without this, IPC/CLI callers can
-            // bypass the modal and persist `""`, which would defeat the
-            // declaration entirely.
-            if raw.trim().is_empty() {
-                return Err(format!("Input {key:?} cannot be blank."));
+        RepositoryInputField::String { key, required, .. } => {
+            // Required strings must carry a non-blank value (matches the
+            // frontend's modal contract). Non-required strings pass through
+            // verbatim — including whitespace-only, in case the user
+            // deliberately wants leading/trailing space.
+            if *required && raw.trim().is_empty() {
+                return Err(format!("Input {key:?} is required."));
             }
             Ok(raw.to_string())
         }
@@ -157,6 +205,33 @@ pub fn coerce_value(field: &RepositoryInputField, raw: &str) -> Result<String, S
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Convenience constructors so the tests below don't drown in
+    /// `..Default::default()`-style boilerplate per variant.
+    fn string_field(key: &str) -> RepositoryInputField {
+        RepositoryInputField::String {
+            key: key.into(),
+            label: key.into(),
+            description: None,
+            default: None,
+            placeholder: None,
+            required: true,
+        }
+    }
+
+    fn number_field(key: &str, min: Option<f64>, max: Option<f64>) -> RepositoryInputField {
+        RepositoryInputField::Number {
+            key: key.into(),
+            label: key.into(),
+            description: None,
+            default: None,
+            min,
+            max,
+            step: None,
+            unit: None,
+            required: true,
+        }
+    }
 
     #[test]
     fn validate_key_accepts_typical_env_names() {
@@ -176,18 +251,13 @@ mod tests {
     #[test]
     fn schema_rejects_duplicate_keys() {
         let schema = vec![
-            RepositoryInputField::String {
-                key: "DUP".into(),
-                label: "A".into(),
-                description: None,
-                default: None,
-                placeholder: None,
-            },
+            string_field("DUP"),
             RepositoryInputField::Boolean {
                 key: "DUP".into(),
                 label: "B".into(),
                 description: None,
                 default: None,
+                required: true,
             },
         ];
         let err = validate_schema(&schema).unwrap_err();
@@ -201,6 +271,7 @@ mod tests {
             label: "Flag".into(),
             description: None,
             default: None,
+            required: true,
         };
         assert_eq!(coerce_value(&field, "true").unwrap(), "true");
         assert_eq!(coerce_value(&field, "false").unwrap(), "false");
@@ -210,16 +281,7 @@ mod tests {
 
     #[test]
     fn coerce_number_with_bounds() {
-        let field = RepositoryInputField::Number {
-            key: "N".into(),
-            label: "N".into(),
-            description: None,
-            default: None,
-            min: Some(0.0),
-            max: Some(10.0),
-            step: None,
-            unit: None,
-        };
+        let field = number_field("N", Some(0.0), Some(10.0));
         assert_eq!(coerce_value(&field, "5").unwrap(), "5");
         assert_eq!(coerce_value(&field, "  3.5  ").unwrap(), "3.5");
         assert!(coerce_value(&field, "abc").is_err());
@@ -229,13 +291,7 @@ mod tests {
 
     #[test]
     fn coerce_string_rejects_blank_and_whitespace() {
-        let field = RepositoryInputField::String {
-            key: "S".into(),
-            label: "S".into(),
-            description: None,
-            default: None,
-            placeholder: None,
-        };
+        let field = string_field("S");
         assert_eq!(coerce_value(&field, "PROJ-123").unwrap(), "PROJ-123");
         // Whitespace-padded values are preserved verbatim — the user may
         // have meant the leading/trailing spaces. Only purely blank input
@@ -248,22 +304,66 @@ mod tests {
 
     #[test]
     fn coerce_number_rejects_non_finite() {
-        let field = RepositoryInputField::Number {
-            key: "N".into(),
-            label: "N".into(),
-            description: None,
-            default: None,
-            min: None,
-            max: None,
-            step: None,
-            unit: None,
-        };
+        let field = number_field("N", None, None);
         // `f64::from_str` parses these — the explicit `is_finite` check is
         // what makes the backend match the frontend's rejection.
         assert!(coerce_value(&field, "NaN").is_err());
         assert!(coerce_value(&field, "inf").is_err());
         assert!(coerce_value(&field, "-inf").is_err());
         assert!(coerce_value(&field, "Infinity").is_err());
+    }
+
+    #[test]
+    fn coerce_optional_string_accepts_blank() {
+        let field = RepositoryInputField::String {
+            key: "NOTES".into(),
+            label: "Notes".into(),
+            description: None,
+            default: None,
+            placeholder: None,
+            required: false,
+        };
+        assert_eq!(coerce_value(&field, "").unwrap(), "");
+        assert_eq!(coerce_value(&field, "   ").unwrap(), "   ");
+        assert_eq!(coerce_value(&field, "anything").unwrap(), "anything");
+    }
+
+    #[test]
+    fn coerce_optional_number_blank_yields_empty() {
+        let field = RepositoryInputField::Number {
+            key: "BUDGET".into(),
+            label: "Budget".into(),
+            description: None,
+            default: None,
+            min: None,
+            max: None,
+            step: None,
+            unit: None,
+            required: false,
+        };
+        // Blank → "" so downstream scripts can `[ -z "$BUDGET" ]`.
+        assert_eq!(coerce_value(&field, "").unwrap(), "");
+        assert_eq!(coerce_value(&field, "  ").unwrap(), "");
+        // Non-blank still goes through full numeric + finite validation.
+        assert_eq!(coerce_value(&field, "42").unwrap(), "42");
+        assert!(coerce_value(&field, "NaN").is_err());
+        assert!(coerce_value(&field, "abc").is_err());
+    }
+
+    #[test]
+    fn legacy_schema_without_required_defaults_to_true() {
+        // Older persisted schemas don't have the `required` field. Make
+        // sure they deserialize as required so behavior doesn't silently
+        // shift for users upgrading.
+        let legacy_json = r#"[
+            {"type":"string","key":"TICKET_ID","label":"Ticket"},
+            {"type":"number","key":"BUDGET","label":"Budget"},
+            {"type":"boolean","key":"DEBUG","label":"Debug"}
+        ]"#;
+        let parsed: Vec<RepositoryInputField> = serde_json::from_str(legacy_json).unwrap();
+        assert!(parsed.iter().all(|f| f.is_required()));
+        // And blank coercion against a legacy string still rejects.
+        assert!(coerce_value(&parsed[0], "").is_err());
     }
 
     #[test]
@@ -275,6 +375,7 @@ mod tests {
                 description: Some("JIRA key".into()),
                 default: None,
                 placeholder: Some("PROJ-123".into()),
+                required: true,
             },
             RepositoryInputField::Number {
                 key: "RETRIES".into(),
@@ -285,12 +386,14 @@ mod tests {
                 max: Some(10.0),
                 step: Some(1.0),
                 unit: None,
+                required: false,
             },
             RepositoryInputField::Boolean {
                 key: "DEBUG".into(),
                 label: "Debug".into(),
                 description: None,
                 default: Some(false),
+                required: true,
             },
         ];
         let json = serde_json::to_string(&schema).unwrap();

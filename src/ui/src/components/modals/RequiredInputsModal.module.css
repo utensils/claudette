@@ -50,6 +50,15 @@
   line-height: 1.4;
 }
 
+/* Inline "· optional" cue next to the label so users know they can submit
+ * the modal without filling this field. Muted to keep the label as the
+ * primary read. */
+.optional {
+  color: var(--text-muted);
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-regular);
+}
+
 .control {
   flex: 1 1 auto;
   min-width: 0;
