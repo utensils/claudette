@@ -2,12 +2,43 @@
 
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { TaskStatus, TrackedTask } from "../../hooks/useTaskTracker";
 import type { WorkspaceTaskHistoryResult } from "../../hooks/useWorkspaceTaskHistory";
 import { TaskList } from "./TaskList";
 
 const mountedRoots: Root[] = [];
 const mountedContainers: HTMLElement[] = [];
+
+// `useActiveTaskScroll` reaches for browser APIs happy-dom doesn't fully
+// implement. Stub them deterministically: a `scrollIntoView` spy lets the
+// auto-scroll tests assert on calls, and the observers are no-ops so DOM
+// churn never drives the pill on its own during a test.
+let scrollIntoView: ReturnType<typeof vi.fn>;
+
+/** A constructable no-op standing in for ResizeObserver / MutationObserver. */
+class NoopObserver {
+  observe() {}
+  unobserve() {}
+  disconnect() {}
+  takeRecords() {
+    return [];
+  }
+}
+
+function installDomStubs() {
+  scrollIntoView = vi.fn();
+  Element.prototype.scrollIntoView =
+    scrollIntoView as unknown as Element["scrollIntoView"];
+  globalThis.ResizeObserver =
+    NoopObserver as unknown as typeof globalThis.ResizeObserver;
+  globalThis.MutationObserver =
+    NoopObserver as unknown as typeof globalThis.MutationObserver;
+  globalThis.requestAnimationFrame = ((cb: FrameRequestCallback) => {
+    cb(0);
+    return 0;
+  }) as typeof globalThis.requestAnimationFrame;
+}
 
 async function render(node: React.ReactNode): Promise<HTMLElement> {
   const container = document.createElement("div");
@@ -21,6 +52,28 @@ async function render(node: React.ReactNode): Promise<HTMLElement> {
   return container;
 }
 
+/** Mount a `TaskList` and return its container plus a `rerender` that swaps
+ *  the `taskHistory` prop on the same root — used to drive task transitions. */
+async function renderTaskList(history: WorkspaceTaskHistoryResult) {
+  const container = document.createElement("div");
+  document.body.appendChild(container);
+  const root = createRoot(container);
+  mountedRoots.push(root);
+  mountedContainers.push(container);
+  await act(async () => {
+    root.render(<TaskList taskHistory={history} />);
+  });
+  const rerender = (next: WorkspaceTaskHistoryResult) =>
+    act(async () => {
+      root.render(<TaskList taskHistory={next} />);
+    });
+  return { container, rerender };
+}
+
+beforeEach(() => {
+  installDomStubs();
+});
+
 afterEach(async () => {
   for (const root of mountedRoots.splice(0).reverse()) {
     await act(async () => {
@@ -30,7 +83,50 @@ afterEach(async () => {
   for (const container of mountedContainers.splice(0)) {
     container.remove();
   }
+  vi.restoreAllMocks();
 });
+
+function makeTask(
+  id: string,
+  status: TaskStatus,
+  description = `Task ${id}`,
+): TrackedTask {
+  return { id, description, status, source: "task" };
+}
+
+/** A history result with only a Current section — enough to exercise the
+ *  active-task auto-scroll without the History / subagent machinery. */
+function historyWith(tasks: TrackedTask[]): WorkspaceTaskHistoryResult {
+  return {
+    current: {
+      tasks,
+      completedCount: tasks.filter((t) => t.status === "completed").length,
+      totalCount: tasks.length,
+    },
+    sessions: [],
+    siblings: [],
+    subagents: [],
+    historyRunCount: 0,
+    totalBadgeCount: tasks.length,
+    loading: false,
+  };
+}
+
+/** Dispatch a manual scroll gesture inside the list. A `keydown` bubbles to
+ *  the scroll container's listener and is never produced by `scrollIntoView`,
+ *  so it is the cleanest way to simulate the user taking scroll control. */
+function dispatchManualScroll(container: HTMLElement) {
+  const surface = container.querySelector("[aria-label='Current tasks']");
+  surface?.dispatchEvent(
+    new KeyboardEvent("keydown", { bubbles: true, key: "ArrowDown" }),
+  );
+}
+
+function jumpToCurrentPill(container: HTMLElement): HTMLButtonElement | null {
+  return container.querySelector<HTMLButtonElement>(
+    "button[aria-label='Jump to current task']",
+  );
+}
 
 function taskHistory(): WorkspaceTaskHistoryResult {
   return {
@@ -234,5 +330,77 @@ describe("TaskList", () => {
     });
 
     expect(container.textContent).toContain("Initial plan snapshot.");
+  });
+
+  it("scrolls the active task into view when the active task changes", async () => {
+    const { rerender } = await renderTaskList(
+      historyWith([
+        makeTask("t1", "in_progress"),
+        makeTask("t2", "pending"),
+      ]),
+    );
+    // Isolate the transition from the initial mount auto-scroll.
+    scrollIntoView.mockClear();
+
+    // t1 completes, t2 becomes in_progress → the active task changes.
+    await rerender(
+      historyWith([
+        makeTask("t1", "completed"),
+        makeTask("t2", "in_progress"),
+      ]),
+    );
+
+    expect(scrollIntoView).toHaveBeenCalled();
+  });
+
+  it("stops auto-scrolling once the user scrolls the list manually", async () => {
+    const { container, rerender } = await renderTaskList(
+      historyWith([
+        makeTask("t1", "in_progress"),
+        makeTask("t2", "pending"),
+      ]),
+    );
+    scrollIntoView.mockClear();
+
+    // The user takes scroll control.
+    await act(async () => {
+      dispatchManualScroll(container);
+    });
+
+    // A task transition arrives — auto-follow must stay yielded.
+    await rerender(
+      historyWith([
+        makeTask("t1", "completed"),
+        makeTask("t2", "in_progress"),
+      ]),
+    );
+
+    expect(scrollIntoView).not.toHaveBeenCalled();
+  });
+
+  it("shows a 'Jump to current' pill after a manual scroll and hides it on click", async () => {
+    const { container } = await renderTaskList(
+      historyWith([
+        makeTask("t1", "in_progress"),
+        makeTask("t2", "pending"),
+      ]),
+    );
+    // While auto-follow is armed the active row is kept in view — no pill.
+    expect(jumpToCurrentPill(container)).toBeNull();
+
+    // User scrolls away → active row off-screen → pill appears.
+    await act(async () => {
+      dispatchManualScroll(container);
+    });
+    const pill = jumpToCurrentPill(container);
+    expect(pill).not.toBeNull();
+
+    // Clicking it re-arms auto-follow, scrolls back, and dismisses the pill.
+    scrollIntoView.mockClear();
+    await act(async () => {
+      pill!.click();
+    });
+    expect(scrollIntoView).toHaveBeenCalled();
+    expect(jumpToCurrentPill(container)).toBeNull();
   });
 });
