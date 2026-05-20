@@ -27,19 +27,14 @@ pub(crate) fn apply_resolved_env_to_command(cmd: &mut Command, env: &ResolvedEnv
 }
 
 fn agent_path(provider_path: Option<&Option<String>>) -> OsString {
-    let base = crate::env::enriched_path();
-    let Some(Some(provider_path)) = provider_path else {
-        return base;
-    };
-
-    let mut paths = std::env::split_paths(provider_path).collect::<Vec<_>>();
-    for path in std::env::split_paths(&base) {
-        if !paths.iter().any(|existing| existing == &path) {
-            paths.push(path);
-        }
+    // A provider that unsets PATH (`Some(None)`) or emits none at all
+    // (`None`) leaves the agent on the app's enriched PATH; an emitted
+    // value is merged with that base via the shared helper so the agent
+    // and the integrated terminal resolve PATH identically (issue #915).
+    match provider_path {
+        Some(Some(provider_path)) => crate::env::merge_path_with_enriched(provider_path),
+        _ => crate::env::enriched_path(),
     }
-
-    std::env::join_paths(paths).unwrap_or(base)
 }
 
 #[cfg(test)]

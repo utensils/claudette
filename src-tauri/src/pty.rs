@@ -163,6 +163,16 @@ pub async fn spawn_pty(
     .await;
     for (k, v) in &resolved_env.vars {
         match v {
+            // A provider-emitted PATH is merged with the app's enriched
+            // PATH rather than applied verbatim. Otherwise a provider
+            // that emits a narrow PATH would strip the terminal of
+            // system tools — and before #915, env-nix-devshell emitted
+            // no PATH at all, so the devshell toolchain never reached
+            // the terminal. Mirrors the agent spawn path's
+            // `apply_resolved_env_to_command`.
+            Some(val) if k.as_str() == "PATH" => {
+                cmd.env("PATH", claudette::env::merge_path_with_enriched(val));
+            }
             Some(val) => cmd.env(k, val),
             // portable-pty's CommandBuilder inherits the base env, so
             // None-valued entries must be explicitly removed rather
