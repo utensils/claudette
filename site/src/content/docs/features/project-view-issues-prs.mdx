@@ -34,6 +34,8 @@ Right-click any issue or PR row for:
 
   The submenu lists the same models the chat panel's model picker would show, with the same alternative-backends and OAuth gating. If you have no models available (alt-backends off and no Claude auth), the submenu shows a single disabled "No models available" row instead of silently swallowing the click.
 
+  You can pick models for several issue/PR rows in quick succession. Claudette queues the workspace creates so each distinct row still gets its own workspace and starter prompt, while an accidental repeat click on the same row is collapsed instead of creating a duplicate.
+
 ## Issue / PR ↔ workspace association
 
 When you send an issue or PR to a workspace, Claudette records the link — which workspace was spun up for which upstream item — and surfaces it on both sides:

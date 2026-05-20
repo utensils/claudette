@@ -66,14 +66,31 @@ export interface CreateWorkspaceOptions {
    *  callers usually want the new workspace to be selected. The Sidebar already
    *  selects on click, so allow opting out from there. Defaults to true. */
   selectOnCreate?: boolean;
+  /** Stable key for a user gesture that should only create one workspace.
+   *  The default keeps manual "New workspace" clicks single-flight. Project
+   *  issue/PR sends pass an item-specific key so distinct sends queue while
+   *  an accidental re-fire of the same row still collapses to one create. */
+  idempotencyKey?: string;
+  /** Called only when `idempotencyKey` is already in flight. Other `null`
+   *  outcomes, such as a backend in-flight rejection, do not call this. */
+  onIdempotencyDuplicate?: () => void;
 }
 
-// Module-level single-flight guard. Lives outside the hook so the
+// Module-level queue/idempotency state. Lives outside the hook so the
 // non-hook entry point (`createWorkspaceOrchestrated`, used by the
-// Cmd+Shift+N hotkey) and the hook share the same in-flight semaphore;
-// otherwise a hotkey press while the welcome card's CTA is mid-flight
-// could double-trigger the slug generator and produce two workspaces.
-let creationInFlight = false;
+// Cmd+Shift+N hotkey) and the hook share the same duplicate protection.
+// The queue keeps git/worktree creates sequential, while the key set keeps
+// accidental re-fires of the same gesture from minting duplicates.
+let createQueueTail: Promise<void> = Promise.resolve();
+const createKeysInFlight = new Set<string>();
+
+const DEFAULT_CREATE_IDEMPOTENCY_KEY = "manual-workspace-create";
+
+/** @internal test helper: clears module-level queue state between tests. */
+export function __resetCreateWorkspaceOrchestrationForTests(): void {
+  createQueueTail = Promise.resolve();
+  createKeysInFlight.clear();
+}
 
 /** Single-source-of-truth orchestration shared between the React hook
  *  and the keyboard-shortcut path. Mirrors the original Sidebar.tsx
@@ -96,8 +113,34 @@ export async function createWorkspaceOrchestrated(
   repoId: string,
   options: CreateWorkspaceOptions = {},
 ): Promise<CreateWorkspaceOutcome | null> {
-  if (creationInFlight) return null;
-  creationInFlight = true;
+  const idempotencyKey =
+    options.idempotencyKey ?? DEFAULT_CREATE_IDEMPOTENCY_KEY;
+  if (createKeysInFlight.has(idempotencyKey)) {
+    options.onIdempotencyDuplicate?.();
+    return null;
+  }
+  createKeysInFlight.add(idempotencyKey);
+
+  const runAfterPrior = createQueueTail.then(
+    () => runCreateWorkspaceOrchestrated(repoId, options),
+    () => runCreateWorkspaceOrchestrated(repoId, options),
+  );
+  createQueueTail = runAfterPrior.then(
+    () => undefined,
+    () => undefined,
+  );
+
+  try {
+    return await runAfterPrior;
+  } finally {
+    createKeysInFlight.delete(idempotencyKey);
+  }
+}
+
+async function runCreateWorkspaceOrchestrated(
+  repoId: string,
+  options: CreateWorkspaceOptions = {},
+): Promise<CreateWorkspaceOutcome | null> {
   const { selectOnCreate = true } = options;
   const store = useAppStore.getState();
   // Selection in effect before this create runs. If a benign backend
@@ -242,8 +285,8 @@ export async function createWorkspaceOrchestrated(
     // logs/telemetry as a failure, and it should leave the user where
     // they were rather than yanking them to the dashboard. Tear the
     // placeholder down restoring the pre-create selection, surface a
-    // calm toast, and return null — the same shape as the module-level
-    // `creationInFlight` early-return. See issue #896.
+    // calm toast, and return null — the same shape as the in-process
+    // idempotency early-return. See issue #896.
     if (isCreateInFlightRejection(e)) {
       if (placeholderId) {
         useAppStore
@@ -271,11 +314,13 @@ export async function createWorkspaceOrchestrated(
     throw e;
   } finally {
     useAppStore.getState().setCreatingWorkspaceRepoId(null);
-    creationInFlight = false;
   }
 }
 
-export type UseCreateWorkspaceOptions = CreateWorkspaceOptions;
+export type UseCreateWorkspaceOptions = Omit<
+  CreateWorkspaceOptions,
+  "idempotencyKey" | "onIdempotencyDuplicate"
+>;
 
 /** React hook wrapping `createWorkspaceOrchestrated` with local React
  *  state so a button can disable itself while the call is in flight.
