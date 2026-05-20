@@ -43,7 +43,7 @@ The dev entry point is `scripts/dev.ps1` (or the `dev` PowerShell profile functi
 
 ## Port discovery
 
-With the devshell `dev` helper, each dev instance probes for a free Vite port (starting at 1420) and a free debug port (starting at 19432), then writes `${TMPDIR:-/tmp}/claudette-dev/<pid>.json` with fields `{pid, debug_port, vite_port, cwd, branch, started_at}`. The file is removed on clean exit.
+With the devshell `dev` helper, each dev instance probes for a free Vite port (starting at 14253) and a free debug port (starting at 19432), then writes `${TMPDIR:-/tmp}/claudette-dev/<pid>.json` with fields `{pid, debug_port, vite_port, cwd, branch, started_at}`. The file is removed on clean exit.
 
 `debug-eval.sh` resolves the port in this order:
 1. `$CLAUDETTE_DEBUG_PORT` (explicit override)
@@ -152,11 +152,11 @@ JS
 
 Read [reference/tauri-commands.md](reference/tauri-commands.md) for the complete list. Key commands for UAT:
 
-- `sendChatMessage(workspaceId, content, permissionLevel?, model?, fastMode?, thinkingEnabled?, planMode?)`
-- `createWorkspace(repoId, name)` -> CreateWorkspaceResult
+- `sendChatMessage(sessionId, messageId?, content, mentionedFiles?, permissionLevel?, model?, fastMode?, thinkingEnabled?, planMode?, effort?, chromeEnabled?, disable1mContext?, backendId?, attachments?)` — keyed on chat session, not workspace
+- `createWorkspace(repoId, name, skipSetup?)` -> CreateWorkspaceResult
 - `loadInitialData()` -> repos, workspaces, branches
 - `loadDiffFiles(workspaceId)` -> DiffFilesResult
-- `stopAgent(workspaceId)`
+- `stopAgent(sessionId)` — keyed on chat session, not workspace
 
 ### `discover state` — list all state slices
 

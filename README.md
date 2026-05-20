@@ -128,10 +128,10 @@ cd src/ui && bunx tsc --noEmit
 Cargo.toml              # Workspace root + claudette lib crate
 src/
   lib.rs                # Backend library entry point
-  db.rs                 # SQLite database (rusqlite)
+  db/                   # SQLite database (rusqlite)
   git.rs                # Async git operations
   diff.rs               # Diff parsing
-  agent.rs              # Claude CLI subprocess + streaming
+  agent/                # Claude CLI subprocess + streaming, alternative backends
   model/                # Data types
   names/                # Random workspace name generator
   ui/                   # React/Vite frontend
@@ -162,6 +162,10 @@ src-server/
     tls.rs              # Self-signed TLS certificate management
     auth.rs             # Pairing token + session token auth
     mdns.rs             # mDNS service advertisement
+src-cli/
+  Cargo.toml            # Command-line client crate (`claudette` binary)
+src-mobile/
+  Cargo.toml            # Tauri iOS / Android remote-control client crate
 ```
 
 ## Command-line client
@@ -237,7 +241,7 @@ Click **Share this machine** in the sidebar. The server starts automatically as 
 On startup the server prints a connection string:
 
 ```
-claudette-server v0.8.0 listening on wss://0.0.0.0:7683
+claudette-server v0.24.0 listening on wss://0.0.0.0:7683
 Name: Work Laptop
 
 Connection string (paste into Claudette):

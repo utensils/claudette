@@ -14,10 +14,13 @@ Select a model from the dropdown in the chat header. Available models:
 
 | Model | ID | Description |
 |-------|-----|-------------|
-| **Opus 4.6 1M** | `opus` | Opus 4.6 with 1M context window |
-| **Opus 4.6** | `claude-opus-4-6` | Standard Opus 4.6 |
+| **Opus 4.7 1M** | `opus` | Opus 4.7 with a 1M context window |
+| **Opus 4.7** | `claude-opus-4-7` | Standard Opus 4.7 (200K context) |
 | **Sonnet 4.6** | `sonnet` | Fast and capable |
+| **Sonnet 4.6 1M** | `claude-sonnet-4-6[1m]` | Sonnet 4.6 with a 1M context window (extra usage) |
 | **Haiku 4.5** | `haiku` | Fastest, most affordable |
+
+Earlier-generation models (Opus 4.6, Opus 4.6 1M, Opus 4.5, Sonnet 4.5, Haiku 3.5) remain selectable in the picker as legacy entries.
 
 The model selection is per-workspace — you can use different models for different tasks.
 
@@ -46,7 +49,8 @@ Control how much reasoning the agent applies to each response:
 | **Low** | Fast, minimal reasoning | Opus, Sonnet |
 | **Medium** | Balanced | Opus, Sonnet |
 | **High** | Deep reasoning | Opus, Sonnet |
-| **Max** | Maximum reasoning budget | Opus 4.6 only |
+| **XHigh** | Extended reasoning budget | Opus 4.7 only |
+| **Max** | Maximum reasoning budget | Opus and Sonnet (effort-capable models) |
 
 Select the effort level from the dropdown in the chat header, next to the model selector.
 

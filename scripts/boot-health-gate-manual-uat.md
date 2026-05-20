@@ -14,11 +14,13 @@ on Windows unless `CLAUDETTE_DATA_DIR` is set.
 
 ## Phase 0 — preconditions
 
-1. Make sure no previous probation state will skew the test:
+1. Make sure no previous probation state will skew the test. Set
+   `APP_DATA` to the platform data dir from the note above (or
+   `$CLAUDETTE_DATA_DIR` if you export it):
 
    ```bash
-   APP_DATA="$(./target/debug/claudette-app --print-data-dir 2>/dev/null \
-     || echo "$HOME/Library/Application Support/claudette")"
+   # macOS — adjust for Linux/Windows per the note above.
+   APP_DATA="${CLAUDETTE_DATA_DIR:-$HOME/Library/Application Support/claudette}"
    rm -f "$APP_DATA/boot-probation.json" "$APP_DATA/boot-rollback-report.json"
    ```
 
@@ -153,7 +155,7 @@ to NOT fire. The simplest reproduction:
    ```
 
 2. Tighten the probation window to 2 seconds so you don't wait the
-   default 10:
+   default 20:
 
    ```bash
    export CLAUDETTE_BOOT_PROBATION_SECS=2
@@ -165,10 +167,10 @@ to NOT fire. The simplest reproduction:
 
    ```diff
     useEffect(() => {
-      if (!viewStateHydrated) return;
+      if (!viewStateHydrated || !initialDataLoaded) return;
    -  bootOk().catch((err) => console.error("Failed to acknowledge boot:", err));
    +  // bootOk()  // intentionally disabled for Phase 3 UAT
-    }, [viewStateHydrated]);
+    }, [viewStateHydrated, initialDataLoaded]);
    ```
 
 4. Launch the app:

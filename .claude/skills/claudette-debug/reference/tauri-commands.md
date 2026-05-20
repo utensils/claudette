@@ -12,7 +12,7 @@ For example, `workspace_id: String` in Rust becomes `workspaceId` in the JS invo
 ## Repository
 
 - `addRepository(path)` -> `Repository`
-- `updateRepositorySettings(id, name, icon?, setupScript?, customInstructions?)` -> void
+- `updateRepositorySettings(id, name, icon?, setupScript?, archiveScript?, customInstructions?, branchRenamePreferences?, setupScriptAutoRun, archiveScriptAutoRun, baseBranch?, defaultRemote?)` -> void
 - `relinkRepository(id, path)` -> void
 - `removeRepository(id)` -> void
 - `getRepoConfig(repoId)` -> `RepoConfigInfo`
@@ -36,18 +36,22 @@ For example, `workspace_id: String` in Rust becomes `workspaceId` in the JS invo
 
 ## Chat
 
-- `sendChatMessage(workspaceId, content, permissionLevel?, model?, fastMode?, thinkingEnabled?, planMode?)` -> void
-- `loadChatHistory(workspaceId)` -> `ChatMessage[]`
-- `stopAgent(workspaceId)` -> void
-- `resetAgentSession(workspaceId)` -> void
+After the multi-session refactor, chat commands are keyed on `sessionId` (chat session id), not `workspaceId`. Resolve the active session id from the store's `selectedSessionIdByWorkspaceId` (see the `send` action in SKILL.md).
+
+- `sendChatMessage(sessionId, messageId?, content, mentionedFiles?, permissionLevel?, model?, fastMode?, thinkingEnabled?, planMode?, effort?, chromeEnabled?, disable1mContext?, backendId?, attachments?)` -> void
+- `loadChatHistory(sessionId)` -> `ChatMessage[]`
+- `stopAgent(sessionId)` -> void
+- `resetAgentSession(sessionId)` -> void
 
 ## Checkpoints
 
-- `listCheckpoints(workspaceId)` -> `ConversationCheckpoint[]`
-- `rollbackToCheckpoint(workspaceId, checkpointId, restoreFiles)` -> `ChatMessage[]`
-- `clearConversation(workspaceId, restoreFiles)` -> `ChatMessage[]`
+Keyed on `sessionId` (chat session id), not `workspaceId`.
+
+- `listCheckpoints(sessionId)` -> `ConversationCheckpoint[]`
+- `rollbackToCheckpoint(sessionId, checkpointId, restoreFiles)` -> `ChatMessage[]`
+- `clearConversation(sessionId, restoreFiles)` -> `ChatMessage[]`
 - `saveTurnToolActivities(checkpointId, messageCount, activities)` -> void
-- `loadCompletedTurns(workspaceId)` -> `CompletedTurnData[]`
+- `loadCompletedTurns(sessionId)` -> `CompletedTurnData[]`
 
 ## Plan
 
@@ -56,7 +60,7 @@ For example, `workspace_id: String` in Rust becomes `workspaceId` in the JS invo
 ## Diff
 
 - `loadDiffFiles(workspaceId)` -> `DiffFilesResult { files, merge_base }`
-- `loadFileDiff(worktreePath, mergeBase, filePath)` -> `FileDiff`
+- `loadFileDiff(worktreePath, mergeBase, filePath, diffLayer?)` -> `FileDiff`
 - `computeWorkspaceMergeBase(workspaceId)` -> string  (lightweight: returns just the merge-base SHA, no file list)
 - `revertFile(worktreePath, mergeBase, filePath, status)` -> void
 
@@ -68,10 +72,12 @@ For example, `workspace_id: String` in Rust becomes `workspaceId` in the JS invo
 
 ## PTY
 
-- `spawnPty(workingDir)` -> `number` (pty_id)
-- `writePty(ptyId, data)` -> void
+- `spawnPty(workingDir, workspaceName, workspaceId, rootPath, defaultBranch, branchName)` -> `number` (pty_id)
+- `writePty(ptyId, data)` -> void (`data` is a byte array)
 - `resizePty(ptyId, cols, rows)` -> void
+- `interruptPtyForeground(ptyId)` -> void
 - `closePty(ptyId)` -> void
+- `detectShell()` -> `string`
 
 ## Settings
 
