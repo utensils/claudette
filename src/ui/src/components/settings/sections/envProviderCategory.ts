@@ -1,9 +1,11 @@
 // Maps an env-provider plugin name onto one of the 8 category-slot
 // tokens (--category-a-fg … --category-h-fg). Bundled providers get
 // stable assignments so muscle memory holds across sessions; third-
-// party providers cycle through the remaining slots via a stable hash
-// so two custom providers get distinct colors (rather than both
-// fingerprinting to the same slot).
+// party providers receive a best-effort stable slot via FNV-1a hashing
+// across the four remaining slots. Hashing reduces clustering but
+// cannot guarantee uniqueness — collisions across N third-party
+// providers are expected at roughly N²/8 (birthday paradox); the
+// assignment is stable per name across launches.
 //
 // The category-* tokens live in src/styles/theme.css and ship a full
 // bg/border/fg triplet — this module only returns the fg color since
@@ -33,9 +35,10 @@ function hashName(name: string): number {
 }
 
 /**
- * Return the CSS var name for an env-provider row's category color, or
- * `null` if no category slot should be applied (e.g. a degraded state
- * where coloring would clash with the existing error/disabled visuals).
+ * Return the CSS var name for an env-provider row's category color.
+ * Every plugin name resolves to some slot — bundled providers map to
+ * their canonical slot (A–D), third-party providers hash into one of
+ * the remaining slots (E–H) deterministically.
  *
  * Caller use:
  *

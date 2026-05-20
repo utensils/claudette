@@ -358,13 +358,27 @@ describe("convertBase16ToClaudette", () => {
     expect(out["syntax-comment"]).toBe("#969896");   // base03
   });
 
-  it("co-emits -rgb companions for every accent so rgba(var(...),a) keeps working", () => {
+  it("co-emits the -rgb companion for --accent-primary (still consumed by legacy alpha overlays)", () => {
     const out = convertBase16ToClaudette(input).colors;
     expect(out["accent-primary-rgb"]).toBe("178, 148, 187");   // base0E
-    expect(out["accent-success-rgb"]).toBe("181, 189, 104");   // base0B
-    expect(out["accent-error-rgb"]).toBe("204, 102, 102");     // base08
-    expect(out["accent-warning-rgb"]).toBe("222, 147, 95");    // base09
-    expect(out["accent-info-rgb"]).toBe("129, 162, 190");      // base0D
+  });
+
+  it("emits only the BASE color for status/UI-role accents (bg/border/hover/fg derive via color-mix in :root)", () => {
+    const out = convertBase16ToClaudette(input).colors;
+    // Base colors should be set explicitly so the cascade can derive
+    // the tinted companions automatically.
+    expect(out["accent-success"]).toBe("#b5bd68");   // base0B
+    expect(out["accent-warning"]).toBe("#de935f");   // base09
+    expect(out["accent-error"]).toBe("#cc6666");     // base08
+    expect(out["accent-info"]).toBe("#81a2be");      // base0D
+    expect(out["accent-secondary"]).toBe("#a3685a"); // base0F
+    expect(out["accent-tertiary"]).toBe("#b294bb");  // base0E
+    // -bg/-border/-fg are NOT emitted — they derive from the base via
+    // color-mix() in :root so the converter doesn't need to bake alpha.
+    expect(out["accent-success-bg"]).toBeUndefined();
+    expect(out["accent-success-rgb"]).toBeUndefined();
+    expect(out["accent-error-bg"]).toBeUndefined();
+    expect(out["accent-secondary-bg"]).toBeUndefined();
   });
 
   it("derives color-scheme=dark from base00 luminance when no variant field", () => {
@@ -427,30 +441,10 @@ describe("convertBase16ToClaudette", () => {
     expect(out["text-dim"]).toBe("#969896");      // base03
   });
 
-  it("emits full -bg/-border/-fg triplets for each status accent so imported palettes don't inherit baseline tints", () => {
-    const out = convertBase16ToClaudette(input).colors;
-    // success uses base0B (#b5bd68 → 181, 189, 104)
-    expect(out["accent-success-bg"]).toBe("rgba(181, 189, 104, 0.10)");
-    expect(out["accent-success-border"]).toBe("rgba(181, 189, 104, 0.30)");
-    expect(out["accent-success-fg"]).toBe("#b5bd68");
-    // error uses base08 (#cc6666 → 204, 102, 102)
-    expect(out["accent-error-bg"]).toBe("rgba(204, 102, 102, 0.10)");
-    expect(out["accent-error-border"]).toBe("rgba(204, 102, 102, 0.30)");
-    // warning uses base09 (#de935f → 222, 147, 95)
-    expect(out["accent-warning-bg"]).toBe("rgba(222, 147, 95, 0.10)");
-    expect(out["accent-warning-border"]).toBe("rgba(222, 147, 95, 0.30)");
-    // info uses base0D (#81a2be → 129, 162, 190)
-    expect(out["accent-info-bg"]).toBe("rgba(129, 162, 190, 0.10)");
-    expect(out["accent-info-border"]).toBe("rgba(129, 162, 190, 0.30)");
-  });
-
-  it("emits secondary + tertiary triplets from base0F and base0E", () => {
-    const out = convertBase16ToClaudette(input).colors;
-    expect(out["accent-secondary"]).toBe("#a3685a");        // base0F
-    expect(out["accent-secondary-bg"]).toBe("rgba(163, 104, 90, 0.10)");
-    expect(out["accent-tertiary"]).toBe("#b294bb");         // base0E
-    expect(out["accent-tertiary-bg"]).toBe("rgba(178, 148, 187, 0.10)");
-  });
+  // The bg/border/hover/fg triplet members no longer come from the converter
+  // — they derive from the base color in :root via color-mix(). Coverage for
+  // the derivation itself lives in themeTokenParity.test.ts (which asserts
+  // the :root rules are present).
 
   it("accepts a base16 palette using lowercase keys (base0a–base0f)", () => {
     const lower: Record<string, string> = {};

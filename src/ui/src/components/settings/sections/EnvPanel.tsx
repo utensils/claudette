@@ -721,8 +721,10 @@ export function EnvPanel({ target }: EnvPanelProps) {
                   // Category-colored leading bar — distinguishes
                   // direnv/mise/nix/dotenv at a glance independently
                   // of the status dot's state color. Third-party
-                  // providers cycle through the remaining slots so
-                  // multiple custom providers stay distinguishable.
+                  // providers receive a best-effort stable slot (E–H)
+                  // via FNV-1a hash; collisions across many third-party
+                  // providers are expected but the same name always
+                  // lands in the same slot across launches.
                   borderLeft: `3px solid ${envProviderCategoryColor(source.plugin_name)}`,
                   paddingLeft: "var(--space-2)",
                 }}

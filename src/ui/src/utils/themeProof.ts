@@ -160,17 +160,30 @@ function renderProof(): HTMLElement {
   return overlay;
 }
 
+// Per-overlay keydown handler, kept at module scope so toggleThemeProof's
+// close path can detach it (the previous version only detached on Esc-close,
+// leaking a listener every time the user toggled the overlay shut via
+// repeated console calls).
+let escHandler: ((e: KeyboardEvent) => void) | null = null;
+
+function dismissProof(overlay: HTMLElement): void {
+  overlay.remove();
+  if (escHandler) {
+    document.removeEventListener("keydown", escHandler);
+    escHandler = null;
+  }
+}
+
 export function toggleThemeProof(): void {
   const existing = document.getElementById(OVERLAY_ID);
   if (existing) {
-    existing.remove();
+    dismissProof(existing);
     return;
   }
   const overlay = renderProof();
-  const escHandler = (e: KeyboardEvent) => {
+  escHandler = (e: KeyboardEvent) => {
     if (e.key === "Escape") {
-      overlay.remove();
-      document.removeEventListener("keydown", escHandler);
+      dismissProof(overlay);
     }
   };
   document.addEventListener("keydown", escHandler);

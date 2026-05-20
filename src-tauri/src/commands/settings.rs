@@ -468,16 +468,30 @@ fn is_valid_hex_color(s: &str) -> bool {
     (v.len() == 3 || v.len() == 6) && v.chars().all(|c| c.is_ascii_hexdigit())
 }
 
-/// Look up a Base16 slot tolerantly: real-world schemes in the wild use
-/// either `base0A` (Tinted Theming spec) or `base0a`. Accept both.
+/// Look up a Base16 slot tolerantly. Real-world Base16 files take two
+/// common shapes:
+///   - The legacy flat shape: `base00`, `base01`, ... at the top level.
+///   - The current Tinted Theming shape (spec-0.11+): the same keys nested
+///     under a `palette` object alongside top-level `system`, `name`,
+///     `variant`, `author` fields.
+/// We accept both, plus lowercase suffixes (`base0a` rather than `base0A`).
 fn read_base16_slot<'a>(
     raw: &'a HashMap<String, serde_json::Value>,
     suffix: &str,
 ) -> Option<&'a str> {
     let upper = format!("base{suffix}");
     let lower = format!("base{}", suffix.to_lowercase());
-    raw.get(&upper)
-        .or_else(|| raw.get(&lower))
+    // Top-level lookup (flat shape).
+    if let Some(v) = raw.get(&upper).or_else(|| raw.get(&lower))
+        && let Some(s) = v.as_str()
+    {
+        return Some(s);
+    }
+    // Nested-under-palette lookup (Tinted Theming canonical shape).
+    let palette = raw.get("palette")?.as_object()?;
+    palette
+        .get(&upper)
+        .or_else(|| palette.get(&lower))
         .and_then(|v| v.as_str())
 }
 
@@ -526,10 +540,20 @@ fn parse_theme_file(content: &str, file_stem: &str) -> Result<ThemeDefinition, S
 
     // Capture every string-valued top-level field so the frontend converter
     // can read `variant`, `scheme`, etc. alongside the base16 hex values.
-    let colors: HashMap<String, String> = raw
+    // For the Tinted Theming nested shape (palette: { base00: ... }), also
+    // flatten the palette's children into `palette.baseXX` keys so the TS
+    // lookup finds them.
+    let mut colors: HashMap<String, String> = raw
         .iter()
         .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
         .collect();
+    if let Some(palette) = raw.get("palette").and_then(|v| v.as_object()) {
+        for (k, v) in palette {
+            if let Some(s) = v.as_str() {
+                colors.insert(format!("palette.{k}"), s.to_string());
+            }
+        }
+    }
 
     let name = colors
         .get("scheme")
@@ -742,6 +766,42 @@ mod tests {
             err.contains("invalid hex"),
             "error should distinguish invalid hex: {err}"
         );
+    }
+
+    #[test]
+    fn parse_theme_file_accepts_tinted_theming_palette_nested_shape() {
+        // Current Tinted Theming canonical shape: base keys nested under
+        // `palette` alongside top-level metadata. Direct YAML→JSON
+        // conversion of `tinted-theming/schemes` files lands here.
+        let content = r##"{
+            "system": "base16",
+            "name": "Tomorrow Night",
+            "variant": "dark",
+            "author": "Chris Kempson",
+            "palette": {
+                "base00": "1d1f21", "base01": "282a2e", "base02": "373b41", "base03": "969896",
+                "base04": "b4b7b4", "base05": "c5c8c6", "base06": "e0e0e0", "base07": "ffffff",
+                "base08": "cc6666", "base09": "de935f", "base0A": "f0c674", "base0B": "b5bd68",
+                "base0C": "8abeb7", "base0D": "81a2be", "base0E": "b294bb", "base0F": "a3685a"
+            }
+        }"##;
+        let theme = parse_theme_file(content, "tomorrow-night").expect("should parse");
+        assert_eq!(theme.id, "tomorrow-night");
+        assert_eq!(theme.name, "Tomorrow Night");
+        assert_eq!(theme.author.as_deref(), Some("Chris Kempson"));
+        // Palette children must be flattened into `palette.baseXX` keys
+        // so the TS converter (which knows about this shape) can find them.
+        for key in [
+            "palette.base00",
+            "palette.base05",
+            "palette.base08",
+            "palette.base0F",
+        ] {
+            assert!(
+                theme.colors.contains_key(key),
+                "missing flattened palette key: {key}"
+            );
+        }
     }
 
     #[test]

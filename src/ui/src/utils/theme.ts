@@ -45,17 +45,20 @@ const THEMEABLE_VARS = [
   "badge-done",
   "badge-plan",
   "badge-ask",
-  // Status accents — each family is a 5-token group (color, -rgb, -bg, -border, -fg).
-  // The -bg/-border/-fg layers derive from -rgb in :root, so a user theme typically
-  // only needs to set the base color + -rgb.
-  "accent-success", "accent-success-rgb", "accent-success-bg", "accent-success-border", "accent-success-hover", "accent-success-fg",
-  "accent-warning", "accent-warning-rgb", "accent-warning-bg", "accent-warning-border", "accent-warning-hover", "accent-warning-fg",
-  "accent-error", "accent-error-rgb", "accent-error-bg", "accent-error-border", "accent-error-hover", "accent-error-fg",
-  "accent-info", "accent-info-rgb", "accent-info-bg", "accent-info-border", "accent-info-hover", "accent-info-fg",
+  // Status accents — each family is a 5-token group: base color (which a
+  // theme can override), plus -bg/-border/-hover/-fg layers derived from
+  // the base via color-mix(in srgb, var(--accent-X) N%, transparent) in
+  // :root. A theme that overrides --accent-success automatically gets a
+  // matching tinted surface and outline; no -rgb companion needed.
+  "accent-success", "accent-success-bg", "accent-success-border", "accent-success-hover", "accent-success-fg",
+  "accent-warning", "accent-warning-bg", "accent-warning-border", "accent-warning-hover", "accent-warning-fg",
+  "accent-error", "accent-error-bg", "accent-error-border", "accent-error-hover", "accent-error-fg",
+  "accent-info", "accent-info-bg", "accent-info-border", "accent-info-hover", "accent-info-fg",
   // UI-role tokens — neutral plus secondary/tertiary brand accents.
+  // Same color-mix derivation; only the base needs overriding per theme.
   "accent-neutral",
-  "accent-secondary", "accent-secondary-rgb", "accent-secondary-bg", "accent-secondary-border", "accent-secondary-fg",
-  "accent-tertiary", "accent-tertiary-rgb", "accent-tertiary-bg", "accent-tertiary-border", "accent-tertiary-fg",
+  "accent-secondary", "accent-secondary-bg", "accent-secondary-border", "accent-secondary-fg",
+  "accent-tertiary", "accent-tertiary-bg", "accent-tertiary-border", "accent-tertiary-fg",
   // Category slots A–H for "item N of a set" UI (workspace tags, plugin types).
   "category-a-bg", "category-a-border", "category-a-fg",
   "category-b-bg", "category-b-border", "category-b-fg",
@@ -312,14 +315,26 @@ function hexLuminance(hex: string): number {
   return (0.299 * r + 0.587 * g + 0.114 * b) / 255;
 }
 
-// Look up a base16 slot tolerantly: real-world files in the wild use either
-// `base0A` (Tinted Theming spec) or `base0a` (some legacy schemes). Accept
-// both by normalizing the suffix's case at lookup time.
+// Look up a base16 slot tolerantly. Accepts:
+//   - Top-level `base0X` keys (the legacy "flat" Base16 JSON shape).
+//   - Nested under `palette` (the canonical Tinted Theming YAML→JSON shape;
+//     when serialized from `palette: { base00: ... }` the entries land as
+//     `"palette.base00"` after the loader flattens string-valued fields).
+//   - Lowercase `base0a` instead of uppercase `base0A` (some legacy schemes).
+// The Rust loader (settings.rs) is also schema-tolerant on the input side,
+// so a file in any of these shapes ends up here with the right keys.
 function readBase16Slot(
   colors: Record<string, string>,
   suffix: string,
 ): string | undefined {
-  return colors[`base${suffix}`] ?? colors[`base${suffix.toLowerCase()}`];
+  const upper = `base${suffix}`;
+  const lower = `base${suffix.toLowerCase()}`;
+  return (
+    colors[upper] ??
+    colors[lower] ??
+    colors[`palette.${upper}`] ??
+    colors[`palette.${lower}`]
+  );
 }
 
 // Token names that, when present in a `colors` map, strongly indicate the file
@@ -385,21 +400,6 @@ export function convertBase16ToClaudette(theme: ThemeDefinition): ThemeDefinitio
         ? "dark"
         : "light";
 
-  // Emit the full bg/border/fg triplet for a semantic accent. Alpha levels
-  // mirror the :root defaults in theme.css (10% tint, 30% outline).
-  const emitTriplet = (
-    out: Record<string, string>,
-    prefix: string,
-    hex: string,
-  ) => {
-    const rgb = hexToRgbTriplet(hex);
-    out[prefix] = hex;
-    out[`${prefix}-rgb`] = rgb;
-    out[`${prefix}-bg`] = `rgba(${rgb}, 0.10)`;
-    out[`${prefix}-border`] = `rgba(${rgb}, 0.30)`;
-    out[`${prefix}-fg`] = hex;
-  };
-
   const out: Record<string, string> = {
     "color-scheme": scheme,
 
@@ -457,16 +457,18 @@ export function convertBase16ToClaudette(theme: ThemeDefinition): ThemeDefinitio
     "syntax-function": p.base0D,
     "syntax-keyword": p.base0E,
     "syntax-comment": p.base03,
-  };
 
-  // Status + UI-role accents — full triplets so imported palettes don't
-  // inherit baseline tints.
-  emitTriplet(out, "accent-success", p.base0B);
-  emitTriplet(out, "accent-warning", p.base09);
-  emitTriplet(out, "accent-error", p.base08);
-  emitTriplet(out, "accent-info", p.base0D);
-  emitTriplet(out, "accent-secondary", p.base0F);
-  emitTriplet(out, "accent-tertiary", p.base0E);
+    // Status + UI-role accent BASE colors. The -bg/-border/-hover/-fg
+    // companions derive from the base via color-mix() in :root, so
+    // we only need to set the base here — the cascade handles the
+    // tinted surface, outline, hover, and fg layers.
+    "accent-success": p.base0B,
+    "accent-warning": p.base09,
+    "accent-error": p.base08,
+    "accent-info": p.base0D,
+    "accent-secondary": p.base0F,
+    "accent-tertiary": p.base0E,
+  };
 
   return {
     id: theme.id,
