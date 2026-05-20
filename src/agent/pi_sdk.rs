@@ -466,9 +466,29 @@ impl PiSdkSession {
         // event and the eventual boundary can't slip past before the
         // per-turn pump exists.
         let mut broadcast_rx = self.event_tx.subscribe();
+        let cached = self.init_cache.lock().await.clone();
         self.send_request(json!({ "type": "compact" })).await?;
 
         let (mpsc_tx, mpsc_rx) = mpsc::channel::<AgentEvent>(128);
+        // Replay the cached command-line + init events first, exactly as
+        // `send_turn` does. The chat bridge's `got_init` flag is set when
+        // it sees the `System { subtype: "init" }` event; the live init
+        // is emitted once during `start_session`, before this per-turn
+        // receiver subscribed. Without the replay `got_init` stays false
+        // for the compaction turn, and a Pi process crash during/after
+        // compaction would hit `send_chat_message`'s `!got_init` branch —
+        // misclassified as an init failure, wrongly clearing session
+        // state and DB rows instead of the gentler mid-turn-crash path.
+        if let Some(event) = cached.command_line
+            && mpsc_tx.send(event).await.is_err()
+        {
+            return Err("Pi SDK harness compact receiver closed".to_string());
+        }
+        if let Some(event) = cached.init
+            && mpsc_tx.send(event).await.is_err()
+        {
+            return Err("Pi SDK harness compact receiver closed".to_string());
+        }
         tokio::spawn(async move {
             loop {
                 match broadcast_rx.recv().await {
