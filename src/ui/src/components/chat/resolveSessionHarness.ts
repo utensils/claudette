@@ -20,16 +20,14 @@ import {
  * Mirrors `resolve_dispatch_harness` for the Pi downgrade case: a non-Pi
  * backend (Ollama, LM Studio, OpenAI, …) configured to dispatch through
  * Pi gets downgraded to the first non-Pi allowed harness when no enabled
- * Pi card exists. Without this the Compact button is incorrectly disabled
- * and `/compact` is rejected with "not supported on this backend" even
- * though the actual send path routes through Claude CLI and supports it.
+ * Pi card exists, so the resolved harness matches the harness the Rust
+ * send pipeline will actually run.
  *
- * Used by both `ChatPanel`'s `/compact` dispatch and `ContextPopover`'s
- * "Compact" button gate so the two surfaces stay in sync — if either
- * silently assumed `claude_code` while the session was actually running
- * on Pi (a real `selectedModelProvider[sessionId] === undefined` case
- * after first launch), Pi compact text would either misroute through the
- * Codex intercept or hit the wrong "not supported" path.
+ * Used by `ChatPanel`'s `/compact` dispatch purely as a readiness guard:
+ * a `null` result means `agent_backends` hasn't loaded yet, so `/compact`
+ * should surface a "backend not ready" notice rather than fire blind.
+ * Every harness (Claude Code, Codex Native, Pi SDK) supports `/compact`,
+ * so the resolved harness value itself no longer gates the command.
  */
 export function resolveSessionHarness(args: {
   sessionId: string;

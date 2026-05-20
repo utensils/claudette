@@ -448,6 +448,80 @@ impl PiSdkSession {
         Ok(())
     }
 
+    /// Trigger Pi's native context compaction via the sidecar's
+    /// `compact` request. Returns a [`TurnHandle`] shaped exactly like
+    /// [`Self::send_turn`]'s so `send_chat_message` can plug it into the
+    /// same per-turn event pump without branching.
+    ///
+    /// Pi's `AgentSession.compact()` aborts any current operation,
+    /// summarizes the conversation, and reports its lifecycle via
+    /// `compaction_start` / `compaction_end` events on the session
+    /// subscription. [`route_pi_message`] translates a successful
+    /// `compaction_end` into a `compact_boundary` System event plus a
+    /// synthetic `Result`: the boundary persists the `COMPACTION:...`
+    /// sentinel, and the `Result` terminates this pump so the chat
+    /// session's status flips back to Idle.
+    pub async fn start_compact(&self) -> Result<TurnHandle, String> {
+        // Subscribe BEFORE the request so the `compaction_start` status
+        // event and the eventual boundary can't slip past before the
+        // per-turn pump exists.
+        let mut broadcast_rx = self.event_tx.subscribe();
+        let cached = self.init_cache.lock().await.clone();
+        self.send_request(json!({ "type": "compact" })).await?;
+
+        let (mpsc_tx, mpsc_rx) = mpsc::channel::<AgentEvent>(128);
+        // Replay the cached command-line + init events first, exactly as
+        // `send_turn` does. The chat bridge's `got_init` flag is set when
+        // it sees the `System { subtype: "init" }` event; the live init
+        // is emitted once during `start_session`, before this per-turn
+        // receiver subscribed. Without the replay `got_init` stays false
+        // for the compaction turn, and a Pi process crash during/after
+        // compaction would hit `send_chat_message`'s `!got_init` branch —
+        // misclassified as an init failure, wrongly clearing session
+        // state and DB rows instead of the gentler mid-turn-crash path.
+        if let Some(event) = cached.command_line
+            && mpsc_tx.send(event).await.is_err()
+        {
+            return Err("Pi SDK harness compact receiver closed".to_string());
+        }
+        if let Some(event) = cached.init
+            && mpsc_tx.send(event).await.is_err()
+        {
+            return Err("Pi SDK harness compact receiver closed".to_string());
+        }
+        tokio::spawn(async move {
+            loop {
+                match broadcast_rx.recv().await {
+                    Ok(event) => {
+                        let is_turn_end =
+                            matches!(&event, AgentEvent::Stream(StreamEvent::Result { .. }));
+                        let is_process_exit = matches!(&event, AgentEvent::ProcessExited(_));
+                        if mpsc_tx.send(event).await.is_err() {
+                            break;
+                        }
+                        if is_turn_end || is_process_exit {
+                            break;
+                        }
+                    }
+                    Err(broadcast::error::RecvError::Closed) => break,
+                    Err(broadcast::error::RecvError::Lagged(n)) => {
+                        tracing::warn!(
+                            target: "claudette::agent",
+                            subsystem = "pi-sdk",
+                            dropped_events = n,
+                            "broadcast lag — pi compact pump missed events"
+                        );
+                    }
+                }
+            }
+        });
+
+        Ok(TurnHandle {
+            event_rx: mpsc_rx,
+            pid: self.pid,
+        })
+    }
+
     pub async fn send_control_response(
         &self,
         request_id: &str,
@@ -705,6 +779,38 @@ enum PiHarnessMessage {
     TurnError {
         #[serde(default)]
         error: Option<String>,
+    },
+    /// Pi began native context compaction. `reason` is `"manual"` (a
+    /// user `/compact`), `"threshold"` (auto-compaction crossed the
+    /// keep-recent budget), or `"overflow"` (context window exhausted).
+    /// Arrives on the same session subscription as turn events.
+    #[serde(rename = "compaction_start")]
+    CompactionStart {
+        #[serde(default)]
+        reason: Option<String>,
+    },
+    /// Pi finished native context compaction. The sidecar flattens Pi's
+    /// `CompactionResult` and collapses "explicit abort" and "generic
+    /// failure" into a single `aborted` flag meaning "did NOT free
+    /// context". On the success path `tokens_before` / `tokens_after` /
+    /// `duration_ms` feed the compaction divider; on the failure path
+    /// `error_message` carries the reason.
+    #[serde(rename = "compaction_end")]
+    CompactionEnd {
+        #[serde(default)]
+        reason: Option<String>,
+        #[serde(default)]
+        aborted: bool,
+        #[serde(default, rename = "willRetry")]
+        will_retry: bool,
+        #[serde(default, rename = "errorMessage")]
+        error_message: Option<String>,
+        #[serde(default, rename = "tokensBefore")]
+        tokens_before: Option<u64>,
+        #[serde(default, rename = "tokensAfter")]
+        tokens_after: Option<u64>,
+        #[serde(default, rename = "durationMs")]
+        duration_ms: Option<u64>,
     },
     #[serde(rename = "error")]
     Error {
@@ -1128,6 +1234,83 @@ async fn route_pi_message(
             output.text.clear();
             output.thinking.clear();
         }
+        PiHarnessMessage::CompactionStart { reason } => {
+            // A manual /compact runs through `start_compact`'s dedicated
+            // per-turn pump; flip the UI to "Compacting" so the user
+            // sees progress, mirroring the Codex compacting affordance.
+            // Auto-compaction (threshold/overflow) fires inside a live
+            // turn that already owns the status indicator — leave it.
+            if reason.as_deref() == Some("manual") {
+                let _ = event_tx.send(pi_compacting_status_event());
+            }
+        }
+        PiHarnessMessage::CompactionEnd {
+            reason,
+            aborted,
+            will_retry,
+            error_message,
+            tokens_before,
+            tokens_after,
+            duration_ms,
+        } => {
+            let is_manual = reason.as_deref() == Some("manual");
+            if aborted {
+                // No context was freed. For a manual /compact surface a
+                // visible notice as an assistant text block (Pi's
+                // harness already routes operational errors this way).
+                // Auto-compaction failures stay quiet: the turn
+                // continues and a `will_retry` run may still succeed, so
+                // a mid-turn notice would just be noise.
+                if is_manual {
+                    let detail = error_message
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|m| !m.is_empty())
+                        .unwrap_or("Pi could not compact the conversation.");
+                    let _ = event_tx.send(AgentEvent::Stream(StreamEvent::Assistant {
+                        message: AssistantMessage {
+                            content: vec![ContentBlock::Text {
+                                text: format!("Compaction did not complete: {detail}"),
+                            }],
+                        },
+                    }));
+                } else if !will_retry {
+                    tracing::warn!(
+                        target: "claudette::agent",
+                        subsystem = "pi-sdk",
+                        reason = reason.as_deref().unwrap_or("unknown"),
+                        error = error_message.as_deref().unwrap_or(""),
+                        "pi auto-compaction failed"
+                    );
+                }
+            } else {
+                // Success → compact_boundary System event. `send.rs`'s
+                // sentinel writer persists the COMPACTION:... row and the
+                // CompactionDivider renders. `trigger` keeps Pi's wire
+                // vocabulary (`manual` / `threshold` / `overflow`); the
+                // divider's label table maps each to a friendly string.
+                let trigger = reason
+                    .clone()
+                    .filter(|r| !r.is_empty())
+                    .unwrap_or_else(|| "manual".to_string());
+                let _ = event_tx.send(pi_compact_boundary_event(
+                    crate::agent::types::CompactMetadata {
+                        trigger,
+                        pre_tokens: tokens_before.unwrap_or(0),
+                        post_tokens: tokens_after.unwrap_or(0),
+                        duration_ms: duration_ms.unwrap_or(0),
+                    },
+                ));
+            }
+            // The manual /compact pump (set up by `start_compact`)
+            // terminates on a Result; emit one so `session.agent_status`
+            // flips back to Idle. Auto-compaction rides an active turn
+            // whose own `turn_end` produces the Result — emitting one
+            // here would cut that turn short.
+            if is_manual {
+                let _ = event_tx.send(pi_compaction_finish_event());
+            }
+        }
         PiHarnessMessage::Error { error } => {
             let _ = event_tx.send(AgentEvent::Stderr(
                 error.unwrap_or_else(|| "Pi SDK harness error".to_string()),
@@ -1251,6 +1434,72 @@ fn pi_command_line_event(path: &Path) -> AgentEvent {
         "{}",
         path.display()
     )))
+}
+
+/// In-flight indicator for a manual Pi compaction. The frontend
+/// `useAgentStream` listener flips `workspace.agent_status` to
+/// `"Compacting"` on this exact shape (`subtype: "status"` +
+/// `status: "compacting"`), matching the Codex affordance.
+fn pi_compacting_status_event() -> AgentEvent {
+    AgentEvent::Stream(StreamEvent::System {
+        subtype: "status".to_string(),
+        session_id: None,
+        state: None,
+        detail: None,
+        task_id: None,
+        tool_use_id: None,
+        output_file: None,
+        summary: None,
+        description: None,
+        last_tool_name: None,
+        usage: None,
+        status: Some("compacting".to_string()),
+        compact_result: None,
+        compact_metadata: None,
+        command_line: None,
+    })
+}
+
+/// `compact_boundary` System event for a successful Pi compaction.
+/// `send_chat_message`'s sentinel writer persists the `COMPACTION:...`
+/// row from `compact_metadata`, and the `CompactionDivider` renders.
+/// `compact_result` stays `None`: the `StreamEvent::System` contract
+/// reserves it for the end-of-compaction *status* event (Claude CLI's
+/// pattern); the boundary carries its payload in `compact_metadata`.
+fn pi_compact_boundary_event(meta: crate::agent::types::CompactMetadata) -> AgentEvent {
+    AgentEvent::Stream(StreamEvent::System {
+        subtype: "compact_boundary".to_string(),
+        session_id: None,
+        state: None,
+        detail: None,
+        task_id: None,
+        tool_use_id: None,
+        output_file: None,
+        summary: None,
+        description: None,
+        last_tool_name: None,
+        usage: None,
+        status: None,
+        compact_result: None,
+        compact_metadata: Some(meta),
+        command_line: None,
+    })
+}
+
+/// Synthetic terminal event that ends the per-turn pump `start_compact`
+/// set up, so the chat session's status flips back to `"Idle"`. Mirrors
+/// the `subtype: "success"` Result Claude's CLI emits at the end of its
+/// `/compact` turn. Always `success`: the compaction *operation*
+/// completed even when it freed nothing — a failure, if any, is already
+/// surfaced as an assistant notice.
+fn pi_compaction_finish_event() -> AgentEvent {
+    AgentEvent::Stream(StreamEvent::Result {
+        subtype: "success".to_string(),
+        result: None,
+        total_cost_usd: None,
+        duration_ms: None,
+        usage: None,
+    })
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -2268,6 +2517,291 @@ mod tests {
             AgentEvent::Stderr(line) => assert!(!line.is_empty()),
             other => panic!("expected Stderr, got {other:?}"),
         }
+    }
+
+    /// Drain every event currently buffered on the receiver.
+    fn drain_events(rx: &mut broadcast::Receiver<AgentEvent>) -> Vec<AgentEvent> {
+        let mut events = Vec::new();
+        while let Ok(event) = rx.try_recv() {
+            events.push(event);
+        }
+        events
+    }
+
+    /// The sidecar emits camelCase keys; pin the rename mapping so a
+    /// wire-shaped success `compaction_end` deserializes with every
+    /// field populated.
+    #[test]
+    fn parses_compaction_end_success() {
+        let line = r#"{"type":"compaction_end","reason":"manual","aborted":false,"willRetry":false,"tokensBefore":120000,"tokensAfter":30000,"durationMs":4200}"#;
+        match serde_json::from_str::<PiHarnessMessage>(line).unwrap() {
+            PiHarnessMessage::CompactionEnd {
+                reason,
+                aborted,
+                will_retry,
+                error_message,
+                tokens_before,
+                tokens_after,
+                duration_ms,
+            } => {
+                assert_eq!(reason.as_deref(), Some("manual"));
+                assert!(!aborted);
+                assert!(!will_retry);
+                assert!(error_message.is_none());
+                assert_eq!(tokens_before, Some(120000));
+                assert_eq!(tokens_after, Some(30000));
+                assert_eq!(duration_ms, Some(4200));
+            }
+            other => panic!("expected CompactionEnd, got {other:?}"),
+        }
+    }
+
+    /// The aborted/failed variant carries no token counts — make sure
+    /// the absent fields default cleanly and `errorMessage` decodes.
+    #[test]
+    fn parses_compaction_end_aborted_without_tokens() {
+        let line = r#"{"type":"compaction_end","reason":"manual","aborted":true,"willRetry":false,"errorMessage":"context provider 500"}"#;
+        match serde_json::from_str::<PiHarnessMessage>(line).unwrap() {
+            PiHarnessMessage::CompactionEnd {
+                aborted,
+                error_message,
+                tokens_before,
+                tokens_after,
+                duration_ms,
+                ..
+            } => {
+                assert!(aborted);
+                assert_eq!(error_message.as_deref(), Some("context provider 500"));
+                assert!(tokens_before.is_none());
+                assert!(tokens_after.is_none());
+                assert!(duration_ms.is_none());
+            }
+            other => panic!("expected CompactionEnd, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_compaction_start() {
+        let msg: PiHarnessMessage =
+            serde_json::from_str(r#"{"type":"compaction_start","reason":"threshold"}"#).unwrap();
+        match msg {
+            PiHarnessMessage::CompactionStart { reason } => {
+                assert_eq!(reason.as_deref(), Some("threshold"));
+            }
+            other => panic!("expected CompactionStart, got {other:?}"),
+        }
+    }
+
+    /// A manual /compact runs a dedicated per-turn pump, so its
+    /// `compaction_start` flips the UI to "Compacting" via a
+    /// `status` System event.
+    #[tokio::test]
+    async fn route_compaction_start_manual_emits_compacting_status() {
+        let (event_tx, control_tx, mut rx, pending, turn_output, init_cache) = pi_state();
+        route_pi_message(
+            &event_tx,
+            &control_tx,
+            &pending,
+            &turn_output,
+            &init_cache,
+            PiHarnessMessage::CompactionStart {
+                reason: Some("manual".to_string()),
+            },
+        )
+        .await;
+        match next_event(&mut rx).await {
+            AgentEvent::Stream(StreamEvent::System {
+                subtype, status, ..
+            }) => {
+                assert_eq!(subtype, "status");
+                assert_eq!(status.as_deref(), Some("compacting"));
+            }
+            other => panic!("expected status System event, got {other:?}"),
+        }
+        assert!(try_recv_now(&mut rx).is_none());
+    }
+
+    /// Auto-compaction (threshold/overflow) fires inside a live turn
+    /// that already owns the status indicator — its `compaction_start`
+    /// must not stomp it with a stray status event.
+    #[tokio::test]
+    async fn route_compaction_start_threshold_emits_nothing() {
+        let (event_tx, control_tx, mut rx, pending, turn_output, init_cache) = pi_state();
+        route_pi_message(
+            &event_tx,
+            &control_tx,
+            &pending,
+            &turn_output,
+            &init_cache,
+            PiHarnessMessage::CompactionStart {
+                reason: Some("threshold".to_string()),
+            },
+        )
+        .await;
+        assert!(try_recv_now(&mut rx).is_none());
+    }
+
+    /// A successful manual `compaction_end` produces exactly the
+    /// compact_boundary System event (carrying Pi's token counts) plus
+    /// the synthetic Result that terminates `start_compact`'s pump.
+    #[tokio::test]
+    async fn route_compaction_end_manual_success_emits_boundary_and_finish() {
+        let (event_tx, control_tx, mut rx, pending, turn_output, init_cache) = pi_state();
+        route_pi_message(
+            &event_tx,
+            &control_tx,
+            &pending,
+            &turn_output,
+            &init_cache,
+            PiHarnessMessage::CompactionEnd {
+                reason: Some("manual".to_string()),
+                aborted: false,
+                will_retry: false,
+                error_message: None,
+                tokens_before: Some(120000),
+                tokens_after: Some(30000),
+                duration_ms: Some(4200),
+            },
+        )
+        .await;
+        let events = drain_events(&mut rx);
+        assert_eq!(events.len(), 2, "boundary + finish, nothing else");
+        match &events[0] {
+            AgentEvent::Stream(StreamEvent::System {
+                subtype,
+                compact_metadata,
+                compact_result,
+                ..
+            }) => {
+                assert_eq!(subtype, "compact_boundary");
+                assert!(compact_result.is_none());
+                let meta = compact_metadata.as_ref().expect("compact_metadata set");
+                assert_eq!(meta.trigger, "manual");
+                assert_eq!(meta.pre_tokens, 120000);
+                assert_eq!(meta.post_tokens, 30000);
+                assert_eq!(meta.duration_ms, 4200);
+            }
+            other => panic!("expected compact_boundary System event, got {other:?}"),
+        }
+        match &events[1] {
+            AgentEvent::Stream(StreamEvent::Result { subtype, .. }) => {
+                assert_eq!(subtype, "success");
+            }
+            other => panic!("expected synthetic Result, got {other:?}"),
+        }
+    }
+
+    /// Auto-compaction rides an active turn whose own `turn_end`
+    /// produces the Result — a threshold `compaction_end` emits only the
+    /// divider boundary, never a Result that would cut the turn short.
+    #[tokio::test]
+    async fn route_compaction_end_threshold_success_emits_boundary_only() {
+        let (event_tx, control_tx, mut rx, pending, turn_output, init_cache) = pi_state();
+        route_pi_message(
+            &event_tx,
+            &control_tx,
+            &pending,
+            &turn_output,
+            &init_cache,
+            PiHarnessMessage::CompactionEnd {
+                reason: Some("threshold".to_string()),
+                aborted: false,
+                will_retry: false,
+                error_message: None,
+                tokens_before: Some(150000),
+                tokens_after: Some(40000),
+                duration_ms: Some(3100),
+            },
+        )
+        .await;
+        let events = drain_events(&mut rx);
+        assert_eq!(events.len(), 1, "boundary only — no terminating Result");
+        match &events[0] {
+            AgentEvent::Stream(StreamEvent::System {
+                subtype,
+                compact_metadata,
+                ..
+            }) => {
+                assert_eq!(subtype, "compact_boundary");
+                assert_eq!(
+                    compact_metadata.as_ref().expect("metadata set").trigger,
+                    "threshold",
+                );
+            }
+            other => panic!("expected compact_boundary System event, got {other:?}"),
+        }
+    }
+
+    /// A failed manual compaction freed no context: surface a visible
+    /// assistant notice (never a divider) plus the Result that ends the
+    /// pump. The error text rides the notice.
+    #[tokio::test]
+    async fn route_compaction_end_manual_aborted_emits_notice_and_finish() {
+        let (event_tx, control_tx, mut rx, pending, turn_output, init_cache) = pi_state();
+        route_pi_message(
+            &event_tx,
+            &control_tx,
+            &pending,
+            &turn_output,
+            &init_cache,
+            PiHarnessMessage::CompactionEnd {
+                reason: Some("manual".to_string()),
+                aborted: true,
+                will_retry: false,
+                error_message: Some("context provider 500".to_string()),
+                tokens_before: None,
+                tokens_after: None,
+                duration_ms: None,
+            },
+        )
+        .await;
+        let events = drain_events(&mut rx);
+        assert_eq!(events.len(), 2, "notice + finish, no boundary");
+        match &events[0] {
+            AgentEvent::Stream(StreamEvent::Assistant { message }) => {
+                let text = match message.content.first() {
+                    Some(ContentBlock::Text { text }) => text.as_str(),
+                    other => panic!("expected text content, got {other:?}"),
+                };
+                assert!(
+                    text.contains("context provider 500"),
+                    "carries the error: {text}"
+                );
+            }
+            other => panic!("expected assistant notice, got {other:?}"),
+        }
+        assert!(
+            matches!(
+                &events[1],
+                AgentEvent::Stream(StreamEvent::Result { subtype, .. }) if subtype == "success"
+            ),
+            "manual pump must still terminate on a Result",
+        );
+    }
+
+    /// An auto-compaction failure must not inject a stray mid-turn
+    /// notice or Result — the turn it rides owns those.
+    #[tokio::test]
+    async fn route_compaction_end_threshold_aborted_is_quiet() {
+        let (event_tx, control_tx, mut rx, pending, turn_output, init_cache) = pi_state();
+        route_pi_message(
+            &event_tx,
+            &control_tx,
+            &pending,
+            &turn_output,
+            &init_cache,
+            PiHarnessMessage::CompactionEnd {
+                reason: Some("threshold".to_string()),
+                aborted: true,
+                will_retry: false,
+                error_message: Some("boom".to_string()),
+                tokens_before: None,
+                tokens_after: None,
+                duration_ms: None,
+            },
+        )
+        .await;
+        assert!(try_recv_now(&mut rx).is_none());
     }
 
     /// Unknown variants (e.g. a future-protocol message Claudette

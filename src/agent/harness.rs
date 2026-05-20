@@ -247,8 +247,9 @@ impl AgentSession {
     ///   synthetic `compacting` status event; the `ContextCompaction` item
     ///   later flows through the stream as a `compact_boundary` + `Result`
     ///   pair.
-    /// - Pi SDK: no native compaction protocol exists, so callers should
-    ///   surface "not supported" in the UI rather than invoking this method.
+    /// - Pi SDK: issues the sidecar `compact` request, which calls Pi's
+    ///   native `AgentSession.compact()`; the `compaction_end` event flows
+    ///   back through the stream as a `compact_boundary` + `Result` pair.
     pub async fn start_compact(&self) -> Result<TurnHandle, String> {
         match self {
             Self::ClaudeCode(_) => Err(
@@ -258,7 +259,7 @@ impl AgentSession {
             ),
             Self::CodexAppServer(session) => session.start_compact().await,
             #[cfg(feature = "pi-sdk")]
-            Self::PiSdk(_) => Err("Compaction is not supported on the Pi SDK harness.".to_string()),
+            Self::PiSdk(session) => session.start_compact().await,
         }
     }
 
