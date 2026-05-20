@@ -142,7 +142,7 @@ export type Delta =
   | { type: "Unknown" };
 
 export type StartContentBlock =
-  | { type: "tool_use"; id: string; name: string }
+  | { type: "tool_use"; id: string; name: string; input?: unknown }
   | { type: "text" }
   | { type: "thinking" }
   | { type: "Unknown" };

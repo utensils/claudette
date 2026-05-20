@@ -1062,6 +1062,7 @@ async fn route_pi_message(
                         content_block: Some(StartContentBlock::ToolUse {
                             id: id.clone(),
                             name,
+                            input: None,
                         }),
                     },
                 }));
