@@ -27,11 +27,18 @@ export interface ScmItemTarget {
 /// a hard-delete), so the freshness filter lives here on the read side.
 /// That keeps an archive -> restore round-trip from losing the link.
 ///
-/// Returns `null` — i.e. the project view shows no badge — when:
-///   - no link matches the target item, OR
-///   - the linked workspace has been hard-deleted (absent from
-///     `workspaces`), OR
-///   - the linked workspace exists but is archived.
+/// An item can have *several* links — the right-click menu deliberately
+/// keeps "Send to new workspace" available even when a link already
+/// exists, so a user can spin up a second workspace on the same issue.
+/// The freshness filter is therefore applied across *every* candidate:
+/// a stale (archived / hard-deleted) link must never shadow a newer
+/// active one. When more than one active link exists, the most recently
+/// created wins so the badge tracks the latest workspace.
+///
+/// Returns `null` — i.e. the project view shows no badge — when no link
+/// matches the target item, or when every matching link points at a
+/// workspace that has been hard-deleted (absent from `workspaces`) or
+/// archived.
 ///
 /// `links` is keyed by `workspace_id` (see `ScmSlice.workspaceScmLinks`),
 /// so this scans its values; the map is workspace-count-sized (a handful
@@ -43,22 +50,29 @@ export function resolveWorkspaceLink(
 ): ResolvedWorkspaceLink | null {
   // Match on all three of repo / kind / number: an issue #N and a PR #N
   // can share a number, so the number alone is not a unique key.
-  const link = Object.values(links).find(
+  const candidates = Object.values(links).filter(
     (l) =>
       l.repo_id === target.repoId &&
       l.kind === target.kind &&
       l.number === target.number,
   );
-  if (!link) return null;
-  // The freshness filter — "keep row, hide badge". A link can outlive
-  // its workspace in-session (hard-deleted, absent here until the next
-  // boot drops the row via the FK cascade), or point at an archived
-  // workspace whose row we intentionally keep. Both hide the badge.
-  const workspace = workspaces.find((w) => w.id === link.workspace_id);
-  if (!workspace || workspace.status === "Archived") return null;
-  return {
-    workspaceId: workspace.id,
-    workspaceName: workspace.name,
-    link,
-  };
+  // Newest first — `created_at` is the SQLite `datetime('now')` string
+  // (`YYYY-MM-DD HH:MM:SS`), which sorts lexically.
+  candidates.sort((a, b) => b.created_at.localeCompare(a.created_at));
+  // Apply the freshness filter to every candidate, not just the first:
+  // a link can outlive its workspace in-session (hard-deleted, absent
+  // here until the next boot drops the row via the FK cascade) or point
+  // at an archived workspace whose row we intentionally keep. Either
+  // way it must not shadow a newer active link for the same item.
+  for (const link of candidates) {
+    const workspace = workspaces.find((w) => w.id === link.workspace_id);
+    if (workspace && workspace.status !== "Archived") {
+      return {
+        workspaceId: workspace.id,
+        workspaceName: workspace.name,
+        link,
+      };
+    }
+  }
+  return null;
 }

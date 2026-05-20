@@ -76,4 +76,49 @@ describe("resolveWorkspaceLink", () => {
     const workspaces = [makeWorkspace({ status: "Archived" })];
     expect(resolveWorkspaceLink(links, workspaces, TARGET)).toBeNull();
   });
+
+  it("does not let a stale link shadow a newer active one for the same item", () => {
+    // The right-click menu keeps "Send to new workspace" available even
+    // when a link exists, so an item can carry several links. An older
+    // archived/deleted one must not hide the active workspace.
+    const links = {
+      "ws-old": makeLink({
+        workspace_id: "ws-old",
+        created_at: "2026-05-19 09:00:00",
+      }),
+      "ws-new": makeLink({
+        workspace_id: "ws-new",
+        created_at: "2026-05-20 15:30:00",
+      }),
+    };
+    const workspaces = [
+      makeWorkspace({ id: "ws-old", status: "Archived" }),
+      makeWorkspace({ id: "ws-new", name: "fresh-start", status: "Active" }),
+    ];
+    expect(resolveWorkspaceLink(links, workspaces, TARGET)).toEqual({
+      workspaceId: "ws-new",
+      workspaceName: "fresh-start",
+      link: links["ws-new"],
+    });
+  });
+
+  it("prefers the most recently created link when several are active", () => {
+    const links = {
+      "ws-old": makeLink({
+        workspace_id: "ws-old",
+        created_at: "2026-05-19 09:00:00",
+      }),
+      "ws-new": makeLink({
+        workspace_id: "ws-new",
+        created_at: "2026-05-20 15:30:00",
+      }),
+    };
+    const workspaces = [
+      makeWorkspace({ id: "ws-old", name: "first-try", status: "Active" }),
+      makeWorkspace({ id: "ws-new", name: "second-try", status: "Active" }),
+    ];
+    expect(resolveWorkspaceLink(links, workspaces, TARGET)?.workspaceId).toBe(
+      "ws-new",
+    );
+  });
 });
