@@ -142,14 +142,14 @@ pub enum Action {
         thinking: bool,
         #[arg(long = "no-thinking", overrides_with = "thinking", hide = true)]
         no_thinking: bool,
-        /// Enable fast mode (lower-latency model variant when supported).
-        /// Pair: `--no-fast` forces off.
+        /// Enable fast mode (lower-latency variant; built-in support:
+        /// Opus 4.6). Pair: `--no-fast` forces off.
         #[arg(long, overrides_with = "no_fast")]
         fast: bool,
         #[arg(long = "no-fast", overrides_with = "fast", hide = true)]
         no_fast: bool,
         /// Effort level: `low`, `medium`, `high`, `xhigh`, `max`
-        /// (`max` requires Opus 4.6).
+        /// (`xhigh` requires Opus 4.7).
         #[arg(long)]
         effort: Option<String>,
         /// Enable Chrome browser mode for this session. Pair: `--no-chrome`
