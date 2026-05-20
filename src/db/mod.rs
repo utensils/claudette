@@ -12,7 +12,7 @@ mod settings;
 pub use settings::RepositoryMcpServer;
 
 mod scm;
-pub use scm::ScmStatusCacheRow;
+pub use scm::{RepoScmListCacheRow, ScmStatusCacheRow};
 
 mod scheduling;
 

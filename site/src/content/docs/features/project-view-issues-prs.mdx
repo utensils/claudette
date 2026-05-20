@@ -1,0 +1,75 @@
+---
+title: Project view — Issues & PRs
+description: Surface open issues and pull requests from the resolved SCM provider on the repo overview screen.
+---
+
+When you click a repo in the sidebar without selecting a workspace, Claudette renders a project overview screen. By default that view shows the "Start a workspace" card, active workspaces, and the archived list — what's outstanding *locally*.
+
+Turn on **Show open issues & PRs in project view** to also surface what's outstanding *upstream*: open issues and open pull requests for that repo, pulled through the same SCM provider plugin (`scm-github`, `scm-gitlab`) that already powers Claudette's per-workspace PR badges.
+
+## What you see
+
+Between the "Start a workspace" card and the Workspaces section, two new collapsible sections appear:
+
+- **Issues** — open issues with their label chips (max 2 visible per row, "+N" overflow), comment count, and relative age. Click a row to open the issue in your browser; right-click for Open / Copy URL.
+- **Pull requests** — open PRs with a scope selector at the section header:
+  - **Open** — every open PR on the repo
+  - **Mine** — open PRs authored by you (`@me` via `gh` / `glab`)
+  - **Review** — open PRs where review is requested from you
+
+Each PR row shows the PR's number, a CI-tinted state icon (open / draft / merged / closed; the open variant tints by CI status), title, `base ← branch`, and author.
+
+Right-click any issue or PR row for:
+
+- **Open in browser** — opens the row's URL in your default browser.
+- **Copy URL** — copies the URL to the clipboard.
+- **Create workspace for this branch** (PR rows only) — creates a workspace on the repo's default base branch and surfaces the PR head branch in a toast.
+- **Send to new workspace ▶ &lt;model&gt;** — opens a submenu of available models. Pick one to (1) create a fresh workspace in the repo, (2) apply the chosen model to the new session so the toolbar reflects it and any cross-harness setup runs, and (3) auto-send a templated starter prompt as the first turn so the agent begins working immediately.
+
+  The starter prompts link back to the source:
+
+  - Issues: `Please investigate and address issue #<N>: <title>\n\nSource: <URL>`
+  - Pull requests: `Please review PR #<N> and continue or refactor as needed: <title>\n\nSource: <URL>\nBranch: <branch>`
+
+  The submenu lists the same models the chat panel's model picker would show, with the same alternative-backends and OAuth gating. If you have no models available (alt-backends off and no Claude auth), the submenu shows a single disabled "No models available" row instead of silently swallowing the click.
+
+Both sections poll every 60 seconds while the project view is visible. Polling pauses on `visibilitychange` to hidden — Claudette doesn't burn your `gh` / `glab` rate-limit budget for a tab you walked away from. The Refresh button in each section header forces an immediate fresh fetch.
+
+## How to enable
+
+Open **Settings → Git → Project view** and flip **Show open issues & PRs in project view** on.
+
+The toggle is off by default. Once enabled, the feature is doubly gated:
+
+1. The flag itself (persisted as `project_view_issues_prs_enabled` in `app_settings`).
+2. The repo must have a resolved SCM provider. If `git remote get-url origin` doesn't match any installed plugin's `remote_patterns`, the sections don't render — same gate today's sidebar PR badge uses. A repo with no remote, or a remote that no installed plugin claims, sees no change.
+
+Both gates are checked backend-side too: with the flag off, the Tauri commands return empty without invoking the SCM plugin, so a stale frontend cannot trigger network calls.
+
+## Supported providers
+
+Bundled plugins:
+
+- **`scm-github`** — wraps `gh issue list` and `gh pr list`. Available out of the box if you have the GitHub CLI installed and authenticated (`gh auth login`).
+- **`scm-gitlab`** — wraps `glab issue list` and `glab mr list`. Available out of the box if you have the GitLab CLI installed and authenticated (`glab auth login`).
+
+User-authored SCM plugins can implement `list_issues` to participate. Plugins that don't implement the operation degrade gracefully: the Issues section renders an "Issues are not supported by this provider" muted hint while the Pull requests section continues to work normally.
+
+## Privacy
+
+All data is fetched on your machine using the credentials in your own `gh` / `glab` CLI. Claudette does not phone home, does not store an OAuth token, and does not proxy through any third-party server.
+
+A small SQLite cache (`repo_scm_lists_cache`) keeps the most recent response per `(repo_id, list_kind)` so the project view paints instantly on app launch instead of waiting for the first poll. Entries are anchored 60 seconds in the past on boot so the first visible visit always triggers a fresh fetch.
+
+## Limits
+
+- Default 10 visible rows; click **Show all (N)** to expand to 50. Beyond 50, use the provider's web UI.
+- Sort: `updated_at DESC` (matches `gh` / `glab` defaults). No client-side resort.
+- Avatars are not rendered in v1 to keep the GitHub rate-limit footprint flat. A separate setting may add them later behind a per-plugin URL allowlist.
+- "Create workspace for this branch" (PR row right-click) creates a workspace on the repo's default base branch and surfaces the PR head branch in a toast. Threading the PR branch through the create flow lands as a follow-up — see the issue tracker.
+
+## Troubleshooting
+
+- **The sections don't appear**: confirm the toggle is on AND that the repo's git remote matches an installed SCM plugin. The Settings → Plugins page shows which providers are loaded and which CLIs (`gh` / `glab`) are detected.
+- **Rate-limit errors**: GitHub's anonymous rate limit is 60 req/hr; authenticated is 5000 req/hr. If you see persistent retry banners, `gh auth status` will confirm authentication; the polling cadence is 60 seconds so a single repo's footprint is tiny — most rate-limit pressure comes from other tooling on the same token.
+- **"Issues are not supported by this provider"**: the resolved plugin doesn't declare `list_issues` in its `plugin.json` `operations` list. Open the plugin's manifest to add it, or use a provider that does (`scm-github`, `scm-gitlab`).

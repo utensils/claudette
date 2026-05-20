@@ -17,8 +17,15 @@ const labels: WorkspaceContextMenuLabels = {
   deleteWorkspace: "Delete",
 };
 
-function actionable(items: ContextMenuItem[]) {
-  return items.filter((item) => item.type !== "separator");
+type ActionItem = Extract<ContextMenuItem, { onSelect: unknown }>;
+
+function actionable(items: ContextMenuItem[]): ActionItem[] {
+  return items.filter(
+    (item): item is ActionItem =>
+      item.type !== "separator" &&
+      item.type !== "submenu" &&
+      item.type !== "header",
+  );
 }
 
 function itemLabels(items: ContextMenuItem[]) {

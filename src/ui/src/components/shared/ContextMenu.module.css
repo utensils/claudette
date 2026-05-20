@@ -1,7 +1,20 @@
+/* `display: contents` keeps the wrapper out of layout so the two child
+ * menu boxes position themselves independently via their own `position: fixed`
+ * coords. A single ref on this wrapper backs the outside-click detection
+ * so the parent menu's handler can `.contains()` clicks inside either box.
+ */
+.menuContainer {
+  display: contents;
+}
+
 .menu {
   position: fixed;
   z-index: 10002;
   min-width: 220px;
+  max-width: 320px;
+  max-height: calc(100vh - 32px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
   background: var(--sidebar-bg);
   border: 1px solid var(--sidebar-border);
   border-radius: 8px;
@@ -51,6 +64,9 @@
 .label {
   min-width: 0;
   flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .shortcut {
@@ -64,4 +80,32 @@
   height: 1px;
   margin: 4px 6px;
   background: var(--divider);
+}
+
+/* Non-interactive group label inside long submenus. Sits flush left,
+ * small caps, muted color, no hover. Skipped by hover/keyboard nav.
+ */
+.header {
+  padding: 7px 10px 3px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  pointer-events: none;
+  user-select: none;
+}
+
+.submenuChevron {
+  margin-left: auto;
+  color: var(--text-dim);
+  flex-shrink: 0;
+}
+
+/* Sticky highlight on the parent item while its submenu is open so the
+ * user can see which leaf they're in even after pointing into the submenu.
+ */
+.itemActive,
+.itemActive:hover:not(:disabled) {
+  background: var(--hover-bg);
 }

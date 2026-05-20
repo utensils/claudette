@@ -13,7 +13,10 @@ import { resolveScmPrIcon } from "../shared/workspaceStatusIcon";
 import { formatElapsedSeconds } from "../chat/chatHelpers";
 import { WelcomeEmptyState } from "./WelcomeEmptyState";
 import { useCreateWorkspace } from "../../hooks/useCreateWorkspace";
+import { useScmProvider } from "../../hooks/useScmProvider";
 import { restoreWorkspace } from "../../services/tauri";
+import { RepoIssuesSection } from "../project/RepoIssuesSection";
+import { RepoPullRequestsSection } from "../project/RepoPullRequestsSection";
 import styles from "./Dashboard.module.css";
 
 /** Strip markdown syntax for a clean one-line preview. */
@@ -388,6 +391,7 @@ export function Dashboard() {
                 : "This project doesn't have any active workspaces yet."
             }
           />
+          <ProjectViewScmLists repoId={scopedRepo.id} />
           {scopedWorkspaceRows.length > 0 && (
             <div className={styles.workspacesSection}>
               <button
@@ -557,5 +561,30 @@ export function Dashboard() {
         </div>
       </BoundedScrollPane>
     </div>
+  );
+}
+
+/// Renders the project-view Issues + Pull Requests sections when the
+/// feature flag is on AND the repo has a resolved SCM provider. The
+/// sections handle their own loading / empty / error / unsupported
+/// states internally, so this wrapper only owns the two-gate visibility
+/// decision and the fetch staging order.
+///
+/// We intentionally render the SCM panel between the WelcomeEmptyState
+/// card and the Workspaces section per the spec, so a user scanning the
+/// project view sees "what's outstanding upstream" before "what's
+/// outstanding locally".
+function ProjectViewScmLists({ repoId }: { repoId: string }) {
+  const enabled = useAppStore((s) => s.projectViewIssuesPrsEnabled);
+  const provider = useScmProvider(enabled ? repoId : null);
+  if (!enabled) return null;
+  // Provider lookup still in flight: render nothing so we don't flash
+  // a placeholder. A missing provider also falls through here (null).
+  if (!provider) return null;
+  return (
+    <>
+      <RepoIssuesSection repoId={repoId} />
+      <RepoPullRequestsSection repoId={repoId} />
+    </>
   );
 }

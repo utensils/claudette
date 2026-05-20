@@ -86,6 +86,58 @@ pub struct CreatePrArgs {
     pub draft: bool,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum IssueState {
+    Open,
+    Closed,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct IssueLabel {
+    pub name: String,
+    /// Hex color without leading `#` (matches GitHub / GitLab payload shape).
+    pub color: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Issue {
+    pub number: u64,
+    pub title: String,
+    pub url: String,
+    pub state: IssueState,
+    pub author: Option<String>,
+    #[serde(default)]
+    pub labels: Vec<IssueLabel>,
+    #[serde(default)]
+    pub comment_count: u32,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+/// Scope filter for repo-wide `list_pull_requests` calls (the project-view
+/// aggregation path; the per-workspace branch lookup uses the `branch` arg
+/// instead).
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PullRequestScope {
+    Open,
+    Mine,
+    ReviewRequested,
+}
+
+impl PullRequestScope {
+    /// String form used as part of the `repo_scm_lists_cache.list_kind`
+    /// composite key. Stable; do not rename without a migration.
+    pub fn as_cache_segment(self) -> &'static str {
+        match self {
+            Self::Open => "open",
+            Self::Mine => "mine",
+            Self::ReviewRequested => "review_requested",
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -198,6 +250,75 @@ mod tests {
             derive_overall_ci_status(&checks),
             Some(CiOverallStatus::Pending)
         );
+    }
+
+    #[test]
+    fn issue_state_serializes_to_snake_case() {
+        let cases: &[(IssueState, &str)] = &[
+            (IssueState::Open, "\"open\""),
+            (IssueState::Closed, "\"closed\""),
+        ];
+        for (state, expected) in cases {
+            let serialized = serde_json::to_string(state).unwrap();
+            assert_eq!(&serialized, expected);
+            let round: IssueState = serde_json::from_str(&serialized).unwrap();
+            assert_eq!(&round, state);
+        }
+    }
+
+    #[test]
+    fn pull_request_scope_cache_segments_are_stable() {
+        assert_eq!(PullRequestScope::Open.as_cache_segment(), "open");
+        assert_eq!(PullRequestScope::Mine.as_cache_segment(), "mine");
+        assert_eq!(
+            PullRequestScope::ReviewRequested.as_cache_segment(),
+            "review_requested"
+        );
+    }
+
+    #[test]
+    fn issue_round_trips_through_json() {
+        let issue = Issue {
+            number: 42,
+            title: "hello".into(),
+            url: "https://example/issues/42".into(),
+            state: IssueState::Open,
+            author: Some("octocat".into()),
+            labels: vec![IssueLabel {
+                name: "bug".into(),
+                color: "ee0701".into(),
+            }],
+            comment_count: 3,
+            created_at: "2026-05-19T00:00:00Z".into(),
+            updated_at: "2026-05-19T01:00:00Z".into(),
+        };
+        let s = serde_json::to_string(&issue).unwrap();
+        let back: Issue = serde_json::from_str(&s).unwrap();
+        assert_eq!(back.number, 42);
+        assert_eq!(back.title, "hello");
+        assert_eq!(back.state, IssueState::Open);
+        assert_eq!(back.labels.len(), 1);
+        assert_eq!(back.labels[0].name, "bug");
+        assert_eq!(back.comment_count, 3);
+    }
+
+    #[test]
+    fn issue_deserializes_with_missing_optional_fields() {
+        // Plugins may omit `labels` and `comment_count` for repos that lack
+        // the info (e.g. user-authored plugins). Defaults must kick in.
+        let json = r#"{
+            "number": 7,
+            "title": "x",
+            "url": "https://e/issues/7",
+            "state": "open",
+            "author": null,
+            "created_at": "2026-05-19T00:00:00Z",
+            "updated_at": "2026-05-19T00:00:00Z"
+        }"#;
+        let issue: Issue = serde_json::from_str(json).unwrap();
+        assert!(issue.labels.is_empty());
+        assert_eq!(issue.comment_count, 0);
+        assert!(issue.author.is_none());
     }
 
     #[test]

@@ -53,6 +53,15 @@ export interface SettingsSlice {
   claudetteTerminalEnabled: boolean;
   setClaudetteTerminalEnabled: (enabled: boolean) => void;
 
+  // Git / SCM
+  /// Surface open issues + pull requests on the repo overview screen via
+  /// the resolved SCM provider. Off by default. Persisted to app_settings
+  /// as `project_view_issues_prs_enabled`; the backend Tauri commands
+  /// short-circuit on the same key so a stale UI cannot trigger network
+  /// calls. Hydrated in App.tsx at boot.
+  projectViewIssuesPrsEnabled: boolean;
+  setProjectViewIssuesPrsEnabled: (enabled: boolean) => void;
+
   // Experimental
   usageInsightsEnabled: boolean;
   setUsageInsightsEnabled: (enabled: boolean) => void;
@@ -177,6 +186,9 @@ export const createSettingsSlice: StateCreator<
   claudetteTerminalEnabled: true,
   setClaudetteTerminalEnabled: (enabled) =>
     set({ claudetteTerminalEnabled: enabled }),
+  projectViewIssuesPrsEnabled: false,
+  setProjectViewIssuesPrsEnabled: (enabled) =>
+    set({ projectViewIssuesPrsEnabled: enabled }),
   usageInsightsEnabled: false,
   setUsageInsightsEnabled: (enabled) => set({ usageInsightsEnabled: enabled }),
   showOpenRouterBalanceInUsageMeter: true,

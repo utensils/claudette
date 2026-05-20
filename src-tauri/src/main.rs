@@ -1170,6 +1170,9 @@ fn main() {
             commands::scm::scm_create_pr,
             commands::scm::scm_merge_pr,
             commands::scm::scm_refresh,
+            commands::scm::list_repo_open_issues,
+            commands::scm::list_repo_open_pull_requests,
+            commands::scm::refresh_repo_scm_lists,
             // Env-provider diagnostic UI
             commands::env::get_env_sources,
             commands::env::get_env_target_worktree,

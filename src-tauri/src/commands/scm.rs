@@ -6,13 +6,16 @@ use futures::stream::{self, StreamExt};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
 
-use claudette::db::Database;
+use claudette::db::{Database, RepoScmListCacheRow};
 use claudette::mcp_supervisor::McpSupervisor;
+use claudette::plugin_runtime::PluginError;
 use claudette::plugin_runtime::host_api::WorkspaceInfo;
 use claudette::scm::detect;
-use claudette::scm::types::{CiCheck, CiCheckStatus, CiFailureLog, CiOverallStatus, PullRequest};
+use claudette::scm::types::{
+    CiCheck, CiCheckStatus, CiFailureLog, CiOverallStatus, Issue, PullRequest, PullRequestScope,
+};
 
-use crate::state::{AppState, ScmCacheEntry};
+use crate::state::{AppState, RepoListEntry, ScmCacheEntry};
 
 #[derive(Serialize)]
 pub struct PluginInfo {
@@ -431,6 +434,533 @@ pub async fn scm_refresh(
     }
 
     load_scm_detail(workspace_id, state).await
+}
+
+// --- Repo-wide SCM lists (project view) ---
+
+/// Feature-flag key for the project-view issues/PRs panel. Backend reads
+/// this every entry to short-circuit when the flag is off, even if the
+/// frontend mistakenly invokes the command.
+const PROJECT_VIEW_ISSUES_PRS_ENABLED_KEY: &str = "project_view_issues_prs_enabled";
+
+/// TTL for the repo-wide SCM list cache. Project-view sections poll on a
+/// 60s cadence; the cache TTL is shorter so a manual refresh that lands
+/// inside the poll window still gets fresh data instead of replaying the
+/// last poll result. Mirrors `load_scm_detail`'s 10s cache TTL.
+const REPO_LIST_CACHE_TTL_SECS: u64 = 10;
+
+/// Default number of items requested from the plugin per list operation.
+/// Sized to cover the "Show all" expander (`ALL_VISIBLE_LIMIT = 50` on the
+/// frontend) so the user never sees fewer rows than what would fit. Beyond
+/// 50 the UI links out to the provider's web list — Claudette is not an
+/// issue tracker.
+const REPO_LIST_DEFAULT_LIMIT: u32 = 50;
+
+#[derive(Serialize)]
+pub struct RepoIssuesPayload {
+    pub issues: Vec<Issue>,
+    pub fetched_at: String,
+    pub error: Option<String>,
+    pub unsupported: bool,
+    pub provider: Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct RepoPullRequestsPayload {
+    pub pull_requests: Vec<PullRequest>,
+    pub scope: PullRequestScope,
+    pub fetched_at: String,
+    pub error: Option<String>,
+    pub unsupported: bool,
+    pub provider: Option<String>,
+}
+
+fn now_iso() -> String {
+    chrono::Utc::now().to_rfc3339()
+}
+
+fn list_kind_for_pr_scope(scope: PullRequestScope) -> String {
+    format!("pull_requests:{}", scope.as_cache_segment())
+}
+
+/// True when the project-view issues/PRs feature flag is enabled.
+fn read_project_view_flag(db: &Database) -> bool {
+    db.get_app_setting(PROJECT_VIEW_ISSUES_PRS_ENABLED_KEY)
+        .ok()
+        .flatten()
+        .as_deref()
+        == Some("true")
+}
+
+/// Resolve the SCM provider for a repo without a workspace context.
+/// Used by the project-view commands which only have a `repo_id`.
+///
+/// Returns:
+/// - `Ok(Some(name))` — provider resolved (manual override or remote-URL match).
+/// - `Ok(None)` — no plugin matches (or the repo has no usable remote). The
+///   project-view section is hidden when this happens.
+/// - `Err(e)` — transient git failure (e.g. unreadable remote). Callers
+///   surface the error and preserve any cached data.
+async fn resolve_repo_provider(
+    state: &State<'_, AppState>,
+    repo_id: &str,
+) -> Result<(Option<String>, claudette::model::Repository), String> {
+    let (manual_override, repo) = {
+        let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
+        let key = format!("repo:{repo_id}:scm_provider");
+        let manual = db.get_app_setting(&key).map_err(|e| e.to_string())?;
+        let repo = db
+            .get_repository(repo_id)
+            .map_err(|e| e.to_string())?
+            .ok_or("Repository not found")?;
+        (manual, repo)
+    };
+
+    if let Some(ref name) = manual_override
+        && !name.is_empty()
+    {
+        return Ok((Some(name.clone()), repo));
+    }
+
+    // Best-effort remote-URL detection; a missing/unreadable remote isn't
+    // an error here — the project view simply doesn't render the panel
+    // when there's no provider.
+    let provider_name =
+        match claudette::git::get_remote_url(&repo.path, repo.default_remote.as_deref()).await {
+            Ok(url) => {
+                let registry = state.plugins.read().await;
+                detect::detect_provider(&url, &registry.plugins)
+            }
+            Err(_) => None,
+        };
+    Ok((provider_name, repo))
+}
+
+fn make_workspace_info_for_repo(repo: &claudette::model::Repository) -> WorkspaceInfo {
+    // Project-view aggregation has no associated workspace — synthesize a
+    // WorkspaceInfo that points the plugin's host.exec at the repo's main
+    // checkout. The Lua plugins only read worktree_path / repo_path /
+    // repo_id from this struct for the `list_issues` / `list_pull_requests`
+    // calls we issue here.
+    WorkspaceInfo {
+        id: format!("repo-aggregate:{}", repo.id),
+        name: repo.name.clone(),
+        branch: String::new(),
+        worktree_path: repo.path.clone(),
+        repo_path: repo.path.clone(),
+        repo_id: Some(repo.id.clone()),
+    }
+}
+
+fn cache_fresh(entry: &RepoListEntry) -> bool {
+    entry.last_fetched.elapsed().as_secs() < REPO_LIST_CACHE_TTL_SECS
+}
+
+/// Persist a repo-wide list cache row to SQLite. Best-effort — failures
+/// are logged and swallowed so an unwritable cache row never blocks the
+/// in-memory return path.
+async fn persist_repo_list_cache(
+    db_path: &std::path::Path,
+    repo_id: &str,
+    list_kind: &str,
+    provider: Option<&str>,
+    payload_json: &str,
+    error: Option<&str>,
+) {
+    match Database::open(db_path) {
+        Ok(db) => {
+            if let Err(e) = db.upsert_repo_scm_list_cache(&RepoScmListCacheRow {
+                repo_id: repo_id.to_string(),
+                list_kind: list_kind.to_string(),
+                provider: provider.map(str::to_string),
+                payload: payload_json.to_string(),
+                error: error.map(str::to_string),
+                fetched_at: String::new(),
+            }) {
+                tracing::warn!(
+                    target: "claudette::scm",
+                    repo_id = %repo_id,
+                    list_kind = %list_kind,
+                    error = %e,
+                    "failed to persist repo SCM list cache"
+                );
+            }
+        }
+        Err(e) => {
+            tracing::warn!(
+                target: "claudette::scm",
+                error = %e,
+                "failed to open DB for repo SCM list cache persistence"
+            );
+        }
+    }
+}
+
+/// Hydrate `repo_scm_lists_cache` from SQLite at boot. Mirrors
+/// [`seed_scm_cache_from_db`] — anchors `last_fetched` 60s in the past so
+/// the first poll cycle treats every entry as stale and refreshes it.
+async fn seed_repo_scm_lists_cache_from_db(
+    db_path: &std::path::Path,
+    cache: &crate::state::RepoScmListsCache,
+) {
+    let rows = match Database::open(db_path) {
+        Ok(db) => match db.load_all_repo_scm_list_cache() {
+            Ok(rows) => rows,
+            Err(e) => {
+                tracing::warn!(
+                    target: "claudette::scm",
+                    error = %e,
+                    "failed to load repo SCM list cache from DB on seed"
+                );
+                return;
+            }
+        },
+        Err(e) => {
+            tracing::warn!(
+                target: "claudette::scm",
+                error = %e,
+                "failed to open DB for repo SCM list cache seed"
+            );
+            return;
+        }
+    };
+
+    let stale_anchor = Instant::now()
+        .checked_sub(Duration::from_secs(60))
+        .unwrap_or_else(Instant::now);
+
+    let mut entries = cache.entries.write().await;
+    for row in rows {
+        let payload = serde_json::from_str::<serde_json::Value>(&row.payload)
+            .unwrap_or_else(|_| serde_json::json!([]));
+        entries.insert(
+            (row.repo_id, row.list_kind),
+            RepoListEntry {
+                payload,
+                last_fetched: stale_anchor,
+                error: row.error,
+                unsupported: false,
+                provider: row.provider,
+            },
+        );
+    }
+}
+
+/// List the open issues for a repository from its resolved SCM provider.
+///
+/// Returns an empty payload (and skips all plugin work) when:
+/// - the project-view feature flag is off, OR
+/// - the repo has no resolved SCM provider.
+///
+/// When the resolved provider does not implement `list_issues`, returns
+/// `unsupported: true` so the UI can render a muted hint rather than an
+/// error banner.
+#[tauri::command]
+pub async fn list_repo_open_issues(
+    repo_id: String,
+    limit: Option<u32>,
+    state: State<'_, AppState>,
+) -> Result<RepoIssuesPayload, String> {
+    // 1. Backend feature-gate short-circuit (defense in depth).
+    {
+        let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
+        if !read_project_view_flag(&db) {
+            return Ok(RepoIssuesPayload {
+                issues: vec![],
+                fetched_at: now_iso(),
+                error: None,
+                unsupported: false,
+                provider: None,
+            });
+        }
+    }
+
+    let (provider_opt, repo) = resolve_repo_provider(&state, &repo_id).await?;
+    let Some(provider_name) = provider_opt else {
+        return Ok(RepoIssuesPayload {
+            issues: vec![],
+            fetched_at: now_iso(),
+            error: None,
+            unsupported: false,
+            provider: None,
+        });
+    };
+
+    let cache_key = (repo_id.clone(), "issues".to_string());
+
+    // Cache hit.
+    {
+        let entries = state.repo_scm_lists_cache.entries.read().await;
+        if let Some(entry) = entries.get(&cache_key)
+            && cache_fresh(entry)
+        {
+            return Ok(issues_payload_from_entry(entry, Some(provider_name)));
+        }
+    }
+
+    let ws_info = make_workspace_info_for_repo(&repo);
+    let limit_val = limit.unwrap_or(REPO_LIST_DEFAULT_LIMIT);
+    let args = serde_json::json!({ "state": "open", "limit": limit_val });
+
+    let result = {
+        let _permit = state
+            .scm_semaphore
+            .acquire()
+            .await
+            .map_err(|e| e.to_string())?;
+        let registry = state.plugins.read().await;
+        registry
+            .call_operation(&provider_name, "list_issues", args, ws_info)
+            .await
+    };
+
+    let entry = build_repo_list_entry(
+        result,
+        Some(provider_name.clone()),
+        &cache_key,
+        &state.repo_scm_lists_cache,
+    )
+    .await;
+
+    let payload_json = serde_json::to_string(&entry.payload).unwrap_or_else(|_| "[]".to_string());
+    persist_repo_list_cache(
+        &state.db_path,
+        &repo_id,
+        &cache_key.1,
+        entry.provider.as_deref(),
+        &payload_json,
+        entry.error.as_deref(),
+    )
+    .await;
+
+    let resp = issues_payload_from_entry(&entry, Some(provider_name));
+    state
+        .repo_scm_lists_cache
+        .entries
+        .write()
+        .await
+        .insert(cache_key, entry);
+    Ok(resp)
+}
+
+/// List the repo-wide pull requests for a given scope from its resolved
+/// SCM provider. See [`list_repo_open_issues`] for the gating contract;
+/// the same short-circuit / unsupported semantics apply.
+#[tauri::command]
+pub async fn list_repo_open_pull_requests(
+    repo_id: String,
+    scope: Option<PullRequestScope>,
+    limit: Option<u32>,
+    state: State<'_, AppState>,
+) -> Result<RepoPullRequestsPayload, String> {
+    let scope = scope.unwrap_or(PullRequestScope::Open);
+    {
+        let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
+        if !read_project_view_flag(&db) {
+            return Ok(RepoPullRequestsPayload {
+                pull_requests: vec![],
+                scope,
+                fetched_at: now_iso(),
+                error: None,
+                unsupported: false,
+                provider: None,
+            });
+        }
+    }
+
+    let (provider_opt, repo) = resolve_repo_provider(&state, &repo_id).await?;
+    let Some(provider_name) = provider_opt else {
+        return Ok(RepoPullRequestsPayload {
+            pull_requests: vec![],
+            scope,
+            fetched_at: now_iso(),
+            error: None,
+            unsupported: false,
+            provider: None,
+        });
+    };
+
+    let list_kind = list_kind_for_pr_scope(scope);
+    let cache_key = (repo_id.clone(), list_kind.clone());
+
+    {
+        let entries = state.repo_scm_lists_cache.entries.read().await;
+        if let Some(entry) = entries.get(&cache_key)
+            && cache_fresh(entry)
+        {
+            return Ok(pull_requests_payload_from_entry(
+                entry,
+                scope,
+                Some(provider_name),
+            ));
+        }
+    }
+
+    let ws_info = make_workspace_info_for_repo(&repo);
+    let limit_val = limit.unwrap_or(REPO_LIST_DEFAULT_LIMIT);
+    let args = serde_json::json!({
+        "scope": scope.as_cache_segment(),
+        "limit": limit_val,
+    });
+
+    let result = {
+        let _permit = state
+            .scm_semaphore
+            .acquire()
+            .await
+            .map_err(|e| e.to_string())?;
+        let registry = state.plugins.read().await;
+        registry
+            .call_operation(&provider_name, "list_pull_requests", args, ws_info)
+            .await
+    };
+
+    let entry = build_repo_list_entry(
+        result,
+        Some(provider_name.clone()),
+        &cache_key,
+        &state.repo_scm_lists_cache,
+    )
+    .await;
+
+    let payload_json = serde_json::to_string(&entry.payload).unwrap_or_else(|_| "[]".to_string());
+    persist_repo_list_cache(
+        &state.db_path,
+        &repo_id,
+        &cache_key.1,
+        entry.provider.as_deref(),
+        &payload_json,
+        entry.error.as_deref(),
+    )
+    .await;
+
+    let resp = pull_requests_payload_from_entry(&entry, scope, Some(provider_name));
+    state
+        .repo_scm_lists_cache
+        .entries
+        .write()
+        .await
+        .insert(cache_key, entry);
+    Ok(resp)
+}
+
+/// Drop the in-memory + on-disk cache for a repo's project-view lists so the
+/// next `list_repo_open_*` call hits the plugin fresh. Used by the Refresh
+/// button in the project-view sections.
+#[tauri::command]
+pub async fn refresh_repo_scm_lists(
+    repo_id: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    {
+        let mut entries = state.repo_scm_lists_cache.entries.write().await;
+        entries.retain(|(rid, _), _| rid != &repo_id);
+    }
+    if let Ok(db) = Database::open(&state.db_path) {
+        let _ = db.delete_repo_scm_list_cache_for_repo(&repo_id);
+    }
+    Ok(())
+}
+
+/// Build a `RepoListEntry` from the plugin result, falling back to the prior
+/// cached payload on transient errors (so a brief network blip doesn't blank
+/// the UI). `OperationNotSupported` translates into `unsupported: true` with
+/// an empty payload — distinct from a transient error.
+async fn build_repo_list_entry(
+    result: Result<serde_json::Value, PluginError>,
+    provider: Option<String>,
+    cache_key: &(String, String),
+    cache: &crate::state::RepoScmListsCache,
+) -> RepoListEntry {
+    match result {
+        Ok(value) => RepoListEntry {
+            payload: value,
+            last_fetched: Instant::now(),
+            error: None,
+            unsupported: false,
+            provider,
+        },
+        Err(PluginError::OperationNotSupported(_)) => RepoListEntry {
+            payload: serde_json::json!([]),
+            last_fetched: Instant::now(),
+            error: None,
+            unsupported: true,
+            provider,
+        },
+        Err(e) => {
+            // Preserve prior payload on transient error (network blip,
+            // rate limit, CLI auth expiry). Mirrors the merge_scm_results
+            // "fall back to previous" contract.
+            let previous = {
+                let entries = cache.entries.read().await;
+                entries.get(cache_key).map(|prev| prev.payload.clone())
+            };
+            RepoListEntry {
+                payload: previous.unwrap_or_else(|| serde_json::json!([])),
+                last_fetched: Instant::now(),
+                error: Some(e.to_string()),
+                unsupported: false,
+                provider,
+            }
+        }
+    }
+}
+
+/// Deserialize a JSON array into `Vec<T>`, tolerating per-row failures.
+/// A single malformed item used to take down the entire list via
+/// `unwrap_or_default()` returning empty — masking real bugs behind a
+/// "No open issues" empty-state. We walk the array item by item, log
+/// rows that fail to deserialize, and keep the successful ones.
+fn deserialize_list_tolerant<T: serde::de::DeserializeOwned>(
+    value: &serde_json::Value,
+    kind: &str,
+) -> Vec<T> {
+    let Some(arr) = value.as_array() else {
+        return Vec::new();
+    };
+    let mut out = Vec::with_capacity(arr.len());
+    for (idx, raw) in arr.iter().enumerate() {
+        match serde_json::from_value::<T>(raw.clone()) {
+            Ok(v) => out.push(v),
+            Err(e) => {
+                tracing::warn!(
+                    target: "claudette::scm",
+                    kind = %kind,
+                    index = idx,
+                    error = %e,
+                    "dropping row that failed to deserialize"
+                );
+            }
+        }
+    }
+    out
+}
+
+fn issues_payload_from_entry(entry: &RepoListEntry, provider: Option<String>) -> RepoIssuesPayload {
+    let issues = deserialize_list_tolerant::<Issue>(&entry.payload, "issue");
+    RepoIssuesPayload {
+        issues,
+        fetched_at: now_iso(),
+        error: entry.error.clone(),
+        unsupported: entry.unsupported,
+        provider: entry.provider.clone().or(provider),
+    }
+}
+
+fn pull_requests_payload_from_entry(
+    entry: &RepoListEntry,
+    scope: PullRequestScope,
+    provider: Option<String>,
+) -> RepoPullRequestsPayload {
+    let pull_requests = deserialize_list_tolerant::<PullRequest>(&entry.payload, "pull_request");
+    RepoPullRequestsPayload {
+        pull_requests,
+        scope,
+        fetched_at: now_iso(),
+        error: entry.error.clone(),
+        unsupported: entry.unsupported,
+        provider: entry.provider.clone().or(provider),
+    }
 }
 
 // --- Helpers ---
@@ -1069,6 +1599,8 @@ pub fn start_scm_polling(app_handle: tauri::AppHandle) {
         {
             let app_state = handle.state::<AppState>();
             seed_scm_cache_from_db(&app_state.db_path, &app_state.scm_cache).await;
+            seed_repo_scm_lists_cache_from_db(&app_state.db_path, &app_state.repo_scm_lists_cache)
+                .await;
             seed_workspace_activity_from_db(&app_state.db_path, &app_state.workspace_activity)
                 .await;
         }
