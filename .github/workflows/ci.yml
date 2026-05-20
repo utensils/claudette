@@ -93,8 +93,20 @@ jobs:
             libsoup-3.0-dev \
             libjavascriptcoregtk-4.1-dev \
             libasound2-dev
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "latest"
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      - name: Cache Pi harness Bun packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: pi-harness-bun-${{ runner.os }}-${{ hashFiles('src-pi-harness/bun.lock') }}
+          restore-keys: |
+            pi-harness-bun-${{ runner.os }}-
+      - name: Stage Tauri sidecars
+        run: scripts/stage-cli-sidecar.sh --profile debug
       - run: cargo check -p claudette-tauri --no-default-features --features devtools,server,voice,alternative-backends,pi-sdk
 
   mobile:
