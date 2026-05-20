@@ -782,42 +782,48 @@ mod tests {
 
     #[test]
     fn test_delete_checkpoint_reclaims_checkpoint_file_pages() {
-        let dir = tempfile::tempdir().unwrap();
-        let db = Database::open(&dir.path().join("claudette.db")).unwrap();
-        db.insert_repository(&make_repo("r1", "/tmp/repo1", "repo1"))
+        fn setup_checkpoint_file_db() -> (tempfile::TempDir, Database) {
+            let dir = tempfile::tempdir().unwrap();
+            let db = Database::open(&dir.path().join("claudette.db")).unwrap();
+            db.insert_repository(&make_repo("r1", "/tmp/repo1", "repo1"))
+                .unwrap();
+            db.insert_workspace(&make_workspace("w1", "r1", "fix-bug"))
+                .unwrap();
+            db.insert_chat_message(&make_chat_msg(&db, "m1", "w1", ChatRole::Assistant, "a1"))
+                .unwrap();
+            db.insert_checkpoint(&make_checkpoint(&db, "cp1", "w1", "m1", 0))
+                .unwrap();
+            db.insert_checkpoint_files(&[CheckpointFile {
+                id: "cf1".into(),
+                checkpoint_id: "cp1".into(),
+                file_path: "large.bin".into(),
+                content: Some(vec![7; 1024 * 1024]),
+                file_mode: 0o100644,
+            }])
             .unwrap();
-        db.insert_workspace(&make_workspace("w1", "r1", "fix-bug"))
-            .unwrap();
-        db.insert_chat_message(&make_chat_msg(&db, "m1", "w1", ChatRole::Assistant, "a1"))
-            .unwrap();
-        db.insert_checkpoint(&make_checkpoint(&db, "cp1", "w1", "m1", 0))
-            .unwrap();
-        db.insert_checkpoint_files(&[CheckpointFile {
-            id: "cf1".into(),
-            checkpoint_id: "cp1".into(),
-            file_path: "large.bin".into(),
-            content: Some(vec![7; 1024 * 1024]),
-            file_mode: 0o100644,
-        }])
-        .unwrap();
+            (dir, db)
+        }
 
-        db.conn()
-            .execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")
-            .unwrap();
-        let page_count_after_insert: i64 = db
+        let (_raw_dir, raw_db) = setup_checkpoint_file_db();
+        raw_db
             .conn()
-            .query_row("PRAGMA page_count", [], |row| row.get(0))
+            .execute("DELETE FROM conversation_checkpoints WHERE id = 'cp1'", [])
             .unwrap();
-
-        db.delete_checkpoint("cp1").unwrap();
-
-        let page_count_after_delete: i64 = db
+        let freelist_after_raw_delete: i64 = raw_db
             .conn()
-            .query_row("PRAGMA page_count", [], |row| row.get(0))
+            .query_row("PRAGMA freelist_count", [], |row| row.get(0))
             .unwrap();
+
+        let (_vacuum_dir, vacuum_db) = setup_checkpoint_file_db();
+        vacuum_db.delete_checkpoint("cp1").unwrap();
+        let freelist_after_vacuuming_delete: i64 = vacuum_db
+            .conn()
+            .query_row("PRAGMA freelist_count", [], |row| row.get(0))
+            .unwrap();
+
         assert!(
-            page_count_after_delete < page_count_after_insert,
-            "checkpoint file delete should reclaim pages; before={page_count_after_insert} after={page_count_after_delete}"
+            freelist_after_vacuuming_delete < freelist_after_raw_delete,
+            "checkpoint file delete should drain some free pages; raw={freelist_after_raw_delete} vacuumed={freelist_after_vacuuming_delete}"
         );
     }
 
