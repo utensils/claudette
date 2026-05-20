@@ -133,14 +133,16 @@ The 16 base colors map onto Claudette's token vocabulary as follows:
 | `base05` | default foreground | `text-primary`, `terminal-fg` |
 | `base06` | bright foreground emphasis | _unmapped — see note below_ |
 | `base07` | lightest | `on-accent` |
-| `base08` | red | `accent-error` (+ triplet), `status-stopped`, `diff-removed-text`, `syntax-variable` |
-| `base09` | orange | `accent-warning` (+ triplet), `syntax-number` |
+| `base08` | red | `accent-error` family, `status-stopped`, `diff-removed-text`, `syntax-variable` |
+| `base09` | orange | `accent-warning` family, `syntax-number` |
 | `base0A` | yellow | `badge-ask`, `syntax-type` |
-| `base0B` | green | `accent-success` (+ triplet), `badge-done`, `diff-added-text`, `syntax-string` |
+| `base0B` | green | `accent-success` family, `badge-done`, `diff-added-text`, `syntax-string` |
 | `base0C` | cyan | `syntax-operator` |
-| `base0D` | blue | `accent-info` (+ triplet), `badge-plan`, `diff-hunk-header`, `syntax-function` |
-| `base0E` | purple | `accent-primary`, `accent-tertiary` (+ triplet), `syntax-keyword` |
-| `base0F` | brown | `accent-dim`, `accent-secondary` (+ triplet) |
+| `base0D` | blue | `accent-info` family, `badge-plan`, `diff-hunk-header`, `syntax-function` |
+| `base0E` | purple | `accent-primary`, `accent-tertiary` family, `syntax-keyword` |
+| `base0F` | brown | `accent-dim`, `accent-secondary` family |
+
+"family" above means the base color plus its derived `-bg` / `-border` / `-hover` / `-fg` companions. The base16 converter sets only the base; the companions derive in `:root` via `color-mix()`, so the whole family adapts together.
 
 :::note
 **Text ramp mapping** — Claudette's `text-primary` → `text-muted` → `text-dim` → `text-faint` is a hierarchy of decreasing contrast against the background. In Base16's "ramp" (`base03`–`base06`), `base06` is actually *brighter* than `base05` (it's an emphasis tone, not a muted one), so it doesn't fit the "muted" role and is left unmapped. The muted/dim steps use `base04` and `base03` instead.
@@ -240,11 +242,11 @@ Semantic tokens express **meaning**, not color. New consumers should prefer thes
 | `accent-success-hover` | Hover state for interactive surfaces (15% alpha) |
 | `accent-success-fg` | Foreground text color when used on `accent-success-bg` |
 | `accent-warning` | Caution / non-fatal warning (and `-bg`, `-border`, `-hover`, `-fg`) |
-| `accent-error` | Error / destructive action. Aliases `--status-stopped` by default. (and full triplet) |
-| `accent-info` | Informational / neutral notice. Aliases `--badge-plan` by default. (and full triplet) |
+| `accent-error` | Error / destructive action. Aliases `--status-stopped` by default. (and `-bg`, `-border`, `-hover`, `-fg`) |
+| `accent-info` | Informational / neutral notice. Aliases `--badge-plan` by default. (and `-bg`, `-border`, `-hover`, `-fg`) |
 | `accent-neutral` | Muted emphasis text or icon — aliases `--text-muted` |
-| `accent-secondary` | Secondary brand accent. Aliases `--mascot-pink` by default. (and `-bg`, `-border`, `-fg`) |
-| `accent-tertiary` | Tertiary brand accent (and `-bg`, `-border`, `-fg`) |
+| `accent-secondary` | Secondary brand accent. Aliases `--mascot-pink` by default. (and `-bg`, `-border`, `-fg` — no `-hover`) |
+| `accent-tertiary` | Tertiary brand accent (and `-bg`, `-border`, `-fg` — no `-hover`) |
 
 :::tip
 Overriding an accent in a custom theme is a **single-token change**: set the base color. The `-bg` / `-border` / `-hover` / `-fg` layers are derived from the base via `color-mix(in srgb, var(--accent-X) N%, transparent)` in `:root`, so they automatically pick up your override.
@@ -258,7 +260,9 @@ Because `--accent-success` aliases `--badge-done`, a theme that overrides only `
 
 ### Category Slots (A–H)
 
-Eight pre-styled chip palettes for "item N of a set" UI — workspace tags, plugin types, env-provider chips. Each slot is brand-invariant by design: the color identity of "category C" stays stable across themes so muscle memory holds.
+Eight pre-styled chip palettes for "item N of a set" UI — plugin badges, env-provider chips, future workspace tags. The default palette is brand-invariant: the same eight hues appear across most themes so the color identity of "category C" stays recognizable when users switch theme.
+
+Themes with a strong canonical palette (Rosé Pine, Solarized) deliberately override these slots in their `[data-theme]` block so chips render in the theme's own native colors. If you're authoring a custom theme and your palette has its own identity, follow that pattern.
 
 Each slot ships as a `-bg` / `-border` / `-fg` triplet (no `-rgb` companion — these aren't expected to be alpha-composed at the call site). Use them directly:
 

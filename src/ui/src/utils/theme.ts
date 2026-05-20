@@ -368,10 +368,12 @@ export function detectBase16(colors: Record<string, string>): boolean {
  * Theming role spec: base00=bg, base05=fg, base08=red, base0A=yellow,
  * base0B=green, base0D=blue, base0E=purple, etc.
  *
- * For every status/UI-role accent we emit the full triplet companion set
- * (-rgb, -bg, -border, -fg) so the imported palette doesn't inherit the
- * baseline theme's tints. The bg/border/fg layers use the same alpha
- * levels as :root in theme.css.
+ * Emits only BASE colors for the semantic accent families (success / warning
+ * / error / info / secondary / tertiary). The `-bg` / `-border` / `-hover`
+ * / `-fg` companions derive from each base in `:root` via `color-mix()`,
+ * so the cascade fills them in automatically — no per-companion emission
+ * needed here. The legacy `--accent-primary-rgb` is still co-emitted
+ * because terminal-selection and a few other consumers still read it.
  *
  * `color-scheme` is read from a `variant` field if present (some base16
  * files declare `"variant": "light"`); otherwise derived from base00's

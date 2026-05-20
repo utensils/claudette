@@ -1,8 +1,14 @@
 /**
  * Shiki syntax-highlighting worker.
  *
- * Holds a single Shiki highlighter loaded with `github-light` + `github-dark`
- * themes. Grammars are loaded on demand via the fine-grained `@shikijs/langs/*`
+ * Holds a single Shiki highlighter loaded with the Claudette theme (see
+ * `../styles/shikiClaudetteTheme.ts`). The theme's `foreground` values are
+ * `var(--syntax-*)` references, so emitted spans inherit per-theme colors
+ * from the active Claudette theme without the worker needing to know which
+ * theme is active. No more dual-theme (`github-light` + `github-dark`)
+ * machinery — light/dark switching happens entirely via the CSS cascade.
+ *
+ * Grammars are loaded on demand via the fine-grained `@shikijs/langs/*`
  * dynamic imports below — only languages actually requested at runtime are
  * fetched, and Vite splits each into its own chunk. Plugin-contributed
  * grammars are registered ahead of time via `register-grammar` messages

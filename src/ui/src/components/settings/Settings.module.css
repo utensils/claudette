@@ -1694,7 +1694,7 @@
   border: 1px solid var(--accent-error-border);
   border-radius: var(--radius-md);
   background: var(--accent-error-bg);
-  color: var(--status-stopped);
+  color: var(--accent-error);
   font-size: 13px;
   line-height: 1.5;
   padding: 10px 12px;
@@ -1824,7 +1824,7 @@
 
 .mcpRemoveBtn:hover {
   background: var(--accent-error-hover);
-  color: var(--status-stopped);
+  color: var(--accent-error);
 }
 
 .mcpStatusDot {

@@ -148,11 +148,15 @@
   --accent-tertiary-fg:      var(--accent-tertiary);
 
   /* ---- Category slots A–H — eight distinguishable hues for "item N of a
-     set" UI like workspace tags, plugin badges, env-provider chips. Each
-     slot ships bg/border/fg directly (no -rgb here, no consumer expected
-     to layer custom alpha). Like --tool-* and --syntax-*, categories are
-     intentionally brand-invariant: a workspace's category color stays
-     stable across themes so muscle memory holds. */
+     set" UI like plugin badges, env-provider chips, future workspace
+     tags. Each slot ships bg/border/fg directly (no -rgb here, no
+     consumer expected to layer custom alpha).
+     The default palette below is brand-invariant by design — a category
+     identity stays recognizable across most themes so muscle memory
+     holds. Themes with a strong native palette (Rosé Pine, Solarized)
+     CAN override these in their [data-theme] block when the palette's
+     identity is itself part of the theme experience; see the per-theme
+     blocks below for examples. */
   --category-a-bg:     rgba(232, 88, 88, 0.12);
   --category-a-border: rgba(232, 88, 88, 0.32);
   --category-a-fg:     #e85858;
