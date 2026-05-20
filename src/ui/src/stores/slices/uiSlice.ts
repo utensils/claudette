@@ -80,6 +80,18 @@ export interface UiSlice {
   closeSettings: () => void;
   setSettingsSection: (section: string) => void;
   clearSettingsFocus: () => void;
+
+  // Scheduler page ("Loops and Schedules" — main's `agent_scheduled_tasks`).
+  schedulerOpen: boolean;
+  /** When called with `prefill`, also opens the create-task modal with
+   *  those fields pre-populated (used by the `/schedule` slash command). */
+  openScheduler: (prefill?: {
+    sessionId?: string;
+    prompt?: string;
+    fireAt?: string;
+    cronExpr?: string;
+  }) => void;
+  closeScheduler: () => void;
   pushSettingsOverlay: () => void;
   popSettingsOverlay: () => void;
   claudeAuthFailure: ClaudeAuthFailureState | null;
@@ -279,6 +291,7 @@ export const createUiSlice: StateCreator<AppState, [], [], UiSlice> = (
       const resetMarketplaceIntent = nextSection === "claude-code-plugins";
       return {
         settingsOpen: true,
+        schedulerOpen: false,
         settingsSection: nextSection,
         settingsFocus: focus,
         pluginSettingsIntent: resetMarketplaceIntent
@@ -292,6 +305,21 @@ export const createUiSlice: StateCreator<AppState, [], [], UiSlice> = (
           : state.pluginSettingsTab,
       };
     }),
+
+  // Scheduler page
+  schedulerOpen: false,
+  openScheduler: (prefill) => {
+    const wantsModal =
+      !!prefill && (!!prefill.prompt || !!prefill.fireAt || !!prefill.cronExpr);
+    set({
+      schedulerOpen: true,
+      settingsOpen: false,
+      ...(wantsModal
+        ? { activeModal: "createScheduledTask", modalData: { ...prefill } }
+        : {}),
+    });
+  },
+  closeScheduler: () => set({ schedulerOpen: false }),
   closeSettings: () =>
     set({
       settingsOpen: false,

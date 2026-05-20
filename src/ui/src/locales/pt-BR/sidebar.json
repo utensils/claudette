@@ -31,6 +31,7 @@
   "add_repository": "Adicionar repositório",
   "add_remote": "Adicionar remoto",
   "back_to_dashboard": "Voltar ao painel",
+  "scheduler": "Loops e agendados",
   "expand_repo_aria": "Expandir {{name}}",
   "collapse_repo_aria": "Recolher {{name}}",
   "filter_workspaces": "Filtrar workspaces",

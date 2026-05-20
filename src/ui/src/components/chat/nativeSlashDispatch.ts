@@ -265,6 +265,9 @@ export async function dispatchNativeSlash(
             );
           },
           workspaceId,
+          sessionId,
+          openScheduler: (prefill) =>
+            useAppStore.getState().openScheduler(prefill),
           agentStatus: agentStatusLabel,
           selectedModel: currentModel,
           selectedModelProvider: currentModelProvider,
