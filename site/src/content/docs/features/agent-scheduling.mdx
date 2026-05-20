@@ -32,3 +32,38 @@ claudette routine delete weekday-prs
 ```
 
 `routine create` accepts literal prompts, `@file` prompts, and `-` for stdin, matching `chat send`.
+
+## Loops and Schedules view
+
+You can drive the same scheduling backend from the GUI without the agent involved.
+
+Click the **clock icon** next to the dashboard icon in the sidebar header to open the **Loops and Schedules** view. Like the Dashboard, it keeps the sidebar and header (panel toggles) in place — click the clock again, the dashboard icon, or a workspace to leave it.
+
+The page lists every persisted task, split into two sections:
+
+- **Loops** — cron routines (`kind: cron`). Shows the human-readable schedule, recurring/one-shot mode, target session, and next-fire countdown.
+- **Schedules** — one-shot wakeups (`kind: wakeup`). Shows the fire time, countdown, and target session.
+
+Each row has **Run now** (fires immediately, same as the CLI's `routine run`) and **Delete** buttons. The same list also appears under **Settings → Automation**.
+
+### Creating a task from the GUI
+
+The **New scheduled task** button at the top of the page opens a dialog with two modes:
+
+- **One-shot (wakeup)** — pick a target chat session, a date/time, and a prompt.
+- **Recurring (cron)** — pick a target chat session, write a standard 5-field cron expression (e.g. `0 9 * * 1-5`), optionally name the routine, choose recurring or one-shot, and write the prompt.
+
+### Slash commands
+
+In a chat, you can create tasks for the current session without opening the dialog:
+
+```
+/loop 5m run the test suite
+/schedule 2026-06-01T09:00 cut the release branch
+/schedule                              # opens the dialog (no args)
+/schedule write the weekly status update  # opens the dialog, prompt prefilled
+```
+
+`/loop <interval> <prompt>` translates whole-minute intervals that evenly divide their unit (1m/2m/5m/10m/15m/20m/30m, 1h/2h/3h/4h/6h/8h/12h, 1d) to a cron expression and creates a recurring routine in the current session. Sub-minute or odd intervals open the dialog instead so you can write the cron expression directly.
+
+`/schedule <when> <prompt>` accepts a leading `YYYY-MM-DD` or `YYYY-MM-DDTHH:MM` timestamp. If both the time and prompt are present, it creates the wakeup inline; otherwise it opens the dialog prefilled with whatever you provided.

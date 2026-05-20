@@ -21,6 +21,8 @@ Native commands ship with the app and always work. They split into two flavors:
 | `/status` | Show session/permission status. |
 | `/help` | Show available commands. |
 | `/init` | Generate a `CLAUDE.md` for the current repo. |
+| `/loop` `<interval> <prompt>` | Schedule a recurring cron routine on this chat session (e.g. `/loop 5m run the tests`). See [Agent Scheduling → Loops and Schedules view](/claudette/features/agent-scheduling/#loops-and-schedules-view). |
+| `/schedule` `[<when>] [<prompt>]` | Schedule a one-shot wakeup on this chat session, or open the New scheduled task dialog if args are missing. |
 | `/login` | Start sign-in for the active model provider. Claude models open the Claude Code browser/manual-code flow; Codex models run `codex login`; Pi models show `pi auth` guidance (run `pi auth` in a terminal, then refresh Pi models — Claudette does not query Pi auth status). |
 | `/config` `[section]` | Open Claudette settings (optional section: `general`, `models`, `usage`, `appearance`, `notifications`, `git`, `plugins`, `experimental`). |
 | `/usage` | Open the Claude Code usage panel. |

@@ -1,5 +1,10 @@
 import type { PluginSettingsIntent } from "../../types/plugins";
-import type { NativeSlashKind, SlashCommand } from "../../services/tauri";
+import {
+  type NativeSlashKind,
+  type SlashCommand,
+  scheduleWakeup,
+  createCronRoutine,
+} from "../../services/tauri";
 import type { PermissionLevel } from "../../stores/useAppStore";
 import { parsePluginSlashCommand } from "./pluginSlashCommand";
 import { buildModelRegistry, resolveModelSelection } from "./modelRegistry";
@@ -54,6 +59,18 @@ export interface NativeCommandContext {
   // -- Per-workspace state read by workspace-control commands
   // (/clear, /plan, /model, /permissions, /status). --
   workspaceId: string | null;
+  /** Active chat session id (read by `/loop` and `/schedule` so a new
+   *  scheduled task is bound to the same session the user typed in). */
+  sessionId: string | null;
+  /** Open the Loops and Schedules view, optionally prefilling the
+   *  create-task modal (used by `/schedule` and `/loop` when their args
+   *  can't be turned into a concrete task on the spot). */
+  openScheduler: (prefill?: {
+    sessionId?: string;
+    prompt?: string;
+    fireAt?: string;
+    cronExpr?: string;
+  }) => void;
   agentStatus: string | null;
   selectedModel: string;
   selectedModelProvider: string;
@@ -723,6 +740,135 @@ const initHandler: NativeHandler = {
   },
 };
 
+/** Map a friendly interval token (e.g. `5m`, `1h`, `1d`) to a standard
+ *  5-field cron expression. Returns `null` for sub-minute or odd intervals
+ *  that cron can't represent cleanly. */
+function intervalToCron(token: string): string | null {
+  const m = /^(\d+)(s|m|h|d)$/i.exec(token.trim());
+  if (!m) return null;
+  const n = Number(m[1]);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  const unit = m[2].toLowerCase();
+  if (unit === "s") return null; // sub-minute — cron can't express
+  if (unit === "m") {
+    if (n >= 60) return null;
+    if (60 % n !== 0) return null; // odd intervals don't tile the hour
+    return `*/${n} * * * *`;
+  }
+  if (unit === "h") {
+    if (n >= 24) return null;
+    if (24 % n !== 0) return null;
+    return n === 1 ? `0 * * * *` : `0 */${n} * * *`;
+  }
+  // unit === "d"
+  if (n !== 1) return null;
+  return `0 0 * * *`;
+}
+
+const LOOP_USAGE =
+  "/loop: usage — `/loop <interval> <prompt>` (e.g. `/loop 5m run the tests`). Whole-minute intervals up to 1d that evenly divide their unit (1m/2m/5m/10m/15m/20m/30m, 1h/2h/3h/4h/6h/8h/12h, 1d). Sub-minute or odd intervals: write a cron expression in the New scheduled task dialog.";
+
+const loopHandler: NativeHandler = {
+  name: "loop",
+  aliases: [],
+  kind: "local_action",
+  execute: async (ctx, args) => {
+    const handled = { kind: "handled" as const, canonicalName: "loop" };
+    if (!ctx.workspaceId || !ctx.sessionId) {
+      ctx.addLocalMessage("/loop: no active workspace");
+      return handled;
+    }
+    const tokens = args.trim().split(/\s+/);
+    if (tokens.length === 0 || tokens[0] === "") {
+      ctx.addLocalMessage(LOOP_USAGE);
+      return handled;
+    }
+    const cronExpr = intervalToCron(tokens[0]);
+    const prompt = tokens.slice(1).join(" ").trim();
+    if (!cronExpr) {
+      ctx.openScheduler({
+        sessionId: ctx.sessionId,
+        prompt: prompt || undefined,
+      });
+      ctx.addLocalMessage(LOOP_USAGE);
+      return handled;
+    }
+    if (!prompt) {
+      ctx.addLocalMessage(LOOP_USAGE);
+      return handled;
+    }
+    try {
+      await createCronRoutine({
+        sessionId: ctx.sessionId,
+        cronExpr,
+        prompt,
+        recurring: true,
+      });
+      ctx.addLocalMessage(
+        `Looping (\`${cronExpr}\`). Manage it from the scheduler (clock icon in the sidebar).`,
+      );
+    } catch (e) {
+      ctx.addLocalMessage(`/loop failed: ${String(e)}`);
+    }
+    return handled;
+  },
+};
+
+/** Strict-ish leading-timestamp matcher so we don't mistake a prompt that
+ *  starts with a date for an explicit schedule time. */
+const SCHEDULE_TIME_RE = /^\d{4}-\d{2}-\d{2}([T ]\d{2}:\d{2}(:\d{2})?)?$/;
+
+const scheduleHandler: NativeHandler = {
+  name: "schedule",
+  aliases: [],
+  kind: "local_action",
+  execute: async (ctx, args) => {
+    const handled = { kind: "handled" as const, canonicalName: "schedule" };
+    const trimmed = args.trim();
+    if (!trimmed) {
+      // No args — open the modal in its default state (one-shot).
+      ctx.openScheduler({ sessionId: ctx.sessionId ?? undefined });
+      return handled;
+    }
+    const firstTok = trimmed.split(/\s+/, 1)[0] ?? "";
+    if (SCHEDULE_TIME_RE.test(firstTok)) {
+      const parsed = new Date(firstTok);
+      const rest = trimmed.slice(firstTok.length).trim();
+      if (!Number.isNaN(parsed.getTime()) && ctx.sessionId && rest) {
+        // Inline schedule: known time, known prompt, known session — fire
+        // the wakeup directly instead of opening the modal.
+        try {
+          await scheduleWakeup({
+            sessionId: ctx.sessionId,
+            fireAt: parsed.toISOString(),
+            prompt: rest,
+          });
+          ctx.addLocalMessage(
+            `Scheduled for ${parsed.toLocaleString()}. Manage it from the scheduler (clock icon in the sidebar).`,
+          );
+        } catch (e) {
+          ctx.addLocalMessage(`/schedule failed: ${String(e)}`);
+        }
+        return handled;
+      }
+      // Time parsed but missing prompt or session — open the modal
+      // prefilled with what we have.
+      ctx.openScheduler({
+        sessionId: ctx.sessionId ?? undefined,
+        prompt: rest || undefined,
+        fireAt: Number.isNaN(parsed.getTime()) ? undefined : parsed.toISOString(),
+      });
+      return handled;
+    }
+    // No leading timestamp — treat all of args as the prompt.
+    ctx.openScheduler({
+      sessionId: ctx.sessionId ?? undefined,
+      prompt: trimmed,
+    });
+    return handled;
+  },
+};
+
 function formatCommandLine(
   cmd: SlashCommand,
   shadowedAliases: ReadonlySet<string>,
@@ -915,6 +1061,8 @@ export const NATIVE_HANDLERS: NativeHandler[] = [
   statusHandler,
   helpHandler,
   initHandler,
+  loopHandler,
+  scheduleHandler,
 ];
 
 /** Resolve a slash command token (no leading `/`) against the native handler table. */

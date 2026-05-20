@@ -16,6 +16,7 @@ import { MissingCliModal } from "./MissingCliModal";
 import { KeyboardShortcutsModal } from "./KeyboardShortcutsModal";
 import { EnvTrustModal } from "./EnvTrustModal";
 import { PiLoginModalRoute } from "./PiLoginModalRoute";
+import { CreateScheduledTaskModal } from "./CreateScheduledTaskModal";
 
 export function ModalRouter() {
   const activeModal = useAppStore((s) => s.activeModal);
@@ -55,6 +56,8 @@ export function ModalRouter() {
       return <EnvTrustModal />;
     case "piLogin":
       return <PiLoginModalRoute />;
+    case "createScheduledTask":
+      return <CreateScheduledTaskModal />;
     default:
       return null;
   }

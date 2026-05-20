@@ -25,7 +25,7 @@ import {
   interruptPtyForeground,
 } from "../../services/tauri";
 import { createWorkspaceOrchestrated } from "../../hooks/useCreateWorkspace";
-import { Settings, Link, X, Share2, Plus, Globe, Archive, Trash2, CircleCheck, CircleAlert, CircleQuestionMark, Cog, Filter, LayoutDashboard, CircleDashed, CircleStop, ChevronRight, ChevronDown, ArrowDownAZ, FolderSearch } from "lucide-react";
+import { Settings, Link, X, Share2, Plus, Globe, Archive, Trash2, CircleCheck, CircleAlert, CircleQuestionMark, Cog, Filter, LayoutDashboard, Clock, CircleDashed, CircleStop, ChevronRight, ChevronDown, ArrowDownAZ, FolderSearch } from "lucide-react";
 import { resolveScmPrIcon } from "../shared/workspaceStatusIcon";
 import { RepoIcon } from "../shared/RepoIcon";
 import { WorkspaceEnvSpinner } from "./WorkspaceEnvSpinner";
@@ -98,6 +98,9 @@ export const Sidebar = memo(function Sidebar() {
   const selectedRepositoryId = useAppStore((s) => s.selectedRepositoryId);
   const selectRepository = useAppStore((s) => s.selectRepository);
   const goToDashboard = useAppStore((s) => s.goToDashboard);
+  const openScheduler = useAppStore((s) => s.openScheduler);
+  const closeScheduler = useAppStore((s) => s.closeScheduler);
+  const schedulerOpen = useAppStore((s) => s.schedulerOpen);
   const sidebarGroupBy = useAppStore((s) => s.sidebarGroupBy);
   const setSidebarGroupBy = useAppStore((s) => s.setSidebarGroupBy);
   const sidebarRepoFilter = useAppStore((s) => s.sidebarRepoFilter);
@@ -882,6 +885,15 @@ export const Sidebar = memo(function Sidebar() {
             aria-label={t("back_to_dashboard")}
           >
             <LayoutDashboard size={12} />
+          </button>
+          <button
+            className={schedulerOpen ? styles.dashboardBtnActive : styles.dashboardBtn}
+            onClick={() => (schedulerOpen ? closeScheduler() : openScheduler())}
+            title={t("scheduler")}
+            aria-label={t("scheduler")}
+            aria-pressed={schedulerOpen}
+          >
+            <Clock size={12} />
           </button>
           <div className={styles.filterDropdown} ref={filterDropdownRef}>
             <button

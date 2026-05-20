@@ -48,6 +48,12 @@
   color: var(--text-muted);
 }
 
+.dashboardBtnActive {
+  composes: dashboardBtn;
+  background: var(--selected-bg);
+  color: var(--text-primary);
+}
+
 .filterToggle {
   background: none;
   border: none;

@@ -937,6 +937,11 @@ function App() {
       store.addToast(msg);
     });
 
+    // Scheduled tasks (loops + wakeups): load the current list. They share
+    // the source-of-truth list shown by Settings → Automation and the
+    // sidebar's Loops-and-Schedules view.
+    void useAppStore.getState().loadScheduledTasks();
+
     return () => {
       isActive = false;
       window.clearInterval(discoveredServersPollId);

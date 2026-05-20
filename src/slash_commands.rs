@@ -218,6 +218,22 @@ pub fn native_command_registry() -> Vec<SlashCommand> {
         argument_hint: Some("[extra guidance]".to_string()),
         kind: Some(NativeKind::PromptExpansion),
     });
+    commands.push(SlashCommand {
+        name: "loop".to_string(),
+        description: "Schedule a recurring cron routine on this chat session".to_string(),
+        source: "builtin".to_string(),
+        aliases: Vec::new(),
+        argument_hint: Some("<interval> <prompt>".to_string()),
+        kind: Some(NativeKind::LocalAction),
+    });
+    commands.push(SlashCommand {
+        name: "schedule".to_string(),
+        description: "Schedule a one-shot wakeup on this chat session".to_string(),
+        source: "builtin".to_string(),
+        aliases: Vec::new(),
+        argument_hint: Some("[<when>] [<prompt>]".to_string()),
+        kind: Some(NativeKind::LocalAction),
+    });
     commands
 }
 

@@ -28,6 +28,7 @@
   "add_repository": "Añadir repositorio",
   "add_remote": "Añadir remoto",
   "back_to_dashboard": "Volver al panel",
+  "scheduler": "Bucles y programados",
   "expand_repo_aria": "Expandir {{name}}",
   "collapse_repo_aria": "Contraer {{name}}",
   "filter_workspaces": "Filtrar espacios de trabajo",

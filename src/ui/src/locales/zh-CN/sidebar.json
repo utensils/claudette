@@ -28,6 +28,7 @@
   "add_repository": "添加仓库",
   "add_remote": "添加远程",
   "back_to_dashboard": "返回仪表盘",
+  "scheduler": "循环与计划",
   "expand_repo_aria": "展开 {{name}}",
   "collapse_repo_aria": "折叠 {{name}}",
   "filter_workspaces": "筛选工作区",
