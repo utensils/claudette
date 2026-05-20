@@ -183,8 +183,11 @@ function App() {
         }
         setLastMessages(msgMap);
         // Issue/PR -> workspace associations for the project-view "in
-        // progress" badge and the workspace breadcrumb.
-        hydrateWorkspaceScmLinks(data.workspace_scm_links);
+        // progress" badge and the workspace breadcrumb. Tolerate a
+        // payload without the field — an older headless server reached
+        // over WSS predates it, and the bundle smoke test's mock omits
+        // it; either way an absent list just means "no links yet".
+        hydrateWorkspaceScmLinks(data.workspace_scm_links ?? []);
         await hydratePersistedViewState(localWorkspaces);
         setViewStateHydrated(true);
         // Boot-health gate: only ack on the success path. The
