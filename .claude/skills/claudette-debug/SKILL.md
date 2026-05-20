@@ -156,7 +156,7 @@ Read [reference/tauri-commands.md](reference/tauri-commands.md) for the complete
 - `createWorkspace(repoId, name, skipSetup?)` -> CreateWorkspaceResult
 - `loadInitialData()` -> repos, workspaces, branches
 - `loadDiffFiles(workspaceId)` -> DiffFilesResult
-- `stopAgent(workspaceId)`
+- `stopAgent(sessionId)` — keyed on chat session, not workspace
 
 ### `discover state` — list all state slices
 
