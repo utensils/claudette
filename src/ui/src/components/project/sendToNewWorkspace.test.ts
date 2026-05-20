@@ -1,0 +1,261 @@
+// @vitest-environment happy-dom
+
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAppStore } from "../../stores/useAppStore";
+import {
+  buildModelSubmenuItems,
+  renderStarterPrompt,
+  sendToNewWorkspace,
+  type SendToNewWorkspaceArgs,
+} from "./sendToNewWorkspace";
+import { createWorkspaceOrchestrated } from "../../hooks/useCreateWorkspace";
+import { applySelectedModel } from "../chat/applySelectedModel";
+import { sendChatMessage } from "../../services/tauri";
+import type { Model } from "../chat/modelRegistry";
+
+vi.mock("../../hooks/useCreateWorkspace", () => ({
+  createWorkspaceOrchestrated: vi.fn(),
+}));
+vi.mock("../chat/applySelectedModel", () => ({
+  applySelectedModel: vi.fn().mockResolvedValue(undefined),
+}));
+vi.mock("../../services/tauri", () => ({
+  sendChatMessage: vi.fn().mockResolvedValue(undefined),
+}));
+
+const mockedCreate = vi.mocked(createWorkspaceOrchestrated);
+const mockedApplyModel = vi.mocked(applySelectedModel);
+const mockedSend = vi.mocked(sendChatMessage);
+
+function makeModel(overrides: Partial<Model> & { id: string }): Model {
+  return {
+    label: overrides.id,
+    group: "Claude Code",
+    extraUsage: false,
+    contextWindowTokens: 200_000,
+    ...overrides,
+  };
+}
+
+const ISSUE_ARGS: SendToNewWorkspaceArgs = {
+  repoId: "repo-1",
+  kind: "issue",
+  number: 893,
+  title: "Make OpenRouter balance always-on",
+  url: "https://github.com/utensils/claudette/issues/893",
+  modelId: "claude-opus-4-7",
+};
+
+const PR_ARGS: SendToNewWorkspaceArgs = {
+  repoId: "repo-1",
+  kind: "pr",
+  number: 884,
+  title: "implement /compact on the Pi SDK harness",
+  url: "https://github.com/utensils/claudette/pull/884",
+  branch: "feat/pi-compact",
+  modelId: "sonnet",
+};
+
+beforeEach(() => {
+  mockedCreate.mockReset();
+  mockedApplyModel.mockClear();
+  mockedSend.mockClear();
+  useAppStore.setState({ chatMessages: {}, toasts: [] });
+});
+
+afterEach(() => {
+  vi.clearAllMocks();
+});
+
+describe("renderStarterPrompt", () => {
+  it("templates an issue prompt with number, title, and source URL", () => {
+    const prompt = renderStarterPrompt(ISSUE_ARGS);
+    expect(prompt).toContain(
+      `issue #${ISSUE_ARGS.number}: ${ISSUE_ARGS.title}`,
+    );
+    expect(prompt).toContain(`Source: ${ISSUE_ARGS.url}`);
+    expect(prompt).not.toContain("Branch:");
+  });
+
+  it("templates a PR prompt and includes the branch when present", () => {
+    const prompt = renderStarterPrompt(PR_ARGS);
+    expect(prompt).toContain(`PR #${PR_ARGS.number}`);
+    expect(prompt).toContain("implement /compact on the Pi SDK harness");
+    expect(prompt).toContain(
+      "Source: https://github.com/utensils/claudette/pull/884",
+    );
+    expect(prompt).toContain("Branch: feat/pi-compact");
+  });
+
+  it("omits the branch line for a PR with no branch", () => {
+    const prompt = renderStarterPrompt({ ...PR_ARGS, branch: undefined });
+    expect(prompt).not.toContain("Branch:");
+  });
+});
+
+describe("buildModelSubmenuItems", () => {
+  it("returns a disabled placeholder when the registry is empty", () => {
+    const items = buildModelSubmenuItems([], vi.fn());
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({
+      label: "No models available",
+      disabled: true,
+    });
+  });
+
+  it("hides legacy models", () => {
+    const items = buildModelSubmenuItems(
+      [
+        makeModel({ id: "opus", label: "Opus 4.7" }),
+        makeModel({ id: "old", label: "Opus 4.5", legacy: true }),
+      ],
+      vi.fn(),
+    );
+    const labels = items
+      .filter((i) => i.type === undefined || i.type === "item")
+      .map((i) => ("label" in i ? i.label : ""));
+    expect(labels).toContain("Opus 4.7");
+    expect(labels).not.toContain("Opus 4.5");
+  });
+
+  it("emits a header for each top-level group with a separator between", () => {
+    const items = buildModelSubmenuItems(
+      [
+        makeModel({ id: "opus", label: "Opus 4.7", group: "Claude Code" }),
+        makeModel({ id: "gpt", label: "GPT-5.5", group: "Codex" }),
+      ],
+      vi.fn(),
+    );
+    const headers = items
+      .filter((i) => i.type === "header")
+      .map((i) => ("label" in i ? i.label : ""));
+    expect(headers).toEqual(["Claude Code", "Codex"]);
+    expect(items.some((i) => i.type === "separator")).toBe(true);
+  });
+
+  it("sections Pi-discovered models by sub-provider, not the flat Pi group", () => {
+    const items = buildModelSubmenuItems(
+      [
+        makeModel({
+          id: "anthropic/claude-sonnet",
+          label: "Claude Sonnet 4.6",
+          group: "Pi",
+          providerKind: "pi_sdk",
+          subProvider: "Anthropic",
+          subProviderKey: "anthropic",
+        }),
+        makeModel({
+          id: "openrouter/minimax",
+          label: "MiniMax-M2.7",
+          group: "Pi",
+          providerKind: "pi_sdk",
+          subProvider: "OpenRouter",
+          subProviderKey: "openrouter",
+        }),
+      ],
+      vi.fn(),
+    );
+    const headers = items
+      .filter((i) => i.type === "header")
+      .map((i) => ("label" in i ? i.label : ""));
+    expect(headers).toEqual(["Anthropic", "OpenRouter"]);
+  });
+
+  it("wires onPick to the model that was clicked", async () => {
+    const onPick = vi.fn();
+    const model = makeModel({ id: "opus", label: "Opus 4.7" });
+    const items = buildModelSubmenuItems([model], onPick);
+    const item = items.find((i) => i.type === undefined || i.type === "item");
+    expect(item && "onSelect" in item).toBe(true);
+    if (item && "onSelect" in item) await item.onSelect();
+    expect(onPick).toHaveBeenCalledWith(model);
+  });
+});
+
+describe("sendToNewWorkspace", () => {
+  it("creates a workspace, applies the model, inserts the prompt, and sends", async () => {
+    mockedCreate.mockResolvedValue({
+      workspaceId: "ws-1",
+      sessionId: "sess-1",
+    });
+
+    await sendToNewWorkspace(ISSUE_ARGS);
+
+    expect(mockedCreate).toHaveBeenCalledWith("repo-1", {
+      selectOnCreate: true,
+    });
+    expect(mockedApplyModel).toHaveBeenCalledWith(
+      "sess-1",
+      "claude-opus-4-7",
+      "anthropic",
+    );
+
+    // The user's prompt is optimistically inserted into the chat store so
+    // the new workspace doesn't open straight to the agent's first reply.
+    const messages = useAppStore.getState().chatMessages["sess-1"] ?? [];
+    expect(messages).toHaveLength(1);
+    expect(messages[0].role).toBe("User");
+    expect(messages[0].content).toContain(`issue #${ISSUE_ARGS.number}`);
+
+    // The optimistic row and the send share one messageId so the
+    // backend-persisted echo collapses onto the same key.
+    const sendArgs = mockedSend.mock.calls[0];
+    expect(sendArgs[0]).toBe("sess-1");
+    expect(sendArgs[4]).toBe("claude-opus-4-7"); // model
+    expect(sendArgs[11]).toBe("anthropic"); // backendId
+    expect(sendArgs[13]).toBe(messages[0].id); // messageId
+  });
+
+  it("derives the provider from a Pi-qualified model id", async () => {
+    mockedCreate.mockResolvedValue({
+      workspaceId: "ws-2",
+      sessionId: "sess-2",
+    });
+
+    await sendToNewWorkspace({
+      ...ISSUE_ARGS,
+      modelId: "claude-sonnet",
+      providerQualifiedId: "openrouter/claude-sonnet",
+    });
+
+    expect(mockedApplyModel).toHaveBeenCalledWith(
+      "sess-2",
+      "claude-sonnet",
+      "openrouter",
+    );
+    expect(mockedSend.mock.calls[0][11]).toBe("openrouter");
+  });
+
+  it("surfaces a toast and skips the send when the create single-flight guard fires", async () => {
+    mockedCreate.mockResolvedValue(null);
+
+    await sendToNewWorkspace(ISSUE_ARGS);
+
+    expect(mockedApplyModel).not.toHaveBeenCalled();
+    expect(mockedSend).not.toHaveBeenCalled();
+    const toasts = useAppStore.getState().toasts;
+    expect(toasts.some((t) => /already being created/i.test(t.message))).toBe(
+      true,
+    );
+  });
+
+  it("toasts a confirmation after a successful send", async () => {
+    mockedCreate.mockResolvedValue({
+      workspaceId: "ws-3",
+      sessionId: "sess-3",
+    });
+
+    await sendToNewWorkspace({ ...PR_ARGS });
+
+    const toasts = useAppStore.getState().toasts;
+    expect(
+      toasts.some((t) => t.message.includes(`Sent #${PR_ARGS.number}`)),
+    ).toBe(true);
+  });
+
+  it("propagates a create failure to the caller", async () => {
+    mockedCreate.mockRejectedValue(new Error("disk full"));
+    await expect(sendToNewWorkspace(ISSUE_ARGS)).rejects.toThrow("disk full");
+    expect(mockedSend).not.toHaveBeenCalled();
+  });
+});
