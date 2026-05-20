@@ -127,7 +127,13 @@ describe("Claudette terminal setting", () => {
 
 describe("queued messages", () => {
   beforeEach(() => {
-    useAppStore.setState({ queuedMessages: {} });
+    useAppStore.setState({
+      queuedMessages: {},
+      queuedMessageAutoDispatchPaused: {},
+      queuedMessageEditing: {},
+      queuedMessageSteering: {},
+      queuedMessageSteeringContent: {},
+    });
   });
 
   it("updates a queued message in place", () => {
@@ -187,6 +193,46 @@ describe("queued messages", () => {
       id: first.id,
       content: "edited",
     });
+  });
+
+  it("keeps steering prompt text with the per-session steering flag until steering ends", () => {
+    useAppStore
+      .getState()
+      .setQueuedMessageSteering("session-1", true, "  refine this approach  ");
+
+    let state = useAppStore.getState();
+    expect(state.queuedMessageSteering["session-1"]).toBe(true);
+    expect(state.queuedMessageSteeringContent["session-1"]).toBe(
+      "refine this approach",
+    );
+
+    useAppStore.getState().setQueuedMessageSteering("session-1", false);
+
+    state = useAppStore.getState();
+    expect(state.queuedMessageSteering["session-1"]).toBeUndefined();
+    expect(state.queuedMessageSteeringContent["session-1"]).toBeUndefined();
+  });
+
+  it("does not invent prompt text for attachment-only steering", () => {
+    useAppStore.getState().setQueuedMessageSteering("session-1", true, "   ");
+
+    const state = useAppStore.getState();
+    expect(state.queuedMessageSteering["session-1"]).toBe(true);
+    expect(state.queuedMessageSteeringContent["session-1"]).toBeUndefined();
+  });
+
+  it("clears steering prompt text when the queued session is emptied", () => {
+    const store = useAppStore.getState();
+    store.setQueuedMessage("session-1", "follow up");
+    store.setQueuedMessageSteering("session-1", true, "follow up");
+
+    const queuedId = useAppStore.getState().queuedMessages["session-1"]?.[0]?.id;
+    expect(queuedId).toBeTruthy();
+    store.removeQueuedMessage("session-1", queuedId!);
+
+    const state = useAppStore.getState();
+    expect(state.queuedMessageSteering["session-1"]).toBeUndefined();
+    expect(state.queuedMessageSteeringContent["session-1"]).toBeUndefined();
   });
 });
 
@@ -266,6 +312,9 @@ describe("queued message auto-dispatch pause", () => {
     useAppStore.setState({
       queuedMessages: {},
       queuedMessageAutoDispatchPaused: {},
+      queuedMessageEditing: {},
+      queuedMessageSteering: {},
+      queuedMessageSteeringContent: {},
     });
   });
 
