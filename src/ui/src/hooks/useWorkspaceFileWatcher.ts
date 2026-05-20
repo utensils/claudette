@@ -95,7 +95,14 @@ export function useWorkspaceFileWatcher(): void {
   useEffect(() => {
     if (!selectedWorkspaceId) return;
     const workspaceId = selectedWorkspaceId;
-    const paths = fileTabs ?? [];
+    // Agent-managed file tabs (plans, memory) are keyed by absolute path
+    // and live outside the worktree. The backend watcher resolves paths
+    // relative to the worktree, so absolute keys can't be watched — drop
+    // them from the set. These files are opened read-only for inspection;
+    // live on-disk follow isn't part of that contract.
+    const paths = (fileTabs ?? []).filter(
+      (p) => !p.startsWith("/") && !/^[A-Za-z]:[\\/]/.test(p),
+    );
     // Even an empty array is a meaningful instruction — it asks the
     // watcher to drop any prior subscriptions for this workspace.
     void watchWorkspaceFiles(workspaceId, paths).catch((err) => {

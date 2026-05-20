@@ -1,5 +1,6 @@
 import { useCallback } from "react";
 import { useAppStore } from "../../stores/useAppStore";
+import { tryOpenAgentFileTab } from "../../utils/agentFiles";
 import { monacoFileLinkTarget } from "./chatFileLinks";
 import { useWorkspaceFileIndex } from "./useWorkspaceFileIndex";
 
@@ -39,6 +40,9 @@ export function useWorkspaceFileOpener(
   const openFile = useCallback(
     (filePath: string) => {
       if (!workspaceId) return false;
+      // Agent-managed files (plans, memory) live outside the worktree —
+      // route them to a read-only Monaco tab before worktree resolution.
+      if (tryOpenAgentFileTab(workspaceId, filePath, openFileTab)) return true;
       const target = monacoFileLinkTarget(filePath, worktreePath);
       if (!target) return false;
       openFileTab(workspaceId, target.path, target.revealTarget);

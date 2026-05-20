@@ -25,6 +25,7 @@ import {
   isLikelyFilePathTarget,
   isLikelyRelativeFileReference,
 } from "./filePathLinks";
+import { classifyAgentFile } from "./agentFiles";
 import { getCachedHighlight, highlightCode } from "./highlight";
 import { rehypeFilePathLinks } from "./rehypeFilePathLinks";
 
@@ -403,6 +404,10 @@ const MarkdownLink: NonNullable<Components["a"]> = ({
   const filePath = href
     ? (encodedFilePath ?? localhostFilePath ?? hrefFilePath)
     : null;
+  // Agent-managed files (plans, memory) sit outside every worktree, so the
+  // workspace resolver never verifies them. Recognize them explicitly so
+  // they render as a Monaco-bound button instead of inert prose.
+  const agentFile = filePath ? classifyAgentFile(filePath) : null;
   const encodedExplicitFilePath =
     encodedFilePath && isAbsoluteExplicitFilePath(encodedFilePath)
       ? encodedFilePath
@@ -431,6 +436,17 @@ const MarkdownLink: NonNullable<Components["a"]> = ({
   };
   const openFilePath = () => {
     if (!filePath) return;
+    if (agentFile && fileOpen) {
+      try {
+        if (fileOpen.openFile(agentFile.path)) return;
+      } catch (err) {
+        console.error(
+          "Failed to open agent file link in Monaco:",
+          agentFile.path,
+          err,
+        );
+      }
+    }
     if (fileOpen) {
       if (verifiedFilePath) {
         try {
@@ -495,7 +511,8 @@ const MarkdownLink: NonNullable<Components["a"]> = ({
       hasFileResolver &&
       !verifiedFilePath &&
       !encodedExplicitFilePath &&
-      !encodedWorkspaceRelativeFilePath
+      !encodedWorkspaceRelativeFilePath &&
+      !agentFile
     ) {
       return createElement("span", props, renderedFilePathLabel);
     }

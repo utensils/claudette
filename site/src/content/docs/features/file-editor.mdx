@@ -19,6 +19,21 @@ Files open as tabs next to your chat and diff tabs, so you can hop between agent
 
 <Image src={fileEditor} alt="Monaco editor open on a Rust source file with the workspace sidebar on the left and the file tree on the right" loading="lazy" />
 
+## Agent-Managed Files
+
+Agents persist plans and memory notes outside your worktree — under `~/.claude/` (Claude Code) and `~/.codex/memories/` (Codex). When one of these paths appears in chat — in an `Editing` tool-call row, an agent message, or a plan card — clicking it opens the file directly in Monaco instead of failing the worktree path check.
+
+Recognized locations:
+
+| File | Location | Badge |
+|------|----------|-------|
+| Plans | `~/.claude/plans/**/*.md` | **Plan** |
+| Project memory | `~/.claude/projects/<project>/memory/**/*.md` | **Memory** (or **Memory index** for `MEMORY.md`) |
+| Other project notes | `~/.claude/projects/<project>/**/*.md` | **Project file** |
+| Codex memory | `~/.codex/memories/**/*.md` | **Memory** (or **Memory index**) |
+
+These tabs are **read-only** — they're for inspecting what the agent wrote, not editing it — and the pane toolbar shows a badge identifying the file kind alongside its full path. Everything else (only those allow-listed directories, never arbitrary absolute paths) still goes through the standard worktree security boundary.
+
 ## Read vs Edit Mode
 
 Files open in read-only mode by default. Toggling into edit mode does **not** remount the editor — your cursor position, scroll offset, and undo stack are preserved as you switch in and out of edit mode.

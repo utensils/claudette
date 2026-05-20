@@ -56,6 +56,7 @@ Keyed on `sessionId` (chat session id), not `workspaceId`.
 ## Plan
 
 - `readPlanFile(path)` -> `string` (file content)
+- `readAgentManagedFile(path)` -> `FileContent` (allow-listed agent file: plans, memory; absolute path in, rejects anything outside the allow-list)
 
 ## Diff
 

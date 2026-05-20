@@ -59,6 +59,7 @@ import {
 import { ChatAuthFailureCallout } from "../auth/ChatAuthFailureCallout";
 import { cleanClaudeAuthError, isClaudeAuthError } from "../auth/claudeAuth";
 import { monacoFileLinkTarget } from "./chatFileLinks";
+import { tryOpenAgentFileTab } from "../../utils/agentFiles";
 import { useWorkspaceFileIndex } from "./useWorkspaceFileIndex";
 import { detectFileReferences } from "../../utils/filePathLinks";
 import {
@@ -490,6 +491,12 @@ export const MessagesWithTurns = memo(function MessagesWithTurns({
   // passing a bad key into the file-tab store.
   const openFileInMonaco = useCallback(
     (filePath: string) => {
+      // Agent-managed files (plans, memory) live outside the worktree —
+      // route them to a read-only Monaco tab before worktree resolution.
+      if (tryOpenAgentFileTab(workspaceId, filePath, openFileTab)) {
+        onOpenFileLink?.();
+        return true;
+      }
       const target = monacoFileLinkTarget(filePath, worktreePath);
       if (!target) return false;
       onOpenFileLink?.();

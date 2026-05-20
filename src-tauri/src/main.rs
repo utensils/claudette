@@ -1008,6 +1008,8 @@ fn main() {
             commands::chat::session::restore_chat_session,
             // Plan
             commands::plan::read_plan_file,
+            // Agent-managed files (plans, memory, …)
+            commands::agent_files::read_agent_managed_file,
             // Metrics
             commands::metrics::get_dashboard_metrics,
             commands::metrics::get_workspace_metrics_batch,
