@@ -94,10 +94,10 @@ const NON_THEMEABLE_ROOT_TOKENS = new Set<string>([
 ]);
 
 // THEMEABLE_VARS entries that are valid CSS but not literal `--token` keys
-// in :root (they're well-known CSS properties applied directly).
-const NON_TOKEN_THEMEABLE_VARS = new Set<string>([
-  "color-scheme",
-]);
+// in :root (they're well-known CSS properties applied directly). Empty
+// today — `--color-scheme` IS declared in :root and is genuinely
+// themeable, so it stays in the strict parity check below.
+const NON_TOKEN_THEMEABLE_VARS = new Set<string>([]);
 
 describe("theme token parity", () => {
   it(":root in theme.css and THEMEABLE_VARS stay in sync", async () => {

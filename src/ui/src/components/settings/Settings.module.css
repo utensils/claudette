@@ -1378,7 +1378,7 @@
 }
 
 .error {
-  color: var(--status-stopped);
+  color: var(--accent-error);
   font-size: 12px;
   margin-top: 4px;
 }
@@ -1887,7 +1887,7 @@
 .envErrorCard {
   margin: 4px 8px 8px 22px;
   padding: 10px 12px;
-  border-left: 2px solid var(--status-stopped);
+  border-left: 2px solid var(--accent-error);
   background: var(--accent-error-hover);
   border-radius: 0 4px 4px 0;
   display: flex;
@@ -2368,7 +2368,7 @@
   margin-top: var(--space-2);
   max-width: 760px;
   padding: var(--space-2) var(--space-3);
-  border-left: 2px solid var(--status-stopped);
+  border-left: 2px solid var(--accent-error);
   border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
   background: var(--accent-error-hover);
   color: var(--text-primary);
@@ -2725,7 +2725,7 @@
   padding: 1px 6px;
   border-radius: 3px;
   background: var(--accent-error-hover);
-  color: var(--status-stopped);
+  color: var(--accent-error);
   font-size: 10px;
   font-weight: 600;
   letter-spacing: 0.04em;
