@@ -86,12 +86,13 @@ const HEX_EXCLUDED_FILES = new Set([
 ]);
 
 // Rgba file-level exclusions (entire file is exempt from Rule 2).
-const RGBA_EXCLUDED_FILES = new Set([
-  // theme.test.ts test names mention the `rgba(var(...), alpha)` pattern
-  // abstractly in `it()` descriptions; the test fixtures intentionally
-  // construct rgba strings to verify converter output.
-  "src/utils/theme.test.ts",
-]);
+// Currently empty — every prior file-level exemption (theme.ts, theme.test.ts)
+// became unnecessary after PR #799's color-mix refactor and converter
+// simplification removed all rgba() emission and abstract-pattern references.
+// New entries should only be added with a concrete justification and a clear
+// "do not extend" comment, the way bootIdentityGuard's HEX exemption is
+// documented above.
+const RGBA_EXCLUDED_FILES = new Set([]);
 
 // --- Walker ---
 

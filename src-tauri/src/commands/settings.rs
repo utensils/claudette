@@ -513,8 +513,27 @@ fn parse_theme_file(content: &str, file_stem: &str) -> Result<ThemeDefinition, S
         Err(e) => e,
     };
 
-    let raw: HashMap<String, serde_json::Value> = serde_json::from_str(content)
+    // Two-step parse so we can distinguish JSON-syntax errors from
+    // valid-JSON-of-the-wrong-shape errors in the logs. The first
+    // `from_str::<Value>` succeeds for any valid JSON; the `as_object`
+    // check then catches arrays, numbers, strings, etc.
+    let value: serde_json::Value = serde_json::from_str(content)
         .map_err(|e| format!("invalid JSON: {e} (native parse: {native_err})"))?;
+    let Some(obj) = value.as_object() else {
+        return Err(format!(
+            "theme file must be a JSON object, got {} (native parse: {native_err})",
+            match &value {
+                serde_json::Value::Array(_) => "array",
+                serde_json::Value::String(_) => "string",
+                serde_json::Value::Number(_) => "number",
+                serde_json::Value::Bool(_) => "boolean",
+                serde_json::Value::Null => "null",
+                serde_json::Value::Object(_) => unreachable!(),
+            }
+        ));
+    };
+    let raw: HashMap<String, serde_json::Value> =
+        obj.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
 
     const BASE16_SUFFIXES: [&str; 16] = [
         "00", "01", "02", "03", "04", "05", "06", "07", "08", "09", "0A", "0B", "0C", "0D", "0E",
@@ -831,6 +850,34 @@ mod tests {
             empty_err.contains("invalid JSON"),
             "empty file error should be clear: {empty_err}"
         );
+    }
+
+    #[test]
+    fn parse_theme_file_distinguishes_wrong_shape_from_invalid_json() {
+        // Valid JSON, wrong top-level type — should report "must be a JSON
+        // object" rather than the misleading "invalid JSON" used for true
+        // syntax errors.
+        for (content, kind) in [
+            ("[1, 2, 3]", "array"),
+            ("\"just a string\"", "string"),
+            ("42", "number"),
+            ("true", "boolean"),
+            ("null", "null"),
+        ] {
+            let err = parse_theme_file(content, "wrong-shape").unwrap_err();
+            assert!(
+                err.contains("must be a JSON object"),
+                "expected wrong-shape error for {kind}, got: {err}"
+            );
+            assert!(
+                err.contains(kind),
+                "error should name the unexpected type {kind}, got: {err}"
+            );
+            assert!(
+                !err.starts_with("invalid JSON:"),
+                "wrong-shape error must not be labeled 'invalid JSON' (got: {err})"
+            );
+        }
     }
 
     #[test]
