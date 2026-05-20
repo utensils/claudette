@@ -229,19 +229,9 @@ pub fn record_boot_stage(
         return Ok(());
     }
 
-    let should_update = probation
-        .latest_stage
-        .as_ref()
-        .is_none_or(|current| boot_stage_rank(&stage) >= boot_stage_rank(&current.stage));
-    if !should_update {
+    if !apply_boot_stage(&mut probation, stage, detail) {
         return Ok(());
     }
-
-    probation.latest_stage = Some(BootStageRecord {
-        stage,
-        detail: detail.and_then(clean_stage_detail),
-        recorded_at: chrono::Utc::now().to_rfc3339(),
-    });
     write_probation(data_dir, &probation)
 }
 
@@ -290,11 +280,7 @@ pub fn start_monitor(app: AppHandle, state: Arc<BootProbationState>, data_dir: P
         return;
     }
 
-    probation.latest_stage = Some(BootStageRecord {
-        stage: BootStage::WebviewCreated,
-        detail: None,
-        recorded_at: chrono::Utc::now().to_rfc3339(),
-    });
+    apply_boot_stage(&mut probation, BootStage::WebviewCreated, None);
     probation.attempts = probation.attempts.saturating_add(1);
 
     // Bounded retry: once we've recorded MAX_PROBATION_ATTEMPTS launches
@@ -366,8 +352,13 @@ pub fn run_helper_from_args(args: &[String]) -> Option<Result<(), String>> {
 }
 
 async fn handle_probation_timeout(app: &AppHandle, data_dir: &Path) {
+    enum TimeoutAction {
+        Exit,
+        SpawnHelper(BootProbation),
+    }
+
     let path = sentinel_path(data_dir);
-    let probation = {
+    let action = {
         let _guard = PROBATION_FILE_LOCK
             .lock()
             .unwrap_or_else(|p| p.into_inner());
@@ -391,15 +382,19 @@ async fn handle_probation_timeout(app: &AppHandle, data_dir: &Path) {
                 data_dir,
                 &rollback_report_from_probation(&probation, false, Some(error)),
             );
-            app.exit(1);
-            return;
+            TimeoutAction::Exit
+        } else {
+            probation.status = ProbationStatus::RollbackInProgress;
+            if let Err(e) = write_probation(data_dir, &probation) {
+                tracing::warn!(target: "claudette::updater", error = %e, "failed to mark boot rollback in progress");
+            }
+            TimeoutAction::SpawnHelper(probation)
         }
+    };
 
-        probation.status = ProbationStatus::RollbackInProgress;
-        if let Err(e) = write_probation(data_dir, &probation) {
-            tracing::warn!(target: "claudette::updater", error = %e, "failed to mark boot rollback in progress");
-        }
-        probation
+    let TimeoutAction::SpawnHelper(probation) = action else {
+        app.exit(1);
+        return;
     };
 
     match spawn_rollback_helper(&path) {
@@ -894,6 +889,27 @@ fn clean_stage_detail(detail: String) -> Option<String> {
     Some(trimmed.chars().take(MAX_DETAIL_CHARS).collect())
 }
 
+fn apply_boot_stage(
+    probation: &mut BootProbation,
+    stage: BootStage,
+    detail: Option<String>,
+) -> bool {
+    let should_update = probation
+        .latest_stage
+        .as_ref()
+        .is_none_or(|current| boot_stage_rank(&stage) >= boot_stage_rank(&current.stage));
+    if !should_update {
+        return false;
+    }
+
+    probation.latest_stage = Some(BootStageRecord {
+        stage,
+        detail: detail.and_then(clean_stage_detail),
+        recorded_at: chrono::Utc::now().to_rfc3339(),
+    });
+    true
+}
+
 fn boot_stage_rank(stage: &BootStage) -> u8 {
     match stage {
         BootStage::ProcessStarted => 0,
@@ -1165,6 +1181,28 @@ mod tests {
     }
 
     #[test]
+    fn apply_boot_stage_does_not_regress_existing_progress() {
+        let tmp = tempdir().unwrap();
+        let mut probation = sample_probation(tmp.path(), None);
+
+        assert!(apply_boot_stage(
+            &mut probation,
+            BootStage::InitialDataLoading,
+            None
+        ));
+        assert!(!apply_boot_stage(
+            &mut probation,
+            BootStage::WebviewCreated,
+            None
+        ));
+
+        assert_eq!(
+            probation.latest_stage.as_ref().map(|stage| &stage.stage),
+            Some(&BootStage::InitialDataLoading)
+        );
+    }
+
+    #[test]
     fn rollback_report_carries_stage_timeout_and_log_tail() {
         let tmp = tempdir().unwrap();
         let mut probation = sample_probation(tmp.path(), None);
@@ -1255,6 +1293,30 @@ mod tests {
         assert!(message.contains("couldn't display its interface"));
         assert!(message.contains("Download the previous release"));
         assert!(message.contains("Rollback error: backup path is missing"));
+    }
+
+    #[test]
+    fn latest_log_file_filters_claudette_daily_logs() {
+        let tmp = tempdir().unwrap();
+        std::fs::write(tmp.path().join("claudette.2026-05-20.txt"), "wrong suffix").unwrap();
+        std::fs::write(tmp.path().join("other.2026-05-20.log"), "wrong prefix").unwrap();
+        let expected = tmp.path().join("claudette.2026-05-20.log");
+        std::fs::write(&expected, "daily log").unwrap();
+
+        assert_eq!(
+            latest_log_file(tmp.path()).as_deref(),
+            Some(expected.as_path())
+        );
+    }
+
+    #[test]
+    fn read_file_tail_returns_bounded_suffix() {
+        let tmp = tempdir().unwrap();
+        let path = tmp.path().join("claudette.2026-05-20.log");
+        std::fs::write(&path, "0123456789").unwrap();
+
+        assert_eq!(read_file_tail(&path, 4).unwrap(), "6789");
+        assert_eq!(read_file_tail(&path, 64).unwrap(), "0123456789");
     }
 
     /// Regression: macOS `.app` bundles routinely contain framework
