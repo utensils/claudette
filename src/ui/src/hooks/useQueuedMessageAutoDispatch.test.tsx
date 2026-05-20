@@ -96,6 +96,7 @@ describe("useQueuedMessageAutoDispatch", () => {
       queuedMessageAutoDispatchPaused: {},
       queuedMessageEditing: {},
       queuedMessageSteering: {},
+      queuedMessageSteeringContent: {},
       chatMessages: {},
       chatAttachments: {},
       promptStartTime: {},
@@ -206,7 +207,9 @@ describe("useQueuedMessageAutoDispatch", () => {
     useAppStore.getState().setQueuedMessage("ghost-session", "stale follow up");
     useAppStore.getState().setQueuedMessageAutoDispatchPaused("ghost-session", true);
     useAppStore.getState().setQueuedMessageEditing("ghost-session", true);
-    useAppStore.getState().setQueuedMessageSteering("ghost-session", true);
+    useAppStore
+      .getState()
+      .setQueuedMessageSteering("ghost-session", true, "stale follow up");
 
     await mountHook();
     await flushQueuedDispatch();
@@ -217,5 +220,6 @@ describe("useQueuedMessageAutoDispatch", () => {
     expect(state.queuedMessageAutoDispatchPaused["ghost-session"]).toBeUndefined();
     expect(state.queuedMessageEditing["ghost-session"]).toBeUndefined();
     expect(state.queuedMessageSteering["ghost-session"]).toBeUndefined();
+    expect(state.queuedMessageSteeringContent["ghost-session"]).toBeUndefined();
   });
 });
