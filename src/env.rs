@@ -469,8 +469,14 @@ mod tests {
         // segment — neither should produce a duplicate or a `::` hole.
         let base = enriched_path();
         let base_first = std::env::split_paths(&base).next().unwrap();
-        let provider =
-            std::env::join_paths(["/custom/bin", base_first.to_str().unwrap(), ""]).unwrap();
+        // Build the provider PATH from `OsStr`s — `base_first` may not be
+        // valid UTF-8, so `to_str().unwrap()` could panic on some systems.
+        let provider = std::env::join_paths([
+            std::ffi::OsStr::new("/custom/bin"),
+            base_first.as_os_str(),
+            std::ffi::OsStr::new(""),
+        ])
+        .unwrap();
         let merged = merge_path_with_enriched(&provider.to_string_lossy());
         let dirs: Vec<_> = std::env::split_paths(&merged).collect();
         assert_eq!(

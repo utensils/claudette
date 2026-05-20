@@ -173,6 +173,13 @@ pub async fn spawn_pty(
             Some(val) if k.as_str() == "PATH" => {
                 cmd.env("PATH", claudette::env::merge_path_with_enriched(val));
             }
+            // A provider that *unsets* PATH must not leave the terminal
+            // with no PATH at all (a broken interactive shell). Fall
+            // back to the enriched base — the same way the agent spawn
+            // path's `agent_path` ignores a PATH removal.
+            None if k.as_str() == "PATH" => {
+                cmd.env("PATH", claudette::env::enriched_path());
+            }
             Some(val) => cmd.env(k, val),
             // portable-pty's CommandBuilder inherits the base env, so
             // None-valued entries must be explicitly removed rather

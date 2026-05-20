@@ -143,9 +143,14 @@ local function devshell_path(installable_args)
         return nil
     end
     if result.code ~= 0 then
+        -- Pick the first NON-EMPTY stream for the diagnostic: `a or b`
+        -- can't be used here because an empty string is truthy in Lua,
+        -- so `result.stderr` would win even when blank and hide stdout.
+        local detail = result.stderr or ""
+        if #detail == 0 then detail = result.stdout or "" end
+        if #detail == 0 then detail = "no output" end
         host.log("warn", "nix develop PATH probe exited with code "
-            .. tostring(result.code) .. ": "
-            .. (result.stderr or result.stdout or "no output"))
+            .. tostring(result.code) .. ": " .. detail)
         return nil
     end
 
