@@ -967,6 +967,7 @@ mod tests {
                 content_block: Some(StartContentBlock::ToolUse {
                     id: "cmd-1".to_string(),
                     name: "Bash".to_string(),
+                    input: None,
                 }),
             },
         }));
@@ -987,6 +988,7 @@ mod tests {
                 content_block: Some(StartContentBlock::ToolUse {
                     id: "cmd-1".to_string(),
                     name: "Bash".to_string(),
+                    input: None,
                 }),
             },
         }));
