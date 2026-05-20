@@ -49,10 +49,33 @@ export async function sendToNewWorkspace(
     store.addToast("A workspace is already being created. Try again in a moment.");
     return;
   }
-  const { sessionId } = outcome;
+  const { workspaceId, sessionId } = outcome;
   const provider = args.providerQualifiedId?.split("/")[0] ?? "anthropic";
   await applySelectedModel(sessionId, args.modelId, provider);
   const prompt = renderStarterPrompt(args);
+  // Optimistically insert the user's prompt into the chat store BEFORE
+  // firing the send. Without this the new workspace opens straight to
+  // the agent's first reply with no visible record of what was asked —
+  // mirrors what `chatMessageDispatch.dispatchChatMessage` does via
+  // `addPersistedUserMessageToStore`. We pass an explicit `messageId`
+  // so the optimistic row and the backend-persisted row collapse onto
+  // the same key when the chat stream echoes the user turn back.
+  const messageId = crypto.randomUUID();
+  useAppStore.getState().addChatMessage(sessionId, {
+    id: messageId,
+    workspace_id: workspaceId,
+    chat_session_id: sessionId,
+    role: "User",
+    content: prompt,
+    cost_usd: null,
+    duration_ms: null,
+    created_at: new Date().toISOString(),
+    thinking: null,
+    input_tokens: null,
+    output_tokens: null,
+    cache_read_tokens: null,
+    cache_creation_tokens: null,
+  });
   await sendChatMessage(
     sessionId,
     prompt,
@@ -73,7 +96,7 @@ export async function sendToNewWorkspace(
     // provider. Matches chatMessageDispatch's `selectedProvider` arg.
     provider,
     /* attachments */ undefined,
-    /* messageId */ undefined,
+    messageId,
   );
   store.addToast(`Sent #${args.number} to a new workspace`);
 }
