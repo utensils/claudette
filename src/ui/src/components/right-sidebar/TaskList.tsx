@@ -1,5 +1,5 @@
-import { memo, useState } from "react";
-import { ChevronRight } from "lucide-react";
+import { memo, useRef, useState, type RefObject } from "react";
+import { ChevronDown, ChevronRight } from "lucide-react";
 import type {
   SubagentTaskRun,
   TaskRun,
@@ -7,6 +7,8 @@ import type {
   TrackedTask,
 } from "../../hooks/useTaskTracker";
 import type { WorkspaceTaskHistoryResult } from "../../hooks/useWorkspaceTaskHistory";
+import { useActiveTaskScroll } from "../../hooks/useActiveTaskScroll";
+import { BoundedScrollPane } from "../shared/BoundedScrollPane";
 import styles from "./TaskList.module.css";
 
 function statusIcon(status: TaskStatus): string {
@@ -39,12 +41,35 @@ function statusColor(status: TaskStatus): string {
   }
 }
 
-function TaskItem({ task }: { task: TrackedTask }) {
+/**
+ * Pick the task the Tasks panel should keep in view — the agent's current
+ * focus. Preference order: the in-progress task, then the next pending
+ * task, then the last task in the list as a backstop. `blocked`,
+ * `completed`, and `cancelled` tasks are never treated as active; a list
+ * stalled entirely on blocked work falls through to the last-row backstop.
+ */
+function findActiveTask(tasks: TrackedTask[]): TrackedTask | null {
+  if (tasks.length === 0) return null;
+  return (
+    tasks.find((t) => t.status === "in_progress") ??
+    tasks.find((t) => t.status === "pending") ??
+    tasks[tasks.length - 1] ??
+    null
+  );
+}
+
+function TaskItem({
+  task,
+  rowRef,
+}: {
+  task: TrackedTask;
+  rowRef?: RefObject<HTMLDivElement | null>;
+}) {
   const isCompleted = task.status === "completed";
   const isCancelled = task.status === "cancelled";
 
   return (
-    <div className={styles.task}>
+    <div className={styles.task} ref={rowRef}>
       <span
         className={styles.statusIcon}
         style={{ color: statusColor(task.status) }}
@@ -72,13 +97,24 @@ function TaskItem({ task }: { task: TrackedTask }) {
   );
 }
 
-function TaskRows({ tasks }: { tasks: TrackedTask[] }) {
+function TaskRows({
+  tasks,
+  activeTask,
+  activeRef,
+}: {
+  tasks: TrackedTask[];
+  /** When set, the matching row receives `activeRef` so the auto-scroll
+   *  hook can find it. Only the Current section passes these. */
+  activeTask?: TrackedTask | null;
+  activeRef?: RefObject<HTMLDivElement | null>;
+}) {
   return (
     <>
       {tasks.map((task) => (
         <TaskItem
           key={`${task.source}-${task.id}-${task.description}`}
           task={task}
+          rowRef={activeRef && task === activeTask ? activeRef : undefined}
         />
       ))}
     </>
@@ -151,106 +187,131 @@ export const TaskList = memo(function TaskList({
   taskHistory: WorkspaceTaskHistoryResult;
 }) {
   const [expandedRuns, setExpandedRuns] = useState<Record<string, boolean>>({});
+  const listRef = useRef<HTMLDivElement>(null);
   const { current, sessions, siblings, subagents, loading } = taskHistory;
+
+  // The active task drives auto-scroll: when its id changes the hook brings
+  // the matching row into view (unless the user has scrolled away).
+  const activeTask = findActiveTask(current.tasks);
+  const { activeTaskRef, showPill, jumpToActive } = useActiveTaskScroll(
+    listRef,
+    activeTask?.id ?? null,
+  );
+
   const hasCurrent = current.tasks.length > 0;
   const hasHistory = sessions.length > 0;
   const hasSubagents = subagents.length > 0;
   const hasSiblings = siblings.length > 0;
-
-  if (!hasCurrent && !hasHistory && !hasSubagents && !hasSiblings) {
-    return (
-      <div className={styles.list}>
-        <div className={styles.empty}>
-          {loading ? "Loading tasks..." : "No tasks"}
-        </div>
-      </div>
-    );
-  }
+  const isEmpty = !hasCurrent && !hasHistory && !hasSubagents && !hasSiblings;
 
   return (
-    <div className={styles.list}>
-      {hasCurrent && (
-        <section className={styles.section} aria-label="Current tasks">
-          <div className={styles.sectionHeader}>
-            <span>Current</span>
-            <span className={styles.sectionMeta}>
-              {current.completedCount}/{current.totalCount}
-            </span>
+    <div className={styles.container}>
+      <BoundedScrollPane ref={listRef} className={styles.list}>
+        {isEmpty && (
+          <div className={styles.empty}>
+            {loading ? "Loading tasks..." : "No tasks"}
           </div>
-          {current.explanation && (
-            <div className={styles.explanation}>{current.explanation}</div>
-          )}
-          <TaskRows tasks={current.tasks} />
-        </section>
-      )}
+        )}
 
-      {hasSubagents &&
-        subagents.map((run) => <SubagentSection key={run.id} run={run} />)}
-
-      {hasSiblings &&
-        siblings.map((sibling) => (
-          <section
-            key={`sibling-${sibling.session.id}`}
-            className={styles.section}
-            aria-label={`Sibling session: ${sibling.session.name}`}
-          >
+        {hasCurrent && (
+          <section className={styles.section} aria-label="Current tasks">
             <div className={styles.sectionHeader}>
-              <span
-                className={styles.subagentLabel}
-                title={sibling.session.name}
-              >
-                {sibling.session.name}
-                <span className={styles.liveDot} aria-hidden="true" />
-              </span>
+              <span>Current</span>
               <span className={styles.sectionMeta}>
-                {sibling.current.completedCount}/{sibling.current.totalCount}
+                {current.completedCount}/{current.totalCount}
               </span>
             </div>
-            {sibling.current.tasks.length > 0 && (
-              <TaskRows tasks={sibling.current.tasks} />
+            {current.explanation && (
+              <div className={styles.explanation}>{current.explanation}</div>
             )}
-            {sibling.subagents.map((run) => (
-              <SubagentSection key={run.id} run={run} />
+            <TaskRows
+              tasks={current.tasks}
+              activeTask={activeTask}
+              activeRef={activeTaskRef}
+            />
+          </section>
+        )}
+
+        {hasSubagents &&
+          subagents.map((run) => <SubagentSection key={run.id} run={run} />)}
+
+        {hasSiblings &&
+          siblings.map((sibling) => (
+            <section
+              key={`sibling-${sibling.session.id}`}
+              className={styles.section}
+              aria-label={`Sibling session: ${sibling.session.name}`}
+            >
+              <div className={styles.sectionHeader}>
+                <span
+                  className={styles.subagentLabel}
+                  title={sibling.session.name}
+                >
+                  {sibling.session.name}
+                  <span className={styles.liveDot} aria-hidden="true" />
+                </span>
+                <span className={styles.sectionMeta}>
+                  {sibling.current.completedCount}/{sibling.current.totalCount}
+                </span>
+              </div>
+              {sibling.current.tasks.length > 0 && (
+                <TaskRows tasks={sibling.current.tasks} />
+              )}
+              {sibling.subagents.map((run) => (
+                <SubagentSection key={run.id} run={run} />
+              ))}
+            </section>
+          ))}
+
+        {hasHistory && (
+          <section className={styles.section} aria-label="Task history">
+            <div className={styles.sectionHeader}>
+              <span>History</span>
+              <span className={styles.sectionMeta}>
+                {taskHistory.historyRunCount}
+              </span>
+            </div>
+            {sessions.map(({ session, runs }) => (
+              <div key={session.id} className={styles.sessionGroup}>
+                <div className={styles.sessionHeader}>
+                  <span className={styles.sessionName}>{session.name}</span>
+                  {session.status === "Archived" && (
+                    <span className={styles.archivedBadge}>Archived</span>
+                  )}
+                </div>
+                {runs.map((run) => {
+                  const key = `${session.id}:${run.id}`;
+                  const expanded = expandedRuns[key] === true;
+                  return (
+                    <RunSummary
+                      key={key}
+                      run={run}
+                      expanded={expanded}
+                      onToggle={() =>
+                        setExpandedRuns((prev) => ({
+                          ...prev,
+                          [key]: !(prev[key] === true),
+                        }))
+                      }
+                    />
+                  );
+                })}
+              </div>
             ))}
           </section>
-        ))}
+        )}
+      </BoundedScrollPane>
 
-      {hasHistory && (
-        <section className={styles.section} aria-label="Task history">
-          <div className={styles.sectionHeader}>
-            <span>History</span>
-            <span className={styles.sectionMeta}>
-              {taskHistory.historyRunCount}
-            </span>
-          </div>
-          {sessions.map(({ session, runs }) => (
-            <div key={session.id} className={styles.sessionGroup}>
-              <div className={styles.sessionHeader}>
-                <span className={styles.sessionName}>{session.name}</span>
-                {session.status === "Archived" && (
-                  <span className={styles.archivedBadge}>Archived</span>
-                )}
-              </div>
-              {runs.map((run) => {
-                const key = `${session.id}:${run.id}`;
-                const expanded = expandedRuns[key] === true;
-                return (
-                  <RunSummary
-                    key={key}
-                    run={run}
-                    expanded={expanded}
-                    onToggle={() =>
-                      setExpandedRuns((prev) => ({
-                        ...prev,
-                        [key]: !(prev[key] === true),
-                      }))
-                    }
-                  />
-                );
-              })}
-            </div>
-          ))}
-        </section>
+      {showPill && (
+        <button
+          type="button"
+          className={styles.jumpToCurrent}
+          onClick={jumpToActive}
+          aria-label="Jump to current task"
+        >
+          <ChevronDown size={14} aria-hidden="true" />
+          <span>Jump to current</span>
+        </button>
       )}
     </div>
   );

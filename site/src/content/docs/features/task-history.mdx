@@ -11,6 +11,14 @@ Open the right sidebar and choose **Tasks**. The **Current** section shows the s
 
 The tab badge counts every task the panel would surface — the active checklist plus any subagent buckets plus every task across archived history runs — so a workspace with older task lists still signals that there is task context to review.
 
+## Following the Active Task
+
+As an agent works through a long checklist, Claudette keeps the **currently-active task** scrolled into view — the task that is `in_progress`, or the next `pending` one if none is in progress. When the agent moves on, the list follows the new active task with a smooth scroll so you never have to chase active work down a long list.
+
+Auto-follow yields the moment you scroll the list yourself — wheel, trackpad, scrollbar, or keyboard. The list then stays exactly where you put it even as new task transitions arrive, so you can read **History** without being pulled away. A **Jump to current** pill appears at the bottom of the list whenever the active task is off-screen; click it to scroll back to the active task and re-enable auto-follow.
+
+Like every other scroll surface in Claudette, the Tasks list does not elastic-bounce at its top and bottom edges.
+
 ## Subagent Tasks
 
 When the main agent spawns subagents (via Claude Code's `TaskCreate` / agent-teams flow), each subagent's own task list renders in its own section above **History**, labeled with the subagent's name. The main agent's checklist stays in **Current**; subagent buckets are kept separate so the two never collide. Once a subagent finishes (status leaves `running`), its bucket is archived into **History** under the owning session.
