@@ -35,13 +35,15 @@ pub struct CreateWorkspaceResult {
     pub setup_result: Option<SetupResult>,
 }
 
-/// Error returned by [`create_workspace`] when a create for the same
-/// repository is already running. The frontend (`useCreateWorkspace.ts`)
-/// matches on the `"already being created for this repository"` substring
-/// to surface a calm toast instead of a failure alert — keep the wording
-/// in sync if you touch this. See issue #896.
-const WORKSPACE_CREATE_IN_FLIGHT_ERR: &str =
-    "A workspace is already being created for this repository. Please wait for it to finish.";
+/// Stable error code returned by [`create_workspace`] when a create for
+/// the same repository is already running. Returned as a bare token (not
+/// a human-readable sentence) so the cross-process contract with the
+/// frontend is a fixed identifier rather than prose — immune to wording
+/// tweaks and future localization. `useCreateWorkspace.ts` matches this
+/// exact string and owns the user-facing copy. Mirrors the
+/// `WORKSPACE_FILE_NOT_FOUND` error-code convention in
+/// `src-tauri/src/commands/files.rs`. See issue #896.
+const WORKSPACE_CREATE_IN_FLIGHT_ERR: &str = "WORKSPACE_CREATE_IN_FLIGHT";
 
 /// RAII release for the per-repo workspace-creation slot claimed via
 /// [`AppState::try_begin_workspace_create`].

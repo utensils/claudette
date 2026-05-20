@@ -338,10 +338,11 @@ describe("createWorkspaceOrchestrated", () => {
       display: "calm protea",
       message: null,
     });
+    // The backend returns the bare error code (not a sentence) so the
+    // cross-process contract is a fixed token — see
+    // `WORKSPACE_CREATE_IN_FLIGHT_ERR` in `commands/workspace.rs`.
     mockCreateWorkspace.mockRejectedValue(
-      new Error(
-        "A workspace is already being created for this repository. Please wait for it to finish.",
-      ),
+      new Error("WORKSPACE_CREATE_IN_FLIGHT"),
     );
     const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 

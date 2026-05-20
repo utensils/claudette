@@ -38,16 +38,18 @@ function buildPlaceholderWorkspace(repoId: string, slug: string): Workspace {
 }
 
 /** Detect the backend's "a create is already running for this repo"
- *  rejection (issue #896). `create_workspace` returns it as a plain
- *  string across the Tauri IPC boundary, so message text is the only
- *  signal available — the error reaching the catch block is typically a
- *  `string`, occasionally an `Error`. Matching on a stable, distinctive
- *  substring keeps this resilient to minor wording tweaks on the Rust
- *  side (`WORKSPACE_CREATE_IN_FLIGHT_ERR` in
- *  `src-tauri/src/commands/workspace.rs` — keep the two in sync). */
+ *  rejection (issue #896). `create_workspace` returns the bare error
+ *  code `WORKSPACE_CREATE_IN_FLIGHT` across the Tauri IPC boundary — a
+ *  fixed token rather than a human sentence, so this match can't
+ *  silently break on a Rust-side wording tweak or future localization
+ *  (mirrors the `WORKSPACE_FILE_NOT_FOUND` convention in
+ *  `FileViewer.tsx`). The error reaching the catch block is typically a
+ *  `string`, occasionally an `Error`, so normalize before comparing.
+ *  Keep this code in sync with `WORKSPACE_CREATE_IN_FLIGHT_ERR` in
+ *  `src-tauri/src/commands/workspace.rs`. */
 function isCreateInFlightRejection(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
-  return message.includes("already being created for this repository");
+  return message === "WORKSPACE_CREATE_IN_FLIGHT";
 }
 
 /** Outcome surfaced to callers so they can show toasts or chain follow-up work
