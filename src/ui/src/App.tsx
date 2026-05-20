@@ -56,6 +56,9 @@ function App() {
   const setDefaultBranches = useAppStore((s) => s.setDefaultBranches);
   const setTerminalFontSize = useAppStore((s) => s.setTerminalFontSize);
   const setLastMessages = useAppStore((s) => s.setLastMessages);
+  const hydrateWorkspaceScmLinks = useAppStore(
+    (s) => s.hydrateWorkspaceScmLinks,
+  );
   const setRemoteConnections = useAppStore((s) => s.setRemoteConnections);
   const setDiscoveredServers = useAppStore((s) => s.setDiscoveredServers);
   const setLocalServerRunning = useAppStore((s) => s.setLocalServerRunning);
@@ -179,6 +182,12 @@ function App() {
           msgMap[msg.workspace_id] = msg;
         }
         setLastMessages(msgMap);
+        // Issue/PR -> workspace associations for the project-view "in
+        // progress" badge and the workspace breadcrumb. Tolerate a
+        // payload without the field — a headless server reached over
+        // WSS may predate it — so an absent list just means "no links
+        // yet" instead of crashing the initial-data load.
+        hydrateWorkspaceScmLinks(data.workspace_scm_links ?? []);
         await hydratePersistedViewState(localWorkspaces);
         setViewStateHydrated(true);
         // Boot-health gate: only ack on the success path. The
@@ -936,7 +945,7 @@ function App() {
       unlistenMissingCli.then((fn) => fn());
       unlistenMissingWorktree.then((fn) => fn());
     };
-  }, [setRepositories, setWorkspaces, setWorktreeBaseDir, setDefaultTerminalAppId, setWorkspaceAppsMenuShown, setDefaultBranches, setTerminalFontSize, setLastMessages, setRemoteConnections, setDiscoveredServers, setLocalServerRunning, setLocalServerConnectionString, setCurrentThemeId, setThemeMode, setThemeDark, setThemeLight, setUiFontSize, setFontFamilySans, setFontFamilyMono, setSystemFonts, setDetectedApps, setUsageInsightsEnabled, setProjectViewIssuesPrsEnabled, setClaudetteTerminalEnabled, setShowSidebarRunningCommands, setToolDisplayMode, setExtendedToolCallOutput, setAlternativeBackendsAvailable, setPiSdkAvailable, setAlternativeBackendsEnabled, setCodexEnabled, setAgentBackends, setDefaultAgentBackendId, setClaudeAuthMethod, setEditorGitGutterBase, setEditorMinimapEnabled, setRevealActiveFileInTree, setEditorWordWrap, setEditorLineNumbersEnabled, setEditorFontZoom, setDisable1mContext, setAppVersion, setVoiceToggleHotkey, setVoiceHoldHotkey, setKeybindings, setManualWorkspaceOrderByRepo]);
+  }, [setRepositories, setWorkspaces, setWorktreeBaseDir, setDefaultTerminalAppId, setWorkspaceAppsMenuShown, setDefaultBranches, setTerminalFontSize, setLastMessages, setRemoteConnections, setDiscoveredServers, setLocalServerRunning, setLocalServerConnectionString, setCurrentThemeId, setThemeMode, setThemeDark, setThemeLight, setUiFontSize, setFontFamilySans, setFontFamilyMono, setSystemFonts, setDetectedApps, setUsageInsightsEnabled, setProjectViewIssuesPrsEnabled, setClaudetteTerminalEnabled, setShowSidebarRunningCommands, setToolDisplayMode, setExtendedToolCallOutput, setAlternativeBackendsAvailable, setPiSdkAvailable, setAlternativeBackendsEnabled, setCodexEnabled, setAgentBackends, setDefaultAgentBackendId, setClaudeAuthMethod, setEditorGitGutterBase, setEditorMinimapEnabled, setRevealActiveFileInTree, setEditorWordWrap, setEditorLineNumbersEnabled, setEditorFontZoom, setDisable1mContext, setAppVersion, setVoiceToggleHotkey, setVoiceHoldHotkey, setKeybindings, setManualWorkspaceOrderByRepo, hydrateWorkspaceScmLinks]);
 
   // Live freshness for LM Studio's `loaded_context_length`.
   //

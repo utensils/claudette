@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { ChatMessage, Repository, Workspace } from "../../types";
-import type { ScmStatusCacheRow } from "../../types/plugin";
+import type { ScmStatusCacheRow, WorkspaceScmLink } from "../../types/plugin";
 
 export interface InitialData {
   repositories: Repository[];
@@ -9,6 +9,9 @@ export interface InitialData {
   default_branches: Record<string, string>;
   last_messages: ChatMessage[];
   scm_cache: ScmStatusCacheRow[];
+  /** Optional: a headless server older than this field omits it over
+   *  WSS. The desktop backend always sends it. */
+  workspace_scm_links?: WorkspaceScmLink[];
   manual_workspace_order_repo_ids: string[];
 }
 

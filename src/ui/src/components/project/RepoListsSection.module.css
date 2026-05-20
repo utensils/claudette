@@ -93,6 +93,62 @@
   gap: 4px;
 }
 
+/* Collapsible "In progress" / "Open" group inside a project-view list
+   (issue #898). Groups stack with a small gap; each gets a faint
+   uppercase sub-header. */
+.group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.group + .group {
+  margin-top: 8px;
+}
+
+.groupHeader {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  align-self: flex-start;
+  padding: 2px 4px;
+  margin: 0;
+  font-family: inherit;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.groupHeader:hover {
+  color: var(--text-muted);
+}
+
+/* The "In progress" group reads in the accent color so dispatched
+   work is obvious at a glance. */
+.groupHeaderAccent {
+  color: var(--accent-primary);
+}
+
+.groupHeaderAccent:hover {
+  color: var(--accent-primary);
+}
+
+.groupLabel {
+  line-height: 1;
+}
+
+.groupCount {
+  font-variant-numeric: tabular-nums;
+  font-weight: 500;
+  opacity: 0.8;
+}
+
 .row {
   display: flex;
   align-items: center;
@@ -205,6 +261,42 @@
   font-size: 10px;
   color: var(--text-faint);
   font-variant-numeric: tabular-nums;
+}
+
+/* "In progress" badge: an issue/PR row whose work is already underway in
+   a Claudette workspace (issue #898). Accent-tinted pill, clickable to
+   jump straight to that workspace. The alpha tints reuse the same
+   color-mix idiom as `.labelColored` so the badge sits on hover
+   backgrounds without a hard fill. */
+.workspaceBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+  max-width: 150px;
+  font-family: inherit;
+  font-size: 10.5px;
+  font-weight: 500;
+  color: var(--accent-primary);
+  background: color-mix(in srgb, var(--accent-primary) 13%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent-primary) 38%, transparent);
+  border-radius: 999px;
+  padding: 2px 8px;
+  cursor: pointer;
+  transition:
+    background var(--transition-fast),
+    border-color var(--transition-fast);
+}
+
+.workspaceBadge:hover {
+  background: color-mix(in srgb, var(--accent-primary) 22%, transparent);
+  border-color: color-mix(in srgb, var(--accent-primary) 55%, transparent);
+}
+
+.workspaceBadgeName {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .muted {

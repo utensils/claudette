@@ -11,10 +11,14 @@ import { useAppStore } from "../../stores/useAppStore";
 import { useRepoOpenIssues } from "../../hooks/useRepoOpenIssues";
 import { ContextMenu, type ContextMenuItem } from "../shared/ContextMenu";
 import { useModelRegistry } from "../chat/useModelRegistry";
+import { useWorkspaceScmLink } from "../../hooks/useWorkspaceScmLink";
 import type { Issue, IssueLabel } from "../../types/plugin";
 import dashStyles from "../layout/Dashboard.module.css";
 import styles from "./RepoListsSection.module.css";
 import { formatTimeAgo } from "./timeAgo";
+import { WorkspaceLinkBadge } from "./WorkspaceLinkBadge";
+import { RepoListGroup } from "./RepoListGroup";
+import { partitionByWorkspaceLink } from "./workspaceScmLink";
 import {
   buildModelSubmenuItems,
   sendToNewWorkspace,
@@ -47,10 +51,26 @@ export const RepoIssuesSection = memo(function RepoIssuesSection({
   const addToast = useAppStore((s) => s.addToast);
 
   const issues = useMemo(() => payload?.issues ?? [], [payload?.issues]);
-  const visible = useMemo(() => {
-    if (showAll) return issues.slice(0, ALL_VISIBLE_LIMIT);
-    return issues.slice(0, DEFAULT_VISIBLE);
-  }, [issues, showAll]);
+  // Split out the issues a workspace is already on so they get their
+  // own "In progress" group above the rest (issue #898). The row cap
+  // applies only to `rest` — every dispatched issue stays visible,
+  // even one that would otherwise sit past the cap.
+  const workspaceScmLinks = useAppStore((s) => s.workspaceScmLinks);
+  const workspaces = useAppStore((s) => s.workspaces);
+  const { inProgress, rest } = useMemo(
+    () =>
+      partitionByWorkspaceLink(
+        issues,
+        { repoId, kind: "issue" },
+        workspaceScmLinks,
+        workspaces,
+      ),
+    [issues, repoId, workspaceScmLinks, workspaces],
+  );
+  const visibleRest = useMemo(() => {
+    if (showAll) return rest.slice(0, ALL_VISIBLE_LIMIT);
+    return rest.slice(0, DEFAULT_VISIBLE);
+  }, [rest, showAll]);
 
   const handleCopyUrl = async (url: string) => {
     try {
@@ -99,7 +119,9 @@ export const RepoIssuesSection = memo(function RepoIssuesSection({
           repoId={repoId}
           payload={payload}
           loading={loading}
-          visible={visible}
+          inProgress={inProgress}
+          visibleRest={visibleRest}
+          restTotal={rest.length}
           totalCount={issues.length}
           showAll={showAll}
           onShowAll={() => setShowAll(true)}
@@ -118,7 +140,13 @@ interface RepoIssuesBodyProps {
   repoId: string;
   payload: ReturnType<typeof useRepoOpenIssues>["payload"];
   loading: boolean;
-  visible: Issue[];
+  /// Issues that already have a workspace — rendered in their own group.
+  inProgress: Issue[];
+  /// The remaining issues, already capped to the visible-row limit.
+  visibleRest: Issue[];
+  /// Total count of `rest` before the cap — drives the "Show all" row.
+  restTotal: number;
+  /// Total count of all open issues — drives the empty/error branches.
   totalCount: number;
   showAll: boolean;
   onShowAll: () => void;
@@ -131,7 +159,9 @@ function RepoIssuesBody({
   repoId,
   payload,
   loading,
-  visible,
+  inProgress,
+  visibleRest,
+  restTotal,
   totalCount,
   showAll,
   onShowAll,
@@ -173,6 +203,23 @@ function RepoIssuesBody({
     return <div className={styles.muted}>No open issues.</div>;
   }
 
+  const renderRow = (issue: Issue) => (
+    <IssueRow
+      key={issue.number}
+      repoId={repoId}
+      issue={issue}
+      onOpen={onOpen}
+      onCopyUrl={onCopyUrl}
+    />
+  );
+  const showAllRow = !showAll && restTotal > visibleRest.length && (
+    <li>
+      <button type="button" className={styles.retryButton} onClick={onShowAll}>
+        Show all ({restTotal})
+      </button>
+    </li>
+  );
+
   return (
     <>
       {payload?.error && (
@@ -187,28 +234,27 @@ function RepoIssuesBody({
           </button>
         </div>
       )}
-      <ul className={styles.list}>
-        {visible.map((issue) => (
-          <IssueRow
-            key={issue.number}
-            repoId={repoId}
-            issue={issue}
-            onOpen={onOpen}
-            onCopyUrl={onCopyUrl}
-          />
-        ))}
-        {!showAll && totalCount > visible.length && (
-          <li>
-            <button
-              type="button"
-              className={styles.retryButton}
-              onClick={onShowAll}
-            >
-              Show all ({totalCount})
-            </button>
-          </li>
-        )}
-      </ul>
+      {inProgress.length > 0 ? (
+        // Dispatched issues get their own group above the rest. When
+        // nothing is dispatched the list renders flat (the `else`
+        // branch), so the common case is visually unchanged.
+        <>
+          <RepoListGroup label="In progress" count={inProgress.length} accent>
+            <ul className={styles.list}>{inProgress.map(renderRow)}</ul>
+          </RepoListGroup>
+          <RepoListGroup label="Open" count={restTotal}>
+            <ul className={styles.list}>
+              {visibleRest.map(renderRow)}
+              {showAllRow}
+            </ul>
+          </RepoListGroup>
+        </>
+      ) : (
+        <ul className={styles.list}>
+          {visibleRest.map(renderRow)}
+          {showAllRow}
+        </ul>
+      )}
     </>
   );
 }
@@ -224,6 +270,8 @@ function IssueRow({ repoId, issue, onOpen, onCopyUrl }: IssueRowProps) {
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const registry = useModelRegistry();
   const addToast = useAppStore((s) => s.addToast);
+  const selectWorkspace = useAppStore((s) => s.selectWorkspace);
+  const linked = useWorkspaceScmLink(repoId, "issue", issue.number);
   const visibleLabels = issue.labels.slice(0, MAX_LABELS_VISIBLE);
   const overflow = Math.max(0, issue.labels.length - visibleLabels.length);
 
@@ -231,6 +279,17 @@ function IssueRow({ repoId, issue, onOpen, onCopyUrl }: IssueRowProps) {
     { label: "Open in browser", onSelect: () => onOpen(issue.url) },
     { label: "Copy URL", onSelect: () => onCopyUrl(issue.url) },
     { type: "separator" },
+    // When a workspace is already on this issue, offer a jump to it
+    // *above* — not instead of — "Send to new workspace": a second
+    // workspace on the same issue is still one deliberate click away.
+    ...(linked
+      ? ([
+          {
+            label: `Go to workspace “${linked.workspaceName}”`,
+            onSelect: () => selectWorkspace(linked.workspaceId),
+          },
+        ] satisfies ContextMenuItem[])
+      : []),
     {
       type: "submenu",
       label: "Send to new workspace",
@@ -290,6 +349,7 @@ function IssueRow({ repoId, issue, onOpen, onCopyUrl }: IssueRowProps) {
             )}
           </span>
         )}
+        {linked && <WorkspaceLinkBadge link={linked} />}
         <span className={styles.rowMeta}>
           {issue.comment_count > 0 && (
             <span className={styles.rowCommentCount}>

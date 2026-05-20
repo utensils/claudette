@@ -6,6 +6,7 @@ import type {
   RepoIssuesPayload,
   RepoPullRequestsPayload,
   ScmDetail,
+  WorkspaceScmLink,
 } from "../../types/plugin";
 
 export function listScmProviders(): Promise<PluginInfo[]> {
@@ -58,4 +59,25 @@ export function listRepoOpenPullRequests(
 
 export function refreshRepoScmLists(repoId: string): Promise<void> {
   return invoke("refresh_repo_scm_lists", { repoId });
+}
+
+/// Persist the association between a freshly-created workspace and the
+/// issue/PR it was spun up for. Returns the saved row (with the
+/// DB-assigned `created_at`). Used by `sendToNewWorkspace`.
+export function createWorkspaceScmLink(args: {
+  workspaceId: string;
+  repoId: string;
+  kind: "issue" | "pr";
+  number: number;
+  url: string;
+  title: string;
+}): Promise<WorkspaceScmLink> {
+  return invoke("create_workspace_scm_link", {
+    workspaceId: args.workspaceId,
+    repoId: args.repoId,
+    kind: args.kind,
+    number: args.number,
+    url: args.url,
+    title: args.title,
+  });
 }

@@ -244,4 +244,9 @@ pub const MIGRATIONS: &[Migration] = &[
         sql: include_str!("20260519231159_deleted_workspace_metric_details.sql"),
         legacy_version: None,
     },
+    Migration {
+        id: "20260520153000_workspace_scm_links",
+        sql: include_str!("20260520153000_workspace_scm_links.sql"),
+        legacy_version: None,
+    },
 ];

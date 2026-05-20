@@ -6,7 +6,7 @@ use futures::stream::{self, StreamExt};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
 
-use claudette::db::{Database, RepoScmListCacheRow};
+use claudette::db::{Database, RepoScmListCacheRow, WorkspaceScmLinkRow};
 use claudette::mcp_supervisor::McpSupervisor;
 use claudette::plugin_runtime::PluginError;
 use claudette::plugin_runtime::host_api::WorkspaceInfo;
@@ -842,6 +842,65 @@ pub async fn list_repo_open_pull_requests(
         .await
         .insert(cache_key, entry);
     Ok(resp)
+}
+
+/// Persist the association between a workspace and the SCM item (issue
+/// or PR) it was created for via the project-view "Send to new
+/// workspace" gesture. Keyed on `workspace_id` — one workspace owns at
+/// most one item, so a re-link replaces.
+///
+/// Returns the saved row (with the DB-assigned `created_at`). The caller
+/// treats failure as non-fatal: the workspace and its first turn already
+/// landed, so a missing link only costs the project-view badge.
+#[tauri::command]
+pub async fn create_workspace_scm_link(
+    workspace_id: String,
+    repo_id: String,
+    kind: String,
+    number: i64,
+    url: String,
+    title: String,
+    state: State<'_, AppState>,
+) -> Result<WorkspaceScmLinkRow, String> {
+    let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
+    // Feature-gate short-circuit (defense in depth): the association is
+    // part of the project-view issues/PRs feature, and the only caller
+    // (`sendToNewWorkspace`) is reachable only from the gated sections.
+    // A stale frontend must not be able to write links with the flag off.
+    if !read_project_view_flag(&db) {
+        return Err("project-view issues/PRs feature is disabled".to_string());
+    }
+    // Validate `kind` server-side: the frontend resolver matches and
+    // filters on it, so an unexpected value would silently break badge
+    // resolution. The `workspace_scm_links.kind` CHECK constraint also
+    // rejects it at the DB layer — this guard just fails earlier with a
+    // clearer message than a raw SQLite constraint error.
+    if kind != "issue" && kind != "pr" {
+        return Err(format!(
+            "invalid SCM link kind {kind:?}: expected \"issue\" or \"pr\""
+        ));
+    }
+    let row = WorkspaceScmLinkRow {
+        workspace_id,
+        repo_id,
+        kind,
+        number,
+        url,
+        title,
+        created_at: String::new(),
+    };
+    db.upsert_workspace_scm_link(&row)
+        .map_err(|e| e.to_string())?;
+    // Re-load so the caller sees the DB-assigned `created_at`. `load_all`
+    // is fine here — this is a rare, user-triggered action and the table
+    // only ever holds one row per live workspace.
+    let saved = db
+        .load_all_workspace_scm_links()
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .find(|r| r.workspace_id == row.workspace_id)
+        .unwrap_or(row);
+    Ok(saved)
 }
 
 /// Drop the in-memory + on-disk cache for a repo's project-view lists so the
