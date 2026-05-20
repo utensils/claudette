@@ -17,7 +17,7 @@ Use `bun` (the project's package manager), run from this directory:
 bun install              # install dependencies (CI uses --frozen-lockfile)
 bun run dev              # start the Vite dev server (used by Tauri)
 bun run build            # type-check (tsc -b) then vite build
-bunx tsc -b              # type-check only — same as CI's check
+bunx tsc -b              # type-check only (CI's dedicated step runs tsc --noEmit)
 bun run test             # run vitest once
 bun run test:watch       # run vitest in watch mode
 bun run lint             # ESLint
@@ -33,7 +33,7 @@ before committing frontend changes.
 
 - **Vite 8** with `@vitejs/plugin-react`.
 - **TypeScript** in strict mode (`noUnusedLocals`, `noUnusedParameters`,
-  `noFallthroughCasesInSwitch`); no `any`.
+  `noFallthroughCasesInSwitch`); `any` is avoided by convention (see CLAUDE.md).
 - **ESLint 9** flat config (`eslint.config.js`) with `typescript-eslint`,
   `eslint-plugin-react-hooks`, `eslint-plugin-react-refresh`.
 - **vitest** is the test runner (not Jest); DOM tests use `happy-dom`.
