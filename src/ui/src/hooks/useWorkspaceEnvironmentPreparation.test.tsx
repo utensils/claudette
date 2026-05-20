@@ -20,7 +20,10 @@ vi.mock("@tauri-apps/api/event", () => ({
   listen: vi.fn().mockResolvedValue(() => undefined),
 }));
 
-import { useWorkspaceEnvironmentPreparation } from "./useWorkspaceEnvironmentPreparation";
+import {
+  __TEST__,
+  useWorkspaceEnvironmentPreparation,
+} from "./useWorkspaceEnvironmentPreparation";
 
 function makeWorkspace(overrides: Partial<Workspace> = {}): Workspace {
   return {
@@ -263,59 +266,159 @@ describe("useWorkspaceEnvironmentPreparation", () => {
     expect(serviceMocks.prepareWorkspaceEnvironment).toHaveBeenCalledTimes(1);
   });
 
-  it("leaves status at 'preparing' when selection changes mid-flight; cancelled guard prevents stale resolution from toasting", async () => {
-    // Previously this test pinned cleanup-sets-idle behavior. That
-    // behaviour was the source of a Windows-specific UI lock: when
-    // WebView2 dropped the Tauri response message for the prep
-    // command, the second mount's `cancelled` guard swallowed any
-    // late resolution, and status stayed at "idle" / "preparing"
-    // forever with no path back to "ready". The cleanup no longer
-    // mutates status, and the `cancelled` flag is retained only to
-    // suppress stale toasts from `.catch`. The actual recovery for
-    // a dropped Tauri response lives in the Complete progress event
-    // — see the "recovers from a dropped Tauri response" test below.
-    let resolvePreparation!: () => void;
-    serviceMocks.prepareWorkspaceEnvironment.mockReturnValue(
-      new Promise<void>((resolve) => {
-        resolvePreparation = resolve;
-      }),
-    );
-    useAppStore.setState({
-      selectedWorkspaceId: "ws-1",
-      workspaces: [makeWorkspace()],
-    });
+  it("delays the 'preparing' spinner and keeps it across a mid-flight selection change", async () => {
+    // Issue #888 hot-cache fix: the workspace is NOT flipped to
+    // "preparing" synchronously on selection — a cached resolve would
+    // return first and the spinner would never have been warranted.
+    // Only once the spinner delay elapses with the resolve still in
+    // flight does the status become "preparing".
+    //
+    // This also pins the original mid-flight contract: once
+    // "preparing", a selection change runs cleanup (which does NOT
+    // mutate status) and sets the `cancelled` guard, so a late stale
+    // resolution can't silently flip the abandoned workspace to
+    // "ready". The Complete progress event is the lifecycle-
+    // independent recovery path — see the "recovers from a dropped
+    // Tauri response" test below.
+    vi.useFakeTimers();
+    try {
+      let resolvePreparation!: () => void;
+      serviceMocks.prepareWorkspaceEnvironment.mockReturnValue(
+        new Promise<void>((resolve) => {
+          resolvePreparation = resolve;
+        }),
+      );
+      useAppStore.setState({
+        selectedWorkspaceId: "ws-1",
+        workspaces: [makeWorkspace()],
+      });
 
-    await renderHarness();
-    expect(useAppStore.getState().workspaceEnvironment["ws-1"]).toEqual({
-      status: "preparing",
-    });
+      await renderHarness();
+      // No synchronous "preparing" — that was the flicker bug.
+      expect(
+        useAppStore.getState().workspaceEnvironment["ws-1"],
+      ).toBeUndefined();
 
-    act(() => {
-      useAppStore.setState({ selectedWorkspaceId: null });
-    });
+      // Spinner delay elapses, resolve still pending → "preparing".
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(
+          __TEST__.PREPARING_SPINNER_DELAY_MS + 50,
+        );
+      });
+      expect(useAppStore.getState().workspaceEnvironment["ws-1"]).toEqual({
+        status: "preparing",
+      });
 
-    // Cleanup ran but does NOT touch status — the in-flight prep
-    // promise is still pending. The user-visible recovery for a
-    // mid-flight navigate-away lives in the Complete progress
-    // event (Rust-side Drop fires it regardless of where the
-    // resolve was initiated), not in this hook's cleanup.
-    expect(useAppStore.getState().workspaceEnvironment["ws-1"]).toEqual({
-      status: "preparing",
-    });
+      act(() => {
+        useAppStore.setState({ selectedWorkspaceId: null });
+      });
 
-    await act(async () => {
-      resolvePreparation();
-      await Promise.resolve();
-    });
+      // Cleanup ran but does NOT touch status — the in-flight prep
+      // promise is still pending. The user-visible recovery for a
+      // mid-flight navigate-away lives in the Complete progress
+      // event (Rust-side Drop fires it regardless of where the
+      // resolve was initiated), not in this hook's cleanup.
+      expect(useAppStore.getState().workspaceEnvironment["ws-1"]).toEqual({
+        status: "preparing",
+      });
 
-    // The `.then` checks `cancelled` (set true by cleanup) and
-    // returns early — status is NOT silently flipped to "ready"
-    // for a workspace whose effect has torn down. The Complete
-    // progress event remains the lifecycle-independent recovery
-    // path for any workspace genuinely stuck at "preparing".
-    expect(useAppStore.getState().workspaceEnvironment["ws-1"]).toEqual({
-      status: "preparing",
-    });
+      await act(async () => {
+        resolvePreparation();
+        await Promise.resolve();
+      });
+
+      // The `.then` checks `cancelled` (set true by cleanup) and
+      // returns early — status is NOT silently flipped to "ready"
+      // for a workspace whose effect has torn down. The Complete
+      // progress event remains the lifecycle-independent recovery
+      // path for any workspace genuinely stuck at "preparing".
+      expect(useAppStore.getState().workspaceEnvironment["ws-1"]).toEqual({
+        status: "preparing",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not flash 'preparing' on a hot-cache resolve that beats the spinner delay", async () => {
+    // The core issue #888 acceptance: re-selecting an already-loaded
+    // workspace must not show "Preparing direnv…". The resolve is
+    // awaited first; the cached round-trip settles well within the
+    // spinner delay, the timer is cleared, and the status goes
+    // straight to "ready" — never through "preparing".
+    vi.useFakeTimers();
+    try {
+      serviceMocks.prepareWorkspaceEnvironment.mockResolvedValue(undefined);
+      useAppStore.setState({
+        selectedWorkspaceId: "ws-1",
+        workspaces: [makeWorkspace()],
+        workspaceEnvironment: { "ws-1": { status: "ready" } },
+      });
+
+      await renderHarness();
+      // Flush the resolved IPC promise's microtasks WITHOUT advancing
+      // wall-clock past the spinner delay.
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      // Straight to "ready", no intermediate "preparing".
+      expect(useAppStore.getState().workspaceEnvironment["ws-1"]).toEqual({
+        status: "ready",
+      });
+
+      // The pending spinner timer was cleared by the resolve, so
+      // crossing the delay cannot retroactively flip it.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(
+          __TEST__.PREPARING_SPINNER_DELAY_MS + 500,
+        );
+      });
+      expect(useAppStore.getState().workspaceEnvironment["ws-1"]).toEqual({
+        status: "ready",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("cancels the pending spinner when selection changes before the delay elapses", async () => {
+    // If the user switches away inside the spinner-delay window, the
+    // timer must be cleared on cleanup — otherwise the workspace they
+    // already left would flip to "preparing" after the fact.
+    vi.useFakeTimers();
+    try {
+      serviceMocks.prepareWorkspaceEnvironment.mockReturnValue(
+        new Promise<void>(() => undefined),
+      );
+      useAppStore.setState({
+        selectedWorkspaceId: "ws-1",
+        workspaces: [makeWorkspace()],
+      });
+
+      await renderHarness();
+      expect(
+        useAppStore.getState().workspaceEnvironment["ws-1"],
+      ).toBeUndefined();
+
+      // Switch away before the spinner delay elapses.
+      act(() => {
+        useAppStore.setState({ selectedWorkspaceId: null });
+      });
+
+      // Crossing the delay must not resurrect the spinner.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(
+          __TEST__.PREPARING_SPINNER_DELAY_MS + 500,
+        );
+      });
+      expect(
+        useAppStore.getState().workspaceEnvironment["ws-1"],
+      ).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   /**
@@ -359,38 +462,112 @@ describe("useWorkspaceEnvironmentPreparation", () => {
     // emits a `complete` progress event as the resolve loop tears
     // down. This test mimics that event and pins the recovery: any
     // workspace still showing `"preparing"` flips to `"ready"`.
-    serviceMocks.prepareWorkspaceEnvironment.mockReturnValue(
-      new Promise<void>(() => undefined),
-    );
-    useAppStore.setState({
-      selectedWorkspaceId: "ws-1",
-      workspaces: [makeWorkspace()],
-    });
+    //
+    // With the issue #888 spinner delay the workspace reaches
+    // "preparing" via the delay timer (the resolve never settles), and
+    // the `complete` event then flips it to "ready" exactly as before.
+    vi.useFakeTimers();
+    try {
+      serviceMocks.prepareWorkspaceEnvironment.mockReturnValue(
+        new Promise<void>(() => undefined),
+      );
+      useAppStore.setState({
+        selectedWorkspaceId: "ws-1",
+        workspaces: [makeWorkspace()],
+      });
 
-    const { fire } = await withCapturedProgressListener();
+      const { fire } = await withCapturedProgressListener();
 
-    await renderHarness();
-    await act(async () => {
-      await Promise.resolve();
-    });
+      await renderHarness();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(
+          __TEST__.PREPARING_SPINNER_DELAY_MS + 50,
+        );
+      });
 
-    expect(useAppStore.getState().workspaceEnvironment["ws-1"]).toEqual({
-      status: "preparing",
-    });
+      expect(useAppStore.getState().workspaceEnvironment["ws-1"]).toEqual({
+        status: "preparing",
+      });
 
-    // Fire the `complete` event the Rust-side sink would emit at the
-    // end of every resolve, regardless of which Tauri command
-    // initiated it.
-    fire({
-      workspace_id: "ws-1",
-      plugin: "",
-      phase: "complete",
-      elapsed_ms: 0,
-    });
+      // Fire the `complete` event the Rust-side sink would emit at the
+      // end of every resolve, regardless of which Tauri command
+      // initiated it.
+      fire({
+        workspace_id: "ws-1",
+        plugin: "",
+        phase: "complete",
+        elapsed_ms: 0,
+      });
 
-    expect(useAppStore.getState().workspaceEnvironment["ws-1"]).toEqual({
-      status: "ready",
-    });
+      expect(useAppStore.getState().workspaceEnvironment["ws-1"]).toEqual({
+        status: "ready",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not re-flip a completed workspace to 'preparing' after a dropped Tauri response", async () => {
+    // Regression for the Copilot review finding on PR #912: on a
+    // dropped Tauri response the prep promise never settles, so
+    // `.then` / `.catch` never run `clearPreparingTimer()`. The
+    // backend still emits `complete`, which finalizes the workspace —
+    // and must ALSO cancel the pending spinner-delay timer. Otherwise
+    // the orphaned timer fires 150ms later, sees a non-"preparing"
+    // status, and drags the finished workspace back to "preparing":
+    // a stuck, blocked composer.
+    vi.useFakeTimers();
+    try {
+      serviceMocks.prepareWorkspaceEnvironment.mockReturnValue(
+        new Promise<void>(() => undefined),
+      );
+      useAppStore.setState({
+        selectedWorkspaceId: "ws-1",
+        workspaces: [makeWorkspace()],
+      });
+
+      const { fire } = await withCapturedProgressListener();
+
+      await renderHarness();
+
+      // A cache-miss resolve completing entirely within the spinner
+      // delay window: started → preparing, complete → ready.
+      fire({
+        workspace_id: "ws-1",
+        plugin: "env-direnv",
+        phase: "started",
+        elapsed_ms: 0,
+      });
+      fire({
+        workspace_id: "ws-1",
+        plugin: "env-direnv",
+        phase: "finished",
+        elapsed_ms: 5,
+        ok: true,
+      });
+      fire({
+        workspace_id: "ws-1",
+        plugin: "",
+        phase: "complete",
+        elapsed_ms: 0,
+      });
+      expect(useAppStore.getState().workspaceEnvironment["ws-1"]).toEqual({
+        status: "ready",
+      });
+
+      // `complete` must have cancelled the spinner-delay timer —
+      // crossing the delay must NOT regress the finished workspace.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(
+          __TEST__.PREPARING_SPINNER_DELAY_MS + 500,
+        );
+      });
+      expect(useAppStore.getState().workspaceEnvironment["ws-1"]).toEqual({
+        status: "ready",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("transitions to 'error' on 'complete' when any plugin reported failure (dropped Err response recovery)", async () => {

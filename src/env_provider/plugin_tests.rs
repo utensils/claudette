@@ -740,6 +740,154 @@ fn direnv_export_stamp_filter_keeps_legit_paths_containing_direnv_segments() {
 }
 
 #[test]
+fn direnv_export_watches_list_drops_nix_direnv_layout_artifacts() {
+    // Regression for issue #888: nix-direnv writes derived build
+    // artifacts into the worktree's own `.direnv/` directory
+    // (`flake-profile-<sha>` symlinks + `.rc`, `flake-inputs/`,
+    // `bin/nix-direnv-reload`, `added_paths`) and direnv reports them
+    // in `DIRENV_WATCHES` for its shell hook. Watching them is
+    // self-defeating — every successful evaluation re-touches one and
+    // primes the next spurious cache eviction. They must be dropped;
+    // the real source files outside `.direnv/` must survive.
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(tmp.path().join(".envrc"), "use flake\n").unwrap();
+    let worktree = tmp.path().to_string_lossy().into_owned();
+    let envrc_path = format!("{worktree}/.envrc");
+    let flake_nix = format!("{worktree}/flake.nix");
+    let flake_lock = format!("{worktree}/flake.lock");
+    let layout_artifacts = [
+        format!("{worktree}/.direnv/flake-profile-3b9c1f2a"),
+        format!("{worktree}/.direnv/flake-profile-3b9c1f2a.rc"),
+        format!("{worktree}/.direnv/flake-inputs/abcd1234"),
+        format!("{worktree}/.direnv/bin/nix-direnv-reload"),
+        format!("{worktree}/.direnv/added_paths"),
+    ];
+    let mut paths: Vec<&str> = vec![envrc_path.as_str(), flake_nix.as_str(), flake_lock.as_str()];
+    paths.extend(layout_artifacts.iter().map(|s| s.as_str()));
+    let encoded = encode_direnv_watches(&paths);
+
+    let lua = make_vm("env-direnv", &["direnv"], tmp.path());
+    let env_json = serde_json::to_string(&serde_json::json!({
+        "FOO": "bar",
+        "DIRENV_WATCHES": encoded,
+    }))
+    .unwrap();
+    let stub = format!(
+        r#"
+        host.exec = function(cmd, args)
+            if cmd ~= "direnv" then error("expected cmd='direnv', got: " .. tostring(cmd)) end
+            if type(args) ~= "table" or args[1] ~= "export" or args[2] ~= "json" or args[3] ~= nil then
+                error("expected args={{'export','json'}}")
+            end
+            return {{ stdout = [==[{env_json}]==], stderr = "", code = 0 }}
+        end
+        "#
+    );
+    lua.load(&stub).exec().unwrap();
+
+    let script = format!(
+        r#"
+        local M = (function() {src} end)()
+        return M.export({{ worktree = "{path}" }})
+        "#,
+        src = DIRENV_SRC,
+        path = worktree.replace('\\', "\\\\"),
+    );
+    let result: mlua::Table = lua.load(&script).eval().unwrap();
+    let watched_tbl: mlua::Table = result.get("watched").unwrap();
+    let len = watched_tbl.len().unwrap() as usize;
+    let watched: Vec<String> = (1..=len)
+        .map(|i| watched_tbl.get::<String>(i).unwrap())
+        .collect();
+
+    // Real source files survive — the legitimate invalidation triggers.
+    for src_path in [&envrc_path, &flake_nix, &flake_lock] {
+        assert!(
+            watched.contains(src_path),
+            "{src_path} must survive the .direnv layout filter; got {watched:?}"
+        );
+    }
+    // nix-direnv's internal artifacts are dropped.
+    for artifact in &layout_artifacts {
+        assert!(
+            !watched.contains(artifact),
+            "nix-direnv artifact {artifact} leaked into watched; cache will thrash. got {watched:?}"
+        );
+    }
+}
+
+#[test]
+fn direnv_export_layout_filter_is_anchored_to_worktree() {
+    // The `.direnv/` filter must be anchored to `<worktree>/.direnv/`,
+    // not match a bare `.direnv` path component anywhere. A workspace
+    // whose worktree itself happens to live under an unrelated
+    // `.direnv/` ancestor directory must keep its real `.envrc` /
+    // `flake.lock` — dropping those would silently stop the EnvCache
+    // from noticing genuine edits.
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(tmp.path().join(".envrc"), "use flake\n").unwrap();
+    // A worktree path that contains `.direnv` as an ancestor segment.
+    let worktree = "/home/dev/.direnv/checkouts/myrepo";
+    let envrc_path = format!("{worktree}/.envrc");
+    let flake_lock = format!("{worktree}/flake.lock");
+    // A genuine nix-direnv artifact under THIS worktree's own
+    // `.direnv/` — still must be dropped.
+    let real_artifact = format!("{worktree}/.direnv/flake-profile-deadbeef");
+    let encoded = encode_direnv_watches(&[
+        envrc_path.as_str(),
+        flake_lock.as_str(),
+        real_artifact.as_str(),
+    ]);
+
+    let lua = make_vm("env-direnv", &["direnv"], tmp.path());
+    let env_json = serde_json::to_string(&serde_json::json!({
+        "FOO": "bar",
+        "DIRENV_WATCHES": encoded,
+    }))
+    .unwrap();
+    let stub = format!(
+        r#"
+        host.exec = function(cmd, args)
+            if cmd ~= "direnv" then error("expected cmd='direnv', got: " .. tostring(cmd)) end
+            if type(args) ~= "table" or args[1] ~= "export" or args[2] ~= "json" or args[3] ~= nil then
+                error("expected args={{'export','json'}}")
+            end
+            return {{ stdout = [==[{env_json}]==], stderr = "", code = 0 }}
+        end
+        "#
+    );
+    lua.load(&stub).exec().unwrap();
+
+    let script = format!(
+        r#"
+        local M = (function() {src} end)()
+        return M.export({{ worktree = "{path}" }})
+        "#,
+        src = DIRENV_SRC,
+        path = worktree.replace('\\', "\\\\"),
+    );
+    let result: mlua::Table = lua.load(&script).eval().unwrap();
+    let watched_tbl: mlua::Table = result.get("watched").unwrap();
+    let len = watched_tbl.len().unwrap() as usize;
+    let watched: Vec<String> = (1..=len)
+        .map(|i| watched_tbl.get::<String>(i).unwrap())
+        .collect();
+
+    assert!(
+        watched.contains(&envrc_path),
+        ".envrc under a `.direnv` ancestor must survive; got {watched:?}"
+    );
+    assert!(
+        watched.contains(&flake_lock),
+        "flake.lock under a `.direnv` ancestor must survive; got {watched:?}"
+    );
+    assert!(
+        !watched.contains(&real_artifact),
+        "the worktree's own .direnv/ artifact must still be dropped; got {watched:?}"
+    );
+}
+
+#[test]
 fn direnv_export_strip_is_prefix_based_for_future_markers() {
     // The strip matches `^DIRENV_` rather than a hardcoded deny-list,
     // so if direnv ships a new internal marker (e.g. `DIRENV_LAYOUT_*`

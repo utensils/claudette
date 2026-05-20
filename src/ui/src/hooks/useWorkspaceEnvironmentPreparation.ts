@@ -89,6 +89,15 @@ function looksLikeMissingWorkspace(message: string): boolean {
   return message.toLowerCase().includes("workspace not found");
 }
 
+/**
+ * How long a workspace-selection env resolve may run before the UI is
+ * flipped to a "Preparing …" spinner. A cached resolve returns within
+ * one IPC round-trip — far under this threshold — so the common
+ * hot-cache path never renders the spinner at all (issue #888). Only a
+ * genuine cold export crosses it.
+ */
+const PREPARING_SPINNER_DELAY_MS = 150;
+
 export function useWorkspaceEnvironmentPreparation() {
   const selectedWorkspaceId = useAppStore((s) => s.selectedWorkspaceId);
   const selectedWorkspaceRemoteConnectionId = useAppStore((s) => {
@@ -141,6 +150,16 @@ export function useWorkspaceEnvironmentPreparation() {
   // each Complete so a subsequent resolve starts fresh.
   const failedDuringResolveRef = useRef<Map<string, boolean>>(new Map());
 
+  // Per-workspace cancel functions for the pending spinner-delay
+  // timers armed by the per-selection effect below. The `complete`
+  // progress handler reaches in here to cancel a workspace's timer
+  // once its resolve is done — critical for the dropped-Tauri-
+  // response case, where the prep promise never settles so
+  // `.then`/`.catch` never run to clear the timer themselves. Without
+  // this a late timer fires after `complete` already finalized the
+  // workspace and re-flips it to "preparing" — a stuck, blocked UI.
+  const spinnerTimerClearsRef = useRef<Map<string, () => void>>(new Map());
+
   // Global listener: subscribe once per app session and route every
   // workspace_env_progress event into the store, regardless of which
   // workspace is currently selected. This lets the sidebar show a
@@ -175,6 +194,12 @@ export function useWorkspaceEnvironmentPreparation() {
         // the spawn_pty / agent-spawn paths where no dedicated
         // `.then` handler exists to finalize the status.
         setWorkspaceEnvironmentProgress(workspace_id, null);
+        // The resolve is done — cancel any pending spinner-delay timer
+        // for this workspace so it can't fire late and strand the
+        // workspace back at "preparing". This is the recovery for a
+        // dropped Tauri response, where the prep promise never settles
+        // and `.then`/`.catch` never clear the timer themselves.
+        spinnerTimerClearsRef.current.get(workspace_id)?.();
         const anyFailed = failed.get(workspace_id) ?? false;
         failed.delete(workspace_id);
         const cur =
@@ -292,7 +317,57 @@ export function useWorkspaceEnvironmentPreparation() {
 
     const workspaceId = selectedWorkspaceId;
     let cancelled = false;
-    setWorkspaceEnvironment(workspaceId, "preparing");
+
+    // Hot-cache path: don't flip the workspace to "preparing"
+    // synchronously. A cached env resolve returns within one IPC
+    // round-trip — the backend's work is sub-millisecond on a cache
+    // hit — so eagerly rendering "Preparing direnv…" guarantees a
+    // spinner flicker on every workspace switch even when nothing
+    // reloaded. Instead, arm a short timer: if the resolve hasn't come
+    // back by then it's a genuine cold export and the spinner is
+    // warranted. A fast (cached) resolve clears the timer before it
+    // fires, so the status goes straight to "ready" with no
+    // intermediate "preparing" frame.
+    //
+    // Cache *misses* still surface a spinner without waiting on this
+    // timer: the backend emits `workspace_env_progress {started}` for
+    // every plugin it actually runs, and the listener above routes
+    // that through `setWorkspaceEnvironmentProgress`, which forces the
+    // status to "preparing" (with the richer per-plugin elapsed-time
+    // fields the sidebar needs).
+    const spinnerTimers = spinnerTimerClearsRef.current;
+    let preparingTimer: ReturnType<typeof setTimeout> | undefined = setTimeout(
+      () => {
+        preparingTimer = undefined;
+        spinnerTimers.delete(workspaceId);
+        if (cancelled) return;
+        // Only promote a genuine pre-resolve state. A workspace the
+        // resolve already finalized (`ready` / `error`) must never be
+        // dragged back to "preparing" — and one a `started` progress
+        // event already moved to "preparing" keeps its richer
+        // `current_plugin` / `started_at` fields untouched. A slow
+        // resolve still in flight sits at `undefined` / `"idle"`; for
+        // that the spinner is warranted, and the eventual `complete`
+        // event recovers it back to "ready".
+        const cur =
+          useAppStore.getState().workspaceEnvironment[workspaceId]?.status;
+        if (cur === undefined || cur === "idle") {
+          setWorkspaceEnvironment(workspaceId, "preparing");
+        }
+      },
+      PREPARING_SPINNER_DELAY_MS,
+    );
+    const clearPreparingTimer = () => {
+      if (preparingTimer !== undefined) {
+        clearTimeout(preparingTimer);
+        preparingTimer = undefined;
+      }
+      spinnerTimers.delete(workspaceId);
+    };
+    // Register so the `complete` progress handler can cancel this
+    // timer even when the prep promise never settles (a dropped Tauri
+    // response) and `.then` / `.catch` never run to clear it.
+    spinnerTimers.set(workspaceId, clearPreparingTimer);
 
     // The recovery path for a dropped Tauri response on Windows
     // lives in the progress listener above: the `Complete` phase
@@ -305,6 +380,7 @@ export function useWorkspaceEnvironmentPreparation() {
     // surface a stale toast for a workspace the user already left.
     prepareWorkspaceEnvironment(workspaceId)
       .then((payload) => {
+        clearPreparingTimer();
         if (cancelled) return;
         // The backend also emits `workspace_env_trust_needed`, but
         // Tauri listener registration is async. On a fast cached
@@ -317,6 +393,7 @@ export function useWorkspaceEnvironmentPreparation() {
         setWorkspaceEnvironment(workspaceId, "ready");
       })
       .catch((err) => {
+        clearPreparingTimer();
         if (cancelled) return;
         const message = String(err);
         // The workspace row is gone from the DB but still showing in the
@@ -347,7 +424,10 @@ export function useWorkspaceEnvironmentPreparation() {
       // to permanently lock the UI when the second-invocation
       // closure swallowed its own resolution. The `Complete` event
       // (Rust-side Drop) is the recovery mechanism; nothing here
-      // needs to force an interim state.
+      // needs to force an interim state. We do cancel the pending
+      // spinner timer so a workspace the user already left can't
+      // flip to "preparing" after the fact.
+      clearPreparingTimer();
       cancelled = true;
     };
   }, [
@@ -363,4 +443,8 @@ export function useWorkspaceEnvironmentPreparation() {
 
 // Internal: exposed for vitest. The hook is the only production
 // consumer.
-export const __TEST__ = { looksLikeTrustError, looksLikeMissingWorkspace };
+export const __TEST__ = {
+  looksLikeTrustError,
+  looksLikeMissingWorkspace,
+  PREPARING_SPINNER_DELAY_MS,
+};
