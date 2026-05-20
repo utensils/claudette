@@ -116,16 +116,12 @@ impl Database {
     }
 
     fn run_space_maintenance(&self) {
-        match self.ensure_incremental_auto_vacuum() {
-            Ok(true) => {}
-            Ok(false) => self.best_effort_incremental_vacuum(INCREMENTAL_VACUUM_PAGES_AFTER_DELETE),
-            Err(e) => {
-                tracing::warn!(
-                    target: "claudette::db",
-                    error = %e,
-                    "database space maintenance skipped"
-                );
-            }
+        if let Err(e) = self.ensure_incremental_auto_vacuum() {
+            tracing::warn!(
+                target: "claudette::db",
+                error = %e,
+                "database space maintenance skipped"
+            );
         }
     }
 
@@ -459,6 +455,12 @@ mod tests {
             .unwrap()
     }
 
+    fn freelist_count(db: &Database) -> i64 {
+        db.conn()
+            .query_row("PRAGMA freelist_count", [], |r| r.get(0))
+            .unwrap()
+    }
+
     /// Apply the SQL bodies of the first N pre-redesign migrations directly,
     /// then set `PRAGMA user_version = N`, producing a DB that looks exactly
     /// like one from before the redesign at that version.
@@ -558,6 +560,32 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM preexisting_table", [], |r| r.get(0))
             .unwrap();
         assert_eq!(preserved, 1);
+    }
+
+    #[test]
+    fn test_open_does_not_incrementally_vacuum_converted_db() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("claudette.db");
+        let freelist_before = {
+            let db = Database::open(&path).unwrap();
+            db.conn()
+                .execute_batch(
+                    "CREATE TABLE vacuum_probe (id INTEGER PRIMARY KEY, payload BLOB);
+                     INSERT INTO vacuum_probe (payload) VALUES (zeroblob(1048576));
+                     DELETE FROM vacuum_probe;",
+                )
+                .unwrap();
+            let freelist_before = freelist_count(&db);
+            assert!(
+                freelist_before > 0,
+                "test setup should leave free pages to reclaim"
+            );
+            freelist_before
+        };
+
+        let db = Database::open(&path).unwrap();
+
+        assert_eq!(freelist_count(&db), freelist_before);
     }
 
     #[test]
