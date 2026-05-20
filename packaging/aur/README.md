@@ -47,12 +47,16 @@ the packages. To do that:
    repository as the `AUR_SSH_PRIVATE_KEY` secret
    (Settings → Secrets and variables → Actions).
 5. On the AUR side, create empty git repos for each package by
-   pushing an initial PKGBUILD from a workstation:
+   pushing an initial PKGBUILD from a workstation. Only `PKGBUILD`
+   is tracked in this repo — the AUR requires a `.SRCINFO` alongside
+   it, so generate one with `makepkg --printsrcinfo` (run on an Arch
+   host or inside `archlinux:latest`):
    ```bash
    # for each pkgname in claudette-bin claudette claudette-git
    git clone ssh://aur@aur.archlinux.org/claudette-bin.git
-   cp packaging/aur/claudette-bin/PKGBUILD packaging/aur/claudette-bin/.SRCINFO claudette-bin/
-   cd claudette-bin && git add . && git commit -m 'Initial upload' && git push
+   cp packaging/aur/claudette-bin/PKGBUILD claudette-bin/
+   cd claudette-bin && makepkg --printsrcinfo > .SRCINFO
+   git add . && git commit -m 'Initial upload' && git push
    ```
    After this first push, CI takes over for `claudette-bin` and
    `claudette`.
@@ -121,7 +125,7 @@ Env vars you can pass through the helper script:
 |-----|---------|---------|
 | `BUILD_PKG` | unset | Which PKGBUILD to build + install on boot. Set by the positional arg. |
 | `LAUNCH_CMD` | unset | Command to auto-launch after install. `--launch` sets this to `claudette-app`. |
-| `VNC_GEOMETRY` | `1440x900` | xrandr-style geometry. Set via `CLAUDETTE_AUR_TEST_GEOMETRY`. |
+| `VNC_GEOMETRY` | `1280x800` | xrandr-style geometry. Set via `CLAUDETTE_AUR_TEST_GEOMETRY` (the helper script defaults to `1280x800`; the entrypoint's own fallback when `VNC_GEOMETRY` is unset is `1440x900`). |
 | `CLONE_BRANCH` | `main` | Branch to clone into `~/Projects/Claudette`. |
 | `SKIP_CLONE` | `0` | Set to `1` to skip the project clone for a faster boot. |
 | `CLAUDETTE_AUR_TEST_PORT` | `6080` | Host port to publish noVNC on. |

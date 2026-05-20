@@ -5,7 +5,7 @@ description: Opt-in toggles for features that are still maturing — what each o
 
 **Settings > Experimental** holds toggles for features that are still maturing. "Experimental" doesn't mean unsafe — these are shipped and tested — but the surface area, defaults, or persistence shape may shift between releases. Toggling one off is always reversible.
 
-Only **Claude Code Usage** lives there today. Agent backend choices such as Ollama, LM Studio, OpenAI API, and Codex live in **Settings > Models** as first-class model/provider controls. Claude Code Plugins, Claude Remote Control, Community Registry, and Claudette Terminal are visible by default in their normal settings locations.
+Two toggles live there today — **Claude Code Usage** and **OpenRouter balance in usage meter**. Agent backend choices such as Ollama, LM Studio, OpenAI API, and Codex live in **Settings > Models** as first-class model/provider controls. Claude Code Plugins, Claude Remote Control, Community Registry, and Claudette Terminal are visible by default in their normal settings locations.
 
 ## Claude Code Usage
 
@@ -19,11 +19,16 @@ Enabling this toggle opens a confirmation dialog that explains how the data flow
 
 → What the panel shows and how it's cached: **[Usage & Metrics](/claudette/features/usage-and-metrics/)**
 
+## OpenRouter balance in usage meter
+
+Shows your live OpenRouter credit balance alongside local token totals for OpenRouter-backed sessions, including Pi OpenRouter models. Turn this off to avoid polling the OpenRouter credits endpoint.
+
 ## Stability outlook
 
 | Toggle | What's still moving |
 |---|---|
 | Claude Code Usage | Cache invalidation around tier changes; richer breakdown views; (non-Anthropic providers already render local-aggregate totals unconditionally). |
+| OpenRouter balance in usage meter | Polling cadence and how the balance is surfaced in the meter. |
 
 If a toggle moves to "default-on" or graduates out of experimental, the release notes for that feature describe any one-time migration. Experimental toggles are otherwise independent, never bundled.
 

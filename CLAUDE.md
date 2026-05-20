@@ -31,7 +31,7 @@ If a change is intentionally undocumented (debug-only flag, internal env var nob
 
 ```bash
 # Backend (Rust)
-cargo test -p claudette -p claudette-server -p claudette-cli --all-features  # Run all backend tests (CI command)
+cargo test -p claudette -p claudette-server -p claudette-cli --all-features  # Run all backend tests (CI runs the same crates via cargo llvm-cov)
 cargo test -p claudette --test diff_tests        # Run a single test file
 cargo test -p claudette parse_unified -- --exact # Run a single test by name
 cargo clippy -p claudette -p claudette-server -p claudette-cli --all-targets --all-features  # Lint (CI command — must pass with zero warnings)
@@ -113,11 +113,11 @@ Feature flags in `claudette-tauri`:
 
 ### Tauri commands
 
-Commands in `src-tauri/src/commands/` are organized by domain: `apps`, `auth`, `cesp`, `chat`, `cli`, `community`, `data`, `debug`, `devtools`, `dialog`, `diff`, `env`, `files`, `grammars`, `mcp`, `metrics`, `pinned_prompts`, `plan`, `plugin`, `plugins_runtime`, `remote`, `repository`, `scm`, `settings`, `shell`, `slash_commands`, `terminal`, `updater`, `usage`, `voice`, `workspace`. Each is a thin wrapper — business logic belongs in the `claudette` crate.
+Commands in `src-tauri/src/commands/` are organized by domain: `agent_backends`, `apps`, `auth`, `boot`, `cesp`, `chat`, `claude_flags`, `cli`, `community`, `data`, `debug`, `devtools`, `diagnostics`, `dialog`, `diff`, `env`, `files`, `grammars`, `mcp`, `metrics`, `pinned_prompts`, `plan`, `plugin`, `plugins_runtime`, `remote`, `repository`, `scheduling`, `scm`, `settings`, `shell`, `slash_commands`, `storage`, `terminal`, `updater`, `usage`, `voice`, `workspace`. Each is a thin wrapper — business logic belongs in the `claudette` crate.
 
 ### CLI client
 
-`claudette` (in `src-cli/`) drives the running GUI over a local IPC socket (Unix domain socket on macOS/Linux, Named Pipes on Windows; `interprocess` crate). It reuses the same command core as the GUI, so tray, notifications, and workspace list update live. Subcommands include `capabilities`, `repo list`, `workspace create`, `chat send|show|turns|stop|answer|approve-plan|deny-plan`, and `batch validate|run`. IPC server lives in `src-tauri/src/ipc.rs`; CLI surface in `src-tauri/src/commands/cli.rs`. The CLI requires the GUI to be running — prefer it over poking the SQLite DB directly.
+`claudette` (in `src-cli/`) drives the running GUI over a local IPC socket (Unix domain socket on macOS/Linux, Named Pipes on Windows; `interprocess` crate). It reuses the same command core as the GUI, so tray, notifications, and workspace list update live. Top-level subcommands include `version`, `capabilities`, `rpc`, `workspace` (alias `ws`), `chat`, `repo`, `batch`, `plugin`, `pr`, `routine`, and `completion`. IPC server lives in `src-tauri/src/ipc.rs`; CLI surface in `src-tauri/src/commands/cli.rs`. The CLI requires the GUI to be running — prefer it over poking the SQLite DB directly.
 
 ## Project structure
 
@@ -125,13 +125,14 @@ Commands in `src-tauri/src/commands/` are organized by domain: `apps`, `auth`, `
 Cargo.toml              — workspace root + claudette lib crate
 src/
   lib.rs                — library entry point, re-exports backend modules
-  db.rs                 — SQLite database: connection, migrations, CRUD
+  db/                   — SQLite database (module dir): connection, migrations, CRUD
   migrations/           — versioned .sql files + MIGRATIONS registry
   git.rs                — async git worktree operations
   diff.rs               — diff parsing and git diff operations
   agent/                — agent runtime (module dir): Claude CLI subprocess + JSON streaming,
-                          plus alternative backends gated behind `alternative-backends`
-                          (`codex_app_server.rs`, `pi_sdk.rs`, `harness.rs` shared scaffolding)
+                          plus alternative backends (`codex_app_server.rs`, `harness.rs` shared
+                          scaffolding). The Pi modules (`pi_sdk.rs`, `pi_control.rs`) are gated
+                          behind the lib crate's `pi-sdk` feature.
   fork.rs               — session forking / checkpoint branching
   snapshot.rs           — workspace snapshots
   process.rs            — cross-platform process spawning helpers
@@ -144,6 +145,8 @@ src/
   slash_commands.rs     — slash command loading and dispatch
   cesp.rs               — CESP (Claudette event stream protocol)
   config.rs / env.rs / path.rs / file_expand.rs — config, env, path helpers
+  transport/            — WSS client transport (trait + WebSocket client),
+                          shared by `claudette-tauri` and `claudette-mobile`
   model/                — data types (no UI or IO logic); all derive Serialize
   names/                — random workspace name generator
   ui/                   — React/Vite frontend (see src/ui/package.json)
@@ -152,7 +155,6 @@ src-tauri/              — Tauri binary crate
   src/state.rs          — managed AppState (db_path, agents, PTYs)
   src/pty.rs            — PTY management via portable-pty
   src/tray.rs           — system tray: icon/menu/tooltip, notifications
-  src/transport/        — Remote transport trait + WebSocket client
   src/remote.rs         — embedded remote server wiring
   src/mdns.rs           — mDNS advertisement for remote discovery
   src/pty_tracker.rs    — PTY foreground-process-group polling for the sidebar command indicator (Unix-only; replaced OSC 133)
@@ -169,7 +171,7 @@ src-pi-harness/         — TypeScript/Bun sidecar wrapping `@earendil-works/pi-
                           executable at `src-tauri/binaries/claudette-pi-harness-<triple>` and
                           shipped via Tauri `bundle.externalBin`. Glue lives in
                           `src/agent/pi_sdk.rs`; only built/loaded when the
-                          `alternative-backends` feature is on.
+                          `pi-sdk` feature is on.
 tests/                  — workspace-level Rust integration tests (e.g. `grants_enforcement.rs`
                           covering the community-plugin granted_capabilities flow).
 ```
@@ -182,12 +184,12 @@ A single sandboxed Lua runtime (`src/plugin_runtime/`) serves multiple plugin ki
 
 **Settings UI** separates two plugin concepts:
 - **Plugins** (`src/ui/src/components/settings/sections/PluginsSettings.tsx`) — Claudette's own Lua plugins (SCM + env-provider). Always visible. Shows status, per-plugin toggle, and the manifest-declared settings form.
-- **Claude Code Plugins** (`ClaudeCodePluginsSettings.tsx`, route key `claude-code-plugins`) — the Claude CLI marketplace integration from `src/plugin.rs` (marketplaces, channels, install/uninstall). Gated behind the `pluginManagementEnabled` experimental flag.
+- **Claude Code Plugins** (`ClaudeCodePluginsSettings.tsx`, route key `claude-code-plugins`) — the Claude CLI marketplace integration from `src/plugin.rs` (marketplaces, channels, install/uninstall). Always visible in the Settings sidebar nav.
 
 ### Guidelines for new code
 
 - **Data types** go in `model/` — keep them free of UI and IO dependencies. All model types must derive `Serialize`.
-- **Service/IO modules** (`db.rs`, `git.rs`, `diff.rs`, `agent.rs`) live at `src/` level in the `claudette` crate
+- **Service/IO modules** (`db/`, `git.rs`, `diff.rs`, `agent/`) live at `src/` level in the `claudette` crate
 - **Tauri commands** go in `src-tauri/src/commands/` — thin wrappers that call into `claudette`
 - **React components** go in `src/ui/src/components/` — organized by feature area
 - **State** lives in the Zustand store (`useAppStore`) — UI state in React, agent sessions in Rust-side `AppState`
@@ -236,7 +238,7 @@ Do not trigger CoreAudio or Speech.framework permission prompts at app launch �
 ### Notification architecture
 
 - Notification sound and commands run on the **Rust side** (not in the webview) — macOS suspends webview JS when the window is hidden
-- `tray.rs` handles attention notifications (AskUserQuestion/ExitPlanMode); `commands/chat.rs` handles agent-finished notifications
+- `tray.rs` handles attention notifications (AskUserQuestion/ExitPlanMode); `commands/chat/` handles agent-finished notifications
 - Both paths use the shared `build_notification_command` helper in `commands/settings.rs` — `sh -c <cmd>` on macOS/Linux, `cmd.exe /S /C <cmd>` on Windows
 - Native notification banners: `mac-notification-sys` on macOS (click-to-navigate), `tauri-plugin-notification` on Linux/Windows
 - **Sound playback** is platform-specific. macOS/Linux shell out to `afplay` / `paplay` / `ffplay` inline. Windows uses `claudette::audio` (`src/audio.rs`): `PlaySoundW` for built-in `C:\Windows\Media` system sounds (no decoder, no per-call volume) and `rodio` (cpal + Symphonia, gated to Windows-only deps) for OpenPeon sound packs that ship MP3/OGG/WAV. New Windows audio code belongs in `audio.rs` so the `unsafe` FFI and feature gating stay in one place.
@@ -257,9 +259,9 @@ Do not trigger CoreAudio or Speech.framework permission prompts at app launch �
 
 ## CI/CD pipeline
 
-- **PR CI** (`.github/workflows/ci.yml`): Rust fmt + clippy + tests (coverage → Codecov), TypeScript type-check + ESLint + `lint:css` + build + vitest.
-- **Nightly** (`.github/workflows/nightly.yml`): Every push to `main` (excluding docs/README). Computes version as `<next-minor>-dev.<commit-count>.g<short-sha>`, stamps all three Cargo.toml files, builds macOS (arm64 + x86_64), Linux (x86_64 + aarch64), Windows (x86_64 + arm64), promotes atomically from `nightly-staging` to `nightly` tag.
-- **Release** (`.github/workflows/release-please.yml`): Triggered by Conventional Commits via release-please. Auto-generates CHANGELOG, bumps workspace `Cargo.toml` (source of truth) + syncs `src-tauri/Cargo.toml` + `src-server/Cargo.toml`, builds all platforms, uploads assets, posts to Discord (`DISCORD_WEBHOOK_URL` secret).
+- **PR CI** (`.github/workflows/ci.yml`): Rust fmt + clippy + tests (coverage → Codecov), TypeScript type-check + `lint:css` + build + vitest. (ESLint via `bun run lint` is available locally but not run in CI.)
+- **Nightly** (`.github/workflows/nightly.yml`): Every push to `main` (excluding docs/README). Computes version as `<next-minor>-dev.<commit-count>.g<short-sha>`, stamps all five Cargo.toml files (workspace root + `src-tauri` + `src-server` + `src-cli` + `src-mobile`), builds macOS (arm64 + x86_64), Linux (x86_64 + aarch64), Windows (x86_64 + arm64), promotes atomically from `nightly-staging` to `nightly` tag.
+- **Release** (`.github/workflows/release-please.yml`): Triggered by Conventional Commits via release-please. Auto-generates CHANGELOG, bumps workspace `Cargo.toml` (source of truth) and the workspace-member crates (`src-tauri`, `src-server`, `src-cli`, `src-mobile`), builds all platforms, uploads assets, posts to Discord (`DISCORD_WEBHOOK_URL` secret).
 - Windows builds in CI skip app bundling (bare `.exe`, zipped). macOS builds produce `.dmg`; Linux produces `.AppImage` + `.deb`.
 
 ## Project context

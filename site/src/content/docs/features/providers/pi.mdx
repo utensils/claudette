@@ -72,7 +72,7 @@ Default Pi selection uses the existing global model settings:
 
 ### Anthropic via Pi is blocked for Claude subscription users
 
-When the local Claude CLI is signed in with an OAuth subscription token (`claude auth status` reports `authMethod: oauth_token`), Claudette hides Pi's **Anthropic** sub-section in the picker and the Rust resolver also refuses any chat-send that would route an `anthropic/*` model through Pi (`ensure_anthropic_not_routed_through_pi_via_oauth` in `src-tauri/src/commands/agent_backends.rs`). The block exists so Claude OAuth tokens never leave the Claude CLI subprocess. Non-Anthropic Pi sub-sections (OpenAI, Google, Ollama, …) continue to work normally.
+When the local Claude CLI is signed in with an OAuth subscription token (`claude auth status` reports `authMethod: oauth_token`), Claudette hides Pi's **Anthropic** sub-section in the picker and the Rust resolver also refuses any chat-send that would route an `anthropic/*` model through Pi (`ensure_anthropic_not_routed_through_pi_via_oauth` in `src-tauri/src/commands/agent_backends/runtime_dispatch.rs`). The block exists so Claude OAuth tokens never leave the Claude CLI subprocess. Non-Anthropic Pi sub-sections (OpenAI, Google, Ollama, …) continue to work normally.
 
 ### Routing other backends through Pi
 

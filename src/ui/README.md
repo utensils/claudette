@@ -1,73 +1,58 @@
-# React + TypeScript + Vite
+# Claudette frontend (`src/ui`)
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+The React + TypeScript webview for the Claudette desktop app. Built with
+Vite and rendered inside the Tauri 2 webview. State lives in a single
+Zustand store (`src/stores/useAppStore.ts`, composed from domain slices
+under `src/stores/slices/`).
 
-Currently, two official plugins are available:
+This is **not** a standalone web app — it talks to the Rust backend over
+Tauri commands and events. Run the full app with `cargo tauri dev` (or
+`./scripts/dev.sh` from the repo root), not `vite` alone.
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+## Commands
 
-## React Compiler
+Use `bun` (the project's package manager), run from this directory:
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
-
-## Expanding the ESLint configuration
-
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
-
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
-
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+```bash
+bun install              # install dependencies (CI uses --frozen-lockfile)
+bun run dev              # start the Vite dev server (used by Tauri)
+bun run build            # type-check (tsc -b) then vite build
+bunx tsc -b              # type-check only — same as CI's check
+bun run test             # run vitest once
+bun run test:watch       # run vitest in watch mode
+bun run lint             # ESLint
+bun run lint:css         # design-token + mono-font enforcement (CI-blocking)
+bun run preview          # preview a production build
+bun run smoke:bundle     # smoke-test the built bundle
 ```
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
+`vitest` uses esbuild and does **not** type-check — always run `bunx tsc -b`
+before committing frontend changes.
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
+## Tooling
 
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
-```
+- **Vite 8** with `@vitejs/plugin-react`.
+- **TypeScript** in strict mode (`noUnusedLocals`, `noUnusedParameters`,
+  `noFallthroughCasesInSwitch`); no `any`.
+- **ESLint 9** flat config (`eslint.config.js`) with `typescript-eslint`,
+  `eslint-plugin-react-hooks`, `eslint-plugin-react-refresh`.
+- **vitest** is the test runner (not Jest); DOM tests use `happy-dom`.
+- CSS colors must reference `var(--token-name)` custom properties defined in
+  `src/styles/theme.css` — raw hex/rgba literals fail `bun run lint:css`.
+
+## Dev server port
+
+The Vite port is chosen by `scripts/dev.sh`, which probes for the first free
+port starting at base **14253** and passes it via `VITE_PORT`. `strictPort`
+is `true`, so a probe/Vite race fails loudly instead of silently binding a
+foreign port. The default was deliberately moved off Tauri's stock `1420`
+because other Tauri starter templates default to it.
+
+## Layout
+
+- `src/components/` — React components, organized by feature area.
+- `src/stores/` — Zustand store and per-domain slices.
+- `src/services/` — Tauri command/event wrappers (`tauri.ts`).
+- `src/hooks/` — streaming-data and UI hooks.
+- `src/styles/` — global CSS and theme tokens.
+- `scripts/` — `lint:css` and bundle-smoke helpers.

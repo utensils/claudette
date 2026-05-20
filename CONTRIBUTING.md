@@ -17,7 +17,7 @@ When filing a bug report, include:
 - A clear, descriptive title
 - Steps to reproduce the issue
 - Expected behavior vs. actual behavior
-- Your OS and version (macOS or Linux)
+- Your OS and version (macOS, Linux, or Windows)
 - Relevant logs or screenshots
 
 ### Suggesting Features
