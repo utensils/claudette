@@ -154,7 +154,13 @@ function RepoIssuesBody({
       </div>
     );
   }
-  if (payload?.error) {
+  // Backend preserves prior cached rows + sets `error` on transient
+  // provider failures so the UI can keep the user oriented. Render the
+  // cached rows when present and surface the error non-destructively
+  // above the list; only replace the list with an error banner when we
+  // have *nothing* cached to fall back to.
+  const hasCachedRows = totalCount > 0;
+  if (payload?.error && !hasCachedRows) {
     return (
       <div className={styles.error}>
         <span>Could not load issues.</span>
@@ -168,33 +174,47 @@ function RepoIssuesBody({
       </div>
     );
   }
-  if (totalCount === 0) {
+  if (!hasCachedRows) {
     return <div className={styles.muted}>No open issues.</div>;
   }
 
   return (
-    <ul className={styles.list}>
-      {visible.map((issue) => (
-        <IssueRow
-          key={issue.number}
-          repoId={repoId}
-          issue={issue}
-          onOpen={onOpen}
-          onCopyUrl={onCopyUrl}
-        />
-      ))}
-      {!showAll && totalCount > visible.length && (
-        <li>
+    <>
+      {payload?.error && (
+        <div className={styles.errorBanner}>
+          <span>Could not refresh issues — showing cached results.</span>
           <button
             type="button"
             className={styles.retryButton}
-            onClick={onShowAll}
+            onClick={onRetry}
           >
-            Show all ({totalCount})
+            Retry
           </button>
-        </li>
+        </div>
       )}
-    </ul>
+      <ul className={styles.list}>
+        {visible.map((issue) => (
+          <IssueRow
+            key={issue.number}
+            repoId={repoId}
+            issue={issue}
+            onOpen={onOpen}
+            onCopyUrl={onCopyUrl}
+          />
+        ))}
+        {!showAll && totalCount > visible.length && (
+          <li>
+            <button
+              type="button"
+              className={styles.retryButton}
+              onClick={onShowAll}
+            >
+              Show all ({totalCount})
+            </button>
+          </li>
+        )}
+      </ul>
+    </>
   );
 }
 

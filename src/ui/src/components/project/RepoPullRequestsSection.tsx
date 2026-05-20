@@ -64,18 +64,16 @@ export const RepoPullRequestsSection = memo(function RepoPullRequestsSection({
     }
   };
 
-  const handleCreateWorkspaceForBranch = async (pr: PullRequest) => {
-    // TODO (issue 890 follow-up): once `create_workspace` accepts a
-    // base branch arg, plumb pr.branch through so the new worktree is
-    // checked out at that PR's head. For v1 we create a workspace
-    // on the repo's default base and surface the PR branch via a
-    // toast so the user knows the follow-up `git checkout` is on
-    // them. Implementing the full pre-fill needs a backend signature
-    // change and lives in its own ticket.
+  const handleCreateWorkspaceInRepo = async (pr: PullRequest) => {
+    // The workspace is created on the repo's default base — the
+    // create_workspace Tauri command doesn't yet accept a branch arg, so
+    // we can't pre-check out pr.branch here (tracked as an issue-890
+    // follow-up). Surface the PR branch in the toast so the user knows
+    // the manual `git checkout` is on them.
     try {
       const created = await createWorkspaceOrchestrated(repoId);
       if (created) {
-        addToast(`Workspace ready. PR branch: ${pr.branch}`);
+        addToast(`Workspace ready (default branch). PR head: ${pr.branch}`);
       }
     } catch (e) {
       addToast(
@@ -151,7 +149,7 @@ export const RepoPullRequestsSection = memo(function RepoPullRequestsSection({
           }}
           onCopyUrl={(url) => void handleCopyUrl(url)}
           onCreateWorkspaceForBranch={(pr) =>
-            void handleCreateWorkspaceForBranch(pr)
+            void handleCreateWorkspaceInRepo(pr)
           }
         />
       )}
@@ -196,7 +194,11 @@ function RepoPullRequestsBody({
       </div>
     );
   }
-  if (payload?.error) {
+  // See RepoIssuesSection's RepoIssuesBody for the rationale — the
+  // backend keeps prior cached rows in `payload` on transient failures,
+  // and replacing the list with an error banner hides that state.
+  const hasCachedRows = totalCount > 0;
+  if (payload?.error && !hasCachedRows) {
     return (
       <div className={styles.error}>
         <span>Could not load pull requests.</span>
@@ -210,34 +212,48 @@ function RepoPullRequestsBody({
       </div>
     );
   }
-  if (totalCount === 0) {
+  if (!hasCachedRows) {
     return <div className={styles.muted}>No open pull requests.</div>;
   }
 
   return (
-    <ul className={styles.list}>
-      {visible.map((pr) => (
-        <PullRequestRow
-          key={pr.number}
-          repoId={repoId}
-          pr={pr}
-          onOpen={onOpen}
-          onCopyUrl={onCopyUrl}
-          onCreateWorkspaceForBranch={onCreateWorkspaceForBranch}
-        />
-      ))}
-      {!showAll && totalCount > visible.length && (
-        <li>
+    <>
+      {payload?.error && (
+        <div className={styles.errorBanner}>
+          <span>Could not refresh pull requests — showing cached results.</span>
           <button
             type="button"
             className={styles.retryButton}
-            onClick={onShowAll}
+            onClick={onRetry}
           >
-            Show all ({totalCount})
+            Retry
           </button>
-        </li>
+        </div>
       )}
-    </ul>
+      <ul className={styles.list}>
+        {visible.map((pr) => (
+          <PullRequestRow
+            key={pr.number}
+            repoId={repoId}
+            pr={pr}
+            onOpen={onOpen}
+            onCopyUrl={onCopyUrl}
+            onCreateWorkspaceForBranch={onCreateWorkspaceForBranch}
+          />
+        ))}
+        {!showAll && totalCount > visible.length && (
+          <li>
+            <button
+              type="button"
+              className={styles.retryButton}
+              onClick={onShowAll}
+            >
+              Show all ({totalCount})
+            </button>
+          </li>
+        )}
+      </ul>
+    </>
   );
 }
 
@@ -264,7 +280,10 @@ function PullRequestRow({
     { label: "Open in browser", onSelect: () => onOpen(pr.url) },
     { label: "Copy URL", onSelect: () => onCopyUrl(pr.url) },
     {
-      label: "Create workspace for this branch",
+      // Honest label: this creates a workspace on the repo's default
+      // branch, NOT the PR head — see handleCreateWorkspaceInRepo in
+      // the parent component for the follow-up tracker.
+      label: "New workspace in this repo",
       onSelect: () => onCreateWorkspaceForBranch(pr),
     },
     { type: "separator" },

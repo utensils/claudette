@@ -65,7 +65,13 @@ export async function sendToNewWorkspace(
     /* effort */ undefined,
     /* chromeEnabled */ undefined,
     /* disable1mContext */ undefined,
-    /* backendId */ undefined,
+    // Route the first turn through the provider we just persisted via
+    // `applySelectedModel`. Without this the backend resolves a default
+    // (often the global "Anthropic Claude Code" card), so a Pi-routed
+    // model id that also exists on multiple backends could fire on the
+    // wrong one for turn 1 even though the toolbar shows the right
+    // provider. Matches chatMessageDispatch's `selectedProvider` arg.
+    provider,
     /* attachments */ undefined,
     /* messageId */ undefined,
   );
