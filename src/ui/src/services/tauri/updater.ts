@@ -19,6 +19,18 @@ export function installPendingUpdate(): Promise<void> {
   return invoke("install_pending_update");
 }
 
+export type BootStage =
+  | "react_mounted"
+  | "initial_data_loading"
+  | "initial_data_failed";
+
+export function reportBootStage(
+  stage: BootStage,
+  detail?: string,
+): Promise<void> {
+  return invoke("boot_stage", { stage, detail: detail ?? null });
+}
+
 export function bootOk(): Promise<void> {
   return invoke("boot_ok");
 }

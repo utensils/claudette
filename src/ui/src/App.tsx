@@ -3,7 +3,7 @@ import { listen } from "@tauri-apps/api/event";
 import { getVersion } from "@tauri-apps/api/app";
 import { useAppStore } from "./stores/useAppStore";
 import { findPendingPlaceholderForCreatedWorkspace } from "./stores/slices/workspacesSlice";
-import { loadInitialData, getAppSetting, setAppSetting, getHostEnvFlags, listRemoteConnections, listDiscoveredServers, getLocalServerStatus, detectInstalledApps, listSystemFonts, deleteTerminalTab, listAppSettingsWithPrefix, listAgentBackends, autoDetectAgentBackends, refreshAgentBackendModels, bootOk, getClaudeAuthStatus } from "./services/tauri";
+import { loadInitialData, getAppSetting, setAppSetting, getHostEnvFlags, listRemoteConnections, listDiscoveredServers, getLocalServerStatus, detectInstalledApps, listSystemFonts, deleteTerminalTab, listAppSettingsWithPrefix, listAgentBackends, autoDetectAgentBackends, refreshAgentBackendModels, bootOk, reportBootStage, getClaudeAuthStatus } from "./services/tauri";
 import { applyTheme, applyUserFonts, loadAllThemes, findTheme, cacheThemePreference, getThemeDataAttr } from "./utils/theme";
 import { DEFAULT_THEME_ID, DEFAULT_LIGHT_THEME_ID } from "./styles/themes";
 import type { ThemeDefinition } from "./types/theme";
@@ -134,6 +134,12 @@ function App() {
   useUsageInsightsPoller();
   useCiAutoFixSession();
 
+  useEffect(() => {
+    reportBootStage("react_mounted").catch((err) =>
+      console.error("Failed to record boot stage:", err),
+    );
+  }, []);
+
   // Boot-health heartbeat for the post-update probation window.
   //
   // Two conditions must both hold before we ack:
@@ -160,6 +166,9 @@ function App() {
   useViewTogglePersistence(viewStateHydrated);
 
   useEffect(() => {
+    reportBootStage("initial_data_loading").catch((err) =>
+      console.error("Failed to record boot stage:", err),
+    );
     loadInitialData()
       .then(async (data) => {
         // Tag local data with null remote_connection_id (backend omits this field).
@@ -240,6 +249,10 @@ function App() {
       })
       .catch(async (err) => {
         console.error("Failed to load initial data:", err);
+        const detail = err instanceof Error ? err.message : String(err);
+        await reportBootStage("initial_data_failed", detail).catch((stageErr) =>
+          console.error("Failed to record boot stage:", stageErr),
+        );
         await hydratePersistedViewState([]);
         setViewStateHydrated(true);
       });
