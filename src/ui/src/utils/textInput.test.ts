@@ -12,6 +12,10 @@ describe("textInput helpers", () => {
 
   it("disables browser typing substitutions for exact-text fields", () => {
     expect(PLAIN_TEXT_INPUT_PROPS).toEqual({
+      // `autoComplete: "off"` suppresses browser-remembered values for
+      // inputs that hold raw content (env var names, scripts, ids) where
+      // autofill is a regression rather than a convenience.
+      autoComplete: "off",
       autoCapitalize: "off",
       autoCorrect: "off",
       spellCheck: false,

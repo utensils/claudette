@@ -18,6 +18,7 @@ import {
   type RepositoryInputField,
   type RepositoryInputType,
 } from "../../../types/repositoryInput";
+import { PLAIN_TEXT_INPUT_PROPS } from "../../../utils/textInput";
 import styles from "../Settings.module.css";
 
 interface RequiredInputsEditorProps {
@@ -268,23 +269,39 @@ export function RequiredInputsEditor({ repoId }: RequiredInputsEditorProps) {
     };
   }, [repoId, flushSave]);
 
+  // Mutators apply the change to `rowsRef.current` *synchronously* before
+  // calling `setRows`, then `queueSave`. `setRows` is async — React schedules
+  // the render after this event handler returns — so the render-phase
+  // `rowsRef.current = rows;` assignment hasn't picked up the new state yet
+  // when `queueSave` runs. Reading the ref then would snapshot the *old*
+  // rows and the timer would persist them back, silently reverting whatever
+  // the user just toggled or typed. Updating the ref first closes that gap.
   const updateRow = useCallback(
     (rowId: string, patch: Partial<EditorRow>) => {
-      setRows((prev) =>
-        prev.map((r) => (r.rowId === rowId ? { ...r, ...patch } : r)),
+      const next = rowsRef.current.map((r) =>
+        r.rowId === rowId ? { ...r, ...patch } : r,
       );
+      rowsRef.current = next;
+      setRows(next);
       queueSave();
     },
     [queueSave],
   );
 
   const addRow = useCallback(() => {
-    setRows((prev) => [...prev, blankRow()]);
+    const next = [...rowsRef.current, blankRow()];
+    rowsRef.current = next;
+    setRows(next);
+    // Intentionally no `queueSave` — a freshly added row has an empty
+    // key and `flushSave` would drop it anyway. The next keystroke
+    // (which lands via `updateRow`) is what triggers the first save.
   }, []);
 
   const removeRow = useCallback(
     (rowId: string) => {
-      setRows((prev) => prev.filter((r) => r.rowId !== rowId));
+      const next = rowsRef.current.filter((r) => r.rowId !== rowId);
+      rowsRef.current = next;
+      setRows(next);
       queueSave();
     },
     [queueSave],
@@ -355,6 +372,7 @@ function RequiredInputRow({ row, onChange, onRemove }: RowProps) {
           placeholder="EXAMPLE_ENV"
           className={`${field} ${styles.requiredInputKeyInput}`}
           aria-label="Input name (env var)"
+          {...PLAIN_TEXT_INPUT_PROPS}
         />
         <select
           value={row.type}
