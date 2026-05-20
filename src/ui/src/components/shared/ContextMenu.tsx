@@ -201,12 +201,26 @@ export function ContextMenu({
     // chevron when both menus use 4px padding. We also stash the parent
     // menu's left edge so the submenu can flip leftward when the right
     // side would overflow.
+    //
+    // Critical: `getBoundingClientRect()` returns visual-frame coords on
+    // WebKit when root `zoom !== 1`, but `style.left/top` use the layout
+    // frame. Without `viewportToFixed`, setting `left = rect.right`
+    // shifts the submenu by a factor of (zoom - 1) — that's the "wildly
+    // offset submenu" symptom users see on scaled UIs. The parent menu
+    // applies the same conversion via `clampToViewport` -> `viewportToFixed`
+    // on the contextmenu MouseEvent coords; do the same for the submenu's
+    // rect-derived anchor.
     const parentMenuRect = menuRef.current?.getBoundingClientRect();
+    const topRight = viewportToFixed(rect.right, rect.top - 4);
+    const parentLeft = viewportToFixed(
+      parentMenuRect?.left ?? rect.left,
+      0,
+    ).x;
     setOpenSubmenu({
       index,
-      x: rect.right,
-      y: rect.top - 4,
-      parentLeft: parentMenuRect?.left ?? rect.left,
+      x: topRight.x,
+      y: topRight.y,
+      parentLeft,
     });
   }, []);
 
