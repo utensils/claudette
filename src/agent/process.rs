@@ -3,7 +3,6 @@ use std::path::Path;
 use serde::Serialize;
 use tokio::io::AsyncBufReadExt;
 use tokio::io::BufReader;
-use tokio::process::Command;
 use tokio::sync::mpsc;
 
 use crate::env::WorkspaceEnv;
@@ -90,7 +89,7 @@ pub async fn run_turn(
     crate::missing_cli::precheck_cwd(working_dir)?;
 
     let claude_path = resolve_claude_path().await;
-    let mut cmd = Command::new(&claude_path);
+    let mut cmd = crate::process::command(&claude_path);
     cmd.no_console_window();
     cmd.args(&args)
         .current_dir(working_dir)
@@ -262,7 +261,7 @@ pub async fn stop_agent(pid: u32) -> Result<(), String> {
 async fn stop_agent_force(pid: u32) -> std::io::Result<std::process::Output> {
     #[cfg(unix)]
     {
-        tokio::process::Command::new("kill")
+        crate::process::command("kill")
             .no_console_window()
             .args(["-9", &pid.to_string()])
             .output()
@@ -270,7 +269,7 @@ async fn stop_agent_force(pid: u32) -> std::io::Result<std::process::Output> {
     }
     #[cfg(windows)]
     {
-        tokio::process::Command::new("taskkill")
+        crate::process::command("taskkill")
             .no_console_window()
             .args(["/PID", &pid.to_string(), "/T", "/F"])
             .output()
@@ -290,13 +289,13 @@ pub async fn stop_agent_graceful(pid: u32) -> Result<(), String> {
     // Send the graceful signal. Errors here are non-fatal — the force
     // escalation below covers any "process didn't respond" case.
     #[cfg(unix)]
-    let _ = tokio::process::Command::new("kill")
+    let _ = crate::process::command("kill")
         .no_console_window()
         .args(["-15", &pid.to_string()])
         .output()
         .await;
     #[cfg(windows)]
-    let _ = tokio::process::Command::new("taskkill")
+    let _ = crate::process::command("taskkill")
         .no_console_window()
         .args(["/PID", &pid.to_string(), "/T"])
         .output()
@@ -326,7 +325,7 @@ pub async fn stop_agent_graceful(pid: u32) -> Result<(), String> {
 async fn pid_is_alive(pid: u32) -> bool {
     #[cfg(unix)]
     {
-        let probe = tokio::process::Command::new("kill")
+        let probe = crate::process::command("kill")
             .no_console_window()
             .args(["-0", &pid.to_string()])
             .output()
@@ -335,7 +334,7 @@ async fn pid_is_alive(pid: u32) -> bool {
     }
     #[cfg(windows)]
     {
-        let probe = tokio::process::Command::new("tasklist")
+        let probe = crate::process::command("tasklist")
             .no_console_window()
             .args(["/FI", &format!("PID eq {pid}"), "/NH", "/FO", "CSV"])
             .output()
@@ -365,7 +364,7 @@ mod tests {
     #[tokio::test]
     async fn test_stop_agent_graceful_stops_process_before_escalation() {
         // Spawn a process that traps SIGTERM and exits cleanly.
-        let mut child = tokio::process::Command::new("sh")
+        let mut child = crate::process::command("sh")
             .no_console_window()
             .args(["-c", "trap 'exit 0' TERM; sleep 5"])
             .stdout(std::process::Stdio::null())
@@ -387,7 +386,7 @@ mod tests {
             .expect("failed to reap child");
 
         // kill -0 should fail for a dead process.
-        let probe = tokio::process::Command::new("kill")
+        let probe = crate::process::command("kill")
             .no_console_window()
             .args(["-0", &pid.to_string()])
             .output()

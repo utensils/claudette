@@ -1,8 +1,6 @@
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
-use tokio::process::Command;
-
 use crate::env::WorkspaceEnv;
 use crate::process::{CommandWindowExt as _, sanitize_claude_subprocess_env};
 
@@ -178,7 +176,7 @@ pub async fn generate_branch_name(
     crate::missing_cli::precheck_cwd(std::path::Path::new(worktree_path))?;
 
     let claude_path = resolve_claude_path().await;
-    let mut cmd = Command::new(&claude_path);
+    let mut cmd = crate::process::command(&claude_path);
     cmd.no_console_window();
     cmd.stdin(std::process::Stdio::null())
         .env("PATH", crate::env::enriched_path());
@@ -267,7 +265,7 @@ pub async fn generate_session_name(
     crate::missing_cli::precheck_cwd(std::path::Path::new(worktree_path))?;
 
     let claude_path = resolve_claude_path().await;
-    let mut cmd = Command::new(&claude_path);
+    let mut cmd = crate::process::command(&claude_path);
     // Without CREATE_NO_WINDOW the background `claude --print` spawn allocates
     // a fresh console and a black cmd.exe window flashes on screen for the
     // duration of the Haiku call. The sibling `generate_branch_name` already

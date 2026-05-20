@@ -544,7 +544,7 @@ pub(super) async fn codex_login_status() -> Result<String, String> {
 }
 
 pub(super) fn codex_cli_command(program: impl AsRef<std::ffi::OsStr>) -> tokio::process::Command {
-    let mut command = tokio::process::Command::new(program);
+    let mut command = claudette::process::command(program);
     command
         .no_console_window()
         .env("PATH", claudette::env::enriched_path());

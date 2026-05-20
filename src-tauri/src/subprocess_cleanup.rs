@@ -37,7 +37,7 @@ use claudette::process::CommandWindowExt as _;
 /// never needs to enumerate the tree from user space.
 #[cfg(unix)]
 pub fn collect_descendants(roots: &[i32]) -> Vec<i32> {
-    let output = match std::process::Command::new("ps")
+    let output = match claudette::process::std_command("ps")
         .args(["-A", "-o", "pid=,ppid="])
         .output()
     {
@@ -122,7 +122,7 @@ pub fn kill_processes_with_descendants(roots: &[i32], grace_ms: u64) {
 
     // Phase 1: graceful taskkill /T (per-root subtree).
     for &pid in &roots {
-        let _ = std::process::Command::new("taskkill")
+        let _ = claudette::process::std_command("taskkill")
             .no_console_window()
             .args(["/PID", &pid.to_string(), "/T"])
             .output();
@@ -142,7 +142,7 @@ pub fn kill_processes_with_descendants(roots: &[i32], grace_ms: u64) {
 
     // Phase 3: force-kill the subtree.
     for &pid in &roots {
-        let _ = std::process::Command::new("taskkill")
+        let _ = claudette::process::std_command("taskkill")
             .no_console_window()
             .args(["/PID", &pid.to_string(), "/T", "/F"])
             .output();
@@ -182,7 +182,7 @@ fn pid_is_alive(pid: u32) -> bool {
 #[cfg(unix)]
 mod tests {
     use super::*;
-    use std::process::{Command, Stdio};
+    use std::process::Stdio;
     use std::time::Duration;
 
     fn pid_alive(pid: i32) -> bool {
@@ -193,7 +193,7 @@ mod tests {
     fn collect_descendants_finds_grandchildren() {
         // sh -c 'sleep 60 & sleep 60' spawns two child sleeps. The outer sh
         // is root; each sleep is a descendant.
-        let mut sh = Command::new("/bin/sh")
+        let mut sh = claudette::process::std_command("/bin/sh")
             .args(["-c", "sleep 60 & sleep 60"])
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -225,7 +225,7 @@ mod tests {
         // Spawn a shell that spawns a long sleep in a different process group
         // (via setsid-like shell-builtin), simulating cargo-watch's pattern.
         // Then verify our killer reaches the grandchild.
-        let mut sh = Command::new("/bin/sh")
+        let mut sh = claudette::process::std_command("/bin/sh")
             .args([
                 "-c",
                 // exec a subshell that disowns its child, so the grandchild
@@ -262,7 +262,7 @@ mod tests {
 #[cfg(windows)]
 mod tests_windows {
     use super::*;
-    use std::process::{Command, Stdio};
+    use std::process::Stdio;
 
     /// `cmd /c "start /B ping -n 30 127.0.0.1 & ping -n 30 127.0.0.1"` spawns
     /// `cmd.exe` as the root with a backgrounded `ping` and an inline `ping`
@@ -270,7 +270,7 @@ mod tests_windows {
     /// should bring all three down within the grace window.
     #[test]
     fn kill_with_descendants_terminates_subtree_windows() {
-        let mut child = Command::new("cmd.exe")
+        let mut child = claudette::process::std_command("cmd.exe")
             .args([
                 "/C",
                 "start /B ping -n 30 127.0.0.1 >NUL & ping -n 30 127.0.0.1 >NUL",

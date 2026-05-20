@@ -5,7 +5,6 @@ use std::sync::OnceLock;
 
 use crate::process::CommandWindowExt as _;
 use serde::Serialize;
-use tokio::process::Command;
 
 /// Resolve the `git` binary once and reuse the absolute path for every
 /// subsequent call. Caching matters because git is invoked dozens of times
@@ -207,7 +206,7 @@ impl fmt::Display for GitError {
 impl std::error::Error for GitError {}
 
 async fn run_git(repo_path: &str, args: &[&str]) -> Result<String, GitError> {
-    let output = Command::new(crate::git::resolve_git_path_blocking())
+    let output = crate::process::command(crate::git::resolve_git_path_blocking())
         .no_console_window()
         .args(["-C", repo_path])
         .args(args)
@@ -226,7 +225,7 @@ async fn run_git(repo_path: &str, args: &[&str]) -> Result<String, GitError> {
 /// Read `git config user.name` from global config (no repo required).
 /// Returns `None` if not configured.
 pub async fn get_git_username() -> Result<Option<String>, GitError> {
-    let output = Command::new(crate::git::resolve_git_path_blocking())
+    let output = crate::process::command(crate::git::resolve_git_path_blocking())
         .no_console_window()
         .args(["config", "--global", "user.name"])
         .output()
@@ -320,7 +319,7 @@ pub async fn read_blob_at_revision(
     validate_repo(worktree_path).await?;
 
     let spec = format!("{revision}:{file_path}");
-    let exists = Command::new(crate::git::resolve_git_path_blocking())
+    let exists = crate::process::command(crate::git::resolve_git_path_blocking())
         .no_console_window()
         .args(["-C", worktree_path])
         .args(["cat-file", "-e", &spec])
@@ -339,7 +338,7 @@ pub async fn read_blob_at_revision(
     // decimal byte count followed by a newline. For oversized blobs the
     // frontend disables the gutter regardless, so we short-circuit here to
     // skip a wasteful IPC roundtrip.
-    let size_out = Command::new(crate::git::resolve_git_path_blocking())
+    let size_out = crate::process::command(crate::git::resolve_git_path_blocking())
         .no_console_window()
         .args(["-C", worktree_path])
         .args(["cat-file", "-s", &spec])
@@ -364,7 +363,7 @@ pub async fn read_blob_at_revision(
         });
     }
 
-    let bytes_out = Command::new(crate::git::resolve_git_path_blocking())
+    let bytes_out = crate::process::command(crate::git::resolve_git_path_blocking())
         .no_console_window()
         .args(["-C", worktree_path])
         .args(["cat-file", "blob", &spec])
@@ -515,7 +514,7 @@ pub async fn fetch_remote(repo_path: &str, remote_override: Option<&str>) -> Res
     };
 
     // Spawn with kill_on_drop so the child is terminated if the timeout fires.
-    let mut child = match Command::new(crate::git::resolve_git_path_blocking())
+    let mut child = match crate::process::command(crate::git::resolve_git_path_blocking())
         .no_console_window()
         .args(["-C", repo_path, "fetch", &remote])
         .kill_on_drop(true)
@@ -1356,7 +1355,7 @@ mod tests {
         // Clone from bare remote.
         let clone_dir = tempfile::tempdir().unwrap();
         let clone_path = clone_dir.path().to_str().unwrap();
-        let output = tokio::process::Command::new(crate::git::resolve_git_path_blocking())
+        let output = crate::process::command(crate::git::resolve_git_path_blocking())
             .no_console_window()
             .args(["clone", remote_path, clone_path])
             .output()
@@ -1389,7 +1388,7 @@ mod tests {
         // Push a new commit directly to the bare remote via a temp worktree.
         let pusher = tempfile::tempdir().unwrap();
         let pusher_path = pusher.path().to_str().unwrap();
-        let out = tokio::process::Command::new(crate::git::resolve_git_path_blocking())
+        let out = crate::process::command(crate::git::resolve_git_path_blocking())
             .no_console_window()
             .args(["clone", remote_path, pusher_path])
             .output()
@@ -1825,11 +1824,10 @@ mod tests {
 #[cfg(test)]
 mod blob_at_revision_tests {
     use super::*;
-    use std::process::Command as StdCommand;
     use tempfile::tempdir;
 
     fn git_cmd(dir: &Path, args: &[&str]) -> String {
-        let out = StdCommand::new("git")
+        let out = crate::process::std_command("git")
             .current_dir(dir)
             .args(args)
             .output()

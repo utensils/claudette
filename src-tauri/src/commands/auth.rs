@@ -3,7 +3,7 @@ use std::process::Stdio;
 use std::time::Duration;
 use tauri::{AppHandle, Emitter, State};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::process::{ChildStderr, ChildStdout, Command};
+use tokio::process::{ChildStderr, ChildStdout};
 use tokio::time::timeout;
 
 use claudette::process::{CommandWindowExt as _, sanitize_claude_subprocess_env};
@@ -73,7 +73,7 @@ pub async fn get_claude_auth_status(
     quiet: Option<bool>,
 ) -> Result<ClaudeAuthStatus, String> {
     let claude_path = claudette::agent::resolve_claude_path().await;
-    let mut command = Command::new(&claude_path);
+    let mut command = claudette::process::command(&claude_path);
     command
         .no_console_window()
         .args(["auth", "status", "--json"])
@@ -140,7 +140,7 @@ pub async fn get_claude_auth_status(
 #[cfg_attr(not(feature = "alternative-backends"), allow(dead_code))]
 pub async fn is_claude_oauth_authenticated() -> bool {
     let claude_path = claudette::agent::resolve_claude_path().await;
-    let mut command = Command::new(&claude_path);
+    let mut command = claudette::process::command(&claude_path);
     command
         .no_console_window()
         .args(["auth", "status", "--json"])
@@ -219,7 +219,7 @@ async fn validate_claude_auth(
     claude_path: std::ffi::OsString,
     local_status: ClaudeAuthStatus,
 ) -> Result<ClaudeAuthStatus, String> {
-    let mut command = Command::new(&claude_path);
+    let mut command = claudette::process::command(&claude_path);
     command
         .no_console_window()
         .arg("-p")
@@ -353,7 +353,7 @@ pub async fn claude_auth_login(app: AppHandle, state: State<'_, AppState>) -> Re
         return Err("A sign-in flow is already in progress.".into());
     }
 
-    let mut command = Command::new(&claude_path);
+    let mut command = claudette::process::command(&claude_path);
     command
         .no_console_window()
         .args(["auth", "login"])

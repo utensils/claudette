@@ -3,7 +3,6 @@ use std::sync::Arc;
 
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
-use tokio::process::Command;
 
 use claudette::db::Database;
 use claudette::file_expand;
@@ -297,7 +296,7 @@ async fn stream_ls_files(
 ) -> Result<(), String> {
     use tokio::io::{AsyncBufReadExt, BufReader};
 
-    let mut child = Command::new(claudette::git::resolve_git_path_blocking())
+    let mut child = claudette::process::command(claudette::git::resolve_git_path_blocking())
         .no_console_window()
         .args(["-C", worktree_path])
         .args(args)
@@ -1019,7 +1018,7 @@ fn build_create_file_target(
 fn reveal_path(path: &Path) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     {
-        let output = std::process::Command::new("open")
+        let output = claudette::process::std_command("open")
             .no_console_window()
             .arg("-R")
             .arg(path)
@@ -1033,7 +1032,7 @@ fn reveal_path(path: &Path) -> Result<(), String> {
 
     #[cfg(target_os = "windows")]
     {
-        std::process::Command::new("explorer")
+        claudette::process::std_command("explorer")
             .no_console_window()
             .arg(format!("/select,{}", path.to_string_lossy()))
             .spawn()
@@ -1453,7 +1452,7 @@ pub fn write_attachment_to_temp_file(
 
 #[cfg(target_os = "macos")]
 fn copy_file_path_to_clipboard(path: &Path) -> Result<(), String> {
-    let output = std::process::Command::new("osascript")
+    let output = claudette::process::std_command("osascript")
         .args([
             "-e",
             "on run argv",
@@ -1524,7 +1523,7 @@ fn pipe_to_command(program: &str, args: &[&str], input: &[u8]) -> Result<(), Str
     use std::io::Write as _;
     use std::process::Stdio;
 
-    let mut child = std::process::Command::new(program)
+    let mut child = claudette::process::std_command(program)
         .args(args)
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
@@ -1815,7 +1814,7 @@ fn copy_image_bytes_to_clipboard(
     // general pasteboard as image data (not a Finder file reference).
     // Error on nil NSImage (unsupported format) and on writeObjects: returning
     // false — both would otherwise produce a silent success (exit 0).
-    let output = std::process::Command::new("osascript")
+    let output = claudette::process::std_command("osascript")
         .args([
             "-e",
             "use framework \"AppKit\"",
@@ -1894,7 +1893,7 @@ fn copy_image_bytes_to_clipboard(
          $frame.Freeze(); \
          [System.Windows.Clipboard]::SetImage($frame)"
     );
-    let output = std::process::Command::new("powershell")
+    let output = claudette::process::std_command("powershell")
         .no_console_window()
         .args(["-NoProfile", "-NonInteractive", "-Command", &script])
         .output()
@@ -2048,7 +2047,7 @@ mod tests {
             vec!["config", "user.email", "test@test.com"],
             vec!["config", "user.name", "Test"],
         ] {
-            std::process::Command::new("git")
+            claudette::process::std_command("git")
                 .args(&args)
                 .current_dir(root)
                 .output()
@@ -2056,7 +2055,7 @@ mod tests {
         }
         std::fs::write(root.join("tracked.txt"), "hello").unwrap();
         for args in [vec!["add", "tracked.txt"], vec!["commit", "-m", "init"]] {
-            std::process::Command::new("git")
+            claudette::process::std_command("git")
                 .args(&args)
                 .current_dir(root)
                 .output()
@@ -2121,7 +2120,7 @@ mod tests {
             vec!["config", "user.email", "test@test.com"],
             vec!["config", "user.name", "Test"],
         ] {
-            std::process::Command::new("git")
+            claudette::process::std_command("git")
                 .args(&args)
                 .current_dir(root)
                 .output()
@@ -2140,7 +2139,7 @@ mod tests {
             vec!["add", "Cargo.toml", "README.md", "src/main.rs"],
             vec!["commit", "-m", "init"],
         ] {
-            std::process::Command::new("git")
+            claudette::process::std_command("git")
                 .args(&args)
                 .current_dir(root)
                 .output()

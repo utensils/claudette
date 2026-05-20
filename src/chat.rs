@@ -425,7 +425,7 @@ mod tests {
     }
 
     async fn init_git_repo(wt: &std::path::Path) {
-        let output = tokio::process::Command::new(crate::git::resolve_git_path_blocking())
+        let output = crate::process::command(crate::git::resolve_git_path_blocking())
             .args(["init", wt.to_str().unwrap()])
             .output()
             .await

@@ -8,7 +8,6 @@
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
-use tokio::process::Command;
 use tokio::time::timeout;
 
 use crate::process::CommandWindowExt as _;
@@ -257,7 +256,7 @@ fn parse_description_choices(desc: &str) -> Option<Vec<String>> {
 /// when parsing yields zero flags.
 pub async fn discover_claude_flags() -> Result<Vec<ClaudeFlagDef>, String> {
     let claude_path = crate::agent::resolve_claude_path().await;
-    let mut cmd = Command::new(&claude_path);
+    let mut cmd = crate::process::command(&claude_path);
     cmd.no_console_window();
     cmd.arg("--help")
         .env("PATH", crate::env::enriched_path())

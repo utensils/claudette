@@ -308,20 +308,22 @@ pub async fn open_url(url: String) -> Result<(), String> {
 
 pub(crate) mod opener {
     use claudette::process::CommandWindowExt as _;
-    use std::process::Command;
 
     pub fn open(path: &str) -> std::io::Result<()> {
         #[cfg(target_os = "macos")]
-        let cmd = Command::new("open").no_console_window().arg(path).spawn();
+        let cmd = claudette::process::std_command("open")
+            .no_console_window()
+            .arg(path)
+            .spawn();
 
         #[cfg(target_os = "linux")]
-        let cmd = Command::new("xdg-open")
+        let cmd = claudette::process::std_command("xdg-open")
             .no_console_window()
             .arg(path)
             .spawn();
 
         #[cfg(target_os = "windows")]
-        let cmd = Command::new("cmd")
+        let cmd = claudette::process::std_command("cmd")
             .no_console_window()
             .args(["/C", "start", "", path])
             .spawn();

@@ -121,7 +121,6 @@ mod tests {
     use super::*;
     use crate::db::Database;
     use crate::model::{AgentStatus, Repository, Workspace, WorkspaceStatus};
-    use std::process::Command;
 
     fn make_repo(id: &str, path: &str) -> Repository {
         Repository {
@@ -160,7 +159,7 @@ mod tests {
     }
 
     fn git(repo: &Path, args: &[&str]) {
-        let status = Command::new(crate::git::resolve_git_path_blocking())
+        let status = crate::process::std_command(crate::git::resolve_git_path_blocking())
             .arg("-C")
             .arg(repo)
             .args(args)
@@ -172,7 +171,7 @@ mod tests {
     fn setup_repo() -> tempfile::TempDir {
         let dir = tempfile::tempdir().unwrap();
         let repo = dir.path();
-        let status = Command::new(crate::git::resolve_git_path_blocking())
+        let status = crate::process::std_command(crate::git::resolve_git_path_blocking())
             .arg("-C")
             .arg(repo)
             .args(["init", "-b", "main"])

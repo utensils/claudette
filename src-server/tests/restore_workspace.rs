@@ -76,7 +76,7 @@ async fn setup() -> (
 }
 
 async fn run_git(cwd: &Path, args: &[&str]) {
-    let status = tokio::process::Command::new("git")
+    let status = claudette::process::command("git")
         .args(args)
         .current_dir(cwd)
         .status()

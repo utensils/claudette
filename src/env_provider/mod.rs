@@ -875,7 +875,7 @@ mod tests {
                 sources: vec![],
             };
 
-            let mut cmd = std::process::Command::new("sh");
+            let mut cmd = crate::process::std_command("sh");
             cmd.arg("-c")
                 .arg("echo set=$CLAUDETTE_TEST_SET; echo unset=${CLAUDETTE_TEST_UNSET:-MISSING}");
             // Pre-set the unset var in the parent env so we can observe

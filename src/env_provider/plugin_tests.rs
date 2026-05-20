@@ -1620,7 +1620,7 @@ async fn integration_direnv_export_returns_env() {
 
     // direnv requires the .envrc to be allowed. direnv reads HOME for
     // its allow-cache location, which we've redirected above.
-    let status = std::process::Command::new("direnv")
+    let status = crate::process::std_command("direnv")
         .arg("allow")
         .current_dir(tmp.path())
         .status()
@@ -1703,7 +1703,7 @@ async fn integration_mise_export_returns_env() {
     .unwrap();
 
     // mise requires explicit trust for per-project config.
-    let status = std::process::Command::new("mise")
+    let status = crate::process::std_command("mise")
         .arg("trust")
         .current_dir(tmp.path())
         .status()

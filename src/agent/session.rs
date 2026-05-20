@@ -92,7 +92,7 @@ impl PersistentSession {
         crate::missing_cli::precheck_cwd(working_dir)?;
 
         let claude_path = resolve_claude_path().await;
-        let mut cmd = Command::new(&claude_path);
+        let mut cmd = crate::process::command(&claude_path);
         cmd.no_console_window();
         cmd.args(&args)
             .current_dir(working_dir)
@@ -823,7 +823,7 @@ mod tests {
 
     #[test]
     fn persistent_session_idle_keepalive_is_applied_to_command_env() {
-        let mut cmd = Command::new("claude");
+        let mut cmd = crate::process::command("claude");
         apply_persistent_session_idle_keepalive(&mut cmd);
 
         let actual = cmd

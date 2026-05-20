@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicI64, Ordering};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
-use tokio::process::{ChildStdin, Command};
+use tokio::process::ChildStdin;
 use tokio::sync::broadcast;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
@@ -256,7 +256,7 @@ impl PiSdkSession {
         crate::missing_cli::precheck_cwd(config.working_dir)?;
 
         let pi_path = resolve_pi_harness_path().await;
-        let mut cmd = Command::new(&pi_path);
+        let mut cmd = crate::process::command(&pi_path);
         cmd.no_console_window();
         cmd.current_dir(config.working_dir)
             .stdin(std::process::Stdio::piped())

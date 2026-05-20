@@ -1994,7 +1994,7 @@ pub async fn open_workspace_in_terminal(
 
         let mut errors = Vec::new();
         for (terminal, args) in &terminals {
-            let mut cmd = tokio::process::Command::new(terminal);
+            let mut cmd = claudette::process::command(terminal);
             cmd.no_console_window();
             for arg in args {
                 cmd.arg(arg);
@@ -2041,7 +2041,7 @@ pub async fn open_workspace_in_terminal(
             end tell"#
         );
 
-        tokio::process::Command::new("osascript")
+        claudette::process::command("osascript")
             .no_console_window()
             .arg("-e")
             .arg(&script)
@@ -2077,7 +2077,7 @@ pub async fn open_workspace_in_terminal(
 
         let mut errors = Vec::new();
         for (binary, args) in attempts {
-            let mut cmd = tokio::process::Command::new(binary);
+            let mut cmd = claudette::process::command(binary);
             cmd.new_console_window();
             for arg in args {
                 cmd.arg(arg);

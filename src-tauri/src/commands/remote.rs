@@ -282,7 +282,7 @@ pub async fn start_local_server(state: State<'_, AppState>) -> Result<LocalServe
         let server_bin = std::env::current_exe()
             .map_err(|e| format!("Failed to locate current executable: {e}"))?;
 
-        let mut child = tokio::process::Command::new(&server_bin)
+        let mut child = claudette::process::command(&server_bin)
             .no_console_window()
             .arg("--server")
             .stdout(std::process::Stdio::piped())

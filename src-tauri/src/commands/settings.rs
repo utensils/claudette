@@ -173,7 +173,7 @@ pub async fn list_system_fonts() -> Vec<String> {
     {
         // Swift is always available on macOS; NSFontManager is the canonical API.
         let script = r#"import AppKit; NSFontManager.shared.availableFontFamilies.sorted().forEach { print($0) }"#;
-        if let Ok(output) = tokio::process::Command::new("/usr/bin/swift")
+        if let Ok(output) = claudette::process::command("/usr/bin/swift")
             .no_console_window()
             .arg("-e")
             .arg(script)
@@ -193,7 +193,7 @@ pub async fn list_system_fonts() -> Vec<String> {
     #[cfg(target_os = "linux")]
     {
         // fontconfig is standard on all Linux desktops.
-        if let Ok(output) = tokio::process::Command::new("fc-list")
+        if let Ok(output) = claudette::process::command("fc-list")
             .no_console_window()
             .args([":", "family"])
             .output()
@@ -241,7 +241,7 @@ pub fn play_notification_sound(sound: String, volume: Option<f64>) {
         } else {
             format!("/System/Library/Sounds/{sound}.aiff")
         };
-        if let Ok(child) = std::process::Command::new("afplay")
+        if let Ok(child) = claudette::process::std_command("afplay")
             .no_console_window()
             .arg("-v")
             .arg(format!("{vol}"))
@@ -259,13 +259,13 @@ pub fn play_notification_sound(sound: String, volume: Option<f64>) {
             sound.to_lowercase()
         };
         let pa_volume = (vol * 65536.0) as u32;
-        if let Ok(child) = std::process::Command::new("canberra-gtk-play")
+        if let Ok(child) = claudette::process::std_command("canberra-gtk-play")
             .no_console_window()
             .arg("-i")
             .arg(&sound_name)
             .spawn()
             .or_else(|_| {
-                std::process::Command::new("paplay")
+                claudette::process::std_command("paplay")
                     .no_console_window()
                     .arg("--volume")
                     .arg(pa_volume.to_string())
@@ -351,13 +351,13 @@ pub(crate) fn build_notification_command(
     }
     #[cfg(not(windows))]
     let mut command = {
-        let mut c = std::process::Command::new("sh");
+        let mut c = claudette::process::std_command("sh");
         c.arg("-c").arg(cmd);
         c
     };
     #[cfg(windows)]
     let mut command = {
-        let mut c = std::process::Command::new("cmd.exe");
+        let mut c = claudette::process::std_command("cmd.exe");
         // /S = leave the command line alone (no double-quote stripping);
         // /C = execute the command and terminate.
         c.arg("/S").arg("/C").arg(cmd);

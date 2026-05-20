@@ -292,7 +292,7 @@ pub async fn open_release_notes() -> Result<(), String> {
 async fn open_external_url(url: &str) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     {
-        tokio::process::Command::new("open")
+        claudette::process::command("open")
             .no_console_window()
             .arg(url)
             .spawn()
@@ -305,7 +305,7 @@ async fn open_external_url(url: &str) -> Result<(), String> {
         // title with no real target. The empty `""` slot neutralises that
         // quirk — current callers pass controlled URLs, but the defensive
         // form costs nothing and protects future callers.
-        tokio::process::Command::new("cmd")
+        claudette::process::command("cmd")
             .no_console_window()
             .args(["/C", "start", "", url])
             .spawn()
@@ -313,7 +313,7 @@ async fn open_external_url(url: &str) -> Result<(), String> {
     }
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
-        tokio::process::Command::new("xdg-open")
+        claudette::process::command("xdg-open")
             .no_console_window()
             .arg(url)
             .spawn()

@@ -22,11 +22,10 @@
 /// `.spawn()`/`.output()`/`.status()`:
 ///
 /// ```ignore
-/// use claudette::process::CommandWindowExt;
+/// use claudette::process::command;
 ///
-/// let out = tokio::process::Command::new("git")
+/// let out = command("git")
 ///     .args(["status", "--porcelain"])
-///     .no_console_window()
 ///     .output()
 ///     .await?;
 /// ```
@@ -46,6 +45,32 @@ pub trait CommandWindowExt {
     /// terminal launchers ignore this flag because they create their
     /// own window via app-activation, so passing it is harmless there.
     fn new_console_window(&mut self) -> &mut Self;
+}
+
+/// Construct a Tokio subprocess command with the Windows console-flash guard
+/// applied by default. Use this for async process work instead of raw
+/// `tokio::process::Command::new`.
+#[allow(
+    clippy::disallowed_methods,
+    reason = "central subprocess constructor applies Windows CREATE_NO_WINDOW guard"
+)]
+pub fn command(program: impl AsRef<std::ffi::OsStr>) -> tokio::process::Command {
+    let mut cmd = tokio::process::Command::new(program);
+    cmd.no_console_window();
+    cmd
+}
+
+/// Construct a std subprocess command with the Windows console-flash guard
+/// applied by default. Use this for blocking process work instead of raw
+/// `std::process::Command::new`.
+#[allow(
+    clippy::disallowed_methods,
+    reason = "central subprocess constructor applies Windows CREATE_NO_WINDOW guard"
+)]
+pub fn std_command(program: impl AsRef<std::ffi::OsStr>) -> std::process::Command {
+    let mut cmd = std::process::Command::new(program);
+    cmd.no_console_window();
+    cmd
 }
 
 /// Remove Claude Code harness environment that is valid for inference but can
@@ -128,14 +153,14 @@ mod tests {
     /// catch breakage of the trait's shape (return type, method name, impls).
     #[test]
     fn std_command_chain_typechecks() {
-        let mut cmd = std::process::Command::new("true");
+        let mut cmd = crate::process::std_command("true");
         // If this compiles, the `&mut Self` return lets us keep chaining.
         let _ref: &mut std::process::Command = cmd.no_console_window().arg("-x");
     }
 
     #[test]
     fn tokio_command_chain_typechecks() {
-        let mut cmd = tokio::process::Command::new("true");
+        let mut cmd = crate::process::command("true");
         let _ref: &mut tokio::process::Command = cmd.no_console_window().arg("-x");
     }
 
@@ -146,7 +171,7 @@ mod tests {
     /// accumulation, but the post-state is identical either way.)
     #[test]
     fn repeat_application_is_safe() {
-        let mut cmd = std::process::Command::new("true");
+        let mut cmd = crate::process::std_command("true");
         cmd.no_console_window();
         cmd.no_console_window();
         assert_eq!(cmd.get_program(), "true");
@@ -176,13 +201,13 @@ mod tests {
 
     #[test]
     fn std_command_new_console_chain_typechecks() {
-        let mut cmd = std::process::Command::new("true");
+        let mut cmd = crate::process::std_command("true");
         let _ref: &mut std::process::Command = cmd.new_console_window().arg("-x");
     }
 
     #[test]
     fn tokio_command_new_console_chain_typechecks() {
-        let mut cmd = tokio::process::Command::new("true");
+        let mut cmd = crate::process::command("true");
         let _ref: &mut tokio::process::Command = cmd.new_console_window().arg("-x");
     }
 
@@ -194,7 +219,7 @@ mod tests {
     #[test]
     fn windows_spawn_with_flag_succeeds() {
         // `cmd /C exit 0` is always available on Windows.
-        let status = std::process::Command::new("cmd")
+        let status = crate::process::std_command("cmd")
             .args(["/C", "exit", "0"])
             .no_console_window()
             .status()

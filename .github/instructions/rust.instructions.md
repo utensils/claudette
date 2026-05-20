@@ -16,4 +16,4 @@ When adding backend behavior, add focused tests close to the changed module. Use
 
 Avoid expanding god files. If adding a separate concern to `src/diff.rs`, `src/git.rs`, `src/plugin.rs`, `src/mcp.rs`, `src/mcp_supervisor.rs`, `src-tauri/src/ipc.rs`, `src-tauri/src/voice.rs`, or a large command file, extract a helper module or domain file and keep the entry point as orchestration.
 
-Gate OS-specific code with `#[cfg(windows)]`, `#[cfg(unix)]`, `#[cfg(target_os = "macos")]`, or matching negative cfgs. Do not assume Unix paths or shells in cross-platform code.
+Gate OS-specific code with `#[cfg(windows)]`, `#[cfg(unix)]`, `#[cfg(target_os = "macos")]`, or matching negative cfgs. Do not assume Unix paths or shells in cross-platform code. Never spawn a subprocess with a raw `std::process::Command::new` / `tokio::process::Command::new` — on Windows that flashes a blank `cmd.exe` console window in release builds. Use the `claudette::process` helper or `CommandWindowExt::no_console_window()`; use `.new_console_window()` only for a terminal the user intentionally opens.

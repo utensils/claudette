@@ -1,6 +1,5 @@
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -9,6 +8,8 @@ use serde::{Deserialize, Serialize};
 use tauri::AppHandle;
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
 use tokio::sync::Notify;
+
+use claudette::process::std_command;
 
 const SENTINEL_FILE: &str = "boot-probation.json";
 const REPORT_FILE: &str = "boot-rollback-report.json";
@@ -455,7 +456,7 @@ fn restore_backup(probation: &BootProbation) -> Result<(), String> {
 }
 
 fn relaunch(probation: &BootProbation) -> Result<(), String> {
-    Command::new(&probation.executable_path)
+    std_command(&probation.executable_path)
         .spawn()
         .map(|_| ())
         .map_err(|e| format!("relaunch {}: {e}", probation.executable_path.display()))
@@ -463,7 +464,7 @@ fn relaunch(probation: &BootProbation) -> Result<(), String> {
 
 fn spawn_rollback_helper(sentinel: &Path) -> Result<(), String> {
     let helper = helper_executable(sentinel)?;
-    Command::new(&helper)
+    std_command(&helper)
         .arg("--boot-rollback-helper")
         .arg(sentinel)
         .arg(std::process::id().to_string())
@@ -1477,7 +1478,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn is_pid_alive_reports_reaped_child_dead() {
-        let mut child = std::process::Command::new("true")
+        let mut child = claudette::process::std_command("true")
             .spawn()
             .expect("spawn no-op child");
         let pid = child.id();

@@ -100,7 +100,7 @@ mod imp {
             )
         };
         if result == IDOK as i32 {
-            let _ = std::process::Command::new("cmd")
+            let _ = claudette::process::std_command("cmd")
                 .no_console_window()
                 .args(["/C", "start", "", DOWNLOAD_URL])
                 .spawn();

@@ -250,13 +250,13 @@ async fn create_inner(
 fn build_script_command(script: &str, worktree_path: &Path) -> TokioCommand {
     #[cfg(not(windows))]
     let mut cmd = {
-        let mut c = TokioCommand::new("sh");
+        let mut c = crate::process::command("sh");
         c.arg("-c").arg(script);
         c
     };
     #[cfg(windows)]
     let mut cmd = {
-        let mut c = TokioCommand::new("cmd.exe");
+        let mut c = crate::process::command("cmd.exe");
         // /S = leave the rest of the command line alone (no double-quote
         // stripping); /C = run the command and exit. Same flags used by
         // the notification-command builder.
@@ -295,7 +295,7 @@ fn build_script_command(script: &str, worktree_path: &Path) -> TokioCommand {
 /// fallback and we're already in a "we don't care, just kill it" path.
 #[cfg(windows)]
 async fn kill_script_subtree(pid: u32) {
-    let _ = TokioCommand::new("taskkill")
+    let _ = crate::process::command("taskkill")
         .no_console_window()
         .args(["/PID", &pid.to_string(), "/T", "/F"])
         .output()
@@ -1125,7 +1125,7 @@ mod tests {
     }
 
     async fn run_git_in(repo_path: &std::path::Path, args: &[&str]) {
-        let status = tokio::process::Command::new("git")
+        let status = crate::process::command("git")
             .args(args)
             .current_dir(repo_path)
             .status()
@@ -1597,7 +1597,7 @@ mod tests {
     async fn kill_script_subtree_terminates_grandchildren() {
         use std::time::Duration;
 
-        let mut child = TokioCommand::new("cmd.exe")
+        let mut child = crate::process::command("cmd.exe")
             .no_console_window()
             .args([
                 "/C",

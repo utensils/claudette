@@ -1,3 +1,5 @@
+#![allow(clippy::disallowed_methods)] // build.rs runs at build time, not in the Windows GUI process.
+
 // All Swift-bridge plumbing is macOS-only; gating the imports keeps
 // non-macOS builds free of unused-import warnings under `-Dwarnings`.
 #[cfg(target_os = "macos")]
