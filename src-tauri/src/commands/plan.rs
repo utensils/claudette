@@ -13,12 +13,16 @@ use claudette::agent_files::{AgentFileKind, classify_agent_file};
 #[tauri::command]
 pub async fn read_plan_file(path: String) -> Result<String, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        let (canonical, kind) = classify_agent_file(Path::new(&path))
-            .map_err(|_| "Only .claude/plans/*.md files can be read".to_string())?;
-        if kind != AgentFileKind::Plan {
-            return Err("Only .claude/plans/*.md files can be read".to_string());
+        match classify_agent_file(Path::new(&path)) {
+            Ok((canonical, AgentFileKind::Plan)) => std::fs::read_to_string(&canonical)
+                .map_err(|e| format!("Failed to read plan file: {e}")),
+            // An allow-listed file that isn't a plan (e.g. a memory note):
+            // surface the plan-specific message.
+            Ok((_, _)) => Err("Only .claude/plans/*.md files can be read".to_string()),
+            // Canonicalization / IO / not-allow-listed failures keep their
+            // specific message instead of collapsing into the generic one.
+            Err(e) => Err(e),
         }
-        std::fs::read_to_string(&canonical).map_err(|e| format!("Failed to read plan file: {e}"))
     })
     .await
     .map_err(|e| format!("Failed to read plan file: {e}"))?

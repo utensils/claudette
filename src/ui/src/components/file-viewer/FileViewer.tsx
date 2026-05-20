@@ -603,6 +603,7 @@ function FileViewerInner({ workspaceId, path, t }: FileViewerInnerProps) {
               revealTarget={revealTarget}
               onRevealTargetApplied={handleRevealTargetApplied}
               isSymlink={bufferState.isSymlink}
+              disableGitGutter={!!agentFile}
               readOnly={editDisabled}
               onChange={handleBufferChange}
               onSave={handleSave}

@@ -37,6 +37,10 @@ interface MonacoEditorProps {
    *  stripe for every line of a resolved-target buffer that doesn't
    *  match git's blob (which is just the target path string). */
   isSymlink: boolean;
+  /** Hard-disable the git gutter. Set for agent-managed tabs, whose
+   *  absolute paths aren't tracked in the workspace repo — running the
+   *  gutter would only fire a guaranteed-to-fail git IPC per open. */
+  disableGitGutter?: boolean;
   /** Read-only mode. Toggled at runtime via `updateOptions` so flipping
    *  view/edit doesn't lose cursor position or undo stack. */
   readOnly: boolean;
@@ -66,6 +70,7 @@ export const MonacoEditor = memo(function MonacoEditor({
   value,
   filename,
   isSymlink,
+  disableGitGutter = false,
   revealTarget,
   onRevealTargetApplied,
   readOnly,
@@ -274,6 +279,7 @@ export const MonacoEditor = memo(function MonacoEditor({
     filename,
     currentBuffer,
     isSymlink,
+    disableGitGutter,
   );
 
   return (
