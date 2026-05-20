@@ -4,6 +4,50 @@ function h(n: string): string {
   return parseInt(n).toString(16).padStart(2, "0");
 }
 
+/** Resolve a CSS custom property to a concrete sRGB color string.
+ *  Necessary because `getComputedStyle(root).getPropertyValue("--x")`
+ *  returns the *specified* value, which after PR #799's refactor includes
+ *  `var(--text-faint)` and `color-mix(in srgb, ...)` expressions. Monaco
+ *  needs concrete hex; those expressions can only be resolved by laying
+ *  out an element that uses them, then reading the COMPUTED `color`.
+ *
+ *  We reuse a single hidden element across calls within one
+ *  applyMonacoTheme invocation to keep DOM churn low. Returns the raw
+ *  fallback if the prop is unset or the resolver fails — the caller's
+ *  outer `cssColorToHex` will pass that through to Monaco. */
+interface ColorResolver {
+  resolve: (prop: string, fallback: string) => string;
+  dispose: () => void;
+}
+
+function makeColorResolver(): ColorResolver {
+  // Cache the probe element + getComputedStyle reference across reads
+  // — one Insert/Remove per applyMonacoTheme call instead of N.
+  const probe = document.createElement("span");
+  probe.style.position = "absolute";
+  probe.style.visibility = "hidden";
+  probe.style.pointerEvents = "none";
+  probe.setAttribute("aria-hidden", "true");
+  document.body.appendChild(probe);
+  return {
+    resolve: (prop, fallback) => {
+      // Setting `color: var(--x)` forces the browser to resolve the var
+      // chain (including any nested color-mix()) and store the concrete
+      // result. Reading `getComputedStyle.color` then returns a concrete
+      // sRGB color string the caller can convert to hex.
+      probe.style.color = "";
+      probe.style.color = `var(${prop})`;
+      const resolved = getComputedStyle(probe).color.trim();
+      // If the var is unset or the value is unparseable, the browser
+      // either leaves `color` empty or falls back to its initial value.
+      // The format sniff distinguishes a real color from those cases.
+      if (!resolved || !/^rgb/.test(resolved)) return fallback;
+      return resolved;
+    },
+    dispose: () => probe.remove(),
+  };
+}
+
 /** Convert any CSS color string to a Monaco-compatible 8-char-or-6-char hex.
  *  If the input is already a hex literal it's returned as-is so safety
  *  fallbacks (`getPropertyValue(...).trim() || "#..."`) flow through
@@ -38,49 +82,71 @@ function token6(hex: string): string {
 }
 
 export function applyMonacoTheme(monaco: typeof MonacoType): void {
-  // Inline `getPropertyValue("--x").trim() || "#…"` is the canonical
-  // safety-fallback pattern allowed by `scripts/check-css-tokens.sh`. The
-  // fallbacks mirror the corresponding tokens in `src/styles/theme.css`
-  // and only kick in if the stylesheet hasn't loaded yet — they exist so
-  // Monaco never receives an empty colour string. Keep them in sync if
-  // those tokens move.
+  // We resolve every CSS variable via a hidden probe element rather than
+  // raw `getPropertyValue`. This is critical after PR #799's color-mix
+  // refactor: tokens like `--accent-bg` and `--syntax-comment` are now
+  // declared via `color-mix(...)` or `var(--text-faint)` chains, and
+  // `getPropertyValue` returns the *literal expression* (e.g.
+  // `"color-mix(in srgb, var(--accent-primary) 8%, transparent)"`),
+  // which Monaco can't parse. The probe-based resolver reads the
+  // browser's COMPUTED color, which is always a concrete sRGB color
+  // string.
+  //
+  // Hex fallbacks in each call mirror :root in theme.css; they only
+  // kick in if the stylesheet hasn't loaded yet (or the var chain is
+  // broken) so Monaco never receives an empty/invalid color.
   const cs = getComputedStyle(document.documentElement);
   const isDark = (cs.getPropertyValue("--color-scheme").trim() || "dark") !== "light";
   const base: MonacoType.editor.BuiltinTheme = isDark ? "vs-dark" : "vs";
 
-  const bg        = cssColorToHex(cs.getPropertyValue("--app-bg").trim()           || (isDark ? "#1c1815" : "#ffffff"));
-  const fg        = cssColorToHex(cs.getPropertyValue("--text-primary").trim()     || (isDark ? "#f0ebe5" : "#1a1a1a"));
-  const muted     = cssColorToHex(cs.getPropertyValue("--text-muted").trim()       || (isDark ? "#b8afa5" : "#666666"));
-  const dim       = cssColorToHex(cs.getPropertyValue("--text-dim").trim()         || (isDark ? "#908880" : "#999999"));
-  const accent    = cssColorToHex(cs.getPropertyValue("--accent-primary").trim()   || (isDark ? "#e07850" : "#c45a35"));
-  const accentBg  = cssColorToHex(cs.getPropertyValue("--accent-bg").trim()        || (isDark ? "#1a1a1a" : "#f5f5f5"));
-  const selected  = cssColorToHex(cs.getPropertyValue("--selected-bg").trim()      || (isDark ? "#3a2820" : "#f0e8e0"));
-  const hovered   = cssColorToHex(cs.getPropertyValue("--hover-bg").trim()         || (isDark ? "#242220" : "#f5f5f5"));
-  const scrollbarThumb = cssColorToHex(cs.getPropertyValue("--scrollbar-thumb").trim() || (isDark ? "#242220" : "#f5f5f5"));
-  const scrollbarThumbHover = cssColorToHex(cs.getPropertyValue("--scrollbar-thumb-hover").trim() || (isDark ? "#e0785040" : "#c45a3540"));
-  const divider   = cssColorToHex(cs.getPropertyValue("--divider").trim()          || (isDark ? "#3d3832" : "#e0e0e0"));
-  const widgetBg  = cssColorToHex(cs.getPropertyValue("--sidebar-bg").trim()       || (isDark ? "#26221f" : "#f5f5f5"));
-  const addedBg   = cssColorToHex(cs.getPropertyValue("--diff-added-bg").trim()    || (isDark ? "#1a3a20" : "#e8f5e9"));
-  const removedBg = cssColorToHex(cs.getPropertyValue("--diff-removed-bg").trim()  || (isDark ? "#3a1a1a" : "#ffebee"));
-  const addedFg   = cssColorToHex(cs.getPropertyValue("--diff-added-text").trim()  || (isDark ? "#6ccc80" : "#2e7d32"));
-  const removedFg = cssColorToHex(cs.getPropertyValue("--diff-removed-text").trim()|| (isDark ? "#f07070" : "#c62828"));
-  const numberFg  = cssColorToHex(cs.getPropertyValue("--badge-plan").trim()       || (isDark ? "#8cb8e0" : "#4a8ab0"));
-  const transparent = withAlpha(bg, "00");
+  const { resolve, dispose } = makeColorResolver();
+  try {
+    const bg        = cssColorToHex(resolve("--app-bg", isDark ? "#1c1815" : "#ffffff"));
+    const fg        = cssColorToHex(resolve("--text-primary", isDark ? "#f0ebe5" : "#1a1a1a"));
+    const muted     = cssColorToHex(resolve("--text-muted", isDark ? "#b8afa5" : "#666666"));
+    const dim       = cssColorToHex(resolve("--text-dim", isDark ? "#908880" : "#999999"));
+    const accent    = cssColorToHex(resolve("--accent-primary", isDark ? "#e07850" : "#c45a35"));
+    const accentBg  = cssColorToHex(resolve("--accent-bg", isDark ? "#1a1a1a" : "#f5f5f5"));
+    const selected  = cssColorToHex(resolve("--selected-bg", isDark ? "#3a2820" : "#f0e8e0"));
+    const hovered   = cssColorToHex(resolve("--hover-bg", isDark ? "#242220" : "#f5f5f5"));
+    const scrollbarThumb = cssColorToHex(resolve("--scrollbar-thumb", isDark ? "#242220" : "#f5f5f5"));
+    const scrollbarThumbHover = cssColorToHex(resolve("--scrollbar-thumb-hover", isDark ? "#e0785040" : "#c45a3540"));
+    const divider   = cssColorToHex(resolve("--divider", isDark ? "#3d3832" : "#e0e0e0"));
+    const widgetBg  = cssColorToHex(resolve("--sidebar-bg", isDark ? "#26221f" : "#f5f5f5"));
+    const addedBg   = cssColorToHex(resolve("--diff-added-bg", isDark ? "#1a3a20" : "#e8f5e9"));
+    const removedBg = cssColorToHex(resolve("--diff-removed-bg", isDark ? "#3a1a1a" : "#ffebee"));
+    const addedFg   = cssColorToHex(resolve("--diff-added-text", isDark ? "#6ccc80" : "#2e7d32"));
+    const removedFg = cssColorToHex(resolve("--diff-removed-text", isDark ? "#f07070" : "#c62828"));
+
+    // Syntax tokens — fallbacks match :root in theme.css.
+    const syntaxKeyword  = cssColorToHex(resolve("--syntax-keyword", isDark ? "#c0a0f0" : "#6848a8"));
+    const syntaxString   = cssColorToHex(resolve("--syntax-string", isDark ? "#6ccc80" : "#1a7f37"));
+    const syntaxNumber   = cssColorToHex(resolve("--syntax-number", isDark ? "#f0a050" : "#c27430"));
+    const syntaxComment  = cssColorToHex(resolve("--syntax-comment", isDark ? "#686058" : "#b8afa5"));
+    const syntaxFunction = cssColorToHex(resolve("--syntax-function", isDark ? "#8cb8e0" : "#3d6da0"));
+    const syntaxType     = cssColorToHex(resolve("--syntax-type", isDark ? "#e0c050" : "#a07820"));
+    const syntaxVariable = cssColorToHex(resolve("--syntax-variable", isDark ? "#f07070" : "#c42020"));
+    const syntaxOperator = cssColorToHex(resolve("--syntax-operator", isDark ? "#6cb6ff" : "#1d6fa5"));
+    const transparent = withAlpha(bg, "00");
 
   monaco.editor.defineTheme("claudette", {
     base,
     inherit: true,
     rules: [
-      // Inherit all token colours from vs-dark/vs; only nudge a handful to
-      // match Claudette's palette so the editor feels native rather than
-      // jarring against the surrounding UI chrome.
-      { token: "comment",          foreground: token6(dim),       fontStyle: "italic" },
-      { token: "keyword",          foreground: token6(accent) },
-      { token: "string",           foreground: token6(addedFg) },
-      { token: "string.escape",    foreground: token6(accent) },
-      { token: "number",           foreground: token6(numberFg) },
-      { token: "regexp",           foreground: token6(removedFg) },
-      { token: "delimiter",        foreground: token6(muted) },
+      // Token rules use the canonical --syntax-* family so Monaco stays in
+      // visual lockstep with Shiki-rendered code blocks in chat. Inherits
+      // unspecified tokens from vs-dark/vs so we don't have to enumerate
+      // every grammar's scope set.
+      { token: "comment",          foreground: token6(syntaxComment), fontStyle: "italic" },
+      { token: "keyword",          foreground: token6(syntaxKeyword) },
+      { token: "string",           foreground: token6(syntaxString) },
+      { token: "string.escape",    foreground: token6(syntaxOperator) },
+      { token: "number",           foreground: token6(syntaxNumber) },
+      { token: "regexp",           foreground: token6(syntaxOperator) },
+      { token: "type",             foreground: token6(syntaxType) },
+      { token: "function",         foreground: token6(syntaxFunction) },
+      { token: "variable",         foreground: token6(syntaxVariable) },
+      { token: "delimiter",        foreground: token6(syntaxOperator) },
     ],
     colors: {
       // Editor surface
@@ -198,6 +264,12 @@ export function applyMonacoTheme(monaco: typeof MonacoType): void {
   });
 
   monaco.editor.setTheme("claudette");
+  } finally {
+    // Remove the probe element even if Monaco's defineTheme throws,
+    // otherwise repeated theme rebuilds (via the MutationObserver in
+    // initMonacoThemeSync) would leak detached <span>s.
+    dispose();
+  }
 }
 
 /** Apply the theme once, then keep it in sync with `data-theme` / inline

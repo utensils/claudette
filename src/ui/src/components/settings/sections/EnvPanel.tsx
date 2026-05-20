@@ -22,6 +22,7 @@ import type { EnvSourceInfo, EnvTarget } from "../../../types/env";
 import { PluginSettingInput } from "../PluginSettingInput";
 import { classifyPostActionError } from "../../modals/EnvTrustModal";
 import { summarizeError } from "../../modals/envTrustFormat";
+import { envProviderCategoryColor } from "./envProviderCategory";
 import styles from "../Settings.module.css";
 
 interface EnvPanelProps {
@@ -714,7 +715,20 @@ export function EnvPanel({ target }: EnvPanelProps) {
           const showDetails = hasError && !trustError;
           return (
             <div key={source.plugin_name}>
-              <div className={styles.mcpRow}>
+              <div
+                className={styles.mcpRow}
+                style={{
+                  // Category-colored leading bar — distinguishes
+                  // direnv/mise/nix/dotenv at a glance independently
+                  // of the status dot's state color. Third-party
+                  // providers receive a best-effort stable slot (E–H)
+                  // via FNV-1a hash; collisions across many third-party
+                  // providers are expected but the same name always
+                  // lands in the same slot across launches.
+                  borderLeft: `3px solid ${envProviderCategoryColor(source.plugin_name)}`,
+                  paddingLeft: "var(--space-2)",
+                }}
+              >
                 <div className={styles.mcpInfo}>
                   <span
                     className={styles.mcpStatusDot}

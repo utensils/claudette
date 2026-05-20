@@ -400,18 +400,18 @@
 
 .btnDestructiveText {
   composes: btn;
-  color: var(--status-stopped);
+  color: var(--accent-error);
 }
 
 .btnDestructiveText:hover:not(:disabled) {
-  background: var(--error-hover);
+  background: var(--accent-error-hover);
 }
 
 .btnDestructiveFill {
   composes: btn;
-  background: var(--status-stopped);
+  background: var(--accent-error);
   color: var(--on-accent);
-  border-color: var(--status-stopped);
+  border-color: var(--accent-error);
 }
 
 .btnDestructiveFill:hover:not(:disabled) {

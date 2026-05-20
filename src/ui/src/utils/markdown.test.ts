@@ -701,14 +701,14 @@ describe("HighlightedCode", () => {
   });
 
   it("renders dangerouslySetInnerHTML when cache returns highlighted HTML", () => {
-    vi.mocked(getCachedHighlight).mockReturnValue('<span style="--shiki-light:black">fn</span>');
+    vi.mocked(getCachedHighlight).mockReturnValue('<span style="color:var(--syntax-keyword)">fn</span>');
     const html = renderToStaticMarkup(
       createElement(HighlightedCode, {
         className: "language-rust",
         children: "fn",
       }),
     );
-    expect(html).toBe('<code class="language-rust"><span style="--shiki-light:black">fn</span></code>');
+    expect(html).toBe('<code class="language-rust"><span style="color:var(--syntax-keyword)">fn</span></code>');
   });
 
   it("preserves className on the rendered code element", () => {

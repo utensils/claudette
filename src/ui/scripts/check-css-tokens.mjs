@@ -23,6 +23,9 @@
 //     to resolve, especially in the foreign-bundle case it's catching).
 //     Theme tokens cannot be the source of truth for an error overlay
 //     designed to render even when the surrounding app's CSS hasn't loaded.
+//   * `src/utils/theme.test.ts` — vitest cases that assert Base16 → Claudette
+//     token conversion produces specific hex values. The hex literals are
+//     fixtures and expected outputs, not styling.
 //
 // Runs from src/ui. Exits non-zero with a report when violations are found.
 //
@@ -59,6 +62,12 @@ const HEX_EXCLUSIONS = [
   /getPropertyValue\(.*\)\.trim\(\) \|\| "#/,
   // `getPropertyValue("...").trim() || (... ? "#..." : ...)` ternary fallback.
   /getPropertyValue\(.*\)\.trim\(\)\s*\|\| \(.*\?.*"#/,
+  // `resolve("--prop", "#fallback")` and the ternary form
+  // `resolve("--prop", isDark ? "#fallback" : "#fallback")` — the
+  // canonical safety-fallback pattern in monacoTheme.ts, which routes
+  // CSS custom properties to Monaco's hex-requiring API and needs
+  // literal fallbacks that mirror `:root`.
+  /\bresolve\("--[a-z-]+",\s*[^)]*"#/,
   // `accentPreview: "#..."` / `accent_preview: "#..."`
   /(accentPreview|accent_preview):\s*"#/,
   // GitHub issue / PR number reference: `issue #896`, `PR #905`,
@@ -72,7 +81,18 @@ const HEX_EXCLUSIONS = [
 const HEX_EXCLUDED_FILES = new Set([
   // Path is relative to uiRoot, with forward slashes.
   "src/utils/bootIdentityGuard.ts",
+  // Base16 conversion tests need hex fixtures and expected output values.
+  "src/utils/theme.test.ts",
 ]);
+
+// Rgba file-level exclusions (entire file is exempt from Rule 2).
+// Currently empty — every prior file-level exemption (theme.ts, theme.test.ts)
+// became unnecessary after PR #799's color-mix refactor and converter
+// simplification removed all rgba() emission and abstract-pattern references.
+// New entries should only be added with a concrete justification and a clear
+// "do not extend" comment, the way bootIdentityGuard's HEX exemption is
+// documented above.
+const RGBA_EXCLUDED_FILES = new Set([]);
 
 // --- Walker ---
 
@@ -125,6 +145,7 @@ for (const absPath of walk(SCAN_ROOT)) {
   const lines = source.split(/\r?\n/);
 
   const hexFileExcluded = HEX_EXCLUDED_FILES.has(rel);
+  const rgbaFileExcluded = RGBA_EXCLUDED_FILES.has(rel);
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
@@ -139,7 +160,7 @@ for (const absPath of walk(SCAN_ROOT)) {
     }
 
     // --- Rule 2: rgb/rgba literals ---
-    if (RGBA_OPEN_RE.test(line) && !RGBA_TOKEN_RE.test(line)) {
+    if (!rgbaFileExcluded && RGBA_OPEN_RE.test(line) && !RGBA_TOKEN_RE.test(line)) {
       rgbaHits.push(formatHit(rel, lineno, line));
     }
   }

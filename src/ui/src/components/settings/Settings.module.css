@@ -1374,11 +1374,11 @@
 }
 
 .btnDanger:hover {
-  background: var(--error-hover);
+  background: var(--accent-error-hover);
 }
 
 .error {
-  color: var(--status-stopped);
+  color: var(--accent-error);
   font-size: 12px;
   margin-top: 4px;
 }
@@ -1691,10 +1691,10 @@
 }
 
 .authPanelError {
-  border: 1px solid var(--error-border);
+  border: 1px solid var(--accent-error-border);
   border-radius: var(--radius-md);
-  background: var(--error-bg);
-  color: var(--status-stopped);
+  background: var(--accent-error-bg);
+  color: var(--accent-error);
   font-size: 13px;
   line-height: 1.5;
   padding: 10px 12px;
@@ -1823,8 +1823,8 @@
 }
 
 .mcpRemoveBtn:hover {
-  background: var(--error-hover);
-  color: var(--status-stopped);
+  background: var(--accent-error-hover);
+  color: var(--accent-error);
 }
 
 .mcpStatusDot {
@@ -1887,8 +1887,8 @@
 .envErrorCard {
   margin: 4px 8px 8px 22px;
   padding: 10px 12px;
-  border-left: 2px solid var(--status-stopped);
-  background: var(--error-hover);
+  border-left: 2px solid var(--accent-error);
+  background: var(--accent-error-hover);
   border-radius: 0 4px 4px 0;
   display: flex;
   flex-direction: column;
@@ -2368,9 +2368,9 @@
   margin-top: var(--space-2);
   max-width: 760px;
   padding: var(--space-2) var(--space-3);
-  border-left: 2px solid var(--status-stopped);
+  border-left: 2px solid var(--accent-error);
   border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
-  background: var(--error-hover);
+  background: var(--accent-error-hover);
   color: var(--text-primary);
   font-size: 12px;
   line-height: 1.4;
@@ -2724,8 +2724,8 @@
   display: inline-block;
   padding: 1px 6px;
   border-radius: 3px;
-  background: var(--error-hover);
-  color: var(--status-stopped);
+  background: var(--accent-error-hover);
+  color: var(--accent-error);
   font-size: 10px;
   font-weight: 600;
   letter-spacing: 0.04em;
@@ -2801,9 +2801,9 @@
 .flagErrorBanner {
   margin: 12px 0 16px;
   padding: 12px 14px;
-  border: 1px solid var(--error-border);
+  border: 1px solid var(--accent-error-border);
   border-radius: 8px;
-  background: var(--error-bg);
+  background: var(--accent-error-bg);
   color: var(--text-primary);
   display: flex;
   align-items: flex-start;
