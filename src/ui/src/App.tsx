@@ -184,9 +184,9 @@ function App() {
         setLastMessages(msgMap);
         // Issue/PR -> workspace associations for the project-view "in
         // progress" badge and the workspace breadcrumb. Tolerate a
-        // payload without the field — an older headless server reached
-        // over WSS predates it, and the bundle smoke test's mock omits
-        // it; either way an absent list just means "no links yet".
+        // payload without the field — a headless server reached over
+        // WSS may predate it — so an absent list just means "no links
+        // yet" instead of crashing the initial-data load.
         hydrateWorkspaceScmLinks(data.workspace_scm_links ?? []);
         await hydratePersistedViewState(localWorkspaces);
         setViewStateHydrated(true);

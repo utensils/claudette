@@ -10,7 +10,7 @@ export interface InitialData {
   last_messages: ChatMessage[];
   scm_cache: ScmStatusCacheRow[];
   /** Optional: a headless server older than this field omits it over
-   *  WSS, and the bundle smoke-test mock does not synthesize it. */
+   *  WSS. The desktop backend always sends it. */
   workspace_scm_links?: WorkspaceScmLink[];
   manual_workspace_order_repo_ids: string[];
 }
