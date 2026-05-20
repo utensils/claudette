@@ -150,6 +150,16 @@ export function useWorkspaceEnvironmentPreparation() {
   // each Complete so a subsequent resolve starts fresh.
   const failedDuringResolveRef = useRef<Map<string, boolean>>(new Map());
 
+  // Per-workspace cancel functions for the pending spinner-delay
+  // timers armed by the per-selection effect below. The `complete`
+  // progress handler reaches in here to cancel a workspace's timer
+  // once its resolve is done — critical for the dropped-Tauri-
+  // response case, where the prep promise never settles so
+  // `.then`/`.catch` never run to clear the timer themselves. Without
+  // this a late timer fires after `complete` already finalized the
+  // workspace and re-flips it to "preparing" — a stuck, blocked UI.
+  const spinnerTimerClearsRef = useRef<Map<string, () => void>>(new Map());
+
   // Global listener: subscribe once per app session and route every
   // workspace_env_progress event into the store, regardless of which
   // workspace is currently selected. This lets the sidebar show a
@@ -184,6 +194,12 @@ export function useWorkspaceEnvironmentPreparation() {
         // the spawn_pty / agent-spawn paths where no dedicated
         // `.then` handler exists to finalize the status.
         setWorkspaceEnvironmentProgress(workspace_id, null);
+        // The resolve is done — cancel any pending spinner-delay timer
+        // for this workspace so it can't fire late and strand the
+        // workspace back at "preparing". This is the recovery for a
+        // dropped Tauri response, where the prep promise never settles
+        // and `.then`/`.catch` never clear the timer themselves.
+        spinnerTimerClearsRef.current.get(workspace_id)?.();
         const anyFailed = failed.get(workspace_id) ?? false;
         failed.delete(workspace_id);
         const cur =
@@ -319,17 +335,23 @@ export function useWorkspaceEnvironmentPreparation() {
     // that through `setWorkspaceEnvironmentProgress`, which forces the
     // status to "preparing" (with the richer per-plugin elapsed-time
     // fields the sidebar needs).
+    const spinnerTimers = spinnerTimerClearsRef.current;
     let preparingTimer: ReturnType<typeof setTimeout> | undefined = setTimeout(
       () => {
         preparingTimer = undefined;
+        spinnerTimers.delete(workspaceId);
         if (cancelled) return;
-        // If progress events already moved us to "preparing" (a real
-        // cold resolve is in flight), leave their `current_plugin` /
-        // `started_at` fields intact — a bare `setWorkspaceEnvironment`
-        // here would blank the sidebar's "(Ns)…" elapsed-time hint.
+        // Only promote a genuine pre-resolve state. A workspace the
+        // resolve already finalized (`ready` / `error`) must never be
+        // dragged back to "preparing" — and one a `started` progress
+        // event already moved to "preparing" keeps its richer
+        // `current_plugin` / `started_at` fields untouched. A slow
+        // resolve still in flight sits at `undefined` / `"idle"`; for
+        // that the spinner is warranted, and the eventual `complete`
+        // event recovers it back to "ready".
         const cur =
           useAppStore.getState().workspaceEnvironment[workspaceId]?.status;
-        if (cur !== "preparing") {
+        if (cur === undefined || cur === "idle") {
           setWorkspaceEnvironment(workspaceId, "preparing");
         }
       },
@@ -340,7 +362,12 @@ export function useWorkspaceEnvironmentPreparation() {
         clearTimeout(preparingTimer);
         preparingTimer = undefined;
       }
+      spinnerTimers.delete(workspaceId);
     };
+    // Register so the `complete` progress handler can cancel this
+    // timer even when the prep promise never settles (a dropped Tauri
+    // response) and `.then` / `.catch` never run to clear it.
+    spinnerTimers.set(workspaceId, clearPreparingTimer);
 
     // The recovery path for a dropped Tauri response on Windows
     // lives in the progress listener above: the `Complete` phase

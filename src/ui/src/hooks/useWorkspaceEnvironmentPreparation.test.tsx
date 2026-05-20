@@ -507,6 +507,69 @@ describe("useWorkspaceEnvironmentPreparation", () => {
     }
   });
 
+  it("does not re-flip a completed workspace to 'preparing' after a dropped Tauri response", async () => {
+    // Regression for the Copilot review finding on PR #912: on a
+    // dropped Tauri response the prep promise never settles, so
+    // `.then` / `.catch` never run `clearPreparingTimer()`. The
+    // backend still emits `complete`, which finalizes the workspace —
+    // and must ALSO cancel the pending spinner-delay timer. Otherwise
+    // the orphaned timer fires 150ms later, sees a non-"preparing"
+    // status, and drags the finished workspace back to "preparing":
+    // a stuck, blocked composer.
+    vi.useFakeTimers();
+    try {
+      serviceMocks.prepareWorkspaceEnvironment.mockReturnValue(
+        new Promise<void>(() => undefined),
+      );
+      useAppStore.setState({
+        selectedWorkspaceId: "ws-1",
+        workspaces: [makeWorkspace()],
+      });
+
+      const { fire } = await withCapturedProgressListener();
+
+      await renderHarness();
+
+      // A cache-miss resolve completing entirely within the spinner
+      // delay window: started → preparing, complete → ready.
+      fire({
+        workspace_id: "ws-1",
+        plugin: "env-direnv",
+        phase: "started",
+        elapsed_ms: 0,
+      });
+      fire({
+        workspace_id: "ws-1",
+        plugin: "env-direnv",
+        phase: "finished",
+        elapsed_ms: 5,
+        ok: true,
+      });
+      fire({
+        workspace_id: "ws-1",
+        plugin: "",
+        phase: "complete",
+        elapsed_ms: 0,
+      });
+      expect(useAppStore.getState().workspaceEnvironment["ws-1"]).toEqual({
+        status: "ready",
+      });
+
+      // `complete` must have cancelled the spinner-delay timer —
+      // crossing the delay must NOT regress the finished workspace.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(
+          __TEST__.PREPARING_SPINNER_DELAY_MS + 500,
+        );
+      });
+      expect(useAppStore.getState().workspaceEnvironment["ws-1"]).toEqual({
+        status: "ready",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("transitions to 'error' on 'complete' when any plugin reported failure (dropped Err response recovery)", async () => {
     // The Windows IPC-drop variant where the bug bites hardest: the
     // backend prep returned Err (e.g. direnv .envrc blocked), but
