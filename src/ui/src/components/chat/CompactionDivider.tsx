@@ -17,7 +17,12 @@ function formatDurationSeconds(ms: number): string {
 
 function triggerLabel(trigger: string): string {
   if (trigger === "manual") return "manual";
-  if (trigger === "auto") return "automatic";
+  // "auto" is Claude CLI's auto-trigger; "threshold" is Pi's
+  // equivalent (auto-compaction crossed the keep-recent budget).
+  if (trigger === "auto" || trigger === "threshold") return "automatic";
+  // "overflow" is Pi forcing a compaction because the context window
+  // is exhausted.
+  if (trigger === "overflow") return "context full";
   if (trigger === "codex") return "Codex";
   return "compaction"; // friendly fallback for unknown triggers
 }

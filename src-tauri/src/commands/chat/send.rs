@@ -777,16 +777,26 @@ pub(super) fn ensure_harness_accepts_attachments(
 }
 
 /// True when this turn should be intercepted as a native compaction
-/// instead of a normal user turn. Only the Codex app-server path needs
-/// the intercept: Claude Code handles `/compact` natively as user input,
-/// and the Pi SDK harness is short-circuited at the UI layer.
+/// instead of a normal user turn. The Codex app-server and Pi SDK
+/// harnesses both need the intercept — each exposes a `start_compact()`
+/// that swaps in for `send_turn`. Claude Code is excluded: its CLI
+/// handles the literal `/compact` user input natively, so routing it
+/// through `start_compact()` would be wrong.
 ///
 /// Routing /compact through `send_chat_message` (and only swapping
 /// `send_turn` for `start_compact` at the very last step) lets us reuse
 /// the full spawn-or-reuse machinery, so /compact works whether or not
-/// a Codex process is currently alive — matching the Claude UX.
-pub(super) fn is_codex_compact_intent(harness: AgentBackendRuntimeHarness, prompt: &str) -> bool {
-    harness == AgentBackendRuntimeHarness::CodexAppServer && prompt.trim() == "/compact"
+/// an agent process is currently alive — matching the Claude UX.
+pub(super) fn is_native_compact_intent(harness: AgentBackendRuntimeHarness, prompt: &str) -> bool {
+    if prompt.trim() != "/compact" {
+        return false;
+    }
+    match harness {
+        AgentBackendRuntimeHarness::CodexAppServer => true,
+        #[cfg(feature = "pi-sdk")]
+        AgentBackendRuntimeHarness::PiSdk => true,
+        _ => false,
+    }
 }
 
 fn cleanup_failed_steer_persistence(
@@ -1040,13 +1050,13 @@ pub async fn send_chat_message(
         resolved_model = Some(rewritten);
     }
     ensure_harness_accepts_attachments(backend_runtime.harness, &prepared_user_send.cli_atts)?;
-    // Codex `/compact` doesn't take attachments — `start_compact()` ignores
-    // them. Reject up-front so attachments never get persisted as orphan
-    // rows under the synthesized `/compact` user message (the body
+    // Native `/compact` doesn't take attachments — `start_compact()`
+    // ignores them. Reject up-front so attachments never get persisted as
+    // orphan rows under the synthesized `/compact` user message (the body
     // wouldn't reference them and the compaction RPC has no slot for
     // them either). The check runs after attachment validation so the
     // generic shape rules still apply first.
-    if is_codex_compact_intent(backend_runtime.harness, &content)
+    if is_native_compact_intent(backend_runtime.harness, &content)
         && !prepared_user_send.cli_atts.is_empty()
     {
         return Err(
@@ -1581,16 +1591,16 @@ pub async fn send_chat_message(
     // migration: after this turn the new harness has the full prior
     // context in its native turn-1 input and subsequent turns flow
     // through unchanged.
-    // Detect `/compact` against the Codex app-server harness from the
+    // Detect `/compact` against a native-compaction harness from the
     // raw `content` (the slash command the user typed) — **before** the
     // cross-harness migration prelude is merged below. A queued prelude
     // would make `prompt` look like `"{prelude…}\n/compact"`, defeating
-    // the literal-string check in `is_codex_compact_intent` and routing
+    // the literal-string check in `is_native_compact_intent` and routing
     // the compact intent as a regular user turn (reintroducing the
-    // original Codex-narrates-/compact bug).
-    let is_codex_compact = is_codex_compact_intent(backend_runtime.harness, &content);
+    // original agent-narrates-/compact bug).
+    let is_native_compact = is_native_compact_intent(backend_runtime.harness, &content);
 
-    let prompt = if is_codex_compact {
+    let prompt = if is_native_compact {
         // Don't consume a pending cross-harness migration prelude for a
         // compaction action — there's no model-visible prompt for
         // `start_compact()` to attach the prelude to. Leave the prelude
@@ -1972,7 +1982,7 @@ pub async fn send_chat_message(
         let local_user_message_uuid = uuid::Uuid::new_v4().to_string();
         session.active_pid = Some(reuse_pid);
         session.remember_local_user_message_uuid(local_user_message_uuid.clone());
-        let turn_result = if is_codex_compact {
+        let turn_result = if is_native_compact {
             ps.start_compact().await
         } else {
             ps.send_turn_with_uuid(&prompt, &image_attachments, &local_user_message_uuid)
@@ -2140,7 +2150,7 @@ pub async fn send_chat_message(
                     let session = agents.get_mut(&chat_session_id).ok_or("Session lost")?;
                     session.remember_local_user_message_uuid(local_user_message_uuid.clone());
                 }
-                let handle = if is_codex_compact {
+                let handle = if is_native_compact {
                     ps.start_compact().await?
                 } else {
                     ps.send_turn_with_uuid(&prompt, &image_attachments, &local_user_message_uuid)
@@ -2301,7 +2311,7 @@ pub async fn send_chat_message(
             let session = agents.get_mut(&chat_session_id).ok_or("Session lost")?;
             session.remember_local_user_message_uuid(local_user_message_uuid.clone());
         }
-        let handle = if is_codex_compact {
+        let handle = if is_native_compact {
             ps.start_compact().await?
         } else {
             ps.send_turn_with_uuid(&prompt, &image_attachments, &local_user_message_uuid)
@@ -3922,42 +3932,51 @@ mod tests {
     }
 
     #[test]
-    fn codex_compact_intent_detects_literal_slash_compact() {
-        // The send pipeline checks this exactly: harness == Codex AND
-        // the prompt (post @-mention expansion) is literally "/compact".
-        // Anything else — whitespace around it is fine, but adding an
-        // argument like "/compact foo" is NOT a compact intent and must
-        // continue down the normal send_turn path.
-        assert!(super::is_codex_compact_intent(
+    fn native_compact_intent_detects_literal_slash_compact() {
+        // The send pipeline checks this exactly: a native-compaction
+        // harness AND the prompt (post @-mention expansion) is literally
+        // "/compact". Anything else — whitespace around it is fine, but
+        // adding an argument like "/compact foo" is NOT a compact intent
+        // and must continue down the normal send_turn path.
+        assert!(super::is_native_compact_intent(
             AgentBackendRuntimeHarness::CodexAppServer,
             "/compact",
         ));
-        assert!(super::is_codex_compact_intent(
+        assert!(super::is_native_compact_intent(
             AgentBackendRuntimeHarness::CodexAppServer,
             "  /compact  \n",
         ));
-        assert!(!super::is_codex_compact_intent(
+        assert!(!super::is_native_compact_intent(
             AgentBackendRuntimeHarness::CodexAppServer,
             "/compact please",
         ));
-        assert!(!super::is_codex_compact_intent(
+        assert!(!super::is_native_compact_intent(
             AgentBackendRuntimeHarness::CodexAppServer,
             "tell me about compaction",
         ));
     }
 
+    /// Pi exposes a native `start_compact()` too, so `/compact` against
+    /// the Pi SDK harness must be intercepted exactly like Codex.
+    #[cfg(feature = "pi-sdk")]
     #[test]
-    fn codex_compact_intent_excludes_other_harnesses() {
-        // Claude Code interprets the literal `/compact` natively; we
-        // must NOT swap in start_compact for it. Same for Pi (which
-        // wouldn't have a start_compact to call anyway).
-        assert!(!super::is_codex_compact_intent(
-            AgentBackendRuntimeHarness::ClaudeCode,
+    fn native_compact_intent_detects_pi_harness() {
+        assert!(super::is_native_compact_intent(
+            AgentBackendRuntimeHarness::PiSdk,
             "/compact",
         ));
-        #[cfg(feature = "pi-sdk")]
-        assert!(!super::is_codex_compact_intent(
+        assert!(!super::is_native_compact_intent(
             AgentBackendRuntimeHarness::PiSdk,
+            "/compact focus on the bug",
+        ));
+    }
+
+    #[test]
+    fn native_compact_intent_excludes_claude_code() {
+        // Claude Code interprets the literal `/compact` natively; we
+        // must NOT swap in start_compact for it.
+        assert!(!super::is_native_compact_intent(
+            AgentBackendRuntimeHarness::ClaudeCode,
             "/compact",
         ));
     }

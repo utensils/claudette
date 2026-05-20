@@ -11,6 +11,7 @@ import {
   SettingsManager,
   createAgentSession,
   defineTool,
+  estimateTokens,
   getAgentDir,
   type AgentSession,
   type AgentSessionEvent,
@@ -54,6 +55,10 @@ type HarnessState = {
   // tracks `/permissions` toggles that trigger a sidecar respawn via
   // the `allowed_tools_changed` drift path.
   bypassPermissions: boolean;
+  // Wall-clock start of the in-flight compaction, set on
+  // `compaction_start` and consumed by `compaction_end` to report a
+  // `durationMs`. Cleared once the end event is emitted.
+  compactionStartedAt?: number;
 };
 
 const state: HarnessState = {
@@ -1105,15 +1110,54 @@ function routeSessionEvent(event: AgentSessionEvent): void {
       }
       break;
     }
+    case "compaction_start": {
+      // Record the start so `compaction_end` can report a duration.
+      // The Rust side flips the UI to "Compacting" for a manual
+      // /compact; auto-compaction (threshold/overflow) rides an active
+      // turn that already owns the status indicator.
+      state.compactionStartedAt = Date.now();
+      send({ type: "compaction_start", reason: event.reason });
+      break;
+    }
     case "compaction_end": {
-      // Compaction failure is surfaced in passing — it doesn't abort
-      // the turn on its own, but the next prompt may behave oddly,
-      // so the user should know. Same shape as auto_retry_end.
-      const errorMessage = (event as { errorMessage?: string }).errorMessage?.trim();
-      const aborted = (event as { aborted?: boolean }).aborted;
-      if (aborted && errorMessage) {
-        send({ type: "thinking_delta", delta: `[Pi compaction failed] ${errorMessage}\n` });
+      // Translate Pi's native compaction completion into a structured
+      // event the Rust harness maps onto Claudette's compact_boundary
+      // divider. Flatten `result` so the deserializer needs no nested
+      // struct. A run that produced no `result` — explicit abort OR a
+      // generic failure carrying `errorMessage` — freed no context, so
+      // flag it `aborted` and let the Rust side surface a notice rather
+      // than a misleading divider.
+      const startedAt = state.compactionStartedAt;
+      state.compactionStartedAt = undefined;
+      const succeeded =
+        !event.aborted && event.result != null && !event.errorMessage;
+      const payload: Record<string, unknown> = {
+        type: "compaction_end",
+        reason: event.reason,
+        aborted: !succeeded,
+        willRetry: event.willRetry === true,
+      };
+      if (startedAt !== undefined) {
+        payload.durationMs = Date.now() - startedAt;
       }
+      if (succeeded && event.result) {
+        payload.tokensBefore = event.result.tokensBefore;
+        // CompactionResult carries no post-compaction count. Pi's
+        // internal `estimateContextTokens` isn't in the package's
+        // public exports, so reconstruct its spirit: sum the exported
+        // chars/4 `estimateTokens` heuristic over the reloaded message
+        // list (`messages` already holds the post-compaction context
+        // by the time `compaction_end` fires on the success path).
+        if (state.session) {
+          payload.tokensAfter = state.session.messages.reduce(
+            (sum, message) => sum + estimateTokens(message),
+            0,
+          );
+        }
+      } else if (event.errorMessage) {
+        payload.errorMessage = event.errorMessage.trim();
+      }
+      send(payload);
       break;
     }
     // Per-LLM-turn boundaries fire N times inside the agent loop —
@@ -1124,7 +1168,6 @@ function routeSessionEvent(event: AgentSessionEvent): void {
     // the double-Result bug.
     case "turn_start":
     case "turn_end":
-    case "compaction_start":
     case "queue_update":
     case "session_info_changed":
     case "thinking_level_changed":
@@ -1161,6 +1204,30 @@ async function handle(message: RequestMessage): Promise<void> {
       runTurn(state.session.steer(asPromptString(message.prompt) ?? ""));
       respond(message.id, message.type, true);
       break;
+    case "compact": {
+      if (!state.session) throw new Error("Pi session has not started");
+      // Pi's `compact()` aborts any current operation, runs the
+      // summarization, and reports its lifecycle via the
+      // `compaction_start` / `compaction_end` events on the session
+      // subscription. Don't await — the response here is just the
+      // action-accepted ack, mirroring `prompt` / `steer`.
+      // `customInstructions` biases the summary (Pi's CLI `/compact
+      // <focus>`); Claudette rejects `/compact` arguments today, so
+      // this is always undefined for now but the slot is wired.
+      const customInstructions =
+        typeof message.customInstructions === "string"
+          ? message.customInstructions
+          : undefined;
+      void state.session.compact(customInstructions).catch((error) => {
+        // `compact()` emits `compaction_end` before it re-throws, so the
+        // structured event the Rust per-turn pump terminates on has
+        // already been sent. Swallow the rejection (surfaced via `error`
+        // for the logs) to avoid an unhandled-promise crash.
+        send({ type: "error", error: `Pi compaction failed: ${String(error)}` });
+      });
+      respond(message.id, message.type, true);
+      break;
+    }
     case "abort":
       // Resolve any pending approval prompts so the corresponding
       // tool `execute()` calls don't keep awaiting after Pi has been

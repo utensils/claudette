@@ -153,22 +153,8 @@
   transition: background var(--transition-fast);
 }
 
-.actionBtn:hover:not(:disabled) {
+.actionBtn:hover {
   background: var(--hover-bg);
-}
-
-.actionBtn:disabled {
-  cursor: not-allowed;
-  opacity: 0.5;
-}
-
-/* Wrapper for tooltip-on-disabled-button.  The disabled <button> swallows
- * hover/title events, so the AppTooltip system reads `data-tooltip` from
- * this wrapper span instead.  Matches `.actionBtn` flex behavior so the
- * button still expands to fill its row. */
-.actionBtnWrap {
-  flex: 1;
-  display: flex;
 }
 
 @keyframes fadeUp {

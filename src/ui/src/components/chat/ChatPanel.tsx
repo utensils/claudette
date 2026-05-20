@@ -1389,15 +1389,15 @@ export function ChatPanel() {
           } else {
             // Resolve the active backend's effective harness via the same
             // fallback chain the send pipeline uses
-            // (per-session provider → default backend → first available).
-            // Claude Code and Codex both fall through to the normal send
-            // path with the literal `/compact`: Claude's CLI interprets it
-            // natively, and `send_chat_message` (Rust side) intercepts the
-            // same string when the harness is Codex and swaps `send_turn`
-            // for `start_compact` at the last possible step. Pi has no
-            // native compaction protocol — short-circuit with a local
-            // message. If we can't resolve a harness yet (agentBackends
-            // hasn't loaded), surface a local error rather than guess.
+            // (per-session provider → default backend → first available)
+            // purely as a readiness guard: if we can't resolve a harness
+            // yet (agentBackends hasn't loaded), surface a local error
+            // rather than fire `/compact` against an unknown backend.
+            // Every supported harness handles the literal `/compact`:
+            // Claude's CLI interprets it natively, while `send_chat_message`
+            // (Rust side) intercepts the same string for Codex and Pi and
+            // swaps `send_turn` for `start_compact` at the last possible
+            // step.
             const harness = resolveSessionHarness({
               sessionId,
               selectedModelProvider: state.selectedModelProvider,
@@ -1410,17 +1410,10 @@ export function ChatPanel() {
               );
               return;
             }
-            if (harness === "pi_sdk") {
-              addLocalMessage("/compact: not supported on this backend.");
-              return;
-            }
-            // claude_code or codex_app_server — fall through with the
-            // literal `/compact`. The send pipeline (frontend
-            // dispatchChatMessage + backend send_chat_message) handles
-            // session spawn-or-reuse, user-message persistence, and turn
-            // setup uniformly. For Codex, send_chat_message branches at
-            // the very last step to issue `start_compact` instead of
-            // `send_turn`.
+            // Fall through with the literal `/compact`. The send pipeline
+            // (frontend dispatchChatMessage + backend send_chat_message)
+            // handles session spawn-or-reuse, user-message persistence,
+            // and turn setup uniformly.
             trimmed = "/compact";
           }
         }
