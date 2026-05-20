@@ -106,6 +106,10 @@ pub struct CodexAppServerSession {
     mcp_config: Option<String>,
     thread_id: Arc<tokio::sync::Mutex<Option<String>>>,
     active_turn_id: Arc<tokio::sync::Mutex<Option<String>>>,
+    /// True only for an explicit `/compact` turn started through
+    /// `thread/compact/start`. Auto-compaction happens inside a normal
+    /// Codex turn and must not synthesize a terminal Result.
+    manual_compaction_in_flight: Arc<AtomicBool>,
     turn_output: TurnOutputBuffer,
 }
 
@@ -188,6 +192,7 @@ impl CodexAppServerSession {
             mcp_config: options.mcp_config,
             thread_id: Arc::new(tokio::sync::Mutex::new(None)),
             active_turn_id: Arc::new(tokio::sync::Mutex::new(None)),
+            manual_compaction_in_flight: Arc::new(AtomicBool::new(false)),
             turn_output: Arc::new(tokio::sync::Mutex::new(CodexTurnOutput::default())),
         };
 
@@ -259,6 +264,7 @@ impl CodexAppServerSession {
             mcp_config: None,
             thread_id: Arc::new(tokio::sync::Mutex::new(None)),
             active_turn_id: Arc::new(tokio::sync::Mutex::new(None)),
+            manual_compaction_in_flight: Arc::new(AtomicBool::new(false)),
             turn_output: Arc::new(tokio::sync::Mutex::new(CodexTurnOutput::default())),
         }
     }
@@ -304,7 +310,10 @@ impl CodexAppServerSession {
     }
 
     pub fn publish_notification_event(&self, event: CodexNotificationEvent) {
-        for event in map_notification_to_agent_events(event) {
+        for event in map_notification_to_agent_events_with_compact_state(
+            event,
+            Some(&self.manual_compaction_in_flight),
+        ) {
             let _ = self.event_tx.send(event);
         }
     }
@@ -461,12 +470,22 @@ impl CodexAppServerSession {
         // before the per-turn pump exists.
         let mut broadcast_rx = self.event_tx.subscribe();
         let thread_id = self.ensure_thread().await?;
-        self.send_request(build_thread_compact_start_request(
-            self.next_id(),
-            &thread_id,
-        ))
-        .await?;
-        let _ = self.event_tx.send(codex_compacting_status_event());
+        self.manual_compaction_in_flight
+            .store(true, Ordering::SeqCst);
+        if let Err(err) = self
+            .send_request(build_thread_compact_start_request(
+                self.next_id(),
+                &thread_id,
+            ))
+            .await
+        {
+            self.manual_compaction_in_flight
+                .store(false, Ordering::SeqCst);
+            return Err(err);
+        }
+        if self.manual_compaction_in_flight.load(Ordering::SeqCst) {
+            let _ = self.event_tx.send(codex_compacting_status_event());
+        }
 
         let (mpsc_tx, mpsc_rx) = mpsc::channel::<AgentEvent>(128);
         tokio::spawn(async move {
@@ -654,6 +673,7 @@ impl CodexAppServerSession {
         let pending = self.pending.clone();
         let stdin = self.stdin.clone();
         let active_turn_id = self.active_turn_id.clone();
+        let manual_compaction_in_flight = self.manual_compaction_in_flight.clone();
         let turn_output = self.turn_output.clone();
         let pid = self.pid;
         tokio::spawn(async move {
@@ -668,6 +688,7 @@ impl CodexAppServerSession {
                             &pending,
                             stdin.as_ref(),
                             Some(&active_turn_id),
+                            Some(&manual_compaction_in_flight),
                             Some(&turn_output),
                             message,
                         )
@@ -804,6 +825,7 @@ async fn route_app_server_message(
     pending: &PendingRequests,
     stdin: Option<&CodexStdin>,
     active_turn_id: Option<&Arc<tokio::sync::Mutex<Option<String>>>>,
+    manual_compaction_in_flight: Option<&Arc<AtomicBool>>,
     turn_output: Option<&TurnOutputBuffer>,
     message: JsonRpcMessage,
 ) {
@@ -887,14 +909,23 @@ async fn route_app_server_message(
                 *active_turn_id.lock().await = None;
             }
             if notification_finishes_turn(&notification)
+                && let Some(manual_compaction_in_flight) = manual_compaction_in_flight
+            {
+                manual_compaction_in_flight.store(false, Ordering::SeqCst);
+            }
+            if notification_finishes_turn(&notification)
                 && let Some(turn_output) = turn_output
             {
                 for event in drain_turn_output_buffer(turn_output).await {
                     let _ = event_tx.send(event);
                 }
             }
-            let events =
-                map_notification_to_agent_events_for_route(notification, turn_output).await;
+            let events = map_notification_to_agent_events_for_route(
+                notification,
+                turn_output,
+                manual_compaction_in_flight,
+            )
+            .await;
             for event in events {
                 let _ = event_tx.send(event);
             }
@@ -2055,6 +2086,24 @@ fn notification_finishes_turn(event: &CodexNotificationEvent) -> bool {
     )
 }
 
+fn notification_completes_context_compaction(event: &CodexNotificationEvent) -> bool {
+    match event {
+        CodexNotificationEvent::ItemCompleted { item, .. } => {
+            item.get("type").and_then(Value::as_str) == Some("contextCompaction")
+        }
+        CodexNotificationEvent::ContextCompacted { .. } => true,
+        _ => false,
+    }
+}
+
+fn notification_starts_context_compaction(event: &CodexNotificationEvent) -> bool {
+    matches!(
+        event,
+        CodexNotificationEvent::ItemStarted { item, .. }
+            if item.get("type").and_then(Value::as_str) == Some("contextCompaction")
+    )
+}
+
 /// Accumulate streaming text/thinking into the per-turn buffer, and
 /// return any `Assistant` events that should be flushed *before* the
 /// caller emits the delta events for this notification.
@@ -2182,6 +2231,7 @@ fn flush_thinking_buffer(buffer: &mut CodexTurnOutput) -> Option<AgentEvent> {
 async fn map_notification_to_agent_events_for_route(
     event: CodexNotificationEvent,
     buffer: Option<&TurnOutputBuffer>,
+    manual_compaction_in_flight: Option<&Arc<AtomicBool>>,
 ) -> Vec<AgentEvent> {
     if let (CodexNotificationEvent::CommandOutputDelta { item_id, delta, .. }, Some(buffer)) =
         (&event, buffer)
@@ -2205,7 +2255,7 @@ async fn map_notification_to_agent_events_for_route(
         })];
     }
 
-    map_notification_to_agent_events(event)
+    map_notification_to_agent_events_with_compact_state(event, manual_compaction_in_flight)
 }
 
 pub fn decode_notification(notification: JsonRpcNotification) -> CodexNotificationEvent {
@@ -2355,6 +2405,30 @@ pub fn decode_notification(notification: JsonRpcNotification) -> CodexNotificati
 }
 
 pub fn map_notification_to_agent_events(event: CodexNotificationEvent) -> Vec<AgentEvent> {
+    map_notification_to_agent_events_with_context(event, false, true)
+}
+
+fn map_notification_to_agent_events_with_compact_state(
+    event: CodexNotificationEvent,
+    manual_compaction_in_flight: Option<&Arc<AtomicBool>>,
+) -> Vec<AgentEvent> {
+    let finish_compaction_turn = notification_completes_context_compaction(&event)
+        && manual_compaction_in_flight.is_some_and(|flag| flag.swap(false, Ordering::SeqCst));
+    let emit_context_compacting_status = notification_starts_context_compaction(&event)
+        && !manual_compaction_in_flight.is_some_and(|flag| flag.load(Ordering::SeqCst));
+
+    map_notification_to_agent_events_with_context(
+        event,
+        finish_compaction_turn,
+        emit_context_compacting_status,
+    )
+}
+
+fn map_notification_to_agent_events_with_context(
+    event: CodexNotificationEvent,
+    finish_compaction_turn: bool,
+    emit_context_compacting_status: bool,
+) -> Vec<AgentEvent> {
     match event {
         CodexNotificationEvent::AgentMessageDelta { delta, .. } if !delta.is_empty() => {
             vec![AgentEvent::Stream(StreamEvent::Stream {
@@ -2417,20 +2491,20 @@ pub fn map_notification_to_agent_events(event: CodexNotificationEvent) -> Vec<Ag
             explanation, plan, ..
         } => map_codex_plan_updated_to_agent_events(explanation, plan),
         CodexNotificationEvent::ItemStarted { item, .. } => {
-            map_codex_item_started_to_agent_events(&item)
+            map_codex_item_started_to_agent_events(&item, emit_context_compacting_status)
         }
         CodexNotificationEvent::ItemCompleted { item, .. } => {
-            map_codex_item_completed_to_agent_events(&item)
+            map_codex_item_completed_to_agent_events(&item, finish_compaction_turn)
         }
         // Transitional fallback: older Codex builds emit `thread/compacted`
         // as a notification rather than a `ContextCompaction` thread item.
-        // Surface the same compact_boundary + Result pair so the timeline
-        // divider renders identically and the per-turn pump terminates.
+        // Route it through the same manual-vs-auto decision as the item path.
         CodexNotificationEvent::ContextCompacted { .. } => {
-            vec![
-                codex_context_compaction_event(),
-                codex_compaction_finish_event(),
-            ]
+            let mut events = vec![codex_context_compaction_event()];
+            if finish_compaction_turn {
+                events.push(codex_compaction_finish_event());
+            }
+            events
         }
         CodexNotificationEvent::AgentMessageDelta { .. }
         | CodexNotificationEvent::ReasoningSummaryDelta { .. }
@@ -2441,7 +2515,7 @@ pub fn map_notification_to_agent_events(event: CodexNotificationEvent) -> Vec<Ag
         // side-channel consumed by the AppState usage cache) — they
         // don't translate to AgentEvents in the chat stream.
         | CodexNotificationEvent::RateLimitsUpdated { .. }
-        | CodexNotificationEvent::Unknown { .. } => Vec::new(),
+            | CodexNotificationEvent::Unknown { .. } => Vec::new(),
     }
 }
 
@@ -2516,7 +2590,17 @@ fn map_codex_plan_updated_to_agent_events(
     ]
 }
 
-fn map_codex_item_started_to_agent_events(item: &Value) -> Vec<AgentEvent> {
+fn map_codex_item_started_to_agent_events(
+    item: &Value,
+    emit_context_compacting_status: bool,
+) -> Vec<AgentEvent> {
+    if item.get("type").and_then(Value::as_str) == Some("contextCompaction") {
+        return if emit_context_compacting_status {
+            vec![codex_compacting_status_event()]
+        } else {
+            Vec::new()
+        };
+    }
     let Some((item_id, tool_name, input)) = codex_item_tool_use(item) else {
         return Vec::new();
     };
@@ -2553,22 +2637,23 @@ fn map_codex_item_started_to_agent_events(item: &Value) -> Vec<AgentEvent> {
     events
 }
 
-fn map_codex_item_completed_to_agent_events(item: &Value) -> Vec<AgentEvent> {
+fn map_codex_item_completed_to_agent_events(
+    item: &Value,
+    finish_compaction_turn: bool,
+) -> Vec<AgentEvent> {
     // ContextCompaction items don't map to a tool use — Codex emits them as
-    // the canonical signal that a `thread/compact/start`-initiated compaction
-    // landed. Translate into the existing `compact_boundary` system event
-    // shape so `send.rs` persists the `COMPACTION:...` sentinel via
-    // `build_compaction_sentinel`, and the timeline divider renders. The
-    // synthetic `Result` event that follows terminates the per-turn pump set
-    // up by `start_compact()` (which `send_chat_message` invokes at the
-    // intercept point in place of `send_turn_with_uuid`) so
-    // `session.agent_status` flips back to `"Idle"` instead of staying
-    // stuck after the boundary lands.
+    // the canonical signal that compaction landed. Translate into the existing
+    // `compact_boundary` system event shape so `send.rs` persists the
+    // `COMPACTION:...` sentinel via `build_compaction_sentinel`, and the
+    // timeline divider renders. Only append the synthetic `Result` for an
+    // explicit `/compact` turn; Codex's auto-compaction happens mid-turn and
+    // must not terminate the live event pump.
     if item.get("type").and_then(Value::as_str) == Some("contextCompaction") {
-        return vec![
-            codex_context_compaction_event(),
-            codex_compaction_finish_event(),
-        ];
+        let mut events = vec![codex_context_compaction_event()];
+        if finish_compaction_turn {
+            events.push(codex_compaction_finish_event());
+        }
+        return events;
     }
     let Some((item_id, _tool_name, input)) = codex_item_tool_use(item) else {
         return Vec::new();
@@ -3647,20 +3732,18 @@ mod tests {
     }
 
     #[test]
-    fn context_compaction_item_completed_emits_compact_boundary_and_finish_events() {
+    fn auto_context_compaction_item_completed_emits_boundary_without_finish() {
         // Regression for issue #881: Codex delivers compaction completion as
         // an `item/completed` with `type: "contextCompaction"`. Make sure we
-        // translate it into a `compact_boundary` system event PLUS a
-        // synthetic `Result` event. The boundary triggers sentinel
-        // persistence + divider render; the Result terminates whichever
-        // per-turn pump is listening so `session.agent_status` flips back
-        // to `"Idle"` (without it, the UI stays stuck in "Compacting").
+        // translate it into a `compact_boundary` system event. For automatic
+        // mid-turn compaction, issue #909 requires that we do NOT append a
+        // synthetic `Result`, because that would terminate the live turn pump.
         let item = json!({
             "id": "item-1",
             "type": "contextCompaction",
         });
-        let events = map_codex_item_completed_to_agent_events(&item);
-        assert_eq!(events.len(), 2);
+        let events = map_codex_item_completed_to_agent_events(&item, false);
+        assert_eq!(events.len(), 1);
         match &events[0] {
             AgentEvent::Stream(StreamEvent::System {
                 subtype,
@@ -3685,6 +3768,23 @@ mod tests {
             }
             other => panic!("expected compact_boundary System event, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn manual_context_compaction_item_completed_emits_boundary_and_finish() {
+        // Manual `/compact` still runs as a standalone compaction turn. The
+        // synthetic Result is correct there: it lets the start_compact pump
+        // return the UI to Idle after the divider lands.
+        let item = json!({
+            "id": "item-1",
+            "type": "contextCompaction",
+        });
+        let events = map_codex_item_completed_to_agent_events(&item, true);
+        assert_eq!(events.len(), 2);
+        assert!(matches!(
+            &events[0],
+            AgentEvent::Stream(StreamEvent::System { subtype, .. }) if subtype == "compact_boundary"
+        ));
         match &events[1] {
             AgentEvent::Stream(StreamEvent::Result { subtype, .. }) => {
                 assert_eq!(subtype, "success");
@@ -3711,13 +3811,33 @@ mod tests {
     }
 
     #[test]
-    fn deprecated_thread_compacted_notification_emits_boundary_and_finish() {
+    fn context_compaction_item_started_emits_compacting_status() {
+        let item = json!({
+            "id": "item-1",
+            "type": "contextCompaction",
+        });
+
+        let events = map_codex_item_started_to_agent_events(&item, true);
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            AgentEvent::Stream(StreamEvent::System {
+                subtype, status, ..
+            }) => {
+                assert_eq!(subtype, "status");
+                assert_eq!(status.as_deref(), Some("compacting"));
+            }
+            other => panic!("expected compacting status System event, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn deprecated_thread_compacted_notification_emits_auto_boundary_without_finish() {
         // Older Codex builds emit `thread/compacted` as a top-level
         // notification rather than embedding the boundary in a thread item.
         // Keep the transitional decode path until we can rely on the new
         // item shape across all supported Codex versions — and make sure
-        // the synthetic Result fires here too so the per-turn pump
-        // terminates the same way it does for the item-path.
+        // Auto-compaction must not synthesize a Result, even on this fallback
+        // path, because Codex continues the original turn after compacting.
         let notification = JsonRpcNotification {
             method: "thread/compacted".to_string(),
             params: Some(json!({
@@ -3731,14 +3851,10 @@ mod tests {
             CodexNotificationEvent::ContextCompacted { .. }
         ));
         let events = map_notification_to_agent_events(decoded);
-        assert_eq!(events.len(), 2);
+        assert_eq!(events.len(), 1);
         assert!(matches!(
             &events[0],
             AgentEvent::Stream(StreamEvent::System { subtype, .. }) if subtype == "compact_boundary"
-        ));
-        assert!(matches!(
-            &events[1],
-            AgentEvent::Stream(StreamEvent::Result { subtype, .. }) if subtype == "success"
         ));
     }
 
@@ -4483,6 +4599,7 @@ mod tests {
             None,
             None,
             None,
+            None,
             JsonRpcMessage::Response(JsonRpcResponse {
                 id: Some(JsonRpcId::Integer(11)),
                 result: json!({"turn":{"id":"turn-1"}}),
@@ -4509,6 +4626,7 @@ mod tests {
             &event_tx,
             &rate_limits_tx,
             &pending,
+            None,
             None,
             None,
             None,
@@ -4553,6 +4671,7 @@ mod tests {
             None,
             Some(&active_turn_id),
             None,
+            None,
             JsonRpcMessage::Notification(JsonRpcNotification {
                 method: "turn/completed".to_string(),
                 params: Some(json!({
@@ -4572,6 +4691,113 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn app_server_router_keeps_auto_compaction_inside_active_turn() {
+        let pending: PendingRequests = Arc::new(tokio::sync::Mutex::new(BTreeMap::new()));
+        let active_turn_id = Arc::new(tokio::sync::Mutex::new(Some("turn-1".to_string())));
+        let manual_compaction_in_flight = Arc::new(AtomicBool::new(false));
+        let (event_tx, mut rx) = broadcast::channel(8);
+        let (rate_limits_tx, _) = broadcast::channel::<CodexRateLimitSnapshot>(8);
+
+        route_app_server_message(
+            1,
+            &event_tx,
+            &rate_limits_tx,
+            &pending,
+            None,
+            Some(&active_turn_id),
+            Some(&manual_compaction_in_flight),
+            None,
+            JsonRpcMessage::Notification(JsonRpcNotification {
+                method: "item/started".to_string(),
+                params: Some(json!({
+                    "threadId": "thread-1",
+                    "turnId": "turn-1",
+                    "item": {"id": "compact-1", "type": "contextCompaction"},
+                })),
+            }),
+        )
+        .await;
+        route_app_server_message(
+            1,
+            &event_tx,
+            &rate_limits_tx,
+            &pending,
+            None,
+            Some(&active_turn_id),
+            Some(&manual_compaction_in_flight),
+            None,
+            JsonRpcMessage::Notification(JsonRpcNotification {
+                method: "item/completed".to_string(),
+                params: Some(json!({
+                    "threadId": "thread-1",
+                    "turnId": "turn-1",
+                    "item": {"id": "compact-1", "type": "contextCompaction"},
+                })),
+            }),
+        )
+        .await;
+
+        assert_eq!(
+            active_turn_id.lock().await.as_deref(),
+            Some("turn-1"),
+            "auto-compaction must not clear the live turn"
+        );
+        assert!(matches!(
+            rx.recv().await.expect("compacting status"),
+            AgentEvent::Stream(StreamEvent::System { subtype, status, .. })
+                if subtype == "status" && status.as_deref() == Some("compacting")
+        ));
+        assert!(matches!(
+            rx.recv().await.expect("compact boundary"),
+            AgentEvent::Stream(StreamEvent::System { subtype, .. }) if subtype == "compact_boundary"
+        ));
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(25), rx.recv())
+                .await
+                .is_err(),
+            "auto-compaction must not synthesize a terminal Result"
+        );
+    }
+
+    #[tokio::test]
+    async fn app_server_router_finishes_manual_compaction_turn_once() {
+        let pending: PendingRequests = Arc::new(tokio::sync::Mutex::new(BTreeMap::new()));
+        let manual_compaction_in_flight = Arc::new(AtomicBool::new(true));
+        let (event_tx, mut rx) = broadcast::channel(8);
+        let (rate_limits_tx, _) = broadcast::channel::<CodexRateLimitSnapshot>(8);
+
+        route_app_server_message(
+            1,
+            &event_tx,
+            &rate_limits_tx,
+            &pending,
+            None,
+            None,
+            Some(&manual_compaction_in_flight),
+            None,
+            JsonRpcMessage::Notification(JsonRpcNotification {
+                method: "item/completed".to_string(),
+                params: Some(json!({
+                    "threadId": "thread-1",
+                    "turnId": "compact-turn",
+                    "item": {"id": "compact-1", "type": "contextCompaction"},
+                })),
+            }),
+        )
+        .await;
+
+        assert!(!manual_compaction_in_flight.load(Ordering::SeqCst));
+        assert!(matches!(
+            rx.recv().await.expect("compact boundary"),
+            AgentEvent::Stream(StreamEvent::System { subtype, .. }) if subtype == "compact_boundary"
+        ));
+        assert!(matches!(
+            rx.recv().await.expect("manual finish"),
+            AgentEvent::Stream(StreamEvent::Result { subtype, .. }) if subtype == "success"
+        ));
+    }
+
+    #[tokio::test]
     async fn app_server_router_synthesizes_assistant_message_on_turn_completion() {
         let pending: PendingRequests = Arc::new(tokio::sync::Mutex::new(BTreeMap::new()));
         let turn_output = Arc::new(tokio::sync::Mutex::new(CodexTurnOutput::default()));
@@ -4583,6 +4809,7 @@ mod tests {
             &event_tx,
             &rate_limits_tx,
             &pending,
+            None,
             None,
             None,
             Some(&turn_output),
@@ -4604,6 +4831,7 @@ mod tests {
             &pending,
             None,
             None,
+            None,
             Some(&turn_output),
             JsonRpcMessage::Notification(JsonRpcNotification {
                 method: "item/agentMessage/delta".to_string(),
@@ -4621,6 +4849,7 @@ mod tests {
             &event_tx,
             &rate_limits_tx,
             &pending,
+            None,
             None,
             None,
             Some(&turn_output),
@@ -4705,6 +4934,7 @@ mod tests {
                 &pending,
                 None,
                 None,
+                None,
                 Some(&turn_output),
                 message,
             )
@@ -4783,6 +5013,7 @@ mod tests {
                 &pending,
                 None,
                 None,
+                None,
                 Some(&turn_output),
                 message,
             )
@@ -4848,6 +5079,7 @@ mod tests {
                 &event_tx,
                 &rate_limits_tx,
                 &pending,
+                None,
                 None,
                 None,
                 Some(&turn_output),
@@ -4970,6 +5202,7 @@ mod tests {
                 &pending,
                 None,
                 None,
+                None,
                 Some(&turn_output),
                 message,
             )
@@ -5023,6 +5256,7 @@ mod tests {
                 &pending,
                 None,
                 None,
+                None,
                 Some(&turn_output),
                 JsonRpcMessage::Notification(JsonRpcNotification {
                     method: "item/commandExecution/outputDelta".to_string(),
@@ -5057,6 +5291,7 @@ mod tests {
             None,
             None,
             None,
+            None,
             JsonRpcMessage::Request(JsonRpcRequest {
                 id: JsonRpcId::String("req-1".to_string()),
                 method: "item/tool/notImplemented".to_string(),
@@ -5082,6 +5317,7 @@ mod tests {
             &event_tx,
             &rate_limits_tx,
             &pending,
+            None,
             None,
             None,
             None,
