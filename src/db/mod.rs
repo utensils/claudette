@@ -1,5 +1,6 @@
 use std::collections::HashSet;
 use std::path::Path;
+use std::time::Duration;
 
 use rusqlite::{Connection, params};
 
@@ -7,6 +8,7 @@ use crate::migrations::{MIGRATIONS, Migration};
 
 const SQLITE_AUTO_VACUUM_FULL: i64 = 1;
 const SQLITE_AUTO_VACUUM_INCREMENTAL: i64 = 2;
+const SQLITE_BUSY_TIMEOUT: Duration = Duration::from_secs(30);
 const INCREMENTAL_VACUUM_PAGES_AFTER_DELETE: i64 = 4096;
 
 mod repository;
@@ -81,6 +83,7 @@ impl Database {
         conn: &Connection,
         enable_incremental_auto_vacuum_before_schema: bool,
     ) -> Result<(), rusqlite::Error> {
+        conn.busy_timeout(SQLITE_BUSY_TIMEOUT)?;
         if enable_incremental_auto_vacuum_before_schema {
             conn.execute_batch("PRAGMA auto_vacuum=INCREMENTAL;")?;
         }
@@ -138,12 +141,13 @@ impl Database {
         if mode == SQLITE_AUTO_VACUUM_INCREMENTAL {
             return Ok(false);
         }
-
-        self.conn.execute_batch("PRAGMA auto_vacuum=INCREMENTAL;")?;
         if mode == SQLITE_AUTO_VACUUM_FULL {
+            // FULL already returns freed pages to the OS on each commit. Avoid
+            // rewriting a user/dev DB just to change to incremental mode.
             return Ok(false);
         }
 
+        self.conn.execute_batch("PRAGMA auto_vacuum=INCREMENTAL;")?;
         tracing::info!(
             target: "claudette::db",
             "converting database to incremental auto-vacuum; running one-time VACUUM"
@@ -175,6 +179,9 @@ impl Database {
     }
 
     fn incremental_vacuum(&self, max_pages: i64) -> Result<(), rusqlite::Error> {
+        if max_pages <= 0 {
+            return Ok(());
+        }
         if self.auto_vacuum_mode()? != SQLITE_AUTO_VACUUM_INCREMENTAL {
             return Ok(());
         }
@@ -184,7 +191,7 @@ impl Database {
         if freelist_count <= 0 {
             return Ok(());
         }
-        let pages = freelist_count.min(max_pages).max(1);
+        let pages = freelist_count.min(max_pages);
         self.conn
             .execute_batch(&format!("PRAGMA incremental_vacuum({pages});"))
     }
@@ -446,6 +453,12 @@ mod tests {
             .unwrap()
     }
 
+    fn busy_timeout_ms(db: &Database) -> i64 {
+        db.conn()
+            .query_row("PRAGMA busy_timeout", [], |r| r.get(0))
+            .unwrap()
+    }
+
     /// Apply the SQL bodies of the first N pre-redesign migrations directly,
     /// then set `PRAGMA user_version = N`, producing a DB that looks exactly
     /// like one from before the redesign at that version.
@@ -513,6 +526,12 @@ mod tests {
     }
 
     #[test]
+    fn test_database_connections_wait_on_busy_locks() {
+        let db = Database::open_in_memory().unwrap();
+        assert_eq!(busy_timeout_ms(&db), SQLITE_BUSY_TIMEOUT.as_millis() as i64);
+    }
+
+    #[test]
     fn test_existing_file_db_converts_to_incremental_auto_vacuum() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("claudette.db");
@@ -534,6 +553,35 @@ mod tests {
         let db = Database::open(&path).unwrap();
 
         assert_eq!(auto_vacuum_mode(&db), SQLITE_AUTO_VACUUM_INCREMENTAL);
+        let preserved: i64 = db
+            .conn()
+            .query_row("SELECT COUNT(*) FROM preexisting_table", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(preserved, 1);
+    }
+
+    #[test]
+    fn test_full_auto_vacuum_db_is_left_unchanged() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("claudette.db");
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch(
+                "PRAGMA auto_vacuum=FULL;
+                 CREATE TABLE preexisting_table (id INTEGER PRIMARY KEY, payload BLOB);
+                 INSERT INTO preexisting_table (payload) VALUES (zeroblob(65536));",
+            )
+            .unwrap();
+            assert_eq!(
+                conn.query_row("PRAGMA auto_vacuum", [], |r| r.get::<_, i64>(0))
+                    .unwrap(),
+                SQLITE_AUTO_VACUUM_FULL
+            );
+        }
+
+        let db = Database::open(&path).unwrap();
+
+        assert_eq!(auto_vacuum_mode(&db), SQLITE_AUTO_VACUUM_FULL);
         let preserved: i64 = db
             .conn()
             .query_row("SELECT COUNT(*) FROM preexisting_table", [], |r| r.get(0))
