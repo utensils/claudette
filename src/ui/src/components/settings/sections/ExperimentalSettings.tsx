@@ -17,12 +17,6 @@ export function ExperimentalSettings() {
   const clearSettingsFocus = useAppStore((s) => s.clearSettingsFocus);
   const usageInsightsEnabled = useAppStore((s) => s.usageInsightsEnabled);
   const setUsageInsightsEnabled = useAppStore((s) => s.setUsageInsightsEnabled);
-  const showOpenRouterBalance = useAppStore(
-    (s) => s.showOpenRouterBalanceInUsageMeter,
-  );
-  const setShowOpenRouterBalance = useAppStore(
-    (s) => s.setShowOpenRouterBalanceInUsageMeter,
-  );
   const [error, setError] = useState<string | null>(null);
   const [usageConfirmOpen, setUsageConfirmOpen] = useState(false);
   const usageRowRef = useRef<HTMLDivElement>(null);
@@ -70,21 +64,6 @@ export function ExperimentalSettings() {
     await applyUsageInsights(false);
   };
 
-  const handleOpenRouterBalanceToggle = async () => {
-    const next = !showOpenRouterBalance;
-    setShowOpenRouterBalance(next);
-    try {
-      setError(null);
-      await setAppSetting(
-        "openrouter_balance_in_usage_meter",
-        next ? "true" : "false",
-      );
-    } catch (e) {
-      setShowOpenRouterBalance(!next);
-      setError(String(e));
-    }
-  };
-
   return (
     <div>
       <h2 className={styles.sectionTitle}>{t("experimental_title")}</h2>
@@ -112,29 +91,6 @@ export function ExperimentalSettings() {
             aria-label={t("experimental_claude_code_usage_aria")}
             data-checked={usageInsightsEnabled}
             onClick={handleUsageToggle}
-          >
-            <div className={styles.toggleKnob} />
-          </button>
-        </div>
-      </div>
-
-      <div className={styles.settingRow}>
-        <div className={styles.settingInfo}>
-          <div className={styles.settingLabel}>
-            {t("experimental_openrouter_balance")}
-          </div>
-          <div className={styles.settingDescription}>
-            {t("experimental_openrouter_balance_desc")}
-          </div>
-        </div>
-        <div className={styles.settingControl}>
-          <button
-            className={styles.toggle}
-            role="switch"
-            aria-checked={showOpenRouterBalance}
-            aria-label={t("experimental_openrouter_balance_aria")}
-            data-checked={showOpenRouterBalance}
-            onClick={handleOpenRouterBalanceToggle}
           >
             <div className={styles.toggleKnob} />
           </button>

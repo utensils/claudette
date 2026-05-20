@@ -34,7 +34,6 @@ pub async fn get_session_usage(
     chat_session_id: String,
     backend: AgentBackendConfig,
     usage_insights_enabled: bool,
-    show_openrouter_balance: bool,
 ) -> Result<UsageSnapshot, String> {
     let now_ms = chrono::Utc::now().timestamp_millis();
 
@@ -114,8 +113,7 @@ pub async fn get_session_usage(
             // key. Network errors are swallowed — the bucket simply doesn't
             // appear, and local-aggregate still carries the meter.
             let mut extras = Vec::new();
-            if show_openrouter_balance
-                && let Ok(Some(key)) = load_backend_secret(&backend.id)
+            if let Ok(Some(key)) = load_backend_secret(&backend.id)
                 && !key.is_empty()
                 && let Ok(Some(bucket)) = openrouter::fetch_credit_bucket(&key).await
             {
@@ -131,22 +129,12 @@ pub async fn get_session_usage(
         #[cfg(feature = "pi-sdk")]
         AgentBackendKind::PiSdk => {
             let mut extras = Vec::new();
-            if show_openrouter_balance && pi_model_is_openrouter(backend.default_model.as_deref()) {
-                match crate::commands::agent_backends::pi_auth::fetch_pi_openrouter_credit_bucket()
-                    .await
-                {
-                    Ok(bucket) => extras.push(bucket),
-                    Err(err) if is_openrouter_auth_error(&err) => {
-                        extras.push(openrouter_invalid_key_bucket())
-                    }
-                    Err(err) => {
-                        tracing::debug!(
-                            target: "claudette::usage",
-                            error = %err,
-                            "Pi OpenRouter balance fetch failed",
-                        );
-                    }
-                }
+            if pi_model_is_openrouter(backend.default_model.as_deref())
+                && let Ok(bucket) =
+                    crate::commands::agent_backends::pi_auth::fetch_pi_openrouter_credit_bucket()
+                        .await
+            {
+                extras.push(bucket);
             }
             (String::from("Pi"), extras)
         }
@@ -173,22 +161,6 @@ fn pi_model_is_openrouter(model: Option<&str>) -> bool {
     model
         .and_then(|model| model.split_once('/').map(|(provider, _)| provider))
         .is_some_and(|provider| provider.eq_ignore_ascii_case("openrouter"))
-}
-
-fn is_openrouter_auth_error(err: &str) -> bool {
-    err.contains("401") || err.contains("403")
-}
-
-fn openrouter_invalid_key_bucket() -> claudette::usage::UsageBucket {
-    claudette::usage::UsageBucket {
-        key: String::from("openrouter_credits_error"),
-        label: String::from("OpenRouter"),
-        utilization: 0.0,
-        primary_text: String::from("key invalid"),
-        secondary_text: Some(String::from("Check the Pi OpenRouter provider row")),
-        is_bounded: false,
-        exhausted: false,
-    }
 }
 
 /// Mirror of the TS-side `CLAUDE_FAMILY_KINDS` in

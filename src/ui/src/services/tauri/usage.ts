@@ -7,7 +7,7 @@ export function getClaudeCodeUsage(): Promise<ClaudeCodeUsage> {
 }
 
 /** Per-session usage snapshot. Backend chooses the data source based on
- *  the active backend kind and the user's experimental-flag preference;
+ *  the active backend kind and the Claude Code Usage opt-in;
  *  see `src-tauri/src/commands/usage.rs::get_session_usage`. Any secret
  *  the dispatcher needs to call provider usage endpoints (e.g.
  *  OpenRouter `/credits`) is loaded server-side — the frontend never
@@ -17,14 +17,12 @@ export function getSessionUsage(args: {
   chatSessionId: string;
   backend: AgentBackendConfig;
   usageInsightsEnabled: boolean;
-  showOpenRouterBalance: boolean;
 }): Promise<UsageSnapshot> {
   return invoke("get_session_usage", {
     workspaceId: args.workspaceId,
     chatSessionId: args.chatSessionId,
     backend: args.backend,
     usageInsightsEnabled: args.usageInsightsEnabled,
-    showOpenrouterBalance: args.showOpenRouterBalance,
   });
 }
 

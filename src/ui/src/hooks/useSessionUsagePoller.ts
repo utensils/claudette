@@ -12,7 +12,6 @@ interface SessionUsagePollerArgs {
   backend: AgentBackendConfig | null;
   mode: UsageIndicatorMode;
   usageInsightsEnabled: boolean;
-  showOpenRouterBalance: boolean;
 }
 
 const REFRESH_INTERVAL_MS = 5 * 60_000; // 5 minutes — fallback cadence
@@ -47,7 +46,6 @@ export function useSessionUsagePoller({
   backend,
   mode,
   usageInsightsEnabled,
-  showOpenRouterBalance,
 }: SessionUsagePollerArgs) {
   const setSessionUsage = useAppStore((s) => s.setSessionUsage);
   const clearSessionUsage = useAppStore((s) => s.clearSessionUsage);
@@ -147,7 +145,6 @@ export function useSessionUsagePoller({
             chatSessionId: sessionId,
             backend,
             usageInsightsEnabled,
-            showOpenRouterBalance,
           });
           if (cancelled) return;
           setSessionUsage(sessionId, snapshot);
@@ -248,7 +245,6 @@ export function useSessionUsagePoller({
     backend,
     mode,
     usageInsightsEnabled,
-    showOpenRouterBalance,
     completedTurnCount,
     setSessionUsage,
     clearSessionUsage,
