@@ -138,9 +138,9 @@ On startup, Claudette also scans `${TMPDIR}/claudette-dev/*.json` (the discovery
 
 ## Update boot-health rollback
 
-After an in-app update, Claudette starts the new build on a short probation window (20 s by default). The React app sends a boot heartbeat after the first commit past the loader (`viewStateHydrated` is true and `loadInitialData` resolved). If that heartbeat never arrives, Claudette treats the update as failed to start and tries to restore the previous self-contained install.
+After an in-app update, Claudette starts the new build on a short probation window (20 s by default). During that window Claudette records boot-stage breadcrumbs in the probation sentinel: process start, webview creation, React mount, initial workspace-data loading, and any initial-data load error. The React app sends the final boot heartbeat after the first commit past the loader (`viewStateHydrated` is true and `loadInitialData` resolved). If that heartbeat never arrives, Claudette treats the update as failed to start and tries to restore the previous self-contained install.
 
-When rollback succeeds, the next launch shows a native dialog saying which version failed and which version was restored. When rollback cannot be applied (for example, there was no usable previous-install backup or the install location could not be replaced), Claudette writes a no-loop failure report and shows a dialog with the failed version plus the release URL to download manually.
+When rollback succeeds, the next launch shows a native dialog saying which version failed, which version was restored, and the last boot stage reached. Startup failures, initial workspace-load failures, and slow starts get different wording so the report starts from the right symptom. When rollback cannot be applied (for example, there was no usable previous-install backup or the install location could not be replaced), Claudette writes a no-loop failure report and shows a dialog with the failed version, the captured boot stage, and the release URL to download manually.
 
 A force-quit during the probation window leaves the sentinel on disk; the next launch increments the attempt counter and treats `attempts >= 2` as "this build runs" (the user already booted past the timer once), clears the sentinel, and skips arming the timer. This avoids spurious rollbacks on an otherwise healthy build whose user happens to quit during every probation window.
 
@@ -152,7 +152,7 @@ Useful files for a rollback bug report:
 |------|---------|
 | `~/.claudette/updates/previous/<version>/` | Backup of the previous self-contained install, when one was available. |
 | OS data dir `boot-probation.json` | Internal sentinel for the update currently on probation. Cleared after a healthy boot. |
-| OS data dir `boot-rollback-report.json` | One-shot report consumed on next launch to show the native rollback dialog. |
+| OS data dir `boot-rollback-report.json` | One-shot report consumed on next launch to show the native rollback dialog. Includes the failed boot stage, probation timeout, rollback execution error (if any), and a bounded tail of the failed build's daily log. |
 | `~/.claudette/logs/claudette.<DATE>.log` | Structured timeline under the `claudette::updater` target. |
 
 The OS data dir is `~/Library/Application Support/claudette/` on macOS, `$XDG_DATA_HOME/claudette/` on Linux, and `%APPDATA%/claudette/` on Windows unless `CLAUDETTE_DATA_DIR` overrides it.

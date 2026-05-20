@@ -369,6 +369,11 @@ fn main() {
     // above for the persisted-log-level read so the two never drift.
     let data_dir = early_data_dir;
     let db_path = early_db_path;
+    let _ = boot_probation::record_boot_stage(
+        &data_dir,
+        boot_probation::BootStage::ProcessStarted,
+        None,
+    );
 
     // Stamp the resolved primary paths so a multi-instance dev session
     // can be reconstructed from the log file alone — knowing which DB
@@ -909,6 +914,7 @@ fn main() {
             // Data
             commands::data::load_initial_data,
             // Boot-health probation
+            commands::boot::boot_stage,
             commands::boot::boot_ok,
             // Repository
             commands::repository::add_repository,
