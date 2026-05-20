@@ -315,15 +315,24 @@ describe("createWorkspaceOrchestrated", () => {
     errSpy.mockRestore();
   });
 
-  it("treats the backend in-flight rejection as benign: toast + null, no throw", async () => {
+  it("treats the backend in-flight rejection as benign: toast, null, restored selection, no error log", async () => {
     // The backend's `create_workspace` refuses a second create for a repo
     // that already has one running (issue #896). That guard survives a
     // webview reload — unlike the module-level latch — so the orchestrator
-    // must surface the rejection calmly (toast) and return null, the same
-    // shape as the in-process single-flight early-return, rather than
-    // throwing a "Failed to create workspace" error at the caller.
+    // must treat the rejection as benign: surface a calm toast, return
+    // null (the same shape as the in-process single-flight early-return),
+    // restore the pre-create selection rather than yanking the user to
+    // the dashboard, and not log it at error level (nothing failed).
     const addToast = vi.fn();
-    useAppStore.setState({ addToast });
+    // A workspace the user was viewing before clicking New — the
+    // optimistic placeholder briefly steals selection, so the benign
+    // rejection must restore selection to this row, not null it.
+    const prior = makeWorkspace("prior");
+    useAppStore.setState({
+      addToast,
+      workspaces: [prior],
+      selectedWorkspaceId: prior.id,
+    });
     mockGenerateWorkspaceName.mockResolvedValue({
       slug: "calm-protea",
       display: "calm protea",
@@ -343,6 +352,10 @@ describe("createWorkspaceOrchestrated", () => {
     expect(addToast).toHaveBeenCalledTimes(1);
     expect(addToast.mock.calls[0][0]).toMatch(/already being created/i);
     expect(useAppStore.getState().creatingWorkspaceRepoId).toBeNull();
+    // Selection is restored to where the user was — not nulled to the
+    // dashboard — and the benign rejection is never logged as a failure.
+    expect(useAppStore.getState().selectedWorkspaceId).toBe(prior.id);
+    expect(errSpy).not.toHaveBeenCalled();
 
     errSpy.mockRestore();
   });
