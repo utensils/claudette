@@ -206,7 +206,7 @@ describe("sendToNewWorkspace", () => {
     expect(sendArgs[13]).toBe(messages[0].id); // messageId
   });
 
-  it("derives the provider from a Pi-qualified model id", async () => {
+  it("routes through the model's explicit providerId", async () => {
     mockedCreate.mockResolvedValue({
       workspaceId: "ws-2",
       sessionId: "sess-2",
@@ -215,7 +215,7 @@ describe("sendToNewWorkspace", () => {
     await sendToNewWorkspace({
       ...ISSUE_ARGS,
       modelId: "claude-sonnet",
-      providerQualifiedId: "openrouter/claude-sonnet",
+      providerId: "openrouter",
     });
 
     expect(mockedApplyModel).toHaveBeenCalledWith(

@@ -18,9 +18,10 @@ export interface UseRepoOpenIssuesResult {
 /// Subscribe a project-view section to its repo's open issues.
 ///
 /// Behavior:
-///  - When the feature flag is off, returns an empty payload and never
-///    invokes the Tauri command (the backend short-circuits as well — this
-///    is just to avoid the no-op round-trip).
+///  - When the feature flag is off, the hook never invokes the Tauri
+///    command and `payload` stays `undefined` (the backend short-circuits
+///    as well — this just avoids the no-op round-trip). Callers already
+///    treat `undefined` as the not-loaded state.
 ///  - Polls every 60s while the document is visible. Pauses on
 ///    `visibilitychange` to `hidden` and resumes when the tab returns.
 ///  - Auto-cancels on repo switch — the cleanup effect drops the pending
@@ -54,7 +55,13 @@ export function useRepoOpenIssues(repoId: string | null): UseRepoOpenIssuesResul
       // hard failure here (e.g. tauri channel dropped) leaves the store
       // alone so the UI shows the last good state.
     } finally {
-      setLoading(false);
+      // Only the request for the *current* repo owns `loading` — a stale
+      // response landing after a repo switch must not clear the spinner
+      // for the request that's now in flight (mirrors the store-write
+      // guard above).
+      if (activeRepoRef.current === repoId) {
+        setLoading(false);
+      }
     }
   }, [enabled, repoId, setRepoIssues]);
 

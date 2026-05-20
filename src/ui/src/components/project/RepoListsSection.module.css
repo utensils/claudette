@@ -189,6 +189,18 @@
   white-space: nowrap;
 }
 
+/* Applied when the SCM provider supplied a label color. `--label-color`
+   is set inline (the raw maintainer-chosen hex — content, not a theme
+   token); the alpha tinting is composed here so the component stays
+   free of color math. Low alpha on the fill keeps text readable in
+   both themes; the border uses a stronger mix to stay visible on
+   hover backgrounds. */
+.labelColored {
+  background: color-mix(in srgb, var(--label-color) 13%, transparent);
+  border-color: color-mix(in srgb, var(--label-color) 40%, transparent);
+  color: var(--text-primary);
+}
+
 .labelMore {
   font-size: 10px;
   color: var(--text-faint);

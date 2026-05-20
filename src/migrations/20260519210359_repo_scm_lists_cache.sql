@@ -8,7 +8,10 @@
 --   "pull_requests:mine"
 --   "pull_requests:review_requested"
 --
--- `payload` is JSON: { items: [...], unsupported?: bool }
+-- `payload` is a JSON-encoded bare array of items (the raw issue or PR
+-- list) — never wrapped in an object. The `{ items, unsupported }`
+-- envelope is applied later by the Tauri command return shape, not here.
+-- See `RepoScmListCacheRow` in `src/db/scm.rs`.
 CREATE TABLE IF NOT EXISTS repo_scm_lists_cache (
     repo_id    TEXT NOT NULL,
     list_kind  TEXT NOT NULL,

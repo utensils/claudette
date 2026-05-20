@@ -5,6 +5,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { RepoIssuesSection } from "./RepoIssuesSection";
 import { useRepoOpenIssues } from "../../hooks/useRepoOpenIssues";
+import { openUrl } from "../../services/tauri";
 import type { Issue, RepoIssuesPayload } from "../../types/plugin";
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean })
@@ -137,6 +138,28 @@ describe("RepoIssuesSection error/cache handling", () => {
     const container = render();
     expand(container);
     expect(container.textContent).toContain("No open issues.");
+  });
+
+  it("activates a row on Space as well as Enter (role=button a11y)", () => {
+    mockedHook.mockReturnValue({
+      payload: makePayload({ issues: [makeIssue(1)] }),
+      loading: false,
+      refresh: vi.fn(),
+    });
+    const container = render();
+    expand(container);
+    vi.mocked(openUrl).mockClear();
+
+    const row = container.querySelector('[role="button"]');
+    expect(row).toBeTruthy();
+    act(() => {
+      row?.dispatchEvent(
+        new KeyboardEvent("keydown", { key: " ", bubbles: true }),
+      );
+    });
+    expect(vi.mocked(openUrl)).toHaveBeenCalledWith(
+      "https://example.com/issues/1",
+    );
   });
 
   it("renders the open-count badge in the collapsed header", () => {

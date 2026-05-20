@@ -300,7 +300,7 @@ function PullRequestRow({
             url: pr.url,
             branch: pr.branch,
             modelId: model.id,
-            providerQualifiedId: model.providerQualifiedId,
+            providerId: model.providerId,
           });
         } catch (e) {
           addToast(
@@ -325,7 +325,12 @@ function PullRequestRow({
         role="button"
         tabIndex={0}
         onKeyDown={(e) => {
-          if (e.key === "Enter") onOpen(pr.url);
+          // A `role="button"` element must activate on Space as well as
+          // Enter; preventDefault stops Space from scrolling the page.
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            onOpen(pr.url);
+          }
         }}
       >
         <span className={styles.rowNumber}>#{pr.number}</span>

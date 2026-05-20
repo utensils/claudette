@@ -17,10 +17,12 @@ export interface SendToNewWorkspaceArgs {
   /// RepoPullRequestsList.tsx).
   branch?: string;
   modelId: string;
-  /// Optional `<provider>/<model>` form from the Pi sidecar. When present
-  /// we use the prefix as the model provider so applySelectedModel routes
-  /// the same way the chat ModelSelector would.
-  providerQualifiedId?: string;
+  /// Provider/backend id the model belongs to — the registry's
+  /// `Model.providerId`. Passed straight through to `applySelectedModel`
+  /// and the send so routing matches the chat ModelSelector. Defaults to
+  /// `"anthropic"` when absent (curated Claude Code models carry no
+  /// provider id).
+  providerId?: string;
 }
 
 /// Orchestrates the "right-click → Send to new workspace ▶ <model>" flow.
@@ -50,7 +52,7 @@ export async function sendToNewWorkspace(
     return;
   }
   const { workspaceId, sessionId } = outcome;
-  const provider = args.providerQualifiedId?.split("/")[0] ?? "anthropic";
+  const provider = args.providerId ?? "anthropic";
   await applySelectedModel(sessionId, args.modelId, provider);
   const prompt = renderStarterPrompt(args);
   // Optimistically insert the user's prompt into the chat store BEFORE

@@ -5,6 +5,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { RepoPullRequestsSection } from "./RepoPullRequestsSection";
 import { useRepoOpenPullRequests } from "../../hooks/useRepoOpenPullRequests";
+import { openUrl } from "../../services/tauri";
 import type { PullRequest, RepoPullRequestsPayload } from "../../types/plugin";
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean })
@@ -112,6 +113,28 @@ describe("RepoPullRequestsSection error/cache handling", () => {
     const container = render();
     expand(container);
     expect(container.textContent).toContain("Could not load pull requests.");
+  });
+
+  it("activates a row on Space as well as Enter (role=button a11y)", () => {
+    mockedHook.mockReturnValue({
+      payload: makePayload({ pull_requests: [makePr(10)] }),
+      loading: false,
+      refresh: vi.fn(),
+    });
+    const container = render();
+    expand(container);
+    vi.mocked(openUrl).mockClear();
+
+    const row = container.querySelector('[role="button"]');
+    expect(row).toBeTruthy();
+    act(() => {
+      row?.dispatchEvent(
+        new KeyboardEvent("keydown", { key: " ", bubbles: true }),
+      );
+    });
+    expect(vi.mocked(openUrl)).toHaveBeenCalledWith(
+      "https://example.com/pull/10",
+    );
   });
 
   it("renders the honest 'New workspace in this repo' context-menu label", () => {

@@ -1,4 +1,4 @@
-import { memo, useMemo, useState } from "react";
+import { memo, useMemo, useState, type CSSProperties } from "react";
 import {
   ChevronDown,
   ChevronRight,
@@ -32,11 +32,6 @@ const ALL_VISIBLE_LIMIT = 50;
 
 export interface RepoIssuesSectionProps {
   repoId: string;
-  /// Optional callback so the parent can dismiss its container when the
-  /// section has nothing meaningful to render (e.g. unsupported provider
-  /// AND no cached payload). Optional; the section also handles its own
-  /// empty/error/unsupported display.
-  hidden?: boolean;
 }
 
 export const RepoIssuesSection = memo(function RepoIssuesSection({
@@ -248,7 +243,7 @@ function IssueRow({ repoId, issue, onOpen, onCopyUrl }: IssueRowProps) {
             title: issue.title,
             url: issue.url,
             modelId: model.id,
-            providerQualifiedId: model.providerQualifiedId,
+            providerId: model.providerId,
           });
         } catch (e) {
           addToast(
@@ -273,7 +268,12 @@ function IssueRow({ repoId, issue, onOpen, onCopyUrl }: IssueRowProps) {
         role="button"
         tabIndex={0}
         onKeyDown={(e) => {
-          if (e.key === "Enter") onOpen(issue.url);
+          // A `role="button"` element must activate on Space as well as
+          // Enter; preventDefault stops Space from scrolling the page.
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            onOpen(issue.url);
+          }
         }}
       >
         <span className={styles.rowNumber}>#{issue.number}</span>
@@ -317,18 +317,20 @@ interface LabelChipProps {
 }
 
 function LabelChip({ label }: LabelChipProps) {
-  // Apply a tinted background derived from the label color (with low alpha
-  // so dark / light themes both stay readable). Border uses a stronger
-  // alpha to keep the chip visible on hover backgrounds.
+  // GitHub / GitLab label colors are arbitrary maintainer-chosen hex
+  // values — content, not a design token — so they can't be tokenized.
+  // Hand the one raw value to CSS as a `--label-color` custom property
+  // and let the stylesheet compose the tinted background / border via
+  // `color-mix` (keeps the alpha math out of the component).
   const style = label.color
-    ? {
-        background: `#${label.color}22`,
-        borderColor: `#${label.color}66`,
-        color: "var(--text-primary)" as const,
-      }
+    ? ({ "--label-color": `#${label.color}` } as CSSProperties)
     : undefined;
   return (
-    <span className={styles.label} style={style} title={label.name}>
+    <span
+      className={`${styles.label}${label.color ? ` ${styles.labelColored}` : ""}`}
+      style={style}
+      title={label.name}
+    >
       {label.name}
     </span>
   );

@@ -53,7 +53,16 @@ export function useRepoOpenPullRequests(
     } catch {
       // Same contract as the issues hook: errors keep prior state.
     } finally {
-      setLoading(false);
+      // Only the request for the *current* repo + scope owns `loading` —
+      // a stale response after a repo/scope switch must not clear the
+      // spinner for the request now in flight (mirrors the store-write
+      // guard above).
+      if (
+        activeRepoRef.current === repoId &&
+        activeScopeRef.current === scope
+      ) {
+        setLoading(false);
+      }
     }
   }, [enabled, repoId, scope, setRepoPullRequests]);
 
