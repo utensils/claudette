@@ -38,6 +38,14 @@ export function readWorkspaceFileForViewer(
   });
 }
 
+/** Read an agent-managed file (plan, memory note, …) for the read-only
+ *  Monaco viewer. `path` is an absolute path; the backend's
+ *  `read_agent_managed_file` allow-list validates that it canonicalizes
+ *  to a file under a known agent directory and rejects anything else. */
+export function readAgentManagedFile(path: string): Promise<FileContent> {
+  return invoke("read_agent_managed_file", { path });
+}
+
 /** Replace the watch set for `workspaceId` with `paths`. Idempotent —
  *  the file-viewer hook re-asserts the full open-tab list whenever
  *  files are opened or closed. The backend's `FileWatcher` deduplicates

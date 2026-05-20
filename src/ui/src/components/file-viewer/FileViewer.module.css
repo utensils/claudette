@@ -49,6 +49,21 @@
   font-size: 12px;
 }
 
+/* Metadata chip for agent-managed files (plan / memory / …) shown in the
+ * pane toolbar between the path and the view controls. */
+.agentBadge {
+  flex-shrink: 0;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-family: var(--font-sans);
+  font-size: 11px;
+  font-weight: 500;
+  white-space: nowrap;
+  color: var(--accent-primary);
+  background: rgba(var(--accent-primary-rgb), 0.12);
+  border: 1px solid rgba(var(--accent-primary-rgb), 0.25);
+}
+
 .imageWrap {
   flex: 1;
   display: flex;

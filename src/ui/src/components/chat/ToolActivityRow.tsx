@@ -15,6 +15,7 @@ import {
 } from "./editActivitySummary";
 import { resolveToolSummary } from "./toolMetadata";
 import { isSkillActivity, skillActivationName } from "./toolActivityGroups";
+import { tryOpenAgentFileTab } from "../../utils/agentFiles";
 import type { DiffLayer } from "../../types/diff";
 
 interface ToolActivityRowProps {
@@ -125,6 +126,10 @@ function GenericToolActivityRow({
   const openEditedFile = useCallback(
     (filePath: string) => {
       if (!selectedWorkspaceId) return;
+      // Agent-managed files (plans, memory) live outside the worktree, so
+      // they have no diff entry and no worktree-relative form — route them
+      // straight to a read-only Monaco tab.
+      if (tryOpenAgentFileTab(selectedWorkspaceId, filePath, openFileTab)) return;
       const relativePath = relativizePath(filePath, worktreePath).replace(/\\/g, "/");
       const diffTarget = findDiffTarget(relativePath, diffFiles, diffStagedFiles);
       if (diffTarget) {

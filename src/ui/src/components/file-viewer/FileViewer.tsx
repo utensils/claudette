@@ -23,10 +23,15 @@ import { tooltipWithHotkey } from "../../hotkeys/display";
 import { fileBufferKey } from "../../stores/slices/fileTreeSlice";
 import {
   loadDiffFiles,
+  readAgentManagedFile,
   readWorkspaceFileBytes,
   readWorkspaceFileForViewer,
   writeWorkspaceFile,
 } from "../../services/tauri";
+import {
+  agentFileKindI18nKey,
+  classifyAgentFile,
+} from "../../utils/agentFiles";
 import { WorkspacePanelHeader } from "../shared/WorkspacePanelHeader";
 import { PaneToolbar } from "../shared/PaneToolbar";
 import { SegmentedControl } from "../shared/SegmentedControl";
@@ -112,6 +117,10 @@ function FileViewerInner({ workspaceId, path, t }: FileViewerInnerProps) {
 
   const isMarkdown = MARKDOWN_EXT.test(path);
   const isImage = isImagePath(path);
+  // Agent-managed files (plans, memory) are opened by absolute path and
+  // live outside the worktree. They load through the allow-listed
+  // `read_agent_managed_file` route and render strictly read-only.
+  const agentFile = useMemo(() => classifyAgentFile(path), [path]);
 
   // Initial load. Triggered when the buffer entry exists but isn't loaded
   // yet (`loaded=false`). The slice seeds an unloaded entry on `openFileTab`,
@@ -122,7 +131,26 @@ function FileViewerInner({ workspaceId, path, t }: FileViewerInnerProps) {
     if (!bufferState || bufferState.loaded) return;
     const version = ++loadVersionRef.current;
 
-    if (isImage) {
+    if (agentFile) {
+      // Agent-managed files load through the allow-listed backend route.
+      // They are always markdown, never images.
+      readAgentManagedFile(path)
+        .then((res) => {
+          if (version !== loadVersionRef.current) return;
+          setFileBufferLoaded(workspaceId, path, {
+            baseline: res.content ?? "",
+            isBinary: res.is_binary,
+            isSymlink: res.is_symlink,
+            sizeBytes: res.size_bytes,
+            truncated: res.truncated,
+            imageBytesB64: null,
+          });
+        })
+        .catch((e) => {
+          if (version !== loadVersionRef.current) return;
+          setFileBufferLoadError(workspaceId, path, String(e));
+        });
+    } else if (isImage) {
       readWorkspaceFileBytes(workspaceId, path)
         .then((res) => {
           if (version !== loadVersionRef.current) return;
@@ -174,6 +202,7 @@ function FileViewerInner({ workspaceId, path, t }: FileViewerInnerProps) {
   }, [
     bufferState,
     isImage,
+    agentFile,
     workspaceId,
     path,
     setFileBufferLoaded,
@@ -196,13 +225,17 @@ function FileViewerInner({ workspaceId, path, t }: FileViewerInnerProps) {
   // available" for binary) or rare enough not to warrant chrome (oversize
   // files between the edit cap and the viewer cap render read-only with
   // no banner — Monaco's read-only cursor signals it).
+  //
+  // Agent-managed files are always read-only: they're inspected from chat,
+  // not edited, and there's no in-app save route back to their home dir.
   const editDisabled =
-    !!bufferState &&
-    bufferState.loaded &&
-    (isImage ||
-      bufferState.isBinary ||
-      bufferState.sizeBytes > EDIT_SIZE_LIMIT_BYTES ||
-      bufferState.truncated);
+    !!agentFile ||
+    (!!bufferState &&
+      bufferState.loaded &&
+      (isImage ||
+        bufferState.isBinary ||
+        bufferState.sizeBytes > EDIT_SIZE_LIMIT_BYTES ||
+        bufferState.truncated));
 
   const handleBufferChange = useCallback(
     (next: string) => {
@@ -282,7 +315,10 @@ function FileViewerInner({ workspaceId, path, t }: FileViewerInnerProps) {
     t,
   ]);
 
-  const showMarkdownToggle = isMarkdown && !editDisabled;
+  // Agent-managed markdown is read-only but still gets the source/preview
+  // toggle — inspecting a plan or memory note as rendered markdown (à la
+  // the inline plan card) is the common case.
+  const showMarkdownToggle = isMarkdown && (!editDisabled || !!agentFile);
   const showMarkdownPreview =
     showMarkdownToggle &&
     bufferState?.preview === "preview" &&
@@ -473,6 +509,16 @@ function FileViewerInner({ workspaceId, path, t }: FileViewerInnerProps) {
       <PaneToolbar
         path={path}
         dirty={dirty}
+        badge={
+          agentFile ? (
+            <span
+              className={styles.agentBadge}
+              title={t("file_agent_managed_readonly")}
+            >
+              {t(agentFileKindI18nKey(agentFile.kind))}
+            </span>
+          ) : undefined
+        }
         actions={
           <>
             {showMarkdownToggle && (
@@ -557,6 +603,7 @@ function FileViewerInner({ workspaceId, path, t }: FileViewerInnerProps) {
               revealTarget={revealTarget}
               onRevealTargetApplied={handleRevealTargetApplied}
               isSymlink={bufferState.isSymlink}
+              disableGitGutter={!!agentFile}
               readOnly={editDisabled}
               onChange={handleBufferChange}
               onSave={handleSave}

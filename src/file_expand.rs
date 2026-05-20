@@ -134,6 +134,18 @@ pub async fn write_worktree_file(
         .map_err(|e| format!("write: {e}"))
 }
 
+/// Read a file at an already-authorized absolute path, with binary
+/// detection and a `max_bytes` truncation cap.
+///
+/// Unlike the `read_worktree_file*` helpers this performs **no** path
+/// containment check — the caller is responsible for having validated the
+/// path against an allow-list first (see [`crate::agent_files`]). The path
+/// is canonicalized so binary/size checks run against the real file.
+pub async fn read_authorized_file(path: &Path, max_bytes: usize) -> Option<SafeFileRead> {
+    let canonical = tokio::fs::canonicalize(path).await.ok()?;
+    read_checked(&canonical, max_bytes).await
+}
+
 /// Inner helper: resolve a relative path against the worktree, validate
 /// containment, read with binary/truncation checks.
 async fn resolve_and_read(

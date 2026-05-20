@@ -13,6 +13,7 @@ import { FileViewer } from "./FileViewer";
 
 const serviceMocks = vi.hoisted(() => ({
   loadDiffFiles: vi.fn(),
+  readAgentManagedFile: vi.fn(),
   readWorkspaceFileBytes: vi.fn(),
   readWorkspaceFileForViewer: vi.fn(),
   writeWorkspaceFile: vi.fn(),
@@ -65,6 +66,7 @@ function seedOpenFile(closeNonce = 0) {
 
 beforeEach(() => {
   serviceMocks.loadDiffFiles.mockReset();
+  serviceMocks.readAgentManagedFile.mockReset();
   serviceMocks.readWorkspaceFileBytes.mockReset();
   serviceMocks.readWorkspaceFileForViewer.mockReset();
   serviceMocks.writeWorkspaceFile.mockReset();
@@ -119,5 +121,52 @@ describe("FileViewer close nonce handling", () => {
     const state = useAppStore.getState();
     expect(state.fileTabsByWorkspace[WS]).toEqual([]);
     expect(state.activeFileTabByWorkspace[WS]).toBeNull();
+  });
+});
+
+describe("FileViewer agent-managed files", () => {
+  const AGENT_FILE = "/Users/test/.claude/plans/sunny-otter.md";
+
+  function seedOpenAgentFile() {
+    useAppStore.setState({
+      selectedWorkspaceId: WS,
+      fileTabsByWorkspace: { [WS]: [AGENT_FILE] },
+      activeFileTabByWorkspace: { [WS]: AGENT_FILE },
+      fileRevealTargetByWorkspace: {},
+      fileBuffers: {
+        [fileBufferKey(WS, AGENT_FILE)]: makeUnloadedBuffer(),
+      },
+      requestCloseFileTabNonceByWorkspace: { [WS]: 0 },
+    });
+  }
+
+  it("loads an agent-managed file via the allow-listed route", async () => {
+    serviceMocks.readAgentManagedFile.mockResolvedValue({
+      path: AGENT_FILE,
+      content: "# Plan",
+      is_binary: false,
+      size_bytes: 6,
+      truncated: false,
+      is_symlink: false,
+    });
+    seedOpenAgentFile();
+
+    const container = await render(<FileViewer />);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    // Routed to the agent-file command, not the worktree file reader.
+    expect(serviceMocks.readAgentManagedFile).toHaveBeenCalledWith(AGENT_FILE);
+    expect(serviceMocks.readWorkspaceFileForViewer).not.toHaveBeenCalled();
+
+    // Buffer loaded; the kind badge is rendered (mocked t() echoes the key).
+    const buffer = useAppStore.getState().fileBuffers[
+      fileBufferKey(WS, AGENT_FILE)
+    ];
+    expect(buffer?.loaded).toBe(true);
+    expect(buffer?.baseline).toBe("# Plan");
+    expect(container.textContent).toContain("agent_file_badge_plan");
   });
 });

@@ -5,6 +5,7 @@ import { HighlightedMessageMarkdown } from "./HighlightedMessageMarkdown";
 import { StreamingContext } from "./StreamingContext";
 import { ScrollContext } from "./ScrollContext";
 import { monacoFileLinkTarget } from "./chatFileLinks";
+import { tryOpenAgentFileTab } from "../../utils/agentFiles";
 import { useWorkspaceFileIndex } from "./useWorkspaceFileIndex";
 import styles from "./ChatPanel.module.css";
 import caretStyles from "./caret.module.css";
@@ -58,6 +59,7 @@ export const StreamingMessage = memo(function StreamingMessage({
 
   const openFileInMonaco = useCallback(
     (filePath: string) => {
+      if (tryOpenAgentFileTab(workspaceId, filePath, openFileTab)) return true;
       const target = monacoFileLinkTarget(filePath, worktreePath);
       if (!target) return false;
       openFileTab(workspaceId, target.path, target.revealTarget);

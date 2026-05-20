@@ -1,5 +1,6 @@
 pub mod agent;
 pub mod agent_backend;
+pub mod agent_files;
 pub mod agent_mcp;
 pub mod audio;
 pub mod cesp;

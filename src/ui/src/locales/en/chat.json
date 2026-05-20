@@ -243,6 +243,11 @@
   "file_dirty_aria": "Unsaved changes",
   "file_external_change_reload_tooltip": "File changed on disk — click to reload (your unsaved edits will be lost)",
   "file_external_change_reload_aria": "Reload from disk",
+  "file_agent_managed_readonly": "Agent-managed file — read-only",
+  "agent_file_badge_plan": "Plan",
+  "agent_file_badge_memory": "Memory",
+  "agent_file_badge_memory_index": "Memory index",
+  "agent_file_badge_project": "Project file",
 
   "editor_menu_file": "File",
   "editor_menu_edit": "Edit",
