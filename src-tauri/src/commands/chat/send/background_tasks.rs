@@ -222,7 +222,7 @@ impl BackgroundTaskInputTracker {
             event:
                 InnerStreamEvent::ContentBlockStart {
                     index,
-                    content_block: Some(StartContentBlock::ToolUse { id, name }),
+                    content_block: Some(StartContentBlock::ToolUse { id, name, .. }),
                 },
         }) = event
             && name == "Bash"

@@ -57,7 +57,7 @@ IMPORTANT: CI sets `RUSTFLAGS="-Dwarnings"` — all compiler warnings are errors
 
 IMPORTANT: Always run `cd src/ui && bunx tsc -b` after modifying TypeScript files (including tests). CI runs `tsc -b` via `bun run build` — `vitest` does **not** type-check (it uses esbuild), so tests can pass locally while types are broken. Run `tsc -b` as the final check before committing any frontend change.
 
-CI also enforces `bun install --frozen-lockfile` — do not modify `bun.lock` without intention. CI runs `cargo llvm-cov` for Rust test coverage (uploaded to Codecov, informational/non-blocking). CI clippy lints `claudette`, `claudette-server`, and `claudette-cli` on Linux, plus `claudette-mobile` on macOS (host target `aarch64-apple-darwin`, desktop-fallback build — iOS target compilation is intentionally not in CI; it requires Xcode + Apple SDK + `cargo tauri ios init` scaffolding). `claudette-tauri` is still excluded because it requires system libs not installed on the lint runner. Frontend CI runs `bunx tsc --noEmit` as a dedicated type-check step before `bun run build`.
+CI also enforces `bun install --frozen-lockfile` — do not modify `bun.lock` without intention. CI runs `cargo llvm-cov` for Rust test coverage (uploaded to Codecov, informational/non-blocking). CI clippy lints `claudette`, `claudette-server`, and `claudette-cli` on Linux, runs `cargo check -p claudette-tauri --no-default-features --features devtools,server,voice,alternative-backends,pi-sdk` with the Linux Tauri system libraries installed, and checks `claudette-mobile` on macOS (host target `aarch64-apple-darwin`, desktop-fallback build — iOS target compilation is intentionally not in CI; it requires Xcode + Apple SDK + `cargo tauri ios init` scaffolding). Frontend CI runs `bunx tsc --noEmit` as a dedicated type-check step before `bun run build`.
 
 ## Code style
 
@@ -259,7 +259,7 @@ Do not trigger CoreAudio or Speech.framework permission prompts at app launch �
 
 ## CI/CD pipeline
 
-- **PR CI** (`.github/workflows/ci.yml`): Rust fmt + clippy + tests (coverage → Codecov), TypeScript type-check + `lint:css` + build + vitest. (ESLint via `bun run lint` is available locally but not run in CI.)
+- **PR CI** (`.github/workflows/ci.yml`): Rust fmt + clippy + tests (coverage → Codecov), desktop Tauri compile check, TypeScript type-check + `lint:css` + build + vitest. (ESLint via `bun run lint` is available locally but not run in CI.)
 - **Nightly** (`.github/workflows/nightly.yml`): Every push to `main` (excluding docs/README). Computes version as `<next-minor>-dev.<commit-count>.g<short-sha>`, stamps all five Cargo.toml files (workspace root + `src-tauri` + `src-server` + `src-cli` + `src-mobile`), builds macOS (arm64 + x86_64), Linux (x86_64 + aarch64), Windows (x86_64 + arm64), promotes atomically from `nightly-staging` to `nightly` tag.
 - **Release** (`.github/workflows/release-please.yml`): Triggered by Conventional Commits via release-please. Auto-generates CHANGELOG, bumps workspace `Cargo.toml` (source of truth) and the workspace-member crates (`src-tauri`, `src-server`, `src-cli`, `src-mobile`), builds all platforms, uploads assets, posts to Discord (`DISCORD_WEBHOOK_URL` secret).
 - Windows builds in CI skip app bundling (bare `.exe`, zipped). macOS builds produce `.dmg`; Linux produces `.AppImage` + `.deb`.

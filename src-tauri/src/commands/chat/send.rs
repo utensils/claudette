@@ -2818,7 +2818,7 @@ pub async fn send_chat_message(
             if let AgentEvent::Stream(StreamEvent::Stream {
                 event:
                     InnerStreamEvent::ContentBlockStart {
-                        content_block: Some(StartContentBlock::ToolUse { id, name }),
+                        content_block: Some(StartContentBlock::ToolUse { id, name, .. }),
                         ..
                     },
             }) = &event
