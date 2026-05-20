@@ -2485,6 +2485,7 @@ fn map_codex_plan_updated_to_agent_events(
                 content_block: Some(StartContentBlock::ToolUse {
                     id: tool_use_id.clone(),
                     name: "update_plan".to_string(),
+                    input: None,
                 }),
             },
         }),
@@ -2527,6 +2528,7 @@ fn map_codex_item_started_to_agent_events(item: &Value) -> Vec<AgentEvent> {
             content_block: Some(StartContentBlock::ToolUse {
                 id: item_id,
                 name: tool_name,
+                input: None,
             }),
         },
     })];
@@ -4166,7 +4168,7 @@ mod tests {
         let AgentEvent::Stream(StreamEvent::Stream {
             event:
                 InnerStreamEvent::ContentBlockStart {
-                    content_block: Some(StartContentBlock::ToolUse { id, name }),
+                    content_block: Some(StartContentBlock::ToolUse { id, name, .. }),
                     ..
                 },
         }) = &events[0]
@@ -4397,7 +4399,7 @@ mod tests {
         let AgentEvent::Stream(StreamEvent::Stream {
             event:
                 InnerStreamEvent::ContentBlockStart {
-                    content_block: Some(StartContentBlock::ToolUse { id, name }),
+                    content_block: Some(StartContentBlock::ToolUse { id, name, .. }),
                     ..
                 },
         }) = &events[0]

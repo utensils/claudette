@@ -88,6 +88,9 @@ beforeEach(() => {
   // mutate. The test only cares about `name` flipping; other fields
   // are placeholder values matching the `ChatSession` shape.
   useAppStore.setState({
+    toolActivities: {},
+    streamingContent: {},
+    streamingThinking: {},
     sessionsByWorkspace: {
       "ws-1": [
         {
@@ -166,5 +169,45 @@ describe("useAgentStream — session-renamed listener", () => {
     // workspace's session list and updates only when it finds an id
     // match).
     expect(sessions.find((s) => s.id === "session-1")?.name).toBe("New chat");
+  });
+
+  it("seeds live tool activity input from Claude content_block_start", async () => {
+    await mountHook();
+    const handlers = registeredHandlers.get("agent-stream") ?? [];
+    expect(handlers.length).toBeGreaterThan(0);
+
+    await act(async () => {
+      for (const handler of handlers) {
+        handler({
+          payload: {
+            workspace_id: "ws-1",
+            chat_session_id: "session-1",
+            event: {
+              Stream: {
+                type: "stream_event",
+                event: {
+                  type: "content_block_start",
+                  index: 0,
+                  content_block: {
+                    type: "tool_use",
+                    id: "toolu-read-1",
+                    name: "Read",
+                    input: { file_path: "/repo/src/app.ts" },
+                  },
+                },
+              },
+            },
+          },
+        });
+      }
+    });
+
+    const [activity] = useAppStore.getState().toolActivities["session-1"] ?? [];
+    expect(activity).toMatchObject({
+      toolUseId: "toolu-read-1",
+      toolName: "Read",
+      inputJson: JSON.stringify({ file_path: "/repo/src/app.ts" }),
+      summary: "/repo/src/app.ts",
+    });
   });
 });

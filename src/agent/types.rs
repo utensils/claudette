@@ -314,7 +314,12 @@ pub enum Delta {
 #[serde(tag = "type")]
 pub enum StartContentBlock {
     #[serde(rename = "tool_use")]
-    ToolUse { id: String, name: String },
+    ToolUse {
+        id: String,
+        name: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        input: Option<serde_json::Value>,
+    },
 
     #[serde(rename = "text")]
     Text {},
@@ -523,6 +528,33 @@ mod tests {
                     }
                 }
                 _ => panic!("Expected ContentBlockDelta"),
+            },
+            _ => panic!("Expected Stream event"),
+        }
+    }
+
+    #[test]
+    fn test_parse_content_block_start_tool_use_input() {
+        let line = r#"{"type":"stream_event","event":{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_1","name":"Read","input":{"file_path":"/tmp/app.ts"}}}}"#;
+        let event = parse_stream_line(line).unwrap();
+        match event {
+            StreamEvent::Stream { event } => match event {
+                InnerStreamEvent::ContentBlockStart {
+                    index,
+                    content_block: Some(StartContentBlock::ToolUse { id, name, input }),
+                } => {
+                    assert_eq!(index, 0);
+                    assert_eq!(id, "toolu_1");
+                    assert_eq!(name, "Read");
+                    assert_eq!(
+                        input
+                            .as_ref()
+                            .and_then(|value| value.get("file_path"))
+                            .and_then(serde_json::Value::as_str),
+                        Some("/tmp/app.ts")
+                    );
+                }
+                _ => panic!("Expected ContentBlockStart tool_use"),
             },
             _ => panic!("Expected Stream event"),
         }

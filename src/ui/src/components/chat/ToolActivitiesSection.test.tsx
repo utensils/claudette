@@ -920,6 +920,49 @@ describe("ToolActivitiesSection", () => {
     expect(container.textContent).toContain("Bash");
   });
 
+  it("shows file paths for active inline file tools", async () => {
+    // Regression: with tool grouping disabled, active turns render each
+    // direct tool row immediately. File-like tools must still surface
+    // the path while the turn is running, not just the bare tool name.
+    const container = await render(
+      <ToolActivitiesSection
+        sessionId="session-inline-files"
+        toolDisplayMode="inline"
+        searchQuery=""
+        worktreePath="/repo"
+        activities={[
+          activity("Edit", {
+            toolUseId: "edit-active",
+            resultText: "",
+            inputJson: JSON.stringify({
+              file_path: "/repo/src/app.ts",
+              old_string: "old",
+              new_string: "new",
+            }),
+          }),
+          activity("Write", {
+            toolUseId: "write-active",
+            resultText: "",
+            inputJson: JSON.stringify({
+              file_path: "/repo/src/new-file.ts",
+              content: "export const value = 1;\n",
+            }),
+          }),
+          activity("Read", {
+            toolUseId: "read-active",
+            resultText: "",
+            inputJson: JSON.stringify({ file_path: "/repo/src/existing.ts" }),
+          }),
+        ]}
+      />,
+    );
+
+    expect(container.textContent).not.toContain("3 tool calls");
+    expect(container.textContent).toContain("src/app.ts");
+    expect(container.textContent).toContain("src/new-file.ts");
+    expect(container.textContent).toContain("src/existing.ts");
+  });
+
   it("renders completed-turn edit summary card", async () => {
     const editActivity = activity("Edit", {
       inputJson: JSON.stringify({

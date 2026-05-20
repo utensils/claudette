@@ -33,6 +33,7 @@ import {
   approvalDetailValue,
   extractAssistantMessageParts,
   firstApprovalDetailString,
+  initialToolInputJson,
 } from "./useAgentStreamLogic";
 
 const ASK_USER_QUESTION_TOOL = "AskUserQuestion";
@@ -520,6 +521,9 @@ export function useAgentStream() {
                     "type" in inner.content_block &&
                     inner.content_block.type === "tool_use"
                   ) {
+                    const inputJson = initialToolInputJson(
+                      inner.content_block.input,
+                    );
                     setBlockTool(
                       blockToolMapRef.current,
                       sessionId,
@@ -532,10 +536,12 @@ export function useAgentStream() {
                     addToolActivity(sessionId, {
                       toolUseId: inner.content_block.id,
                       toolName: inner.content_block.name,
-                      inputJson: "",
+                      inputJson,
                       resultText: "",
                       collapsed: true,
-                      summary: "",
+                      summary: inputJson
+                        ? extractToolSummary(inner.content_block.name, inputJson)
+                        : "",
                       startedAt: new Date().toISOString(),
                       assistantMessageOrdinal:
                         (turnMessageCountRef.current[sessionId] || 0) +

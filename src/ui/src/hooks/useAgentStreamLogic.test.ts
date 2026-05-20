@@ -4,6 +4,7 @@ import {
   approvalDetailValue,
   extractAssistantMessageParts,
   firstApprovalDetailString,
+  initialToolInputJson,
   type CommandLineApplyDeps,
 } from "./useAgentStreamLogic";
 
@@ -111,6 +112,19 @@ describe("approvalDetailValue", () => {
     expect(approvalDetailValue({ foo: "bar" })).toBeNull();
     expect(approvalDetailValue(42)).toBeNull();
     expect(approvalDetailValue(["read", 42])).toBeNull();
+  });
+});
+
+describe("initialToolInputJson", () => {
+  it("preserves non-empty tool input from content_block_start", () => {
+    expect(initialToolInputJson({ file_path: "/repo/src/app.ts" })).toBe(
+      JSON.stringify({ file_path: "/repo/src/app.ts" }),
+    );
+  });
+
+  it("ignores empty start input so streamed JSON deltas can append cleanly", () => {
+    expect(initialToolInputJson({})).toBe("");
+    expect(initialToolInputJson(null)).toBe("");
   });
 });
 
