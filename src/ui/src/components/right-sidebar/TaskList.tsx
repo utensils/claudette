@@ -43,18 +43,22 @@ function statusColor(status: TaskStatus): string {
 
 /**
  * Pick the task the Tasks panel should keep in view — the agent's current
- * focus. Preference order: the in-progress task, then the next pending
- * task, then the last task in the list as a backstop. `blocked`,
- * `completed`, and `cancelled` tasks are never treated as active; a list
- * stalled entirely on blocked work falls through to the last-row backstop.
+ * focus. Preference order:
+ *   1. the task that is `in_progress`,
+ *   2. otherwise the first `pending` task,
+ *   3. otherwise the last task in the list, as a backstop.
+ *
+ * The backstop is intentionally status-agnostic: when nothing is actively
+ * progressing (every task completed, or the list stalled entirely on
+ * blocked work) the panel anchors on the end of the list rather than
+ * scrolling nowhere.
  */
 function findActiveTask(tasks: TrackedTask[]): TrackedTask | null {
   if (tasks.length === 0) return null;
   return (
     tasks.find((t) => t.status === "in_progress") ??
     tasks.find((t) => t.status === "pending") ??
-    tasks[tasks.length - 1] ??
-    null
+    tasks[tasks.length - 1]
   );
 }
 
