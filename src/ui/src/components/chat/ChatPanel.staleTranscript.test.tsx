@@ -47,7 +47,13 @@ vi.mock("react-i18next", () => ({
   }),
 }));
 
-vi.mock("../../services/tauri", () => serviceMocks);
+vi.mock("../../services/tauri", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../services/tauri")>();
+  return {
+    ...actual,
+    ...serviceMocks,
+  };
+});
 
 vi.mock("../../hooks/useStickyScroll", () => ({
   useStickyScroll: () => ({
