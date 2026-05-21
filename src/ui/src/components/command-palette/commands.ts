@@ -405,7 +405,12 @@ export function buildCommands(ctx: CommandContext): Command[] {
       icon: BookOpen,
       shortcut: shortcut("global.toggle-plan-mode"),
       keywords: ["planning", "architect"],
-      execute: () => { ctx.setPlanMode(sessId, !ctx.planMode); ctx.close(); },
+      execute: () => {
+        const next = !ctx.planMode;
+        ctx.setPlanMode(sessId, next);
+        ctx.persistSetting(`plan_mode:${sessId}`, String(next));
+        ctx.close();
+      },
     });
     if (isFastSupported(ctx.selectedModel)) {
       cmds.push({

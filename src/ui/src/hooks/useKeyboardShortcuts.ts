@@ -8,6 +8,7 @@ import {
   isTerminalFocused,
 } from "../utils/focusTargets";
 import { adjustTerminalFontSize, adjustUiFontSize } from "../utils/fontSettings";
+import { setPlanModeAndPersist } from "../components/chat/planModePersistence";
 import { resolveHotkeyAction } from "../hotkeys/bindings";
 import {
   executeCloseTab,
@@ -40,7 +41,6 @@ export function useKeyboardShortcuts() {
       ? s.selectedSessionIdByWorkspaceId[s.selectedWorkspaceId] ?? null
       : null,
   );
-  const setPlanMode = useAppStore((s) => s.setPlanMode);
   const planMode = useAppStore(
     (s) => (activeSessionId ? s.planMode[activeSessionId] ?? false : false),
   );
@@ -196,7 +196,7 @@ export function useKeyboardShortcuts() {
         e.preventDefault();
         switch (id) {
           case "global.toggle-plan-mode":
-            if (activeSessionId) setPlanMode(activeSessionId, !planMode);
+            if (activeSessionId) void setPlanModeAndPersist(activeSessionId, !planMode);
             return;
           case "global.cycle-tab-prev":
             useAppStore.getState().cycleWorkspaceTab("prev");
@@ -380,7 +380,6 @@ export function useKeyboardShortcuts() {
     diffSelectedFile,
     selectedWorkspaceId,
     activeSessionId,
-    setPlanMode,
     planMode,
     chatSearchOpen,
     openChatSearch,

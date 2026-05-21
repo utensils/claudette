@@ -4,7 +4,7 @@ import type { AgentApproval, AgentQuestion, PlanApproval } from "./useAppStore";
 import type { ChatMessage, ChatSession } from "../types/chat";
 import type { ConversationCheckpoint } from "../types/checkpoint";
 import type { Workspace } from "../types/workspace";
-import { applyPlanModeMountDefault } from "../components/chat/applyPlanModeMountDefault";
+import { applyPlanModeMountDefault } from "../components/chat/planModePersistence";
 
 const WS_ID = "test-workspace";
 
@@ -759,20 +759,27 @@ describe("applyPlanModeMountDefault", () => {
   });
 
   it("applies default when store has no runtime value", () => {
-    applyPlanModeMountDefault(WS_ID, true);
+    applyPlanModeMountDefault(WS_ID, null, true);
     expect(useAppStore.getState().planMode[WS_ID]).toBe(true);
   });
 
   it("preserves existing false runtime value on remount", () => {
     useAppStore.getState().setPlanMode(WS_ID, false);
-    applyPlanModeMountDefault(WS_ID, true);
+    applyPlanModeMountDefault(WS_ID, null, true);
     expect(useAppStore.getState().planMode[WS_ID]).toBe(false);
   });
 
   it("preserves existing true runtime value on remount", () => {
     useAppStore.getState().setPlanMode(WS_ID, true);
-    applyPlanModeMountDefault(WS_ID, false);
+    applyPlanModeMountDefault(WS_ID, null, false);
     expect(useAppStore.getState().planMode[WS_ID]).toBe(true);
+  });
+
+  it("prefers persisted per-session value over the global default", () => {
+    // Regression for issue 963 — a user-toggled "off" must beat
+    // `default_plan_mode = true` on the next mount.
+    applyPlanModeMountDefault(WS_ID, "false", true);
+    expect(useAppStore.getState().planMode[WS_ID]).toBe(false);
   });
 });
 

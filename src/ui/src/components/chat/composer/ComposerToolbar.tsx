@@ -13,7 +13,7 @@ import {
   reasoningVariantForModel,
 } from "../reasoningControls";
 import { applySelectedModel } from "../applySelectedModel";
-import { applyPlanModeMountDefault } from "../applyPlanModeMountDefault";
+import { applyPlanModeMountDefault, setPlanModeAndPersist } from "../planModePersistence";
 import { ToolbarPill } from "./ToolbarPill";
 import { ReasoningPill } from "./ReasoningPill";
 import { OverflowMenu } from "./OverflowMenu";
@@ -59,7 +59,6 @@ export function ComposerToolbar({
   const setSelectedModel = useAppStore((s) => s.setSelectedModel);
   const setFastMode = useAppStore((s) => s.setFastMode);
   const setThinkingEnabled = useAppStore((s) => s.setThinkingEnabled);
-  const setPlanMode = useAppStore((s) => s.setPlanMode);
   const setEffortLevel = useAppStore((s) => s.setEffortLevel);
   const setChromeEnabled = useAppStore((s) => s.setChromeEnabled);
   const setShowThinkingBlocks = useAppStore((s) => s.setShowThinkingBlocks);
@@ -91,11 +90,12 @@ export function ComposerToolbar({
   useEffect(() => {
     let cancelled = false;
     async function load() {
-      const [model, provider, fast, thinking, effort, showThinking, chrome, defModel, defProvider, defFast, defThinking, defPlan, defEffort, defShowThinking, defChrome] = await Promise.all([
+      const [model, provider, fast, thinking, plan, effort, showThinking, chrome, defModel, defProvider, defFast, defThinking, defPlan, defEffort, defShowThinking, defChrome] = await Promise.all([
         getAppSetting(`model:${sessionId}`),
         getAppSetting(`model_provider:${sessionId}`),
         getAppSetting(`fast_mode:${sessionId}`),
         getAppSetting(`thinking_enabled:${sessionId}`),
+        getAppSetting(`plan_mode:${sessionId}`),
         getAppSetting(`effort_level:${sessionId}`),
         getAppSetting(`show_thinking:${sessionId}`),
         getAppSetting(`chrome_enabled:${sessionId}`),
@@ -119,7 +119,7 @@ export function ComposerToolbar({
       const effectiveThinking = thinking === "true" || (!thinking && defThinking === "true");
       setFastMode(sessionId, effectiveFast);
       setThinkingEnabled(sessionId, effectiveThinking);
-      applyPlanModeMountDefault(sessionId, defPlan === "true");
+      applyPlanModeMountDefault(sessionId, plan, defPlan === "true");
       const effectiveEffort = effort ?? defEffort;
       if (effectiveEffort) {
         const normalized = !supportsEffort
@@ -149,9 +149,9 @@ export function ComposerToolbar({
     [sessionId, selectedModel, selectedProvider, setModelSelectorOpen],
   );
 
-  const togglePlan = useCallback(() => {
-    setPlanMode(sessionId, !planMode);
-  }, [sessionId, planMode, setPlanMode]);
+  const togglePlan = useCallback(async () => {
+    await setPlanModeAndPersist(sessionId, !planMode);
+  }, [sessionId, planMode]);
 
   // The Cmd/Ctrl+T thinking-mode hotkey lived here as a raw
   // `window.addEventListener("keydown")` listener. It's been removed —

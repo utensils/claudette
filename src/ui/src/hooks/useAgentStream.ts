@@ -28,6 +28,7 @@ import { debugChat } from "../utils/chatDebug";
 import { extractLatestCallUsage } from "../utils/extractLatestCallUsage";
 import { buildCompactionSentinel } from "../utils/compactionSentinel";
 import { pickMeterUsageFromResult } from "./pickMeterUsageFromResult";
+import { setPlanModeAndPersist } from "../components/chat/planModePersistence";
 import {
   applyCommandLineEvent,
   approvalDetailValue,
@@ -187,7 +188,6 @@ export function useAgentStream() {
   const setPlanApproval = useAppStore((s) => s.setPlanApproval);
   const setAgentApproval = useAppStore((s) => s.setAgentApproval);
   const finalizeTurn = useAppStore((s) => s.finalizeTurn);
-  const setPlanMode = useAppStore((s) => s.setPlanMode);
   const addCompactionEvent = useAppStore((s) => s.addCompactionEvent);
 
   // Per-session map: sessionId → (content-block index → tool entry). Two
@@ -546,12 +546,15 @@ export function useAgentStream() {
                           ? 1
                           : 0),
                     });
-                    // Detect plan mode changes from agent tool calls.
+                    // Detect plan mode changes from agent tool calls. Persist
+                    // alongside the in-memory update so an agent-driven
+                    // ExitPlanMode survives a restart instead of being
+                    // clobbered by the global `default_plan_mode` on remount.
                     if (inner.content_block.name === "EnterPlanMode") {
-                      setPlanMode(sessionId, true);
+                      void setPlanModeAndPersist(sessionId, true);
                     } else if (inner.content_block.name === "ExitPlanMode") {
                       debugChat("plan-mode", "ExitPlanMode → setPlanMode(false)", { sessionId, origin: "content_block_start" });
-                      setPlanMode(sessionId, false);
+                      void setPlanModeAndPersist(sessionId, false);
                     }
                   }
                   break;
@@ -729,7 +732,6 @@ export function useAgentStream() {
     setPlanApproval,
     upsertAgentToolCall,
     finalizeTurn,
-    setPlanMode,
     addCompactionEvent,
     updateChatSession,
   ]);
@@ -885,7 +887,7 @@ export function useAgentStream() {
         // until the user chooses "Approve plan".
         if (!isCodexSyntheticPlan) {
           debugChat("plan-mode", "ExitPlanMode → setPlanMode(false)", { sessionId, origin: "agent-permission-prompt" });
-          setPlanMode(sessionId, false);
+          void setPlanModeAndPersist(sessionId, false);
         }
         let allowedPrompts: Array<{ tool: string; prompt: string }> = [];
         if (inputObj && "allowedPrompts" in inputObj) {
@@ -953,7 +955,7 @@ export function useAgentStream() {
       active = false;
       unlisten.then((fn) => fn());
     };
-  }, [setAgentApproval, setAgentQuestion, setPlanApproval, setPlanMode, updateChatSession]);
+  }, [setAgentApproval, setAgentQuestion, setPlanApproval, updateChatSession]);
 
   // Listen for checkpoint-created events from the backend.
   const addCheckpoint = useAppStore((s) => s.addCheckpoint);

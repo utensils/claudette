@@ -165,7 +165,6 @@ export function useChatPanelStore() {
     activeSessionId ? s.agentApprovals[activeSessionId] ?? null : null,
   );
   const clearAgentApproval = useAppStore((s) => s.clearAgentApproval);
-  const setPlanMode = useAppStore((s) => s.setPlanMode);
   const queuedMessages = useAppStore((s) =>
     activeSessionId
       ? s.queuedMessages[activeSessionId] ?? EMPTY_QUEUED_MESSAGES
@@ -272,7 +271,6 @@ export function useChatPanelStore() {
     setChatMessages,
     setChatPagination,
     setPermissionLevel,
-    setPlanMode,
     setQueuedMessage,
     setQueuedMessageAutoDispatchPaused,
     setQueuedMessageEditing,

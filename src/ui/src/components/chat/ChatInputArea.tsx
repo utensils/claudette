@@ -52,6 +52,7 @@ import { SlashCommandPicker } from "./SlashCommandPicker";
 import { useSlashPicker } from "../../hooks/useSlashPicker";
 import { formatEnvProviderName } from "../../utils/workspaceEnvironment";
 import { hasUltrathink, renderUltrathinkText } from "./ultrathink";
+import { setPlanModeAndPersist } from "./planModePersistence";
 import styles from "./ChatPanel.module.css";
 
 type ComposerMode = "prompt" | "shell";
@@ -473,7 +474,7 @@ export function ChatInputArea({
       // We use getState() rather than subscribing — this component should
       // not re-render every time a toolbar toggle changes.
       const store = useAppStore.getState();
-      if (pin.plan_mode !== null) store.setPlanMode(sessionId, pin.plan_mode);
+      if (pin.plan_mode !== null) void setPlanModeAndPersist(sessionId, pin.plan_mode);
       if (pin.fast_mode !== null) store.setFastMode(sessionId, pin.fast_mode);
       if (pin.thinking_enabled !== null)
         store.setThinkingEnabled(sessionId, pin.thinking_enabled);
@@ -1071,7 +1072,6 @@ export function ChatInputArea({
   const planMode = useAppStore(
     (s) => s.planMode[sessionId] ?? false,
   );
-  const setPlanMode = useAppStore((s) => s.setPlanMode);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Escape" && voice.state === "recording") {
@@ -1095,7 +1095,7 @@ export function ChatInputArea({
     // Shift+Tab: toggle plan mode
     if (e.key === "Tab" && e.shiftKey) {
       e.preventDefault();
-      setPlanMode(sessionId, !planMode);
+      void setPlanModeAndPersist(sessionId, !planMode);
       return;
     }
 

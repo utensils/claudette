@@ -14,7 +14,7 @@ import {
 import { findModelInRegistry } from "./modelRegistry";
 import { useModelRegistry } from "./useModelRegistry";
 import { applySelectedModel } from "./applySelectedModel";
-import { applyPlanModeMountDefault } from "./applyPlanModeMountDefault";
+import { applyPlanModeMountDefault, setPlanModeAndPersist } from "./planModePersistence";
 import { ContextMeter } from "./ContextMeter";
 import { useSelectedModelEntry } from "./useSelectedModelEntry";
 import { getHotkeyLabel, tooltipAttributes } from "../../hotkeys/display";
@@ -38,7 +38,6 @@ export function ChatToolbar({ sessionId, disabled }: ChatToolbarProps) {
   const setSelectedModel = useAppStore((s) => s.setSelectedModel);
   const setFastMode = useAppStore((s) => s.setFastMode);
   const setThinkingEnabled = useAppStore((s) => s.setThinkingEnabled);
-  const setPlanMode = useAppStore((s) => s.setPlanMode);
   const showThinkingBlocks = useAppStore((s) => s.showThinkingBlocks[sessionId] === true);
   const setEffortLevel = useAppStore((s) => s.setEffortLevel);
   const setChromeEnabled = useAppStore((s) => s.setChromeEnabled);
@@ -67,11 +66,12 @@ export function ChatToolbar({ sessionId, disabled }: ChatToolbarProps) {
   useEffect(() => {
     let cancelled = false;
     async function load() {
-      const [model, provider, fast, thinking, effort, showThinking, chrome, defModel, defProvider, defFast, defThinking, defPlan, defEffort, defShowThinking, defChrome] = await Promise.all([
+      const [model, provider, fast, thinking, plan, effort, showThinking, chrome, defModel, defProvider, defFast, defThinking, defPlan, defEffort, defShowThinking, defChrome] = await Promise.all([
         getAppSetting(`model:${sessionId}`),
         getAppSetting(`model_provider:${sessionId}`),
         getAppSetting(`fast_mode:${sessionId}`),
         getAppSetting(`thinking_enabled:${sessionId}`),
+        getAppSetting(`plan_mode:${sessionId}`),
         getAppSetting(`effort_level:${sessionId}`),
         getAppSetting(`show_thinking:${sessionId}`),
         getAppSetting(`chrome_enabled:${sessionId}`),
@@ -95,7 +95,7 @@ export function ChatToolbar({ sessionId, disabled }: ChatToolbarProps) {
       const effectiveThinking = thinking === "true" || (!thinking && defThinking === "true");
       setFastMode(sessionId, effectiveFast);
       setThinkingEnabled(sessionId, effectiveThinking);
-      applyPlanModeMountDefault(sessionId, defPlan === "true");
+      applyPlanModeMountDefault(sessionId, plan, defPlan === "true");
       // Normalize effort against the loaded model to prevent stale values.
       const effectiveEffort = effort ?? defEffort;
       if (effectiveEffort) {
@@ -153,9 +153,9 @@ export function ChatToolbar({ sessionId, disabled }: ChatToolbarProps) {
     await setAppSetting(`show_thinking:${sessionId}`, String(next));
   }, [sessionId, showThinkingBlocks, setShowThinkingBlocks]);
 
-  const togglePlan = useCallback(() => {
-    setPlanMode(sessionId, !planMode);
-  }, [sessionId, planMode, setPlanMode]);
+  const togglePlan = useCallback(async () => {
+    await setPlanModeAndPersist(sessionId, !planMode);
+  }, [sessionId, planMode]);
 
   const toggleChrome = useCallback(async () => {
     const next = !chromeEnabled;

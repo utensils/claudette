@@ -23,6 +23,7 @@ import {
 import { resolveSessionHarness } from "./resolveSessionHarness";
 import { applySelectedModel } from "./applySelectedModel";
 import { findLatestPlanFilePath } from "./planFilePath";
+import { setPlanModeAndPersist } from "./planModePersistence";
 import type { PermissionLevel } from "../../stores/useAppStore";
 import { dispatchChatMessage } from "./chatMessageDispatch";
 import { reconstructCompletedTurns } from "../../utils/reconstructTurns";
@@ -97,7 +98,6 @@ export function ChatPanel() {
     setChatMessages,
     setChatPagination,
     setPermissionLevel,
-    setPlanMode,
     setQueuedMessage,
     setQueuedMessageAutoDispatchPaused,
     setQueuedMessageEditing,
@@ -558,7 +558,7 @@ export function ChatPanel() {
         };
 
         const setPlanModeBound = (enabled: boolean) => {
-          useAppStore.getState().setPlanMode(sessionId, enabled);
+          void setPlanModeAndPersist(sessionId, enabled);
         };
 
         // Route plan-file reads through the remote server for remote
@@ -902,7 +902,6 @@ export function ChatPanel() {
           selectedWorkspaceId={selectedWorkspaceId}
           setChatAuthLoginStartedRequestId={setChatAuthLoginStartedRequestId}
           setError={setError}
-          setPlanMode={setPlanMode}
           setQueuedMessageEditing={setQueuedMessageEditing}
           showChatAuthLoginPanel={showChatAuthLoginPanel}
           showThinkingBlocks={showThinkingBlocks}
