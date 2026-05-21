@@ -1,5 +1,6 @@
 use std::path::Path;
 
+#[cfg(any(target_os = "macos", windows))]
 use super::attachments::write_attachment_to_temp_file;
 
 pub(super) fn copy_file_path_to_clipboard(path: &Path) -> Result<(), String> {
