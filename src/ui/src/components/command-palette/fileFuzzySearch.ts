@@ -89,19 +89,15 @@ export function searchFileIndex(
       : 0;
     const pathBoost = pathScore ? pathScore.score : 0;
     const score = basenameBoost + pathBoost - entry.path.length * 0.6;
-    results.push({
+    pushTopResult(results, {
       entry,
       score,
       basenameMatches: basenameScore?.matches ?? [],
       pathMatches: pathScore?.matches ?? [],
-    });
+    }, limit);
   }
 
-  results.sort((a, b) => {
-    if (b.score !== a.score) return b.score - a.score;
-    return a.entry.path.localeCompare(b.entry.path);
-  });
-  return results.slice(0, limit);
+  return results;
 }
 
 function normalizeQuery(query: string): string {
@@ -152,6 +148,42 @@ function fuzzyMatch(target: string, query: string): number[] | null {
     searchFrom = index + 1;
   }
   return matches;
+}
+
+function pushTopResult(
+  results: FileSearchResult[],
+  candidate: FileSearchResult,
+  limit: number,
+): void {
+  if (limit <= 0) return;
+  if (results.length === 0) {
+    results.push(candidate);
+    return;
+  }
+  const worst = results[results.length - 1];
+  if (results.length >= limit && compareResults(candidate, worst) >= 0) {
+    return;
+  }
+
+  let low = 0;
+  let high = results.length;
+  while (low < high) {
+    const mid = Math.floor((low + high) / 2);
+    if (compareResults(candidate, results[mid]) < 0) {
+      high = mid;
+    } else {
+      low = mid + 1;
+    }
+  }
+  results.splice(low, 0, candidate);
+  if (results.length > limit) {
+    results.pop();
+  }
+}
+
+function compareResults(a: FileSearchResult, b: FileSearchResult): number {
+  if (b.score !== a.score) return b.score - a.score;
+  return a.entry.path.localeCompare(b.entry.path);
 }
 
 function computeBoundaries(value: string): Uint8Array {

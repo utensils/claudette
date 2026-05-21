@@ -784,7 +784,10 @@ export function CommandPalette() {
                     key={result.entry.path}
                     data-index={idx}
                     className={`${styles.result} ${styles.fileResult} ${idx === selectedIndex ? styles.resultSelected : ""}`}
-                    style={{ transform: `translateY(${idx * FILE_RESULT_ROW_HEIGHT}px)` }}
+                    style={{
+                      height: FILE_RESULT_ROW_HEIGHT,
+                      transform: `translateY(${idx * FILE_RESULT_ROW_HEIGHT}px)`,
+                    }}
                     onClick={() => {
                       if (!fileSearchSettled) return;
                       if (selectedWorkspaceId) {

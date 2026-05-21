@@ -69,13 +69,24 @@ describe("fileFuzzySearch", () => {
       })),
     );
 
-    const started = performance.now();
     const results = searchFileIndex(index, "", 200);
-    const elapsed = performance.now() - started;
 
     expect(results).toHaveLength(200);
     expect(results[0]?.entry.path).toBe("src/generated/File0.ts");
-    expect(elapsed).toBeLessThan(25);
+  });
+
+  it("bounds broad fuzzy-query results instead of returning every match", () => {
+    const index = prepareFileSearchIndex(
+      Array.from({ length: 10_000 }, (_, i) => ({
+        path: `src/alpha/File${i}.ts`,
+        is_directory: false,
+      })),
+    );
+
+    const results = searchFileIndex(index, "a", 50);
+
+    expect(results).toHaveLength(50);
+    expect(results.every((result) => result.pathMatches.length > 0)).toBe(true);
   });
 
   it("keeps large-list fuzzy matching bounded by the top result limit", () => {

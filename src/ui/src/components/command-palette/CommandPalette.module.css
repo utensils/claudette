@@ -142,7 +142,6 @@
   position: absolute;
   top: 0;
   inset-inline: var(--space-1);
-  height: 52px;
 }
 
 .result:hover {
