@@ -67,6 +67,7 @@ import { PlanApprovalCard } from "./PlanApprovalCard";
 import { AgentApprovalCard } from "./AgentApprovalCard";
 import { ScrollToBottomPill } from "./ScrollToBottomPill";
 import { useStickyScroll } from "../../hooks/useStickyScroll";
+import { useEnvElapsedSeconds } from "../../hooks/useEnvElapsedSeconds";
 import { tooltipWithHotkey } from "../../hotkeys/display";
 import { isMacHotkeyPlatform } from "../../hotkeys/platform";
 import { usePreventScrollBounce } from "../../hooks/usePreventScrollBounce";
@@ -83,6 +84,7 @@ import { CurrentTurnTaskProgress } from "./CurrentTurnTaskProgress";
 import { ChatInputArea } from "./ChatInputArea";
 import { EMPTY_ACTIVITIES } from "./chatConstants";
 import { QueuedMessagesPopover } from "./QueuedMessagesPopover";
+import { ChatEmptyState } from "./ChatEmptyState";
 
 const EMPTY_QUEUED_MESSAGES: QueuedMessage[] = [];
 
@@ -91,6 +93,9 @@ export function ChatPanel() {
   const selectedWorkspaceId = useAppStore((s) => s.selectedWorkspaceId);
   const workspaceEnvironmentPreparing = useAppStore((s) =>
     isWorkspaceEnvironmentPreparing(s, s.selectedWorkspaceId),
+  );
+  const { plugin: envPlugin, seconds: envSeconds } = useEnvElapsedSeconds(
+    selectedWorkspaceId,
   );
   const activeSessionId = useAppStore((s) =>
     s.selectedWorkspaceId
@@ -1566,9 +1571,11 @@ export function ChatPanel() {
             sessionId={activeChatSessionRecord?.id}
           />
           {messages.length === 0 && !hasStreaming && !runningSetupScriptSource ? (
-            <div className={styles.empty}>
-              Send a message to start a conversation
-            </div>
+            <ChatEmptyState
+              workspaceEnvironmentPreparing={workspaceEnvironmentPreparing}
+              envPlugin={envPlugin}
+              envSeconds={envSeconds}
+            />
           ) : (
             <>
               {isLoadingMore && (

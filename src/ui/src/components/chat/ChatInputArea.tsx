@@ -49,6 +49,7 @@ import { PinnedPromptsBar } from "./PinnedPromptsBar";
 import { extractMentionPaths } from "./queuedMessageEditing";
 import { SlashCommandPicker } from "./SlashCommandPicker";
 import { useSlashPicker } from "../../hooks/useSlashPicker";
+import { formatEnvProviderName } from "../../utils/workspaceEnvironment";
 import { hasUltrathink, renderUltrathinkText } from "./ultrathink";
 import styles from "./ChatPanel.module.css";
 
@@ -240,16 +241,7 @@ export function ChatInputArea({
     ? envPlugin && envSeconds !== null
       ? t("composer_placeholder_preparing_env_with_plugin", {
           defaultValue: "Preparing {{plugin}} ({{seconds}}s)…",
-          plugin:
-            envPlugin === "env-direnv"
-              ? "direnv"
-              : envPlugin === "env-mise"
-                ? "mise"
-                : envPlugin === "env-dotenv"
-                  ? "dotenv"
-                  : envPlugin === "env-nix-devshell"
-                    ? "nix"
-                    : envPlugin,
+          plugin: formatEnvProviderName(envPlugin),
           seconds: envSeconds,
         })
       : t("composer_placeholder_preparing_env")

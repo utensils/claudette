@@ -1,5 +1,8 @@
 {
   "send_message_to_start": "Send a message to start a conversation",
+  "empty_preparing_env": "Preparing workspace environment…",
+  "empty_preparing_env_with_plugin": "Preparing {{plugin}} ({{seconds}}s)…",
+  "empty_preparing_env_subtitle": "You'll be able to send a message in a moment.",
   "compacting_label": "Compacting context…",
   "compacting_aria": "Compacting context, {{elapsed}} elapsed",
   "processing_aria": "Processing, {{elapsed}} elapsed",

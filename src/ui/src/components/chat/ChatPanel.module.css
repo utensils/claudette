@@ -150,6 +150,27 @@
   font-family: var(--font-mono);
 }
 
+.emptyPreparing::before {
+  content: none;
+}
+
+.emptySpinner {
+  animation: preparingForkSpin 1s linear infinite;
+  color: var(--accent-primary);
+  opacity: 0.7;
+}
+
+.emptyTitle {
+  color: var(--text-muted);
+}
+
+.emptySub {
+  max-width: 360px;
+  text-align: center;
+  line-height: 1.45;
+  color: var(--text-faint);
+}
+
 .errorBanner {
   background: var(--accent-error-bg);
   border: 1px solid var(--accent-error-border);
