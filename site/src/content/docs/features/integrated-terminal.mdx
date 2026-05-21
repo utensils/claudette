@@ -70,6 +70,12 @@ Agent subprocesses use the same separation. In a Nix devshell workspace, Claudet
 
 Adjust the terminal font size in `Settings > Appearance > Terminal font size` (range: 8–32px, default: 11px). Press `⌘/Ctrl + Shift + =` or `⌘/Ctrl + Shift + -` to scale only the terminal without changing the rest of the UI.
 
+## Search Scrollback
+
+Press `⌘/Ctrl + F` while a terminal pane has focus to open an in-panel search bar for that pane's scrollback. Enter steps to the next match; `Shift + Enter` steps to the previous one; `Esc` closes the bar. The same shortcut still searches the active chat transcript when focus is elsewhere — it routes by which surface owns the keystroke, not by which panel is visible.
+
+The keybinding is rebindable from `Settings > Keyboard > Terminal > Search terminal scrollback` independently of the chat search hotkey, so you can split the two if you prefer.
+
 ## Environment Variables
 
 Every terminal session has [workspace environment variables](/claudette/features/settings/#environment-variables) set automatically — `$CLAUDETTE_WORKSPACE_NAME`, `$CLAUDETTE_WORKSPACE_PATH`, `$CLAUDETTE_ROOT_PATH`, and others. These are useful for scripts and tools that need to know which workspace they're running in.

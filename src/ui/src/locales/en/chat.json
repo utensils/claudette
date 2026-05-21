@@ -176,6 +176,8 @@
   "chat_search_close": "Close search",
   "chat_search_close_title": "Close (Esc)",
   "chat_search_no_matches": "No matches",
+  "terminal_search_aria": "Search terminal",
+  "terminal_search_placeholder": "Search terminal…",
 
   "pinned_prompts_label": "pinned",
   "pinned_prompt_tooltip_auto": "Send {{name}}",

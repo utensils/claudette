@@ -171,6 +171,8 @@
   "chat_search_close": "検索を閉じる",
   "chat_search_close_title": "閉じる（Esc）",
   "chat_search_no_matches": "一致なし",
+  "terminal_search_aria": "ターミナルを検索",
+  "terminal_search_placeholder": "ターミナルを検索…",
 
   "pinned_prompts_label": "ピン留め",
   "pinned_prompt_tooltip_auto": "{{name}} を送信",

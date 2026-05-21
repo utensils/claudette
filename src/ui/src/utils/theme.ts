@@ -93,6 +93,8 @@ const THEMEABLE_VARS = [
   "terminal-fg",
   "terminal-cursor",
   "terminal-selection",
+  "terminal-search-match-bg",
+  "terminal-search-active-match-bg",
   "toolbar-active",
   "toolbar-active-text",
   "error-bg",
@@ -158,6 +160,47 @@ export function getTerminalTheme(): ITheme {
     selectionBackground:
       style.getPropertyValue("--terminal-selection").trim() || undefined,
   };
+}
+
+/**
+ * Decoration colors for `@xterm/addon-search`. The addon requires literal
+ * `#RRGGBB` strings — alpha/var chains it can't resolve are rejected — and,
+ * critically, only emits `onDidChangeResults` when decorations are enabled.
+ * Without them the match counter stays at zero and the prev/next buttons
+ * remain disabled even when matches exist.
+ *
+ * The tokens live in theme.css so per-theme overrides keep working. We read
+ * them via the canonical `getPropertyValue(...).trim() || "#..."` safety
+ * fallback, then run `ensureHexColor` to guard against user JSON themes
+ * that override `--accent-primary` (which the active-match token follows
+ * via var-substitution) with non-hex CSS color formats — the addon would
+ * silently reject those.
+ */
+export function getTerminalSearchDecorations(): {
+  matchBackground: string;
+  matchOverviewRuler: string;
+  activeMatchBackground: string;
+  activeMatchColorOverviewRuler: string;
+} {
+  const style = getComputedStyle(document.documentElement);
+  const rawMatch = style.getPropertyValue("--terminal-search-match-bg").trim() || "#5a5a5a";
+  const rawActive = style.getPropertyValue("--terminal-search-active-match-bg").trim() || "#e07850";
+  const matchColor = ensureHexColor(rawMatch, "#5a5a5a");
+  const activeColor = ensureHexColor(rawActive, "#e07850");
+  return {
+    matchBackground: matchColor,
+    matchOverviewRuler: matchColor,
+    activeMatchBackground: activeColor,
+    activeMatchColorOverviewRuler: activeColor,
+  };
+}
+
+// Validates that a color string is in literal `#RRGGBB` form. Anything
+// else (rgb/hsl/color-mix/unresolved var) falls back to the supplied hex
+// so the search addon — which silently no-ops on non-hex input — always
+// gets something it can render.
+function ensureHexColor(value: string, fallback: string): string {
+  return /^#[0-9a-fA-F]{6}$/.test(value) ? value : fallback;
 }
 
 // Keys the user may have set via applyUserFonts() — preserved across
