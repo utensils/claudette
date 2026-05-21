@@ -107,6 +107,30 @@ async fn handle_payload(
             media_type,
             caption,
         } => {
+            // The Claudette MCP server is now injected unconditionally so
+            // its always-on scheduling tools reach every agent (see the
+            // wiring in commands/chat/send.rs + remote_control.rs). The
+            // "Agent Attachments" plugin toggle therefore can't gate the
+            // server's mere presence anymore — it has to gate the
+            // send_to_user call itself, here. Without this check,
+            // disabling the plugin would still let attachments through,
+            // breaking the Settings contract that turning it off removes
+            // the tool. Reusing the same `is_builtin_plugin_enabled` read
+            // the system-prompt nudge already consults.
+            let db_for_gate = match Database::open(&db_path) {
+                Ok(db) => db,
+                Err(err) => {
+                    return BridgeResponse::err(format!("open db: {err}"));
+                }
+            };
+            if !claudette::agent_mcp::is_builtin_plugin_enabled(&db_for_gate, "send_to_user") {
+                return BridgeResponse::err(
+                    "The Agent Attachments plugin is disabled. Enable it in Settings → \
+                     Plugins to deliver files inline."
+                        .to_string(),
+                );
+            }
+            drop(db_for_gate);
             send_attachment(
                 app,
                 db_path,

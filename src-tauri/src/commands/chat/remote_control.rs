@@ -20,10 +20,7 @@ use crate::state::{
     AgentSessionState, AppState, ClaudeRemoteControlLifecycle, ClaudeRemoteControlStatus,
 };
 
-use super::{
-    AgentStreamPayload, build_agent_hook_bridge, now_iso, start_bridge_and_inject_mcp,
-    start_chat_bridge,
-};
+use super::{AgentStreamPayload, build_agent_hook_bridge, now_iso, start_bridge_and_inject_mcp};
 
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -569,7 +566,13 @@ async fn ensure_persistent_session_for_remote_control(
         hook_bridge: None,
         extra_claude_flags,
     };
-    let bridge = if send_to_user_enabled {
+    // Inject the Claudette MCP server unconditionally — it carries the
+    // always-on scheduling tools (ScheduleWakeup / Cron*) and `Monitor`.
+    // The `send_to_user_enabled` toggle gates only that tool's nudge
+    // (above) and the call itself (in `agent_mcp_sink::handle_payload`),
+    // not the whole server. Same wiring as the spawn / respawn blocks in
+    // `chat::send::send_chat_message`.
+    let bridge = {
         let (bridge, mcp_with_claudette) = start_bridge_and_inject_mcp(
             app,
             &state.db_path,
@@ -580,8 +583,6 @@ async fn ensure_persistent_session_for_remote_control(
         .await?;
         agent_settings.mcp_config = mcp_with_claudette;
         bridge
-    } else {
-        start_chat_bridge(app, &state.db_path, &workspace_id, &chat_session_id).await?
     };
     agent_settings.hook_bridge = Some(build_agent_hook_bridge(&bridge)?);
 
