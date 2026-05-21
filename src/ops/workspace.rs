@@ -275,10 +275,14 @@ async fn create_inner(
     // Persist any declared input values to the dedicated column. The
     // workspace row was inserted without them — `insert_workspace`'s SQL
     // only writes the original columns — so the agent/terminal/script env
-    // merges would read NULL without this.
+    // merges would read NULL without this. If the write fails, roll back
+    // the row too — otherwise the DB ends up with a workspace pointing at
+    // a worktree we're about to delete, with `input_values` NULL — exactly
+    // the state we use to mean "no inputs declared".
     if let Some(values) = validated_inputs.as_ref()
         && let Err(e) = db.set_workspace_input_values(&ws.id, Some(values))
     {
+        let _ = db.delete_workspace(&ws.id);
         let _ = git::remove_worktree(&repo_path, &actual_path, true).await;
         let _ = git::branch_delete(&repo_path, &ws.branch_name).await;
         return Err(OpsError::Db(e));
