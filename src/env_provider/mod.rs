@@ -18,6 +18,7 @@
 
 pub mod backend;
 pub mod cache;
+pub mod devshell;
 #[cfg(test)]
 mod plugin_tests;
 pub mod types;
@@ -33,6 +34,7 @@ use crate::plugin_runtime::host_api::WorkspaceInfo;
 use backend::EnvProviderBackend;
 pub use backend::PluginRegistryBackend;
 pub use cache::EnvCache;
+pub use devshell::nix_develop_wrap;
 use types::EnvMap;
 pub use watcher::EnvWatcher;
 

@@ -56,6 +56,12 @@ Profile detection probes both `%USERPROFILE%\Documents\…` and `%USERPROFILE%\O
 
 No extra arguments are passed, so the shell behaves the same as it would in a stock Windows Terminal tab — PowerShell auto-loads `$PROFILE`, and `cmd.exe` honours its `HKCU\Software\Microsoft\Command Processor\AutoRun` entry.
 
+### Nix devshell
+
+If the workspace has a `flake.nix` (or a legacy `shell.nix`) and the bundled **env-nix-devshell** environment provider is enabled, the terminal launches *inside* that workspace's devshell — Claudette spawns the shell as `nix develop --command <your shell>`. The toolchain pinned by the flake is on `PATH` from the first prompt, so the integrated terminal matches what `nix develop` gives you outside Claudette, regardless of which devshell Claudette itself was started in.
+
+It falls back to a plain shell only when there is genuinely nothing to enter — the provider is disabled, `nix` is not installed, or the workspace has no flake. A flake that *fails to evaluate* is not hidden: `nix develop` reports the error directly in the terminal, so a broken devshell is visible rather than silently swapped for a plain shell with the wrong toolchain. This is independent of **env-direnv** — the terminal enters the devshell through `nix develop` directly, never through direnv. Toggle it per repo or globally from the **env-nix-devshell** entry in `Settings > Plugins`.
+
 ## Terminal Font Size
 
 Adjust the terminal font size in `Settings > Appearance > Terminal font size` (range: 8–32px, default: 11px). Press `⌘/Ctrl + Shift + =` or `⌘/Ctrl + Shift + -` to scale only the terminal without changing the rest of the UI.

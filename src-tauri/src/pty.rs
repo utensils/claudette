@@ -89,9 +89,6 @@ pub async fn spawn_pty(
     // no extra args are needed; cmd honours its registry-based AutoRun
     // for the same reason.
     let (shell_path, _shell_type) = detect_user_shell();
-    let mut cmd = CommandBuilder::new(&shell_path);
-    cmd.cwd(&working_dir);
-    configure_pty_env(&mut cmd);
 
     // Resolve the env-provider layer for this workspace.
     // Unlike the agent spawn path, the PTY hosts an interactive shell that
@@ -161,6 +158,33 @@ pub async fn spawn_pty(
         &resolved_env.sources,
     )
     .await;
+
+    // When the env-nix-devshell provider detects a devshell for this
+    // workspace, spawn the shell *inside* `nix develop` so the terminal
+    // lands in the workspace's own devshell — not whatever devshell the
+    // Claudette process inherited at launch. The wrap fires whenever the
+    // provider is enabled and a `flake.nix` / `shell.nix` is present;
+    // `nix_develop_wrap` returns `None` (plain shell) only when there is
+    // genuinely nothing to enter — the provider is disabled, `nix` is
+    // missing, or there's no flake. It is deliberately NOT gated on the
+    // env-var probe succeeding: a flake that fails to evaluate surfaces
+    // its error in the terminal rather than silently dropping the user
+    // into a plain shell with the wrong toolchain. See issue #915.
+    let mut cmd = match claudette::env_provider::nix_develop_wrap(
+        std::path::Path::new(&working_dir),
+        &resolved_env,
+    ) {
+        Some(prefix) => {
+            let mut c = CommandBuilder::new(&prefix[0]);
+            c.args(&prefix[1..]);
+            c.arg(&shell_path);
+            c
+        }
+        None => CommandBuilder::new(&shell_path),
+    };
+    cmd.cwd(&working_dir);
+    configure_pty_env(&mut cmd);
+
     for (k, v) in &resolved_env.vars {
         match v {
             // A provider-emitted PATH is merged with the app's enriched
