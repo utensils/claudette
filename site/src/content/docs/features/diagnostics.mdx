@@ -25,11 +25,13 @@ Restart-required filter applied to the file log when `RUST_LOG` is unset. Choose
 
 | Level | Captures |
 |-------|----------|
-| `default` | `info` overall plus `debug` for Claudette's own crates — the shipping default |
+| `default` | `info` overall plus `debug` for Claudette's own crates, with `mdns_sd` capped at `warn` — the shipping default |
 | `warn` | warnings and errors only |
 | `info` | startup, shutdown, every Tauri command lifecycle event |
-| `debug` | the above plus span timings for slow ops (DB migrations, git fetches, diff parsing, agent spawns) |
-| `trace` | maximum detail; not recommended for normal use |
+| `debug` | the above plus Claudette debug events and span timings for slow ops (DB migrations, git fetches, diff parsing, agent spawns) |
+| `trace` | maximum Claudette detail; not recommended for normal use |
+
+The in-app selector scopes coarse levels to Claudette's own crates and keeps dependencies below debug/trace. It also caps `mdns_sd` at `warn` so mDNS packet chatter does not flood the daily log.
 
 If `RUST_LOG` is set in the process's environment, this select is locked and a banner explains why — `RUST_LOG` always wins so the env var workflow is preserved.
 
@@ -51,7 +53,7 @@ Two buttons. The first reveals the log directory in your file manager (Finder on
 
 ## Filtering verbosity by domain
 
-When investigating a specific subsystem, use a per-domain `RUST_LOG` filter rather than turning every domain up to `trace`. Every event in Claudette is emitted under a `claudette::<domain>` target:
+When investigating a specific subsystem, use a per-domain `RUST_LOG` filter rather than turning every domain up to `trace`. `RUST_LOG` is honored verbatim, so it can still enable dependency targets when you deliberately need them. Every event in Claudette is emitted under a `claudette::<domain>` target:
 
 ```bash
 # Only chat lifecycle events

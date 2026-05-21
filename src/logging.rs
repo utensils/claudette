@@ -24,7 +24,8 @@
 //! ## Filtering
 //!
 //! Defaults to
-//! `info,claudette=debug,claudette_tauri=debug,claudette_server=debug`
+//! `info,claudette=debug,claudette_tauri=debug,claudette_server=debug,`
+//! `mdns_sd=warn`
 //! (see [`DEFAULT_FILTER`]). Override with the standard `RUST_LOG` env
 //! var (e.g.
 //! `RUST_LOG=claudette::commands::chat=trace`). For users who don't
@@ -66,6 +67,7 @@
 //! Use these targets verbatim; new domains are added here first so the
 //! convention stays one filterable axis.
 
+use std::borrow::Cow;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use std::time::{Duration, SystemTime};
@@ -89,8 +91,20 @@ const LOG_FILE_PREFIX: &str = "claudette";
 /// Default subscriber filter when `RUST_LOG` is unset. Library and
 /// binary crate names go to `debug`; the rest of the dep tree stays
 /// at `info` so reqwest / hyper / mio chatter doesn't drown out our
-/// own events.
-const DEFAULT_FILTER: &str = "info,claudette=debug,claudette_tauri=debug,claudette_server=debug";
+/// own events. `mdns_sd` is capped further because it can log one
+/// event per mDNS packet observed on the LAN.
+const DEFAULT_FILTER: &str =
+    "info,claudette=debug,claudette_tauri=debug,claudette_server=debug,mdns_sd=warn";
+
+/// Coarse levels selected in Settings are scoped to our crates instead
+/// of applied globally. A bare `debug`/`trace` would also raise noisy
+/// dependencies such as `mdns_sd`, which logs every LAN mDNS packet at
+/// debug level and can grow the daily log by hundreds of MB.
+const CLAUDETTE_CRATES: &[&str] = &["claudette", "claudette_tauri", "claudette_server"];
+
+/// Dependencies that are too noisy for coarse in-app levels. `RUST_LOG`
+/// remains the escape hatch for deliberately enabling these targets.
+const NOISY_DEPENDENCY_CAPS: &[(&str, &str)] = &[("mdns_sd", "warn")];
 
 /// Holds the appender's worker thread alive for the lifetime of the
 /// process. `init` returns a `LogHandle` to `main`, which drops it on
@@ -165,10 +179,10 @@ pub fn init_stderr_only() -> Option<LogHandle> {
 ///
 /// `runtime_override` is parsed as an `EnvFilter` directive (e.g.
 /// `info`, `debug`, `claudette::chat=trace,info`). It is used **only**
-/// when `RUST_LOG` is unset, so an explicit env var still wins. The GUI
-/// reads `app_settings["diagnostics.log_level"]` and passes it through
-/// here so users who don't want to set env vars can change verbosity
-/// from Settings → Diagnostics.
+/// when `RUST_LOG` is unset, so an explicit env var still wins. Bare
+/// coarse levels from Settings are scoped to Claudette's crates before
+/// parsing so dependencies stay below debug/trace unless the user opts
+/// into a custom directive.
 ///
 /// Errors here are logged to stderr only and downgrade gracefully:
 /// if the file appender can't be created, stderr-only logging still
@@ -195,12 +209,15 @@ pub fn init_with_override(runtime_override: Option<&str>) -> Option<LogHandle> {
             let trimmed = s.trim();
             (!trimmed.is_empty()).then_some(trimmed)
         }) {
-            Some(directive) => EnvFilter::try_new(directive).unwrap_or_else(|e| {
-                eprintln!(
-                    "[logging] invalid runtime override {directive:?}: {e} — using default filter"
-                );
-                EnvFilter::new(DEFAULT_FILTER)
-            }),
+            Some(directive) => {
+                let normalized = normalize_runtime_override(directive);
+                EnvFilter::try_new(normalized.as_ref()).unwrap_or_else(|e| {
+                    eprintln!(
+                        "[logging] invalid runtime override {directive:?}: {e} — using default filter"
+                    );
+                    EnvFilter::new(DEFAULT_FILTER)
+                })
+            }
             None => EnvFilter::new(DEFAULT_FILTER),
         },
     };
@@ -277,6 +294,37 @@ pub fn init_with_override(runtime_override: Option<&str>) -> Option<LogHandle> {
         _file_guard: guard,
         log_dir,
     })
+}
+
+/// Convert simple Settings selections (`debug`, `trace`, etc.) into a
+/// scoped filter that changes Claudette's own crates without raising
+/// the whole dependency tree. Custom `EnvFilter` directives are returned
+/// verbatim so power users can persist targeted filters if needed.
+fn normalize_runtime_override(directive: &str) -> Cow<'_, str> {
+    let trimmed = directive.trim();
+    if matches!(trimmed, "trace" | "debug" | "info" | "warn" | "error") {
+        let dependency_floor = if matches!(trimmed, "trace" | "debug") {
+            "info"
+        } else {
+            trimmed
+        };
+        let mut scoped = String::from(dependency_floor);
+        for target in CLAUDETTE_CRATES {
+            scoped.push(',');
+            scoped.push_str(target);
+            scoped.push('=');
+            scoped.push_str(trimmed);
+        }
+        for (target, level) in NOISY_DEPENDENCY_CAPS {
+            scoped.push(',');
+            scoped.push_str(target);
+            scoped.push('=');
+            scoped.push_str(level);
+        }
+        Cow::Owned(scoped)
+    } else {
+        Cow::Borrowed(trimmed)
+    }
 }
 
 /// Resolve the directory rolled log files are written to. Order:
@@ -488,11 +536,11 @@ mod tests {
 
     /// The Settings UI writes one of these strings into
     /// `app_settings["diagnostics.log_level"]` and we thread it into
-    /// `init_with_override`. Verify each parses as a real `EnvFilter`
-    /// directive so a typo in the Settings select can't silently brick
-    /// the subscriber. We can't easily install a global subscriber
-    /// from a test (it's process-wide and other tests may have set it),
-    /// so we exercise the parsing path directly — the same call
+    /// `init_with_override`. Verify each parses after the runtime
+    /// normalization that keeps coarse selections scoped to Claudette's
+    /// own crates. We can't easily install a global subscriber from a
+    /// test (it's process-wide and other tests may have set it), so we
+    /// exercise the parsing path directly — the same call
     /// `init_with_override` makes when `RUST_LOG` is unset.
     #[test]
     fn supported_log_level_directives_parse() {
@@ -505,8 +553,36 @@ mod tests {
             "claudette::chat=trace",
             DEFAULT_FILTER,
         ] {
-            assert!(EnvFilter::try_new(ok).is_ok(), "expected {ok:?} to parse");
+            let normalized = normalize_runtime_override(ok);
+            assert!(
+                EnvFilter::try_new(normalized.as_ref()).is_ok(),
+                "expected {ok:?} to parse after normalization to {normalized:?}"
+            );
         }
+    }
+
+    #[test]
+    fn coarse_runtime_overrides_scope_claudette_crates_only() {
+        assert_eq!(
+            normalize_runtime_override("debug"),
+            "info,claudette=debug,claudette_tauri=debug,claudette_server=debug,mdns_sd=warn"
+        );
+        assert_eq!(
+            normalize_runtime_override("trace"),
+            "info,claudette=trace,claudette_tauri=trace,claudette_server=trace,mdns_sd=warn"
+        );
+        assert_eq!(
+            normalize_runtime_override("warn"),
+            "warn,claudette=warn,claudette_tauri=warn,claudette_server=warn,mdns_sd=warn"
+        );
+    }
+
+    #[test]
+    fn targeted_runtime_overrides_remain_verbatim() {
+        assert_eq!(
+            normalize_runtime_override("claudette::chat=trace,mdns_sd=debug"),
+            "claudette::chat=trace,mdns_sd=debug"
+        );
     }
 
     /// Validate the env override path. We guard the env mutation so
