@@ -1,6 +1,14 @@
-import { useState, useMemo, useEffect, useRef, useCallback } from "react";
+import {
+  useState,
+  useMemo,
+  useEffect,
+  useRef,
+  useCallback,
+  useDeferredValue,
+  type ReactNode,
+} from "react";
 import { useTranslation } from "react-i18next";
-import { Search, ChevronLeft } from "lucide-react";
+import { Search, ChevronLeft, File } from "lucide-react";
 import { useAppStore } from "../../stores/useAppStore";
 import { applyTheme, applyUserFonts, findTheme, loadAllThemes, cacheThemePreference, getThemeDataAttr } from "../../utils/theme";
 import {
@@ -33,12 +41,49 @@ import {
   buildThemeCommands,
   buildModelCommands,
   buildEffortCommands,
-  buildFileCommands,
   groupCommandsByCategory,
   type FileEntry,
   type GroupedCommands,
 } from "./commands";
+import {
+  DEFAULT_FILE_SEARCH_LIMIT,
+  prepareFileSearchIndex,
+  searchFileIndex,
+  type FileSearchResult,
+} from "./fileFuzzySearch";
 import styles from "./CommandPalette.module.css";
+
+const FILE_RESULT_ROW_HEIGHT = 52;
+const FILE_RESULT_OVERSCAN = 6;
+
+function renderHighlightedText(text: string, matches: readonly number[]) {
+  if (matches.length === 0) return text;
+  const matchSet = new Set(matches);
+  const chunks: ReactNode[] = [];
+  let plainStart = 0;
+  for (let index = 0; index < text.length; index += 1) {
+    if (!matchSet.has(index)) continue;
+    if (plainStart < index) {
+      chunks.push(text.slice(plainStart, index));
+    }
+    chunks.push(
+      <mark key={`${index}-${text[index]}`} className={styles.matchHighlight}>
+        {text[index]}
+      </mark>,
+    );
+    plainStart = index + 1;
+  }
+  if (plainStart < text.length) {
+    chunks.push(text.slice(plainStart));
+  }
+  return chunks;
+}
+
+function dirnameMatches(result: FileSearchResult): number[] {
+  const dirnameLength = result.entry.dirname.length;
+  if (dirnameLength === 0) return [];
+  return result.pathMatches.filter((index) => index < dirnameLength);
+}
 
 export function CommandPalette() {
   const { t } = useTranslation("chat");
@@ -126,6 +171,8 @@ export function CommandPalette() {
   const [fileEntries, setFileEntries] = useState<FileEntry[]>([]);
   const [filesLoading, setFilesLoading] = useState(false);
   const [filesLoadError, setFilesLoadError] = useState<string | null>(null);
+  const [resultsScrollTop, setResultsScrollTop] = useState(0);
+  const [resultsViewportHeight, setResultsViewportHeight] = useState(0);
   // Monotonic token bumped on each `enterFileMode` invocation so a late
   // `listWorkspaceFiles` response from a previous workspace can detect it's
   // stale and skip overwriting `fileEntries` with the wrong list.
@@ -147,6 +194,26 @@ export function CommandPalette() {
     const id = requestAnimationFrame(() => inputRef.current?.focus());
     return () => cancelAnimationFrame(id);
   }, [mode]);
+
+  useEffect(() => {
+    const el = resultsRef.current;
+    if (!el) return;
+    const updateHeight = () => setResultsViewportHeight(el.clientHeight);
+    updateHeight();
+    if (typeof ResizeObserver === "undefined") {
+      window.addEventListener("resize", updateHeight);
+      return () => window.removeEventListener("resize", updateHeight);
+    }
+    const resizeObserver = new ResizeObserver(updateHeight);
+    resizeObserver.observe(el);
+    return () => resizeObserver.disconnect();
+  }, []);
+
+  useEffect(() => {
+    const el = resultsRef.current;
+    if (el) el.scrollTop = 0;
+    setResultsScrollTop(0);
+  }, [mode, query]);
 
   const close = toggleCommandPalette;
 
@@ -417,28 +484,29 @@ export function CommandPalette() {
     [selectedModel, selectedModelProvider, effortLevel, selectedSessionId, t],
   );
 
-  const fileCommands = useMemo(
-    () =>
-      buildFileCommands(
-        fileEntries,
-        (path) => {
-          if (selectedWorkspaceId) openFileTab(selectedWorkspaceId, path);
-        },
-        close,
-      ),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [fileEntries, selectedWorkspaceId],
+  const fileSearchIndex = useMemo(
+    () => prepareFileSearchIndex(fileEntries),
+    [fileEntries],
   );
+  const deferredFileQuery = useDeferredValue(mode === "file" ? query : "");
+  const fileResults = useMemo(
+    () =>
+      mode === "file"
+        ? searchFileIndex(fileSearchIndex, deferredFileQuery, DEFAULT_FILE_SEARCH_LIMIT)
+        : [],
+    [deferredFileQuery, fileSearchIndex, mode],
+  );
+  const fileSearchSettled = mode !== "file" || deferredFileQuery === query;
 
   // Active command list based on mode
   const activeCommands =
     mode === "theme" ? themeCommands
     : mode === "model" ? modelCommands
     : mode === "effort" ? effortCommands
-    : mode === "file" ? fileCommands
     : mainCommands;
 
   const filteredCommands = useMemo(() => {
+    if (mode === "file") return [];
     if (!query.trim()) return activeCommands;
 
     const scored = activeCommands
@@ -450,7 +518,7 @@ export function CommandPalette() {
       .sort((a, b) => b.score - a.score);
 
     return scored.map(({ cmd }) => cmd);
-  }, [activeCommands, query]);
+  }, [activeCommands, mode, query]);
 
   const grouped = useMemo<GroupedCommands[]>(() => {
     if (mode === "theme") {
@@ -459,9 +527,7 @@ export function CommandPalette() {
         : [];
     }
     if (mode === "file") {
-      return filteredCommands.length > 0
-        ? [{ category: "navigation", label: "Files", commands: filteredCommands }]
-        : [];
+      return [];
     }
     // When searching, show a flat ranked list (no category grouping)
     // so the relevance sort isn't overridden by category order.
@@ -481,18 +547,19 @@ export function CommandPalette() {
     () => grouped.flatMap((g) => g.commands),
     [grouped],
   );
+  const resultCount = mode === "file" ? fileResults.length : flatCommands.length;
 
   // Keep the highlight within bounds when filtering shrinks the list
   // (e.g. typing extra characters that remove matches under the cursor).
   useEffect(() => {
-    if (flatCommands.length === 0) {
+    if (resultCount === 0) {
       if (selectedIndex !== 0) setSelectedIndex(0);
       return;
     }
-    if (selectedIndex > flatCommands.length - 1) {
-      setSelectedIndex(flatCommands.length - 1);
+    if (selectedIndex > resultCount - 1) {
+      setSelectedIndex(resultCount - 1);
     }
-  }, [flatCommands.length, selectedIndex]);
+  }, [resultCount, selectedIndex]);
 
   // Theme live preview on arrow navigation (only in theme mode)
   useEffect(() => {
@@ -520,19 +587,42 @@ export function CommandPalette() {
 
   // Scroll selected item into view
   useEffect(() => {
+    if (mode === "file") {
+      const el = resultsRef.current;
+      if (!el) return;
+      const top = selectedIndex * FILE_RESULT_ROW_HEIGHT;
+      const bottom = top + FILE_RESULT_ROW_HEIGHT;
+      if (top < el.scrollTop) {
+        el.scrollTop = top;
+      } else if (bottom > el.scrollTop + el.clientHeight) {
+        el.scrollTop = bottom - el.clientHeight;
+      }
+      return;
+    }
     const el = resultsRef.current?.querySelector(`[data-index="${selectedIndex}"]`);
     el?.scrollIntoView({ block: "nearest" });
-  }, [selectedIndex]);
+  }, [mode, selectedIndex]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "ArrowDown") {
       e.preventDefault();
       setSelectedIndex((i) =>
-        flatCommands.length === 0 ? 0 : Math.min(i + 1, flatCommands.length - 1),
+        resultCount === 0 ? 0 : Math.min(i + 1, resultCount - 1),
       );
     } else if (e.key === "ArrowUp") {
       e.preventDefault();
       setSelectedIndex((i) => Math.max(i - 1, 0));
+    } else if (e.key === "Enter" && mode === "file") {
+      e.preventDefault();
+      const currentResults = fileSearchSettled
+        ? fileResults
+        : searchFileIndex(fileSearchIndex, query, DEFAULT_FILE_SEARCH_LIMIT);
+      const selectedResult = currentResults[selectedIndex] ?? currentResults[0];
+      if (!selectedResult) return;
+      if (selectedWorkspaceId) {
+        openFileTab(selectedWorkspaceId, selectedResult.entry.path);
+      }
+      close();
     } else if (e.key === "Enter" && flatCommands[selectedIndex]) {
       e.preventDefault();
       flatCommands[selectedIndex].execute();
@@ -591,6 +681,25 @@ export function CommandPalette() {
     }
   };
 
+  const visibleFileRange = useMemo(() => {
+    if (mode !== "file") return { start: 0, end: 0 };
+    const viewport = resultsViewportHeight || 360;
+    const start = Math.max(
+      0,
+      Math.floor(resultsScrollTop / FILE_RESULT_ROW_HEIGHT) - FILE_RESULT_OVERSCAN,
+    );
+    const visibleCount = Math.ceil(viewport / FILE_RESULT_ROW_HEIGHT) + FILE_RESULT_OVERSCAN * 2;
+    return {
+      start,
+      end: Math.min(fileResults.length, start + visibleCount),
+    };
+  }, [fileResults.length, mode, resultsScrollTop, resultsViewportHeight]);
+  const visibleFileResults = useMemo(
+    () => fileResults.slice(visibleFileRange.start, visibleFileRange.end),
+    [fileResults, visibleFileRange.end, visibleFileRange.start],
+  );
+  const fileResultsHeight = fileResults.length * FILE_RESULT_ROW_HEIGHT;
+
   let flatIndex = 0;
 
   return (
@@ -645,14 +754,61 @@ export function CommandPalette() {
           )}
         </div>
 
-        <div className={styles.results} ref={resultsRef}>
-          {filteredCommands.length === 0 ? (
+        <div
+          className={styles.results}
+          ref={resultsRef}
+          onScroll={(e) => {
+            if (mode === "file") {
+              setResultsScrollTop(e.currentTarget.scrollTop);
+            }
+          }}
+        >
+          {resultCount === 0 ? (
             <div className={styles.empty}>
               {mode === "theme" ? "No matching themes"
                 : mode === "model" ? "No matching models"
                 : mode === "effort" ? "No matching levels"
                 : mode === "file" ? (filesLoading ? "Loading files..." : filesLoadError ? `Failed to load files: ${filesLoadError}` : "No matching files")
                 : "No matching commands"}
+            </div>
+          ) : mode === "file" ? (
+            <div
+              className={styles.virtualFileList}
+              style={{ height: fileResultsHeight }}
+            >
+              {visibleFileResults.map((result, offset) => {
+                const idx = visibleFileRange.start + offset;
+                const dirname = result.entry.dirname;
+                return (
+                  <div
+                    key={result.entry.path}
+                    data-index={idx}
+                    className={`${styles.result} ${styles.fileResult} ${idx === selectedIndex ? styles.resultSelected : ""}`}
+                    style={{ transform: `translateY(${idx * FILE_RESULT_ROW_HEIGHT}px)` }}
+                    onClick={() => {
+                      if (!fileSearchSettled) return;
+                      if (selectedWorkspaceId) {
+                        openFileTab(selectedWorkspaceId, result.entry.path);
+                      }
+                      close();
+                    }}
+                    onMouseDown={(e) => e.preventDefault()}
+                    onMouseEnter={() => setSelectedIndex(idx)}
+                  >
+                    <File size={18} className={styles.resultIcon} />
+                    <div className={styles.resultBody}>
+                      <div className={styles.resultName}>
+                        {renderHighlightedText(result.entry.basename, result.basenameMatches)}
+                      </div>
+                      {dirname && (
+                        <div className={styles.resultDescription}>
+                          {renderHighlightedText(dirname, dirnameMatches(result))}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           ) : (
             grouped.map((group) => {

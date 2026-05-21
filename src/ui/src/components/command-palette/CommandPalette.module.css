@@ -104,6 +104,10 @@
   padding: var(--space-1);
 }
 
+.virtualFileList {
+  position: relative;
+}
+
 .empty {
   padding: var(--space-6);
   text-align: center;
@@ -132,6 +136,13 @@
   border-radius: var(--radius-lg);
   cursor: pointer;
   transition: background var(--transition-fast);
+}
+
+.fileResult {
+  position: absolute;
+  top: 0;
+  inset-inline: var(--space-1);
+  height: 52px;
 }
 
 .result:hover {
@@ -175,6 +186,12 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.matchHighlight {
+  color: var(--accent-primary);
+  background: transparent;
+  font-weight: var(--fw-semibold);
 }
 
 /* Keyboard shortcut badges */
