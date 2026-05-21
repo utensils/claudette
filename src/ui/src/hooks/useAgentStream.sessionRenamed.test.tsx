@@ -88,6 +88,7 @@ beforeEach(() => {
   // mutate. The test only cares about `name` flipping; other fields
   // are placeholder values matching the `ChatSession` shape.
   useAppStore.setState({
+    agentQuestions: {},
     toolActivities: {},
     streamingContent: {},
     streamingThinking: {},
@@ -115,6 +116,7 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
+  vi.useRealTimers();
   for (const root of mountedRoots.splice(0).reverse()) {
     await act(async () => {
       root.unmount();
@@ -209,5 +211,88 @@ describe("useAgentStream — session-renamed listener", () => {
       inputJson: JSON.stringify({ file_path: "/repo/src/app.ts" }),
       summary: "/repo/src/app.ts",
     });
+  });
+
+  it("falls back to rendering AskUserQuestion from the streamed tool block", async () => {
+    vi.useFakeTimers();
+    await mountHook();
+    const handlers = registeredHandlers.get("agent-stream") ?? [];
+    expect(handlers.length).toBeGreaterThan(0);
+
+    const input = {
+      questions: [
+        {
+          header: "Next step",
+          question: "How should I proceed?",
+          options: [
+            { label: "Implement the fix", description: "Patch and test it." },
+            { label: "Stop here" },
+          ],
+        },
+      ],
+    };
+
+    await act(async () => {
+      for (const handler of handlers) {
+        handler({
+          payload: {
+            workspace_id: "ws-1",
+            chat_session_id: "session-1",
+            event: {
+              Stream: {
+                type: "stream_event",
+                event: {
+                  type: "content_block_start",
+                  index: 0,
+                  content_block: {
+                    type: "tool_use",
+                    id: "toolu-question-1",
+                    name: "AskUserQuestion",
+                    input,
+                  },
+                },
+              },
+            },
+          },
+        });
+        handler({
+          payload: {
+            workspace_id: "ws-1",
+            chat_session_id: "session-1",
+            event: {
+              Stream: {
+                type: "stream_event",
+                event: {
+                  type: "content_block_stop",
+                  index: 0,
+                },
+              },
+            },
+          },
+        });
+      }
+      vi.advanceTimersByTime(500);
+    });
+
+    const question = useAppStore.getState().agentQuestions["session-1"];
+    expect(question).toMatchObject({
+      sessionId: "session-1",
+      toolUseId: "toolu-question-1",
+      questions: [
+        {
+          header: "Next step",
+          question: "How should I proceed?",
+          options: [
+            { label: "Implement the fix", description: "Patch and test it." },
+            { label: "Stop here" },
+          ],
+        },
+      ],
+    });
+    const session = useAppStore
+      .getState()
+      .sessionsByWorkspace["ws-1"]?.find((item) => item.id === "session-1");
+    expect(session?.needs_attention).toBe(true);
+    expect(session?.attention_kind).toBe("Ask");
   });
 });

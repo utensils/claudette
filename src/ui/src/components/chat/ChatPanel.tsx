@@ -86,6 +86,7 @@ import { QueuedMessagesPopover } from "./QueuedMessagesPopover";
 import { ChatEmptyState } from "./ChatEmptyState";
 
 const EMPTY_QUEUED_MESSAGES: QueuedMessage[] = [];
+const STUCK_TURN_SECONDS = 180;
 
 export function ChatPanel() {
   const { t } = useTranslation("chat");
@@ -517,6 +518,12 @@ export function ChatPanel() {
   }, [isRunning, promptStartTime]);
 
   const formatElapsed = formatElapsedSeconds;
+  const showStuckAffordance =
+    isRunning &&
+    !pendingQuestion &&
+    !pendingPlan &&
+    !pendingApproval &&
+    elapsed >= STUCK_TURN_SECONDS;
 
   // Load persisted permission level when the active session changes.
   useEffect(() => {
@@ -1733,6 +1740,24 @@ export function ChatPanel() {
                     <span className={styles.compactingLabel}>{t("compacting_label")}</span>
                   )}
                   <span className={styles.elapsed}>{formatElapsed(elapsed)}</span>
+                  {showStuckAffordance && (
+                    <>
+                      <span className={styles.stuckHint}>
+                        {t("processing_stuck_hint", {
+                          defaultValue: "Agent may be stuck",
+                        })}
+                      </span>
+                      <button
+                        type="button"
+                        className={styles.stuckCancel}
+                        onClick={handleStop}
+                      >
+                        {t("processing_stuck_cancel", {
+                          defaultValue: "Cancel",
+                        })}
+                      </button>
+                    </>
+                  )}
                 </div>
               )}
 

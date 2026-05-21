@@ -67,7 +67,8 @@ fn warn_if_concurrent_dev_instance(db_path: &Path) {
         return;
     };
     let our_pid = std::process::id();
-    let mut peers: Vec<(u32, String)> = Vec::new();
+    let our_data_dir = db_path.parent().map(Path::to_path_buf);
+    let mut peers: Vec<(u32, String, Option<PathBuf>)> = Vec::new();
 
     for entry in entries.flatten() {
         let path = entry.path();
@@ -95,29 +96,31 @@ fn warn_if_concurrent_dev_instance(db_path: &Path) {
             .and_then(|v| v.as_str())
             .unwrap_or("(unknown)")
             .to_string();
-        peers.push((pid, cwd));
+        let peer_data_dir = parsed
+            .get("claudette_data_dir")
+            .and_then(|v| v.as_str())
+            .map(PathBuf::from);
+        if peer_data_dir.is_some() && peer_data_dir != our_data_dir {
+            continue;
+        }
+        peers.push((pid, cwd, peer_data_dir));
     }
 
-    for (pid, cwd) in &peers {
-        // We can only confirm the peer is a live Claudette dev process
-        // (matched by discovery file + alive PID) — the discovery JSON
-        // doesn't currently include a DB path, so whether it's the
-        // *same* DB as ours is inferred, not verified. By default both
-        // launches resolve `dirs::data_dir()/claudette/claudette.db`,
-        // so the inference is right in the common case; the wording
-        // hedges so the warning stays accurate if a future dev launch
-        // ever isolates `CLAUDETTE_DATA_DIR` per-instance.
+    for (pid, cwd, peer_data_dir) in &peers {
+        // Modern `scripts/dev.sh` discovery files include the effective
+        // `CLAUDETTE_DATA_DIR`, so we skip peers that are clearly isolated.
+        // Older discovery files do not have it; keep warning for those because
+        // legacy dev launches shared the default DB by construction.
         tracing::warn!(
             target: "claudette::startup",
             our_pid,
             peer_pid = pid,
             peer_cwd = %cwd,
+            peer_data_dir = peer_data_dir.as_ref().map(|p| p.display().to_string()),
             our_db_path = %db_path.display(),
             "another Claudette dev instance is alive — if it's running \
-             against the same DB (the default unless CLAUDETTE_DATA_DIR \
-             is overridden), concurrent SQLite writers can cross-pollute \
-             chat_messages rows and corrupt resumed Claude CLI transcripts; \
-             consider setting a per-instance data dir before continuing"
+             against the same DB, concurrent SQLite writers can cross-pollute \
+             chat_messages rows and corrupt resumed Claude CLI transcripts"
         );
     }
 }
