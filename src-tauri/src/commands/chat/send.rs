@@ -137,6 +137,151 @@ fn queue_control_prompt(
     kind
 }
 
+#[derive(Debug, PartialEq)]
+enum ControlRequestSessionRoute {
+    Interactive { kind: crate::state::AttentionKind },
+    PermissionResponse { response: serde_json::Value },
+}
+
+fn route_control_request_session_state(
+    session: &mut AgentSessionState,
+    request_id: &str,
+    tool_name: &str,
+    tool_use_id: &str,
+    input: &serde_json::Value,
+) -> ControlRequestSessionRoute {
+    if matches!(tool_name, "AskUserQuestion" | "ExitPlanMode")
+        || is_codex_approval_tool_name(tool_name)
+    {
+        let kind = queue_control_prompt(
+            session,
+            request_id.to_string(),
+            tool_name.to_string(),
+            tool_use_id.to_string(),
+            input.clone(),
+        );
+        ControlRequestSessionRoute::Interactive { kind }
+    } else {
+        ControlRequestSessionRoute::PermissionResponse {
+            response: build_permission_response(
+                &session.session_allowed_tools,
+                session.session_plan_mode,
+                session.session_exited_plan,
+                tool_name,
+                input,
+            ),
+        }
+    }
+}
+
+pub(super) async fn route_turn_control_request(
+    app: &AppHandle,
+    workspace_id: &str,
+    chat_session_id: &str,
+    event: &AgentEvent,
+) -> bool {
+    let AgentEvent::Stream(StreamEvent::ControlRequest {
+        request_id,
+        request:
+            ControlRequestInner::CanUseTool {
+                tool_name,
+                tool_use_id,
+                input,
+            },
+    }) = event
+    else {
+        return false;
+    };
+
+    let app_state = app.state::<AppState>();
+    let mut agents = app_state.agents.write().await;
+    let mut permission_response = None;
+    let kind = if let Some(session) = agents.get_mut(chat_session_id) {
+        match route_control_request_session_state(
+            session,
+            request_id,
+            tool_name,
+            tool_use_id,
+            input,
+        ) {
+            ControlRequestSessionRoute::Interactive { kind } => Some(kind),
+            ControlRequestSessionRoute::PermissionResponse { response } => {
+                permission_response = session.persistent_session.clone().map(|ps| (ps, response));
+                None
+            }
+        }
+    } else if matches!(tool_name.as_str(), "AskUserQuestion" | "ExitPlanMode")
+        || is_codex_approval_tool_name(tool_name)
+    {
+        Some(control_prompt_attention_kind(tool_name))
+    } else {
+        None
+    };
+    drop(agents);
+
+    if let Some(kind) = kind {
+        let payload = serde_json::json!({
+            "workspace_id": workspace_id,
+            "chat_session_id": chat_session_id,
+            "tool_use_id": tool_use_id,
+            "tool_name": tool_name,
+            "input": input,
+        });
+        let _ = app.emit("agent-permission-prompt", &payload);
+
+        // Fire the system notification after the frontend has the data it
+        // needs to render the card. The task is detached, so it re-checks
+        // that the same request is still pending before notifying.
+        let app_for_notify = app.clone();
+        let ws_id_for_notify = workspace_id.to_string();
+        let session_id_for_notify = chat_session_id.to_string();
+        let tool_use_id_for_notify = tool_use_id.clone();
+        let request_id_for_notify = request_id.clone();
+        let tool_name_for_notify = tool_name.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(ATTENTION_NOTIFY_DELAY_MS)).await;
+
+            let app_state = app_for_notify.state::<AppState>();
+            let should_notify = {
+                let mut agents = app_state.agents.write().await;
+                let Some(session) = agents.get_mut(&session_id_for_notify) else {
+                    return;
+                };
+                if session.attention_notification_sent {
+                    false
+                } else {
+                    let still_pending = session
+                        .pending_permissions
+                        .get(&tool_use_id_for_notify)
+                        .is_some_and(|p| {
+                            p.request_id == request_id_for_notify
+                                && p.tool_name == tool_name_for_notify
+                        });
+                    if still_pending {
+                        session.attention_notification_sent = true;
+                    }
+                    still_pending
+                }
+            };
+
+            if should_notify {
+                crate::tray::notify_attention(&app_for_notify, &ws_id_for_notify, kind);
+            }
+        });
+    } else if let Some((ps, response)) = permission_response
+        && let Err(e) = ps.send_control_response(request_id, response).await
+    {
+        tracing::warn!(
+            target: "claudette::chat",
+            tool_name = %tool_name,
+            error = %e,
+            "failed to respond to control_request"
+        );
+    }
+
+    true
+}
+
 fn auth_failure_message_from_stderr(stderr_lines: &[String]) -> Option<String> {
     let output = stderr_lines
         .iter()
@@ -2654,133 +2799,7 @@ pub async fn send_chat_message(
             //      without this branch "full" users see spurious denials.
             //   3. Otherwise — deny with a message that names the escalation
             //      path (the model paraphrases this to the user).
-            if let AgentEvent::Stream(StreamEvent::ControlRequest {
-                request_id,
-                request:
-                    ControlRequestInner::CanUseTool {
-                        tool_name,
-                        tool_use_id,
-                        input,
-                    },
-            }) = &event
-            {
-                if matches!(tool_name.as_str(), "AskUserQuestion" | "ExitPlanMode")
-                    || is_codex_approval_tool_name(tool_name)
-                {
-                    let app_state = app.state::<AppState>();
-                    let mut agents = app_state.agents.write().await;
-                    let kind = if let Some(session) = agents.get_mut(&chat_session_id_for_stream) {
-                        queue_control_prompt(
-                            session,
-                            request_id.clone(),
-                            tool_name.clone(),
-                            tool_use_id.clone(),
-                            input.clone(),
-                        )
-                    } else {
-                        control_prompt_attention_kind(tool_name)
-                    };
-                    drop(agents);
-                    let payload = serde_json::json!({
-                        "workspace_id": &ws_id,
-                        "chat_session_id": &chat_session_id_for_stream,
-                        "tool_use_id": tool_use_id,
-                        "tool_name": tool_name,
-                        "input": input,
-                    });
-                    let _ = app.emit("agent-permission-prompt", &payload);
-
-                    // Fire the system notification after the frontend has the
-                    // data it needs to render the card. We emit
-                    // `agent-permission-prompt` synchronously above; the
-                    // short sleep gives the webview time to pick up the event
-                    // and paint before the notification sound/banner arrives.
-                    // Tied to ControlRequest (not the earlier ContentBlockStart)
-                    // because the card is driven by this event, not the
-                    // streaming tool_use block.
-                    //
-                    // The task is detached, so it must defend against state
-                    // changes during the sleep:
-                    //   - If the user already responded (or the session was
-                    //     stopped/cleared), the matching pending_permission is
-                    //     gone and a notification would be misleading.
-                    //   - If a different pending prompt in the same cycle has
-                    //     already triggered the notification, dedupe via
-                    //     `attention_notification_sent`.
-                    let app_for_notify = app.clone();
-                    let ws_id_for_notify = ws_id.clone();
-                    let session_id_for_notify = chat_session_id_for_stream.clone();
-                    let tool_use_id_for_notify = tool_use_id.clone();
-                    let request_id_for_notify = request_id.clone();
-                    let tool_name_for_notify = tool_name.clone();
-                    tokio::spawn(async move {
-                        tokio::time::sleep(std::time::Duration::from_millis(
-                            ATTENTION_NOTIFY_DELAY_MS,
-                        ))
-                        .await;
-
-                        let app_state = app_for_notify.state::<AppState>();
-                        let should_notify = {
-                            let mut agents = app_state.agents.write().await;
-                            let Some(session) = agents.get_mut(&session_id_for_notify) else {
-                                return;
-                            };
-                            if session.attention_notification_sent {
-                                false
-                            } else {
-                                let still_pending = session
-                                    .pending_permissions
-                                    .get(&tool_use_id_for_notify)
-                                    .is_some_and(|p| {
-                                        p.request_id == request_id_for_notify
-                                            && p.tool_name == tool_name_for_notify
-                                    });
-                                if still_pending {
-                                    session.attention_notification_sent = true;
-                                }
-                                still_pending
-                            }
-                        };
-
-                        if should_notify {
-                            crate::tray::notify_attention(&app_for_notify, &ws_id_for_notify, kind);
-                        }
-                    });
-                } else {
-                    let app_state = app.state::<AppState>();
-                    let agents = app_state.agents.read().await;
-                    let (ps, session_allowed_tools, session_plan_mode, session_exited_plan) =
-                        agents
-                            .get(&chat_session_id_for_stream)
-                            .map(|s| {
-                                (
-                                    s.persistent_session.clone(),
-                                    s.session_allowed_tools.clone(),
-                                    s.session_plan_mode,
-                                    s.session_exited_plan,
-                                )
-                            })
-                            .unwrap_or_else(|| (None, Vec::new(), false, false));
-                    drop(agents);
-                    if let Some(ps) = ps {
-                        let response = build_permission_response(
-                            &session_allowed_tools,
-                            session_plan_mode,
-                            session_exited_plan,
-                            tool_name,
-                            input,
-                        );
-                        if let Err(e) = ps.send_control_response(request_id, response).await {
-                            tracing::warn!(
-                                target: "claudette::chat",
-                                tool_name = %tool_name,
-                                error = %e,
-                                "failed to respond to control_request"
-                            );
-                        }
-                    }
-                }
-            }
+            route_turn_control_request(&app, &ws_id, &chat_session_id_for_stream, &event).await;
 
             // Detect tool calls that require user input (question, plan approval).
             // The tray state flip happens here (on ContentBlockStart) so the
@@ -3387,14 +3406,15 @@ pub async fn send_chat_message(
 #[cfg(test)]
 mod tests {
     use super::{
-        auth_failure_message_from_assistant_text, auth_failure_message_from_stderr,
-        ensure_harness_accepts_attachments, env_provider_drifted_parts, has_env_trust_warning,
-        pi_attachment_unsupported_message, queue_control_prompt,
-        remote_control_requested_or_active, remote_control_requested_or_active_for_turn,
+        ControlRequestSessionRoute, auth_failure_message_from_assistant_text,
+        auth_failure_message_from_stderr, ensure_harness_accepts_attachments,
+        env_provider_drifted_parts, has_env_trust_warning, pi_attachment_unsupported_message,
+        queue_control_prompt, remote_control_requested_or_active,
+        remote_control_requested_or_active_for_turn,
         remote_control_should_defer_drift_teardown_for_turn,
         remote_control_should_restore_for_turn, remote_control_title, resolve_spawn_session_id,
-        should_reenable_remote_control_after_turn_result, should_resume_persistent_session,
-        should_run_auto_naming,
+        route_control_request_session_state, should_reenable_remote_control_after_turn_result,
+        should_resume_persistent_session, should_run_auto_naming,
     };
     use crate::state::{
         AgentSessionState, AttentionKind, ClaudeRemoteControlLifecycle, ClaudeRemoteControlStatus,
@@ -3494,6 +3514,81 @@ mod tests {
         assert_eq!(session.attention_kind, Some(AttentionKind::Plan));
         assert!(session.session_exited_plan);
         assert!(session.pending_permissions.contains_key("tool-2"));
+    }
+
+    #[test]
+    fn control_request_route_queues_interactive_prompt() {
+        let mut session = test_agent_session_state();
+
+        let route = route_control_request_session_state(
+            &mut session,
+            "request-3",
+            "AskUserQuestion",
+            "tool-3",
+            &serde_json::json!({"question": "Ship it?"}),
+        );
+
+        assert_eq!(
+            route,
+            ControlRequestSessionRoute::Interactive {
+                kind: AttentionKind::Ask
+            }
+        );
+        assert!(session.needs_attention);
+        assert_eq!(session.attention_kind, Some(AttentionKind::Ask));
+        let pending = session.pending_permissions.get("tool-3").unwrap();
+        assert_eq!(pending.request_id, "request-3");
+        assert_eq!(pending.tool_name, "AskUserQuestion");
+        assert_eq!(pending.original_input["question"], "Ship it?");
+    }
+
+    #[test]
+    fn control_request_route_allows_non_interactive_tool_in_bypass_mode() {
+        let mut session = test_agent_session_state();
+        session.session_allowed_tools = vec!["*".to_string()];
+
+        let route = route_control_request_session_state(
+            &mut session,
+            "request-4",
+            "Write",
+            "tool-4",
+            &serde_json::json!({"file_path": "README.md"}),
+        );
+
+        let ControlRequestSessionRoute::PermissionResponse { response } = route else {
+            panic!("expected permission response");
+        };
+        assert_eq!(response["behavior"], "allow");
+        assert_eq!(response["updatedInput"]["file_path"], "README.md");
+        assert!(session.pending_permissions.is_empty());
+        assert!(!session.needs_attention);
+    }
+
+    #[test]
+    fn control_request_route_denies_non_interactive_tool_during_plan_mode() {
+        let mut session = test_agent_session_state();
+        session.session_allowed_tools = vec!["*".to_string()];
+        session.session_plan_mode = true;
+
+        let route = route_control_request_session_state(
+            &mut session,
+            "request-5",
+            "Write",
+            "tool-5",
+            &serde_json::json!({"file_path": "README.md"}),
+        );
+
+        let ControlRequestSessionRoute::PermissionResponse { response } = route else {
+            panic!("expected permission response");
+        };
+        assert_eq!(response["behavior"], "deny");
+        assert!(
+            response["message"]
+                .as_str()
+                .is_some_and(|message| message.contains("Write isn't enabled"))
+        );
+        assert!(session.pending_permissions.is_empty());
+        assert!(!session.needs_attention);
     }
 
     #[test]

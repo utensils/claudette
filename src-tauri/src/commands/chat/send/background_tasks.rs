@@ -845,6 +845,8 @@ pub(super) fn schedule_background_task_wake(
                 }
             }
 
+            super::route_turn_control_request(&app, &workspace_id, &chat_session_id, &event).await;
+
             if let AgentEvent::Stream(StreamEvent::Stream {
                 event: InnerStreamEvent::MessageDelta { usage: Some(u) },
             }) = &event
