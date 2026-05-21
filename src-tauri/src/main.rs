@@ -1007,6 +1007,7 @@ fn main() {
             commands::workspace::import_worktrees,
             commands::workspace::purge_stray_worktree,
             commands::storage::compute_storage_stats,
+            commands::storage::compute_reclaimable_bytes_for_workspaces,
             commands::storage::scan_orphaned_worktrees,
             commands::storage::purge_orphaned_worktree,
             commands::workspace::open_workspace_in_terminal,

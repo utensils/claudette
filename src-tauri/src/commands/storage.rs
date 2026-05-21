@@ -179,6 +179,35 @@ pub async fn compute_storage_stats(
     Ok(by_repo)
 }
 
+/// Bytes that would actually free if the given set of archived
+/// workspaces were deleted together — dedup-aware, unlike a client-side
+/// sum of each workspace's sole-owned bytes. A blob shared between two
+/// workspaces in the set still counts once here, because both
+/// references go away.
+///
+/// Used by the cleanup dialog's "Delete selected (N · X MB)" total so
+/// the headline figure stays accurate. The per-row size shown next to
+/// each workspace remains the per-workspace sole-owned figure from
+/// `compute_storage_stats` — the right number for a single delete.
+#[tauri::command]
+pub async fn compute_reclaimable_bytes_for_workspaces(
+    workspace_ids: Vec<String>,
+    state: State<'_, AppState>,
+) -> Result<u64, String> {
+    if workspace_ids.is_empty() {
+        return Ok(0);
+    }
+    let db_path = state.db_path.clone();
+    tokio::task::spawn_blocking(move || {
+        let db = Database::open(&db_path).map_err(|e| e.to_string())?;
+        let id_refs: Vec<&str> = workspace_ids.iter().map(String::as_str).collect();
+        db.reclaimable_checkpoint_bytes_for_workspaces(&id_refs)
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| format!("reclaimable-bytes join error: {e}"))?
+}
+
 /// Walk `<base>/<slug>/<wt_name>/` two levels deep and return every
 /// leaf-dir-path-plus-slug pair whose canonical path is not in
 /// `tracked_paths`. Pure (no DB / state access) so it can be unit-tested

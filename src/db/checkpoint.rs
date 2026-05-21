@@ -7,7 +7,7 @@
 
 use std::fmt;
 
-use rusqlite::{OptionalExtension, params, types::Type};
+use rusqlite::{OptionalExtension, params, params_from_iter, types::Type};
 use sha2::{Digest, Sha256};
 
 use crate::model::{
@@ -437,6 +437,70 @@ impl Database {
         Ok(sole.saturating_add(legacy))
     }
 
+    /// Set-based generalization of [`Self::reclaimable_checkpoint_bytes`]:
+    /// bytes that would actually free if **all** workspaces in `ids` were
+    /// deleted together. A blob shared between two workspaces in the
+    /// set still counts once here (because both references go away),
+    /// even though it would correctly be excluded from each workspace's
+    /// per-row sole-owned count.
+    ///
+    /// Used by the cleanup dialog's "Delete selected (N · X MB)" total
+    /// so the headline figure stays accurate under dedup, while each
+    /// row's per-workspace figure remains the honest single-delete
+    /// number.
+    pub fn reclaimable_checkpoint_bytes_for_workspaces(
+        &self,
+        ids: &[&str],
+    ) -> rusqlite::Result<u64> {
+        if ids.is_empty() {
+            return Ok(0);
+        }
+
+        // Build `?,?,?` placeholders for both the IN (this set) and
+        // NOT IN (everything else) clauses. Bind `ids` twice via chain.
+        let placeholders = std::iter::repeat_n("?", ids.len())
+            .collect::<Vec<_>>()
+            .join(",");
+
+        let sole_sql = format!(
+            "SELECT COALESCE(SUM(cb.byte_size), 0)
+             FROM checkpoint_blobs cb
+             WHERE EXISTS (
+                 SELECT 1 FROM checkpoint_files cf
+                 JOIN conversation_checkpoints cc ON cc.id = cf.checkpoint_id
+                 WHERE cc.workspace_id IN ({placeholders})
+                   AND cf.blob_sha256 = cb.sha256
+             )
+             AND NOT EXISTS (
+                 SELECT 1 FROM checkpoint_files cf
+                 JOIN conversation_checkpoints cc ON cc.id = cf.checkpoint_id
+                 WHERE cc.workspace_id NOT IN ({placeholders})
+                   AND cf.blob_sha256 = cb.sha256
+             )"
+        );
+        let sole_owned: i64 = self.conn.query_row(
+            &sole_sql,
+            params_from_iter(ids.iter().chain(ids.iter())),
+            |row| row.get(0),
+        )?;
+
+        let legacy_sql = format!(
+            "SELECT COALESCE(SUM(LENGTH(cf.content)), 0)
+             FROM checkpoint_files cf
+             JOIN conversation_checkpoints cc ON cc.id = cf.checkpoint_id
+             WHERE cc.workspace_id IN ({placeholders})
+               AND cf.blob_sha256 IS NULL
+               AND cf.content IS NOT NULL"
+        );
+        let legacy_inline: i64 =
+            self.conn
+                .query_row(&legacy_sql, params_from_iter(ids.iter()), |row| row.get(0))?;
+
+        let sole = u64::try_from(sole_owned).unwrap_or(0);
+        let legacy = u64::try_from(legacy_inline).unwrap_or(0);
+        Ok(sole.saturating_add(legacy))
+    }
+
     /// Read snapshot rows for a checkpoint, materializing bytes from
     /// `checkpoint_blobs` via the `blob_sha256` reference. Legacy rows
     /// where `blob_sha256 IS NULL` fall back to the row's own `content`
@@ -524,6 +588,25 @@ impl Database {
              JOIN conversation_checkpoints cc ON cc.id = cf.checkpoint_id
              WHERE cc.workspace_id = ?1 AND cc.turn_index > ?2",
             params![workspace_id, turn_index],
+            |row| row.get(0),
+        )
+    }
+
+    /// Count `checkpoint_files` rows that will cascade away if the given
+    /// workspace is hard-deleted. The workspace delete path uses this as
+    /// the short-circuit signal for `gc_orphan_blobs_after_delete`: if
+    /// the workspace has no checkpoint files, the GC's full-table
+    /// `NOT EXISTS` scan is skipped.
+    pub(super) fn count_workspace_checkpoint_files(
+        &self,
+        workspace_id: &str,
+    ) -> Result<usize, rusqlite::Error> {
+        self.conn.query_row(
+            "SELECT COUNT(*)
+             FROM checkpoint_files cf
+             JOIN conversation_checkpoints cc ON cc.id = cf.checkpoint_id
+             WHERE cc.workspace_id = ?1",
+            params![workspace_id],
             |row| row.get(0),
         )
     }
@@ -1734,5 +1817,154 @@ mod tests {
         let db = setup_db_with_workspace();
         let bytes = db.reclaimable_checkpoint_bytes("w1").unwrap();
         assert_eq!(bytes, 0);
+    }
+
+    /// Codex peer-review pin: when two archived workspaces both
+    /// reference the same dedup blob, deleting them together must
+    /// reclaim that blob exactly once. The per-row sole-owned helper
+    /// would honestly report 0 for each (because the other still
+    /// references it), and naïvely summing the per-row numbers in the
+    /// UI would advertise a smaller-than-real reclaim. The set helper
+    /// is the correct math for the "Delete selected (N)" total.
+    #[test]
+    fn reclaimable_bytes_for_workspaces_counts_blobs_shared_within_set_once() {
+        let db = setup_db_with_workspace();
+        db.insert_workspace(&make_workspace("w2", "r1", "other")).unwrap();
+        let shared = vec![0x77u8; 800];
+
+        db.insert_chat_message(&make_chat_msg(&db, "m1", "w1", ChatRole::Assistant, "a"))
+            .unwrap();
+        db.insert_checkpoint(&make_checkpoint(&db, "cp1", "w1", "m1", 0))
+            .unwrap();
+        db.insert_checkpoint_files(&[raw_file("f1", "cp1", "shared.bin", &shared)])
+            .unwrap();
+
+        db.insert_chat_message(&make_chat_msg(&db, "m2", "w2", ChatRole::Assistant, "b"))
+            .unwrap();
+        db.insert_checkpoint(&make_checkpoint(&db, "cp2", "w2", "m2", 0))
+            .unwrap();
+        db.insert_checkpoint_files(&[raw_file("f2", "cp2", "shared.bin", &shared)])
+            .unwrap();
+        assert_eq!(blob_count(&db), 1);
+
+        // Per-row sole-owned excludes shared blob from BOTH workspaces.
+        assert_eq!(db.reclaimable_checkpoint_bytes("w1").unwrap(), 0);
+        assert_eq!(db.reclaimable_checkpoint_bytes("w2").unwrap(), 0);
+
+        // Set-based version counts it once when both are in the set.
+        let set_bytes = db
+            .reclaimable_checkpoint_bytes_for_workspaces(&["w1", "w2"])
+            .unwrap();
+        assert_eq!(set_bytes, shared.len() as u64);
+    }
+
+    /// A blob shared with a workspace OUTSIDE the deletion set must not
+    /// count — the GC's `NOT EXISTS` predicate would leave it in place.
+    #[test]
+    fn reclaimable_bytes_for_workspaces_excludes_blobs_referenced_outside_set() {
+        let db = setup_db_with_workspace();
+        db.insert_workspace(&make_workspace("w2", "r1", "second")).unwrap();
+        db.insert_workspace(&make_workspace("w3", "r1", "third")).unwrap();
+        let shared = vec![0x33u8; 500];
+        let unique_to_w1 = vec![0x11u8; 200];
+
+        // w1 owns one blob outright and shares another with w3 (NOT in
+        // the deletion set).
+        db.insert_chat_message(&make_chat_msg(&db, "m1", "w1", ChatRole::Assistant, "a"))
+            .unwrap();
+        db.insert_checkpoint(&make_checkpoint(&db, "cp1", "w1", "m1", 0))
+            .unwrap();
+        db.insert_checkpoint_files(&[
+            raw_file("f1a", "cp1", "shared.bin", &shared),
+            raw_file("f1b", "cp1", "unique.bin", &unique_to_w1),
+        ])
+        .unwrap();
+
+        db.insert_chat_message(&make_chat_msg(&db, "m3", "w3", ChatRole::Assistant, "c"))
+            .unwrap();
+        db.insert_checkpoint(&make_checkpoint(&db, "cp3", "w3", "m3", 0))
+            .unwrap();
+        db.insert_checkpoint_files(&[raw_file("f3", "cp3", "shared.bin", &shared)])
+            .unwrap();
+
+        // Deletion set is {w1, w2}. The shared blob survives because
+        // w3 still references it; only unique_to_w1 reclaims.
+        let bytes = db
+            .reclaimable_checkpoint_bytes_for_workspaces(&["w1", "w2"])
+            .unwrap();
+        assert_eq!(bytes, unique_to_w1.len() as u64);
+    }
+
+    /// Empty set returns 0 cleanly — the set helper must not panic on
+    /// "no selection" (placeholders-with-0-args would be invalid SQL).
+    #[test]
+    fn reclaimable_bytes_for_workspaces_empty_set_returns_zero() {
+        let db = setup_db_with_workspace();
+        let bytes = db.reclaimable_checkpoint_bytes_for_workspaces(&[]).unwrap();
+        assert_eq!(bytes, 0);
+    }
+
+    /// Codex peer-review pin: deleting a workspace must reclaim its
+    /// sole-owned checkpoint blobs in the same call. Without orphan-blob
+    /// GC chained onto the workspace delete path, the FK cascade drops
+    /// `checkpoint_files` references but the blob bytes in
+    /// `checkpoint_blobs` survive until some unrelated future GC pass.
+    /// That would make `reclaimable_checkpoint_bytes` lie to the cleanup
+    /// dialog — bytes shown as freeable wouldn't actually free.
+    #[test]
+    fn delete_workspace_with_summary_orphan_gcs_blobs() {
+        let db = setup_db_with_workspace();
+        db.insert_chat_message(&make_chat_msg(&db, "m1", "w1", ChatRole::Assistant, "a"))
+            .unwrap();
+        db.insert_checkpoint(&make_checkpoint(&db, "cp1", "w1", "m1", 0))
+            .unwrap();
+        db.insert_checkpoint_files(&[raw_file("f1", "cp1", "x.bin", b"unique-to-w1")])
+            .unwrap();
+        assert_eq!(blob_count(&db), 1);
+
+        db.delete_workspace_with_summary("w1").unwrap();
+
+        assert_eq!(checkpoint_files_count(&db), 0);
+        assert_eq!(
+            blob_count(&db),
+            0,
+            "delete_workspace_with_summary must orphan-GC blobs whose only references were the deleted workspace's checkpoint_files"
+        );
+    }
+
+    /// Blobs shared with a workspace that is NOT being deleted must
+    /// survive. Same SQL contract as `gc_orphan_blobs_tx`: only blobs
+    /// with zero remaining references go away. Pins the symmetry with
+    /// `reclaimable_checkpoint_bytes_excludes_blobs_shared_with_other_workspaces`
+    /// — the helper excludes shared blobs from the reclaim count AND
+    /// the GC leaves them in place.
+    #[test]
+    fn delete_workspace_with_summary_keeps_blobs_shared_with_others() {
+        let db = setup_db_with_workspace();
+        db.insert_workspace(&make_workspace("w2", "r1", "other")).unwrap();
+        let shared = b"shared-bytes";
+
+        db.insert_chat_message(&make_chat_msg(&db, "m1", "w1", ChatRole::Assistant, "a"))
+            .unwrap();
+        db.insert_checkpoint(&make_checkpoint(&db, "cp1", "w1", "m1", 0))
+            .unwrap();
+        db.insert_checkpoint_files(&[raw_file("f1", "cp1", "shared.bin", shared)])
+            .unwrap();
+
+        db.insert_chat_message(&make_chat_msg(&db, "m2", "w2", ChatRole::Assistant, "b"))
+            .unwrap();
+        db.insert_checkpoint(&make_checkpoint(&db, "cp2", "w2", "m2", 0))
+            .unwrap();
+        db.insert_checkpoint_files(&[raw_file("f2", "cp2", "shared.bin", shared)])
+            .unwrap();
+        assert_eq!(blob_count(&db), 1, "dedupe collapses to one blob");
+
+        db.delete_workspace_with_summary("w1").unwrap();
+
+        assert_eq!(
+            blob_count(&db),
+            1,
+            "shared blob must survive because w2 still references it"
+        );
     }
 }

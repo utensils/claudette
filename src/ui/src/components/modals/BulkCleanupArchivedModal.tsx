@@ -5,6 +5,7 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { useAppStore } from "../../stores/useAppStore";
 import {
   cancelWorkspacesBulk,
+  computeReclaimableBytesForWorkspaces,
   computeStorageStats,
   deleteWorkspacesBulk,
   type BulkCleanupProgress,
@@ -150,6 +151,21 @@ export function BulkCleanupArchivedModal() {
   const [backendArchivedIds, setBackendArchivedIds] = useState<Set<
     string
   > | null>(null);
+  // Set-aware reclaimable-bytes total for the current selection. The
+  // per-row `sizeById` figure is each workspace's *sole-owned* bytes,
+  // which is the honest single-delete number but undercounts when two
+  // selected workspaces share a dedup blob (each row excludes the
+  // shared blob, so naïvely summing them excludes it twice even though
+  // deleting both actually reclaims one copy). This state holds the
+  // backend's set-based reclaim figure for the current selection so
+  // the headline "N · X MB" total stays accurate under dedup.
+  //
+  // `null` means "no backend value yet" — the display falls back to
+  // the client-side sole-owned sum (always a lower bound on the truth)
+  // until the call resolves or fails.
+  const [setReclaimableBytes, setSetReclaimableBytes] = useState<
+    number | null
+  >(null);
   // Re-scan whenever the set of archived ids in the store changes —
   // catches the moment an in-flight archive resolves and the
   // `useWorkspaceLifecycle.archive` optimistic update is confirmed by
@@ -240,6 +256,40 @@ export function BulkCleanupArchivedModal() {
 
   const allEligibleSelected =
     eligible.length > 0 && effectiveSelection.size === eligible.length;
+
+  // Refresh the backend-computed set-reclaim figure whenever the user
+  // changes the selection. The join key keeps the dependency stable so
+  // a Set instance swap with the same contents doesn't refire — only
+  // actual selection changes do. `cancelled` guards against the user
+  // toggling rapidly: if a newer call has started, drop the stale
+  // result instead of clobbering the current one.
+  const selectionJoin = useMemo(
+    () => [...effectiveSelection].sort().join(","),
+    [effectiveSelection],
+  );
+  useEffect(() => {
+    if (effectiveSelection.size === 0) {
+      setSetReclaimableBytes(0);
+      return;
+    }
+    let cancelled = false;
+    computeReclaimableBytesForWorkspaces([...effectiveSelection])
+      .then((n) => {
+        if (!cancelled) setSetReclaimableBytes(n);
+      })
+      .catch(() => {
+        // Backend failure → drop back to the client-side sum
+        // (rendered when this state is null in the counter below).
+        if (!cancelled) setSetReclaimableBytes(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+    // selectionJoin captures the selection set's identity; the Set
+    // itself is recreated on every render so listing it directly
+    // would refire every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectionJoin]);
 
   // Workspaces rendered during a run come from `runIds` (the dispatched
   // snapshot) — we look up each id in `workspaces` to get the row data.
@@ -684,11 +734,19 @@ export function BulkCleanupArchivedModal() {
               <>
                 {" · "}
                 {t("bulk_cleanup_selected_size", {
+                  // Prefer the backend's set-aware figure when it has
+                  // resolved; otherwise the client-side sole-owned sum
+                  // is shown as a graceful loading / fallback value.
+                  // The client sum is a lower bound on the truth (it
+                  // double-excludes blobs shared within the selection),
+                  // so flashing it briefly is safe — the number can
+                  // only tick up when the backend value arrives.
                   size: formatBytes(
-                    [...effectiveSelection].reduce(
-                      (sum, id) => sum + (sizeById.get(id) ?? 0),
-                      0,
-                    ),
+                    setReclaimableBytes ??
+                      [...effectiveSelection].reduce(
+                        (sum, id) => sum + (sizeById.get(id) ?? 0),
+                        0,
+                      ),
                   ),
                 })}
               </>
