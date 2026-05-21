@@ -171,6 +171,22 @@
   color: var(--text-faint);
 }
 
+.emptyRetry {
+  margin-top: 4px;
+  border: 1px solid var(--divider);
+  border-radius: 6px;
+  background: var(--chat-input-bg);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 12px;
+  padding: 5px 10px;
+  cursor: pointer;
+}
+
+.emptyRetry:hover {
+  background: var(--hover-bg);
+}
+
 .errorBanner {
   background: var(--accent-error-bg);
   border: 1px solid var(--accent-error-border);
@@ -180,6 +196,36 @@
   color: var(--accent-error);
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+.envErrorBanner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  background: var(--accent-error-bg);
+  border: 1px solid var(--accent-error-border);
+  border-radius: 8px;
+  padding: 10px 14px;
+  font-size: 13px;
+  color: var(--accent-error);
+  word-break: break-word;
+}
+
+.envErrorRetry {
+  flex-shrink: 0;
+  border: 1px solid var(--accent-error-border);
+  border-radius: 6px;
+  background: var(--chat-input-bg);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 12px;
+  padding: 4px 8px;
+  cursor: pointer;
+}
+
+.envErrorRetry:hover {
+  background: var(--hover-bg);
 }
 
 /* --- Block-based message layout ---
@@ -509,26 +555,6 @@
   font-size: 12px;
   font-variant-numeric: tabular-nums;
   font-family: var(--font-mono);
-}
-
-.stuckHint {
-  color: var(--text-muted);
-  font-size: 12px;
-}
-
-.stuckCancel {
-  border: 1px solid var(--divider);
-  border-radius: 6px;
-  background: var(--chat-input-bg);
-  color: var(--text-primary);
-  font: inherit;
-  font-size: 12px;
-  padding: 3px 8px;
-  cursor: pointer;
-}
-
-.stuckCancel:hover {
-  background: var(--hover-bg);
 }
 
 .compactingLabel {

@@ -19,6 +19,7 @@ const translations: Record<string, string> = {
   empty_preparing_env_with_plugin_static: "Preparing {{plugin}}…",
   empty_preparing_env_subtitle:
     "You'll be able to send a message in a moment.",
+  retry_environment: "Retry environment setup",
 };
 
 vi.mock("react-i18next", () => ({
@@ -121,5 +122,25 @@ describe("ChatEmptyState", () => {
     expect(container.textContent).toContain("Preparing direnv (12s)…");
     expect(container.querySelector("[role='status']")?.getAttribute("aria-label"))
       .toBe("Preparing direnv…");
+  });
+
+  it("offers an in-place retry while the environment is still preparing", async () => {
+    const onRetry = vi.fn();
+    const container = await render(
+      <ChatEmptyState
+        workspaceEnvironmentPreparing
+        workspaceId="ws-1"
+        onRetryEnvironment={onRetry}
+      />,
+    );
+
+    const button = container.querySelector("button");
+    expect(button?.textContent).toBe("Retry environment setup");
+
+    await act(async () => {
+      button?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+
+    expect(onRetry).toHaveBeenCalledTimes(1);
   });
 });

@@ -198,6 +198,7 @@ pub(crate) async fn create_workspace_inner(
         "workspace_env_progress",
         crate::commands::env::WorkspaceEnvProgressPayload {
             workspace_id: out.workspace.id.clone(),
+            resolve_id: uuid::Uuid::new_v4().to_string(),
             plugin: "provisioning".to_string(),
             phase: crate::commands::env::EnvProgressPhase::Started,
             elapsed_ms: 0,

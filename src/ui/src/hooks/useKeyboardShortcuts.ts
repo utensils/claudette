@@ -15,6 +15,10 @@ import {
   executeNewWorkspace,
 } from "../hotkeys/contextActions";
 import type { HotkeyActionId } from "../hotkeys/actions";
+import {
+  computeStatusVisibleWorkspaces,
+  filterSidebarWorkspaces,
+} from "../utils/sidebarJumpTargets";
 
 export function useKeyboardShortcuts() {
   const toggleSidebar = useAppStore((s) => s.toggleSidebar);
@@ -146,8 +150,29 @@ export function useKeyboardShortcuts() {
       if (jumpMatch) {
         e.preventDefault();
         const currentState = useAppStore.getState();
-        const localRepos = currentState.repositories.filter((r) => !r.remote_connection_id);
         const idx = parseInt(jumpMatch[1], 10) - 1;
+
+        if (currentState.sidebarGroupBy === "status") {
+          // Status mode: Cmd+N jumps to the Nth visible workspace —
+          // computed from exactly the same ordered/filtered list the
+          // sidebar paints (see filterSidebarWorkspaces +
+          // computeStatusVisibleWorkspaces) so the badge number on screen
+          // and the jump target can never disagree.
+          const filtered = filterSidebarWorkspaces(currentState.workspaces, {
+            showArchived: currentState.sidebarShowArchived,
+            repoFilter: currentState.sidebarRepoFilter,
+          });
+          const visible = computeStatusVisibleWorkspaces(
+            filtered,
+            currentState.scmSummary,
+            currentState.statusGroupCollapsed,
+          );
+          const target = visible[idx];
+          if (target) currentState.selectWorkspace(target.id);
+          return;
+        }
+
+        const localRepos = currentState.repositories.filter((r) => !r.remote_connection_id);
         if (idx < localRepos.length) {
           const repo = localRepos[idx];
           const ws = currentState.workspaces.find(

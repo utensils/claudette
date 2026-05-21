@@ -35,6 +35,10 @@ import {
   firstApprovalDetailString,
   initialToolInputJson,
 } from "./useAgentStreamLogic";
+import {
+  clearPromptStartTimeIfWorkspaceIdle,
+  syncWorkspaceTurnStatus,
+} from "../components/chat/chatTurnLifecycle";
 
 const ASK_USER_QUESTION_TOOL = "AskUserQuestion";
 const ASK_USER_QUESTION_FALLBACK_DELAY_MS = 500;
@@ -225,30 +229,11 @@ export function useAgentStream() {
   // gating) — it is not displayed verbatim. Call this whenever a session
   // or background task transitions so the aggregate stays accurate even
   // with concurrent sessions and async task updates.
-  const syncWorkspaceAgentStatus = (wsId: string) => {
+  const ensurePromptStartTime = (wsId: string) => {
     const state = useAppStore.getState();
-    const sessions = state.sessionsByWorkspace[wsId] ?? [];
-    const anyRunning = sessions.some(
-      (s) => s.status === "Active" && s.agent_status === "Running",
-    );
-    const activeSessionIds = new Set(
-      sessions.filter((s) => s.status === "Active").map((s) => s.id),
-    );
-    const anyBackground = Object.entries(state.agentBackgroundTasksBySessionId)
-      .some(([sessionId, tabs]) =>
-        activeSessionIds.has(sessionId) &&
-        tabs.some((tab) => {
-          const status = (tab.task_status ?? "").toLowerCase();
-          return status === "starting" || status === "running";
-        }),
-      );
-    state.updateWorkspace(wsId, {
-      agent_status: anyRunning
-        ? "Running"
-        : anyBackground
-          ? "IdleWithBackground"
-          : "Idle",
-    });
+    if (state.promptStartTime[wsId] == null) {
+      state.setPromptStartTime(wsId, Date.now());
+    }
   };
 
   useEffect(() => {
@@ -287,8 +272,8 @@ export function useAgentStream() {
         // Natural completion emits a `result` event (wasFinalized=true) → Idle.
         // User stop or crash has no prior `result` → Stopped.
         updateChatSession(sessionId, { agent_status: wasFinalized ? "Idle" : "Stopped" });
-        syncWorkspaceAgentStatus(wsId);
-        useAppStore.getState().clearPromptStartTime(wsId);
+        syncWorkspaceTurnStatus(wsId);
+        clearPromptStartTimeIfWorkspaceIdle(wsId);
         setStreamingContent(sessionId, "");
         clearStreamingThinking(sessionId);
         clearBlockToolsForSession(blockToolMapRef.current, sessionId);
@@ -307,6 +292,7 @@ export function useAgentStream() {
 
       if (!("Stream" in agentEvent)) return;
       const streamEvent = agentEvent.Stream;
+      ensurePromptStartTime(wsId);
 
       // Handle different stream event types based on the Rust enum serialization
       if ("type" in streamEvent) {
@@ -721,8 +707,8 @@ export function useAgentStream() {
             turnFinalizedRef.current[sessionId] = true;
             turnSawUsageRef.current[sessionId] = false;
             updateChatSession(sessionId, { agent_status: "Idle" });
-            syncWorkspaceAgentStatus(wsId);
-            useAppStore.getState().clearPromptStartTime(wsId);
+            syncWorkspaceTurnStatus(wsId);
+            clearPromptStartTimeIfWorkspaceIdle(wsId);
             useAppStore.getState().markWorkspaceAsUnread(wsId);
             break;
           }
@@ -1250,7 +1236,7 @@ export function useAgentStream() {
           agent_status: hasRunningBackground ? "IdleWithBackground" : "Idle",
         });
       }
-      syncWorkspaceAgentStatus(wsId);
+      syncWorkspaceTurnStatus(wsId);
     });
     return () => {
       active = false;

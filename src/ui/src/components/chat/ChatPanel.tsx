@@ -70,6 +70,7 @@ import { useStickyScroll } from "../../hooks/useStickyScroll";
 import { tooltipWithHotkey } from "../../hotkeys/display";
 import { isMacHotkeyPlatform } from "../../hotkeys/platform";
 import { usePreventScrollBounce } from "../../hooks/usePreventScrollBounce";
+import { useWorkspaceElapsedSeconds } from "../../hooks/useWorkspaceElapsedSeconds";
 import styles from "./ChatPanel.module.css";
 import { formatElapsedSeconds } from "./chatHelpers";
 import { ScrollContext } from "./ScrollContext";
@@ -86,13 +87,21 @@ import { QueuedMessagesPopover } from "./QueuedMessagesPopover";
 import { ChatEmptyState } from "./ChatEmptyState";
 
 const EMPTY_QUEUED_MESSAGES: QueuedMessage[] = [];
-const STUCK_TURN_SECONDS = 180;
 
 export function ChatPanel() {
   const { t } = useTranslation("chat");
   const selectedWorkspaceId = useAppStore((s) => s.selectedWorkspaceId);
   const workspaceEnvironmentPreparing = useAppStore((s) =>
     isWorkspaceEnvironmentPreparing(s, s.selectedWorkspaceId),
+  );
+  const workspaceEnvironmentError = useAppStore((s) =>
+    s.selectedWorkspaceId &&
+      s.workspaceEnvironment[s.selectedWorkspaceId]?.status === "error"
+      ? s.workspaceEnvironment[s.selectedWorkspaceId]?.error ??
+        t("environment_error_fallback", {
+          defaultValue: "Workspace environment setup failed.",
+        })
+      : null,
   );
   const activeSessionId = useAppStore((s) =>
     s.selectedWorkspaceId
@@ -502,28 +511,8 @@ export function ChatPanel() {
     }
   }, [activeSessionIdsKey]);
 
-  // Elapsed timer for running agent.
-  const promptStartTime = useAppStore(
-    (s) => (selectedWorkspaceId ? s.promptStartTime[selectedWorkspaceId] ?? null : null)
-  );
-  const [elapsed, setElapsed] = useState(0);
-  useEffect(() => {
-    if (!isRunning || promptStartTime == null) return;
-    setElapsed(Math.floor((Date.now() - promptStartTime) / 1000));
-    const interval = setInterval(() => {
-      const newElapsed = Math.floor((Date.now() - promptStartTime) / 1000);
-      setElapsed((prev) => (prev === newElapsed ? prev : newElapsed));
-    }, 1000);
-    return () => clearInterval(interval);
-  }, [isRunning, promptStartTime]);
-
+  const elapsed = useWorkspaceElapsedSeconds(selectedWorkspaceId, isRunning);
   const formatElapsed = formatElapsedSeconds;
-  const showStuckAffordance =
-    isRunning &&
-    !pendingQuestion &&
-    !pendingPlan &&
-    !pendingApproval &&
-    elapsed >= STUCK_TURN_SECONDS;
 
   // Load persisted permission level when the active session changes.
   useEffect(() => {
@@ -1138,6 +1127,12 @@ export function ChatPanel() {
     enqueueTerminalCommand(selectedWorkspaceId, command);
   };
 
+  const handleRetryWorkspaceEnvironment = () => {
+    if (!selectedWorkspaceId || ws?.remote_connection_id) return;
+    setError(null);
+    useAppStore.getState().retryWorkspaceEnvironment(selectedWorkspaceId);
+  };
+
   const handleSend = async (
     content: string,
     mentionedFiles?: Set<string>,
@@ -1580,11 +1575,28 @@ export function ChatPanel() {
             invocation={cliInvocation}
             sessionId={activeChatSessionRecord?.id}
           />
+          {workspaceEnvironmentError && (
+            <div className={styles.envErrorBanner} role="alert">
+              <span>{workspaceEnvironmentError}</span>
+              <button
+                type="button"
+                className={styles.envErrorRetry}
+                onClick={handleRetryWorkspaceEnvironment}
+              >
+                {t("retry_environment", "Retry environment setup")}
+              </button>
+            </div>
+          )}
           {messages.length === 0 && !hasStreaming && !runningSetupScriptSource ? (
             <ChatEmptyState
               key={activeSessionId ?? "no-active-session"}
               workspaceEnvironmentPreparing={workspaceEnvironmentPreparing}
               workspaceId={selectedWorkspaceId}
+              onRetryEnvironment={
+                workspaceEnvironmentPreparing || workspaceEnvironmentError
+                  ? handleRetryWorkspaceEnvironment
+                  : undefined
+              }
             />
           ) : (
             <>
@@ -1749,24 +1761,6 @@ export function ChatPanel() {
                     <span className={styles.compactingLabel}>{t("compacting_label")}</span>
                   )}
                   <span className={styles.elapsed}>{formatElapsed(elapsed)}</span>
-                  {showStuckAffordance && (
-                    <>
-                      <span className={styles.stuckHint}>
-                        {t("processing_stuck_hint", {
-                          defaultValue: "Agent may be stuck",
-                        })}
-                      </span>
-                      <button
-                        type="button"
-                        className={styles.stuckCancel}
-                        onClick={handleStop}
-                      >
-                        {t("processing_stuck_cancel", {
-                          defaultValue: "Cancel",
-                        })}
-                      </button>
-                    </>
-                  )}
                 </div>
               )}
 

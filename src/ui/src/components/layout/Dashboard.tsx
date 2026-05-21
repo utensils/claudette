@@ -17,6 +17,7 @@ import { useScmProvider } from "../../hooks/useScmProvider";
 import { restoreWorkspace } from "../../services/tauri";
 import { RepoIssuesSection } from "../project/RepoIssuesSection";
 import { RepoPullRequestsSection } from "../project/RepoPullRequestsSection";
+import { useWorkspaceElapsedSeconds } from "../../hooks/useWorkspaceElapsedSeconds";
 import styles from "./Dashboard.module.css";
 
 /** Strip markdown syntax for a clean one-line preview. */
@@ -61,19 +62,7 @@ const WorkspaceCard = memo(function WorkspaceCard({
   // also uses it for grouping; here we only need this row's slice.
   const summary = useAppStore((s) => s.scmSummary[ws.id]);
   const isRunning = isAgentBusy(ws.agent_status);
-  const promptStartTime = useAppStore((s) => s.promptStartTime[ws.id] ?? null);
-  const [elapsed, setElapsed] = useState(0);
-  useEffect(() => {
-    if (!isRunning || promptStartTime == null) {
-      setElapsed(0);
-      return;
-    }
-    setElapsed(Math.floor((Date.now() - promptStartTime) / 1000));
-    const interval = setInterval(() => {
-      setElapsed(Math.floor((Date.now() - promptStartTime) / 1000));
-    }, 1000);
-    return () => clearInterval(interval);
-  }, [isRunning, promptStartTime]);
+  const elapsed = useWorkspaceElapsedSeconds(ws.id, isRunning);
 
   const statusColor =
     isRunning

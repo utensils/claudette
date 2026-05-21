@@ -14,6 +14,8 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use uuid::Uuid;
+
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
 
@@ -61,6 +63,10 @@ pub enum EnvProgressPhase {
 #[derive(Clone, Serialize)]
 pub struct WorkspaceEnvProgressPayload {
     pub workspace_id: String,
+    /// Unique id for one env resolve stream. Lets the frontend ignore stale
+    /// `finished` / `complete` events from a timed-out attempt after the user
+    /// has started a retry for the same workspace.
+    pub resolve_id: String,
     pub plugin: String,
     pub phase: EnvProgressPhase,
     /// Milliseconds since `started`. Zero on the `started` event so
@@ -84,11 +90,16 @@ pub struct WorkspaceEnvProgressPayload {
 pub struct TauriEnvProgressSink {
     app: AppHandle,
     workspace_id: String,
+    resolve_id: String,
 }
 
 impl TauriEnvProgressSink {
     pub fn new(app: AppHandle, workspace_id: String) -> Self {
-        Self { app, workspace_id }
+        Self {
+            app,
+            workspace_id,
+            resolve_id: Uuid::new_v4().to_string(),
+        }
     }
 }
 
@@ -98,6 +109,7 @@ impl claudette::env_provider::EnvProgressSink for TauriEnvProgressSink {
             "workspace_env_progress",
             WorkspaceEnvProgressPayload {
                 workspace_id: self.workspace_id.clone(),
+                resolve_id: self.resolve_id.clone(),
                 plugin: plugin.to_string(),
                 phase: EnvProgressPhase::Started,
                 elapsed_ms: 0,
@@ -110,6 +122,7 @@ impl claudette::env_provider::EnvProgressSink for TauriEnvProgressSink {
             "workspace_env_progress",
             WorkspaceEnvProgressPayload {
                 workspace_id: self.workspace_id.clone(),
+                resolve_id: self.resolve_id.clone(),
                 plugin: plugin.to_string(),
                 phase: EnvProgressPhase::Finished,
                 elapsed_ms: elapsed.as_millis() as u64,
@@ -257,6 +270,7 @@ impl Drop for TauriEnvProgressSink {
             "workspace_env_progress",
             WorkspaceEnvProgressPayload {
                 workspace_id: self.workspace_id.clone(),
+                resolve_id: self.resolve_id.clone(),
                 plugin: String::new(),
                 phase: EnvProgressPhase::Complete,
                 elapsed_ms: 0,
