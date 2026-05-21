@@ -2,9 +2,10 @@ use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use serde::Serialize;
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 use claudette::db::Database;
+use claudette::model::{ChatMessage, ChatRole};
 use claudette::scheduling::{ScheduledTask, ScheduledTaskKind, cron_to_human};
 
 use crate::state::AppState;
@@ -27,12 +28,16 @@ impl From<ScheduledTask> for ScheduledTaskView {
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn schedule_wakeup(
     session_id: String,
     delay_seconds: Option<i64>,
     fire_at: Option<String>,
     prompt: String,
     reason: Option<String>,
+    backend_id: Option<String>,
+    model: Option<String>,
+    app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<ScheduledTaskView, String> {
     if prompt.trim().is_empty() {
@@ -41,35 +46,69 @@ pub async fn schedule_wakeup(
     let fire_at = resolve_fire_at(delay_seconds, fire_at.as_deref())?;
     let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
     let task = db
-        .create_agent_wakeup(&session_id, fire_at, prompt.trim(), reason.as_deref())
+        .create_agent_wakeup(
+            &session_id,
+            fire_at,
+            prompt.trim(),
+            reason.as_deref(),
+            backend_id.as_deref(),
+            model.as_deref(),
+        )
         .map_err(|e| e.to_string())?;
     state.scheduler_notify.notify_waiters();
+    post_creation_note(
+        &app,
+        &state.db_path,
+        &task.workspace_id,
+        &task.chat_session_id,
+        format!(
+            "Scheduled wakeup for {}. Manage it from the scheduler (clock icon in the sidebar).",
+            fire_at.to_rfc3339()
+        ),
+    );
     Ok(task.into())
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn create_cron_routine(
     session_id: String,
     name: Option<String>,
     cron_expr: String,
     prompt: String,
     recurring: Option<bool>,
+    backend_id: Option<String>,
+    model: Option<String>,
+    app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<ScheduledTaskView, String> {
     if prompt.trim().is_empty() {
         return Err("prompt is required".to_string());
     }
+    let cron_expr = cron_expr.trim().to_string();
     let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
     let task = db
         .create_agent_cron_task(
             &session_id,
             name.as_deref(),
-            cron_expr.trim(),
+            &cron_expr,
             prompt.trim(),
             recurring.unwrap_or(true),
+            backend_id.as_deref(),
+            model.as_deref(),
         )
         .map_err(|e| e.to_string())?;
     state.scheduler_notify.notify_waiters();
+    post_creation_note(
+        &app,
+        &state.db_path,
+        &task.workspace_id,
+        &task.chat_session_id,
+        format!(
+            "Looping (`{cron_expr}` — {}). Manage it from the scheduler (clock icon in the sidebar).",
+            cron_to_human(&cron_expr)
+        ),
+    );
     Ok(task.into())
 }
 
@@ -183,13 +222,34 @@ pub async fn dispatch_task_prompt(
     source: &str,
 ) -> Result<(), String> {
     let prompt = build_dispatch_prompt(&task, source);
-    dispatch_prompt_to_session(app, task.chat_session_id, prompt).await
+    // Forward the row's pinned backend / model so a cron created from a
+    // Codex or Pi chat fires on the same runtime it was scheduled under.
+    // Either being `None` keeps the existing global-default fallback (the
+    // case for agent-callable rows and pre-migration rows).
+    dispatch_prompt_to_session_with_backend(
+        app,
+        task.chat_session_id,
+        prompt,
+        task.backend_id,
+        task.model,
+    )
+    .await
 }
 
 pub async fn dispatch_prompt_to_session(
     app: AppHandle,
     chat_session_id: String,
     prompt: String,
+) -> Result<(), String> {
+    dispatch_prompt_to_session_with_backend(app, chat_session_id, prompt, None, None).await
+}
+
+async fn dispatch_prompt_to_session_with_backend(
+    app: AppHandle,
+    chat_session_id: String,
+    prompt: String,
+    backend_id: Option<String>,
+    model: Option<String>,
 ) -> Result<(), String> {
     let state = app.state::<AppState>();
     crate::commands::chat::send::send_chat_message(
@@ -198,19 +258,61 @@ pub async fn dispatch_prompt_to_session(
         prompt,
         None,
         None,
+        model,
         None,
         None,
         None,
         None,
         None,
         None,
-        None,
-        None,
+        backend_id,
         None,
         app.clone(),
         state,
     )
     .await
+}
+
+/// Append a system-role chat message announcing that a wakeup / cron was
+/// scheduled, and emit `chat-system-message` so the chat panel renders it
+/// inline. Persisted to the DB so it survives reloads (and is visible
+/// across all backends without any frontend per-backend code) — replaces
+/// the prior frontend `addLocalMessage` which evaporated on refresh.
+/// Best-effort: a failure here doesn't unwind the scheduling itself.
+fn post_creation_note(
+    app: &AppHandle,
+    db_path: &std::path::Path,
+    workspace_id: &str,
+    chat_session_id: &str,
+    content: String,
+) {
+    let message = ChatMessage {
+        id: uuid::Uuid::new_v4().to_string(),
+        workspace_id: workspace_id.to_string(),
+        chat_session_id: chat_session_id.to_string(),
+        role: ChatRole::System,
+        content,
+        cost_usd: None,
+        duration_ms: None,
+        created_at: Utc::now().to_rfc3339(),
+        thinking: None,
+        input_tokens: None,
+        output_tokens: None,
+        cache_read_tokens: None,
+        cache_creation_tokens: None,
+    };
+    match Database::open(db_path).and_then(|db| db.insert_chat_message(&message)) {
+        Ok(()) => {
+            let _ = app.emit("chat-system-message", &message);
+        }
+        Err(err) => {
+            tracing::warn!(
+                target: "claudette::scheduling",
+                error = %err,
+                "failed to persist schedule confirmation message"
+            );
+        }
+    }
 }
 
 fn build_dispatch_prompt(task: &ScheduledTask, source: &str) -> String {
@@ -268,6 +370,8 @@ mod tests {
             updated_at: "now".into(),
             last_fired_at: None,
             next_fire_at: None,
+            backend_id: None,
+            model: None,
         }
     }
 

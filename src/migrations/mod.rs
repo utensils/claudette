@@ -254,4 +254,9 @@ pub const MIGRATIONS: &[Migration] = &[
         sql: include_str!("20260521062827_checkpoint_files_dedup.sql"),
         legacy_version: None,
     },
+    Migration {
+        id: "20260521143000_agent_scheduled_tasks_backend",
+        sql: include_str!("20260521143000_agent_scheduled_tasks_backend.sql"),
+        legacy_version: None,
+    },
 ];

@@ -47,6 +47,16 @@ pub struct ScheduledTask {
     pub updated_at: String,
     pub last_fired_at: Option<String>,
     pub next_fire_at: Option<String>,
+    /// Backend the task was scheduled under. The scheduler passes this
+    /// through to `send_chat_message` so a Codex- or Pi-chat cron fires
+    /// on its own backend instead of falling through to the global
+    /// `default_agent_backend` app setting. `None` for legacy rows and
+    /// for agent-callable scheduling that chose not to pin a backend —
+    /// those keep the prior global-default behavior.
+    pub backend_id: Option<String>,
+    /// Model id captured at schedule time. Forwarded to
+    /// `send_chat_message` like [`Self::backend_id`].
+    pub model: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -941,6 +941,15 @@ async fn handle_schedule_wakeup(
         .get("reason")
         .and_then(|v| v.as_str())
         .map(ToOwned::to_owned);
+    let backend_id = params
+        .get("backend_id")
+        .or_else(|| params.get("backendId"))
+        .and_then(|v| v.as_str())
+        .map(ToOwned::to_owned);
+    let model = params
+        .get("model")
+        .and_then(|v| v.as_str())
+        .map(ToOwned::to_owned);
     let state = app_state(app)?;
     let value = crate::commands::scheduling::schedule_wakeup(
         session_id,
@@ -948,6 +957,9 @@ async fn handle_schedule_wakeup(
         fire_at,
         prompt,
         reason,
+        backend_id,
+        model,
+        app.clone(),
         state,
     )
     .await?;
@@ -968,9 +980,26 @@ async fn handle_routine_create(
         .and_then(|v| v.as_str())
         .map(ToOwned::to_owned);
     let recurring = params.get("recurring").and_then(|v| v.as_bool());
+    let backend_id = params
+        .get("backend_id")
+        .or_else(|| params.get("backendId"))
+        .and_then(|v| v.as_str())
+        .map(ToOwned::to_owned);
+    let model = params
+        .get("model")
+        .and_then(|v| v.as_str())
+        .map(ToOwned::to_owned);
     let state = app_state(app)?;
     let value = crate::commands::scheduling::create_cron_routine(
-        session_id, name, cron_expr, prompt, recurring, state,
+        session_id,
+        name,
+        cron_expr,
+        prompt,
+        recurring,
+        backend_id,
+        model,
+        app.clone(),
+        state,
     )
     .await?;
     serde_json::to_value(value).map_err(|e| e.to_string())

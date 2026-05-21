@@ -213,7 +213,19 @@ fn schedule_wakeup(
         Ok(db) => db,
         Err(err) => return BridgeResponse::err(format!("open db: {err}")),
     };
-    match db.create_agent_wakeup(&chat_session_id, fire_at, &prompt, reason.as_deref()) {
+    // Agent-callable scheduling doesn't pin a backend — the cron inherits
+    // the global default when it fires. Backend pinning is a frontend
+    // concern (toolbar choice via `/loop` / `/schedule`); the agent itself
+    // is already running on a backend and doesn't get to choose for the
+    // fired turn.
+    match db.create_agent_wakeup(
+        &chat_session_id,
+        fire_at,
+        &prompt,
+        reason.as_deref(),
+        None,
+        None,
+    ) {
         Ok(task) => {
             app.state::<AppState>().scheduler_notify.notify_waiters();
             BridgeResponse::data(
@@ -244,6 +256,8 @@ fn create_cron(
         &cron_expr,
         &prompt,
         recurring,
+        None,
+        None,
     ) {
         Ok(task) => {
             app.state::<AppState>().scheduler_notify.notify_waiters();
