@@ -575,9 +575,6 @@ function RepoCard({
                 {card.displayName}
               </span>
             )}
-            <span className={styles.storageCardTotal}>
-              {formatBytes(card.totalBytes)}
-            </span>
           </div>
           <div className={styles.storageCardMeta}>
             {isUnknown ? (
@@ -588,6 +585,9 @@ function RepoCard({
           </div>
         </div>
         <div className={styles.storageCardActions}>
+          <span className={styles.storageCardTotal}>
+            {formatBytes(card.totalBytes)}
+          </span>
           {card.orphans.length > 0 && (
             <button
               type="button"
