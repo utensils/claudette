@@ -17,7 +17,6 @@
 
 use std::fmt;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
 
 use crate::db::{Database, SQLITE_AUTO_VACUUM_FULL, SQLITE_AUTO_VACUUM_INCREMENTAL};
 
@@ -25,8 +24,6 @@ const BATCH_ROW_COUNT: usize = 64;
 const BATCH_BYTE_BUDGET: usize = 16 * 1024 * 1024;
 const BACKFILL_DONE_KEY: &str = "checkpoint_blob_backfill_done";
 const SPACE_RECLAIM_DONE_KEY: &str = "checkpoint_blob_space_reclaim_done";
-const SPACE_RECLAIM_CHUNK_PAGES: i64 = 16 * 1024;
-const SPACE_RECLAIM_PAUSE: Duration = Duration::from_millis(10);
 
 /// Failure modes for the backfill task. Kept distinct from `rusqlite::Error`
 /// so a `JoinError` from a panicked / cancelled worker doesn't masquerade
@@ -122,19 +119,22 @@ pub async fn run_post_backfill_space_reclaim(db_path: &Path) -> Result<(), Backf
 fn run_backfill_blocking(db_path: &Path) -> Result<(), BackfillError> {
     let db = Database::open(db_path)?;
 
-    // Skip if already complete — recorded after every successful pass so we
-    // never repeat the full table scan on subsequent boots.
-    if db
-        .get_app_setting(BACKFILL_DONE_KEY)?
-        .is_some_and(|v| v == "true")
-    {
-        return Ok(());
-    }
-
     let total_legacy = db.count_legacy_checkpoint_file_rows()?;
     if total_legacy == 0 {
         db.set_app_setting(BACKFILL_DONE_KEY, "true")?;
         return Ok(());
+    }
+
+    if db
+        .get_app_setting(BACKFILL_DONE_KEY)?
+        .is_some_and(|v| v == "true")
+    {
+        tracing::warn!(
+            target: "claudette::db",
+            issue = 940,
+            legacy_rows = total_legacy,
+            "checkpoint blob backfill marker was stale; resuming legacy row migration"
+        );
     }
 
     tracing::info!(
@@ -153,6 +153,9 @@ fn run_backfill_blocking(db_path: &Path) -> Result<(), BackfillError> {
         migrated_total += migrated;
     }
     db.set_app_setting(BACKFILL_DONE_KEY, "true")?;
+    if migrated_total > 0 {
+        db.set_app_setting(SPACE_RECLAIM_DONE_KEY, "false")?;
+    }
     tracing::info!(
         target: "claudette::db",
         migrated_rows = migrated_total,
@@ -220,50 +223,25 @@ fn run_post_backfill_space_reclaim_blocking(db_path: &Path) -> Result<(), Backfi
         return Ok(());
     }
 
-    let mut chunks = 0usize;
-    let mut reclaimed_pages = 0i64;
-    loop {
-        let before = db.freelist_page_count()?;
-        if before <= 0 {
-            db.set_app_setting(SPACE_RECLAIM_DONE_KEY, "true")?;
-            tracing::info!(
-                target: "claudette::db",
-                issue = 940,
-                chunks,
-                reclaimed_pages,
-                "checkpoint space reclaim complete"
-            );
-            return Ok(());
-        }
-
-        let reclaimed = db.incremental_vacuum_pages(SPACE_RECLAIM_CHUNK_PAGES)?;
-        chunks += 1;
-        reclaimed_pages += reclaimed;
-
-        if chunks == 1 || chunks.is_multiple_of(32) {
-            tracing::info!(
-                target: "claudette::db",
-                issue = 940,
-                chunks,
-                reclaimed_pages,
-                remaining_pages = db.freelist_page_count()?,
-                "checkpoint space reclaim progress"
-            );
-        }
-
-        if reclaimed <= 0 {
-            tracing::warn!(
-                target: "claudette::db",
-                issue = 940,
-                chunks,
-                remaining_pages = before,
-                "checkpoint space reclaim made no progress; will retry on next launch"
-            );
-            return Ok(());
-        }
-
-        std::thread::sleep(SPACE_RECLAIM_PAUSE);
+    // `PRAGMA incremental_vacuum(N)` is excellent for steady-state deletes,
+    // but on the real #940 DB the freed pages are so fragmented that each
+    // invocation only truncates one tail page regardless of N. A post-boot
+    // full VACUUM is the practical maintenance operation: it rewrites the
+    // file once, compacts the fragmented freelist, and leaves incremental
+    // auto-vacuum active for future steady-state cleanup.
+    db.vacuum_for_space_reclaim()?;
+    let remaining_pages = db.freelist_page_count()?;
+    if remaining_pages == 0 {
+        db.set_app_setting(SPACE_RECLAIM_DONE_KEY, "true")?;
     }
+    tracing::info!(
+        target: "claudette::db",
+        issue = 940,
+        initial_pages = initial_freelist,
+        remaining_pages,
+        "checkpoint space reclaim complete after post-boot VACUUM"
+    );
+    Ok(())
 }
 
 #[cfg(test)]
@@ -341,6 +319,46 @@ mod tests {
 
         run_backfill(&db_path).await.unwrap();
         run_backfill(&db_path).await.unwrap();
+    }
+
+    /// The completion marker is an optimization, not the source of truth.
+    /// A second process running an older build can write legacy rows after
+    /// the marker was set; the next pass must resume rather than trusting
+    /// the stale flag.
+    #[tokio::test]
+    async fn backfill_resumes_when_done_marker_is_stale() {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("test.db");
+
+        {
+            let db = Database::open(&db_path).unwrap();
+            db.execute_batch(SEED_SQL).unwrap();
+            db.set_app_setting(BACKFILL_DONE_KEY, "true").unwrap();
+            db.set_app_setting(SPACE_RECLAIM_DONE_KEY, "true").unwrap();
+            db.execute_batch(
+                "INSERT INTO checkpoint_files
+                   (id, checkpoint_id, file_path, content, blob_sha256, file_mode)
+                 VALUES
+                   ('late-f1', 'cp1', 'late.txt', x'68656c6c6f', NULL, 33188);",
+            )
+            .unwrap();
+            assert_eq!(db.count_legacy_checkpoint_file_rows().unwrap(), 1);
+        }
+
+        run_backfill(&db_path).await.unwrap();
+
+        let db = Database::open(&db_path).unwrap();
+        assert_eq!(db.count_legacy_checkpoint_file_rows().unwrap(), 0);
+        let files = db.get_checkpoint_files("cp1").unwrap();
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].content.as_deref(), Some(b"hello".as_slice()));
+        assert!(files[0].blob_sha256.is_some());
+        assert_eq!(
+            db.get_app_setting(SPACE_RECLAIM_DONE_KEY)
+                .unwrap()
+                .as_deref(),
+            Some("false")
+        );
     }
 
     /// Fresh writes via the dedupe path don't need backfilling at all —

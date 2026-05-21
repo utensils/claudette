@@ -152,6 +152,10 @@ impl Database {
             .query_row("PRAGMA freelist_count", [], |row| row.get(0))
     }
 
+    pub(crate) fn vacuum_for_space_reclaim(&self) -> Result<(), rusqlite::Error> {
+        self.conn.execute_batch("VACUUM;")
+    }
+
     fn best_effort_incremental_vacuum_after_delete(&self, rows_deleted: usize) {
         if rows_deleted > 0 {
             self.best_effort_incremental_vacuum(INCREMENTAL_VACUUM_PAGES_AFTER_DELETE);
@@ -214,16 +218,6 @@ impl Database {
         let pages = freelist_count.min(max_pages);
         self.conn
             .execute_batch(&format!("PRAGMA incremental_vacuum({pages});"))
-    }
-
-    pub(crate) fn incremental_vacuum_pages(&self, max_pages: i64) -> Result<i64, rusqlite::Error> {
-        if max_pages <= 0 {
-            return Ok(0);
-        }
-        let before = self.freelist_page_count()?;
-        self.incremental_vacuum(max_pages)?;
-        let after = self.freelist_page_count()?;
-        Ok(before.saturating_sub(after))
     }
 
     /// Ensure `schema_migrations` exists; seed it from `PRAGMA user_version`
