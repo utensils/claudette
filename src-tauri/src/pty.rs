@@ -177,10 +177,12 @@ pub async fn spawn_pty(
     // shell profile (oh-my-zsh, `nix-daemon.sh`, and on nix-darwin the
     // `/etc/zshenv` `set-environment` reset), which hard-overwrites
     // `PATH` and strips the devshell back out. See issue #915.
-    let mut cmd = match claudette::env_provider::nix_develop_wrap(
+    let nix_develop_argv = claudette::env_provider::nix_develop_wrap(
         std::path::Path::new(&working_dir),
         &resolved_env,
-    ) {
+    );
+    let wrapped_in_nix_develop = nix_develop_argv.is_some();
+    let mut cmd = match nix_develop_argv {
         Some(argv) => {
             let mut c = CommandBuilder::new(&argv[0]);
             c.args(&argv[1..]);
@@ -191,31 +193,33 @@ pub async fn spawn_pty(
     cmd.cwd(&working_dir);
     configure_pty_env(&mut cmd);
 
-    for (k, v) in &resolved_env.vars {
-        match v {
-            // A provider-emitted PATH is merged with the app's enriched
-            // PATH rather than applied verbatim. Otherwise a provider
-            // that emits a narrow PATH would strip the terminal of
-            // system tools — and before #915, env-nix-devshell emitted
-            // no PATH at all, so the devshell toolchain never reached
-            // the terminal. Mirrors the agent spawn path's
-            // `apply_resolved_env_to_command`.
-            Some(val) if k.as_str() == "PATH" => {
-                cmd.env("PATH", claudette::env::merge_path_with_enriched(val));
+    if !wrapped_in_nix_develop {
+        for (k, v) in &resolved_env.vars {
+            match v {
+                // A provider-emitted PATH is merged with the app's enriched
+                // PATH rather than applied verbatim. Otherwise a provider
+                // that emits a narrow PATH would strip the terminal of
+                // system tools — and before #915, env-nix-devshell emitted
+                // no PATH at all, so the devshell toolchain never reached
+                // the terminal. Mirrors the agent spawn path's
+                // `apply_resolved_env_to_command`.
+                Some(val) if k.as_str() == "PATH" => {
+                    cmd.env("PATH", claudette::env::merge_path_with_enriched(val));
+                }
+                // A provider that *unsets* PATH must not leave the terminal
+                // with no PATH at all (a broken interactive shell). Fall
+                // back to the enriched base — the same way the agent spawn
+                // path's `agent_path` ignores a PATH removal.
+                None if k.as_str() == "PATH" => {
+                    cmd.env("PATH", claudette::env::enriched_path());
+                }
+                Some(val) => cmd.env(k, val),
+                // portable-pty's CommandBuilder inherits the base env, so
+                // None-valued entries must be explicitly removed rather
+                // than just skipped — otherwise the interactive shell
+                // silently picks up the parent-process value.
+                None => cmd.env_remove(k),
             }
-            // A provider that *unsets* PATH must not leave the terminal
-            // with no PATH at all (a broken interactive shell). Fall
-            // back to the enriched base — the same way the agent spawn
-            // path's `agent_path` ignores a PATH removal.
-            None if k.as_str() == "PATH" => {
-                cmd.env("PATH", claudette::env::enriched_path());
-            }
-            Some(val) => cmd.env(k, val),
-            // portable-pty's CommandBuilder inherits the base env, so
-            // None-valued entries must be explicitly removed rather
-            // than just skipped — otherwise the interactive shell
-            // silently picks up the parent-process value.
-            None => cmd.env_remove(k),
         }
     }
 
