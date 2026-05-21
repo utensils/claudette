@@ -67,7 +67,8 @@ fn warn_if_concurrent_dev_instance(db_path: &Path) {
         return;
     };
     let our_pid = std::process::id();
-    let mut peers: Vec<(u32, String)> = Vec::new();
+    let our_data_dir = db_path.parent().map(normalize_dev_data_dir);
+    let mut peers: Vec<(u32, String, Option<PathBuf>)> = Vec::new();
 
     for entry in entries.flatten() {
         let path = entry.path();
@@ -95,31 +96,52 @@ fn warn_if_concurrent_dev_instance(db_path: &Path) {
             .and_then(|v| v.as_str())
             .unwrap_or("(unknown)")
             .to_string();
-        peers.push((pid, cwd));
+        let peer_data_dir = parsed
+            .get("claudette_data_dir")
+            .and_then(|v| v.as_str())
+            .map(Path::new)
+            .map(normalize_dev_data_dir);
+        if peer_data_dir.is_some() && peer_data_dir != our_data_dir {
+            continue;
+        }
+        peers.push((pid, cwd, peer_data_dir));
     }
 
-    for (pid, cwd) in &peers {
-        // We can only confirm the peer is a live Claudette dev process
-        // (matched by discovery file + alive PID) — the discovery JSON
-        // doesn't currently include a DB path, so whether it's the
-        // *same* DB as ours is inferred, not verified. By default both
-        // launches resolve `dirs::data_dir()/claudette/claudette.db`,
-        // so the inference is right in the common case; the wording
-        // hedges so the warning stays accurate if a future dev launch
-        // ever isolates `CLAUDETTE_DATA_DIR` per-instance.
+    for (pid, cwd, peer_data_dir) in &peers {
+        // Modern `scripts/dev.sh` discovery files include the effective
+        // `CLAUDETTE_DATA_DIR`, so we skip peers that are clearly isolated.
+        // Older discovery files do not have it; keep warning for those because
+        // legacy dev launches shared the default DB by construction.
         tracing::warn!(
             target: "claudette::startup",
             our_pid,
             peer_pid = pid,
             peer_cwd = %cwd,
+            peer_data_dir = peer_data_dir.as_ref().map(|p| p.display().to_string()),
             our_db_path = %db_path.display(),
             "another Claudette dev instance is alive — if it's running \
-             against the same DB (the default unless CLAUDETTE_DATA_DIR \
-             is overridden), concurrent SQLite writers can cross-pollute \
-             chat_messages rows and corrupt resumed Claude CLI transcripts; \
-             consider setting a per-instance data dir before continuing"
+             against the same DB, concurrent SQLite writers can cross-pollute \
+             chat_messages rows and corrupt resumed Claude CLI transcripts"
         );
     }
+}
+
+fn normalize_dev_data_dir(path: &Path) -> PathBuf {
+    std::fs::canonicalize(path).unwrap_or_else(|_| normalize_path_lexically(path))
+}
+
+fn normalize_path_lexically(path: &Path) -> PathBuf {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                normalized.pop();
+            }
+            other => normalized.push(other.as_os_str()),
+        }
+    }
+    normalized
 }
 
 #[cfg(unix)]
@@ -1391,6 +1413,7 @@ mod tests {
     #[cfg(target_os = "macos")]
     use super::MACOS_CLOSE_WINDOW_ACCELERATOR;
     use super::migrate_legacy_env_provider_trust;
+    use super::normalize_dev_data_dir;
     #[cfg(target_os = "macos")]
     use super::release_tag_for;
     use claudette::db::Database;
@@ -1529,6 +1552,20 @@ mod tests {
         // the gated-out platform's CI. Taking a function pointer is
         // sufficient — we don't need to call it.
         let _: fn(&Database) = migrate_legacy_env_provider_trust;
+    }
+
+    #[test]
+    fn normalize_dev_data_dir_handles_spelling_variants() {
+        let dir = tempdir().unwrap();
+        let data = dir.path().join("sandbox").join("data");
+        std::fs::create_dir_all(&data).unwrap();
+
+        let spelled = data.join("..").join("data").join(".");
+
+        assert_eq!(
+            normalize_dev_data_dir(&spelled),
+            normalize_dev_data_dir(&data)
+        );
     }
 
     /// Migration is idempotent: a second run after a successful first

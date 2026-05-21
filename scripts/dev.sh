@@ -12,7 +12,12 @@
 #
 # A discovery file is written to ${TMPDIR:-/tmp}/claudette-dev/<pid>.json so
 # helpers like `debug-eval.sh` can find the matching instance when multiple
-# dev builds run side-by-side. The file is cleaned up on exit.
+# dev builds run side-by-side. The file is cleaned up on exit. Regular dev
+# launches default CLAUDETTE_HOME and CLAUDETTE_DATA_DIR to a stable
+# per-worktree sandbox under the same directory so dev builds do not share the
+# released app's SQLite DB. Use --clone when you intentionally need copied real
+# state, or CLAUDETTE_DEV_SHARE_USER_STATE=1 to opt back into the legacy shared
+# paths.
 #
 # Env overrides:
 #   VITE_PORT_BASE         start port for Vite probe (default 14253)
@@ -21,6 +26,10 @@
 #                          alternative-backends is appended if omitted)
 #   CLAUDETTE_DEV_KEEP_CLAUDE_AUTH_ENV
 #                         preserve inherited Claude auth env vars (default strips them)
+#   CLAUDETTE_DEV_SHARE_USER_STATE
+#                         set to 1 to keep the legacy shared CLAUDETTE_HOME /
+#                         CLAUDETTE_DATA_DIR defaults instead of the per-
+#                         worktree dev sandbox
 #
 # Flags:
 #   --new                  Run as a fresh user — points CLAUDETTE_HOME,
@@ -131,6 +140,11 @@ Env vars (each consulted at process start):
                        such as CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY.
                        By default dev launches strip these so Settings and
                        chat exercise the configured Claude Code credentials.
+  CLAUDETTE_DEV_SHARE_USER_STATE
+                       Set to 1 to keep the legacy shared CLAUDETTE_HOME and
+                       CLAUDETTE_DATA_DIR defaults. Without this, regular dev
+                       launches use a stable per-worktree sandbox under
+                       \${TMPDIR:-/tmp}/claudette-dev/worktree-<hash>/.
   CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS
                        Regular dev defaults to 1 so the agent-teams
                        flow (TeamCreate / TeamDelete / SendMessage) is
@@ -316,23 +330,49 @@ branch="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown)"
 cwd="$(pwd)"
 started="$(date +%s)"
 
-# Build JSON via python3's json module so paths or branch names containing
-# quotes, backslashes, or newlines don't break the discovery file. `python3`
-# is already an explicit prerequisite of the debug eval helper, so making
-# the devshell depend on it too is consistent.
-python3 -c '
+write_discovery_file() {
+  # Build JSON via python3's json module so paths or branch names containing
+  # quotes, backslashes, or newlines don't break the discovery file. `python3`
+  # is already an explicit prerequisite of the debug eval helper, so making
+  # the devshell depend on it too is consistent.
+  python3 -c '
 import json, sys
-out, pid, debug_port, vite_port, started, cwd, branch = sys.argv[1:8]
+(
+    out,
+    pid,
+    debug_port,
+    vite_port,
+    started,
+    cwd,
+    branch,
+    claudette_home,
+    claudette_data_dir,
+) = sys.argv[1:10]
+payload = {
+    "pid": int(pid),
+    "debug_port": int(debug_port),
+    "vite_port": int(vite_port),
+    "cwd": cwd,
+    "branch": branch,
+    "started_at": int(started),
+}
+if claudette_home:
+    payload["claudette_home"] = claudette_home
+if claudette_data_dir:
+    payload["claudette_data_dir"] = claudette_data_dir
 with open(out, "w") as f:
-    json.dump({
-        "pid": int(pid),
-        "debug_port": int(debug_port),
-        "vite_port": int(vite_port),
-        "cwd": cwd,
-        "branch": branch,
-        "started_at": int(started),
-    }, f)
-' "$discovery_file" "$$" "$debug_port" "$vite_port" "$started" "$cwd" "$branch"
+    json.dump(payload, f)
+' \
+    "$discovery_file" \
+    "$$" \
+    "$debug_port" \
+    "$vite_port" \
+    "$started" \
+    "$cwd" \
+    "$branch" \
+    "${CLAUDETTE_HOME:-}" \
+    "${CLAUDETTE_DATA_DIR:-}"
+}
 
 sandbox_root=""
 
@@ -556,6 +596,30 @@ if (( clone_session )); then
   echo "[dev.sh] Note: cloned workspace .git files still point at the real repo's worktree admin dir; dev-app git writes will land in the real repo." >&2
   echo "[dev.sh] Note: claudette.db was rsync'd raw — quit the release app first if you need a guaranteed-consistent DB snapshot." >&2
 fi
+
+if (( ! new_session && ! clone_session )) && [[ "${CLAUDETTE_DEV_SHARE_USER_STATE:-}" != "1" ]]; then
+  workspace_hash="$(
+    if command -v shasum >/dev/null 2>&1; then
+      printf '%s' "$repo_root" | shasum -a 256 | awk '{print substr($1, 1, 12)}'
+    else
+      printf '%s' "$repo_root" | sha256sum | awk '{print substr($1, 1, 12)}'
+    fi
+  )"
+  sandbox_root="$discovery_dir/worktree-$workspace_hash"
+  if [[ -z "${CLAUDETTE_HOME:-}" ]]; then
+    export CLAUDETTE_HOME="$sandbox_root/home"
+  fi
+  if [[ -z "${CLAUDETTE_DATA_DIR:-}" ]]; then
+    export CLAUDETTE_DATA_DIR="$sandbox_root/data"
+  fi
+  mkdir -p "$CLAUDETTE_HOME" "$CLAUDETTE_DATA_DIR"
+  echo "▸ Dev sandbox:        $sandbox_root"
+  echo "▸ CLAUDETTE_HOME:     $CLAUDETTE_HOME"
+  echo "▸ CLAUDETTE_DATA_DIR: $CLAUDETTE_DATA_DIR"
+  echo "[dev.sh] Use --clone for copied real state, --new for fresh state, or CLAUDETTE_DEV_SHARE_USER_STATE=1 for legacy shared paths." >&2
+fi
+
+write_discovery_file
 
 cleanup() {
   rm -f "$discovery_file"

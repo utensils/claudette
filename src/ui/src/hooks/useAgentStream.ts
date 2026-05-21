@@ -37,6 +37,7 @@ import {
 } from "./useAgentStreamLogic";
 
 const ASK_USER_QUESTION_TOOL = "AskUserQuestion";
+const ASK_USER_QUESTION_FALLBACK_DELAY_MS = 500;
 const CODEX_COMMAND_APPROVAL_TOOL = "CodexCommandApproval";
 const CODEX_FILE_CHANGE_APPROVAL_TOOL = "CodexFileChangeApproval";
 const CODEX_PERMISSIONS_APPROVAL_TOOL = "CodexPermissionsApproval";
@@ -146,6 +147,16 @@ function stringArrayFromUnknown(value: unknown): string[] {
     .filter((item) => item.length > 0);
 }
 
+function parseJsonRecord(inputJson: string): Record<string, unknown> | null {
+  try {
+    const parsed = JSON.parse(inputJson);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+    return parsed as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+}
+
 interface AgentHookEventPayload {
   workspace_id: string;
   chat_session_id: string;
@@ -200,6 +211,9 @@ export function useAgentStream() {
   const planFilePathRef = useRef<Record<string, string>>({});
   const thinkingBlocksRef = useRef<Record<string, Set<number>>>({});
   const pendingAgentToolCallsRef = useRef<Record<string, AgentToolCall[]>>({});
+  const askQuestionFallbackTimersRef = useRef<
+    Record<string, ReturnType<typeof setTimeout>>
+  >({});
 
   // Recompute the workspace-level `agent_status` from the current
   // per-session statuses plus active background tasks. Priority:
@@ -590,13 +604,39 @@ export function useAgentStream() {
                     }
                   }
 
-                  // NOTE: AskUserQuestion / ExitPlanMode card-showing is no
-                  // longer driven by content_block_stop. The Rust bridge emits
-                  // an `agent-permission-prompt` event the moment the CLI's
-                  // `control_request` is captured (and pending_permissions is
-                  // populated). The listener below handles those tools — that
-                  // way the card cannot be clicked before the Rust side is
-                  // ready to receive the answer.
+                  // The control_request path below is the primary source of
+                  // truth because it means the Rust side has populated
+                  // pending_permissions and can receive the answer. Keep a
+                  // delayed fallback from the streamed tool_use input, though:
+                  // if the prompt event is dropped or missed, the user must
+                  // still get the picker instead of a generic raw JSON tool
+                  // block.
+                  if (
+                    entry.toolName === ASK_USER_QUESTION_TOOL &&
+                    activity?.inputJson
+                  ) {
+                    const parsed = parseJsonRecord(activity.inputJson);
+                    const questions = parsed ? parseAskUserQuestion(parsed) : [];
+                    if (questions.length > 0) {
+                      const key = `${sessionId}:${entry.toolUseId}`;
+                      clearTimeout(askQuestionFallbackTimersRef.current[key]);
+                      askQuestionFallbackTimersRef.current[key] = setTimeout(() => {
+                        delete askQuestionFallbackTimersRef.current[key];
+                        const existing =
+                          useAppStore.getState().agentQuestions[sessionId];
+                        if (existing) return;
+                        setAgentQuestion({
+                          sessionId,
+                          toolUseId: entry.toolUseId,
+                          questions,
+                        });
+                        updateChatSession(sessionId, {
+                          needs_attention: true,
+                          attention_kind: "Ask",
+                        });
+                      }, ASK_USER_QUESTION_FALLBACK_DELAY_MS);
+                    }
+                  }
                   break;
                 }
               }
@@ -716,6 +756,10 @@ export function useAgentStream() {
     return () => {
       active = false;
       unlisten.then((fn) => fn());
+      for (const timeout of Object.values(askQuestionFallbackTimersRef.current)) {
+        clearTimeout(timeout);
+      }
+      askQuestionFallbackTimersRef.current = {};
     };
   }, [
     appendStreamingContent,
@@ -853,6 +897,9 @@ export function useAgentStream() {
         input,
       } = event.payload;
       if (toolName === ASK_USER_QUESTION_TOOL) {
+        const fallbackKey = `${sessionId}:${toolUseId}`;
+        clearTimeout(askQuestionFallbackTimersRef.current[fallbackKey]);
+        delete askQuestionFallbackTimersRef.current[fallbackKey];
         // The CLI guarantees `input` is the validated tool-input object —
         // narrow before handing it to the parser.
         if (input && typeof input === "object") {

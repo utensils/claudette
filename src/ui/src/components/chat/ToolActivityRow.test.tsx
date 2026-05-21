@@ -140,6 +140,44 @@ describe("ToolActivityRow", () => {
     expect(container.querySelector("pre")).toBeNull();
   });
 
+  it("renders AskUserQuestion details as readable question text instead of raw JSON", async () => {
+    const input = {
+      questions: [
+        {
+          header: "Next step",
+          question: "How should I proceed?",
+          options: [
+            { label: "Implement the fix", description: "Patch and test it." },
+            { label: "Stop here" },
+          ],
+        },
+      ],
+    };
+    const container = await render(
+      <ToolActivityRow
+        activity={activity("AskUserQuestion", {
+          inputJson: JSON.stringify(input),
+        })}
+        searchQuery=""
+      />,
+    );
+
+    const toggle = container.querySelector(
+      'button[aria-label="Expand AskUserQuestion input details"]',
+    ) as HTMLButtonElement;
+    expect(toggle).toBeTruthy();
+
+    await act(async () => {
+      toggle.click();
+      await Promise.resolve();
+    });
+
+    const details = container.querySelector("pre")?.textContent ?? "";
+    expect(details).toContain('question: "How should I proceed?"');
+    expect(details).toContain('label: "Implement the fix"');
+    expect(details).not.toContain('{"questions"');
+  });
+
   it("persists expanded state across row re-renders", async () => {
     const row = (
       <ToolActivityRow

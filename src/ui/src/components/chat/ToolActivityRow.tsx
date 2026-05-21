@@ -17,6 +17,7 @@ import { resolveToolSummary } from "./toolMetadata";
 import { isSkillActivity, skillActivationName } from "./toolActivityGroups";
 import { tryOpenAgentFileTab } from "../../utils/agentFiles";
 import type { DiffLayer } from "../../types/diff";
+import { parseAskUserQuestion } from "../../hooks/parseAgentQuestion";
 
 interface ToolActivityRowProps {
   activity: ToolActivity;
@@ -292,6 +293,30 @@ function readableToolInput(
   input: Record<string, unknown>,
 ): ToolDetails | null {
   const normalized = toolName.toLowerCase();
+
+  if (normalized === "askuserquestion") {
+    const questions = parseAskUserQuestion(input);
+    if (questions.length > 0) {
+      const lines = ["questions:"];
+      for (const q of questions) {
+        lines.push(`  - question: ${yamlScalar(q.question)}`);
+        if (q.header) lines.push(`    header: ${yamlScalar(q.header)}`);
+        if (q.multiSelect) lines.push("    multiSelect: true");
+        if (q.options.length > 0) {
+          lines.push("    options:");
+          for (const option of q.options) {
+            lines.push(`      - label: ${yamlScalar(option.label)}`);
+            if (option.description) {
+              lines.push(
+                `        description: ${yamlScalar(option.description)}`,
+              );
+            }
+          }
+        }
+      }
+      return { content: lines.join("\n"), lang: "yaml" };
+    }
+  }
 
   if (normalized === "edit") {
     const details = replacementDetails(input, {
