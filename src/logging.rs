@@ -23,9 +23,11 @@
 //!
 //! ## Filtering
 //!
-//! Defaults to
-//! `info,claudette=debug,claudette_tauri=debug,claudette_server=debug,`
-//! `mdns_sd=warn`
+//! Defaults to:
+//!
+//! ```text
+//! info,claudette=debug,claudette_tauri=debug,claudette_server=debug,mdns_sd=warn
+//! ```
 //! (see [`DEFAULT_FILTER`]). Override with the standard `RUST_LOG` env
 //! var (e.g.
 //! `RUST_LOG=claudette::commands::chat=trace`). For users who don't
@@ -319,11 +321,30 @@ fn normalize_runtime_override(directive: &str) -> Cow<'_, str> {
             scoped.push(',');
             scoped.push_str(target);
             scoped.push('=');
-            scoped.push_str(level);
+            scoped.push_str(less_verbose_level(trimmed, level));
         }
         Cow::Owned(scoped)
     } else {
         Cow::Borrowed(trimmed)
+    }
+}
+
+fn less_verbose_level<'a>(selected_level: &'a str, cap_level: &'a str) -> &'a str {
+    if level_severity_rank(selected_level) >= level_severity_rank(cap_level) {
+        selected_level
+    } else {
+        cap_level
+    }
+}
+
+fn level_severity_rank(level: &str) -> u8 {
+    match level {
+        "trace" => 0,
+        "debug" => 1,
+        "info" => 2,
+        "warn" => 3,
+        "error" => 4,
+        _ => 2,
     }
 }
 
@@ -574,6 +595,10 @@ mod tests {
         assert_eq!(
             normalize_runtime_override("warn"),
             "warn,claudette=warn,claudette_tauri=warn,claudette_server=warn,mdns_sd=warn"
+        );
+        assert_eq!(
+            normalize_runtime_override("error"),
+            "error,claudette=error,claudette_tauri=error,claudette_server=error,mdns_sd=error"
         );
     }
 
