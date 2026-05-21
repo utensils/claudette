@@ -29,6 +29,7 @@ export interface UiSlice {
   sidebarWidth: number;
   rightSidebarWidth: number;
   terminalHeight: number;
+  composerHeight: number;
   rightSidebarTabByWorkspace: Record<string, "files" | "changes" | "tasks">;
   sidebarGroupBy: "status" | "repo";
   sidebarRepoFilter: string; // repo ID or "all"
@@ -45,6 +46,7 @@ export interface UiSlice {
   setSidebarWidth: (w: number) => void;
   setRightSidebarWidth: (w: number) => void;
   setTerminalHeight: (h: number) => void;
+  setComposerHeight: (h: number) => void;
   setSidebarGroupBy: (g: "status" | "repo") => void;
   setSidebarRepoFilter: (id: string) => void;
   setSidebarShowArchived: (show: boolean) => void;
@@ -165,6 +167,7 @@ export const createUiSlice: StateCreator<AppState, [], [], UiSlice> = (
   sidebarWidth: 260,
   rightSidebarWidth: 250,
   terminalHeight: 300,
+  composerHeight: 52,
   rightSidebarTabByWorkspace: {},
   sidebarGroupBy: "repo",
   sidebarRepoFilter: "all",
@@ -183,6 +186,7 @@ export const createUiSlice: StateCreator<AppState, [], [], UiSlice> = (
   setSidebarWidth: (w) => set({ sidebarWidth: w }),
   setRightSidebarWidth: (w) => set({ rightSidebarWidth: w }),
   setTerminalHeight: (h) => set({ terminalHeight: h }),
+  setComposerHeight: (h) => set({ composerHeight: h }),
   setSidebarGroupBy: (g) => set({ sidebarGroupBy: g }),
   setSidebarRepoFilter: (id) => set({ sidebarRepoFilter: id }),
   setSidebarShowArchived: (show) => set({ sidebarShowArchived: show }),
