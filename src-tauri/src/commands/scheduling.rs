@@ -294,7 +294,10 @@ fn post_creation_note(
         content,
         cost_usd: None,
         duration_ms: None,
-        created_at: Utc::now().to_rfc3339(),
+        // Match the format every other Tauri-emitted chat message uses
+        // (Unix-seconds string from `now_iso()`). Mixing formats breaks
+        // the frontend's string-sort over `created_at`.
+        created_at: crate::commands::chat::now_iso(),
         thinking: None,
         input_tokens: None,
         output_tokens: None,

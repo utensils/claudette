@@ -1468,13 +1468,18 @@ pub async fn send_chat_message(
     let send_to_user_enabled = claudette::agent_mcp::is_builtin_plugin_enabled(&db, "send_to_user");
 
     // Compose the system prompt for fresh spawns: bundled global prompt →
-    // MCP nudge (so the model reaches for `mcp__claudette__send_to_user`
-    // when asked to deliver a file) → per-repo instructions. Resume turns
-    // reuse the persistent CLI process and never re-pass the prompt.
-    let nudge = send_to_user_enabled.then_some(claudette::agent_mcp::SYSTEM_PROMPT_NUDGE);
+    // MCP nudge → per-repo instructions. Resume turns reuse the persistent
+    // CLI process and never re-pass the prompt.
+    //
+    // `mcp_system_prompt_nudge` always includes the scheduling/Monitor
+    // guidance (those tools are MCP-served via the unconditional bridge
+    // injection above) and only appends the `send_to_user` guidance when
+    // the Agent Attachments plugin is enabled. Splitting these keeps the
+    // toggle gating only the tool it owns.
+    let nudge_owned = claudette::agent_mcp::mcp_system_prompt_nudge(send_to_user_enabled);
     let custom_instructions = claudette::global_prompt::compose_system_prompt(
         session.custom_instructions.as_deref(),
-        nudge,
+        nudge_owned.as_deref(),
         // Claude CLI exposes `AskUserQuestion` / `ExitPlanMode` via the
         // Claudette MCP bridge, so those rules apply here.
         Some(claudette::agent_mcp::CLAUDE_CODE_MCP_RULES),
@@ -2345,10 +2350,15 @@ pub async fn send_chat_message(
         drop(agents);
 
         // Start the agent-MCP bridge and merge the synthetic `claudette`
-        // server entry into the spawn-time `--mcp-config` JSON when the
-        // built-in `send_to_user` plugin is enabled. The bridge is stored
-        // on the session below so it lives exactly as long as the
-        // persistent CLI process.
+        // server entry into the spawn-time `--mcp-config` JSON
+        // unconditionally for Claude / Codex — the server carries the
+        // always-on scheduling tools (ScheduleWakeup / Cron*) alongside
+        // the toggleable `send_to_user` tool, so injection cannot be
+        // gated on the Agent Attachments plugin without taking
+        // scheduling offline. The toggle now gates only that tool's
+        // call-time policy + prompt nudge, not the whole server. The
+        // bridge is stored on the session below so it lives exactly as
+        // long as the persistent CLI process.
         let mut spawn_settings = agent_settings.clone();
         let bridge = match spawn_settings.backend_runtime.harness {
             // The Claudette MCP server carries always-on scheduling tools
