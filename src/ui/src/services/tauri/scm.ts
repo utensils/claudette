@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
+  IssueScope,
   PluginInfo,
   PullRequest,
   PullRequestScope,
@@ -44,9 +45,10 @@ export function scmMergePr(
 
 export function listRepoOpenIssues(
   repoId: string,
+  scope: IssueScope = "open",
   limit?: number,
 ): Promise<RepoIssuesPayload> {
-  return invoke("list_repo_open_issues", { repoId, limit });
+  return invoke("list_repo_open_issues", { repoId, scope, limit });
 }
 
 export function listRepoOpenPullRequests(

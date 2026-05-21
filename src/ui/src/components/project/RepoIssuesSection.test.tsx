@@ -39,6 +39,7 @@ function makeIssue(n: number): Issue {
 function makePayload(over: Partial<RepoIssuesPayload>): RepoIssuesPayload {
   return {
     issues: [],
+    scope: "open",
     fetched_at: "2026-05-19T00:00:00Z",
     error: null,
     unsupported: false,
@@ -243,5 +244,67 @@ describe("RepoIssuesSection error/cache handling", () => {
     const container = render();
     expand(container);
     expect(container.textContent).not.toContain("In progress");
+  });
+});
+
+describe("RepoIssuesSection scope toggle", () => {
+  it("defaults to the Open scope and exposes a Mine tab", () => {
+    mockedHook.mockReturnValue({
+      payload: makePayload({ issues: [] }),
+      loading: false,
+      refresh: vi.fn(),
+    });
+    const container = render();
+    const openTab = Array.from(container.querySelectorAll('[role="tab"]')).find(
+      (n) => n.textContent === "Open",
+    );
+    const mineTab = Array.from(container.querySelectorAll('[role="tab"]')).find(
+      (n) => n.textContent === "Mine",
+    );
+    expect(openTab?.getAttribute("aria-selected")).toBe("true");
+    expect(mineTab?.getAttribute("aria-selected")).toBe("false");
+    // The PR section has a Review tab too — the Issues section deliberately
+    // doesn't (GitHub issues have no review-requested concept).
+    const reviewTab = Array.from(
+      container.querySelectorAll('[role="tab"]'),
+    ).find((n) => n.textContent === "Review");
+    expect(reviewTab).toBeUndefined();
+  });
+
+  it("calls useRepoOpenIssues with the selected scope and re-fetches on switch", () => {
+    mockedHook.mockReturnValue({
+      payload: makePayload({ issues: [makeIssue(1)] }),
+      loading: false,
+      refresh: vi.fn(),
+    });
+    const container = render();
+    // Default scope.
+    expect(mockedHook).toHaveBeenLastCalledWith("repo-1", "open");
+
+    const mineTab = Array.from(container.querySelectorAll('[role="tab"]')).find(
+      (n) => n.textContent === "Mine",
+    ) as HTMLButtonElement | undefined;
+    expect(mineTab).toBeTruthy();
+    act(() => {
+      mineTab?.click();
+    });
+    expect(mockedHook).toHaveBeenLastCalledWith("repo-1", "mine");
+  });
+
+  it("uses the scope-aware empty state on Mine", () => {
+    mockedHook.mockReturnValue({
+      payload: makePayload({ issues: [], scope: "mine" }),
+      loading: false,
+      refresh: vi.fn(),
+    });
+    const container = render();
+    expand(container);
+    const mineTab = Array.from(container.querySelectorAll('[role="tab"]')).find(
+      (n) => n.textContent === "Mine",
+    ) as HTMLButtonElement | undefined;
+    act(() => {
+      mineTab?.click();
+    });
+    expect(container.textContent).toContain("No issues assigned to you.");
   });
 });

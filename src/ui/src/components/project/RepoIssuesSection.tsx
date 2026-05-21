@@ -12,7 +12,7 @@ import { useRepoOpenIssues } from "../../hooks/useRepoOpenIssues";
 import { ContextMenu, type ContextMenuItem } from "../shared/ContextMenu";
 import { useModelRegistry } from "../chat/useModelRegistry";
 import { useWorkspaceScmLink } from "../../hooks/useWorkspaceScmLink";
-import type { Issue, IssueLabel } from "../../types/plugin";
+import type { Issue, IssueLabel, IssueScope } from "../../types/plugin";
 import dashStyles from "../layout/Dashboard.module.css";
 import styles from "./RepoListsSection.module.css";
 import { formatTimeAgo } from "./timeAgo";
@@ -34,6 +34,11 @@ const MAX_LABELS_VISIBLE = 2;
 const DEFAULT_VISIBLE = 10;
 const ALL_VISIBLE_LIMIT = 50;
 
+const SCOPES: { value: IssueScope; label: string }[] = [
+  { value: "open", label: "Open" },
+  { value: "mine", label: "Mine" },
+];
+
 export interface RepoIssuesSectionProps {
   repoId: string;
 }
@@ -46,7 +51,8 @@ export const RepoIssuesSection = memo(function RepoIssuesSection({
   // upstream without forcing two long lists into the layout above the
   // workspaces grid. User clicks the chevron to expand.
   const [open, setOpen] = useState(false);
-  const { payload, loading, refresh } = useRepoOpenIssues(repoId);
+  const [scope, setScope] = useState<IssueScope>("open");
+  const { payload, loading, refresh } = useRepoOpenIssues(repoId, scope);
   const [showAll, setShowAll] = useState(false);
   const addToast = useAppStore((s) => s.addToast);
 
@@ -94,10 +100,31 @@ export const RepoIssuesSection = memo(function RepoIssuesSection({
           <CircleDot size={12} className={dashStyles.archivedIcon} aria-hidden />
           <span className={dashStyles.workspacesTitle}>Issues</span>
           {issues.length > 0 && (
-            <span className={dashStyles.headerCount}>{issues.length} open</span>
+            // Match the PR-section header — the count tracks whatever the
+            // active scope produced (e.g. "Mine" shows mine-count, not
+            // total-open-count). The bare number keeps the label honest
+            // across scopes; the toggle below disambiguates it.
+            <span className={dashStyles.headerCount}>{issues.length}</span>
           )}
         </button>
         <div className={styles.headerRight}>
+          <div className={styles.scopeTabs} role="tablist">
+            {SCOPES.map((s) => (
+              <button
+                key={s.value}
+                type="button"
+                role="tab"
+                aria-selected={scope === s.value}
+                className={`${styles.scopeTab} ${scope === s.value ? styles.scopeTabActive : ""}`}
+                onClick={() => {
+                  setScope(s.value);
+                  setShowAll(false);
+                }}
+              >
+                {s.label}
+              </button>
+            ))}
+          </div>
           <button
             type="button"
             className={styles.refreshButton}
@@ -118,6 +145,7 @@ export const RepoIssuesSection = memo(function RepoIssuesSection({
         <RepoIssuesBody
           repoId={repoId}
           payload={payload}
+          scope={scope}
           loading={loading}
           inProgress={inProgress}
           visibleRest={visibleRest}
@@ -139,6 +167,7 @@ export const RepoIssuesSection = memo(function RepoIssuesSection({
 interface RepoIssuesBodyProps {
   repoId: string;
   payload: ReturnType<typeof useRepoOpenIssues>["payload"];
+  scope: IssueScope;
   loading: boolean;
   /// Issues that already have a workspace — rendered in their own group.
   inProgress: Issue[];
@@ -158,6 +187,7 @@ interface RepoIssuesBodyProps {
 function RepoIssuesBody({
   repoId,
   payload,
+  scope,
   loading,
   inProgress,
   visibleRest,
@@ -200,7 +230,11 @@ function RepoIssuesBody({
     );
   }
   if (!hasCachedRows) {
-    return <div className={styles.muted}>No open issues.</div>;
+    return (
+      <div className={styles.muted}>
+        {scope === "mine" ? "No issues assigned to you." : "No open issues."}
+      </div>
+    );
   }
 
   const renderRow = (issue: Issue) => (

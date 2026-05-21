@@ -138,6 +138,30 @@ impl PullRequestScope {
     }
 }
 
+/// Scope filter for repo-wide `list_issues` calls (the project-view
+/// aggregation path). Mirrors [`PullRequestScope`] minus `ReviewRequested`
+/// — GitHub issues don't have a review-requested concept.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum IssueScope {
+    Open,
+    Mine,
+}
+
+impl IssueScope {
+    /// String form used as part of the `repo_scm_lists_cache.list_kind`
+    /// composite key. Stable; do not rename without a migration. The
+    /// legacy `"issues"` row written before the scope tab existed is left
+    /// to expire from the cache (the next poll repopulates under the
+    /// scoped key).
+    pub fn as_cache_segment(self) -> &'static str {
+        match self {
+            Self::Open => "open",
+            Self::Mine => "mine",
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -274,6 +298,26 @@ mod tests {
             PullRequestScope::ReviewRequested.as_cache_segment(),
             "review_requested"
         );
+    }
+
+    #[test]
+    fn issue_scope_cache_segments_are_stable() {
+        assert_eq!(IssueScope::Open.as_cache_segment(), "open");
+        assert_eq!(IssueScope::Mine.as_cache_segment(), "mine");
+    }
+
+    #[test]
+    fn issue_scope_serializes_to_snake_case() {
+        let cases: &[(IssueScope, &str)] = &[
+            (IssueScope::Open, "\"open\""),
+            (IssueScope::Mine, "\"mine\""),
+        ];
+        for (scope, expected) in cases {
+            let serialized = serde_json::to_string(scope).unwrap();
+            assert_eq!(&serialized, expected);
+            let round: IssueScope = serde_json::from_str(&serialized).unwrap();
+            assert_eq!(&round, scope);
+        }
     }
 
     #[test]

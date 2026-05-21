@@ -95,8 +95,15 @@ export interface Issue {
 
 export type PullRequestScope = "open" | "mine" | "review_requested";
 
+/** Scope filter for the Issues tab. Mirrors PullRequestScope minus
+ *  `review_requested` — GitHub issues don't have a review-requested
+ *  concept. "Mine" is provider-side: issues authored by *or* assigned
+ *  to the authenticated CLI user (see plugins/scm-github/init.lua). */
+export type IssueScope = "open" | "mine";
+
 export interface RepoIssuesPayload {
   issues: Issue[];
+  scope: IssueScope;
   fetched_at: string;
   error: string | null;
   /** True when the resolved provider doesn't implement `list_issues`.

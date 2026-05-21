@@ -12,7 +12,8 @@ use claudette::plugin_runtime::PluginError;
 use claudette::plugin_runtime::host_api::WorkspaceInfo;
 use claudette::scm::detect;
 use claudette::scm::types::{
-    CiCheck, CiCheckStatus, CiFailureLog, CiOverallStatus, Issue, PullRequest, PullRequestScope,
+    CiCheck, CiCheckStatus, CiFailureLog, CiOverallStatus, Issue, IssueScope, PullRequest,
+    PullRequestScope,
 };
 
 use crate::state::{AppState, RepoListEntry, ScmCacheEntry};
@@ -459,6 +460,7 @@ const REPO_LIST_DEFAULT_LIMIT: u32 = 50;
 #[derive(Serialize)]
 pub struct RepoIssuesPayload {
     pub issues: Vec<Issue>,
+    pub scope: IssueScope,
     pub fetched_at: String,
     pub error: Option<String>,
     pub unsupported: bool,
@@ -481,6 +483,10 @@ fn now_iso() -> String {
 
 fn list_kind_for_pr_scope(scope: PullRequestScope) -> String {
     format!("pull_requests:{}", scope.as_cache_segment())
+}
+
+fn list_kind_for_issue_scope(scope: IssueScope) -> String {
+    format!("issues:{}", scope.as_cache_segment())
 }
 
 /// True when the project-view issues/PRs feature flag is enabled.
@@ -655,18 +661,25 @@ async fn seed_repo_scm_lists_cache_from_db(
 /// When the resolved provider does not implement `list_issues`, returns
 /// `unsupported: true` so the UI can render a muted hint rather than an
 /// error banner.
+///
+/// `scope` defaults to `IssueScope::Open` — every open issue on the repo.
+/// `IssueScope::Mine` narrows to issues authored by or assigned to the
+/// authenticated user (resolved by the SCM plugin).
 #[tauri::command]
 pub async fn list_repo_open_issues(
     repo_id: String,
+    scope: Option<IssueScope>,
     limit: Option<u32>,
     state: State<'_, AppState>,
 ) -> Result<RepoIssuesPayload, String> {
+    let scope = scope.unwrap_or(IssueScope::Open);
     // 1. Backend feature-gate short-circuit (defense in depth).
     {
         let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
         if !read_project_view_flag(&db) {
             return Ok(RepoIssuesPayload {
                 issues: vec![],
+                scope,
                 fetched_at: now_iso(),
                 error: None,
                 unsupported: false,
@@ -679,6 +692,7 @@ pub async fn list_repo_open_issues(
     let Some(provider_name) = provider_opt else {
         return Ok(RepoIssuesPayload {
             issues: vec![],
+            scope,
             fetched_at: now_iso(),
             error: None,
             unsupported: false,
@@ -686,7 +700,8 @@ pub async fn list_repo_open_issues(
         });
     };
 
-    let cache_key = (repo_id.clone(), "issues".to_string());
+    let list_kind = list_kind_for_issue_scope(scope);
+    let cache_key = (repo_id.clone(), list_kind.clone());
 
     // Cache hit.
     {
@@ -694,13 +709,17 @@ pub async fn list_repo_open_issues(
         if let Some(entry) = entries.get(&cache_key)
             && cache_fresh(entry)
         {
-            return Ok(issues_payload_from_entry(entry, Some(provider_name)));
+            return Ok(issues_payload_from_entry(entry, scope, Some(provider_name)));
         }
     }
 
     let ws_info = make_workspace_info_for_repo(&repo);
     let limit_val = limit.unwrap_or(REPO_LIST_DEFAULT_LIMIT);
-    let args = serde_json::json!({ "state": "open", "limit": limit_val });
+    let args = serde_json::json!({
+        "state": "open",
+        "scope": scope.as_cache_segment(),
+        "limit": limit_val,
+    });
 
     let result = {
         let _permit = state
@@ -733,7 +752,7 @@ pub async fn list_repo_open_issues(
     )
     .await;
 
-    let resp = issues_payload_from_entry(&entry, Some(provider_name));
+    let resp = issues_payload_from_entry(&entry, scope, Some(provider_name));
     state
         .repo_scm_lists_cache
         .entries
@@ -995,10 +1014,15 @@ fn deserialize_list_tolerant<T: serde::de::DeserializeOwned>(
     out
 }
 
-fn issues_payload_from_entry(entry: &RepoListEntry, provider: Option<String>) -> RepoIssuesPayload {
+fn issues_payload_from_entry(
+    entry: &RepoListEntry,
+    scope: IssueScope,
+    provider: Option<String>,
+) -> RepoIssuesPayload {
     let issues = deserialize_list_tolerant::<Issue>(&entry.payload, "issue");
     RepoIssuesPayload {
         issues,
+        scope,
         fetched_at: now_iso(),
         error: entry.error.clone(),
         unsupported: entry.unsupported,
