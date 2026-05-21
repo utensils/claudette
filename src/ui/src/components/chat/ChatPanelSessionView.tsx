@@ -10,7 +10,6 @@ import { useTranslation } from "react-i18next";
 import { LoaderCircle, SendHorizontal } from "lucide-react";
 
 import type { AttachmentInput } from "../../types/chat";
-import type { QueuedMessage } from "../../stores/useAppStore";
 import type { DownloadableAttachment } from "../../utils/attachmentDownload";
 import {
   submitAgentAnswer,
@@ -425,7 +424,7 @@ export function ChatPanelSessionView({
 
       {queuedMessages.length > 0 && activeSessionId && (
         <QueuedMessagesPopover
-          queuedMessages={queuedMessages as QueuedMessage[]}
+          queuedMessages={queuedMessages}
           isRemote={!!ws?.remote_connection_id}
           isRunning={isRunning}
           isSteeringQueued={isSteeringQueued}
@@ -442,26 +441,28 @@ export function ChatPanelSessionView({
         />
       )}
 
-      <ChatInputArea
-        onSend={onSend}
-        onSendSteer={onSendSteer}
-        onSteerQueuedTop={onSteerQueuedTop}
-        onRunShellCommand={onRunShellCommand}
-        onStop={onStop}
-        isRunning={isRunning}
-        workspaceEnvironmentPreparing={workspaceEnvironmentPreparing}
-        isRemote={!!ws?.remote_connection_id}
-        hasQueuedMessages={queuedMessages.length > 0}
-        selectedWorkspaceId={selectedWorkspaceId!}
-        sessionId={activeSessionId!}
-        repoId={repo?.id}
-        projectPath={repo?.path}
-        historyRef={historyRef}
-        historyIndexRef={historyIndexRef}
-        draftRef={draftRef}
-        onAttachmentContextMenu={onAttachmentContextMenu}
-        onAttachmentClick={onAttachmentClick}
-      />
+      {selectedWorkspaceId && activeSessionId && (
+        <ChatInputArea
+          onSend={onSend}
+          onSendSteer={onSendSteer}
+          onSteerQueuedTop={onSteerQueuedTop}
+          onRunShellCommand={onRunShellCommand}
+          onStop={onStop}
+          isRunning={isRunning}
+          workspaceEnvironmentPreparing={workspaceEnvironmentPreparing}
+          isRemote={!!ws?.remote_connection_id}
+          hasQueuedMessages={queuedMessages.length > 0}
+          selectedWorkspaceId={selectedWorkspaceId}
+          sessionId={activeSessionId}
+          repoId={repo?.id}
+          projectPath={repo?.path}
+          historyRef={historyRef}
+          historyIndexRef={historyIndexRef}
+          draftRef={draftRef}
+          onAttachmentContextMenu={onAttachmentContextMenu}
+          onAttachmentClick={onAttachmentClick}
+        />
+      )}
     </>
   );
 }
