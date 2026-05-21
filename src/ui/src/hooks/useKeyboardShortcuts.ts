@@ -128,12 +128,16 @@ export function useKeyboardShortcuts() {
 
       const overlayOpen =
         state.settingsOpen || !!state.activeModal || state.commandPaletteOpen || state.fuzzyFinderOpen;
+      const filePaletteAction =
+        action === "global.open-command-palette-file-mode" ||
+        action === "global.open-command-palette-file-mode-alt";
       if (
         overlayOpen &&
         action !== "global.open-settings" &&
         action !== "global.toggle-command-palette" &&
         action !== "global.toggle-fuzzy-finder" &&
-        action !== "global.show-keyboard-shortcuts"
+        action !== "global.show-keyboard-shortcuts" &&
+        !(state.commandPaletteOpen && filePaletteAction)
       ) return;
       if (action === "global.toggle-plan-mode" && (!activeSessionId || isInteractive)) return;
 
@@ -214,6 +218,10 @@ export function useKeyboardShortcuts() {
             return;
           case "global.open-command-palette-file-mode":
           case "global.open-command-palette-file-mode-alt":
+            if (useAppStore.getState().commandPaletteOpen) {
+              toggleCommandPalette();
+              return;
+            }
             if (selectedWorkspaceId) openCommandPaletteFileMode();
             return;
           case "global.toggle-right-sidebar":
