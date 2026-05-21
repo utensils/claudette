@@ -1,14 +1,15 @@
 use std::{
     collections::{HashMap, HashSet},
-    path::Path,
+    path::{Path, PathBuf},
+    sync::{Mutex, OnceLock},
     time::Duration,
 };
 
 use tauri::{AppHandle, Emitter, Manager};
 
 use claudette::agent::background::{
-    AgentBackgroundTaskEvent, AgentBackgroundTaskEventKind, parse_bash_start,
-    parse_task_notification, workspace_terminal_output_path,
+    AgentBackgroundTaskEvent, AgentBackgroundTaskEventKind, append_terminal_output_sync,
+    parse_bash_start, parse_task_notification, workspace_terminal_output_path,
 };
 use claudette::agent::{AgentEvent, InnerStreamEvent, StartContentBlock, StreamEvent};
 use claudette::chat::{
@@ -53,27 +54,70 @@ pub(super) fn terminal_text(text: &str) -> String {
     rendered
 }
 
-pub(super) async fn append_agent_bash_output(
-    path: &std::path::Path,
-    text: &str,
-) -> std::io::Result<()> {
-    if let Some(parent) = path.parent() {
-        tokio::fs::create_dir_all(parent).await?;
+/// Async wrapper around the lib crate's [`append_terminal_output_sync`].
+/// Takes ownership of `bytes` and `path` so the call site hands a single
+/// allocation across the `spawn_blocking` boundary — no extra `to_vec()`
+/// copy of the (potentially multi-MB) tool-result text.
+pub(super) async fn append_agent_bash_output(path: PathBuf, bytes: Vec<u8>) -> std::io::Result<()> {
+    tokio::task::spawn_blocking(move || append_terminal_output_sync(&path, &bytes))
+        .await
+        .map_err(|err| {
+            std::io::Error::other(format!("terminal output writer task join failed: {err}"))
+        })?
+}
+
+/// Set of (source, destination) pairs that already have a live mirror task
+/// running. Background-bash bindings can re-fire (e.g. on `--resume` replay
+/// of the session transcript), and each spawn would restart reading the
+/// source file from offset 0 — re-appending gigabytes of historical bash
+/// output to the workspace terminal. This dedupes spawn requests so only
+/// one mirror per (source, destination) pair runs at a time.
+fn active_mirrors() -> &'static Mutex<HashSet<(PathBuf, PathBuf)>> {
+    static ACTIVE: OnceLock<Mutex<HashSet<(PathBuf, PathBuf)>>> = OnceLock::new();
+    ACTIVE.get_or_init(|| Mutex::new(HashSet::new()))
+}
+
+/// RAII token that removes a mirror registration on drop. The spawned
+/// mirror task owns one of these and lets it drop when the task finishes
+/// — normally, via panic, or because the JoinHandle was aborted. Without
+/// this, a panicking or aborted task would leave the entry behind and
+/// permanently dedupe all future spawns for that `(source, destination)`.
+struct MirrorRegistration {
+    key: Option<(PathBuf, PathBuf)>,
+}
+
+impl Drop for MirrorRegistration {
+    fn drop(&mut self) {
+        if let Some(key) = self.key.take() {
+            let mut active = active_mirrors().lock().unwrap_or_else(|p| p.into_inner());
+            active.remove(&key);
+        }
     }
-    use tokio::io::AsyncWriteExt;
-    let mut file = tokio::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(path)
-        .await?;
-    file.write_all(text.as_bytes()).await
 }
 
 pub(super) fn mirror_background_task_output(
     source: std::path::PathBuf,
     destination: std::path::PathBuf,
 ) {
+    let key = (source.clone(), destination.clone());
+    let registration = {
+        let mut active = active_mirrors().lock().unwrap_or_else(|p| p.into_inner());
+        if !active.insert(key.clone()) {
+            tracing::debug!(
+                target: "claudette::chat",
+                source = %source.display(),
+                destination = %destination.display(),
+                "skipping duplicate background output mirror spawn"
+            );
+            return;
+        }
+        MirrorRegistration { key: Some(key) }
+    };
     tokio::spawn(async move {
+        // Held in scope for the entire mirror loop. Dropped on normal
+        // completion, panic, or JoinHandle::abort — whichever happens
+        // first — so the (source, destination) registration is released.
+        let _registration = registration;
         use tokio::io::{AsyncReadExt, AsyncSeekExt};
 
         let mut offset = 0_u64;
@@ -105,11 +149,10 @@ pub(super) fn mirror_background_task_output(
                     Ok(n) => {
                         offset += n as u64;
                         wrote = true;
-                        if let Err(err) = append_agent_bash_output(
-                            &destination,
-                            &terminal_text(&String::from_utf8_lossy(&buf[..n])),
-                        )
-                        .await
+                        let rendered = terminal_text(&String::from_utf8_lossy(&buf[..n]));
+                        if let Err(err) =
+                            append_agent_bash_output(destination.clone(), rendered.into_bytes())
+                                .await
                         {
                             tracing::warn!(target: "claudette::chat", error = %err, "failed to mirror background output");
                         }
@@ -131,6 +174,9 @@ pub(super) fn mirror_background_task_output(
                 }
             }
         }
+        // `_registration` drops here, releasing the (source, destination)
+        // entry from `active_mirrors` so a fresh mirror can be spawned
+        // later if the same background bash binding re-fires.
     });
 }
 
@@ -322,7 +368,7 @@ impl BackgroundTaskInputTracker {
         let echo = command
             .map(|cmd| format!("\r\n$ {}\r\n", terminal_text(cmd)))
             .unwrap_or_else(|| "\r\n$ Bash\r\n".to_string());
-        if let Err(err) = append_agent_bash_output(&path, &echo).await {
+        if let Err(err) = append_agent_bash_output(path, echo.into_bytes()).await {
             tracing::warn!(target: "claudette::chat", error = %err, "failed to write agent bash output");
         }
         if get_or_create_agent_shell_terminal_tab(db_path, workspace_id, chat_session_id).is_some()
@@ -1060,5 +1106,48 @@ mod tests {
         assert!(text.contains("tail output"));
 
         let _ = std::fs::remove_file(trusted_path);
+    }
+
+    #[tokio::test]
+    async fn mirror_background_task_output_dedupes_duplicate_spawns() {
+        // Issue #937: on session resume the binding `ToolResult` can re-fire,
+        // and each spawn restarts the mirror at offset 0 and re-appends the
+        // entire source file. Duplicate (source, destination) pairs must be
+        // deduped so a single mirror exists per pair.
+        use super::mirror_background_task_output;
+
+        let source =
+            std::env::temp_dir().join(format!("claudette-mirror-src-{}.log", uuid::Uuid::new_v4()));
+        let destination =
+            std::env::temp_dir().join(format!("claudette-mirror-dst-{}.log", uuid::Uuid::new_v4()));
+        // Seed a tiny source so the mirror has bytes to copy on its first
+        // tick (~100 ms). We assert on the destination size, which a single
+        // mirror would write once and a second concurrent mirror would
+        // append again.
+        let payload = b"once\n";
+        std::fs::write(&source, payload).unwrap();
+
+        mirror_background_task_output(source.clone(), destination.clone());
+        // Second spawn for the same pair must be a no-op (deduped) rather
+        // than re-reading the source file from offset 0.
+        mirror_background_task_output(source.clone(), destination.clone());
+
+        // Give the (single) live mirror a tick or two to flush.
+        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+
+        let after = std::fs::read(&destination).unwrap();
+        // The mirror runs `terminal_text` which converts `\n` → `\r\n`.
+        // One mirror copies the source once: 5 bytes in → 6 bytes out.
+        // Two mirrors would copy it twice: 12 bytes out.
+        assert_eq!(
+            after.len(),
+            6,
+            "expected exactly one mirror to have written, got {} bytes ({:?})",
+            after.len(),
+            String::from_utf8_lossy(&after)
+        );
+
+        let _ = std::fs::remove_file(source);
+        let _ = std::fs::remove_file(destination);
     }
 }
