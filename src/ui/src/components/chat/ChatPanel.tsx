@@ -83,6 +83,7 @@ import { CurrentTurnTaskProgress } from "./CurrentTurnTaskProgress";
 import { ChatInputArea } from "./ChatInputArea";
 import { EMPTY_ACTIVITIES } from "./chatConstants";
 import { QueuedMessagesPopover } from "./QueuedMessagesPopover";
+import { ChatEmptyState } from "./ChatEmptyState";
 
 const EMPTY_QUEUED_MESSAGES: QueuedMessage[] = [];
 
@@ -1566,9 +1567,10 @@ export function ChatPanel() {
             sessionId={activeChatSessionRecord?.id}
           />
           {messages.length === 0 && !hasStreaming && !runningSetupScriptSource ? (
-            <div className={styles.empty}>
-              Send a message to start a conversation
-            </div>
+            <ChatEmptyState
+              workspaceEnvironmentPreparing={workspaceEnvironmentPreparing}
+              workspaceId={selectedWorkspaceId}
+            />
           ) : (
             <>
               {isLoadingMore && (

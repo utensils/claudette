@@ -1,5 +1,9 @@
 {
   "send_message_to_start": "Envía un mensaje para iniciar una conversación",
+  "empty_preparing_env": "Preparando el entorno del espacio de trabajo…",
+  "empty_preparing_env_with_plugin": "Preparando {{plugin}} ({{seconds}}s)…",
+  "empty_preparing_env_with_plugin_static": "Preparando {{plugin}}…",
+  "empty_preparing_env_subtitle": "Podrás enviar un mensaje en un momento.",
   "compacting_label": "Compactando contexto…",
   "compacting_aria": "Compactando contexto, {{elapsed}} transcurridos",
   "processing_aria": "Procesando, {{elapsed}} transcurridos",
