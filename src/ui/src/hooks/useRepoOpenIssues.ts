@@ -10,7 +10,17 @@ import type { IssueScope, RepoIssuesPayload } from "../types/plugin";
 const POLL_INTERVAL_MS = 60_000;
 
 export interface UseRepoOpenIssuesResult {
+  /// Payload for the requested scope. When the new scope hasn't been
+  /// fetched yet, the hook falls back to the most recent payload seen
+  /// for any other scope (stale-while-revalidate) so the section can
+  /// keep rendering rows during the round-trip instead of flashing a
+  /// blank list. `undefined` only on the very first load before any
+  /// scope has resolved.
   payload: RepoIssuesPayload | undefined;
+  /// True when the returned `payload` is from a different scope than
+  /// the one currently requested — useful for a subtle "refreshing"
+  /// affordance in the UI.
+  isStale: boolean;
   loading: boolean;
   refresh: () => Promise<void>;
 }
@@ -128,5 +138,35 @@ export function useRepoOpenIssues(
     };
   }, [enabled, repoId, fetchOnce]);
 
-  return { payload, loading, refresh };
+  // Stale-while-revalidate: when the requested scope hasn't been
+  // fetched yet (first switch to it), fall back to the most recent
+  // payload for any other scope on this repo so the section keeps
+  // rendering rows during the round-trip. Without this, the body
+  // briefly shows the skeleton — which the user reads as "blank list"
+  // since the skeleton rows carry no text. Subscribing to the full
+  // by-scope record keeps the fallback fresh as soon as any scope's
+  // poll lands.
+  const byScope = useAppStore((s) =>
+    repoId ? s.repoIssuesByRepoId[repoId] : undefined,
+  );
+  const lastSeenRef = useRef<RepoIssuesPayload | undefined>(undefined);
+  if (payload) {
+    lastSeenRef.current = payload;
+  } else if (byScope) {
+    // Newest fetched_at wins so the fallback reflects the freshest
+    // state the user has actually seen for this repo.
+    let freshest: RepoIssuesPayload | undefined;
+    for (const candidate of Object.values(byScope)) {
+      if (!candidate) continue;
+      if (!freshest || candidate.fetched_at > freshest.fetched_at) {
+        freshest = candidate;
+      }
+    }
+    if (freshest) lastSeenRef.current = freshest;
+  }
+
+  const effectivePayload = payload ?? lastSeenRef.current;
+  const isStale = !payload && effectivePayload !== undefined;
+
+  return { payload: effectivePayload, isStale, loading, refresh };
 }

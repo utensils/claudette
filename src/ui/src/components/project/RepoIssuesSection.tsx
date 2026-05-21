@@ -57,7 +57,10 @@ export const RepoIssuesSection = memo(function RepoIssuesSection({
   // workspaces grid. User clicks the chevron to expand.
   const [open, setOpen] = useState(false);
   const [scope, setScope] = useState<IssueScope>("open");
-  const { payload, loading, refresh } = useRepoOpenIssues(repoId, scope);
+  const { payload, isStale, loading, refresh } = useRepoOpenIssues(
+    repoId,
+    scope,
+  );
   const [showAll, setShowAll] = useState(false);
   const addToast = useAppStore((s) => s.addToast);
 
@@ -152,6 +155,7 @@ export const RepoIssuesSection = memo(function RepoIssuesSection({
           repoId={repoId}
           payload={payload}
           scope={scope}
+          isStale={isStale}
           inProgress={inProgress}
           visibleRest={visibleRest}
           restTotal={rest.length}
@@ -173,6 +177,9 @@ interface RepoIssuesBodyProps {
   repoId: string;
   payload: ReturnType<typeof useRepoOpenIssues>["payload"];
   scope: IssueScope;
+  /// True when `payload` is the previous scope's data (stale-while-
+  /// revalidate). The list dims while real data is in flight.
+  isStale: boolean;
   /// Issues that already have a workspace — rendered in their own group.
   inProgress: Issue[];
   /// The remaining issues, already capped to the visible-row limit.
@@ -192,6 +199,7 @@ function RepoIssuesBody({
   repoId,
   payload,
   scope,
+  isStale,
   inProgress,
   visibleRest,
   restTotal,
@@ -268,8 +276,13 @@ function RepoIssuesBody({
     </li>
   );
 
+  // When the requested scope hasn't loaded yet we render the previous
+  // scope's rows (stale-while-revalidate). Dim them subtly so the user
+  // sees the switch is in flight without ever staring at a blank list.
+  const staleClass = isStale ? styles.stale : "";
+
   return (
-    <>
+    <div className={staleClass} aria-busy={isStale || undefined}>
       {payload?.error && (
         <div className={styles.errorBanner}>
           <span>Could not refresh issues — showing cached results.</span>
@@ -303,7 +316,7 @@ function RepoIssuesBody({
           {showAllRow}
         </ul>
       )}
-    </>
+    </div>
   );
 }
 

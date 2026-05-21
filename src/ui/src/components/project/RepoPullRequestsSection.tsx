@@ -43,7 +43,10 @@ export const RepoPullRequestsSection = memo(function RepoPullRequestsSection({
   repoId,
 }: RepoPullRequestsSectionProps) {
   const [scope, setScope] = useState<PullRequestScope>("open");
-  const { payload, loading, refresh } = useRepoOpenPullRequests(repoId, scope);
+  const { payload, isStale, loading, refresh } = useRepoOpenPullRequests(
+    repoId,
+    scope,
+  );
   // Collapsed by default — header surfaces the count, clicking the
   // chevron expands. Symmetrical with RepoIssuesSection.
   const [open, setOpen] = useState(false);
@@ -157,6 +160,7 @@ export const RepoPullRequestsSection = memo(function RepoPullRequestsSection({
         <RepoPullRequestsBody
           repoId={repoId}
           payload={payload}
+          isStale={isStale}
           inProgress={inProgress}
           visibleRest={visibleRest}
           restTotal={rest.length}
@@ -180,6 +184,9 @@ export const RepoPullRequestsSection = memo(function RepoPullRequestsSection({
 interface RepoPullRequestsBodyProps {
   repoId: string;
   payload: ReturnType<typeof useRepoOpenPullRequests>["payload"];
+  /// True when `payload` is the previous scope's data (stale-while-
+  /// revalidate). The list dims while real data is in flight.
+  isStale: boolean;
   /// PRs that already have a workspace — rendered in their own group.
   inProgress: PullRequest[];
   /// The remaining PRs, already capped to the visible-row limit.
@@ -199,6 +206,7 @@ interface RepoPullRequestsBodyProps {
 function RepoPullRequestsBody({
   repoId,
   payload,
+  isStale,
   inProgress,
   visibleRest,
   restTotal,
@@ -265,8 +273,13 @@ function RepoPullRequestsBody({
     </li>
   );
 
+  // Stale-while-revalidate: dim the rows while the new-scope fetch is
+  // in flight. See RepoIssuesSection's RepoIssuesBody for the
+  // rationale.
+  const staleClass = isStale ? styles.stale : "";
+
   return (
-    <>
+    <div className={staleClass} aria-busy={isStale || undefined}>
       {payload?.error && (
         <div className={styles.errorBanner}>
           <span>Could not refresh pull requests — showing cached results.</span>
@@ -299,7 +312,7 @@ function RepoPullRequestsBody({
           {showAllRow}
         </ul>
       )}
-    </>
+    </div>
   );
 }
 
