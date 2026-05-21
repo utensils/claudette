@@ -39,7 +39,11 @@ pub(crate) struct PlatformSpeechAvailability {
 }
 
 impl PlatformSpeechAvailability {
-    #[cfg(test)]
+    // Test constructors used only by the macOS/Windows-gated
+    // platform-speech tests — gate them the same way so they aren't dead
+    // code on Linux, where `cargo test --no-run` compiles test targets
+    // under `-Dwarnings`.
+    #[cfg(all(test, any(target_os = "macos", windows)))]
     pub(crate) fn ready(engine_label: &str) -> Self {
         Self {
             status: PlatformSpeechAvailabilityStatus::Ready,
@@ -48,7 +52,7 @@ impl PlatformSpeechAvailability {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, any(target_os = "macos", windows)))]
     pub(crate) fn needs_speech_permission(message: &str) -> Self {
         Self {
             status: PlatformSpeechAvailabilityStatus::NeedsSpeechPermission,
