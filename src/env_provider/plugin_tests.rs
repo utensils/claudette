@@ -1599,6 +1599,48 @@ fn nix_export_recovers_devshell_path_for_flake() {
     );
 }
 
+#[test]
+fn nix_export_preserves_semicolon_path_separator() {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(tmp.path().join("flake.nix"), "{}").unwrap();
+    let lua = make_vm("env-nix-devshell", &["nix"], tmp.path());
+
+    let stub = r#"
+        host.exec = function(cmd, args)
+            if cmd ~= "nix" then error("expected cmd='nix'") end
+            if args[1] == "print-dev-env" then
+                return { stdout = [==[{"variables":{}}]==], stderr = "", code = 0 }
+            elseif args[1] == "develop" then
+                return {
+                    stdout = [[C:\nix\store\devshell\bin;/path-not-set;;C:\Windows\System32]],
+                    stderr = "",
+                    code = 0,
+                }
+            else
+                error("unexpected nix subcommand")
+            end
+        end
+    "#;
+    lua.load(stub).exec().expect("install stub");
+
+    let worktree = tmp.path().to_string_lossy().into_owned();
+    let script = format!(
+        r#"
+        local M = (function() {src} end)()
+        return M.export({{ worktree = "{path}" }})
+        "#,
+        src = NIX_SRC,
+        path = worktree.replace('\\', "\\\\"),
+    );
+    let result: mlua::Table = lua.load(&script).eval().expect("export");
+    let env_tbl: mlua::Table = result.get("env").expect("env field");
+    assert_eq!(
+        env_tbl.get::<String>("PATH").unwrap(),
+        r"C:\nix\store\devshell\bin;C:\Windows\System32",
+        "semicolon-separated PATHs must keep their separator while being cleaned"
+    );
+}
+
 /// When the `nix develop` PATH probe fails, the plugin keeps the
 /// `print-dev-env` vars and simply omits PATH — it must not abort the
 /// whole export (issue #915, "degrade gracefully").

@@ -103,6 +103,13 @@ local function worktree_of(args)
     return (args and args.worktree) or host.workspace().worktree_path
 end
 
+local function path_list_separator(path)
+    if path:find(";", 1, true) or path:match("^%a:[/\\]") or path:match(";%a:[/\\]") then
+        return ";"
+    end
+    return ":"
+end
+
 function M.detect(args)
     local wt = worktree_of(args)
     return host.file_exists(join(wt, "flake.nix"))
@@ -156,12 +163,13 @@ local function devshell_path(installable_args)
         return nil
     end
 
-    -- Split on ':' and drop empty segments plus any lingering
-    -- `/path-not-set` placeholder. A real `nix develop` shell assembles
-    -- a usable PATH, but a degenerate devShell with no PATH-contributing
-    -- inputs could leave the placeholder behind — never propagate it.
+    -- Split on the separator used by the probed PATH and drop empty
+    -- segments plus any lingering `/path-not-set` placeholder. `nix
+    -- develop` is normally Unix-y, but preserving `;` keeps the cleanup
+    -- correct if a Windows-shaped PATH reaches this provider.
     local dirs = {}
-    for segment in tostring(result.stdout or ""):gmatch("[^:]+") do
+    local separator = path_list_separator(tostring(result.stdout or ""))
+    for segment in tostring(result.stdout or ""):gmatch("[^" .. separator .. "]+") do
         if segment ~= "/path-not-set" then
             table.insert(dirs, segment)
         end
@@ -170,7 +178,7 @@ local function devshell_path(installable_args)
         host.log("warn", "nix develop PATH probe returned an empty PATH")
         return nil
     end
-    return table.concat(dirs, ":")
+    return table.concat(dirs, separator)
 end
 
 function M.export(args)
