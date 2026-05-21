@@ -43,8 +43,12 @@ export function PlanApprovalCard({
   // requests. Cleared in a `finally` so a failed fetch can be retried.
   const inFlightFetchRef = useRef<Promise<string> | null>(null);
   const { openFile, resolveFilePath } = useWorkspaceFileOpener(workspaceId);
+  const directPlanContent = approval.planContent ?? null;
+  const visiblePlanContent = planContent ?? directPlanContent;
+  const hasPlanPreview = Boolean(approval.planFilePath || directPlanContent);
 
   const fetchPlanContent = (): Promise<string> => {
+    if (directPlanContent !== null) return Promise.resolve(directPlanContent);
     if (planContent !== null) return Promise.resolve(planContent);
     if (inFlightFetchRef.current) return inFlightFetchRef.current;
     if (!approval.planFilePath) {
@@ -67,7 +71,7 @@ export function PlanApprovalCard({
   };
 
   const handleViewPlan = async () => {
-    if (planContent !== null) {
+    if (visiblePlanContent !== null) {
       setExpanded(!expanded);
       return;
     }
@@ -94,7 +98,7 @@ export function PlanApprovalCard({
         {t("plan_approval_description")}
       </div>
 
-      {approval.planFilePath && (
+      {hasPlanPreview && (
         <div className={styles.planActions}>
           <button
             className={styles.planLink}
@@ -107,7 +111,9 @@ export function PlanApprovalCard({
                 ? t("plan_approval_hide_plan")
                 : t("plan_approval_view_plan")}
             {" \u2014 "}
-            {approval.planFilePath.split("/").slice(-2).join("/")}
+            {approval.planFilePath
+              ? approval.planFilePath.split("/").slice(-2).join("/")
+              : t("plan_approval_codex_plan")}
           </button>
           <CopyButton
             variant="bare"
@@ -126,10 +132,10 @@ export function PlanApprovalCard({
         </div>
       )}
 
-      {expanded && planContent && (
+      {expanded && visiblePlanContent && (
         <div className={styles.planContent}>
           <MessageMarkdown
-            content={planContent}
+            content={visiblePlanContent}
             onOpenFile={openFile}
             resolveFilePath={resolveFilePath}
           />

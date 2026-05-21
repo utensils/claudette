@@ -117,6 +117,7 @@
   "plan_approval_description": "O agente escreveu um plano e está solicitando aprovação para prosseguir com a implementação.",
   "plan_approval_view_plan": "Ver plano",
   "plan_approval_hide_plan": "Ocultar plano",
+  "plan_approval_codex_plan": "Plano do Codex",
   "plan_approval_copy": "Copiar plano",
   "plan_approval_copied": "Copiado!",
   "plan_approval_loading": "Carregando...",

@@ -916,14 +916,26 @@ export function useAgentStream() {
           }
         }
       } else if (toolName === "ExitPlanMode") {
-        // Mirror the content_block_start clear at the control_request boundary
-        // in case that event arrived without the tool `name` populated.
-        // Idempotent — setting to the same value is a no-op.
-        debugChat("plan-mode", "ExitPlanMode → setPlanMode(false)", { sessionId, origin: "agent-permission-prompt" });
-        setPlanMode(sessionId, false);
+        const inputObj =
+          input && typeof input === "object"
+            ? (input as Record<string, unknown>)
+            : null;
+        const codexPlanContent =
+          typeof inputObj?.codexPlanContent === "string"
+            ? inputObj.codexPlanContent
+            : null;
+        const isCodexSyntheticPlan =
+          inputObj?.codexSyntheticPlan === true && codexPlanContent !== null;
+        // Claude's ExitPlanMode tool means the agent is leaving plan mode now.
+        // Codex's synthetic plan approval is client-side: keep plan mode on
+        // until the user chooses "Approve plan".
+        if (!isCodexSyntheticPlan) {
+          debugChat("plan-mode", "ExitPlanMode → setPlanMode(false)", { sessionId, origin: "agent-permission-prompt" });
+          setPlanMode(sessionId, false);
+        }
         let allowedPrompts: Array<{ tool: string; prompt: string }> = [];
-        if (input && typeof input === "object" && "allowedPrompts" in input) {
-          const ap = (input as { allowedPrompts?: unknown }).allowedPrompts;
+        if (inputObj && "allowedPrompts" in inputObj) {
+          const ap = inputObj.allowedPrompts;
           if (Array.isArray(ap)) {
             allowedPrompts = ap as Array<{ tool: string; prompt: string }>;
           }
@@ -953,7 +965,14 @@ export function useAgentStream() {
         if (!planFilePath && planFilePathRef.current[sessionId]) {
           planFilePath = planFilePathRef.current[sessionId];
         }
-        setPlanApproval({ sessionId, toolUseId, planFilePath, allowedPrompts });
+        setPlanApproval({
+          sessionId,
+          toolUseId,
+          planFilePath,
+          allowedPrompts,
+          source: isCodexSyntheticPlan ? "codex" : "claude",
+          planContent: codexPlanContent,
+        });
         updateChatSession(sessionId, {
           needs_attention: true,
           attention_kind: "Plan",

@@ -121,6 +121,7 @@
   "plan_approval_description": "The agent has written a plan and is requesting approval to proceed with implementation.",
   "plan_approval_view_plan": "View plan",
   "plan_approval_hide_plan": "Hide plan",
+  "plan_approval_codex_plan": "Codex plan",
   "plan_approval_copy": "Copy plan",
   "plan_approval_copied": "Copied!",
   "plan_approval_loading": "Loading...",

@@ -2682,6 +2682,9 @@ fn map_codex_item_completed_to_agent_events(
         }
         return events;
     }
+    if item.get("type").and_then(Value::as_str) == Some("plan") {
+        return map_codex_plan_item_to_agent_events(item);
+    }
     let Some((item_id, _tool_name, input)) = codex_item_tool_use(item) else {
         return Vec::new();
     };
@@ -2724,6 +2727,40 @@ fn map_codex_item_completed_to_agent_events(
         }),
     ]);
     events
+}
+
+fn map_codex_plan_item_to_agent_events(item: &Value) -> Vec<AgentEvent> {
+    let plan_text = string_field(item, "text");
+    if plan_text.trim().is_empty() {
+        return Vec::new();
+    }
+    let item_id = string_field(item, "id");
+    let tool_use_id = if item_id.is_empty() {
+        format!("codex-plan-{}", uuid::Uuid::new_v4())
+    } else {
+        format!("codex-plan-{item_id}")
+    };
+    vec![
+        AgentEvent::Stream(StreamEvent::Assistant {
+            message: AssistantMessage {
+                content: vec![ContentBlock::Text {
+                    text: plan_text.clone(),
+                }],
+            },
+        }),
+        AgentEvent::Stream(StreamEvent::ControlRequest {
+            request_id: format!("synthetic-codex-plan-{tool_use_id}"),
+            request: ControlRequestInner::CanUseTool {
+                tool_name: "ExitPlanMode".to_string(),
+                tool_use_id,
+                input: json!({
+                    "codexSyntheticPlan": true,
+                    "codexPlanContent": plan_text,
+                    "allowedPrompts": [],
+                }),
+            },
+        }),
+    ]
 }
 
 /// Build the in-flight indicator for a Codex compaction. The frontend
@@ -4602,6 +4639,49 @@ mod tests {
         };
         assert_eq!(tool_use_id, id);
         assert_eq!(content, &Value::String("Plan updated".to_string()));
+    }
+
+    #[test]
+    fn maps_codex_plan_item_to_plan_approval_prompt() {
+        let events = map_notification_to_agent_events(CodexNotificationEvent::ItemCompleted {
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-1".to_string(),
+            item: json!({
+                "type": "plan",
+                "id": "plan-1",
+                "text": "# Plan\n\n- Rename the README title.",
+            }),
+        });
+
+        assert_eq!(events.len(), 2);
+        let AgentEvent::Stream(StreamEvent::Assistant { message }) = &events[0] else {
+            panic!("expected assistant plan message");
+        };
+        let [ContentBlock::Text { text }] = message.content.as_slice() else {
+            panic!("expected text-only assistant plan message");
+        };
+        assert_eq!(text, "# Plan\n\n- Rename the README title.");
+
+        let AgentEvent::Stream(StreamEvent::ControlRequest {
+            request_id,
+            request:
+                ControlRequestInner::CanUseTool {
+                    tool_name,
+                    tool_use_id,
+                    input,
+                },
+        }) = &events[1]
+        else {
+            panic!("expected synthetic plan approval request");
+        };
+        assert!(request_id.starts_with("synthetic-codex-plan-"));
+        assert_eq!(tool_name, "ExitPlanMode");
+        assert_eq!(tool_use_id, "codex-plan-plan-1");
+        assert_eq!(input["codexSyntheticPlan"], true);
+        assert_eq!(
+            input["codexPlanContent"],
+            "# Plan\n\n- Rename the README title."
+        );
     }
 
     #[tokio::test]
