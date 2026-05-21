@@ -1,11 +1,19 @@
-//! Wrapping spawned commands in the workspace's own Nix devshell.
+//! Wrapping the integrated terminal in the workspace's own Nix devshell.
 //!
 //! When a workspace has a Nix flake (or legacy `shell.nix`) and the
 //! `env-nix-devshell` provider is enabled, the integrated terminal is
-//! spawned as `nix develop … --command <shell>` so it lands inside
-//! *that workspace's* devshell — rather than inheriting whichever
-//! devshell the Claudette process itself happens to be running in. See
-//! issue #915.
+//! spawned as plain `nix develop` so it lands inside *that workspace's*
+//! devshell — rather than inheriting whichever devshell the Claudette
+//! process itself happens to be running in. See issue #915.
+//!
+//! Crucially the terminal runs `nix develop` with **no `--command`**, so
+//! it drops into the devshell's *own* shell (the flake's `shellHook`
+//! runs, the toolchain is on `PATH`). It deliberately does NOT launch the
+//! user's personal interactive shell inside the devshell: doing that
+//! re-runs the user's full shell profile (oh-my-zsh, `nix-daemon.sh`, and
+//! on nix-darwin the `/etc/zshenv` `set-environment` reset), which
+//! hard-overwrites `PATH` and strips the devshell back out — the devshell
+//! would "enter, then vanish".
 //!
 //! `env-nix-devshell` and `env-direnv` are totally separate plugins with
 //! separate jobs. This wrap enters the devshell via `nix develop`
@@ -19,9 +27,9 @@ use super::ResolvedEnv;
 /// Bundled Nix devshell env-provider plugin name.
 const NIX_DEVSHELL_PLUGIN: &str = "env-nix-devshell";
 
-/// Build the `nix develop` argv that wraps a spawned command so it runs
-/// inside the workspace's devshell, or `None` to spawn the command
-/// directly (the plain-shell fallback).
+/// Build the `nix develop` argv that opens the integrated terminal inside
+/// the workspace's devshell, or `None` to spawn a plain shell instead
+/// (the fallback).
 ///
 /// The wrap fires whenever the `env-nix-devshell` provider *applies* to
 /// the workspace — the provider is enabled, `nix` is on PATH, and a
@@ -36,8 +44,11 @@ const NIX_DEVSHELL_PLUGIN: &str = "env-nix-devshell";
 /// toolchain. If the flake is genuinely broken, `nix develop` surfaces
 /// the error *in the terminal* — visible, not hidden behind a fallback.
 ///
-/// The returned vec is `[<nix>, "develop", ("-f" <shell.nix>)?,
-/// "--command"]`; callers append the real program and its arguments.
+/// The returned vec is the complete `nix develop` argv
+/// (`[<nix>, "develop", ("-f" <shell.nix>)?]`) — spawn it as-is. There is
+/// deliberately no `--command`: `nix develop` then drops the terminal
+/// into the devshell's own shell (see the module docs for why launching
+/// the user's personal shell would defeat the wrap).
 pub fn nix_develop_wrap(worktree: &Path, resolved: &ResolvedEnv) -> Option<Vec<String>> {
     if !devshell_detected(resolved) {
         return None;
@@ -65,10 +76,10 @@ fn devshell_detected(resolved: &ResolvedEnv) -> bool {
         .any(|source| source.plugin_name == NIX_DEVSHELL_PLUGIN && source.detected)
 }
 
-/// Assemble the `nix develop` wrap argv. A `flake.nix` is auto-discovered
-/// from the spawn cwd; a legacy `shell.nix`-only repo needs an explicit
-/// `-f` (mirrors the `installable_args` the env-nix-devshell plugin uses
-/// for its own `print-dev-env` call).
+/// Assemble the `nix develop` argv. A `flake.nix` is auto-discovered from
+/// the spawn cwd; a legacy `shell.nix`-only repo needs an explicit `-f`
+/// (mirrors the `installable_args` the env-nix-devshell plugin uses for
+/// its own `print-dev-env` call).
 fn build_wrap_argv(nix: &Path, worktree: &Path) -> Vec<String> {
     let mut argv = vec![nix.to_string_lossy().into_owned(), "develop".to_string()];
     if !worktree.join("flake.nix").exists() {
@@ -78,7 +89,6 @@ fn build_wrap_argv(nix: &Path, worktree: &Path) -> Vec<String> {
             argv.push(shell_nix.to_string_lossy().into_owned());
         }
     }
-    argv.push("--command".to_string());
     argv
 }
 
@@ -164,11 +174,13 @@ mod tests {
 
     #[test]
     fn wrap_argv_auto_discovers_flake() {
+        // `flake.nix` present: bare `nix develop`, no `-f`, no
+        // `--command` — `nix develop` opens the devshell's own shell.
         let tmp = tempfile::tempdir().unwrap();
         std::fs::write(tmp.path().join("flake.nix"), "{}").unwrap();
         assert_eq!(
             build_wrap_argv(Path::new("/usr/bin/nix"), tmp.path()),
-            vec!["/usr/bin/nix", "develop", "--command"],
+            vec!["/usr/bin/nix", "develop"],
         );
     }
 
@@ -179,13 +191,7 @@ mod tests {
         let shell_nix = tmp.path().join("shell.nix").to_string_lossy().into_owned();
         assert_eq!(
             build_wrap_argv(Path::new("/usr/bin/nix"), tmp.path()),
-            vec![
-                "/usr/bin/nix",
-                "develop",
-                "-f",
-                shell_nix.as_str(),
-                "--command"
-            ],
+            vec!["/usr/bin/nix", "develop", "-f", shell_nix.as_str()],
         );
     }
 
@@ -199,7 +205,7 @@ mod tests {
         std::fs::write(tmp.path().join("shell.nix"), "{}").unwrap();
         assert_eq!(
             build_wrap_argv(Path::new("/usr/bin/nix"), tmp.path()),
-            ["/usr/bin/nix", "develop", "--command"].map(String::from),
+            ["/usr/bin/nix", "develop"].map(String::from),
         );
     }
 }
