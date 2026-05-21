@@ -12,6 +12,7 @@ import {
 import { createPortal } from "react-dom";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
+import { SearchAddon } from "@xterm/addon-search";
 import { Unicode11Addon } from "@xterm/addon-unicode11";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { listen } from "@tauri-apps/api/event";
@@ -59,6 +60,7 @@ import {
 } from "../../utils/focusTargets";
 import { TerminalEnvOverlay } from "./TerminalEnvOverlay";
 import { TerminalPaneTree } from "./TerminalPaneTree";
+import { TerminalSearchBar } from "./TerminalSearchBar";
 import type { TerminalTab } from "../../types/terminal";
 import {
   collectNeededLeaves,
@@ -155,6 +157,7 @@ interface LeafInstance {
   container: HTMLDivElement;
   term: Terminal;
   fit: FitAddon;
+  search: SearchAddon;
   ptyId: number;
   isAgentTask: boolean;
   agentTaskTailPath: string | null;
@@ -480,6 +483,17 @@ export const TerminalPanel = memo(function TerminalPanel() {
     height: number;
     title: string;
   } | null>(null);
+  // Per-panel search bar visibility + query. State is panel-local rather than
+  // panel-per-pane: the bar lives at the top of the visible pane, so there
+  // is exactly one bar in flight at a time. The query string survives close
+  // → re-open within the same session so re-firing Cmd+F doesn't lose what
+  // the user just typed.
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  // Bumped on every Cmd+F press so the search bar re-focuses (and selects)
+  // its input even when the bar is already open. Without this, hitting
+  // Cmd+F after clicking back into the pane would feel like a no-op.
+  const [searchFocusToken, setSearchFocusToken] = useState(0);
 
   const autoCreatedRef = useRef<string | null>(null);
   // Tracks the last (tabId, leafId, visible) tuple we applied keyboard
@@ -929,6 +943,13 @@ export const TerminalPanel = memo(function TerminalPanel() {
             .catch(() => {});
           return;
         }
+        case "open-search": {
+          setSearchOpen(true);
+          // Re-focus the input even when the bar is already open — the user
+          // may have clicked back into the pane between Cmd+F presses.
+          setSearchFocusToken((token) => token + 1);
+          return;
+        }
       }
     },
     [
@@ -1003,8 +1024,15 @@ export const TerminalPanel = memo(function TerminalPanel() {
       const links = new WebLinksAddon((_event, url) => {
         void openUrl(url);
       });
+      // Search addon: surfaces decorations for matches in scrollback and
+      // exposes findNext/findPrevious + onDidChangeResults. Match colors
+      // come from the active theme's --terminal-search-* tokens (see
+      // theme.css). Each pane gets its own addon — searches are scoped
+      // to a single xterm buffer, so we cannot share one across panes.
+      const search = new SearchAddon();
       term.loadAddon(fit);
       term.loadAddon(links);
+      term.loadAddon(search);
       // xterm.js defaults to Unicode 6 width tables, where most emoji
       // (including starship's status glyphs — 💀, 🔋, etc.) are 1 cell.
       // PSReadLine, ConPTY, Windows Terminal, iTerm2, and pretty much
@@ -1068,6 +1096,7 @@ export const TerminalPanel = memo(function TerminalPanel() {
         container,
         term,
         fit,
+        search,
         ptyId: -1,
         isAgentTask:
           Object.values(terminalTabs)
@@ -1725,6 +1754,46 @@ export const TerminalPanel = memo(function TerminalPanel() {
     [setPaneSpawnError, destroyInstance],
   );
 
+  // Auto-close the search bar if the user switches to a different terminal
+  // tab or hides the panel — the bar is anchored to whichever pane was
+  // visible when they opened it, so leaving that context should clear it.
+  useEffect(() => {
+    if (!terminalPanelVisible && searchOpen) setSearchOpen(false);
+  }, [terminalPanelVisible, searchOpen]);
+  useEffect(() => {
+    // Active tab / pane changing invalidates the search's addon target.
+    // Closing is simpler than re-running findNext on the new pane with the
+    // old query — the user can re-trigger Cmd+F if they want to keep going.
+    setSearchOpen(false);
+  }, [activeTerminalTabId, selectedWorkspaceId]);
+
+  const handleCloseSearch = useCallback(() => {
+    setSearchOpen(false);
+    // Clear decorations on the active addon so the highlights don't linger
+    // after the bar closes. clearActiveDecoration would only drop the
+    // current-match ring; clearDecorations drops the full match set.
+    const tabId = activeTerminalTabId;
+    const paneId = tabId ? activeTerminalPaneId[tabId] ?? null : null;
+    const inst = paneId ? instancesRef.current.get(paneId) : null;
+    inst?.search.clearDecorations();
+    requestAnimationFrame(() => focusActiveTerminal());
+  }, [activeTerminalTabId, activeTerminalPaneId]);
+
+  // Resolve the active pane's search addon at render time so the bar always
+  // operates on whichever pane currently owns focus. `searchFocusToken`
+  // participates so a Cmd+F press also re-resolves — useful right after a
+  // pane is created (the LeafInstance lands in instancesRef imperatively,
+  // outside React state). ESLint can't see why the token is read; the read
+  // is the point.
+  const activeSearchAddon = useMemo<SearchAddon | null>(() => {
+    void searchFocusToken;
+    if (!searchOpen) return null;
+    const tabId = activeTerminalTabId;
+    const paneId = tabId ? activeTerminalPaneId[tabId] ?? null : null;
+    const inst = paneId ? instancesRef.current.get(paneId) : null;
+    return inst?.search ?? null;
+  }, [searchOpen, activeTerminalTabId, activeTerminalPaneId, searchFocusToken]);
+
   return (
     <div className={styles.panel}>
       <TerminalEnvOverlay workspaceId={selectedWorkspaceId} />
@@ -1806,6 +1875,15 @@ export const TerminalPanel = memo(function TerminalPanel() {
         </button>
       </div>
       <div className={styles.termContainer}>
+        {searchOpen && (
+          <TerminalSearchBar
+            addon={activeSearchAddon}
+            query={searchQuery}
+            onQueryChange={setSearchQuery}
+            onClose={handleCloseSearch}
+            focusToken={searchFocusToken}
+          />
+        )}
         {tabs.map((tab) => {
           const tree = terminalPaneTrees[tab.id];
           if (!tree) return null;

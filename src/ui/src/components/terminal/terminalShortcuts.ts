@@ -49,6 +49,7 @@ export type TerminalKeyAction =
   | { kind: "focus-pane"; direction: "left" | "right" | "up" | "down" }
   | { kind: "copy" }
   | { kind: "paste" }
+  | { kind: "open-search" }
   | null;
 
 /**
@@ -135,6 +136,8 @@ export function terminalKeyAction(
       return { kind: "copy" };
     case "terminal.paste":
       return { kind: "paste" };
+    case "terminal.open-search":
+      return { kind: "open-search" };
     default:
       return null;
   }
@@ -184,6 +187,11 @@ function legacyTerminalKeyAction(ev: KeyboardEvent): string | null {
   // Linux/Windows: Ctrl+Shift+C/V (bare Ctrl+C stays as SIGINT)
   if (isC && ev.ctrlKey && ev.shiftKey && !ev.metaKey) return "terminal.copy-selection";
   if (isV && ev.ctrlKey && ev.shiftKey && !ev.metaKey) return "terminal.paste";
+  // Cmd/Ctrl+F: opens the terminal-search bar. No Shift on either platform —
+  // a Ctrl+Shift+F (find-in-files, when added) should not trigger this.
+  const isF = ev.code === "KeyF";
+  if (isF && ev.metaKey && !ev.ctrlKey && !ev.shiftKey) return "terminal.open-search";
+  if (isF && ev.ctrlKey && !ev.metaKey && !ev.shiftKey) return "terminal.open-search";
   return null;
 }
 import { resolveHotkeyAction, type KeybindingMap } from "../../hotkeys/bindings";
