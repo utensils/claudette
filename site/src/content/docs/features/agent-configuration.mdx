@@ -160,7 +160,7 @@ If you switch between build channels (e.g. nightly → stable, or run two builds
 
 ## File References (@-mentions)
 
-Type `@` in the chat input to reference specific files in your workspace. A file picker appears showing matching files — select one to include it as context for the agent.
+Type `@` in the chat input to reference specific files in your workspace. A file picker appears showing matching files — select one to include it as context for the agent. Exact filename and path substrings rank first, and abbreviations or skipped-character queries can still match as ordered subsequences (for example, `cpanel` can find `ChatPanel.tsx`).
 
 This is useful for directing the agent's attention to specific files:
 

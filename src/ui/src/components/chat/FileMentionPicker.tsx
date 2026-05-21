@@ -16,6 +16,16 @@ interface FileMentionPickerProps {
   onHover: (index: number) => void;
 }
 
+interface ScoredFileMatch extends FileMatchResult {
+  score: number;
+}
+
+interface SubsequenceMatch {
+  score: number;
+  matchStart: number;
+  matchEnd: number;
+}
+
 export function FileMentionPicker({
   results,
   selectedIndex,
@@ -67,7 +77,7 @@ export function matchFiles(
   }
 
   const q = query.toLowerCase();
-  const scored: { file: FileEntry; score: number; matchStart: number; matchEnd: number }[] = [];
+  const scored: ScoredFileMatch[] = [];
 
   for (const file of files) {
     const pathLower = file.path.toLowerCase();
@@ -78,11 +88,9 @@ export function matchFiles(
     const fnIdx = filename.indexOf(q);
     if (fnIdx >= 0) {
       const score = 100 + (q.length / filename.length) * 50;
-      // Boost directories so they sort before files at equal relevance
-      const dirBoost = file.is_directory ? 0.5 : 0;
       scored.push({
         file,
-        score: score + dirBoost,
+        score: score + directoryBoost(file),
         matchStart: filenameOffset + fnIdx,
         matchEnd: filenameOffset + fnIdx + q.length,
       });
@@ -93,21 +101,128 @@ export function matchFiles(
     const pathIdx = pathLower.indexOf(q);
     if (pathIdx >= 0) {
       const score = 50 + (q.length / pathLower.length) * 25;
-      const dirBoost = file.is_directory ? 0.5 : 0;
       scored.push({
         file,
-        score: score + dirBoost,
+        score: score + directoryBoost(file),
         matchStart: pathIdx,
         matchEnd: pathIdx + q.length,
       });
       continue;
     }
 
-    // No fuzzy fallback — only substring matches
+    const filenameMatch = scoreSubsequence(
+      file.path.slice(filenameOffset),
+      q,
+    );
+    if (filenameMatch) {
+      const matchPosition = filenameOffset + filenameMatch.matchStart;
+      scored.push({
+        file,
+        score: 20 + filenameMatch.score + directoryBoost(file),
+        matchStart: matchPosition,
+        matchEnd: matchPosition,
+      });
+      continue;
+    }
+
+    const pathMatch = scoreSubsequence(file.path, q);
+    if (pathMatch) {
+      scored.push({
+        file,
+        score: 5 + pathMatch.score + directoryBoost(file),
+        matchStart: pathMatch.matchStart,
+        matchEnd: pathMatch.matchStart,
+      });
+    }
   }
 
   return scored
     .sort((a, b) => b.score - a.score)
     .slice(0, MAX_RESULTS)
     .map(({ file, matchStart, matchEnd }) => ({ file, matchStart, matchEnd }));
+}
+
+function directoryBoost(file: FileEntry): number {
+  return file.is_directory ? 0.5 : 0;
+}
+
+function scoreSubsequence(
+  target: string,
+  queryLower: string,
+): SubsequenceMatch | null {
+  if (queryLower.length > target.length) {
+    return null;
+  }
+
+  const targetLower = target.toLowerCase();
+  const positions: number[] = [];
+  let queryIndex = 0;
+
+  for (
+    let i = 0;
+    i < targetLower.length && queryIndex < queryLower.length;
+    i += 1
+  ) {
+    if (targetLower[i] === queryLower[queryIndex]) {
+      positions.push(i);
+      queryIndex += 1;
+    }
+  }
+
+  if (queryIndex !== queryLower.length || positions.length === 0) {
+    return null;
+  }
+
+  const matchStart = positions[0] ?? 0;
+  const lastPosition = positions[positions.length - 1] ?? matchStart;
+  const matchEnd = lastPosition + 1;
+  const spanLength = matchEnd - matchStart;
+  const density = queryLower.length / spanLength;
+  const boundaryHits = positions.filter((position) =>
+    isWordBoundary(target, position),
+  ).length;
+  const boundaryRatio = boundaryHits / positions.length;
+  const contiguousPairs = positions.slice(1).filter((position, index) => {
+    return position === positions[index] + 1;
+  }).length;
+  const contiguityRatio =
+    positions.length > 1 ? contiguousPairs / (positions.length - 1) : 1;
+  const startRatio =
+    target.length > 0 ? 1 - matchStart / Math.max(target.length, 1) : 1;
+
+  return {
+    score:
+      density * 10 +
+      contiguityRatio * 8 +
+      boundaryRatio * 6 +
+      startRatio * 3,
+    matchStart,
+    matchEnd,
+  };
+}
+
+function isWordBoundary(target: string, index: number): boolean {
+  if (index === 0) {
+    return true;
+  }
+
+  const previous = target[index - 1] ?? "";
+  const current = target[index] ?? "";
+
+  return (
+    previous === "/" ||
+    previous === "-" ||
+    previous === "_" ||
+    previous === "." ||
+    previous === " " ||
+    (isLowercaseAscii(previous) && isUppercaseAscii(current))
+  );
+}
+
+function isLowercaseAscii(value: string): boolean {
+  return value >= "a" && value <= "z";
+}
+
+function isUppercaseAscii(value: string): boolean {
+  return value >= "A" && value <= "Z";
 }
