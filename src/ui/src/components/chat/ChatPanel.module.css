@@ -557,26 +557,6 @@
   font-family: var(--font-mono);
 }
 
-.stuckHint {
-  color: var(--text-muted);
-  font-size: 12px;
-}
-
-.stuckCancel {
-  border: 1px solid var(--divider);
-  border-radius: 6px;
-  background: var(--chat-input-bg);
-  color: var(--text-primary);
-  font: inherit;
-  font-size: 12px;
-  padding: 3px 8px;
-  cursor: pointer;
-}
-
-.stuckCancel:hover {
-  background: var(--hover-bg);
-}
-
 .compactingLabel {
   color: var(--accent-primary);
   font-size: 12px;
