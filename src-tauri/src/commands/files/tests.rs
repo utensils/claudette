@@ -1,7 +1,7 @@
 use super::attachments::{
     cleanup_stale_attachments_at, create_staging_dir, extension_for_media_type, html_escape,
-    sanitize_stem, write_attachment_to_temp_file, write_bytes_to_absolute_path,
-    write_image_as_html,
+    sanitize_stem, stage_image_html_for_browser, write_attachment_to_temp_file,
+    write_bytes_to_absolute_path, write_image_as_html,
 };
 use super::listing::{
     MAX_IGNORED_FILES_PER_TOP_DIR, collect_workspace_file_entries, is_high_volume_path,
@@ -368,6 +368,16 @@ fn create_staging_dir_rejects_a_regular_file_at_the_path() {
     std::fs::write(&target, b"oops").unwrap();
     let err = create_staging_dir(&target).unwrap_err();
     assert_eq!(err.kind(), std::io::ErrorKind::AlreadyExists);
+}
+
+#[test]
+fn stage_image_html_for_browser_uses_hardened_staging_dir() {
+    let parent = tempdir().unwrap();
+    let target = parent.path().join("claudette-attachments");
+    std::fs::write(&target, b"not a directory").unwrap();
+    let err = stage_image_html_for_browser(&target, "cat.png", "image/png", b"\x89PNG")
+        .expect_err("regular file at staging path must be rejected");
+    assert!(err.contains("not a directory"));
 }
 
 #[cfg(unix)]

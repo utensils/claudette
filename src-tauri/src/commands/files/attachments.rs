@@ -2,6 +2,8 @@ use std::path::{Path, PathBuf};
 
 use super::clipboard::{copy_file_path_to_clipboard, copy_image_bytes_to_clipboard};
 
+const STALE_ATTACHMENT_MAX_AGE: std::time::Duration = std::time::Duration::from_secs(24 * 60 * 60);
+
 /// Write raw bytes to a filesystem path chosen by the user via a save dialog.
 ///
 /// The frontend opens the OS save dialog itself (via `@tauri-apps/plugin-dialog`)
@@ -100,12 +102,7 @@ pub async fn open_attachment_in_browser(
 ) -> Result<(), String> {
     let dir = std::env::temp_dir().join("claudette-attachments");
     tokio::task::spawn_blocking(move || -> Result<PathBuf, String> {
-        std::fs::create_dir_all(&dir).map_err(|e| format!("mkdir temp dir: {e}"))?;
-        let stem = Path::new(&filename)
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or("attachment");
-        write_image_as_html(&dir, stem, &media_type, &bytes).map_err(|e| format!("write html: {e}"))
+        stage_image_html_for_browser(&dir, &filename, &media_type, &bytes)
     })
     .await
     .map_err(|e| format!("join error: {e}"))?
@@ -302,6 +299,21 @@ pub(super) fn cleanup_stale_attachments_at(
     }
 }
 
+pub(super) fn stage_image_html_for_browser(
+    dir: &Path,
+    filename: &str,
+    media_type: &str,
+    bytes: &[u8],
+) -> Result<PathBuf, String> {
+    create_staging_dir(dir).map_err(|e| format!("mkdir temp dir: {e}"))?;
+    cleanup_stale_attachments(dir, STALE_ATTACHMENT_MAX_AGE);
+    let stem = Path::new(filename)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("attachment");
+    write_image_as_html(dir, stem, media_type, bytes).map_err(|e| format!("write html: {e}"))
+}
+
 /// Open an attachment with the system's default handler for its media
 /// type (e.g. PDF → Preview on macOS, the user's PDF reader on Linux /
 /// Windows). Bytes are staged to a temp file under the OS temp dir with
@@ -319,7 +331,7 @@ pub async fn open_attachment_with_default_app(
         // Reap files older than a day — keeps the directory bounded
         // without yanking the rug out from under an app the user may
         // still have open. Cleanup errors are non-fatal.
-        cleanup_stale_attachments(&dir, std::time::Duration::from_secs(24 * 60 * 60));
+        cleanup_stale_attachments(&dir, STALE_ATTACHMENT_MAX_AGE);
         write_attachment_to_temp_file(&dir, &filename, &media_type, &bytes)
             .map_err(|e| format!("write attachment: {e}"))
     })
@@ -344,7 +356,7 @@ pub async fn copy_attachment_file_to_clipboard(
     let dir = std::env::temp_dir().join("claudette-attachments");
     tokio::task::spawn_blocking(move || -> Result<(), String> {
         create_staging_dir(&dir).map_err(|e| format!("mkdir temp dir: {e}"))?;
-        cleanup_stale_attachments(&dir, std::time::Duration::from_secs(24 * 60 * 60));
+        cleanup_stale_attachments(&dir, STALE_ATTACHMENT_MAX_AGE);
         let path = write_attachment_to_temp_file(&dir, &filename, &media_type, &bytes)
             .map_err(|e| format!("write attachment: {e}"))?;
         copy_file_path_to_clipboard(&path)
@@ -370,7 +382,7 @@ pub async fn copy_image_to_clipboard(
     let dir = std::env::temp_dir().join("claudette-attachments");
     tokio::task::spawn_blocking(move || -> Result<(), String> {
         create_staging_dir(&dir).map_err(|e| format!("mkdir temp dir: {e}"))?;
-        cleanup_stale_attachments(&dir, std::time::Duration::from_secs(24 * 60 * 60));
+        cleanup_stale_attachments(&dir, STALE_ATTACHMENT_MAX_AGE);
         copy_image_bytes_to_clipboard(&dir, &bytes, &filename, &media_type)
     })
     .await

@@ -113,10 +113,13 @@ fn pipe_to_command(program: &str, args: &[&str], input: &[u8]) -> Result<(), Str
 #[cfg(windows)]
 fn copy_file_path(path: &Path) -> Result<(), String> {
     use std::os::windows::ffi::OsStrExt as _;
+    use windows_sys::Win32::Foundation::HGLOBAL;
     use windows_sys::Win32::System::DataExchange::{
         CloseClipboard, EmptyClipboard, OpenClipboard, SetClipboardData,
     };
-    use windows_sys::Win32::System::Memory::{GHND, GlobalAlloc, GlobalLock, GlobalUnlock};
+    use windows_sys::Win32::System::Memory::{
+        GHND, GlobalAlloc, GlobalFree, GlobalLock, GlobalUnlock,
+    };
     use windows_sys::Win32::System::Ole::CF_HDROP;
     use windows_sys::Win32::UI::Shell::DROPFILES;
 
@@ -125,6 +128,32 @@ fn copy_file_path(path: &Path) -> Result<(), String> {
         fn drop(&mut self) {
             unsafe {
                 CloseClipboard();
+            }
+        }
+    }
+
+    struct GlobalMemGuard {
+        handle: HGLOBAL,
+        transferred_to_clipboard: bool,
+    }
+    impl GlobalMemGuard {
+        fn new(handle: HGLOBAL) -> Self {
+            Self {
+                handle,
+                transferred_to_clipboard: false,
+            }
+        }
+
+        fn mark_transferred(&mut self) {
+            self.transferred_to_clipboard = true;
+        }
+    }
+    impl Drop for GlobalMemGuard {
+        fn drop(&mut self) {
+            if !self.transferred_to_clipboard && !self.handle.is_null() {
+                unsafe {
+                    let _ = GlobalFree(self.handle);
+                }
             }
         }
     }
@@ -142,7 +171,8 @@ fn copy_file_path(path: &Path) -> Result<(), String> {
         if hmem.is_null() {
             return Err("GlobalAlloc failed".to_string());
         }
-        let ptr = GlobalLock(hmem);
+        let mut hmem = GlobalMemGuard::new(hmem);
+        let ptr = GlobalLock(hmem.handle);
         if ptr.is_null() {
             return Err("GlobalLock failed".to_string());
         }
@@ -163,7 +193,7 @@ fn copy_file_path(path: &Path) -> Result<(), String> {
             (ptr as *mut u8).add(header_size),
             wide_path.len() * std::mem::size_of::<u16>(),
         );
-        GlobalUnlock(hmem);
+        GlobalUnlock(hmem.handle);
 
         if OpenClipboard(std::ptr::null_mut()) == 0 {
             return Err("OpenClipboard failed".to_string());
@@ -172,9 +202,10 @@ fn copy_file_path(path: &Path) -> Result<(), String> {
         if EmptyClipboard() == 0 {
             return Err("EmptyClipboard failed".to_string());
         }
-        if SetClipboardData(CF_HDROP as u32, hmem).is_null() {
+        if SetClipboardData(CF_HDROP as u32, hmem.handle).is_null() {
             return Err("SetClipboardData failed".to_string());
         }
+        hmem.mark_transferred();
     }
     Ok(())
 }
