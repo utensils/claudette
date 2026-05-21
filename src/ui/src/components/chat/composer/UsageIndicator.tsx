@@ -9,11 +9,6 @@ import { resolveIndicatorMode } from "./usageIndicatorMode";
 import { UsagePopover } from "./UsagePopover";
 import styles from "./UsageIndicator.module.css";
 
-/** Matches the convention used elsewhere in the chat UI
- *  (ComposerToolbar, ChatToolbar, ChatPanel, OverflowMenu, applySelectedModel)
- *  for sessions that haven't explicitly saved a provider yet. */
-const DEFAULT_BACKEND_ID = "anthropic";
-
 interface UsageIndicatorProps {
   workspaceId: string | null;
   sessionId: string | null;
@@ -57,6 +52,7 @@ export function UsageIndicator({ workspaceId, sessionId }: UsageIndicatorProps) 
 
   const usageInsightsEnabled = useAppStore((s) => s.usageInsightsEnabled);
   const agentBackends = useAppStore((s) => s.agentBackends);
+  const defaultAgentBackendId = useAppStore((s) => s.defaultAgentBackendId);
   const selectedModel = useAppStore((s) => s.selectedModel);
   const selectedModelProvider = useAppStore((s) => s.selectedModelProvider);
   const sessionUsage = useAppStore((s) => s.sessionUsage);
@@ -64,13 +60,18 @@ export function UsageIndicator({ workspaceId, sessionId }: UsageIndicatorProps) 
 
   const backend = useMemo(() => {
     if (!sessionId) return null;
-    // Default to "anthropic" when no explicit provider has been saved
-    // for this session — matches the convention every other chat
-    // composer surface uses, so a brand-new default-Claude session
-    // gets the greyed-out enable affordance instead of nothing.
-    const backendId = selectedModelProvider[sessionId] ?? DEFAULT_BACKEND_ID;
-    return agentBackends.find((b) => b.id === backendId) ?? null;
-  }, [agentBackends, selectedModelProvider, sessionId]);
+    // Match the backend resolution used by the send/runtime path:
+    // per-session provider -> configured default backend -> first
+    // loaded backend. A hardcoded "anthropic" fallback makes Codex or
+    // OpenRouter defaults look gated by the Claude Code Usage toggle.
+    const backendId = selectedModelProvider[sessionId] ?? defaultAgentBackendId;
+    return (
+      agentBackends.find((b) => b.id === backendId) ??
+      agentBackends.find((b) => b.id === defaultAgentBackendId) ??
+      agentBackends[0] ??
+      null
+    );
+  }, [agentBackends, defaultAgentBackendId, selectedModelProvider, sessionId]);
 
   const usageBackend = useMemo(() => {
     if (!backend || !sessionId) return backend;
