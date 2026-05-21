@@ -1,4 +1,5 @@
 import type { StateCreator } from "zustand";
+import type { editor as MonacoEditorNs } from "monaco-editor";
 import type { AppState } from "../useAppStore";
 import type { UnifiedTabEntry } from "../../components/chat/sessionTabsLogic";
 
@@ -12,6 +13,8 @@ export interface FileRevealTarget {
   endColumn?: number;
   nonce: number;
 }
+
+export type FileEditorViewState = MonacoEditorNs.ICodeEditorViewState;
 
 /** Per-tab buffer + UI state. Lives in the store keyed by `${wsId}:${path}`
  *  so that switching tabs preserves unsaved edits across the FileViewer's
@@ -39,6 +42,9 @@ export interface FileBufferState {
   loaded: boolean;
   loadError: string | null;
   preview: FileViewerPreviewMode;
+  /** Monaco cursor + scroll snapshot. Captured before the editor unmounts
+   *  so switching to chat/diff and back restores the user's place. */
+  editorViewState: FileEditorViewState | null;
   /** Set by `applyExternalFileChange` when an external write (agent edit,
    *  manual save in another editor, `git checkout`, …) lands on disk while
    *  the buffer was dirty. Drives the tab strip's "external change" badge:
@@ -100,6 +106,7 @@ export function makeUnloadedBuffer(): FileBufferState {
     loaded: false,
     loadError: null,
     preview: "source",
+    editorViewState: null,
     externallyChanged: false,
   };
 }
@@ -355,6 +362,11 @@ export interface FileTreeSlice {
     workspaceId: string,
     path: string,
     preview: FileViewerPreviewMode,
+  ) => void;
+  setFileEditorViewState: (
+    workspaceId: string,
+    path: string,
+    editorViewState: FileEditorViewState | null,
   ) => void;
   renameFilePathInWorkspace: (
     workspaceId: string,
@@ -743,6 +755,20 @@ export const createFileTreeSlice: StateCreator<AppState, [], [], FileTreeSlice> 
         fileBuffers: {
           ...s.fileBuffers,
           [key]: { ...prev, preview },
+        },
+      };
+    }),
+
+  setFileEditorViewState: (workspaceId, path, editorViewState) =>
+    set((s) => {
+      const key = fileBufferKey(workspaceId, path);
+      const prev = s.fileBuffers[key];
+      if (!prev) return s;
+      if (prev.editorViewState === editorViewState) return s;
+      return {
+        fileBuffers: {
+          ...s.fileBuffers,
+          [key]: { ...prev, editorViewState },
         },
       };
     }),

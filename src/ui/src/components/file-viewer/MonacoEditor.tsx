@@ -5,7 +5,10 @@ import { applyMonacoTheme, initMonacoThemeSync } from "./monacoTheme";
 import { DEFAULT_MONO_STACK } from "../../styles/fonts";
 import { useAppStore } from "../../stores/useAppStore";
 import { executeCloseTab, executeNewTab } from "../../hotkeys/contextActions";
-import type { FileRevealTarget } from "../../stores/slices/fileTreeSlice";
+import type {
+  FileEditorViewState,
+  FileRevealTarget,
+} from "../../stores/slices/fileTreeSlice";
 import { EDITOR_BASE_FONT_SIZE } from "./editorConstants";
 import {
   useGitGutter,
@@ -47,6 +50,10 @@ interface MonacoEditorProps {
   /** Optional one-shot reveal target from chat file links. */
   revealTarget?: FileRevealTarget | null;
   onRevealTargetApplied?: (nonce: number) => void;
+  /** Monaco cursor + scroll snapshot from the last time this file tab
+   *  unmounted. */
+  editorViewState?: FileEditorViewState | null;
+  onEditorViewStateChange?: (viewState: FileEditorViewState | null) => void;
   /** Fired on every document change. The parent compares against the
    *  baseline to update the per-tab dirty flag. The `@monaco-editor/react`
    *  wrapper internally suppresses this callback while it's applying a
@@ -73,6 +80,8 @@ export const MonacoEditor = memo(function MonacoEditor({
   disableGitGutter = false,
   revealTarget,
   onRevealTargetApplied,
+  editorViewState,
+  onEditorViewStateChange,
   readOnly,
   onChange,
   onSave,
@@ -85,6 +94,7 @@ export const MonacoEditor = memo(function MonacoEditor({
   const onChangeRef = useRef(onChange);
   const onSaveRef = useRef(onSave);
   const onEditorReadyRef = useRef(onEditorReady);
+  const onEditorViewStateChangeRef = useRef(onEditorViewStateChange);
   useEffect(() => {
     onChangeRef.current = onChange;
   }, [onChange]);
@@ -94,6 +104,9 @@ export const MonacoEditor = memo(function MonacoEditor({
   useEffect(() => {
     onEditorReadyRef.current = onEditorReady;
   }, [onEditorReady]);
+  useEffect(() => {
+    onEditorViewStateChangeRef.current = onEditorViewStateChange;
+  }, [onEditorViewStateChange]);
 
   const editorRef = useRef<Parameters<OnMount>[0] | null>(null);
   const monacoRef = useRef<Parameters<OnMount>[1] | null>(null);
@@ -156,6 +169,9 @@ export const MonacoEditor = memo(function MonacoEditor({
   // editor reference so handlers don't fire against a disposed editor.
   useEffect(
     () => () => {
+      onEditorViewStateChangeRef.current?.(
+        editorRef.current?.saveViewState() ?? null,
+      );
       cleanupThemeSyncRef.current?.();
       gutterCollectionRef.current?.clear();
       revealCollectionRef.current?.clear();
@@ -208,6 +224,9 @@ export const MonacoEditor = memo(function MonacoEditor({
   const handleMount: OnMount = (editor, monacoInstance) => {
     editorRef.current = editor;
     monacoRef.current = monacoInstance;
+    if (editorViewState) {
+      editor.restoreViewState(editorViewState);
+    }
     // Initialize the gutter decoration collection now that Monaco has
     // handed us a live editor. The collection survives buffer/file
     // changes within the same mount; the parent remounts on file

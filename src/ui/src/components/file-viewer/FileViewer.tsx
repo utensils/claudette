@@ -20,7 +20,10 @@ import {
 } from "../../hotkeys/bindings";
 import { isMacHotkeyPlatform } from "../../hotkeys/platform";
 import { tooltipWithHotkey } from "../../hotkeys/display";
-import { fileBufferKey } from "../../stores/slices/fileTreeSlice";
+import {
+  fileBufferKey,
+  type FileEditorViewState,
+} from "../../stores/slices/fileTreeSlice";
 import {
   loadDiffFiles,
   readAgentManagedFile,
@@ -90,6 +93,7 @@ function FileViewerInner({ workspaceId, path, t }: FileViewerInnerProps) {
   const setFileBufferSaved = useAppStore((s) => s.setFileBufferSaved);
   const setDiffFiles = useAppStore((s) => s.setDiffFiles);
   const setFileTabPreview = useAppStore((s) => s.setFileTabPreview);
+  const setFileEditorViewState = useAppStore((s) => s.setFileEditorViewState);
   const closeFileTab = useAppStore((s) => s.closeFileTab);
   const clearFileRevealTarget = useAppStore((s) => s.clearFileRevealTarget);
   const requestFileTreeRefresh = useAppStore((s) => s.requestFileTreeRefresh);
@@ -248,6 +252,12 @@ function FileViewerInner({ workspaceId, path, t }: FileViewerInnerProps) {
       clearFileRevealTarget(workspaceId, nonce);
     },
     [clearFileRevealTarget, workspaceId],
+  );
+  const handleEditorViewStateChange = useCallback(
+    (viewState: FileEditorViewState | null) => {
+      setFileEditorViewState(workspaceId, path, viewState);
+    },
+    [path, setFileEditorViewState, workspaceId],
   );
 
   const handleSave = useCallback(async () => {
@@ -602,6 +612,8 @@ function FileViewerInner({ workspaceId, path, t }: FileViewerInnerProps) {
               filename={path}
               revealTarget={revealTarget}
               onRevealTargetApplied={handleRevealTargetApplied}
+              editorViewState={bufferState.editorViewState}
+              onEditorViewStateChange={handleEditorViewStateChange}
               isSymlink={bufferState.isSymlink}
               disableGitGutter={!!agentFile}
               readOnly={editDisabled}
