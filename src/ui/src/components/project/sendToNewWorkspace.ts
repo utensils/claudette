@@ -2,6 +2,10 @@ import { useAppStore } from "../../stores/useAppStore";
 import { createWorkspaceOrchestrated } from "../../hooks/useCreateWorkspace";
 import { applySelectedModel } from "../chat/applySelectedModel";
 import { createWorkspaceScmLink, sendChatMessage } from "../../services/tauri";
+import {
+  markChatTurnStarting,
+  rollbackChatTurnStarting,
+} from "../chat/chatMessageDispatch";
 import type { Model } from "../chat/modelRegistry";
 import type { ContextMenuItem } from "../shared/ContextMenu";
 
@@ -85,51 +89,40 @@ export async function sendToNewWorkspace(
     console.error("[sendToNewWorkspace] failed to persist SCM link:", e);
   }
   const prompt = renderStarterPrompt(args);
-  // Optimistically insert the user's prompt into the chat store BEFORE
-  // firing the send. Without this the new workspace opens straight to
-  // the agent's first reply with no visible record of what was asked —
-  // mirrors what `chatMessageDispatch.dispatchChatMessage` does via
-  // `addPersistedUserMessageToStore`. We pass an explicit `messageId`
-  // so the optimistic row and the backend-persisted row collapse onto
-  // the same key when the chat stream echoes the user turn back.
   const messageId = crypto.randomUUID();
-  useAppStore.getState().addChatMessage(sessionId, {
-    id: messageId,
-    workspace_id: workspaceId,
-    chat_session_id: sessionId,
-    role: "User",
-    content: prompt,
-    cost_usd: null,
-    duration_ms: null,
-    created_at: new Date().toISOString(),
-    thinking: null,
-    input_tokens: null,
-    output_tokens: null,
-    cache_read_tokens: null,
-    cache_creation_tokens: null,
-  });
-  await sendChatMessage(
+  markChatTurnStarting({
     sessionId,
-    prompt,
-    /* mentionedFiles */ undefined,
-    /* permissionLevel */ undefined,
-    args.modelId,
-    /* fastMode */ undefined,
-    /* thinkingEnabled */ undefined,
-    /* planMode */ undefined,
-    /* effort */ undefined,
-    /* chromeEnabled */ undefined,
-    /* disable1mContext */ undefined,
-    // Route the first turn through the provider we just persisted via
-    // `applySelectedModel`. Without this the backend resolves a default
-    // (often the global "Anthropic Claude Code" card), so a Pi-routed
-    // model id that also exists on multiple backends could fire on the
-    // wrong one for turn 1 even though the toolbar shows the right
-    // provider. Matches chatMessageDispatch's `selectedProvider` arg.
-    provider,
-    /* attachments */ undefined,
+    workspaceId,
     messageId,
-  );
+    content: prompt,
+  });
+  try {
+    await sendChatMessage(
+      sessionId,
+      prompt,
+      /* mentionedFiles */ undefined,
+      /* permissionLevel */ undefined,
+      args.modelId,
+      /* fastMode */ undefined,
+      /* thinkingEnabled */ undefined,
+      /* planMode */ undefined,
+      /* effort */ undefined,
+      /* chromeEnabled */ undefined,
+      /* disable1mContext */ undefined,
+      // Route the first turn through the provider we just persisted via
+      // `applySelectedModel`. Without this the backend resolves a default
+      // (often the global "Anthropic Claude Code" card), so a Pi-routed
+      // model id that also exists on multiple backends could fire on the
+      // wrong one for turn 1 even though the toolbar shows the right
+      // provider. Matches chatMessageDispatch's `selectedProvider` arg.
+      provider,
+      /* attachments */ undefined,
+      messageId,
+    );
+  } catch (e) {
+    rollbackChatTurnStarting(sessionId, workspaceId);
+    throw e;
+  }
   store.addToast(`Sent #${args.number} to a new workspace`);
 }
 

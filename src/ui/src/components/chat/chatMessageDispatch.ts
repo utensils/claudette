@@ -22,6 +22,15 @@ export interface DispatchChatMessageResult {
   messageId: string;
 }
 
+interface MarkChatTurnStartingArgs {
+  sessionId: string;
+  workspaceId: string;
+  messageId: string;
+  content: string;
+  attachments?: AttachmentInput[];
+  startedAt?: number;
+}
+
 function resolveSessionWorkspace(sessionId: string) {
   const state = useAppStore.getState();
   for (const [workspaceId, sessions] of Object.entries(state.sessionsByWorkspace)) {
@@ -74,6 +83,40 @@ function addPersistedUserMessageToStore(
   useAppStore.getState().addChatAttachments(sessionId, optimisticAttachments);
 }
 
+export function markChatTurnStarting({
+  sessionId,
+  workspaceId,
+  messageId,
+  content,
+  attachments,
+  startedAt = Date.now(),
+}: MarkChatTurnStartingArgs) {
+  const state = useAppStore.getState();
+  state.setQueuedMessageAutoDispatchPaused(sessionId, false);
+  state.clearAgentQuestion(sessionId);
+  state.clearPlanApproval(sessionId);
+  state.clearAgentApproval(sessionId);
+  state.finishTypewriterDrain(sessionId);
+  addPersistedUserMessageToStore(
+    sessionId,
+    workspaceId,
+    messageId,
+    content,
+    attachments,
+  );
+  state.updateWorkspace(workspaceId, { agent_status: "Running" });
+  state.setPromptStartTime(workspaceId, startedAt);
+  state.updateChatSession(sessionId, { agent_status: "Running" });
+  state.clearUnreadCompletion(workspaceId);
+}
+
+export function rollbackChatTurnStarting(sessionId: string, workspaceId: string) {
+  const state = useAppStore.getState();
+  state.updateWorkspace(workspaceId, { agent_status: "Idle" });
+  state.updateChatSession(sessionId, { agent_status: "Idle" });
+  state.clearPromptStartTime(workspaceId);
+}
+
 export async function dispatchChatMessage({
   sessionId,
   content,
@@ -91,16 +134,13 @@ export async function dispatchChatMessage({
   let state = useAppStore.getState();
   const permissionLevel: PermissionLevel = state.permissionLevel[sessionId] ?? "full";
 
-  state.setQueuedMessageAutoDispatchPaused(sessionId, false);
-  state.clearAgentQuestion(sessionId);
-  state.clearPlanApproval(sessionId);
-  state.clearAgentApproval(sessionId);
-  state.finishTypewriterDrain(sessionId);
-  addPersistedUserMessageToStore(sessionId, workspaceId, messageId, trimmed, attachments);
-  state.updateWorkspace(workspaceId, { agent_status: "Running" });
-  state.setPromptStartTime(workspaceId, Date.now());
-  state.updateChatSession(sessionId, { agent_status: "Running" });
-  state.clearUnreadCompletion(workspaceId);
+  markChatTurnStarting({
+    sessionId,
+    workspaceId,
+    messageId,
+    content: trimmed,
+    attachments,
+  });
 
   try {
     state = useAppStore.getState();
@@ -149,9 +189,7 @@ export async function dispatchChatMessage({
   } catch (e) {
     const errMsg = String(e);
     const current = useAppStore.getState();
-    current.updateWorkspace(workspaceId, { agent_status: "Idle" });
-    current.updateChatSession(sessionId, { agent_status: "Idle" });
-    current.clearPromptStartTime(workspaceId);
+    rollbackChatTurnStarting(sessionId, workspaceId);
     if (shouldRecordSendFailureInChat(errMsg)) {
       current.addChatMessage(
         sessionId,

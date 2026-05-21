@@ -70,6 +70,7 @@ import { useStickyScroll } from "../../hooks/useStickyScroll";
 import { tooltipWithHotkey } from "../../hotkeys/display";
 import { isMacHotkeyPlatform } from "../../hotkeys/platform";
 import { usePreventScrollBounce } from "../../hooks/usePreventScrollBounce";
+import { useWorkspaceElapsedSeconds } from "../../hooks/useWorkspaceElapsedSeconds";
 import styles from "./ChatPanel.module.css";
 import { formatElapsedSeconds } from "./chatHelpers";
 import { ScrollContext } from "./ScrollContext";
@@ -502,21 +503,7 @@ export function ChatPanel() {
     }
   }, [activeSessionIdsKey]);
 
-  // Elapsed timer for running agent.
-  const promptStartTime = useAppStore(
-    (s) => (selectedWorkspaceId ? s.promptStartTime[selectedWorkspaceId] ?? null : null)
-  );
-  const [elapsed, setElapsed] = useState(0);
-  useEffect(() => {
-    if (!isRunning || promptStartTime == null) return;
-    setElapsed(Math.floor((Date.now() - promptStartTime) / 1000));
-    const interval = setInterval(() => {
-      const newElapsed = Math.floor((Date.now() - promptStartTime) / 1000);
-      setElapsed((prev) => (prev === newElapsed ? prev : newElapsed));
-    }, 1000);
-    return () => clearInterval(interval);
-  }, [isRunning, promptStartTime]);
-
+  const elapsed = useWorkspaceElapsedSeconds(selectedWorkspaceId, isRunning);
   const formatElapsed = formatElapsedSeconds;
   const showStuckAffordance =
     isRunning &&

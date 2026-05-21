@@ -251,6 +251,24 @@ export function useAgentStream() {
     });
   };
 
+  const ensurePromptStartTime = (wsId: string) => {
+    const state = useAppStore.getState();
+    if (state.promptStartTime[wsId] == null) {
+      state.setPromptStartTime(wsId, Date.now());
+    }
+  };
+
+  const clearPromptStartTimeIfWorkspaceIdle = (wsId: string) => {
+    const state = useAppStore.getState();
+    const hasRunningSession = (state.sessionsByWorkspace[wsId] ?? []).some(
+      (session) =>
+        session.status === "Active" && session.agent_status === "Running",
+    );
+    if (!hasRunningSession) {
+      state.clearPromptStartTime(wsId);
+    }
+  };
+
   useEffect(() => {
     // Guard against StrictMode double-mount: the async unlisten() promise
     // can't block React's synchronous remount, so a stale listener may
@@ -288,7 +306,7 @@ export function useAgentStream() {
         // User stop or crash has no prior `result` → Stopped.
         updateChatSession(sessionId, { agent_status: wasFinalized ? "Idle" : "Stopped" });
         syncWorkspaceAgentStatus(wsId);
-        useAppStore.getState().clearPromptStartTime(wsId);
+        clearPromptStartTimeIfWorkspaceIdle(wsId);
         setStreamingContent(sessionId, "");
         clearStreamingThinking(sessionId);
         clearBlockToolsForSession(blockToolMapRef.current, sessionId);
@@ -307,6 +325,7 @@ export function useAgentStream() {
 
       if (!("Stream" in agentEvent)) return;
       const streamEvent = agentEvent.Stream;
+      ensurePromptStartTime(wsId);
 
       // Handle different stream event types based on the Rust enum serialization
       if ("type" in streamEvent) {
@@ -722,7 +741,7 @@ export function useAgentStream() {
             turnSawUsageRef.current[sessionId] = false;
             updateChatSession(sessionId, { agent_status: "Idle" });
             syncWorkspaceAgentStatus(wsId);
-            useAppStore.getState().clearPromptStartTime(wsId);
+            clearPromptStartTimeIfWorkspaceIdle(wsId);
             useAppStore.getState().markWorkspaceAsUnread(wsId);
             break;
           }
