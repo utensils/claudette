@@ -857,13 +857,28 @@ fn main() {
             // One-time backfill of legacy `checkpoint_files.content` rows
             // into the content-addressed `checkpoint_blobs` store. Closes
             // #940 / #942 for users whose DB filled up before dedupe
-            // shipped. The helper handles the "already done" short-circuit,
-            // the long-lived spawn_blocking worker, and the warn-on-error
-            // path — call it directly rather than re-implementing those
-            // semantics inline here.
-            claudette::checkpoint_backfill::spawn_backfill(
-                app.state::<state::AppState>().db_path.clone(),
-            );
+            // shipped.
+            //
+            // We deliberately do NOT call `checkpoint_backfill::spawn_backfill`
+            // here even though it would dedupe the warn-on-error wrapping:
+            // that helper uses `tokio::spawn`, which panics with "there is
+            // no reactor running" when called from Tauri's `setup` callback
+            // because the main-thread closure executes outside any tokio
+            // runtime context. `tauri::async_runtime::spawn` is the correct
+            // bridge into Tauri's internal tokio runtime from a sync setup
+            // closure.
+            let backfill_db_path = app.state::<state::AppState>().db_path.clone();
+            tauri::async_runtime::spawn(async move {
+                if let Err(e) =
+                    claudette::checkpoint_backfill::run_backfill(&backfill_db_path).await
+                {
+                    tracing::warn!(
+                        target: "claudette::db",
+                        error = %e,
+                        "checkpoint blob backfill failed; will retry on next launch"
+                    );
+                }
+            });
 
             // Start the local IPC server the `claudette` CLI talks to.
             // Spawned async on the Tauri runtime; the resulting
