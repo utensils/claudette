@@ -58,11 +58,11 @@ pub(super) fn icon_cache_dir() -> Option<PathBuf> {
 
 /// Build a stable cache key for a Windows icon source.
 ///
-/// For .exe paths we mix the canonical path, file size, and modification
-/// time so an in-place upgrade (e.g. VS Code auto-updating `Code.exe`)
-/// invalidates the cache automatically — the cache filename changes,
-/// the new run misses, and the new icon is extracted and stored under
-/// a new key.
+/// For .exe paths we mix the resolved source path, file size, and
+/// modification time so an in-place upgrade (e.g. VS Code auto-updating
+/// `Code.exe`) invalidates the cache automatically — the cache filename
+/// changes, the new run misses, and the new icon is extracted and stored
+/// under a new key.
 ///
 /// For UWP packages the .exe is the alias so the path is identical
 /// across versions; we use just the package-name field. AppxPackage
