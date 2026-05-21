@@ -511,9 +511,9 @@ mod tests {
         );
 
         // Rust does not expose a stable getter for Windows creation flags on
-        // `Command`, so keep a source-level tripwire around the helper that
-        // protects startup refresh, Settings refresh, and login-status probes
-        // from allocating black cmd.exe windows in release builds.
+        // `Command`, so keep a source-level tripwire around the constructor
+        // that protects startup refresh, Settings refresh, and login-status
+        // probes from allocating black cmd.exe windows in release builds.
         let source = include_str!("discovery.rs");
         let helper_start = source
             .find("fn codex_cli_command")
@@ -523,8 +523,8 @@ mod tests {
             .expect("helper should stay before the OpenAI model filter")
             + helper_start;
         assert!(
-            source[helper_start..helper_end].contains(".no_console_window()"),
-            "Codex CLI helper must suppress Windows console windows",
+            source[helper_start..helper_end].contains("claudette::process::command(program)"),
+            "Codex CLI helper must use the Windows-safe process constructor",
         );
     }
 
