@@ -14,8 +14,8 @@ use tokio::sync::oneshot;
 use super::environment::build_agent_command;
 use super::{
     AgentEvent, AssistantMessage, ContentBlock, ControlRequestInner, Delta, FileAttachment,
-    InnerStreamEvent, StartContentBlock, StreamEvent, TokenUsage, TurnHandle, UserContentBlock,
-    UserEventMessage, UserMessageContent,
+    InnerStreamEvent, StartContentBlock, StreamEvent, TokenUsage, TokenUsageIteration, TurnHandle,
+    UserContentBlock, UserEventMessage, UserMessageContent,
 };
 
 type PiStdin = Arc<tokio::sync::Mutex<ChildStdin>>;
@@ -687,6 +687,33 @@ impl PiSdkSession {
     }
 }
 
+/// Per-final-call usage snapshot emitted by the harness on `turn_end`.
+/// Maps onto Claudette's `TokenUsage` shape (specifically the
+/// `iterations[0]` slot that `pickMeterUsageFromResult` reads first),
+/// translating Pi's `Usage` field names (`input`, `output`, `cacheRead`,
+/// `cacheWrite`) into Claudette's wire names.
+#[derive(Debug, Clone, Deserialize)]
+struct PiIterationUsage {
+    #[serde(default, rename = "inputTokens")]
+    input_tokens: Option<u64>,
+    #[serde(default, rename = "outputTokens")]
+    output_tokens: Option<u64>,
+    #[serde(default, rename = "cacheReadTokens")]
+    cache_read_tokens: Option<u64>,
+    #[serde(default, rename = "cacheCreationTokens")]
+    cache_creation_tokens: Option<u64>,
+    /// Authoritative end-of-turn context size from
+    /// `AgentSession.getContextUsage().tokens`, or the last assistant
+    /// `usage.totalTokens` when the session API returns null/undefined.
+    #[serde(default, rename = "totalTokens")]
+    total_tokens: Option<u64>,
+    /// Runtime context window from
+    /// `AgentSession.getContextUsage().contextWindow`. When present it
+    /// overrides the static UI model-registry capacity.
+    #[serde(default, rename = "modelContextWindow")]
+    model_context_window: Option<u64>,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type")]
 enum PiHarnessMessage {
@@ -751,16 +778,18 @@ enum PiHarnessMessage {
     TurnEnd {
         #[serde(default)]
         error: Option<String>,
-        #[serde(default, rename = "totalTokens")]
-        total_tokens: Option<u64>,
-        #[serde(default, rename = "inputTokens")]
-        input_tokens: Option<u64>,
-        #[serde(default, rename = "outputTokens")]
-        output_tokens: Option<u64>,
-        #[serde(default, rename = "cacheReadTokens")]
-        cache_read_tokens: Option<u64>,
-        #[serde(default, rename = "cacheCreationTokens")]
-        cache_creation_tokens: Option<u64>,
+        /// Per-final-call usage snapshot, populated by the harness from
+        /// the last `AssistantMessage.usage` plus
+        /// `AgentSession.getContextUsage()` for the authoritative
+        /// end-of-turn context size. The Rust side routes this into
+        /// `TokenUsage.iterations[0]`, which `pickMeterUsageFromResult`
+        /// reads in preference to the top-level aggregate.
+        ///
+        /// Absent on resumed pre-fix sessions; the meter then falls back
+        /// to the aggregate (the legacy over-reporting behavior, but no
+        /// worse than what shipped before).
+        #[serde(default)]
+        iteration: Option<PiIterationUsage>,
         #[serde(default, rename = "totalCostUsd")]
         total_cost_usd: Option<f64>,
         #[serde(default, rename = "durationMs")]
@@ -782,9 +811,16 @@ enum PiHarnessMessage {
     /// user `/compact`), `"threshold"` (auto-compaction crossed the
     /// keep-recent budget), or `"overflow"` (context window exhausted).
     /// Arrives on the same session subscription as turn events.
+    ///
+    /// We currently flip the UI to "Compacting" regardless of trigger,
+    /// so `reason` isn't read on the route side — but the harness
+    /// continues to send it for log/diagnostic clarity and future
+    /// per-trigger affordances. `#[allow(dead_code)]` keeps the field
+    /// in the deserialized shape without tripping the unused-field lint.
     #[serde(rename = "compaction_start")]
     CompactionStart {
         #[serde(default)]
+        #[allow(dead_code)]
         reason: Option<String>,
     },
     /// Pi finished native context compaction. The sidecar flattens Pi's
@@ -1149,11 +1185,7 @@ async fn route_pi_message(
         }
         PiHarnessMessage::TurnEnd {
             error,
-            total_tokens,
-            input_tokens,
-            output_tokens,
-            cache_read_tokens,
-            cache_creation_tokens,
+            iteration,
             total_cost_usd,
             duration_ms,
         } => {
@@ -1213,35 +1245,53 @@ async fn route_pi_message(
                 (false, Some(err)) => format!("{}\n\n{}", output.text, err),
                 _ => output.text.clone(),
             };
+            // Pi's per-final-call usage rides `iteration` (a separate
+            // snapshot sourced from the last assistant message + Pi's
+            // own `AgentSession.getContextUsage()`). The Claudette
+            // `TokenUsage` shape exposes that to the context meter via
+            // `iterations[0]`, which `pickMeterUsageFromResult` reads in
+            // preference to the top-level aggregate. The top-level
+            // fields stay populated from the same snapshot so the USAGE
+            // popover and the meter agree.
+            let usage = iteration.as_ref().map(|it| {
+                let input = it.input_tokens.unwrap_or(0);
+                let output = it.output_tokens.unwrap_or(0);
+                TokenUsage {
+                    total_tokens: it.total_tokens,
+                    input_tokens: input,
+                    output_tokens: output,
+                    cache_creation_input_tokens: it.cache_creation_tokens,
+                    cache_read_input_tokens: it.cache_read_tokens,
+                    model_context_window: it.model_context_window,
+                    iterations: Some(vec![TokenUsageIteration {
+                        total_tokens: it.total_tokens,
+                        input_tokens: input,
+                        output_tokens: output,
+                        cache_creation_input_tokens: it.cache_creation_tokens,
+                        cache_read_input_tokens: it.cache_read_tokens,
+                        model_context_window: it.model_context_window,
+                    }]),
+                }
+            });
             let _ = event_tx.send(AgentEvent::Stream(StreamEvent::Result {
                 subtype: subtype.to_string(),
                 result: Some(result_text),
                 total_cost_usd,
                 duration_ms,
-                usage: input_tokens
-                    .zip(output_tokens)
-                    .map(|(input_tokens, output_tokens)| TokenUsage {
-                        total_tokens,
-                        input_tokens,
-                        output_tokens,
-                        cache_creation_input_tokens: cache_creation_tokens,
-                        cache_read_input_tokens: cache_read_tokens,
-                        model_context_window: None,
-                        iterations: None,
-                    }),
+                usage,
             }));
             output.text.clear();
             output.thinking.clear();
         }
-        PiHarnessMessage::CompactionStart { reason } => {
-            // A manual /compact runs through `start_compact`'s dedicated
-            // per-turn pump; flip the UI to "Compacting" so the user
-            // sees progress, mirroring the Codex compacting affordance.
-            // Auto-compaction (threshold/overflow) fires inside a live
-            // turn that already owns the status indicator — leave it.
-            if reason.as_deref() == Some("manual") {
-                let _ = event_tx.send(pi_compacting_status_event());
-            }
+        PiHarnessMessage::CompactionStart { .. } => {
+            // Always flip the UI to "Compacting" — the turn's existing
+            // spinner is a generic "Running" indicator, not a compacting
+            // affordance, so users had no visual cue that auto-compaction
+            // (threshold/overflow) was the reason a turn paused mid-stream.
+            // `CompactionEnd` clears the status by emitting either
+            // `compact_boundary` (success) or the synthetic `status:running`
+            // event (auto-abort) — see the matching branch below.
+            let _ = event_tx.send(pi_compacting_status_event());
         }
         PiHarnessMessage::CompactionEnd {
             reason,
@@ -1257,9 +1307,14 @@ async fn route_pi_message(
                 // No context was freed. For a manual /compact surface a
                 // visible notice as an assistant text block (Pi's
                 // harness already routes operational errors this way).
-                // Auto-compaction failures stay quiet: the turn
-                // continues and a `will_retry` run may still succeed, so
-                // a mid-turn notice would just be noise.
+                // Auto-compaction failures stay quiet on the chat
+                // surface: the turn continues and a `will_retry` run may
+                // still succeed, so a mid-turn notice would be noise.
+                // But we MUST clear the "Compacting" status the matching
+                // `CompactionStart` set — no `compact_boundary` will
+                // follow on the abort path, so without an explicit
+                // status reset `agent_status` would stay stuck on
+                // "Compacting" until the turn itself ends.
                 if is_manual {
                     let detail = error_message
                         .as_deref()
@@ -1273,14 +1328,17 @@ async fn route_pi_message(
                             }],
                         },
                     }));
-                } else if !will_retry {
-                    tracing::warn!(
-                        target: "claudette::agent",
-                        subsystem = "pi-sdk",
-                        reason = reason.as_deref().unwrap_or("unknown"),
-                        error = error_message.as_deref().unwrap_or(""),
-                        "pi auto-compaction failed"
-                    );
+                } else {
+                    if !will_retry {
+                        tracing::warn!(
+                            target: "claudette::agent",
+                            subsystem = "pi-sdk",
+                            reason = reason.as_deref().unwrap_or("unknown"),
+                            error = error_message.as_deref().unwrap_or(""),
+                            "pi auto-compaction failed"
+                        );
+                    }
+                    let _ = event_tx.send(pi_status_running_event());
                 }
             } else {
                 // Success → compact_boundary System event. `send.rs`'s
@@ -1459,6 +1517,32 @@ fn pi_compacting_status_event() -> AgentEvent {
     })
 }
 
+/// Companion to [`pi_compacting_status_event`]: clears the "Compacting"
+/// affordance without producing a compaction divider. Emitted when an
+/// auto-compaction aborts mid-turn — the turn keeps streaming, so the
+/// status needs to flip back to "Running" but no `compact_boundary`
+/// belongs in the chat (the abort freed no context). Frontend handles
+/// `status: "running"` by setting `agent_status` back to `"Running"`.
+fn pi_status_running_event() -> AgentEvent {
+    AgentEvent::Stream(StreamEvent::System {
+        subtype: "status".to_string(),
+        session_id: None,
+        state: None,
+        detail: None,
+        task_id: None,
+        tool_use_id: None,
+        output_file: None,
+        summary: None,
+        description: None,
+        last_tool_name: None,
+        usage: None,
+        status: Some("running".to_string()),
+        compact_result: None,
+        compact_metadata: None,
+        command_line: None,
+    })
+}
+
 /// `compact_boundary` System event for a successful Pi compaction.
 /// `send_chat_message`'s sentinel writer persists the `COMPACTION:...`
 /// row from `compact_metadata`, and the `CompactionDivider` renders.
@@ -1548,14 +1632,70 @@ mod tests {
         rx.try_recv().ok()
     }
 
+    /// The harness emits per-final-call usage under the `iteration`
+    /// key (with `inputTokens`/`outputTokens`/`cacheRead`/`cacheWrite`
+    /// /`totalTokens`/`modelContextWindow` shape). The Rust side has
+    /// to deserialize that shape verbatim — a refactor that renames or
+    /// reshapes any field here silently breaks the context meter,
+    /// because the fallback path drops back to the old cumulative
+    /// aggregate. Pin the wire format.
+    #[test]
+    fn turn_end_iteration_wire_format() {
+        let line = r#"{
+            "type": "turn_end",
+            "iteration": {
+                "inputTokens": 136900,
+                "outputTokens": 3000,
+                "cacheReadTokens": 0,
+                "cacheCreationTokens": 0,
+                "totalTokens": 139900,
+                "modelContextWindow": 272000
+            },
+            "totalCostUsd": 0.42,
+            "durationMs": 513000
+        }"#;
+        let msg: PiHarnessMessage = serde_json::from_str(line).unwrap();
+        match msg {
+            PiHarnessMessage::TurnEnd {
+                iteration: Some(it),
+                total_cost_usd,
+                duration_ms,
+                ..
+            } => {
+                assert_eq!(it.input_tokens, Some(136_900));
+                assert_eq!(it.output_tokens, Some(3000));
+                assert_eq!(it.total_tokens, Some(139_900));
+                assert_eq!(it.model_context_window, Some(272_000));
+                assert_eq!(total_cost_usd, Some(0.42));
+                assert_eq!(duration_ms, Some(513_000));
+            }
+            other => panic!("expected TurnEnd with iteration, got {other:?}"),
+        }
+    }
+
+    /// Sessions resumed mid-stream from an older harness build won't
+    /// send `iteration`. The deserializer must accept that case and
+    /// let the route layer skip building a TokenUsage rather than
+    /// blow up the reader loop.
+    #[test]
+    fn turn_end_without_iteration_parses() {
+        let line = r#"{"type":"turn_end"}"#;
+        let msg: PiHarnessMessage = serde_json::from_str(line).unwrap();
+        assert!(matches!(
+            msg,
+            PiHarnessMessage::TurnEnd {
+                iteration: None,
+                total_cost_usd: None,
+                duration_ms: None,
+                error: None,
+            }
+        ));
+    }
+
     fn turn_end(error: Option<&str>) -> PiHarnessMessage {
         PiHarnessMessage::TurnEnd {
             error: error.map(str::to_string),
-            total_tokens: None,
-            input_tokens: None,
-            output_tokens: None,
-            cache_read_tokens: None,
-            cache_creation_tokens: None,
+            iteration: None,
             total_cost_usd: None,
             duration_ms: None,
         }
@@ -1564,11 +1704,14 @@ mod tests {
     fn turn_end_with_usage() -> PiHarnessMessage {
         PiHarnessMessage::TurnEnd {
             error: None,
-            total_tokens: Some(175),
-            input_tokens: Some(100),
-            output_tokens: Some(50),
-            cache_read_tokens: Some(20),
-            cache_creation_tokens: Some(5),
+            iteration: Some(PiIterationUsage {
+                input_tokens: Some(100),
+                output_tokens: Some(50),
+                cache_read_tokens: Some(20),
+                cache_creation_tokens: Some(5),
+                total_tokens: Some(175),
+                model_context_window: Some(272_000),
+            }),
             total_cost_usd: Some(0.0123),
             duration_ms: Some(4321),
         }
@@ -2246,6 +2389,15 @@ mod tests {
                 assert_eq!(usage.output_tokens, 50);
                 assert_eq!(usage.cache_read_input_tokens, Some(20));
                 assert_eq!(usage.cache_creation_input_tokens, Some(5));
+                assert_eq!(usage.model_context_window, Some(272_000));
+                let iters = usage.iterations.expect("iterations[0] must be populated");
+                assert_eq!(iters.len(), 1);
+                assert_eq!(iters[0].input_tokens, 100);
+                assert_eq!(iters[0].output_tokens, 50);
+                assert_eq!(iters[0].cache_read_input_tokens, Some(20));
+                assert_eq!(iters[0].cache_creation_input_tokens, Some(5));
+                assert_eq!(iters[0].total_tokens, Some(175));
+                assert_eq!(iters[0].model_context_window, Some(272_000));
                 assert_eq!(total_cost_usd, Some(0.0123));
                 assert_eq!(duration_ms, Some(4321));
             }
@@ -2620,11 +2772,13 @@ mod tests {
         assert!(try_recv_now(&mut rx).is_none());
     }
 
-    /// Auto-compaction (threshold/overflow) fires inside a live turn
-    /// that already owns the status indicator — its `compaction_start`
-    /// must not stomp it with a stray status event.
+    /// Auto-compaction (threshold/overflow) must also flip the UI to
+    /// "Compacting". The active turn's generic "Running" spinner is
+    /// indistinguishable from a normal LLM call, so without this event
+    /// users had no signal that Pi paused to compact — they saw a
+    /// stalled turn and ran `/compact` manually.
     #[tokio::test]
-    async fn route_compaction_start_threshold_emits_nothing() {
+    async fn route_compaction_start_threshold_emits_compacting_status() {
         let (event_tx, control_tx, mut rx, pending, turn_output, init_cache) = pi_state();
         route_pi_message(
             &event_tx,
@@ -2637,7 +2791,41 @@ mod tests {
             },
         )
         .await;
+        match next_event(&mut rx).await {
+            AgentEvent::Stream(StreamEvent::System {
+                subtype, status, ..
+            }) => {
+                assert_eq!(subtype, "status");
+                assert_eq!(status.as_deref(), Some("compacting"));
+            }
+            other => panic!("expected status System event, got {other:?}"),
+        }
         assert!(try_recv_now(&mut rx).is_none());
+    }
+
+    /// Same goes for `overflow` (context window exhausted) — the user
+    /// needs the same affordance regardless of which auto-trigger
+    /// fired.
+    #[tokio::test]
+    async fn route_compaction_start_overflow_emits_compacting_status() {
+        let (event_tx, control_tx, mut rx, pending, turn_output, init_cache) = pi_state();
+        route_pi_message(
+            &event_tx,
+            &control_tx,
+            &pending,
+            &turn_output,
+            &init_cache,
+            PiHarnessMessage::CompactionStart {
+                reason: Some("overflow".to_string()),
+            },
+        )
+        .await;
+        match next_event(&mut rx).await {
+            AgentEvent::Stream(StreamEvent::System { status, .. }) => {
+                assert_eq!(status.as_deref(), Some("compacting"));
+            }
+            other => panic!("expected status System event, got {other:?}"),
+        }
     }
 
     /// A successful manual `compaction_end` produces exactly the
@@ -2778,10 +2966,13 @@ mod tests {
         );
     }
 
-    /// An auto-compaction failure must not inject a stray mid-turn
-    /// notice or Result — the turn it rides owns those.
+    /// An auto-compaction failure must not inject a notice or
+    /// terminating Result — the turn it rides owns those — but it MUST
+    /// clear the "Compacting" status that the matching
+    /// `CompactionStart` set. Otherwise `agent_status` stays stuck on
+    /// "Compacting" until the turn itself ends.
     #[tokio::test]
-    async fn route_compaction_end_threshold_aborted_is_quiet() {
+    async fn route_compaction_end_threshold_aborted_emits_running_status() {
         let (event_tx, control_tx, mut rx, pending, turn_output, init_cache) = pi_state();
         route_pi_message(
             &event_tx,
@@ -2800,7 +2991,19 @@ mod tests {
             },
         )
         .await;
-        assert!(try_recv_now(&mut rx).is_none());
+        match next_event(&mut rx).await {
+            AgentEvent::Stream(StreamEvent::System {
+                subtype, status, ..
+            }) => {
+                assert_eq!(subtype, "status");
+                assert_eq!(status.as_deref(), Some("running"));
+            }
+            other => panic!("expected status:running System event, got {other:?}"),
+        }
+        assert!(
+            try_recv_now(&mut rx).is_none(),
+            "must not emit a boundary or notice on auto-abort",
+        );
     }
 
     /// Unknown variants (e.g. a future-protocol message Claudette

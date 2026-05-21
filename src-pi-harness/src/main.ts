@@ -585,6 +585,29 @@ function makeStreamCapture(limitBytes: number) {
   };
 }
 
+/**
+ * Run a command and capture its stdout/stderr to a per-stream cap.
+ *
+ * Resolves on the child's `'exit'` event, NOT `'close'`. `'close'` waits
+ * for the child AND every stdio pipe FD to reach EOF — a grandchild that
+ * inherited stdout/stderr (the textbook example: `bash -c "codex exec …"`,
+ * where `codex` forks helper processes) keeps the pipe open, so `'close'`
+ * never fires and the tool call hangs forever even though the visible
+ * command has finished.
+ *
+ * We listen to both `'exit'` (process terminated) and the streams' `'end'`
+ * (EOF reached on the pipe). On exit we yield one event-loop tick via
+ * `setImmediate` so libuv delivers any `'data'` callbacks already queued
+ * for the just-died child, then if a pipe is still open — a descendant is
+ * holding it — we forcibly destroy our read end. The descendant gets
+ * EPIPE on its next write, which is correct: its parent died, it has no
+ * standing to keep writing to our captured stream.
+ *
+ * This intentionally has no wall-clock timeout. Users press Stop to
+ * cancel a genuinely stuck command; an arbitrary cap would either
+ * interrupt legitimate long jobs (builds, large test suites) or be loose
+ * enough to be useless.
+ */
 function runCommand(program: string, args: string[], cwd: string, signal?: AbortSignal) {
   return new Promise<{
     stdout: string;
@@ -600,16 +623,54 @@ function runCommand(program: string, args: string[], cwd: string, signal?: Abort
     child.stderr.setEncoding("utf8");
     child.stdout.on("data", (chunk: string) => stdout.push(chunk));
     child.stderr.on("data", (chunk: string) => stderr.push(chunk));
-    child.on("error", reject);
-    child.on("close", (exitCode) =>
+
+    let exited = false;
+    let exitCode: number | null = null;
+    let stdoutEnded = false;
+    let stderrEnded = false;
+    let resolved = false;
+
+    const finalize = () => {
+      if (resolved) return;
+      // Only finalize once we know the process exited. The `setImmediate`
+      // path below handles the case where exit fires but the pipes never
+      // EOF (descendant holding the FD).
+      if (!exited) return;
+      resolved = true;
       resolveCommand({
         stdout: stdout.text(),
         stderr: stderr.text(),
         exitCode,
         truncated: stdout.wasTruncated() || stderr.wasTruncated(),
         limitBytes: MAX_COMMAND_OUTPUT_BYTES,
-      }),
-    );
+      });
+    };
+
+    child.stdout.on("end", () => {
+      stdoutEnded = true;
+      finalize();
+    });
+    child.stderr.on("end", () => {
+      stderrEnded = true;
+      finalize();
+    });
+    child.on("error", reject);
+    child.on("exit", (code) => {
+      exited = true;
+      exitCode = code;
+      // Yield to libuv so any `'data'` callbacks already queued for
+      // bytes the child wrote before it died get delivered to our
+      // capture before we close. `setImmediate` runs after the current
+      // I/O phase — no arbitrary delay, just the standard
+      // "drain pending callbacks" idiom.
+      setImmediate(() => {
+        if (!stdoutEnded) child.stdout.destroy();
+        if (!stderrEnded) child.stderr.destroy();
+        // If a descendant is holding the pipe, the streams won't emit
+        // `'end'` — finalize directly.
+        finalize();
+      });
+    });
   });
 }
 
@@ -907,12 +968,32 @@ function extractAgentEndError(event: { messages?: unknown }): string | undefined
   return undefined;
 }
 
-type PiTurnUsage = {
-  totalTokens?: number;
+type PiIterationUsage = {
   inputTokens: number;
   outputTokens: number;
   cacheReadTokens: number;
   cacheCreationTokens: number;
+  /** End-of-turn context occupancy. Sourced from
+   * `AgentSession.getContextUsage().tokens` when available — that is Pi's
+   * authoritative figure (uses the last assistant usage and walks any
+   * trailing messages), which is also what Pi itself uses to decide
+   * whether auto-compaction should fire. Falls back to the last
+   * assistant message's `usage.totalTokens` when the session API
+   * returns null (e.g. right after a compaction, before the next LLM
+   * response). */
+  totalTokens?: number;
+  /** Runtime context window for the current model. Lets the meter use
+   * the model's actual capacity rather than the static value baked into
+   * the UI's model registry. */
+  modelContextWindow?: number;
+};
+
+type PiTurnUsage = {
+  /** Per-final-call snapshot — what the meter needs to show
+   *  end-of-turn context occupancy. */
+  iteration?: PiIterationUsage;
+  /** Cumulative cost across all assistant messages in the turn. Drives
+   *  the USAGE popover; not used by the context meter. */
   totalCostUsd: number;
   durationMs?: number;
 };
@@ -921,20 +1002,28 @@ function finiteNumber(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
-function extractAgentEndUsage(
-  event: { messages?: unknown },
-  startedAt?: number,
-): PiTurnUsage | undefined {
+/**
+ * Resolve the per-final-call usage snapshot the context meter reads.
+ *
+ * Pi's `AssistantMessage.usage` is per-call (not cumulative); summing
+ * across messages — which the harness used to do — produces a figure
+ * that grows roughly as `num_iterations × actual_context`, hitting
+ * megatokens on long tool-use chains. The meter needs the size of the
+ * model's most recent prompt, which is exactly the last assistant
+ * message's usage block.
+ *
+ * For `totalTokens` we prefer `session.getContextUsage()` because Pi
+ * computes it the same way auto-compaction does (last-assistant usage
+ * plus an estimate for any trailing non-assistant messages) and
+ * handles the post-compaction "no usage yet" baseline by returning
+ * `tokens: null`. When the session API is unavailable (no session, or
+ * returned undefined) we fall back to the last assistant's
+ * `usage.totalTokens` so the meter still shows something useful.
+ */
+function buildIterationUsage(event: { messages?: unknown }): PiIterationUsage | undefined {
   const messages = Array.isArray(event.messages) ? event.messages : [];
-  const totals: PiTurnUsage = {
-    inputTokens: 0,
-    outputTokens: 0,
-    cacheReadTokens: 0,
-    cacheCreationTokens: 0,
-    totalCostUsd: 0,
-  };
-  let sawUsage = false;
-  for (const message of messages) {
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const message = messages[i];
     if (!message || typeof message !== "object") continue;
     const m = message as {
       role?: string;
@@ -944,29 +1033,65 @@ function extractAgentEndUsage(
         cacheRead?: unknown;
         cacheWrite?: unknown;
         totalTokens?: unknown;
-        cost?: { total?: unknown };
       };
     };
     if (m.role !== "assistant" || !m.usage) continue;
-    sawUsage = true;
     const input = finiteNumber(m.usage.input) ?? 0;
     const output = finiteNumber(m.usage.output) ?? 0;
     const cacheRead = finiteNumber(m.usage.cacheRead) ?? 0;
     const cacheWrite = finiteNumber(m.usage.cacheWrite) ?? 0;
-    totals.inputTokens += input;
-    totals.outputTokens += output;
-    totals.cacheReadTokens += cacheRead;
-    totals.cacheCreationTokens += cacheWrite;
-    totals.totalCostUsd += finiteNumber(m.usage.cost?.total) ?? 0;
-    totals.totalTokens =
-      (totals.totalTokens ?? 0) +
-      (finiteNumber(m.usage.totalTokens) ?? input + output + cacheRead + cacheWrite);
+    const lastTotal = finiteNumber(m.usage.totalTokens);
+
+    let sessionTokens: number | undefined;
+    let sessionContextWindow: number | undefined;
+    try {
+      const usage = state.session?.getContextUsage();
+      if (usage) {
+        sessionTokens = finiteNumber(usage.tokens);
+        sessionContextWindow = finiteNumber(usage.contextWindow);
+      }
+    } catch {
+      // `getContextUsage()` reads internal session state; if Pi changes
+      // its shape under us, fall through to the last-assistant fallback.
+    }
+
+    return {
+      inputTokens: input,
+      outputTokens: output,
+      cacheReadTokens: cacheRead,
+      cacheCreationTokens: cacheWrite,
+      totalTokens: sessionTokens ?? lastTotal,
+      modelContextWindow: sessionContextWindow,
+    };
   }
-  if (!sawUsage) return undefined;
+  return undefined;
+}
+
+function extractAgentEndUsage(
+  event: { messages?: unknown },
+  startedAt?: number,
+): PiTurnUsage | undefined {
+  const messages = Array.isArray(event.messages) ? event.messages : [];
+  let totalCostUsd = 0;
+  let sawUsage = false;
+  for (const message of messages) {
+    if (!message || typeof message !== "object") continue;
+    const m = message as {
+      role?: string;
+      usage?: { cost?: { total?: unknown } };
+    };
+    if (m.role !== "assistant" || !m.usage) continue;
+    sawUsage = true;
+    totalCostUsd += finiteNumber(m.usage.cost?.total) ?? 0;
+  }
+  const iteration = buildIterationUsage(event);
+  if (!sawUsage && !iteration) return undefined;
+  const out: PiTurnUsage = { totalCostUsd };
+  if (iteration) out.iteration = iteration;
   if (startedAt !== undefined) {
-    totals.durationMs = Math.max(0, Date.now() - startedAt);
+    out.durationMs = Math.max(0, Date.now() - startedAt);
   }
-  return totals;
+  return out;
 }
 
 function routeSessionEvent(event: AgentSessionEvent): void {
