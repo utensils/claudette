@@ -157,7 +157,6 @@ export const RepoPullRequestsSection = memo(function RepoPullRequestsSection({
         <RepoPullRequestsBody
           repoId={repoId}
           payload={payload}
-          loading={loading}
           inProgress={inProgress}
           visibleRest={visibleRest}
           restTotal={rest.length}
@@ -181,7 +180,6 @@ export const RepoPullRequestsSection = memo(function RepoPullRequestsSection({
 interface RepoPullRequestsBodyProps {
   repoId: string;
   payload: ReturnType<typeof useRepoOpenPullRequests>["payload"];
-  loading: boolean;
   /// PRs that already have a workspace — rendered in their own group.
   inProgress: PullRequest[];
   /// The remaining PRs, already capped to the visible-row limit.
@@ -201,7 +199,6 @@ interface RepoPullRequestsBodyProps {
 function RepoPullRequestsBody({
   repoId,
   payload,
-  loading,
   inProgress,
   visibleRest,
   restTotal,
@@ -213,7 +210,12 @@ function RepoPullRequestsBody({
   onCopyUrl,
   onCreateWorkspaceForBranch,
 }: RepoPullRequestsBodyProps) {
-  if (loading && !payload) {
+  // Render the skeleton whenever we don't yet have a payload for this
+  // (repo, scope) pair — see RepoIssuesSection's RepoIssuesBody for the
+  // rationale. Switching scope tabs selects a store slot that may be
+  // `undefined` until the fetch lands; relying on `loading` alone would
+  // briefly flash the empty state.
+  if (!payload) {
     return <SkeletonList />;
   }
   if (payload?.unsupported) {

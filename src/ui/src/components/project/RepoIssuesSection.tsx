@@ -34,9 +34,14 @@ const MAX_LABELS_VISIBLE = 2;
 const DEFAULT_VISIBLE = 10;
 const ALL_VISIBLE_LIMIT = 50;
 
-const SCOPES: { value: IssueScope; label: string }[] = [
-  { value: "open", label: "Open" },
-  { value: "mine", label: "Mine" },
+const SCOPES: { value: IssueScope; label: string; title: string }[] = [
+  { value: "open", label: "Open", title: "All open issues" },
+  { value: "mine", label: "Mine", title: "Issues you opened" },
+  {
+    value: "assigned",
+    label: "Assigned",
+    title: "Issues assigned to you",
+  },
 ];
 
 export interface RepoIssuesSectionProps {
@@ -115,6 +120,7 @@ export const RepoIssuesSection = memo(function RepoIssuesSection({
                 type="button"
                 role="tab"
                 aria-selected={scope === s.value}
+                title={s.title}
                 className={`${styles.scopeTab} ${scope === s.value ? styles.scopeTabActive : ""}`}
                 onClick={() => {
                   setScope(s.value);
@@ -146,7 +152,6 @@ export const RepoIssuesSection = memo(function RepoIssuesSection({
           repoId={repoId}
           payload={payload}
           scope={scope}
-          loading={loading}
           inProgress={inProgress}
           visibleRest={visibleRest}
           restTotal={rest.length}
@@ -168,7 +173,6 @@ interface RepoIssuesBodyProps {
   repoId: string;
   payload: ReturnType<typeof useRepoOpenIssues>["payload"];
   scope: IssueScope;
-  loading: boolean;
   /// Issues that already have a workspace — rendered in their own group.
   inProgress: Issue[];
   /// The remaining issues, already capped to the visible-row limit.
@@ -188,7 +192,6 @@ function RepoIssuesBody({
   repoId,
   payload,
   scope,
-  loading,
   inProgress,
   visibleRest,
   restTotal,
@@ -199,7 +202,14 @@ function RepoIssuesBody({
   onOpen,
   onCopyUrl,
 }: RepoIssuesBodyProps) {
-  if (loading && !payload) {
+  // Render the skeleton whenever we don't yet have a payload for this
+  // (repo, scope) pair — not just when `loading` flips true. When the
+  // user clicks a different scope tab, the next render selects the new
+  // scope's store slot, which is `undefined` until the fetch lands; if
+  // we keyed the skeleton off `loading` alone, that intermediate paint
+  // briefly shows the "empty" message before the fetch's loading=true
+  // flips the spinner on.
+  if (!payload) {
     return <SkeletonList />;
   }
   if (payload?.unsupported) {
@@ -232,7 +242,11 @@ function RepoIssuesBody({
   if (!hasCachedRows) {
     return (
       <div className={styles.muted}>
-        {scope === "mine" ? "No issues assigned to you." : "No open issues."}
+        {scope === "mine"
+          ? "No issues opened by you."
+          : scope === "assigned"
+            ? "No issues assigned to you."
+            : "No open issues."}
       </div>
     );
   }

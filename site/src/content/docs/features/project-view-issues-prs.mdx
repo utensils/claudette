@@ -11,9 +11,12 @@ Turn on **Show open issues & PRs in project view** to also surface what's outsta
 
 Between the "Start a workspace" card and the Workspaces section, two new collapsible sections appear:
 
-- **Issues** — open issues with their label chips (max 2 visible per row, "+N" overflow), comment count, and relative age. The section header carries a scope selector that mirrors the Pull requests toggle minus the option that doesn't apply:
+- **Issues** — open issues with their label chips (max 2 visible per row, "+N" overflow), comment count, and relative age. The section header carries a scope selector:
   - **Open** — every open issue on the repo
-  - **Mine** — open issues authored by *or* assigned to you (`@me` via `gh` / `glab`)
+  - **Mine** — open issues you opened (`--author @me` via `gh`, `--mine` via `glab`)
+  - **Assigned** — open issues assigned to you (`--assignee @me`)
+
+  Mine and Assigned are kept separate because the workflows differ — "what did I file?" vs. "what's on my plate?". There's no **Review** option (GitHub issues have no review-requested concept).
 
   Click a row to open the issue in your browser; right-click for Open / Copy URL.
 - **Pull requests** — open PRs with a scope selector at the section header:

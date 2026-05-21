@@ -140,12 +140,16 @@ impl PullRequestScope {
 
 /// Scope filter for repo-wide `list_issues` calls (the project-view
 /// aggregation path). Mirrors [`PullRequestScope`] minus `ReviewRequested`
-/// — GitHub issues don't have a review-requested concept.
+/// — GitHub issues don't have a review-requested concept. `Mine` and
+/// `Assigned` are deliberately separate (rather than a unioned "Mine"
+/// like PRs) because issues you authored and issues assigned to you
+/// represent meaningfully different workflows.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum IssueScope {
     Open,
     Mine,
+    Assigned,
 }
 
 impl IssueScope {
@@ -158,6 +162,7 @@ impl IssueScope {
         match self {
             Self::Open => "open",
             Self::Mine => "mine",
+            Self::Assigned => "assigned",
         }
     }
 }
@@ -304,6 +309,7 @@ mod tests {
     fn issue_scope_cache_segments_are_stable() {
         assert_eq!(IssueScope::Open.as_cache_segment(), "open");
         assert_eq!(IssueScope::Mine.as_cache_segment(), "mine");
+        assert_eq!(IssueScope::Assigned.as_cache_segment(), "assigned");
     }
 
     #[test]
@@ -311,6 +317,7 @@ mod tests {
         let cases: &[(IssueScope, &str)] = &[
             (IssueScope::Open, "\"open\""),
             (IssueScope::Mine, "\"mine\""),
+            (IssueScope::Assigned, "\"assigned\""),
         ];
         for (scope, expected) in cases {
             let serialized = serde_json::to_string(scope).unwrap();

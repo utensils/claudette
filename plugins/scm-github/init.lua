@@ -86,61 +86,27 @@ function M.list_issues(args)
     -- open; callers can override via args.state.
     local limit = tostring(args.limit or 25)
     local state = args.state or "open"
-    local json_fields = "number,title,url,state,author,labels,comments,createdAt,updatedAt"
-
-    local function base_args()
-        return {
-            "issue", "list",
-            "--state", state,
-            "--limit", limit,
-            "--json", json_fields,
-        }
-    end
-
-    local data
+    local gh_args = {
+        "issue", "list",
+        "--state", state,
+        "--limit", limit,
+        "--json", "number,title,url,state,author,labels,comments,createdAt,updatedAt",
+    }
+    -- Three scope options surface on the Issues tab:
+    --   "mine"     → authored by the current user (--author @me)
+    --   "assigned" → assigned to the current user (--assignee @me)
+    --   anything else (incl. nil) → no extra filter ("Open")
     if args.scope == "mine" then
-        -- "Mine" matches the PR-side definition: issues authored by *or*
-        -- assigned to the current user. `gh issue list --author X
-        -- --assignee Y` ANDs the two filters (and GitHub's search
-        -- backend doesn't expose a clean OR between `author:` and
-        -- `assignee:`). Run the two filters separately and union on
-        -- `number` so an issue that's both authored and assigned isn't
-        -- listed twice.
-        local authored_args = base_args()
-        table.insert(authored_args, "--author")
-        table.insert(authored_args, "@me")
-        local assigned_args = base_args()
-        table.insert(assigned_args, "--assignee")
-        table.insert(assigned_args, "@me")
-
-        local ok_a, authored = pcall(gh, authored_args)
-        if not ok_a then error(authored) end
-        local ok_b, assigned = pcall(gh, assigned_args)
-        if not ok_b then error(assigned) end
-
-        local seen = {}
-        data = {}
-        for _, item in ipairs(authored) do
-            if item.number and not seen[item.number] then
-                seen[item.number] = true
-                table.insert(data, item)
-            end
-        end
-        for _, item in ipairs(assigned) do
-            if item.number and not seen[item.number] then
-                seen[item.number] = true
-                table.insert(data, item)
-            end
-        end
-    else
-        local gh_args = base_args()
-        local ok, result = pcall(gh, gh_args)
-        if not ok then
-            error(result)
-        end
-        data = result
+        table.insert(gh_args, "--author")
+        table.insert(gh_args, "@me")
+    elseif args.scope == "assigned" then
+        table.insert(gh_args, "--assignee")
+        table.insert(gh_args, "@me")
     end
-
+    local ok, data = pcall(gh, gh_args)
+    if not ok then
+        error(data)
+    end
     local issues = {}
     for _, item in ipairs(data) do
         local labels = {}

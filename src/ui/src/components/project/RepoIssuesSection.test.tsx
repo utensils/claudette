@@ -248,27 +248,30 @@ describe("RepoIssuesSection error/cache handling", () => {
 });
 
 describe("RepoIssuesSection scope toggle", () => {
-  it("defaults to the Open scope and exposes a Mine tab", () => {
+  function tabByLabel(container: HTMLElement, label: string) {
+    return Array.from(container.querySelectorAll('[role="tab"]')).find(
+      (n) => n.textContent === label,
+    ) as HTMLButtonElement | undefined;
+  }
+
+  it("defaults to the Open scope and exposes Mine + Assigned tabs", () => {
     mockedHook.mockReturnValue({
       payload: makePayload({ issues: [] }),
       loading: false,
       refresh: vi.fn(),
     });
     const container = render();
-    const openTab = Array.from(container.querySelectorAll('[role="tab"]')).find(
-      (n) => n.textContent === "Open",
+    expect(tabByLabel(container, "Open")?.getAttribute("aria-selected")).toBe(
+      "true",
     );
-    const mineTab = Array.from(container.querySelectorAll('[role="tab"]')).find(
-      (n) => n.textContent === "Mine",
+    expect(tabByLabel(container, "Mine")?.getAttribute("aria-selected")).toBe(
+      "false",
     );
-    expect(openTab?.getAttribute("aria-selected")).toBe("true");
-    expect(mineTab?.getAttribute("aria-selected")).toBe("false");
-    // The PR section has a Review tab too — the Issues section deliberately
-    // doesn't (GitHub issues have no review-requested concept).
-    const reviewTab = Array.from(
-      container.querySelectorAll('[role="tab"]'),
-    ).find((n) => n.textContent === "Review");
-    expect(reviewTab).toBeUndefined();
+    expect(
+      tabByLabel(container, "Assigned")?.getAttribute("aria-selected"),
+    ).toBe("false");
+    // No Review tab — GitHub issues have no review-requested concept.
+    expect(tabByLabel(container, "Review")).toBeUndefined();
   });
 
   it("calls useRepoOpenIssues with the selected scope and re-fetches on switch", () => {
@@ -278,20 +281,20 @@ describe("RepoIssuesSection scope toggle", () => {
       refresh: vi.fn(),
     });
     const container = render();
-    // Default scope.
     expect(mockedHook).toHaveBeenLastCalledWith("repo-1", "open");
 
-    const mineTab = Array.from(container.querySelectorAll('[role="tab"]')).find(
-      (n) => n.textContent === "Mine",
-    ) as HTMLButtonElement | undefined;
-    expect(mineTab).toBeTruthy();
     act(() => {
-      mineTab?.click();
+      tabByLabel(container, "Mine")?.click();
     });
     expect(mockedHook).toHaveBeenLastCalledWith("repo-1", "mine");
+
+    act(() => {
+      tabByLabel(container, "Assigned")?.click();
+    });
+    expect(mockedHook).toHaveBeenLastCalledWith("repo-1", "assigned");
   });
 
-  it("uses the scope-aware empty state on Mine", () => {
+  it("uses scope-aware empty states for Mine and Assigned", () => {
     mockedHook.mockReturnValue({
       payload: makePayload({ issues: [], scope: "mine" }),
       loading: false,
@@ -299,12 +302,36 @@ describe("RepoIssuesSection scope toggle", () => {
     });
     const container = render();
     expand(container);
-    const mineTab = Array.from(container.querySelectorAll('[role="tab"]')).find(
-      (n) => n.textContent === "Mine",
-    ) as HTMLButtonElement | undefined;
     act(() => {
-      mineTab?.click();
+      tabByLabel(container, "Mine")?.click();
+    });
+    expect(container.textContent).toContain("No issues opened by you.");
+
+    mockedHook.mockReturnValue({
+      payload: makePayload({ issues: [], scope: "assigned" }),
+      loading: false,
+      refresh: vi.fn(),
+    });
+    act(() => {
+      tabByLabel(container, "Assigned")?.click();
     });
     expect(container.textContent).toContain("No issues assigned to you.");
+  });
+
+  it("renders the skeleton (not the empty state) when payload is undefined", () => {
+    // Simulates the first paint after a scope switch — the new scope's
+    // store slot is still undefined and the fetch hasn't landed yet.
+    mockedHook.mockReturnValue({
+      payload: undefined,
+      loading: false,
+      refresh: vi.fn(),
+    });
+    const container = render();
+    expand(container);
+    expect(container.textContent).not.toContain("No open issues.");
+    expect(container.textContent).not.toContain("No issues opened by you.");
+    expect(container.textContent).not.toContain("No issues assigned to you.");
+    // SkeletonList renders empty <li> rows.
+    expect(container.querySelectorAll("li").length).toBeGreaterThan(0);
   });
 });

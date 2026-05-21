@@ -95,11 +95,16 @@ export interface Issue {
 
 export type PullRequestScope = "open" | "mine" | "review_requested";
 
-/** Scope filter for the Issues tab. Mirrors PullRequestScope minus
- *  `review_requested` — GitHub issues don't have a review-requested
- *  concept. "Mine" is provider-side: issues authored by *or* assigned
- *  to the authenticated CLI user (see plugins/scm-github/init.lua). */
-export type IssueScope = "open" | "mine";
+/** Scope filter for the Issues tab. Three options:
+ *  - `open` — every open issue on the repo (default)
+ *  - `mine` — issues authored by the authenticated CLI user
+ *  - `assigned` — issues assigned to the authenticated CLI user
+ *
+ *  `mine` and `assigned` are kept separate (unlike the PR `mine`, which
+ *  is author-only) because the workflows differ: "what did I file?" vs.
+ *  "what's on my plate?". GitHub issues have no review-requested concept,
+ *  so there's no equivalent of `review_requested` here. */
+export type IssueScope = "open" | "mine" | "assigned";
 
 export interface RepoIssuesPayload {
   issues: Issue[];

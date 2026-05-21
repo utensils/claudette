@@ -55,62 +55,31 @@ end
 function M.list_issues(args)
     local limit = tostring(args.limit or 25)
     local state = args.state or "open"
-
-    local function base_args()
-        local out = {
-            "issue", "list",
-            "--per-page", limit,
-            "--output-format", "json",
-        }
-        if state == "open" then
-            table.insert(out, "--opened")
-        elseif state == "closed" then
-            table.insert(out, "--closed")
-        else
-            table.insert(out, "--all")
-        end
-        return out
-    end
-
-    local data
-    if args.scope == "mine" then
-        -- "Mine" mirrors the PR-side `--mine` semantics (authored by
-        -- the current user) plus issues assigned to them. glab exposes
-        -- both with distinct flags but doesn't OR them in a single
-        -- call, so run two queries and union on `iid` to dedupe issues
-        -- that are both authored and assigned.
-        local authored = base_args()
-        table.insert(authored, "--mine")
-        local assigned = base_args()
-        table.insert(assigned, "--assignee")
-        table.insert(assigned, "@me")
-
-        local ok_a, authored_data = pcall(glab, authored)
-        if not ok_a then error(authored_data) end
-        local ok_b, assigned_data = pcall(glab, assigned)
-        if not ok_b then error(assigned_data) end
-
-        local seen = {}
-        data = {}
-        for _, item in ipairs(authored_data) do
-            if item.iid and not seen[item.iid] then
-                seen[item.iid] = true
-                table.insert(data, item)
-            end
-        end
-        for _, item in ipairs(assigned_data) do
-            if item.iid and not seen[item.iid] then
-                seen[item.iid] = true
-                table.insert(data, item)
-            end
-        end
+    local glab_args = {
+        "issue", "list",
+        "--per-page", limit,
+        "--output-format", "json",
+    }
+    if state == "open" then
+        table.insert(glab_args, "--opened")
+    elseif state == "closed" then
+        table.insert(glab_args, "--closed")
     else
-        local glab_args = base_args()
-        local ok, result = pcall(glab, glab_args)
-        if not ok then
-            error(result)
-        end
-        data = result
+        table.insert(glab_args, "--all")
+    end
+    -- Mirror the GitHub plugin's three Issues-tab scopes:
+    --   "mine"     → glab's `--mine` flag (authored by current user)
+    --   "assigned" → `--assignee @me`
+    --   anything else → no extra filter ("Open")
+    if args.scope == "mine" then
+        table.insert(glab_args, "--mine")
+    elseif args.scope == "assigned" then
+        table.insert(glab_args, "--assignee")
+        table.insert(glab_args, "@me")
+    end
+    local ok, data = pcall(glab, glab_args)
+    if not ok then
+        error(data)
     end
     local issues = {}
     for _, item in ipairs(data) do
