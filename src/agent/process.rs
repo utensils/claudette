@@ -11,7 +11,7 @@ use crate::process::sanitize_claude_subprocess_env;
 use super::AgentSettings;
 use super::args::{build_claude_args, build_stdin_message};
 use super::binary::resolve_claude_path;
-use super::environment::{apply_resolved_env_to_command, apply_teammate_command_override};
+use super::environment::{apply_teammate_command_override, build_agent_command};
 use super::types::{FileAttachment, StreamEvent, parse_stream_line};
 
 /// Events emitted by an agent turn (stream events + process lifecycle).
@@ -89,28 +89,24 @@ pub async fn run_turn(
     crate::missing_cli::precheck_cwd(working_dir)?;
 
     let claude_path = resolve_claude_path().await;
-    let mut cmd = crate::process::command(&claude_path);
-    cmd.args(&args)
-        .current_dir(working_dir)
-        .stdout(std::process::Stdio::piped())
+    let built_command =
+        build_agent_command(claude_path.as_os_str(), &args, working_dir, resolved_env);
+    let invocation_program = built_command.invocation_program.clone();
+    let invocation_args = built_command.invocation_args.clone();
+    let mut cmd = built_command.command;
+    cmd.stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
-        .env("PATH", crate::env::enriched_path());
-
-    if has_attachments {
-        cmd.stdin(std::process::Stdio::piped());
-    } else {
-        cmd.stdin(std::process::Stdio::null());
-    }
+        .stdin(if has_attachments {
+            std::process::Stdio::piped()
+        } else {
+            std::process::Stdio::null()
+        });
 
     sanitize_claude_subprocess_env(&mut cmd);
 
-    // Apply user-provided env-provider output (direnv / mise / nix-devshell /
-    // dotenv) BEFORE the workspace's CLAUDETTE_* markers so those always win,
-    // and BEFORE the settings-driven 1M-context toggle so the UI choice
-    // cannot be overridden by a provider that happens to export the same key.
-    if let Some(env) = resolved_env {
-        apply_resolved_env_to_command(&mut cmd, env);
-    }
+    // build_agent_command applies the merged env-provider map for direct
+    // spawns, or wraps Nix workspaces in `nix develop --command` so the
+    // agent gets the clean devshell instead of direnv/profile output.
     settings.backend_runtime.apply_to_command(&mut cmd);
 
     cmd.env_remove("CLAUDE_CODE_DISABLE_1M_CONTEXT");
@@ -176,7 +172,7 @@ pub async fn run_turn(
     // canonical record. `is_resume == false` is the canonical "first turn"
     // signal already used elsewhere in this function.
     if !is_resume {
-        emit_invocation_event(&event_tx, &claude_path, &args);
+        emit_invocation_event(&event_tx, &invocation_program, &invocation_args);
     }
 
     // Stdout reader task — parse stream-json events

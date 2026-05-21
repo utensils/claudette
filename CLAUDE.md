@@ -57,7 +57,7 @@ IMPORTANT: CI sets `RUSTFLAGS="-Dwarnings"` — all compiler warnings are errors
 
 IMPORTANT: Always run `cd src/ui && bunx tsc -b` after modifying TypeScript files (including tests). CI runs `tsc -b` via `bun run build` — `vitest` does **not** type-check (it uses esbuild), so tests can pass locally while types are broken. Run `tsc -b` as the final check before committing any frontend change.
 
-CI also enforces `bun install --frozen-lockfile` — do not modify `bun.lock` without intention. CI runs `cargo llvm-cov` for Rust test coverage (uploaded to Codecov, informational/non-blocking). CI clippy lints `claudette`, `claudette-server`, and `claudette-cli` on Linux, runs `scripts/stage-cli-sidecar.sh --profile debug` and then `cargo check -p claudette-tauri --no-default-features --features devtools,server,voice,alternative-backends,pi-sdk` with the Linux Tauri system libraries installed, and checks `claudette-mobile` on macOS (host target `aarch64-apple-darwin`, desktop-fallback build — iOS target compilation is intentionally not in CI; it requires Xcode + Apple SDK + `cargo tauri ios init` scaffolding). The Tauri check uses the shared Rust cache plus Bun's package cache for the Pi harness sidecar staging path; keep it cache-friendly when editing. Frontend CI runs `bunx tsc --noEmit` as a dedicated type-check step before `bun run build`.
+CI also enforces `bun install --frozen-lockfile` — do not modify `bun.lock` without intention. CI runs `cargo llvm-cov` for Rust test coverage (uploaded to Codecov, informational/non-blocking). CI clippy lints `claudette`, `claudette-server`, and `claudette-cli` on Linux, runs `scripts/stage-cli-sidecar.sh --profile debug` and then `cargo test -p claudette-tauri --no-default-features --features devtools,server,voice,alternative-backends,pi-sdk --no-run` with the Linux Tauri system libraries installed (`--no-run` so the binary crate's test targets are compiled too — the `test` job only covers `claudette` / `-server` / `-cli`, so a non-compiling test fixture in `claudette-tauri` would otherwise slip through), and checks `claudette-mobile` on macOS (host target `aarch64-apple-darwin`, desktop-fallback build — iOS target compilation is intentionally not in CI; it requires Xcode + Apple SDK + `cargo tauri ios init` scaffolding). The Tauri check uses the shared Rust cache plus Bun's package cache for the Pi harness sidecar staging path; keep it cache-friendly when editing. Frontend CI runs `bunx tsc --noEmit` as a dedicated type-check step before `bun run build`.
 
 ## Code style
 
@@ -141,7 +141,8 @@ src/
   plugin_runtime/       — sandboxed Lua runtime (mlua) shared across plugin kinds
   permissions.rs        — tool/permission policy
   scm/                  — SCM consumer of plugin_runtime: PR/CI types + host/URL detection
-  env_provider/         — env-provider consumer: dispatcher, mtime cache, merged ResolvedEnv
+  env_provider/         — env-provider consumer: dispatcher, mtime cache, merged ResolvedEnv,
+                          plus `nix develop` wrapping for Nix devshell terminals/agents
   slash_commands.rs     — slash command loading and dispatch
   cesp.rs               — CESP (Claudette event stream protocol)
   config.rs / env.rs / path.rs / file_expand.rs — config, env, path helpers
@@ -165,7 +166,8 @@ plugins/                — bundled Lua plugins (compiled in via include_str!)
   env-direnv/           — direnv env activation
   env-mise/             — mise env activation
   env-dotenv/           — `.env` in-process parser
-  env-nix-devshell/     — `nix print-dev-env` env activation
+  env-nix-devshell/     — Nix devshell detection/env export; terminals and agents enter via
+                          `nix develop` directly instead of through direnv
 src-pi-harness/         — TypeScript/Bun sidecar wrapping `@earendil-works/pi-coding-agent`.
                           Compiled by `scripts/stage-pi-harness-sidecar.sh` into a single Bun
                           executable at `src-tauri/binaries/claudette-pi-harness-<triple>` and

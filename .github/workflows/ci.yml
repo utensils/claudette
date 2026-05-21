@@ -107,7 +107,12 @@ jobs:
             pi-harness-bun-${{ runner.os }}-
       - name: Stage Tauri sidecars
         run: scripts/stage-cli-sidecar.sh --profile debug
-      - run: cargo check -p claudette-tauri --no-default-features --features devtools,server,voice,alternative-backends,pi-sdk
+      # `cargo test --no-run` (not `cargo check`) so the binary crate's
+      # test targets are compiled too — CI's `test` job only covers
+      # claudette / -server / -cli, so a non-compiling test fixture in
+      # claudette-tauri would otherwise slip through entirely.
+      - name: Compile claudette-tauri (incl. test targets)
+        run: cargo test -p claudette-tauri --no-default-features --features devtools,server,voice,alternative-backends,pi-sdk --no-run
 
   mobile:
     name: Mobile (macOS)

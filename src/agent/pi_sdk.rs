@@ -11,7 +11,7 @@ use tokio::sync::broadcast;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 
-use super::environment::apply_resolved_env_to_command;
+use super::environment::build_agent_command;
 use super::{
     AgentEvent, AssistantMessage, ContentBlock, ControlRequestInner, Delta, FileAttachment,
     InnerStreamEvent, StartContentBlock, StreamEvent, TokenUsage, TurnHandle, UserContentBlock,
@@ -254,15 +254,16 @@ impl PiSdkSession {
         crate::missing_cli::precheck_cwd(config.working_dir)?;
 
         let pi_path = resolve_pi_harness_path().await;
-        let mut cmd = crate::process::command(&pi_path);
-        cmd.current_dir(config.working_dir)
-            .stdin(std::process::Stdio::piped())
+        let built_command = build_agent_command(
+            pi_path.as_os_str(),
+            &[],
+            config.working_dir,
+            config.resolved_env,
+        );
+        let mut cmd = built_command.command;
+        cmd.stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .env("PATH", crate::env::enriched_path());
-        if let Some(env) = config.resolved_env {
-            apply_resolved_env_to_command(&mut cmd, env);
-        }
+            .stderr(std::process::Stdio::piped());
         if let Some(env) = config.workspace_env {
             env.apply(&mut cmd);
         }
