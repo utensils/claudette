@@ -192,6 +192,7 @@ export interface WorkspacesSlice {
    *  it failed). */
   cancelPendingCreate: (placeholderId: string, restoreSelectionTo: string | null) => void;
   workspaceEnvironment: Record<string, WorkspaceEnvironmentPreparation>;
+  workspaceEnvironmentRetryNonce: Record<string, number>;
   setWorkspaces: (workspaces: Workspace[]) => void;
   addWorkspace: (ws: Workspace) => void;
   updateWorkspace: (id: string, updates: Partial<Workspace>) => void;
@@ -210,6 +211,7 @@ export interface WorkspacesSlice {
     status: WorkspaceEnvironmentStatus,
     error?: string,
   ) => void;
+  retryWorkspaceEnvironment: (id: string) => void;
   /** Update the per-workspace progress entry from a
    *  `workspace_env_progress` Tauri event. `plugin === null` clears
    *  the active plugin (paired with the matching `finished` event).
@@ -489,6 +491,7 @@ export const createWorkspacesSlice: StateCreator<
       };
     }),
   workspaceEnvironment: {},
+  workspaceEnvironmentRetryNonce: {},
   setWorkspaces: (workspaces) => set({ workspaces }),
   // Idempotent by id: workspace creates can race between the Tauri
   // command's response (Sidebar calls `addWorkspace` after the await
@@ -731,6 +734,17 @@ export const createWorkspacesSlice: StateCreator<
         },
       };
     }),
+  retryWorkspaceEnvironment: (id) =>
+    set((s) => ({
+      workspaceEnvironment: {
+        ...s.workspaceEnvironment,
+        [id]: { status: "preparing" },
+      },
+      workspaceEnvironmentRetryNonce: {
+        ...s.workspaceEnvironmentRetryNonce,
+        [id]: (s.workspaceEnvironmentRetryNonce[id] ?? 0) + 1,
+      },
+    })),
   setWorkspaceEnvironmentProgress: (id, plugin, started_at) =>
     set((s) => {
       const previous = s.workspaceEnvironment[id];

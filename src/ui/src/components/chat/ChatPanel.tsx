@@ -11,10 +11,6 @@ import { WorkspaceEmptyTabs } from "./WorkspaceEmptyTabs";
 import { useAppStore } from "../../stores/useAppStore";
 import { isWorkspaceEnvironmentPreparing } from "../../utils/workspaceEnvironment";
 import {
-  ENV_PREPARATION_TIMEOUT_MS,
-  envPreparationTimeoutMessage,
-} from "../../hooks/useWorkspaceEnvironmentPreparation";
-import {
   loadAttachmentData,
   loadChatHistoryPage,
   loadAttachmentsForSession,
@@ -37,9 +33,7 @@ import {
   loadDiffFiles,
   forkWorkspaceAtCheckpoint,
   launchCodexLogin,
-  prepareWorkspaceEnvironment,
 } from "../../services/tauri";
-import { envTargetFromWorkspace, reloadEnv } from "../../services/env";
 import { resolveSessionHarness } from "./resolveSessionHarness";
 import { applySelectedModel } from "./applySelectedModel";
 import { findLatestPlanFilePath } from "./planFilePath";
@@ -1153,45 +1147,10 @@ export function ChatPanel() {
     enqueueTerminalCommand(selectedWorkspaceId, command);
   };
 
-  const handleRetryWorkspaceEnvironment = async () => {
+  const handleRetryWorkspaceEnvironment = () => {
     if (!selectedWorkspaceId || ws?.remote_connection_id) return;
-    const workspaceId = selectedWorkspaceId;
-    const timeoutMessage = envPreparationTimeoutMessage();
-    const withTimeout = <T,>(operation: () => Promise<T>): Promise<T> =>
-      new Promise((resolve, reject) => {
-        const timer = window.setTimeout(
-          () => reject(new Error(timeoutMessage)),
-          ENV_PREPARATION_TIMEOUT_MS,
-        );
-        operation().then(
-          (value) => {
-            window.clearTimeout(timer);
-            resolve(value);
-          },
-          (err) => {
-            window.clearTimeout(timer);
-            reject(err);
-          },
-        );
-      });
-
     setError(null);
-    const store = useAppStore.getState();
-    store.setWorkspaceEnvironment(workspaceId, "preparing");
-    try {
-      const payload = await withTimeout(async () => {
-        await reloadEnv(envTargetFromWorkspace(workspaceId));
-        return prepareWorkspaceEnvironment(workspaceId);
-      });
-      if (payload) store.openModal("envTrust", payload);
-      useAppStore.getState().setWorkspaceEnvironment(workspaceId, "ready");
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      useAppStore
-        .getState()
-        .setWorkspaceEnvironment(workspaceId, "error", message);
-      setError(message);
-    }
+    useAppStore.getState().retryWorkspaceEnvironment(selectedWorkspaceId);
   };
 
   const handleSend = async (

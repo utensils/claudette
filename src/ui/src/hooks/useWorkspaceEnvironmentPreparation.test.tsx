@@ -9,8 +9,16 @@ import { useAppStore } from "../stores/useAppStore";
 const serviceMocks = vi.hoisted(() => ({
   prepareWorkspaceEnvironment: vi.fn(),
 }));
+const envServiceMocks = vi.hoisted(() => ({
+  reloadEnv: vi.fn(),
+  envTargetFromWorkspace: vi.fn((workspaceId: string) => ({
+    kind: "workspace",
+    workspace_id: workspaceId,
+  })),
+}));
 
 vi.mock("../services/tauri", () => serviceMocks);
+vi.mock("../services/env", () => envServiceMocks);
 
 // The hook subscribes to `workspace_env_progress` Tauri events at
 // mount; in vitest there's no Tauri runtime so `listen` would crash
@@ -64,10 +72,14 @@ describe("useWorkspaceEnvironmentPreparation", () => {
     document.body.innerHTML = "";
     serviceMocks.prepareWorkspaceEnvironment.mockReset();
     serviceMocks.prepareWorkspaceEnvironment.mockResolvedValue(undefined);
+    envServiceMocks.reloadEnv.mockReset();
+    envServiceMocks.reloadEnv.mockResolvedValue(undefined);
+    envServiceMocks.envTargetFromWorkspace.mockClear();
     useAppStore.setState({
       selectedWorkspaceId: null,
       workspaces: [],
       workspaceEnvironment: {},
+      workspaceEnvironmentRetryNonce: {},
       activeModal: null,
       modalData: {},
       toasts: [],
@@ -566,6 +578,40 @@ describe("useWorkspaceEnvironmentPreparation", () => {
       phase: "complete",
       elapsed_ms: 0,
     });
+    expect(useAppStore.getState().workspaceEnvironment["ws-1"]).toEqual({
+      status: "ready",
+    });
+  });
+
+  it("reruns preparation through the hook when retry is requested", async () => {
+    useAppStore.setState({
+      selectedWorkspaceId: "ws-1",
+      workspaces: [makeWorkspace()],
+      workspaceEnvironment: { "ws-1": { status: "error", error: "timed out" } },
+    });
+
+    await renderHarness();
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(serviceMocks.prepareWorkspaceEnvironment).toHaveBeenCalledTimes(1);
+
+    act(() => {
+      useAppStore.getState().retryWorkspaceEnvironment("ws-1");
+    });
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(envServiceMocks.envTargetFromWorkspace).toHaveBeenCalledWith("ws-1");
+    expect(envServiceMocks.reloadEnv).toHaveBeenCalledWith({
+      kind: "workspace",
+      workspace_id: "ws-1",
+    });
+    expect(serviceMocks.prepareWorkspaceEnvironment).toHaveBeenCalledTimes(2);
     expect(useAppStore.getState().workspaceEnvironment["ws-1"]).toEqual({
       status: "ready",
     });
