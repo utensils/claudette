@@ -2860,7 +2860,21 @@ pub async fn send_chat_message(
                 let _ = db.insert_chat_message(&msg);
             }
 
-            if let AgentEvent::Stream(StreamEvent::User { message, .. }) = &event {
+            if let AgentEvent::Stream(StreamEvent::User {
+                message, is_replay, ..
+            }) = &event
+            {
+                // On replay (CLI's `--replay-user-messages` echo of stdin and
+                // anything the CLI re-emits from a resumed transcript) every
+                // ToolResult that already landed on disk would be re-appended
+                // to the workspace `terminal.output` and trigger another
+                // mirror spawn for any background-task binding. That is the
+                // O(n²) growth path documented in issue #937 — the
+                // workspace's terminal.output file reached 15.6 GB and the
+                // process held ~46 GB RSS before the OOM. Skip the side
+                // effects on replay; the original event already produced
+                // them and the persisted file already has the content.
+                let is_replay = *is_replay;
                 match &message.content {
                     claudette::agent::UserMessageContent::Blocks(blocks) => {
                         for block in blocks {
@@ -2891,6 +2905,7 @@ pub async fn send_chat_message(
                                         };
                                     if let Some(binding) = background_binding
                                         && is_trusted_background_binding
+                                        && !is_replay
                                     {
                                         {
                                             let app_state = app.state::<AppState>();
@@ -2940,7 +2955,7 @@ pub async fn send_chat_message(
                                                 );
                                             }
                                         }
-                                    } else if is_known_bash_tool_result {
+                                    } else if is_known_bash_tool_result && !is_replay {
                                         let path =
                                             claudette::agent::background::workspace_terminal_output_path(&ws_id);
                                         let text = terminal_text(&text);

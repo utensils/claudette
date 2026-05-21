@@ -1,10 +1,12 @@
 use std::{
     collections::{HashMap, HashSet},
-    path::Path,
+    path::{Path, PathBuf},
+    sync::{Arc, OnceLock},
     time::Duration,
 };
 
 use tauri::{AppHandle, Emitter, Manager};
+use tokio::sync::Mutex as AsyncMutex;
 
 use claudette::agent::background::{
     AgentBackgroundTaskEvent, AgentBackgroundTaskEventKind, parse_bash_start,
@@ -53,6 +55,64 @@ pub(super) fn terminal_text(text: &str) -> String {
     rendered
 }
 
+/// Hard ceiling for any workspace `terminal.output` file. Once a file reaches this
+/// size, the next append truncates it to its last [`TERMINAL_OUTPUT_TAIL_BYTES`]
+/// (preceded by a banner) so a chatty long-running background bash cannot grow
+/// the file unboundedly. The Claudette Terminal tail reader already handles
+/// in-place shrinkage (`tail_agent_task_file` resets when `len < offset`).
+///
+/// 64 MiB / 32 MiB is enough scrollback for any practical debugging session
+/// while bounding the worst-case heap retained by the Tauri → xterm.js pipeline.
+const TERMINAL_OUTPUT_MAX_BYTES: u64 = 64 * 1024 * 1024;
+const TERMINAL_OUTPUT_TAIL_BYTES: u64 = 32 * 1024 * 1024;
+
+/// Per-path async mutexes used to serialize size-cap rotations against
+/// concurrent appenders. Each workspace's `terminal.output` gets its own
+/// lock, so unrelated workspaces never block each other; rotations and
+/// appends to the same path are serialized so the truncate-to-tail
+/// rewrite can't lose concurrent writes.
+fn terminal_output_lock_for(path: &Path) -> Arc<AsyncMutex<()>> {
+    static LOCKS: OnceLock<std::sync::Mutex<HashMap<PathBuf, Arc<AsyncMutex<()>>>>> =
+        OnceLock::new();
+    let map = LOCKS.get_or_init(|| std::sync::Mutex::new(HashMap::new()));
+    let mut guard = map.lock().expect("terminal output lock map poisoned");
+    guard
+        .entry(path.to_path_buf())
+        .or_insert_with(|| Arc::new(AsyncMutex::new(())))
+        .clone()
+}
+
+async fn rotate_terminal_output_if_needed(path: &Path) -> std::io::Result<()> {
+    let len = match tokio::fs::metadata(path).await {
+        Ok(meta) => meta.len(),
+        Err(_) => return Ok(()),
+    };
+    if len <= TERMINAL_OUTPUT_MAX_BYTES {
+        return Ok(());
+    }
+    use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
+    let mut file = tokio::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(path)
+        .await?;
+    let start = len.saturating_sub(TERMINAL_OUTPUT_TAIL_BYTES);
+    file.seek(std::io::SeekFrom::Start(start)).await?;
+    let mut tail = Vec::with_capacity(TERMINAL_OUTPUT_TAIL_BYTES as usize);
+    file.read_to_end(&mut tail).await?;
+    let banner = format!(
+        "\r\n[claudette: terminal output truncated, keeping last {} MiB]\r\n",
+        TERMINAL_OUTPUT_TAIL_BYTES / (1024 * 1024)
+    );
+    file.seek(std::io::SeekFrom::Start(0)).await?;
+    file.write_all(banner.as_bytes()).await?;
+    file.write_all(&tail).await?;
+    let new_len = banner.len() as u64 + tail.len() as u64;
+    file.set_len(new_len).await?;
+    file.flush().await?;
+    Ok(())
+}
+
 pub(super) async fn append_agent_bash_output(
     path: &std::path::Path,
     text: &str,
@@ -60,6 +120,9 @@ pub(super) async fn append_agent_bash_output(
     if let Some(parent) = path.parent() {
         tokio::fs::create_dir_all(parent).await?;
     }
+    let lock = terminal_output_lock_for(path);
+    let _guard = lock.lock().await;
+    rotate_terminal_output_if_needed(path).await?;
     use tokio::io::AsyncWriteExt;
     let mut file = tokio::fs::OpenOptions::new()
         .create(true)
@@ -69,10 +132,33 @@ pub(super) async fn append_agent_bash_output(
     file.write_all(text.as_bytes()).await
 }
 
+/// Set of (source, destination) pairs that already have a live mirror task
+/// running. Background-bash bindings can re-fire (e.g. on `--resume` replay
+/// of the session transcript), and each spawn would restart reading the
+/// source file from offset 0 — re-appending gigabytes of historical bash
+/// output to the workspace terminal. This dedupes spawn requests so only
+/// one mirror per (source, destination) pair runs at a time.
+fn active_mirrors() -> &'static std::sync::Mutex<HashSet<(PathBuf, PathBuf)>> {
+    static ACTIVE: OnceLock<std::sync::Mutex<HashSet<(PathBuf, PathBuf)>>> = OnceLock::new();
+    ACTIVE.get_or_init(|| std::sync::Mutex::new(HashSet::new()))
+}
+
 pub(super) fn mirror_background_task_output(
     source: std::path::PathBuf,
     destination: std::path::PathBuf,
 ) {
+    {
+        let mut active = active_mirrors().lock().expect("active mirrors poisoned");
+        if !active.insert((source.clone(), destination.clone())) {
+            tracing::debug!(
+                target: "claudette::chat",
+                source = %source.display(),
+                destination = %destination.display(),
+                "skipping duplicate background output mirror spawn"
+            );
+            return;
+        }
+    }
     tokio::spawn(async move {
         use tokio::io::{AsyncReadExt, AsyncSeekExt};
 
@@ -131,6 +217,8 @@ pub(super) fn mirror_background_task_output(
                 }
             }
         }
+        let mut active = active_mirrors().lock().expect("active mirrors poisoned");
+        active.remove(&(source, destination));
     });
 }
 
@@ -1060,5 +1148,100 @@ mod tests {
         assert!(text.contains("tail output"));
 
         let _ = std::fs::remove_file(trusted_path);
+    }
+
+    #[tokio::test]
+    async fn append_caps_terminal_output_via_truncate_to_tail() {
+        // Issue #937: workspace `terminal.output` grew to 15.6 GB because a
+        // long-running background bash mirror appended without bound. The
+        // appender must rotate the file when it exceeds the hard cap so the
+        // tail-emit pipeline can't blow up memory.
+        use super::{
+            TERMINAL_OUTPUT_MAX_BYTES, TERMINAL_OUTPUT_TAIL_BYTES, append_agent_bash_output,
+        };
+
+        let path = std::env::temp_dir().join(format!(
+            "claudette-cap-{}.terminal.output",
+            uuid::Uuid::new_v4()
+        ));
+        // Seed the file just past the cap so the next append triggers
+        // rotation. Use a small marker at the very end so we can assert
+        // recent bytes survive truncation.
+        let mut seed = vec![b'A'; TERMINAL_OUTPUT_MAX_BYTES as usize + 1024];
+        let marker = b"TAIL_MARKER_KEEP_ME";
+        let marker_at = seed.len() - marker.len();
+        seed[marker_at..].copy_from_slice(marker);
+        std::fs::write(&path, &seed).unwrap();
+
+        append_agent_bash_output(&path, "new-line\r\n")
+            .await
+            .unwrap();
+
+        let after = std::fs::read(&path).unwrap();
+        // Cap brought us back well under the ceiling. tail bytes + banner +
+        // the new "new-line" append must all fit comfortably inside the cap.
+        assert!(
+            (after.len() as u64) <= TERMINAL_OUTPUT_TAIL_BYTES + 256,
+            "file should have been truncated, got {} bytes",
+            after.len()
+        );
+        let after_str = String::from_utf8_lossy(&after);
+        assert!(after_str.starts_with("\r\n[claudette: terminal output truncated"));
+        // The marker we appended *just before* rotation must survive — the
+        // rotator keeps the tail of the file, not the head.
+        assert!(
+            after.windows(marker.len()).any(|w| w == marker),
+            "expected tail marker to survive truncation"
+        );
+        // The newly appended line is at the very end.
+        assert!(
+            after_str.ends_with("new-line\r\n"),
+            "expected newest append at end"
+        );
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[tokio::test]
+    async fn mirror_background_task_output_dedupes_duplicate_spawns() {
+        // Issue #937: on session resume the binding `ToolResult` can re-fire,
+        // and each spawn restarts the mirror at offset 0 and re-appends the
+        // entire source file. Duplicate (source, destination) pairs must be
+        // deduped so a single mirror exists per pair.
+        use super::mirror_background_task_output;
+
+        let source =
+            std::env::temp_dir().join(format!("claudette-mirror-src-{}.log", uuid::Uuid::new_v4()));
+        let destination =
+            std::env::temp_dir().join(format!("claudette-mirror-dst-{}.log", uuid::Uuid::new_v4()));
+        // Seed a tiny source so the mirror has bytes to copy on its first
+        // tick (~100 ms). We assert on the destination size, which a single
+        // mirror would write once and a second concurrent mirror would
+        // append again.
+        let payload = b"once\n";
+        std::fs::write(&source, payload).unwrap();
+
+        mirror_background_task_output(source.clone(), destination.clone());
+        // Second spawn for the same pair must be a no-op (deduped) rather
+        // than re-reading the source file from offset 0.
+        mirror_background_task_output(source.clone(), destination.clone());
+
+        // Give the (single) live mirror a tick or two to flush.
+        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+
+        let after = std::fs::read(&destination).unwrap();
+        // The mirror runs `terminal_text` which converts `\n` → `\r\n`.
+        // One mirror copies the source once: 5 bytes in → 6 bytes out.
+        // Two mirrors would copy it twice: 12 bytes out.
+        assert_eq!(
+            after.len(),
+            6,
+            "expected exactly one mirror to have written, got {} bytes ({:?})",
+            after.len(),
+            String::from_utf8_lossy(&after)
+        );
+
+        let _ = std::fs::remove_file(source);
+        let _ = std::fs::remove_file(destination);
     }
 }
