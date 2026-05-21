@@ -255,9 +255,14 @@ impl Database {
         let keep = retention_count.max(1);
         let tx = self.conn.unchecked_transaction()?;
         Self::insert_checkpoint_files_tx(&tx, files)?;
-        Self::prune_checkpoint_files_tx(&tx, workspace_id, keep)?;
-        Self::gc_orphan_blobs_tx(&tx)?;
+        let pruned = Self::prune_checkpoint_files_tx(&tx, workspace_id, keep)?;
+        let gc_count = Self::gc_orphan_blobs_tx(&tx)?;
         tx.commit()?;
+        // Drain freelist pages the prune + orphan GC just freed. The
+        // `_after_delete` helper short-circuits when nothing was deleted,
+        // so this is a no-op on the steady-state path where every batch
+        // sits comfortably inside the retention window.
+        self.best_effort_incremental_vacuum_after_delete(pruned + gc_count);
         Ok(())
     }
 
@@ -309,7 +314,7 @@ impl Database {
         tx: &rusqlite::Transaction<'_>,
         workspace_id: &str,
         keep: usize,
-    ) -> Result<(), rusqlite::Error> {
+    ) -> Result<usize, rusqlite::Error> {
         // `created_at DESC, turn_index DESC, id DESC` matches the ordering
         // documented in #582: created_at is unambiguous wall-clock recency at
         // the workspace scope (turn_index is per-session so it collides
@@ -321,7 +326,7 @@ impl Database {
         // snapshot even though their `checkpoint_files` rows were already
         // pruned earlier and there is no work to do for them — making
         // snapshot cost O(total history) rather than O(retained-with-files).
-        tx.execute(
+        let deleted = tx.execute(
             "DELETE FROM checkpoint_files
              WHERE checkpoint_id IN (
                  SELECT id FROM conversation_checkpoints
@@ -335,10 +340,10 @@ impl Database {
              )",
             params![workspace_id, keep as i64],
         )?;
-        Ok(())
+        Ok(deleted)
     }
 
-    fn gc_orphan_blobs_tx(tx: &rusqlite::Transaction<'_>) -> Result<(), rusqlite::Error> {
+    fn gc_orphan_blobs_tx(tx: &rusqlite::Transaction<'_>) -> Result<usize, rusqlite::Error> {
         // Correlated `NOT EXISTS` lets SQLite drive each candidate blob row
         // through `idx_checkpoint_files_blob_sha256` directly, without
         // materializing a DISTINCT set of every referenced sha. The form
@@ -347,7 +352,7 @@ impl Database {
         // don't satisfy the `=` predicate, so they neither protect a
         // blob from GC nor poison the outer match the way they would
         // under `NOT IN`'s three-valued logic.
-        tx.execute(
+        let deleted = tx.execute(
             "DELETE FROM checkpoint_blobs
              WHERE NOT EXISTS (
                  SELECT 1 FROM checkpoint_files
@@ -355,7 +360,7 @@ impl Database {
              )",
             [],
         )?;
-        Ok(())
+        Ok(deleted)
     }
 
     /// Read snapshot rows for a checkpoint, materializing bytes from
@@ -474,6 +479,13 @@ impl Database {
             }
         }
         tx.commit()?;
+        // Each migrated row nulled out a `content` BLOB whose overflow
+        // pages were just freed. Draining the freelist incrementally as
+        // we go means the DB file actually shrinks during a long
+        // backfill rather than ballooning until something else triggers
+        // a vacuum. `best_effort_*` short-circuits on FULL auto-vacuum
+        // mode, so this is safe to call unconditionally.
+        self.best_effort_incremental_vacuum_after_delete(migrated);
         Ok(migrated)
     }
 

@@ -84,22 +84,37 @@ pub fn spawn_backfill(db_path: PathBuf) {
 
 /// Drive the backfill loop to completion. Returns once every legacy row
 /// has been migrated or there are no legacy rows to begin with.
+///
+/// The entire loop runs inside a single `spawn_blocking` worker that owns
+/// one `Database` connection — opening a fresh DB per batch (as an
+/// earlier version did) cost a migration scan, pragma reapply, and
+/// busy-timeout setup tens of thousands of times on a multi-GB legacy
+/// install. Each batch is still its own transaction, so the SQLite write
+/// lock is only held for the duration of a single batch's writes —
+/// foreground commands queued on `busy_timeout` get to interleave between
+/// our commits.
 pub async fn run_backfill(db_path: &Path) -> Result<(), BackfillError> {
+    let path = db_path.to_path_buf();
+    tokio::task::spawn_blocking(move || run_backfill_blocking(&path))
+        .await
+        .map_err(BackfillError::JoinFailed)?
+}
+
+fn run_backfill_blocking(db_path: &Path) -> Result<(), BackfillError> {
+    let db = Database::open(db_path)?;
+
     // Skip if already complete — recorded after every successful pass so we
     // never repeat the full table scan on subsequent boots.
-    if blocking_op(db_path, |db| {
-        Ok(db
-            .get_app_setting(BACKFILL_DONE_KEY)?
-            .is_some_and(|v| v == "true"))
-    })
-    .await?
+    if db
+        .get_app_setting(BACKFILL_DONE_KEY)?
+        .is_some_and(|v| v == "true")
     {
         return Ok(());
     }
 
-    let total_legacy = blocking_op(db_path, |db| db.count_legacy_checkpoint_file_rows()).await?;
+    let total_legacy = db.count_legacy_checkpoint_file_rows()?;
     if total_legacy == 0 {
-        blocking_op(db_path, |db| db.set_app_setting(BACKFILL_DONE_KEY, "true")).await?;
+        db.set_app_setting(BACKFILL_DONE_KEY, "true")?;
         return Ok(());
     }
 
@@ -111,43 +126,20 @@ pub async fn run_backfill(db_path: &Path) -> Result<(), BackfillError> {
 
     let mut migrated_total: usize = 0;
     loop {
-        let migrated = blocking_op(db_path, |db| {
-            db.migrate_legacy_checkpoint_file_batch(BATCH_ROW_COUNT, BATCH_BYTE_BUDGET)
-        })
-        .await?;
+        let migrated =
+            db.migrate_legacy_checkpoint_file_batch(BATCH_ROW_COUNT, BATCH_BYTE_BUDGET)?;
         if migrated == 0 {
             break;
         }
         migrated_total += migrated;
-        // Yield between batches so foreground commands keep the write lock
-        // for short periods. Cooperative scheduling rather than hard sleep.
-        tokio::task::yield_now().await;
     }
-    blocking_op(db_path, |db| db.set_app_setting(BACKFILL_DONE_KEY, "true")).await?;
+    db.set_app_setting(BACKFILL_DONE_KEY, "true")?;
     tracing::info!(
         target: "claudette::db",
         migrated_rows = migrated_total,
         "checkpoint blob backfill complete"
     );
     Ok(())
-}
-
-/// Run a blocking DB operation on a worker thread so the backfill never
-/// holds a `Database` (non-`Send`) across `await` points and never blocks
-/// the tokio reactor with synchronous SQLite calls.
-async fn blocking_op<F, T>(db_path: &Path, op: F) -> Result<T, BackfillError>
-where
-    F: FnOnce(&Database) -> Result<T, rusqlite::Error> + Send + 'static,
-    T: Send + 'static,
-{
-    let path = db_path.to_path_buf();
-    tokio::task::spawn_blocking(move || {
-        let db = Database::open(&path)?;
-        op(&db)
-    })
-    .await
-    .map_err(BackfillError::JoinFailed)?
-    .map_err(BackfillError::Sql)
 }
 
 #[cfg(test)]

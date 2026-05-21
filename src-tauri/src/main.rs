@@ -857,22 +857,13 @@ fn main() {
             // One-time backfill of legacy `checkpoint_files.content` rows
             // into the content-addressed `checkpoint_blobs` store. Closes
             // #940 / #942 for users whose DB filled up before dedupe
-            // shipped. The task short-circuits if the
-            // `checkpoint_blob_backfill_done` marker is already set, so
-            // subsequent boots pay only the marker read. Backgrounded to
-            // avoid blocking app launch on a multi-GB legacy install.
-            let backfill_db_path = app.state::<state::AppState>().db_path.clone();
-            tauri::async_runtime::spawn(async move {
-                if let Err(e) =
-                    claudette::checkpoint_backfill::run_backfill(&backfill_db_path).await
-                {
-                    tracing::warn!(
-                        target: "claudette::db",
-                        error = %e,
-                        "checkpoint blob backfill failed; will retry on next launch"
-                    );
-                }
-            });
+            // shipped. The helper handles the "already done" short-circuit,
+            // the long-lived spawn_blocking worker, and the warn-on-error
+            // path — call it directly rather than re-implementing those
+            // semantics inline here.
+            claudette::checkpoint_backfill::spawn_backfill(
+                app.state::<state::AppState>().db_path.clone(),
+            );
 
             // Start the local IPC server the `claudette` CLI talks to.
             // Spawned async on the Tauri runtime; the resulting
