@@ -43,7 +43,6 @@ use super::{
 mod background_tasks;
 mod team_agents;
 
-pub(crate) use self::background_tasks::append_terminal_output_sync;
 use self::background_tasks::{
     BackgroundTaskInputTracker, append_agent_bash_output, apply_task_notification_status,
     emit_agent_background_task_event, get_or_create_agent_shell_terminal_tab,

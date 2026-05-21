@@ -19,14 +19,13 @@ use uuid::Uuid;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
 
-use claudette::agent::background::workspace_terminal_output_path;
+use claudette::agent::background::{append_terminal_output_sync, workspace_terminal_output_path};
 use claudette::db::Database;
 use claudette::env_provider::EnvWatcher;
 use claudette::plugin_runtime::host_api::{OutputStream, StreamingSink, WorkspaceInfo};
 use claudette::plugin_runtime::manifest::PluginKind;
 use claudette::process::command;
 
-use crate::commands::chat::send::append_terminal_output_sync;
 use crate::state::AppState;
 
 /// Payload for the `env-cache-invalidated` Tauri event. The frontend's

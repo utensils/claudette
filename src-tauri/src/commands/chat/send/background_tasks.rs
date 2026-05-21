@@ -1,15 +1,15 @@
 use std::{
     collections::{HashMap, HashSet},
     path::{Path, PathBuf},
-    sync::{Arc, Mutex, OnceLock},
+    sync::{Mutex, OnceLock},
     time::Duration,
 };
 
 use tauri::{AppHandle, Emitter, Manager};
 
 use claudette::agent::background::{
-    AgentBackgroundTaskEvent, AgentBackgroundTaskEventKind, parse_bash_start,
-    parse_task_notification, workspace_terminal_output_path,
+    AgentBackgroundTaskEvent, AgentBackgroundTaskEventKind, append_terminal_output_sync,
+    parse_bash_start, parse_task_notification, workspace_terminal_output_path,
 };
 use claudette::agent::{AgentEvent, InnerStreamEvent, StartContentBlock, StreamEvent};
 use claudette::chat::{
@@ -54,102 +54,10 @@ pub(super) fn terminal_text(text: &str) -> String {
     rendered
 }
 
-/// Hard ceiling for any workspace `terminal.output` file. Once a file reaches this
-/// size, the next append truncates it to its last [`TERMINAL_OUTPUT_TAIL_BYTES`]
-/// (preceded by a banner) so a chatty long-running background bash cannot grow
-/// the file unboundedly. The Claudette Terminal tail reader already handles
-/// in-place shrinkage (`tail_agent_task_file` resets when `len < offset`).
-///
-/// 64 MiB / 32 MiB is enough scrollback for any practical debugging session
-/// while bounding the worst-case heap retained by the Tauri → xterm.js pipeline.
-pub(crate) const TERMINAL_OUTPUT_MAX_BYTES: u64 = 64 * 1024 * 1024;
-pub(crate) const TERMINAL_OUTPUT_TAIL_BYTES: u64 = 32 * 1024 * 1024;
-
-/// Per-path mutexes used to serialize size-cap rotations against concurrent
-/// appenders. Each workspace's `terminal.output` gets its own lock, so
-/// unrelated workspaces never block each other; rotations and appends to
-/// the same path are serialized so the truncate-to-tail rewrite cannot
-/// lose concurrent writes.
-///
-/// Both writers to the workspace terminal file (the agent stream path
-/// here and `WorkspaceTerminalFileSink` in `commands::env`) take this
-/// lock from sync context — the async agent path defers to
-/// [`tokio::task::spawn_blocking`] so the std mutex is never held across
-/// an await.
-fn terminal_output_lock_for(path: &Path) -> Arc<Mutex<()>> {
-    static LOCKS: OnceLock<Mutex<HashMap<PathBuf, Arc<Mutex<()>>>>> = OnceLock::new();
-    let map = LOCKS.get_or_init(|| Mutex::new(HashMap::new()));
-    // Tolerate poisoning: a prior panic while holding the lock map mutex
-    // would otherwise propagate a panic into every subsequent terminal-
-    // output write and crash the app. The map's data is just `Arc`
-    // handles and `PathBuf` keys — recovering the inner value is safe.
-    let mut guard = map.lock().unwrap_or_else(|p| p.into_inner());
-    guard
-        .entry(path.to_path_buf())
-        .or_insert_with(|| Arc::new(Mutex::new(())))
-        .clone()
-}
-
-/// Rewrite `path` in place to its last [`TERMINAL_OUTPUT_TAIL_BYTES`] (plus
-/// a truncation banner) when the projected post-append size would exceed the
-/// cap. Pass `incoming` = `bytes.len()` so a single oversized append that
-/// would jump from "just under the cap" to "well over" is caught *before*
-/// the bytes hit disk — checking the post-state, not the pre-state, is the
-/// only way the hard ceiling is honoured for every append shape.
-fn rotate_terminal_output_if_needed_sync(path: &Path, incoming: u64) -> std::io::Result<()> {
-    let len = match std::fs::metadata(path) {
-        Ok(meta) => meta.len(),
-        Err(_) => return Ok(()),
-    };
-    if len.saturating_add(incoming) <= TERMINAL_OUTPUT_MAX_BYTES {
-        return Ok(());
-    }
-    use std::io::{Read, Seek, SeekFrom, Write};
-    let mut file = std::fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open(path)?;
-    let start = len.saturating_sub(TERMINAL_OUTPUT_TAIL_BYTES);
-    file.seek(SeekFrom::Start(start))?;
-    let mut tail = Vec::with_capacity(TERMINAL_OUTPUT_TAIL_BYTES as usize);
-    file.read_to_end(&mut tail)?;
-    let banner = format!(
-        "\r\n[claudette: terminal output truncated, keeping last {} MiB]\r\n",
-        TERMINAL_OUTPUT_TAIL_BYTES / (1024 * 1024)
-    );
-    file.seek(SeekFrom::Start(0))?;
-    file.write_all(banner.as_bytes())?;
-    file.write_all(&tail)?;
-    let new_len = banner.len() as u64 + tail.len() as u64;
-    file.set_len(new_len)?;
-    Ok(())
-}
-
-/// Sync writer for the workspace `terminal.output` file shared by every
-/// path that streams into it (agent bash echoes + mirror, env-provider
-/// streaming sink, setup-script sink). All callers must go through this
-/// helper so the per-path mutex serializes them with the rotation rewrite
-/// — otherwise a concurrent appender can lose bytes during truncation.
-pub(crate) fn append_terminal_output_sync(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    let lock = terminal_output_lock_for(path);
-    // Same poisoning policy as the lock map: tolerate a prior panic so
-    // a single bad write doesn't silently kill the terminal pipeline.
-    let _guard = lock.lock().unwrap_or_else(|p| p.into_inner());
-    rotate_terminal_output_if_needed_sync(path, bytes.len() as u64)?;
-    use std::io::Write;
-    let mut file = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(path)?;
-    file.write_all(bytes)
-}
-
-/// Async wrapper. Takes ownership of `bytes` and `path` so the call site
-/// hands a single allocation across the `spawn_blocking` boundary — no
-/// extra `to_vec()` copy of the (potentially multi-MB) tool-result text.
+/// Async wrapper around the lib crate's [`append_terminal_output_sync`].
+/// Takes ownership of `bytes` and `path` so the call site hands a single
+/// allocation across the `spawn_blocking` boundary — no extra `to_vec()`
+/// copy of the (potentially multi-MB) tool-result text.
 pub(super) async fn append_agent_bash_output(path: PathBuf, bytes: Vec<u8>) -> std::io::Result<()> {
     tokio::task::spawn_blocking(move || append_terminal_output_sync(&path, &bytes))
         .await
@@ -1198,151 +1106,6 @@ mod tests {
         assert!(text.contains("tail output"));
 
         let _ = std::fs::remove_file(trusted_path);
-    }
-
-    #[tokio::test]
-    async fn append_caps_terminal_output_via_truncate_to_tail() {
-        // Issue #937: workspace `terminal.output` grew to 15.6 GB because a
-        // long-running background bash mirror appended without bound. The
-        // appender must rotate the file when it exceeds the hard cap so the
-        // tail-emit pipeline can't blow up memory.
-        use super::{
-            TERMINAL_OUTPUT_MAX_BYTES, TERMINAL_OUTPUT_TAIL_BYTES, append_agent_bash_output,
-        };
-
-        let path = std::env::temp_dir().join(format!(
-            "claudette-cap-{}.terminal.output",
-            uuid::Uuid::new_v4()
-        ));
-        // Seed the file just past the cap so the next append triggers
-        // rotation. Use a small marker at the very end so we can assert
-        // recent bytes survive truncation.
-        let mut seed = vec![b'A'; TERMINAL_OUTPUT_MAX_BYTES as usize + 1024];
-        let marker = b"TAIL_MARKER_KEEP_ME";
-        let marker_at = seed.len() - marker.len();
-        seed[marker_at..].copy_from_slice(marker);
-        std::fs::write(&path, &seed).unwrap();
-
-        append_agent_bash_output(path.clone(), b"new-line\r\n".to_vec())
-            .await
-            .unwrap();
-
-        let after = std::fs::read(&path).unwrap();
-        // Cap brought us back well under the ceiling. tail bytes + banner +
-        // the new "new-line" append must all fit comfortably inside the cap.
-        assert!(
-            (after.len() as u64) <= TERMINAL_OUTPUT_TAIL_BYTES + 256,
-            "file should have been truncated, got {} bytes",
-            after.len()
-        );
-        let after_str = String::from_utf8_lossy(&after);
-        assert!(after_str.starts_with("\r\n[claudette: terminal output truncated"));
-        // The marker we appended *just before* rotation must survive — the
-        // rotator keeps the tail of the file, not the head.
-        assert!(
-            after.windows(marker.len()).any(|w| w == marker),
-            "expected tail marker to survive truncation"
-        );
-        // The newly appended line is at the very end.
-        assert!(
-            after_str.ends_with("new-line\r\n"),
-            "expected newest append at end"
-        );
-
-        let _ = std::fs::remove_file(path);
-    }
-
-    #[tokio::test]
-    async fn append_rotates_when_post_state_would_exceed_cap() {
-        // Regression test for the Copilot-flagged off-by-one in the cap check.
-        // Seed the file at exactly the ceiling so the *current* len is not
-        // over-cap, then append a payload that would push it past. The
-        // rotator must look at `len + incoming`, not just `len`, otherwise
-        // a single large bash result could land the file well past the
-        // documented hard ceiling before any future write triggers rotation.
-        use super::{
-            TERMINAL_OUTPUT_MAX_BYTES, TERMINAL_OUTPUT_TAIL_BYTES, append_terminal_output_sync,
-        };
-
-        let path = std::env::temp_dir().join(format!(
-            "claudette-cap-post-{}.terminal.output",
-            uuid::Uuid::new_v4()
-        ));
-        let seed = vec![b'B'; TERMINAL_OUTPUT_MAX_BYTES as usize];
-        std::fs::write(&path, &seed).unwrap();
-
-        // Appending even a single byte should be enough to trigger rotation
-        // now that the helper compares `len + incoming` against the cap.
-        append_terminal_output_sync(&path, b"X").unwrap();
-
-        let after_len = std::fs::metadata(&path).unwrap().len();
-        assert!(
-            after_len <= TERMINAL_OUTPUT_TAIL_BYTES + 256,
-            "expected rotation when post-append size would exceed cap, got {after_len} bytes"
-        );
-
-        let _ = std::fs::remove_file(path);
-    }
-
-    #[tokio::test]
-    async fn shared_sync_helper_serializes_concurrent_writers_through_rotation() {
-        // Issue #937 / Codex review: `WorkspaceTerminalFileSink` (env-provider
-        // and setup-script) used to bypass the lock with its own cached
-        // append-mode fd. The shared `append_terminal_output_sync` helper
-        // is the single chokepoint both writers go through, so the per-path
-        // mutex serializes the env-sink path against the agent path's
-        // truncate-to-tail rotation. Hammer the helper from many threads
-        // around the cap boundary and assert (a) the cap is honoured and
-        // (b) every line we wrote survives — none were dropped into the
-        // truncation window.
-        use super::{
-            TERMINAL_OUTPUT_MAX_BYTES, TERMINAL_OUTPUT_TAIL_BYTES, append_terminal_output_sync,
-        };
-
-        let path = std::env::temp_dir().join(format!(
-            "claudette-shared-{}.terminal.output",
-            uuid::Uuid::new_v4()
-        ));
-        // Seed just under the cap so the first few appends will trigger
-        // rotation. Every appended line ends with a unique marker we can
-        // count to verify nothing got dropped during the rewrite.
-        let seed = vec![b'A'; TERMINAL_OUTPUT_MAX_BYTES as usize - 4096];
-        std::fs::write(&path, &seed).unwrap();
-
-        const WRITERS: usize = 8;
-        const LINES_PER_WRITER: usize = 64;
-        let mut handles = Vec::new();
-        for w in 0..WRITERS {
-            let path = path.clone();
-            handles.push(std::thread::spawn(move || {
-                for i in 0..LINES_PER_WRITER {
-                    let line = format!("LINE w{w} i{i}\n");
-                    append_terminal_output_sync(&path, line.as_bytes()).unwrap();
-                }
-            }));
-        }
-        for h in handles {
-            h.join().unwrap();
-        }
-
-        let after = std::fs::read(&path).unwrap();
-        assert!(
-            (after.len() as u64) <= TERMINAL_OUTPUT_TAIL_BYTES + 8192,
-            "file should have been truncated, got {} bytes",
-            after.len()
-        );
-        let after_str = String::from_utf8_lossy(&after);
-        for w in 0..WRITERS {
-            for i in 0..LINES_PER_WRITER {
-                let needle = format!("LINE w{w} i{i}");
-                assert!(
-                    after_str.contains(&needle),
-                    "missing line {needle:?} — must not be lost during rotation"
-                );
-            }
-        }
-
-        let _ = std::fs::remove_file(path);
     }
 
     #[tokio::test]
