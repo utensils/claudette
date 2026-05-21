@@ -137,6 +137,43 @@ fn queue_control_prompt(
     kind
 }
 
+#[derive(Debug, PartialEq)]
+enum ControlRequestSessionRoute {
+    Interactive { kind: crate::state::AttentionKind },
+    PermissionResponse { response: serde_json::Value },
+}
+
+fn route_control_request_session_state(
+    session: &mut AgentSessionState,
+    request_id: &str,
+    tool_name: &str,
+    tool_use_id: &str,
+    input: &serde_json::Value,
+) -> ControlRequestSessionRoute {
+    if matches!(tool_name, "AskUserQuestion" | "ExitPlanMode")
+        || is_codex_approval_tool_name(tool_name)
+    {
+        let kind = queue_control_prompt(
+            session,
+            request_id.to_string(),
+            tool_name.to_string(),
+            tool_use_id.to_string(),
+            input.clone(),
+        );
+        ControlRequestSessionRoute::Interactive { kind }
+    } else {
+        ControlRequestSessionRoute::PermissionResponse {
+            response: build_permission_response(
+                &session.session_allowed_tools,
+                session.session_plan_mode,
+                session.session_exited_plan,
+                tool_name,
+                input,
+            ),
+        }
+    }
+}
+
 pub(super) async fn route_turn_control_request(
     app: &AppHandle,
     workspace_id: &str,
@@ -156,23 +193,33 @@ pub(super) async fn route_turn_control_request(
         return false;
     };
 
-    if matches!(tool_name.as_str(), "AskUserQuestion" | "ExitPlanMode")
+    let app_state = app.state::<AppState>();
+    let mut agents = app_state.agents.write().await;
+    let mut permission_response = None;
+    let kind = if let Some(session) = agents.get_mut(chat_session_id) {
+        match route_control_request_session_state(
+            session,
+            request_id,
+            tool_name,
+            tool_use_id,
+            input,
+        ) {
+            ControlRequestSessionRoute::Interactive { kind } => Some(kind),
+            ControlRequestSessionRoute::PermissionResponse { response } => {
+                permission_response = session.persistent_session.clone().map(|ps| (ps, response));
+                None
+            }
+        }
+    } else if matches!(tool_name.as_str(), "AskUserQuestion" | "ExitPlanMode")
         || is_codex_approval_tool_name(tool_name)
     {
-        let app_state = app.state::<AppState>();
-        let mut agents = app_state.agents.write().await;
-        let kind = if let Some(session) = agents.get_mut(chat_session_id) {
-            queue_control_prompt(
-                session,
-                request_id.clone(),
-                tool_name.clone(),
-                tool_use_id.clone(),
-                input.clone(),
-            )
-        } else {
-            control_prompt_attention_kind(tool_name)
-        };
-        drop(agents);
+        Some(control_prompt_attention_kind(tool_name))
+    } else {
+        None
+    };
+    drop(agents);
+
+    if let Some(kind) = kind {
         let payload = serde_json::json!({
             "workspace_id": workspace_id,
             "chat_session_id": chat_session_id,
@@ -221,38 +268,15 @@ pub(super) async fn route_turn_control_request(
                 crate::tray::notify_attention(&app_for_notify, &ws_id_for_notify, kind);
             }
         });
-    } else {
-        let app_state = app.state::<AppState>();
-        let agents = app_state.agents.read().await;
-        let (ps, session_allowed_tools, session_plan_mode, session_exited_plan) = agents
-            .get(chat_session_id)
-            .map(|s| {
-                (
-                    s.persistent_session.clone(),
-                    s.session_allowed_tools.clone(),
-                    s.session_plan_mode,
-                    s.session_exited_plan,
-                )
-            })
-            .unwrap_or_else(|| (None, Vec::new(), false, false));
-        drop(agents);
-        if let Some(ps) = ps {
-            let response = build_permission_response(
-                &session_allowed_tools,
-                session_plan_mode,
-                session_exited_plan,
-                tool_name,
-                input,
-            );
-            if let Err(e) = ps.send_control_response(request_id, response).await {
-                tracing::warn!(
-                    target: "claudette::chat",
-                    tool_name = %tool_name,
-                    error = %e,
-                    "failed to respond to control_request"
-                );
-            }
-        }
+    } else if let Some((ps, response)) = permission_response
+        && let Err(e) = ps.send_control_response(request_id, response).await
+    {
+        tracing::warn!(
+            target: "claudette::chat",
+            tool_name = %tool_name,
+            error = %e,
+            "failed to respond to control_request"
+        );
     }
 
     true
@@ -3382,14 +3406,15 @@ pub async fn send_chat_message(
 #[cfg(test)]
 mod tests {
     use super::{
-        auth_failure_message_from_assistant_text, auth_failure_message_from_stderr,
-        ensure_harness_accepts_attachments, env_provider_drifted_parts, has_env_trust_warning,
-        pi_attachment_unsupported_message, queue_control_prompt,
-        remote_control_requested_or_active, remote_control_requested_or_active_for_turn,
+        ControlRequestSessionRoute, auth_failure_message_from_assistant_text,
+        auth_failure_message_from_stderr, ensure_harness_accepts_attachments,
+        env_provider_drifted_parts, has_env_trust_warning, pi_attachment_unsupported_message,
+        queue_control_prompt, remote_control_requested_or_active,
+        remote_control_requested_or_active_for_turn,
         remote_control_should_defer_drift_teardown_for_turn,
         remote_control_should_restore_for_turn, remote_control_title, resolve_spawn_session_id,
-        should_reenable_remote_control_after_turn_result, should_resume_persistent_session,
-        should_run_auto_naming,
+        route_control_request_session_state, should_reenable_remote_control_after_turn_result,
+        should_resume_persistent_session, should_run_auto_naming,
     };
     use crate::state::{
         AgentSessionState, AttentionKind, ClaudeRemoteControlLifecycle, ClaudeRemoteControlStatus,
@@ -3489,6 +3514,81 @@ mod tests {
         assert_eq!(session.attention_kind, Some(AttentionKind::Plan));
         assert!(session.session_exited_plan);
         assert!(session.pending_permissions.contains_key("tool-2"));
+    }
+
+    #[test]
+    fn control_request_route_queues_interactive_prompt() {
+        let mut session = test_agent_session_state();
+
+        let route = route_control_request_session_state(
+            &mut session,
+            "request-3",
+            "AskUserQuestion",
+            "tool-3",
+            &serde_json::json!({"question": "Ship it?"}),
+        );
+
+        assert_eq!(
+            route,
+            ControlRequestSessionRoute::Interactive {
+                kind: AttentionKind::Ask
+            }
+        );
+        assert!(session.needs_attention);
+        assert_eq!(session.attention_kind, Some(AttentionKind::Ask));
+        let pending = session.pending_permissions.get("tool-3").unwrap();
+        assert_eq!(pending.request_id, "request-3");
+        assert_eq!(pending.tool_name, "AskUserQuestion");
+        assert_eq!(pending.original_input["question"], "Ship it?");
+    }
+
+    #[test]
+    fn control_request_route_allows_non_interactive_tool_in_bypass_mode() {
+        let mut session = test_agent_session_state();
+        session.session_allowed_tools = vec!["*".to_string()];
+
+        let route = route_control_request_session_state(
+            &mut session,
+            "request-4",
+            "Write",
+            "tool-4",
+            &serde_json::json!({"file_path": "README.md"}),
+        );
+
+        let ControlRequestSessionRoute::PermissionResponse { response } = route else {
+            panic!("expected permission response");
+        };
+        assert_eq!(response["behavior"], "allow");
+        assert_eq!(response["updatedInput"]["file_path"], "README.md");
+        assert!(session.pending_permissions.is_empty());
+        assert!(!session.needs_attention);
+    }
+
+    #[test]
+    fn control_request_route_denies_non_interactive_tool_during_plan_mode() {
+        let mut session = test_agent_session_state();
+        session.session_allowed_tools = vec!["*".to_string()];
+        session.session_plan_mode = true;
+
+        let route = route_control_request_session_state(
+            &mut session,
+            "request-5",
+            "Write",
+            "tool-5",
+            &serde_json::json!({"file_path": "README.md"}),
+        );
+
+        let ControlRequestSessionRoute::PermissionResponse { response } = route else {
+            panic!("expected permission response");
+        };
+        assert_eq!(response["behavior"], "deny");
+        assert!(
+            response["message"]
+                .as_str()
+                .is_some_and(|message| message.contains("Write isn't enabled"))
+        );
+        assert!(session.pending_permissions.is_empty());
+        assert!(!session.needs_attention);
     }
 
     #[test]
