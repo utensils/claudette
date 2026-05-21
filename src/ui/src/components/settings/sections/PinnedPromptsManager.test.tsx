@@ -157,8 +157,9 @@ describe("PinnedPromptsManager", () => {
     const editButton = container.querySelector(
       'button[aria-label="pinned_prompts_edit_action:Ship it"]',
     );
+    if (!editButton) throw new Error("Expected Ship it edit button");
     await act(async () => {
-      editButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      editButton.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     });
 
     expect(container.textContent).toContain("pinned_prompts_override_plan_mode");
@@ -169,9 +170,10 @@ describe("PinnedPromptsManager", () => {
     const editButton = container.querySelector(
       'button[aria-label="pinned_prompts_edit_action:Ship it"]',
     );
+    if (!editButton) throw new Error("Expected Ship it edit button");
 
     await act(async () => {
-      editButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      editButton.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     });
 
     const promptTextarea = container.querySelector("textarea");

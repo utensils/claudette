@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { MessageMarkdown } from "./MessageMarkdown";
 import type { PlanApproval } from "../../stores/useAppStore";
@@ -44,8 +44,16 @@ export function PlanApprovalCard({
   const inFlightFetchRef = useRef<Promise<string> | null>(null);
   const { openFile, resolveFilePath } = useWorkspaceFileOpener(workspaceId);
   const directPlanContent = approval.planContent ?? null;
-  const visiblePlanContent = planContent ?? directPlanContent;
-  const hasPlanPreview = Boolean(approval.planFilePath || directPlanContent);
+  const visiblePlanContent = directPlanContent ?? planContent;
+  const hasPlanPreview = approval.planFilePath !== null || directPlanContent !== null;
+
+  useEffect(() => {
+    inFlightFetchRef.current = null;
+    setPlanContent(null);
+    setLoadError(null);
+    setLoading(false);
+    setExpanded(false);
+  }, [approval.toolUseId]);
 
   const fetchPlanContent = (): Promise<string> => {
     if (directPlanContent !== null) return Promise.resolve(directPlanContent);
@@ -132,7 +140,7 @@ export function PlanApprovalCard({
         </div>
       )}
 
-      {expanded && visiblePlanContent && (
+      {expanded && visiblePlanContent !== null && (
         <div className={styles.planContent}>
           <MessageMarkdown
             content={visiblePlanContent}
@@ -142,7 +150,7 @@ export function PlanApprovalCard({
         </div>
       )}
 
-      {expanded && !planContent && loadError && (
+      {expanded && visiblePlanContent === null && loadError && (
         <div className={styles.planContent}>{loadError}</div>
       )}
 
