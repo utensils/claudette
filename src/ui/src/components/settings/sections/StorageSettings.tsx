@@ -30,18 +30,16 @@ const MIN_RETENTION = 1;
 const MAX_RETENTION = 1000;
 
 // Backend (`read_checkpoint_retention_count` in src/chat.rs) parses the
-// stored value as `usize` via `str::parse`, which only accepts strings
-// matching `^[0-9]+$` — no leading sign, no decimals, no whitespace, no
-// scientific notation. The UI must match that contract exactly, otherwise
+// stored value as `usize` via `str::parse`, which accepts strings matching
+// `^[0-9]+$` — no leading sign, no decimals, no whitespace, no scientific
+// notation. The UI must match that contract exactly, otherwise
 // `Number("1e2") = 100` or `Number(" 60") = 60` would display values the
-// Rust side silently rejects (falling back to the default). The regex is
-// the simplest cross-language way to pin "non-negative decimal integer
-// with no leading zeros allowed beyond a single 0".
+// Rust side silently rejects (falling back to the default).
 //
 // Module-scope (rather than nested in the component) so its identity is
 // stable across renders and it can be referenced from hooks without
 // showing up in dependency arrays.
-const STRICT_USIZE_RE = /^(?:0|[1-9][0-9]*)$/;
+const STRICT_USIZE_RE = /^[0-9]+$/;
 function parseStrictInteger(raw: string): number | null {
   if (!STRICT_USIZE_RE.test(raw)) return null;
   const n = Number(raw);

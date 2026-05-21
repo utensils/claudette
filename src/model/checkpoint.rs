@@ -17,18 +17,20 @@ pub struct ConversationCheckpoint {
 
 /// A single file captured in a checkpoint snapshot.
 ///
-/// Storage is content-addressed via [`Self::blob_sha256`] — new rows hold
-/// only the sha; the bytes live once in `checkpoint_blobs` keyed by that
-/// hash. [`Self::content`] is retained only as a fallback for legacy rows
-/// written before #940 / #942 dedupe landed; the startup backfill replaces
-/// `content` with a blob reference over time.
+/// Storage is content-addressed via [`Self::blob_sha256`] — persisted rows
+/// written after #940 / #942 dedupe hold only the sha; the bytes live once
+/// in `checkpoint_blobs` keyed by that hash. [`Self::content`] carries
+/// materialized file bytes at API boundaries: write callers pass bytes here
+/// so the DB layer can upsert the blob, and read callers receive bytes here
+/// after the DB layer joins through `checkpoint_blobs`. The column is stored
+/// inline only for legacy rows that have not been backfilled yet.
 #[derive(Debug, Clone)]
 pub struct CheckpointFile {
     pub id: String,
     pub checkpoint_id: String,
     pub file_path: String,
-    /// Legacy raw bytes. `None` for rows written after dedupe shipped or
-    /// backfilled away. Always `None` for fresh writes.
+    /// Materialized file bytes for restore or blob insertion. Persisted inline
+    /// only for un-backfilled legacy rows.
     pub content: Option<Vec<u8>>,
     /// Hex sha256 of the file's raw bytes; references `checkpoint_blobs.sha256`.
     /// `None` only for un-backfilled legacy rows.

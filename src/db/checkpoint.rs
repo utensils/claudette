@@ -5,7 +5,9 @@
 //! are idiomatic Rust; the public method paths resolve identically to a
 //! single-block layout.
 
-use rusqlite::{OptionalExtension, params};
+use std::fmt;
+
+use rusqlite::{OptionalExtension, params, types::Type};
 use sha2::{Digest, Sha256};
 
 use crate::model::{
@@ -13,6 +15,19 @@ use crate::model::{
 };
 
 use super::Database;
+
+#[derive(Debug)]
+struct MissingCheckpointBlob {
+    sha: String,
+}
+
+impl fmt::Display for MissingCheckpointBlob {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "checkpoint file references missing blob {}", self.sha)
+    }
+}
+
+impl std::error::Error for MissingCheckpointBlob {}
 
 /// Hex sha256 digest of `bytes`. The blob store keys on this string — it's
 /// hex-not-binary because SQLite's TEXT primary key behaves more predictably
@@ -96,22 +111,25 @@ impl Database {
         chat_session_id: &str,
         turn_index: i32,
     ) -> Result<usize, rusqlite::Error> {
+        let file_rows =
+            self.count_checkpoint_file_rows_for_session_after(chat_session_id, turn_index)?;
         let deleted = self.conn.execute(
             "DELETE FROM conversation_checkpoints WHERE chat_session_id = ?1 AND turn_index > ?2",
             params![chat_session_id, turn_index],
         )?;
-        self.gc_orphan_blobs_after_delete(deleted);
-        self.best_effort_incremental_vacuum_after_delete(deleted);
+        self.gc_orphan_blobs_after_delete(file_rows);
+        self.best_effort_incremental_vacuum_after_delete(file_rows + deleted);
         Ok(deleted)
     }
 
     pub fn delete_checkpoint(&self, checkpoint_id: &str) -> Result<(), rusqlite::Error> {
+        let file_rows = self.count_checkpoint_file_rows(checkpoint_id)?;
         let deleted = self.conn.execute(
             "DELETE FROM conversation_checkpoints WHERE id = ?1",
             params![checkpoint_id],
         )?;
-        self.gc_orphan_blobs_after_delete(deleted);
-        self.best_effort_incremental_vacuum_after_delete(deleted);
+        self.gc_orphan_blobs_after_delete(file_rows);
+        self.best_effort_incremental_vacuum_after_delete(file_rows + deleted);
         Ok(())
     }
 
@@ -147,12 +165,14 @@ impl Database {
         workspace_id: &str,
         turn_index: i32,
     ) -> Result<usize, rusqlite::Error> {
+        let file_rows =
+            self.count_checkpoint_file_rows_for_workspace_after(workspace_id, turn_index)?;
         let deleted = self.conn.execute(
             "DELETE FROM conversation_checkpoints WHERE workspace_id = ?1 AND turn_index > ?2",
             params![workspace_id, turn_index],
         )?;
-        self.gc_orphan_blobs_after_delete(deleted);
-        self.best_effort_incremental_vacuum_after_delete(deleted);
+        self.gc_orphan_blobs_after_delete(file_rows);
+        self.best_effort_incremental_vacuum_after_delete(file_rows + deleted);
         Ok(deleted)
     }
 
@@ -256,7 +276,11 @@ impl Database {
         let tx = self.conn.unchecked_transaction()?;
         Self::insert_checkpoint_files_tx(&tx, files)?;
         let pruned = Self::prune_checkpoint_files_tx(&tx, workspace_id, keep)?;
-        let gc_count = Self::gc_orphan_blobs_tx(&tx)?;
+        let gc_count = if pruned > 0 {
+            Self::gc_orphan_blobs_tx(&tx)?
+        } else {
+            0
+        };
         tx.commit()?;
         // Drain freelist pages the prune + orphan GC just freed. The
         // `_after_delete` helper short-circuits when nothing was deleted,
@@ -384,7 +408,18 @@ impl Database {
             let blob_bytes: Option<Vec<u8>> = row.get(6)?;
             // Prefer blob bytes when the row has been deduped/backfilled;
             // fall back to the row's own column for legacy un-backfilled rows.
-            let content = blob_bytes.or(legacy_content);
+            let content = match (blob_sha256.as_ref(), blob_bytes, legacy_content) {
+                (Some(_), Some(bytes), _) => Some(bytes),
+                (Some(_), None, Some(bytes)) => Some(bytes),
+                (Some(sha), None, None) => {
+                    return Err(rusqlite::Error::FromSqlConversionFailure(
+                        6,
+                        Type::Null,
+                        Box::new(MissingCheckpointBlob { sha: sha.clone() }),
+                    ));
+                }
+                (None, _, content) => content,
+            };
             Ok(CheckpointFile {
                 id: row.get(0)?,
                 checkpoint_id: row.get(1)?,
@@ -401,6 +436,44 @@ impl Database {
         self.conn.query_row(
             "SELECT EXISTS(SELECT 1 FROM checkpoint_files WHERE checkpoint_id = ?1)",
             params![checkpoint_id],
+            |row| row.get(0),
+        )
+    }
+
+    fn count_checkpoint_file_rows(&self, checkpoint_id: &str) -> Result<usize, rusqlite::Error> {
+        self.conn.query_row(
+            "SELECT COUNT(*) FROM checkpoint_files WHERE checkpoint_id = ?1",
+            params![checkpoint_id],
+            |row| row.get(0),
+        )
+    }
+
+    fn count_checkpoint_file_rows_for_session_after(
+        &self,
+        chat_session_id: &str,
+        turn_index: i32,
+    ) -> Result<usize, rusqlite::Error> {
+        self.conn.query_row(
+            "SELECT COUNT(*)
+             FROM checkpoint_files cf
+             JOIN conversation_checkpoints cc ON cc.id = cf.checkpoint_id
+             WHERE cc.chat_session_id = ?1 AND cc.turn_index > ?2",
+            params![chat_session_id, turn_index],
+            |row| row.get(0),
+        )
+    }
+
+    fn count_checkpoint_file_rows_for_workspace_after(
+        &self,
+        workspace_id: &str,
+        turn_index: i32,
+    ) -> Result<usize, rusqlite::Error> {
+        self.conn.query_row(
+            "SELECT COUNT(*)
+             FROM checkpoint_files cf
+             JOIN conversation_checkpoints cc ON cc.id = cf.checkpoint_id
+             WHERE cc.workspace_id = ?1 AND cc.turn_index > ?2",
+            params![workspace_id, turn_index],
             |row| row.get(0),
         )
     }
@@ -1289,6 +1362,32 @@ mod tests {
         assert_eq!(files.len(), 1);
         assert_eq!(files[0].content.as_deref(), Some(b"legacy".as_ref()));
         assert!(files[0].blob_sha256.is_none());
+    }
+
+    /// A corrupt row with a blob reference but no blob bytes must fail closed:
+    /// returning `content=None` would be interpreted by restore as a tombstone.
+    #[test]
+    fn read_path_errors_when_blob_reference_is_missing() {
+        let db = setup_db_with_workspace();
+        db.insert_chat_message(&make_chat_msg(&db, "m1", "w1", ChatRole::Assistant, "a"))
+            .unwrap();
+        db.insert_checkpoint(&make_checkpoint(&db, "cp1", "w1", "m1", 0))
+            .unwrap();
+
+        db.execute_batch(
+            "PRAGMA foreign_keys=OFF;
+             INSERT INTO checkpoint_files
+                (id, checkpoint_id, file_path, content, blob_sha256, file_mode)
+             VALUES ('corrupt', 'cp1', 'corrupt.txt', NULL, 'missing-sha', 33188);
+             PRAGMA foreign_keys=ON;",
+        )
+        .unwrap();
+
+        let err = db.get_checkpoint_files("cp1").unwrap_err();
+        assert!(
+            err.to_string().contains("missing blob"),
+            "missing blob reference should surface as an error, got {err}"
+        );
     }
 
     /// `insert_checkpoint_files_and_prune` keeps the N most-recent

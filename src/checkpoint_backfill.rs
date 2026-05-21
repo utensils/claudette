@@ -16,7 +16,7 @@
 //! can't lose progress on shutdown.
 
 use std::fmt;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use crate::db::{Database, SQLITE_AUTO_VACUUM_FULL, SQLITE_AUTO_VACUUM_INCREMENTAL};
 
@@ -24,6 +24,7 @@ const BATCH_ROW_COUNT: usize = 64;
 const BATCH_BYTE_BUDGET: usize = 16 * 1024 * 1024;
 const BACKFILL_DONE_KEY: &str = "checkpoint_blob_backfill_done";
 const SPACE_RECLAIM_DONE_KEY: &str = "checkpoint_blob_space_reclaim_done";
+const SMALL_FREELIST_INCREMENTAL_VACUUM_PAGES: i64 = 16 * 1024;
 
 /// Failure modes for the backfill task. Kept distinct from `rusqlite::Error`
 /// so a `JoinError` from a panicked / cancelled worker doesn't masquerade
@@ -66,21 +67,6 @@ impl From<tokio::task::JoinError> for BackfillError {
     fn from(e: tokio::task::JoinError) -> Self {
         Self::JoinFailed(e)
     }
-}
-
-/// Spawn a fire-and-forget tokio task that runs the backfill in the
-/// background. Safe to call repeatedly: the task short-circuits if
-/// `app_settings.checkpoint_blob_backfill_done = "true"` is already set.
-pub fn spawn_backfill(db_path: PathBuf) {
-    tokio::spawn(async move {
-        if let Err(e) = run_backfill(&db_path).await {
-            tracing::warn!(
-                target: "claudette::db",
-                error = %e,
-                "checkpoint blob backfill failed; will retry on next launch"
-            );
-        }
-    });
 }
 
 /// Drive the backfill loop to completion. Returns once every legacy row
@@ -223,12 +209,45 @@ fn run_post_backfill_space_reclaim_blocking(db_path: &Path) -> Result<(), Backfi
         return Ok(());
     }
 
-    // `PRAGMA incremental_vacuum(N)` is excellent for steady-state deletes,
-    // but on the real #940 DB the freed pages are so fragmented that each
-    // invocation only truncates one tail page regardless of N. A post-boot
-    // full VACUUM is the practical maintenance operation: it rewrites the
-    // file once, compacts the fragmented freelist, and leaves incremental
-    // auto-vacuum active for future steady-state cleanup.
+    if initial_freelist <= SMALL_FREELIST_INCREMENTAL_VACUUM_PAGES {
+        let mut reclaimed_pages = 0;
+        let mut chunks = 0;
+        loop {
+            let before = db.freelist_page_count()?;
+            if before == 0 {
+                break;
+            }
+            let reclaimed =
+                db.incremental_vacuum_for_space_reclaim(SMALL_FREELIST_INCREMENTAL_VACUUM_PAGES)?;
+            chunks += 1;
+            reclaimed_pages += reclaimed;
+            if reclaimed == 0 {
+                break;
+            }
+        }
+        let remaining_pages = db.freelist_page_count()?;
+        if remaining_pages == 0 {
+            db.set_app_setting(SPACE_RECLAIM_DONE_KEY, "true")?;
+        }
+        tracing::info!(
+            target: "claudette::db",
+            issue = 940,
+            initial_pages = initial_freelist,
+            chunks,
+            reclaimed_pages,
+            remaining_pages,
+            "checkpoint space reclaim complete after incremental vacuum"
+        );
+        return Ok(());
+    }
+
+    // `PRAGMA incremental_vacuum(N)` is excellent for small steady-state
+    // deletes, but on the real #940 DB the large freed-page set was so
+    // fragmented that each invocation only truncated one tail page regardless
+    // of N. For large post-backfill freelists, a post-boot full VACUUM is the
+    // practical maintenance operation: it rewrites the file once, compacts
+    // the fragmented freelist, and leaves incremental auto-vacuum active for
+    // future steady-state cleanup.
     db.vacuum_for_space_reclaim()?;
     let remaining_pages = db.freelist_page_count()?;
     if remaining_pages == 0 {

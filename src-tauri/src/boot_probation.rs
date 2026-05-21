@@ -50,10 +50,9 @@ impl BootProbationState {
     }
 
     pub async fn wait_until_acknowledged(&self) {
-        if self.is_acknowledged() {
-            return;
+        while !self.is_acknowledged() {
+            tokio::time::sleep(Duration::from_millis(100)).await;
         }
-        self.cancel.notified().await;
     }
 
     fn is_acknowledged(&self) -> bool {
