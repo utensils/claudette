@@ -92,6 +92,7 @@ beforeEach(() => {
     toolActivities: {},
     streamingContent: {},
     streamingThinking: {},
+    promptStartTime: {},
     sessionsByWorkspace: {
       "ws-1": [
         {
@@ -211,6 +212,107 @@ describe("useAgentStream — session-renamed listener", () => {
       inputJson: JSON.stringify({ file_path: "/repo/src/app.ts" }),
       summary: "/repo/src/app.ts",
     });
+  });
+
+  it("seeds the live elapsed timer from the first stream event when dispatch missed it", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_700_000_000_000);
+    await mountHook();
+    const handlers = registeredHandlers.get("agent-stream") ?? [];
+    expect(handlers.length).toBeGreaterThan(0);
+
+    await act(async () => {
+      for (const handler of handlers) {
+        handler({
+          payload: {
+            workspace_id: "ws-1",
+            chat_session_id: "session-1",
+            event: {
+              Stream: {
+                type: "system",
+                subtype: "init",
+              },
+            },
+          },
+        });
+      }
+    });
+
+    expect(useAppStore.getState().promptStartTime["ws-1"]).toBe(
+      1_700_000_000_000,
+    );
+  });
+
+  it("keeps an existing live elapsed timer anchor when stream events arrive", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_700_000_000_000);
+    useAppStore.getState().setPromptStartTime("ws-1", 1_699_999_990_000);
+    await mountHook();
+    const handlers = registeredHandlers.get("agent-stream") ?? [];
+
+    await act(async () => {
+      for (const handler of handlers) {
+        handler({
+          payload: {
+            workspace_id: "ws-1",
+            chat_session_id: "session-1",
+            event: {
+              Stream: {
+                type: "system",
+                subtype: "init",
+              },
+            },
+          },
+        });
+      }
+    });
+
+    expect(useAppStore.getState().promptStartTime["ws-1"]).toBe(
+      1_699_999_990_000,
+    );
+  });
+
+  it("keeps the workspace timer while a sibling active session is still running", async () => {
+    const session = useAppStore.getState().sessionsByWorkspace["ws-1"]![0]!;
+    useAppStore.setState({
+      promptStartTime: { "ws-1": 1_699_999_990_000 },
+      sessionsByWorkspace: {
+        "ws-1": [
+          { ...session, id: "session-1", agent_status: "Running" },
+          { ...session, id: "session-2", agent_status: "Running" },
+        ],
+      },
+    });
+    await mountHook();
+    const handlers = registeredHandlers.get("agent-stream") ?? [];
+
+    await act(async () => {
+      for (const handler of handlers) {
+        handler({
+          payload: {
+            workspace_id: "ws-1",
+            chat_session_id: "session-1",
+            event: { ProcessExited: { exit_code: 0 } },
+          },
+        });
+      }
+    });
+    expect(useAppStore.getState().promptStartTime["ws-1"]).toBe(
+      1_699_999_990_000,
+    );
+
+    await act(async () => {
+      for (const handler of handlers) {
+        handler({
+          payload: {
+            workspace_id: "ws-1",
+            chat_session_id: "session-2",
+            event: { ProcessExited: { exit_code: 0 } },
+          },
+        });
+      }
+    });
+    expect(useAppStore.getState().promptStartTime["ws-1"]).toBeUndefined();
   });
 
   it("falls back to rendering AskUserQuestion from the streamed tool block", async () => {

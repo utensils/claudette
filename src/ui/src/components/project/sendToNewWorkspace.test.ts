@@ -83,10 +83,18 @@ beforeEach(() => {
   mockedCreateLink.mockImplementation((a) =>
     Promise.resolve(makeLinkFromArgs(a)),
   );
-  useAppStore.setState({ chatMessages: {}, toasts: [], workspaceScmLinks: {} });
+  useAppStore.setState({
+    chatMessages: {},
+    toasts: [],
+    workspaceScmLinks: {},
+    promptStartTime: {},
+    workspaces: [],
+    sessionsByWorkspace: {},
+  });
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.clearAllMocks();
 });
 
@@ -235,6 +243,9 @@ describe("sendToNewWorkspace", () => {
     expect(sendArgs[4]).toBe("claude-opus-4-7"); // model
     expect(sendArgs[11]).toBe("anthropic"); // backendId
     expect(sendArgs[13]).toBe(messages[0].id); // messageId
+    expect(useAppStore.getState().promptStartTime["ws-1"]).toEqual(
+      expect.any(Number),
+    );
   });
 
   it("routes through the model's explicit providerId", async () => {
@@ -365,5 +376,6 @@ describe("sendToNewWorkspace", () => {
       workspace_id: "ws-6",
       number: ISSUE_ARGS.number,
     });
+    expect(useAppStore.getState().promptStartTime["ws-6"]).toBeUndefined();
   });
 });
