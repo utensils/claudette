@@ -1754,30 +1754,54 @@ export const TerminalPanel = memo(function TerminalPanel() {
     [setPaneSpawnError, destroyInstance],
   );
 
+  // Tracks the leaf the search addon was last attached to. The auto-close
+  // effects need this because by the time they fire, `activeTerminalPaneId`
+  // already points at the NEW pane — we'd otherwise clear decorations on
+  // the wrong instance (or none at all) and the highlights would linger in
+  // the pane the user just navigated away from.
+  const searchActiveLeafRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!searchOpen) {
+      searchActiveLeafRef.current = null;
+      return;
+    }
+    const tabId = activeTerminalTabId;
+    const paneId = tabId ? activeTerminalPaneId[tabId] ?? null : null;
+    if (paneId) searchActiveLeafRef.current = paneId;
+  }, [searchOpen, activeTerminalTabId, activeTerminalPaneId]);
+
+  const clearActiveSearchDecorations = useCallback(() => {
+    const leafId = searchActiveLeafRef.current;
+    if (!leafId) return;
+    instancesRef.current.get(leafId)?.search.clearDecorations();
+    searchActiveLeafRef.current = null;
+  }, []);
+
   // Auto-close the search bar if the user switches to a different terminal
   // tab or hides the panel — the bar is anchored to whichever pane was
   // visible when they opened it, so leaving that context should clear it.
   useEffect(() => {
-    if (!terminalPanelVisible && searchOpen) setSearchOpen(false);
-  }, [terminalPanelVisible, searchOpen]);
+    if (!terminalPanelVisible && searchOpen) {
+      clearActiveSearchDecorations();
+      setSearchOpen(false);
+    }
+  }, [terminalPanelVisible, searchOpen, clearActiveSearchDecorations]);
   useEffect(() => {
     // Active tab / pane changing invalidates the search's addon target.
     // Closing is simpler than re-running findNext on the new pane with the
     // old query — the user can re-trigger Cmd+F if they want to keep going.
+    clearActiveSearchDecorations();
     setSearchOpen(false);
-  }, [activeTerminalTabId, selectedWorkspaceId]);
+  }, [activeTerminalTabId, selectedWorkspaceId, clearActiveSearchDecorations]);
 
   const handleCloseSearch = useCallback(() => {
     setSearchOpen(false);
-    // Clear decorations on the active addon so the highlights don't linger
-    // after the bar closes. clearActiveDecoration would only drop the
-    // current-match ring; clearDecorations drops the full match set.
-    const tabId = activeTerminalTabId;
-    const paneId = tabId ? activeTerminalPaneId[tabId] ?? null : null;
-    const inst = paneId ? instancesRef.current.get(paneId) : null;
-    inst?.search.clearDecorations();
+    // clearActiveDecoration would only drop the current-match ring;
+    // clearDecorations drops the full match set, which is what we want
+    // when the bar is dismissed.
+    clearActiveSearchDecorations();
     requestAnimationFrame(() => focusActiveTerminal());
-  }, [activeTerminalTabId, activeTerminalPaneId]);
+  }, [clearActiveSearchDecorations]);
 
   // Resolve the active pane's search addon at render time so the bar always
   // operates on whichever pane currently owns focus. `searchFocusToken`

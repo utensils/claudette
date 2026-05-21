@@ -1,9 +1,18 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { ChevronDown, ChevronUp, X } from "lucide-react";
 import type { ISearchOptions, SearchAddon } from "@xterm/addon-search";
 import { getTerminalSearchDecorations } from "../../utils/theme";
 import styles from "./TerminalSearchBar.module.css";
+
+// Read the latest theme tokens on every call. `getComputedStyle` is cheap
+// (no layout flush) and this runs at human typing cadence — switching
+// themes mid-search immediately picks up the new highlight color on the
+// next keystroke or step. Caching with useMemo would freeze colors to
+// whatever the theme was at bar-mount time.
+function freshSearchOptions(incremental = false): ISearchOptions {
+  return { decorations: getTerminalSearchDecorations(), incremental };
+}
 
 interface Props {
   /** Search addon for the currently active pane. Null when no pane is active. */
@@ -61,15 +70,6 @@ export function TerminalSearchBar({
     return () => sub.dispose();
   }, [addon]);
 
-  // Decoration options are required for `onDidChangeResults` to fire —
-  // without them the counter stays at zero even when matches exist. The
-  // helper resolves theme colors at call time so theme switches mid-search
-  // pick up new accent values on the next keystroke.
-  const baseSearchOptions = useMemo<ISearchOptions>(
-    () => ({ decorations: getTerminalSearchDecorations() }),
-    [],
-  );
-
   // Re-run findNext when the query changes so the counter and highlighted
   // match update incrementally as the user types. `incremental: true`
   // expands the current selection while it still matches — matching the
@@ -81,17 +81,17 @@ export function TerminalSearchBar({
       setResults({ index: -1, count: 0 });
       return;
     }
-    addon.findNext(query, { ...baseSearchOptions, incremental: true });
-  }, [addon, query, baseSearchOptions]);
+    addon.findNext(query, freshSearchOptions(true));
+  }, [addon, query]);
 
   const handleNext = () => {
     if (!addon || query.length === 0) return;
-    addon.findNext(query, baseSearchOptions);
+    addon.findNext(query, freshSearchOptions());
   };
 
   const handlePrev = () => {
     if (!addon || query.length === 0) return;
-    addon.findPrevious(query, baseSearchOptions);
+    addon.findPrevious(query, freshSearchOptions());
   };
 
   const displayMatchIndex = results.index < 0 ? 0 : results.index + 1;
@@ -135,9 +135,16 @@ export function TerminalSearchBar({
         }}
         // Stop Cmd/Ctrl+F from bubbling to the global handler while the bar
         // is focused — re-select the input so the user can replace the query
-        // with another Cmd+F press.
+        // with another Cmd+F press. Gated on `!shift && !alt` so future
+        // bindings like Cmd+Shift+F (find-in-files) or Cmd+Alt+F still pass
+        // through; this matches the strictness of `terminal.open-search`.
         onKeyDownCapture={(e) => {
-          if ((e.metaKey || e.ctrlKey) && e.code === "KeyF") {
+          if (
+            (e.metaKey || e.ctrlKey) &&
+            !e.shiftKey &&
+            !e.altKey &&
+            e.code === "KeyF"
+          ) {
             e.preventDefault();
             e.stopPropagation();
             inputRef.current?.select();

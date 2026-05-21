@@ -171,6 +171,8 @@
   "chat_search_close": "Fechar busca",
   "chat_search_close_title": "Fechar (Esc)",
   "chat_search_no_matches": "Sem resultados",
+  "terminal_search_aria": "Buscar no terminal",
+  "terminal_search_placeholder": "Buscar no terminal…",
 
   "pinned_prompts_label": "fixados",
   "pinned_prompt_tooltip_auto": "Enviar {{name}}",

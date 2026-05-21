@@ -171,6 +171,8 @@
   "chat_search_close": "关闭搜索",
   "chat_search_close_title": "关闭 (Esc)",
   "chat_search_no_matches": "无匹配",
+  "terminal_search_aria": "搜索终端",
+  "terminal_search_placeholder": "搜索终端…",
 
   "pinned_prompts_label": "已固定",
   "pinned_prompt_tooltip_auto": "发送 {{name}}",
