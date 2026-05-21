@@ -31,6 +31,8 @@
   "automation_mode_recurring": "繰り返し",
   "automation_mode_one_shot": "一回限り",
   "automation_next_fire": "次回実行",
+  "automation_disabled_reason": "一時停止の理由",
+  "automation_last_error": "前回のエラー",
   "general_title": "一般",
   "general_app_version": "アプリのバージョン",
   "general_check_updates": "更新を確認",

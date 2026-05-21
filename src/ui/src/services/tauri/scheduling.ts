@@ -18,6 +18,10 @@ export interface ScheduledTask {
   updated_at: string;
   last_fired_at: string | null;
   next_fire_at: string | null;
+  failure_count: number;
+  last_failed_at: string | null;
+  last_error: string | null;
+  disabled_reason: string | null;
   human_schedule: string | null;
 }
 

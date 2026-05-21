@@ -68,6 +68,8 @@ pub async fn load_diff_files(
     workspace_id: String,
     state: State<'_, AppState>,
 ) -> Result<DiffFilesResult, String> {
+    let lock = diff_load_lock_for_workspace(&state, &workspace_id).await;
+    let _guard = lock.lock().await;
     let (merge_base, worktree_path) =
         cached_resolve_workspace_merge_base(&state.merge_base_cache, &state.db_path, &workspace_id)
             .await?;
@@ -90,6 +92,24 @@ pub async fn load_diff_files(
         staged_files,
         commits,
     })
+}
+
+async fn diff_load_lock_for_workspace(
+    state: &AppState,
+    workspace_id: &str,
+) -> std::sync::Arc<tokio::sync::Mutex<()>> {
+    {
+        let locks = state.diff_load_locks.read().await;
+        if let Some(lock) = locks.get(workspace_id) {
+            return std::sync::Arc::clone(lock);
+        }
+    }
+    let mut locks = state.diff_load_locks.write().await;
+    std::sync::Arc::clone(
+        locks
+            .entry(workspace_id.to_string())
+            .or_insert_with(|| std::sync::Arc::new(tokio::sync::Mutex::new(()))),
+    )
 }
 
 /// Lightweight sibling of `load_diff_files` that returns only the workspace's
@@ -226,6 +246,7 @@ mod tests {
     use super::*;
     use claudette::db::Database;
     use claudette::model::{AgentStatus, Repository, Workspace, WorkspaceStatus};
+    use claudette::plugin_runtime::PluginRegistry;
     use std::path::PathBuf;
 
     fn git(dir: &std::path::Path, args: &[&str]) {
@@ -413,5 +434,29 @@ mod tests {
         let entries = cache.entries.read().await;
         assert!(entries.contains_key("w1"));
         assert!(entries.contains_key("w2"));
+    }
+
+    #[tokio::test]
+    async fn diff_load_lock_is_shared_per_workspace_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let plugins = PluginRegistry::discover(dir.path());
+        let state = AppState::new(
+            dir.path().join("db.sqlite"),
+            dir.path().join("worktrees"),
+            plugins,
+        );
+
+        let lock_a1 = diff_load_lock_for_workspace(&state, "w1").await;
+        let lock_a2 = diff_load_lock_for_workspace(&state, "w1").await;
+        let lock_b = diff_load_lock_for_workspace(&state, "w2").await;
+
+        assert!(
+            std::sync::Arc::ptr_eq(&lock_a1, &lock_a2),
+            "same workspace must share one backend diff gate",
+        );
+        assert!(
+            !std::sync::Arc::ptr_eq(&lock_a1, &lock_b),
+            "different workspaces should not block each other's diff loads",
+        );
     }
 }

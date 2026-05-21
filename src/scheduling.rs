@@ -47,6 +47,10 @@ pub struct ScheduledTask {
     pub updated_at: String,
     pub last_fired_at: Option<String>,
     pub next_fire_at: Option<String>,
+    pub failure_count: i64,
+    pub last_failed_at: Option<String>,
+    pub last_error: Option<String>,
+    pub disabled_reason: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

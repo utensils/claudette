@@ -40,6 +40,9 @@ pub struct ScmDetail {
 const CI_AUTO_FIX_COOLDOWN_DEFAULT_SECONDS: u64 = 300;
 const CI_AUTO_FIX_COOLDOWN_MIN_SECONDS: u64 = 60;
 const CI_AUTO_FIX_COOLDOWN_MAX_SECONDS: u64 = 3600;
+const SCM_DETAIL_CACHE_TTL: Duration = Duration::from_secs(10);
+const SCM_POLL_CACHE_TTL: Duration = Duration::from_secs(30);
+const SCM_NO_PR_NEGATIVE_CACHE_TTL: Duration = Duration::from_secs(10 * 60);
 
 struct ScmPollSettingsSnapshot {
     workspace_ids: Vec<(String, String)>,
@@ -226,12 +229,15 @@ pub async fn load_scm_detail(
     };
 
     let ws_info = make_workspace_info(&ctx.workspace, &ctx.repo);
+    let head_sha = workspace_head_sha(&ctx.workspace).await;
+    let fetch_lock = scm_fetch_lock_for_key(state.inner(), &cache_key).await;
+    let _fetch_guard = fetch_lock.lock().await;
 
     // Check cache first
     {
         let cache = state.scm_cache.entries.read().await;
         if let Some(entry) = cache.get(&cache_key)
-            && entry.last_fetched.elapsed().as_secs() < 10
+            && scm_cache_entry_fresh(entry, SCM_DETAIL_CACHE_TTL, None)
         {
             return Ok(ScmDetail {
                 workspace_id,
@@ -243,28 +249,16 @@ pub async fn load_scm_detail(
         }
     }
 
-    // Fetch fresh data — run both operations concurrently. Acquire 2
-    // permits so the semaphore reflects the true number of in-flight
-    // CLI invocations (one for list_pull_requests, one for ci_status).
-    let _permit = state
-        .scm_semaphore
-        .acquire_many(2)
-        .await
-        .map_err(|e| e.to_string())?;
-    let registry = state.plugins.read().await;
-
     let branch = ctx.workspace.branch_name.clone();
-    let args = serde_json::json!({"branch": &branch});
-
-    let (prs_result, ci_result) = tokio::join!(
-        registry.call_operation(
-            &provider_name,
-            "list_pull_requests",
-            args.clone(),
-            ws_info.clone(),
-        ),
-        registry.call_operation(&provider_name, "ci_status", args, ws_info),
-    );
+    let registry = state.inner().plugins_snapshot().await;
+    let (prs_result, ci_result) = fetch_branch_scm_results(
+        &registry,
+        &state.scm_semaphore,
+        &provider_name,
+        &branch,
+        ws_info,
+    )
+    .await?;
 
     let outcome = {
         let cache = state.scm_cache.entries.read().await;
@@ -302,6 +296,7 @@ pub async fn load_scm_detail(
             &pull_request,
             &ci_checks,
             error.clone(),
+            head_sha,
         )
         .await;
     }
@@ -1078,9 +1073,7 @@ fn merge_scm_results(
 
     let (pull_request, prs_err) = match prs_result {
         Ok(val) => {
-            let parsed = serde_json::from_value::<Vec<PullRequest>>(val)
-                .ok()
-                .and_then(|prs| prs.into_iter().find(|pr| pr.branch == branch));
+            let parsed = pull_request_for_branch(&val, branch);
             (parsed, None)
         }
         Err(e) => (
@@ -1114,6 +1107,61 @@ fn merge_scm_results(
         error,
         should_persist,
     }
+}
+
+fn pull_request_for_branch(value: &serde_json::Value, branch: &str) -> Option<PullRequest> {
+    serde_json::from_value::<Vec<PullRequest>>(value.clone())
+        .ok()
+        .and_then(|prs| prs.into_iter().find(|pr| pr.branch == branch))
+}
+
+fn scm_cache_entry_is_no_pr(entry: &ScmCacheEntry) -> bool {
+    entry.pull_request.is_none() && entry.error.is_none()
+}
+
+fn scm_cache_entry_fresh(
+    entry: &ScmCacheEntry,
+    standard_ttl: Duration,
+    current_head_sha: Option<&str>,
+) -> bool {
+    let ttl = if scm_cache_entry_is_no_pr(entry) {
+        SCM_NO_PR_NEGATIVE_CACHE_TTL
+    } else {
+        standard_ttl
+    };
+    if entry.last_fetched.elapsed() >= ttl {
+        return false;
+    }
+    if scm_cache_entry_is_no_pr(entry)
+        && let (Some(cached), Some(current)) = (entry.head_sha.as_deref(), current_head_sha)
+        && cached != current
+    {
+        return false;
+    }
+    true
+}
+
+async fn workspace_head_sha(workspace: &claudette::model::Workspace) -> Option<String> {
+    let worktree = workspace.worktree_path.as_deref()?;
+    claudette::git::head_commit(worktree).await.ok()
+}
+
+async fn scm_fetch_lock_for_key(
+    state: &AppState,
+    key: &(String, String),
+) -> Arc<tokio::sync::Mutex<()>> {
+    {
+        let locks = state.scm_fetch_locks.read().await;
+        if let Some(lock) = locks.get(key) {
+            return Arc::clone(lock);
+        }
+    }
+    let mut locks = state.scm_fetch_locks.write().await;
+    Arc::clone(
+        locks
+            .entry(key.clone())
+            .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(()))),
+    )
 }
 
 /// Build a `ScmDetail` payload from a previously-cached entry, used when the
@@ -1194,6 +1242,7 @@ async fn seed_scm_cache_from_db(db_path: &std::path::Path, cache: &crate::state:
                 ci_checks,
                 last_fetched: stale_anchor,
                 error: row.error,
+                head_sha: None,
             },
         );
     }
@@ -1217,6 +1266,7 @@ async fn persist_scm_cache(
     pull_request: &Option<PullRequest>,
     ci_checks: &[CiCheck],
     error: Option<String>,
+    head_sha: Option<String>,
 ) {
     let cache_map_key = (key.repo_id.to_string(), key.branch.to_string());
     {
@@ -1228,6 +1278,7 @@ async fn persist_scm_cache(
                 ci_checks: ci_checks.to_vec(),
                 last_fetched: Instant::now(),
                 error: error.clone(),
+                head_sha,
             },
         );
     }
@@ -1256,6 +1307,46 @@ async fn persist_scm_cache(
             tracing::warn!(target: "claudette::scm", error = %e, "failed to open DB for SCM cache persistence");
         }
     }
+}
+
+async fn fetch_branch_scm_results(
+    registry: &claudette::plugin_runtime::PluginRegistry,
+    scm_semaphore: &tokio::sync::Semaphore,
+    provider_name: &str,
+    branch: &str,
+    ws_info: WorkspaceInfo,
+) -> Result<
+    (
+        Result<serde_json::Value, PluginError>,
+        Result<serde_json::Value, PluginError>,
+    ),
+    String,
+> {
+    let args = serde_json::json!({"branch": branch});
+    let _permit = scm_semaphore.acquire().await.map_err(|e| e.to_string())?;
+    let prs_result = registry
+        .call_operation(
+            provider_name,
+            "list_pull_requests",
+            args.clone(),
+            ws_info.clone(),
+        )
+        .await;
+    drop(_permit);
+
+    let should_fetch_ci = match &prs_result {
+        Ok(value) => pull_request_for_branch(value, branch).is_some(),
+        Err(_) => true,
+    };
+    if !should_fetch_ci {
+        return Ok((prs_result, Ok(serde_json::Value::Array(vec![]))));
+    }
+
+    let _permit = scm_semaphore.acquire().await.map_err(|e| e.to_string())?;
+    let ci_result = registry
+        .call_operation(provider_name, "ci_status", args, ws_info)
+        .await;
+    Ok((prs_result, ci_result))
 }
 
 fn make_workspace_info(
@@ -1352,12 +1443,16 @@ async fn poll_workspace_scm(app_state: &AppState, workspace_id: &str) -> Option<
     };
 
     let ws_info = make_workspace_info(&ctx.workspace, &ctx.repo);
+    let head_sha = workspace_head_sha(&ctx.workspace).await;
+    let fetch_lock = scm_fetch_lock_for_key(app_state, &cache_key).await;
+    let _fetch_guard = fetch_lock.lock().await;
 
-    // Skip if cache is fresh (< 30s for background polling)
+    // Skip if cache is fresh. No-PR entries get a longer negative-cache
+    // window, but only while the branch HEAD still matches the fetched row.
     {
         let cache = app_state.scm_cache.entries.read().await;
         if let Some(entry) = cache.get(&cache_key)
-            && entry.last_fetched.elapsed().as_secs() < 30
+            && scm_cache_entry_fresh(entry, SCM_POLL_CACHE_TTL, head_sha.as_deref())
         {
             // Return cached data so frontend still gets populated
             return Some(ScmDetail {
@@ -1370,23 +1465,17 @@ async fn poll_workspace_scm(app_state: &AppState, workspace_id: &str) -> Option<
         }
     }
 
-    // Two permits because tokio::join! below runs two CLI operations
-    // concurrently. One permit per in-flight subprocess.
-    let _permit = app_state.scm_semaphore.acquire_many(2).await.ok()?;
-    let registry = app_state.plugins.read().await;
-
     let branch = ctx.workspace.branch_name.clone();
-    let args = serde_json::json!({"branch": &branch});
-
-    let (prs_result, ci_result) = tokio::join!(
-        registry.call_operation(
-            &provider_name,
-            "list_pull_requests",
-            args.clone(),
-            ws_info.clone()
-        ),
-        registry.call_operation(&provider_name, "ci_status", args, ws_info),
-    );
+    let registry = app_state.plugins_snapshot().await;
+    let (prs_result, ci_result) = fetch_branch_scm_results(
+        &registry,
+        &app_state.scm_semaphore,
+        &provider_name,
+        &branch,
+        ws_info,
+    )
+    .await
+    .ok()?;
 
     let outcome = {
         let cache = app_state.scm_cache.entries.read().await;
@@ -1424,6 +1513,7 @@ async fn poll_workspace_scm(app_state: &AppState, workspace_id: &str) -> Option<
             &pull_request,
             &ci_checks,
             error.clone(),
+            head_sha,
         )
         .await;
     }
@@ -1526,7 +1616,13 @@ fn load_scm_poll_settings_snapshot(db: &Database) -> ScmPollSettingsSnapshot {
         .list_workspaces()
         .unwrap_or_default()
         .into_iter()
-        .filter(|ws| ws.status == claudette::model::WorkspaceStatus::Active)
+        .filter(|ws| {
+            ws.status == claudette::model::WorkspaceStatus::Active
+                && ws
+                    .worktree_path
+                    .as_deref()
+                    .is_some_and(|path| !path.trim().is_empty())
+        })
         .map(|ws| (ws.id, ws.repository_id))
         .collect();
     let global_archive = db
@@ -2357,6 +2453,7 @@ mod tests {
             ci_checks: checks,
             last_fetched: Instant::now(),
             error: None,
+            head_sha: None,
         }
     }
 
@@ -2493,6 +2590,57 @@ mod tests {
             "PRs for other branches must not be selected",
         );
         assert!(outcome.should_persist);
+    }
+
+    #[test]
+    fn no_pr_cache_uses_longer_ttl_until_head_changes() {
+        let mut entry = make_entry(None, vec![]);
+        entry.head_sha = Some("head-a".into());
+        entry.last_fetched = Instant::now()
+            .checked_sub(SCM_POLL_CACHE_TTL + Duration::from_secs(5))
+            .unwrap();
+
+        assert!(
+            scm_cache_entry_fresh(&entry, SCM_POLL_CACHE_TTL, Some("head-a")),
+            "negative no-PR cache should remain fresh beyond the normal poll TTL",
+        );
+        assert!(
+            !scm_cache_entry_fresh(&entry, SCM_POLL_CACHE_TTL, Some("head-b")),
+            "a branch HEAD change must invalidate the no-PR negative cache",
+        );
+    }
+
+    #[test]
+    fn pr_cache_still_uses_standard_ttl() {
+        let mut entry = make_entry(Some(make_pr("feature/cached", 10)), vec![]);
+        entry.last_fetched = Instant::now()
+            .checked_sub(SCM_POLL_CACHE_TTL + Duration::from_secs(1))
+            .unwrap();
+
+        assert!(
+            !scm_cache_entry_fresh(&entry, SCM_POLL_CACHE_TTL, Some("head-a")),
+            "positive PR cache should not inherit the long no-PR TTL",
+        );
+    }
+
+    #[tokio::test]
+    async fn scm_fetch_lock_is_shared_per_repo_branch() {
+        let dir = tempfile::tempdir().unwrap();
+        let plugins = claudette::plugin_runtime::PluginRegistry::discover(dir.path());
+        let state = AppState::new(
+            dir.path().join("db.sqlite"),
+            dir.path().join("worktrees"),
+            plugins,
+        );
+        let key = ("repo-1".to_string(), "feature/x".to_string());
+        let other_key = ("repo-1".to_string(), "feature/y".to_string());
+
+        let lock_a = scm_fetch_lock_for_key(&state, &key).await;
+        let lock_b = scm_fetch_lock_for_key(&state, &key).await;
+        let lock_other = scm_fetch_lock_for_key(&state, &other_key).await;
+
+        assert!(Arc::ptr_eq(&lock_a, &lock_b));
+        assert!(!Arc::ptr_eq(&lock_a, &lock_other));
     }
 
     /// Build a minimal `Repository` fixture for DB tests. We can't reuse

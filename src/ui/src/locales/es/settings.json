@@ -31,6 +31,8 @@
   "automation_mode_recurring": "recurrente",
   "automation_mode_one_shot": "una vez",
   "automation_next_fire": "Próxima ejecución",
+  "automation_disabled_reason": "Motivo de pausa",
+  "automation_last_error": "Último error",
   "general_title": "General",
   "general_app_version": "Versión de la app",
   "general_check_updates": "Buscar actualizaciones",

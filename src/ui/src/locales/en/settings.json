@@ -29,6 +29,8 @@
   "automation_mode_recurring": "recurring",
   "automation_mode_one_shot": "one-shot",
   "automation_next_fire": "Next fire",
+  "automation_disabled_reason": "Paused reason",
+  "automation_last_error": "Last error",
 
   "cli_title": "Command-line interface",
   "cli_install_label": "Install `claudette` on PATH",

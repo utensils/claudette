@@ -129,7 +129,7 @@ pub fn start_scheduler(app: AppHandle) {
 async fn run_due_tasks_once(app: AppHandle) -> Duration {
     let state = app.state::<AppState>();
     let now = Utc::now();
-    let (due, next_fire) = {
+    let due = {
         let db = match Database::open(&state.db_path) {
             Ok(db) => db,
             Err(err) => {
@@ -137,12 +137,32 @@ async fn run_due_tasks_once(app: AppHandle) -> Duration {
                 return Duration::from_secs(60);
             }
         };
+        match db.disable_due_agent_scheduled_tasks_without_worktrees(
+            now,
+            "workspace_unavailable",
+            "Workspace is archived or has no worktree",
+        ) {
+            Ok(count) if count > 0 => {
+                tracing::info!(
+                    target: "claudette::scheduling",
+                    count,
+                    "paused scheduled tasks for unavailable workspaces"
+                );
+            }
+            Ok(_) => {}
+            Err(err) => {
+                tracing::warn!(
+                    target: "claudette::scheduling",
+                    error = %err,
+                    "failed to pause scheduled tasks for unavailable workspaces"
+                );
+            }
+        }
         let due = db.due_agent_scheduled_tasks(now).unwrap_or_else(|err| {
             tracing::warn!(target: "claudette::scheduling", error = %err, "failed to load due scheduled tasks");
             Vec::new()
         });
-        let next_fire = db.next_agent_schedule_fire_at().ok().flatten();
-        (due, next_fire)
+        due
     };
 
     for task in due {
@@ -150,6 +170,10 @@ async fn run_due_tasks_once(app: AppHandle) -> Duration {
             tracing::warn!(target: "claudette::scheduling", error = %err, "failed to fire scheduled task");
         }
     }
+
+    let next_fire = Database::open(&state.db_path)
+        .ok()
+        .and_then(|db| db.next_agent_schedule_fire_at().ok().flatten());
 
     next_fire
         .and_then(|value| DateTime::parse_from_rfc3339(&value).ok())
@@ -174,7 +198,33 @@ async fn mark_and_dispatch_due_task(
             return Ok(());
         }
     }
-    dispatch_task_prompt(app, task, "scheduled").await
+    match dispatch_task_prompt(app.clone(), task.clone(), "scheduled").await {
+        Ok(()) => Ok(()),
+        Err(err) => {
+            let state = app.state::<AppState>();
+            if let Ok(db) = Database::open(&state.db_path) {
+                let result = if is_terminal_scheduled_task_error(&err) {
+                    db.disable_agent_scheduled_task_after_failure(
+                        &task.id,
+                        Utc::now(),
+                        "terminal_dispatch_error",
+                        &err,
+                    )
+                } else {
+                    db.record_agent_scheduled_task_failure(&task.id, Utc::now(), &err)
+                };
+                if let Err(db_err) = result {
+                    tracing::warn!(
+                        target: "claudette::scheduling",
+                        task_id = %task.id,
+                        error = %db_err,
+                        "failed to record scheduled task dispatch failure"
+                    );
+                }
+            }
+            Err(err)
+        }
+    }
 }
 
 pub async fn dispatch_task_prompt(
@@ -233,6 +283,14 @@ fn build_dispatch_prompt(task: &ScheduledTask, source: &str) -> String {
     prompt
 }
 
+fn is_terminal_scheduled_task_error(error: &str) -> bool {
+    let error = error.to_ascii_lowercase();
+    error.contains("workspace has no worktree")
+        || error.contains("workspace not found")
+        || error.contains("chat session not found")
+        || error.contains("repository not found")
+}
+
 fn resolve_fire_at(
     delay_seconds: Option<i64>,
     fire_at: Option<&str>,
@@ -268,6 +326,10 @@ mod tests {
             updated_at: "now".into(),
             last_fired_at: None,
             next_fire_at: None,
+            failure_count: 0,
+            last_failed_at: None,
+            last_error: None,
+            disabled_reason: None,
         }
     }
 
@@ -278,5 +340,14 @@ mod tests {
         assert!(prompt.contains("Name: morning"));
         assert!(prompt.contains("Reason: daily review"));
         assert!(prompt.contains("Check the PR"));
+    }
+
+    #[test]
+    fn terminal_scheduler_errors_are_classified() {
+        assert!(is_terminal_scheduled_task_error(
+            "Workspace has no worktree"
+        ));
+        assert!(is_terminal_scheduled_task_error("chat session not found"));
+        assert!(!is_terminal_scheduled_task_error("network timeout"));
     }
 }

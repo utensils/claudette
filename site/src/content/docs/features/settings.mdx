@@ -62,7 +62,7 @@ See [Agent Configuration](/claudette/features/agent-configuration/) for detailed
 
 ## Automation
 
-Native agent wakeups and routines are managed by the scheduler described in [Agent Scheduling](/claudette/features/agent-scheduling/). The current surface is CLI and agent-tool driven; scheduled rows persist in the app database and re-arm when Claudette starts.
+Native agent wakeups and routines are managed by the scheduler described in [Agent Scheduling](/claudette/features/agent-scheduling/). The current surface is CLI and agent-tool driven; scheduled rows persist in the app database and re-arm when Claudette starts. Tasks whose workspace is archived or missing a worktree are paused with a visible reason rather than retried in the background.
 
 | Setting | Description | Default |
 |---------|-------------|---------|

@@ -121,15 +121,23 @@ pub(super) fn mirror_background_task_output(
         use tokio::io::{AsyncReadExt, AsyncSeekExt};
 
         let mut offset = 0_u64;
-        let mut idle_ticks = 0_u32;
-        const MAX_INITIAL_IDLE_TICKS: u32 = 6_000; // 10 minutes at 100ms/tick.
+        let mut empty_reads = 0_u32;
+        let started_at = tokio::time::Instant::now();
+        let mut idle_since_output: Option<tokio::time::Instant> = None;
+        const ACTIVE_MIRROR_POLL: Duration = Duration::from_millis(100);
+        const MAX_INITIAL_IDLE: Duration = Duration::from_secs(10 * 60);
+        const MAX_IDLE_AFTER_OUTPUT: Duration = Duration::from_secs(10);
         const MAX_IDLE_TICKS_AFTER_OUTPUT: u32 = 20;
         let mut buf = vec![0_u8; 8192];
         loop {
-            tokio::time::sleep(Duration::from_millis(100)).await;
+            tokio::time::sleep(crate::tail_backoff::adaptive_tail_delay(
+                ACTIVE_MIRROR_POLL,
+                empty_reads,
+            ))
+            .await;
             let Ok(mut file) = tokio::fs::File::open(&source).await else {
-                idle_ticks = idle_ticks.saturating_add(1);
-                if idle_ticks >= MAX_INITIAL_IDLE_TICKS {
+                empty_reads = empty_reads.saturating_add(1);
+                if offset == 0 && started_at.elapsed() >= MAX_INITIAL_IDLE {
                     tracing::debug!(target: "claudette::chat", source = %source.display(), "stopping idle background output mirror before source file appeared");
                     break;
                 }
@@ -161,15 +169,21 @@ pub(super) fn mirror_background_task_output(
                 }
             }
             if wrote {
-                idle_ticks = 0;
+                empty_reads = 0;
+                idle_since_output = None;
             } else {
-                idle_ticks = idle_ticks.saturating_add(1);
-                let max_idle_ticks = if offset > 0 {
-                    MAX_IDLE_TICKS_AFTER_OUTPUT
-                } else {
-                    MAX_INITIAL_IDLE_TICKS
-                };
-                if idle_ticks >= max_idle_ticks {
+                empty_reads = empty_reads.saturating_add(1);
+                let idle_for = idle_since_output
+                    .get_or_insert_with(tokio::time::Instant::now)
+                    .elapsed();
+                if offset == 0 && started_at.elapsed() >= MAX_INITIAL_IDLE {
+                    tracing::debug!(target: "claudette::chat", source = %source.display(), "stopping idle background output mirror with no output");
+                    break;
+                }
+                if offset > 0
+                    && (empty_reads >= MAX_IDLE_TICKS_AFTER_OUTPUT
+                        || idle_for >= MAX_IDLE_AFTER_OUTPUT)
+                {
                     break;
                 }
             }

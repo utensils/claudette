@@ -19,6 +19,7 @@ mod pty_tracker;
 mod remote;
 mod state;
 mod subprocess_cleanup;
+mod tail_backoff;
 mod tray;
 mod usage;
 #[cfg(feature = "voice")]

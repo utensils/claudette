@@ -19,6 +19,7 @@ import { isAgentBusy } from "../../utils/agentStatus";
 import {
   FILES_AGENT_RUNNING_INTERVAL_MS,
   IDLE_REFRESH_INTERVAL_MS,
+  workspaceRefreshPollingAllowed,
 } from "../../utils/pollingIntervals";
 import type { DiffLayer } from "../../types/diff";
 import { FilePathContextMenu } from "./FilePathContextMenu";
@@ -189,6 +190,7 @@ export function FilesPanel() {
     const interval = setInterval(() => {
       // Skip when a previous load is still in flight — see
       // `loadFilesInFlightCount` declaration above for the pileup rationale.
+      if (!workspaceRefreshPollingAllowed()) return;
       if (loadFilesInFlightCount.current > 0) return;
       void loadFiles(selectedWorkspaceId, refreshNonce, false);
     }, FILES_AGENT_RUNNING_INTERVAL_MS);
@@ -216,6 +218,7 @@ export function FilesPanel() {
     const interval = setInterval(() => {
       // Skip when a previous load is still in flight — see
       // `loadFilesInFlightCount` declaration above for the pileup rationale.
+      if (!workspaceRefreshPollingAllowed()) return;
       if (loadFilesInFlightCount.current > 0) return;
       void loadFiles(selectedWorkspaceId, refreshNonce, false);
     }, IDLE_REFRESH_INTERVAL_MS);

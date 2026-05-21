@@ -31,6 +31,8 @@
   "automation_mode_recurring": "重复",
   "automation_mode_one_shot": "一次性",
   "automation_next_fire": "下次触发",
+  "automation_disabled_reason": "暂停原因",
+  "automation_last_error": "上次错误",
   "general_title": "通用",
   "general_app_version": "应用版本",
   "general_check_updates": "检查更新",

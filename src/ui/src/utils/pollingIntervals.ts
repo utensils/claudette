@@ -29,3 +29,7 @@ export const DIFF_AGENT_RUNNING_INTERVAL_MS = 3_000;
  *  this exists to catch manual edits and external `git` ops, not
  *  agent-driven activity. */
 export const IDLE_REFRESH_INTERVAL_MS = 10_000;
+
+export function workspaceRefreshPollingAllowed(): boolean {
+  return typeof document === "undefined" || document.visibilityState === "visible";
+}

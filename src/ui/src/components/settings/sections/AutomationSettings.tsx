@@ -26,15 +26,21 @@ function routineDescription(task: ScheduledTask, t: TFunction<"settings">): stri
     ? t("automation_status_enabled")
     : t("automation_status_disabled");
   const nextFire = `${t("automation_next_fire")}: ${formatFireTime(task.next_fire_at, t)}`;
+  const disabledDetail =
+    !task.enabled && task.disabled_reason
+      ? ` ${t("automation_disabled_reason")}: ${task.disabled_reason}.`
+      : "";
+  const lastError =
+    task.last_error ? ` ${t("automation_last_error")}: ${task.last_error}.` : "";
   if (task.kind === "wakeup") {
-    return `${t("automation_kind_wakeup")}, ${status}. ${nextFire}.`;
+    return `${t("automation_kind_wakeup")}, ${status}. ${nextFire}.${disabledDetail}${lastError}`;
   }
   const schedule =
     task.human_schedule || task.cron_expr || t("automation_unknown_schedule");
   const mode = task.recurring
     ? t("automation_mode_recurring")
     : t("automation_mode_one_shot");
-  return `${schedule}, ${mode}, ${status}. ${nextFire}.`;
+  return `${schedule}, ${mode}, ${status}. ${nextFire}.${disabledDetail}${lastError}`;
 }
 
 export function AutomationSettings() {

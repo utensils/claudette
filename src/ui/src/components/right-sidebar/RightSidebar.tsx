@@ -11,6 +11,7 @@ import { isAgentBusy } from "../../utils/agentStatus";
 import {
   DIFF_AGENT_RUNNING_INTERVAL_MS,
   IDLE_REFRESH_INTERVAL_MS,
+  workspaceRefreshPollingAllowed,
 } from "../../utils/pollingIntervals";
 import { ChevronRight, Undo2, Trash2, Plus, Minus, FilePenLine } from "lucide-react";
 import { useAppStore, selectActiveSessionId } from "../../stores/useAppStore";
@@ -170,6 +171,7 @@ export const RightSidebar = memo(function RightSidebar() {
     activeTab === "tasks",
   );
   const taskCount = taskHistory.totalBadgeCount;
+  const changesTabVisible = activeTab === "changes";
 
   // `useWorkspaceTaskHistory` already derives the active session's
   // `current` + `subagents` snapshot (it's the lightweight IO-free
@@ -283,7 +285,7 @@ export const RightSidebar = memo(function RightSidebar() {
   }, [workspaces]);
 
   useLayoutEffect(() => {
-    if (!selectedWorkspaceId) return;
+    if (!selectedWorkspaceId || !changesTabVisible) return;
     if (isPendingPlaceholder) {
       // Placeholder workspace — the backend doesn't have this id yet.
       // Skip the fetch entirely; the effect re-runs when commit swaps
@@ -308,10 +310,11 @@ export const RightSidebar = memo(function RightSidebar() {
     clearDiffFiles,
     setDiffLoading,
     isPendingPlaceholder,
+    changesTabVisible,
   ]);
 
   useEffect(() => {
-    if (!selectedWorkspaceId || isPendingPlaceholder) return;
+    if (!selectedWorkspaceId || isPendingPlaceholder || !changesTabVisible) return;
     const cached = getCachedDiffResult(selectedWorkspaceId, refreshNonce);
     setDiffLoading(cached === null);
     const version = ++diffLoadVersion.current;
@@ -339,17 +342,19 @@ export const RightSidebar = memo(function RightSidebar() {
     setDiffLoading,
     isDiffResultStillValid,
     isPendingPlaceholder,
+    changesTabVisible,
   ]);
 
   // Live-refresh diff files while agent is running.
   useEffect(() => {
-    if (!selectedWorkspaceId || isPendingPlaceholder || !isRunning) return;
+    if (!selectedWorkspaceId || isPendingPlaceholder || !isRunning || !changesTabVisible) return;
     const workspaceId = selectedWorkspaceId;
 
     const interval = setInterval(() => {
       // Skip this tick if the previous fetch hasn't resolved. Without this,
       // on a slow repo each `git merge-base` outlives the 3s polling
       // cadence and the swarm grows linearly until the machine melts.
+      if (!workspaceRefreshPollingAllowed()) return;
       if (loadDiffInFlightCount.current > 0) return;
       const version = ++diffLoadVersion.current;
       loadDiffInFlightCount.current += 1;
@@ -374,6 +379,7 @@ export const RightSidebar = memo(function RightSidebar() {
     applyDiffResult,
     isDiffResultStillValid,
     isPendingPlaceholder,
+    changesTabVisible,
   ]);
 
   // Final refresh when agent stops running (after making changes).
@@ -381,7 +387,13 @@ export const RightSidebar = memo(function RightSidebar() {
     const wasRunning = prevIsRunning.current;
     prevIsRunning.current = isRunning;
 
-    if (!selectedWorkspaceId || isPendingPlaceholder || wasRunning !== true || isRunning) return;
+    if (
+      !selectedWorkspaceId ||
+      isPendingPlaceholder ||
+      !changesTabVisible ||
+      wasRunning !== true ||
+      isRunning
+    ) return;
     const workspaceId = selectedWorkspaceId;
 
     const timer = setTimeout(() => {
@@ -415,6 +427,7 @@ export const RightSidebar = memo(function RightSidebar() {
     setDiffLoading,
     isDiffResultStillValid,
     isPendingPlaceholder,
+    changesTabVisible,
   ]);
 
   // Idle polling: refresh diff while agent is not running so manually-edited
@@ -422,13 +435,14 @@ export const RightSidebar = memo(function RightSidebar() {
   // is shared with the Files panel via `utils/pollingIntervals` so the two
   // stay in lockstep.
   useEffect(() => {
-    if (!selectedWorkspaceId || isPendingPlaceholder || isRunning) return;
+    if (!selectedWorkspaceId || isPendingPlaceholder || isRunning || !changesTabVisible) return;
     const workspaceId = selectedWorkspaceId;
 
     const interval = setInterval(() => {
       // See active-polling effect above: skip tick when previous fetch is
       // still in flight. The 10s idle cadence rarely overlaps in practice,
       // but a concurrent `git fetch` can push merge-base latency past it.
+      if (!workspaceRefreshPollingAllowed()) return;
       if (loadDiffInFlightCount.current > 0) return;
       const version = ++diffLoadVersion.current;
       loadDiffInFlightCount.current += 1;
@@ -453,6 +467,7 @@ export const RightSidebar = memo(function RightSidebar() {
     applyDiffResult,
     isDiffResultStillValid,
     isPendingPlaceholder,
+    changesTabVisible,
   ]);
 
   const statusLabel = (status: string | { Renamed: { from: string } }) => {

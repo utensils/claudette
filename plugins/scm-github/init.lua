@@ -253,7 +253,12 @@ function M.ci_status(args)
         "--json", "name,state,link,startedAt",
     })
     if not ok then
-        host.log("warn", "ci_status failed for branch " .. tostring(args.branch) .. ": " .. tostring(data))
+        local message = tostring(data)
+        local level = "warn"
+        if string.find(message, "no pull requests found", 1, true) then
+            level = "debug"
+        end
+        host.log(level, "ci_status failed for branch " .. tostring(args.branch) .. ": " .. message)
         return {}
     end
     local checks = {}

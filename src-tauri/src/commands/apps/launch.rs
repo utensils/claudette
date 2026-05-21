@@ -14,6 +14,7 @@ async fn open_macos_app(app_name: &str, target_path: &str) -> Result<(), String>
     claudette::process::command("open")
         .args(["-a", app_name, target_path])
         .spawn()
+        .map(crate::commands::settings::spawn_tokio_and_reap)
         .map_err(|e| format!("Failed to launch {app_name}: {e}"))?;
     Ok(())
 }
@@ -64,6 +65,7 @@ end run"#
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
+        .map(crate::commands::settings::spawn_tokio_and_reap)
         .map_err(|e| format!("Failed to run AppleScript for {app_id}: {e}"))?;
     Ok(())
 }
@@ -147,6 +149,7 @@ end run"#,
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
+        .map(crate::commands::settings::spawn_tokio_and_reap)
         .map_err(|e| {
             format!(
                 "Failed to launch {} in {app_name} via AppleScript: {e}",
@@ -215,12 +218,14 @@ async fn open_in_terminal(
         cmd.arg(arg.replace("{}", "."));
     }
 
-    cmd.spawn().map_err(|e| {
-        format!(
-            "Failed to launch {} in {}: {e}",
-            editor_entry.name, terminal.name
-        )
-    })?;
+    cmd.spawn()
+        .map(crate::commands::settings::spawn_tokio_and_reap)
+        .map_err(|e| {
+            format!(
+                "Failed to launch {} in {}: {e}",
+                editor_entry.name, terminal.name
+            )
+        })?;
     Ok(())
 }
 
@@ -255,6 +260,7 @@ pub(crate) async fn open_workspace_in_app_inner(
         claudette::process::command("open")
             .arg(worktree_path)
             .spawn()
+            .map(crate::commands::settings::spawn_tokio_and_reap)
             .map_err(|e| format!("Failed to open workspace: {e}"))?;
         return Ok(());
     }
@@ -313,6 +319,7 @@ pub(crate) async fn open_workspace_in_app_inner(
 
     cmd.args(&args)
         .spawn()
+        .map(crate::commands::settings::spawn_tokio_and_reap)
         .map_err(|e| format!("Failed to launch {}: {e}", entry.name))?;
 
     Ok(())
