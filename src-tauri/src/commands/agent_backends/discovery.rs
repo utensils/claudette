@@ -20,7 +20,6 @@ use claudette::agent::{
 };
 use claudette::agent_backend::{AgentBackendConfig, AgentBackendKind, AgentBackendModel};
 use claudette::plugin::load_secure_secret;
-use claudette::process::CommandWindowExt as _;
 use serde_json::Value;
 
 #[cfg(feature = "pi-sdk")]
@@ -544,10 +543,8 @@ pub(super) async fn codex_login_status() -> Result<String, String> {
 }
 
 pub(super) fn codex_cli_command(program: impl AsRef<std::ffi::OsStr>) -> tokio::process::Command {
-    let mut command = tokio::process::Command::new(program);
-    command
-        .no_console_window()
-        .env("PATH", claudette::env::enriched_path());
+    let mut command = claudette::process::command(program);
+    command.env("PATH", claudette::env::enriched_path());
     command
 }
 

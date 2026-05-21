@@ -3,7 +3,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::plugin_runtime::manifest::PluginKind;
-use crate::process::CommandWindowExt as _;
 use mlua::LuaSerdeExt;
 use mlua::prelude::*;
 use tokio::io::AsyncBufReadExt;
@@ -568,8 +567,7 @@ async fn host_exec_streaming(
     crate::missing_cli::precheck_cwd(std::path::Path::new(&ctx.workspace_info.worktree_path))
         .map_err(LuaError::external)?;
 
-    let mut command = Command::new(cmd);
-    command.no_console_window();
+    let mut command = crate::process::command(cmd);
     command.args(&args);
     command.current_dir(&ctx.workspace_info.worktree_path);
     apply_hermetic_env(&mut command, ctx);
@@ -767,8 +765,7 @@ async fn host_exec(
 
     // Build and execute the command with kill_on_drop so timed-out
     // processes don't leak.
-    let mut command = Command::new(cmd);
-    command.no_console_window();
+    let mut command = crate::process::command(cmd);
     command.args(&args);
     command.current_dir(&ctx.workspace_info.worktree_path);
 

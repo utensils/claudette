@@ -9,7 +9,7 @@ use tokio::process::Command;
 use tokio::sync::mpsc;
 
 use crate::env::WorkspaceEnv;
-use crate::process::{CommandWindowExt as _, sanitize_claude_subprocess_env};
+use crate::process::sanitize_claude_subprocess_env;
 
 use super::AgentSettings;
 use super::args::{
@@ -92,8 +92,7 @@ impl PersistentSession {
         crate::missing_cli::precheck_cwd(working_dir)?;
 
         let claude_path = resolve_claude_path().await;
-        let mut cmd = Command::new(&claude_path);
-        cmd.no_console_window();
+        let mut cmd = crate::process::command(&claude_path);
         cmd.args(&args)
             .current_dir(working_dir)
             .stdin(std::process::Stdio::piped())
@@ -823,7 +822,7 @@ mod tests {
 
     #[test]
     fn persistent_session_idle_keepalive_is_applied_to_command_env() {
-        let mut cmd = Command::new("claude");
+        let mut cmd = crate::process::command("claude");
         apply_persistent_session_idle_keepalive(&mut cmd);
 
         let actual = cmd

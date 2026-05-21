@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use tauri::State;
 
 use crate::state::AppState;
+#[cfg(target_os = "windows")]
 use claudette::process::CommandWindowExt as _;
 
 const DEFAULT_APPS_JSON: &str = include_str!("../../default-apps.json");
@@ -398,7 +399,7 @@ fn image_data_url_from_file(path: &Path) -> Option<String> {
 #[cfg(target_os = "macos")]
 fn mac_icon_from_app_bundle(app_path: &Path) -> Option<String> {
     let info_plist = app_path.join("Contents/Info.plist");
-    let output = std::process::Command::new("/usr/libexec/PlistBuddy")
+    let output = claudette::process::std_command("/usr/libexec/PlistBuddy")
         .args(["-c", "Print :CFBundleIconFile"])
         .arg(&info_plist)
         .output()
@@ -431,7 +432,7 @@ fn mac_icon_from_app_bundle(app_path: &Path) -> Option<String> {
     std::fs::create_dir_all(&out_dir).ok()?;
     let out_file = out_dir.join("icon.png");
 
-    let output = std::process::Command::new("sips")
+    let output = claudette::process::std_command("sips")
         .args(["-s", "format", "png"])
         .arg(&icon_path)
         .arg("--out")
@@ -961,8 +962,7 @@ fn extract_windows_icon_data_url(appx_package: &str, icon_source: &Path) -> Opti
     use std::io::Write;
     use std::process::Stdio;
 
-    let mut child = std::process::Command::new("powershell.exe")
-        .no_console_window()
+    let mut child = claudette::process::std_command("powershell.exe")
         .args([
             "-NoProfile",
             "-NonInteractive",
@@ -1094,8 +1094,7 @@ pub async fn detect_installed_apps(state: State<'_, AppState>) -> Result<Vec<Det
 /// Launch an app using macOS `open -a` command.
 #[cfg(target_os = "macos")]
 async fn open_macos_app(app_name: &str, target_path: &str) -> Result<(), String> {
-    tokio::process::Command::new("open")
-        .no_console_window()
+    claudette::process::command("open")
         .args(["-a", app_name, target_path])
         .spawn()
         .map_err(|e| format!("Failed to launch {app_name}: {e}"))?;
@@ -1140,8 +1139,7 @@ end run"#
         other => return Err(format!("No AppleScript handler for app '{other}'")),
     };
 
-    tokio::process::Command::new("osascript")
-        .no_console_window()
+    claudette::process::command("osascript")
         .arg("-e")
         .arg(script)
         .arg("--")
@@ -1224,8 +1222,7 @@ end run"#,
         )
     };
 
-    tokio::process::Command::new("osascript")
-        .no_console_window()
+    claudette::process::command("osascript")
         .arg("-e")
         .arg(script)
         .arg("--")
@@ -1284,8 +1281,9 @@ async fn open_in_terminal(
         .ok_or_else(|| format!("Terminal '{}' not found in config", terminal.id))?;
 
     // Build: terminal_binary [terminal_open_args with {} -> path] [exec_separator] editor_binary [editor_open_args]
-    let mut cmd = tokio::process::Command::new(&terminal.detected_path);
-    cmd.no_console_window();
+    let mut cmd = claudette::process::command(&terminal.detected_path);
+    #[cfg(target_os = "windows")]
+    cmd.new_console_window();
 
     for arg in &terminal_entry.open_args {
         cmd.arg(arg.replace("{}", worktree_path));
@@ -1337,8 +1335,7 @@ pub(crate) async fn open_workspace_in_app_inner(
 
     #[cfg(target_os = "macos")]
     if entry.open_args.first().is_some_and(|a| a == "__open__") {
-        tokio::process::Command::new("open")
-            .no_console_window()
+        claudette::process::command("open")
             .arg(worktree_path)
             .spawn()
             .map_err(|e| format!("Failed to open workspace: {e}"))?;
@@ -1385,26 +1382,17 @@ pub(crate) async fn open_workspace_in_app_inner(
         .map(|a| a.replace("{}", worktree_path))
         .collect();
 
-    let mut cmd = tokio::process::Command::new(&detected.detected_path);
+    let mut cmd = claudette::process::command(&detected.detected_path);
     // Windows console terminals (cmd.exe, powershell.exe, pwsh.exe)
-    // need a fresh, visible console of their own — `CREATE_NO_WINDOW`
-    // would launch them invisibly, and inheriting Claudette's console
-    // (the dev launcher's PowerShell, or nothing at all in release)
-    // gives unusable UX. `wt.exe` ignores the flag because it activates
-    // the Windows Terminal app via a separate process, so it's safe
-    // to apply uniformly to the Terminal category. Editors / IDEs /
-    // file managers keep `no_console_window` so they don't flash a
-    // transient cmd window during launch.
+    // need a fresh, visible console of their own. The process helper
+    // suppresses console allocation by default for everything else.
+    // `wt.exe` ignores this flag because it activates the Windows Terminal
+    // app via a separate process, so applying it to the Terminal category
+    // is harmless there.
     #[cfg(target_os = "windows")]
-    {
-        if entry.category == AppCategory::Terminal {
-            cmd.new_console_window();
-        } else {
-            cmd.no_console_window();
-        }
+    if entry.category == AppCategory::Terminal {
+        cmd.new_console_window();
     }
-    #[cfg(not(target_os = "windows"))]
-    cmd.no_console_window();
 
     cmd.args(&args)
         .spawn()
@@ -2250,8 +2238,7 @@ mod tests {
 
         // Quick gate: skip when WT isn't installed (e.g. Windows
         // Server hosts without the optional component).
-        let pkg_check = std::process::Command::new("powershell.exe")
-            .no_console_window()
+        let pkg_check = claudette::process::std_command("powershell.exe")
             .args([
                 "-NoProfile",
                 "-Command",

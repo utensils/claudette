@@ -7,6 +7,7 @@ use claudette::config;
 use claudette::db::{Database, is_duplicate_repository_path_error};
 use claudette::git;
 use claudette::model::Repository;
+use claudette::process::command;
 
 use crate::state::AppState;
 
@@ -432,7 +433,8 @@ async fn init_repository_inner(
     app: &AppHandle,
     state: State<'_, AppState>,
 ) -> Result<Repository, String> {
-    let init_ok = tokio::process::Command::new("git")
+    let git_bin = claudette::git::resolve_git_path_blocking();
+    let init_ok = command(&git_bin)
         .arg("-C")
         .arg(dir)
         .args(["init", "-b", "main"])
@@ -446,20 +448,20 @@ async fn init_repository_inner(
 
     // Set a repo-local identity so the empty commit succeeds even when the
     // user has no global git config. These values live only in .git/config.
-    let _ = tokio::process::Command::new("git")
+    let _ = command(&git_bin)
         .arg("-C")
         .arg(dir)
         .args(["config", "user.email", "claudette@localhost"])
         .output()
         .await;
-    let _ = tokio::process::Command::new("git")
+    let _ = command(&git_bin)
         .arg("-C")
         .arg(dir)
         .args(["config", "user.name", "Claudette"])
         .output()
         .await;
 
-    let commit_ok = tokio::process::Command::new("git")
+    let commit_ok = command(&git_bin)
         .arg("-C")
         .arg(dir)
         .args(["commit", "--allow-empty", "-m", "init"])

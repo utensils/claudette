@@ -6,11 +6,6 @@ use std::time::{Duration, Instant};
 use rand::seq::SliceRandom;
 
 use crate::model::cesp::{CespManifest, CespSound, InstalledPack, InstalledPackMeta, RegistryPack};
-// Sound-playback spawns only live under macOS/Linux cfg branches — the
-// trait import is likewise macOS/Linux-only so Windows doesn't flag it
-// as unused.
-#[cfg(any(target_os = "macos", target_os = "linux"))]
-use crate::process::CommandWindowExt as _;
 
 const MANIFEST_FILE: &str = "openpeon.json";
 const META_FILE: &str = "_meta.json";
@@ -421,8 +416,7 @@ pub fn play_audio_file(path: &Path, volume: f64) {
             .unwrap_or("")
             .to_lowercase();
         let result = if ext == "ogg" || ext == "oga" {
-            std::process::Command::new("ffplay")
-                .no_console_window()
+            crate::process::std_command("ffplay")
                 .args(["-nodisp", "-autoexit", "-volume"])
                 .arg(format!("{}", (volume * 100.0) as u32))
                 .arg(path)
@@ -430,8 +424,7 @@ pub fn play_audio_file(path: &Path, volume: f64) {
                 .stderr(std::process::Stdio::null())
                 .spawn()
         } else {
-            std::process::Command::new("afplay")
-                .no_console_window()
+            crate::process::std_command("afplay")
                 .arg("-v")
                 .arg(format!("{volume}"))
                 .arg(path)
@@ -450,8 +443,7 @@ pub fn play_audio_file(path: &Path, volume: f64) {
             .unwrap_or("")
             .to_lowercase();
         let result = if ext == "mp3" {
-            std::process::Command::new("ffplay")
-                .no_console_window()
+            crate::process::std_command("ffplay")
                 .args(["-nodisp", "-autoexit", "-volume"])
                 .arg(format!("{}", (volume * 100.0) as u32))
                 .arg(path)
@@ -460,15 +452,13 @@ pub fn play_audio_file(path: &Path, volume: f64) {
                 .spawn()
         } else {
             let pa_volume = (volume * 65536.0) as u32;
-            std::process::Command::new("paplay")
-                .no_console_window()
+            crate::process::std_command("paplay")
                 .arg("--volume")
                 .arg(pa_volume.to_string())
                 .arg(path)
                 .spawn()
                 .or_else(|_| {
-                    std::process::Command::new("ffplay")
-                        .no_console_window()
+                    crate::process::std_command("ffplay")
                         .args(["-nodisp", "-autoexit", "-volume"])
                         .arg(format!("{}", (volume * 100.0) as u32))
                         .arg(path)

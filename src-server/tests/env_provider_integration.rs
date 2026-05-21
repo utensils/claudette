@@ -169,7 +169,7 @@ async fn server_applies_resolved_env_to_spawned_command() {
     )
     .await;
 
-    let mut cmd = tokio::process::Command::new("sh");
+    let mut cmd = claudette::process::command("sh");
     cmd.arg("-c").arg("printf '%s' \"$FOO\"");
     // Drop FOO from the parent env so we can't accidentally pass.
     cmd.env_remove("FOO");

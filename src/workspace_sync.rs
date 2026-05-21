@@ -145,11 +145,10 @@ pub async fn reconcile_single_workspace_branch(
 mod tests {
     use super::*;
     use crate::model::{AgentStatus, Repository, Workspace};
-    use std::process::Command;
 
     fn run_git(path: &Path, args: &[&str], action: &str) {
         let git_path = crate::git::resolve_git_path_blocking();
-        let output = Command::new(&git_path)
+        let output = crate::process::std_command(&git_path)
             .args(args)
             .current_dir(path)
             .output()
@@ -503,7 +502,7 @@ mod tests {
 
         // Detach HEAD at the current commit.
         let git_path = crate::git::resolve_git_path_blocking();
-        let rev_parse = Command::new(&git_path)
+        let rev_parse = crate::process::std_command(&git_path)
             .args(["rev-parse", "HEAD"])
             .current_dir(repo_dir.path())
             .output()

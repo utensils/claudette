@@ -178,7 +178,7 @@ async fn lookup_command(pid: i32) -> Option<String> {
     //
     // Use tokio::process::Command so the syscall doesn't block the worker
     // thread — multiple PTYs each fire this on every command transition.
-    let output = tokio::process::Command::new("ps")
+    let output = claudette::process::command("ps")
         .arg("-o")
         .arg("args=")
         .arg("-p")

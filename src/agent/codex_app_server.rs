@@ -6,12 +6,10 @@ use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncWrite, AsyncWriteExt};
-use tokio::process::{ChildStdin, Command};
+use tokio::process::ChildStdin;
 use tokio::sync::broadcast;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
-
-use crate::process::CommandWindowExt as _;
 
 use super::{
     AgentEvent, AssistantMessage, ContentBlock, ControlRequestInner, Delta, FileAttachment,
@@ -131,8 +129,7 @@ impl CodexAppServerSession {
         crate::missing_cli::precheck_cwd(working_dir)?;
 
         let codex_path = super::binary::resolve_codex_path().await;
-        let mut cmd = Command::new(codex_path);
-        cmd.no_console_window();
+        let mut cmd = crate::process::command(codex_path);
         cmd.args(codex_app_server_args())
             .current_dir(working_dir)
             .stdin(std::process::Stdio::piped())

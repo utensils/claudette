@@ -2,9 +2,6 @@ use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::path::Path;
 
-use crate::process::CommandWindowExt as _;
-use tokio::process::Command;
-
 use crate::model::diff::{
     CommitEntry, DiffFile, DiffHunk, DiffLine, DiffLineType, FileDiff, FileStatus, GitFileLayer,
     GitStatusEntry, StagedDiffFiles,
@@ -54,8 +51,7 @@ fn validate_file_path(file_path: &str) -> Result<(), DiffError> {
 }
 
 async fn run_git(path: &str, args: &[&str]) -> Result<String, DiffError> {
-    let output = Command::new(crate::git::resolve_git_path_blocking())
-        .no_console_window()
+    let output = crate::process::command(crate::git::resolve_git_path_blocking())
         .args(["-C", path])
         .args(args)
         .output()
@@ -435,8 +431,7 @@ async fn suppress_unstaged_rename_deletion_ghosts(
 }
 
 async fn hash_worktree_file(worktree_path: &str, relative_path: &str) -> Option<String> {
-    let output = Command::new(crate::git::resolve_git_path_blocking())
-        .no_console_window()
+    let output = crate::process::command(crate::git::resolve_git_path_blocking())
         .args(["-C", worktree_path])
         .arg("hash-object")
         .arg(format!("--path={relative_path}"))
@@ -614,8 +609,7 @@ pub async fn file_diff(
     if !ls_output.trim().is_empty() {
         // Untracked file — diff against /dev/null
         let full_path = Path::new(worktree_path).join(file_path);
-        let output = Command::new(crate::git::resolve_git_path_blocking())
-            .no_console_window()
+        let output = crate::process::command(crate::git::resolve_git_path_blocking())
             .args(["-C", worktree_path])
             .args([
                 "diff",
@@ -667,8 +661,7 @@ pub async fn file_diff_for_layer(
         Some("untracked") => {
             // Diff against /dev/null for untracked files
             let full_path = Path::new(worktree_path).join(file_path);
-            let output = Command::new(crate::git::resolve_git_path_blocking())
-                .no_console_window()
+            let output = crate::process::command(crate::git::resolve_git_path_blocking())
                 .args(["-C", worktree_path])
                 .args([
                     "diff",
@@ -1378,11 +1371,9 @@ index a..b 100644
 #[cfg(test)]
 mod integration_tests {
     use super::*;
-    use std::process::Command as StdCommand;
 
     fn git_cmd(dir: &Path, args: &[&str]) -> String {
-        let output = StdCommand::new(crate::git::resolve_git_path_blocking())
-            .no_console_window()
+        let output = crate::process::std_command(crate::git::resolve_git_path_blocking())
             .args(["-C", dir.to_str().unwrap()])
             .args(args)
             .output()

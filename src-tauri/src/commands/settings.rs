@@ -6,7 +6,6 @@ use tauri::{AppHandle, State};
 use claudette::db::Database;
 
 use crate::state::AppState;
-use claudette::process::CommandWindowExt as _;
 
 /// Spawn a short-lived process and reap it in a background thread to prevent zombies.
 pub(crate) fn spawn_and_reap(mut child: std::process::Child) {
@@ -173,8 +172,7 @@ pub async fn list_system_fonts() -> Vec<String> {
     {
         // Swift is always available on macOS; NSFontManager is the canonical API.
         let script = r#"import AppKit; NSFontManager.shared.availableFontFamilies.sorted().forEach { print($0) }"#;
-        if let Ok(output) = tokio::process::Command::new("/usr/bin/swift")
-            .no_console_window()
+        if let Ok(output) = claudette::process::command("/usr/bin/swift")
             .arg("-e")
             .arg(script)
             .output()
@@ -193,8 +191,7 @@ pub async fn list_system_fonts() -> Vec<String> {
     #[cfg(target_os = "linux")]
     {
         // fontconfig is standard on all Linux desktops.
-        if let Ok(output) = tokio::process::Command::new("fc-list")
-            .no_console_window()
+        if let Ok(output) = claudette::process::command("fc-list")
             .args([":", "family"])
             .output()
             .await
@@ -241,8 +238,7 @@ pub fn play_notification_sound(sound: String, volume: Option<f64>) {
         } else {
             format!("/System/Library/Sounds/{sound}.aiff")
         };
-        if let Ok(child) = std::process::Command::new("afplay")
-            .no_console_window()
+        if let Ok(child) = claudette::process::std_command("afplay")
             .arg("-v")
             .arg(format!("{vol}"))
             .arg(&path)
@@ -259,14 +255,12 @@ pub fn play_notification_sound(sound: String, volume: Option<f64>) {
             sound.to_lowercase()
         };
         let pa_volume = (vol * 65536.0) as u32;
-        if let Ok(child) = std::process::Command::new("canberra-gtk-play")
-            .no_console_window()
+        if let Ok(child) = claudette::process::std_command("canberra-gtk-play")
             .arg("-i")
             .arg(&sound_name)
             .spawn()
             .or_else(|_| {
-                std::process::Command::new("paplay")
-                    .no_console_window()
+                claudette::process::std_command("paplay")
                     .arg("--volume")
                     .arg(pa_volume.to_string())
                     .arg(format!(
@@ -351,19 +345,18 @@ pub(crate) fn build_notification_command(
     }
     #[cfg(not(windows))]
     let mut command = {
-        let mut c = std::process::Command::new("sh");
+        let mut c = claudette::process::std_command("sh");
         c.arg("-c").arg(cmd);
         c
     };
     #[cfg(windows)]
     let mut command = {
-        let mut c = std::process::Command::new("cmd.exe");
+        let mut c = claudette::process::std_command("cmd.exe");
         // /S = leave the command line alone (no double-quote stripping);
         // /C = execute the command and terminate.
         c.arg("/S").arg("/C").arg(cmd);
         c
     };
-    command.no_console_window();
     ws_env.apply_std(&mut command);
     Some(command)
 }

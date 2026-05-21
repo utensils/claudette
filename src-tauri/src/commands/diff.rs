@@ -227,10 +227,9 @@ mod tests {
     use claudette::db::Database;
     use claudette::model::{AgentStatus, Repository, Workspace, WorkspaceStatus};
     use std::path::PathBuf;
-    use std::process::Command;
 
     fn git(dir: &std::path::Path, args: &[&str]) {
-        let out = Command::new("git")
+        let out = claudette::process::std_command("git")
             .args(args)
             .current_dir(dir)
             .output()

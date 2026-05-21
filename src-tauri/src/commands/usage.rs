@@ -6,7 +6,6 @@ use crate::usage::{self, ClaudeCodeUsage};
 use claudette::agent::{CodexAppServerOptions, CodexAppServerSession};
 use claudette::agent_backend::{AgentBackendConfig, AgentBackendKind};
 use claudette::db::Database;
-use claudette::process::CommandWindowExt as _;
 use claudette::usage::{
     UsageSnapshot, anthropic_oauth, codex_account, local_aggregate, openrouter,
 };
@@ -292,8 +291,7 @@ pub async fn open_release_notes() -> Result<(), String> {
 async fn open_external_url(url: &str) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     {
-        tokio::process::Command::new("open")
-            .no_console_window()
+        claudette::process::command("open")
             .arg(url)
             .spawn()
             .map_err(|e| format!("Failed to open URL: {e}"))?;
@@ -305,16 +303,14 @@ async fn open_external_url(url: &str) -> Result<(), String> {
         // title with no real target. The empty `""` slot neutralises that
         // quirk — current callers pass controlled URLs, but the defensive
         // form costs nothing and protects future callers.
-        tokio::process::Command::new("cmd")
-            .no_console_window()
+        claudette::process::command("cmd")
             .args(["/C", "start", "", url])
             .spawn()
             .map_err(|e| format!("Failed to open URL: {e}"))?;
     }
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
-        tokio::process::Command::new("xdg-open")
-            .no_console_window()
+        claudette::process::command("xdg-open")
             .arg(url)
             .spawn()
             .map_err(|e| format!("Failed to open URL: {e}"))?;

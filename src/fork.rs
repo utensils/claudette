@@ -1095,12 +1095,11 @@ mod tests {
     /// `workspace_alloc::tests` — kept local so the helpers don't have to
     /// become `pub(crate)` just for this test.
     fn setup_real_repo() -> (tempfile::TempDir, String) {
-        use std::process::Command;
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path();
         let git_bin = crate::git::resolve_git_path_blocking();
         let must = |args: &[&str]| {
-            let ok = Command::new(&git_bin)
+            let ok = crate::process::std_command(&git_bin)
                 .arg("-C")
                 .arg(path)
                 .args(args)
@@ -1116,7 +1115,7 @@ mod tests {
         must(&["add", "-A"]);
         must(&["commit", "-m", "initial"]);
         let head = std::str::from_utf8(
-            &Command::new(&git_bin)
+            &crate::process::std_command(&git_bin)
                 .arg("-C")
                 .arg(path)
                 .args(["rev-parse", "HEAD"])
