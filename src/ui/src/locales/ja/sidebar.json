@@ -45,6 +45,7 @@
   "context_copied_working_directory": "作業ディレクトリをコピーしました",
   "context_copied_claude_session_id": "Claude セッション ID をコピーしました",
   "context_no_claude_session_id": "Claude セッション ID はまだありません",
+  "context_discover_worktrees": "ワークツリーを検出…",
   "status_badge_completed_title": "完了",
   "status_badge_completed_aria": "完了",
   "status_badge_plan_title": "プランの承認が必要",
