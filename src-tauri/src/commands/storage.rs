@@ -22,9 +22,13 @@ pub struct WorkspaceStorageEntry {
     pub name: String,
     pub status: WorkspaceStatus,
     pub worktree_path: Option<String>,
-    /// `None` when the workspace has no `worktree_path` (e.g. setup
-    /// failed and the row was created without a real worktree) or when
-    /// the dir is missing on disk.
+    /// For active workspaces with a worktree dir on disk: the size of
+    /// that dir. For workspaces whose worktree has been removed
+    /// (archived, or setup-failed), the bytes the checkpoint store
+    /// would reclaim if the workspace were deleted — sole-owned
+    /// content-addressed blobs plus inline legacy file content.
+    /// `None` is reserved for the rare case where the DB query itself
+    /// fails; callers can treat that as "unknown" and skip the row.
     pub size_bytes: Option<u64>,
 }
 
@@ -51,10 +55,12 @@ pub struct OrphanedWorktree {
     pub inferred_repo_name: Option<String>,
 }
 
-/// Compute per-repo storage statistics by summing the on-disk size of
-/// every workspace's worktree directory. Spawns all directory walks
-/// concurrently on the blocking pool so a large worktree tree doesn't
-/// serialize the whole computation.
+/// Compute per-repo storage statistics. For each workspace: walk its
+/// worktree directory when one exists on disk, otherwise (the archived
+/// case, or a setup-failed row) sum the bytes the workspace would
+/// reclaim from the checkpoint store on delete. Per-workspace work
+/// happens on the blocking pool so neither a large worktree tree nor a
+/// large checkpoint history serializes the whole computation.
 #[tauri::command]
 pub async fn compute_storage_stats(
     state: State<'_, AppState>,
@@ -74,16 +80,19 @@ pub async fn compute_storage_stats(
         .map(|r| r.id)
         .collect();
 
-    // Spawn one blocking size walk per workspace that has a worktree
-    // dir on disk. Skip rows whose path is None or doesn't exist —
-    // they contribute 0 bytes and don't need a thread.
+    // Spawn one blocking task per workspace. When a worktree dir
+    // exists, walk it for the on-disk size. When it doesn't (the
+    // archived case, or a setup-failed row), open a fresh Database
+    // connection inside the task and sum the checkpoint bytes the
+    // workspace would reclaim on delete — that's the only meaningful
+    // size signal once the worktree is gone.
     struct Pending {
         id: String,
         name: String,
         status: WorkspaceStatus,
         repository_id: String,
         worktree_path: Option<String>,
-        size_handle: Option<tokio::task::JoinHandle<u64>>,
+        size_handle: tokio::task::JoinHandle<u64>,
     }
 
     let mut pending: Vec<Pending> = Vec::with_capacity(workspaces.len());
@@ -91,14 +100,26 @@ pub async fn compute_storage_stats(
         if !known_repo_ids.contains(&ws.repository_id) {
             continue;
         }
-        let size_handle = ws
-            .worktree_path
-            .as_ref()
-            .filter(|p| Path::new(p).is_dir())
-            .map(|p| {
-                let path = PathBuf::from(p);
-                tokio::task::spawn_blocking(move || directory_size_bytes(&path))
-            });
+        let workspace_id = ws.id.clone();
+        let worktree_path_opt = ws.worktree_path.clone();
+        let db_path = state.db_path.clone();
+        let size_handle = tokio::task::spawn_blocking(move || -> u64 {
+            if let Some(p) = worktree_path_opt.as_deref()
+                && Path::new(p).is_dir()
+            {
+                return directory_size_bytes(Path::new(p));
+            }
+            // No worktree to walk — fall back to reclaimable checkpoint
+            // storage. A DB error here is best-effort: treat as 0 so the
+            // row still renders (with a possibly low size) rather than
+            // failing the whole stats call.
+            match Database::open(&db_path) {
+                Ok(db) => db
+                    .reclaimable_checkpoint_bytes(&workspace_id)
+                    .unwrap_or(0),
+                Err(_) => 0,
+            }
+        });
         pending.push(Pending {
             id: ws.id,
             name: ws.name,
@@ -119,10 +140,7 @@ pub async fn compute_storage_stats(
     let mut by_repo: Vec<RepoStorageStats> = Vec::new();
     let mut by_repo_index: HashMap<String, usize> = HashMap::new();
     for p in pending {
-        let size_bytes = match p.size_handle {
-            Some(handle) => handle.await.ok(),
-            None => None,
-        };
+        let size_bytes = p.size_handle.await.ok();
         let entry = WorkspaceStorageEntry {
             id: p.id,
             name: p.name,

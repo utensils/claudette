@@ -387,6 +387,56 @@ impl Database {
         Ok(deleted)
     }
 
+    /// Bytes that deleting this workspace would actually reclaim from the
+    /// checkpoint store: sole-owned `checkpoint_blobs` plus inline legacy
+    /// `checkpoint_files.content`. Cross-workspace shared blobs are
+    /// excluded — they would survive the delete via the
+    /// `gc_orphan_blobs_tx` `NOT EXISTS` predicate.
+    ///
+    /// This is what the Storage / cleanup UI uses to show a meaningful
+    /// size for archived workspaces, which have no worktree on disk left
+    /// to walk.
+    pub fn reclaimable_checkpoint_bytes(&self, workspace_id: &str) -> rusqlite::Result<u64> {
+        // Sole-owned blobs: referenced by this workspace's checkpoints AND
+        // by no other workspace's. Mirrors the `NOT EXISTS` shape that
+        // `gc_orphan_blobs_tx` uses so SQLite drives both correlated
+        // subqueries through `idx_checkpoint_files_blob_sha256`.
+        let sole_owned: i64 = self.conn.query_row(
+            "SELECT COALESCE(SUM(cb.byte_size), 0)
+             FROM checkpoint_blobs cb
+             WHERE EXISTS (
+                 SELECT 1 FROM checkpoint_files cf
+                 JOIN conversation_checkpoints cc ON cc.id = cf.checkpoint_id
+                 WHERE cc.workspace_id = ?1 AND cf.blob_sha256 = cb.sha256
+             )
+             AND NOT EXISTS (
+                 SELECT 1 FROM checkpoint_files cf
+                 JOIN conversation_checkpoints cc ON cc.id = cf.checkpoint_id
+                 WHERE cc.workspace_id <> ?1 AND cf.blob_sha256 = cb.sha256
+             )",
+            params![workspace_id],
+            |row| row.get(0),
+        )?;
+
+        // Legacy un-backfilled rows still keep their bytes inline in
+        // `checkpoint_files.content`. Those reclaim 1:1 on workspace
+        // delete since no other row can reference them.
+        let legacy_inline: i64 = self.conn.query_row(
+            "SELECT COALESCE(SUM(LENGTH(cf.content)), 0)
+             FROM checkpoint_files cf
+             JOIN conversation_checkpoints cc ON cc.id = cf.checkpoint_id
+             WHERE cc.workspace_id = ?1
+               AND cf.blob_sha256 IS NULL
+               AND cf.content IS NOT NULL",
+            params![workspace_id],
+            |row| row.get(0),
+        )?;
+
+        let sole = u64::try_from(sole_owned).unwrap_or(0);
+        let legacy = u64::try_from(legacy_inline).unwrap_or(0);
+        Ok(sole.saturating_add(legacy))
+    }
+
     /// Read snapshot rows for a checkpoint, materializing bytes from
     /// `checkpoint_blobs` via the `blob_sha256` reference. Legacy rows
     /// where `blob_sha256 IS NULL` fall back to the row's own `content`
@@ -1603,5 +1653,86 @@ mod tests {
                 .unwrap()
         };
         assert_eq!(with_files, vec!["cp3".to_string(), "cp4".to_string()]);
+    }
+
+    // --- reclaimable_checkpoint_bytes ---
+
+    /// Sole-owned blobs count toward the workspace's reclaimable bytes;
+    /// blobs that another workspace also references do not (deleting this
+    /// workspace would not free them via `gc_orphan_blobs_tx`).
+    #[test]
+    fn reclaimable_bytes_excludes_blobs_shared_with_other_workspaces() {
+        let db = setup_db_with_workspace();
+        // Add a second workspace under the same repo so both can hold
+        // checkpoints in parallel.
+        db.insert_workspace(&make_workspace("w2", "r1", "other")).unwrap();
+
+        // Workspace A: cp1 with two file rows — one unique blob, one
+        // shared with B.
+        db.insert_chat_message(&make_chat_msg(&db, "m1", "w1", ChatRole::Assistant, "a"))
+            .unwrap();
+        db.insert_checkpoint(&make_checkpoint(&db, "cp1", "w1", "m1", 0))
+            .unwrap();
+        let unique_a = vec![0xAAu8; 1000];
+        let shared = vec![0x55u8; 600];
+        db.insert_checkpoint_files(&[
+            raw_file("fa-unique", "cp1", "unique-a.bin", &unique_a),
+            raw_file("fa-shared", "cp1", "shared.bin", &shared),
+        ])
+        .unwrap();
+
+        // Workspace B: also references the shared blob.
+        db.insert_chat_message(&make_chat_msg(&db, "m2", "w2", ChatRole::Assistant, "b"))
+            .unwrap();
+        // make_checkpoint resolves the default session for the workspace, so
+        // it picks w2's session here.
+        db.insert_checkpoint(&make_checkpoint(&db, "cp2", "w2", "m2", 0))
+            .unwrap();
+        db.insert_checkpoint_files(&[raw_file("fb-shared", "cp2", "shared.bin", &shared)])
+            .unwrap();
+
+        // Sanity: dedupe is on, so we have 2 distinct blobs total.
+        assert_eq!(blob_count(&db), 2);
+
+        // Only the unique-A blob is reclaimable for w1 — the shared one
+        // would survive because cp2 still references it.
+        let bytes = db.reclaimable_checkpoint_bytes("w1").unwrap();
+        assert_eq!(bytes, unique_a.len() as u64);
+    }
+
+    /// Legacy un-backfilled rows (content in `checkpoint_files.content`,
+    /// `blob_sha256 IS NULL`) reclaim 1:1 since no other row can reference
+    /// them.
+    #[test]
+    fn reclaimable_bytes_counts_legacy_inline_content() {
+        let db = setup_db_with_workspace();
+        db.insert_chat_message(&make_chat_msg(&db, "m1", "w1", ChatRole::Assistant, "a"))
+            .unwrap();
+        db.insert_checkpoint(&make_checkpoint(&db, "cp1", "w1", "m1", 0))
+            .unwrap();
+
+        // Backdoor a legacy row (no blob_sha256, raw bytes in content),
+        // matching the partially-migrated-DB shape the read-path fallback
+        // test uses.
+        db.execute_batch(
+            "INSERT INTO checkpoint_files
+                (id, checkpoint_id, file_path, content, blob_sha256, file_mode)
+             VALUES ('legacy', 'cp1', 'legacy.txt', x'6c6567616379', NULL, 33188);",
+        )
+        .unwrap();
+
+        // 'legacy' = 6 bytes (l e g a c y).
+        let bytes = db.reclaimable_checkpoint_bytes("w1").unwrap();
+        assert_eq!(bytes, 6);
+    }
+
+    /// A workspace with no checkpoints (or checkpoints with no files)
+    /// reports 0 rather than failing — important so the cleanup UI can
+    /// surface "0 B" instead of `—` for brand-new archives.
+    #[test]
+    fn reclaimable_bytes_empty_workspace_returns_zero() {
+        let db = setup_db_with_workspace();
+        let bytes = db.reclaimable_checkpoint_bytes("w1").unwrap();
+        assert_eq!(bytes, 0);
     }
 }
