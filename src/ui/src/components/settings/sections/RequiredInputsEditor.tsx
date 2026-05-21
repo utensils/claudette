@@ -49,7 +49,8 @@ interface EditorRow {
   required: boolean;
 }
 
-function blankRow(): EditorRow {
+// Exported for unit testing the placeholder-vs-mid-edit distinction.
+export function blankRow(): EditorRow {
   return {
     rowId: typeof crypto !== "undefined" && "randomUUID" in crypto
       ? crypto.randomUUID()
@@ -66,6 +67,31 @@ function blankRow(): EditorRow {
     max: "",
     required: true,
   };
+}
+
+/** True when a row is a brand-new placeholder the user added but hasn't
+ *  touched — a blank key *and* every other field still at its `blankRow`
+ *  default. These are dropped silently on save (they aren't real fields).
+ *
+ *  A row whose key is only *temporarily* blank (e.g. cleared mid-rename
+ *  while the label / bounds are still set) is deliberately NOT pristine:
+ *  treating it as a placeholder would let the debounced save persist a
+ *  schema that drops the field, silently deleting an existing input. Those
+ *  rows instead hold the save until the key is valid again. */
+export function isPristinePlaceholder(row: EditorRow): boolean {
+  return (
+    row.key.trim() === "" &&
+    row.label.trim() === "" &&
+    row.description.trim() === "" &&
+    row.placeholder.trim() === "" &&
+    row.defaultString.trim() === "" &&
+    row.defaultNumber.trim() === "" &&
+    row.min.trim() === "" &&
+    row.max.trim() === "" &&
+    row.type === "string" &&
+    row.defaultBool === false &&
+    row.required === true
+  );
 }
 
 function rowFromField(field: RepositoryInputField): EditorRow {
@@ -209,10 +235,18 @@ export function RequiredInputsEditor({ repoId }: RequiredInputsEditorProps) {
   // still carries the previous repo id in its captured closure.
   const flushSave = useCallback(
     async (targetRepoId: string, rowsToSave: EditorRow[]) => {
-      // Drop rows whose key is still empty — they're WIP placeholders the
-      // user hasn't filled in yet. Surfacing a "key required" error for
-      // those would be noisy on every keystroke.
-      const candidates = rowsToSave.filter((r) => r.key.trim() !== "");
+      // Drop brand-new untouched placeholder rows — they aren't real fields
+      // yet, and surfacing a "key required" error for them would be noisy on
+      // every keystroke.
+      const candidates = rowsToSave.filter((r) => !isPristinePlaceholder(r));
+      // A non-placeholder row with a temporarily-blank key is an in-progress
+      // edit (typically a rename). Persisting now would drop that field from
+      // the schema — silent data loss — so hold the save and leave the last
+      // persisted schema intact until the key is filled in again. Matches the
+      // row-level UI, which also stays quiet (no error) while a key is blank.
+      if (candidates.some((r) => r.key.trim() === "")) {
+        return;
+      }
       const seen = new Set<string>();
       const fields: RepositoryInputField[] = [];
       for (const row of candidates) {
