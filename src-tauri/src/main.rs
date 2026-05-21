@@ -67,7 +67,7 @@ fn warn_if_concurrent_dev_instance(db_path: &Path) {
         return;
     };
     let our_pid = std::process::id();
-    let our_data_dir = db_path.parent().map(Path::to_path_buf);
+    let our_data_dir = db_path.parent().map(normalize_dev_data_dir);
     let mut peers: Vec<(u32, String, Option<PathBuf>)> = Vec::new();
 
     for entry in entries.flatten() {
@@ -99,7 +99,8 @@ fn warn_if_concurrent_dev_instance(db_path: &Path) {
         let peer_data_dir = parsed
             .get("claudette_data_dir")
             .and_then(|v| v.as_str())
-            .map(PathBuf::from);
+            .map(Path::new)
+            .map(normalize_dev_data_dir);
         if peer_data_dir.is_some() && peer_data_dir != our_data_dir {
             continue;
         }
@@ -123,6 +124,24 @@ fn warn_if_concurrent_dev_instance(db_path: &Path) {
              chat_messages rows and corrupt resumed Claude CLI transcripts"
         );
     }
+}
+
+fn normalize_dev_data_dir(path: &Path) -> PathBuf {
+    std::fs::canonicalize(path).unwrap_or_else(|_| normalize_path_lexically(path))
+}
+
+fn normalize_path_lexically(path: &Path) -> PathBuf {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                normalized.pop();
+            }
+            other => normalized.push(other.as_os_str()),
+        }
+    }
+    normalized
 }
 
 #[cfg(unix)]
@@ -1394,6 +1413,7 @@ mod tests {
     #[cfg(target_os = "macos")]
     use super::MACOS_CLOSE_WINDOW_ACCELERATOR;
     use super::migrate_legacy_env_provider_trust;
+    use super::normalize_dev_data_dir;
     #[cfg(target_os = "macos")]
     use super::release_tag_for;
     use claudette::db::Database;
@@ -1532,6 +1552,20 @@ mod tests {
         // the gated-out platform's CI. Taking a function pointer is
         // sufficient — we don't need to call it.
         let _: fn(&Database) = migrate_legacy_env_provider_trust;
+    }
+
+    #[test]
+    fn normalize_dev_data_dir_handles_spelling_variants() {
+        let dir = tempdir().unwrap();
+        let data = dir.path().join("sandbox").join("data");
+        std::fs::create_dir_all(&data).unwrap();
+
+        let spelled = data.join("..").join("data").join(".");
+
+        assert_eq!(
+            normalize_dev_data_dir(&spelled),
+            normalize_dev_data_dir(&data)
+        );
     }
 
     /// Migration is idempotent: a second run after a successful first
