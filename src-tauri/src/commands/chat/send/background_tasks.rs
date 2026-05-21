@@ -79,7 +79,11 @@ pub(crate) const TERMINAL_OUTPUT_TAIL_BYTES: u64 = 32 * 1024 * 1024;
 fn terminal_output_lock_for(path: &Path) -> Arc<Mutex<()>> {
     static LOCKS: OnceLock<Mutex<HashMap<PathBuf, Arc<Mutex<()>>>>> = OnceLock::new();
     let map = LOCKS.get_or_init(|| Mutex::new(HashMap::new()));
-    let mut guard = map.lock().expect("terminal output lock map poisoned");
+    // Tolerate poisoning: a prior panic while holding the lock map mutex
+    // would otherwise propagate a panic into every subsequent terminal-
+    // output write and crash the app. The map's data is just `Arc`
+    // handles and `PathBuf` keys — recovering the inner value is safe.
+    let mut guard = map.lock().unwrap_or_else(|p| p.into_inner());
     guard
         .entry(path.to_path_buf())
         .or_insert_with(|| Arc::new(Mutex::new(())))
@@ -125,7 +129,9 @@ pub(crate) fn append_terminal_output_sync(path: &Path, bytes: &[u8]) -> std::io:
         std::fs::create_dir_all(parent)?;
     }
     let lock = terminal_output_lock_for(path);
-    let _guard = lock.lock().expect("terminal output lock poisoned");
+    // Same poisoning policy as the lock map: tolerate a prior panic so
+    // a single bad write doesn't silently kill the terminal pipeline.
+    let _guard = lock.lock().unwrap_or_else(|p| p.into_inner());
     rotate_terminal_output_if_needed_sync(path)?;
     use std::io::Write;
     let mut file = std::fs::OpenOptions::new()
@@ -135,12 +141,10 @@ pub(crate) fn append_terminal_output_sync(path: &Path, bytes: &[u8]) -> std::io:
     file.write_all(bytes)
 }
 
-pub(super) async fn append_agent_bash_output(
-    path: &std::path::Path,
-    text: &str,
-) -> std::io::Result<()> {
-    let path = path.to_path_buf();
-    let bytes = text.as_bytes().to_vec();
+/// Async wrapper. Takes ownership of `bytes` and `path` so the call site
+/// hands a single allocation across the `spawn_blocking` boundary — no
+/// extra `to_vec()` copy of the (potentially multi-MB) tool-result text.
+pub(super) async fn append_agent_bash_output(path: PathBuf, bytes: Vec<u8>) -> std::io::Result<()> {
     tokio::task::spawn_blocking(move || append_terminal_output_sync(&path, &bytes))
         .await
         .map_err(|err| {
@@ -154,18 +158,37 @@ pub(super) async fn append_agent_bash_output(
 /// source file from offset 0 — re-appending gigabytes of historical bash
 /// output to the workspace terminal. This dedupes spawn requests so only
 /// one mirror per (source, destination) pair runs at a time.
-fn active_mirrors() -> &'static std::sync::Mutex<HashSet<(PathBuf, PathBuf)>> {
-    static ACTIVE: OnceLock<std::sync::Mutex<HashSet<(PathBuf, PathBuf)>>> = OnceLock::new();
-    ACTIVE.get_or_init(|| std::sync::Mutex::new(HashSet::new()))
+fn active_mirrors() -> &'static Mutex<HashSet<(PathBuf, PathBuf)>> {
+    static ACTIVE: OnceLock<Mutex<HashSet<(PathBuf, PathBuf)>>> = OnceLock::new();
+    ACTIVE.get_or_init(|| Mutex::new(HashSet::new()))
+}
+
+/// RAII token that removes a mirror registration on drop. The spawned
+/// mirror task owns one of these and lets it drop when the task finishes
+/// — normally, via panic, or because the JoinHandle was aborted. Without
+/// this, a panicking or aborted task would leave the entry behind and
+/// permanently dedupe all future spawns for that `(source, destination)`.
+struct MirrorRegistration {
+    key: Option<(PathBuf, PathBuf)>,
+}
+
+impl Drop for MirrorRegistration {
+    fn drop(&mut self) {
+        if let Some(key) = self.key.take() {
+            let mut active = active_mirrors().lock().unwrap_or_else(|p| p.into_inner());
+            active.remove(&key);
+        }
+    }
 }
 
 pub(super) fn mirror_background_task_output(
     source: std::path::PathBuf,
     destination: std::path::PathBuf,
 ) {
-    {
-        let mut active = active_mirrors().lock().expect("active mirrors poisoned");
-        if !active.insert((source.clone(), destination.clone())) {
+    let key = (source.clone(), destination.clone());
+    let registration = {
+        let mut active = active_mirrors().lock().unwrap_or_else(|p| p.into_inner());
+        if !active.insert(key.clone()) {
             tracing::debug!(
                 target: "claudette::chat",
                 source = %source.display(),
@@ -174,8 +197,13 @@ pub(super) fn mirror_background_task_output(
             );
             return;
         }
-    }
+        MirrorRegistration { key: Some(key) }
+    };
     tokio::spawn(async move {
+        // Held in scope for the entire mirror loop. Dropped on normal
+        // completion, panic, or JoinHandle::abort — whichever happens
+        // first — so the (source, destination) registration is released.
+        let _registration = registration;
         use tokio::io::{AsyncReadExt, AsyncSeekExt};
 
         let mut offset = 0_u64;
@@ -207,11 +235,10 @@ pub(super) fn mirror_background_task_output(
                     Ok(n) => {
                         offset += n as u64;
                         wrote = true;
-                        if let Err(err) = append_agent_bash_output(
-                            &destination,
-                            &terminal_text(&String::from_utf8_lossy(&buf[..n])),
-                        )
-                        .await
+                        let rendered = terminal_text(&String::from_utf8_lossy(&buf[..n]));
+                        if let Err(err) =
+                            append_agent_bash_output(destination.clone(), rendered.into_bytes())
+                                .await
                         {
                             tracing::warn!(target: "claudette::chat", error = %err, "failed to mirror background output");
                         }
@@ -233,8 +260,9 @@ pub(super) fn mirror_background_task_output(
                 }
             }
         }
-        let mut active = active_mirrors().lock().expect("active mirrors poisoned");
-        active.remove(&(source, destination));
+        // `_registration` drops here, releasing the (source, destination)
+        // entry from `active_mirrors` so a fresh mirror can be spawned
+        // later if the same background bash binding re-fires.
     });
 }
 
@@ -426,7 +454,7 @@ impl BackgroundTaskInputTracker {
         let echo = command
             .map(|cmd| format!("\r\n$ {}\r\n", terminal_text(cmd)))
             .unwrap_or_else(|| "\r\n$ Bash\r\n".to_string());
-        if let Err(err) = append_agent_bash_output(&path, &echo).await {
+        if let Err(err) = append_agent_bash_output(path, echo.into_bytes()).await {
             tracing::warn!(target: "claudette::chat", error = %err, "failed to write agent bash output");
         }
         if get_or_create_agent_shell_terminal_tab(db_path, workspace_id, chat_session_id).is_some()
@@ -1189,7 +1217,7 @@ mod tests {
         seed[marker_at..].copy_from_slice(marker);
         std::fs::write(&path, &seed).unwrap();
 
-        append_agent_bash_output(&path, "new-line\r\n")
+        append_agent_bash_output(path.clone(), b"new-line\r\n".to_vec())
             .await
             .unwrap();
 

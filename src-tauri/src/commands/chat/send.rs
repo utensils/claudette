@@ -2959,14 +2959,12 @@ pub async fn send_chat_message(
                                     } else if is_known_bash_tool_result && !is_replay {
                                         let path =
                                             claudette::agent::background::workspace_terminal_output_path(&ws_id);
-                                        let text = terminal_text(&text);
-                                        let suffix =
-                                            if text.ends_with("\r\n") { "" } else { "\r\n" };
-                                        if let Err(err) = append_agent_bash_output(
-                                            &path,
-                                            &format!("{text}{suffix}"),
-                                        )
-                                        .await
+                                        let mut bytes = terminal_text(&text).into_bytes();
+                                        if !bytes.ends_with(b"\r\n") {
+                                            bytes.extend_from_slice(b"\r\n");
+                                        }
+                                        if let Err(err) =
+                                            append_agent_bash_output(path, bytes).await
                                         {
                                             tracing::warn!(
                                                 target: "claudette::chat",
