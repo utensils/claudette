@@ -315,7 +315,14 @@ describe("useAgentStream — session-renamed listener", () => {
     expect(useAppStore.getState().promptStartTime["ws-1"]).toBeUndefined();
   });
 
-  it("falls back to rendering AskUserQuestion from the streamed tool block", async () => {
+  it("does NOT re-show an AskUserQuestion card from the streamed tool block", async () => {
+    // Regression guard for the PR-939 fallback. The prior implementation
+    // re-created the question card from `content_block_stop` if the user
+    // had already answered the original (control_request-driven) card.
+    // The Rust side had cleared the matching pending_permissions entry,
+    // so the second answer failed with "No pending permission request for
+    // tool_use_id ...". The card must only ever come from the Rust-side
+    // `agent-permission-prompt` event.
     vi.useFakeTimers();
     await mountHook();
     const handlers = registeredHandlers.get("agent-stream") ?? [];
@@ -373,28 +380,9 @@ describe("useAgentStream — session-renamed listener", () => {
           },
         });
       }
-      vi.advanceTimersByTime(500);
+      vi.advanceTimersByTime(5_000);
     });
 
-    const question = useAppStore.getState().agentQuestions["session-1"];
-    expect(question).toMatchObject({
-      sessionId: "session-1",
-      toolUseId: "toolu-question-1",
-      questions: [
-        {
-          header: "Next step",
-          question: "How should I proceed?",
-          options: [
-            { label: "Implement the fix", description: "Patch and test it." },
-            { label: "Stop here" },
-          ],
-        },
-      ],
-    });
-    const session = useAppStore
-      .getState()
-      .sessionsByWorkspace["ws-1"]?.find((item) => item.id === "session-1");
-    expect(session?.needs_attention).toBe(true);
-    expect(session?.attention_kind).toBe("Ask");
+    expect(useAppStore.getState().agentQuestions["session-1"]).toBeUndefined();
   });
 });
