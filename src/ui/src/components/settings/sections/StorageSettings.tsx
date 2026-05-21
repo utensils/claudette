@@ -575,9 +575,6 @@ function RepoCard({
                 {card.displayName}
               </span>
             )}
-            <span className={styles.storageCardTotal}>
-              {formatBytes(card.totalBytes)}
-            </span>
           </div>
           <div className={styles.storageCardMeta}>
             {isUnknown ? (
@@ -613,6 +610,9 @@ function RepoCard({
               {t("storage_cleanup_button")}
             </button>
           )}
+          <span className={styles.storageCardTotal}>
+            {formatBytes(card.totalBytes)}
+          </span>
         </div>
       </div>
 
