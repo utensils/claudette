@@ -4,15 +4,11 @@ import { useTranslation } from "react-i18next";
 import { useAppStore } from "../../../stores/useAppStore";
 import { useSessionUsagePoller } from "../../../hooks/useSessionUsagePoller";
 import type { UsageBucket } from "../../../types/usage";
+import { resolveSessionBackend } from "../resolveSessionBackend";
 import { CLAUDE_CODE_USAGE_FOCUS } from "../../settings/focusKeys";
 import { resolveIndicatorMode } from "./usageIndicatorMode";
 import { UsagePopover } from "./UsagePopover";
 import styles from "./UsageIndicator.module.css";
-
-/** Matches the convention used elsewhere in the chat UI
- *  (ComposerToolbar, ChatToolbar, ChatPanel, OverflowMenu, applySelectedModel)
- *  for sessions that haven't explicitly saved a provider yet. */
-const DEFAULT_BACKEND_ID = "anthropic";
 
 interface UsageIndicatorProps {
   workspaceId: string | null;
@@ -57,6 +53,7 @@ export function UsageIndicator({ workspaceId, sessionId }: UsageIndicatorProps) 
 
   const usageInsightsEnabled = useAppStore((s) => s.usageInsightsEnabled);
   const agentBackends = useAppStore((s) => s.agentBackends);
+  const defaultAgentBackendId = useAppStore((s) => s.defaultAgentBackendId);
   const selectedModel = useAppStore((s) => s.selectedModel);
   const selectedModelProvider = useAppStore((s) => s.selectedModelProvider);
   const sessionUsage = useAppStore((s) => s.sessionUsage);
@@ -64,13 +61,13 @@ export function UsageIndicator({ workspaceId, sessionId }: UsageIndicatorProps) 
 
   const backend = useMemo(() => {
     if (!sessionId) return null;
-    // Default to "anthropic" when no explicit provider has been saved
-    // for this session — matches the convention every other chat
-    // composer surface uses, so a brand-new default-Claude session
-    // gets the greyed-out enable affordance instead of nothing.
-    const backendId = selectedModelProvider[sessionId] ?? DEFAULT_BACKEND_ID;
-    return agentBackends.find((b) => b.id === backendId) ?? null;
-  }, [agentBackends, selectedModelProvider, sessionId]);
+    return resolveSessionBackend({
+      sessionId,
+      selectedModelProvider,
+      agentBackends,
+      defaultAgentBackendId,
+    });
+  }, [agentBackends, defaultAgentBackendId, selectedModelProvider, sessionId]);
 
   const usageBackend = useMemo(() => {
     if (!backend || !sessionId) return backend;
