@@ -158,18 +158,23 @@ pub async fn save_snapshot(
 ) -> Result<bool, SnapshotError> {
     let collected = collect_worktree_files(worktree_path).await?;
 
+    // Pre-hash on the calling thread BEFORE opening the write transaction.
+    // Holding the SQLite write lock while sha256-ing megabytes of content
+    // would starve foreground commands (sidebar refresh, chat sends, etc.)
+    // on long snapshots. The hashes feed the dedupe upsert directly, so
+    // doing them up front trades nothing.
     let files: Vec<CheckpointFile> = collected
         .into_iter()
-        .map(|(path, content, mode)| CheckpointFile {
-            id: uuid::Uuid::new_v4().to_string(),
-            checkpoint_id: checkpoint_id.to_string(),
-            file_path: path,
-            content: Some(content),
-            // Hashed inside the DB transaction so we don't pay the digest
-            // cost on the calling thread for files that the prune step
-            // would have just dropped anyway.
-            blob_sha256: None,
-            file_mode: mode,
+        .map(|(path, content, mode)| {
+            let sha = crate::db::sha256_hex(&content);
+            CheckpointFile {
+                id: uuid::Uuid::new_v4().to_string(),
+                checkpoint_id: checkpoint_id.to_string(),
+                file_path: path,
+                content: Some(content),
+                blob_sha256: Some(sha),
+                file_mode: mode,
+            }
         })
         .collect();
 

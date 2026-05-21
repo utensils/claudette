@@ -15,6 +15,7 @@
 //! (#942). Each batch is its own transaction so a long-running backfill
 //! can't lose progress on shutdown.
 
+use std::fmt;
 use std::path::{Path, PathBuf};
 
 use crate::db::Database;
@@ -22,6 +23,49 @@ use crate::db::Database;
 const BATCH_ROW_COUNT: usize = 64;
 const BATCH_BYTE_BUDGET: usize = 16 * 1024 * 1024;
 const BACKFILL_DONE_KEY: &str = "checkpoint_blob_backfill_done";
+
+/// Failure modes for the backfill task. Kept distinct from `rusqlite::Error`
+/// so a `JoinError` from a panicked / cancelled worker doesn't masquerade
+/// as a SQL conversion failure in logs and telemetry.
+#[derive(Debug)]
+pub enum BackfillError {
+    /// A SQL operation against `checkpoint_files` / `checkpoint_blobs` /
+    /// `app_settings` failed.
+    Sql(rusqlite::Error),
+    /// The `spawn_blocking` worker panicked or was cancelled before
+    /// returning. Almost always indicates a bug or a process shutdown.
+    JoinFailed(tokio::task::JoinError),
+}
+
+impl fmt::Display for BackfillError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Sql(e) => write!(f, "checkpoint backfill SQL error: {e}"),
+            Self::JoinFailed(e) => write!(f, "checkpoint backfill worker failed: {e}"),
+        }
+    }
+}
+
+impl std::error::Error for BackfillError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Sql(e) => Some(e),
+            Self::JoinFailed(e) => Some(e),
+        }
+    }
+}
+
+impl From<rusqlite::Error> for BackfillError {
+    fn from(e: rusqlite::Error) -> Self {
+        Self::Sql(e)
+    }
+}
+
+impl From<tokio::task::JoinError> for BackfillError {
+    fn from(e: tokio::task::JoinError) -> Self {
+        Self::JoinFailed(e)
+    }
+}
 
 /// Spawn a fire-and-forget tokio task that runs the backfill in the
 /// background. Safe to call repeatedly: the task short-circuits if
@@ -40,7 +84,7 @@ pub fn spawn_backfill(db_path: PathBuf) {
 
 /// Drive the backfill loop to completion. Returns once every legacy row
 /// has been migrated or there are no legacy rows to begin with.
-pub async fn run_backfill(db_path: &Path) -> Result<(), rusqlite::Error> {
+pub async fn run_backfill(db_path: &Path) -> Result<(), BackfillError> {
     // Skip if already complete — recorded after every successful pass so we
     // never repeat the full table scan on subsequent boots.
     if blocking_op(db_path, |db| {
@@ -91,7 +135,7 @@ pub async fn run_backfill(db_path: &Path) -> Result<(), rusqlite::Error> {
 /// Run a blocking DB operation on a worker thread so the backfill never
 /// holds a `Database` (non-`Send`) across `await` points and never blocks
 /// the tokio reactor with synchronous SQLite calls.
-async fn blocking_op<F, T>(db_path: &Path, op: F) -> Result<T, rusqlite::Error>
+async fn blocking_op<F, T>(db_path: &Path, op: F) -> Result<T, BackfillError>
 where
     F: FnOnce(&Database) -> Result<T, rusqlite::Error> + Send + 'static,
     T: Send + 'static,
@@ -102,7 +146,8 @@ where
         op(&db)
     })
     .await
-    .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?
+    .map_err(BackfillError::JoinFailed)?
+    .map_err(BackfillError::Sql)
 }
 
 #[cfg(test)]

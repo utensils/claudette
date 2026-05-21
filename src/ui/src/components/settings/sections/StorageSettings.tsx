@@ -74,13 +74,26 @@ export function StorageSettings() {
   const [retentionSaving, setRetentionSaving] = useState(false);
   const [retentionError, setRetentionError] = useState<string | null>(null);
 
+  // Backend (`read_checkpoint_retention_count` in src/chat.rs) parses
+  // the stored value as `usize`, which rejects non-integer strings like
+  // "1.5" entirely and falls back to the default. The UI must match that
+  // contract — otherwise `parseInt("1.5") = 1` would display a clamped
+  // value the backend doesn't actually honour.
+  const parseStrictInteger = (raw: string): number | null => {
+    const trimmed = raw.trim();
+    if (trimmed === "") return null;
+    const n = Number(trimmed);
+    return Number.isInteger(n) ? n : null;
+  };
+
   useEffect(() => {
     getAppSetting("checkpoint_retention_count")
       .then((v) => {
-        const n = v ? Number.parseInt(v, 10) : NaN;
-        const value = Number.isFinite(n)
-          ? Math.min(MAX_RETENTION, Math.max(MIN_RETENTION, n))
-          : DEFAULT_RETENTION;
+        const n = v == null ? null : parseStrictInteger(v);
+        const value =
+          n == null
+            ? DEFAULT_RETENTION
+            : Math.min(MAX_RETENTION, Math.max(MIN_RETENTION, n));
         setRetention(value);
         setRetentionDraft(String(value));
       })
@@ -88,8 +101,8 @@ export function StorageSettings() {
   }, []);
 
   const saveRetention = useCallback(async () => {
-    const parsed = Number.parseInt(retentionDraft, 10);
-    if (!Number.isFinite(parsed)) {
+    const parsed = parseStrictInteger(retentionDraft);
+    if (parsed === null) {
       setRetentionError(t("checkpoint_retention_invalid"));
       return;
     }
@@ -367,7 +380,7 @@ export function StorageSettings() {
           disabled={
             retentionSaving ||
             retentionDraft === String(retention) ||
-            !Number.isFinite(Number.parseInt(retentionDraft, 10))
+            parseStrictInteger(retentionDraft) === null
           }
         >
           {retentionSaving

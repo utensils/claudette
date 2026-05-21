@@ -339,15 +339,16 @@ impl Database {
     }
 
     fn gc_orphan_blobs_tx(tx: &rusqlite::Transaction<'_>) -> Result<(), rusqlite::Error> {
-        // Index `idx_checkpoint_files_blob_sha256` makes the inner DISTINCT
-        // an index-only scan. SQLite's NOT IN with a non-correlated subquery
-        // is efficient at the blob-table scale we care about (the worst case
-        // in #942 is ~5500 unique blobs).
+        // Correlated `NOT EXISTS` lets SQLite drive each candidate blob row
+        // through `idx_checkpoint_files_blob_sha256` directly, without
+        // materializing a DISTINCT set of every referenced sha. Also avoids
+        // any `NOT IN` NULL surprise if a future schema change ever
+        // dropped the `IS NOT NULL` guard.
         tx.execute(
             "DELETE FROM checkpoint_blobs
-             WHERE sha256 NOT IN (
-                 SELECT DISTINCT blob_sha256 FROM checkpoint_files
-                  WHERE blob_sha256 IS NOT NULL
+             WHERE NOT EXISTS (
+                 SELECT 1 FROM checkpoint_files
+                  WHERE blob_sha256 = checkpoint_blobs.sha256
              )",
             [],
         )?;

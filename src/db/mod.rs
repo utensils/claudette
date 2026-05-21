@@ -28,6 +28,7 @@ pub use terminal::CLAUDETTE_TERMINAL_TITLE;
 mod remote;
 
 mod checkpoint;
+pub(crate) use checkpoint::sha256_hex;
 
 mod chat;
 
@@ -168,15 +169,21 @@ impl Database {
     /// `conversation_checkpoints` — the FK chain reclaims the reference rows
     /// but not the blob bytes themselves. Best-effort: failure is logged and
     /// swallowed so user-facing deletes don't fail on housekeeping.
+    ///
+    /// Uses a correlated `NOT EXISTS` rather than `NOT IN (SELECT DISTINCT …)`
+    /// so SQLite can drive the lookup off `idx_checkpoint_files_blob_sha256`
+    /// directly without materializing the DISTINCT set. This also sidesteps
+    /// `NOT IN` NULL semantics — irrelevant given the inner `IS NOT NULL`
+    /// filter, but cheap insurance against future schema drift.
     fn gc_orphan_blobs_after_delete(&self, rows_deleted: usize) {
         if rows_deleted == 0 {
             return;
         }
         if let Err(e) = self.conn.execute(
             "DELETE FROM checkpoint_blobs
-             WHERE sha256 NOT IN (
-                 SELECT DISTINCT blob_sha256 FROM checkpoint_files
-                  WHERE blob_sha256 IS NOT NULL
+             WHERE NOT EXISTS (
+                 SELECT 1 FROM checkpoint_files
+                  WHERE blob_sha256 = checkpoint_blobs.sha256
              )",
             [],
         ) {
