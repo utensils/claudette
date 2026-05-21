@@ -171,8 +171,10 @@ export function getTerminalTheme(): ITheme {
  *
  * The tokens live in theme.css so per-theme overrides keep working. We read
  * them via the canonical `getPropertyValue(...).trim() || "#..."` safety
- * fallback so the rare race where the stylesheet hasn't applied still hands
- * the addon a usable hex.
+ * fallback, then run `ensureHexColor` to guard against user JSON themes
+ * that override `--accent-primary` (which the active-match token follows
+ * via var-substitution) with non-hex CSS color formats — the addon would
+ * silently reject those.
  */
 export function getTerminalSearchDecorations(): {
   matchBackground: string;
@@ -181,14 +183,24 @@ export function getTerminalSearchDecorations(): {
   activeMatchColorOverviewRuler: string;
 } {
   const style = getComputedStyle(document.documentElement);
-  const matchColor = style.getPropertyValue("--terminal-search-match-bg").trim() || "#5a5a5a";
-  const activeColor = style.getPropertyValue("--terminal-search-active-match-bg").trim() || "#e07850";
+  const rawMatch = style.getPropertyValue("--terminal-search-match-bg").trim() || "#5a5a5a";
+  const rawActive = style.getPropertyValue("--terminal-search-active-match-bg").trim() || "#e07850";
+  const matchColor = ensureHexColor(rawMatch, "#5a5a5a");
+  const activeColor = ensureHexColor(rawActive, "#e07850");
   return {
     matchBackground: matchColor,
     matchOverviewRuler: matchColor,
     activeMatchBackground: activeColor,
     activeMatchColorOverviewRuler: activeColor,
   };
+}
+
+// Validates that a color string is in literal `#RRGGBB` form. Anything
+// else (rgb/hsl/color-mix/unresolved var) falls back to the supplied hex
+// so the search addon — which silently no-ops on non-hex input — always
+// gets something it can render.
+function ensureHexColor(value: string, fallback: string): string {
+  return /^#[0-9a-fA-F]{6}$/.test(value) ? value : fallback;
 }
 
 // Keys the user may have set via applyUserFonts() — preserved across

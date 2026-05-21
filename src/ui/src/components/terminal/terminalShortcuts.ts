@@ -187,11 +187,18 @@ function legacyTerminalKeyAction(ev: KeyboardEvent): string | null {
   // Linux/Windows: Ctrl+Shift+C/V (bare Ctrl+C stays as SIGINT)
   if (isC && ev.ctrlKey && ev.shiftKey && !ev.metaKey) return "terminal.copy-selection";
   if (isV && ev.ctrlKey && ev.shiftKey && !ev.metaKey) return "terminal.paste";
-  // Cmd/Ctrl+F: opens the terminal-search bar. No Shift on either platform —
-  // a Ctrl+Shift+F (find-in-files, when added) should not trigger this.
+  // Cmd/Ctrl+F: opens the terminal-search bar. No Shift or Alt on either
+  // platform — Cmd+Shift+F (find-in-files, when added) and Cmd+Alt+F
+  // should both still pass through to whatever owns them. The `!altKey`
+  // gate matches the strictness of the `bindingMatchesEvent` path that
+  // resolves the registered `terminal.open-search` action.
   const isF = ev.code === "KeyF";
-  if (isF && ev.metaKey && !ev.ctrlKey && !ev.shiftKey) return "terminal.open-search";
-  if (isF && ev.ctrlKey && !ev.metaKey && !ev.shiftKey) return "terminal.open-search";
+  if (isF && ev.metaKey && !ev.ctrlKey && !ev.shiftKey && !ev.altKey) {
+    return "terminal.open-search";
+  }
+  if (isF && ev.ctrlKey && !ev.metaKey && !ev.shiftKey && !ev.altKey) {
+    return "terminal.open-search";
+  }
   return null;
 }
 import { resolveHotkeyAction, type KeybindingMap } from "../../hotkeys/bindings";

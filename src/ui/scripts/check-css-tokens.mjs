@@ -12,6 +12,11 @@
 //     `utils/theme.ts` for the rare case a token is missing from the
 //     computed style (e.g. before the stylesheet loads). The fallback
 //     must match a token that already exists in theme.css.
+//   * `ensureHexColor(value, "#fallback")` — validation helper in
+//     `utils/theme.ts` that rejects non-hex CSS values resolved from
+//     custom properties (user JSON themes can override accent tokens
+//     with `rgb()`/`hsl()`/`color-mix()`, formats the xterm search
+//     addon silently rejects). Fallback must mirror a token in theme.css.
 //   * `accentPreview: "#..."` — mirror of a theme's `--accent-primary`
 //     hex in `styles/themes/index.ts`, consumed by CommandPalette to
 //     render theme swatches without a runtime style lookup. Each entry
@@ -68,6 +73,12 @@ const HEX_EXCLUSIONS = [
   // CSS custom properties to Monaco's hex-requiring API and needs
   // literal fallbacks that mirror `:root`.
   /\bresolve\("--[a-z-]+",\s*[^)]*"#/,
+  // `ensureHexColor(value, "#fallback")` — validation helper in theme.ts
+  // that rejects non-hex CSS values (user JSON themes can override accent
+  // tokens with rgb/hsl/color-mix; the xterm search addon silently fails
+  // on non-hex). The literal fallback must mirror a token already in
+  // theme.css.
+  /\bensureHexColor\([^,]+,\s*"#/,
   // `accentPreview: "#..."` / `accent_preview: "#..."`
   /(accentPreview|accent_preview):\s*"#/,
   // GitHub issue / PR number reference: `issue #896`, `PR #905`,

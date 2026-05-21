@@ -67,7 +67,15 @@ export function TerminalSearchBar({
     const sub = addon.onDidChangeResults(({ resultIndex, resultCount }) => {
       setResults({ index: resultIndex, count: resultCount });
     });
-    return () => sub.dispose();
+    // Cleanup also clears the prior addon's decorations: when the user
+    // switches panes mid-search the `addon` prop swaps to the new pane's
+    // addon, and without this the old pane keeps its highlight rectangles
+    // until the parent's auto-close runs (which it won't if the parent
+    // chose to keep the bar open across the switch).
+    return () => {
+      sub.dispose();
+      addon.clearDecorations();
+    };
   }, [addon]);
 
   // Re-run findNext when the query changes so the counter and highlighted
