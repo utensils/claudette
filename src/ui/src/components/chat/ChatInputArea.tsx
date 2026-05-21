@@ -277,22 +277,23 @@ export function ChatInputArea({
       sessionForUpdate: string,
       updater: (prev: PendingAttachment[]) => PendingAttachment[],
     ) => {
-      setPendingAttachments((prev) => {
-        const next = updater(prev);
-        // Mirror to slice (without `preview_url` since it's transient).
-        const stored: StoredAttachment[] = next.map((a) => ({
-          id: a.id,
-          filename: a.filename,
-          media_type: a.media_type,
-          data_base64: a.data_base64,
-          size_bytes: a.size_bytes,
-          text_content: a.text_content,
-        }));
-        useAppStore
-          .getState()
-          .setPendingAttachmentsForSession(sessionForUpdate, stored);
-        return next;
-      });
+      const next = updater(pendingAttachmentsRef.current);
+      pendingAttachmentsRef.current = next;
+      setPendingAttachments(next);
+      // Mirror to slice (without `preview_url` since it's transient). Keep
+      // this outside the React state updater; calling a Zustand setter from
+      // inside the updater trips React's render-time update warning.
+      const stored: StoredAttachment[] = next.map((a) => ({
+        id: a.id,
+        filename: a.filename,
+        media_type: a.media_type,
+        data_base64: a.data_base64,
+        size_bytes: a.size_bytes,
+        text_content: a.text_content,
+      }));
+      useAppStore
+        .getState()
+        .setPendingAttachmentsForSession(sessionForUpdate, stored);
     },
     [],
   );
@@ -552,12 +553,12 @@ export function ChatInputArea({
       // previous mount's blob URLs first so we don't leak them — but
       // leave the *slice* entry for the previous session intact, so
       // its attachments come back when the user navigates back to it.
-      setPendingAttachments((prevList) => {
-        for (const a of prevList) {
-          if (a.preview_url.startsWith("blob:")) URL.revokeObjectURL(a.preview_url);
-        }
-        return hydratePendingFromSlice(sessionId);
-      });
+      for (const a of pendingAttachmentsRef.current) {
+        if (a.preview_url.startsWith("blob:")) URL.revokeObjectURL(a.preview_url);
+      }
+      const nextAttachments = hydratePendingFromSlice(sessionId);
+      pendingAttachmentsRef.current = nextAttachments;
+      setPendingAttachments(nextAttachments);
       voice.cancel();
     }
   }, [sessionId]); // eslint-disable-line react-hooks/exhaustive-deps

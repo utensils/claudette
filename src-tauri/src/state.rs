@@ -31,6 +31,25 @@ pub static APP_SHUTTING_DOWN: AtomicBool = AtomicBool::new(false);
 /// Re-export for use in tray module without direct tauri::tray import.
 pub type TrayIcon = tauri::tray::TrayIcon;
 
+pub(crate) struct AsyncGateEntry {
+    pub lock: Arc<tokio::sync::Mutex<()>>,
+    pub last_used: Instant,
+}
+
+impl AsyncGateEntry {
+    pub fn new(now: Instant) -> Self {
+        Self {
+            lock: Arc::new(tokio::sync::Mutex::new(())),
+            last_used: now,
+        }
+    }
+
+    pub fn touch(&mut self, now: Instant) -> Arc<tokio::sync::Mutex<()>> {
+        self.last_used = now;
+        Arc::clone(&self.lock)
+    }
+}
+
 /// What kind of attention the agent needs from the user.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AttentionKind {
@@ -444,6 +463,10 @@ pub struct ScmCacheEntry {
     pub ci_checks: Vec<CiCheck>,
     pub last_fetched: Instant,
     pub error: Option<String>,
+    /// HEAD SHA observed when this cache row was fetched. Used to let
+    /// no-PR negative cache entries live longer without masking a newly
+    /// pushed branch tip.
+    pub head_sha: Option<String>,
 }
 
 /// In-memory cache for SCM data, keyed by (repo_id, branch_name).
@@ -629,12 +652,24 @@ pub struct AppState {
     pub file_watcher: RwLock<Option<Arc<FileWatcher>>>,
     /// Cached PR/CI status data keyed by (repo_id, branch_name).
     pub scm_cache: ScmCache,
+    /// Per `(repo_id, branch)` SCM fetch gate. Multiple workspaces can point
+    /// at the same branch; this lets the first lookup populate the cache and
+    /// the rest reuse it instead of shelling out in parallel. Idle, unheld
+    /// gates are pruned on lookup so long-running sessions do not retain every
+    /// branch forever.
+    pub scm_fetch_locks: RwLock<HashMap<(String, String), AsyncGateEntry>>,
     /// Cached repo-wide SCM lists (open issues / open PRs by scope) keyed
     /// by `(repo_id, list_kind)`. Powers the project-view sections.
     pub repo_scm_lists_cache: RepoScmListsCache,
     /// Short-TTL cache for `git merge-base <base_branch> HEAD`, keyed by
     /// workspace_id. See `MergeBaseCache` doc comment for the full rationale.
     pub merge_base_cache: MergeBaseCache,
+    /// Per-workspace gate for `load_diff_files`. Frontend callers normally
+    /// de-dupe their own intervals, but file gutters, sidebar refreshes, and
+    /// remote callers can still converge on the same workspace; this prevents
+    /// backend git fanout from overlapping for one workspace. Idle, unheld
+    /// gates are pruned on lookup.
+    pub diff_load_locks: RwLock<HashMap<String, AsyncGateEntry>>,
     /// Per-workspace CI transition state for auto-fix triggering.
     pub ci_last_status: RwLock<HashMap<String, CiTransitionState>>,
     /// Limits concurrent SCM CLI invocations.
@@ -738,8 +773,10 @@ impl AppState {
             env_watcher: RwLock::new(None),
             file_watcher: RwLock::new(None),
             scm_cache: ScmCache::new(),
+            scm_fetch_locks: RwLock::new(HashMap::new()),
             repo_scm_lists_cache: RepoScmListsCache::new(),
             merge_base_cache: MergeBaseCache::new(),
+            diff_load_locks: RwLock::new(HashMap::new()),
             ci_last_status: RwLock::new(HashMap::new()),
             scm_semaphore: Arc::new(Semaphore::new(4)),
             selected_workspace_id: RwLock::new(None),

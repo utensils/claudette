@@ -839,6 +839,12 @@ pub async fn archive(
     } else {
         db.delete_terminal_tabs_for_workspace(&workspace_id)?;
         db.delete_scm_status_cache(&workspace_id)?;
+        db.disable_agent_scheduled_tasks_for_workspace(
+            &workspace_id,
+            chrono::Utc::now(),
+            "workspace_archived",
+            "Workspace was archived",
+        )?;
         db.update_workspace_status(&workspace_id, &WorkspaceStatus::Archived, None)?;
     }
 

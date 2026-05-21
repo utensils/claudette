@@ -19,6 +19,8 @@ When the built-in Claudette MCP bridge is available, agents can use these native
 
 Wakeups and routines survive app restarts. If a fire time passes while Claudette is closed, the scheduler fires the overdue task when the app starts again.
 
+If the owning workspace is archived, deleted, or otherwise has no worktree when a task comes due, Claudette pauses the task instead of retrying it forever. The Automation settings row and `routine list` payload include the disabled reason and last error so you can delete or recreate the routine deliberately.
+
 ## CLI
 
 The CLI exposes routines for automation and scripts:

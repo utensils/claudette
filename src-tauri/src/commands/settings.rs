@@ -14,6 +14,13 @@ pub(crate) fn spawn_and_reap(mut child: std::process::Child) {
     });
 }
 
+/// Spawn a short-lived Tokio process and reap it in the background to prevent zombies.
+pub(crate) fn spawn_tokio_and_reap(mut child: tokio::process::Child) {
+    tauri::async_runtime::spawn(async move {
+        let _ = child.wait().await;
+    });
+}
+
 #[derive(Serialize, Deserialize, Debug)]
 pub struct ThemeDefinition {
     pub id: String,

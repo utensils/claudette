@@ -328,13 +328,19 @@ async fn tail_agent_task_file(
         );
     }
     let mut buf = vec![0_u8; 8192];
+    let mut empty_reads = 0_u32;
+    const ACTIVE_TAIL_POLL: Duration = Duration::from_millis(33);
     loop {
         tokio::select! {
             _ = cancel.notified() => break,
-            _ = tokio::time::sleep(Duration::from_millis(33)) => {}
+            _ = tokio::time::sleep(crate::tail_backoff::adaptive_tail_delay(
+                ACTIVE_TAIL_POLL,
+                empty_reads,
+            )) => {}
         }
 
         let Ok(mut file) = tokio::fs::File::open(&path).await else {
+            empty_reads = empty_reads.saturating_add(1);
             continue;
         };
         let len = file.metadata().await.ok().map(|m| m.len()).unwrap_or(0);
@@ -350,13 +356,16 @@ async fn tail_agent_task_file(
             );
         }
         if file.seek(SeekFrom::Start(offset)).await.is_err() {
+            empty_reads = empty_reads.saturating_add(1);
             continue;
         }
+        let mut wrote = false;
         loop {
             match file.read(&mut buf).await {
                 Ok(0) => break,
                 Ok(n) => {
                     offset += n as u64;
+                    wrote = true;
                     let _ = app.emit(
                         "agent-task-output",
                         &AgentTaskOutputPayload {
@@ -368,6 +377,11 @@ async fn tail_agent_task_file(
                 }
                 Err(_) => break,
             }
+        }
+        if wrote {
+            empty_reads = 0;
+        } else {
+            empty_reads = empty_reads.saturating_add(1);
         }
     }
 }

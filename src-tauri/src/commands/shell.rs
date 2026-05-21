@@ -328,7 +328,7 @@ pub(crate) mod opener {
             "Unsupported platform",
         ));
 
-        cmd.map(|_| ())
+        cmd.map(crate::commands::settings::spawn_and_reap)
     }
 }
 
