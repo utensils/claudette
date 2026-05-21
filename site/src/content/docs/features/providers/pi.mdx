@@ -84,6 +84,35 @@ Beyond the dedicated Pi card, Ollama, LM Studio, OpenAI API, Custom OpenAI, and 
 - `/login` for a Pi-selected chat opens the **Pi provider picker** modal (Pi is multi-provider, so `/login` doesn't blind-launch one OAuth flow the way it does for Codex or Claude Code — you pick which provider to configure).
 - `/permissions` keeps controlling Claudette's permission mode for Pi, Claude Code, and Codex.
 
+## Context Lifecycle
+
+Pi sessions surface the same end-of-turn affordances as the Claude CLI gateway:
+
+- **Auto-compaction is visible.** When Pi's native context manager fires
+  `compaction_start` for any trigger — manual `/compact`, threshold (the
+  `keepRecentTokens` budget), or overflow (context window exhausted) —
+  the chat flips to **Compacting context…** instead of leaving a
+  generic spinner. On success the `compact_boundary` divider renders
+  the pre/post token counts and the meter resets to the post-compaction
+  baseline; on auto-compaction failure the status returns to **Running**
+  without a divider so the surviving turn keeps streaming.
+- **The context meter shows end-of-turn occupancy.** The meter reads
+  `AgentSession.getContextUsage()` (Pi's own end-of-turn context size +
+  the model's actual context window) rather than a cumulative tally
+  across the agent loop's internal LLM rounds. A 136 k turn on a 272 k
+  model reads ~50%, not 1100%.
+
+## Tool Execution
+
+Pi tool calls — including the shell-backed `bash` and Pi's exec tools —
+resolve as soon as the spawned command exits, even when the command
+backgrounded a descendant that inherited stdout / stderr (a typical
+example is `bash -c "codex exec …"`, where the Codex CLI forks helper
+processes that hold the inherited pipe open). If you press Stop on the
+chat, the running command is cancelled via the abort signal. There is
+no automatic per-command timeout; pressing Stop is the only way to
+cancel a genuinely stuck command.
+
 ## Troubleshooting
 
 **Refresh models returns only the seed models.** Make sure `pi auth` has been run and provider configuration exists in Pi. Then click **Refresh models** again.

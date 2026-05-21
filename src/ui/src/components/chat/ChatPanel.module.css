@@ -171,22 +171,6 @@
   color: var(--text-faint);
 }
 
-.emptyRetry {
-  margin-top: 4px;
-  border: 1px solid var(--divider);
-  border-radius: 6px;
-  background: var(--chat-input-bg);
-  color: var(--text-primary);
-  font: inherit;
-  font-size: 12px;
-  padding: 5px 10px;
-  cursor: pointer;
-}
-
-.emptyRetry:hover {
-  background: var(--hover-bg);
-}
-
 .errorBanner {
   background: var(--accent-error-bg);
   border: 1px solid var(--accent-error-border);
