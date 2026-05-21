@@ -7,13 +7,23 @@ import { setAppSetting } from "../../services/tauri";
  * `plan_mode:${sessionId}` in `app_settings`. Use this at every user- or
  * agent-driven plan-mode toggle site so the off-state survives restart and
  * session swap.
+ *
+ * Persistence is best-effort: the in-memory store update is what the user
+ * sees, so a failing `app_settings` write must not abort the surrounding
+ * workflow (e.g. plan-approval handlers that chain `await onSend(...)`
+ * after toggling plan mode) or surface as an unhandled rejection at the
+ * many `void`-ed fire-and-forget call sites.
  */
 export async function setPlanModeAndPersist(
   sessionId: string,
   enabled: boolean,
 ): Promise<void> {
   useAppStore.getState().setPlanMode(sessionId, enabled);
-  await setAppSetting(`plan_mode:${sessionId}`, String(enabled));
+  try {
+    await setAppSetting(`plan_mode:${sessionId}`, String(enabled));
+  } catch (err) {
+    console.error(`Failed to persist plan_mode:${sessionId}`, err);
+  }
 }
 
 /**

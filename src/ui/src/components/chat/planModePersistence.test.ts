@@ -41,6 +41,22 @@ describe("setPlanModeAndPersist", () => {
       "false",
     );
   });
+
+  it("swallows persistence errors so the store update always wins", async () => {
+    // A failing app_settings write must not surface as an unhandled
+    // rejection at the many fire-and-forget `void` call sites, nor abort
+    // plan-approval handlers that chain `await onSend(...)` after the
+    // toggle. The in-memory store update is what the user sees and must
+    // always succeed.
+    mocks.setAppSetting.mockRejectedValueOnce(new Error("disk full"));
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    await expect(setPlanModeAndPersist(SESSION, false)).resolves.toBeUndefined();
+    expect(useAppStore.getState().planMode[SESSION]).toBe(false);
+    expect(errorSpy).toHaveBeenCalled();
+
+    errorSpy.mockRestore();
+  });
 });
 
 describe("applyPlanModeMountDefault", () => {
