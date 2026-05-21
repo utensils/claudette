@@ -1,6 +1,32 @@
 import type { ScmSummary } from "../types/plugin";
 import type { Workspace } from "../types/workspace";
 
+export interface SidebarWorkspaceFilter {
+  showArchived: boolean;
+  /** Repo id or the literal `"all"` sentinel used by the sidebar dropdown. */
+  repoFilter: string;
+}
+
+/**
+ * The same visibility predicate the sidebar uses to derive its
+ * `filteredWorkspaces` memo: drop remote rows, drop archived rows unless the
+ * "show archived" toggle is on, and drop rows from other repos when a repo
+ * filter is active. Shared so the `Cmd+N` jump handler (which has to resolve
+ * the Nth visible workspace from raw store state) can't accidentally drift
+ * from what the user actually sees.
+ */
+export function filterSidebarWorkspaces(
+  workspaces: readonly Workspace[],
+  { showArchived, repoFilter }: SidebarWorkspaceFilter,
+): Workspace[] {
+  return workspaces.filter((ws) => {
+    if (ws.remote_connection_id) return false;
+    if (!showArchived && ws.status === "Archived") return false;
+    if (repoFilter !== "all" && ws.repository_id !== repoFilter) return false;
+    return true;
+  });
+}
+
 export type StatusBucketKey =
   | "in-progress"
   | "in-review"

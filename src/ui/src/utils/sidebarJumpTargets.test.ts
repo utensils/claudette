@@ -4,6 +4,7 @@ import type { Workspace } from "../types/workspace";
 import {
   bucketForWorkspace,
   computeStatusVisibleWorkspaces,
+  filterSidebarWorkspaces,
   STATUS_BUCKET_ORDER,
   statusBucketGroupKey,
 } from "./sidebarJumpTargets";
@@ -106,5 +107,44 @@ describe("computeStatusVisibleWorkspaces", () => {
       "closed",
       "archived",
     ]);
+  });
+});
+
+describe("filterSidebarWorkspaces", () => {
+  const local = workspace("local-active");
+  const archived = workspace("local-archived", { status: "Archived" });
+  const remote = workspace("remote-row", { remote_connection_id: "conn-1" });
+  const otherRepo = workspace("other-repo", { repository_id: "repo-2" });
+
+  it("drops remote rows unconditionally", () => {
+    const out = filterSidebarWorkspaces(
+      [local, remote],
+      { showArchived: true, repoFilter: "all" },
+    );
+    expect(out.map((w) => w.id)).toEqual(["local-active"]);
+  });
+
+  it("hides archived rows until showArchived is on", () => {
+    expect(
+      filterSidebarWorkspaces(
+        [local, archived],
+        { showArchived: false, repoFilter: "all" },
+      ).map((w) => w.id),
+    ).toEqual(["local-active"]);
+
+    expect(
+      filterSidebarWorkspaces(
+        [local, archived],
+        { showArchived: true, repoFilter: "all" },
+      ).map((w) => w.id),
+    ).toEqual(["local-active", "local-archived"]);
+  });
+
+  it("scopes to a single repo when a repoFilter is set", () => {
+    const out = filterSidebarWorkspaces(
+      [local, otherRepo],
+      { showArchived: false, repoFilter: "repo-2" },
+    );
+    expect(out.map((w) => w.id)).toEqual(["other-repo"]);
   });
 });

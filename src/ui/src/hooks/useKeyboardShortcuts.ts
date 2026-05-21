@@ -15,7 +15,10 @@ import {
   executeNewWorkspace,
 } from "../hotkeys/contextActions";
 import type { HotkeyActionId } from "../hotkeys/actions";
-import { computeStatusVisibleWorkspaces } from "../utils/sidebarJumpTargets";
+import {
+  computeStatusVisibleWorkspaces,
+  filterSidebarWorkspaces,
+} from "../utils/sidebarJumpTargets";
 
 export function useKeyboardShortcuts() {
   const toggleSidebar = useAppStore((s) => s.toggleSidebar);
@@ -152,18 +155,12 @@ export function useKeyboardShortcuts() {
         if (currentState.sidebarGroupBy === "status") {
           // Status mode: Cmd+N jumps to the Nth visible workspace —
           // computed from exactly the same ordered/filtered list the
-          // sidebar paints (see computeStatusVisibleWorkspaces) so the
-          // badge number on screen and the jump target can never disagree.
-          const filtered = currentState.workspaces.filter((ws) => {
-            if (ws.remote_connection_id) return false;
-            if (!currentState.sidebarShowArchived && ws.status === "Archived") return false;
-            if (
-              currentState.sidebarRepoFilter !== "all" &&
-              ws.repository_id !== currentState.sidebarRepoFilter
-            ) {
-              return false;
-            }
-            return true;
+          // sidebar paints (see filterSidebarWorkspaces +
+          // computeStatusVisibleWorkspaces) so the badge number on screen
+          // and the jump target can never disagree.
+          const filtered = filterSidebarWorkspaces(currentState.workspaces, {
+            showArchived: currentState.sidebarShowArchived,
+            repoFilter: currentState.sidebarRepoFilter,
           });
           const visible = computeStatusVisibleWorkspaces(
             filtered,

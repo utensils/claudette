@@ -36,7 +36,7 @@ import { UpdateBanner } from "../layout/UpdateBanner";
 import { ContextMenu, type ContextMenuItem } from "../shared/ContextMenu";
 import { useTabDragReorder } from "../../hooks/useTabDragReorder";
 import { TabDragGhost } from "../shared/TabDragGhost";
-import { tooltipAttributes, tooltipWithHotkey } from "../../hotkeys/display";
+import { tooltipAttributes, tooltipForBoundHotkey } from "../../hotkeys/display";
 import { isMacHotkeyPlatform } from "../../hotkeys/platform";
 import type { HotkeyActionId } from "../../hotkeys/actions";
 import {
@@ -47,6 +47,7 @@ import {
 import {
   buildStatusBuckets,
   computeStatusVisibleWorkspaces,
+  filterSidebarWorkspaces,
   STATUS_BUCKET_ORDER,
 } from "../../utils/sidebarJumpTargets";
 import {
@@ -270,11 +271,9 @@ export const Sidebar = memo(function Sidebar() {
   }, []);
 
   const filteredWorkspaces = useMemo(
-    () => workspaces.filter((ws) => {
-      if (ws.remote_connection_id) return false;
-      if (!sidebarShowArchived && ws.status === "Archived") return false;
-      if (sidebarRepoFilter !== "all" && ws.repository_id !== sidebarRepoFilter) return false;
-      return true;
+    () => filterSidebarWorkspaces(workspaces, {
+      showArchived: sidebarShowArchived,
+      repoFilter: sidebarRepoFilter,
     }),
     [workspaces, sidebarShowArchived, sidebarRepoFilter]
   );
@@ -598,8 +597,11 @@ export const Sidebar = memo(function Sidebar() {
     const jumpLabelText = jumpActionId
       ? t("jump_to_workspace", { number: jumpNumber }) ?? ""
       : "";
+    // Only advertise the jump in the tooltip when the shortcut is actually
+    // bound — otherwise the row would claim a hotkey the user no longer
+    // has, and the badge would be missing to corroborate the lie.
     const jumpTooltip = jumpActionId && jumpLabelText
-      ? tooltipWithHotkey(jumpLabelText, jumpActionId, keybindings, isMac)
+      ? tooltipForBoundHotkey(jumpLabelText, jumpActionId, keybindings, isMac)
       : undefined;
     const dragHandlers = dragEnabled ? workspaceDrag.getTabHandlers(ws) : null;
     const isDragging = dragEnabled && workspaceDrag.draggingId === ws.id;
@@ -1061,7 +1063,7 @@ export const Sidebar = memo(function Sidebar() {
             ? t("jump_to_project", { number: repoJumpNumber }) ?? ""
             : "";
           const jumpTooltip = repoJumpActionId && repoJumpLabel
-            ? tooltipWithHotkey(
+            ? tooltipForBoundHotkey(
                 repoJumpLabel,
                 repoJumpActionId,
                 keybindings,
