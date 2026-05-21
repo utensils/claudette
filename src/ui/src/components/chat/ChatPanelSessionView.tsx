@@ -223,11 +223,6 @@ export function ChatPanelSessionView({
                 key={activeSessionId ?? "no-active-session"}
                 workspaceEnvironmentPreparing={workspaceEnvironmentPreparing}
                 workspaceId={selectedWorkspaceId}
-                onRetryEnvironment={
-                  workspaceEnvironmentPreparing || workspaceEnvironmentError
-                    ? onRetryWorkspaceEnvironment
-                    : undefined
-                }
               />
             ) : (
               <>

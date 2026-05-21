@@ -124,23 +124,21 @@ describe("ChatEmptyState", () => {
       .toBe("Preparing direnv…");
   });
 
-  it("offers an in-place retry while the environment is still preparing", async () => {
-    const onRetry = vi.fn();
+  it("does not offer a retry while the environment is still preparing", async () => {
+    hookMocks.useEnvElapsedSeconds.mockReturnValueOnce({
+      plugin: "env-direnv",
+      seconds: 0,
+    });
     const container = await render(
       <ChatEmptyState
         workspaceEnvironmentPreparing
         workspaceId="ws-1"
-        onRetryEnvironment={onRetry}
       />,
     );
 
-    const button = container.querySelector("button");
-    expect(button?.textContent).toBe("Retry environment setup");
-
-    await act(async () => {
-      button?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-    });
-
-    expect(onRetry).toHaveBeenCalledTimes(1);
+    // A genuinely stuck workspace is surfaced by the env-prep timeout,
+    // which flips the workspace to "error" and shows the chat error
+    // banner's retry. The preparing empty state must never flash one.
+    expect(container.querySelector("button")).toBeNull();
   });
 });
