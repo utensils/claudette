@@ -7,6 +7,19 @@ use crate::model::CheckpointFile;
 /// Maximum file size to include in a snapshot (10 MB).
 const MAX_SNAPSHOT_FILE_SIZE: u64 = 10 * 1024 * 1024;
 
+/// Default per-workspace cap on the number of recent checkpoints that retain
+/// restorable file snapshots. Older checkpoints keep their conversation rows
+/// (chat history, tool activities) but their `checkpoint_files` rows are
+/// pruned and `has_file_state` flips to false — restore on those becomes a
+/// safe no-op (`src-tauri/src/commands/chat/checkpoint.rs` already guards on
+/// the flag). Settable via the `checkpoint_retention_count` app_setting.
+///
+/// Default and bounds match #582 — the rationale is documented in
+/// `site/src/content/docs/features/settings.mdx`.
+pub const DEFAULT_CHECKPOINT_RETENTION_COUNT: usize = 50;
+pub const MIN_CHECKPOINT_RETENTION_COUNT: usize = 1;
+pub const MAX_CHECKPOINT_RETENTION_COUNT: usize = 1000;
+
 #[derive(Debug)]
 pub enum SnapshotError {
     Io(String),
@@ -123,10 +136,19 @@ pub async fn collect_worktree_files(
 /// derivation used when reading checkpoints back. Opens its own DB
 /// connection so it can be called from async contexts without holding a
 /// non-Send `Database` across await points.
+///
+/// Bytes are deduplicated into `checkpoint_blobs` keyed by sha256 — repeated
+/// checkpoints of the same file pay only the reference-row cost, not the
+/// full bytes. `retention_count` caps how many recent checkpoints in
+/// `workspace_id` retain file restore data; older `checkpoint_files` rows
+/// (and any blobs they exclusively referenced) are pruned in the same
+/// transaction.
 pub async fn save_snapshot(
     db_path: &Path,
+    workspace_id: &str,
     checkpoint_id: &str,
     worktree_path: &str,
+    retention_count: usize,
 ) -> Result<usize, SnapshotError> {
     let collected = collect_worktree_files(worktree_path).await?;
 
@@ -137,13 +159,17 @@ pub async fn save_snapshot(
             checkpoint_id: checkpoint_id.to_string(),
             file_path: path,
             content: Some(content),
+            // Hashed inside the DB transaction so we don't pay the digest
+            // cost on the calling thread for files that the prune step
+            // would have just dropped anyway.
+            blob_sha256: None,
             file_mode: mode,
         })
         .collect();
 
     let count = files.len();
     let db = crate::db::Database::open(db_path).map_err(|e| SnapshotError::Db(e.to_string()))?;
-    db.insert_checkpoint_files(&files)?;
+    db.insert_checkpoint_files_and_prune(workspace_id, &files, retention_count)?;
     Ok(count)
 }
 
@@ -396,7 +422,15 @@ mod tests {
         let db = crate::db::Database::open(&db_path).unwrap();
         db.execute_batch(TEST_SEED_SQL).unwrap();
 
-        save_snapshot(&db_path, "cp1", dir_str).await.unwrap();
+        save_snapshot(
+            &db_path,
+            "ws1",
+            "cp1",
+            dir_str,
+            DEFAULT_CHECKPOINT_RETENTION_COUNT,
+        )
+        .await
+        .unwrap();
 
         // Verify files were saved
         assert!(db.has_checkpoint_files("cp1").unwrap());
@@ -444,7 +478,15 @@ mod tests {
         let db = crate::db::Database::open(&db_path).unwrap();
         db.execute_batch(TEST_SEED_SQL).unwrap();
 
-        save_snapshot(&db_path, "cp1", dir_str).await.unwrap();
+        save_snapshot(
+            &db_path,
+            "ws1",
+            "cp1",
+            dir_str,
+            DEFAULT_CHECKPOINT_RETENTION_COUNT,
+        )
+        .await
+        .unwrap();
 
         // Add extra file after snapshot
         tokio::fs::write(dir.path().join("extra.txt"), b"extra")
@@ -507,7 +549,15 @@ mod tests {
         let db = crate::db::Database::open(&db_path).unwrap();
         db.execute_batch(TEST_SEED_SQL).unwrap();
 
-        save_snapshot(&db_path, "cp1", dir_str).await.unwrap();
+        save_snapshot(
+            &db_path,
+            "ws1",
+            "cp1",
+            dir_str,
+            DEFAULT_CHECKPOINT_RETENTION_COUNT,
+        )
+        .await
+        .unwrap();
 
         // Overwrite with non-executable
         tokio::fs::write(dir.path().join("script.sh"), b"changed")

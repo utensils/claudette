@@ -163,6 +163,31 @@ impl Database {
         }
     }
 
+    /// Drop `checkpoint_blobs` rows that no `checkpoint_files` row references.
+    /// Called after delete paths that cascade through `checkpoint_files` via
+    /// `conversation_checkpoints` — the FK chain reclaims the reference rows
+    /// but not the blob bytes themselves. Best-effort: failure is logged and
+    /// swallowed so user-facing deletes don't fail on housekeeping.
+    fn gc_orphan_blobs_after_delete(&self, rows_deleted: usize) {
+        if rows_deleted == 0 {
+            return;
+        }
+        if let Err(e) = self.conn.execute(
+            "DELETE FROM checkpoint_blobs
+             WHERE sha256 NOT IN (
+                 SELECT DISTINCT blob_sha256 FROM checkpoint_files
+                  WHERE blob_sha256 IS NOT NULL
+             )",
+            [],
+        ) {
+            tracing::warn!(
+                target: "claudette::db",
+                error = %e,
+                "orphan checkpoint blob GC skipped"
+            );
+        }
+    }
+
     fn best_effort_incremental_vacuum(&self, max_pages: i64) {
         if let Err(e) = self.incremental_vacuum(max_pages) {
             tracing::warn!(

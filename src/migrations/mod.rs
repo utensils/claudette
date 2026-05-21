@@ -249,4 +249,9 @@ pub const MIGRATIONS: &[Migration] = &[
         sql: include_str!("20260520153000_workspace_scm_links.sql"),
         legacy_version: None,
     },
+    Migration {
+        id: "20260521062827_checkpoint_files_dedup",
+        sql: include_str!("20260521062827_checkpoint_files_dedup.sql"),
+        legacy_version: None,
+    },
 ];

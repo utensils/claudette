@@ -12,13 +12,22 @@ import { RepoIcon } from "../../shared/RepoIcon";
 import { formatBytes } from "../../../utils/formatBytes";
 import {
   computeStorageStats,
+  getAppSetting,
   scanOrphanedWorktrees,
+  setAppSetting,
   type OrphanedWorktree,
   type RepoStorageStats,
   type WorkspaceStorageEntry,
 } from "../../../services/tauri";
 import { useOrphanBulkPurge } from "./useOrphanBulkPurge";
 import styles from "../Settings.module.css";
+
+// Mirrors src/snapshot.rs DEFAULT_CHECKPOINT_RETENTION_COUNT and bounds.
+// Out-of-range values are silently clamped by the backend reader; we
+// clamp here too so the UI can't display a misleading value.
+const DEFAULT_RETENTION = 50;
+const MIN_RETENTION = 1;
+const MAX_RETENTION = 1000;
 
 /**
  * Unified per-repo card the Storage page actually renders. A single row
@@ -55,6 +64,48 @@ export function StorageSettings() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  // Checkpoint retention: per-workspace cap on how many recent
+  // checkpoints retain their file-restore snapshot. Older checkpoints
+  // keep their chat history but lose the "restore files" affordance.
+  const [retention, setRetention] = useState<number>(DEFAULT_RETENTION);
+  const [retentionDraft, setRetentionDraft] = useState<string>(
+    String(DEFAULT_RETENTION),
+  );
+  const [retentionSaving, setRetentionSaving] = useState(false);
+  const [retentionError, setRetentionError] = useState<string | null>(null);
+
+  useEffect(() => {
+    getAppSetting("checkpoint_retention_count")
+      .then((v) => {
+        const n = v ? Number.parseInt(v, 10) : NaN;
+        const value = Number.isFinite(n)
+          ? Math.min(MAX_RETENTION, Math.max(MIN_RETENTION, n))
+          : DEFAULT_RETENTION;
+        setRetention(value);
+        setRetentionDraft(String(value));
+      })
+      .catch(() => {});
+  }, []);
+
+  const saveRetention = useCallback(async () => {
+    const parsed = Number.parseInt(retentionDraft, 10);
+    if (!Number.isFinite(parsed)) {
+      setRetentionError(t("checkpoint_retention_invalid"));
+      return;
+    }
+    const clamped = Math.min(MAX_RETENTION, Math.max(MIN_RETENTION, parsed));
+    setRetentionSaving(true);
+    setRetentionError(null);
+    try {
+      await setAppSetting("checkpoint_retention_count", String(clamped));
+      setRetention(clamped);
+      setRetentionDraft(String(clamped));
+    } catch (e) {
+      setRetentionError(String(e));
+    } finally {
+      setRetentionSaving(false);
+    }
+  }, [retentionDraft, t]);
   // Bulk confirm: a list of one or more paths the user has staged for
   // deletion. Single-path (per-row trash) and multi-path (per-card
   // "Delete N orphans" or global "Delete all orphans") share the same
@@ -290,6 +341,42 @@ export function StorageSettings() {
 
       {error && !confirmPaths && (
         <div className={styles.storageError}>{error}</div>
+      )}
+
+      <h3 className={styles.subsectionTitle}>
+        {t("checkpoint_retention_title")}
+      </h3>
+      <p className={styles.sectionDescription}>
+        {t("checkpoint_retention_description", { count: retention })}
+      </p>
+      <div className={styles.storageHeaderActions}>
+        <input
+          type="number"
+          min={MIN_RETENTION}
+          max={MAX_RETENTION}
+          step={1}
+          value={retentionDraft}
+          disabled={retentionSaving}
+          onChange={(e) => setRetentionDraft(e.target.value)}
+          aria-label={t("checkpoint_retention_title")}
+        />
+        <button
+          type="button"
+          className={styles.iconBtn}
+          onClick={saveRetention}
+          disabled={
+            retentionSaving ||
+            retentionDraft === String(retention) ||
+            !Number.isFinite(Number.parseInt(retentionDraft, 10))
+          }
+        >
+          {retentionSaving
+            ? t("checkpoint_retention_saving")
+            : tCommon("save")}
+        </button>
+      </div>
+      {retentionError && (
+        <div className={styles.storageError}>{retentionError}</div>
       )}
 
       {loading && !stats && (
