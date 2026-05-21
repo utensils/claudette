@@ -47,6 +47,7 @@
   "context_copied_working_directory": "Copied working directory",
   "context_copied_claude_session_id": "Copied Claude session ID",
   "context_no_claude_session_id": "No Claude session ID yet",
+  "context_discover_worktrees": "Discover Worktrees…",
   "status_badge_completed_title": "Completed",
   "status_badge_completed_aria": "Completed",
   "status_badge_plan_title": "Plan approval needed",

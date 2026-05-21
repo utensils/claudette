@@ -19,6 +19,15 @@ When you create a workspace in Claudette:
 
 When you archive a workspace, the worktree and its directory are cleaned up automatically.
 
+## Discovering Existing Worktrees
+
+Worktrees created outside Claudette — `git worktree add` from a terminal, teammate tooling, or other agent runners like Conductor — aren't tracked as workspaces until you import them. Run discovery to scan the repository for those worktrees:
+
+- **Workspaces sidebar** → right-click a repository row and choose **Discover Worktrees…**.
+- **Repo Settings** → the **Worktree discovery** field has a **Discover worktrees** button.
+
+Both open the **Existing worktrees found** dialog, which lists each untracked worktree with its branch name, path, and on-disk size. Name each one, select the ones to import, and confirm — Claudette registers them as workspaces. The per-row trash icon deletes a stray worktree from disk instead. When the scan finds nothing, the dialog tells you so.
+
 ## Branch Naming
 
 New workspace branches are given a random name initially. After your first prompt, the agent automatically renames the branch to something descriptive based on the work being done.

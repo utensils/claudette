@@ -45,6 +45,7 @@
   "context_copied_working_directory": "已复制工作目录",
   "context_copied_claude_session_id": "已复制 Claude 会话 ID",
   "context_no_claude_session_id": "尚无 Claude 会话 ID",
+  "context_discover_worktrees": "发现工作树…",
   "status_badge_completed_title": "已完成",
   "status_badge_completed_aria": "已完成",
   "status_badge_plan_title": "需要批准计划",

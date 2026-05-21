@@ -45,7 +45,12 @@ export function ImportWorktreesModal() {
     discoverWorktrees(repoId)
       .then((discovered) => {
         if (discovered.length === 0) {
-          chainOrClose();
+          // Nothing to import. In the add-repo onboarding chain, skip
+          // ahead to MCP selection. Opened standalone (Repo Settings or
+          // the sidebar context menu), fall through to the "none found"
+          // render below so the user gets explicit feedback instead of
+          // a modal that silently vanishes.
+          if (pendingMcps && pendingMcps.length > 0) chainOrClose();
           return;
         }
         const mapped = discovered.map((wt) => ({

@@ -25,7 +25,7 @@ import {
   interruptPtyForeground,
 } from "../../services/tauri";
 import { createWorkspaceOrchestrated } from "../../hooks/useCreateWorkspace";
-import { Settings, Link, X, Share2, Plus, Globe, Archive, Trash2, CircleCheck, CircleAlert, CircleQuestionMark, Cog, Filter, LayoutDashboard, CircleDashed, CircleStop, ChevronRight, ChevronDown, ArrowDownAZ } from "lucide-react";
+import { Settings, Link, X, Share2, Plus, Globe, Archive, Trash2, CircleCheck, CircleAlert, CircleQuestionMark, Cog, Filter, LayoutDashboard, CircleDashed, CircleStop, ChevronRight, ChevronDown, ArrowDownAZ, FolderSearch } from "lucide-react";
 import { resolveScmPrIcon } from "../shared/workspaceStatusIcon";
 import { RepoIcon } from "../shared/RepoIcon";
 import { WorkspaceEnvSpinner } from "./WorkspaceEnvSpinner";
@@ -214,6 +214,16 @@ export const Sidebar = memo(function Sidebar() {
     const repoId = repoContextMenu.repoId;
     return [
       {
+        label: t("context_discover_worktrees"),
+        icon: <FolderSearch size={14} />,
+        // Reuse the exact flow Repository Settings runs — the modal
+        // scans for worktrees, shows a "none found" state, or lets the
+        // user pick which to import. The modal is the feedback, so no
+        // bespoke toast is needed here.
+        onSelect: () => openModal("importWorktrees", { repoId }),
+      },
+      { type: "separator" },
+      {
         label: "Sort Workspaces Automatically",
         icon: <ArrowDownAZ size={14} />,
         disabled: !isManualWorkspaceOrder(manualWorkspaceOrderByRepo, repoId),
@@ -223,7 +233,13 @@ export const Sidebar = memo(function Sidebar() {
         },
       },
     ];
-  }, [clearManualWorkspaceOrder, manualWorkspaceOrderByRepo, repoContextMenu]);
+  }, [
+    clearManualWorkspaceOrder,
+    manualWorkspaceOrderByRepo,
+    repoContextMenu,
+    openModal,
+    t,
+  ]);
 
   // Thin wrapper around the shared orchestrator so the inline `+` button
   // and the welcome card / project view / Cmd+Shift+N hotkey all run the
