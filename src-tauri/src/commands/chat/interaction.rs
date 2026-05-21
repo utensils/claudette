@@ -157,6 +157,15 @@ fn is_user_approval_tool(tool_name: &str) -> bool {
     tool_name == "ExitPlanMode" || is_codex_approval_tool_name(tool_name)
 }
 
+fn is_synthetic_codex_plan_approval(pending: &PendingPermission) -> bool {
+    pending.tool_name == "ExitPlanMode"
+        && pending
+            .original_input
+            .get("codexSyntheticPlan")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false)
+}
+
 /// Resolve a pending approval-style `can_use_tool` request.
 /// `approved=true` → allow with the model's original input (the CLI's
 /// `call()` will save the plan and emit the real tool_result for Claude plan
@@ -174,10 +183,6 @@ async fn submit_approval_response(
     let (pending, ps) = {
         let mut agents = state.agents.write().await;
         let session = agents.get_mut(&session_id).ok_or("Session not found")?;
-        let ps = session
-            .persistent_session
-            .clone()
-            .ok_or("Agent session is not active")?;
         match session.pending_permissions.get(&tool_use_id) {
             None => {
                 let pending_ids: Vec<String> =
@@ -199,11 +204,26 @@ async fn submit_approval_response(
             .remove(&tool_use_id)
             .expect("checked above");
         session.reset_attention();
+        let ps = if is_synthetic_codex_plan_approval(&pending) {
+            None
+        } else {
+            Some(
+                session
+                    .persistent_session
+                    .clone()
+                    .ok_or("Agent session is not active")?,
+            )
+        };
         (pending, ps)
     };
 
+    if is_synthetic_codex_plan_approval(&pending) {
+        return Ok(());
+    }
+
     let response = build_attention_response(&pending, approved, reason)?;
-    ps.send_control_response(&pending.request_id, response)
+    ps.expect("non-synthetic approvals require a persistent session")
+        .send_control_response(&pending.request_id, response)
         .await
 }
 

@@ -44,7 +44,7 @@ const appStore = vi.hoisted(() => ({
 }));
 
 const serviceMocks = vi.hoisted(() => ({
-  getAppSetting: vi.fn(() => Promise.resolve(null)),
+  getAppSetting: vi.fn((_key: string) => Promise.resolve(null as string | null)),
   setAppSetting: vi.fn(() => Promise.resolve()),
   deleteAppSetting: vi.fn(() => Promise.resolve()),
   listAppSettingsWithPrefix: vi.fn(() => Promise.resolve([])),
@@ -316,6 +316,37 @@ describe("ModelSettings", () => {
     expect(container.textContent).toContain("models_backends_title");
     expect(container.textContent).toContain("auth_setting_label");
     expect(container.textContent).toContain("auth_status_signed_in");
+  });
+
+  it("shows default plan mode for Claude-compatible defaults", async () => {
+    const container = await renderModelSettings();
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(
+      container.querySelector('button[aria-label="models_default_plan_mode"]'),
+    ).not.toBeNull();
+  });
+
+  it("shows default plan mode when the selected default backend is Codex", async () => {
+    serviceMocks.getAppSetting.mockImplementation((key: string) => {
+      if (key === "default_model") return Promise.resolve("gpt-5.4");
+      if (key === "default_agent_backend") return Promise.resolve("codex");
+      if (key === "default_plan_mode") return Promise.resolve("true");
+      return Promise.resolve(null);
+    });
+
+    const container = await renderModelSettings();
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(
+      container.querySelector('button[aria-label="models_default_plan_mode"]'),
+    ).not.toBeNull();
   });
 
   it("honors the Claude auth focus target from the Models provider section", async () => {
