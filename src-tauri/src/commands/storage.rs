@@ -22,9 +22,16 @@ pub struct WorkspaceStorageEntry {
     pub name: String,
     pub status: WorkspaceStatus,
     pub worktree_path: Option<String>,
-    /// `None` when the workspace has no `worktree_path` (e.g. setup
-    /// failed and the row was created without a real worktree) or when
-    /// the dir is missing on disk.
+    /// For active workspaces with a worktree dir on disk: the size of
+    /// that dir. For workspaces whose worktree has been removed
+    /// (archived, or setup-failed), the bytes the checkpoint store
+    /// would reclaim if the workspace were deleted — sole-owned
+    /// content-addressed blobs plus inline legacy file content.
+    /// `None` is reserved for `spawn_blocking` join failures (the
+    /// per-workspace dir-walk task panicked, or the batched
+    /// reclaimable-bytes task did). DB / fs errors degrade to
+    /// `Some(0)` inside the task so the row still renders with a
+    /// possibly-low figure rather than vanishing.
     pub size_bytes: Option<u64>,
 }
 
@@ -51,10 +58,12 @@ pub struct OrphanedWorktree {
     pub inferred_repo_name: Option<String>,
 }
 
-/// Compute per-repo storage statistics by summing the on-disk size of
-/// every workspace's worktree directory. Spawns all directory walks
-/// concurrently on the blocking pool so a large worktree tree doesn't
-/// serialize the whole computation.
+/// Compute per-repo storage statistics. For each workspace: walk its
+/// worktree directory when one exists on disk, otherwise (the archived
+/// case, or a setup-failed row) sum the bytes the workspace would
+/// reclaim from the checkpoint store on delete. Per-workspace work
+/// happens on the blocking pool so neither a large worktree tree nor a
+/// large checkpoint history serializes the whole computation.
 #[tauri::command]
 pub async fn compute_storage_stats(
     state: State<'_, AppState>,
@@ -74,40 +83,82 @@ pub async fn compute_storage_stats(
         .map(|r| r.id)
         .collect();
 
-    // Spawn one blocking size walk per workspace that has a worktree
-    // dir on disk. Skip rows whose path is None or doesn't exist —
-    // they contribute 0 bytes and don't need a thread.
+    // Partition: workspaces with a walkable worktree dir get a
+    // per-workspace blocking task so concurrent fs walks don't
+    // serialize on a slow disk. Workspaces without one (archived
+    // rows whose worktree is gone, or setup-failed rows) get
+    // bundled into a single batched task that opens one SQLite
+    // connection and runs the reclaimable-bytes query for each in
+    // sequence — avoids the N concurrent `Database::open` burst the
+    // per-workspace design would create on archive-heavy
+    // repositories.
+    enum SizeSource {
+        DirWalk(tokio::task::JoinHandle<u64>),
+        /// Resolve from the shared `batched_sizes` map below.
+        Batched,
+    }
     struct Pending {
         id: String,
         name: String,
         status: WorkspaceStatus,
         repository_id: String,
         worktree_path: Option<String>,
-        size_handle: Option<tokio::task::JoinHandle<u64>>,
+        size_source: SizeSource,
     }
 
     let mut pending: Vec<Pending> = Vec::with_capacity(workspaces.len());
+    let mut batched_ids: Vec<String> = Vec::new();
     for ws in workspaces {
         if !known_repo_ids.contains(&ws.repository_id) {
             continue;
         }
-        let size_handle = ws
-            .worktree_path
-            .as_ref()
-            .filter(|p| Path::new(p).is_dir())
-            .map(|p| {
+        let size_source = match ws.worktree_path.as_deref() {
+            Some(p) if Path::new(p).is_dir() => {
                 let path = PathBuf::from(p);
-                tokio::task::spawn_blocking(move || directory_size_bytes(&path))
-            });
+                SizeSource::DirWalk(tokio::task::spawn_blocking(move || {
+                    directory_size_bytes(&path)
+                }))
+            }
+            _ => {
+                batched_ids.push(ws.id.clone());
+                SizeSource::Batched
+            }
+        };
         pending.push(Pending {
             id: ws.id,
             name: ws.name,
             status: ws.status,
             repository_id: ws.repository_id,
             worktree_path: ws.worktree_path,
-            size_handle,
+            size_source,
         });
     }
+
+    // Single blocking task that opens the SQLite connection once and
+    // runs `reclaimable_checkpoint_bytes` for every workspace lacking
+    // a walkable worktree. Empty input → empty map; spawn cost is
+    // negligible and unconditional so the await side doesn't need to
+    // branch. DB-open failure degrades the whole batch to zeros so
+    // the dialog still renders.
+    let db_path_for_batch = state.db_path.clone();
+    let batched_handle = tokio::task::spawn_blocking(move || -> HashMap<String, u64> {
+        let mut out: HashMap<String, u64> = HashMap::with_capacity(batched_ids.len());
+        match Database::open(&db_path_for_batch) {
+            Ok(db) => {
+                for id in &batched_ids {
+                    let bytes = db.reclaimable_checkpoint_bytes(id).unwrap_or(0);
+                    out.insert(id.clone(), bytes);
+                }
+            }
+            Err(_) => {
+                for id in batched_ids {
+                    out.insert(id, 0);
+                }
+            }
+        }
+        out
+    });
+    let batched_sizes: HashMap<String, u64> = batched_handle.await.unwrap_or_default();
 
     // Aggregate by repository_id, preserving workspace insertion order
     // within each repo. Use a `Vec` for the stable returned ordering
@@ -119,9 +170,9 @@ pub async fn compute_storage_stats(
     let mut by_repo: Vec<RepoStorageStats> = Vec::new();
     let mut by_repo_index: HashMap<String, usize> = HashMap::new();
     for p in pending {
-        let size_bytes = match p.size_handle {
-            Some(handle) => handle.await.ok(),
-            None => None,
+        let size_bytes = match p.size_source {
+            SizeSource::DirWalk(handle) => handle.await.ok(),
+            SizeSource::Batched => batched_sizes.get(&p.id).copied(),
         };
         let entry = WorkspaceStorageEntry {
             id: p.id,
@@ -159,6 +210,35 @@ pub async fn compute_storage_stats(
     }
 
     Ok(by_repo)
+}
+
+/// Bytes that would actually free if the given set of archived
+/// workspaces were deleted together — dedup-aware, unlike a client-side
+/// sum of each workspace's sole-owned bytes. A blob shared between two
+/// workspaces in the set still counts once here, because both
+/// references go away.
+///
+/// Used by the cleanup dialog's "Delete selected (N · X MB)" total so
+/// the headline figure stays accurate. The per-row size shown next to
+/// each workspace remains the per-workspace sole-owned figure from
+/// `compute_storage_stats` — the right number for a single delete.
+#[tauri::command]
+pub async fn compute_reclaimable_bytes_for_workspaces(
+    workspace_ids: Vec<String>,
+    state: State<'_, AppState>,
+) -> Result<u64, String> {
+    if workspace_ids.is_empty() {
+        return Ok(0);
+    }
+    let db_path = state.db_path.clone();
+    tokio::task::spawn_blocking(move || {
+        let db = Database::open(&db_path).map_err(|e| e.to_string())?;
+        let id_refs: Vec<&str> = workspace_ids.iter().map(String::as_str).collect();
+        db.reclaimable_checkpoint_bytes_for_workspaces(&id_refs)
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| format!("reclaimable-bytes join error: {e}"))?
 }
 
 /// Walk `<base>/<slug>/<wt_name>/` two levels deep and return every

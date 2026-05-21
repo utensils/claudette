@@ -497,12 +497,21 @@ impl Database {
 
     /// Hard-delete a workspace, materializing a frozen summary row first so
     /// lifetime dashboard stats survive the cascade.
+    ///
+    /// The FK chain cascades to `checkpoint_files`, but blob bytes in
+    /// `checkpoint_blobs` are only reclaimed by an explicit orphan-GC
+    /// pass. Without that pass the delete would leave bytes behind that
+    /// `compute_storage_stats` already advertised as reclaimable — so we
+    /// snapshot the cascade-row count inside the transaction and run GC
+    /// once the rows are gone.
     pub fn delete_workspace_with_summary(&self, id: &str) -> Result<(), rusqlite::Error> {
         let tx = self.conn.unchecked_transaction()?;
         Self::materialize_workspace_summary_tx(&tx, id)?;
+        let file_rows = self.count_workspace_checkpoint_files(id)?;
         let deleted = tx.execute("DELETE FROM workspaces WHERE id = ?1", params![id])?;
         tx.commit()?;
-        self.best_effort_incremental_vacuum_after_delete(deleted);
+        self.gc_orphan_blobs_after_delete(file_rows);
+        self.best_effort_incremental_vacuum_after_delete(file_rows + deleted);
         Ok(())
     }
 
@@ -553,9 +562,11 @@ impl Database {
             return Ok(false);
         }
         Self::materialize_workspace_summary_tx(&tx, id)?;
+        let file_rows = self.count_workspace_checkpoint_files(id)?;
         let deleted = tx.execute("DELETE FROM workspaces WHERE id = ?1", params![id])?;
         tx.commit()?;
-        self.best_effort_incremental_vacuum_after_delete(deleted);
+        self.gc_orphan_blobs_after_delete(file_rows);
+        self.best_effort_incremental_vacuum_after_delete(file_rows + deleted);
         Ok(true)
     }
 
@@ -660,10 +671,12 @@ impl Database {
     }
 
     pub fn delete_workspace(&self, id: &str) -> Result<(), rusqlite::Error> {
+        let file_rows = self.count_workspace_checkpoint_files(id)?;
         let deleted = self
             .conn
             .execute("DELETE FROM workspaces WHERE id = ?1", params![id])?;
-        self.best_effort_incremental_vacuum_after_delete(deleted);
+        self.gc_orphan_blobs_after_delete(file_rows);
+        self.best_effort_incremental_vacuum_after_delete(file_rows + deleted);
         Ok(())
     }
 }
