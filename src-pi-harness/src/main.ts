@@ -629,6 +629,13 @@ function runCommand(program: string, args: string[], cwd: string, signal?: Abort
     let stdoutEnded = false;
     let stderrEnded = false;
     let resolved = false;
+    // Set if we had to force-close a stream that hadn't reached EOF.
+    // Means a descendant inherited the pipe (the case this whole
+    // rewrite exists for) OR the child wrote enough output that libuv
+    // hadn't finished draining before our `setImmediate` ran. Either
+    // way the caller deserves a truthful "we may have cut off tail
+    // output" flag instead of a silent partial result.
+    let forcedClose = false;
 
     const finalize = () => {
       if (resolved) return;
@@ -641,7 +648,7 @@ function runCommand(program: string, args: string[], cwd: string, signal?: Abort
         stdout: stdout.text(),
         stderr: stderr.text(),
         exitCode,
-        truncated: stdout.wasTruncated() || stderr.wasTruncated(),
+        truncated: stdout.wasTruncated() || stderr.wasTruncated() || forcedClose,
         limitBytes: MAX_COMMAND_OUTPUT_BYTES,
       });
     };
@@ -664,8 +671,14 @@ function runCommand(program: string, args: string[], cwd: string, signal?: Abort
       // I/O phase — no arbitrary delay, just the standard
       // "drain pending callbacks" idiom.
       setImmediate(() => {
-        if (!stdoutEnded) child.stdout.destroy();
-        if (!stderrEnded) child.stderr.destroy();
+        if (!stdoutEnded) {
+          forcedClose = true;
+          child.stdout.destroy();
+        }
+        if (!stderrEnded) {
+          forcedClose = true;
+          child.stderr.destroy();
+        }
         // If a descendant is holding the pipe, the streams won't emit
         // `'end'` — finalize directly.
         finalize();
@@ -988,9 +1001,34 @@ type PiIterationUsage = {
   modelContextWindow?: number;
 };
 
+type PiAggregateUsage = {
+  /** Sum of `input` across every assistant message in this turn. */
+  inputTokens: number;
+  /** Sum of `output` across every assistant message in this turn. */
+  outputTokens: number;
+  /** Sum of `cacheRead` across every assistant message in this turn. */
+  cacheReadTokens: number;
+  /** Sum of `cacheWrite` across every assistant message in this turn. */
+  cacheCreationTokens: number;
+  /** Sum of `totalTokens` across every assistant message in this turn,
+   *  falling back to `input+output+cacheRead+cacheWrite` per message
+   *  when the provider didn't populate it. */
+  totalTokens?: number;
+};
+
 type PiTurnUsage = {
-  /** Per-final-call snapshot — what the meter needs to show
-   *  end-of-turn context occupancy. */
+  /** Cumulative usage across every assistant message in the turn.
+   *  Drives `TokenUsage`'s top-level fields, which the TurnFooter /
+   *  CompletedTurn surface as "total work for this Claudette-level
+   *  turn". Documented by `pickMeterUsageFromResult` as the aggregate
+   *  semantics. Multi-iteration turns (agent loop with tool calls)
+   *  must use the cumulative figure here, not the final-call snapshot,
+   *  otherwise the footer under-reports. */
+  aggregate?: PiAggregateUsage;
+  /** Per-final-call snapshot — populates `TokenUsage.iterations[0]`,
+   *  which `pickMeterUsageFromResult` reads in preference to the
+   *  top-level aggregate for the ContextMeter's end-of-turn occupancy
+   *  reading. */
   iteration?: PiIterationUsage;
   /** Cumulative cost across all assistant messages in the turn. Drives
    *  the USAGE popover; not used by the context meter. */
@@ -1074,19 +1112,53 @@ function extractAgentEndUsage(
   const messages = Array.isArray(event.messages) ? event.messages : [];
   let totalCostUsd = 0;
   let sawUsage = false;
+  const aggregate: PiAggregateUsage = {
+    inputTokens: 0,
+    outputTokens: 0,
+    cacheReadTokens: 0,
+    cacheCreationTokens: 0,
+  };
+  let aggregateTotal = 0;
+  let sawAggregateTotal = false;
   for (const message of messages) {
     if (!message || typeof message !== "object") continue;
     const m = message as {
       role?: string;
-      usage?: { cost?: { total?: unknown } };
+      usage?: {
+        input?: unknown;
+        output?: unknown;
+        cacheRead?: unknown;
+        cacheWrite?: unknown;
+        totalTokens?: unknown;
+        cost?: { total?: unknown };
+      };
     };
     if (m.role !== "assistant" || !m.usage) continue;
     sawUsage = true;
+    const input = finiteNumber(m.usage.input) ?? 0;
+    const output = finiteNumber(m.usage.output) ?? 0;
+    const cacheRead = finiteNumber(m.usage.cacheRead) ?? 0;
+    const cacheWrite = finiteNumber(m.usage.cacheWrite) ?? 0;
+    aggregate.inputTokens += input;
+    aggregate.outputTokens += output;
+    aggregate.cacheReadTokens += cacheRead;
+    aggregate.cacheCreationTokens += cacheWrite;
+    const messageTotal = finiteNumber(m.usage.totalTokens);
+    if (messageTotal !== undefined) {
+      aggregateTotal += messageTotal;
+      sawAggregateTotal = true;
+    } else {
+      aggregateTotal += input + output + cacheRead + cacheWrite;
+    }
     totalCostUsd += finiteNumber(m.usage.cost?.total) ?? 0;
+  }
+  if (sawAggregateTotal || aggregateTotal > 0) {
+    aggregate.totalTokens = aggregateTotal;
   }
   const iteration = buildIterationUsage(event);
   if (!sawUsage && !iteration) return undefined;
   const out: PiTurnUsage = { totalCostUsd };
+  if (sawUsage) out.aggregate = aggregate;
   if (iteration) out.iteration = iteration;
   if (startedAt !== undefined) {
     out.durationMs = Math.max(0, Date.now() - startedAt);

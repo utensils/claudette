@@ -687,6 +687,30 @@ impl PiSdkSession {
     }
 }
 
+/// Cumulative-across-the-turn usage emitted by the harness on
+/// `turn_end`. Populates the top-level `TokenUsage` fields, which
+/// `TurnFooter` / `CompletedTurn` surface as "total work for this
+/// Claudette-level turn" (see `pickMeterUsageFromResult`'s docs and the
+/// `aggregate semantics` comment in `useAgentStream.ts`'s `result`
+/// branch). Sums every assistant message's `usage.*` for this turn so
+/// the footer doesn't under-report on multi-iteration agent loops.
+#[derive(Debug, Clone, Deserialize)]
+struct PiAggregateUsage {
+    #[serde(default, rename = "inputTokens")]
+    input_tokens: Option<u64>,
+    #[serde(default, rename = "outputTokens")]
+    output_tokens: Option<u64>,
+    #[serde(default, rename = "cacheReadTokens")]
+    cache_read_tokens: Option<u64>,
+    #[serde(default, rename = "cacheCreationTokens")]
+    cache_creation_tokens: Option<u64>,
+    /// Sum of per-message `totalTokens`. Distinct from
+    /// `PiIterationUsage::total_tokens`, which is end-of-turn context
+    /// occupancy.
+    #[serde(default, rename = "totalTokens")]
+    total_tokens: Option<u64>,
+}
+
 /// Per-final-call usage snapshot emitted by the harness on `turn_end`.
 /// Maps onto Claudette's `TokenUsage` shape (specifically the
 /// `iterations[0]` slot that `pickMeterUsageFromResult` reads first),
@@ -778,16 +802,23 @@ enum PiHarnessMessage {
     TurnEnd {
         #[serde(default)]
         error: Option<String>,
+        /// Cumulative-across-the-turn totals. Populates the top-level
+        /// `TokenUsage` fields the TurnFooter / CompletedTurn surface
+        /// as "total work for this turn".
+        ///
+        /// Absent on resumed pre-fix sessions (a sidecar predating
+        /// this payload). In that case the route layer skips building
+        /// a `TokenUsage` entirely — the meter holds its previous
+        /// reading and the footer omits token counts, which is the
+        /// same fail-safe as a missing CLI `usage` block.
+        #[serde(default)]
+        aggregate: Option<PiAggregateUsage>,
         /// Per-final-call usage snapshot, populated by the harness from
         /// the last `AssistantMessage.usage` plus
         /// `AgentSession.getContextUsage()` for the authoritative
         /// end-of-turn context size. The Rust side routes this into
         /// `TokenUsage.iterations[0]`, which `pickMeterUsageFromResult`
         /// reads in preference to the top-level aggregate.
-        ///
-        /// Absent on resumed pre-fix sessions; the meter then falls back
-        /// to the aggregate (the legacy over-reporting behavior, but no
-        /// worse than what shipped before).
         #[serde(default)]
         iteration: Option<PiIterationUsage>,
         #[serde(default, rename = "totalCostUsd")]
@@ -1185,6 +1216,7 @@ async fn route_pi_message(
         }
         PiHarnessMessage::TurnEnd {
             error,
+            aggregate,
             iteration,
             total_cost_usd,
             duration_ms,
@@ -1245,34 +1277,74 @@ async fn route_pi_message(
                 (false, Some(err)) => format!("{}\n\n{}", output.text, err),
                 _ => output.text.clone(),
             };
-            // Pi's per-final-call usage rides `iteration` (a separate
-            // snapshot sourced from the last assistant message + Pi's
-            // own `AgentSession.getContextUsage()`). The Claudette
-            // `TokenUsage` shape exposes that to the context meter via
-            // `iterations[0]`, which `pickMeterUsageFromResult` reads in
-            // preference to the top-level aggregate. The top-level
-            // fields stay populated from the same snapshot so the USAGE
-            // popover and the meter agree.
-            let usage = iteration.as_ref().map(|it| {
-                let input = it.input_tokens.unwrap_or(0);
-                let output = it.output_tokens.unwrap_or(0);
-                TokenUsage {
-                    total_tokens: it.total_tokens,
-                    input_tokens: input,
-                    output_tokens: output,
-                    cache_creation_input_tokens: it.cache_creation_tokens,
-                    cache_read_input_tokens: it.cache_read_tokens,
-                    model_context_window: it.model_context_window,
-                    iterations: Some(vec![TokenUsageIteration {
+            // Pi splits the usage payload into two snapshots:
+            //  * `aggregate` — cumulative across every assistant message
+            //    in this turn. Drives `TokenUsage`'s top-level fields
+            //    (TurnFooter / CompletedTurn semantics).
+            //  * `iteration` — per-final-call snapshot built from the
+            //    last `AssistantMessage.usage` plus
+            //    `AgentSession.getContextUsage()`. Drives
+            //    `iterations[0]`, which `pickMeterUsageFromResult` reads
+            //    in preference to the aggregate for the ContextMeter's
+            //    end-of-turn occupancy reading.
+            //
+            // `model_context_window` lives only on `iteration` (Pi's
+            // session API exposes it there); it's also lifted to the
+            // top level so consumers that don't crack iterations get
+            // the live capacity. Either snapshot is sufficient to
+            // populate a `TokenUsage` — emit one only when at least
+            // one is present, so resumed pre-fix sessions (no payload
+            // at all) result in `usage: None` rather than a zeroed
+            // misreading.
+            let usage = if aggregate.is_some() || iteration.is_some() {
+                let iterations = iteration.as_ref().map(|it| {
+                    vec![TokenUsageIteration {
                         total_tokens: it.total_tokens,
-                        input_tokens: input,
-                        output_tokens: output,
+                        input_tokens: it.input_tokens.unwrap_or(0),
+                        output_tokens: it.output_tokens.unwrap_or(0),
                         cache_creation_input_tokens: it.cache_creation_tokens,
                         cache_read_input_tokens: it.cache_read_tokens,
                         model_context_window: it.model_context_window,
-                    }]),
-                }
-            });
+                    }]
+                });
+                // Aggregate is the source of truth for top-level
+                // fields; fall back to iteration when aggregate is
+                // missing (older harness builds that only sent
+                // iteration). model_context_window is iteration-only.
+                let agg_input = aggregate
+                    .as_ref()
+                    .and_then(|a| a.input_tokens)
+                    .or_else(|| iteration.as_ref().and_then(|it| it.input_tokens))
+                    .unwrap_or(0);
+                let agg_output = aggregate
+                    .as_ref()
+                    .and_then(|a| a.output_tokens)
+                    .or_else(|| iteration.as_ref().and_then(|it| it.output_tokens))
+                    .unwrap_or(0);
+                let agg_cache_read = aggregate
+                    .as_ref()
+                    .and_then(|a| a.cache_read_tokens)
+                    .or_else(|| iteration.as_ref().and_then(|it| it.cache_read_tokens));
+                let agg_cache_creation = aggregate
+                    .as_ref()
+                    .and_then(|a| a.cache_creation_tokens)
+                    .or_else(|| iteration.as_ref().and_then(|it| it.cache_creation_tokens));
+                let agg_total = aggregate
+                    .as_ref()
+                    .and_then(|a| a.total_tokens)
+                    .or_else(|| iteration.as_ref().and_then(|it| it.total_tokens));
+                Some(TokenUsage {
+                    total_tokens: agg_total,
+                    input_tokens: agg_input,
+                    output_tokens: agg_output,
+                    cache_creation_input_tokens: agg_cache_creation,
+                    cache_read_input_tokens: agg_cache_read,
+                    model_context_window: iteration.as_ref().and_then(|it| it.model_context_window),
+                    iterations,
+                })
+            } else {
+                None
+            };
             let _ = event_tx.send(AgentEvent::Stream(StreamEvent::Result {
                 subtype: subtype.to_string(),
                 result: Some(result_text),
@@ -1632,17 +1704,29 @@ mod tests {
         rx.try_recv().ok()
     }
 
-    /// The harness emits per-final-call usage under the `iteration`
-    /// key (with `inputTokens`/`outputTokens`/`cacheRead`/`cacheWrite`
-    /// /`totalTokens`/`modelContextWindow` shape). The Rust side has
-    /// to deserialize that shape verbatim — a refactor that renames or
-    /// reshapes any field here silently breaks the context meter,
-    /// because the fallback path drops back to the old cumulative
-    /// aggregate. Pin the wire format.
+    /// The harness emits two usage snapshots on `turn_end`:
+    ///  * `aggregate` (cumulative across all assistant messages in
+    ///    this Claudette-level turn) — drives the TurnFooter.
+    ///  * `iteration` (per-final-call) — drives the ContextMeter via
+    ///    `TokenUsage.iterations[0]`.
+    ///
+    /// Both use the `inputTokens` / `outputTokens` / `cacheReadTokens`
+    /// / `cacheCreationTokens` / `totalTokens` shape; `iteration` also
+    /// carries `modelContextWindow`. The Rust side has to deserialize
+    /// that shape verbatim — a refactor that renames or reshapes any
+    /// field here silently regresses the meter or the footer. Pin the
+    /// wire format.
     #[test]
-    fn turn_end_iteration_wire_format() {
+    fn turn_end_usage_wire_format() {
         let line = r#"{
             "type": "turn_end",
+            "aggregate": {
+                "inputTokens": 410700,
+                "outputTokens": 9000,
+                "cacheReadTokens": 0,
+                "cacheCreationTokens": 0,
+                "totalTokens": 419700
+            },
             "iteration": {
                 "inputTokens": 136900,
                 "outputTokens": 3000,
@@ -1657,11 +1741,15 @@ mod tests {
         let msg: PiHarnessMessage = serde_json::from_str(line).unwrap();
         match msg {
             PiHarnessMessage::TurnEnd {
+                aggregate: Some(agg),
                 iteration: Some(it),
                 total_cost_usd,
                 duration_ms,
                 ..
             } => {
+                assert_eq!(agg.input_tokens, Some(410_700));
+                assert_eq!(agg.output_tokens, Some(9000));
+                assert_eq!(agg.total_tokens, Some(419_700));
                 assert_eq!(it.input_tokens, Some(136_900));
                 assert_eq!(it.output_tokens, Some(3000));
                 assert_eq!(it.total_tokens, Some(139_900));
@@ -1669,21 +1757,22 @@ mod tests {
                 assert_eq!(total_cost_usd, Some(0.42));
                 assert_eq!(duration_ms, Some(513_000));
             }
-            other => panic!("expected TurnEnd with iteration, got {other:?}"),
+            other => panic!("expected TurnEnd with both snapshots, got {other:?}"),
         }
     }
 
     /// Sessions resumed mid-stream from an older harness build won't
-    /// send `iteration`. The deserializer must accept that case and
-    /// let the route layer skip building a TokenUsage rather than
-    /// blow up the reader loop.
+    /// send `aggregate` or `iteration`. The deserializer must accept
+    /// that case and let the route layer skip building a TokenUsage
+    /// rather than blow up the reader loop.
     #[test]
-    fn turn_end_without_iteration_parses() {
+    fn turn_end_without_usage_parses() {
         let line = r#"{"type":"turn_end"}"#;
         let msg: PiHarnessMessage = serde_json::from_str(line).unwrap();
         assert!(matches!(
             msg,
             PiHarnessMessage::TurnEnd {
+                aggregate: None,
                 iteration: None,
                 total_cost_usd: None,
                 duration_ms: None,
@@ -1695,6 +1784,7 @@ mod tests {
     fn turn_end(error: Option<&str>) -> PiHarnessMessage {
         PiHarnessMessage::TurnEnd {
             error: error.map(str::to_string),
+            aggregate: None,
             iteration: None,
             total_cost_usd: None,
             duration_ms: None,
@@ -1702,8 +1792,18 @@ mod tests {
     }
 
     fn turn_end_with_usage() -> PiHarnessMessage {
+        // Multi-iteration turn: the agent loop ran three model calls, so
+        // aggregate is roughly 3 × per-final-call. The footer reads the
+        // aggregate; the meter reads `iterations[0]` (the per-final-call).
         PiHarnessMessage::TurnEnd {
             error: None,
+            aggregate: Some(PiAggregateUsage {
+                input_tokens: Some(300),
+                output_tokens: Some(150),
+                cache_read_tokens: Some(60),
+                cache_creation_tokens: Some(15),
+                total_tokens: Some(525),
+            }),
             iteration: Some(PiIterationUsage {
                 input_tokens: Some(100),
                 output_tokens: Some(50),
@@ -2384,12 +2484,24 @@ mod tests {
                 ..
             }) => {
                 let usage = usage.expect("Pi usage should be forwarded");
-                assert_eq!(usage.total_tokens, Some(175));
-                assert_eq!(usage.input_tokens, 100);
-                assert_eq!(usage.output_tokens, 50);
-                assert_eq!(usage.cache_read_input_tokens, Some(20));
-                assert_eq!(usage.cache_creation_input_tokens, Some(5));
+                // Top-level fields are the cumulative turn aggregate
+                // (TurnFooter / CompletedTurn semantics). They must
+                // NOT be the per-final-call snapshot — otherwise a
+                // multi-iteration turn under-reports total work.
+                assert_eq!(usage.total_tokens, Some(525));
+                assert_eq!(usage.input_tokens, 300);
+                assert_eq!(usage.output_tokens, 150);
+                assert_eq!(usage.cache_read_input_tokens, Some(60));
+                assert_eq!(usage.cache_creation_input_tokens, Some(15));
+                // model_context_window is iteration-only on the
+                // protocol side (Pi exposes it via getContextUsage),
+                // but we lift it to the top level too so consumers
+                // that don't crack `iterations` still see the live
+                // capacity.
                 assert_eq!(usage.model_context_window, Some(272_000));
+                // iterations[0] is the per-final-call snapshot for the
+                // ContextMeter — must reflect just the final call, not
+                // the cumulative.
                 let iters = usage.iterations.expect("iterations[0] must be populated");
                 assert_eq!(iters.len(), 1);
                 assert_eq!(iters[0].input_tokens, 100);
@@ -2400,6 +2512,86 @@ mod tests {
                 assert_eq!(iters[0].model_context_window, Some(272_000));
                 assert_eq!(total_cost_usd, Some(0.0123));
                 assert_eq!(duration_ms, Some(4321));
+            }
+            other => panic!("expected Result, got {other:?}"),
+        }
+    }
+
+    /// Pre-aggregate harness builds (or any future sidecar variant
+    /// that emits only the per-final-call snapshot) must still
+    /// produce a usable `TokenUsage`. The route layer falls back to
+    /// the iteration values for the top-level fields when aggregate
+    /// is absent — better to show single-iteration totals than no
+    /// totals at all.
+    #[tokio::test]
+    async fn turn_end_iteration_only_falls_back_to_iteration_for_top_level() {
+        let (event_tx, control_tx, mut rx, pending, turn_output, init_cache) = pi_state();
+        turn_output.lock().await.text.push_str("answer");
+        route_pi_message(
+            &event_tx,
+            &control_tx,
+            &pending,
+            &turn_output,
+            &init_cache,
+            PiHarnessMessage::TurnEnd {
+                error: None,
+                aggregate: None,
+                iteration: Some(PiIterationUsage {
+                    input_tokens: Some(100),
+                    output_tokens: Some(50),
+                    cache_read_tokens: Some(20),
+                    cache_creation_tokens: Some(5),
+                    total_tokens: Some(175),
+                    model_context_window: Some(272_000),
+                }),
+                total_cost_usd: None,
+                duration_ms: None,
+            },
+        )
+        .await;
+        let _assistant = next_event(&mut rx).await;
+        match next_event(&mut rx).await {
+            AgentEvent::Stream(StreamEvent::Result {
+                usage: Some(usage), ..
+            }) => {
+                // No aggregate available → top-level mirrors iteration.
+                assert_eq!(usage.input_tokens, 100);
+                assert_eq!(usage.output_tokens, 50);
+                assert_eq!(usage.cache_read_input_tokens, Some(20));
+                assert_eq!(usage.cache_creation_input_tokens, Some(5));
+                assert_eq!(usage.total_tokens, Some(175));
+                let iters = usage.iterations.expect("iterations populated");
+                assert_eq!(iters[0].input_tokens, 100);
+            }
+            other => panic!("expected Result with usage, got {other:?}"),
+        }
+    }
+
+    /// Turn-end with neither aggregate nor iteration (a sidecar
+    /// predating this payload, or a turn that produced no LLM usage
+    /// at all) must produce `usage: None` rather than zeroes. Zeroes
+    /// would poison the meter; `None` lets it hold its previous
+    /// reading.
+    #[tokio::test]
+    async fn turn_end_without_usage_emits_no_token_usage() {
+        let (event_tx, control_tx, mut rx, pending, turn_output, init_cache) = pi_state();
+        turn_output.lock().await.text.push_str("answer");
+        route_pi_message(
+            &event_tx,
+            &control_tx,
+            &pending,
+            &turn_output,
+            &init_cache,
+            turn_end(None),
+        )
+        .await;
+        let _assistant = next_event(&mut rx).await;
+        match next_event(&mut rx).await {
+            AgentEvent::Stream(StreamEvent::Result { usage, .. }) => {
+                assert!(
+                    usage.is_none(),
+                    "no aggregate + no iteration → no TokenUsage"
+                );
             }
             other => panic!("expected Result, got {other:?}"),
         }
