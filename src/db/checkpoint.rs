@@ -341,9 +341,12 @@ impl Database {
     fn gc_orphan_blobs_tx(tx: &rusqlite::Transaction<'_>) -> Result<(), rusqlite::Error> {
         // Correlated `NOT EXISTS` lets SQLite drive each candidate blob row
         // through `idx_checkpoint_files_blob_sha256` directly, without
-        // materializing a DISTINCT set of every referenced sha. Also avoids
-        // any `NOT IN` NULL surprise if a future schema change ever
-        // dropped the `IS NOT NULL` guard.
+        // materializing a DISTINCT set of every referenced sha. The form
+        // also naturally tolerates `checkpoint_files` rows with NULL
+        // `blob_sha256` (legacy un-backfilled rows): such rows simply
+        // don't satisfy the `=` predicate, so they neither protect a
+        // blob from GC nor poison the outer match the way they would
+        // under `NOT IN`'s three-valued logic.
         tx.execute(
             "DELETE FROM checkpoint_blobs
              WHERE NOT EXISTS (

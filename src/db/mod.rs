@@ -172,9 +172,9 @@ impl Database {
     ///
     /// Uses a correlated `NOT EXISTS` rather than `NOT IN (SELECT DISTINCT …)`
     /// so SQLite can drive the lookup off `idx_checkpoint_files_blob_sha256`
-    /// directly without materializing the DISTINCT set. This also sidesteps
-    /// `NOT IN` NULL semantics — irrelevant given the inner `IS NOT NULL`
-    /// filter, but cheap insurance against future schema drift.
+    /// directly without materializing the DISTINCT set, and so that NULL
+    /// `blob_sha256` values (legacy un-backfilled rows) don't poison the
+    /// outer match the way they would under `NOT IN`'s three-valued logic.
     fn gc_orphan_blobs_after_delete(&self, rows_deleted: usize) {
         if rows_deleted == 0 {
             return;

@@ -29,6 +29,20 @@ const DEFAULT_RETENTION = 50;
 const MIN_RETENTION = 1;
 const MAX_RETENTION = 1000;
 
+// Backend (`read_checkpoint_retention_count` in src/chat.rs) parses the
+// stored value as `usize`, which rejects non-integer strings like "1.5"
+// entirely and falls back to the default. The UI must match that contract
+// — otherwise `parseInt("1.5") = 1` would display a clamped value the
+// backend doesn't actually honour. Module-scope (rather than nested in
+// the component) so its identity is stable across renders and it can be
+// referenced from hooks without showing up in dependency arrays.
+function parseStrictInteger(raw: string): number | null {
+  const trimmed = raw.trim();
+  if (trimmed === "") return null;
+  const n = Number(trimmed);
+  return Number.isInteger(n) ? n : null;
+}
+
 /**
  * Unified per-repo card the Storage page actually renders. A single row
  * carries the repo's archived count, on-disk totals, AND any orphaned
@@ -73,18 +87,6 @@ export function StorageSettings() {
   );
   const [retentionSaving, setRetentionSaving] = useState(false);
   const [retentionError, setRetentionError] = useState<string | null>(null);
-
-  // Backend (`read_checkpoint_retention_count` in src/chat.rs) parses
-  // the stored value as `usize`, which rejects non-integer strings like
-  // "1.5" entirely and falls back to the default. The UI must match that
-  // contract — otherwise `parseInt("1.5") = 1` would display a clamped
-  // value the backend doesn't actually honour.
-  const parseStrictInteger = (raw: string): number | null => {
-    const trimmed = raw.trim();
-    if (trimmed === "") return null;
-    const n = Number(trimmed);
-    return Number.isInteger(n) ? n : null;
-  };
 
   useEffect(() => {
     getAppSetting("checkpoint_retention_count")
