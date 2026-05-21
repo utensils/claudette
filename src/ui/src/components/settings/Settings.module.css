@@ -184,14 +184,14 @@
   font-size: 22px;
   font-weight: 500;
   color: var(--text-primary);
-  margin: 0 0 32px;
+  margin: 0 0 12px;
 }
 
 .sectionDescription {
   color: var(--text-dim);
   font-size: 13px;
   line-height: 1.55;
-  margin: -20px 0 24px;
+  margin: 0 0 24px;
   max-width: 640px;
 }
 
