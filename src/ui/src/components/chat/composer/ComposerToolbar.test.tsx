@@ -82,8 +82,9 @@ vi.mock("../applySelectedModel", () => ({
   applySelectedModel: vi.fn(() => Promise.resolve()),
 }));
 
-vi.mock("../applyPlanModeMountDefault", () => ({
+vi.mock("../planModePersistence", () => ({
   applyPlanModeMountDefault: vi.fn(),
+  setPlanModeAndPersist: vi.fn(() => Promise.resolve()),
 }));
 
 vi.mock("./ReasoningPill", () => ({

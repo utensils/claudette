@@ -28,6 +28,7 @@ import { CurrentTurnTaskProgress } from "./CurrentTurnTaskProgress";
 import { MessagesWithTurns } from "./MessagesWithTurns";
 import { OverlayScrollbar } from "./OverlayScrollbar";
 import { PlanApprovalCard } from "./PlanApprovalCard";
+import { setPlanModeAndPersist } from "./planModePersistence";
 import { QueuedMessagesPopover } from "./QueuedMessagesPopover";
 import { ScrollContext } from "./ScrollContext";
 import { ScrollToBottomPill } from "./ScrollToBottomPill";
@@ -69,7 +70,6 @@ type ChatPanelSessionViewProps = Pick<
   | "searchQuery"
   | "selectedWorkspaceId"
   | "setChatAuthLoginStartedRequestId"
-  | "setPlanMode"
   | "setQueuedMessageEditing"
   | "showChatAuthLoginPanel"
   | "showThinkingBlocks"
@@ -172,7 +172,6 @@ export function ChatPanelSessionView({
   selectedWorkspaceId,
   setChatAuthLoginStartedRequestId,
   setError,
-  setPlanMode,
   setQueuedMessageEditing,
   showChatAuthLoginPanel,
   showThinkingBlocks,
@@ -329,16 +328,16 @@ export function ChatPanelSessionView({
                         clearPlanApproval(sid);
                         if (codexPlanApproval) {
                           if (approved) {
-                            setPlanMode(sid, false);
+                            await setPlanModeAndPersist(sid, false);
                             await onSend("Implement the plan.");
                           } else if (reason?.trim()) {
-                            setPlanMode(sid, true);
+                            await setPlanModeAndPersist(sid, true);
                             await onSend(
                               `${reason.trim()}\n\nRevise the plan to address this feedback. Do not begin implementation.`,
                             );
                           }
                         } else {
-                          setPlanMode(sid, false);
+                          await setPlanModeAndPersist(sid, false);
                         }
                       } catch (e) {
                         console.error("Failed to submit plan approval:", e);
