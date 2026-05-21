@@ -5,7 +5,7 @@ import { createWorkspaceScmLink, sendChatMessage } from "../../services/tauri";
 import {
   markChatTurnStarting,
   rollbackChatTurnStarting,
-} from "../chat/chatMessageDispatch";
+} from "../chat/chatTurnLifecycle";
 import type { Model } from "../chat/modelRegistry";
 import type { ContextMenuItem } from "../shared/ContextMenu";
 

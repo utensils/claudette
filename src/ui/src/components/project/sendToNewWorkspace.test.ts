@@ -22,7 +22,6 @@ vi.mock("../chat/applySelectedModel", () => ({
 }));
 vi.mock("../../services/tauri", () => ({
   sendChatMessage: vi.fn().mockResolvedValue(undefined),
-  sendRemoteCommand: vi.fn().mockResolvedValue(undefined),
   createWorkspaceScmLink: vi.fn(),
 }));
 

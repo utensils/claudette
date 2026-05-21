@@ -1,12 +1,16 @@
 import { sendChatMessage, sendRemoteCommand } from "../../services/tauri";
 import { useAppStore } from "../../stores/useAppStore";
 import type { PermissionLevel } from "../../stores/useAppStore";
-import type { AttachmentInput, ChatMessage } from "../../types/chat";
+import type { AttachmentInput } from "../../types/chat";
 import { shouldDisable1mContext } from "./chatHelpers";
 import {
   buildSendFailureSystemMessage,
   shouldRecordSendFailureInChat,
 } from "./chatSendFailure";
+import {
+  markChatTurnStarting,
+  rollbackChatTurnStarting,
+} from "./chatTurnLifecycle";
 import { resolveUltrathinkEffort } from "./ultrathink";
 
 interface DispatchChatMessageArgs {
@@ -22,15 +26,6 @@ export interface DispatchChatMessageResult {
   messageId: string;
 }
 
-interface MarkChatTurnStartingArgs {
-  sessionId: string;
-  workspaceId: string;
-  messageId: string;
-  content: string;
-  attachments?: AttachmentInput[];
-  startedAt?: number;
-}
-
 function resolveSessionWorkspace(sessionId: string) {
   const state = useAppStore.getState();
   for (const [workspaceId, sessions] of Object.entries(state.sessionsByWorkspace)) {
@@ -41,80 +36,6 @@ function resolveSessionWorkspace(sessionId: string) {
     return { workspaceId, workspace, session };
   }
   return null;
-}
-
-function addPersistedUserMessageToStore(
-  sessionId: string,
-  workspaceId: string,
-  messageId: string,
-  content: string,
-  attachments?: AttachmentInput[],
-) {
-  const store = useAppStore.getState();
-  const message: ChatMessage = {
-    id: messageId,
-    workspace_id: workspaceId,
-    chat_session_id: sessionId,
-    role: "User",
-    content,
-    cost_usd: null,
-    duration_ms: null,
-    created_at: new Date().toISOString(),
-    thinking: null,
-    input_tokens: null,
-    output_tokens: null,
-    cache_read_tokens: null,
-    cache_creation_tokens: null,
-  };
-  store.addChatMessage(sessionId, message);
-
-  if (!attachments?.length) return;
-  const optimisticAttachments = attachments.map((attachment) => ({
-    id: crypto.randomUUID(),
-    message_id: messageId,
-    filename: attachment.filename,
-    media_type: attachment.media_type,
-    data_base64: attachment.data_base64,
-    text_content: attachment.text_content ?? null,
-    width: null,
-    height: null,
-    size_bytes: Math.ceil(attachment.data_base64.length * 0.75),
-  }));
-  useAppStore.getState().addChatAttachments(sessionId, optimisticAttachments);
-}
-
-export function markChatTurnStarting({
-  sessionId,
-  workspaceId,
-  messageId,
-  content,
-  attachments,
-  startedAt = Date.now(),
-}: MarkChatTurnStartingArgs) {
-  const state = useAppStore.getState();
-  state.setQueuedMessageAutoDispatchPaused(sessionId, false);
-  state.clearAgentQuestion(sessionId);
-  state.clearPlanApproval(sessionId);
-  state.clearAgentApproval(sessionId);
-  state.finishTypewriterDrain(sessionId);
-  addPersistedUserMessageToStore(
-    sessionId,
-    workspaceId,
-    messageId,
-    content,
-    attachments,
-  );
-  state.updateWorkspace(workspaceId, { agent_status: "Running" });
-  state.setPromptStartTime(workspaceId, startedAt);
-  state.updateChatSession(sessionId, { agent_status: "Running" });
-  state.clearUnreadCompletion(workspaceId);
-}
-
-export function rollbackChatTurnStarting(sessionId: string, workspaceId: string) {
-  const state = useAppStore.getState();
-  state.updateWorkspace(workspaceId, { agent_status: "Idle" });
-  state.updateChatSession(sessionId, { agent_status: "Idle" });
-  state.clearPromptStartTime(workspaceId);
 }
 
 export async function dispatchChatMessage({
