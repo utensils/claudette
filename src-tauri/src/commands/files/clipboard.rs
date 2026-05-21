@@ -117,9 +117,7 @@ fn copy_file_path(path: &Path) -> Result<(), String> {
     use windows_sys::Win32::System::DataExchange::{
         CloseClipboard, EmptyClipboard, OpenClipboard, SetClipboardData,
     };
-    use windows_sys::Win32::System::Memory::{
-        GHND, GlobalAlloc, GlobalLock, GlobalUnlock,
-    };
+    use windows_sys::Win32::System::Memory::{GHND, GlobalAlloc, GlobalLock, GlobalUnlock};
     use windows_sys::Win32::System::Ole::CF_HDROP;
     use windows_sys::Win32::UI::Shell::DROPFILES;
 
