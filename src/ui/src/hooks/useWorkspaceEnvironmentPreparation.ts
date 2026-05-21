@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { prepareWorkspaceEnvironment } from "../services/tauri";
+import { envTargetFromWorkspace, reloadEnv } from "../services/env";
 import { useAppStore } from "../stores/useAppStore";
 import type { WorkspaceEnvTrustNeededPayload } from "../types/env";
 
@@ -19,6 +20,7 @@ import type { WorkspaceEnvTrustNeededPayload } from "../types/env";
 type EnvProgressPhase = "started" | "finished" | "complete";
 interface WorkspaceEnvProgressPayload {
   workspace_id: string;
+  resolve_id?: string;
   plugin: string;
   phase: EnvProgressPhase;
   elapsed_ms: number;
@@ -97,6 +99,12 @@ function looksLikeMissingWorkspace(message: string): boolean {
  * genuine cold export crosses it.
  */
 const PREPARING_SPINNER_DELAY_MS = 150;
+export const ENV_PREPARATION_TIMEOUT_MS = 5 * 60 * 1000;
+const MAX_CLOSED_RESOLVE_IDS_PER_WORKSPACE = 32;
+
+export function envPreparationTimeoutMessage(): string {
+  return "Workspace environment preparation timed out. You can retry environment setup from the chat banner.";
+}
 
 export function useWorkspaceEnvironmentPreparation() {
   const selectedWorkspaceId = useAppStore((s) => s.selectedWorkspaceId);
@@ -120,6 +128,11 @@ export function useWorkspaceEnvironmentPreparation() {
       ? !!s.pendingForks[s.selectedWorkspaceId] ||
         !!s.pendingCreates[s.selectedWorkspaceId]
       : false,
+  );
+  const selectedWorkspaceEnvironmentRetryNonce = useAppStore((s) =>
+    s.selectedWorkspaceId
+      ? (s.workspaceEnvironmentRetryNonce[s.selectedWorkspaceId] ?? 0)
+      : 0,
   );
   const setWorkspaceEnvironment = useAppStore((s) => s.setWorkspaceEnvironment);
   const setWorkspaceEnvironmentProgress = useAppStore(
@@ -149,6 +162,9 @@ export function useWorkspaceEnvironmentPreparation() {
   // trust errors and provider failures from the user. Cleared on
   // each Complete so a subsequent resolve starts fresh.
   const failedDuringResolveRef = useRef<Map<string, boolean>>(new Map());
+  const activeResolveIdRef = useRef<Map<string, string>>(new Map());
+  const closedResolveIdsRef = useRef<Set<string>>(new Set());
+  const closedResolveOrderRef = useRef<Map<string, string[]>>(new Map());
 
   // Per-workspace cancel functions for the pending spinner-delay
   // timers armed by the per-selection effect below. The `complete`
@@ -159,6 +175,14 @@ export function useWorkspaceEnvironmentPreparation() {
   // this a late timer fires after `complete` already finalized the
   // workspace and re-flips it to "preparing" — a stuck, blocked UI.
   const spinnerTimerClearsRef = useRef<Map<string, () => void>>(new Map());
+  // Per-workspace hard timeout for selected-workspace preparation. Progress
+  // `complete` usually clears the loading state, but if the IPC call stalls
+  // before a sink is even constructed (for example behind a long SQLite lock)
+  // no progress event can arrive. Keep the timeout outside effect cleanup so a
+  // navigate-away/navigate-back cannot strand the row forever; a subsequent
+  // prepare attempt clears the prior timer before arming its own.
+  const preparationTimeoutClearsRef = useRef<Map<string, () => void>>(new Map());
+  const handledRetryNonceRef = useRef<Map<string, number>>(new Map());
 
   // Global listener: subscribe once per app session and route every
   // workspace_env_progress event into the store, regardless of which
@@ -170,12 +194,50 @@ export function useWorkspaceEnvironmentPreparation() {
     let mounted = true;
     let unlisten: (() => void) | undefined;
     const failed = failedDuringResolveRef.current;
+    const activeResolveIds = activeResolveIdRef.current;
+    const closedResolveIds = closedResolveIdsRef.current;
+    const closedResolveOrder = closedResolveOrderRef.current;
+    const failureKey = (workspaceId: string, resolveId: string | undefined) =>
+      `${workspaceId}\0${resolveId ?? "legacy"}`;
+    const resolveKey = (workspaceId: string, resolveId: string) =>
+      `${workspaceId}\0${resolveId}`;
+    const rememberClosedResolve = (workspaceId: string, resolveId: string) => {
+      const key = resolveKey(workspaceId, resolveId);
+      if (closedResolveIds.has(key)) return;
+      closedResolveIds.add(key);
+      const order = closedResolveOrder.get(workspaceId) ?? [];
+      order.push(key);
+      while (order.length > MAX_CLOSED_RESOLVE_IDS_PER_WORKSPACE) {
+        const evicted = order.shift();
+        if (evicted) closedResolveIds.delete(evicted);
+      }
+      closedResolveOrder.set(workspaceId, order);
+    };
+    const isCurrentResolve = (
+      workspaceId: string,
+      resolveId: string | undefined,
+    ) => {
+      if (!resolveId) return true;
+      if (closedResolveIds.has(resolveKey(workspaceId, resolveId))) {
+        return false;
+      }
+      const active = activeResolveIds.get(workspaceId);
+      return active === undefined || active === resolveId;
+    };
     listen<WorkspaceEnvProgressPayload>("workspace_env_progress", (event) => {
       if (!mounted) return;
-      const { workspace_id, plugin, phase, ok } = event.payload;
+      const { workspace_id, resolve_id, plugin, phase, ok } = event.payload;
       if (phase === "started") {
+        if (resolve_id && plugin !== "provisioning") {
+          const previous = activeResolveIds.get(workspace_id);
+          if (previous && previous !== resolve_id) {
+            rememberClosedResolve(workspace_id, previous);
+          }
+          activeResolveIds.set(workspace_id, resolve_id);
+        }
         setWorkspaceEnvironmentProgress(workspace_id, plugin);
       } else if (phase === "finished") {
+        if (!isCurrentResolve(workspace_id, resolve_id)) return;
         setWorkspaceEnvironmentProgress(workspace_id, null);
         // Track per-plugin failures so the Complete handler below
         // can distinguish "all plugins succeeded — safe to mark
@@ -183,9 +245,10 @@ export function useWorkspaceEnvironmentPreparation() {
         // Tauri Err response doesn't silently paper over a trust
         // error or provider failure".
         if (ok === false) {
-          failed.set(workspace_id, true);
+          failed.set(failureKey(workspace_id, resolve_id), true);
         }
       } else {
+        if (!isCurrentResolve(workspace_id, resolve_id)) return;
         // phase === "complete" — fires once at end of every backend
         // resolve. Clear the active-plugin display and, critically,
         // transition any workspace stuck at "preparing" purely from
@@ -200,8 +263,16 @@ export function useWorkspaceEnvironmentPreparation() {
         // dropped Tauri response, where the prep promise never settles
         // and `.then`/`.catch` never clear the timer themselves.
         spinnerTimerClearsRef.current.get(workspace_id)?.();
-        const anyFailed = failed.get(workspace_id) ?? false;
-        failed.delete(workspace_id);
+        preparationTimeoutClearsRef.current.get(workspace_id)?.();
+        const key = failureKey(workspace_id, resolve_id);
+        const anyFailed = failed.get(key) ?? false;
+        failed.delete(key);
+        if (resolve_id) {
+          rememberClosedResolve(workspace_id, resolve_id);
+          if (activeResolveIds.get(workspace_id) === resolve_id) {
+            activeResolveIds.delete(workspace_id);
+          }
+        }
         const cur =
           useAppStore.getState().workspaceEnvironment[workspace_id]?.status;
         if (cur === "preparing") {
@@ -308,15 +379,63 @@ export function useWorkspaceEnvironmentPreparation() {
     // to `true`, cancelling the in-flight IPC mid-flight.
     const existingEnv =
       useAppStore.getState().workspaceEnvironment[selectedWorkspaceId];
+
+    const workspaceId = selectedWorkspaceId;
+    const retryNonce = selectedWorkspaceEnvironmentRetryNonce;
+    const lastHandledRetryNonce =
+      handledRetryNonceRef.current.get(workspaceId) ?? 0;
+    const isRetry = retryNonce > lastHandledRetryNonce;
+    if (isRetry) {
+      handledRetryNonceRef.current.set(workspaceId, retryNonce);
+    }
+    let cancelled = false;
+    let timedOut = false;
+
+    const armPreparationTimeout = (delayMs: number) => {
+      const preparationTimeouts = preparationTimeoutClearsRef.current;
+      preparationTimeouts.get(workspaceId)?.();
+      let preparationTimeout: ReturnType<typeof setTimeout> | undefined =
+        setTimeout(() => {
+          preparationTimeout = undefined;
+          preparationTimeouts.delete(workspaceId);
+          const cur = useAppStore.getState().workspaceEnvironment[workspaceId];
+          if (cur?.status !== "preparing") return;
+          timedOut = true;
+          const message = envPreparationTimeoutMessage();
+          useAppStore
+            .getState()
+            .setWorkspaceEnvironment(workspaceId, "error", message);
+          const state = useAppStore.getState();
+          if (state.selectedWorkspaceId === workspaceId) {
+            state.addToast(message);
+          }
+        }, delayMs);
+      const clearPreparationTimeout = () => {
+        if (preparationTimeout !== undefined) {
+          clearTimeout(preparationTimeout);
+          preparationTimeout = undefined;
+        }
+        preparationTimeouts.delete(workspaceId);
+      };
+      preparationTimeouts.set(workspaceId, clearPreparationTimeout);
+      return clearPreparationTimeout;
+    };
+
     if (
       existingEnv?.status === "preparing" &&
-      existingEnv.started_at !== undefined
+      existingEnv.started_at !== undefined &&
+      !isRetry
     ) {
+      const elapsedMs = Math.max(0, Date.now() - existingEnv.started_at);
+      armPreparationTimeout(
+        Math.max(0, ENV_PREPARATION_TIMEOUT_MS - elapsedMs),
+      );
       return;
     }
 
-    const workspaceId = selectedWorkspaceId;
-    let cancelled = false;
+    const clearPreparationTimeout = armPreparationTimeout(
+      ENV_PREPARATION_TIMEOUT_MS,
+    );
 
     // Hot-cache path: don't flip the workspace to "preparing"
     // synchronously. A cached env resolve returns within one IPC
@@ -340,7 +459,7 @@ export function useWorkspaceEnvironmentPreparation() {
       () => {
         preparingTimer = undefined;
         spinnerTimers.delete(workspaceId);
-        if (cancelled) return;
+        if (cancelled || timedOut) return;
         // Only promote a genuine pre-resolve state. A workspace the
         // resolve already finalized (`ready` / `error`) must never be
         // dragged back to "preparing" — and one a `started` progress
@@ -378,10 +497,19 @@ export function useWorkspaceEnvironmentPreparation() {
     // when the IPC response does make it back. `.catch` still
     // respects `cancelled` so navigating away mid-flight doesn't
     // surface a stale toast for a workspace the user already left.
-    prepareWorkspaceEnvironment(workspaceId)
+    const prepare = async () => {
+      if (isRetry) {
+        await reloadEnv(envTargetFromWorkspace(workspaceId));
+      }
+      if (cancelled || timedOut) return undefined;
+      return prepareWorkspaceEnvironment(workspaceId);
+    };
+
+    prepare()
       .then((payload) => {
         clearPreparingTimer();
-        if (cancelled) return;
+        clearPreparationTimeout();
+        if (cancelled || timedOut) return;
         // The backend also emits `workspace_env_trust_needed`, but
         // Tauri listener registration is async. On a fast cached
         // resolve during app/workspace startup, the command can finish
@@ -394,7 +522,8 @@ export function useWorkspaceEnvironmentPreparation() {
       })
       .catch((err) => {
         clearPreparingTimer();
-        if (cancelled) return;
+        clearPreparationTimeout();
+        if (cancelled || timedOut) return;
         const message = String(err);
         // The workspace row is gone from the DB but still showing in the
         // sidebar (a delete whose `workspaces-changed` event we missed, a
@@ -434,6 +563,7 @@ export function useWorkspaceEnvironmentPreparation() {
     selectedWorkspaceId,
     selectedWorkspaceRemoteConnectionId,
     selectedWorkspaceIsPendingFork,
+    selectedWorkspaceEnvironmentRetryNonce,
     setWorkspaceEnvironment,
     addToast,
     openTrustModalOnce,
@@ -447,4 +577,6 @@ export const __TEST__ = {
   looksLikeTrustError,
   looksLikeMissingWorkspace,
   PREPARING_SPINNER_DELAY_MS,
+  ENV_PREPARATION_TIMEOUT_MS,
+  envPreparationTimeoutMessage,
 };

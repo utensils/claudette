@@ -4,6 +4,8 @@
   "empty_preparing_env_with_plugin": "Preparing {{plugin}} ({{seconds}}s)…",
   "empty_preparing_env_with_plugin_static": "Preparing {{plugin}}…",
   "empty_preparing_env_subtitle": "You'll be able to send a message in a moment.",
+  "retry_environment": "Retry environment setup",
+  "environment_error_fallback": "Workspace environment setup failed.",
   "compacting_label": "Compacting context…",
   "compacting_aria": "Compacting context, {{elapsed}} elapsed",
   "processing_aria": "Processing, {{elapsed}} elapsed",

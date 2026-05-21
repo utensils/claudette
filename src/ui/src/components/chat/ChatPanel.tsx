@@ -95,6 +95,15 @@ export function ChatPanel() {
   const workspaceEnvironmentPreparing = useAppStore((s) =>
     isWorkspaceEnvironmentPreparing(s, s.selectedWorkspaceId),
   );
+  const workspaceEnvironmentError = useAppStore((s) =>
+    s.selectedWorkspaceId &&
+      s.workspaceEnvironment[s.selectedWorkspaceId]?.status === "error"
+      ? s.workspaceEnvironment[s.selectedWorkspaceId]?.error ??
+        t("environment_error_fallback", {
+          defaultValue: "Workspace environment setup failed.",
+        })
+      : null,
+  );
   const activeSessionId = useAppStore((s) =>
     s.selectedWorkspaceId
       ? s.selectedSessionIdByWorkspaceId[s.selectedWorkspaceId] ?? null
@@ -1125,6 +1134,12 @@ export function ChatPanel() {
     enqueueTerminalCommand(selectedWorkspaceId, command);
   };
 
+  const handleRetryWorkspaceEnvironment = () => {
+    if (!selectedWorkspaceId || ws?.remote_connection_id) return;
+    setError(null);
+    useAppStore.getState().retryWorkspaceEnvironment(selectedWorkspaceId);
+  };
+
   const handleSend = async (
     content: string,
     mentionedFiles?: Set<string>,
@@ -1567,11 +1582,28 @@ export function ChatPanel() {
             invocation={cliInvocation}
             sessionId={activeChatSessionRecord?.id}
           />
+          {workspaceEnvironmentError && (
+            <div className={styles.envErrorBanner} role="alert">
+              <span>{workspaceEnvironmentError}</span>
+              <button
+                type="button"
+                className={styles.envErrorRetry}
+                onClick={handleRetryWorkspaceEnvironment}
+              >
+                {t("retry_environment", "Retry environment setup")}
+              </button>
+            </div>
+          )}
           {messages.length === 0 && !hasStreaming && !runningSetupScriptSource ? (
             <ChatEmptyState
               key={activeSessionId ?? "no-active-session"}
               workspaceEnvironmentPreparing={workspaceEnvironmentPreparing}
               workspaceId={selectedWorkspaceId}
+              onRetryEnvironment={
+                workspaceEnvironmentPreparing || workspaceEnvironmentError
+                  ? handleRetryWorkspaceEnvironment
+                  : undefined
+              }
             />
           ) : (
             <>

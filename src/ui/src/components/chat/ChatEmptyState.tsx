@@ -8,11 +8,13 @@ import styles from "./ChatPanel.module.css";
 interface ChatEmptyStateProps {
   workspaceEnvironmentPreparing: boolean;
   workspaceId: string | null;
+  onRetryEnvironment?: () => void;
 }
 
 export function ChatEmptyState({
   workspaceEnvironmentPreparing,
   workspaceId,
+  onRetryEnvironment,
 }: ChatEmptyStateProps) {
   const { t } = useTranslation("chat");
   const { plugin: envPlugin, seconds: envSeconds } = useEnvElapsedSeconds(
@@ -49,6 +51,15 @@ export function ChatEmptyState({
         {title}
       </div>
       <div className={styles.emptySub}>{t("empty_preparing_env_subtitle")}</div>
+      {onRetryEnvironment && (
+        <button
+          type="button"
+          className={styles.emptyRetry}
+          onClick={onRetryEnvironment}
+        >
+          {t("retry_environment", "Retry environment setup")}
+        </button>
+      )}
     </div>
   );
 }
