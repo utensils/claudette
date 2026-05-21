@@ -119,6 +119,7 @@ describe("view state persistence", () => {
           loaded: true,
           loadError: null,
           preview: "source",
+          editorViewState: null,
           externallyChanged: false,
         },
       },

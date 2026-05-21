@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { useAppStore } from "./useAppStore";
 import {
+  type FileEditorViewState,
   getRevealAncestorDirs,
   snapshotRemovedFilePath,
 } from "./slices/fileTreeSlice";
@@ -31,6 +32,23 @@ function openLoadedFile(path: string, content = "saved") {
     truncated: false,
     imageBytesB64: null,
   });
+}
+
+function makeEditorViewState(scrollTop: number): FileEditorViewState {
+  return {
+    cursorState: [],
+    viewState: {
+      scrollTop,
+      scrollTopWithoutViewZones: scrollTop,
+      scrollLeft: 0,
+      firstPosition: {
+        lineNumber: 1,
+        column: 1,
+      },
+      firstPositionDeltaTop: 0,
+    },
+    contributionsState: {},
+  };
 }
 
 describe("file path store updates", () => {
@@ -89,6 +107,10 @@ describe("file path store updates", () => {
   it("renames an open file tab and preserves its buffer", () => {
     openLoadedFile("src/app.ts");
     useAppStore.getState().setFileBufferContent(WS, "src/app.ts", "dirty");
+    const editorViewState = makeEditorViewState(320);
+    useAppStore
+      .getState()
+      .setFileEditorViewState(WS, "src/app.ts", editorViewState);
     useAppStore.setState({
       tabOrderByWorkspace: { [WS]: [{ kind: "file", path: "src/app.ts" }] },
     });
@@ -102,9 +124,25 @@ describe("file path store updates", () => {
     expect(state.activeFileTabByWorkspace[WS]).toBe("src/main.ts");
     expect(state.fileBuffers[`${WS}:src/app.ts`]).toBeUndefined();
     expect(state.fileBuffers[`${WS}:src/main.ts`].buffer).toBe("dirty");
+    expect(state.fileBuffers[`${WS}:src/main.ts`].editorViewState).toBe(
+      editorViewState,
+    );
     expect(state.tabOrderByWorkspace[WS]).toEqual([
       { kind: "file", path: "src/main.ts" },
     ]);
+  });
+
+  it("stores Monaco view state per file tab", () => {
+    openLoadedFile("src/app.ts");
+    const editorViewState = makeEditorViewState(640);
+
+    useAppStore
+      .getState()
+      .setFileEditorViewState(WS, "src/app.ts", editorViewState);
+
+    expect(
+      useAppStore.getState().fileBuffers[`${WS}:src/app.ts`].editorViewState,
+    ).toBe(editorViewState);
   });
 
   it("stores a one-shot reveal target when opening a file tab with a line range", () => {
