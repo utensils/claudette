@@ -29,7 +29,10 @@
   "automation_mode_recurring": "recurring",
   "automation_mode_one_shot": "one-shot",
   "automation_next_fire": "Next fire",
-  "automation_disabled_reason": "Paused reason",
+  "automation_disabled_reason": "Pause reason",
+  "automation_disabled_reason_workspace_archived": "Workspace archived",
+  "automation_disabled_reason_workspace_unavailable": "Workspace unavailable",
+  "automation_disabled_reason_terminal_dispatch_error": "Dispatch cannot start",
   "automation_last_error": "Last error",
 
   "cli_title": "Command-line interface",

@@ -31,6 +31,25 @@ pub static APP_SHUTTING_DOWN: AtomicBool = AtomicBool::new(false);
 /// Re-export for use in tray module without direct tauri::tray import.
 pub type TrayIcon = tauri::tray::TrayIcon;
 
+pub(crate) struct AsyncGateEntry {
+    pub lock: Arc<tokio::sync::Mutex<()>>,
+    pub last_used: Instant,
+}
+
+impl AsyncGateEntry {
+    pub fn new(now: Instant) -> Self {
+        Self {
+            lock: Arc::new(tokio::sync::Mutex::new(())),
+            last_used: now,
+        }
+    }
+
+    pub fn touch(&mut self, now: Instant) -> Arc<tokio::sync::Mutex<()>> {
+        self.last_used = now;
+        Arc::clone(&self.lock)
+    }
+}
+
 /// What kind of attention the agent needs from the user.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AttentionKind {
@@ -635,8 +654,10 @@ pub struct AppState {
     pub scm_cache: ScmCache,
     /// Per `(repo_id, branch)` SCM fetch gate. Multiple workspaces can point
     /// at the same branch; this lets the first lookup populate the cache and
-    /// the rest reuse it instead of shelling out in parallel.
-    pub scm_fetch_locks: RwLock<HashMap<(String, String), Arc<tokio::sync::Mutex<()>>>>,
+    /// the rest reuse it instead of shelling out in parallel. Idle, unheld
+    /// gates are pruned on lookup so long-running sessions do not retain every
+    /// branch forever.
+    pub scm_fetch_locks: RwLock<HashMap<(String, String), AsyncGateEntry>>,
     /// Cached repo-wide SCM lists (open issues / open PRs by scope) keyed
     /// by `(repo_id, list_kind)`. Powers the project-view sections.
     pub repo_scm_lists_cache: RepoScmListsCache,
@@ -646,8 +667,9 @@ pub struct AppState {
     /// Per-workspace gate for `load_diff_files`. Frontend callers normally
     /// de-dupe their own intervals, but file gutters, sidebar refreshes, and
     /// remote callers can still converge on the same workspace; this prevents
-    /// backend git fanout from overlapping for one workspace.
-    pub diff_load_locks: RwLock<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
+    /// backend git fanout from overlapping for one workspace. Idle, unheld
+    /// gates are pruned on lookup.
+    pub diff_load_locks: RwLock<HashMap<String, AsyncGateEntry>>,
     /// Per-workspace CI transition state for auto-fix triggering.
     pub ci_last_status: RwLock<HashMap<String, CiTransitionState>>,
     /// Limits concurrent SCM CLI invocations.

@@ -6,7 +6,11 @@ use claudette::db::Database;
 use claudette::diff;
 use claudette::model::diff::{CommitEntry, DiffFile, FileDiff, StagedDiffFiles};
 
-use crate::state::{AppState, MERGE_BASE_CACHE_TTL, MergeBaseCache, MergeBaseCacheEntry};
+use crate::state::{
+    AppState, AsyncGateEntry, MERGE_BASE_CACHE_TTL, MergeBaseCache, MergeBaseCacheEntry,
+};
+
+const DIFF_LOAD_LOCK_TTL: std::time::Duration = std::time::Duration::from_secs(10 * 60);
 
 /// Cache-aware wrapper around `diff::resolve_workspace_merge_base`.
 ///
@@ -98,18 +102,19 @@ async fn diff_load_lock_for_workspace(
     state: &AppState,
     workspace_id: &str,
 ) -> std::sync::Arc<tokio::sync::Mutex<()>> {
-    {
-        let locks = state.diff_load_locks.read().await;
-        if let Some(lock) = locks.get(workspace_id) {
-            return std::sync::Arc::clone(lock);
-        }
-    }
+    let now = std::time::Instant::now();
     let mut locks = state.diff_load_locks.write().await;
-    std::sync::Arc::clone(
-        locks
-            .entry(workspace_id.to_string())
-            .or_insert_with(|| std::sync::Arc::new(tokio::sync::Mutex::new(()))),
-    )
+    locks.retain(|_, entry| {
+        entry.last_used.elapsed() < DIFF_LOAD_LOCK_TTL
+            || std::sync::Arc::strong_count(&entry.lock) > 1
+    });
+    if let Some(entry) = locks.get_mut(workspace_id) {
+        return entry.touch(now);
+    }
+    let entry = locks
+        .entry(workspace_id.to_string())
+        .or_insert_with(|| AsyncGateEntry::new(now));
+    std::sync::Arc::clone(&entry.lock)
 }
 
 /// Lightweight sibling of `load_diff_files` that returns only the workspace's
@@ -458,5 +463,40 @@ mod tests {
             !std::sync::Arc::ptr_eq(&lock_a1, &lock_b),
             "different workspaces should not block each other's diff loads",
         );
+    }
+
+    #[tokio::test]
+    async fn diff_load_lock_prunes_idle_entries() {
+        let dir = tempfile::tempdir().unwrap();
+        let plugins = PluginRegistry::discover(dir.path());
+        let state = AppState::new(
+            dir.path().join("db.sqlite"),
+            dir.path().join("worktrees"),
+            plugins,
+        );
+
+        let active_lock = diff_load_lock_for_workspace(&state, "active").await;
+        {
+            let mut locks = state.diff_load_locks.write().await;
+            locks.insert(
+                "stale".to_string(),
+                AsyncGateEntry::new(
+                    std::time::Instant::now()
+                        - DIFF_LOAD_LOCK_TTL
+                        - std::time::Duration::from_secs(1),
+                ),
+            );
+            if let Some(entry) = locks.get_mut("active") {
+                entry.last_used = std::time::Instant::now()
+                    - DIFF_LOAD_LOCK_TTL
+                    - std::time::Duration::from_secs(1);
+            }
+        }
+
+        let _fresh = diff_load_lock_for_workspace(&state, "new").await;
+        let locks = state.diff_load_locks.read().await;
+        assert!(!locks.contains_key("stale"));
+        assert!(locks.contains_key("active"));
+        drop(active_lock);
     }
 }

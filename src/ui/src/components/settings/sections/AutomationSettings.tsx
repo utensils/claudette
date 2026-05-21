@@ -21,14 +21,30 @@ function routineLabel(task: ScheduledTask): string {
   return task.name || task.id;
 }
 
+function formatDisabledReason(reason: string | null, t: TFunction<"settings">): string | null {
+  switch (reason) {
+    case "workspace_archived":
+      return t("automation_disabled_reason_workspace_archived");
+    case "workspace_unavailable":
+      return t("automation_disabled_reason_workspace_unavailable");
+    case "terminal_dispatch_error":
+      return t("automation_disabled_reason_terminal_dispatch_error");
+    case null:
+      return null;
+    default:
+      return reason.replaceAll("_", " ");
+  }
+}
+
 function routineDescription(task: ScheduledTask, t: TFunction<"settings">): string {
   const status = task.enabled
     ? t("automation_status_enabled")
     : t("automation_status_disabled");
   const nextFire = `${t("automation_next_fire")}: ${formatFireTime(task.next_fire_at, t)}`;
+  const disabledReason = formatDisabledReason(task.disabled_reason, t);
   const disabledDetail =
-    !task.enabled && task.disabled_reason
-      ? ` ${t("automation_disabled_reason")}: ${task.disabled_reason}.`
+    !task.enabled && disabledReason
+      ? ` ${t("automation_disabled_reason")}: ${disabledReason}.`
       : "";
   const lastError =
     task.last_error ? ` ${t("automation_last_error")}: ${task.last_error}.` : "";

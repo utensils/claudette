@@ -15,7 +15,7 @@ use claudette::scm::types::{
     CiCheck, CiCheckStatus, CiFailureLog, CiOverallStatus, Issue, PullRequest, PullRequestScope,
 };
 
-use crate::state::{AppState, RepoListEntry, ScmCacheEntry};
+use crate::state::{AppState, AsyncGateEntry, RepoListEntry, ScmCacheEntry};
 
 #[derive(Serialize)]
 pub struct PluginInfo {
@@ -43,6 +43,7 @@ const CI_AUTO_FIX_COOLDOWN_MAX_SECONDS: u64 = 3600;
 const SCM_DETAIL_CACHE_TTL: Duration = Duration::from_secs(10);
 const SCM_POLL_CACHE_TTL: Duration = Duration::from_secs(30);
 const SCM_NO_PR_NEGATIVE_CACHE_TTL: Duration = Duration::from_secs(10 * 60);
+const SCM_FETCH_LOCK_TTL: Duration = Duration::from_secs(10 * 60);
 
 struct ScmPollSettingsSnapshot {
     workspace_ids: Vec<(String, String)>,
@@ -1150,18 +1151,18 @@ async fn scm_fetch_lock_for_key(
     state: &AppState,
     key: &(String, String),
 ) -> Arc<tokio::sync::Mutex<()>> {
-    {
-        let locks = state.scm_fetch_locks.read().await;
-        if let Some(lock) = locks.get(key) {
-            return Arc::clone(lock);
-        }
-    }
+    let now = Instant::now();
     let mut locks = state.scm_fetch_locks.write().await;
-    Arc::clone(
-        locks
-            .entry(key.clone())
-            .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(()))),
-    )
+    locks.retain(|_, entry| {
+        entry.last_used.elapsed() < SCM_FETCH_LOCK_TTL || Arc::strong_count(&entry.lock) > 1
+    });
+    if let Some(entry) = locks.get_mut(key) {
+        return entry.touch(now);
+    }
+    let entry = locks
+        .entry(key.clone())
+        .or_insert_with(|| AsyncGateEntry::new(now));
+    Arc::clone(&entry.lock)
 }
 
 /// Build a `ScmDetail` payload from a previously-cached entry, used when the
@@ -2641,6 +2642,38 @@ mod tests {
 
         assert!(Arc::ptr_eq(&lock_a, &lock_b));
         assert!(!Arc::ptr_eq(&lock_a, &lock_other));
+    }
+
+    #[tokio::test]
+    async fn scm_fetch_lock_prunes_idle_entries() {
+        let dir = tempfile::tempdir().unwrap();
+        let plugins = claudette::plugin_runtime::PluginRegistry::discover(dir.path());
+        let state = AppState::new(
+            dir.path().join("db.sqlite"),
+            dir.path().join("worktrees"),
+            plugins,
+        );
+        let stale_key = ("repo-1".to_string(), "old".to_string());
+        let active_key = ("repo-1".to_string(), "active".to_string());
+
+        let active_lock = scm_fetch_lock_for_key(&state, &active_key).await;
+        {
+            let mut locks = state.scm_fetch_locks.write().await;
+            locks.insert(
+                stale_key.clone(),
+                AsyncGateEntry::new(Instant::now() - SCM_FETCH_LOCK_TTL - Duration::from_secs(1)),
+            );
+            if let Some(entry) = locks.get_mut(&active_key) {
+                entry.last_used = Instant::now() - SCM_FETCH_LOCK_TTL - Duration::from_secs(1);
+            }
+        }
+
+        let _fresh =
+            scm_fetch_lock_for_key(&state, &("repo-1".to_string(), "new".to_string())).await;
+        let locks = state.scm_fetch_locks.read().await;
+        assert!(!locks.contains_key(&stale_key));
+        assert!(locks.contains_key(&active_key));
+        drop(active_lock);
     }
 
     /// Build a minimal `Repository` fixture for DB tests. We can't reuse
