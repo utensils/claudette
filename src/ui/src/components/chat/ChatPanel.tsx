@@ -550,6 +550,13 @@ export function ChatPanel() {
       .workspaces.find((w) => w.id === selectedWorkspaceId);
     const sessionId = activeSessionId;
     const isLocal = !currentWs?.remote_connection_id;
+    const isCurrentHistoryLoad = () => {
+      const state = useAppStore.getState();
+      return (
+        state.selectedWorkspaceId === selectedWorkspaceId &&
+        state.selectedSessionIdByWorkspaceId[selectedWorkspaceId] === sessionId
+      );
+    };
 
     debugChat("ChatPanel", "load-history:start", {
       sessionId,
@@ -558,7 +565,7 @@ export function ChatPanel() {
     });
 
     const onMessages = (msgs: ChatMessage[], attachments?: import("../../types").ChatAttachment[], pageState?: import("../../types").ChatPaginationState) => {
-      if (cancelled) return;
+      if (cancelled || !isCurrentHistoryLoad()) return;
       // The paginated backend already drops legacy empty-assistant rows so
       // `total_count` matches the page contents. The remote (non-paginated)
       // path still needs the filter — apply it only when no pageState exists.
@@ -616,7 +623,7 @@ export function ChatPanel() {
         if (!isRunning) {
           loadCompletedTurns(sessionId)
             .then((turnData) => {
-              if (cancelled) return;
+              if (cancelled || !isCurrentHistoryLoad()) return;
               const turns = reconstructCompletedTurns(filtered, turnData, loadGlobalOffset);
               debugChat("ChatPanel", "load-completed-turns:success", {
                 sessionId,
@@ -673,7 +680,7 @@ export function ChatPanel() {
       const setCheckpoints = useAppStore.getState().setCheckpoints;
       listCheckpoints(sessionId)
         .then((cps) => {
-          if (cancelled) return;
+          if (cancelled || !isCurrentHistoryLoad()) return;
           setCheckpoints(sessionId, cps);
         })
         .catch((e) => console.error("Failed to load checkpoints:", e));
@@ -1568,6 +1575,7 @@ export function ChatPanel() {
           />
           {messages.length === 0 && !hasStreaming && !runningSetupScriptSource ? (
             <ChatEmptyState
+              key={activeSessionId ?? "no-active-session"}
               workspaceEnvironmentPreparing={workspaceEnvironmentPreparing}
               workspaceId={selectedWorkspaceId}
             />
@@ -1581,6 +1589,7 @@ export function ChatPanel() {
               )}
               {activeSessionId && selectedWorkspaceId && (
                 <MessagesWithTurns
+                  key={activeSessionId}
                   messages={messages}
                   workspaceId={selectedWorkspaceId}
                   sessionId={activeSessionId}
