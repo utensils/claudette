@@ -340,6 +340,75 @@ describe("useWorkspaceEnvironmentPreparation", () => {
     }
   });
 
+  it("times out an existing warmup-driven preparing state even when selected prep is skipped", async () => {
+    vi.useFakeTimers();
+    try {
+      const startedAt = Date.now() - 1000;
+      useAppStore.setState({
+        selectedWorkspaceId: "ws-1",
+        workspaces: [makeWorkspace()],
+        workspaceEnvironment: {
+          "ws-1": { status: "preparing", started_at: startedAt },
+        },
+      });
+
+      await renderHarness();
+      expect(serviceMocks.prepareWorkspaceEnvironment).not.toHaveBeenCalled();
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(
+          __TEST__.ENV_PREPARATION_TIMEOUT_MS - 1000,
+        );
+      });
+
+      expect(useAppStore.getState().workspaceEnvironment["ws-1"]).toEqual({
+        status: "error",
+        error: __TEST__.envPreparationTimeoutMessage(),
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("marks a stalled env preparation as error after the hard timeout", async () => {
+    vi.useFakeTimers();
+    try {
+      serviceMocks.prepareWorkspaceEnvironment.mockReturnValue(
+        new Promise<void>(() => undefined),
+      );
+      useAppStore.setState({
+        selectedWorkspaceId: "ws-1",
+        workspaces: [makeWorkspace()],
+      });
+
+      await renderHarness();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(
+          __TEST__.PREPARING_SPINNER_DELAY_MS + 50,
+        );
+      });
+      expect(useAppStore.getState().workspaceEnvironment["ws-1"]?.status).toBe(
+        "preparing",
+      );
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(
+          __TEST__.ENV_PREPARATION_TIMEOUT_MS,
+        );
+      });
+
+      expect(useAppStore.getState().workspaceEnvironment["ws-1"]).toEqual({
+        status: "error",
+        error: __TEST__.envPreparationTimeoutMessage(),
+      });
+      expect(useAppStore.getState().toasts.at(-1)?.message).toBe(
+        __TEST__.envPreparationTimeoutMessage(),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("does not flash 'preparing' on a hot-cache resolve that beats the spinner delay", async () => {
     // The core issue #888 acceptance: re-selecting an already-loaded
     // workspace must not show "Preparing direnv…". The resolve is
@@ -430,6 +499,7 @@ describe("useWorkspaceEnvironmentPreparation", () => {
   async function withCapturedProgressListener(): Promise<{
     fire: (payload: {
       workspace_id: string;
+      resolve_id?: string;
       plugin: string;
       phase: "started" | "finished" | "complete";
       elapsed_ms: number;
@@ -452,6 +522,107 @@ describe("useWorkspaceEnvironmentPreparation", () => {
       },
     };
   }
+
+  it("ignores stale progress events from a timed-out resolve after a retry starts", async () => {
+    useAppStore.setState({
+      selectedWorkspaceId: null,
+      workspaces: [makeWorkspace()],
+      workspaceEnvironment: { "ws-1": { status: "error", error: "timed out" } },
+    });
+
+    const { fire } = await withCapturedProgressListener();
+
+    await renderHarness();
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    fire({
+      workspace_id: "ws-1",
+      resolve_id: "retry",
+      plugin: "env-direnv",
+      phase: "started",
+      elapsed_ms: 0,
+    });
+    expect(useAppStore.getState().workspaceEnvironment["ws-1"]?.status).toBe(
+      "preparing",
+    );
+
+    fire({
+      workspace_id: "ws-1",
+      resolve_id: "old",
+      plugin: "",
+      phase: "complete",
+      elapsed_ms: 0,
+    });
+    expect(useAppStore.getState().workspaceEnvironment["ws-1"]?.status).toBe(
+      "preparing",
+    );
+
+    fire({
+      workspace_id: "ws-1",
+      resolve_id: "retry",
+      plugin: "",
+      phase: "complete",
+      elapsed_ms: 0,
+    });
+    expect(useAppStore.getState().workspaceEnvironment["ws-1"]).toEqual({
+      status: "ready",
+    });
+  });
+
+  it("keeps superseded resolve ids stale after the retry completes", async () => {
+    useAppStore.setState({
+      selectedWorkspaceId: null,
+      workspaces: [makeWorkspace()],
+      workspaceEnvironment: { "ws-1": { status: "ready" } },
+    });
+
+    const { fire } = await withCapturedProgressListener();
+
+    await renderHarness();
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    fire({
+      workspace_id: "ws-1",
+      resolve_id: "old",
+      plugin: "env-direnv",
+      phase: "started",
+      elapsed_ms: 0,
+    });
+    fire({
+      workspace_id: "ws-1",
+      resolve_id: "retry",
+      plugin: "env-direnv",
+      phase: "started",
+      elapsed_ms: 0,
+    });
+    fire({
+      workspace_id: "ws-1",
+      resolve_id: "retry",
+      plugin: "",
+      phase: "complete",
+      elapsed_ms: 0,
+    });
+    expect(useAppStore.getState().workspaceEnvironment["ws-1"]).toEqual({
+      status: "ready",
+    });
+
+    useAppStore.getState().setWorkspaceEnvironment("ws-1", "preparing");
+    fire({
+      workspace_id: "ws-1",
+      resolve_id: "old",
+      plugin: "",
+      phase: "complete",
+      elapsed_ms: 0,
+    });
+
+    expect(useAppStore.getState().workspaceEnvironment["ws-1"]).toEqual({
+      status: "preparing",
+    });
+  });
 
   it("recovers from a dropped Tauri response when a 'complete' progress event arrives", async () => {
     // The Windows regression we're guarding against: WebView2
