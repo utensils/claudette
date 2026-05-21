@@ -162,10 +162,12 @@ export function BulkCleanupArchivedModal() {
   //
   // `null` means "no backend value yet" — the display falls back to
   // the client-side sole-owned sum (always a lower bound on the truth)
-  // until the call resolves or fails.
-  const [setReclaimableBytes, setSetReclaimableBytes] = useState<
-    number | null
-  >(null);
+  // until the call resolves or fails. The selection-change effect
+  // resets this to `null` on every selection transition so a stale
+  // value from a previous selection never leaks into the new one.
+  const [reclaimableBytes, setReclaimableBytes] = useState<number | null>(
+    null,
+  );
   // Re-scan whenever the set of archived ids in the store changes —
   // catches the moment an in-flight archive resolves and the
   // `useWorkspaceLifecycle.archive` optimistic update is confirmed by
@@ -269,18 +271,27 @@ export function BulkCleanupArchivedModal() {
   );
   useEffect(() => {
     if (effectiveSelection.size === 0) {
-      setSetReclaimableBytes(0);
+      setReclaimableBytes(0);
       return;
     }
+    // Reset to `null` immediately so the counter falls back to the
+    // client-side sole-owned sum for the new selection instead of
+    // continuing to render the previous selection's total. Without
+    // this, deselecting rows could appear to *increase* the total
+    // briefly (stale higher number lingers until the new call
+    // resolves), contradicting the lower-bound-until-resolved
+    // semantic the counter relies on.
+    setReclaimableBytes(null);
     let cancelled = false;
     computeReclaimableBytesForWorkspaces([...effectiveSelection])
       .then((n) => {
-        if (!cancelled) setSetReclaimableBytes(n);
+        if (!cancelled) setReclaimableBytes(n);
       })
       .catch(() => {
-        // Backend failure → drop back to the client-side sum
-        // (rendered when this state is null in the counter below).
-        if (!cancelled) setSetReclaimableBytes(null);
+        // Backend failure → leave it `null` so the counter keeps
+        // rendering the client-side sole-owned sum as a graceful
+        // degradation.
+        if (!cancelled) setReclaimableBytes(null);
       });
     return () => {
       cancelled = true;
@@ -742,7 +753,7 @@ export function BulkCleanupArchivedModal() {
                   // so flashing it briefly is safe — the number can
                   // only tick up when the backend value arrives.
                   size: formatBytes(
-                    setReclaimableBytes ??
+                    reclaimableBytes ??
                       [...effectiveSelection].reduce(
                         (sum, id) => sum + (sizeById.get(id) ?? 0),
                         0,

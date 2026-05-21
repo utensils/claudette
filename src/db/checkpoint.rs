@@ -1748,7 +1748,8 @@ mod tests {
         let db = setup_db_with_workspace();
         // Add a second workspace under the same repo so both can hold
         // checkpoints in parallel.
-        db.insert_workspace(&make_workspace("w2", "r1", "other")).unwrap();
+        db.insert_workspace(&make_workspace("w2", "r1", "other"))
+            .unwrap();
 
         // Workspace A: cp1 with two file rows — one unique blob, one
         // shared with B.
@@ -1829,7 +1830,8 @@ mod tests {
     #[test]
     fn reclaimable_bytes_for_workspaces_counts_blobs_shared_within_set_once() {
         let db = setup_db_with_workspace();
-        db.insert_workspace(&make_workspace("w2", "r1", "other")).unwrap();
+        db.insert_workspace(&make_workspace("w2", "r1", "other"))
+            .unwrap();
         let shared = vec![0x77u8; 800];
 
         db.insert_chat_message(&make_chat_msg(&db, "m1", "w1", ChatRole::Assistant, "a"))
@@ -1863,8 +1865,10 @@ mod tests {
     #[test]
     fn reclaimable_bytes_for_workspaces_excludes_blobs_referenced_outside_set() {
         let db = setup_db_with_workspace();
-        db.insert_workspace(&make_workspace("w2", "r1", "second")).unwrap();
-        db.insert_workspace(&make_workspace("w3", "r1", "third")).unwrap();
+        db.insert_workspace(&make_workspace("w2", "r1", "second"))
+            .unwrap();
+        db.insert_workspace(&make_workspace("w3", "r1", "third"))
+            .unwrap();
         let shared = vec![0x33u8; 500];
         let unique_to_w1 = vec![0x11u8; 200];
 
@@ -1941,7 +1945,8 @@ mod tests {
     #[test]
     fn delete_workspace_with_summary_keeps_blobs_shared_with_others() {
         let db = setup_db_with_workspace();
-        db.insert_workspace(&make_workspace("w2", "r1", "other")).unwrap();
+        db.insert_workspace(&make_workspace("w2", "r1", "other"))
+            .unwrap();
         let shared = b"shared-bytes";
 
         db.insert_chat_message(&make_chat_msg(&db, "m1", "w1", ChatRole::Assistant, "a"))
