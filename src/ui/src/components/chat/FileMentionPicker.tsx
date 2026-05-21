@@ -115,11 +115,12 @@ export function matchFiles(
       q,
     );
     if (filenameMatch) {
+      const matchPosition = filenameOffset + filenameMatch.matchStart;
       scored.push({
         file,
         score: 20 + filenameMatch.score + directoryBoost(file),
-        matchStart: filenameOffset + filenameMatch.matchStart,
-        matchEnd: filenameOffset + filenameMatch.matchEnd,
+        matchStart: matchPosition,
+        matchEnd: matchPosition,
       });
       continue;
     }
@@ -130,7 +131,7 @@ export function matchFiles(
         file,
         score: 5 + pathMatch.score + directoryBoost(file),
         matchStart: pathMatch.matchStart,
-        matchEnd: pathMatch.matchEnd,
+        matchEnd: pathMatch.matchStart,
       });
     }
   }
@@ -149,6 +150,10 @@ function scoreSubsequence(
   target: string,
   queryLower: string,
 ): SubsequenceMatch | null {
+  if (queryLower.length > target.length) {
+    return null;
+  }
+
   const targetLower = target.toLowerCase();
   const positions: number[] = [];
   let queryIndex = 0;

@@ -35,6 +35,15 @@ describe("matchFiles", () => {
     ]);
   });
 
+  it("preserves contiguous highlights for substring matches", () => {
+    const [result] = matchFiles(files, "panel");
+    const path = "src/ui/src/components/chat/ChatPanel.tsx";
+
+    expect(result?.file.path).toBe(path);
+    expect(result?.matchStart).toBe(path.indexOf("Panel"));
+    expect(result?.matchEnd).toBe(path.indexOf("Panel") + "panel".length);
+  });
+
   it("matches skipped characters in a filename", () => {
     expect(
       matchFiles(files, "chatpanl").map((result) => result.file.path),
@@ -47,6 +56,14 @@ describe("matchFiles", () => {
     ).toContain("src/ui/src/components/chat/ChatPanel.tsx");
   });
 
+  it("does not highlight a contiguous block for fuzzy matches", () => {
+    const result = matchFiles(files, "cpanel").find(
+      (match) => match.file.path === "src/ui/src/components/chat/ChatPanel.tsx",
+    );
+
+    expect(result?.matchStart).toBe(result?.matchEnd);
+  });
+
   it("matches subsequences across path segments", () => {
     expect(
       matchFiles(files, "uiappstore").map((result) => result.file.path),
@@ -55,6 +72,10 @@ describe("matchFiles", () => {
 
   it("does not match characters that only appear out of order", () => {
     expect(matchFiles(files, "storeappui")).toEqual([]);
+  });
+
+  it("does not scan impossible subsequence matches longer than the path", () => {
+    expect(matchFiles([file("short.ts")], "short-ts-but-longer")).toEqual([]);
   });
 
   it("keeps directory results ahead at equal substring relevance", () => {
