@@ -151,6 +151,19 @@ describe("PinnedPromptsManager", () => {
     expect(container.textContent).toContain("pinned_prompts_delete_prompt");
   });
 
+  it("shows the plan-mode override", async () => {
+    const container = await renderManager();
+
+    const editButton = container.querySelector(
+      'button[aria-label="pinned_prompts_edit_action:Ship it"]',
+    );
+    await act(async () => {
+      editButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+
+    expect(container.textContent).toContain("pinned_prompts_override_plan_mode");
+  });
+
   it("Escape cancels an active row edit without deleting the prompt", async () => {
     const container = await renderManager();
     const editButton = container.querySelector(

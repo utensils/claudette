@@ -46,7 +46,7 @@ const appStore = vi.hoisted(
 );
 
 const serviceMocks = vi.hoisted(() => ({
-  getAppSetting: vi.fn(() => Promise.resolve(null)),
+  getAppSetting: vi.fn((_key: string) => Promise.resolve(null as string | null)),
 }));
 
 vi.mock("../../../stores/useAppStore", () => ({
@@ -164,6 +164,9 @@ beforeEach(() => {
   serviceMocks.getAppSetting.mockClear();
   appStore.setSelectedModel.mockClear();
   appStore.setPlanMode.mockClear();
+  appStore.selectedModel = { s1: "opus" };
+  appStore.selectedModelProvider = { s1: "anthropic" };
+  appStore.planMode = { s1: false };
 });
 
 afterEach(async () => {

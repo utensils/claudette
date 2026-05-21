@@ -89,6 +89,8 @@ In plan mode, the agent runs read-only until it produces a plan you explicitly a
 - **Default**: Set in `Settings > Models > Default plan mode`
 - **Slash command**: `/plan` enables plan mode for the next turn
 
+Plan mode follows the active runtime: Claude-compatible sessions use Claude Code's plan approval flow, while Codex Native sessions use Codex's `collaborationMode: plan` workflow.
+
 ## Chrome Browser Mode
 
 Toggle the Chrome chip in the chat header to enable the agent's browser tool for web tasks. Useful when the agent needs to navigate live pages, screenshot DOM state, or scrape something that doesn't have a clean API. Set the default in `Settings > Models > Default chrome mode`.
@@ -174,5 +176,5 @@ Configure defaults for all new sessions in `Settings > Models`:
 | Default effort | Reasoning effort level | Auto |
 | Default thinking | Enable thinking blocks | Off |
 | Show thinking blocks | Display thinking in UI | Off |
-| Default plan mode | Start in plan mode | Off |
+| Default plan mode | Start new sessions in plan mode | Off |
 | Default fast mode | Use fast mode | Off |
