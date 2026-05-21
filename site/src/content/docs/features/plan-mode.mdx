@@ -19,6 +19,8 @@ Per session by default:
 
 - **Settings > Models > Default plan mode** — every new session starts in plan mode.
 
+Plan mode follows the active runtime. Claude-compatible sessions use Claude Code's plan approval flow; Codex Native sessions use Codex's `collaborationMode: plan` workflow. Codex may still run non-mutating exploration commands while planning, then Claudette surfaces Codex's completed plan in the same approval card before implementation begins.
+
 From the [CLI](/claudette/features/cli-client/):
 
 ```sh
@@ -39,11 +41,11 @@ While the card is unresolved, the session sits in **attention** state — the wo
 
 ### Approving
 
-Click **Approve** and the agent re-enters tool-use mode immediately, executing the plan it drafted. No re-prompting needed.
+Click **Approve** and the agent re-enters tool-use mode immediately, executing the plan it drafted. No re-prompting needed. For Codex Native, approval sends the follow-up `Implement the plan.` turn outside plan mode.
 
 ### Denying with feedback
 
-Click **Deny** to open a feedback box. Whatever you type is sent to the agent as the next user turn — so this is the right path when you want a different approach, not a full restart. Examples that work well:
+Click **Deny** to open a feedback box. Whatever you type is sent to the agent as the next user turn, while Codex Native stays in plan mode for revisions — so this is the right path when you want a different approach, not a full restart. Examples that work well:
 
 - "Use middleware composition instead of inheritance — see `src/auth/wrap.ts` for the pattern."
 - "The test plan is fine but skip the legacy adapter for now."

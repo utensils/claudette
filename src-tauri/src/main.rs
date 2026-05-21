@@ -852,7 +852,7 @@ fn main() {
             // here only disables realtime buffer refresh — file viewer
             // continues to work via the initial-load path. Same
             // fallback shape as the env watcher above.
-            commands::files::setup_file_watcher(app.handle().clone());
+            commands::files::watcher::setup_file_watcher(app.handle().clone());
 
             // One-time backfill of legacy `checkpoint_files.content` rows
             // into the content-addressed `checkpoint_blobs` store, followed
@@ -1022,26 +1022,26 @@ fn main() {
             commands::pinned_prompts::delete_pinned_prompt,
             commands::pinned_prompts::reorder_pinned_prompts,
             // Files
-            commands::files::list_workspace_files,
-            commands::files::read_workspace_file,
-            commands::files::read_workspace_file_for_viewer,
-            commands::files::read_workspace_file_bytes,
-            commands::files::read_workspace_file_at_revision,
-            commands::files::write_workspace_file,
-            commands::files::resolve_workspace_path,
-            commands::files::open_workspace_path,
-            commands::files::reveal_workspace_path,
-            commands::files::create_workspace_file,
-            commands::files::rename_workspace_path,
-            commands::files::trash_workspace_path,
-            commands::files::restore_workspace_path_from_trash,
-            commands::files::save_attachment_bytes,
-            commands::files::open_attachment_in_browser,
-            commands::files::open_attachment_with_default_app,
-            commands::files::copy_attachment_file_to_clipboard,
-            commands::files::copy_image_to_clipboard,
-            commands::files::watch_workspace_files,
-            commands::files::unwatch_workspace_files,
+            commands::files::listing::list_workspace_files,
+            commands::files::workspace_ops::read_workspace_file,
+            commands::files::workspace_ops::read_workspace_file_for_viewer,
+            commands::files::workspace_ops::read_workspace_file_bytes,
+            commands::files::workspace_ops::read_workspace_file_at_revision,
+            commands::files::workspace_ops::write_workspace_file,
+            commands::files::workspace_ops::resolve_workspace_path,
+            commands::files::workspace_ops::open_workspace_path,
+            commands::files::workspace_ops::reveal_workspace_path,
+            commands::files::workspace_ops::create_workspace_file,
+            commands::files::workspace_ops::rename_workspace_path,
+            commands::files::workspace_ops::trash_workspace_path,
+            commands::files::workspace_ops::restore_workspace_path_from_trash,
+            commands::files::attachments::save_attachment_bytes,
+            commands::files::attachments::open_attachment_in_browser,
+            commands::files::attachments::open_attachment_with_default_app,
+            commands::files::attachments::copy_attachment_file_to_clipboard,
+            commands::files::attachments::copy_image_to_clipboard,
+            commands::files::watcher::watch_workspace_files,
+            commands::files::watcher::unwatch_workspace_files,
             // Chat
             commands::chat::send::load_chat_history,
             commands::chat::send::load_chat_history_page,

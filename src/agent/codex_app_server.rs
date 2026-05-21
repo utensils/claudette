@@ -48,6 +48,7 @@ struct CodexTurnOutput {
 pub struct CodexAppServerOptions {
     pub model: Option<String>,
     pub permission_level: CodexPermissionLevel,
+    pub plan_mode: bool,
     pub fast_mode: bool,
     pub reasoning_effort: Option<String>,
     pub resume_thread_id: Option<String>,
@@ -62,6 +63,7 @@ impl Default for CodexAppServerOptions {
         Self {
             model: None,
             permission_level: CodexPermissionLevel::Readonly,
+            plan_mode: false,
             fast_mode: false,
             reasoning_effort: None,
             resume_thread_id: None,
@@ -98,6 +100,7 @@ pub struct CodexAppServerSession {
     working_dir: PathBuf,
     model: Option<String>,
     permission_level: CodexPermissionLevel,
+    plan_mode: bool,
     fast_mode: bool,
     reasoning_effort: Option<String>,
     resume_thread_id: Option<String>,
@@ -187,6 +190,7 @@ impl CodexAppServerSession {
             working_dir: working_dir.to_path_buf(),
             model: options.model,
             permission_level: options.permission_level,
+            plan_mode: options.plan_mode,
             fast_mode: options.fast_mode,
             reasoning_effort: normalize_codex_reasoning_effort(options.reasoning_effort.as_deref()),
             resume_thread_id: options.resume_thread_id,
@@ -259,6 +263,7 @@ impl CodexAppServerSession {
             working_dir: PathBuf::from("/tmp"),
             model: None,
             permission_level: CodexPermissionLevel::Readonly,
+            plan_mode: false,
             fast_mode: false,
             reasoning_effort: None,
             resume_thread_id: None,
@@ -345,6 +350,7 @@ impl CodexAppServerSession {
                 cwd: &self.working_dir,
                 model: self.model.as_deref(),
                 permission_level: self.permission_level,
+                plan_mode: self.plan_mode,
                 fast_mode: self.fast_mode,
                 reasoning_effort: self.reasoning_effort.as_deref(),
                 attachments,
@@ -1667,6 +1673,7 @@ pub struct CodexTurnStartRequest<'a> {
     pub cwd: &'a Path,
     pub model: Option<&'a str>,
     pub permission_level: CodexPermissionLevel,
+    pub plan_mode: bool,
     pub fast_mode: bool,
     pub reasoning_effort: Option<&'a str>,
     pub attachments: &'a [FileAttachment],
@@ -1675,6 +1682,8 @@ pub struct CodexTurnStartRequest<'a> {
 pub fn build_turn_start_request(params: CodexTurnStartRequest<'_>) -> JsonRpcRequest {
     let mapping = params.permission_level.mapping();
     let service_tier = params.fast_mode.then_some("priority");
+    let collaboration_mode =
+        codex_collaboration_mode(params.plan_mode, params.model, params.reasoning_effort);
     JsonRpcRequest {
         id: JsonRpcId::Integer(params.id),
         method: "turn/start".to_string(),
@@ -1688,8 +1697,25 @@ pub fn build_turn_start_request(params: CodexTurnStartRequest<'_>) -> JsonRpcReq
             "model": params.model,
             "serviceTier": service_tier,
             "effort": params.reasoning_effort,
+            "collaborationMode": collaboration_mode,
         })),
     }
+}
+
+fn codex_collaboration_mode(
+    plan_mode: bool,
+    model: Option<&str>,
+    reasoning_effort: Option<&str>,
+) -> Option<Value> {
+    let model = model?;
+    Some(json!({
+        "mode": if plan_mode { "plan" } else { "default" },
+        "settings": {
+            "model": model,
+            "reasoning_effort": reasoning_effort,
+            "developer_instructions": Value::Null,
+        },
+    }))
 }
 
 pub fn normalize_codex_reasoning_effort(effort: Option<&str>) -> Option<String> {
@@ -2656,6 +2682,9 @@ fn map_codex_item_completed_to_agent_events(
         }
         return events;
     }
+    if item.get("type").and_then(Value::as_str) == Some("plan") {
+        return map_codex_plan_item_to_agent_events(item);
+    }
     let Some((item_id, _tool_name, input)) = codex_item_tool_use(item) else {
         return Vec::new();
     };
@@ -2698,6 +2727,40 @@ fn map_codex_item_completed_to_agent_events(
         }),
     ]);
     events
+}
+
+fn map_codex_plan_item_to_agent_events(item: &Value) -> Vec<AgentEvent> {
+    let plan_text = string_field(item, "text");
+    if plan_text.trim().is_empty() {
+        return Vec::new();
+    }
+    let item_id = string_field(item, "id");
+    let tool_use_id = if item_id.is_empty() {
+        format!("codex-plan-{}", uuid::Uuid::new_v4())
+    } else {
+        format!("codex-plan-{item_id}")
+    };
+    vec![
+        AgentEvent::Stream(StreamEvent::Assistant {
+            message: AssistantMessage {
+                content: vec![ContentBlock::Text {
+                    text: plan_text.clone(),
+                }],
+            },
+        }),
+        AgentEvent::Stream(StreamEvent::ControlRequest {
+            request_id: format!("synthetic-codex-plan-{tool_use_id}"),
+            request: ControlRequestInner::CanUseTool {
+                tool_name: "ExitPlanMode".to_string(),
+                tool_use_id,
+                input: json!({
+                    "codexSyntheticPlan": true,
+                    "codexPlanContent": plan_text,
+                    "allowedPrompts": [],
+                }),
+            },
+        }),
+    ]
 }
 
 /// Build the in-flight indicator for a Codex compaction. The frontend
@@ -3321,6 +3384,7 @@ mod tests {
             cwd: Path::new("/tmp/work"),
             model: None,
             permission_level: CodexPermissionLevel::Readonly,
+            plan_mode: false,
             fast_mode: false,
             reasoning_effort: None,
             attachments: &[],
@@ -3487,6 +3551,7 @@ mod tests {
             cwd: Path::new("/tmp/work"),
             model: Some("gpt-5.1-codex"),
             permission_level: CodexPermissionLevel::Standard,
+            plan_mode: true,
             fast_mode: true,
             reasoning_effort: Some("xhigh"),
             attachments: &[],
@@ -3500,6 +3565,19 @@ mod tests {
         assert_eq!(value["params"]["model"], "gpt-5.1-codex");
         assert_eq!(value["params"]["serviceTier"], "priority");
         assert_eq!(value["params"]["effort"], "xhigh");
+        assert_eq!(value["params"]["collaborationMode"]["mode"], "plan");
+        assert_eq!(
+            value["params"]["collaborationMode"]["settings"]["model"],
+            "gpt-5.1-codex"
+        );
+        assert_eq!(
+            value["params"]["collaborationMode"]["settings"]["reasoning_effort"],
+            "xhigh"
+        );
+        assert_eq!(
+            value["params"]["collaborationMode"]["settings"]["developer_instructions"],
+            serde_json::Value::Null
+        );
         assert_eq!(value["params"]["approvalPolicy"], "on-request");
         assert_eq!(value["params"]["sandboxPolicy"]["type"], "workspaceWrite");
         assert_eq!(value["params"]["sandboxPolicy"]["networkAccess"], false);
@@ -3528,6 +3606,7 @@ mod tests {
             cwd: Path::new("/tmp/work"),
             model: None,
             permission_level: CodexPermissionLevel::Readonly,
+            plan_mode: false,
             fast_mode: false,
             reasoning_effort: None,
             attachments: &attachments,
@@ -3593,8 +3672,9 @@ mod tests {
             thread_id: "thread-1",
             prompt: "ship it",
             cwd: Path::new("/tmp/work"),
-            model: None,
+            model: Some("gpt-5.1-codex"),
             permission_level: CodexPermissionLevel::Full,
+            plan_mode: false,
             fast_mode: false,
             reasoning_effort: None,
             attachments: &[],
@@ -3608,6 +3688,7 @@ mod tests {
         );
         assert_eq!(value["params"]["serviceTier"], serde_json::Value::Null);
         assert_eq!(value["params"]["effort"], serde_json::Value::Null);
+        assert_eq!(value["params"]["collaborationMode"]["mode"], "default");
     }
 
     #[test]
@@ -4558,6 +4639,49 @@ mod tests {
         };
         assert_eq!(tool_use_id, id);
         assert_eq!(content, &Value::String("Plan updated".to_string()));
+    }
+
+    #[test]
+    fn maps_codex_plan_item_to_plan_approval_prompt() {
+        let events = map_notification_to_agent_events(CodexNotificationEvent::ItemCompleted {
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-1".to_string(),
+            item: json!({
+                "type": "plan",
+                "id": "plan-1",
+                "text": "# Plan\n\n- Rename the README title.",
+            }),
+        });
+
+        assert_eq!(events.len(), 2);
+        let AgentEvent::Stream(StreamEvent::Assistant { message }) = &events[0] else {
+            panic!("expected assistant plan message");
+        };
+        let [ContentBlock::Text { text }] = message.content.as_slice() else {
+            panic!("expected text-only assistant plan message");
+        };
+        assert_eq!(text, "# Plan\n\n- Rename the README title.");
+
+        let AgentEvent::Stream(StreamEvent::ControlRequest {
+            request_id,
+            request:
+                ControlRequestInner::CanUseTool {
+                    tool_name,
+                    tool_use_id,
+                    input,
+                },
+        }) = &events[1]
+        else {
+            panic!("expected synthetic plan approval request");
+        };
+        assert!(request_id.starts_with("synthetic-codex-plan-"));
+        assert_eq!(tool_name, "ExitPlanMode");
+        assert_eq!(tool_use_id, "codex-plan-plan-1");
+        assert_eq!(input["codexSyntheticPlan"], true);
+        assert_eq!(
+            input["codexPlanContent"],
+            "# Plan\n\n- Rename the README title."
+        );
     }
 
     #[tokio::test]

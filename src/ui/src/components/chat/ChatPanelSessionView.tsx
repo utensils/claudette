@@ -323,10 +323,23 @@ export function ChatPanelSessionView({
                       if (!activeSessionId) return;
                       const sid = activeSessionId;
                       const toolUseId = pendingPlan.toolUseId;
+                      const codexPlanApproval = pendingPlan.source === "codex";
                       try {
                         await submitPlanApproval(sid, toolUseId, approved, reason);
                         clearPlanApproval(sid);
-                        setPlanMode(sid, false);
+                        if (codexPlanApproval) {
+                          if (approved) {
+                            setPlanMode(sid, false);
+                            await onSend("Implement the plan.");
+                          } else if (reason?.trim()) {
+                            setPlanMode(sid, true);
+                            await onSend(
+                              `${reason.trim()}\n\nRevise the plan to address this feedback. Do not begin implementation.`,
+                            );
+                          }
+                        } else {
+                          setPlanMode(sid, false);
+                        }
                       } catch (e) {
                         console.error("Failed to submit plan approval:", e);
                         setError(String(e));

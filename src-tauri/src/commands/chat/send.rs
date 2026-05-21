@@ -1868,6 +1868,7 @@ pub async fn send_chat_message(
                         CodexAppServerOptions {
                             model: settings.model.clone(),
                             permission_level: codex_permission_level_for_persistent,
+                            plan_mode: settings.plan_mode,
                             fast_mode: settings.fast_mode,
                             reasoning_effort: settings.effort.clone(),
                             resume_thread_id: is_resume.then(|| sid.clone()),

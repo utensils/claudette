@@ -21,6 +21,8 @@ export interface PlanApproval {
   toolUseId: string;
   planFilePath: string | null;
   allowedPrompts: Array<{ tool: string; prompt: string }>;
+  source?: "claude" | "codex";
+  planContent?: string | null;
 }
 
 export type AgentApprovalKind = "commandExecution" | "fileChange" | "permissions";
