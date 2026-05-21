@@ -25,6 +25,7 @@ function workspace(
     created_at: "2026-01-01T00:00:00Z",
     sort_order: 0,
     remote_connection_id: null,
+    input_values: null,
     ...overrides,
   };
 }

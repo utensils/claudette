@@ -199,6 +199,7 @@ function makeWorkspace(): Workspace {
     sort_order: 0,
     remote_connection_id: null,
     agent_status: "Idle",
+    input_values: null,
   };
 }
 
@@ -221,6 +222,7 @@ function makeRepository(): Repository {
     default_remote: null,
     path_valid: true,
     remote_connection_id: null,
+    required_inputs: null,
   };
 }
 
