@@ -22,6 +22,7 @@
   "settings": "Configuración",
   "help_menu_trigger": "Ayuda y recursos",
   "jump_to_project": "Ir al proyecto {{number}}",
+  "jump_to_workspace": "Ir al espacio de trabajo {{number}}",
   "relink": "Volver a vincular",
   "remove": "Quitar",
   "add_repository": "Añadir repositorio",

@@ -23,6 +23,7 @@
   "help_open_docs": "Open Claudette documentation",
   "help_menu_trigger": "Help & resources",
   "jump_to_project": "Jump to project {{number}}",
+  "jump_to_workspace": "Jump to workspace {{number}}",
   "relink": "Re-link",
   "remove": "Remove",
   "add_repository": "Add repository",

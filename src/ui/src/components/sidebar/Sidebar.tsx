@@ -36,7 +36,7 @@ import { UpdateBanner } from "../layout/UpdateBanner";
 import { ContextMenu, type ContextMenuItem } from "../shared/ContextMenu";
 import { useTabDragReorder } from "../../hooks/useTabDragReorder";
 import { TabDragGhost } from "../shared/TabDragGhost";
-import { getHotkeyLabel, tooltipAttributes, tooltipWithHotkey } from "../../hotkeys/display";
+import { tooltipAttributes, tooltipWithHotkey } from "../../hotkeys/display";
 import { isMacHotkeyPlatform } from "../../hotkeys/platform";
 import type { HotkeyActionId } from "../../hotkeys/actions";
 import {
@@ -45,16 +45,17 @@ import {
   workspaceOrderModeKey,
 } from "../../utils/workspaceOrdering";
 import {
+  buildStatusBuckets,
+  computeStatusVisibleWorkspaces,
+  STATUS_BUCKET_ORDER,
+} from "../../utils/sidebarJumpTargets";
+import {
   buildWorkspaceContextMenuItems,
   type WorkspaceContextMenuLabels,
 } from "./workspaceContextMenu";
+import { JumpShortcutBadge } from "./JumpShortcutBadge";
 import type { ChatSession } from "../../types";
 import styles from "./Sidebar.module.css";
-
-type StatusBucketKey = "in-progress" | "in-review" | "draft" | "merged" | "closed" | "archived";
-const STATUS_BUCKET_ORDER: StatusBucketKey[] = [
-  "merged", "in-review", "draft", "in-progress", "closed", "archived",
-];
 
 function workspaceContextMenuLabels(t: TFunction<"sidebar">): WorkspaceContextMenuLabels {
   return {
@@ -128,7 +129,6 @@ export const Sidebar = memo(function Sidebar() {
   const clearManualWorkspaceOrder = useAppStore(
     (s) => s.clearManualWorkspaceOrder,
   );
-  const metaKeyHeld = useAppStore((s) => s.metaKeyHeld);
   const keybindings = useAppStore((s) => s.keybindings);
   const isMac = isMacHotkeyPlatform();
   const { t } = useTranslation("sidebar");
@@ -304,31 +304,35 @@ export const Sidebar = memo(function Sidebar() {
     return out;
   }, [filteredWorkspaces, repositories, scmSummary, manualWorkspaceOrderByRepo]);
 
-  const statusBuckets = useMemo(() => {
-    const buckets = new Map<StatusBucketKey, typeof workspaces>();
-    for (const key of STATUS_BUCKET_ORDER) buckets.set(key, []);
-    for (const ws of filteredWorkspaces) {
-      let key: StatusBucketKey;
-      if (ws.status === "Archived") {
-        key = "archived";
-      } else {
-        const summary = scmSummary[ws.id];
-        if (!summary?.hasPr) {
-          key = "in-progress";
-        } else if (summary.prState === "merged") {
-          key = "merged";
-        } else if (summary.prState === "closed") {
-          key = "closed";
-        } else if (summary.prState === "draft") {
-          key = "draft";
-        } else {
-          key = "in-review";
-        }
-      }
-      buckets.get(key)!.push(ws);
+  const statusBuckets = useMemo(
+    () => buildStatusBuckets(filteredWorkspaces, scmSummary),
+    [filteredWorkspaces, scmSummary],
+  );
+
+  // Same list the status view paints — used both for rendering the
+  // hold-Cmd jump badges (positions 1..9) and for the keyboard handler
+  // that resolves Cmd+N to a workspace. Two consumers, one ordering, so
+  // the visible number and the jump target can never disagree.
+  const statusVisibleWorkspaces = useMemo(
+    () =>
+      computeStatusVisibleWorkspaces(
+        filteredWorkspaces,
+        scmSummary,
+        statusGroupCollapsed,
+      ),
+    [filteredWorkspaces, scmSummary, statusGroupCollapsed],
+  );
+
+  // Index from workspace id → 1-based visible position (1..9 only). A row
+  // outside the first 9 gets `undefined` and no badge.
+  const statusJumpNumberById = useMemo(() => {
+    const map = new Map<string, number>();
+    const cap = Math.min(9, statusVisibleWorkspaces.length);
+    for (let i = 0; i < cap; i++) {
+      map.set(statusVisibleWorkspaces[i].id, i + 1);
     }
-    return buckets;
-  }, [filteredWorkspaces, scmSummary]);
+    return map;
+  }, [statusVisibleWorkspaces]);
 
   const handleArchive = useCallback(async (wsId: string) => {
     if (archivingRef.current.has(wsId)) return;
@@ -582,7 +586,21 @@ export const Sidebar = memo(function Sidebar() {
     },
   });
 
-  const renderWorkspace = (ws: typeof workspaces[number], dragEnabled: boolean) => {
+  const renderWorkspace = (
+    ws: typeof workspaces[number],
+    dragEnabled: boolean,
+    jumpNumber?: number,
+  ) => {
+    const jumpActionId =
+      jumpNumber && jumpNumber >= 1 && jumpNumber <= 9
+        ? (`global.jump-to-project-${jumpNumber}` as HotkeyActionId)
+        : null;
+    const jumpLabelText = jumpActionId
+      ? t("jump_to_workspace", { number: jumpNumber }) ?? ""
+      : "";
+    const jumpTooltip = jumpActionId && jumpLabelText
+      ? tooltipWithHotkey(jumpLabelText, jumpActionId, keybindings, isMac)
+      : undefined;
     const dragHandlers = dragEnabled ? workspaceDrag.getTabHandlers(ws) : null;
     const isDragging = dragEnabled && workspaceDrag.draggingId === ws.id;
     const dropBefore =
@@ -607,6 +625,8 @@ export const Sidebar = memo(function Sidebar() {
         data-sidebar-workspace-id={dragEnabled ? ws.id : undefined}
         data-drop-before={dropBefore || undefined}
         data-drop-after={dropAfter || undefined}
+        data-tooltip={jumpTooltip}
+        data-tooltip-placement="bottom"
         className={`${styles.wsItem} ${selectedWorkspaceId === ws.id ? styles.wsSelected : ""} ${badge ? styles.wsUnread : ""} ${isDragging ? styles.wsDragging : ""}`}
         onClick={() => {
           if (dragEnabled && workspaceDrag.justEnded()) return;
@@ -843,6 +863,7 @@ export const Sidebar = memo(function Sidebar() {
             </>
           )}
         </div>
+        {jumpNumber && <JumpShortcutBadge number={jumpNumber} />}
       </div>
     );
   };
@@ -948,7 +969,9 @@ export const Sidebar = memo(function Sidebar() {
                   <span className={styles.statusGroupCount}>{bucketWorkspaces.length}</span>
                 </span>
               </div>
-              {!collapsed && bucketWorkspaces.map((ws) => renderWorkspace(ws, false))}
+              {!collapsed && bucketWorkspaces.map((ws) =>
+                renderWorkspace(ws, false, statusJumpNumberById.get(ws.id)),
+              )}
             </div>
           );
         })}
@@ -1030,18 +1053,17 @@ export const Sidebar = memo(function Sidebar() {
           const runningCount = repoWorkspaces.filter(
             (ws) => isAgentBusy(ws.agent_status)
           ).length;
-          const jumpActionId = repoIdx < 9
-            ? (`global.jump-to-project-${repoIdx + 1}` as HotkeyActionId)
+          const repoJumpNumber = repoIdx < 9 ? repoIdx + 1 : null;
+          const repoJumpActionId = repoJumpNumber
+            ? (`global.jump-to-project-${repoJumpNumber}` as HotkeyActionId)
             : null;
-          const jumpShortcut = jumpActionId
-            ? getHotkeyLabel(jumpActionId, keybindings, isMac)
-            : null;
-          const jumpLabel =
-            t("jump_to_project", { number: repoIdx + 1 }) ?? "";
-          const jumpTooltip = jumpActionId && jumpShortcut && jumpLabel
+          const repoJumpLabel = repoJumpNumber
+            ? t("jump_to_project", { number: repoJumpNumber }) ?? ""
+            : "";
+          const jumpTooltip = repoJumpActionId && repoJumpLabel
             ? tooltipWithHotkey(
-                jumpLabel,
-                jumpActionId,
+                repoJumpLabel,
+                repoJumpActionId,
                 keybindings,
                 isMac,
               )
@@ -1252,13 +1274,8 @@ export const Sidebar = memo(function Sidebar() {
                     </button>
                   </>
                 )}
-                {jumpShortcut && (
-                  <kbd
-                    aria-hidden="true"
-                    className={`${styles.shortcutBadge} ${metaKeyHeld ? styles.shortcutBadgeVisible : ""}`}
-                  >
-                    {jumpShortcut}
-                  </kbd>
+                {repoJumpNumber && (
+                  <JumpShortcutBadge number={repoJumpNumber} />
                 )}
               </div>
 
