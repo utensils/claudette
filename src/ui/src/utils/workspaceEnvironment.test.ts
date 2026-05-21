@@ -2,7 +2,10 @@ import { describe, it, expect } from "vitest";
 import type { AppState } from "../stores/useAppStore";
 import type { Workspace } from "../types/workspace";
 import type { WorkspaceEnvironmentPreparation } from "../stores/slices/workspacesSlice";
-import { isWorkspaceEnvironmentPreparing } from "./workspaceEnvironment";
+import {
+  formatEnvProviderName,
+  isWorkspaceEnvironmentPreparing,
+} from "./workspaceEnvironment";
 
 function makeWorkspace(overrides: Partial<Workspace> = {}): Workspace {
   return {
@@ -102,5 +105,20 @@ describe("isWorkspaceEnvironmentPreparing", () => {
     // paths resolve env on their own.
     const state = makeState([makeWorkspace()], {});
     expect(isWorkspaceEnvironmentPreparing(state, "ws-1")).toBe(false);
+  });
+});
+
+describe("formatEnvProviderName", () => {
+  it("formats bundled env-provider ids for display", () => {
+    expect(formatEnvProviderName("env-direnv")).toBe("direnv");
+    expect(formatEnvProviderName("env-mise")).toBe("mise");
+    expect(formatEnvProviderName("env-dotenv")).toBe("dotenv");
+    expect(formatEnvProviderName("env-nix-devshell")).toBe("nix");
+  });
+
+  it("keeps unknown provider ids visible", () => {
+    expect(formatEnvProviderName("env-custom-toolchain")).toBe(
+      "env-custom-toolchain",
+    );
   });
 });

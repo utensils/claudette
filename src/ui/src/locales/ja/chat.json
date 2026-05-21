@@ -2,6 +2,7 @@
   "send_message_to_start": "メッセージを送信して会話を開始してください",
   "empty_preparing_env": "ワークスペース環境を準備中…",
   "empty_preparing_env_with_plugin": "{{plugin}} を準備中（{{seconds}}秒）…",
+  "empty_preparing_env_with_plugin_static": "{{plugin}} を準備中…",
   "empty_preparing_env_subtitle": "まもなくメッセージを送信できるようになります。",
   "compacting_label": "コンテキストを圧縮中…",
   "compacting_aria": "コンテキストを圧縮中、経過時間 {{elapsed}}",

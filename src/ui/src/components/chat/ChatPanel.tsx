@@ -67,7 +67,6 @@ import { PlanApprovalCard } from "./PlanApprovalCard";
 import { AgentApprovalCard } from "./AgentApprovalCard";
 import { ScrollToBottomPill } from "./ScrollToBottomPill";
 import { useStickyScroll } from "../../hooks/useStickyScroll";
-import { useEnvElapsedSeconds } from "../../hooks/useEnvElapsedSeconds";
 import { tooltipWithHotkey } from "../../hotkeys/display";
 import { isMacHotkeyPlatform } from "../../hotkeys/platform";
 import { usePreventScrollBounce } from "../../hooks/usePreventScrollBounce";
@@ -93,9 +92,6 @@ export function ChatPanel() {
   const selectedWorkspaceId = useAppStore((s) => s.selectedWorkspaceId);
   const workspaceEnvironmentPreparing = useAppStore((s) =>
     isWorkspaceEnvironmentPreparing(s, s.selectedWorkspaceId),
-  );
-  const { plugin: envPlugin, seconds: envSeconds } = useEnvElapsedSeconds(
-    selectedWorkspaceId,
   );
   const activeSessionId = useAppStore((s) =>
     s.selectedWorkspaceId
@@ -1573,8 +1569,7 @@ export function ChatPanel() {
           {messages.length === 0 && !hasStreaming && !runningSetupScriptSource ? (
             <ChatEmptyState
               workspaceEnvironmentPreparing={workspaceEnvironmentPreparing}
-              envPlugin={envPlugin}
-              envSeconds={envSeconds}
+              workspaceId={selectedWorkspaceId}
             />
           ) : (
             <>

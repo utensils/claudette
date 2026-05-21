@@ -2,6 +2,7 @@
   "send_message_to_start": "发送消息以开始对话",
   "empty_preparing_env": "正在准备工作区环境…",
   "empty_preparing_env_with_plugin": "正在准备 {{plugin}}（{{seconds}} 秒）…",
+  "empty_preparing_env_with_plugin_static": "正在准备 {{plugin}}…",
   "empty_preparing_env_subtitle": "稍后即可发送消息。",
   "compacting_label": "正在压缩上下文…",
   "compacting_aria": "正在压缩上下文，已用 {{elapsed}}",

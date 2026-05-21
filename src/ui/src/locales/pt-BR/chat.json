@@ -2,6 +2,7 @@
   "send_message_to_start": "Envie uma mensagem para iniciar uma conversa",
   "empty_preparing_env": "Preparando ambiente do workspace…",
   "empty_preparing_env_with_plugin": "Preparando {{plugin}} ({{seconds}}s)…",
+  "empty_preparing_env_with_plugin_static": "Preparando {{plugin}}…",
   "empty_preparing_env_subtitle": "Você poderá enviar uma mensagem em instantes.",
   "compacting_label": "Compactando contexto…",
   "compacting_aria": "Compactando contexto, {{elapsed}} decorrido",
