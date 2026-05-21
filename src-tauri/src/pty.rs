@@ -37,6 +37,36 @@ fn configure_pty_env(cmd: &mut CommandBuilder) {
     cmd.env("CLAUDETTE_PTY", "1");
 }
 
+/// The command + arguments to run as `nix develop --command <…>` for the
+/// integrated terminal's interactive shell.
+///
+/// On macOS this is *not* simply the shell path. `nix develop` correctly
+/// assembles the devshell `PATH`, but the shell it then launches reads
+/// `/etc/zshenv` (zsh reads it for *every* invocation — login or not).
+/// On nix-darwin systems that file sources a generated `set-environment`
+/// script, guarded by `__NIX_DARWIN_SET_ENVIRONMENT_DONE`, which does a
+/// hard `export PATH=…` — overwriting the devshell `PATH` and dropping
+/// the devshell's `bin` dir. The visible symptom: the terminal enters the
+/// devshell and then immediately loses it (the devshell "vanishes").
+///
+/// The shell we spawn is genuinely *nested* inside `nix develop`, so it
+/// must skip that login-level environment reset — exactly what any nested
+/// shell does. Pre-setting the guard via `env` makes `/etc/zshenv` treat
+/// the environment as already initialised. It is harmless on
+/// non-nix-darwin machines (nothing reads the variable) and for shells
+/// other than zsh (nix-darwin gates all its shell integrations on the
+/// same variable). See issue #915.
+fn devshell_inner_command(shell_path: &str) -> Vec<String> {
+    let mut argv = Vec::new();
+    #[cfg(target_os = "macos")]
+    {
+        argv.push("/usr/bin/env".to_string());
+        argv.push("__NIX_DARWIN_SET_ENVIRONMENT_DONE=1".to_string());
+    }
+    argv.push(shell_path.to_string());
+    argv
+}
+
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
 #[tracing::instrument(
@@ -177,7 +207,12 @@ pub async fn spawn_pty(
         Some(prefix) => {
             let mut c = CommandBuilder::new(&prefix[0]);
             c.args(&prefix[1..]);
-            c.arg(&shell_path);
+            // The shell runs *inside* `nix develop`; on macOS it needs the
+            // nix-darwin guard so `/etc/zshenv` doesn't clobber the
+            // devshell PATH — see `devshell_inner_command`.
+            for arg in devshell_inner_command(&shell_path) {
+                c.arg(arg);
+            }
             c
         }
         None => CommandBuilder::new(&shell_path),
@@ -499,6 +534,30 @@ mod tests {
     use portable_pty::{CommandBuilder, PtySize, native_pty_system};
     use std::io::Read;
     use std::time::{Duration, Instant};
+
+    /// The macOS nix-darwin guard must be injected immediately before the
+    /// shell inside `nix develop --command`, and the real shell must stay
+    /// the final argv entry on every platform. See issue #915.
+    #[test]
+    fn devshell_inner_command_applies_nix_darwin_guard_on_macos() {
+        let argv = super::devshell_inner_command("/bin/zsh");
+        assert_eq!(
+            argv.last().map(String::as_str),
+            Some("/bin/zsh"),
+            "the real shell must always be the last argv entry"
+        );
+        #[cfg(target_os = "macos")]
+        assert_eq!(
+            argv,
+            [
+                "/usr/bin/env",
+                "__NIX_DARWIN_SET_ENVIRONMENT_DONE=1",
+                "/bin/zsh",
+            ],
+        );
+        #[cfg(not(target_os = "macos"))]
+        assert_eq!(argv, ["/bin/zsh"]);
+    }
 
     /// Spawn a short-lived `sh -c <script>` in a PTY, using the same
     /// `configure_pty_env` helper as production code. Returns the master,
