@@ -19,9 +19,9 @@ interface DiagnosticsSettingsPayload {
   rust_log_active: boolean;
 }
 
-// EnvFilter directives the select offers. Anything more exotic (e.g.
-// per-target overrides) belongs in the RUST_LOG path — the select is
-// for users who don't want to know what an EnvFilter is.
+// Coarse log levels the select offers. The Rust logging bootstrap
+// scopes these to Claudette's own crates and caps noisy dependency
+// targets like mdns_sd. Anything more exotic belongs in RUST_LOG.
 const LOG_LEVELS = [
   { value: "", label: "default" },
   { value: "warn", label: "warn" },

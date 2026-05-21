@@ -32,9 +32,11 @@ use claudette::db::Database;
 use crate::state::AppState;
 
 /// Settings key that persists the user's chosen log filter.
-/// Read once at startup by `main.rs`. The value is any valid
-/// `EnvFilter` directive (see `claudette::logging` doc-comment for the
-/// syntax). `RUST_LOG`, if set, still wins.
+/// Read once at startup by `main.rs`. Bare levels such as `debug` are
+/// scoped to Claudette's own crates by `claudette::logging` before the
+/// `EnvFilter` is built, with noisy dependency caps such as
+/// `mdns_sd=warn`; custom directives are preserved as written. `RUST_LOG`,
+/// if set, still wins.
 pub const LOG_LEVEL_SETTING: &str = "diagnostics.log_level";
 
 /// Settings key that persists the frontend bridge verbosity. The
