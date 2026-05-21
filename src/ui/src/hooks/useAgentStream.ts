@@ -352,12 +352,22 @@ export function useAgentStream() {
               }
             }
             // Compaction lifecycle: status -> "compacting" marks start;
-            // compact_boundary marks end.
+            // compact_boundary marks success-path end. `status: "running"`
+            // is the abort-path counterpart — emitted by the Pi harness
+            // when an auto-compaction failed mid-turn, where there's no
+            // boundary divider to clear the Compacting affordance.
             if (
               streamEvent.subtype === "status" &&
               streamEvent.status === "compacting"
             ) {
               updateWorkspace(wsId, { agent_status: "Compacting" });
+              break;
+            }
+            if (
+              streamEvent.subtype === "status" &&
+              streamEvent.status === "running"
+            ) {
+              updateWorkspace(wsId, { agent_status: "Running" });
               break;
             }
             if (
