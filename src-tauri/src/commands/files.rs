@@ -3,7 +3,7 @@ mod clipboard;
 pub(crate) mod listing;
 mod platform;
 mod trash;
-mod types;
+pub(crate) mod types;
 pub(crate) mod watcher;
 pub(crate) mod workspace_ops;
 

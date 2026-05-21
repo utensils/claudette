@@ -305,7 +305,6 @@ pub async fn trash_workspace_path(
     let is_directory = resolved.is_directory;
     let absolute = resolved.absolute;
 
-    #[cfg(target_os = "macos")]
     let undo_token = trash::trash_path(absolute).await?;
 
     Ok(WorkspacePathTrashResult {
