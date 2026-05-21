@@ -17,8 +17,14 @@ use super::{
     InnerStreamEvent, StartContentBlock, StreamEvent, TokenUsage, TokenUsageIteration, TurnHandle,
     UserContentBlock, UserEventMessage, UserMessageContent,
 };
+use crate::agent_mcp::bridge::Sink;
+use crate::agent_mcp::protocol::{BridgePayload, BridgeResponse};
 
 type PiStdin = Arc<tokio::sync::Mutex<ChildStdin>>;
+/// Shared host-side tool sink. Pi has no MCP bridge, so a `host_tool`
+/// sidecar message is routed straight through this `Sink` (the same
+/// `ChatBridgeSink` Claude/Codex reach over their MCP socket).
+type PiSink = Arc<dyn Sink>;
 type PendingRequests = Arc<tokio::sync::Mutex<BTreeMap<String, PendingPiRequest>>>;
 type TurnOutput = Arc<tokio::sync::Mutex<PiTurnOutput>>;
 type InitCacheHandle = Arc<tokio::sync::Mutex<InitCache>>;
@@ -86,7 +92,9 @@ struct InitCache {
     init: Option<AgentEvent>,
 }
 
-#[derive(Debug, Clone)]
+// No `Debug` derive: `sink` is a `dyn Sink` trait object, which is not
+// `Debug`. `PiSdkOptions` is built once and consumed, never formatted.
+#[derive(Clone)]
 pub struct PiSdkOptions {
     pub model: Option<String>,
     pub thinking_level: Option<String>,
@@ -106,6 +114,10 @@ pub struct PiSdkOptions {
     /// in the provider auth UI. Maps a Pi-recognized env var name
     /// (e.g. `OPENROUTER_API_KEY`) to its value. Empty by default.
     pub pi_provider_env: Vec<(String, String)>,
+    /// Host-side tool sink for `host_tool` round-trips from the sidecar
+    /// (native scheduling tools). `None` disables them — the sidecar's
+    /// scheduling tools then report "scheduling unavailable".
+    pub sink: Option<PiSink>,
 }
 
 pub struct PiSdkSession {
@@ -122,6 +134,9 @@ pub struct PiSdkSession {
     working_dir: PathBuf,
     turn_output: TurnOutput,
     init_cache: InitCacheHandle,
+    /// Host-side tool sink for `host_tool` sidecar round-trips. Cloned
+    /// into the stdout reader task at spawn time.
+    sink: Option<PiSink>,
 }
 
 /// Setup knobs for `PiSdkSession::spawn_initialized`. `start` and
@@ -141,6 +156,10 @@ struct PiSpawnConfig<'a> {
     /// touching `~/.pi/agent/auth.json`.
     extra_env: Option<&'a [(String, String)]>,
     cache_command_line: bool,
+    /// Host-side tool sink, forwarded to the stdout reader so `host_tool`
+    /// messages can be served the moment the sidecar starts. `None` for
+    /// control-plane sessions, which never run agent tools.
+    sink: Option<PiSink>,
 }
 
 impl PiSdkSession {
@@ -159,6 +178,7 @@ impl PiSdkSession {
                 Some(&options.pi_provider_env)
             },
             cache_command_line: true,
+            sink: options.sink.clone(),
         })
         .await?;
         if let Err(err) = session.start_session(session_id, options).await {
@@ -220,6 +240,7 @@ impl PiSdkSession {
             workspace_env: None,
             extra_env,
             cache_command_line: false,
+            sink: None,
         })
         .await
     }
@@ -312,6 +333,7 @@ impl PiSdkSession {
             working_dir: config.working_dir.to_path_buf(),
             turn_output: Arc::new(tokio::sync::Mutex::new(PiTurnOutput::default())),
             init_cache: Arc::new(tokio::sync::Mutex::new(InitCache::default())),
+            sink: config.sink,
         };
 
         session.spawn_stdout_reader(stdout);
@@ -350,6 +372,7 @@ impl PiSdkSession {
             working_dir: PathBuf::from("/tmp"),
             turn_output: Arc::new(tokio::sync::Mutex::new(PiTurnOutput::default())),
             init_cache: Arc::new(tokio::sync::Mutex::new(InitCache::default())),
+            sink: None,
         }
     }
 
@@ -632,6 +655,8 @@ impl PiSdkSession {
         let pending = self.pending.clone();
         let turn_output = self.turn_output.clone();
         let init_cache = self.init_cache.clone();
+        let stdin = self.stdin.clone();
+        let sink = self.sink.clone();
         tokio::spawn(async move {
             let reader = tokio::io::BufReader::new(stdout);
             let mut lines = reader.lines();
@@ -640,6 +665,17 @@ impl PiSdkSession {
                     continue;
                 }
                 match serde_json::from_str::<PiHarnessMessage>(&line) {
+                    Ok(PiHarnessMessage::HostTool {
+                        request_id,
+                        name,
+                        args,
+                    }) => {
+                        // Served off the reader loop so a slow DB write
+                        // never stalls stdout draining. Intercepted here
+                        // because this is the only place that holds the
+                        // live `stdin` + `sink`.
+                        handle_host_tool(stdin.clone(), sink.clone(), request_id, name, args);
+                    }
                     Ok(message) => {
                         route_pi_message(
                             &event_tx,
@@ -773,6 +809,18 @@ enum PiHarnessMessage {
         tool_call_id: String,
         kind: String,
         input: Value,
+    },
+    /// A native scheduling tool in the Pi sidecar wants the host to run a
+    /// `BridgePayload` and return the result. Intercepted in the stdout
+    /// reader loop (which holds `stdin` + `sink`) — never reaches
+    /// [`route_pi_message`].
+    #[serde(rename = "host_tool")]
+    HostTool {
+        #[serde(rename = "requestId")]
+        request_id: String,
+        name: String,
+        #[serde(default)]
+        args: Value,
     },
     #[serde(rename = "tool_update")]
     ToolUpdate {
@@ -1490,7 +1538,108 @@ async fn route_pi_message(
                 error,
             });
         }
+        // Intercepted in `spawn_stdout_reader`'s loop before this routes —
+        // listed only to keep the match exhaustive.
+        PiHarnessMessage::HostTool { .. } => {}
         PiHarnessMessage::Unknown => {}
+    }
+}
+
+/// Serve a `host_tool` sidecar request: run its `BridgePayload` through
+/// the host `Sink` and write a `host_tool_result` line back to the
+/// sidecar. Spawned as a detached task so the stdout reader keeps
+/// draining while the (blocking-ish) DB write runs.
+fn handle_host_tool(
+    stdin: Option<PiStdin>,
+    sink: Option<PiSink>,
+    request_id: String,
+    name: String,
+    args: Value,
+) {
+    tokio::spawn(async move {
+        let response = run_host_tool(sink, &name, args).await;
+        let Some(stdin) = stdin else {
+            tracing::warn!(
+                target: "claudette::agent",
+                subsystem = "pi-sdk",
+                tool = %name,
+                "host_tool result dropped — sidecar stdin unavailable"
+            );
+            return;
+        };
+        let line = json!({
+            "type": "host_tool_result",
+            "requestId": request_id,
+            "ok": response.ok,
+            "message": response.message,
+            "data": response.data,
+            "error": response.error,
+        });
+        let Ok(mut bytes) = serde_json::to_vec(&line) else {
+            return;
+        };
+        bytes.push(b'\n');
+        let mut guard = stdin.lock().await;
+        if let Err(err) = guard.write_all(&bytes).await {
+            tracing::warn!(
+                target: "claudette::agent",
+                subsystem = "pi-sdk",
+                error = %err,
+                "failed to write host_tool_result to sidecar"
+            );
+        }
+    });
+}
+
+/// Map a `host_tool` request to a `BridgePayload` and run it through the
+/// sink. A missing sink (control session, or a build without scheduling)
+/// degrades to an error result rather than panicking.
+async fn run_host_tool(sink: Option<PiSink>, name: &str, args: Value) -> BridgeResponse {
+    let payload = match bridge_payload_for(name, args) {
+        Ok(payload) => payload,
+        Err(err) => return BridgeResponse::err(err),
+    };
+    match sink {
+        Some(sink) => sink.handle(payload).await,
+        None => BridgeResponse::err("scheduling is unavailable for this session"),
+    }
+}
+
+/// Translate a native Pi scheduling tool name + arguments into the
+/// shared [`BridgePayload`]. Accepts both the camelCase keys the sidecar
+/// sends and the snake_case aliases the MCP server tolerates, so the two
+/// tool surfaces stay interchangeable. An unknown name is an error, not
+/// a panic — a future user Pi extension can add tools without this
+/// dispatch table needing to recognize them.
+fn bridge_payload_for(name: &str, args: Value) -> Result<BridgePayload, String> {
+    let str_arg = |keys: &[&str]| -> Option<String> {
+        keys.iter()
+            .find_map(|k| args.get(*k).and_then(Value::as_str))
+            .map(ToOwned::to_owned)
+    };
+    match name {
+        "ScheduleWakeup" => Ok(BridgePayload::ScheduleWakeup {
+            delay_seconds: ["delaySeconds", "delay_seconds"]
+                .iter()
+                .find_map(|k| args.get(*k).and_then(Value::as_i64)),
+            fire_at: str_arg(&["fireAt", "fire_at"]),
+            prompt: str_arg(&["prompt"]).ok_or("prompt is required")?,
+            reason: str_arg(&["reason"]),
+        }),
+        "CronCreate" => Ok(BridgePayload::CronCreate {
+            name: str_arg(&["name"]),
+            cron_expr: str_arg(&["cron", "cron_expr"]).ok_or("cron is required")?,
+            prompt: str_arg(&["prompt"]).ok_or("prompt is required")?,
+            recurring: args
+                .get("recurring")
+                .and_then(Value::as_bool)
+                .unwrap_or(true),
+        }),
+        "CronList" => Ok(BridgePayload::CronList),
+        "CronDelete" => Ok(BridgePayload::CronDelete {
+            id: str_arg(&["id", "name"]).ok_or("id is required")?,
+        }),
+        other => Err(format!("unknown host tool: {other}")),
     }
 }
 
@@ -1822,6 +1971,142 @@ mod tests {
         let value = r#"{"type":"tool_request","requestId":"r1","toolCallId":"t1","kind":"commandExecution","input":{"command":"echo hi"}}"#;
         let msg: PiHarnessMessage = serde_json::from_str(value).unwrap();
         assert!(matches!(msg, PiHarnessMessage::ToolRequest { .. }));
+    }
+
+    #[test]
+    fn parses_host_tool() {
+        let value = r#"{"type":"host_tool","requestId":"t1","name":"CronCreate","args":{"cron":"0 9 * * *"}}"#;
+        match serde_json::from_str::<PiHarnessMessage>(value).unwrap() {
+            PiHarnessMessage::HostTool {
+                request_id,
+                name,
+                args,
+            } => {
+                assert_eq!(request_id, "t1");
+                assert_eq!(name, "CronCreate");
+                assert_eq!(args["cron"], "0 9 * * *");
+            }
+            other => panic!("expected HostTool, got {other:?}"),
+        }
+        // Zero-parameter tools omit `args`; the field must still parse.
+        let no_args = r#"{"type":"host_tool","requestId":"t2","name":"CronList"}"#;
+        assert!(matches!(
+            serde_json::from_str::<PiHarnessMessage>(no_args).unwrap(),
+            PiHarnessMessage::HostTool { .. }
+        ));
+    }
+
+    #[test]
+    fn bridge_payload_for_maps_each_scheduling_tool() {
+        // camelCase keys (what the sidecar sends).
+        match bridge_payload_for(
+            "ScheduleWakeup",
+            json!({ "prompt": "ping", "delaySeconds": 60, "reason": "later" }),
+        )
+        .unwrap()
+        {
+            BridgePayload::ScheduleWakeup {
+                delay_seconds,
+                prompt,
+                reason,
+                ..
+            } => {
+                assert_eq!(delay_seconds, Some(60));
+                assert_eq!(prompt, "ping");
+                assert_eq!(reason.as_deref(), Some("later"));
+            }
+            other => panic!("expected ScheduleWakeup, got {other:?}"),
+        }
+        // snake_case aliases still work — parity with the MCP server.
+        assert!(matches!(
+            bridge_payload_for(
+                "ScheduleWakeup",
+                json!({ "prompt": "p", "delay_seconds": 5 })
+            )
+            .unwrap(),
+            BridgePayload::ScheduleWakeup {
+                delay_seconds: Some(5),
+                ..
+            }
+        ));
+        // CronCreate defaults `recurring` to true.
+        match bridge_payload_for("CronCreate", json!({ "cron": "0 9 * * *", "prompt": "go" }))
+            .unwrap()
+        {
+            BridgePayload::CronCreate {
+                cron_expr,
+                recurring,
+                name,
+                ..
+            } => {
+                assert_eq!(cron_expr, "0 9 * * *");
+                assert!(recurring);
+                assert_eq!(name, None);
+            }
+            other => panic!("expected CronCreate, got {other:?}"),
+        }
+        assert!(matches!(
+            bridge_payload_for("CronList", json!({})).unwrap(),
+            BridgePayload::CronList
+        ));
+        // CronDelete accepts `name` as an alias for `id`.
+        assert!(matches!(
+            bridge_payload_for("CronDelete", json!({ "name": "morning" })).unwrap(),
+            BridgePayload::CronDelete { .. }
+        ));
+    }
+
+    #[test]
+    fn bridge_payload_for_rejects_bad_input() {
+        assert!(bridge_payload_for("ScheduleWakeup", json!({})).is_err());
+        assert!(bridge_payload_for("CronCreate", json!({ "prompt": "x" })).is_err());
+        assert!(bridge_payload_for("CronDelete", json!({})).is_err());
+        // An unrecognized tool is an error, not a panic — leaves room
+        // for future user Pi extensions to add their own host tools.
+        assert!(
+            bridge_payload_for("SomeFutureExtensionTool", json!({}))
+                .unwrap_err()
+                .contains("unknown host tool")
+        );
+    }
+
+    #[tokio::test]
+    async fn run_host_tool_forwards_payload_to_sink() {
+        struct RecordingSink {
+            last: std::sync::Mutex<Option<BridgePayload>>,
+        }
+        impl Sink for RecordingSink {
+            fn handle(
+                &self,
+                payload: BridgePayload,
+            ) -> std::pin::Pin<Box<dyn std::future::Future<Output = BridgeResponse> + Send + '_>>
+            {
+                Box::pin(async move {
+                    *self.last.lock().unwrap() = Some(payload);
+                    BridgeResponse::message("ok")
+                })
+            }
+        }
+        let recorder = Arc::new(RecordingSink {
+            last: std::sync::Mutex::new(None),
+        });
+        let sink: PiSink = recorder.clone();
+        let response = run_host_tool(Some(sink), "CronDelete", json!({ "id": "task-9" })).await;
+        assert!(response.ok);
+        match recorder.last.lock().unwrap().clone() {
+            Some(BridgePayload::CronDelete { id }) => assert_eq!(id, "task-9"),
+            other => panic!("expected CronDelete to reach the sink, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn run_host_tool_degrades_without_sink_or_on_bad_input() {
+        // No sink (control session / scheduling-disabled build).
+        let no_sink = run_host_tool(None, "CronList", json!({})).await;
+        assert!(!no_sink.ok && no_sink.error.is_some());
+        // Bad args never reach the sink.
+        let bad = run_host_tool(None, "ScheduleWakeup", json!({})).await;
+        assert!(!bad.ok && bad.error.is_some());
     }
 
     #[test]

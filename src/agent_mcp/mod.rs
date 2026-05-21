@@ -90,6 +90,15 @@ Claudette to wake this chat later with a prompt. Use the cron tools for \
 recurring routines. Use `Monitor` to subscribe to future output from a \
 background Bash task instead of polling.";
 
+/// Scheduling nudge for Pi SDK sessions. Pi has no Claudette MCP bridge —
+/// its scheduling tools are registered as *native* sidecar tools, so this
+/// is worded without the `mcp__claudette__` prefixes [`SYSTEM_PROMPT_NUDGE`]
+/// uses, and omits `send_to_user` / `Monitor` (Pi ships neither).
+pub const PI_SCHEDULING_NUDGE: &str = "\
+Native scheduling: you have the tools `ScheduleWakeup`, `CronCreate`, \
+`CronList`, and `CronDelete`. Use `ScheduleWakeup` to wake this chat later \
+with a prompt; use the cron tools for recurring routines.";
+
 /// Claude-CLI-only rules that reference MCP tools shipped by the Claude
 /// Code runtime (`AskUserQuestion`, `ExitPlanMode`). These tools do not
 /// exist in the Pi SDK or the Codex app-server harnesses, so the rules
