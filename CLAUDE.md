@@ -141,7 +141,8 @@ src/
   plugin_runtime/       — sandboxed Lua runtime (mlua) shared across plugin kinds
   permissions.rs        — tool/permission policy
   scm/                  — SCM consumer of plugin_runtime: PR/CI types + host/URL detection
-  env_provider/         — env-provider consumer: dispatcher, mtime cache, merged ResolvedEnv
+  env_provider/         — env-provider consumer: dispatcher, mtime cache, merged ResolvedEnv,
+                          plus `nix develop` wrapping for Nix devshell terminals/agents
   slash_commands.rs     — slash command loading and dispatch
   cesp.rs               — CESP (Claudette event stream protocol)
   config.rs / env.rs / path.rs / file_expand.rs — config, env, path helpers
@@ -165,7 +166,8 @@ plugins/                — bundled Lua plugins (compiled in via include_str!)
   env-direnv/           — direnv env activation
   env-mise/             — mise env activation
   env-dotenv/           — `.env` in-process parser
-  env-nix-devshell/     — `nix print-dev-env` env activation
+  env-nix-devshell/     — Nix devshell detection/env export; terminals and agents enter via
+                          `nix develop` directly instead of through direnv
 src-pi-harness/         — TypeScript/Bun sidecar wrapping `@earendil-works/pi-coding-agent`.
                           Compiled by `scripts/stage-pi-harness-sidecar.sh` into a single Bun
                           executable at `src-tauri/binaries/claudette-pi-harness-<triple>` and

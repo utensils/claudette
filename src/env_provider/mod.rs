@@ -34,7 +34,7 @@ use crate::plugin_runtime::host_api::WorkspaceInfo;
 use backend::EnvProviderBackend;
 pub use backend::PluginRegistryBackend;
 pub use cache::EnvCache;
-pub use devshell::nix_develop_wrap;
+pub use devshell::{nix_develop_command_wrap, nix_develop_wrap};
 use types::EnvMap;
 pub use watcher::EnvWatcher;
 

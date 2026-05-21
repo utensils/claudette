@@ -64,6 +64,8 @@ Because the terminal runs `nix develop` with no `--command`, a devshell workspac
 
 It falls back to a plain shell only when there is genuinely nothing to enter — the provider is disabled, `nix` is not installed, or the workspace has no flake. A flake that *fails to evaluate* is not hidden: `nix develop` reports the error directly in the terminal, so a broken devshell is visible rather than silently swapped for a plain shell with the wrong toolchain. This is independent of **env-direnv** — the terminal enters the devshell through `nix develop` directly, never through direnv. Toggle it per repo or globally from the **env-nix-devshell** entry in `Settings > Plugins`.
 
+Agent subprocesses use the same separation. In a Nix devshell workspace, Claudette starts the harness as `nix develop --command <agent> ...`, so agents see the clean devshell environment rather than direnv's user-shell/profile environment.
+
 ## Terminal Font Size
 
 Adjust the terminal font size in `Settings > Appearance > Terminal font size` (range: 8–32px, default: 11px). Press `⌘/Ctrl + Shift + =` or `⌘/Ctrl + Shift + -` to scale only the terminal without changing the rest of the UI.

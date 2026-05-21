@@ -67,7 +67,7 @@ The plugin sandbox enforces strict security:
 
 ## Environment Provider Plugins
 
-The same Lua plugin runtime powers a second plugin kind: **env-provider**. Each env-provider activates when the workspace's worktree contains the file or signal it watches for, then merges its environment variables into every process Claudette spawns inside the worktree (terminals, agent subprocesses, [MCP servers](/claudette/features/mcp-servers/)).
+The same Lua plugin runtime powers a second plugin kind: **env-provider**. Each env-provider activates when the workspace's worktree contains the file or signal it watches for, then prepares the environment for processes Claudette spawns inside the worktree (terminals, agent subprocesses, [MCP servers](/claudette/features/mcp-servers/)).
 
 Bundled env-providers:
 
@@ -82,9 +82,11 @@ Toggle individual providers in **Settings > Plugins**. Each plugin's manifest de
 
 For direnv, Claudette keeps the `direnv allow` safeguard content-aware. When you approve a blocked `.envrc`, Claudette records that file's SHA-256 digest and can auto-allow future worktrees only when their `.envrc` content matches an approved digest. Editing `.envrc` changes the digest, so the next resolve prompts again before agents or terminals receive that environment.
 
+For Nix devshells, terminals and agent harnesses do not consume direnv's shell/profile-derived environment. When `env-nix-devshell` detects a `flake.nix` or `shell.nix`, Claudette enters the workspace through `nix develop` directly: terminals run plain `nix develop`, and agents run as `nix develop --command <agent> ...`. This keeps the Nix devshell independent from `env-direnv`, even in repos whose `.envrc` also says `use flake`.
+
 If a bundled provider's required CLI isn't installed (e.g. `nix` missing on a non-Nix host), Claudette marks it **not installed** in the Environment panel and silently skips it on every workspace spawn — no toast, no error. The toggle is locked in this state. CLI availability is probed once at startup, so if you install the underlying tool while Claudette is running, restart the app to pick up the change.
 
-When Claudette **creates** a new workspace, the [repo setup script](/claudette/features/per-repo-settings/#setup-script) (if any) runs first with the system shell environment — deliberately, so a setup script can prime env-provider state itself (`direnv allow`, `mise trust && mise install`, generate a `.env` from a template, `nix flake check`) before any provider tries to read it. Claudette then resolves the env-providers, and only after that does the workspace appear as ready. Selecting an **existing** workspace performs the same env warmup but skips the setup script (it already ran on create). In both cases, terminal tabs, agent subprocesses, and MCP servers spawn into the merged environment once the warmup completes.
+When Claudette **creates** a new workspace, the [repo setup script](/claudette/features/per-repo-settings/#setup-script) (if any) runs first with the system shell environment — deliberately, so a setup script can prime env-provider state itself (`direnv allow`, `mise trust && mise install`, generate a `.env` from a template, `nix flake check`) before any provider tries to read it. Claudette then resolves the env-providers, and only after that does the workspace appear as ready. Selecting an **existing** workspace performs the same env warmup but skips the setup script (it already ran on create). In both cases, terminal tabs, agent subprocesses, and MCP servers wait for warmup before spawning. Non-Nix providers are applied as a merged environment; Nix devshell terminals and agents enter through `nix develop` directly.
 
 The merged environment is cached per worktree and invalidated when watched files such as `.envrc`, `mise.toml`, `.env`, or `flake.lock` change. New terminals spawn with the refreshed env. Persistent agent subprocesses re-check the env before each turn and restart when provider output or provider evaluation metadata changes, so the next agent turn sees the updated shell environment. Already-running terminal shells keep their original process environment.
 

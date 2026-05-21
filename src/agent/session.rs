@@ -16,7 +16,7 @@ use super::args::{
     build_settings_json, build_stdin_message_with_uuid, build_steering_stdin_message,
 };
 use super::binary::resolve_claude_path;
-use super::environment::{apply_resolved_env_to_command, apply_teammate_command_override};
+use super::environment::{apply_teammate_command_override, build_agent_command};
 use super::process::{AgentEvent, TurnHandle};
 use super::types::{ControlResponsePayload, FileAttachment, StreamEvent, parse_stream_line};
 
@@ -92,21 +92,21 @@ impl PersistentSession {
         crate::missing_cli::precheck_cwd(working_dir)?;
 
         let claude_path = resolve_claude_path().await;
-        let mut cmd = crate::process::command(&claude_path);
-        cmd.args(&args)
-            .current_dir(working_dir)
-            .stdin(std::process::Stdio::piped())
+        let built_command =
+            build_agent_command(claude_path.as_os_str(), &args, working_dir, resolved_env);
+        let invocation_program = built_command.invocation_program.clone();
+        let invocation_args = built_command.invocation_args.clone();
+        let mut cmd = built_command.command;
+        cmd.stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .env("PATH", crate::env::enriched_path());
+            .stderr(std::process::Stdio::piped());
 
         sanitize_claude_subprocess_env(&mut cmd);
 
-        // See run_turn for layering rationale — env-provider output under
-        // the CLAUDETTE_* markers, under the settings-driven context toggle.
-        if let Some(env) = resolved_env {
-            apply_resolved_env_to_command(&mut cmd, env);
-        }
+        // build_agent_command applies the merged env-provider map for direct
+        // spawns, or wraps Nix workspaces in `nix develop --command` so the
+        // persistent agent gets the clean devshell instead of direnv/profile
+        // output.
         settings.backend_runtime.apply_to_command(&mut cmd);
 
         cmd.env_remove("CLAUDE_CODE_DISABLE_1M_CONTEXT");
@@ -164,7 +164,7 @@ impl PersistentSession {
         // a persistent session) and replay it on the first `send_turn` —
         // see the field doc on `invocation_line` for why we don't emit now.
         let invocation_line =
-            super::args::format_redacted_invocation(claude_path.as_os_str(), &args);
+            super::args::format_redacted_invocation(&invocation_program, &invocation_args);
 
         // Background stdout reader — runs for the session lifetime.
         let tx = event_tx.clone();

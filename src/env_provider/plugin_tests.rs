@@ -1244,6 +1244,7 @@ fn nix_export_returns(
     // The plugin makes two `nix` calls: `print-dev-env --json` for the
     // structured vars, then a `nix develop --command` probe for the
     // real PATH. Stub both; the probe returns NIX_DEVSHELL_PROBE_PATH.
+    let probe = NIX_DEVSHELL_PROBE_PATH;
     let stub = format!(
         r#"
         host.exec = function(cmd, args)
@@ -1260,7 +1261,6 @@ fn nix_export_returns(
             end
         end
         "#,
-        probe = NIX_DEVSHELL_PROBE_PATH,
     );
     lua.load(&stub).exec().expect("install stub");
 

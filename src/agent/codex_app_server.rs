@@ -11,6 +11,7 @@ use tokio::sync::broadcast;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 
+use super::environment::build_agent_command;
 use super::{
     AgentEvent, AssistantMessage, ContentBlock, ControlRequestInner, Delta, FileAttachment,
     InnerStreamEvent, StartContentBlock, StreamEvent, TokenUsage, TurnHandle,
@@ -129,17 +130,21 @@ impl CodexAppServerSession {
         crate::missing_cli::precheck_cwd(working_dir)?;
 
         let codex_path = super::binary::resolve_codex_path().await;
-        let mut cmd = crate::process::command(codex_path);
-        cmd.args(codex_app_server_args())
-            .current_dir(working_dir)
-            .stdin(std::process::Stdio::piped())
+        let args = codex_app_server_args()
+            .into_iter()
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+        let built_command = build_agent_command(
+            codex_path.as_os_str(),
+            &args,
+            working_dir,
+            options.resolved_env.as_ref(),
+        );
+        let mut cmd = built_command.command;
+        cmd.stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .env("PATH", crate::env::enriched_path());
+            .stderr(std::process::Stdio::piped());
 
-        if let Some(env) = options.resolved_env.as_ref() {
-            env.apply(&mut cmd);
-        }
         if let Some(env) = options.workspace_env.as_ref() {
             env.apply(&mut cmd);
         }
@@ -964,8 +969,7 @@ async fn route_app_server_message(
                         }
                     }
                     let _ = event_tx.send(AgentEvent::Stderr(format!(
-                        "Codex app-server request `{}` is not handled yet.",
-                        method
+                        "Codex app-server request `{method}` is not handled yet."
                     )));
                 }
                 Err(err) => {

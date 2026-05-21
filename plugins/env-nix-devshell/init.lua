@@ -5,11 +5,12 @@
 --
 -- Detection is a pure function of what's on disk: if `flake.nix` or
 -- `shell.nix` exists, we detect. We deliberately do NOT back off when
--- `.envrc` is present — instead, precedence handles the overlap:
--- `env-direnv` outranks `env-nix-devshell`, so when an `.envrc` does
--- `use flake` and both plugins export, direnv's values win on key
--- collisions at merge time. Users who want only one can toggle the
--- other off in the Environment settings panel.
+-- `.envrc` is present. The dispatcher still merges provider exports for
+-- processes that consume env vars directly, but terminals and agent
+-- harnesses use this provider's detection as the signal to enter the
+-- workspace with `nix develop` itself. That path is independent of
+-- `env-direnv`: direnv may also detect, but it must not be the way Nix
+-- devshell terminals or agents are activated.
 --
 -- Export happens in two steps:
 --
@@ -33,8 +34,9 @@
 --      fully-assembled PATH. The probe inherits Claudette's enriched
 --      PATH, so the devshell's tool dirs come back already prepended
 --      to the host PATH (a merge, not a replacement); `cargo`, `node`,
---      project binaries, etc. then resolve in both terminals and agent
---      commands. See issue #915.
+--      project binaries, etc. then resolve in env consumers that apply
+--      the merged map directly. Terminals and agent commands enter via
+--      `nix develop` itself; see issue #915.
 --
 -- If the step-2 probe fails we keep the step-1 vars and just omit
 -- PATH (logged as a warning) rather than failing the whole provider —

@@ -20,6 +20,7 @@
 //! directly — it never routes through direnv, and the wrap decision
 //! never consults direnv (or any other provider's) resolve result.
 
+use std::ffi::{OsStr, OsString};
 use std::path::Path;
 
 use super::ResolvedEnv;
@@ -57,6 +58,29 @@ pub fn nix_develop_wrap(worktree: &Path, resolved: &ResolvedEnv) -> Option<Vec<S
     Some(build_wrap_argv(&nix, worktree))
 }
 
+/// Build a `nix develop --command <program> <args...>` argv for
+/// non-interactive workspace subprocesses, or `None` when the workspace
+/// should run the command directly.
+///
+/// This is the agent-side counterpart to [`nix_develop_wrap`]. Agents
+/// are not interactive terminals, so they need an explicit command to
+/// run inside the devshell. Crucially, callers should spawn the returned
+/// argv as-is and avoid applying the merged env-provider map on top: a
+/// `flake.nix` workspace's Nix devshell is its own activation path and
+/// must not be contaminated by `env-direnv` output from an `.envrc`.
+pub fn nix_develop_command_wrap(
+    worktree: &Path,
+    resolved: &ResolvedEnv,
+    program: &OsStr,
+    args: &[String],
+) -> Option<Vec<OsString>> {
+    if !devshell_detected(resolved) {
+        return None;
+    }
+    let nix = crate::env::which_in_enriched_path("nix").ok()?;
+    Some(build_command_wrap_argv(&nix, worktree, program, args))
+}
+
 /// Did the `env-nix-devshell` provider detect a devshell for this
 /// workspace?
 ///
@@ -89,6 +113,22 @@ fn build_wrap_argv(nix: &Path, worktree: &Path) -> Vec<String> {
             argv.push(shell_nix.to_string_lossy().into_owned());
         }
     }
+    argv
+}
+
+fn build_command_wrap_argv(
+    nix: &Path,
+    worktree: &Path,
+    program: &OsStr,
+    args: &[String],
+) -> Vec<OsString> {
+    let mut argv = build_wrap_argv(nix, worktree)
+        .into_iter()
+        .map(OsString::from)
+        .collect::<Vec<_>>();
+    argv.push(OsString::from("--command"));
+    argv.push(program.to_os_string());
+    argv.extend(args.iter().map(OsString::from));
     argv
 }
 
@@ -206,6 +246,52 @@ mod tests {
         assert_eq!(
             build_wrap_argv(Path::new("/usr/bin/nix"), tmp.path()),
             ["/usr/bin/nix", "develop"].map(String::from),
+        );
+    }
+
+    #[test]
+    fn command_wrap_argv_runs_program_inside_flake_devshell() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("flake.nix"), "{}").unwrap();
+        assert_eq!(
+            build_command_wrap_argv(
+                Path::new("/usr/bin/nix"),
+                tmp.path(),
+                OsStr::new("/opt/bin/claude"),
+                &["--print".to_string(), "hello".to_string()],
+            ),
+            vec![
+                OsString::from("/usr/bin/nix"),
+                OsString::from("develop"),
+                OsString::from("--command"),
+                OsString::from("/opt/bin/claude"),
+                OsString::from("--print"),
+                OsString::from("hello"),
+            ],
+        );
+    }
+
+    #[test]
+    fn command_wrap_argv_keeps_shell_nix_before_command() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("shell.nix"), "{}").unwrap();
+        let shell_nix = tmp.path().join("shell.nix");
+        assert_eq!(
+            build_command_wrap_argv(
+                Path::new("/usr/bin/nix"),
+                tmp.path(),
+                OsStr::new("codex"),
+                &["app-server".to_string()],
+            ),
+            vec![
+                OsString::from("/usr/bin/nix"),
+                OsString::from("develop"),
+                OsString::from("-f"),
+                shell_nix.into_os_string(),
+                OsString::from("--command"),
+                OsString::from("codex"),
+                OsString::from("app-server"),
+            ],
         );
     }
 }
