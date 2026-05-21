@@ -1704,7 +1704,8 @@
 .inputHighlight {
   position: absolute;
   inset: 0;
-  max-height: 160px;
+  min-height: var(--composer-h, 52px);
+  max-height: max(160px, var(--composer-h, 52px));
   overflow: hidden;
   padding: 14px 18px 8px;
   color: var(--text-primary);
@@ -1727,8 +1728,8 @@
   line-height: var(--lh-body);
   outline: none;
   resize: none;
-  min-height: 52px;
-  max-height: 160px;
+  min-height: var(--composer-h, 52px);
+  max-height: max(160px, var(--composer-h, 52px));
   overflow-x: hidden;
   width: 100%;
   position: relative;

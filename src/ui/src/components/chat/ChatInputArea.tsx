@@ -43,6 +43,7 @@ import { ComposerToolbar } from "./composer/ComposerToolbar";
 import { ContextPopover } from "./composer/ContextPopover";
 import { SegmentedMeter } from "./composer/SegmentedMeter";
 import { UsageIndicator } from "./composer/UsageIndicator";
+import { ResizeHandle } from "../layout/ResizeHandle";
 import { AttachMenu } from "./AttachMenu";
 import { FileMentionPicker, matchFiles } from "./FileMentionPicker";
 import { PinnedPromptsBar } from "./PinnedPromptsBar";
@@ -54,6 +55,14 @@ import { hasUltrathink, renderUltrathinkText } from "./ultrathink";
 import styles from "./ChatPanel.module.css";
 
 type ComposerMode = "prompt" | "shell";
+
+const COMPOSER_MIN_HEIGHT = 52;
+const COMPOSER_DEFAULT_AUTOGROW_MAX = 160;
+const COMPOSER_MAX_HEIGHT = 1200;
+
+function clampComposerHeight(value: number, max: number): number {
+  return Math.max(COMPOSER_MIN_HEIGHT, Math.min(max, value));
+}
 
 function parseComposerDraft(value: string): { mode: ComposerMode; text: string } {
   return value.startsWith("!")
@@ -291,6 +300,52 @@ export function ChatInputArea({
   const [attachMenuOpen, setAttachMenuOpen] = useState(false);
   const [contextPopoverOpen, setContextPopoverOpen] = useState(false);
   const meterRef = useRef<HTMLButtonElement>(null);
+  const inputAreaRef = useRef<HTMLDivElement>(null);
+  // The user-set composer height (persisted globally). CSS var
+  // `--composer-h` on the inputArea div drives the textarea's visible
+  // height; CSS keeps the historical 160px auto-grow ceiling until
+  // the user resizes beyond it.
+  const composerHeight = useAppStore((s) => s.composerHeight);
+  const setComposerHeight = useAppStore((s) => s.setComposerHeight);
+  // Dynamic upper bound for the resize drag — half the chat pane's
+  // height, so the user can't drag the composer past the visible
+  // message area. Measured via ResizeObserver on the inputArea's
+  // offsetParent (the chat session container).
+  const [composerMaxBound, setComposerMaxBound] = useState(COMPOSER_DEFAULT_AUTOGROW_MAX);
+  const appliedComposerHeight = Math.min(composerHeight, composerMaxBound);
+  useEffect(() => {
+    const el = inputAreaRef.current;
+    if (!el) return;
+    const target = el.offsetParent as HTMLElement | null;
+    if (!target) return;
+    const update = () => {
+      const half = Math.floor(target.clientHeight / 2);
+      setComposerMaxBound(
+        Math.max(
+          COMPOSER_MIN_HEIGHT,
+          Math.min(COMPOSER_MAX_HEIGHT, half),
+        ),
+      );
+    };
+    update();
+    const ro = new ResizeObserver(update);
+    ro.observe(target);
+    return () => ro.disconnect();
+  }, []);
+  // Mirror Zustand value → CSS var on the inputArea. ResizeHandle
+  // writes the var directly during drag (no React state churn); this
+  // effect handles every other update (mount, persistence rehydrate,
+  // external setComposerHeight calls).
+  useEffect(() => {
+    const el = inputAreaRef.current;
+    if (!el) return;
+    if (el.dataset.resizing === "true") return;
+    el.style.setProperty("--composer-h", `${appliedComposerHeight}px`);
+  }, [appliedComposerHeight]);
+  const handleComposerResizeEnd = useCallback(
+    (final: number) => setComposerHeight(clampComposerHeight(final, composerMaxBound)),
+    [composerMaxBound, setComposerHeight],
+  );
   const pluginRefreshToken = useAppStore((s) => s.pluginRefreshToken);
   const openSettings = useAppStore((s) => s.openSettings);
 
@@ -1145,10 +1200,21 @@ export function ChatInputArea({
 
   return (
     <div
+      ref={inputAreaRef}
       className={`${styles.inputArea}${dragActive ? ` ${styles.inputDragActive}` : ""}${
         composerMode === "shell" ? ` ${styles.inputAreaShell}` : ""
       }`}
+      style={{ "--composer-h": `${appliedComposerHeight}px` } as React.CSSProperties}
     >
+      <ResizeHandle
+        direction="vertical"
+        targetRef={inputAreaRef}
+        cssVar="--composer-h"
+        min={COMPOSER_MIN_HEIGHT}
+        max={composerMaxBound}
+        invert
+        onResizeEnd={handleComposerResizeEnd}
+      />
       {showFilePicker && (
         <FileMentionPicker
           results={mentionResults}
