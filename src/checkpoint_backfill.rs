@@ -17,12 +17,16 @@
 
 use std::fmt;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
-use crate::db::Database;
+use crate::db::{Database, SQLITE_AUTO_VACUUM_FULL, SQLITE_AUTO_VACUUM_INCREMENTAL};
 
 const BATCH_ROW_COUNT: usize = 64;
 const BATCH_BYTE_BUDGET: usize = 16 * 1024 * 1024;
 const BACKFILL_DONE_KEY: &str = "checkpoint_blob_backfill_done";
+const SPACE_RECLAIM_DONE_KEY: &str = "checkpoint_blob_space_reclaim_done";
+const SPACE_RECLAIM_CHUNK_PAGES: i64 = 16 * 1024;
+const SPACE_RECLAIM_PAUSE: Duration = Duration::from_millis(10);
 
 /// Failure modes for the backfill task. Kept distinct from `rusqlite::Error`
 /// so a `JoinError` from a panicked / cancelled worker doesn't masquerade
@@ -100,6 +104,21 @@ pub async fn run_backfill(db_path: &Path) -> Result<(), BackfillError> {
         .map_err(BackfillError::JoinFailed)?
 }
 
+/// Reclaim the SQLite freelist left behind by the #940 legacy checkpoint
+/// backfill after the frontend has acknowledged a healthy boot.
+///
+/// This intentionally stays separate from [`run_backfill`]. The backfill
+/// itself is many tiny transactions; reclaiming gigabytes of free pages can
+/// block SQLite writers long enough to trip the updater's boot probation if
+/// it starts before `boot_ok`. The Tauri shell owns that lifecycle signal and
+/// calls this only after boot is acknowledged.
+pub async fn run_post_backfill_space_reclaim(db_path: &Path) -> Result<(), BackfillError> {
+    let path = db_path.to_path_buf();
+    tokio::task::spawn_blocking(move || run_post_backfill_space_reclaim_blocking(&path))
+        .await
+        .map_err(BackfillError::JoinFailed)?
+}
+
 fn run_backfill_blocking(db_path: &Path) -> Result<(), BackfillError> {
     let db = Database::open(db_path)?;
 
@@ -140,6 +159,111 @@ fn run_backfill_blocking(db_path: &Path) -> Result<(), BackfillError> {
         "checkpoint blob backfill complete"
     );
     Ok(())
+}
+
+fn run_post_backfill_space_reclaim_blocking(db_path: &Path) -> Result<(), BackfillError> {
+    let db = Database::open(db_path)?;
+
+    if db
+        .get_app_setting(SPACE_RECLAIM_DONE_KEY)?
+        .is_some_and(|v| v == "true")
+    {
+        return Ok(());
+    }
+
+    if db
+        .get_app_setting(BACKFILL_DONE_KEY)?
+        .is_none_or(|v| v != "true")
+    {
+        return Ok(());
+    }
+
+    let initial_freelist = db.freelist_page_count()?;
+    let mode = db.auto_vacuum_mode()?;
+    if initial_freelist <= 0 {
+        db.set_app_setting(SPACE_RECLAIM_DONE_KEY, "true")?;
+        return Ok(());
+    }
+
+    tracing::info!(
+        target: "claudette::db",
+        issue = 940,
+        auto_vacuum = mode,
+        freelist_pages = initial_freelist,
+        "starting post-backfill checkpoint space reclaim"
+    );
+
+    if mode == SQLITE_AUTO_VACUUM_FULL {
+        db.set_app_setting(SPACE_RECLAIM_DONE_KEY, "true")?;
+        tracing::info!(
+            target: "claudette::db",
+            issue = 940,
+            freelist_pages = initial_freelist,
+            "checkpoint space reclaim skipped because FULL auto-vacuum is already active"
+        );
+        return Ok(());
+    }
+
+    if mode != SQLITE_AUTO_VACUUM_INCREMENTAL {
+        // Legacy DBs that predate auto-vacuum support need one full VACUUM
+        // to rewrite the file with pointer-map pages. Do this only after
+        // `boot_ok`; running it from Database::open can trip the 20s upgrade
+        // guard on the exact multi-GB #940 databases this feature repairs.
+        let converted = db.ensure_incremental_auto_vacuum()?;
+        db.set_app_setting(SPACE_RECLAIM_DONE_KEY, "true")?;
+        tracing::info!(
+            target: "claudette::db",
+            issue = 940,
+            converted,
+            "checkpoint space reclaim complete after auto-vacuum conversion"
+        );
+        return Ok(());
+    }
+
+    let mut chunks = 0usize;
+    let mut reclaimed_pages = 0i64;
+    loop {
+        let before = db.freelist_page_count()?;
+        if before <= 0 {
+            db.set_app_setting(SPACE_RECLAIM_DONE_KEY, "true")?;
+            tracing::info!(
+                target: "claudette::db",
+                issue = 940,
+                chunks,
+                reclaimed_pages,
+                "checkpoint space reclaim complete"
+            );
+            return Ok(());
+        }
+
+        let reclaimed = db.incremental_vacuum_pages(SPACE_RECLAIM_CHUNK_PAGES)?;
+        chunks += 1;
+        reclaimed_pages += reclaimed;
+
+        if chunks == 1 || chunks.is_multiple_of(32) {
+            tracing::info!(
+                target: "claudette::db",
+                issue = 940,
+                chunks,
+                reclaimed_pages,
+                remaining_pages = db.freelist_page_count()?,
+                "checkpoint space reclaim progress"
+            );
+        }
+
+        if reclaimed <= 0 {
+            tracing::warn!(
+                target: "claudette::db",
+                issue = 940,
+                chunks,
+                remaining_pages = before,
+                "checkpoint space reclaim made no progress; will retry on next launch"
+            );
+            return Ok(());
+        }
+
+        std::thread::sleep(SPACE_RECLAIM_PAUSE);
+    }
 }
 
 #[cfg(test)]
@@ -249,5 +373,101 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM checkpoint_blobs", [], |r| r.get(0))
             .unwrap();
         assert_eq!(blob_count, 1);
+    }
+
+    #[tokio::test]
+    async fn post_backfill_space_reclaim_waits_for_backfill_done_marker() {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("test.db");
+        {
+            let db = Database::open(&db_path).unwrap();
+            db.execute_batch(
+                "CREATE TABLE reclaim_probe (id INTEGER PRIMARY KEY, payload BLOB);
+                 INSERT INTO reclaim_probe (payload) VALUES (zeroblob(1048576));
+                 DELETE FROM reclaim_probe;",
+            )
+            .unwrap();
+            assert!(db.freelist_page_count().unwrap() > 0);
+        }
+
+        run_post_backfill_space_reclaim(&db_path).await.unwrap();
+
+        let db = Database::open(&db_path).unwrap();
+        assert!(
+            db.get_app_setting(SPACE_RECLAIM_DONE_KEY)
+                .unwrap()
+                .is_none(),
+            "space reclaim must not mark done before the #940 backfill marker exists"
+        );
+        assert!(
+            db.freelist_page_count().unwrap() > 0,
+            "space reclaim should not run before backfill completion"
+        );
+    }
+
+    #[tokio::test]
+    async fn post_backfill_space_reclaim_drains_incremental_freelist() {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("test.db");
+        {
+            let db = Database::open(&db_path).unwrap();
+            db.execute_batch(
+                "CREATE TABLE reclaim_probe (id INTEGER PRIMARY KEY, payload BLOB);
+                 INSERT INTO reclaim_probe (payload) VALUES (zeroblob(1048576));
+                 DELETE FROM reclaim_probe;",
+            )
+            .unwrap();
+            assert!(db.freelist_page_count().unwrap() > 0);
+            db.set_app_setting(BACKFILL_DONE_KEY, "true").unwrap();
+        }
+
+        run_post_backfill_space_reclaim(&db_path).await.unwrap();
+
+        let db = Database::open(&db_path).unwrap();
+        assert_eq!(db.freelist_page_count().unwrap(), 0);
+        assert_eq!(
+            db.get_app_setting(SPACE_RECLAIM_DONE_KEY)
+                .unwrap()
+                .as_deref(),
+            Some("true")
+        );
+    }
+
+    #[tokio::test]
+    async fn post_backfill_space_reclaim_converts_legacy_none_auto_vacuum_db() {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("legacy.db");
+        {
+            let conn = rusqlite::Connection::open(&db_path).unwrap();
+            conn.execute_batch(
+                "PRAGMA auto_vacuum=NONE;
+                 CREATE TABLE preexisting_table (id INTEGER PRIMARY KEY, payload BLOB);
+                 INSERT INTO preexisting_table (payload) VALUES (zeroblob(1048576));
+                 DELETE FROM preexisting_table;",
+            )
+            .unwrap();
+        }
+        {
+            let db = Database::open(&db_path).unwrap();
+            assert_ne!(
+                db.auto_vacuum_mode().unwrap(),
+                SQLITE_AUTO_VACUUM_INCREMENTAL
+            );
+            db.set_app_setting(BACKFILL_DONE_KEY, "true").unwrap();
+        }
+
+        run_post_backfill_space_reclaim(&db_path).await.unwrap();
+
+        let db = Database::open(&db_path).unwrap();
+        assert_eq!(
+            db.auto_vacuum_mode().unwrap(),
+            SQLITE_AUTO_VACUUM_INCREMENTAL
+        );
+        assert_eq!(
+            db.get_app_setting(SPACE_RECLAIM_DONE_KEY)
+                .unwrap()
+                .as_deref(),
+            Some("true")
+        );
     }
 }

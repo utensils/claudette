@@ -49,6 +49,13 @@ impl BootProbationState {
         self.cancel.notify_waiters();
     }
 
+    pub async fn wait_until_acknowledged(&self) {
+        if self.is_acknowledged() {
+            return;
+        }
+        self.cancel.notified().await;
+    }
+
     fn is_acknowledged(&self) -> bool {
         self.acknowledged.load(Ordering::SeqCst)
     }

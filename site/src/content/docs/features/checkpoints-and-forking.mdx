@@ -21,7 +21,7 @@ File bytes from snapshots are **content-addressed** — a unique blob lives once
 
 A per-workspace retention cap bounds how many recent checkpoints retain their file-restore snapshot. The cap defaults to **50** and is configurable under **Settings → Storage → Checkpoint file retention** (range `[1, 1000]`). Older checkpoints stay visible in chat history and tool-activity timelines, but the "restore files" affordance is dropped for them — only the `checkpoint_files` reference rows are pruned, `conversation_checkpoints` and `turn_tool_activities` survive.
 
-For databases that grew before content-addressed storage shipped, a one-time background backfill runs at app launch. It batches through legacy rows (no schema downtime — the read path falls back to the row's own `content` column for un-migrated rows), deduplicates them into the blob store, and marks completion in `app_settings.checkpoint_blob_backfill_done` so the work is a no-op on subsequent boots. Progress is logged on the `claudette::db` target.
+For databases that grew before content-addressed storage shipped, a one-time background backfill runs after the app has acknowledged a healthy boot. It batches through legacy rows (no schema downtime — the read path falls back to the row's own `content` column for un-migrated rows), deduplicates them into the blob store, and marks completion in `app_settings.checkpoint_blob_backfill_done` so the work is a no-op on subsequent boots. After the backfill, Claudette drains the SQLite freelist in bounded chunks so the duplicate bytes reported in GitHub issue #940 are returned to the OS without running a long `VACUUM` during the updater's startup guard window. Progress is logged on the `claudette::db` target.
 
 ## Rolling back
 

@@ -855,27 +855,39 @@ fn main() {
             commands::files::setup_file_watcher(app.handle().clone());
 
             // One-time backfill of legacy `checkpoint_files.content` rows
-            // into the content-addressed `checkpoint_blobs` store. Closes
-            // #940 / #942 for users whose DB filled up before dedupe
-            // shipped.
+            // into the content-addressed `checkpoint_blobs` store, followed
+            // by post-backfill SQLite space reclaim. Closes GitHub issue
+            // #940 / #942 for users whose DB filled up before dedupe shipped.
             //
-            // We deliberately do NOT call `checkpoint_backfill::spawn_backfill`
-            // here even though it would dedupe the warn-on-error wrapping:
-            // that helper uses `tokio::spawn`, which panics with "there is
-            // no reactor running" when called from Tauri's `setup` callback
-            // because the main-thread closure executes outside any tokio
-            // runtime context. `tauri::async_runtime::spawn` is the correct
-            // bridge into Tauri's internal tokio runtime from a sync setup
-            // closure.
-            let backfill_db_path = app.state::<state::AppState>().db_path.clone();
+            // Wait for `boot_ok` before doing this maintenance. The updater's
+            // boot-probation rollback window is 20s; draining a multi-GB #940
+            // freelist can take far longer and can make foreground DB reads
+            // wait on SQLite locks. Starting only after boot acknowledgement
+            // keeps a healthy upgrade from being rolled back.
+            let maintenance_db_path = app.state::<state::AppState>().db_path.clone();
+            let maintenance_boot =
+                std::sync::Arc::clone(&app.state::<state::AppState>().boot_probation);
             tauri::async_runtime::spawn(async move {
+                maintenance_boot.wait_until_acknowledged().await;
                 if let Err(e) =
-                    claudette::checkpoint_backfill::run_backfill(&backfill_db_path).await
+                    claudette::checkpoint_backfill::run_backfill(&maintenance_db_path).await
                 {
                     tracing::warn!(
                         target: "claudette::db",
                         error = %e,
                         "checkpoint blob backfill failed; will retry on next launch"
+                    );
+                    return;
+                }
+                if let Err(e) = claudette::checkpoint_backfill::run_post_backfill_space_reclaim(
+                    &maintenance_db_path,
+                )
+                .await
+                {
+                    tracing::warn!(
+                        target: "claudette::db",
+                        error = %e,
+                        "checkpoint post-backfill space reclaim failed; will retry on next launch"
                     );
                 }
             });
