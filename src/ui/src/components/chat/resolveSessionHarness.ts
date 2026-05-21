@@ -7,6 +7,7 @@ import {
   defaultHarnessForKind,
   effectiveHarness,
 } from "../../services/tauri/agentBackends";
+import { resolveSessionBackend } from "./resolveSessionBackend";
 
 /**
  * Resolve the runtime harness for a chat session using the same fallback
@@ -36,13 +37,12 @@ export function resolveSessionHarness(args: {
   defaultAgentBackendId: string;
 }): AgentBackendRuntimeHarness | null {
   const { sessionId, selectedModelProvider, agentBackends, defaultAgentBackendId } = args;
-  if (agentBackends.length === 0) return null;
-  const providerId =
-    selectedModelProvider[sessionId] ?? defaultAgentBackendId;
-  const backend =
-    agentBackends.find((b) => b.id === providerId) ??
-    agentBackends.find((b) => b.id === defaultAgentBackendId) ??
-    agentBackends[0];
+  const backend = resolveSessionBackend({
+    sessionId,
+    selectedModelProvider,
+    agentBackends,
+    defaultAgentBackendId,
+  });
   if (!backend) return null;
   const harness = effectiveHarness(backend);
   if (harness !== "pi_sdk") return harness;

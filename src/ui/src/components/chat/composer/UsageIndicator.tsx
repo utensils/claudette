@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next";
 import { useAppStore } from "../../../stores/useAppStore";
 import { useSessionUsagePoller } from "../../../hooks/useSessionUsagePoller";
 import type { UsageBucket } from "../../../types/usage";
+import { resolveSessionBackend } from "../resolveSessionBackend";
 import { CLAUDE_CODE_USAGE_FOCUS } from "../../settings/focusKeys";
 import { resolveIndicatorMode } from "./usageIndicatorMode";
 import { UsagePopover } from "./UsagePopover";
@@ -60,17 +61,12 @@ export function UsageIndicator({ workspaceId, sessionId }: UsageIndicatorProps) 
 
   const backend = useMemo(() => {
     if (!sessionId) return null;
-    // Match the backend resolution used by the send/runtime path:
-    // per-session provider -> configured default backend -> first
-    // loaded backend. A hardcoded "anthropic" fallback makes Codex or
-    // OpenRouter defaults look gated by the Claude Code Usage toggle.
-    const backendId = selectedModelProvider[sessionId] ?? defaultAgentBackendId;
-    return (
-      agentBackends.find((b) => b.id === backendId) ??
-      agentBackends.find((b) => b.id === defaultAgentBackendId) ??
-      agentBackends[0] ??
-      null
-    );
+    return resolveSessionBackend({
+      sessionId,
+      selectedModelProvider,
+      agentBackends,
+      defaultAgentBackendId,
+    });
   }, [agentBackends, defaultAgentBackendId, selectedModelProvider, sessionId]);
 
   const usageBackend = useMemo(() => {
