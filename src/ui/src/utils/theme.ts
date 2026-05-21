@@ -93,6 +93,8 @@ const THEMEABLE_VARS = [
   "terminal-fg",
   "terminal-cursor",
   "terminal-selection",
+  "terminal-search-match-bg",
+  "terminal-search-active-match-bg",
   "toolbar-active",
   "toolbar-active-text",
   "error-bg",
@@ -162,17 +164,15 @@ export function getTerminalTheme(): ITheme {
 
 /**
  * Decoration colors for `@xterm/addon-search`. The addon requires literal
- * `#RRGGBB` strings (no `rgba()` / `color-mix()` / CSS-var references) and,
- * critically, only emits `onDidChangeResults` when decorations are enabled —
- * so we must pass these on every `findNext` / `findPrevious` call or the
- * match counter and next/previous buttons stay disabled at zero matches even
- * when matches exist.
+ * `#RRGGBB` strings — alpha/var chains it can't resolve are rejected — and,
+ * critically, only emits `onDidChangeResults` when decorations are enabled.
+ * Without them the match counter stays at zero and the prev/next buttons
+ * remain disabled even when matches exist.
  *
- * Active match uses the live `--accent-primary` (already a hex value across
- * every built-in theme). Inactive matches use a neutral mid-gray so they
- * read as "match" rather than "selected" — themes that already paint
- * selections with accent-primary would otherwise make the two states
- * indistinguishable.
+ * The tokens live in theme.css so per-theme overrides keep working. We read
+ * them via the canonical `getPropertyValue(...).trim() || "#..."` safety
+ * fallback so the rare race where the stylesheet hasn't applied still hands
+ * the addon a usable hex.
  */
 export function getTerminalSearchDecorations(): {
   matchBackground: string;
@@ -181,13 +181,8 @@ export function getTerminalSearchDecorations(): {
   activeMatchColorOverviewRuler: string;
 } {
   const style = getComputedStyle(document.documentElement);
-  const accent = style.getPropertyValue("--accent-primary").trim() || "#e07850";
-  const isHex = /^#[0-9a-fA-F]{6}$/.test(accent);
-  const activeColor = isHex ? accent : "#e07850";
-  // Inactive match background: neutral gray that contrasts against both
-  // light and dark terminal backgrounds. The overview ruler color matches
-  // so the minimap markers stay legible too.
-  const matchColor = "#5a5a5a";
+  const matchColor = style.getPropertyValue("--terminal-search-match-bg").trim() || "#5a5a5a";
+  const activeColor = style.getPropertyValue("--terminal-search-active-match-bg").trim() || "#e07850";
   return {
     matchBackground: matchColor,
     matchOverviewRuler: matchColor,
