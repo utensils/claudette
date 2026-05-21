@@ -402,16 +402,29 @@ fn copy_history(
         // checkpoint. Without this, snapshot-only checkpoints (the norm
         // since Claudette migrated away from git-commit checkpoints) would
         // have neither a commit nor file data to restore from in the fork.
+        //
+        // Dedupe-aware fork: when the source row already has a
+        // `blob_sha256`, we copy only the reference — the bytes live once
+        // in `checkpoint_blobs` and orphan-GC keeps them alive as long as
+        // any fork still references them. Legacy un-backfilled rows fall
+        // back to byte-copy so a fork mid-migration still works.
         if cp.has_file_state {
             let files = db.get_checkpoint_files(&cp.id)?;
             let remapped_files: Vec<CheckpointFile> = files
                 .into_iter()
-                .map(|f| CheckpointFile {
-                    id: uuid::Uuid::new_v4().to_string(),
-                    checkpoint_id: new_cp_id.clone(),
-                    file_path: f.file_path,
-                    content: f.content,
-                    file_mode: f.file_mode,
+                .map(|f| {
+                    let (content, blob_sha256) = match f.blob_sha256 {
+                        Some(sha) => (None, Some(sha)),
+                        None => (f.content, None),
+                    };
+                    CheckpointFile {
+                        id: uuid::Uuid::new_v4().to_string(),
+                        checkpoint_id: new_cp_id.clone(),
+                        file_path: f.file_path,
+                        content,
+                        blob_sha256,
+                        file_mode: f.file_mode,
+                    }
                 })
                 .collect();
             if !remapped_files.is_empty() {

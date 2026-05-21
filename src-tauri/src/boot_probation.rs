@@ -49,6 +49,12 @@ impl BootProbationState {
         self.cancel.notify_waiters();
     }
 
+    pub async fn wait_until_acknowledged(&self) {
+        while !self.is_acknowledged() {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    }
+
     fn is_acknowledged(&self) -> bool {
         self.acknowledged.load(Ordering::SeqCst)
     }

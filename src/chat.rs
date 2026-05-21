@@ -344,6 +344,8 @@ pub async fn create_turn_checkpoint(args: CheckpointArgs<'_>) -> Option<Conversa
         .map(|cp| cp.turn_index + 1)
         .unwrap_or(0);
 
+    let retention_count = read_checkpoint_retention_count(&db);
+
     let mut checkpoint = ConversationCheckpoint {
         id: uuid::Uuid::new_v4().to_string(),
         workspace_id: workspace_id.to_string(),
@@ -359,11 +361,22 @@ pub async fn create_turn_checkpoint(args: CheckpointArgs<'_>) -> Option<Conversa
     db.insert_checkpoint(&checkpoint).ok()?;
     drop(db); // release the non-Send connection before awaiting save_snapshot
 
-    // Match the DB-derived `has_file_state` (EXISTS over `checkpoint_files`):
-    // a successful snapshot that inserted zero rows still means no restore
-    // capability — happens for empty / fully-ignored worktrees.
-    let has_files = match snapshot::save_snapshot(db_path, &checkpoint.id, worktree_path).await {
-        Ok(count) => count > 0,
+    // `save_snapshot` returns the post-prune `has_file_state` flag — i.e.
+    // the same EXISTS-over-`checkpoint_files` value the read path will
+    // derive. That accounts for both the obvious zero-snapshot case
+    // (empty / fully-ignored worktrees) and the subtle one where the
+    // retention sweep prunes the just-inserted rows because a newer
+    // checkpoint already filled the kept-set.
+    let has_files = match snapshot::save_snapshot(
+        db_path,
+        workspace_id,
+        &checkpoint.id,
+        worktree_path,
+        retention_count,
+    )
+    .await
+    {
+        Ok(flag) => flag,
         Err(e) => {
             tracing::warn!(
                 target: "claudette::chat",
@@ -377,6 +390,23 @@ pub async fn create_turn_checkpoint(args: CheckpointArgs<'_>) -> Option<Conversa
 
     checkpoint.has_file_state = has_files;
     Some(checkpoint)
+}
+
+/// Read the user-configured checkpoint retention count from `app_settings`,
+/// clamping to the safe range. Falls back to the default on any read /
+/// parse error so a corrupted setting can't disable file snapshots entirely.
+pub(crate) fn read_checkpoint_retention_count(db: &Database) -> usize {
+    db.get_app_setting("checkpoint_retention_count")
+        .ok()
+        .flatten()
+        .and_then(|s| s.parse::<usize>().ok())
+        .map(|n| {
+            n.clamp(
+                snapshot::MIN_CHECKPOINT_RETENTION_COUNT,
+                snapshot::MAX_CHECKPOINT_RETENTION_COUNT,
+            )
+        })
+        .unwrap_or(snapshot::DEFAULT_CHECKPOINT_RETENTION_COUNT)
 }
 
 #[cfg(test)]

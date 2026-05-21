@@ -6,8 +6,8 @@ use rusqlite::{Connection, params};
 
 use crate::migrations::{MIGRATIONS, Migration};
 
-const SQLITE_AUTO_VACUUM_FULL: i64 = 1;
-const SQLITE_AUTO_VACUUM_INCREMENTAL: i64 = 2;
+pub(crate) const SQLITE_AUTO_VACUUM_FULL: i64 = 1;
+pub(crate) const SQLITE_AUTO_VACUUM_INCREMENTAL: i64 = 2;
 const SQLITE_BUSY_TIMEOUT: Duration = Duration::from_secs(30);
 const INCREMENTAL_VACUUM_PAGES_AFTER_DELETE: i64 = 4096;
 
@@ -28,6 +28,7 @@ pub use terminal::CLAUDETTE_TERMINAL_TITLE;
 mod remote;
 
 mod checkpoint;
+pub(crate) use checkpoint::sha256_hex;
 
 mod chat;
 
@@ -66,7 +67,6 @@ impl Database {
         Self::configure_connection(&conn, is_fresh_file)?;
         let db = Self { conn };
         db.migrate()?;
-        db.run_space_maintenance();
         Ok(db)
     }
 
@@ -115,16 +115,6 @@ impl Database {
         self.heal_orphaned_sessions()
     }
 
-    fn run_space_maintenance(&self) {
-        if let Err(e) = self.ensure_incremental_auto_vacuum() {
-            tracing::warn!(
-                target: "claudette::db",
-                error = %e,
-                "database space maintenance skipped"
-            );
-        }
-    }
-
     /// Ensure freed pages can be returned to the OS.
     ///
     /// SQLite only honors `PRAGMA auto_vacuum` immediately before any tables
@@ -132,7 +122,7 @@ impl Database {
     /// after flipping the pragma; this must live outside the SQL migration
     /// runner because migrations execute inside transactions and `VACUUM`
     /// is prohibited there.
-    fn ensure_incremental_auto_vacuum(&self) -> Result<bool, rusqlite::Error> {
+    pub(crate) fn ensure_incremental_auto_vacuum(&self) -> Result<bool, rusqlite::Error> {
         let mode = self.auto_vacuum_mode()?;
         if mode == SQLITE_AUTO_VACUUM_INCREMENTAL {
             return Ok(false);
@@ -152,14 +142,67 @@ impl Database {
         Ok(true)
     }
 
-    fn auto_vacuum_mode(&self) -> Result<i64, rusqlite::Error> {
+    pub(crate) fn auto_vacuum_mode(&self) -> Result<i64, rusqlite::Error> {
         self.conn
             .query_row("PRAGMA auto_vacuum", [], |row| row.get(0))
+    }
+
+    pub(crate) fn freelist_page_count(&self) -> Result<i64, rusqlite::Error> {
+        self.conn
+            .query_row("PRAGMA freelist_count", [], |row| row.get(0))
+    }
+
+    pub(crate) fn vacuum_for_space_reclaim(&self) -> Result<(), rusqlite::Error> {
+        self.conn.execute_batch("VACUUM;")
+    }
+
+    pub(crate) fn incremental_vacuum_for_space_reclaim(
+        &self,
+        max_pages: i64,
+    ) -> Result<i64, rusqlite::Error> {
+        if max_pages <= 0 {
+            return Ok(0);
+        }
+        let before = self.freelist_page_count()?;
+        self.incremental_vacuum(max_pages)?;
+        let after = self.freelist_page_count()?;
+        Ok(before.saturating_sub(after))
     }
 
     fn best_effort_incremental_vacuum_after_delete(&self, rows_deleted: usize) {
         if rows_deleted > 0 {
             self.best_effort_incremental_vacuum(INCREMENTAL_VACUUM_PAGES_AFTER_DELETE);
+        }
+    }
+
+    /// Drop `checkpoint_blobs` rows that no `checkpoint_files` row references.
+    /// Called after delete paths that cascade through `checkpoint_files` via
+    /// `conversation_checkpoints` — the FK chain reclaims the reference rows
+    /// but not the blob bytes themselves. Best-effort: failure is logged and
+    /// swallowed so user-facing deletes don't fail on housekeeping.
+    ///
+    /// Uses a correlated `NOT EXISTS` rather than `NOT IN (SELECT DISTINCT …)`
+    /// so SQLite can drive the lookup off `idx_checkpoint_files_blob_sha256`
+    /// directly without materializing the DISTINCT set, and so that NULL
+    /// `blob_sha256` values (legacy un-backfilled rows) don't poison the
+    /// outer match the way they would under `NOT IN`'s three-valued logic.
+    fn gc_orphan_blobs_after_delete(&self, rows_deleted: usize) {
+        if rows_deleted == 0 {
+            return;
+        }
+        if let Err(e) = self.conn.execute(
+            "DELETE FROM checkpoint_blobs
+             WHERE NOT EXISTS (
+                 SELECT 1 FROM checkpoint_files
+                  WHERE blob_sha256 = checkpoint_blobs.sha256
+             )",
+            [],
+        ) {
+            tracing::warn!(
+                target: "claudette::db",
+                error = %e,
+                "orphan checkpoint blob GC skipped"
+            );
         }
     }
 
@@ -181,9 +224,7 @@ impl Database {
         if self.auto_vacuum_mode()? != SQLITE_AUTO_VACUUM_INCREMENTAL {
             return Ok(());
         }
-        let freelist_count: i64 = self
-            .conn
-            .query_row("PRAGMA freelist_count", [], |row| row.get(0))?;
+        let freelist_count = self.freelist_page_count()?;
         if freelist_count <= 0 {
             return Ok(());
         }
@@ -534,7 +575,7 @@ mod tests {
     }
 
     #[test]
-    fn test_existing_file_db_converts_to_incremental_auto_vacuum() {
+    fn test_existing_file_db_defers_auto_vacuum_conversion_until_maintenance() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("claudette.db");
         {
@@ -554,6 +595,32 @@ mod tests {
 
         let db = Database::open(&path).unwrap();
 
+        assert_eq!(auto_vacuum_mode(&db), 0);
+        let preserved: i64 = db
+            .conn()
+            .query_row("SELECT COUNT(*) FROM preexisting_table", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(preserved, 1);
+    }
+
+    #[test]
+    fn test_explicit_maintenance_converts_existing_file_db_to_incremental_auto_vacuum() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("claudette.db");
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch(
+                "PRAGMA auto_vacuum=NONE;
+                 CREATE TABLE preexisting_table (id INTEGER PRIMARY KEY, payload BLOB);
+                 INSERT INTO preexisting_table (payload) VALUES (zeroblob(65536));",
+            )
+            .unwrap();
+        }
+
+        let db = Database::open(&path).unwrap();
+        let converted = db.ensure_incremental_auto_vacuum().unwrap();
+
+        assert!(converted);
         assert_eq!(auto_vacuum_mode(&db), SQLITE_AUTO_VACUUM_INCREMENTAL);
         let preserved: i64 = db
             .conn()

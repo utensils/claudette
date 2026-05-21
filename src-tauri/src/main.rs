@@ -854,6 +854,44 @@ fn main() {
             // fallback shape as the env watcher above.
             commands::files::watcher::setup_file_watcher(app.handle().clone());
 
+            // One-time backfill of legacy `checkpoint_files.content` rows
+            // into the content-addressed `checkpoint_blobs` store, followed
+            // by post-backfill SQLite space reclaim. Closes GitHub issue
+            // #940 / #942 for users whose DB filled up before dedupe shipped.
+            //
+            // Wait for `boot_ok` before doing this maintenance. The updater's
+            // boot-probation rollback window is 20s; draining a multi-GB #940
+            // freelist can take far longer and can make foreground DB reads
+            // wait on SQLite locks. Starting only after boot acknowledgement
+            // keeps a healthy upgrade from being rolled back.
+            let maintenance_db_path = app.state::<state::AppState>().db_path.clone();
+            let maintenance_boot =
+                std::sync::Arc::clone(&app.state::<state::AppState>().boot_probation);
+            tauri::async_runtime::spawn(async move {
+                maintenance_boot.wait_until_acknowledged().await;
+                if let Err(e) =
+                    claudette::checkpoint_backfill::run_backfill(&maintenance_db_path).await
+                {
+                    tracing::warn!(
+                        target: "claudette::db",
+                        error = %e,
+                        "checkpoint blob backfill failed; will retry on next launch"
+                    );
+                    return;
+                }
+                if let Err(e) = claudette::checkpoint_backfill::run_post_backfill_space_reclaim(
+                    &maintenance_db_path,
+                )
+                .await
+                {
+                    tracing::warn!(
+                        target: "claudette::db",
+                        error = %e,
+                        "checkpoint post-backfill space reclaim failed; will retry on next launch"
+                    );
+                }
+            });
+
             // Start the local IPC server the `claudette` CLI talks to.
             // Spawned async on the Tauri runtime; the resulting
             // `IpcServer` + discovery file are managed so they live for

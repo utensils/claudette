@@ -5,6 +5,7 @@ pub mod agent_mcp;
 pub mod audio;
 pub mod cesp;
 pub mod chat;
+pub mod checkpoint_backfill;
 pub mod claude_flags_store;
 pub mod claude_help;
 pub mod community;
