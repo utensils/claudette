@@ -139,11 +139,12 @@ impl PullRequestScope {
 }
 
 /// Scope filter for repo-wide `list_issues` calls (the project-view
-/// aggregation path). Mirrors [`PullRequestScope`] minus `ReviewRequested`
-/// — GitHub issues don't have a review-requested concept. `Mine` and
-/// `Assigned` are deliberately separate (rather than a unioned "Mine"
-/// like PRs) because issues you authored and issues assigned to you
-/// represent meaningfully different workflows.
+/// aggregation path). `Mine` matches issues you opened (authored);
+/// `Assigned` matches issues assigned to you. The two are kept
+/// separate rather than unioned because "what did I file?" and
+/// "what's on my plate?" are meaningfully different workflows. There
+/// is no `ReviewRequested` variant — GitHub issues have no
+/// review-requested concept (that's PRs only, via [`PullRequestScope`]).
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum IssueScope {

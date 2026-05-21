@@ -663,8 +663,10 @@ async fn seed_repo_scm_lists_cache_from_db(
 /// error banner.
 ///
 /// `scope` defaults to `IssueScope::Open` — every open issue on the repo.
-/// `IssueScope::Mine` narrows to issues authored by or assigned to the
-/// authenticated user (resolved by the SCM plugin).
+/// `IssueScope::Mine` narrows to issues *opened by* the authenticated
+/// user; `IssueScope::Assigned` narrows to issues *assigned to* them.
+/// The two are intentionally separate (rather than a union) because the
+/// workflows differ — "what did I file?" vs. "what's on my plate?".
 #[tauri::command]
 pub async fn list_repo_open_issues(
     repo_id: String,

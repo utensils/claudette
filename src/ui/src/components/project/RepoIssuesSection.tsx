@@ -108,10 +108,9 @@ export const RepoIssuesSection = memo(function RepoIssuesSection({
           <CircleDot size={12} className={dashStyles.archivedIcon} aria-hidden />
           <span className={dashStyles.workspacesTitle}>Issues</span>
           {issues.length > 0 && (
-            // Match the PR-section header — the count tracks whatever the
-            // active scope produced (e.g. "Mine" shows mine-count, not
-            // total-open-count). The bare number keeps the label honest
-            // across scopes; the toggle below disambiguates it.
+            // Bare count — tracks the active scope (e.g. "Mine" shows
+            // mine-count, not total-open-count). The toggle next to it
+            // disambiguates the label. Same shape as the PR section.
             <span className={dashStyles.headerCount}>{issues.length}</span>
           )}
         </button>

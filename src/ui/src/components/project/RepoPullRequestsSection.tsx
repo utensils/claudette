@@ -119,7 +119,11 @@ export const RepoPullRequestsSection = memo(function RepoPullRequestsSection({
           <GitPullRequest size={12} className={dashStyles.archivedIcon} aria-hidden />
           <span className={dashStyles.workspacesTitle}>Pull Requests</span>
           {prs.length > 0 && (
-            <span className={dashStyles.headerCount}>{prs.length} open</span>
+            // Bare count, no " open" suffix: the count tracks whatever
+            // scope is active (Open / Mine / Review), and "open" was
+            // misleading on the Mine/Review tabs where the number is
+            // scope-filtered. The toggle next to it disambiguates.
+            <span className={dashStyles.headerCount}>{prs.length}</span>
           )}
         </button>
         <div className={styles.headerRight}>
