@@ -361,9 +361,12 @@ pub async fn create_turn_checkpoint(args: CheckpointArgs<'_>) -> Option<Conversa
     db.insert_checkpoint(&checkpoint).ok()?;
     drop(db); // release the non-Send connection before awaiting save_snapshot
 
-    // Match the DB-derived `has_file_state` (EXISTS over `checkpoint_files`):
-    // a successful snapshot that inserted zero rows still means no restore
-    // capability — happens for empty / fully-ignored worktrees.
+    // `save_snapshot` returns the post-prune `has_file_state` flag — i.e.
+    // the same EXISTS-over-`checkpoint_files` value the read path will
+    // derive. That accounts for both the obvious zero-snapshot case
+    // (empty / fully-ignored worktrees) and the subtle one where the
+    // retention sweep prunes the just-inserted rows because a newer
+    // checkpoint already filled the kept-set.
     let has_files = match snapshot::save_snapshot(
         db_path,
         workspace_id,
@@ -373,7 +376,7 @@ pub async fn create_turn_checkpoint(args: CheckpointArgs<'_>) -> Option<Conversa
     )
     .await
     {
-        Ok(count) => count > 0,
+        Ok(flag) => flag,
         Err(e) => {
             tracing::warn!(
                 target: "claudette::chat",

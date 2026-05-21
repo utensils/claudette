@@ -314,11 +314,22 @@ impl Database {
         // documented in #582: created_at is unambiguous wall-clock recency at
         // the workspace scope (turn_index is per-session so it collides
         // across sessions), id is the deterministic final tiebreaker.
+        //
+        // The `EXISTS(...)` filter scopes the subquery to checkpoints that
+        // still hold file rows. Without it, a workspace with thousands of
+        // historical turns re-scans every old checkpoint on every
+        // snapshot even though their `checkpoint_files` rows were already
+        // pruned earlier and there is no work to do for them — making
+        // snapshot cost O(total history) rather than O(retained-with-files).
         tx.execute(
             "DELETE FROM checkpoint_files
              WHERE checkpoint_id IN (
                  SELECT id FROM conversation_checkpoints
                   WHERE workspace_id = ?1
+                    AND EXISTS(
+                        SELECT 1 FROM checkpoint_files
+                         WHERE checkpoint_id = conversation_checkpoints.id
+                    )
                   ORDER BY created_at DESC, turn_index DESC, id DESC
                   LIMIT -1 OFFSET ?2
              )",
@@ -1398,5 +1409,84 @@ mod tests {
             0,
             "blob bytes must be reclaimed when no checkpoint_files row references them"
         );
+    }
+
+    /// Codex peer-review pin: the retention prune subquery must skip
+    /// checkpoints whose file rows were already pruned in a previous run.
+    /// Without the `EXISTS(...)` filter, the subquery returns every
+    /// historical checkpoint past the offset on every snapshot — making
+    /// the per-snapshot cost O(workspace lifetime) instead of
+    /// O(retained-with-files).
+    #[test]
+    fn retention_prune_subquery_skips_already_pruned_checkpoints() {
+        let db = setup_db_with_workspace();
+        // Seed N+2 checkpoints, all with file rows. After a tight
+        // retention pass, only the N most-recent should still have files.
+        for i in 0..5 {
+            let mid = format!("m{i}");
+            let cpid = format!("cp{i}");
+            db.insert_chat_message(&make_chat_msg(&db, &mid, "w1", ChatRole::Assistant, "x"))
+                .unwrap();
+            db.insert_checkpoint(&make_checkpoint(&db, &cpid, "w1", &mid, i))
+                .unwrap();
+            db.insert_checkpoint_files_and_prune(
+                "w1",
+                &[raw_file(&format!("f-{i}"), &cpid, "a.txt", b"x")],
+                2,
+            )
+            .unwrap();
+        }
+
+        // EXPLAIN QUERY PLAN must consult `checkpoint_files` from the
+        // inner EXISTS filter — proving the new index path is in play
+        // and the subquery is bounded by the retained set.
+        let plan: Vec<String> = {
+            let mut stmt = db
+                .conn()
+                .prepare(
+                    "EXPLAIN QUERY PLAN
+                     DELETE FROM checkpoint_files
+                      WHERE checkpoint_id IN (
+                          SELECT id FROM conversation_checkpoints
+                           WHERE workspace_id = 'w1'
+                             AND EXISTS(
+                                 SELECT 1 FROM checkpoint_files
+                                  WHERE checkpoint_id = conversation_checkpoints.id
+                             )
+                           ORDER BY created_at DESC, turn_index DESC, id DESC
+                           LIMIT -1 OFFSET 2
+                      )",
+                )
+                .unwrap();
+            stmt.query_map([], |r| r.get::<_, String>(3))
+                .unwrap()
+                .collect::<Result<_, _>>()
+                .unwrap()
+        };
+        let plan_text = plan.join(" | ");
+        assert!(
+            plan_text.contains("checkpoint_files"),
+            "EXISTS filter must drive a checkpoint_files lookup in the plan: {plan_text}"
+        );
+
+        // And the retention semantics still hold — cp3 + cp4 keep files,
+        // cp0–cp2 don't. (Same invariant as
+        // `retention_prunes_old_file_rows_but_keeps_history`, but here it
+        // doubles as a sanity check that the EXISTS filter didn't change
+        // the semantic outcome — only the cost.)
+        let with_files: Vec<String> = {
+            let mut stmt = db
+                .conn()
+                .prepare(
+                    "SELECT DISTINCT checkpoint_id FROM checkpoint_files
+                     ORDER BY checkpoint_id",
+                )
+                .unwrap();
+            stmt.query_map([], |r| r.get::<_, String>(0))
+                .unwrap()
+                .collect::<Result<_, _>>()
+                .unwrap()
+        };
+        assert_eq!(with_files, vec!["cp3".to_string(), "cp4".to_string()]);
     }
 }
