@@ -137,6 +137,127 @@ fn queue_control_prompt(
     kind
 }
 
+pub(super) async fn route_turn_control_request(
+    app: &AppHandle,
+    workspace_id: &str,
+    chat_session_id: &str,
+    event: &AgentEvent,
+) -> bool {
+    let AgentEvent::Stream(StreamEvent::ControlRequest {
+        request_id,
+        request:
+            ControlRequestInner::CanUseTool {
+                tool_name,
+                tool_use_id,
+                input,
+            },
+    }) = event
+    else {
+        return false;
+    };
+
+    if matches!(tool_name.as_str(), "AskUserQuestion" | "ExitPlanMode")
+        || is_codex_approval_tool_name(tool_name)
+    {
+        let app_state = app.state::<AppState>();
+        let mut agents = app_state.agents.write().await;
+        let kind = if let Some(session) = agents.get_mut(chat_session_id) {
+            queue_control_prompt(
+                session,
+                request_id.clone(),
+                tool_name.clone(),
+                tool_use_id.clone(),
+                input.clone(),
+            )
+        } else {
+            control_prompt_attention_kind(tool_name)
+        };
+        drop(agents);
+        let payload = serde_json::json!({
+            "workspace_id": workspace_id,
+            "chat_session_id": chat_session_id,
+            "tool_use_id": tool_use_id,
+            "tool_name": tool_name,
+            "input": input,
+        });
+        let _ = app.emit("agent-permission-prompt", &payload);
+
+        // Fire the system notification after the frontend has the data it
+        // needs to render the card. The task is detached, so it re-checks
+        // that the same request is still pending before notifying.
+        let app_for_notify = app.clone();
+        let ws_id_for_notify = workspace_id.to_string();
+        let session_id_for_notify = chat_session_id.to_string();
+        let tool_use_id_for_notify = tool_use_id.clone();
+        let request_id_for_notify = request_id.clone();
+        let tool_name_for_notify = tool_name.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(ATTENTION_NOTIFY_DELAY_MS)).await;
+
+            let app_state = app_for_notify.state::<AppState>();
+            let should_notify = {
+                let mut agents = app_state.agents.write().await;
+                let Some(session) = agents.get_mut(&session_id_for_notify) else {
+                    return;
+                };
+                if session.attention_notification_sent {
+                    false
+                } else {
+                    let still_pending = session
+                        .pending_permissions
+                        .get(&tool_use_id_for_notify)
+                        .is_some_and(|p| {
+                            p.request_id == request_id_for_notify
+                                && p.tool_name == tool_name_for_notify
+                        });
+                    if still_pending {
+                        session.attention_notification_sent = true;
+                    }
+                    still_pending
+                }
+            };
+
+            if should_notify {
+                crate::tray::notify_attention(&app_for_notify, &ws_id_for_notify, kind);
+            }
+        });
+    } else {
+        let app_state = app.state::<AppState>();
+        let agents = app_state.agents.read().await;
+        let (ps, session_allowed_tools, session_plan_mode, session_exited_plan) = agents
+            .get(chat_session_id)
+            .map(|s| {
+                (
+                    s.persistent_session.clone(),
+                    s.session_allowed_tools.clone(),
+                    s.session_plan_mode,
+                    s.session_exited_plan,
+                )
+            })
+            .unwrap_or_else(|| (None, Vec::new(), false, false));
+        drop(agents);
+        if let Some(ps) = ps {
+            let response = build_permission_response(
+                &session_allowed_tools,
+                session_plan_mode,
+                session_exited_plan,
+                tool_name,
+                input,
+            );
+            if let Err(e) = ps.send_control_response(request_id, response).await {
+                tracing::warn!(
+                    target: "claudette::chat",
+                    tool_name = %tool_name,
+                    error = %e,
+                    "failed to respond to control_request"
+                );
+            }
+        }
+    }
+
+    true
+}
+
 fn auth_failure_message_from_stderr(stderr_lines: &[String]) -> Option<String> {
     let output = stderr_lines
         .iter()
@@ -2654,133 +2775,7 @@ pub async fn send_chat_message(
             //      without this branch "full" users see spurious denials.
             //   3. Otherwise — deny with a message that names the escalation
             //      path (the model paraphrases this to the user).
-            if let AgentEvent::Stream(StreamEvent::ControlRequest {
-                request_id,
-                request:
-                    ControlRequestInner::CanUseTool {
-                        tool_name,
-                        tool_use_id,
-                        input,
-                    },
-            }) = &event
-            {
-                if matches!(tool_name.as_str(), "AskUserQuestion" | "ExitPlanMode")
-                    || is_codex_approval_tool_name(tool_name)
-                {
-                    let app_state = app.state::<AppState>();
-                    let mut agents = app_state.agents.write().await;
-                    let kind = if let Some(session) = agents.get_mut(&chat_session_id_for_stream) {
-                        queue_control_prompt(
-                            session,
-                            request_id.clone(),
-                            tool_name.clone(),
-                            tool_use_id.clone(),
-                            input.clone(),
-                        )
-                    } else {
-                        control_prompt_attention_kind(tool_name)
-                    };
-                    drop(agents);
-                    let payload = serde_json::json!({
-                        "workspace_id": &ws_id,
-                        "chat_session_id": &chat_session_id_for_stream,
-                        "tool_use_id": tool_use_id,
-                        "tool_name": tool_name,
-                        "input": input,
-                    });
-                    let _ = app.emit("agent-permission-prompt", &payload);
-
-                    // Fire the system notification after the frontend has the
-                    // data it needs to render the card. We emit
-                    // `agent-permission-prompt` synchronously above; the
-                    // short sleep gives the webview time to pick up the event
-                    // and paint before the notification sound/banner arrives.
-                    // Tied to ControlRequest (not the earlier ContentBlockStart)
-                    // because the card is driven by this event, not the
-                    // streaming tool_use block.
-                    //
-                    // The task is detached, so it must defend against state
-                    // changes during the sleep:
-                    //   - If the user already responded (or the session was
-                    //     stopped/cleared), the matching pending_permission is
-                    //     gone and a notification would be misleading.
-                    //   - If a different pending prompt in the same cycle has
-                    //     already triggered the notification, dedupe via
-                    //     `attention_notification_sent`.
-                    let app_for_notify = app.clone();
-                    let ws_id_for_notify = ws_id.clone();
-                    let session_id_for_notify = chat_session_id_for_stream.clone();
-                    let tool_use_id_for_notify = tool_use_id.clone();
-                    let request_id_for_notify = request_id.clone();
-                    let tool_name_for_notify = tool_name.clone();
-                    tokio::spawn(async move {
-                        tokio::time::sleep(std::time::Duration::from_millis(
-                            ATTENTION_NOTIFY_DELAY_MS,
-                        ))
-                        .await;
-
-                        let app_state = app_for_notify.state::<AppState>();
-                        let should_notify = {
-                            let mut agents = app_state.agents.write().await;
-                            let Some(session) = agents.get_mut(&session_id_for_notify) else {
-                                return;
-                            };
-                            if session.attention_notification_sent {
-                                false
-                            } else {
-                                let still_pending = session
-                                    .pending_permissions
-                                    .get(&tool_use_id_for_notify)
-                                    .is_some_and(|p| {
-                                        p.request_id == request_id_for_notify
-                                            && p.tool_name == tool_name_for_notify
-                                    });
-                                if still_pending {
-                                    session.attention_notification_sent = true;
-                                }
-                                still_pending
-                            }
-                        };
-
-                        if should_notify {
-                            crate::tray::notify_attention(&app_for_notify, &ws_id_for_notify, kind);
-                        }
-                    });
-                } else {
-                    let app_state = app.state::<AppState>();
-                    let agents = app_state.agents.read().await;
-                    let (ps, session_allowed_tools, session_plan_mode, session_exited_plan) =
-                        agents
-                            .get(&chat_session_id_for_stream)
-                            .map(|s| {
-                                (
-                                    s.persistent_session.clone(),
-                                    s.session_allowed_tools.clone(),
-                                    s.session_plan_mode,
-                                    s.session_exited_plan,
-                                )
-                            })
-                            .unwrap_or_else(|| (None, Vec::new(), false, false));
-                    drop(agents);
-                    if let Some(ps) = ps {
-                        let response = build_permission_response(
-                            &session_allowed_tools,
-                            session_plan_mode,
-                            session_exited_plan,
-                            tool_name,
-                            input,
-                        );
-                        if let Err(e) = ps.send_control_response(request_id, response).await {
-                            tracing::warn!(
-                                target: "claudette::chat",
-                                tool_name = %tool_name,
-                                error = %e,
-                                "failed to respond to control_request"
-                            );
-                        }
-                    }
-                }
-            }
+            route_turn_control_request(&app, &ws_id, &chat_session_id_for_stream, &event).await;
 
             // Detect tool calls that require user input (question, plan approval).
             // The tray state flip happens here (on ContentBlockStart) so the

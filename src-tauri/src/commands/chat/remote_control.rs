@@ -976,6 +976,9 @@ async fn ensure_remote_control_monitor(
                 remote_user_msg_id = Some(msg.id);
             }
 
+            super::send::route_turn_control_request(&app, &workspace_id, &chat_session_id, &event)
+                .await;
+
             if let AgentEvent::Stream(StreamEvent::Stream {
                 event: claudette::agent::InnerStreamEvent::MessageDelta { usage: Some(u) },
             }) = &event
