@@ -90,6 +90,7 @@ describe("RepoPullRequestsSection error/cache handling", () => {
         pull_requests: [makePr(10), makePr(11)],
         error: "rate limited",
       }),
+      isStale: false,
       loading: false,
       refresh: vi.fn(),
     });
@@ -107,6 +108,7 @@ describe("RepoPullRequestsSection error/cache handling", () => {
   it("replaces the list with an error banner when nothing is cached", () => {
     mockedHook.mockReturnValue({
       payload: makePayload({ pull_requests: [], error: "boom" }),
+      isStale: false,
       loading: false,
       refresh: vi.fn(),
     });
@@ -118,6 +120,7 @@ describe("RepoPullRequestsSection error/cache handling", () => {
   it("activates a row on Space as well as Enter (role=button a11y)", () => {
     mockedHook.mockReturnValue({
       payload: makePayload({ pull_requests: [makePr(10)] }),
+      isStale: false,
       loading: false,
       refresh: vi.fn(),
     });
@@ -140,6 +143,7 @@ describe("RepoPullRequestsSection error/cache handling", () => {
   it("renders the honest 'New workspace in this repo' context-menu label", () => {
     mockedHook.mockReturnValue({
       payload: makePayload({ pull_requests: [makePr(10)] }),
+      isStale: false,
       loading: false,
       refresh: vi.fn(),
     });

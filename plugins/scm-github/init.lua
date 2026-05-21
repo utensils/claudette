@@ -92,6 +92,17 @@ function M.list_issues(args)
         "--limit", limit,
         "--json", "number,title,url,state,author,labels,comments,createdAt,updatedAt",
     }
+    -- Three scope options surface on the Issues tab:
+    --   "mine"     → authored by the current user (--author @me)
+    --   "assigned" → assigned to the current user (--assignee @me)
+    --   anything else (incl. nil) → no extra filter ("Open")
+    if args.scope == "mine" then
+        table.insert(gh_args, "--author")
+        table.insert(gh_args, "@me")
+    elseif args.scope == "assigned" then
+        table.insert(gh_args, "--assignee")
+        table.insert(gh_args, "@me")
+    end
     local ok, data = pcall(gh, gh_args)
     if not ok then
         error(data)

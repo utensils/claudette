@@ -77,8 +77,11 @@ impl Database {
     // --- Repo-wide SCM lists cache (issues / PRs by scope) ---
 
     /// `row.fetched_at` is ignored; the database sets it to `datetime('now')`
-    /// on every upsert. `list_kind` is one of `"issues"` or
-    /// `"pull_requests:<scope>"`.
+    /// on every upsert. `list_kind` is one of `"issues:<scope>"` or
+    /// `"pull_requests:<scope>"`. The pre-scope `"issues"` rows written
+    /// before the issues filter toggle landed are read-tolerated by
+    /// `load_all_repo_scm_list_cache` but no longer produced — they age
+    /// out the next time the repo is polled.
     pub fn upsert_repo_scm_list_cache(
         &self,
         row: &RepoScmListCacheRow,

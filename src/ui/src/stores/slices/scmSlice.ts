@@ -1,5 +1,6 @@
 import type { StateCreator } from "zustand";
 import type {
+  IssueScope,
   PullRequestScope,
   RepoIssuesPayload,
   RepoPullRequestsPayload,
@@ -22,17 +23,25 @@ export interface ScmSlice {
 
   // --- Project-view repo-wide lists ---
 
-  /** Open issues per repo_id. Powers the project-view Issues section.
-   *  Hydrated lazily by `useRepoOpenIssues`; survives repo switches so a
-   *  return to a previously-viewed repo paints instantly. */
-  repoIssuesByRepoId: Record<string, RepoIssuesPayload>;
+  /** Open issues per repo_id per scope. Powers the project-view Issues
+   *  section's Open / Mine toggle. Hydrated lazily by `useRepoOpenIssues`;
+   *  survives repo switches so a return to a previously-viewed repo paints
+   *  instantly. */
+  repoIssuesByRepoId: Record<
+    string,
+    Partial<Record<IssueScope, RepoIssuesPayload>>
+  >;
   /** Open PRs per repo_id per scope. Powers the project-view PR section's
    *  scope tabs (open / mine / review_requested). */
   repoPullRequestsByRepoId: Record<
     string,
     Partial<Record<PullRequestScope, RepoPullRequestsPayload>>
   >;
-  setRepoIssues: (repoId: string, payload: RepoIssuesPayload) => void;
+  setRepoIssues: (
+    repoId: string,
+    scope: IssueScope,
+    payload: RepoIssuesPayload,
+  ) => void;
   setRepoPullRequests: (
     repoId: string,
     scope: PullRequestScope,
@@ -76,9 +85,15 @@ export const createScmSlice: StateCreator<AppState, [], [], ScmSlice> = (
 
   repoIssuesByRepoId: {},
   repoPullRequestsByRepoId: {},
-  setRepoIssues: (repoId, payload) =>
+  setRepoIssues: (repoId, scope, payload) =>
     set((s) => ({
-      repoIssuesByRepoId: { ...s.repoIssuesByRepoId, [repoId]: payload },
+      repoIssuesByRepoId: {
+        ...s.repoIssuesByRepoId,
+        [repoId]: {
+          ...(s.repoIssuesByRepoId[repoId] ?? {}),
+          [scope]: payload,
+        },
+      },
     })),
   setRepoPullRequests: (repoId, scope, payload) =>
     set((s) => ({

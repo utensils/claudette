@@ -43,7 +43,10 @@ export const RepoPullRequestsSection = memo(function RepoPullRequestsSection({
   repoId,
 }: RepoPullRequestsSectionProps) {
   const [scope, setScope] = useState<PullRequestScope>("open");
-  const { payload, loading, refresh } = useRepoOpenPullRequests(repoId, scope);
+  const { payload, isStale, loading, refresh } = useRepoOpenPullRequests(
+    repoId,
+    scope,
+  );
   // Collapsed by default — header surfaces the count, clicking the
   // chevron expands. Symmetrical with RepoIssuesSection.
   const [open, setOpen] = useState(false);
@@ -116,7 +119,11 @@ export const RepoPullRequestsSection = memo(function RepoPullRequestsSection({
           <GitPullRequest size={12} className={dashStyles.archivedIcon} aria-hidden />
           <span className={dashStyles.workspacesTitle}>Pull Requests</span>
           {prs.length > 0 && (
-            <span className={dashStyles.headerCount}>{prs.length} open</span>
+            // Bare count, no " open" suffix: the count tracks whatever
+            // scope is active (Open / Mine / Review), and "open" was
+            // misleading on the Mine/Review tabs where the number is
+            // scope-filtered. The toggle next to it disambiguates.
+            <span className={dashStyles.headerCount}>{prs.length}</span>
           )}
         </button>
         <div className={styles.headerRight}>
@@ -157,7 +164,7 @@ export const RepoPullRequestsSection = memo(function RepoPullRequestsSection({
         <RepoPullRequestsBody
           repoId={repoId}
           payload={payload}
-          loading={loading}
+          isStale={isStale}
           inProgress={inProgress}
           visibleRest={visibleRest}
           restTotal={rest.length}
@@ -181,7 +188,9 @@ export const RepoPullRequestsSection = memo(function RepoPullRequestsSection({
 interface RepoPullRequestsBodyProps {
   repoId: string;
   payload: ReturnType<typeof useRepoOpenPullRequests>["payload"];
-  loading: boolean;
+  /// True when `payload` is the previous scope's data (stale-while-
+  /// revalidate). The list dims while real data is in flight.
+  isStale: boolean;
   /// PRs that already have a workspace — rendered in their own group.
   inProgress: PullRequest[];
   /// The remaining PRs, already capped to the visible-row limit.
@@ -201,7 +210,7 @@ interface RepoPullRequestsBodyProps {
 function RepoPullRequestsBody({
   repoId,
   payload,
-  loading,
+  isStale,
   inProgress,
   visibleRest,
   restTotal,
@@ -213,7 +222,12 @@ function RepoPullRequestsBody({
   onCopyUrl,
   onCreateWorkspaceForBranch,
 }: RepoPullRequestsBodyProps) {
-  if (loading && !payload) {
+  // Render the skeleton whenever we don't yet have a payload for this
+  // (repo, scope) pair — see RepoIssuesSection's RepoIssuesBody for the
+  // rationale. Switching scope tabs selects a store slot that may be
+  // `undefined` until the fetch lands; relying on `loading` alone would
+  // briefly flash the empty state.
+  if (!payload) {
     return <SkeletonList />;
   }
   if (payload?.unsupported) {
@@ -263,8 +277,13 @@ function RepoPullRequestsBody({
     </li>
   );
 
+  // Stale-while-revalidate: dim the rows while the new-scope fetch is
+  // in flight. See RepoIssuesSection's RepoIssuesBody for the
+  // rationale.
+  const staleClass = isStale ? styles.stale : "";
+
   return (
-    <>
+    <div className={staleClass} aria-busy={isStale || undefined}>
       {payload?.error && (
         <div className={styles.errorBanner}>
           <span>Could not refresh pull requests — showing cached results.</span>
@@ -297,7 +316,7 @@ function RepoPullRequestsBody({
           {showAllRow}
         </ul>
       )}
-    </>
+    </div>
   );
 }
 

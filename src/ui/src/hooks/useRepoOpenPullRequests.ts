@@ -12,7 +12,15 @@ import type {
 const POLL_INTERVAL_MS = 60_000;
 
 export interface UseRepoOpenPullRequestsResult {
+  /// Payload for the requested scope. When the new scope hasn't been
+  /// fetched yet, the hook falls back to the most recent payload seen
+  /// for any other scope (stale-while-revalidate) so the section can
+  /// keep rendering rows during the round-trip instead of flashing a
+  /// blank list. Mirrors the same behaviour in `useRepoOpenIssues`.
   payload: RepoPullRequestsPayload | undefined;
+  /// True when the returned `payload` is from a different scope than
+  /// the one currently requested.
+  isStale: boolean;
   loading: boolean;
   refresh: () => Promise<void>;
 }
@@ -110,5 +118,29 @@ export function useRepoOpenPullRequests(
     };
   }, [enabled, repoId, fetchOnce]);
 
-  return { payload, loading, refresh };
+  // Stale-while-revalidate fallback — see useRepoOpenIssues for the
+  // full rationale. Without this, switching scope tabs flashes a
+  // skeleton during the fetch round-trip; with it, the section keeps
+  // showing the previous scope's rows until real data lands.
+  const byScope = useAppStore((s) =>
+    repoId ? s.repoPullRequestsByRepoId[repoId] : undefined,
+  );
+  const lastSeenRef = useRef<RepoPullRequestsPayload | undefined>(undefined);
+  if (payload) {
+    lastSeenRef.current = payload;
+  } else if (byScope) {
+    let freshest: RepoPullRequestsPayload | undefined;
+    for (const candidate of Object.values(byScope)) {
+      if (!candidate) continue;
+      if (!freshest || candidate.fetched_at > freshest.fetched_at) {
+        freshest = candidate;
+      }
+    }
+    if (freshest) lastSeenRef.current = freshest;
+  }
+
+  const effectivePayload = payload ?? lastSeenRef.current;
+  const isStale = !payload && effectivePayload !== undefined;
+
+  return { payload: effectivePayload, isStale, loading, refresh };
 }

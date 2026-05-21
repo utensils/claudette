@@ -39,6 +39,7 @@ function makeIssue(n: number): Issue {
 function makePayload(over: Partial<RepoIssuesPayload>): RepoIssuesPayload {
   return {
     issues: [],
+    scope: "open",
     fetched_at: "2026-05-19T00:00:00Z",
     error: null,
     unsupported: false,
@@ -114,6 +115,7 @@ describe("RepoIssuesSection error/cache handling", () => {
         issues: [makeIssue(1), makeIssue(2)],
         error: "rate limited",
       }),
+      isStale: false,
       loading: false,
       refresh: vi.fn(),
     });
@@ -132,6 +134,7 @@ describe("RepoIssuesSection error/cache handling", () => {
   it("replaces the list with an error banner when there is nothing cached", () => {
     mockedHook.mockReturnValue({
       payload: makePayload({ issues: [], error: "rate limited" }),
+      isStale: false,
       loading: false,
       refresh: vi.fn(),
     });
@@ -145,6 +148,7 @@ describe("RepoIssuesSection error/cache handling", () => {
   it("shows the unsupported hint when the provider lacks list_issues", () => {
     mockedHook.mockReturnValue({
       payload: makePayload({ unsupported: true }),
+      isStale: false,
       loading: false,
       refresh: vi.fn(),
     });
@@ -158,6 +162,7 @@ describe("RepoIssuesSection error/cache handling", () => {
   it("shows the empty state when there are no issues and no error", () => {
     mockedHook.mockReturnValue({
       payload: makePayload({ issues: [] }),
+      isStale: false,
       loading: false,
       refresh: vi.fn(),
     });
@@ -169,6 +174,7 @@ describe("RepoIssuesSection error/cache handling", () => {
   it("activates a row on Space as well as Enter (role=button a11y)", () => {
     mockedHook.mockReturnValue({
       payload: makePayload({ issues: [makeIssue(1)] }),
+      isStale: false,
       loading: false,
       refresh: vi.fn(),
     });
@@ -191,6 +197,7 @@ describe("RepoIssuesSection error/cache handling", () => {
   it("renders the open-count badge in the collapsed header", () => {
     mockedHook.mockReturnValue({
       payload: makePayload({ issues: [makeIssue(1), makeIssue(2), makeIssue(3)] }),
+      isStale: false,
       loading: false,
       refresh: vi.fn(),
     });
@@ -221,6 +228,7 @@ describe("RepoIssuesSection error/cache handling", () => {
       payload: makePayload({
         issues: [makeIssue(1), makeIssue(2), makeIssue(3)],
       }),
+      isStale: false,
       loading: false,
       refresh: vi.fn(),
     });
@@ -237,11 +245,128 @@ describe("RepoIssuesSection error/cache handling", () => {
   it("renders a flat list (no group headers) when nothing is dispatched", () => {
     mockedHook.mockReturnValue({
       payload: makePayload({ issues: [makeIssue(1), makeIssue(2)] }),
+      isStale: false,
       loading: false,
       refresh: vi.fn(),
     });
     const container = render();
     expand(container);
     expect(container.textContent).not.toContain("In progress");
+  });
+});
+
+describe("RepoIssuesSection scope toggle", () => {
+  function tabByLabel(container: HTMLElement, label: string) {
+    return Array.from(container.querySelectorAll('[role="tab"]')).find(
+      (n) => n.textContent === label,
+    ) as HTMLButtonElement | undefined;
+  }
+
+  it("defaults to the Open scope and exposes Mine + Assigned tabs", () => {
+    mockedHook.mockReturnValue({
+      payload: makePayload({ issues: [] }),
+      isStale: false,
+      loading: false,
+      refresh: vi.fn(),
+    });
+    const container = render();
+    expect(tabByLabel(container, "Open")?.getAttribute("aria-selected")).toBe(
+      "true",
+    );
+    expect(tabByLabel(container, "Mine")?.getAttribute("aria-selected")).toBe(
+      "false",
+    );
+    expect(
+      tabByLabel(container, "Assigned")?.getAttribute("aria-selected"),
+    ).toBe("false");
+    // No Review tab — GitHub issues have no review-requested concept.
+    expect(tabByLabel(container, "Review")).toBeUndefined();
+  });
+
+  it("calls useRepoOpenIssues with the selected scope and re-fetches on switch", () => {
+    mockedHook.mockReturnValue({
+      payload: makePayload({ issues: [makeIssue(1)] }),
+      isStale: false,
+      loading: false,
+      refresh: vi.fn(),
+    });
+    const container = render();
+    expect(mockedHook).toHaveBeenLastCalledWith("repo-1", "open");
+
+    act(() => {
+      tabByLabel(container, "Mine")?.click();
+    });
+    expect(mockedHook).toHaveBeenLastCalledWith("repo-1", "mine");
+
+    act(() => {
+      tabByLabel(container, "Assigned")?.click();
+    });
+    expect(mockedHook).toHaveBeenLastCalledWith("repo-1", "assigned");
+  });
+
+  it("uses scope-aware empty states for Mine and Assigned", () => {
+    mockedHook.mockReturnValue({
+      payload: makePayload({ issues: [], scope: "mine" }),
+      isStale: false,
+      loading: false,
+      refresh: vi.fn(),
+    });
+    const container = render();
+    expand(container);
+    act(() => {
+      tabByLabel(container, "Mine")?.click();
+    });
+    expect(container.textContent).toContain("No issues opened by you.");
+
+    mockedHook.mockReturnValue({
+      payload: makePayload({ issues: [], scope: "assigned" }),
+      isStale: false,
+      loading: false,
+      refresh: vi.fn(),
+    });
+    act(() => {
+      tabByLabel(container, "Assigned")?.click();
+    });
+    expect(container.textContent).toContain("No issues assigned to you.");
+  });
+
+  it("renders the skeleton (not the empty state) when payload is undefined", () => {
+    // Simulates the very first paint — no scope has been fetched yet,
+    // so the hook can't even produce a stale fallback.
+    mockedHook.mockReturnValue({
+      payload: undefined,
+      isStale: false,
+      loading: false,
+      refresh: vi.fn(),
+    });
+    const container = render();
+    expand(container);
+    expect(container.textContent).not.toContain("No open issues.");
+    expect(container.textContent).not.toContain("No issues opened by you.");
+    expect(container.textContent).not.toContain("No issues assigned to you.");
+    // SkeletonList renders empty <li> rows.
+    expect(container.querySelectorAll("li").length).toBeGreaterThan(0);
+  });
+
+  it("renders prior rows dimmed during stale-while-revalidate (no blank flash)", () => {
+    // On scope switch, the hook returns the previous scope's payload
+    // marked isStale=true until the new fetch lands. The body must
+    // render those rows (not the skeleton) and apply the stale
+    // dimming wrapper so the section never flashes "blank".
+    mockedHook.mockReturnValue({
+      payload: makePayload({ issues: [makeIssue(7), makeIssue(8)] }),
+      isStale: true,
+      loading: false,
+      refresh: vi.fn(),
+    });
+    const container = render();
+    expand(container);
+
+    // Rows are visible (no skeleton-only paint).
+    expect(container.textContent).toContain("Issue 7");
+    expect(container.textContent).toContain("Issue 8");
+    // The wrapper carries `aria-busy="true"` so assistive tech is informed.
+    const busy = container.querySelector('[aria-busy="true"]');
+    expect(busy).toBeTruthy();
   });
 });

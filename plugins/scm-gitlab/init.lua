@@ -67,6 +67,16 @@ function M.list_issues(args)
     else
         table.insert(glab_args, "--all")
     end
+    -- Mirror the GitHub plugin's three Issues-tab scopes:
+    --   "mine"     → glab's `--mine` flag (authored by current user)
+    --   "assigned" → `--assignee @me`
+    --   anything else → no extra filter ("Open")
+    if args.scope == "mine" then
+        table.insert(glab_args, "--mine")
+    elseif args.scope == "assigned" then
+        table.insert(glab_args, "--assignee")
+        table.insert(glab_args, "@me")
+    end
     local ok, data = pcall(glab, glab_args)
     if not ok then
         error(data)

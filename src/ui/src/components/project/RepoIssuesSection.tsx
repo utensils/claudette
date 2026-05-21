@@ -12,7 +12,7 @@ import { useRepoOpenIssues } from "../../hooks/useRepoOpenIssues";
 import { ContextMenu, type ContextMenuItem } from "../shared/ContextMenu";
 import { useModelRegistry } from "../chat/useModelRegistry";
 import { useWorkspaceScmLink } from "../../hooks/useWorkspaceScmLink";
-import type { Issue, IssueLabel } from "../../types/plugin";
+import type { Issue, IssueLabel, IssueScope } from "../../types/plugin";
 import dashStyles from "../layout/Dashboard.module.css";
 import styles from "./RepoListsSection.module.css";
 import { formatTimeAgo } from "./timeAgo";
@@ -34,6 +34,16 @@ const MAX_LABELS_VISIBLE = 2;
 const DEFAULT_VISIBLE = 10;
 const ALL_VISIBLE_LIMIT = 50;
 
+const SCOPES: { value: IssueScope; label: string; title: string }[] = [
+  { value: "open", label: "Open", title: "All open issues" },
+  { value: "mine", label: "Mine", title: "Issues you opened" },
+  {
+    value: "assigned",
+    label: "Assigned",
+    title: "Issues assigned to you",
+  },
+];
+
 export interface RepoIssuesSectionProps {
   repoId: string;
 }
@@ -46,7 +56,11 @@ export const RepoIssuesSection = memo(function RepoIssuesSection({
   // upstream without forcing two long lists into the layout above the
   // workspaces grid. User clicks the chevron to expand.
   const [open, setOpen] = useState(false);
-  const { payload, loading, refresh } = useRepoOpenIssues(repoId);
+  const [scope, setScope] = useState<IssueScope>("open");
+  const { payload, isStale, loading, refresh } = useRepoOpenIssues(
+    repoId,
+    scope,
+  );
   const [showAll, setShowAll] = useState(false);
   const addToast = useAppStore((s) => s.addToast);
 
@@ -94,10 +108,31 @@ export const RepoIssuesSection = memo(function RepoIssuesSection({
           <CircleDot size={12} className={dashStyles.archivedIcon} aria-hidden />
           <span className={dashStyles.workspacesTitle}>Issues</span>
           {issues.length > 0 && (
-            <span className={dashStyles.headerCount}>{issues.length} open</span>
+            // Bare count — tracks the active scope (e.g. "Mine" shows
+            // mine-count, not total-open-count). The toggle next to it
+            // disambiguates the label. Same shape as the PR section.
+            <span className={dashStyles.headerCount}>{issues.length}</span>
           )}
         </button>
         <div className={styles.headerRight}>
+          <div className={styles.scopeTabs} role="tablist">
+            {SCOPES.map((s) => (
+              <button
+                key={s.value}
+                type="button"
+                role="tab"
+                aria-selected={scope === s.value}
+                title={s.title}
+                className={`${styles.scopeTab} ${scope === s.value ? styles.scopeTabActive : ""}`}
+                onClick={() => {
+                  setScope(s.value);
+                  setShowAll(false);
+                }}
+              >
+                {s.label}
+              </button>
+            ))}
+          </div>
           <button
             type="button"
             className={styles.refreshButton}
@@ -118,7 +153,8 @@ export const RepoIssuesSection = memo(function RepoIssuesSection({
         <RepoIssuesBody
           repoId={repoId}
           payload={payload}
-          loading={loading}
+          scope={scope}
+          isStale={isStale}
           inProgress={inProgress}
           visibleRest={visibleRest}
           restTotal={rest.length}
@@ -139,7 +175,10 @@ export const RepoIssuesSection = memo(function RepoIssuesSection({
 interface RepoIssuesBodyProps {
   repoId: string;
   payload: ReturnType<typeof useRepoOpenIssues>["payload"];
-  loading: boolean;
+  scope: IssueScope;
+  /// True when `payload` is the previous scope's data (stale-while-
+  /// revalidate). The list dims while real data is in flight.
+  isStale: boolean;
   /// Issues that already have a workspace — rendered in their own group.
   inProgress: Issue[];
   /// The remaining issues, already capped to the visible-row limit.
@@ -158,7 +197,8 @@ interface RepoIssuesBodyProps {
 function RepoIssuesBody({
   repoId,
   payload,
-  loading,
+  scope,
+  isStale,
   inProgress,
   visibleRest,
   restTotal,
@@ -169,7 +209,14 @@ function RepoIssuesBody({
   onOpen,
   onCopyUrl,
 }: RepoIssuesBodyProps) {
-  if (loading && !payload) {
+  // Render the skeleton whenever we don't yet have a payload for this
+  // (repo, scope) pair — not just when `loading` flips true. When the
+  // user clicks a different scope tab, the next render selects the new
+  // scope's store slot, which is `undefined` until the fetch lands; if
+  // we keyed the skeleton off `loading` alone, that intermediate paint
+  // briefly shows the "empty" message before the fetch's loading=true
+  // flips the spinner on.
+  if (!payload) {
     return <SkeletonList />;
   }
   if (payload?.unsupported) {
@@ -200,7 +247,15 @@ function RepoIssuesBody({
     );
   }
   if (!hasCachedRows) {
-    return <div className={styles.muted}>No open issues.</div>;
+    return (
+      <div className={styles.muted}>
+        {scope === "mine"
+          ? "No issues opened by you."
+          : scope === "assigned"
+            ? "No issues assigned to you."
+            : "No open issues."}
+      </div>
+    );
   }
 
   const renderRow = (issue: Issue) => (
@@ -220,8 +275,13 @@ function RepoIssuesBody({
     </li>
   );
 
+  // When the requested scope hasn't loaded yet we render the previous
+  // scope's rows (stale-while-revalidate). Dim them subtly so the user
+  // sees the switch is in flight without ever staring at a blank list.
+  const staleClass = isStale ? styles.stale : "";
+
   return (
-    <>
+    <div className={staleClass} aria-busy={isStale || undefined}>
       {payload?.error && (
         <div className={styles.errorBanner}>
           <span>Could not refresh issues — showing cached results.</span>
@@ -255,7 +315,7 @@ function RepoIssuesBody({
           {showAllRow}
         </ul>
       )}
-    </>
+    </div>
   );
 }
 
