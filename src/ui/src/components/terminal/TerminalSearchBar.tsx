@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { ChevronDown, ChevronUp, X } from "lucide-react";
-import type { SearchAddon } from "@xterm/addon-search";
+import type { ISearchOptions, SearchAddon } from "@xterm/addon-search";
+import { getTerminalSearchDecorations } from "../../utils/theme";
 import styles from "./TerminalSearchBar.module.css";
 
 interface Props {
@@ -60,6 +61,15 @@ export function TerminalSearchBar({
     return () => sub.dispose();
   }, [addon]);
 
+  // Decoration options are required for `onDidChangeResults` to fire —
+  // without them the counter stays at zero even when matches exist. The
+  // helper resolves theme colors at call time so theme switches mid-search
+  // pick up new accent values on the next keystroke.
+  const baseSearchOptions = useMemo<ISearchOptions>(
+    () => ({ decorations: getTerminalSearchDecorations() }),
+    [],
+  );
+
   // Re-run findNext when the query changes so the counter and highlighted
   // match update incrementally as the user types. `incremental: true`
   // expands the current selection while it still matches — matching the
@@ -71,17 +81,17 @@ export function TerminalSearchBar({
       setResults({ index: -1, count: 0 });
       return;
     }
-    addon.findNext(query, { incremental: true });
-  }, [addon, query]);
+    addon.findNext(query, { ...baseSearchOptions, incremental: true });
+  }, [addon, query, baseSearchOptions]);
 
   const handleNext = () => {
     if (!addon || query.length === 0) return;
-    addon.findNext(query);
+    addon.findNext(query, baseSearchOptions);
   };
 
   const handlePrev = () => {
     if (!addon || query.length === 0) return;
-    addon.findPrevious(query);
+    addon.findPrevious(query, baseSearchOptions);
   };
 
   const displayMatchIndex = results.index < 0 ? 0 : results.index + 1;

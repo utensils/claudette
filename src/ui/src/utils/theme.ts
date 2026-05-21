@@ -160,6 +160,42 @@ export function getTerminalTheme(): ITheme {
   };
 }
 
+/**
+ * Decoration colors for `@xterm/addon-search`. The addon requires literal
+ * `#RRGGBB` strings (no `rgba()` / `color-mix()` / CSS-var references) and,
+ * critically, only emits `onDidChangeResults` when decorations are enabled —
+ * so we must pass these on every `findNext` / `findPrevious` call or the
+ * match counter and next/previous buttons stay disabled at zero matches even
+ * when matches exist.
+ *
+ * Active match uses the live `--accent-primary` (already a hex value across
+ * every built-in theme). Inactive matches use a neutral mid-gray so they
+ * read as "match" rather than "selected" — themes that already paint
+ * selections with accent-primary would otherwise make the two states
+ * indistinguishable.
+ */
+export function getTerminalSearchDecorations(): {
+  matchBackground: string;
+  matchOverviewRuler: string;
+  activeMatchBackground: string;
+  activeMatchColorOverviewRuler: string;
+} {
+  const style = getComputedStyle(document.documentElement);
+  const accent = style.getPropertyValue("--accent-primary").trim() || "#e07850";
+  const isHex = /^#[0-9a-fA-F]{6}$/.test(accent);
+  const activeColor = isHex ? accent : "#e07850";
+  // Inactive match background: neutral gray that contrasts against both
+  // light and dark terminal backgrounds. The overview ruler color matches
+  // so the minimap markers stay legible too.
+  const matchColor = "#5a5a5a";
+  return {
+    matchBackground: matchColor,
+    matchOverviewRuler: matchColor,
+    activeMatchBackground: activeColor,
+    activeMatchColorOverviewRuler: activeColor,
+  };
+}
+
 // Keys the user may have set via applyUserFonts() — preserved across
 // theme switches so font/zoom choices don't reset when picking a theme.
 const PRESERVED_INLINE_PROPS = new Set(["--font-sans", "--font-mono", "zoom"]);
