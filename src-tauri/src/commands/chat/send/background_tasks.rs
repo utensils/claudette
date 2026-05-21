@@ -90,12 +90,18 @@ fn terminal_output_lock_for(path: &Path) -> Arc<Mutex<()>> {
         .clone()
 }
 
-fn rotate_terminal_output_if_needed_sync(path: &Path) -> std::io::Result<()> {
+/// Rewrite `path` in place to its last [`TERMINAL_OUTPUT_TAIL_BYTES`] (plus
+/// a truncation banner) when the projected post-append size would exceed the
+/// cap. Pass `incoming` = `bytes.len()` so a single oversized append that
+/// would jump from "just under the cap" to "well over" is caught *before*
+/// the bytes hit disk — checking the post-state, not the pre-state, is the
+/// only way the hard ceiling is honoured for every append shape.
+fn rotate_terminal_output_if_needed_sync(path: &Path, incoming: u64) -> std::io::Result<()> {
     let len = match std::fs::metadata(path) {
         Ok(meta) => meta.len(),
         Err(_) => return Ok(()),
     };
-    if len <= TERMINAL_OUTPUT_MAX_BYTES {
+    if len.saturating_add(incoming) <= TERMINAL_OUTPUT_MAX_BYTES {
         return Ok(());
     }
     use std::io::{Read, Seek, SeekFrom, Write};
@@ -132,7 +138,7 @@ pub(crate) fn append_terminal_output_sync(path: &Path, bytes: &[u8]) -> std::io:
     // Same poisoning policy as the lock map: tolerate a prior panic so
     // a single bad write doesn't silently kill the terminal pipeline.
     let _guard = lock.lock().unwrap_or_else(|p| p.into_inner());
-    rotate_terminal_output_if_needed_sync(path)?;
+    rotate_terminal_output_if_needed_sync(path, bytes.len() as u64)?;
     use std::io::Write;
     let mut file = std::fs::OpenOptions::new()
         .create(true)
@@ -1241,6 +1247,38 @@ mod tests {
         assert!(
             after_str.ends_with("new-line\r\n"),
             "expected newest append at end"
+        );
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[tokio::test]
+    async fn append_rotates_when_post_state_would_exceed_cap() {
+        // Regression test for the Copilot-flagged off-by-one in the cap check.
+        // Seed the file at exactly the ceiling so the *current* len is not
+        // over-cap, then append a payload that would push it past. The
+        // rotator must look at `len + incoming`, not just `len`, otherwise
+        // a single large bash result could land the file well past the
+        // documented hard ceiling before any future write triggers rotation.
+        use super::{
+            TERMINAL_OUTPUT_MAX_BYTES, TERMINAL_OUTPUT_TAIL_BYTES, append_terminal_output_sync,
+        };
+
+        let path = std::env::temp_dir().join(format!(
+            "claudette-cap-post-{}.terminal.output",
+            uuid::Uuid::new_v4()
+        ));
+        let seed = vec![b'B'; TERMINAL_OUTPUT_MAX_BYTES as usize];
+        std::fs::write(&path, &seed).unwrap();
+
+        // Appending even a single byte should be enough to trigger rotation
+        // now that the helper compares `len + incoming` against the cap.
+        append_terminal_output_sync(&path, b"X").unwrap();
+
+        let after_len = std::fs::metadata(&path).unwrap().len();
+        assert!(
+            after_len <= TERMINAL_OUTPUT_TAIL_BYTES + 256,
+            "expected rotation when post-append size would exceed cap, got {after_len} bytes"
         );
 
         let _ = std::fs::remove_file(path);
