@@ -34,6 +34,18 @@ async function pressEscape() {
   });
 }
 
+async function pressQuickOpenHotkey() {
+  await act(async () => {
+    window.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "p",
+        ctrlKey: true,
+        bubbles: true,
+      }),
+    );
+  });
+}
+
 describe("shouldDeferSettingsEscapeForElement", () => {
   it("keeps Settings Escape local to focused native fields", () => {
     expect(shouldDeferSettingsEscapeForElement(document.createElement("input")))
@@ -100,5 +112,45 @@ describe("useKeyboardShortcuts Settings Escape", () => {
 
     await pressEscape();
     expect(useAppStore.getState().settingsOpen).toBe(false);
+  });
+});
+
+describe("useKeyboardShortcuts command palette quick-open toggle", () => {
+  beforeEach(() => {
+    document.body.innerHTML = "";
+    useAppStore.setState({
+      activeModal: null,
+      commandPaletteOpen: true,
+      commandPaletteInitialMode: null,
+      fuzzyFinderOpen: false,
+      selectedWorkspaceId: "ws-1",
+      settingsOpen: false,
+      settingsOverlayCount: 0,
+    });
+  });
+
+  afterEach(async () => {
+    if (root) {
+      await act(async () => {
+        root!.unmount();
+      });
+    }
+    root = null;
+    container = null;
+    document.body.innerHTML = "";
+    useAppStore.setState({
+      commandPaletteOpen: false,
+      commandPaletteInitialMode: null,
+      selectedWorkspaceId: null,
+    });
+  });
+
+  it("dismisses the command palette when the quick-open hotkey is pressed again", async () => {
+    await renderHarness();
+
+    await pressQuickOpenHotkey();
+
+    expect(useAppStore.getState().commandPaletteOpen).toBe(false);
+    expect(useAppStore.getState().commandPaletteInitialMode).toBeNull();
   });
 });
