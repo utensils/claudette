@@ -113,13 +113,11 @@ fn pipe_to_command(program: &str, args: &[&str], input: &[u8]) -> Result<(), Str
 #[cfg(windows)]
 fn copy_file_path(path: &Path) -> Result<(), String> {
     use std::os::windows::ffi::OsStrExt as _;
-    use windows_sys::Win32::Foundation::HGLOBAL;
+    use windows_sys::Win32::Foundation::{GlobalFree, HGLOBAL};
     use windows_sys::Win32::System::DataExchange::{
         CloseClipboard, EmptyClipboard, OpenClipboard, SetClipboardData,
     };
-    use windows_sys::Win32::System::Memory::{
-        GHND, GlobalAlloc, GlobalFree, GlobalLock, GlobalUnlock,
-    };
+    use windows_sys::Win32::System::Memory::{GHND, GlobalAlloc, GlobalLock, GlobalUnlock};
     use windows_sys::Win32::System::Ole::CF_HDROP;
     use windows_sys::Win32::UI::Shell::DROPFILES;
 
