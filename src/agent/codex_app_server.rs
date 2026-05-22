@@ -20,6 +20,7 @@ use super::{
 type CodexStdin = Arc<tokio::sync::Mutex<ChildStdin>>;
 type PendingRequests = Arc<tokio::sync::Mutex<BTreeMap<JsonRpcId, PendingCodexRequest>>>;
 type TurnOutputBuffer = Arc<tokio::sync::Mutex<CodexTurnOutput>>;
+const MAX_CODEX_STDOUT_PREAMBLE_LINES: usize = 256;
 
 struct PendingCodexRequest {
     method: String,
@@ -1240,6 +1241,7 @@ where
     R: AsyncBufRead + Unpin,
 {
     let mut line = String::new();
+    let mut skipped_preamble_lines = 0usize;
     loop {
         line.clear();
         let bytes = reader
@@ -1253,9 +1255,35 @@ where
         if trimmed.is_empty() {
             continue;
         }
+        if !trimmed.starts_with('{') {
+            skipped_preamble_lines += 1;
+            if skipped_preamble_lines > MAX_CODEX_STDOUT_PREAMBLE_LINES {
+                return Err(format!(
+                    "Codex app-server stdout produced too many non-JSON preamble lines before JSON-RPC; last line: {}",
+                    truncate_protocol_line(trimmed)
+                ));
+            }
+            tracing::debug!(
+                target: "claudette::agent",
+                line = %truncate_protocol_line(trimmed),
+                "skipping non-JSON Codex app-server stdout preamble"
+            );
+            continue;
+        }
         return parse_jsonrpc_line(trimmed)
             .map(Some)
             .map_err(|e| format!("Failed to parse Codex app-server JSON-RPC line: {e}"));
+    }
+}
+
+fn truncate_protocol_line(line: &str) -> String {
+    const MAX_LEN: usize = 160;
+    let mut chars = line.chars();
+    let truncated = chars.by_ref().take(MAX_LEN).collect::<String>();
+    if chars.next().is_some() {
+        format!("{truncated}...")
+    } else {
+        truncated
     }
 }
 
@@ -3372,6 +3400,44 @@ mod tests {
                 .expect("eof succeeds")
                 .is_none()
         );
+    }
+
+    #[tokio::test]
+    async fn skips_devshell_stdout_preamble_before_jsonrpc() {
+        let input =
+            b"\x1b[33m[devshell] lib/agent_sdk/dist is missing -- run `agent-sdk-build`.\x1b[0m\n\
+\n\
+\x1b[1m[[general commands]]\x1b[0m\n\
+\n\
+  menu                  - prints this menu\n\
+{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"ok\":true}}\n";
+        let mut reader = tokio::io::BufReader::new(&input[..]);
+
+        let message = read_jsonrpc_message(&mut reader)
+            .await
+            .expect("devshell preamble is skipped")
+            .expect("json-rpc response");
+
+        assert!(matches!(
+            message,
+            JsonRpcMessage::Response(JsonRpcResponse {
+                id: Some(JsonRpcId::Integer(1)),
+                ..
+            })
+        ));
+    }
+
+    #[tokio::test]
+    async fn malformed_jsonrpc_object_still_errors() {
+        let input = br#"{"jsonrpc":"2.0","id":1,"result":
+"#;
+        let mut reader = tokio::io::BufReader::new(&input[..]);
+
+        let err = read_jsonrpc_message(&mut reader)
+            .await
+            .expect_err("object-shaped protocol corruption must not be skipped");
+
+        assert!(err.contains("Failed to parse Codex app-server JSON-RPC line"));
     }
 
     #[test]
