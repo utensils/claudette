@@ -327,6 +327,9 @@ impl AgentSession {
                  do not call start_compact() on this harness."
                     .to_string(),
             ),
+            Self::ClaudeInteractive(_) => {
+                Err("ClaudeInteractive does not support native context compaction".to_string())
+            }
             Self::CodexAppServer(session) => session.start_compact().await,
             #[cfg(feature = "pi-sdk")]
             Self::PiSdk(session) => session.start_compact().await,

@@ -311,7 +311,7 @@ async fn try_connect(socket_path: &Path) -> std::io::Result<()> {
 /// detached — we don't await its exit, and `kill_on_drop` stays at the
 /// default `false` so the sidecar outlives this process if needed.
 fn spawn_sidecar(binary: &Path, socket: &Path) -> std::io::Result<()> {
-    let mut cmd = tokio::process::Command::new(binary);
+    let mut cmd = crate::process::command(binary);
     cmd.arg("--socket").arg(socket);
     // Detach: don't tie the sidecar's lifetime to this process. The sidecar
     // has its own idle-exit timer (see `idle_exit.rs` in session-host).
@@ -602,7 +602,7 @@ impl InteractiveHost for SidecarHost {
 mod tests {
     use super::*;
     use crate::agent::interactive_host::conformance::{ConformanceFixture, run};
-    use std::process::Command;
+    use crate::process::std_command;
 
     /// Locate a workspace binary, building it first if necessary. Mirrors
     /// the `find_stub_tui` helper used by the session-host integration
@@ -610,13 +610,13 @@ mod tests {
     /// `-Z bindeps` on stable.
     fn find_workspace_binary(pkg: &str, bin: &str) -> PathBuf {
         let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
-        let status = Command::new(&cargo)
+        let status = std_command(&cargo)
             .args(["build", "-p", pkg])
             .status()
             .expect("failed to invoke cargo to build workspace binary");
         assert!(status.success(), "cargo build -p {pkg} failed");
 
-        let meta_out = Command::new(&cargo)
+        let meta_out = std_command(&cargo)
             .args(["metadata", "--format-version", "1", "--no-deps"])
             .output()
             .expect("failed to run cargo metadata");

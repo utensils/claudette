@@ -50,10 +50,7 @@ pub async fn check_tmux() -> TmuxAvailability {
 }
 
 async fn check_tmux_uncached() -> TmuxAvailability {
-    let out = tokio::process::Command::new("tmux")
-        .arg("-V")
-        .output()
-        .await;
+    let out = crate::process::command("tmux").arg("-V").output().await;
     let Ok(out) = out else {
         return TmuxAvailability::NotFound;
     };

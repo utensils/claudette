@@ -1,6 +1,6 @@
 [package]
 name = "claudette-session-host"
-version = "0.24.0"
+version = "0.25.0"
 edition = "2024"
 license = "MIT"
 description = "Long-lived sidecar that owns interactive Claude PTYs for Claudette"

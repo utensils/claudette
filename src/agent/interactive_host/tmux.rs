@@ -36,7 +36,6 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use tokio::process::Command;
 use tokio::sync::Mutex;
 
 /// Per-session broadcast hub. Owned by `TmuxHost::sessions`; one entry per
@@ -182,7 +181,7 @@ fn spawn_fifo_tailer(
 /// Synchronous (`tmux has-session`) probe used by the FIFO tailer thread,
 /// which runs outside the tokio runtime and can't `await`.
 fn tmux_session_exists_blocking(sid: &str) -> bool {
-    std::process::Command::new("tmux")
+    crate::process::std_command("tmux")
         .args(["has-session", "-t", sid])
         .status()
         .map(|s| s.success())
@@ -197,7 +196,7 @@ impl InteractiveHost for TmuxHost {
         spec: &SessionSpec,
     ) -> Result<HostHandle, HostError> {
         // 1. Determine current tmux state.
-        let exists = Command::new("tmux")
+        let exists = crate::process::command("tmux")
             .args(["has-session", "-t", sid.as_str()])
             .output()
             .await
@@ -208,7 +207,7 @@ impl InteractiveHost for TmuxHost {
         if !exists {
             std::fs::create_dir_all(&self.runtime_dir).map_err(HostError::Io)?;
 
-            let mut cmd = Command::new("tmux");
+            let mut cmd = crate::process::command("tmux");
             cmd.args([
                 "new-session",
                 "-d",
@@ -261,7 +260,7 @@ impl InteractiveHost for TmuxHost {
             .map_err(|e| HostError::Other(format!("mkfifo {}: {e}", fifo.display())))?;
 
             let pipe_cmd = format!("cat >> {}", shell_escape(&fifo.to_string_lossy()));
-            let st = Command::new("tmux")
+            let st = crate::process::command("tmux")
                 .args(["pipe-pane", "-O", "-t", sid.as_str(), &pipe_cmd])
                 .status()
                 .await
@@ -383,7 +382,7 @@ impl InteractiveHost for TmuxHost {
                 args.push(s);
             }
         }
-        let st = Command::new("tmux")
+        let st = crate::process::command("tmux")
             .args(&args)
             .status()
             .await
@@ -397,7 +396,7 @@ impl InteractiveHost for TmuxHost {
     async fn capture_screen(&self, sid: &SessionId) -> Result<ScreenSnapshot, HostError> {
         // `-p` writes to stdout, `-J` joins wrapped lines, `-e` keeps
         // raw escape sequences so the frontend can replay attributes.
-        let out = Command::new("tmux")
+        let out = crate::process::command("tmux")
             .args(["capture-pane", "-t", sid.as_str(), "-pJ", "-e"])
             .output()
             .await
@@ -411,7 +410,7 @@ impl InteractiveHost for TmuxHost {
 
         // Fetch real pane dimensions; fall back to a safe 24x80 if the
         // format string returns something unparseable.
-        let dims = Command::new("tmux")
+        let dims = crate::process::command("tmux")
             .args([
                 "display-message",
                 "-p",
@@ -438,7 +437,7 @@ impl InteractiveHost for TmuxHost {
     }
 
     async fn resize(&self, sid: &SessionId, rows: u16, cols: u16) -> Result<(), HostError> {
-        let st = Command::new("tmux")
+        let st = crate::process::command("tmux")
             .args([
                 "resize-window",
                 "-t",
@@ -471,13 +470,13 @@ impl InteractiveHost for TmuxHost {
                 // Best-effort C-c; ignore failure (session may already be
                 // gone). Then wait up to 5s for the underlying process to
                 // exit — same budget as the sidecar host.
-                let _ = Command::new("tmux")
+                let _ = crate::process::command("tmux")
                     .args(["send-keys", "-t", sid.as_str(), "--", "C-c"])
                     .status()
                     .await;
                 let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
                 while std::time::Instant::now() < deadline {
-                    let still = Command::new("tmux")
+                    let still = crate::process::command("tmux")
                         .args(["has-session", "-t", sid.as_str()])
                         .output()
                         .await
@@ -494,7 +493,7 @@ impl InteractiveHost for TmuxHost {
         // Always kill — graceful path is best-effort. Propagate spawn
         // / wait errors via `?`; previously a stray `let _ =` swallowed
         // the `Result` so I/O failures here disappeared silently.
-        Command::new("tmux")
+        crate::process::command("tmux")
             .args(["kill-session", "-t", sid.as_str()])
             .status()
             .await
@@ -518,7 +517,7 @@ impl InteractiveHost for TmuxHost {
     }
 
     async fn status(&self) -> Result<HostStatus, HostError> {
-        let out = Command::new("tmux")
+        let out = crate::process::command("tmux")
             .args(["list-sessions", "-F", "#{session_name}|#{session_created}"])
             .output()
             .await;
@@ -562,20 +561,20 @@ fn shell_escape(s: &str) -> String {
 mod tests {
     use super::*;
     use crate::agent::interactive_host::conformance::{ConformanceFixture, run};
-    use std::process::Command as StdCommand;
+    use crate::process::std_command;
 
     /// Locate a workspace binary, building it first if necessary. Mirrors
     /// `find_workspace_binary` in `sidecar.rs` — we can't use
     /// `CARGO_BIN_EXE_*` because that requires `-Z bindeps`.
     fn find_workspace_binary(pkg: &str, bin: &str) -> PathBuf {
         let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
-        let status = StdCommand::new(&cargo)
+        let status = std_command(&cargo)
             .args(["build", "-p", pkg])
             .status()
             .expect("failed to invoke cargo to build workspace binary");
         assert!(status.success(), "cargo build -p {pkg} failed");
 
-        let meta_out = StdCommand::new(&cargo)
+        let meta_out = std_command(&cargo)
             .args(["metadata", "--format-version", "1", "--no-deps"])
             .output()
             .expect("failed to run cargo metadata");
@@ -682,7 +681,7 @@ mod tests {
         );
 
         // Kill the session externally (bypassing TmuxHost::stop).
-        let st = StdCommand::new("tmux")
+        let st = std_command("tmux")
             .args(["kill-session", "-t", sid.as_str()])
             .status()
             .expect("failed to spawn tmux kill-session");
