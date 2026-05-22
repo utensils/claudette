@@ -656,10 +656,16 @@ impl CodexAppServerSession {
             )
         })? {
             Ok(response) => Ok(response),
-            Err(error) => Err(format!(
-                "Codex app-server `{}` failed: {}",
-                request.method, error.error.message
-            )),
+            Err(error) => {
+                if codex_error_indicates_auth_expiry(&error.error.message) {
+                    self.auth_expired.store(true, Ordering::SeqCst);
+                    return Err(CODEX_AUTH_EXPIRED_MESSAGE.to_string());
+                }
+                Err(format!(
+                    "Codex app-server `{}` failed: {}",
+                    request.method, error.error.message
+                ))
+            }
         }
     }
 
@@ -1020,7 +1026,14 @@ pub(crate) fn codex_stderr_indicates_auth_expiry(line: &str) -> bool {
     line.contains("Failed to refresh token")
         || line.contains("Please log out and sign in again")
         || (line.contains("401 Unauthorized")
-            && line.contains("wss://chatgpt.com/backend-api/codex/responses"))
+            && (line.contains("wss://chatgpt.com/backend-api/codex/responses")
+                || line.contains("wss://api.openai.com/v1/responses")))
+}
+
+fn codex_error_indicates_auth_expiry(message: &str) -> bool {
+    message
+        .to_ascii_lowercase()
+        .contains("codex account authentication required")
 }
 
 async fn fail_pending_requests(pending: &PendingRequests, reason: &str) {
@@ -1258,7 +1271,13 @@ where
         let Some(first_char) = trimmed.chars().next() else {
             continue;
         };
-        if !is_json_value_start(first_char) {
+        if first_char == '[' {
+            return Err(format!(
+                "Unsupported Codex app-server JSON-RPC message shape: expected object line, got {}",
+                truncate_protocol_line(trimmed)
+            ));
+        }
+        if first_char != '{' {
             skipped_preamble_lines += 1;
             if skipped_preamble_lines > MAX_CODEX_STDOUT_PREAMBLE_LINES {
                 return Err(format!(
@@ -1273,20 +1292,10 @@ where
             );
             continue;
         }
-        if first_char != '{' {
-            return Err(format!(
-                "Unsupported Codex app-server JSON-RPC message shape: expected object line, got {}",
-                truncate_protocol_line(trimmed)
-            ));
-        }
         return parse_jsonrpc_line(trimmed)
             .map(Some)
             .map_err(|e| format!("Failed to parse Codex app-server JSON-RPC line: {e}"));
     }
-}
-
-fn is_json_value_start(ch: char) -> bool {
-    matches!(ch, '{' | '[' | '"' | 't' | 'f' | 'n' | '-' | '0'..='9')
 }
 
 fn truncate_protocol_line(line: &str) -> String {
@@ -3422,6 +3431,7 @@ mod tests {
 \n\
 \x1b[1m[[general commands]]\x1b[0m\n\
 \n\
+  fix                   - Auto-fix code (standardrb --fix)\n\
   menu                  - prints this menu\n\
 {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"ok\":true}}\n";
         let mut reader = tokio::io::BufReader::new(&input[..]);
@@ -5609,6 +5619,30 @@ mod tests {
                     websocket: HTTP error: 401 Unauthorized, url: \
                     wss://chatgpt.com/backend-api/codex/responses";
         assert!(codex_stderr_indicates_auth_expiry(line));
+    }
+
+    #[test]
+    fn detects_openai_responses_websocket_401() {
+        let line = "\u{1b}[2m2026-05-22T02:12:39.001347Z\u{1b}[0m \
+                    \u{1b}[31mERROR\u{1b}[0m \
+                    \u{1b}[2mcodex_api::endpoint::responses_websocket\u{1b}[0m: \
+                    failed to connect to websocket: HTTP error: 401 Unauthorized, \
+                    url: wss://api.openai.com/v1/responses";
+        assert!(codex_stderr_indicates_auth_expiry(line));
+    }
+
+    #[test]
+    fn detects_rate_limit_read_auth_required_error() {
+        assert!(codex_error_indicates_auth_expiry(
+            "codex account authentication required to read rate limits"
+        ));
+    }
+
+    #[test]
+    fn ignores_unrelated_rate_limit_errors() {
+        assert!(!codex_error_indicates_auth_expiry(
+            "account/rateLimits/read failed because the network is unavailable"
+        ));
     }
 
     #[test]
