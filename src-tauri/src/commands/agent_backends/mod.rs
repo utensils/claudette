@@ -244,16 +244,23 @@ pub async fn save_agent_backend(
 ///
 /// `harness` is `None` to clear the override (the resolver falls back
 /// to `AgentBackendKind::default_harness`). A `Some` value must be in
-/// the kind's `available_harnesses` list — otherwise the call is
-/// rejected so a malicious frontend cannot bypass the per-kind matrix.
-/// The built-in Anthropic backend always rejects overrides because its
-/// kind only permits the Claude CLI harness.
+/// the kind's allow-list — otherwise the call is rejected so a
+/// malicious frontend cannot bypass the per-kind matrix. The built-in
+/// Anthropic backend rejects every override except `ClaudeInteractive`
+/// (and only when the `claudeInteractiveEnabled` experimental flag is
+/// on), since its kind only permits Claude-side harnesses.
+///
+/// The flag is read from `app_settings` rather than passed by the
+/// caller so a stale frontend can't trick the validator into accepting
+/// `ClaudeInteractive` while the gate is off — same surface
+/// `AgentBackendConfig::effective_harness_kind` uses for dispatch.
 #[tauri::command]
 pub async fn set_agent_backend_runtime_harness(
     backend_id: String,
     harness: Option<AgentBackendRuntimeHarness>,
     state: State<'_, AppState>,
 ) -> Result<Vec<AgentBackendConfig>, String> {
+    let claude_interactive_enabled = state.claude_interactive_enabled().await;
     let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
     ensure_backend_id_allowed_by_gate(&db, &backend_id)?;
     let mut backends = load_backend_configs(&db)?;
@@ -262,7 +269,10 @@ pub async fn set_agent_backend_runtime_harness(
         .find(|backend| backend.id == backend_id)
         .ok_or_else(|| format!("Unknown backend `{backend_id}`"))?;
     if let Some(harness) = harness {
-        if !slot.kind.available_harnesses().contains(&harness) {
+        let allowed = slot
+            .kind
+            .available_harnesses_with_interactive(claude_interactive_enabled);
+        if !allowed.contains(&harness) {
             return Err(format!(
                 "Backend `{}` ({:?}) does not allow harness `{:?}`",
                 slot.id, slot.kind, harness

@@ -639,11 +639,10 @@ export function ModelSettings() {
         </div>
       </div>
 
-      {/* TODO(G2 follow-up): card is currently display-only. Actual runtime
-          selection happens in RuntimeSelector. When that flow is wired to
-          accept claude_interactive (via Fix 1 to effectiveHarness), revisit
-          whether this card should also offer a direct "Use this runtime"
-          affordance. */}
+      {/* Display-only summary card. Actual per-backend runtime selection
+          happens in `RuntimeSelector` further down — when the experimental
+          flag is on, the Anthropic / CustomAnthropic / CodexSubscription
+          cards offer `Claude (Interactive)` as a runtime option there. */}
       <div
         className={styles.settingRow}
         data-testid="runtime-card-claude-interactive"

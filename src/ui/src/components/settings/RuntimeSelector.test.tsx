@@ -45,23 +45,37 @@ const serviceMocks = vi.hoisted(() => ({
         return "pi_sdk" as const;
     }
   },
-  availableHarnessesForKind: (kind: AgentBackendConfig["kind"]) => {
-    switch (kind) {
-      case "anthropic":
-      case "custom_anthropic":
-      case "codex_subscription":
-        return ["claude_code"] as const;
-      case "ollama":
-      case "lm_studio":
-        return ["pi_sdk", "claude_code"] as const;
-      case "openai_api":
-      case "custom_openai":
-        return ["claude_code", "pi_sdk"] as const;
-      case "codex_native":
-        return ["codex_app_server", "pi_sdk"] as const;
-      case "pi_sdk":
-        return ["pi_sdk"] as const;
+  availableHarnessesForKind: (
+    kind: AgentBackendConfig["kind"],
+    options?: { claudeInteractiveEnabled?: boolean },
+  ) => {
+    const base: string[] = (() => {
+      switch (kind) {
+        case "anthropic":
+        case "custom_anthropic":
+        case "codex_subscription":
+          return ["claude_code"];
+        case "ollama":
+        case "lm_studio":
+          return ["pi_sdk", "claude_code"];
+        case "openai_api":
+        case "custom_openai":
+          return ["claude_code", "pi_sdk"];
+        case "codex_native":
+          return ["codex_app_server", "pi_sdk"];
+        case "pi_sdk":
+          return ["pi_sdk"];
+      }
+    })();
+    if (
+      options?.claudeInteractiveEnabled === true &&
+      (kind === "anthropic" ||
+        kind === "custom_anthropic" ||
+        kind === "codex_subscription")
+    ) {
+      base.push("claude_interactive");
     }
+    return base;
   },
   effectiveHarness: (backend: AgentBackendConfig) => {
     if (backend.runtime_harness) return backend.runtime_harness;
@@ -234,5 +248,101 @@ describe("RuntimeSelector", () => {
       "test",
       "claude_code",
     );
+  });
+
+  it("hides the Claude (Interactive) option for an Anthropic backend when the flag is OFF", () => {
+    // Default appStore.claudeInteractiveEnabled is false → the
+    // Anthropic kind only has one available harness, so the selector
+    // shouldn't render at all.
+    appStore.claudeInteractiveEnabled = false;
+    const container = mount(
+      <RuntimeSelector
+        backend={makeBackend({ kind: "anthropic" })}
+        onSaved={() => {}}
+      />,
+    );
+    expect(container.querySelector("select")).toBeNull();
+  });
+
+  it("renders the Claude (Interactive) option for an Anthropic backend when the flag is ON", () => {
+    appStore.claudeInteractiveEnabled = true;
+    try {
+      const container = mount(
+        <RuntimeSelector
+          backend={makeBackend({ kind: "anthropic", id: "anthropic" })}
+          onSaved={() => {}}
+        />,
+      );
+      const select = container.querySelector("select") as HTMLSelectElement;
+      expect(select).not.toBeNull();
+      const values = Array.from(select.options).map((o) => o.value);
+      expect(values).toEqual(["claude_code", "claude_interactive"]);
+      // ClaudeCode is the kind's default → first entry is marked default.
+      expect(select.options[0]!.textContent).toMatch(/default/i);
+      // Currently selected is the kind default (no override persisted).
+      expect(select.value).toBe("claude_code");
+    } finally {
+      appStore.claudeInteractiveEnabled = false;
+    }
+  });
+
+  it("persists the claude_interactive harness when the user selects it (flag on)", async () => {
+    appStore.claudeInteractiveEnabled = true;
+    try {
+      const container = mount(
+        <RuntimeSelector
+          backend={makeBackend({ kind: "anthropic", id: "anthropic" })}
+          onSaved={() => {}}
+        />,
+      );
+      const select = container.querySelector("select") as HTMLSelectElement;
+      await act(async () => {
+        select.value = "claude_interactive";
+        select.dispatchEvent(new Event("change", { bubbles: true }));
+      });
+      expect(serviceMocks.setAgentBackendRuntimeHarness).toHaveBeenCalledTimes(1);
+      // claude_interactive is NOT the kind default, so the override is
+      // passed through verbatim (not nulled out).
+      expect(serviceMocks.setAgentBackendRuntimeHarness).toHaveBeenCalledWith(
+        "anthropic",
+        "claude_interactive",
+      );
+    } finally {
+      appStore.claudeInteractiveEnabled = false;
+    }
+  });
+
+  it("does not expose Claude (Interactive) for non-Claude-flavored kinds even when the flag is on", () => {
+    // Ollama / LM Studio / OpenAI / CodexNative / PiSdk must never
+    // surface claude_interactive — the harness is a Claude-runtime
+    // variant only.
+    appStore.claudeInteractiveEnabled = true;
+    appStore.agentBackends = [
+      makeBackend({ id: "pi", kind: "pi_sdk", enabled: true }),
+    ];
+    try {
+      for (const kind of [
+        "ollama",
+        "lm_studio",
+        "openai_api",
+        "custom_openai",
+        "codex_native",
+      ] as const) {
+        const container = mount(
+          <RuntimeSelector
+            backend={makeBackend({ kind })}
+            onSaved={() => {}}
+          />,
+        );
+        const select = container.querySelector("select");
+        if (select) {
+          const values = Array.from(select.options).map((o) => o.value);
+          expect(values).not.toContain("claude_interactive");
+        }
+        container.remove();
+      }
+    } finally {
+      appStore.claudeInteractiveEnabled = false;
+    }
   });
 });

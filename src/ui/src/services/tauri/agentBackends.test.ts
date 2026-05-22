@@ -18,6 +18,7 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 
 import {
   type AgentBackendConfig,
+  availableHarnessesForKind,
   effectiveHarness,
 } from "./agentBackends";
 
@@ -105,5 +106,60 @@ describe("effectiveHarness", () => {
     expect(
       effectiveHarness(config, { claudeInteractiveEnabled: true }),
     ).toBe("claude_code");
+  });
+});
+
+describe("availableHarnessesForKind", () => {
+  it("omits claude_interactive from every kind when the flag is OFF (default)", () => {
+    // Back-compat baseline: callers without the option get the static
+    // matrix, identical to the pre-FB-1 behaviour.
+    const kinds = [
+      "anthropic",
+      "custom_anthropic",
+      "codex_subscription",
+      "ollama",
+      "lm_studio",
+      "openai_api",
+      "custom_openai",
+      "codex_native",
+      "pi_sdk",
+    ] as const;
+    for (const kind of kinds) {
+      const harnesses = availableHarnessesForKind(kind);
+      expect(harnesses).not.toContain("claude_interactive");
+      // And explicit `false` matches the default-undefined case.
+      expect(
+        availableHarnessesForKind(kind, { claudeInteractiveEnabled: false }),
+      ).toEqual(harnesses);
+    }
+  });
+
+  it("appends claude_interactive for Anthropic / CustomAnthropic / CodexSubscription when the flag is ON", () => {
+    for (const kind of ["anthropic", "custom_anthropic", "codex_subscription"] as const) {
+      expect(
+        availableHarnessesForKind(kind, { claudeInteractiveEnabled: true }),
+      ).toEqual(["claude_code", "claude_interactive"]);
+    }
+  });
+
+  it("does not append claude_interactive for non-Claude-flavored kinds even when the flag is ON", () => {
+    // ClaudeInteractive is a Claude-runtime variant — Pi, Ollama, LM
+    // Studio, OpenAI-flavored, and Codex Native must never surface it.
+    const kinds = [
+      "ollama",
+      "lm_studio",
+      "openai_api",
+      "custom_openai",
+      "codex_native",
+      "pi_sdk",
+    ] as const;
+    for (const kind of kinds) {
+      const withFlag = availableHarnessesForKind(kind, {
+        claudeInteractiveEnabled: true,
+      });
+      const withoutFlag = availableHarnessesForKind(kind);
+      expect(withFlag).not.toContain("claude_interactive");
+      expect(withFlag).toEqual(withoutFlag);
+    }
   });
 });

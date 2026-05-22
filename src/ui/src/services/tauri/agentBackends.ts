@@ -166,29 +166,53 @@ export function defaultHarnessForKind(
 }
 
 /**
- * Mirror of `AgentBackendKind::available_harnesses`. The first entry is
- * the default. Pinning a value outside this list is rejected server-side
- * by `set_agent_backend_runtime_harness`.
+ * Mirror of `AgentBackendKind::available_harnesses` /
+ * `available_harnesses_with_interactive`. The first entry is the
+ * default. Pinning a value outside this list is rejected server-side by
+ * `set_agent_backend_runtime_harness`.
+ *
+ * `"claude_interactive"` is intentionally **not** in the static matrix:
+ * it's gated by the `claudeInteractiveEnabled` experimental flag, not
+ * the per-kind allow-list. Callers that have the flag value available
+ * (the Settings runtime picker, anything driving persistence) should
+ * pass it via `options.claudeInteractiveEnabled` so the Claude-flavored
+ * kinds (Anthropic, CustomAnthropic, CodexSubscription) gain
+ * `"claude_interactive"` as a second option. Other call sites — the
+ * Pi-disabled downgrade in `resolveSessionHarness`, the gateway-hash
+ * key — want the matrix shape and should call without the option (the
+ * flag defaults to `false`).
  */
 export function availableHarnessesForKind(
   kind: AgentBackendKind,
+  options?: { claudeInteractiveEnabled?: boolean },
 ): AgentBackendRuntimeHarness[] {
-  switch (kind) {
-    case "anthropic":
-    case "custom_anthropic":
-    case "codex_subscription":
-      return ["claude_code"];
-    case "ollama":
-    case "lm_studio":
-      return ["pi_sdk", "claude_code"];
-    case "openai_api":
-    case "custom_openai":
-      return ["claude_code", "pi_sdk"];
-    case "codex_native":
-      return ["codex_app_server", "pi_sdk"];
-    case "pi_sdk":
-      return ["pi_sdk"];
+  const base: AgentBackendRuntimeHarness[] = (() => {
+    switch (kind) {
+      case "anthropic":
+      case "custom_anthropic":
+      case "codex_subscription":
+        return ["claude_code"];
+      case "ollama":
+      case "lm_studio":
+        return ["pi_sdk", "claude_code"];
+      case "openai_api":
+      case "custom_openai":
+        return ["claude_code", "pi_sdk"];
+      case "codex_native":
+        return ["codex_app_server", "pi_sdk"];
+      case "pi_sdk":
+        return ["pi_sdk"];
+    }
+  })();
+  if (
+    options?.claudeInteractiveEnabled === true &&
+    (kind === "anthropic" ||
+      kind === "custom_anthropic" ||
+      kind === "codex_subscription")
+  ) {
+    base.push("claude_interactive");
   }
+  return base;
 }
 
 /** Effective harness for a config: persisted override when allowed,
