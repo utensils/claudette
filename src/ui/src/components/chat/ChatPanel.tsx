@@ -26,6 +26,7 @@ import { findLatestPlanFilePath } from "./planFilePath";
 import { setPlanModeAndPersist } from "./planModePersistence";
 import type { PermissionLevel } from "../../stores/useAppStore";
 import { dispatchChatMessage } from "./chatMessageDispatch";
+import { shouldRecordSendFailureInChat } from "./chatSendFailure";
 import { reconstructCompletedTurns } from "../../utils/reconstructTurns";
 import type { AttachmentInput } from "../../types/chat";
 import {
@@ -748,7 +749,9 @@ export function ChatPanel() {
     } catch (e) {
       const errMsg = String(e);
       console.error("dispatchChatMessage failed:", errMsg);
-      setError(errMsg);
+      if (!shouldRecordSendFailureInChat(errMsg)) {
+        setError(errMsg);
+      }
     }
   };
 
