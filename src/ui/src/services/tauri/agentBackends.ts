@@ -123,8 +123,8 @@ export function testAgentBackend(backendId: string): Promise<BackendStatus> {
   return invoke("test_agent_backend", { backendId });
 }
 
-export function launchCodexLogin(): Promise<void> {
-  return invoke("launch_codex_login");
+export function launchCodexLogin(workspaceId?: string | null): Promise<void> {
+  return invoke("launch_codex_login", { workspaceId: workspaceId ?? null });
 }
 
 export function setAgentBackendRuntimeHarness(

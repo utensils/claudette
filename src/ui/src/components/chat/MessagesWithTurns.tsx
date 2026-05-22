@@ -845,6 +845,10 @@ export const MessagesWithTurns = memo(function MessagesWithTurns({
             );
           }
         }
+        const isAuthFailureMessage =
+          (msg.role === "Assistant" || msg.role === "System") &&
+          isClaudeAuthError(msg.content);
+
         // Default rendering for User, Assistant, and non-sentinel System messages.
         return (
           <React.Fragment key={msg.id}>
@@ -854,7 +858,11 @@ export const MessagesWithTurns = memo(function MessagesWithTurns({
               streamingMessageNode
             ) : (
               <div
-                className={`${styles.message} ${styles[roleClassKey(msg.role, msg.content)]}${
+                className={`${styles.message} ${styles[
+                  roleClassKey(msg.role, msg.content, {
+                    forceSystemBlock: isAuthFailureMessage,
+                  })
+                ]}${
                   msg.role === "Assistant" && msg.thinking && showThinkingBlocks
                     ? ` ${styles.messageLeadingThinking}`
                     : ""
@@ -962,16 +970,14 @@ export const MessagesWithTurns = memo(function MessagesWithTurns({
                       })}
                     </div>
                   )}
-                  {(msg.role === "Assistant" || msg.role === "System") &&
-                  isClaudeAuthError(msg.content) &&
+                  {isAuthFailureMessage &&
                   msg.id === lastAuthFailureMessageId &&
                   msg.id !== resolvedClaudeAuthFailureMessageId ? (
                     <ChatAuthFailureCallout
                       error={msg.content}
                       messageId={msg.id}
                     />
-                  ) : (msg.role === "Assistant" || msg.role === "System") &&
-                    isClaudeAuthError(msg.content) ? (
+                  ) : isAuthFailureMessage ? (
                     <div
                       className={
                         msg.id === resolvedClaudeAuthFailureMessageId

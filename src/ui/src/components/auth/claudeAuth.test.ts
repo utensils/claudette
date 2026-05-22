@@ -28,8 +28,29 @@ const serviceMocks = vi.hoisted(() => ({
   launchCodexLogin: vi.fn(() => Promise.resolve()),
 }));
 
+const eventMocks = vi.hoisted(() => {
+  const listeners = new Map<
+    string,
+    Array<(event: { payload: unknown }) => void>
+  >();
+  return {
+    listeners,
+    listen: vi.fn(
+      (event: string, handler: (event: { payload: unknown }) => void) => {
+        listeners.set(event, [...(listeners.get(event) ?? []), handler]);
+        return Promise.resolve(() => {
+          listeners.set(
+            event,
+            (listeners.get(event) ?? []).filter((entry) => entry !== handler),
+          );
+        });
+      },
+    ),
+  };
+});
+
 vi.mock("@tauri-apps/api/event", () => ({
-  listen: vi.fn(() => Promise.resolve(() => {})),
+  listen: eventMocks.listen,
 }));
 
 vi.mock("../../services/tauri", () => serviceMocks);
@@ -41,10 +62,12 @@ import {
   isClaudeAuthError,
   isCodexAuthError,
   useClaudeAuthRecovery,
+  useCodexAuthLogin,
 } from "./claudeAuth";
 import { useAppStore } from "../../stores/useAppStore";
 
 type RecoveryApi = ReturnType<typeof useClaudeAuthRecovery>;
+type CodexLoginApi = ReturnType<typeof useCodexAuthLogin>;
 
 let root: Root | null = null;
 let container: HTMLDivElement | null = null;
@@ -65,6 +88,25 @@ function renderRecoveryHarness(onReady: (api: RecoveryApi) => void) {
   });
 }
 
+function renderCodexLoginHarness(
+  onReady: (api: CodexLoginApi) => void,
+  options?: Parameters<typeof useCodexAuthLogin>[0],
+) {
+  container = document.createElement("div");
+  document.body.appendChild(container);
+  root = createRoot(container);
+
+  function Harness() {
+    const api = useCodexAuthLogin(options);
+    useEffect(() => onReady(api), [api]);
+    return null;
+  }
+
+  act(() => {
+    root?.render(createElement(Harness));
+  });
+}
+
 beforeEach(() => {
   serviceMocks.getClaudeAuthStatus.mockReset();
   serviceMocks.getClaudeAuthStatus.mockResolvedValue({
@@ -75,9 +117,14 @@ beforeEach(() => {
     apiProvider: null,
     message: null,
   });
+  serviceMocks.launchCodexLogin.mockReset();
+  serviceMocks.launchCodexLogin.mockResolvedValue(undefined);
+  eventMocks.listen.mockClear();
+  eventMocks.listeners.clear();
   useAppStore.setState({
     claudeAuthFailure: null,
     resolvedClaudeAuthFailureMessageId: null,
+    selectedWorkspaceId: null,
   });
 });
 
@@ -205,6 +252,57 @@ describe("cleanClaudeAuthError", () => {
     expect(cleanClaudeAuthError("Not logged in · Please run /login")).toBe(
       "Not logged in",
     );
+  });
+});
+
+describe("useCodexAuthLogin", () => {
+  it("launches Codex login with the selected workspace id", async () => {
+    useAppStore.setState({ selectedWorkspaceId: "workspace-1" });
+    let api: CodexLoginApi | null = null;
+    renderCodexLoginHarness((next) => {
+      api = next;
+    });
+
+    await act(async () => {
+      await api?.startAuthLogin();
+    });
+
+    expect(serviceMocks.launchCodexLogin).toHaveBeenCalledWith("workspace-1");
+  });
+
+  it("keeps global Codex login when no workspace is selected", async () => {
+    let api: CodexLoginApi | null = null;
+    renderCodexLoginHarness((next) => {
+      api = next;
+    });
+
+    await act(async () => {
+      await api?.startAuthLogin();
+    });
+
+    expect(serviceMocks.launchCodexLogin).toHaveBeenCalledWith(null);
+  });
+
+  it("finishes successfully when the Codex login completion event arrives", async () => {
+    const onSuccess = vi.fn(() => Promise.resolve());
+    let api!: CodexLoginApi;
+    renderCodexLoginHarness((next) => {
+      api = next;
+    }, { onSuccess });
+
+    await act(async () => {
+      await api.startAuthLogin();
+    });
+
+    await act(async () => {
+      eventMocks.listeners.get("codex://login-complete")?.forEach((handler) => {
+        handler({ payload: { success: true, error: null } });
+      });
+      await Promise.resolve();
+    });
+
+    expect(onSuccess).toHaveBeenCalledTimes(1);
+    expect(api.authState.status).toBe("success");
   });
 });
 

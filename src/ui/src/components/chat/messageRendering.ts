@@ -32,8 +32,15 @@ export function shouldRenderAsMarkdown(role: ChatRole): boolean {
  * Returns the key used to look up the CSS module class (e.g.
  * `styles.role_User`, `styles.role_System_block`).
  */
-export function roleClassKey(role: ChatRole, content: string): string {
-  if (role === "System" && content.includes("\n")) {
+export function roleClassKey(
+  role: ChatRole,
+  content: string,
+  options: { forceSystemBlock?: boolean } = {},
+): string {
+  if (
+    role === "System" &&
+    (options.forceSystemBlock === true || content.includes("\n"))
+  ) {
     return "role_System_block";
   }
   return `role_${role}`;
