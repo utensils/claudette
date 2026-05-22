@@ -296,35 +296,85 @@ export function useClaudeAuthLogin({
  * Unlike Claude Code, the Codex CLI's `codex login` flow is a one-shot
  * browser handoff — it does not emit progress events or accept a paste-
  * back auth code, so `manualUrl` is always null and `submitAuthCode` is
- * a no-op. The success signal lands implicitly via
- * `launch_codex_login`'s post-exit sweep that tears down any
- * persistent Codex session; the user then re-sends the message and a
- * fresh app-server picks up the new tokens. The controller stays in
- * `running` until the user explicitly cancels via the close button,
- * because there is no FE-visible "browser flow finished" signal.
+ * a no-op. Completion lands through a Codex-specific event after
+ * `launch_codex_login`'s post-exit sweep has torn down stale persistent
+ * Codex sessions, so a fresh app-server picks up the new tokens.
  */
 export function useCodexAuthLogin({
-  onSuccess: _onSuccess,
+  onSuccess,
 }: {
   onSuccess?: () => void | Promise<void>;
 } = {}) {
+  const selectedWorkspaceId = useAppStore((s) => s.selectedWorkspaceId);
+  const onSuccessRef = useRef(onSuccess);
+  const loginInFlightRef = useRef(false);
   const [authState, setAuthState] = useState<ClaudeAuthLoginState>({
     status: "idle",
   });
 
+  useEffect(() => {
+    onSuccessRef.current = onSuccess;
+  }, [onSuccess]);
+
+  useEffect(() => {
+    let cancelled = false;
+    let unlisten: UnlistenFn | null = null;
+    listen<AuthLoginComplete>("codex://login-complete", (event) => {
+      if (!loginInFlightRef.current) return;
+      loginInFlightRef.current = false;
+      const { success, error } = event.payload;
+      if (!success) {
+        setAuthState({
+          status: "error",
+          error: error ?? "Codex sign-in failed.",
+        });
+        return;
+      }
+
+      void Promise.resolve(onSuccessRef.current?.())
+        .then(() => {
+          setAuthState({ status: "success" });
+        })
+        .catch((err) => {
+          setAuthState({
+            status: "error",
+            error:
+              err instanceof Error
+                ? err.message
+                : String(err || "Codex sign-in could not be verified."),
+          });
+        });
+    })
+      .then((fn) => {
+        if (cancelled) fn();
+        else unlisten = fn;
+      })
+      .catch((err) => {
+        console.error("Failed to subscribe to codex://login-complete", err);
+      });
+
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, []);
+
   const startAuthLogin = useCallback(async () => {
+    loginInFlightRef.current = true;
     setAuthState({ status: "running", manualUrl: null });
     try {
-      await launchCodexLogin();
+      await launchCodexLogin(selectedWorkspaceId);
     } catch (e) {
+      loginInFlightRef.current = false;
       setAuthState({ status: "error", error: String(e) });
     }
-  }, []);
+  }, [selectedWorkspaceId]);
 
   const cancelAuthLogin = useCallback(async () => {
     // No backend cancel — `codex login` runs detached. Just reset the
     // UI so the user can dismiss the spinner if they completed the
     // browser flow and want to retry their message.
+    loginInFlightRef.current = false;
     setAuthState({ status: "idle" });
   }, []);
 

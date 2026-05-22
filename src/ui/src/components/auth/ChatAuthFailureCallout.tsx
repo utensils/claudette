@@ -34,7 +34,7 @@ export function ChatAuthFailureCallout({
   const closeChatAuthLoginPanel = useAppStore(
     (s) => s.closeChatAuthLoginPanel,
   );
-  const { validateAuthLoginSuccess } = useClaudeAuthRecovery();
+  const { markAuthRecovered, validateAuthLoginSuccess } = useClaudeAuthRecovery();
   // Both hooks must be called unconditionally — React rules-of-hooks.
   // The unused controller stays inert (idle authState, never invoked).
   const claudeController = useClaudeAuthLogin({
@@ -42,7 +42,9 @@ export function ChatAuthFailureCallout({
       await validateAuthLoginSuccess();
     },
   });
-  const codexController = useCodexAuthLogin();
+  const codexController = useCodexAuthLogin({
+    onSuccess: markAuthRecovered,
+  });
   const controller =
     provider === "codex" ? codexController : claudeController;
   const {

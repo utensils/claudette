@@ -4,14 +4,28 @@
 //! into focused submodules. See each `mod` declaration's owning file
 //! for the relevant cluster.
 
-use tauri::{AppHandle, Manager, State};
+use std::ffi::{OsStr, OsString};
+use std::path::{Path, PathBuf};
+
+use serde::Serialize;
+use tauri::{AppHandle, Emitter, Manager, State};
 
 use claudette::agent::resolve_codex_path;
 use claudette::agent_backend::{AgentBackendConfig, AgentBackendRuntimeHarness};
 use claudette::db::Database;
+use claudette::env_provider::ResolvedEnv;
 use claudette::plugin::{delete_secure_secret, load_secure_secret, save_secure_secret};
+use claudette::plugin_runtime::host_api::WorkspaceInfo;
 
 use crate::state::AppState;
+
+const CODEX_LOGIN_COMPLETE_EVENT: &str = "codex://login-complete";
+
+#[derive(Clone, Serialize)]
+struct CodexLoginComplete {
+    success: bool,
+    error: Option<String>,
+}
 
 mod auto_detect;
 mod codex_auth;
@@ -340,13 +354,19 @@ pub async fn test_agent_backend(
 }
 
 #[tauri::command]
-pub async fn launch_codex_login(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
+pub async fn launch_codex_login(
+    workspace_id: Option<String>,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
     let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
     ensure_native_codex_enabled(&db)?;
+    drop(db);
+
     let codex_path = resolve_codex_path().await;
-    let mut command = codex_cli_command(codex_path);
+    let workspace_env = resolve_codex_login_workspace_env(&state, workspace_id.as_deref()).await?;
+    let mut command = build_codex_login_command(codex_path.as_os_str(), workspace_env.as_ref());
     let mut child = command
-        .arg("login")
         .spawn()
         .map_err(|e| format!("Failed to launch `codex login`: {e}"))?;
     // After `codex login` exits successfully, drop every persistent
@@ -387,6 +407,13 @@ pub async fn launch_codex_login(app: AppHandle, state: State<'_, AppState>) -> R
                     code = ?s.code(),
                     "`codex login` exited non-zero; skipping Codex session sweep"
                 );
+                let _ = app.emit(
+                    CODEX_LOGIN_COMPLETE_EVENT,
+                    CodexLoginComplete {
+                        success: false,
+                        error: Some(format!("`codex login` exited with {s}")),
+                    },
+                );
                 false
             }
             Err(err) => {
@@ -400,6 +427,13 @@ pub async fn launch_codex_login(app: AppHandle, state: State<'_, AppState>) -> R
                     target: "claudette::agent",
                     error = %err,
                     "failed to wait for `codex login` child; skipping Codex session sweep"
+                );
+                let _ = app.emit(
+                    CODEX_LOGIN_COMPLETE_EVENT,
+                    CodexLoginComplete {
+                        success: false,
+                        error: Some(format!("Failed to wait on `codex login`: {err}")),
+                    },
                 );
                 false
             }
@@ -442,8 +476,127 @@ pub async fn launch_codex_login(app: AppHandle, state: State<'_, AppState>) -> R
                 );
             }
         }
+        let _ = app.emit(
+            CODEX_LOGIN_COMPLETE_EVENT,
+            CodexLoginComplete {
+                success: true,
+                error: None,
+            },
+        );
     });
     Ok(())
+}
+
+struct CodexLoginWorkspaceEnv {
+    worktree: PathBuf,
+    resolved: ResolvedEnv,
+}
+
+async fn resolve_codex_login_workspace_env(
+    state: &AppState,
+    workspace_id: Option<&str>,
+) -> Result<Option<CodexLoginWorkspaceEnv>, String> {
+    let Some(workspace_id) = workspace_id else {
+        return Ok(None);
+    };
+    let (worktree, ws_info, disabled) = {
+        let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
+        let workspace = db
+            .list_workspaces()
+            .map_err(|e| e.to_string())?
+            .into_iter()
+            .find(|workspace| workspace.id == workspace_id)
+            .ok_or("Workspace not found")?;
+        let worktree = workspace
+            .worktree_path
+            .clone()
+            .ok_or("Workspace has no worktree")?;
+        let repo = db
+            .get_repository(&workspace.repository_id)
+            .map_err(|e| e.to_string())?
+            .ok_or("Repository not found")?;
+        let repo_id = workspace.repository_id.clone();
+        let disabled = crate::commands::env::load_disabled_providers(&db, &repo_id);
+        let ws_info = WorkspaceInfo {
+            id: workspace.id,
+            name: workspace.name,
+            branch: workspace.branch_name,
+            worktree_path: worktree.clone(),
+            repo_path: repo.path,
+            repo_id: Some(repo_id.clone()),
+        };
+        (PathBuf::from(worktree), ws_info, disabled)
+    };
+
+    let registry = state.plugins_snapshot().await;
+    let resolved = claudette::env_provider::resolve_with_registry_streaming(
+        &registry,
+        &state.env_cache,
+        &worktree,
+        &ws_info,
+        &disabled,
+        None,
+        None,
+    )
+    .await;
+    Ok(Some(CodexLoginWorkspaceEnv { worktree, resolved }))
+}
+
+fn build_codex_login_command(
+    codex_path: &OsStr,
+    workspace_env: Option<&CodexLoginWorkspaceEnv>,
+) -> tokio::process::Command {
+    let login_arg = "login".to_string();
+    if let Some(ctx) = workspace_env
+        && let Some(argv) = claudette::env_provider::nix_develop_command_wrap(
+            &ctx.worktree,
+            &ctx.resolved,
+            codex_path,
+            std::slice::from_ref(&login_arg),
+        )
+    {
+        return codex_login_command_from_argv(argv, Some(&ctx.worktree));
+    }
+
+    let mut command = codex_cli_command(codex_path);
+    command.arg(login_arg);
+    apply_resolved_env_to_codex_login(&mut command, workspace_env);
+    command
+}
+
+fn codex_login_command_from_argv(
+    argv: Vec<OsString>,
+    worktree: Option<&Path>,
+) -> tokio::process::Command {
+    let mut iter = argv.into_iter();
+    let program = iter
+        .next()
+        .expect("nix develop command wrapper should include a program");
+    let mut command = codex_cli_command(program);
+    command.args(iter);
+    if let Some(worktree) = worktree {
+        command.current_dir(worktree);
+    }
+    command
+}
+
+fn apply_resolved_env_to_codex_login(
+    command: &mut tokio::process::Command,
+    workspace_env: Option<&CodexLoginWorkspaceEnv>,
+) {
+    if let Some(CodexLoginWorkspaceEnv { worktree, resolved }) = workspace_env {
+        command.current_dir(worktree);
+        resolved.apply(command);
+        command.env(
+            "PATH",
+            match resolved.vars.get("PATH") {
+                Some(Some(provider_path)) => {
+                    claudette::env::merge_path_with_enriched(provider_path)
+                }
+                _ => claudette::env::enriched_path(),
+            },
+        );
+    }
 }
 
 #[cfg(test)]
@@ -526,6 +679,109 @@ mod tests {
             source[helper_start..helper_end].contains("claudette::process::command(program)"),
             "Codex CLI helper must use the Windows-safe process constructor",
         );
+    }
+
+    #[test]
+    fn codex_login_without_workspace_uses_default_codex_home() {
+        let command = build_codex_login_command(OsStr::new("codex"), None);
+
+        assert_eq!(command.as_std().get_current_dir(), None);
+        assert_eq!(command.as_std().get_program(), "codex");
+        assert_eq!(
+            command.as_std().get_args().collect::<Vec<_>>(),
+            vec![OsStr::new("login")]
+        );
+        assert!(
+            !command
+                .as_std()
+                .get_envs()
+                .any(|(key, _)| key == "CODEX_HOME"),
+            "global login should not override the user's default CODEX_HOME",
+        );
+    }
+
+    #[test]
+    fn codex_login_with_workspace_uses_repo_local_codex_home() {
+        let worktree = PathBuf::from("/tmp/speckit-worktree");
+        let ctx = CodexLoginWorkspaceEnv {
+            worktree: worktree.clone(),
+            resolved: ResolvedEnv {
+                vars: HashMap::from([("CODEX_HOME".to_string(), Some(".codex".to_string()))]),
+                sources: Vec::new(),
+            },
+        };
+
+        let command = build_codex_login_command(OsStr::new("codex"), Some(&ctx));
+
+        assert_eq!(command.as_std().get_program(), "codex");
+        assert_eq!(
+            command.as_std().get_args().collect::<Vec<_>>(),
+            vec![OsStr::new("login")]
+        );
+        assert_eq!(command.as_std().get_current_dir(), Some(worktree.as_path()));
+        let codex_home = command
+            .as_std()
+            .get_envs()
+            .find_map(|(key, value)| (key == "CODEX_HOME").then_some(value))
+            .flatten();
+        assert_eq!(codex_home, Some(std::ffi::OsStr::new(".codex")));
+    }
+
+    #[test]
+    fn codex_login_with_nix_devshell_uses_app_server_wrap() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("flake.nix"), "{}").unwrap();
+        let ctx = CodexLoginWorkspaceEnv {
+            worktree: tmp.path().to_path_buf(),
+            resolved: ResolvedEnv {
+                vars: HashMap::from([("CODEX_HOME".to_string(), Some(".codex".to_string()))]),
+                sources: vec![claudette::env_provider::ResolvedSource {
+                    plugin_name: "env-nix-devshell".to_string(),
+                    detected: true,
+                    vars_contributed: 1,
+                    cached: false,
+                    evaluated_at: std::time::SystemTime::now(),
+                    error: None,
+                }],
+            },
+        };
+
+        let command = build_codex_login_command(OsStr::new("codex"), Some(&ctx));
+
+        assert_eq!(command.as_std().get_current_dir(), Some(tmp.path()));
+        if claudette::env::which_in_enriched_path("nix").is_ok() {
+            assert!(
+                command
+                    .as_std()
+                    .get_program()
+                    .to_string_lossy()
+                    .ends_with("nix"),
+                "devshell Codex login should use the same nix develop wrapper as app-server"
+            );
+            assert_eq!(
+                command
+                    .as_std()
+                    .get_args()
+                    .map(|arg| arg.to_string_lossy().into_owned())
+                    .collect::<Vec<_>>(),
+                vec!["develop", "--command", "codex", "login"]
+            );
+            assert!(
+                !command
+                    .as_std()
+                    .get_envs()
+                    .any(|(key, _)| key == "CODEX_HOME"),
+                "wrapped login should let the devshell provide CODEX_HOME just like app-server"
+            );
+            return;
+        }
+
+        let codex_home = command
+            .as_std()
+            .get_envs()
+            .find_map(|(key, value)| (key == "CODEX_HOME").then_some(value))
+            .flatten();
+        assert_eq!(codex_home, Some(std::ffi::OsStr::new(".codex")));
     }
 
     #[test]

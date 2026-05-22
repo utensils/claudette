@@ -628,7 +628,9 @@ export function ChatPanel() {
             appVersion,
             addLocalMessage,
             startClaudeAuthLogin: startChatClaudeAuthLogin,
-            startCodexLogin: launchCodexLogin,
+            startCodexLogin: async () => {
+              await launchCodexLogin(selectedWorkspaceId);
+            },
             startPiLogin: async () => {
               useAppStore.getState().openModal("piLogin", {
                 workingDir: ws?.worktree_path ?? "",
