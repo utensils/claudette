@@ -163,6 +163,11 @@ async fn attach_lagged_subscriber_stream_ends() {
     handshake(&mut ctrl_r, &mut ctrl_w).await;
 
     let sid = "claudette-attach-lagged".to_string();
+    // Delay the stub-tui's `READY` print so attach connections have time to
+    // subscribe to the per-session broadcast channel before the line is sent.
+    // Without this, under `cargo llvm-cov` instrumentation the PTY reader can
+    // broadcast `READY` to zero subscribers, the message is dropped, and
+    // `drain_until_contains("READY", …)` runs to its full 10s budget.
     send_req(
         &mut ctrl_w,
         &Request::EnsureSession {
@@ -173,7 +178,7 @@ async fn attach_lagged_subscriber_stream_ends() {
                 cols: 80,
                 claude_binary: stub.to_string_lossy().into(),
                 claude_args: vec![],
-                env: vec![],
+                env: vec![("STUB_TUI_DELAY_MS".into(), "200".into())],
                 claude_config_dir: std::env::temp_dir().to_string_lossy().into(),
             },
         },

@@ -6,11 +6,23 @@
 //! - If `STUB_TUI_FAKE_AWAITING_AFTER` is set to a positive integer N, after
 //!   echoing N lines we exit 0 (simulating `Stop` hook) without further output.
 //! - If `STUB_TUI_CRASH_AFTER` is set, panic after that many lines.
+//! - If `STUB_TUI_DELAY_MS` is set to a non-negative integer, sleep that many
+//!   milliseconds before printing `READY`. Used by the attach lag-broadcast
+//!   test to deflake a join race: under `cargo llvm-cov` the PTY reader can
+//!   broadcast `READY` before any attach client has subscribed to the
+//!   per-session `broadcast::Sender`, so subscribers miss the line entirely.
+//!   Delaying startup output gives attach connections time to subscribe.
 //! - Line `quit\n` exits 0 immediately.
 
 use std::io::{BufRead, Write};
 
 fn main() {
+    if let Ok(s) = std::env::var("STUB_TUI_DELAY_MS")
+        && let Ok(ms) = s.parse::<u64>()
+    {
+        std::thread::sleep(std::time::Duration::from_millis(ms));
+    }
+
     let mut stdout = std::io::stdout().lock();
     writeln!(stdout, "READY").unwrap();
     stdout.flush().unwrap();
