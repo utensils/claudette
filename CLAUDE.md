@@ -190,6 +190,13 @@ src-session-host/       — `claudette-session-host` sidecar binary. Owns intera
                           Windows, opt-in on Unix. Bundled as a Tauri `externalBin`.
 tests/                  — workspace-level Rust integration tests (e.g. `grants_enforcement.rs`
                           covering the community-plugin granted_capabilities flow).
+                          `tests/fixtures/stub-tui/` is a tiny workspace member that builds a
+                          standalone TUI binary used as a fake `claude` PTY in tests; relied on
+                          by both the `claudette` lib's interactive tests (e.g.
+                          `interactive_lifecycle`, `commands/interactive`) and the
+                          `claudette-session-host` integration tests under
+                          `src-session-host/tests/` (`attach_stream.rs`, `ensure_session.rs`,
+                          `handshake.rs`).
 ```
 
 ### Plugin system
