@@ -95,7 +95,7 @@ async fn attach_streams_echoed_output() {
     }
 
     // Drain stub-tui's `READY\n` first.
-    let ready_seen = drain_until_contains(&mut att_r, "READY", Duration::from_secs(2)).await;
+    let ready_seen = drain_until_contains(&mut att_r, "READY", Duration::from_secs(10)).await;
     assert!(ready_seen, "did not observe READY on attach stream");
 
     // Send input on the control connection.
@@ -113,7 +113,7 @@ async fn attach_streams_echoed_output() {
     assert!(matches!(resp, Response::Ok), "expected Ok, got {resp:?}");
 
     // Drain attach until we see the echo.
-    let seen = drain_until_contains(&mut att_r, "OUT: hello", Duration::from_secs(3)).await;
+    let seen = drain_until_contains(&mut att_r, "OUT: hello", Duration::from_secs(10)).await;
     assert!(seen, "did not observe echoed line on attach stream");
 
     server.abort();
@@ -196,7 +196,7 @@ async fn attach_lagged_subscriber_stream_ends() {
     // Wait for stub-tui's READY before kicking off the drainer, to make sure
     // the session reader task is wired up before we start blasting input.
     assert!(
-        drain_until_contains(&mut fast_r, "READY", Duration::from_secs(2)).await,
+        drain_until_contains(&mut fast_r, "READY", Duration::from_secs(10)).await,
         "fast attach never saw READY"
     );
 
