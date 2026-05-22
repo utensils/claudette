@@ -77,8 +77,31 @@ const serviceMocks = vi.hoisted(() => ({
     }
     return base;
   },
-  effectiveHarness: (backend: AgentBackendConfig) => {
-    if (backend.runtime_harness) return backend.runtime_harness;
+  effectiveHarness: (
+    backend: AgentBackendConfig,
+    options?: { claudeInteractiveEnabled?: boolean },
+  ) => {
+    const override = backend.runtime_harness ?? undefined;
+    // Mirror the real `effectiveHarness` guard: `"claude_interactive"`
+    // is only honored when the experimental flag is on (it's
+    // intentionally absent from the per-kind matrix). Other persisted
+    // overrides are honored when they appear in the kind's allow-list;
+    // otherwise we fall through to the kind's default.
+    if (
+      override === "claude_interactive" &&
+      options?.claudeInteractiveEnabled === true
+    ) {
+      return override;
+    }
+    if (
+      override &&
+      override !== "claude_interactive" &&
+      serviceMocks
+        .availableHarnessesForKind(backend.kind, options)
+        .includes(override)
+    ) {
+      return override;
+    }
     return serviceMocks.defaultHarnessForKind(backend.kind);
   },
 }));
@@ -344,5 +367,36 @@ describe("RuntimeSelector", () => {
     } finally {
       appStore.claudeInteractiveEnabled = false;
     }
+  });
+
+  it("falls back to the kind's default when runtime_harness is claude_interactive but the flag is OFF", () => {
+    // Regression: the previous mock unconditionally returned the
+    // persisted override, including `"claude_interactive"`. The real
+    // `effectiveHarness` honors `"claude_interactive"` only when the
+    // experimental flag is on; otherwise it falls through to the kind's
+    // default. The selector won't render for Anthropic (single available
+    // harness with the flag off), so use Ollama where the kind has a
+    // multi-entry matrix. Its default harness is `pi_sdk`.
+    appStore.claudeInteractiveEnabled = false;
+    appStore.agentBackends = [
+      makeBackend({ id: "pi", kind: "pi_sdk", enabled: true }),
+    ];
+    const container = mount(
+      <RuntimeSelector
+        backend={makeBackend({
+          kind: "ollama",
+          runtime_harness: "claude_interactive",
+        })}
+        onSaved={() => {}}
+      />,
+    );
+    const select = container.querySelector("select") as HTMLSelectElement;
+    expect(select).not.toBeNull();
+    // Flag is OFF → the persisted `claude_interactive` override is
+    // dropped, and the effective harness is the kind's default (pi_sdk).
+    expect(select.value).toBe("pi_sdk");
+    // `claude_interactive` is NOT in the option list either (matrix gate).
+    const values = Array.from(select.options).map((o) => o.value);
+    expect(values).not.toContain("claude_interactive");
   });
 });
