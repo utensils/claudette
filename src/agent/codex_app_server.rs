@@ -1255,11 +1255,14 @@ where
         if trimmed.is_empty() {
             continue;
         }
-        if !trimmed.starts_with('{') {
+        let Some(first_char) = trimmed.chars().next() else {
+            continue;
+        };
+        if !is_json_value_start(first_char) {
             skipped_preamble_lines += 1;
             if skipped_preamble_lines > MAX_CODEX_STDOUT_PREAMBLE_LINES {
                 return Err(format!(
-                    "Codex app-server stdout produced too many non-JSON preamble lines before JSON-RPC; last line: {}",
+                    "Codex app-server stdout produced too many unexpected non-JSON-RPC lines; last line: {}",
                     truncate_protocol_line(trimmed)
                 ));
             }
@@ -1270,10 +1273,20 @@ where
             );
             continue;
         }
+        if first_char != '{' {
+            return Err(format!(
+                "Unsupported Codex app-server JSON-RPC message shape: expected object line, got {}",
+                truncate_protocol_line(trimmed)
+            ));
+        }
         return parse_jsonrpc_line(trimmed)
             .map(Some)
             .map_err(|e| format!("Failed to parse Codex app-server JSON-RPC line: {e}"));
     }
+}
+
+fn is_json_value_start(ch: char) -> bool {
+    matches!(ch, '{' | '[' | '"' | 't' | 'f' | 'n' | '-' | '0'..='9')
 }
 
 fn truncate_protocol_line(line: &str) -> String {
@@ -3438,6 +3451,19 @@ mod tests {
             .expect_err("object-shaped protocol corruption must not be skipped");
 
         assert!(err.contains("Failed to parse Codex app-server JSON-RPC line"));
+    }
+
+    #[tokio::test]
+    async fn unsupported_jsonrpc_batch_shape_errors() {
+        let input = br#"[{"jsonrpc":"2.0","id":1,"result":{"ok":true}}]
+"#;
+        let mut reader = tokio::io::BufReader::new(&input[..]);
+
+        let err = read_jsonrpc_message(&mut reader)
+            .await
+            .expect_err("batch-shaped protocol lines must not be skipped");
+
+        assert!(err.contains("Unsupported Codex app-server JSON-RPC message shape"));
     }
 
     #[test]
