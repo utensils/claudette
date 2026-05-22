@@ -507,10 +507,9 @@ async fn resolve_codex_login_workspace_env(
             .into_iter()
             .find(|workspace| workspace.id == workspace_id)
             .ok_or("Workspace not found")?;
-        let worktree = workspace
-            .worktree_path
-            .clone()
-            .ok_or("Workspace has no worktree")?;
+        let Some(worktree) = codex_login_worktree_path(&workspace) else {
+            return Ok(None);
+        };
         let repo = db
             .get_repository(&workspace.repository_id)
             .map_err(|e| e.to_string())?
@@ -521,11 +520,11 @@ async fn resolve_codex_login_workspace_env(
             id: workspace.id,
             name: workspace.name,
             branch: workspace.branch_name,
-            worktree_path: worktree.clone(),
+            worktree_path: worktree.to_string_lossy().into_owned(),
             repo_path: repo.path,
             repo_id: Some(repo_id.clone()),
         };
-        (PathBuf::from(worktree), ws_info, disabled)
+        (worktree, ws_info, disabled)
     };
 
     let registry = state.plugins_snapshot().await;
@@ -540,6 +539,10 @@ async fn resolve_codex_login_workspace_env(
     )
     .await;
     Ok(Some(CodexLoginWorkspaceEnv { worktree, resolved }))
+}
+
+fn codex_login_worktree_path(workspace: &claudette::model::Workspace) -> Option<PathBuf> {
+    workspace.worktree_path.as_deref().map(PathBuf::from)
 }
 
 fn build_codex_login_command(
@@ -697,6 +700,34 @@ mod tests {
                 .get_envs()
                 .any(|(key, _)| key == "CODEX_HOME"),
             "global login should not override the user's default CODEX_HOME",
+        );
+    }
+
+    #[test]
+    fn codex_login_missing_worktree_falls_back_to_default_codex_home() {
+        let workspace = claudette::model::Workspace {
+            id: "workspace-1".to_string(),
+            repository_id: "repo-1".to_string(),
+            name: "Restoring workspace".to_string(),
+            branch_name: "main".to_string(),
+            worktree_path: None,
+            status: claudette::model::WorkspaceStatus::Active,
+            agent_status: claudette::model::AgentStatus::Idle,
+            status_line: String::new(),
+            created_at: "2026-05-22T00:00:00.000Z".to_string(),
+            sort_order: 0,
+        };
+
+        assert_eq!(codex_login_worktree_path(&workspace), None);
+        let command = build_codex_login_command(OsStr::new("codex"), None);
+
+        assert_eq!(command.as_std().get_current_dir(), None);
+        assert!(
+            !command
+                .as_std()
+                .get_envs()
+                .any(|(key, _)| key == "CODEX_HOME"),
+            "missing-worktree login should fall back to the user's default CODEX_HOME",
         );
     }
 
