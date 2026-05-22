@@ -483,11 +483,23 @@ async fn handle_create_workspace(
 
     let state = app_state(app)?;
 
+    // The CLI / batch fan-out path doesn't yet surface required inputs
+    // (deferred to v1.x). When a repo has declared inputs, the shared
+    // `ops::workspace::create_inner` raises a clear error from
+    // `validate_repository_inputs` rather than silently creating a
+    // workspace with missing env. Until the CLI grows `--input KEY=VALUE`
+    // flags, batch runs against an input-declaring repo will need to be
+    // created from the GUI.
+    let input_values: Option<std::collections::HashMap<String, String>> = params
+        .get("input_values")
+        .and_then(|v| serde_json::from_value(v.clone()).ok());
+
     let result = crate::commands::workspace::create_workspace_inner(
         repo_id,
         name,
         skip_setup,
         preserve_supplied_name,
+        input_values,
         app,
         &state,
     )
@@ -1449,6 +1461,7 @@ mod tests {
             archive_script_auto_run: false,
             base_branch: None,
             default_remote: None,
+            required_inputs: None,
             path_valid: true,
         }
     }
@@ -1465,6 +1478,7 @@ mod tests {
             status_line: String::new(),
             created_at: String::new(),
             sort_order: 0,
+            input_values: None,
         }
     }
 

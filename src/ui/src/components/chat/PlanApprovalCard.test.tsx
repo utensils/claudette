@@ -111,6 +111,7 @@ beforeEach(() => {
         status: "Active",
         agent_status: "Idle",
         status_line: "",
+        input_values: null,
         remote_connection_id: null,
       },
     ],

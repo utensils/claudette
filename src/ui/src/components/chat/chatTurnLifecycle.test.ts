@@ -23,6 +23,7 @@ function makeWorkspace(overrides: Partial<Workspace> = {}): Workspace {
     created_at: "2026-05-21T00:00:00Z",
     sort_order: 0,
     remote_connection_id: null,
+    input_values: null,
     ...overrides,
   };
 }

@@ -26,6 +26,7 @@ function makeArchived(id: string, ageInDays: number): Workspace {
     status_line: "",
     created_at: String(NOW - ageInDays * DAY),
     sort_order: 0,
+    input_values: null,
     remote_connection_id: null,
   };
 }
@@ -194,6 +195,7 @@ describe("groupByRepository", () => {
       archive_script_auto_run: false,
       base_branch: null,
       default_remote: null,
+      required_inputs: null,
       path_valid: true,
       remote_connection_id: null,
     };

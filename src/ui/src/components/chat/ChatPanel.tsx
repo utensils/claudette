@@ -178,6 +178,10 @@ export function ChatPanel() {
         status_line: "",
         created_at: new Date().toISOString(),
         sort_order: ws.sort_order + 1,
+        // Fork inherits its source workspace's input_values once the
+        // backend completes the create — this placeholder is swapped out
+        // by `commitPendingFork` before any env merge reads it.
+        input_values: null,
         remote_connection_id: null,
       };
       const previousSelection = selectedWorkspaceId;

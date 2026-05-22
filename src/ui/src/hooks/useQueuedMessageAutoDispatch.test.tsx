@@ -32,6 +32,7 @@ function makeWorkspace(id: string, remoteConnectionId: string | null = null): Wo
     status_line: "",
     created_at: baseTime,
     sort_order: 0,
+    input_values: null,
     remote_connection_id: remoteConnectionId,
   };
 }

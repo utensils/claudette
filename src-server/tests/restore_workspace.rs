@@ -60,6 +60,7 @@ async fn setup() -> (
         archive_script_auto_run: false,
         base_branch: None,
         default_remote: None,
+        required_inputs: None,
         path_valid: true,
     };
     db.insert_repository(&repo).unwrap();
@@ -106,6 +107,7 @@ async fn restore_workspace_recreates_worktree_for_archived() {
             repo_id: &repo.id,
             name: "feature",
             branch_prefix: "test/",
+            input_values: None,
         },
     )
     .await
@@ -189,6 +191,7 @@ async fn restore_workspace_errors_when_workspace_already_active() {
             repo_id: &repo.id,
             name: "feature",
             branch_prefix: "test/",
+            input_values: None,
         },
     )
     .await

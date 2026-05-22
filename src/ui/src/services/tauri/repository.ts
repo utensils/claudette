@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { Repository } from "../../types";
 import type { RepoConfigInfo } from "../../types/repository";
+import type { RepositoryInputField } from "../../types/repositoryInput";
 
 export function addRepository(path: string): Promise<Repository> {
   return invoke("add_repository", { path });
@@ -72,4 +73,15 @@ export function setSetupScriptAutoRun(repoId: string, enabled: boolean): Promise
 
 export function setArchiveScriptAutoRun(repoId: string, enabled: boolean): Promise<void> {
   return invoke("set_archive_script_auto_run", { repoId, enabled });
+}
+
+/** Replace the per-repo declared-input schema. Pass `[]` to clear it (the
+ *  backend treats empty and null identically, so workspace-create stops
+ *  prompting). The backend re-validates env-var-name shape and duplicate
+ *  keys; surfacing a validation error here is a thrown promise rejection. */
+export function updateRepositoryRequiredInputs(
+  repoId: string,
+  schema: RepositoryInputField[],
+): Promise<void> {
+  return invoke("update_repository_required_inputs", { repoId, schema });
 }

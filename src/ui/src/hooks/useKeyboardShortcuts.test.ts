@@ -173,6 +173,7 @@ function makeWorkspace(
     created_at: "2026-01-01T00:00:00Z",
     sort_order: 0,
     remote_connection_id: null,
+    input_values: null,
     ...overrides,
   };
 }
@@ -196,6 +197,7 @@ function makeRepo(id: string, sort_order = 0): Repository {
     default_remote: null,
     path_valid: true,
     remote_connection_id: null,
+    required_inputs: null,
   };
 }
 
