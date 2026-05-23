@@ -39,12 +39,29 @@ type PendingTool = {
   resolve: (approved: boolean) => void;
 };
 
+// Result of a `host_tool` round-trip — mirrors the Rust `BridgeResponse`
+// shape the Claudette host writes back in `host_tool_result`.
+type HostToolResult = {
+  ok: boolean;
+  message?: string;
+  data?: unknown;
+  error?: string;
+};
+
+type PendingHostTool = {
+  resolve: (result: HostToolResult) => void;
+  reject: (error: Error) => void;
+};
+
 type HarnessState = {
   cwd: string;
   session?: AgentSession;
   authStorage: AuthStorage;
   modelRegistry: ModelRegistry;
   pendingTools: Map<string, PendingTool>;
+  // In-flight `host_tool` round-trips, keyed by the originating tool
+  // call id. Resolved by a matching `host_tool_result` from the host.
+  pendingHostTools: Map<string, PendingHostTool>;
   activeTurnStartedAt?: number;
   // True when Claudette's permission level is `full` — i.e. the user
   // ran `/permissions full` and Claudette's tools-for-level resolver
@@ -66,6 +83,7 @@ const state: HarnessState = {
   authStorage: AuthStorage.create(),
   modelRegistry: ModelRegistry.create(AuthStorage.create()),
   pendingTools: new Map(),
+  pendingHostTools: new Map(),
   bypassPermissions: false,
 };
 
@@ -278,6 +296,36 @@ function textResult(text: string, details: Record<string, unknown> = {}) {
     content: [{ type: "text" as const, text }],
     details,
   };
+}
+
+/** Round-trip a request to the Claudette host and await its result.
+ *  Pi has no MCP bridge, so this generic `host_tool` channel is how a
+ *  native sidecar tool reaches host-only services (currently the
+ *  `agent_scheduled_tasks` DB). The channel is intentionally not
+ *  scheduling-specific — a future user Pi extension that needs host
+ *  services can reuse it. `toolCallId` doubles as the correlation id:
+ *  it is unique per tool call and a scheduling tool never also runs an
+ *  `approval()` round-trip, so the two pending maps can't collide. */
+function hostTool(toolCallId: string, name: string, args: unknown): Promise<HostToolResult> {
+  send({ type: "host_tool", requestId: toolCallId, name, args });
+  return new Promise<HostToolResult>((resolve, reject) => {
+    state.pendingHostTools.set(toolCallId, { resolve, reject });
+  });
+}
+
+/** Render a `HostToolResult` as a Pi tool result. A failed host call
+ *  throws so the SDK marks the tool call `isError`. */
+function hostToolResult(result: HostToolResult) {
+  if (!result.ok) {
+    throw new Error(result.error ?? "Scheduling request failed.");
+  }
+  const text = result.message ?? "Done.";
+  if (result.data === undefined || result.data === null) {
+    return textResult(text);
+  }
+  return textResult(`${text}\n${JSON.stringify(result.data, null, 2)}`, {
+    data: result.data,
+  });
 }
 
 function buildTools(cwd: string, enabledTools: readonly string[]): ToolDefinition[] {
@@ -502,6 +550,58 @@ function buildTools(cwd: string, enabledTools: readonly string[]): ToolDefinitio
         await writeFile(path, before.replace(params.oldText, params.newText), "utf8");
         return textResult(`Edited ${path}`, { path });
       },
+    }),
+    // Native scheduling tools. These carry no local side effect — each
+    // `execute` round-trips through `hostTool` to the Claudette host,
+    // which writes the `agent_scheduled_tasks` DB and re-enters the
+    // chat when the task is due. Parameter keys mirror the Claudette
+    // MCP server's scheduling tools so the surfaces stay interchangeable.
+    defineTool({
+      name: "ScheduleWakeup",
+      label: "Schedule wakeup",
+      description:
+        "Schedule a one-shot wakeup that re-enters this chat later with a prompt. " +
+        "Provide either delaySeconds or fireAt (an RFC3339 timestamp).",
+      parameters: Type.Object({
+        prompt: Type.String(),
+        delaySeconds: Type.Optional(Type.Number()),
+        fireAt: Type.Optional(Type.String()),
+        reason: Type.Optional(Type.String()),
+      }),
+      execute: async (toolCallId, params) =>
+        hostToolResult(await hostTool(toolCallId, "ScheduleWakeup", params)),
+    }),
+    defineTool({
+      name: "CronCreate",
+      label: "Create routine",
+      description:
+        "Create a scheduled routine from a standard 5-field cron expression in local time.",
+      parameters: Type.Object({
+        cron: Type.String(),
+        prompt: Type.String(),
+        name: Type.Optional(Type.String()),
+        recurring: Type.Optional(Type.Boolean()),
+      }),
+      execute: async (toolCallId, params) =>
+        hostToolResult(await hostTool(toolCallId, "CronCreate", params)),
+    }),
+    defineTool({
+      name: "CronList",
+      label: "List routines",
+      description: "List scheduled wakeups and routines for this chat session.",
+      parameters: Type.Object({}),
+      execute: async (toolCallId, params) =>
+        hostToolResult(await hostTool(toolCallId, "CronList", params)),
+    }),
+    defineTool({
+      name: "CronDelete",
+      label: "Delete routine",
+      description: "Delete a scheduled wakeup or routine by its id or name.",
+      parameters: Type.Object({
+        id: Type.String(),
+      }),
+      execute: async (toolCallId, params) =>
+        hostToolResult(await hostTool(toolCallId, "CronDelete", params)),
     }),
   ];
   return tools.filter((tool) => enabled.has(tool.name));
@@ -734,10 +834,18 @@ async function grepFallback(root: string, query: string): Promise<string> {
   return matches.join("\n");
 }
 
+// Native scheduling tools — always enabled, no approval round-trip,
+// present in every Pi session regardless of Claudette's permission
+// level (they only schedule prompts; they mutate nothing locally).
+const SCHEDULING_TOOLS = ["ScheduleWakeup", "CronCreate", "CronList", "CronDelete"];
+
 function mapPermissionTools(value: unknown): { tools: string[]; bypass: boolean } {
   const tools = asStringArray(value);
   if (tools.includes("*")) {
-    return { tools: ["read", "ls", "find", "grep", "bash", "write", "edit"], bypass: true };
+    return {
+      tools: ["read", "ls", "find", "grep", "bash", "write", "edit", ...SCHEDULING_TOOLS],
+      bypass: true,
+    };
   }
   const out = new Set<string>();
   for (const tool of tools) {
@@ -750,6 +858,7 @@ function mapPermissionTools(value: unknown): { tools: string[]; bypass: boolean 
     if (normalized === "bash") out.add("bash");
   }
   out.add("ls");
+  for (const name of SCHEDULING_TOOLS) out.add(name);
   return { tools: [...out], bypass: false };
 }
 
@@ -1434,6 +1543,12 @@ async function handle(message: RequestMessage): Promise<void> {
         pending.resolve(false);
       }
       state.pendingTools.clear();
+      // Likewise release in-flight host-tool round-trips so a
+      // scheduling tool's `execute()` doesn't dangle past the abort.
+      for (const pending of state.pendingHostTools.values()) {
+        pending.reject(new Error("aborted"));
+      }
+      state.pendingHostTools.clear();
       await state.session?.abort();
       respond(message.id, message.type, true);
       break;
@@ -1506,6 +1621,20 @@ async function handle(message: RequestMessage): Promise<void> {
       if (requestId) state.pendingTools.delete(requestId);
       pending?.resolve(false);
       respond(message.id, message.type, true);
+      break;
+    }
+    case "host_tool_result": {
+      // Result of a `host_tool` round-trip. A notification, not a
+      // request — it carries no `id`, so we send no `response` back.
+      const requestId = asString(message.requestId);
+      const pending = requestId ? state.pendingHostTools.get(requestId) : undefined;
+      if (requestId) state.pendingHostTools.delete(requestId);
+      pending?.resolve({
+        ok: message.ok === true,
+        message: typeof message.message === "string" ? message.message : undefined,
+        data: message.data,
+        error: typeof message.error === "string" ? message.error : undefined,
+      });
       break;
     }
     case "dispose":

@@ -7,15 +7,17 @@ Claudette can persist agent wakeups and recurring routines in its app database. 
 
 ## Agent Tools
 
-When the built-in Claudette MCP bridge is available, agents can use these native tools:
+Agents can schedule their own wakeups and routines through native tools:
 
-| Tool | Purpose |
-|---|---|
-| `ScheduleWakeup` | Schedule a one-shot wakeup with `delaySeconds` or `fireAt`, plus a prompt and optional reason. |
-| `CronCreate` | Create a routine from a standard 5-field cron expression in local time. |
-| `CronList` | List persisted wakeups and routines. |
-| `CronDelete` | Delete a routine by id or name. |
-| `Monitor` | Subscribe to future output lines from a background Bash task instead of polling. |
+| Tool | Purpose | Backends |
+|---|---|---|
+| `ScheduleWakeup` | Schedule a one-shot wakeup with `delaySeconds` or `fireAt`, plus a prompt and optional reason. | Claude, Codex, Pi |
+| `CronCreate` | Create a routine from a standard 5-field cron expression in local time. | Claude, Codex, Pi |
+| `CronList` | List persisted wakeups and routines. | Claude, Codex, Pi |
+| `CronDelete` | Delete a routine by id or name. | Claude, Codex, Pi |
+| `Monitor` | Subscribe to future output lines from a background Bash task instead of polling. | Claude, Codex |
+
+Claude and Codex agents reach these tools over the built-in Claudette MCP bridge. The Pi backend has no MCP bridge, so its scheduling tools are registered natively in the Pi sidecar — `Monitor` is unavailable there. Scheduling stays available regardless of the **Agent Attachments** plugin toggle.
 
 Wakeups and routines survive app restarts. If a fire time passes while Claudette is closed, the scheduler fires the overdue task when the app starts again.
 

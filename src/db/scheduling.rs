@@ -12,6 +12,8 @@ impl Database {
         fire_at: DateTime<Utc>,
         prompt: &str,
         reason: Option<&str>,
+        backend_id: Option<&str>,
+        model: Option<&str>,
     ) -> Result<ScheduledTask, rusqlite::Error> {
         let workspace_id = self.workspace_id_for_chat_session(chat_session_id)?;
         let id = uuid::Uuid::new_v4().to_string();
@@ -20,8 +22,9 @@ impl Database {
         self.conn.execute(
             "INSERT INTO agent_scheduled_tasks
                 (id, chat_session_id, workspace_id, kind, prompt, reason, fire_at,
-                 recurring, enabled, created_at, updated_at, next_fire_at)
-             VALUES (?1, ?2, ?3, 'wakeup', ?4, ?5, ?6, 0, 1, ?7, ?7, ?6)",
+                 recurring, enabled, created_at, updated_at, next_fire_at,
+                 backend_id, model)
+             VALUES (?1, ?2, ?3, 'wakeup', ?4, ?5, ?6, 0, 1, ?7, ?7, ?6, ?8, ?9)",
             params![
                 id,
                 chat_session_id,
@@ -29,13 +32,16 @@ impl Database {
                 prompt,
                 reason,
                 fire_at,
-                now
+                now,
+                backend_id.map(str::trim).filter(|s| !s.is_empty()),
+                model.map(str::trim).filter(|s| !s.is_empty()),
             ],
         )?;
         self.get_agent_scheduled_task(&id)?
             .ok_or(rusqlite::Error::QueryReturnedNoRows)
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn create_agent_cron_task(
         &self,
         chat_session_id: &str,
@@ -43,6 +49,8 @@ impl Database {
         cron_expr: &str,
         prompt: &str,
         recurring: bool,
+        backend_id: Option<&str>,
+        model: Option<&str>,
     ) -> Result<ScheduledTask, rusqlite::Error> {
         let workspace_id = self.workspace_id_for_chat_session(chat_session_id)?;
         let id = uuid::Uuid::new_v4().to_string();
@@ -57,8 +65,9 @@ impl Database {
         self.conn.execute(
             "INSERT INTO agent_scheduled_tasks
                 (id, chat_session_id, workspace_id, kind, name, prompt, cron_expr,
-                 recurring, enabled, created_at, updated_at, next_fire_at)
-             VALUES (?1, ?2, ?3, 'cron', ?4, ?5, ?6, ?7, 1, ?8, ?8, ?9)",
+                 recurring, enabled, created_at, updated_at, next_fire_at,
+                 backend_id, model)
+             VALUES (?1, ?2, ?3, 'cron', ?4, ?5, ?6, ?7, 1, ?8, ?8, ?9, ?10, ?11)",
             params![
                 id,
                 chat_session_id,
@@ -68,7 +77,9 @@ impl Database {
                 cron_expr,
                 if recurring { 1 } else { 0 },
                 now,
-                next
+                next,
+                backend_id.map(str::trim).filter(|s| !s.is_empty()),
+                model.map(str::trim).filter(|s| !s.is_empty()),
             ],
         )?;
         self.get_agent_scheduled_task(&id)?
@@ -84,7 +95,7 @@ impl Database {
                 "SELECT id, chat_session_id, workspace_id, kind, name, prompt, reason,
                         fire_at, cron_expr, recurring, enabled, created_at, updated_at,
                         last_fired_at, next_fire_at, failure_count, last_failed_at,
-                        last_error, disabled_reason
+                        last_error, disabled_reason, backend_id, model
                  FROM agent_scheduled_tasks
                  WHERE id = ?1",
                 params![id],
@@ -98,7 +109,7 @@ impl Database {
             "SELECT id, chat_session_id, workspace_id, kind, name, prompt, reason,
                     fire_at, cron_expr, recurring, enabled, created_at, updated_at,
                     last_fired_at, next_fire_at, failure_count, last_failed_at,
-                    last_error, disabled_reason
+                    last_error, disabled_reason, backend_id, model
              FROM agent_scheduled_tasks
              ORDER BY enabled DESC, next_fire_at IS NULL, next_fire_at, created_at",
         )?;
@@ -113,7 +124,7 @@ impl Database {
             "SELECT id, chat_session_id, workspace_id, kind, name, prompt, reason,
                     fire_at, cron_expr, recurring, enabled, created_at, updated_at,
                     last_fired_at, next_fire_at, failure_count, last_failed_at,
-                    last_error, disabled_reason
+                    last_error, disabled_reason, backend_id, model
              FROM agent_scheduled_tasks
              WHERE chat_session_id = ?1
              ORDER BY enabled DESC, next_fire_at IS NULL, next_fire_at, created_at",
@@ -131,7 +142,7 @@ impl Database {
             "SELECT t.id, t.chat_session_id, t.workspace_id, t.kind, t.name, t.prompt, t.reason,
                     t.fire_at, t.cron_expr, t.recurring, t.enabled, t.created_at, t.updated_at,
                     t.last_fired_at, t.next_fire_at, t.failure_count, t.last_failed_at,
-                    t.last_error, t.disabled_reason
+                    t.last_error, t.disabled_reason, t.backend_id, t.model
              FROM agent_scheduled_tasks t
              JOIN workspaces w ON w.id = t.workspace_id
              WHERE t.enabled = 1
@@ -363,6 +374,8 @@ fn parse_scheduled_task_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Schedul
         last_failed_at: row.get(16)?,
         last_error: row.get(17)?,
         disabled_reason: row.get(18)?,
+        backend_id: row.get(19)?,
+        model: row.get(20)?,
     })
 }
 
@@ -383,7 +396,14 @@ mod tests {
         let fire_at = Utc::now() + chrono::Duration::minutes(5);
 
         let task = db
-            .create_agent_wakeup(&session.id, fire_at, "check the build", Some("build"))
+            .create_agent_wakeup(
+                &session.id,
+                fire_at,
+                "check the build",
+                Some("build"),
+                None,
+                None,
+            )
             .unwrap();
         assert_eq!(task.kind, ScheduledTaskKind::Wakeup);
         assert_eq!(task.chat_session_id, session.id);
@@ -404,7 +424,15 @@ mod tests {
         let session: ChatSession = db.create_chat_session(&ws.id).unwrap();
 
         let task = db
-            .create_agent_cron_task(&session.id, Some("hourly"), "0 * * * *", "check", true)
+            .create_agent_cron_task(
+                &session.id,
+                Some("hourly"),
+                "0 * * * *",
+                "check",
+                true,
+                None,
+                None,
+            )
             .unwrap();
         assert_eq!(task.kind, ScheduledTaskKind::Cron);
         assert_eq!(task.name.as_deref(), Some("hourly"));
@@ -422,10 +450,18 @@ mod tests {
         let session_b = db.create_chat_session(&ws.id).unwrap();
 
         let task_a = db
-            .create_agent_cron_task(&session_a.id, Some("same-name"), "0 * * * *", "a", true)
+            .create_agent_cron_task(
+                &session_a.id,
+                Some("same-name"),
+                "0 * * * *",
+                "a",
+                true,
+                None,
+                None,
+            )
             .unwrap();
         let task_b = db
-            .create_agent_cron_task(&session_b.id, None, "0 * * * *", "b", true)
+            .create_agent_cron_task(&session_b.id, None, "0 * * * *", "b", true, None, None)
             .unwrap();
 
         let rows = db
@@ -462,6 +498,8 @@ mod tests {
                 now - chrono::Duration::minutes(1),
                 "check",
                 None,
+                None,
+                None,
             )
             .unwrap();
 
@@ -491,10 +529,20 @@ mod tests {
                 now - chrono::Duration::minutes(1),
                 "check",
                 None,
+                None,
+                None,
             )
             .unwrap();
         let cron = db
-            .create_agent_cron_task(&session.id, Some("hourly"), "0 * * * *", "cron", true)
+            .create_agent_cron_task(
+                &session.id,
+                Some("hourly"),
+                "0 * * * *",
+                "cron",
+                true,
+                None,
+                None,
+            )
             .unwrap();
         db.conn
             .execute(
@@ -543,7 +591,15 @@ mod tests {
         db.insert_workspace(&ws).unwrap();
         let session = db.create_chat_session(&ws.id).unwrap();
         let task = db
-            .create_agent_cron_task(&session.id, Some("daily"), "0 9 * * *", "check", true)
+            .create_agent_cron_task(
+                &session.id,
+                Some("daily"),
+                "0 9 * * *",
+                "check",
+                true,
+                None,
+                None,
+            )
             .unwrap();
 
         assert_eq!(

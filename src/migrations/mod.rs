@@ -260,6 +260,11 @@ pub const MIGRATIONS: &[Migration] = &[
         legacy_version: None,
     },
     Migration {
+        id: "20260521143000_agent_scheduled_tasks_backend",
+        sql: include_str!("20260521143000_agent_scheduled_tasks_backend.sql"),
+        legacy_version: None,
+    },
+    Migration {
         id: "20260521212019_agent_scheduled_task_failures",
         sql: include_str!("20260521212019_agent_scheduled_task_failures.sql"),
         legacy_version: None,

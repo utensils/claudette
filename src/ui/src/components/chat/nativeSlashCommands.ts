@@ -798,15 +798,19 @@ const loopHandler: NativeHandler = {
       return handled;
     }
     try {
+      // Pin the toolbar's current backend + model on the row so the cron
+      // fires on the runtime the user picked, not on whatever happens to
+      // be the global default at fire time. The host-side command now
+      // also writes a System chat message announcing the schedule (one
+      // persisted note for all 3 backends — no per-backend wiring here).
       await createCronRoutine({
         sessionId: ctx.sessionId,
         cronExpr,
         prompt,
         recurring: true,
+        backendId: ctx.selectedModelProvider || undefined,
+        model: ctx.selectedModel || undefined,
       });
-      ctx.addLocalMessage(
-        `Looping (\`${cronExpr}\`). Manage it from the scheduler (clock icon in the sidebar).`,
-      );
     } catch (e) {
       ctx.addLocalMessage(`/loop failed: ${String(e)}`);
     }
@@ -836,16 +840,18 @@ const scheduleHandler: NativeHandler = {
       const rest = trimmed.slice(firstTok.length).trim();
       if (!Number.isNaN(parsed.getTime()) && ctx.sessionId && rest) {
         // Inline schedule: known time, known prompt, known session — fire
-        // the wakeup directly instead of opening the modal.
+        // the wakeup directly instead of opening the modal. Pin the
+        // toolbar's backend + model so the cron fires on the runtime the
+        // user picked. Confirmation message is persisted by the host
+        // command (one path for all 3 backends).
         try {
           await scheduleWakeup({
             sessionId: ctx.sessionId,
             fireAt: parsed.toISOString(),
             prompt: rest,
+            backendId: ctx.selectedModelProvider || undefined,
+            model: ctx.selectedModel || undefined,
           });
-          ctx.addLocalMessage(
-            `Scheduled for ${parsed.toLocaleString()}. Manage it from the scheduler (clock icon in the sidebar).`,
-          );
         } catch (e) {
           ctx.addLocalMessage(`/schedule failed: ${String(e)}`);
         }
