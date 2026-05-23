@@ -70,6 +70,7 @@
   "general_language_pt_br": "Portugués (Brasil)",
   "general_language_ja": "日本語",
   "general_language_zh_cn": "简体中文",
+  "general_language_de": "Deutsch",
   "general_update_check_failed": "Error al buscar actualizaciones. Inténtalo de nuevo más tarde.",
   "attribution": "Claudette no está afiliada con Anthropic. Claude® y Claude Code® son marcas registradas de Anthropic, PBC.",
   "workspace_apps_default_terminal": "Terminal predeterminado",

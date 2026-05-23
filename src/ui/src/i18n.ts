@@ -25,8 +25,13 @@ import settingsZhCn from "./locales/zh-CN/settings.json";
 import chatZhCn from "./locales/zh-CN/chat.json";
 import modalsZhCn from "./locales/zh-CN/modals.json";
 import sidebarZhCn from "./locales/zh-CN/sidebar.json";
+import commonDe from "./locales/de/common.json";
+import settingsDe from "./locales/de/settings.json";
+import chatDe from "./locales/de/chat.json";
+import modalsDe from "./locales/de/modals.json";
+import sidebarDe from "./locales/de/sidebar.json";
 
-export const SUPPORTED_LANGUAGES = ["en", "es", "pt-BR", "ja", "zh-CN"] as const;
+export const SUPPORTED_LANGUAGES = ["en", "es", "pt-BR", "ja", "zh-CN", "de"] as const;
 export type SupportedLanguage = (typeof SUPPORTED_LANGUAGES)[number];
 
 export function isSupportedLanguage(lang: string): lang is SupportedLanguage {
@@ -74,6 +79,13 @@ void i18n.use(initReactI18next).init({
       chat: chatZhCn,
       modals: modalsZhCn,
       sidebar: sidebarZhCn,
+    },
+    de: {
+      common: commonDe,
+      settings: settingsDe,
+      chat: chatDe,
+      modals: modalsDe,
+      sidebar: sidebarDe,
     },
   },
   interpolation: {
