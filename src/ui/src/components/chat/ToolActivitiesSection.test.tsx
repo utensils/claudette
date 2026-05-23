@@ -303,6 +303,47 @@ describe("ToolActivitiesSection", () => {
     expect(container.querySelector(`.${styles.skillActivation}`)).toBeTruthy();
   });
 
+  it("renders MCP calls in a Plug2 server container with bare tool-name rows", async () => {
+    const container = await render(
+      <ToolActivitiesSection
+        sessionId="session-mcp"
+        toolDisplayMode="grouped"
+        searchQuery=""
+        activities={[
+          activity("mcp__datadog__load_datadog_skill", {
+            toolUseId: "mcp-1",
+            resultText: "done",
+          }),
+          activity("mcp__datadog__search_datadog_dashboards", {
+            toolUseId: "mcp-2",
+            resultText: "done",
+          }),
+        ]}
+      />,
+    );
+
+    // Header shows the server name + the Plug2 marker, collapsed by default.
+    expect(container.textContent).toContain("datadog");
+    expect(container.querySelector(`.${styles.mcpGroupIcon}`)).toBeTruthy();
+    const header = container.querySelector(
+      '[role="button"][aria-expanded]',
+    ) as HTMLElement;
+    expect(header.getAttribute("aria-expanded")).toBe("false");
+    // Tool rows hidden while collapsed.
+    expect(container.textContent).not.toContain("load_datadog_skill");
+
+    await act(async () => {
+      header.click();
+    });
+
+    // Expanded: rows show the bare tool name, never the redundant
+    // `mcp__<server>__` prefix that already lives in the container header.
+    expect(header.getAttribute("aria-expanded")).toBe("true");
+    expect(container.textContent).toContain("load_datadog_skill");
+    expect(container.textContent).toContain("search_datadog_dashboards");
+    expect(container.textContent).not.toContain("mcp__datadog__");
+  });
+
   it("collapses grouped live calls by default — even while still running", async () => {
     // Intentional behavior change: with grouped tool calls on (the
     // default for new users), live tool groups start collapsed

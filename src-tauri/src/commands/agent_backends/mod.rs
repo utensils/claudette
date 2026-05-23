@@ -716,6 +716,7 @@ mod tests {
             status_line: String::new(),
             created_at: "2026-05-22T00:00:00.000Z".to_string(),
             sort_order: 0,
+            input_values: None,
         };
 
         assert_eq!(codex_login_worktree_path(&workspace), None);

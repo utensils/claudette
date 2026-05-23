@@ -714,6 +714,7 @@ export const MessagesWithTurns = memo(function MessagesWithTurns({
                 activities={activities}
                 label={label}
                 inline={toolDisplayMode === "inline"}
+                mcp={kind === "mcp"}
                 showFooter={showFooter}
                 collapsed={collapsed}
                 onToggle={onToggle}
