@@ -597,6 +597,14 @@
   font-size: 12px;
 }
 
+/* Plug2 marker on an MCP tool group header — sits between the chevron and
+   the server-name label. Accent-colored to read as a first-class transcript
+   element alongside the skill-activation marker. */
+.mcpGroupIcon {
+  flex-shrink: 0;
+  color: var(--accent-primary);
+}
+
 .turnActivities {
   border-top: 1px solid var(--divider);
   padding: 4px;

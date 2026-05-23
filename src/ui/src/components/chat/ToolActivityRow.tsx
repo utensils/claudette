@@ -15,6 +15,7 @@ import {
 } from "./editActivitySummary";
 import { resolveToolSummary } from "./toolMetadata";
 import { isSkillActivity, skillActivationName } from "./toolActivityGroups";
+import { parseMcpToolName } from "./mcpToolName";
 import { tryOpenAgentFileTab } from "../../utils/agentFiles";
 import type { DiffLayer } from "../../types/diff";
 import { parseAskUserQuestion } from "../../hooks/parseAgentQuestion";
@@ -29,6 +30,10 @@ interface ToolActivityRowProps {
    *  pick up the compact treatment from a `.inlineTurnActivities`
    *  ancestor instead. */
   inline?: boolean;
+  /** Set when the row is rendered inside an MCP group container (whose
+   *  header already shows the server name): drop the redundant
+   *  `mcp__<server>__` prefix and display the bare tool name. */
+  mcp?: boolean;
 }
 
 interface ToolDetails {
@@ -93,6 +98,7 @@ function GenericToolActivityRow({
   activity,
   searchQuery,
   worktreePath,
+  mcp,
 }: ToolActivityRowProps) {
   const expanded = useAppStore((s) => !!s.expandedToolUseIds[activity.toolUseId]);
   const toggleToolUseExpanded = useAppStore((s) => s.toggleToolUseExpanded);
@@ -105,6 +111,12 @@ function GenericToolActivityRow({
   const setDiffSelectedCommitHash = useAppStore((s) => s.setDiffSelectedCommitHash);
   const editSummary = summarizeToolActivityEdit(activity);
   const summary = activitySummaryText(activity);
+  // Inside an MCP container the server is already in the group header, so
+  // show just the bare tool name (`search_datadog_dashboards`) instead of
+  // the full `mcp__datadog__search_datadog_dashboards`.
+  const displayName = mcp
+    ? (parseMcpToolName(activity.toolName)?.tool ?? activity.toolName)
+    : activity.toolName;
   const details = useMemo(() => toolDetails(activity), [activity]);
   const cachedHtml = details.lang
     ? getCachedHighlight(details.content, details.lang)
@@ -151,7 +163,7 @@ function GenericToolActivityRow({
     ],
   );
 
-  const label = `${expanded ? "Collapse" : "Expand"} ${activity.toolName} input details`;
+  const label = `${expanded ? "Collapse" : "Expand"} ${displayName} input details`;
 
   return (
     <div key={activity.toolUseId} className={styles.toolActivity}>
@@ -185,7 +197,7 @@ function GenericToolActivityRow({
             className={styles.toolName}
             style={{ color: toolColor(activity.toolName) }}
           >
-            {activity.toolName}
+            {displayName}
           </span>
         )}
         {!editSummary && summary && (

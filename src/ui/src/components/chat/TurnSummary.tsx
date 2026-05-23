@@ -1,4 +1,5 @@
 import { useId, useMemo } from "react";
+import { Plug2 } from "lucide-react";
 import type { CompletedTurn, ToolActivity } from "../../stores/useAppStore";
 import type { TaskTrackerResult } from "../../hooks/useTaskTracker";
 import styles from "./ChatPanel.module.css";
@@ -59,6 +60,7 @@ export function TurnSummary({
   worktreePath,
   label,
   inline = false,
+  mcp = false,
   editSummaryFallback,
   onLoadEditPreview,
   onOpenEditFile,
@@ -84,6 +86,9 @@ export function TurnSummary({
   worktreePath?: string | null;
   label?: string;
   inline?: boolean;
+  /** MCP group: prefix the header with the Plug2 icon and render the
+   *  contained rows with their `mcp__<server>__` prefix stripped. */
+  mcp?: boolean;
   /** Rescue summary used only when activity-derived edits return null —
    *  typically the workspace-diff summary for the latest turn, where the
    *  agent's tools couldn't be parsed (Bash heredoc, MCP write tool, etc.).
@@ -147,6 +152,7 @@ export function TurnSummary({
         searchQuery={searchQuery}
         worktreePath={worktreePath}
         inline={inline}
+        mcp={mcp}
       />
     );
   });
@@ -172,6 +178,13 @@ export function TurnSummary({
             }}
           >
             <span className={styles.toolChevron}>{isExpanded ? "⌄" : "›"}</span>
+            {mcp && (
+              <Plug2
+                size={13}
+                aria-hidden="true"
+                className={styles.mcpGroupIcon}
+              />
+            )}
             <span className={styles.turnLabel}>
               {label != null ? (
                 renderTurnLabel(label)

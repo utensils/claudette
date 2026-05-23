@@ -122,6 +122,77 @@ describe("toolActivityGroups", () => {
     expect(groups[0]?.label).toBe("rebase-on-main");
   });
 
+  it("groups consecutive same-server MCP calls into one server-labeled group", () => {
+    const groups = groupToolActivitiesForDisplay([
+      activity("mcp__datadog__load_datadog_skill"),
+      activity("mcp__datadog__list_datadog_skills"),
+      activity("mcp__datadog__search_datadog_dashboards"),
+    ]);
+
+    expect(groups).toHaveLength(1);
+    expect(groups[0]?.kind).toBe("mcp");
+    expect(groups[0]?.label).toBe("datadog");
+    expect(groups[0]?.activities).toHaveLength(3);
+  });
+
+  it("splits different MCP servers into separate groups in order", () => {
+    const groups = groupToolActivitiesForDisplay([
+      activity("mcp__datadog__search_datadog_dashboards"),
+      activity("mcp__github__create_issue"),
+      activity("mcp__github__list_issues"),
+    ]);
+
+    expect(groups.map((g) => g.kind)).toEqual(["mcp", "mcp"]);
+    expect(groups.map((g) => g.label)).toEqual(["datadog", "github"]);
+    expect(groups.map((g) => g.activities.length)).toEqual([1, 2]);
+  });
+
+  it("pulls MCP calls out of the generic tool pill, preserving transcript order", () => {
+    const groups = groupToolActivitiesForDisplay([
+      activity("Read"),
+      activity("mcp__datadog__search_datadog_dashboards"),
+      activity("mcp__datadog__list_datadog_skills"),
+      activity("Write"),
+    ]);
+
+    expect(groups.map((g) => g.kind)).toEqual(["tools", "mcp", "tools"]);
+    expect(groups.map((g) => g.label)).toEqual([
+      "1 tool call",
+      "datadog",
+      "1 tool call",
+    ]);
+  });
+
+  it("breaks an MCP run around an agent or skill, like direct tools", () => {
+    const groups = groupToolActivitiesForDisplay([
+      activity("mcp__datadog__search_datadog_dashboards"),
+      activity("Skill", { inputJson: JSON.stringify({ skill: "commit-changes" }) }),
+      activity("mcp__datadog__list_datadog_skills"),
+    ]);
+
+    expect(groups.map((g) => g.kind)).toEqual(["mcp", "skill", "mcp"]);
+    expect(groups.map((g) => g.label)).toEqual([
+      "datadog",
+      "commit-changes",
+      "datadog",
+    ]);
+  });
+
+  it("does not form MCP groups in inline mode", () => {
+    const groups = groupToolActivitiesForDisplay(
+      [
+        activity("mcp__datadog__search_datadog_dashboards"),
+        activity("mcp__datadog__list_datadog_skills"),
+      ],
+      "inline",
+    );
+
+    // Inline mode is the legacy "show everything flat" rendering: one group
+    // per activity, no per-server container.
+    expect(groups).toHaveLength(2);
+    expect(groups.every((g) => g.kind !== "mcp")).toBe(true);
+  });
+
   it("derives the skill name from input, then summary, then a default", () => {
     expect(
       skillActivationName(
