@@ -1,0 +1,254 @@
+/* Experimental "dashboard mode" chat surface. Gated behind the
+   `dashboardModeEnabled` setting. All colors are theme tokens; the only
+   alpha layering uses the var(--*-rgb) channel form so lint:css stays happy. */
+
+.sessionHeader {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  margin-bottom: 12px;
+  background: var(--chat-system-bg);
+  border: 1px solid var(--divider);
+  border-radius: var(--radius-lg);
+  backdrop-filter: blur(6px);
+}
+
+.headerTitleRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.headerTitle {
+  font-family: var(--font-sans);
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.metricRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  align-items: baseline;
+}
+
+.metric {
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+}
+
+.metricValue {
+  font-family: var(--font-mono);
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  line-height: 1;
+}
+
+.metricLabel {
+  font-family: var(--font-sans);
+  font-size: 0.7rem;
+  color: var(--text-dim);
+}
+
+/* Session header: stat tiles laid out as a responsive grid of widgets. */
+.statGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(108px, 1fr));
+  gap: 8px;
+}
+
+.statGrid .metric {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 7px 9px;
+  background: var(--hover-bg-subtle);
+  border: 1px solid var(--divider);
+  border-radius: var(--radius-md);
+}
+
+.statGrid .metricValue {
+  font-size: 1.15rem;
+}
+
+/* Session header: skill / MCP leaderboards. */
+.leaderboardRowWrap {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 10px;
+}
+
+.leaderboard {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 8px 10px;
+  background: var(--hover-bg-subtle);
+  border: 1px solid var(--divider);
+  border-radius: var(--radius-md);
+}
+
+.leaderboardTitle {
+  font-family: var(--font-sans);
+  font-size: 0.66rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.leaderboardEmpty {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--text-faint);
+}
+
+.leaderboardRow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 56px auto;
+  align-items: center;
+  gap: 8px;
+}
+
+.leaderboardName {
+  font-family: var(--font-mono);
+  font-size: 0.74rem;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.leaderboardBarTrack {
+  height: 6px;
+  border-radius: var(--radius-pill);
+  background: var(--hover-bg);
+  overflow: hidden;
+}
+
+.leaderboardBar {
+  display: block;
+  height: 100%;
+  min-width: 2px;
+  border-radius: var(--radius-pill);
+  background: var(--accent-primary);
+}
+
+.leaderboardCount {
+  font-family: var(--font-mono);
+  font-size: 0.74rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-align: right;
+}
+
+.turnCard {
+  margin: 6px 0 14px;
+  padding: 9px 11px;
+  background: var(--hover-bg-subtle);
+  border: 1px solid var(--divider);
+  border-radius: var(--radius-lg);
+}
+
+.turnCardLive {
+  border-color: var(--accent-primary);
+  background: rgba(var(--accent-primary-rgb), 0.06);
+}
+
+.turnCardHeader {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.turnCardTitle {
+  font-family: var(--font-sans);
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.liveDot {
+  width: 7px;
+  height: 7px;
+  border-radius: var(--radius-pill);
+  background: var(--status-running);
+  animation: dashboardPulse 1.4s ease-in-out infinite;
+}
+
+@keyframes dashboardPulse {
+  0%,
+  100% {
+    opacity: 0.35;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+.categoryBreakdown {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  margin-top: 6px;
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  color: var(--text-dim);
+}
+
+.categoryChip {
+  white-space: nowrap;
+}
+
+.categoryChipValue {
+  color: var(--text-muted);
+  font-weight: 600;
+}
+
+.expandButton {
+  margin-top: 8px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 4px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-family: var(--font-sans);
+  font-size: 0.72rem;
+  color: var(--accent-primary);
+}
+
+.expandButton:hover {
+  text-decoration: underline;
+}
+
+.expandChevron {
+  font-size: 0.7rem;
+  line-height: 1;
+}
+
+.detail {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--divider);
+}
+
+.detailEmpty {
+  font-family: var(--font-sans);
+  font-size: 0.74rem;
+  color: var(--text-faint);
+  font-style: italic;
+}

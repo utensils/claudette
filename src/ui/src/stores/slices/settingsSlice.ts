@@ -65,6 +65,14 @@ export interface SettingsSlice {
   // Experimental
   usageInsightsEnabled: boolean;
   setUsageInsightsEnabled: (enabled: boolean) => void;
+  /// Experimental "dashboard mode" chat surface: instead of streaming every
+  /// assistant message, thinking block, and tool call inline, summarize each
+  /// turn's activity into a live dashboard card (thoughts / questions / plans
+  /// / tool calls / tasks / tokens) plus a session rollup, showing only the
+  /// final assistant message. Off by default. Persisted as
+  /// `dashboard_mode_enabled`; hydrated in App.tsx at boot.
+  dashboardModeEnabled: boolean;
+  setDashboardModeEnabled: (enabled: boolean) => void;
   disable1mContext: boolean;
   setDisable1mContext: (v: boolean) => void;
   alternativeBackendsAvailable: boolean;
@@ -187,6 +195,8 @@ export const createSettingsSlice: StateCreator<
     set({ projectViewIssuesPrsEnabled: enabled }),
   usageInsightsEnabled: false,
   setUsageInsightsEnabled: (enabled) => set({ usageInsightsEnabled: enabled }),
+  dashboardModeEnabled: false,
+  setDashboardModeEnabled: (enabled) => set({ dashboardModeEnabled: enabled }),
   disable1mContext: false,
   setDisable1mContext: (v) => set({ disable1mContext: v }),
   alternativeBackendsAvailable: false,

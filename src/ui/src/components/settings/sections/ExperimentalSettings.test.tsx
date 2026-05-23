@@ -9,6 +9,10 @@ const appStore = vi.hoisted(() => ({
   setUsageInsightsEnabled: vi.fn((next: boolean) => {
     appStore.usageInsightsEnabled = next;
   }),
+  dashboardModeEnabled: false,
+  setDashboardModeEnabled: vi.fn((next: boolean) => {
+    appStore.dashboardModeEnabled = next;
+  }),
   settingsFocus: null as string | null,
   clearSettingsFocus: vi.fn(),
 }));
@@ -68,6 +72,14 @@ function findUsageToggle(container: HTMLElement): HTMLButtonElement {
   return toggle as HTMLButtonElement;
 }
 
+function findDashboardToggle(container: HTMLElement): HTMLButtonElement {
+  const toggle = container.querySelector(
+    'button[aria-label="experimental_dashboard_mode_aria"]',
+  );
+  if (!toggle) throw new Error("Dashboard mode toggle not found");
+  return toggle as HTMLButtonElement;
+}
+
 function findConfirmButton(container: HTMLElement): HTMLButtonElement | null {
   const modal = container.querySelector('[data-testid="modal"]');
   if (!modal) return null;
@@ -81,8 +93,10 @@ function findConfirmButton(container: HTMLElement): HTMLButtonElement | null {
 
 beforeEach(() => {
   appStore.usageInsightsEnabled = false;
+  appStore.dashboardModeEnabled = false;
   appStore.settingsFocus = null;
   appStore.setUsageInsightsEnabled.mockClear();
+  appStore.setDashboardModeEnabled.mockClear();
   appStore.clearSettingsFocus.mockClear();
   serviceMocks.setAppSetting.mockClear();
   serviceMocks.setAppSetting.mockResolvedValue(undefined);
@@ -151,11 +165,62 @@ describe("ExperimentalSettings — Usage Insights consent gate", () => {
   });
   it("does not render the removed OpenRouter balance toggle", async () => {
     const container = await renderSettings();
-    const switches = Array.from(container.querySelectorAll('[role="switch"]'));
+    const labels = Array.from(
+      container.querySelectorAll('[role="switch"]'),
+    ).map((el) => el.getAttribute("aria-label"));
 
-    expect(switches).toHaveLength(1);
-    expect(switches[0]?.getAttribute("aria-label")).toBe(
+    // Only the two intentional experimental toggles render — the removed
+    // OpenRouter balance switch must not reappear.
+    expect(labels).toEqual([
       "experimental_claude_code_usage_aria",
+      "experimental_dashboard_mode_aria",
+    ]);
+  });
+});
+
+describe("ExperimentalSettings — Dashboard mode toggle", () => {
+  it("persists dashboard_mode_enabled=true on OFF→ON without a confirm modal", async () => {
+    const container = await renderSettings();
+
+    await act(async () => {
+      findDashboardToggle(container).click();
+      await Promise.resolve();
+    });
+
+    expect(container.querySelector('[data-testid="modal"]')).toBeNull();
+    expect(appStore.setDashboardModeEnabled).toHaveBeenCalledWith(true);
+    expect(serviceMocks.setAppSetting).toHaveBeenCalledWith(
+      "dashboard_mode_enabled",
+      "true",
     );
+  });
+
+  it("persists dashboard_mode_enabled=false when already ON", async () => {
+    appStore.dashboardModeEnabled = true;
+    const container = await renderSettings();
+
+    await act(async () => {
+      findDashboardToggle(container).click();
+      await Promise.resolve();
+    });
+
+    expect(serviceMocks.setAppSetting).toHaveBeenCalledWith(
+      "dashboard_mode_enabled",
+      "false",
+    );
+  });
+
+  it("reverts the optimistic toggle when persistence fails", async () => {
+    serviceMocks.setAppSetting.mockRejectedValueOnce(new Error("disk full"));
+    const container = await renderSettings();
+
+    await act(async () => {
+      findDashboardToggle(container).click();
+      await Promise.resolve();
+    });
+
+    // Optimistic on, then reverted off after the rejection.
+    expect(appStore.setDashboardModeEnabled).toHaveBeenNthCalledWith(1, true);
+    expect(appStore.setDashboardModeEnabled).toHaveBeenNthCalledWith(2, false);
   });
 });
