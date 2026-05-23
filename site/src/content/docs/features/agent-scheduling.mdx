@@ -7,7 +7,7 @@ Claudette can persist agent wakeups and recurring routines in its app database. 
 
 ## Agent Tools
 
-When the built-in Claudette MCP bridge is available, agents can use these native tools:
+Agents can schedule their own wakeups and routines through native tools:
 
 | Tool | Purpose |
 |---|---|
@@ -16,6 +16,8 @@ When the built-in Claudette MCP bridge is available, agents can use these native
 | `CronList` | List persisted wakeups and routines. |
 | `CronDelete` | Delete a routine by id or name. |
 | `Monitor` | Subscribe to future output lines from a background task (Bash `run_in_background`, a backgrounded Agent/subagent, or a Workflow) instead of polling. |
+
+Claude and Codex agents both reach these tools over the built-in Claudette MCP bridge. Scheduling stays available regardless of the **Agent Attachments** plugin toggle or the experimental Claudette MCP interaction tools.
 
 Wakeups and routines survive app restarts. If a fire time passes while Claudette is closed, the scheduler fires the overdue task when the app starts again.
 
