@@ -5,6 +5,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ToolActivity } from "../../stores/useAppStore";
 import { useAppStore } from "../../stores/useAppStore";
+import styles from "./ChatPanel.module.css";
 import { ToolActivityRow } from "./ToolActivityRow";
 
 const { highlightCalls, highlightCache } = vi.hoisted(() => ({
@@ -138,6 +139,32 @@ describe("ToolActivityRow", () => {
     });
     expect(toggle.getAttribute("aria-expanded")).toBe("false");
     expect(container.querySelector("pre")).toBeNull();
+  });
+
+  it("strips the MCP prefix from the visible name but keeps it in the toggle aria-label", async () => {
+    // Inside an MCP container the server lives in the group header, so the
+    // visible row shows the bare tool name. The toggle's accessible label
+    // keeps the server-qualified name so it stays unambiguous for assistive
+    // tech (two servers can each expose a `query` tool).
+    const container = await render(
+      <ToolActivityRow
+        activity={activity("mcp__datadog__search_datadog_dashboards")}
+        searchQuery=""
+        mcp
+      />,
+    );
+
+    const name = container.querySelector(
+      `span.${styles.toolName}`,
+    ) as HTMLElement;
+    expect(name.textContent).toBe("search_datadog_dashboards");
+
+    const toggle = container.querySelector(
+      "button[aria-label]",
+    ) as HTMLButtonElement;
+    expect(toggle.getAttribute("aria-label")).toBe(
+      "Expand mcp__datadog__search_datadog_dashboards input details",
+    );
   });
 
   it("renders AskUserQuestion details as readable question text instead of raw JSON", async () => {

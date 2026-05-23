@@ -163,7 +163,11 @@ function GenericToolActivityRow({
     ],
   );
 
-  const label = `${expanded ? "Collapse" : "Expand"} ${displayName} input details`;
+  // The visible row shows the stripped `displayName`, but the toggle's
+  // accessible label keeps the full `activity.toolName` (incl. the
+  // `mcp__<server>__` prefix) so screen-reader users get an unambiguous,
+  // server-qualified name — two servers can each expose a `query` tool.
+  const label = `${expanded ? "Collapse" : "Expand"} ${activity.toolName} input details`;
 
   return (
     <div key={activity.toolUseId} className={styles.toolActivity}>
