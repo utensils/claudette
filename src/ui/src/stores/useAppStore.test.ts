@@ -509,6 +509,20 @@ describe("plugin settings routing", () => {
   });
 });
 
+describe("claudeInteractiveEnabled experimental flag", () => {
+  beforeEach(() => {
+    useAppStore.setState({ claudeInteractiveEnabled: false });
+  });
+
+  it("defaults to false and toggles via setClaudeInteractiveEnabled", () => {
+    expect(useAppStore.getState().claudeInteractiveEnabled).toBe(false);
+    useAppStore.getState().setClaudeInteractiveEnabled(true);
+    expect(useAppStore.getState().claudeInteractiveEnabled).toBe(true);
+    useAppStore.getState().setClaudeInteractiveEnabled(false);
+    expect(useAppStore.getState().claudeInteractiveEnabled).toBe(false);
+  });
+});
+
 describe("settings overlay counter", () => {
   beforeEach(() => {
     useAppStore.setState({ settingsOverlayCount: 0, settingsOpen: false });

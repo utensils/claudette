@@ -65,6 +65,12 @@ export interface SettingsSlice {
   // Experimental
   usageInsightsEnabled: boolean;
   setUsageInsightsEnabled: (enabled: boolean) => void;
+  /// Experimental: surface the ClaudeInteractive agent backend, which runs
+  /// the `claude` CLI in interactive (non `--print`) mode inside a
+  /// detachable host (tmux/sidecar). Off by default; opt in via
+  /// Settings → Experimental.
+  claudeInteractiveEnabled: boolean;
+  setClaudeInteractiveEnabled: (enabled: boolean) => void;
   disable1mContext: boolean;
   setDisable1mContext: (v: boolean) => void;
   alternativeBackendsAvailable: boolean;
@@ -187,6 +193,9 @@ export const createSettingsSlice: StateCreator<
     set({ projectViewIssuesPrsEnabled: enabled }),
   usageInsightsEnabled: false,
   setUsageInsightsEnabled: (enabled) => set({ usageInsightsEnabled: enabled }),
+  claudeInteractiveEnabled: false,
+  setClaudeInteractiveEnabled: (enabled) =>
+    set({ claudeInteractiveEnabled: enabled }),
   disable1mContext: false,
   setDisable1mContext: (v) => set({ disable1mContext: v }),
   alternativeBackendsAvailable: false,

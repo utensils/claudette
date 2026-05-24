@@ -18,6 +18,7 @@ export interface WorkspaceContextMenuLabels {
   openInTerminal: string;
   copyWorkingDirectory: string;
   copyClaudeSessionId: string;
+  copyTmuxAttachCommand: string;
   archiveWorkspace: string;
   restoreWorkspace: string;
   deleteWorkspace: string;
@@ -27,6 +28,15 @@ export interface WorkspaceContextMenuTarget {
   status: WorkspaceStatus;
   worktreePath: string | null;
   remote: boolean;
+  /**
+   * G8: the sid of an attachable interactive session whose host is
+   * tmux (Unix-only). When non-null, the menu surfaces a "Copy tmux
+   * attach command" item that copies `tmux attach-session -t <sid>`.
+   * Null / undefined hides the item entirely — there's no
+   * Windows-friendly equivalent for the sidecar host, and tmux is the
+   * canonical gate (a tmux session implies the user is on Unix).
+   */
+  tmuxAttachSid?: string | null;
 }
 
 export interface WorkspaceContextMenuCallbacks {
@@ -36,9 +46,23 @@ export interface WorkspaceContextMenuCallbacks {
   openInTerminal?: () => void | Promise<void>;
   copyWorkingDirectory?: () => void | Promise<void>;
   copyClaudeSessionId?: () => void | Promise<void>;
+  /**
+   * G8: invoked when the user selects "Copy tmux attach command".
+   * Only wired by the caller when `target.tmuxAttachSid` is non-null.
+   */
+  copyTmuxAttachCommand?: () => void | Promise<void>;
   archive?: () => void | Promise<void>;
   restore?: () => void | Promise<void>;
   delete?: () => void | Promise<void>;
+}
+
+/**
+ * Build the `tmux attach-session -t <sid>` command string copied by the
+ * "Copy tmux attach command" menu action. Exported so tests and the
+ * Sidebar wiring share one canonical formatter.
+ */
+export function buildTmuxAttachCommand(sid: string): string {
+  return `tmux attach-session -t ${sid}`;
 }
 
 export function buildWorkspaceContextMenuItems(
@@ -103,6 +127,15 @@ export function buildWorkspaceContextMenuItems(
       onSelect: callbacks.copyClaudeSessionId ?? (() => {}),
       disabled: !callbacks.copyClaudeSessionId,
     },
+    ...(target.tmuxAttachSid && callbacks.copyTmuxAttachCommand
+      ? [
+          {
+            label: labels.copyTmuxAttachCommand,
+            icon: <Terminal size={14} aria-hidden="true" />,
+            onSelect: callbacks.copyTmuxAttachCommand,
+          } satisfies ContextMenuItem,
+        ]
+      : []),
     { type: "separator" },
     ...(target.status === "Active"
       ? [

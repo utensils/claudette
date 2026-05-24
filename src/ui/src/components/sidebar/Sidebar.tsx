@@ -30,6 +30,7 @@ import { resolveScmPrIcon } from "../shared/workspaceStatusIcon";
 import { RepoIcon } from "../shared/RepoIcon";
 import { WorkspaceEnvSpinner } from "./WorkspaceEnvSpinner";
 import { WorkspaceScmLinkIcon } from "./WorkspaceScmLinkIcon";
+import { InteractiveBadge, computeInteractiveBadgeState } from "./InteractiveBadge";
 import { extractRemoteWorkspace } from "./remoteWorkspaceResponse";
 import { HelpMenu } from "./HelpMenu";
 import { UpdateBanner } from "../layout/UpdateBanner";
@@ -51,11 +52,13 @@ import {
   STATUS_BUCKET_ORDER,
 } from "../../utils/sidebarJumpTargets";
 import {
+  buildTmuxAttachCommand,
   buildWorkspaceContextMenuItems,
   type WorkspaceContextMenuLabels,
 } from "./workspaceContextMenu";
 import { JumpShortcutBadge } from "./JumpShortcutBadge";
 import type { ChatSession } from "../../types";
+import type { InteractiveSessionRow } from "../../services/interactive";
 import styles from "./Sidebar.module.css";
 
 function workspaceContextMenuLabels(t: TFunction<"sidebar">): WorkspaceContextMenuLabels {
@@ -66,10 +69,37 @@ function workspaceContextMenuLabels(t: TFunction<"sidebar">): WorkspaceContextMe
     openInTerminal: t("context_open_in_terminal"),
     copyWorkingDirectory: t("context_copy_working_directory"),
     copyClaudeSessionId: t("context_copy_claude_session_id"),
+    copyTmuxAttachCommand: t("context_copy_tmux_attach_command"),
     archiveWorkspace: t("archive_workspace"),
     restoreWorkspace: t("restore_workspace"),
     deleteWorkspace: t("delete_workspace"),
   };
+}
+
+/**
+ * G8: pick a tmux interactive session sid suitable for the "Copy tmux
+ * attach command" menu item. Returns the sid of the first session whose
+ * host is tmux AND whose state is `running` or `detached` (i.e. the
+ * underlying tmux session is alive and attachable). Returns null when:
+ *   - the workspace has no persisted interactive sessions, OR
+ *   - every interactive session is on the sidecar host (Windows path or
+ *     a Unix box without tmux), OR
+ *   - every tmux session is in a terminal state (`stopped` / `crashed`).
+ *
+ * The selector deliberately ignores `unknown` so a forward-compat row
+ * doesn't accidentally enable the menu item — we only enable when we're
+ * sure tmux can attach.
+ */
+function pickTmuxAttachSid(
+  sessions: readonly InteractiveSessionRow[] | undefined,
+): string | null {
+  if (!sessions || sessions.length === 0) return null;
+  for (const row of sessions) {
+    if (row.hostKind !== "tmux") continue;
+    if (row.state !== "running" && row.state !== "detached") continue;
+    return row.sid;
+  }
+  return null;
 }
 
 function pickClaudeSessionId(
@@ -116,6 +146,7 @@ export const Sidebar = memo(function Sidebar() {
   const addToast = useAppStore((s) => s.addToast);
   const unreadCompletions = useAppStore((s) => s.unreadCompletions);
   const sessionsByWorkspace = useAppStore((s) => s.sessionsByWorkspace);
+  const interactiveSessionsByWorkspace = useAppStore((s) => s.interactiveSessionsByWorkspace);
   const setSessionsForWorkspace = useAppStore((s) => s.setSessionsForWorkspace);
   const scmSummary = useAppStore((s) => s.scmSummary);
   const workspaceEnvironment = useAppStore((s) => s.workspaceEnvironment);
@@ -438,8 +469,16 @@ export const Sidebar = memo(function Sidebar() {
     if (!workspaceContextMenu) return [];
     const ws = workspaces.find((w) => w.id === workspaceContextMenu.workspaceId);
     if (!ws) return [];
+    const tmuxAttachSid = pickTmuxAttachSid(
+      interactiveSessionsByWorkspace[ws.id],
+    );
     return buildWorkspaceContextMenuItems(
-      { status: ws.status, worktreePath: ws.worktree_path, remote: false },
+      {
+        status: ws.status,
+        worktreePath: ws.worktree_path,
+        remote: false,
+        tmuxAttachSid,
+      },
       workspaceContextMenuLabels(t),
       {
         rename: () => {
@@ -482,6 +521,18 @@ export const Sidebar = memo(function Sidebar() {
           await clipboardWriteText(claudeSessionId);
           addToast(t("context_copied_claude_session_id"));
         },
+        // G8: only wire the copy callback when the selector picked a
+        // live tmux sid. `buildWorkspaceContextMenuItems` hides the
+        // item entirely when either `tmuxAttachSid` or this callback
+        // is missing, so both gates have to agree before the item
+        // renders.
+        copyTmuxAttachCommand: tmuxAttachSid
+          ? async () => {
+              const cmd = buildTmuxAttachCommand(tmuxAttachSid);
+              await clipboardWriteText(cmd);
+              addToast(t("context_copied_tmux_attach_command", { cmd }));
+            }
+          : undefined,
         archive: ws.status === "Active" ? () => handleArchive(ws.id) : undefined,
         restore: ws.status === "Archived" ? () => handleRestore(ws.id) : undefined,
         delete:
@@ -498,6 +549,7 @@ export const Sidebar = memo(function Sidebar() {
     addToast,
     handleArchive,
     handleRestore,
+    interactiveSessionsByWorkspace,
     markWorkspaceAsUnread,
     openModal,
     setSessionsForWorkspace,
@@ -754,6 +806,17 @@ export const Sidebar = memo(function Sidebar() {
             </span>
           )}
           <span className={styles.wsBranch}>{ws.branch_name}</span>
+          {(() => {
+            const interactiveBadge = computeInteractiveBadgeState(
+              interactiveSessionsByWorkspace[ws.id],
+            );
+            return interactiveBadge !== null ? (
+              <InteractiveBadge
+                state={interactiveBadge}
+                className={styles.interactiveBadge}
+              />
+            ) : null;
+          })()}
           {(() => {
             if (!showSidebarRunningCommands) return null;
             const wsCommands = workspaceTerminalCommands[ws.id];

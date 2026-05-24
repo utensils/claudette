@@ -35,6 +35,9 @@ mod chat;
 mod workspace;
 pub use workspace::WORKSPACE_ORDER_MODE_PREFIX;
 
+mod interactive_sessions;
+pub use interactive_sessions::InteractiveSessionRow;
+
 mod commands;
 
 mod usage;
@@ -916,6 +919,36 @@ mod tests {
             )
             .unwrap();
         assert!(present);
+    }
+
+    #[test]
+    fn interactive_sessions_table_is_created() {
+        let db = Database::open_in_memory().unwrap();
+        let cols: Vec<String> = db
+            .conn()
+            .prepare("SELECT name FROM pragma_table_info('interactive_sessions')")
+            .unwrap()
+            .query_map([], |r| r.get::<_, String>(0))
+            .unwrap()
+            .filter_map(Result::ok)
+            .collect();
+        for expected in [
+            "sid",
+            "workspace_id",
+            "host_kind",
+            "state",
+            "crash_reason",
+            "created_at",
+            "last_attached_at",
+            "last_screen_blob",
+            "claude_flags_json",
+            "pid",
+        ] {
+            assert!(
+                cols.iter().any(|c| c == expected),
+                "missing column {expected}"
+            );
+        }
     }
 
     #[test]

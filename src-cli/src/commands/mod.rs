@@ -1,6 +1,7 @@
 pub mod batch;
 pub mod capabilities;
 pub mod chat;
+pub mod chat_hook;
 pub mod plugin;
 pub mod pr;
 pub mod repo;

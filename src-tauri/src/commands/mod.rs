@@ -22,6 +22,7 @@ pub mod diff;
 pub mod env;
 pub mod files;
 pub mod grammars;
+pub mod interactive;
 pub mod mcp;
 pub mod metrics;
 pub mod path_util;

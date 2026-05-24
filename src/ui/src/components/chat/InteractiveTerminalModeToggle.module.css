@@ -1,0 +1,33 @@
+/* Header button for the "Open in Terminal" / "Back to Chat" toggle.
+ * Sized to match PanelToggles' icon buttons so the chat header stays
+ * visually consistent — same hit target, same padding rhythm. */
+
+.toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 24px;
+  min-width: 24px;
+  padding: 0 6px;
+  border-radius: 4px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.toggle:hover {
+  background: var(--hover-bg);
+  color: var(--text-primary);
+}
+
+.toggle:focus-visible {
+  outline: 2px solid var(--accent-primary);
+  outline-offset: 1px;
+}
+
+.active {
+  background: var(--accent-bg);
+  color: var(--accent-primary);
+  border-color: var(--accent-bg-strong);
+}

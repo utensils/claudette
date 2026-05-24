@@ -42,6 +42,7 @@ import { useChatPanelAttachments } from "./useChatPanelAttachments";
 import { useChatPanelSessionLifecycle } from "./useChatPanelSessionLifecycle";
 import { ChatPanelAttachmentOverlays } from "./ChatPanelAttachmentOverlays";
 import { ChatPanelSessionView } from "./ChatPanelSessionView";
+import { useInteractiveChatMode } from "./useInteractiveChatMode";
 
 export function ChatPanel() {
   const { t } = useTranslation("chat");
@@ -223,6 +224,14 @@ export function ChatPanel() {
   );
 
   const elapsed = useWorkspaceElapsedSeconds(selectedWorkspaceId, isRunning);
+
+  // G6: detect when the active backend's effective harness is the
+  // ClaudeInteractive runtime so the session view can swap the chat
+  // scroll body to the embedded turn-list / full-terminal view.
+  const interactiveMode = useInteractiveChatMode(
+    selectedWorkspaceId,
+    activeSessionId,
+  );
 
   const {
     isAtBottom,
@@ -877,6 +886,7 @@ export function ChatPanel() {
           hasThinking={hasThinking}
           historyIndexRef={historyIndexRef}
           historyRef={historyRef}
+          interactiveMode={interactiveMode}
           isAtBottom={isAtBottom}
           isLoadingMore={isLoadingMore}
           isRemote={isRemote}

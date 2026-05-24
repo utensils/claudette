@@ -6,6 +6,7 @@ mod app_info;
 mod boot_probation;
 mod claude_teammate_bridge;
 mod commands;
+mod interactive_lifecycle;
 mod ipc;
 mod mdns;
 mod missing_cli;
@@ -893,6 +894,17 @@ fn main() {
                 }
             });
 
+            // Reconcile any `interactive_sessions` rows left in
+            // `state = 'running'` from the previous boot. Runs in the
+            // background so a slow tmux/sidecar probe doesn't delay
+            // the UI; the reconciler is idempotent and only writes
+            // when the host responds, so repeated boots eventually
+            // converge even if the first attempt finds nothing.
+            let reattach_app = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                interactive_lifecycle::reattach_interactive_sessions_on_boot(reattach_app).await;
+            });
+
             // Start the local IPC server the `claudette` CLI talks to.
             // Spawned async on the Tauri runtime; the resulting
             // `IpcServer` + discovery file are managed so they live for
@@ -1075,6 +1087,15 @@ fn main() {
             commands::chat::session::reorder_chat_sessions,
             commands::chat::session::archive_chat_session,
             commands::chat::session::restore_chat_session,
+            // Claude (Interactive) experimental backend
+            commands::interactive::interactive_start,
+            commands::interactive::interactive_send_input,
+            commands::interactive::interactive_capture_screen,
+            commands::interactive::interactive_stop,
+            commands::interactive::interactive_list_for_workspace,
+            commands::interactive::interactive_attach,
+            commands::interactive::interactive_list_orphans,
+            commands::interactive::interactive_cleanup_orphans,
             // Plan
             commands::plan::read_plan_file,
             // Agent-managed files (plans, memory, …)

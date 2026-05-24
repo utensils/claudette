@@ -25,7 +25,10 @@ import { ChatInputArea } from "./ChatInputArea";
 import { ChatSearchBar } from "./ChatSearchBar";
 import { CliInvocationBanner } from "./CliInvocationBanner";
 import { CurrentTurnTaskProgress } from "./CurrentTurnTaskProgress";
+import { InteractiveTerminalMode } from "./InteractiveTerminalMode";
+import { InteractiveTurns } from "./InteractiveTurns";
 import { MessagesWithTurns } from "./MessagesWithTurns";
+import type { useInteractiveChatMode } from "./useInteractiveChatMode";
 import { OverlayScrollbar } from "./OverlayScrollbar";
 import { PlanApprovalCard } from "./PlanApprovalCard";
 import { setPlanModeAndPersist } from "./planModePersistence";
@@ -86,6 +89,7 @@ type ChatPanelSessionViewProps = Pick<
   error: string | null;
   historyIndexRef: MutableRefObject<number>;
   historyRef: MutableRefObject<Record<string, string[]>>;
+  interactiveMode: ReturnType<typeof useInteractiveChatMode>;
   isAtBottom: boolean;
   isRemote: boolean;
   markUserScrollIntent: () => void;
@@ -138,6 +142,7 @@ export function ChatPanelSessionView({
   hasThinking,
   historyIndexRef,
   historyRef,
+  interactiveMode,
   isAtBottom,
   isLoadingMore,
   isRemote,
@@ -234,47 +239,55 @@ export function ChatPanelSessionView({
                     Loading older messages…
                   </div>
                 )}
-                {activeSessionId && selectedWorkspaceId && (
-                  <MessagesWithTurns
-                    key={activeSessionId}
-                    messages={messages}
-                    workspaceId={selectedWorkspaceId}
-                    sessionId={activeSessionId}
-                    isRunning={isRunning}
-                    onForkTurn={isRemote ? undefined : onForkTurn}
-                    onAttachmentContextMenu={onAttachmentContextMenu}
-                    onAttachmentClick={onAttachmentClick}
-                    onOpenFileLink={rememberChatScrollPosition}
-                    searchQuery={searchQuery}
-                    globalOffset={globalOffset}
-                    toolDisplayMode={toolDisplayMode}
-                    liveTaskProgressNode={
-                      activitiesCount > 0 ? (
-                        <CurrentTurnTaskProgress sessionId={activeSessionId} />
-                      ) : null
-                    }
-                    streamingThinkingNode={
-                      hasThinking && showThinkingBlocks ? (
-                        <StreamingThinkingBlock
-                          sessionId={activeSessionId}
-                          isStreaming={isRunning ?? false}
-                          inline={toolDisplayMode === "inline"}
-                          searchQuery={searchQuery}
-                        />
-                      ) : null
-                    }
-                    streamingMessageNode={
-                      hasStreaming || hasPendingTypewriter ? (
-                        <StreamingMessage
-                          sessionId={activeSessionId}
-                          workspaceId={selectedWorkspaceId}
-                          isStreaming={isRunning ?? false}
-                          searchQuery={searchQuery}
-                        />
-                      ) : null
-                    }
-                  />
-                )}
+                {activeSessionId &&
+                  selectedWorkspaceId &&
+                  (interactiveMode.isInteractive ? (
+                    interactiveMode.terminalMode ? (
+                      <InteractiveTerminalMode sid={activeSessionId} />
+                    ) : (
+                      <InteractiveTurns sid={activeSessionId} />
+                    )
+                  ) : (
+                    <MessagesWithTurns
+                      key={activeSessionId}
+                      messages={messages}
+                      workspaceId={selectedWorkspaceId}
+                      sessionId={activeSessionId}
+                      isRunning={isRunning}
+                      onForkTurn={isRemote ? undefined : onForkTurn}
+                      onAttachmentContextMenu={onAttachmentContextMenu}
+                      onAttachmentClick={onAttachmentClick}
+                      onOpenFileLink={rememberChatScrollPosition}
+                      searchQuery={searchQuery}
+                      globalOffset={globalOffset}
+                      toolDisplayMode={toolDisplayMode}
+                      liveTaskProgressNode={
+                        activitiesCount > 0 ? (
+                          <CurrentTurnTaskProgress sessionId={activeSessionId} />
+                        ) : null
+                      }
+                      streamingThinkingNode={
+                        hasThinking && showThinkingBlocks ? (
+                          <StreamingThinkingBlock
+                            sessionId={activeSessionId}
+                            isStreaming={isRunning ?? false}
+                            inline={toolDisplayMode === "inline"}
+                            searchQuery={searchQuery}
+                          />
+                        ) : null
+                      }
+                      streamingMessageNode={
+                        hasStreaming || hasPendingTypewriter ? (
+                          <StreamingMessage
+                            sessionId={activeSessionId}
+                            workspaceId={selectedWorkspaceId}
+                            isStreaming={isRunning ?? false}
+                            searchQuery={searchQuery}
+                          />
+                        ) : null
+                      }
+                    />
+                  ))}
 
                 {showChatAuthLoginPanel && (
                   <ChatAuthFailureCallout

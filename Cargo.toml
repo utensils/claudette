@@ -1,5 +1,5 @@
 [workspace]
-members = ["src-tauri", "src-server", "src-cli", "src-mobile"]
+members = ["src-tauri", "src-server", "src-cli", "src-mobile", "src-session-host", "tests/fixtures/stub-tui"]
 resolver = "2"
 
 [package]
@@ -74,6 +74,14 @@ chrono = "0.4"
 # build platform-agnostic; `json` enables `Response::json` for the
 # small response bodies these endpoints return.
 reqwest = { version = "0.13", default-features = false, features = ["rustls", "json", "stream"] }
+# Provides the `Stream` trait re-export used by `AttachStream` in
+# `src/agent/interactive_host/`. Lightweight wrapper crate already on the
+# tokio side of the workspace dep graph.
+tokio-stream = "0.1"
+# `#[derive(thiserror::Error)]` for the `HostError` enum exposed by the
+# `InteractiveHost` trait. v2 matches the version unified across the
+# transitive workspace tree.
+thiserror = "2"
 
 [target.'cfg(windows)'.dependencies]
 # Read fresh PATH from HKCU + HKLM Environment registry keys so we pick up
@@ -102,6 +110,11 @@ rodio = { version = "0.22", default-features = false, features = ["playback", "s
 # whose 5-minute deadline elapses, so grandchild processes (`npm install`,
 # build helpers) don't survive the kill of the immediate `sh -c` parent.
 libc = "0.2"
+# Used by `agent::interactive_host::tmux` to `mkfifo` the per-session
+# pipe-pane FIFO that bridges tmux output → the FIFO tailer thread →
+# AttachStream subscribers. `fs` enables `nix::unistd::mkfifo` and
+# `nix::sys::stat::Mode`.
+nix = { version = "0.30", features = ["fs"] }
 
 [features]
 # `pi-sdk` gates the Pi coding-agent harness (sidecar wrapper around

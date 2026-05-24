@@ -129,3 +129,18 @@ chmod +x "$dest"
 echo "▸ Staged $target_bin -> $dest"
 
 "$repo_root/scripts/stage-pi-harness-sidecar.sh" "$triple"
+
+# Chain to the session-host sidecar staging. Forward the same profile so a
+# `scripts/stage-cli-sidecar.sh --profile debug` invocation builds the
+# session-host in debug mode too — otherwise the dev `.app` would mirror a
+# release session-host while the GUI was built debug, doubling cargo compile
+# time on first dev launch.
+session_host_args=()
+if [ "$triple_explicit" = "true" ]; then
+  session_host_args+=("$triple")
+fi
+session_host_args+=("--profile" "$profile")
+if [ "$release_built" = "true" ]; then
+  session_host_args+=("--release-built")
+fi
+"$repo_root/scripts/stage-session-host-sidecar.sh" "${session_host_args[@]}"

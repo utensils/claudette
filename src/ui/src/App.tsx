@@ -31,6 +31,7 @@ import {
 } from "./components/settings/codexBackendMigration";
 import { autoDetectStartupAgentBackends } from "./components/settings/agentBackendStartupRefresh";
 import { findLeafByPtyId } from "./stores/terminalPaneTree";
+import { OrphanListener } from "./OrphanListener";
 import type { CommandEvent } from "./types";
 import i18n, { isSupportedLanguage } from "./i18n";
 import "./styles/theme.css";
@@ -916,6 +917,11 @@ function App() {
       store.updateWorkspace(workspaceId, { agent_status: "Running" });
     });
 
+    // Orphan-detection (`interactive://orphans-detected`) lives in
+    // `<OrphanListener />` so the listener-effect can be tested without
+    // pulling the rest of App's provider graph into the suite — see
+    // `App.orphans.test.tsx`.
+
     const unlistenAutoArchived = listen<{ workspace_id: string; workspace_name: string; pr_number?: number; deleted?: boolean }>("workspace-auto-archived", (event) => {
       const { workspace_id, workspace_name, pr_number, deleted } = event.payload;
       const store = useAppStore.getState();
@@ -1081,7 +1087,12 @@ function App() {
   }, []);
 
   if (!viewStateHydrated) return null;
-  return <AppLayout />;
+  return (
+    <>
+      <OrphanListener />
+      <AppLayout />
+    </>
+  );
 }
 
 export default App;

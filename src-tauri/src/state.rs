@@ -5,7 +5,8 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use claudette::agent::AgentSession;
-use tokio::sync::{RwLock, Semaphore};
+use claudette::agent::interactive_host::InteractiveHost;
+use tokio::sync::{RwLock, Semaphore, mpsc};
 
 use claudette::claude_help::ClaudeFlagDef;
 use claudette::env_provider::{EnvCache, EnvWatcher};
@@ -57,6 +58,50 @@ pub enum AttentionKind {
     Ask,
     /// Agent wants plan approval (ExitPlanMode).
     Plan,
+}
+
+/// Lifecycle signal received from a Claude Code hook (relayed by
+/// `claudette-cli chat hook`) for an interactive session. Variants
+/// mirror the Claude Code hook surface the interactive runner cares
+/// about; the `Unknown` arm preserves forward-compatibility so an
+/// unrecognized hook name shows up in logs instead of silently
+/// failing on the wire.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HookEventKind {
+    /// `Stop` hook — the active turn finished. The runner uses this to
+    /// know it can dispatch the next queued prompt or hand control back
+    /// to the user.
+    Stop,
+    /// `Notification` hook fired with an `awaiting`-style reason
+    /// (permission prompt, idle-while-waiting-for-input, etc). The
+    /// optional `reason` carries the raw Claude-Code reason string so
+    /// the runner can distinguish permission asks from generic
+    /// awaits when surfacing UI.
+    Awaiting { reason: Option<String> },
+    /// `UserPromptSubmit` hook — Claude Code accepted a prompt and is
+    /// about to start work on it. Emitted by the cli relay when the
+    /// interactive driver wants to know that its enqueued prompt was
+    /// actually delivered (rather than buffered in the CLI's input
+    /// queue).
+    PromptSubmitted,
+    /// `SubagentStop` hook — a nested Task subagent finished. Distinct
+    /// from `Stop` because the top-level turn is still in flight.
+    SubagentStop,
+    /// Any hook kind the runner doesn't know about. Carries the raw
+    /// kind string so log lines can still identify what arrived.
+    Unknown { raw_kind: String },
+}
+
+/// One hook event delivered to a single interactive session. The `sid`
+/// is the synthetic interactive session id Claudette stamps onto the
+/// child Claude Code process via `--session-id` (or env var) at spawn
+/// time; the cli relay echoes that back via `claudette-cli chat hook
+/// --sid …` so dispatch can fan a single CLI invocation to the right
+/// session-scoped channel.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InteractiveHookEvent {
+    pub sid: String,
+    pub kind: HookEventKind,
 }
 
 /// A `control_request: can_use_tool` the CLI is waiting on the host to
@@ -735,6 +780,40 @@ pub struct AppState {
     /// deleted, or manually fired so the polling loop can recompute its next
     /// deadline immediately instead of waiting for the fallback tick.
     pub scheduler_notify: Arc<tokio::sync::Notify>,
+    /// Per-interactive-session hook delivery channels, keyed by the
+    /// synthetic interactive session id (`sid`). Producers are
+    /// `claudette-cli chat hook` invocations routed through `ipc.rs`;
+    /// consumers are the per-session interactive runners (Task F3/G4)
+    /// that own the receiving end of the matching `mpsc::UnboundedReceiver`.
+    /// A sender registered here without a live receiver is fine — the
+    /// receiver simply isn't draining yet — but a hook arriving with no
+    /// registered sender is logged and dropped, since there is nobody to
+    /// hand the event to. `Arc<Mutex<…>>` (the std mutex) is sufficient
+    /// because the critical section is a single HashMap op; there's no
+    /// await held inside it.
+    pub interactive_hook_channels:
+        Arc<Mutex<HashMap<String, mpsc::UnboundedSender<InteractiveHookEvent>>>>,
+    /// Cached `InteractiveHost` keyed by `workspace_id`. The host trait
+    /// owns connections to tmux / sidecar, so we want to share a single
+    /// instance per workspace across `interactive_start` / `_send_input`
+    /// / `_attach` calls. `select_default_host` is awaited lazily on
+    /// first use through [`AppState::interactive_host_for`].
+    pub interactive_hosts: RwLock<HashMap<String, Arc<dyn InteractiveHost>>>,
+    /// Reverse index from synthetic interactive `sid` to its owning
+    /// `workspace_id`. Used by [`AppState::host_for_session`] to route a
+    /// per-session command back to the workspace-cached host. Populated
+    /// by [`AppState::register_interactive_session`] and dropped by
+    /// [`AppState::unregister_interactive_session`].
+    pub interactive_sessions: RwLock<HashMap<String, String>>,
+    /// Orphan interactive sessions detected at boot — sids the host
+    /// reported but the DB did NOT track. Populated by the boot
+    /// reconciler ([`crate::interactive_lifecycle`]) via
+    /// [`claudette::interactive::detect_orphans`], drained by the
+    /// `interactive_cleanup_orphans` Tauri command. Each entry maps
+    /// `sid → host that reported it` so the cleanup command can call
+    /// `host.stop()` without re-resolving the host (and without needing
+    /// the orphan to belong to a workspace Claudette still tracks).
+    pub interactive_orphans: RwLock<HashMap<String, Arc<dyn InteractiveHost>>>,
 }
 
 impl AppState {
@@ -791,6 +870,10 @@ impl AppState {
             bulk_cleanup_cancels: RwLock::new(HashMap::new()),
             workspace_creates_in_flight: Mutex::new(HashSet::new()),
             scheduler_notify: Arc::new(tokio::sync::Notify::new()),
+            interactive_hook_channels: Arc::new(Mutex::new(HashMap::new())),
+            interactive_hosts: RwLock::new(HashMap::new()),
+            interactive_sessions: RwLock::new(HashMap::new()),
+            interactive_orphans: RwLock::new(HashMap::new()),
         }
     }
 
@@ -821,6 +904,302 @@ impl AppState {
             .remove(repo_id);
     }
 
+    /// Register the sender half of a per-session hook channel. Replaces
+    /// any existing sender for `sid` (the previous receiver will see its
+    /// stream end on the next poll). The interactive runner is expected
+    /// to call [`Self::unregister_interactive_hook_channel`] in its
+    /// teardown path so the map doesn't grow without bound across
+    /// session restarts.
+    ///
+    /// Called from `commands::interactive::interactive_start` (Task F3)
+    /// to bridge CLI-relayed hooks (`claudette-cli chat hook` → IPC
+    /// `chat_hook` → [`Self::dispatch_interactive_hook`]) into the
+    /// `interactive://<sid>/hook` Tauri event stream the frontend
+    /// subscribes to.
+    pub fn register_interactive_hook_channel(
+        &self,
+        sid: &str,
+        tx: mpsc::UnboundedSender<InteractiveHookEvent>,
+    ) {
+        let mut map = self
+            .interactive_hook_channels
+            .lock()
+            .expect("interactive_hook_channels poisoned");
+        map.insert(sid.to_string(), tx);
+    }
+
+    /// Drop the sender half of a per-session hook channel. Safe to call
+    /// for an unknown `sid` (no-op). Doing this on session teardown
+    /// closes the receiver loop in the runner.
+    ///
+    /// Paired with [`Self::register_interactive_hook_channel`]; called
+    /// from `commands::interactive::interactive_stop` (Task F3) on
+    /// session teardown.
+    pub fn unregister_interactive_hook_channel(&self, sid: &str) {
+        let mut map = self
+            .interactive_hook_channels
+            .lock()
+            .expect("interactive_hook_channels poisoned");
+        map.remove(sid);
+    }
+
+    /// Deliver `event` to whichever interactive runner is registered for
+    /// `event.sid`. If no channel is registered, log a warning and drop
+    /// the event — this is the common case during startup (CLI hook
+    /// fires before the runner has wired up its receiver) and during
+    /// shutdown (runner already torn down, late hook still draining).
+    /// Send failures (receiver dropped without `unregister`) are also
+    /// logged and the stale entry is evicted so the next event takes
+    /// the "no listener" path instead of repeatedly failing to send.
+    pub fn dispatch_interactive_hook(&self, event: InteractiveHookEvent) {
+        // Hold the lock long enough to send; the channel is unbounded
+        // so send is non-blocking. Evicting on send failure has to
+        // happen under the same lock to avoid racing with a fresh
+        // re-registration on the same sid.
+        let mut map = self
+            .interactive_hook_channels
+            .lock()
+            .expect("interactive_hook_channels poisoned");
+        let sid = event.sid.clone();
+        match map.get(&sid) {
+            Some(tx) => {
+                if let Err(err) = tx.send(event) {
+                    tracing::warn!(
+                        target: "claudette::interactive",
+                        sid = %sid,
+                        error = %err,
+                        "interactive hook receiver dropped before unregister; evicting channel"
+                    );
+                    map.remove(&sid);
+                }
+            }
+            None => {
+                tracing::warn!(
+                    target: "claudette::interactive",
+                    sid = %sid,
+                    kind = ?event.kind,
+                    "no interactive hook channel registered for sid; dropping event"
+                );
+            }
+        }
+    }
+
+    /// Read the `claudeInteractiveEnabled` experimental flag from the
+    /// `app_settings` table. Treats any value other than the literal
+    /// string `"true"` as disabled (matches the F1 stub semantics) and
+    /// returns `false` if the DB can't be opened — the interactive
+    /// commands surface the user-facing error themselves.
+    pub async fn claude_interactive_enabled(&self) -> bool {
+        let db_path = self.db_path.clone();
+        tokio::task::spawn_blocking(move || {
+            let Ok(db) = claudette::db::Database::open(&db_path) else {
+                return false;
+            };
+            matches!(
+                db.get_app_setting("claudeInteractiveEnabled"),
+                Ok(Some(v)) if v.trim() == "true"
+            )
+        })
+        .await
+        .unwrap_or(false)
+    }
+
+    /// Per-user runtime directory used for the interactive overlay tree
+    /// and the sidecar socket. Lives under `claudette_home()` so it
+    /// honors `$CLAUDETTE_HOME` overrides and the test harness can swap
+    /// it out by setting `CLAUDETTE_HOME` to a tempdir.
+    ///
+    /// `create_dir_all` is best-effort — the host implementations will
+    /// surface a concrete error if the directory cannot be created when
+    /// they try to materialize overlays / sockets inside it.
+    pub async fn runtime_dir_for_interactive(&self) -> std::path::PathBuf {
+        let dir = claudette::path::claudette_home().join("interactive");
+        // Best-effort: ignore errors here so callers see the
+        // host-layer error if the directory is truly unusable.
+        let _ = std::fs::create_dir_all(&dir);
+        dir
+    }
+
+    /// Path to the bundled `claudette` CLI binary that interactive
+    /// hooks will shell out to. The CLI is staged by
+    /// `scripts/stage-cli-sidecar.sh` and registered in
+    /// `tauri.conf.json`'s `bundle.externalBin` as `binaries/claudette`;
+    /// at runtime it lives next to the GUI binary (`Contents/MacOS/`
+    /// on macOS, alongside the `.exe` on Windows, alongside the
+    /// AppImage on Linux). In dev the macOS app runner mirrors the
+    /// staged sidecar into the same layout so `current_exe().parent()`
+    /// resolves identically.
+    ///
+    /// Returns `None` if `current_exe` cannot be read or if the
+    /// resolved candidate does not exist on disk — the latter is the
+    /// common dev-without-staging case, and callers surface a
+    /// "claudette-cli binary not found" error so the user knows to
+    /// re-run `scripts/stage-cli-sidecar.sh`.
+    pub async fn bundled_cli_binary_path(&self) -> Option<std::path::PathBuf> {
+        if let Ok(p) = std::env::var("CLAUDETTE_CLI") {
+            let candidate = PathBuf::from(p);
+            // Honour the documented contract: returning `None` when the
+            // resolved candidate does not exist on disk. Without this
+            // check, a stale or test-only `CLAUDETTE_CLI` override would
+            // bypass the existence guard that applies to the
+            // current_exe + dev-fallback branches below.
+            if candidate.exists() {
+                return Some(candidate);
+            }
+            return None;
+        }
+        let exe = std::env::current_exe().ok()?;
+        let dir = exe.parent()?;
+        let suffix = std::env::consts::EXE_SUFFIX;
+        let candidate = dir.join(format!("claudette{suffix}"));
+        if candidate.exists() {
+            return Some(candidate);
+        }
+        // Dev fallback: repo-relative staged path. Mirrors
+        // `claudette::agent::pi_sdk::resolve_pi_harness_path` so a
+        // bare `cargo run` (which doesn't go through the macOS dev
+        // runner) can still find the sidecar.
+        let triple = host_triple();
+        let staged = std::path::PathBuf::from("src-tauri")
+            .join("binaries")
+            .join(format!("claudette-{triple}{suffix}"));
+        if staged.exists() {
+            return Some(staged);
+        }
+        None
+    }
+
+    /// Path to the bundled `claudette-session-host` sidecar used by
+    /// the interactive backend's sidecar host. The session-host is
+    /// staged by `scripts/stage-session-host-sidecar.sh` and
+    /// registered in `tauri.conf.json`'s `bundle.externalBin` as
+    /// `binaries/claudette-session-host`; at runtime it lives next to
+    /// the GUI binary (`Contents/MacOS/` on macOS, alongside the
+    /// `.exe` on Windows, alongside the AppImage on Linux). In dev
+    /// the macOS app runner mirrors the staged sidecar into the same
+    /// layout.
+    ///
+    /// Returns `None` if `current_exe` cannot be read or no candidate
+    /// exists on disk. The sidecar host falls back to a bare
+    /// `claudette-session-host` (PATH lookup) when this is `None`,
+    /// which lets a `cargo run`-from-workspace flow still work when
+    /// the user has the binary on PATH.
+    pub async fn bundled_session_host_binary_path(&self) -> Option<std::path::PathBuf> {
+        if let Ok(override_path) = std::env::var("CLAUDETTE_SESSION_HOST") {
+            return Some(std::path::PathBuf::from(override_path));
+        }
+        let exe = std::env::current_exe().ok()?;
+        let dir = exe.parent()?;
+        let suffix = std::env::consts::EXE_SUFFIX;
+        let candidate = dir.join(format!("claudette-session-host{suffix}"));
+        if candidate.exists() {
+            return Some(candidate);
+        }
+        // Dev fallback: repo-relative staged path. Mirrors
+        // `claudette::agent::pi_sdk::resolve_pi_harness_path` so a
+        // bare `cargo run` (which doesn't go through the macOS dev
+        // runner) can still find the sidecar.
+        let triple = host_triple();
+        let staged = std::path::PathBuf::from("src-tauri")
+            .join("binaries")
+            .join(format!("claudette-session-host-{triple}{suffix}"));
+        if staged.exists() {
+            return Some(staged);
+        }
+        None
+    }
+
+    /// Synthesize a wire string for the active interactive host kind.
+    /// The plan distinguishes `"tmux"` vs `"sidecar"` for the
+    /// `interactive_sessions.host_kind` column. For F3 we use the
+    /// same `tmux >= 3.0` probe `select_default_host` uses; if the
+    /// probe says tmux is available we report `"tmux"`, otherwise
+    /// `"sidecar"`. The probe result is cached for 30s so this is
+    /// cheap on the second call within a workspace bringup.
+    pub async fn interactive_host_kind_for(&self, _workspace_id: &str) -> &'static str {
+        #[cfg(unix)]
+        {
+            use claudette::agent::interactive_host::availability::{TmuxAvailability, check_tmux};
+            if matches!(check_tmux().await, TmuxAvailability::Available { .. }) {
+                return "tmux";
+            }
+        }
+        "sidecar"
+    }
+
+    /// Return (or lazily construct) the cached `InteractiveHost` for
+    /// `workspace_id`. For v1 every workspace shares the same default
+    /// host (tmux when available on Unix, sidecar otherwise); the map
+    /// is keyed by workspace so a future per-workspace override can
+    /// land without touching call sites.
+    pub async fn interactive_host_for(
+        &self,
+        workspace_id: &str,
+    ) -> Result<Arc<dyn InteractiveHost>, claudette::agent::interactive_host::HostError> {
+        if let Some(host) = self.interactive_hosts.read().await.get(workspace_id) {
+            return Ok(Arc::clone(host));
+        }
+        let runtime_dir = self.runtime_dir_for_interactive().await;
+        let sidecar_socket = runtime_dir.join("session-host.sock");
+        // Resolve the staged `claudette-session-host` sidecar through
+        // the same Tauri externalBin path the CLI uses. Falls back to
+        // a bare binary name so a PATH-installed
+        // `claudette-session-host` still works when the bundle is
+        // missing (developer running `cargo run` straight out of the
+        // workspace without going through `scripts/dev.sh`).
+        let sidecar_binary = self
+            .bundled_session_host_binary_path()
+            .await
+            .unwrap_or_else(|| {
+                let suffix = std::env::consts::EXE_SUFFIX;
+                std::path::PathBuf::from(format!("claudette-session-host{suffix}"))
+            });
+        let host = claudette::agent::interactive_host::select_default_host(
+            &runtime_dir,
+            &sidecar_socket,
+            &sidecar_binary,
+            false,
+        )
+        .await?;
+        let mut hosts = self.interactive_hosts.write().await;
+        // Re-check under the write lock to avoid clobbering a host
+        // another concurrent caller just inserted.
+        if let Some(existing) = hosts.get(workspace_id) {
+            return Ok(Arc::clone(existing));
+        }
+        hosts.insert(workspace_id.to_string(), Arc::clone(&host));
+        Ok(host)
+    }
+
+    /// Look up the cached host that owns `sid`. Returns `None` if the
+    /// session is unknown or the host cache entry was evicted (e.g.
+    /// because the workspace was archived).
+    pub async fn host_for_session(&self, sid: &str) -> Option<Arc<dyn InteractiveHost>> {
+        let workspace_id = self.interactive_sessions.read().await.get(sid).cloned()?;
+        self.interactive_hosts
+            .read()
+            .await
+            .get(&workspace_id)
+            .map(Arc::clone)
+    }
+
+    /// Register a new interactive session in the sid→workspace_id map
+    /// so subsequent commands can route by `sid` alone.
+    pub async fn register_interactive_session(&self, sid: &str, workspace_id: String) {
+        self.interactive_sessions
+            .write()
+            .await
+            .insert(sid.to_string(), workspace_id);
+    }
+
+    /// Drop the sid→workspace_id mapping. Safe to call for an unknown
+    /// `sid` (no-op). The matching host stays cached against the
+    /// workspace because other sessions in the same workspace may
+    /// still need it.
+    pub async fn unregister_interactive_session(&self, sid: &str) {
+        self.interactive_sessions.write().await.remove(sid);
+    }
+
     /// Snapshot the plugin registry for use across `await` points.
     ///
     /// The lock is held only long enough to `Arc::clone` the inner
@@ -838,6 +1217,24 @@ impl AppState {
     /// the Plugins settings page from stalling while env loads.
     pub async fn plugins_snapshot(&self) -> Arc<PluginRegistry> {
         Arc::clone(&*self.plugins.read().await)
+    }
+}
+
+/// Host target triple matching the staged sidecar naming used by
+/// `scripts/stage-*-sidecar.sh`. Mirrors the lookup table in
+/// `claudette::agent::pi_sdk::host_triple` so the repo-relative dev
+/// fallback used by [`AppState::bundled_cli_binary_path`] and
+/// [`AppState::bundled_session_host_binary_path`] picks the same
+/// directory entry the staging scripts wrote.
+fn host_triple() -> &'static str {
+    match (std::env::consts::ARCH, std::env::consts::OS) {
+        ("aarch64", "macos") => "aarch64-apple-darwin",
+        ("x86_64", "macos") => "x86_64-apple-darwin",
+        ("x86_64", "linux") => "x86_64-unknown-linux-gnu",
+        ("aarch64", "linux") => "aarch64-unknown-linux-gnu",
+        ("x86_64", "windows") => "x86_64-pc-windows-msvc",
+        ("aarch64", "windows") => "aarch64-pc-windows-msvc",
+        _ => "unknown",
     }
 }
 

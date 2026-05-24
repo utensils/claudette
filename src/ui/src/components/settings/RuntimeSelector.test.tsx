@@ -11,6 +11,10 @@ const appStore = vi.hoisted(() => ({
   // to the same shape a real Pi-compiled binary would produce. A
   // dedicated test below pins the no-Pi behaviour.
   piSdkAvailable: true,
+  // Experimental gate consumed by RuntimeSelector via effectiveHarness.
+  // Defaults to off because the selector's existing matrix tests don't
+  // care about the interactive harness.
+  claudeInteractiveEnabled: false,
 }));
 
 vi.mock("../../stores/useAppStore", () => {
@@ -41,26 +45,63 @@ const serviceMocks = vi.hoisted(() => ({
         return "pi_sdk" as const;
     }
   },
-  availableHarnessesForKind: (kind: AgentBackendConfig["kind"]) => {
-    switch (kind) {
-      case "anthropic":
-      case "custom_anthropic":
-      case "codex_subscription":
-        return ["claude_code"] as const;
-      case "ollama":
-      case "lm_studio":
-        return ["pi_sdk", "claude_code"] as const;
-      case "openai_api":
-      case "custom_openai":
-        return ["claude_code", "pi_sdk"] as const;
-      case "codex_native":
-        return ["codex_app_server", "pi_sdk"] as const;
-      case "pi_sdk":
-        return ["pi_sdk"] as const;
+  availableHarnessesForKind: (
+    kind: AgentBackendConfig["kind"],
+    options?: { claudeInteractiveEnabled?: boolean },
+  ) => {
+    const base: string[] = (() => {
+      switch (kind) {
+        case "anthropic":
+        case "custom_anthropic":
+        case "codex_subscription":
+          return ["claude_code"];
+        case "ollama":
+        case "lm_studio":
+          return ["pi_sdk", "claude_code"];
+        case "openai_api":
+        case "custom_openai":
+          return ["claude_code", "pi_sdk"];
+        case "codex_native":
+          return ["codex_app_server", "pi_sdk"];
+        case "pi_sdk":
+          return ["pi_sdk"];
+      }
+    })();
+    if (
+      options?.claudeInteractiveEnabled === true &&
+      (kind === "anthropic" ||
+        kind === "custom_anthropic" ||
+        kind === "codex_subscription")
+    ) {
+      base.push("claude_interactive");
     }
+    return base;
   },
-  effectiveHarness: (backend: AgentBackendConfig) => {
-    if (backend.runtime_harness) return backend.runtime_harness;
+  effectiveHarness: (
+    backend: AgentBackendConfig,
+    options?: { claudeInteractiveEnabled?: boolean },
+  ) => {
+    const override = backend.runtime_harness ?? undefined;
+    // Mirror the real `effectiveHarness` guard: `"claude_interactive"`
+    // is only honored when the experimental flag is on (it's
+    // intentionally absent from the per-kind matrix). Other persisted
+    // overrides are honored when they appear in the kind's allow-list;
+    // otherwise we fall through to the kind's default.
+    if (
+      override === "claude_interactive" &&
+      options?.claudeInteractiveEnabled === true
+    ) {
+      return override;
+    }
+    if (
+      override &&
+      override !== "claude_interactive" &&
+      serviceMocks
+        .availableHarnessesForKind(backend.kind, options)
+        .includes(override)
+    ) {
+      return override;
+    }
     return serviceMocks.defaultHarnessForKind(backend.kind);
   },
 }));
@@ -230,5 +271,132 @@ describe("RuntimeSelector", () => {
       "test",
       "claude_code",
     );
+  });
+
+  it("hides the Claude (Interactive) option for an Anthropic backend when the flag is OFF", () => {
+    // Default appStore.claudeInteractiveEnabled is false → the
+    // Anthropic kind only has one available harness, so the selector
+    // shouldn't render at all.
+    appStore.claudeInteractiveEnabled = false;
+    const container = mount(
+      <RuntimeSelector
+        backend={makeBackend({ kind: "anthropic" })}
+        onSaved={() => {}}
+      />,
+    );
+    expect(container.querySelector("select")).toBeNull();
+  });
+
+  it("renders the Claude (Interactive) option for an Anthropic backend when the flag is ON", () => {
+    appStore.claudeInteractiveEnabled = true;
+    try {
+      const container = mount(
+        <RuntimeSelector
+          backend={makeBackend({ kind: "anthropic", id: "anthropic" })}
+          onSaved={() => {}}
+        />,
+      );
+      const select = container.querySelector("select") as HTMLSelectElement;
+      expect(select).not.toBeNull();
+      const values = Array.from(select.options).map((o) => o.value);
+      expect(values).toEqual(["claude_code", "claude_interactive"]);
+      // ClaudeCode is the kind's default → first entry is marked default.
+      expect(select.options[0]!.textContent).toMatch(/default/i);
+      // Currently selected is the kind default (no override persisted).
+      expect(select.value).toBe("claude_code");
+    } finally {
+      appStore.claudeInteractiveEnabled = false;
+    }
+  });
+
+  it("persists the claude_interactive harness when the user selects it (flag on)", async () => {
+    appStore.claudeInteractiveEnabled = true;
+    try {
+      const container = mount(
+        <RuntimeSelector
+          backend={makeBackend({ kind: "anthropic", id: "anthropic" })}
+          onSaved={() => {}}
+        />,
+      );
+      const select = container.querySelector("select") as HTMLSelectElement;
+      await act(async () => {
+        select.value = "claude_interactive";
+        select.dispatchEvent(new Event("change", { bubbles: true }));
+      });
+      expect(serviceMocks.setAgentBackendRuntimeHarness).toHaveBeenCalledTimes(1);
+      // claude_interactive is NOT the kind default, so the override is
+      // passed through verbatim (not nulled out).
+      expect(serviceMocks.setAgentBackendRuntimeHarness).toHaveBeenCalledWith(
+        "anthropic",
+        "claude_interactive",
+      );
+    } finally {
+      appStore.claudeInteractiveEnabled = false;
+    }
+  });
+
+  it("does not expose Claude (Interactive) for non-Claude-flavored kinds even when the flag is on", () => {
+    // Ollama / LM Studio / OpenAI / CodexNative / PiSdk must never
+    // surface claude_interactive — the harness is a Claude-runtime
+    // variant only.
+    appStore.claudeInteractiveEnabled = true;
+    appStore.agentBackends = [
+      makeBackend({ id: "pi", kind: "pi_sdk", enabled: true }),
+    ];
+    try {
+      for (const kind of [
+        "ollama",
+        "lm_studio",
+        "openai_api",
+        "custom_openai",
+        "codex_native",
+      ] as const) {
+        const container = mount(
+          <RuntimeSelector
+            backend={makeBackend({ kind })}
+            onSaved={() => {}}
+          />,
+        );
+        const select = container.querySelector("select");
+        if (select) {
+          const values = Array.from(select.options).map((o) => o.value);
+          expect(values).not.toContain("claude_interactive");
+        }
+        container.remove();
+      }
+    } finally {
+      appStore.claudeInteractiveEnabled = false;
+    }
+  });
+
+  it("falls back to the kind's default when runtime_harness is claude_interactive but the flag is OFF", () => {
+    // Regression: the previous mock unconditionally returned the
+    // persisted override, including `"claude_interactive"`. The real
+    // `effectiveHarness` honors `"claude_interactive"` only when the
+    // experimental flag is on; otherwise it falls through to the kind's
+    // default. The selector won't render for Anthropic (single available
+    // harness with the flag off), so use Ollama where the kind has a
+    // multi-entry matrix. Its default harness is `pi_sdk`.
+    appStore.claudeInteractiveEnabled = false;
+    appStore.agentBackends = [
+      makeBackend({ id: "pi", kind: "pi_sdk", enabled: true }),
+    ];
+    const container = mount(
+      <RuntimeSelector
+        backend={makeBackend({
+          kind: "ollama",
+          runtime_harness: "claude_interactive",
+        })}
+        onSaved={() => {}}
+      />,
+    );
+    const select = container.querySelector("select") as HTMLSelectElement;
+    expect(select).not.toBeNull();
+    // Flag is OFF → the persisted `claude_interactive` override is
+    // dropped, and the effective harness is the kind's default (pi_sdk).
+    expect(select.value).toBe("pi_sdk");
+    // `claude_interactive` is NOT in the option list either (matrix gate).
+    const values = Array.from(select.options).map((o) => o.value);
+    expect(values).not.toContain("claude_interactive");
   });
 });

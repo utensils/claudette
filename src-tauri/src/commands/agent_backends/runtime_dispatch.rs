@@ -99,6 +99,16 @@ pub async fn resolve_backend_runtime(
         AgentBackendRuntimeHarness::ClaudeCode => {
             build_claude_code_runtime(state, &mut backend, model).await
         }
+        // F1 only wires the variant through the harness layer; the
+        // runtime build for interactive sessions arrives in a later
+        // task. `resolve_dispatch_harness` will never surface this
+        // value today (no `AgentBackendKind::available_harnesses()`
+        // listing includes `ClaudeInteractive`), so the unreachable
+        // branch is defense-in-depth against a future broadening that
+        // forgets to add the runtime builder.
+        AgentBackendRuntimeHarness::ClaudeInteractive => {
+            Err("ClaudeInteractive runtime build is not implemented yet".to_string())
+        }
     }
 }
 

@@ -41,6 +41,11 @@ const appStore = vi.hoisted(() => ({
   setClaudeAuthMethod: vi.fn((method: string | null) => {
     appStore.claudeAuthMethod = method;
   }),
+  claudeInteractiveEnabled: false,
+  setClaudeInteractiveEnabled: vi.fn((enabled: boolean) => {
+    appStore.claudeInteractiveEnabled = enabled;
+  }),
+  piSdkAvailable: true,
 }));
 
 const serviceMocks = vi.hoisted(() => ({
@@ -195,7 +200,7 @@ vi.mock("@tauri-apps/api/event", () => ({
 
 vi.mock("react-i18next", () => ({
   useTranslation: () => ({
-    t: (key: string) => key,
+    t: (key: string, fallback?: string) => fallback ?? key,
   }),
 }));
 
@@ -246,6 +251,7 @@ describe("ModelSettings", () => {
     appStore.agentBackends = [];
     appStore.settingsFocus = null;
     appStore.claudeAuthFailure = null;
+    appStore.claudeInteractiveEnabled = false;
     for (const value of Object.values(appStore)) {
       if (typeof value === "function" && "mockClear" in value) {
         value.mockClear();
@@ -468,6 +474,35 @@ describe("ModelSettings", () => {
     expect(serviceMocks.getClaudeAuthStatus).toHaveBeenCalledTimes(2);
     expect(serviceMocks.getClaudeAuthStatus).toHaveBeenLastCalledWith(true);
     expect(appStore.setClaudeAuthFailure).not.toHaveBeenCalled();
+  });
+
+  it("runtime-card-claude-interactive renders disabled when claudeInteractiveEnabled is false", async () => {
+    appStore.claudeInteractiveEnabled = false;
+    const container = await renderModelSettings();
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    const card = container.querySelector(
+      '[data-testid="runtime-card-claude-interactive"]',
+    );
+    expect(card).not.toBeNull();
+    expect(card?.getAttribute("aria-disabled")).toBe("true");
+    expect(card?.textContent ?? "").toMatch(/enable in experimental/i);
+  });
+
+  it("runtime-card-claude-interactive renders selectable when flag is on", async () => {
+    appStore.claudeInteractiveEnabled = true;
+    const container = await renderModelSettings();
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    const card = container.querySelector(
+      '[data-testid="runtime-card-claude-interactive"]',
+    );
+    expect(card).not.toBeNull();
+    expect(card?.getAttribute("aria-disabled")).toBe("false");
   });
 
   it("does not resolve a chat auth failure until sign-in validates", async () => {

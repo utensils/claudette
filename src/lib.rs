@@ -21,6 +21,7 @@ pub mod git;
 pub mod global_prompt;
 pub mod grammar_provider;
 pub mod i18n;
+pub mod interactive;
 pub mod logging;
 pub mod mcp;
 pub mod mcp_supervisor;

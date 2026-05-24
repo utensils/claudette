@@ -1,0 +1,51 @@
+[package]
+name = "claudette-session-host"
+version = "0.25.0"
+edition = "2024"
+license = "MIT"
+description = "Long-lived sidecar that owns interactive Claude PTYs for Claudette"
+
+[lib]
+name = "claudette_session_host"
+path = "src/lib.rs"
+
+[[bin]]
+name = "claudette-session-host"
+path = "src/main.rs"
+
+[dependencies]
+# `default-features = false` so transitive feature unification doesn't
+# pull `pi-sdk` back into the lib when the Tauri binary opts out. This
+# crate consumes the interactive-host protocol types from `claudette`
+# but has no Pi-specific surface.
+claudette = { path = "..", default-features = false }
+tokio = { version = "1", features = ["full"] }
+# Cross-platform local IPC: Unix domain sockets on macOS/Linux, Named Pipes
+# on Windows. One async API for both — same shape used by `agent_mcp::bridge`
+# in the core crate.
+interprocess = { version = "2", features = ["tokio"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# Structured, span-aware logging. Pinned to the same versions used across
+# the workspace so the session host emits events through the same registry
+# when run standalone or embedded in tests.
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+# PTY ownership for interactive Claude processes. Matches the pin used in
+# `src-tauri` and `src-server`.
+portable-pty = "0.8"
+# In-memory terminal grid model for `capture_screen` snapshots. Not yet a
+# workspace dep elsewhere — pinned to the latest stable major at the time
+# the session-host crate was scaffolded.
+alacritty_terminal = "0.26"
+base64 = "0.22"
+async-trait = "0.1"
+thiserror = "2"
+futures = "0.3"
+tokio-stream = "0.1"
+# Per-user socket path scheme picks up the current username so concurrent
+# users on the same host don't collide on `$TMPDIR/claudette-session-host/`.
+whoami = "1"
+
+[dev-dependencies]
+tempfile = "3"

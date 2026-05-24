@@ -1,9 +1,15 @@
 import { describe, expect, it, vi } from "vitest";
+import { writeText as clipboardWriteText } from "@tauri-apps/plugin-clipboard-manager";
 import {
+  buildTmuxAttachCommand,
   buildWorkspaceContextMenuItems,
   type WorkspaceContextMenuLabels,
 } from "./workspaceContextMenu";
 import type { ContextMenuItem } from "../shared/ContextMenu";
+
+vi.mock("@tauri-apps/plugin-clipboard-manager", () => ({
+  writeText: vi.fn().mockResolvedValue(undefined),
+}));
 
 const labels: WorkspaceContextMenuLabels = {
   renameWorkspace: "Rename Workspace…",
@@ -12,6 +18,7 @@ const labels: WorkspaceContextMenuLabels = {
   openInTerminal: "Open in Terminal",
   copyWorkingDirectory: "Copy Working Directory",
   copyClaudeSessionId: "Copy Claude Session ID",
+  copyTmuxAttachCommand: "Copy tmux attach command",
   archiveWorkspace: "Archive",
   restoreWorkspace: "Restore",
   deleteWorkspace: "Delete",
@@ -116,5 +123,110 @@ describe("buildWorkspaceContextMenuItems", () => {
     );
 
     expect(itemLabels(items)).toEqual(["Mark as Unread", "Archive"]);
+  });
+
+  it("shows tmux attach menu item only when hostKind is tmux", () => {
+    const noop = vi.fn();
+    // Tmux session present → item appears.
+    const withTmux = buildWorkspaceContextMenuItems(
+      {
+        status: "Active",
+        worktreePath: "/tmp/workspace",
+        remote: false,
+        tmuxAttachSid: "claude-abc123",
+      },
+      labels,
+      {
+        rename: noop,
+        markAsUnread: noop,
+        openInFileManager: noop,
+        openInTerminal: noop,
+        copyWorkingDirectory: noop,
+        copyClaudeSessionId: noop,
+        copyTmuxAttachCommand: noop,
+        archive: noop,
+      },
+    );
+    expect(itemLabels(withTmux)).toContain("Copy tmux attach command");
+
+    // No interactive sessions → item hidden.
+    const noInteractive = buildWorkspaceContextMenuItems(
+      {
+        status: "Active",
+        worktreePath: "/tmp/workspace",
+        remote: false,
+        tmuxAttachSid: null,
+      },
+      labels,
+      {
+        rename: noop,
+        markAsUnread: noop,
+        openInFileManager: noop,
+        openInTerminal: noop,
+        copyWorkingDirectory: noop,
+        copyClaudeSessionId: noop,
+        archive: noop,
+      },
+    );
+    expect(itemLabels(noInteractive)).not.toContain("Copy tmux attach command");
+
+    // Sidecar session (no tmux sid) → item hidden.
+    const sidecarOnly = buildWorkspaceContextMenuItems(
+      {
+        status: "Active",
+        worktreePath: "/tmp/workspace",
+        remote: false,
+        // The sidebar selector returns null when the only host is sidecar;
+        // we model that here by simply not setting tmuxAttachSid.
+      },
+      labels,
+      {
+        rename: noop,
+        markAsUnread: noop,
+        openInFileManager: noop,
+        openInTerminal: noop,
+        copyWorkingDirectory: noop,
+        copyClaudeSessionId: noop,
+        archive: noop,
+      },
+    );
+    expect(itemLabels(sidecarOnly)).not.toContain("Copy tmux attach command");
+  });
+
+  it("copies the tmux attach command to clipboard", async () => {
+    const writeTextMock = vi.mocked(clipboardWriteText);
+    writeTextMock.mockClear();
+
+    const sid = "claude-abc123";
+    const items = buildWorkspaceContextMenuItems(
+      {
+        status: "Active",
+        worktreePath: "/tmp/workspace",
+        remote: false,
+        tmuxAttachSid: sid,
+      },
+      labels,
+      {
+        markAsUnread: vi.fn(),
+        // Mirror the Sidebar wiring: the callback invokes the Tauri
+        // clipboard plugin with the tmux attach command.
+        copyTmuxAttachCommand: async () => {
+          await clipboardWriteText(buildTmuxAttachCommand(sid));
+        },
+      },
+    );
+
+    const tmuxItem = actionable(items).find(
+      (item) => item.label === "Copy tmux attach command",
+    );
+    expect(tmuxItem).toBeDefined();
+    expect(tmuxItem?.disabled).toBeFalsy();
+
+    // Invoke the menu item's onSelect — the same path the ContextMenu
+    // component runs on click.
+    await tmuxItem?.onSelect?.();
+
+    expect(writeTextMock).toHaveBeenCalledTimes(1);
+    expect(writeTextMock).toHaveBeenCalledWith(`tmux attach-session -t ${sid}`);
   });
 });

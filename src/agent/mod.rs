@@ -1,10 +1,13 @@
 mod args;
 pub mod background;
 mod binary;
+pub mod claude_interactive;
 pub mod codex_app_server;
 mod environment;
 pub mod harness;
 pub mod history_seeder;
+pub mod interactive_host;
+pub mod interactive_protocol;
 mod naming;
 #[cfg(feature = "pi-sdk")]
 pub mod pi_control;
@@ -32,6 +35,10 @@ pub use codex_app_server::{
 pub use harness::{
     AgentHarnessCapabilities, AgentHarnessKind, AgentSession, ClaudeCodeHarness,
     PersistentSessionStart,
+};
+pub use interactive_host::{
+    AttachEvent, AttachId, AttachStream, HostError, HostHandle, HostSessionSummary, HostStatus,
+    InteractiveHost, ScreenSnapshot, SessionId,
 };
 pub use naming::{
     generate_branch_name, generate_session_name, persist_claude_custom_title, sanitize_branch_name,

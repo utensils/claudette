@@ -235,6 +235,11 @@ pub const MIGRATIONS: &[Migration] = &[
         legacy_version: None,
     },
     Migration {
+        id: "20260517020158_interactive_sessions",
+        sql: include_str!("20260517020158_interactive_sessions.sql"),
+        legacy_version: None,
+    },
+    Migration {
         id: "20260517190000_agent_scheduled_tasks",
         sql: include_str!("20260517190000_agent_scheduled_tasks.sql"),
         legacy_version: None,

@@ -33,11 +33,17 @@ export interface AgentBackendModel {
  *
  *  - `claude_code` — the bundled Claude CLI (with `ANTHROPIC_BASE_URL` /
  *    gateway env when the backend isn't Anthropic itself).
+ *  - `claude_interactive` — interactive `claude` running inside a
+ *    detachable host (tmux on Unix, sidecar on Windows). Gated on the
+ *    `claudeInteractiveEnabled` experimental flag and intentionally
+ *    absent from `availableHarnessesForKind` — the experimental gate
+ *    is enforced server-side via `AgentBackendConfig.effective_harness_kind`.
  *  - `codex_app_server` — the Codex CLI's debug app-server.
  *  - `pi_sdk` — Claudette's bundled Pi sidecar.
  */
 export type AgentBackendRuntimeHarness =
   | "claude_code"
+  | "claude_interactive"
   | "codex_app_server"
   | "pi_sdk";
 
@@ -160,37 +166,84 @@ export function defaultHarnessForKind(
 }
 
 /**
- * Mirror of `AgentBackendKind::available_harnesses`. The first entry is
- * the default. Pinning a value outside this list is rejected server-side
- * by `set_agent_backend_runtime_harness`.
+ * Mirror of `AgentBackendKind::available_harnesses` /
+ * `available_harnesses_with_interactive`. The first entry is the
+ * default. Pinning a value outside this list is rejected server-side by
+ * `set_agent_backend_runtime_harness`.
+ *
+ * `"claude_interactive"` is intentionally **not** in the static matrix:
+ * it's gated by the `claudeInteractiveEnabled` experimental flag, not
+ * the per-kind allow-list. Callers that have the flag value available
+ * (the Settings runtime picker, anything driving persistence) should
+ * pass it via `options.claudeInteractiveEnabled` so the Claude-flavored
+ * kinds (Anthropic, CustomAnthropic, CodexSubscription) gain
+ * `"claude_interactive"` as a second option. Other call sites — the
+ * Pi-disabled downgrade in `resolveSessionHarness`, the gateway-hash
+ * key — want the matrix shape and should call without the option (the
+ * flag defaults to `false`).
  */
 export function availableHarnessesForKind(
   kind: AgentBackendKind,
+  options?: { claudeInteractiveEnabled?: boolean },
 ): AgentBackendRuntimeHarness[] {
-  switch (kind) {
-    case "anthropic":
-    case "custom_anthropic":
-    case "codex_subscription":
-      return ["claude_code"];
-    case "ollama":
-    case "lm_studio":
-      return ["pi_sdk", "claude_code"];
-    case "openai_api":
-    case "custom_openai":
-      return ["claude_code", "pi_sdk"];
-    case "codex_native":
-      return ["codex_app_server", "pi_sdk"];
-    case "pi_sdk":
-      return ["pi_sdk"];
+  const base: AgentBackendRuntimeHarness[] = (() => {
+    switch (kind) {
+      case "anthropic":
+      case "custom_anthropic":
+      case "codex_subscription":
+        return ["claude_code"];
+      case "ollama":
+      case "lm_studio":
+        return ["pi_sdk", "claude_code"];
+      case "openai_api":
+      case "custom_openai":
+        return ["claude_code", "pi_sdk"];
+      case "codex_native":
+        return ["codex_app_server", "pi_sdk"];
+      case "pi_sdk":
+        return ["pi_sdk"];
+    }
+  })();
+  if (
+    options?.claudeInteractiveEnabled === true &&
+    (kind === "anthropic" ||
+      kind === "custom_anthropic" ||
+      kind === "codex_subscription")
+  ) {
+    base.push("claude_interactive");
   }
+  return base;
 }
 
 /** Effective harness for a config: persisted override when allowed,
- *  otherwise the kind's default. Matches `AgentBackendConfig::effective_harness`. */
+ *  otherwise the kind's default.
+ *
+ *  Mirrors the Rust-side `AgentBackendConfig::effective_harness_kind`
+ *  (in `src/agent_backend.rs`): the persisted override is honored when
+ *  it appears in `availableHarnessesForKind(kind)`, OR when it's
+ *  `"claude_interactive"` AND the `claudeInteractiveEnabled`
+ *  experimental flag is on. `"claude_interactive"` is intentionally
+ *  absent from `availableHarnessesForKind` because the gate is the
+ *  experimental flag, not the per-kind matrix — so any caller that
+ *  has the flag value must pass it here, otherwise a backend with
+ *  `runtime_harness === "claude_interactive"` silently falls back to
+ *  the kind's default harness (a frontend/backend state mismatch).
+ *
+ *  @param backend Persisted backend config.
+ *  @param options.claudeInteractiveEnabled Value of the experimental
+ *    flag from the Zustand store. Defaults to `false` for callers that
+ *    don't (yet) know about the flag — same as the Rust default. */
 export function effectiveHarness(
   backend: AgentBackendConfig,
+  options?: { claudeInteractiveEnabled?: boolean },
 ): AgentBackendRuntimeHarness {
   const override = backend.runtime_harness ?? undefined;
+  if (
+    override === "claude_interactive" &&
+    options?.claudeInteractiveEnabled === true
+  ) {
+    return override;
+  }
   if (override && availableHarnessesForKind(backend.kind).includes(override)) {
     return override;
   }

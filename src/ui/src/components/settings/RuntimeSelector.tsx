@@ -21,6 +21,8 @@ function harnessLabelKey(harness: AgentBackendRuntimeHarness): string {
   switch (harness) {
     case "claude_code":
       return "models_backend_runtime_claude_cli_label";
+    case "claude_interactive":
+      return "models_backend_runtime_claude_interactive_label";
     case "pi_sdk":
       return "models_backend_runtime_pi_label";
     case "codex_app_server":
@@ -32,6 +34,8 @@ function harnessFallbackLabel(harness: AgentBackendRuntimeHarness): string {
   switch (harness) {
     case "claude_code":
       return "Claude CLI";
+    case "claude_interactive":
+      return "Claude (Interactive)";
     case "pi_sdk":
       return "Pi";
     case "codex_app_server":
@@ -51,16 +55,19 @@ function harnessFallbackLabel(harness: AgentBackendRuntimeHarness): string {
 export function RuntimeSelector({ backend, onSaved, onError }: RuntimeSelectorProps) {
   const { t } = useTranslation("settings");
   const piSdkAvailable = useAppStore((s) => s.piSdkAvailable);
+  const claudeInteractiveEnabled = useAppStore((s) => s.claudeInteractiveEnabled);
   const harnesses = useMemo(() => {
-    const all = availableHarnessesForKind(backend.kind);
+    const all = availableHarnessesForKind(backend.kind, {
+      claudeInteractiveEnabled,
+    });
     // Hide the Pi runtime option entirely on builds that didn't
     // compile the Pi harness in — the dispatcher would fall back to
     // ClaudeCode anyway, but exposing the option here would let the
     // user pin a setting that has no effect.
     return piSdkAvailable ? all : all.filter((h) => h !== "pi_sdk");
-  }, [backend.kind, piSdkAvailable]);
+  }, [backend.kind, piSdkAvailable, claudeInteractiveEnabled]);
   const defaultHarness = defaultHarnessForKind(backend.kind);
-  const current = effectiveHarness(backend);
+  const current = effectiveHarness(backend, { claudeInteractiveEnabled });
   const piEnabled = useAppStore((s) =>
     s.agentBackends.some((b) => b.kind === "pi_sdk" && b.enabled),
   );

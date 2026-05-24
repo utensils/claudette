@@ -1,0 +1,53 @@
+/* Embedded interactive-session view. Container stacks per-turn
+ * `InteractiveTurnView` cards vertically; aux affordances
+ * (awaiting / crashed) sit at the tail so they appear next to the
+ * most-recent turn. */
+
+.turns {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+}
+
+.turn {
+  width: 100%;
+}
+
+/* Status accents — kept subtle so they hint at lifecycle without
+ * competing with the agent's own ANSI styling inside the turn.
+ * Theme-token references only (theme.css is the source of raw colors —
+ * `bun run lint:css` will reject hex/rgba literals anywhere else).
+ */
+.turnLive {
+  /* Live turn: nothing special yet — defer to the InteractiveTurnView's
+   * own border so the user doesn't see a "loading" frame they can't act
+   * on. */
+}
+
+.turnDone {
+  opacity: 0.92;
+}
+
+.turnCrashed {
+  opacity: 0.7;
+}
+
+.awaitingPill {
+  align-self: flex-start;
+  font-size: 11px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: var(--accent-bg);
+  color: var(--accent-primary);
+  border: 1px solid var(--accent-bg-strong);
+}
+
+.crashedBanner {
+  font-size: 12px;
+  padding: 6px 10px;
+  border-radius: 4px;
+  background: var(--error-bg);
+  color: var(--text-primary);
+  border: 1px solid var(--error-border);
+}

@@ -75,6 +75,7 @@ export function ModelSettings() {
   const setAlternativeBackendsEnabled = useAppStore((s) => s.setAlternativeBackendsEnabled);
   const codexEnabled = useAppStore((s) => s.codexEnabled);
   const setCodexEnabled = useAppStore((s) => s.setCodexEnabled);
+  const claudeInteractiveEnabled = useAppStore((s) => s.claudeInteractiveEnabled);
   const agentBackends = useAppStore((s) => s.agentBackends);
   const setAgentBackends = useAppStore((s) => s.setAgentBackends);
   const setDefaultAgentBackendId = useAppStore((s) => s.setDefaultAgentBackendId);
@@ -635,6 +636,33 @@ export function ModelSettings() {
           >
             <div className={styles.toggleKnob} />
           </button>
+        </div>
+      </div>
+
+      {/* Display-only summary card. Actual per-backend runtime selection
+          happens in `RuntimeSelector` further down — when the experimental
+          flag is on, the Anthropic / CustomAnthropic / CodexSubscription
+          cards offer `Claude (Interactive)` as a runtime option there. */}
+      <div
+        className={styles.settingRow}
+        data-testid="runtime-card-claude-interactive"
+        aria-disabled={!claudeInteractiveEnabled}
+      >
+        <div className={styles.settingInfo}>
+          <div className={styles.settingLabel}>
+            {t("models_runtime_claude_interactive_label", "Claude (Interactive)")}
+          </div>
+          <div className={styles.settingDescription}>
+            {claudeInteractiveEnabled
+              ? t(
+                  "models_runtime_claude_interactive_desc",
+                  "Run interactive claude inside a detachable host (tmux on Unix, sidecar on Windows). Survives Claudette closing.",
+                )
+              : t(
+                  "models_runtime_claude_interactive_disabled_hint",
+                  "Enable in Experimental settings to use this runtime.",
+                )}
+          </div>
         </div>
       </div>
 

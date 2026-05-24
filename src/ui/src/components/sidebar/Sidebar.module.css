@@ -579,6 +579,24 @@
   font-family: var(--font-mono);
 }
 
+/* G7 — Interactive-session badge ("Awaiting input" / "Detached" /
+   "Crashed") rendered inline under the workspace branch. The colour
+   comes from the InteractiveBadge component's inline style (driven by
+   theme tokens); this class only owns layout + typography so the
+   badge sits flush with the existing sidebar row metrics. */
+.interactiveBadge {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  margin-top: 2px;
+  display: inline-block;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
 /* Running-commands summary row. Collapsed by default — clicking expands the
    list of individual commands underneath. Indented to nest visually under
    the workspace branch line. */

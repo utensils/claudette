@@ -2122,6 +2122,13 @@ pub async fn send_chat_message(
                     .await?;
                     Ok::<Arc<AgentSession>, String>(Arc::new(AgentSession::from_pi_sdk(started)))
                 }
+                // F1 wires the variant through the harness layer only;
+                // `resolve_backend_runtime` never produces this value
+                // today, so the spawn site rejects it loudly. The real
+                // start path lives in F2.
+                AgentBackendRuntimeHarness::ClaudeInteractive => Err::<Arc<AgentSession>, String>(
+                    "ClaudeInteractive session start is not implemented yet".to_string(),
+                ),
             }
         }
     };
@@ -2198,6 +2205,10 @@ pub async fn send_chat_message(
                     AgentBackendRuntimeHarness::CodexAppServer => None,
                     #[cfg(feature = "pi-sdk")]
                     AgentBackendRuntimeHarness::PiSdk => None,
+                    // F1 stub: interactive sessions don't run through
+                    // the print-mode hook bridge — they get hooks via
+                    // the per-session `CLAUDE_CONFIG_DIR` overlay.
+                    AgentBackendRuntimeHarness::ClaudeInteractive => None,
                 };
                 if let Some(bridge) = bridge.as_ref()
                     && matches!(
@@ -2385,6 +2396,11 @@ pub async fn send_chat_message(
             AgentBackendRuntimeHarness::CodexAppServer => None,
             #[cfg(feature = "pi-sdk")]
             AgentBackendRuntimeHarness::PiSdk => None,
+            // F1 stub: interactive sessions deliver hook callbacks
+            // through the per-session settings overlay materialized in
+            // `claude_interactive::SettingsOverlay`, not the print-mode
+            // chat bridge.
+            AgentBackendRuntimeHarness::ClaudeInteractive => None,
         };
         if let Some(bridge) = bridge.as_ref()
             && matches!(

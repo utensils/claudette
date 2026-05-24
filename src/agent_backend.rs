@@ -99,6 +99,16 @@ impl AgentBackendKind {
     /// The harnesses the user is allowed to pick for a backend of this
     /// kind. The first entry is the default. Pinning a value not in
     /// this list is rejected by the resolver as defense-in-depth.
+    ///
+    /// `ClaudeInteractive` is intentionally **not** in this matrix —
+    /// it's gated by the `claudeInteractiveEnabled` experimental flag,
+    /// not the per-kind allow-list. Callers that have the flag value
+    /// available (the Settings runtime picker, the persistence command)
+    /// should use [`available_harnesses_with_interactive`] which
+    /// conditionally appends `ClaudeInteractive` for the Claude-flavored
+    /// kinds when the flag is on. All other call sites (Pi-disabled
+    /// downgrade, gateway-hash key) want the matrix shape and should
+    /// stick with this method.
     pub fn available_harnesses(self) -> &'static [AgentBackendRuntimeHarness] {
         match self {
             Self::Anthropic | Self::CustomAnthropic | Self::CodexSubscription => {
@@ -129,6 +139,40 @@ impl AgentBackendKind {
             Self::PiSdk => &[AgentBackendRuntimeHarness::PiSdk],
         }
     }
+
+    /// Like [`available_harnesses`] but conditionally appends
+    /// [`AgentBackendRuntimeHarness::ClaudeInteractive`] when the
+    /// experimental flag is on AND this kind is one of the
+    /// Claude-flavored ones (Anthropic, CustomAnthropic,
+    /// CodexSubscription). These three kinds are locked to the Claude
+    /// CLI runtime so subscription OAuth tokens never reach Pi —
+    /// interactive Claude is just another Claude-side harness, so it
+    /// belongs alongside `ClaudeCode` for exactly those kinds. Every
+    /// other kind ignores the flag and returns the static matrix
+    /// unchanged.
+    ///
+    /// Used by the Settings runtime picker (so the dropdown actually
+    /// lists the option when the flag is on) and by
+    /// `set_agent_backend_runtime_harness` (so the persistence
+    /// validator doesn't reject a sanctioned value). The static-slice
+    /// [`available_harnesses`] still gates the gateway-hash key and
+    /// the Pi-disabled downgrade because those flows want the matrix
+    /// shape, not the experimental gate.
+    pub fn available_harnesses_with_interactive(
+        self,
+        claude_interactive_enabled: bool,
+    ) -> Vec<AgentBackendRuntimeHarness> {
+        let mut harnesses: Vec<AgentBackendRuntimeHarness> = self.available_harnesses().to_vec();
+        if claude_interactive_enabled
+            && matches!(
+                self,
+                Self::Anthropic | Self::CustomAnthropic | Self::CodexSubscription
+            )
+        {
+            harnesses.push(AgentBackendRuntimeHarness::ClaudeInteractive);
+        }
+        harnesses
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -136,6 +180,11 @@ impl AgentBackendKind {
 pub enum AgentBackendRuntimeHarness {
     #[default]
     ClaudeCode,
+    /// Interactive `claude` running inside an `InteractiveHost` (tmux on
+    /// Unix, sidecar elsewhere). Gated on the `claudeInteractiveEnabled`
+    /// experimental flag — see
+    /// [`AgentBackendConfig::effective_harness_kind`].
+    ClaudeInteractive,
     CodexAppServer,
     #[cfg(feature = "pi-sdk")]
     PiSdk,
@@ -240,6 +289,51 @@ impl AgentBackendConfig {
         match self.runtime_harness {
             Some(harness) if self.kind.available_harnesses().contains(&harness) => harness,
             _ => self.kind.default_harness(),
+        }
+    }
+
+    /// Map the persisted runtime selection onto the internal
+    /// [`crate::agent::AgentHarnessKind`] the chat dispatcher uses to
+    /// pick a session-protocol implementation.
+    ///
+    /// `ClaudeInteractive` is special: it's gated on the experimental
+    /// `claudeInteractiveEnabled` flag and is intentionally absent from
+    /// `available_harnesses()` (which keeps the UI runtime selector
+    /// honest for non-experimental users). The resolver therefore reads
+    /// `runtime_harness` directly here — bypassing the
+    /// `available_harnesses` filter — but only when the flag is on. If
+    /// the flag is off and the user has somehow pinned
+    /// `ClaudeInteractive` (downgrade, hand-edited DB, etc.), we fall
+    /// back to the kind's default harness rather than dispatch into a
+    /// disabled experiment.
+    pub fn effective_harness_kind(
+        &self,
+        claude_interactive_enabled: bool,
+    ) -> crate::agent::AgentHarnessKind {
+        if claude_interactive_enabled
+            && matches!(
+                self.runtime_harness,
+                Some(AgentBackendRuntimeHarness::ClaudeInteractive)
+            )
+        {
+            return crate::agent::AgentHarnessKind::ClaudeInteractive;
+        }
+        match self.effective_harness() {
+            AgentBackendRuntimeHarness::ClaudeCode => crate::agent::AgentHarnessKind::ClaudeCode,
+            AgentBackendRuntimeHarness::ClaudeInteractive => {
+                // `effective_harness()` is filtered by `available_harnesses()`,
+                // which never lists `ClaudeInteractive` today, so this
+                // arm is unreachable in production. Keep it explicit
+                // (over `unreachable!()`) so a future broadening of the
+                // allow-list doesn't silently panic — falling back to
+                // ClaudeCode matches the gate-off behavior above.
+                crate::agent::AgentHarnessKind::ClaudeCode
+            }
+            AgentBackendRuntimeHarness::CodexAppServer => {
+                crate::agent::AgentHarnessKind::CodexAppServer
+            }
+            #[cfg(feature = "pi-sdk")]
+            AgentBackendRuntimeHarness::PiSdk => crate::agent::AgentHarnessKind::PiSdk,
         }
     }
 }
@@ -682,6 +776,113 @@ mod tests {
         }
     }
 
+    #[test]
+    fn available_harnesses_with_interactive_omits_interactive_when_flag_off() {
+        // Flag off → identical to the static matrix shape, for every
+        // kind. This is the back-compat baseline that callers without
+        // the flag value (Pi-disabled downgrade, gateway-hash key) rely
+        // on implicitly.
+        let kinds = [
+            AgentBackendKind::Anthropic,
+            AgentBackendKind::CustomAnthropic,
+            AgentBackendKind::CodexSubscription,
+            AgentBackendKind::Ollama,
+            AgentBackendKind::LmStudio,
+            AgentBackendKind::OpenAiApi,
+            AgentBackendKind::CustomOpenAi,
+            AgentBackendKind::CodexNative,
+            #[cfg(feature = "pi-sdk")]
+            AgentBackendKind::PiSdk,
+        ];
+        for kind in kinds {
+            assert_eq!(
+                kind.available_harnesses_with_interactive(false),
+                kind.available_harnesses().to_vec(),
+                "{kind:?}::available_harnesses_with_interactive(false) must match the static matrix",
+            );
+            assert!(
+                !kind
+                    .available_harnesses_with_interactive(false)
+                    .contains(&AgentBackendRuntimeHarness::ClaudeInteractive),
+                "{kind:?} must never expose ClaudeInteractive when the flag is off",
+            );
+        }
+    }
+
+    #[test]
+    fn available_harnesses_with_interactive_appends_for_claude_flavored_kinds() {
+        // Flag on → the three Claude-CLI-locked kinds gain
+        // ClaudeInteractive as a second option, appended after the
+        // existing ClaudeCode entry so the kind's default stays first.
+        for kind in [
+            AgentBackendKind::Anthropic,
+            AgentBackendKind::CustomAnthropic,
+            AgentBackendKind::CodexSubscription,
+        ] {
+            let harnesses = kind.available_harnesses_with_interactive(true);
+            assert_eq!(
+                harnesses,
+                vec![
+                    AgentBackendRuntimeHarness::ClaudeCode,
+                    AgentBackendRuntimeHarness::ClaudeInteractive,
+                ],
+                "{kind:?} should expose ClaudeCode then ClaudeInteractive when the flag is on",
+            );
+        }
+    }
+
+    #[test]
+    fn available_harnesses_with_interactive_skips_non_claude_kinds_even_with_flag() {
+        // ClaudeInteractive is a Claude-runtime variant — Pi / Ollama /
+        // LM Studio / OpenAI / CodexNative must never offer it,
+        // regardless of the flag. Otherwise the runtime picker would
+        // dangle an option the resolver can't honor (Pi can't host an
+        // interactive Claude session against user OAuth).
+        let kinds = [
+            AgentBackendKind::Ollama,
+            AgentBackendKind::LmStudio,
+            AgentBackendKind::OpenAiApi,
+            AgentBackendKind::CustomOpenAi,
+            AgentBackendKind::CodexNative,
+            #[cfg(feature = "pi-sdk")]
+            AgentBackendKind::PiSdk,
+        ];
+        for kind in kinds {
+            let harnesses = kind.available_harnesses_with_interactive(true);
+            assert!(
+                !harnesses.contains(&AgentBackendRuntimeHarness::ClaudeInteractive),
+                "{kind:?} must not expose ClaudeInteractive even when the flag is on",
+            );
+            // And the rest of the list stays exactly the static matrix.
+            assert_eq!(
+                harnesses,
+                kind.available_harnesses().to_vec(),
+                "{kind:?}::available_harnesses_with_interactive(true) must match the static matrix",
+            );
+        }
+    }
+
+    #[test]
+    fn effective_harness_kind_round_trips_claude_interactive_override() {
+        // Full round-trip: user picks ClaudeInteractive (which the
+        // persistence validator allows only when the flag is on), the
+        // override is persisted as `runtime_harness =
+        // Some(ClaudeInteractive)`, and `effective_harness_kind(true)`
+        // dispatches to the interactive harness. Flipping the flag off
+        // falls back to the kind's default — defense-in-depth against a
+        // stale override surviving a downgrade.
+        let mut backend = AgentBackendConfig::builtin_anthropic();
+        backend.runtime_harness = Some(AgentBackendRuntimeHarness::ClaudeInteractive);
+        assert_eq!(
+            backend.effective_harness_kind(true),
+            crate::agent::AgentHarnessKind::ClaudeInteractive,
+        );
+        assert_eq!(
+            backend.effective_harness_kind(false),
+            crate::agent::AgentHarnessKind::ClaudeCode,
+        );
+    }
+
     #[cfg(feature = "pi-sdk")]
     #[test]
     fn pi_sdk_kind_locked_to_pi_harness() {
@@ -749,6 +950,7 @@ mod tests {
     fn harness_serde_name(harness: AgentBackendRuntimeHarness) -> &'static str {
         match harness {
             AgentBackendRuntimeHarness::ClaudeCode => "claude_code",
+            AgentBackendRuntimeHarness::ClaudeInteractive => "claude_interactive",
             AgentBackendRuntimeHarness::CodexAppServer => "codex_app_server",
             AgentBackendRuntimeHarness::PiSdk => "pi_sdk",
         }
