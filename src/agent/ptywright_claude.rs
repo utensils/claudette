@@ -74,8 +74,7 @@ impl PtywrightClaudeSession {
         let handle = tokio::task::spawn_blocking(move || {
             let mut target = ptywright::Target::new(claude_program.clone())
                 .args(target_args)
-                .cwd(working_dir)
-                .size(ptywright::TerminalSize::new(60, 200));
+                .cwd(working_dir);
             target = apply_start_env(target, &settings, workspace_env.as_ref());
 
             let session = ptywright::Session::spawn(ptywright::SessionConfig::new(target))
@@ -254,9 +253,15 @@ impl PtywrightClaudeSession {
             let mut guard = handle
                 .lock()
                 .map_err(|_| "ptywright handle lock poisoned".to_string())?;
-            guard
+            let cancel_result = guard
                 .send("cancel", json!({}))
-                .map_err(|e| format!("Failed to cancel ptywright Claude turn: {e}"))?;
+                .map_err(|e| format!("Failed to cancel ptywright Claude turn: {e}"));
+            let terminate_result = guard
+                .session()
+                .terminate(Duration::from_secs(2))
+                .map_err(|e| format!("Failed to terminate ptywright Claude session: {e}"));
+            cancel_result?;
+            terminate_result?;
             Ok::<_, String>(())
         })
         .await
@@ -373,6 +378,7 @@ fn wait_for_turn_state(
                 last_meaningful_growth_at = Instant::now();
             } else if last_meaningful_growth_at.elapsed() >= THINKING_STUCK_TIMEOUT {
                 let _ = handle.send("cancel", json!({}));
+                let _ = handle.session().terminate(Duration::from_secs(2));
                 return Err(format!(
                     "ptywright Claude turn got stuck: no meaningful PTY output for {}s while classifier reported `thinking`",
                     THINKING_STUCK_TIMEOUT.as_secs()
