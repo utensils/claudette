@@ -474,6 +474,10 @@ function renderRoutingBadge(
   if (runtimeHarness === "pi_sdk") {
     label = t("model_picker_routing_via_pi", { defaultValue: "via Pi" });
     className = `${styles.routingBadge} ${styles.routingBadgePi}`;
+  } else if (runtimeHarness === "ptywright_claude") {
+    label = t("model_picker_routing_via_ptywright", {
+      defaultValue: "via ptywright",
+    });
   } else if (runtimeHarness === "claude_code") {
     label = t("model_picker_routing_via_claude_cli", {
       defaultValue: "via Claude CLI",

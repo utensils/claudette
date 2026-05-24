@@ -76,6 +76,11 @@ export interface SettingsSlice {
   /// Codex Native alt-backend support without Pi).
   piSdkAvailable: boolean;
   setPiSdkAvailable: (available: boolean) => void;
+  /// Whether the experimental ptywright Claude harness was compiled
+  /// into this binary. The UI uses this to hide the ptywright runtime
+  /// option in normal builds.
+  ptywrightClaudeAvailable: boolean;
+  setPtywrightClaudeAvailable: (available: boolean) => void;
   alternativeBackendsEnabled: boolean;
   setAlternativeBackendsEnabled: (enabled: boolean) => void;
   codexEnabled: boolean;
@@ -198,6 +203,9 @@ export const createSettingsSlice: StateCreator<
     })),
   piSdkAvailable: false,
   setPiSdkAvailable: (available) => set({ piSdkAvailable: available }),
+  ptywrightClaudeAvailable: false,
+  setPtywrightClaudeAvailable: (available) =>
+    set({ ptywrightClaudeAvailable: available }),
   alternativeBackendsEnabled: false,
   setAlternativeBackendsEnabled: (enabled) =>
     set((state) => ({

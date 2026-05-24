@@ -205,6 +205,7 @@
   "models_backend_filter_no_match": "No models match this filter",
   "models_backend_runtime_label": "Runtime",
   "models_backend_runtime_claude_cli_label": "Claude CLI",
+  "models_backend_runtime_ptywright_claude_label": "ptywright Claude",
   "models_backend_runtime_pi_label": "Pi",
   "models_backend_runtime_codex_app_server_label": "Codex app-server",
   "models_backend_runtime_default_suffix": "default",

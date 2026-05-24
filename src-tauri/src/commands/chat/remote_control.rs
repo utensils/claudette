@@ -306,6 +306,8 @@ fn remote_control_requires_claude_cli_message(harness: AgentBackendRuntimeHarnes
         AgentBackendRuntimeHarness::CodexAppServer => "Codex app-server",
         #[cfg(feature = "pi-sdk")]
         AgentBackendRuntimeHarness::PiSdk => "Pi SDK",
+        #[cfg(feature = "ptywright-claude")]
+        AgentBackendRuntimeHarness::PtywrightClaude => "ptywright Claude",
     };
     format!(
         "Claude Remote Control requires the Claude CLI runtime, but this backend is configured to run through the {harness_label} runtime. \

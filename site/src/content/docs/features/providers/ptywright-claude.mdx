@@ -1,0 +1,51 @@
+---
+title: ptywright Claude Runtime
+description: Experimental Claude Code runtime that drives the interactive Claude TUI through ptywright instead of using claude -p.
+---
+
+The ptywright Claude runtime is an experimental, compile-time feature for the built-in **Claude Code** provider. It runs the real interactive `claude` TUI in a hidden PTY and drives it with ptywright's `claude-code` Lua plugin instead of spawning the non-interactive `claude -p` / Agent SDK path.
+
+This exists because Anthropic's published Claude Code docs and Help Center describe a June 15, 2026 billing split: Agent SDK and `claude -p` usage move to a separate monthly Agent SDK credit, while interactive Claude Code stays on normal subscription usage. Claudette's ptywright runtime is the migration path for keeping Claude Code subscription auth while avoiding the print-mode execution surface.
+
+## Availability
+
+This runtime only appears in builds compiled with the `ptywright-claude` Cargo feature.
+
+When enabled:
+
+1. Open **Settings > Models**.
+2. Find the **Claude Code** backend card.
+3. Change **Runtime** from **Claude CLI** to **ptywright Claude**.
+
+The default remains **Claude CLI**. Picking the default clears the stored override so future default-policy changes can apply cleanly.
+
+## Current Scope
+
+Implemented in the first integration pass:
+
+- Local path dependency on `../ptywright`.
+- Feature-gated `PtywrightClaude` harness in the Rust backend runtime matrix.
+- Runtime selector support in Settings.
+- Hidden PTY spawn of interactive `claude` at 60x200, with classifier-stable Claude Code environment variables.
+- Prompt submission through ptywright's built-in `claude-code` plugin.
+- Basic completed-turn detection and synthetic assistant/result events back into Claudette.
+- Cancel and mid-turn steer wiring through ptywright intents.
+
+Still intentionally reduced fidelity:
+
+- Attachments are rejected before persistence.
+- MCP config injection and the built-in `send_to_user` bridge are not wired yet.
+- Claude Remote Control is unsupported on this runtime.
+- Native compaction is unsupported; switch back to Claude CLI for `/compact`.
+- Permission prompts are observed by ptywright but not yet bridged into Claudette's host approval UI.
+- Streaming is screen-snapshot based, not stream-json parity.
+
+## Rollout Plan
+
+Phase 1 keeps the runtime hidden behind `ptywright-claude` and focuses on safe process lifecycle: spawn, send one turn, detect completion, cancel, and cleanly switch back to Claude CLI.
+
+Phase 2 should map ptywright classifier states into Claudette-native events: permission prompts, plan approval, trust dialogs, model picker state, login prompts, usage panels, and structured errors.
+
+Phase 3 should add parity features: attachment intent support, `send_to_user` delivery, MCP bridge injection where feasible, transcript-quality answer extraction, and smoke tests using ptywright fixtures.
+
+Phase 4 can flip product defaults only after long-session soak testing shows the hidden PTY path preserves current Claude Code behavior across resume, model changes, worktree switches, cancellation, and app restarts.

@@ -76,7 +76,11 @@ export async function applySelectedModel(
     store.alternativeBackendsEnabled,
     store.agentBackends,
     store.codexEnabled,
-    { isClaudeOauthSubscriber, piSdkAvailable: store.piSdkAvailable },
+    {
+      isClaudeOauthSubscriber,
+      piSdkAvailable: store.piSdkAvailable,
+      ptywrightClaudeAvailable: store.ptywrightClaudeAvailable,
+    },
   );
 
   const prevModel = store.selectedModel[sessionId];

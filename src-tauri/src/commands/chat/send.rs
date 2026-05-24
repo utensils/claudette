@@ -2,6 +2,8 @@ use std::sync::Arc;
 
 use tauri::{AppHandle, Emitter, Manager, State};
 
+#[cfg(feature = "ptywright-claude")]
+use claudette::agent::PtywrightClaudeSession;
 use claudette::agent::background::{
     AgentBackgroundTaskEventKind, parse_background_task_binding, parse_task_notification,
 };
@@ -897,6 +899,13 @@ pub(super) fn pi_attachment_unsupported_message() -> &'static str {
      in Settings → Models → Runtime."
 }
 
+#[cfg(feature = "ptywright-claude")]
+pub(super) fn ptywright_attachment_unsupported_message() -> &'static str {
+    "The ptywright Claude harness does not yet support file attachments. \
+     Remove the attachments or switch this backend's runtime to Claude CLI \
+     in Settings → Models → Runtime."
+}
+
 /// Surface harness/attachment incompatibility *before* a turn is
 /// persisted. The Pi sidecar's `send_turn` / `steer_turn` reject
 /// non-empty attachment slices because Pi has no file-upload API
@@ -916,7 +925,11 @@ pub(super) fn ensure_harness_accepts_attachments(
     if harness == AgentBackendRuntimeHarness::PiSdk {
         return Err(pi_attachment_unsupported_message().to_string());
     }
-    #[cfg(not(feature = "pi-sdk"))]
+    #[cfg(feature = "ptywright-claude")]
+    if harness == AgentBackendRuntimeHarness::PtywrightClaude {
+        return Err(ptywright_attachment_unsupported_message().to_string());
+    }
+    #[cfg(all(not(feature = "pi-sdk"), not(feature = "ptywright-claude")))]
     let _ = harness;
     Ok(())
 }
@@ -2122,6 +2135,23 @@ pub async fn send_chat_message(
                     .await?;
                     Ok::<Arc<AgentSession>, String>(Arc::new(AgentSession::from_pi_sdk(started)))
                 }
+                #[cfg(feature = "ptywright-claude")]
+                AgentBackendRuntimeHarness::PtywrightClaude => {
+                    let started = PtywrightClaudeSession::start(PersistentSessionStart {
+                        working_dir: std::path::Path::new(&worktree),
+                        session_id: &sid,
+                        is_resume,
+                        allowed_tools: &tools,
+                        custom_instructions: instructions.as_deref(),
+                        settings: &settings,
+                        workspace_env: Some(&env),
+                        resolved_env: Some(&resolved),
+                    })
+                    .await?;
+                    Ok::<Arc<AgentSession>, String>(Arc::new(AgentSession::from_ptywright_claude(
+                        started,
+                    )))
+                }
             }
         }
     };
@@ -2198,6 +2228,8 @@ pub async fn send_chat_message(
                     AgentBackendRuntimeHarness::CodexAppServer => None,
                     #[cfg(feature = "pi-sdk")]
                     AgentBackendRuntimeHarness::PiSdk => None,
+                    #[cfg(feature = "ptywright-claude")]
+                    AgentBackendRuntimeHarness::PtywrightClaude => None,
                 };
                 if let Some(bridge) = bridge.as_ref()
                     && matches!(
@@ -2385,6 +2417,8 @@ pub async fn send_chat_message(
             AgentBackendRuntimeHarness::CodexAppServer => None,
             #[cfg(feature = "pi-sdk")]
             AgentBackendRuntimeHarness::PiSdk => None,
+            #[cfg(feature = "ptywright-claude")]
+            AgentBackendRuntimeHarness::PtywrightClaude => None,
         };
         if let Some(bridge) = bridge.as_ref()
             && matches!(
@@ -4025,6 +4059,18 @@ mod tests {
         assert!(ensure_harness_accepts_attachments(AgentBackendRuntimeHarness::PiSdk, &[]).is_ok());
     }
 
+    #[cfg(feature = "ptywright-claude")]
+    #[test]
+    fn ptywright_harness_rejects_attachment_before_persist() {
+        let atts = vec![dummy_attachment()];
+        let err =
+            ensure_harness_accepts_attachments(AgentBackendRuntimeHarness::PtywrightClaude, &atts)
+                .expect_err("ptywright Claude + attachments must error pre-persist");
+        assert_eq!(err, ptywright_attachment_unsupported_message());
+        assert!(err.contains("Claude CLI"));
+        assert!(err.contains("Settings → Models → Runtime"));
+    }
+
     #[test]
     fn claude_code_harness_accepts_attachments() {
         // Sister-case to the Pi guard — Claude CLI fully supports image
@@ -4039,7 +4085,8 @@ mod tests {
     #[test]
     fn codex_app_server_harness_accepts_attachments() {
         // Codex app-server has its own attachment plumbing; the
-        // attachment guard only flags Pi.
+        // attachment guard only flags harnesses that do not have an
+        // attachment path yet.
         let atts = vec![dummy_attachment()];
         assert!(
             ensure_harness_accepts_attachments(AgentBackendRuntimeHarness::CodexAppServer, &atts)

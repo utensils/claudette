@@ -127,6 +127,7 @@ windows = { version = "0.61", features = [
 # stops looking for the `claudette-pi-harness` sidecar.
 default = ["server", "voice", "devtools", "alternative-backends", "pi-sdk"]
 alternative-backends = []
+ptywright-claude = ["claudette/ptywright-claude"]
 pi-sdk = ["claudette/pi-sdk"]
 devtools = ["tauri/devtools"]
 server = ["dep:claudette-server"]

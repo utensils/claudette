@@ -554,5 +554,7 @@ fn harness_hash_key(harness: AgentBackendRuntimeHarness) -> &'static str {
         AgentBackendRuntimeHarness::CodexAppServer => "codex_app_server",
         #[cfg(feature = "pi-sdk")]
         AgentBackendRuntimeHarness::PiSdk => "pi_sdk",
+        #[cfg(feature = "ptywright-claude")]
+        AgentBackendRuntimeHarness::PtywrightClaude => "ptywright_claude",
     }
 }

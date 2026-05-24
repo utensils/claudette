@@ -101,7 +101,20 @@ impl AgentBackendKind {
     /// this list is rejected by the resolver as defense-in-depth.
     pub fn available_harnesses(self) -> &'static [AgentBackendRuntimeHarness] {
         match self {
-            Self::Anthropic | Self::CustomAnthropic | Self::CodexSubscription => {
+            Self::Anthropic => {
+                #[cfg(feature = "ptywright-claude")]
+                {
+                    &[
+                        AgentBackendRuntimeHarness::ClaudeCode,
+                        AgentBackendRuntimeHarness::PtywrightClaude,
+                    ]
+                }
+                #[cfg(not(feature = "ptywright-claude"))]
+                {
+                    &[AgentBackendRuntimeHarness::ClaudeCode]
+                }
+            }
+            Self::CustomAnthropic | Self::CodexSubscription => {
                 &[AgentBackendRuntimeHarness::ClaudeCode]
             }
             #[cfg(feature = "pi-sdk")]
@@ -139,6 +152,8 @@ pub enum AgentBackendRuntimeHarness {
     CodexAppServer,
     #[cfg(feature = "pi-sdk")]
     PiSdk,
+    #[cfg(feature = "ptywright-claude")]
+    PtywrightClaude,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -665,17 +680,32 @@ mod tests {
     }
 
     #[test]
-    fn anthropic_kind_only_allows_claude_code_harness() {
-        // Guard against accidental Pi opt-in for Claude subscription
-        // users — Pi must never route the user's OAuth tokens.
+    fn subscription_kinds_do_not_allow_non_claude_subprocess_harnesses() {
+        // Guard against accidental Pi opt-in for Claude/Codex
+        // subscription users — Pi must never route OAuth tokens. The
+        // ptywright experiment is only allowed on the first-party
+        // Anthropic/Claude Code card because it still drives the real
+        // interactive Claude Code CLI.
+        #[cfg(feature = "pi-sdk")]
+        assert!(
+            !AgentBackendKind::Anthropic
+                .available_harnesses()
+                .contains(&AgentBackendRuntimeHarness::PiSdk)
+        );
+
+        #[cfg(feature = "ptywright-claude")]
+        assert!(
+            AgentBackendKind::Anthropic
+                .available_harnesses()
+                .contains(&AgentBackendRuntimeHarness::PtywrightClaude)
+        );
+
         for kind in [
-            AgentBackendKind::Anthropic,
             AgentBackendKind::CustomAnthropic,
             AgentBackendKind::CodexSubscription,
         ] {
-            let harnesses = kind.available_harnesses();
             assert_eq!(
-                harnesses,
+                kind.available_harnesses(),
                 &[AgentBackendRuntimeHarness::ClaudeCode],
                 "{kind:?} must lock to ClaudeCode-only",
             );
@@ -751,6 +781,8 @@ mod tests {
             AgentBackendRuntimeHarness::ClaudeCode => "claude_code",
             AgentBackendRuntimeHarness::CodexAppServer => "codex_app_server",
             AgentBackendRuntimeHarness::PiSdk => "pi_sdk",
+            #[cfg(feature = "ptywright-claude")]
+            AgentBackendRuntimeHarness::PtywrightClaude => "ptywright_claude",
         }
     }
 
@@ -833,6 +865,11 @@ mod tests {
                         panic!("fixture `{name}.available` must be strings only")
                     })
                 })
+                .collect();
+            #[cfg(not(feature = "ptywright-claude"))]
+            let fixture_available: Vec<&str> = fixture_available
+                .into_iter()
+                .filter(|harness| *harness != "ptywright_claude")
                 .collect();
             let rust_available: Vec<&str> = kind
                 .available_harnesses()

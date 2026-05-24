@@ -1560,6 +1560,9 @@ pub struct HostEnvFlags {
     /// `false`, even if `alternative_backends_compiled` is `true` (a
     /// build can ship Codex Native alt-backend support without Pi).
     pub pi_sdk_compiled: bool,
+    /// Reports whether the experimental ptywright Claude harness was
+    /// compiled into this binary.
+    pub ptywright_claude_compiled: bool,
 }
 
 /// Return environment-derived flags from the host process. Unlike app
@@ -1571,6 +1574,7 @@ pub fn get_host_env_flags() -> HostEnvFlags {
         disable_1m_context: std::env::var("CLAUDE_CODE_DISABLE_1M_CONTEXT").is_ok(),
         alternative_backends_compiled: cfg!(feature = "alternative-backends"),
         pi_sdk_compiled: cfg!(feature = "pi-sdk"),
+        ptywright_claude_compiled: cfg!(feature = "ptywright-claude"),
     }
 }
 

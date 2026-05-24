@@ -20,6 +20,8 @@ const appStore = vi.hoisted(() => ({
   setAlternativeBackendsEnabled: vi.fn(),
   codexEnabled: true,
   setCodexEnabled: vi.fn(),
+  piSdkAvailable: true,
+  ptywrightClaudeAvailable: false,
   agentBackends: [] as AgentBackendConfig[],
   setAgentBackends: vi.fn((backends: AgentBackendConfig[]) => {
     appStore.agentBackends = backends;
@@ -88,6 +90,7 @@ const serviceMocks = vi.hoisted(() => ({
   availableHarnessesForKind: (kind: AgentBackendConfig["kind"]) => {
     switch (kind) {
       case "anthropic":
+        return ["claude_code", "ptywright_claude"] as const;
       case "custom_anthropic":
       case "codex_subscription":
         return ["claude_code"] as const;

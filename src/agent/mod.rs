@@ -11,6 +11,8 @@ pub mod pi_control;
 #[cfg(feature = "pi-sdk")]
 pub mod pi_sdk;
 mod process;
+#[cfg(feature = "ptywright-claude")]
+pub mod ptywright_claude;
 mod session;
 mod types;
 
@@ -41,6 +43,8 @@ pub use pi_control::{PiOAuthSession, PiOAuthStarted, PiProvider, PiProviderList}
 #[cfg(feature = "pi-sdk")]
 pub use pi_sdk::{PiControlEvent, PiSdkModel, PiSdkOptions, PiSdkSession, resolve_pi_harness_path};
 pub use process::{AgentEvent, TurnHandle, run_turn, stop_agent, stop_agent_graceful};
+#[cfg(feature = "ptywright-claude")]
+pub use ptywright_claude::PtywrightClaudeSession;
 pub use session::PersistentSession;
 pub use types::{
     AssistantMessage, CompactMetadata, ContentBlock, ControlRequestInner, ControlResponsePayload,

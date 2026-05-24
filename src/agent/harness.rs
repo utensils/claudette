@@ -6,6 +6,8 @@ use crate::env_provider::ResolvedEnv;
 use super::codex_app_server::CodexAppServerSession;
 #[cfg(feature = "pi-sdk")]
 use super::pi_sdk::PiSdkSession;
+#[cfg(feature = "ptywright-claude")]
+use super::ptywright_claude::PtywrightClaudeSession;
 use super::{
     AgentEvent, AgentSettings, ControlResponsePayload, FileAttachment, PersistentSession,
     TurnHandle,
@@ -18,6 +20,8 @@ pub enum AgentHarnessKind {
     CodexAppServer,
     #[cfg(feature = "pi-sdk")]
     PiSdk,
+    #[cfg(feature = "ptywright-claude")]
+    PtywrightClaude,
 }
 
 /// Capabilities that affect which chat/session features a harness can support
@@ -52,6 +56,18 @@ impl AgentHarnessCapabilities {
             remote_control: false,
             mcp_config: true,
             attachments: true,
+        }
+    }
+
+    #[cfg(feature = "ptywright-claude")]
+    pub const fn ptywright_claude() -> Self {
+        Self {
+            persistent_sessions: true,
+            steer_turn: true,
+            host_permission_prompts: false,
+            remote_control: false,
+            mcp_config: false,
+            attachments: false,
         }
     }
 
@@ -118,6 +134,8 @@ pub enum AgentSession {
     CodexAppServer(CodexAppServerSession),
     #[cfg(feature = "pi-sdk")]
     PiSdk(PiSdkSession),
+    #[cfg(feature = "ptywright-claude")]
+    PtywrightClaude(PtywrightClaudeSession),
 }
 
 impl AgentSession {
@@ -127,6 +145,11 @@ impl AgentSession {
 
     pub fn from_codex_app_server(session: CodexAppServerSession) -> Self {
         Self::CodexAppServer(session)
+    }
+
+    #[cfg(feature = "ptywright-claude")]
+    pub fn from_ptywright_claude(session: PtywrightClaudeSession) -> Self {
+        Self::PtywrightClaude(session)
     }
 
     #[cfg(feature = "pi-sdk")]
@@ -140,6 +163,8 @@ impl AgentSession {
             Self::CodexAppServer(_) => AgentHarnessKind::CodexAppServer,
             #[cfg(feature = "pi-sdk")]
             Self::PiSdk(_) => AgentHarnessKind::PiSdk,
+            #[cfg(feature = "ptywright-claude")]
+            Self::PtywrightClaude(_) => AgentHarnessKind::PtywrightClaude,
         }
     }
 
@@ -149,6 +174,8 @@ impl AgentSession {
             Self::CodexAppServer(_) => AgentHarnessCapabilities::codex_app_server(),
             #[cfg(feature = "pi-sdk")]
             Self::PiSdk(_) => AgentHarnessCapabilities::pi_sdk(),
+            #[cfg(feature = "ptywright-claude")]
+            Self::PtywrightClaude(_) => AgentHarnessCapabilities::ptywright_claude(),
         }
     }
 
@@ -158,6 +185,8 @@ impl AgentSession {
             Self::CodexAppServer(session) => session.pid(),
             #[cfg(feature = "pi-sdk")]
             Self::PiSdk(session) => session.pid(),
+            #[cfg(feature = "ptywright-claude")]
+            Self::PtywrightClaude(session) => session.pid(),
         }
     }
 
@@ -176,6 +205,12 @@ impl AgentSession {
             Self::CodexAppServer(session) => session.send_turn(prompt, attachments).await,
             #[cfg(feature = "pi-sdk")]
             Self::PiSdk(session) => session.send_turn(prompt, attachments).await,
+            #[cfg(feature = "ptywright-claude")]
+            Self::PtywrightClaude(session) => {
+                session
+                    .send_turn_with_uuid(prompt, attachments, user_message_uuid)
+                    .await
+            }
         }
     }
 
@@ -189,6 +224,8 @@ impl AgentSession {
             Self::CodexAppServer(session) => session.steer_turn(prompt, attachments).await,
             #[cfg(feature = "pi-sdk")]
             Self::PiSdk(session) => session.steer_turn(prompt, attachments).await,
+            #[cfg(feature = "ptywright-claude")]
+            Self::PtywrightClaude(session) => session.steer_turn(prompt, attachments).await,
         }
     }
 
@@ -198,6 +235,8 @@ impl AgentSession {
             Self::CodexAppServer(session) => session.subscribe(),
             #[cfg(feature = "pi-sdk")]
             Self::PiSdk(session) => session.subscribe(),
+            #[cfg(feature = "ptywright-claude")]
+            Self::PtywrightClaude(session) => session.subscribe(),
         }
     }
 
@@ -213,6 +252,10 @@ impl AgentSession {
             }
             #[cfg(feature = "pi-sdk")]
             Self::PiSdk(session) => session.send_control_response(request_id, response).await,
+            #[cfg(feature = "ptywright-claude")]
+            Self::PtywrightClaude(_) => Err(format!(
+                "ptywright Claude harness cannot answer control request `{request_id}` yet"
+            )),
         }
     }
 
@@ -224,6 +267,10 @@ impl AgentSession {
             }
             #[cfg(feature = "pi-sdk")]
             Self::PiSdk(_) => Err(format!("Pi SDK harness cannot stop task `{task_id}` yet")),
+            #[cfg(feature = "ptywright-claude")]
+            Self::PtywrightClaude(_) => Err(format!(
+                "ptywright Claude harness cannot stop task `{task_id}` yet"
+            )),
         }
     }
 
@@ -233,6 +280,8 @@ impl AgentSession {
             Self::CodexAppServer(session) => session.interrupt_turn().await,
             #[cfg(feature = "pi-sdk")]
             Self::PiSdk(session) => session.interrupt_turn().await,
+            #[cfg(feature = "ptywright-claude")]
+            Self::PtywrightClaude(session) => session.interrupt_turn().await,
         }
     }
 
@@ -260,6 +309,10 @@ impl AgentSession {
             Self::CodexAppServer(session) => session.start_compact().await,
             #[cfg(feature = "pi-sdk")]
             Self::PiSdk(session) => session.start_compact().await,
+            #[cfg(feature = "ptywright-claude")]
+            Self::PtywrightClaude(_) => {
+                Err("ptywright Claude harness does not support native compaction yet".to_string())
+            }
         }
     }
 
@@ -275,6 +328,10 @@ impl AgentSession {
             #[cfg(feature = "pi-sdk")]
             Self::PiSdk(_) => {
                 Err("Pi SDK harness does not support Claude Remote Control".to_string())
+            }
+            #[cfg(feature = "ptywright-claude")]
+            Self::PtywrightClaude(_) => {
+                Err("ptywright Claude harness does not support Claude Remote Control".to_string())
             }
         }
     }

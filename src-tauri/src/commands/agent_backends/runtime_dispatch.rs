@@ -55,15 +55,21 @@ pub async fn resolve_backend_runtime(
     if !alternative_backends_enabled && !is_always_on_alt_backend(backend.kind) {
         return Ok(AgentBackendRuntime::default());
     }
-    // Anthropic stays a fast-path: no enabled-flag check, no env, no hash.
-    // The Claude CLI inherits the parent process's auth state.
+    // Anthropic stays a fast-path for the normal Claude CLI runtime:
+    // no enabled-flag check, no env, no hash. The ptywright experiment
+    // still needs a hash so changing Runtime forces a process respawn.
     if backend.kind == AgentBackendKind::Anthropic {
+        let dispatch_harness = resolve_dispatch_harness(&backend, &backends);
+        #[cfg(feature = "ptywright-claude")]
+        if dispatch_harness == AgentBackendRuntimeHarness::PtywrightClaude {
+            return Ok(build_ptywright_claude_runtime(&backend));
+        }
         return Ok(AgentBackendRuntime {
             backend_id: Some(backend.id),
-            harness: AgentBackendRuntimeHarness::ClaudeCode,
+            harness: dispatch_harness,
             env: Vec::new(),
             hash: String::new(),
-            // Anthropic stays a Claude CLI path — no model rewrite.
+            // Anthropic stays a local Claude Code path — no model rewrite.
             // None tells the caller to use its original input.
             model: None,
             pi_provider_override: None,
@@ -94,6 +100,8 @@ pub async fn resolve_backend_runtime(
         AgentBackendRuntimeHarness::CodexAppServer => {
             Ok(build_codex_app_server_runtime(&backend, model))
         }
+        #[cfg(feature = "ptywright-claude")]
+        AgentBackendRuntimeHarness::PtywrightClaude => Ok(build_ptywright_claude_runtime(&backend)),
         #[cfg(feature = "pi-sdk")]
         AgentBackendRuntimeHarness::PiSdk => Ok(build_pi_sdk_runtime(&mut backend, model)),
         AgentBackendRuntimeHarness::ClaudeCode => {
@@ -162,6 +170,18 @@ pub(super) fn resolve_dispatch_harness(
     _backends: &[AgentBackendConfig],
 ) -> AgentBackendRuntimeHarness {
     backend.effective_harness()
+}
+
+#[cfg(feature = "ptywright-claude")]
+pub(super) fn build_ptywright_claude_runtime(backend: &AgentBackendConfig) -> AgentBackendRuntime {
+    AgentBackendRuntime {
+        backend_id: Some(backend.id.clone()),
+        harness: AgentBackendRuntimeHarness::PtywrightClaude,
+        env: Vec::new(),
+        hash: runtime_hash(backend, None, None),
+        model: None,
+        pi_provider_override: None,
+    }
 }
 
 pub(super) fn build_codex_app_server_runtime(

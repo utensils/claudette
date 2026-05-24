@@ -21,6 +21,8 @@ function harnessLabelKey(harness: AgentBackendRuntimeHarness): string {
   switch (harness) {
     case "claude_code":
       return "models_backend_runtime_claude_cli_label";
+    case "ptywright_claude":
+      return "models_backend_runtime_ptywright_claude_label";
     case "pi_sdk":
       return "models_backend_runtime_pi_label";
     case "codex_app_server":
@@ -32,6 +34,8 @@ function harnessFallbackLabel(harness: AgentBackendRuntimeHarness): string {
   switch (harness) {
     case "claude_code":
       return "Claude CLI";
+    case "ptywright_claude":
+      return "ptywright Claude";
     case "pi_sdk":
       return "Pi";
     case "codex_app_server":
@@ -51,16 +55,24 @@ function harnessFallbackLabel(harness: AgentBackendRuntimeHarness): string {
 export function RuntimeSelector({ backend, onSaved, onError }: RuntimeSelectorProps) {
   const { t } = useTranslation("settings");
   const piSdkAvailable = useAppStore((s) => s.piSdkAvailable);
+  const ptywrightClaudeAvailable = useAppStore(
+    (s) => s.ptywrightClaudeAvailable,
+  );
   const harnesses = useMemo(() => {
-    const all = availableHarnessesForKind(backend.kind);
+    let all = availableHarnessesForKind(backend.kind);
     // Hide the Pi runtime option entirely on builds that didn't
     // compile the Pi harness in — the dispatcher would fall back to
     // ClaudeCode anyway, but exposing the option here would let the
     // user pin a setting that has no effect.
-    return piSdkAvailable ? all : all.filter((h) => h !== "pi_sdk");
-  }, [backend.kind, piSdkAvailable]);
+    if (!piSdkAvailable) all = all.filter((h) => h !== "pi_sdk");
+    if (!ptywrightClaudeAvailable) {
+      all = all.filter((h) => h !== "ptywright_claude");
+    }
+    return all;
+  }, [backend.kind, piSdkAvailable, ptywrightClaudeAvailable]);
   const defaultHarness = defaultHarnessForKind(backend.kind);
-  const current = effectiveHarness(backend);
+  const effective = effectiveHarness(backend);
+  const current = harnesses.includes(effective) ? effective : defaultHarness;
   const piEnabled = useAppStore((s) =>
     s.agentBackends.some((b) => b.kind === "pi_sdk" && b.enabled),
   );

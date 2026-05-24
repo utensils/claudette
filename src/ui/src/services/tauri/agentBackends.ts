@@ -33,11 +33,14 @@ export interface AgentBackendModel {
  *
  *  - `claude_code` — the bundled Claude CLI (with `ANTHROPIC_BASE_URL` /
  *    gateway env when the backend isn't Anthropic itself).
+ *  - `ptywright_claude` — experimental hidden-PTY Claude Code driver that
+ *    uses interactive Claude Code rather than `claude -p`.
  *  - `codex_app_server` — the Codex CLI's debug app-server.
  *  - `pi_sdk` — Claudette's bundled Pi sidecar.
  */
 export type AgentBackendRuntimeHarness =
   | "claude_code"
+  | "ptywright_claude"
   | "codex_app_server"
   | "pi_sdk";
 
@@ -169,6 +172,7 @@ export function availableHarnessesForKind(
 ): AgentBackendRuntimeHarness[] {
   switch (kind) {
     case "anthropic":
+      return ["claude_code", "ptywright_claude"];
     case "custom_anthropic":
     case "codex_subscription":
       return ["claude_code"];

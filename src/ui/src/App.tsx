@@ -93,6 +93,9 @@ function App() {
   const setDisable1mContext = useAppStore((s) => s.setDisable1mContext);
   const setAlternativeBackendsAvailable = useAppStore((s) => s.setAlternativeBackendsAvailable);
   const setPiSdkAvailable = useAppStore((s) => s.setPiSdkAvailable);
+  const setPtywrightClaudeAvailable = useAppStore(
+    (s) => s.setPtywrightClaudeAvailable,
+  );
   const setAlternativeBackendsEnabled = useAppStore((s) => s.setAlternativeBackendsEnabled);
   const setCodexEnabled = useAppStore((s) => s.setCodexEnabled);
   const setAgentBackends = useAppStore((s) => s.setAgentBackends);
@@ -415,12 +418,13 @@ function App() {
         const flags =
           flagsResult.status === "fulfilled"
             ? flagsResult.value
-            : { alternative_backends_compiled: false, disable_1m_context: false, pi_sdk_compiled: false };
+            : { alternative_backends_compiled: false, disable_1m_context: false, pi_sdk_compiled: false, ptywright_claude_compiled: false };
         if (flagsResult.status === "rejected") {
           console.error("Failed to load host environment flags:", flagsResult.reason);
         }
         setAlternativeBackendsAvailable(flags.alternative_backends_compiled);
         setPiSdkAvailable(flags.pi_sdk_compiled);
+        setPtywrightClaudeAvailable(flags.ptywright_claude_compiled);
         if (flags.disable_1m_context) setDisable1mContext(true);
         if (settingResult.status === "rejected") {
           console.error("Failed to load alternative backend setting:", settingResult.reason);
@@ -958,7 +962,7 @@ function App() {
       unlistenMissingCli.then((fn) => fn());
       unlistenMissingWorktree.then((fn) => fn());
     };
-  }, [setRepositories, setWorkspaces, setWorktreeBaseDir, setDefaultTerminalAppId, setWorkspaceAppsMenuShown, setDefaultBranches, setTerminalFontSize, setLastMessages, setRemoteConnections, setDiscoveredServers, setLocalServerRunning, setLocalServerConnectionString, setCurrentThemeId, setThemeMode, setThemeDark, setThemeLight, setUiFontSize, setFontFamilySans, setFontFamilyMono, setSystemFonts, setDetectedApps, setUsageInsightsEnabled, setProjectViewIssuesPrsEnabled, setClaudetteTerminalEnabled, setShowSidebarRunningCommands, setToolDisplayMode, setExtendedToolCallOutput, setAlternativeBackendsAvailable, setPiSdkAvailable, setAlternativeBackendsEnabled, setCodexEnabled, setAgentBackends, setDefaultAgentBackendId, setClaudeAuthMethod, setEditorGitGutterBase, setEditorMinimapEnabled, setRevealActiveFileInTree, setEditorWordWrap, setEditorLineNumbersEnabled, setEditorFontZoom, setDisable1mContext, setAppVersion, setVoiceToggleHotkey, setVoiceHoldHotkey, setKeybindings, setManualWorkspaceOrderByRepo, hydrateWorkspaceScmLinks]);
+  }, [setRepositories, setWorkspaces, setWorktreeBaseDir, setDefaultTerminalAppId, setWorkspaceAppsMenuShown, setDefaultBranches, setTerminalFontSize, setLastMessages, setRemoteConnections, setDiscoveredServers, setLocalServerRunning, setLocalServerConnectionString, setCurrentThemeId, setThemeMode, setThemeDark, setThemeLight, setUiFontSize, setFontFamilySans, setFontFamilyMono, setSystemFonts, setDetectedApps, setUsageInsightsEnabled, setProjectViewIssuesPrsEnabled, setClaudetteTerminalEnabled, setShowSidebarRunningCommands, setToolDisplayMode, setExtendedToolCallOutput, setAlternativeBackendsAvailable, setPiSdkAvailable, setPtywrightClaudeAvailable, setAlternativeBackendsEnabled, setCodexEnabled, setAgentBackends, setDefaultAgentBackendId, setClaudeAuthMethod, setEditorGitGutterBase, setEditorMinimapEnabled, setRevealActiveFileInTree, setEditorWordWrap, setEditorLineNumbersEnabled, setEditorFontZoom, setDisable1mContext, setAppVersion, setVoiceToggleHotkey, setVoiceHoldHotkey, setKeybindings, setManualWorkspaceOrderByRepo, hydrateWorkspaceScmLinks]);
 
   // Live freshness for LM Studio's `loaded_context_length`.
   //

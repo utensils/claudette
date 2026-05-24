@@ -575,8 +575,14 @@ const modelHandler: NativeHandler = {
       return handled;
     }
     const { disable1mContext } = useAppStore.getState();
-    const { alternativeBackendsEnabled, codexEnabled, agentBackends, claudeAuthMethod } =
-      useAppStore.getState();
+    const {
+      alternativeBackendsEnabled,
+      codexEnabled,
+      agentBackends,
+      claudeAuthMethod,
+      piSdkAvailable,
+      ptywrightClaudeAvailable,
+    } = useAppStore.getState();
     // Match every other registry consumer's OAuth Pi-anthropic gate
     // (`ensure_anthropic_not_routed_through_pi_via_oauth` in
     // `agent_backends.rs`). Without this the `/model` command would
@@ -590,7 +596,7 @@ const modelHandler: NativeHandler = {
       alternativeBackendsEnabled,
       agentBackends,
       codexEnabled,
-      { isClaudeOauthSubscriber },
+      { isClaudeOauthSubscriber, piSdkAvailable, ptywrightClaudeAvailable },
     );
     const available = disable1mContext
       ? registry.filter((m) => m.contextWindowTokens < 1_000_000)

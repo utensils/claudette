@@ -96,6 +96,7 @@ export default defineConfig({
             { slug: 'features/providers/lm-studio' },
             { slug: 'features/providers/openai-codex' },
             { slug: 'features/providers/pi' },
+            { slug: 'features/providers/ptywright-claude' },
           ],
         },
         {

@@ -11,6 +11,7 @@ const appStore = vi.hoisted(() => ({
   // to the same shape a real Pi-compiled binary would produce. A
   // dedicated test below pins the no-Pi behaviour.
   piSdkAvailable: true,
+  ptywrightClaudeAvailable: false,
 }));
 
 vi.mock("../../stores/useAppStore", () => {
@@ -44,6 +45,7 @@ const serviceMocks = vi.hoisted(() => ({
   availableHarnessesForKind: (kind: AgentBackendConfig["kind"]) => {
     switch (kind) {
       case "anthropic":
+        return ["claude_code", "ptywright_claude"] as const;
       case "custom_anthropic":
       case "codex_subscription":
         return ["claude_code"] as const;
@@ -122,6 +124,7 @@ function mount(element: React.ReactElement): HTMLElement {
 describe("RuntimeSelector", () => {
   beforeEach(() => {
     appStore.agentBackends = [];
+    appStore.ptywrightClaudeAvailable = false;
     serviceMocks.setAgentBackendRuntimeHarness.mockClear();
     document.body.innerHTML = "";
   });
@@ -143,6 +146,21 @@ describe("RuntimeSelector", () => {
       />,
     );
     expect(container.querySelector("select")).toBeNull();
+  });
+
+  it("shows the ptywright Claude option only when compiled in", () => {
+    appStore.ptywrightClaudeAvailable = true;
+    const container = mount(
+      <RuntimeSelector
+        backend={makeBackend({ kind: "anthropic" })}
+        onSaved={() => {}}
+      />,
+    );
+    const select = container.querySelector("select") as HTMLSelectElement;
+    expect(Array.from(select.options).map((o) => o.value)).toEqual([
+      "claude_code",
+      "ptywright_claude",
+    ]);
   });
 
   it("renders the kind's available harnesses with the default marked", () => {

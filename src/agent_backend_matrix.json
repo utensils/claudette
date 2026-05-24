@@ -3,7 +3,7 @@
   "kinds": {
     "anthropic": {
       "default": "claude_code",
-      "available": ["claude_code"]
+      "available": ["claude_code", "ptywright_claude"]
     },
     "custom_anthropic": {
       "default": "claude_code",

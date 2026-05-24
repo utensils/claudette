@@ -32,7 +32,8 @@ export type Model = {
    *  uniformly. The redundant-badge suppression for Pi-on-Pi /
    *  Codex-on-CodexAppServer lives in `ModelSelector`'s
    *  `runtimeBadge` filter, not here. Possible values:
-   *  `"pi_sdk"`, `"claude_code"`, `"codex_app_server"`. */
+   *  `"pi_sdk"`, `"claude_code"`, `"ptywright_claude"`,
+   *  `"codex_app_server"`. */
   readonly runtimeHarness?: string;
   /** Display label of the *sub-provider* within a Pi-style aggregator
    *  backend (e.g. "OpenAI", "Anthropic", "Ollama"). Parsed from the
@@ -130,7 +131,7 @@ export const DEFAULT_HARNESS_BY_KIND: Readonly<Record<string, string>> = {
  *  override defensively — a stale override outside the allow-list falls
  *  back to the kind's default, same as the Rust resolver does. */
 export const AVAILABLE_HARNESSES_BY_KIND: Readonly<Record<string, readonly string[]>> = {
-  anthropic: ["claude_code"],
+  anthropic: ["claude_code", "ptywright_claude"],
   custom_anthropic: ["claude_code"],
   codex_subscription: ["claude_code"],
   ollama: ["pi_sdk", "claude_code"],
@@ -409,6 +410,12 @@ export interface ModelRegistryOptions {
    * unit-test fixtures keep their full surface without modification.
    */
   piSdkAvailable?: boolean;
+  /**
+   * False when the host binary was built without the experimental
+   * `ptywright-claude` cargo feature. Defaults to `true` for fixture
+   * parity; callers in the live app pass the host flag.
+   */
+  ptywrightClaudeAvailable?: boolean;
 }
 
 export function buildModelRegistry(
@@ -419,6 +426,7 @@ export function buildModelRegistry(
 ): readonly Model[] {
   const isClaudeOauthSubscriber = options.isClaudeOauthSubscriber === true;
   const piSdkAvailable = options.piSdkAvailable !== false;
+  const ptywrightClaudeAvailable = options.ptywrightClaudeAvailable !== false;
   // Pi-disabled downgrade: when no enabled Pi backend exists, non-Pi
   // cards that point at the Pi harness fall through to their first
   // sanctioned non-Pi runtime — same logic as `resolve_dispatch_harness`
@@ -428,7 +436,16 @@ export function buildModelRegistry(
   const piEnabled = backends.some(
     (b) => b.kind === "pi_sdk" && b.enabled,
   );
-  let models: Model[] | undefined;
+  const anthropicBackend = backends.find((b) => b.kind === "anthropic");
+  let models: Model[] | undefined =
+    anthropicBackend &&
+    ptywrightClaudeAvailable &&
+    resolveEffectiveHarness(anthropicBackend, piEnabled) === "ptywright_claude"
+      ? MODELS.map((model) => ({
+          ...model,
+          runtimeHarness: "ptywright_claude",
+        }))
+      : undefined;
   for (const backend of backends) {
     if (!shouldExposeBackendModels(
       backend,
