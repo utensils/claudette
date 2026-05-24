@@ -7,6 +7,7 @@ use tokio::sync::{broadcast, mpsc};
 
 use crate::env::WorkspaceEnv;
 
+use super::args::{build_settings_json, format_redacted_invocation};
 use super::binary::resolve_claude_path;
 use super::process::{AgentEvent, TurnHandle};
 use super::types::{AssistantMessage, ContentBlock, FileAttachment, StreamEvent};
@@ -16,8 +17,10 @@ const COMPLETED_TURN_STABLE_MS: u64 = 300;
 const TURN_TIMEOUT: Duration = Duration::from_secs(60 * 30);
 const STARTUP_READY_TIMEOUT: Duration = Duration::from_secs(20);
 const PASTE_ACK_TIMEOUT: Duration = Duration::from_secs(10);
+const THINKING_STUCK_TIMEOUT: Duration = Duration::from_secs(60);
 const PASTE_REACTION_BYTES: usize = 256;
 const POLL_INTERVAL: Duration = Duration::from_millis(50);
+const GROWTH_SAMPLE_INTERVAL: Duration = Duration::from_secs(1);
 
 type SharedHandle = Arc<Mutex<ptywright::ExtensionHandle>>;
 type SharedCancel = Arc<Mutex<Option<ptywright::CancellationToken>>>;
@@ -64,10 +67,13 @@ impl PtywrightClaudeSession {
         let claude_program = claude_path.to_string_lossy().into_owned();
         let working_dir = params.working_dir.to_path_buf();
         let settings = params.settings.clone();
+        let claude_args = build_ptywright_claude_args(&settings);
+        let target_args = claude_args.clone();
         let workspace_env = params.workspace_env.cloned();
 
         let handle = tokio::task::spawn_blocking(move || {
             let mut target = ptywright::Target::new(claude_program.clone())
+                .args(target_args)
                 .cwd(working_dir)
                 .size(ptywright::TerminalSize::new(60, 200));
             target = apply_start_env(target, &settings, workspace_env.as_ref());
@@ -88,7 +94,10 @@ impl PtywrightClaudeSession {
         .map_err(|e| format!("Failed to initialize ptywright Claude harness: {e}"))??;
 
         let (pid, handle) = handle;
-        let invocation_line = format!("{} # interactive via ptywright", claude_path.display());
+        let invocation_line = format!(
+            "{} # interactive via ptywright",
+            format_redacted_invocation(claude_path.as_os_str(), &claude_args)
+        );
         let (event_tx, _) = broadcast::channel(2048);
 
         Ok(Self {
@@ -181,6 +190,14 @@ impl PtywrightClaudeSession {
                     send_event(&broadcast_tx, &event_tx, result);
                 }
                 Err(error) => {
+                    let assistant = AgentEvent::Stream(StreamEvent::Assistant {
+                        message: AssistantMessage {
+                            content: vec![ContentBlock::Text {
+                                text: error.clone(),
+                            }],
+                        },
+                    });
+                    send_event(&broadcast_tx, &event_tx, assistant);
                     send_event(&broadcast_tx, &event_tx, AgentEvent::Stderr(error.clone()));
                     send_event(
                         &broadcast_tx,
@@ -247,6 +264,31 @@ impl PtywrightClaudeSession {
     }
 }
 
+fn build_ptywright_claude_args(settings: &AgentSettings) -> Vec<String> {
+    let mut args = Vec::new();
+    if let Some(model) = settings.model.as_ref() {
+        args.push("--model".to_string());
+        args.push(model.clone());
+    }
+    if let Some(settings_json) = build_settings_json(settings) {
+        args.push("--settings".to_string());
+        args.push(settings_json);
+    }
+    if let Some(effort) = settings.effort.as_ref()
+        && matches!(effort.as_str(), "low" | "medium" | "high" | "xhigh" | "max")
+    {
+        args.push("--effort".to_string());
+        args.push(effort.clone());
+    }
+    for (name, value) in &settings.extra_claude_flags {
+        args.push(name.clone());
+        if let Some(value) = value {
+            args.push(value.clone());
+        }
+    }
+    args
+}
+
 fn run_ptywright_turn(
     handle: &SharedHandle,
     prompt: &str,
@@ -257,9 +299,7 @@ fn run_ptywright_turn(
         .map_err(|_| "ptywright handle lock poisoned".to_string())?;
     prepare_for_prompt(&mut guard)?;
     submit_prompt(&mut guard, prompt)?;
-    let (state, _) = guard
-        .wait_with_cancel("wait_turn_matcher", json!({}), TURN_TIMEOUT, cancel)
-        .map_err(|e| format!("ptywright Claude turn failed: {e}"))?;
+    let state = wait_for_turn_state(&mut guard, cancel)?;
 
     match state.state.as_str() {
         "completed_turn" => {
@@ -286,6 +326,83 @@ fn run_ptywright_turn(
         )),
         _ => Ok(extract_turn_answer(&guard, &state, prompt)),
     }
+}
+
+fn wait_for_turn_state(
+    handle: &mut ptywright::ExtensionHandle,
+    cancel: &ptywright::CancellationToken,
+) -> Result<ptywright::ExtensionStateSnapshot, String> {
+    let deadline = Instant::now() + TURN_TIMEOUT;
+    let mut last_state: Option<ptywright::ExtensionStateSnapshot> = None;
+    let mut growth_baseline = handle.session().transcript().len();
+    let mut last_meaningful_growth_at = Instant::now();
+    let mut last_growth_sample_at = Instant::now();
+    while Instant::now() < deadline {
+        if cancel.is_cancelled() {
+            return Err("ptywright Claude turn failed: wait cancelled".to_string());
+        }
+        let mut state = handle
+            .try_state()
+            .map_err(|e| format!("Failed to inspect ptywright Claude turn state: {e}"))?;
+        tracing::trace!(
+            target: "claudette::agent",
+            ptywright_state = %state.state,
+            evidence = %state.evidence,
+            "ptywright Claude turn poll"
+        );
+        let screen = handle.session().snapshot().plain_text;
+        if answer_looks_like_claude_error(&screen) {
+            return Err(format!(
+                "ptywright Claude reported an error: {}",
+                extract_visible_answer(&screen, &state.evidence)
+            ));
+        }
+        if state.state == "thinking" && screen.lines().any(|line| is_completion_marker(line.trim()))
+        {
+            state.state = "completed_turn".to_string();
+            if state.evidence.is_empty() {
+                state.evidence = "completion marker observed in screen".to_string();
+            }
+            return Ok(state);
+        }
+        if state.state == "thinking" && last_growth_sample_at.elapsed() >= GROWTH_SAMPLE_INTERVAL {
+            last_growth_sample_at = Instant::now();
+            let transcript_len = handle.session().transcript().len();
+            if transcript_len.saturating_sub(growth_baseline) >= PASTE_REACTION_BYTES {
+                growth_baseline = transcript_len;
+                last_meaningful_growth_at = Instant::now();
+            } else if last_meaningful_growth_at.elapsed() >= THINKING_STUCK_TIMEOUT {
+                let _ = handle.send("cancel", json!({}));
+                return Err(format!(
+                    "ptywright Claude turn got stuck: no meaningful PTY output for {}s while classifier reported `thinking`",
+                    THINKING_STUCK_TIMEOUT.as_secs()
+                ));
+            }
+        }
+        match state.state.as_str() {
+            "completed_turn"
+            | "error"
+            | "waiting_for_permission"
+            | "waiting_for_enter_plan_mode"
+            | "waiting_for_plan_approval"
+            | "waiting_for_trust"
+            | "waiting_for_model_select"
+            | "waiting_for_external_editor"
+            | "waiting_for_login" => return Ok(state),
+            _ => {
+                last_state = Some(state);
+                std::thread::sleep(POLL_INTERVAL);
+            }
+        }
+    }
+
+    let evidence = last_state
+        .as_ref()
+        .map(|state| format!("last state `{}` ({})", state.state, state.evidence))
+        .unwrap_or_else(|| "no state observed".to_string());
+    Err(format!(
+        "Timed out waiting for ptywright Claude turn to complete; {evidence}"
+    ))
 }
 
 fn prepare_for_prompt(handle: &mut ptywright::ExtensionHandle) -> Result<(), String> {
@@ -345,19 +462,34 @@ fn submit_prompt_once(
         .send("send_prompt", json!({ "prompt": prompt }))
         .map_err(|e| format!("Failed to submit ptywright Claude prompt: {e}"))?;
 
-    let prompt_anchor = prompt.trim().lines().next().unwrap_or_default();
+    let prompt_anchor = prompt
+        .trim()
+        .lines()
+        .next()
+        .unwrap_or_default()
+        .chars()
+        .take(40)
+        .collect::<String>();
     let deadline = Instant::now() + PASTE_ACK_TIMEOUT;
     while Instant::now() < deadline {
-        let transcript_len = handle.session().transcript().len();
+        let transcript = handle.session().transcript();
+        let transcript_len = transcript.len();
         let grew = transcript_len.saturating_sub(baseline);
-        let snapshot = handle.session().snapshot().plain_text;
         let state = handle
             .try_state()
             .map_err(|e| format!("Failed to inspect ptywright Claude submit state: {e}"))?;
+        let anchored = !prompt_anchor.is_empty() && transcript.contains(&prompt_anchor);
+        tracing::trace!(
+            target: "claudette::agent",
+            ptywright_state = %state.state,
+            grew,
+            anchored,
+            evidence = %state.evidence,
+            "ptywright Claude prompt acknowledgement poll"
+        );
 
         if matches!(state.state.as_str(), "completed_turn" | "error")
-            || (grew >= PASTE_REACTION_BYTES
-                && prompt_anchor_is_submitted(&snapshot, prompt_anchor))
+            || (grew >= PASTE_REACTION_BYTES && (anchored || state.state.as_str() == "thinking"))
         {
             return Ok(true);
         }
@@ -366,13 +498,6 @@ fn submit_prompt_once(
     }
 
     Ok(false)
-}
-
-fn prompt_anchor_is_submitted(screen: &str, prompt_anchor: &str) -> bool {
-    !prompt_anchor.is_empty()
-        && screen
-            .lines()
-            .any(|line| line.trim_start().starts_with('❯') && line.contains(prompt_anchor))
 }
 
 fn extract_turn_answer(
@@ -670,5 +795,15 @@ clean line
         assert!(answer_looks_like_claude_error(
             "Your organization has disabled Claude subscription access for Claude Code"
         ));
+    }
+
+    #[test]
+    fn ptywright_args_include_selected_model() {
+        let settings = AgentSettings {
+            model: Some("opus".to_string()),
+            ..AgentSettings::default()
+        };
+
+        assert_eq!(build_ptywright_claude_args(&settings), ["--model", "opus"]);
     }
 }

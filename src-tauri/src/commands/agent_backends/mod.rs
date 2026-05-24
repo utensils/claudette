@@ -246,8 +246,9 @@ pub async fn save_agent_backend(
 /// to `AgentBackendKind::default_harness`). A `Some` value must be in
 /// the kind's `available_harnesses` list — otherwise the call is
 /// rejected so a malicious frontend cannot bypass the per-kind matrix.
-/// The built-in Anthropic backend always rejects overrides because its
-/// kind only permits the Claude CLI harness.
+/// Built-in Anthropic stays implicit unless the user selects a runtime
+/// override, which is persisted so Settings can switch between Claude
+/// CLI and ptywright Claude.
 #[tauri::command]
 pub async fn set_agent_backend_runtime_harness(
     backend_id: String,
@@ -1627,6 +1628,30 @@ mod tests {
             .find(|b| b.id == "ollama")
             .expect("ollama present");
         assert!(ollama_after.enabled);
+    }
+
+    #[test]
+    #[cfg(feature = "ptywright-claude")]
+    fn anthropic_runtime_harness_override_round_trips() {
+        let db = Database::open_in_memory().expect("test db should open");
+        let mut backends = load_backend_configs(&db).expect("backends should load");
+        let anthropic = backends
+            .iter_mut()
+            .find(|backend| backend.id == "anthropic")
+            .expect("anthropic backend present");
+        anthropic.runtime_harness = Some(AgentBackendRuntimeHarness::PtywrightClaude);
+
+        save_backend_configs(&db, &backends).expect("save should succeed");
+
+        let reloaded = load_backend_configs(&db).expect("reload should succeed");
+        let anthropic_after = reloaded
+            .iter()
+            .find(|backend| backend.id == "anthropic")
+            .expect("anthropic backend present after reload");
+        assert_eq!(
+            anthropic_after.runtime_harness,
+            Some(AgentBackendRuntimeHarness::PtywrightClaude)
+        );
     }
 
     #[test]

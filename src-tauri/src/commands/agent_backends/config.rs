@@ -333,7 +333,7 @@ pub(super) fn save_backend_configs(
         backends.iter().map(|backend| backend.id.clone()).collect();
     let mut persisted: Vec<Value> = backends
         .iter()
-        .filter(|backend| backend.id != "anthropic")
+        .filter(|backend| should_persist_backend(backend))
         .map(|backend| {
             let mut backend = backend.clone();
             backend.has_secret = false;
@@ -351,6 +351,10 @@ pub(super) fn save_backend_configs(
     let raw = serde_json::to_string(&persisted).map_err(|e| e.to_string())?;
     db.set_app_setting(SETTINGS_KEY, &raw)
         .map_err(|e| e.to_string())
+}
+
+fn should_persist_backend(backend: &AgentBackendConfig) -> bool {
+    backend.id != "anthropic" || backend.runtime_harness.is_some()
 }
 
 pub(super) fn find_backend(
