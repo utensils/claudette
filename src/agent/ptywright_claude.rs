@@ -19,6 +19,7 @@ const STARTUP_READY_TIMEOUT: Duration = Duration::from_secs(20);
 const PASTE_ACK_TIMEOUT: Duration = Duration::from_secs(10);
 const PASTE_REACTION_BYTES: usize = 256;
 const POLL_INTERVAL: Duration = Duration::from_millis(50);
+const SUBMIT_NUDGE_INTERVAL: Duration = Duration::from_millis(750);
 
 type SharedHandle = Arc<Mutex<ptywright::ExtensionHandle>>;
 type SharedCancel = Arc<Mutex<Option<ptywright::CancellationToken>>>;
@@ -551,19 +552,26 @@ fn submit_prompt_once(
         .collect::<String>();
     let deadline = Instant::now() + PASTE_ACK_TIMEOUT;
     let mut last_log_at = Instant::now() - Duration::from_secs(60);
+    let mut last_submit_nudge_at = Instant::now();
     while Instant::now() < deadline {
         let transcript = handle.session().transcript();
         let transcript_len = transcript.len();
         let grew = transcript_len.saturating_sub(baseline);
+        let screen = handle.session().snapshot().plain_text;
         let state = handle
             .try_state()
             .map_err(|e| format!("Failed to inspect ptywright Claude submit state: {e}"))?;
         let anchored = !prompt_anchor.is_empty() && transcript.contains(&prompt_anchor);
+        let editable_prompt = prompt_still_editable(&screen, &prompt_anchor);
+        let submitted = grew >= PASTE_REACTION_BYTES
+            && !editable_prompt
+            && (anchored || state.state.as_str() == "thinking");
         tracing::trace!(
             target: "claudette::agent",
             ptywright_state = %state.state,
             grew,
             anchored,
+            editable_prompt,
             evidence = %state.evidence,
             "ptywright Claude prompt acknowledgement poll"
         );
@@ -575,15 +583,28 @@ fn submit_prompt_once(
                 transcript_len,
                 grew,
                 anchored,
-                screen_tail = %debug_tail(&handle.session().snapshot().plain_text, 500),
+                editable_prompt,
+                submitted,
+                screen_tail = %debug_tail(&screen, 500),
                 "ptywright Claude prompt acknowledgement poll"
             );
             last_log_at = Instant::now();
         }
 
-        if matches!(state.state.as_str(), "completed_turn" | "error")
-            || (grew >= PASTE_REACTION_BYTES && (anchored || state.state.as_str() == "thinking"))
-        {
+        if editable_prompt && last_submit_nudge_at.elapsed() >= SUBMIT_NUDGE_INTERVAL {
+            tracing::debug!(
+                target: "claudette::agent",
+                ptywright_state = %state.state,
+                evidence = %state.evidence,
+                "ptywright Claude prompt still editable; nudging Enter"
+            );
+            handle
+                .send("key", json!({ "key": "enter" }))
+                .map_err(|e| format!("Failed to nudge ptywright Claude prompt submit: {e}"))?;
+            last_submit_nudge_at = Instant::now();
+        }
+
+        if matches!(state.state.as_str(), "completed_turn" | "error") || submitted {
             tracing::debug!(
                 target: "claudette::agent",
                 ptywright_state = %state.state,
@@ -591,6 +612,7 @@ fn submit_prompt_once(
                 transcript_len,
                 grew,
                 anchored,
+                editable_prompt,
                 "ptywright Claude prompt acknowledged"
             );
             return Ok(true);
@@ -833,6 +855,47 @@ fn extract_visible_answer(screen: &str, evidence: &str) -> String {
     trimmed.to_string()
 }
 
+fn prompt_still_editable(screen: &str, prompt_anchor: &str) -> bool {
+    if prompt_anchor.is_empty() {
+        return false;
+    }
+
+    let lines: Vec<&str> = screen.lines().collect();
+    let Some(prompt_index) = lines.iter().enumerate().rev().find_map(|(index, line)| {
+        let trimmed = line.trim();
+        if is_prompt_line(trimmed) && trimmed.contains(prompt_anchor) {
+            Some(index)
+        } else {
+            None
+        }
+    }) else {
+        return false;
+    };
+
+    lines[prompt_index + 1..]
+        .iter()
+        .all(|line| is_prompt_trailing_chrome(line))
+}
+
+fn is_prompt_line(line: &str) -> bool {
+    line.starts_with("❯ ") || line.starts_with("❯\u{00a0}") || line.starts_with("> ")
+}
+
+fn is_prompt_trailing_chrome(line: &str) -> bool {
+    let trimmed = line.trim();
+    trimmed.is_empty()
+        || trimmed == "❯"
+        || trimmed == ">"
+        || is_horizontal_rule(trimmed)
+        || trimmed.contains("⏵⏵")
+        || trimmed.contains(" @ ")
+        || trimmed.contains("· /")
+        || trimmed.contains("Claude in Chrome enabled")
+        || trimmed.contains("MCP server failed")
+        || trimmed.contains("connectors need auth")
+        || trimmed.contains("/effort")
+}
+
 fn metadata_keys(metadata: Option<&serde_json::Value>) -> Vec<String> {
     metadata
         .and_then(serde_json::Value::as_object)
@@ -942,6 +1005,56 @@ clean line
 ✻ Done for 1s";
 
         assert!(clean_transcript_answer(transcript, "go").is_none());
+    }
+
+    #[test]
+    fn editable_prompt_detection_matches_unsubmitted_claude_input() {
+        let screen = "\
+ ▐▛███▜▌   Claude Code v2.1.150
+▝▜█████▛▘  Sonnet 4.6 · Claude Max
+
+────────────────────────────────────────────────────────────────────────────────
+❯\u{00a0}tell me about this project
+────────────────────────────────────────────────────────────────────────────────
+  jamesbrink @ halcyon workspaces/claudex/brazen-cedar  james-brink/project-i…
+  ⏵⏵ auto mode on (shift+tab to cycle)
+                                            Claude in Chrome enabled · /chrome";
+
+        assert!(prompt_still_editable(screen, "tell me about this project"));
+    }
+
+    #[test]
+    fn editable_prompt_detection_releases_after_spinner_starts() {
+        let screen = "\
+❯ ping
+
+✽ Sautéing…
+
+────────────────────────────────────────────────────────────────────────────────
+❯\u{00a0}
+────────────────────────────────────────────────────────────────────────────────
+  jamesbrink @ halcyon workspaces/claudex/brazen-cedar
+  ⏵⏵ auto mode on (shift+tab to cycle)";
+
+        assert!(!prompt_still_editable(screen, "ping"));
+    }
+
+    #[test]
+    fn editable_prompt_detection_releases_after_answer_completes() {
+        let screen = "\
+❯ ping
+
+⏺ pong
+
+✻ Baked for 4s
+
+────────────────────────────────────────────────────────────────────────────────
+❯\u{00a0}
+────────────────────────────────────────────────────────────────────────────────
+  jamesbrink @ halcyon workspaces/claudex/brazen-cedar
+                                       2 claude.ai connectors need auth · /mcp";
+
+        assert!(!prompt_still_editable(screen, "ping"));
     }
 
     #[test]

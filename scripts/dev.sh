@@ -21,6 +21,8 @@
 #                          alternative-backends and ptywright-claude are appended if omitted)
 #   CLAUDETTE_DEV_KEEP_CLAUDE_AUTH_ENV
 #                         preserve inherited Claude auth env vars (default strips them)
+#   CLAUDETTE_DEV_NO_EXTRA_RUST_WATCH
+#                         set to 1 to skip extra Rust/watch folders
 #
 # Flags:
 #   --new                  Run as a fresh user — points CLAUDETTE_HOME,
@@ -132,6 +134,10 @@ Env vars (each consulted at process start):
                        such as CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY.
                        By default dev launches strip these so Settings and
                        chat exercise the configured Claude Code credentials.
+  CLAUDETTE_DEV_NO_EXTRA_RUST_WATCH
+                       Set to 1 to skip the additional Tauri watch folders
+                       this script adds for workspace Rust crates and the
+                       sibling ptywright checkout.
   CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS
                        Regular dev defaults to 1 so the agent-teams
                        flow (TeamCreate / TeamDelete / SendMessage) is
@@ -591,7 +597,30 @@ runner_args=()
 if [[ "$(uname -s)" == "Darwin" ]]; then
   runner_args=(--runner "$repo_root/scripts/macos-dev-app-runner.sh")
 fi
+watch_args=()
+if [[ "${CLAUDETTE_DEV_NO_EXTRA_RUST_WATCH:-0}" != "1" ]]; then
+  watch_folders=(
+    "$repo_root/src"
+    "$repo_root/src-tauri/src"
+    "$repo_root/src-cli/src"
+    "$repo_root/src-server/src"
+    "$repo_root/src-mobile/src"
+  )
+  ptywright_root="$(cd "$repo_root/../ptywright" 2>/dev/null && pwd || true)"
+  if [[ -n "$ptywright_root" ]]; then
+    watch_folders+=("$ptywright_root/src" "$ptywright_root/plugins")
+  fi
+  existing_watch_folders=()
+  for folder in "${watch_folders[@]}"; do
+    [[ -d "$folder" ]] && existing_watch_folders+=("$folder")
+  done
+  if (( ${#existing_watch_folders[@]} )); then
+    watch_args=(--additional-watch-folders "${existing_watch_folders[@]}")
+    echo "▸ Extra Rust watch: ${existing_watch_folders[*]}"
+  fi
+fi
 
 exec "${tauri_cmd[@]}" dev --features "$features" \
   "${runner_args[@]}" \
+  "${watch_args[@]}" \
   -c "{\"build\":{\"devUrl\":\"http://localhost:$vite_port\"}}"
