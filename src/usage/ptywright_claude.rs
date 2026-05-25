@@ -5,7 +5,7 @@
 //! adapter. It avoids the old Anthropic OAuth usage endpoint entirely.
 
 use std::sync::OnceLock;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use chrono::{Datelike, Local, NaiveDate, NaiveDateTime, NaiveTime, TimeZone};
 use serde_json::{Value, json};
@@ -17,6 +17,8 @@ use crate::agent::resolve_claude_path_blocking;
 use crate::agent_backend::AgentBackendKind;
 
 const COMPLETED_TURN_STABLE_MS: u64 = 300;
+const STARTUP_READY_TIMEOUT: Duration = Duration::from_secs(5);
+const STARTUP_POLL_INTERVAL: Duration = Duration::from_millis(150);
 const USAGE_TIMEOUT: Duration = Duration::from_secs(45);
 const USAGE_CACHE_TTL_MS: u64 = 30_000;
 
@@ -111,7 +113,7 @@ fn fetch_usage_from_handle(
         let (state, _) = handle
             .turn(
                 "slash_command",
-                json!({ "command": "usage" }),
+                json!({ "command": "usage", "dismiss_welcome": true }),
                 Some("wait_turn_matcher"),
                 json!({}),
                 USAGE_TIMEOUT,
@@ -136,16 +138,26 @@ fn fetch_usage_from_handle(
 }
 
 fn clear_startup_barriers(handle: &mut ptywright::ExtensionHandle) -> Result<(), String> {
-    for _ in 0..3 {
-        let state = handle
-            .wait("wait_turn_matcher", json!({}), Duration::from_secs(10))
-            .map(|(state, _)| state)
-            .unwrap_or_else(|_| handle.state());
-        if !handle_startup_barrier(handle, &state)? {
+    let deadline = Instant::now() + STARTUP_READY_TIMEOUT;
+    let mut barriers_cleared = 0;
+
+    loop {
+        let state = handle.state();
+        if handle_startup_barrier(handle, &state)? {
+            barriers_cleared += 1;
+            if barriers_cleared >= 4 {
+                return Ok(());
+            }
+            std::thread::sleep(STARTUP_POLL_INTERVAL);
+            continue;
+        }
+
+        if state.state != "starting" || Instant::now() >= deadline {
             return Ok(());
         }
+
+        std::thread::sleep(STARTUP_POLL_INTERVAL);
     }
-    Ok(())
 }
 
 fn handle_startup_barrier(
@@ -334,9 +346,7 @@ pub fn snapshot_from_usage(
         provider_kind,
         source_label: "Claude Code".to_string(),
         buckets,
-        note: Some(
-            "Usage is read from the official Claude Code /usage screen via ptywright.".to_string(),
-        ),
+        note: None,
         fetched_at_ms,
         experimental_disabled: false,
     }
