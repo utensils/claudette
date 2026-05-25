@@ -1370,6 +1370,19 @@ pub fn setup_env_watcher(app: AppHandle) {
     let trust_probe_versions: Arc<Mutex<HashMap<(String, String), u64>>> =
         Arc::new(Mutex::new(HashMap::new()));
     let watcher = match EnvWatcher::new(Arc::new(move |worktree, plugin| {
+        if plugin == "shell-env" {
+            // Synthetic global source — no entry in EnvCache, no trust probe.
+            // Just invalidate the shell-env cache and notify UI.
+            claudette::env::invalidate_shell_env();
+            let _ = app_for_cb.emit(
+                "env-cache-invalidated",
+                EnvCacheInvalidatedPayload {
+                    worktree_path: worktree.to_string_lossy().into_owned(),
+                    plugin_name: "shell-env".to_string(),
+                },
+            );
+            return;
+        }
         cache.invalidate(worktree, Some(plugin));
         let worktree_path = worktree.to_string_lossy().into_owned();
         let plugin_name = plugin.to_string();
@@ -1431,6 +1444,15 @@ pub fn setup_env_watcher(app: AppHandle) {
     let app_for_store = app.clone();
     tauri::async_runtime::block_on(async move {
         let state = app_for_store.state::<AppState>();
+        // Subscribe to the user's rc files so shell-env invalidates on
+        // .zshrc / .bashrc edits.
+        if let Err(e) = watcher.watch_rc_files() {
+            tracing::warn!(
+                target: "claudette::env-watcher",
+                error = %e,
+                "watch_rc_files failed — shell-env will only refresh on app restart"
+            );
+        }
         *state.env_watcher.write().await = Some(watcher);
     });
 }
