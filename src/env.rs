@@ -239,6 +239,42 @@ pub fn probe_shell_env_with_shell(shell: &std::path::Path) -> Option<BTreeMap<St
     }
 }
 
+/// Compute the set of env vars the user's shell init *added* on top
+/// of the launchd / baseline env. A key is included when it is
+/// missing from the baseline, or present with a different value.
+pub fn diff_against_baseline(
+    shell: &BTreeMap<String, String>,
+    baseline: &BTreeMap<String, String>,
+) -> BTreeMap<String, String> {
+    let mut out = BTreeMap::new();
+    for (k, v) in shell {
+        match baseline.get(k) {
+            Some(bv) if bv == v => continue,
+            _ => {
+                out.insert(k.clone(), v.clone());
+            }
+        }
+    }
+    out
+}
+
+/// Invalidate the cached shell env. Next call to `shell_env()` returns
+/// `None` until the probe re-runs. Used by the rc-file watcher.
+pub fn invalidate_shell_env() {
+    if let Ok(mut guard) = SHELL_ENV.write() {
+        *guard = None;
+    }
+}
+
+/// Test-only helper: install a synthetic `ShellEnv` so unit tests can
+/// exercise downstream code paths without running a real shell.
+#[doc(hidden)]
+pub fn install_shell_env_for_test(env: ShellEnv) {
+    if let Ok(mut guard) = SHELL_ENV.write() {
+        *guard = Some(Arc::new(env));
+    }
+}
+
 /// Probe `$SHELL` for the full env. Returns `None` if `$SHELL` is
 /// unset, not absolute, or the probe fails.
 pub fn probe_shell_env() -> Option<BTreeMap<String, String>> {
@@ -1258,5 +1294,59 @@ mod tests {
     fn probe_returns_none_when_shell_path_relative() {
         let probed = probe_shell_env_with_shell(std::path::Path::new("zsh"));
         assert!(probed.is_none(), "relative shell path must be rejected");
+    }
+
+    #[test]
+    fn diff_drops_baseline_keys_with_unchanged_values() {
+        use std::collections::BTreeMap;
+        let mut baseline = BTreeMap::new();
+        baseline.insert("HOME".into(), "/Users/k".into());
+        baseline.insert("USER".into(), "k".into());
+        let mut shell = BTreeMap::new();
+        shell.insert("HOME".into(), "/Users/k".into());
+        shell.insert("USER".into(), "k".into());
+        shell.insert("ADDED_BY_RC".into(), "yes".into());
+        let added = diff_against_baseline(&shell, &baseline);
+        assert_eq!(added.len(), 1, "only the added var should remain");
+        assert_eq!(
+            added.get("ADDED_BY_RC").map(String::as_str),
+            Some("yes"),
+            "user-added var must be forwarded",
+        );
+    }
+
+    #[test]
+    fn diff_keeps_baseline_keys_with_changed_values() {
+        use std::collections::BTreeMap;
+        let mut baseline = BTreeMap::new();
+        baseline.insert("PATH".into(), "/usr/bin:/bin".into());
+        let mut shell = BTreeMap::new();
+        shell.insert("PATH".into(), "/Users/k/.local/bin:/usr/bin:/bin".into());
+        let added = diff_against_baseline(&shell, &baseline);
+        assert_eq!(
+            added.get("PATH").map(String::as_str),
+            Some("/Users/k/.local/bin:/usr/bin:/bin"),
+            "changed PATH must be forwarded",
+        );
+    }
+
+    #[test]
+    fn invalidate_shell_env_clears_cache() {
+        use std::collections::BTreeMap;
+        let mut vars = BTreeMap::new();
+        vars.insert("FOO".into(), "bar".into());
+        install_shell_env_for_test(ShellEnv {
+            vars,
+            captured_at: std::time::SystemTime::UNIX_EPOCH,
+        });
+        assert!(
+            shell_env().is_some(),
+            "install_shell_env_for_test must populate the cache",
+        );
+        invalidate_shell_env();
+        assert!(
+            shell_env().is_none(),
+            "invalidate_shell_env must clear the cache",
+        );
     }
 }
