@@ -143,7 +143,7 @@ export interface SettingsSlice {
   claudeFlagDefs: ClaudeFlagDef[] | null;
   setClaudeFlagDefs: (defs: ClaudeFlagDef[] | null) => void;
 
-  // Shell environment inheritance (issue #990)
+  // Shell environment inheritance
   shellEnv: ShellEnvSnapshot | null;
   refreshShellEnv: () => Promise<void>;
   setShellEnvDenylist: (patterns: string[]) => Promise<void>;

@@ -90,7 +90,7 @@ export function envTargetFromWorkspace(workspaceId: string): EnvTarget {
 }
 
 // ---------------------------------------------------------------------------
-// Shell environment inheritance (issue #990)
+// Shell environment inheritance
 // ---------------------------------------------------------------------------
 
 export type ShellEnvVarSnapshot = {
