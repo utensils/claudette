@@ -619,7 +619,12 @@ mod tests {
 
     #[test]
     fn shell_env_returns_none_before_set() {
-        let _: Option<std::sync::Arc<crate::env::ShellEnv>> = crate::env::shell_env();
+        // SHELL_ENV is process-global and nothing in this test suite writes
+        // to it, so the None contract holds for the duration of the test run.
+        assert!(
+            shell_env().is_none(),
+            "shell_env() must return None until the probe has run",
+        );
     }
 
     #[test]
@@ -627,7 +632,7 @@ mod tests {
         use std::collections::BTreeMap;
         let mut vars = BTreeMap::new();
         vars.insert("FOO".into(), "bar".into());
-        let s = crate::env::ShellEnv {
+        let s = ShellEnv {
             vars,
             captured_at: std::time::SystemTime::UNIX_EPOCH,
         };
@@ -639,9 +644,18 @@ mod tests {
         use std::collections::BTreeMap;
         let mut baseline = BTreeMap::new();
         baseline.insert("PRE_EXISTING".into(), "yes".into());
-        let _ = crate::env::set_launch_env_snapshot(baseline);
-        let snap = crate::env::launch_env_snapshot();
+        let was_first = set_launch_env_snapshot(baseline);
+        let snap = launch_env_snapshot();
         assert!(snap.is_some(), "snapshot must be set by the first caller");
+        if was_first {
+            assert_eq!(
+                snap.and_then(|m| m.get("PRE_EXISTING")).map(String::as_str),
+                Some("yes"),
+                "snapshot content must match what this test wrote",
+            );
+        }
+        // If was_first == false, another test seeded the OnceLock first —
+        // we can still assert it is Some, but we cannot assert the content.
     }
 
     // ---- Platform-agnostic expansion tests --------------------------------
