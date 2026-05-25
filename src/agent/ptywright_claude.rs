@@ -1961,7 +1961,13 @@ fn send_event(
     event: AgentEvent,
 ) {
     let _ = broadcast_tx.send(event.clone());
-    let _ = turn_tx.blocking_send(event);
+    if let Err(err) = turn_tx.try_send(event) {
+        tracing::debug!(
+            target: "claudette::agent",
+            error = %err,
+            "dropped ptywright Claude turn-local stream event"
+        );
+    }
 }
 
 fn apply_start_env(
