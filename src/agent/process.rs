@@ -95,8 +95,8 @@ pub async fn run_turn(
     cmd.args(&args)
         .current_dir(working_dir)
         .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .env("PATH", crate::env::enriched_path());
+        .stderr(std::process::Stdio::piped());
+    crate::env::enriched_env().apply(&mut cmd);
 
     if has_attachments {
         cmd.stdin(std::process::Stdio::piped());

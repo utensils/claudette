@@ -180,8 +180,8 @@ pub async fn generate_branch_name(
     let claude_path = resolve_claude_path().await;
     let mut cmd = Command::new(&claude_path);
     cmd.no_console_window();
-    cmd.stdin(std::process::Stdio::null())
-        .env("PATH", crate::env::enriched_path());
+    cmd.stdin(std::process::Stdio::null());
+    crate::env::enriched_env().apply(&mut cmd);
     cmd.current_dir(worktree_path);
     let user_message = format!(
         "Generate a short git branch name slug for the following task. \
@@ -273,8 +273,8 @@ pub async fn generate_session_name(
     // duration of the Haiku call. The sibling `generate_branch_name` already
     // does this; keep them in sync.
     cmd.no_console_window();
-    cmd.stdin(std::process::Stdio::null())
-        .env("PATH", crate::env::enriched_path());
+    cmd.stdin(std::process::Stdio::null());
+    crate::env::enriched_env().apply(&mut cmd);
     cmd.current_dir(worktree_path);
 
     let user_message = format!(

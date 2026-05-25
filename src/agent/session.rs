@@ -98,8 +98,8 @@ impl PersistentSession {
             .current_dir(working_dir)
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .env("PATH", crate::env::enriched_path());
+            .stderr(std::process::Stdio::piped());
+        crate::env::enriched_env().apply(&mut cmd);
 
         sanitize_claude_subprocess_env(&mut cmd);
 

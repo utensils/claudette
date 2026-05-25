@@ -106,8 +106,8 @@ impl CodexAppServerSession {
             .current_dir(working_dir)
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .env("PATH", crate::env::enriched_path());
+            .stderr(std::process::Stdio::piped());
+        crate::env::enriched_env().apply(&mut cmd);
 
         if let Some(env) = options.resolved_env.as_ref() {
             env.apply(&mut cmd);
