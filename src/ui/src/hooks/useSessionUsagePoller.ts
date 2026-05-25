@@ -14,6 +14,10 @@ interface SessionUsagePollerArgs {
 
 const REFRESH_INTERVAL_MS = 5 * 60_000; // 5 minutes — fallback cadence
 
+function usesClaudeCodeUsage(backend: AgentBackendConfig): boolean {
+  return backend.kind === "anthropic" || backend.kind === "custom_anthropic";
+}
+
 /**
  * Drive the unified `get_session_usage` snapshot for the active chat
  * session. No-ops while the indicator is hidden (`mode === "hidden"`)
@@ -52,6 +56,16 @@ export function useSessionUsagePoller({
   // turn finalizes, so `completedTurnCount` is the correct signal.
   const completedTurnCount = useAppStore((s) =>
     sessionId ? (s.completedTurns[sessionId]?.length ?? 0) : 0,
+  );
+  const activeSessionStatus = useAppStore((s) => {
+    if (!workspaceId || !sessionId) return null;
+    return (
+      s.sessionsByWorkspace[workspaceId]?.find((session) => session.id === sessionId)
+        ?.agent_status ?? null
+    );
+  });
+  const hasStreamingContent = useAppStore((s) =>
+    sessionId ? Boolean(s.streamingContent[sessionId]) : false,
   );
 
   // Track the previous (workspaceId, sessionId) so each switch can
@@ -110,9 +124,12 @@ export function useSessionUsagePoller({
     let timeoutId: ReturnType<typeof setTimeout> | null = null;
     let lastFetchAt = 0;
     let inFlight: Promise<void> | null = null;
+    const claudeCodeUsage = usesClaudeCodeUsage(backend);
+    const turnActive = activeSessionStatus === "Running" || hasStreamingContent;
 
     const fetchOnce = (): Promise<void> => {
       if (inFlight !== null) return inFlight;
+      if (claudeCodeUsage && turnActive) return Promise.resolve();
       inFlight = (async () => {
         try {
           const snapshot = await getSessionUsage({
@@ -218,17 +235,17 @@ export function useSessionUsagePoller({
     };
     // `completedTurnCount` is intentionally in the deps so the effect
     // re-runs (and immediately fetches) whenever a new assistant turn
-    // lands for the active session. We intentionally do not depend on
-    // mid-stream signals — local-aggregate rows aren't written until
-    // the turn finalizes, and remote sources have their own push
-    // (Codex rate-limit notifications) or interval (Anthropic OAuth)
-    // updates that don't need a per-chunk re-poll.
+    // lands for the active session. Claude Code usage is protected by
+    // `fetchOnce` while a turn is active and by the Rust-side 5-minute
+    // cache so it never starts an interactive `/usage` probe mid-turn.
   }, [
     workspaceId,
     sessionId,
     backend,
     mode,
     completedTurnCount,
+    activeSessionStatus,
+    hasStreamingContent,
     setSessionUsage,
     clearSessionUsage,
   ]);

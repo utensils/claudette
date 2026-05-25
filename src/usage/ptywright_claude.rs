@@ -22,7 +22,7 @@ const STARTUP_POLL_INTERVAL: Duration = Duration::from_millis(150);
 const USAGE_TIMEOUT: Duration = Duration::from_secs(45);
 const USAGE_DATA_READY_TIMEOUT: Duration = Duration::from_secs(12);
 const USAGE_DATA_POLL_INTERVAL: Duration = Duration::from_millis(250);
-const USAGE_CACHE_TTL_MS: u64 = 30_000;
+const USAGE_CACHE_TTL_MS: u64 = 5 * 60_000;
 
 #[derive(Clone)]
 struct CachedUsage {
@@ -62,12 +62,10 @@ pub async fn get_usage() -> Result<ClaudeCodeUsage, String> {
     let usage = tokio::task::spawn_blocking(fetch_usage_sync)
         .await
         .map_err(|e| format!("Failed to join ptywright usage task: {e}"))??;
-    if usage_has_limit_buckets(&usage) {
-        *guard = Some(CachedUsage {
-            usage: usage.clone(),
-            fetched_at: usage.fetched_at,
-        });
-    }
+    *guard = Some(CachedUsage {
+        usage: usage.clone(),
+        fetched_at: usage.fetched_at,
+    });
     Ok(usage)
 }
 
@@ -146,7 +144,7 @@ fn clear_startup_barriers(handle: &mut ptywright::ExtensionHandle) -> Result<(),
     while Instant::now() < deadline {
         let state = handle.state();
         if handle_startup_barrier(handle, &state)? {
-            std::thread::sleep(STARTUP_POLL_INTERVAL);
+            std::thread::sleep(Duration::from_millis(500));
             continue;
         }
 
@@ -193,7 +191,7 @@ fn handle_startup_barrier(
             Ok(true)
         }
         "starting" if state.evidence.contains("welcome") => {
-            tracing::debug!(
+            tracing::trace!(
                 target: "claudette::usage",
                 "dismissing Claude Code usage probe welcome screen"
             );
