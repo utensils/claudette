@@ -3,7 +3,6 @@ import { useEffect, useRef } from "react";
 import type { AgentBackendConfig } from "../services/tauri/agentBackends";
 import { getSessionUsage, prefetchCodexRateLimits } from "../services/tauri";
 import { useAppStore } from "../stores/useAppStore";
-import type { UsageSnapshot } from "../types/usage";
 import type { UsageIndicatorMode } from "../components/chat/composer/usageIndicatorMode";
 
 interface SessionUsagePollerArgs {
@@ -11,7 +10,6 @@ interface SessionUsagePollerArgs {
   sessionId: string | null;
   backend: AgentBackendConfig | null;
   mode: UsageIndicatorMode;
-  usageInsightsEnabled: boolean;
 }
 
 const REFRESH_INTERVAL_MS = 5 * 60_000; // 5 minutes — fallback cadence
@@ -20,7 +18,7 @@ const REFRESH_INTERVAL_MS = 5 * 60_000; // 5 minutes — fallback cadence
  * Drive the unified `get_session_usage` snapshot for the active chat
  * session. No-ops while the indicator is hidden (`mode === "hidden"`)
  * so unsupported backends never touch the SQL aggregate or the
- * Anthropic OAuth path.
+ * Claude Code ptywright path.
  *
  * Refresh signals:
  *  - immediate fetch on session / backend / mode change
@@ -35,17 +33,12 @@ const REFRESH_INTERVAL_MS = 5 * 60_000; // 5 minutes — fallback cadence
  * snapshot so the popover never flashes stale data from a sibling
  * tab — both on switch and on unmount.
  *
- * When `mode === "disabled"` (Claude-family backend with the experimental
- * Claude Code Usage flag off), we write a local stub snapshot into the
- * store instead of leaving any prior active snapshot in place. The
- * popover then reflects the disabled state correctly.
  */
 export function useSessionUsagePoller({
   workspaceId,
   sessionId,
   backend,
   mode,
-  usageInsightsEnabled,
 }: SessionUsagePollerArgs) {
   const setSessionUsage = useAppStore((s) => s.setSessionUsage);
   const clearSessionUsage = useAppStore((s) => s.clearSessionUsage);
@@ -93,24 +86,6 @@ export function useSessionUsagePoller({
       return;
     }
 
-    if (mode === "disabled") {
-      // Claude-family backend, experimental flag off. Surface the
-      // disabled stub so the popover reflects "off" rather than
-      // showing a stale active snapshot from before the user toggled
-      // the flag (or from when the session was on a different
-      // backend).
-      const stub: UsageSnapshot = {
-        provider_kind: backend.kind,
-        source_label: "Claude Code Usage off",
-        buckets: [],
-        note: "Enable Claude Code Usage in Settings → Experimental to surface subscription limits.",
-        fetched_at_ms: Date.now(),
-        experimental_disabled: true,
-      };
-      setSessionUsage(sessionId, stub);
-      return;
-    }
-
     // Synchronous placeholder on real backend transitions so the
     // indicator renders the new backend's chrome immediately instead
     // of disappearing for the ~50-200ms it takes the IPC + DB
@@ -144,7 +119,6 @@ export function useSessionUsagePoller({
             workspaceId,
             chatSessionId: sessionId,
             backend,
-            usageInsightsEnabled,
           });
           if (cancelled) return;
           setSessionUsage(sessionId, snapshot);
@@ -244,7 +218,6 @@ export function useSessionUsagePoller({
     sessionId,
     backend,
     mode,
-    usageInsightsEnabled,
     completedTurnCount,
     setSessionUsage,
     clearSessionUsage,

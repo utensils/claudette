@@ -13,13 +13,11 @@ import type { UsageSnapshot } from "../../../types/usage";
 // Hoisted store state — selectors run against this object via the
 // useAppStore mock below.
 const appStore = vi.hoisted(() => ({
-  usageInsightsEnabled: false,
   agentBackends: [] as AgentBackendConfig[],
   defaultAgentBackendId: "anthropic",
   selectedModel: {} as Record<string, string>,
   selectedModelProvider: {} as Record<string, string>,
   sessionUsage: {} as Record<string, UsageSnapshot>,
-  openSettings: vi.fn(),
   setSessionUsage: vi.fn(),
   clearSessionUsage: vi.fn(),
 }));
@@ -125,13 +123,11 @@ function makeSnapshot(overrides: Partial<UsageSnapshot> = {}): UsageSnapshot {
 }
 
 beforeEach(() => {
-  appStore.usageInsightsEnabled = false;
   appStore.agentBackends = [];
   appStore.defaultAgentBackendId = "anthropic";
   appStore.selectedModel = {};
   appStore.selectedModelProvider = {};
   appStore.sessionUsage = {};
-  appStore.openSettings = vi.fn();
   pollerMock.useSessionUsagePoller.mockClear();
 });
 
@@ -155,8 +151,7 @@ describe("UsageIndicator", () => {
   it("falls back to the first loaded backend when the configured default is absent", async () => {
     // Mirrors the send/runtime fallback chain. If the loaded backend
     // list contains only Codex (or a remote/default-only backend),
-    // the usage meter should not silently fall back to Claude and show
-    // the Claude Code Usage-off affordance.
+    // the usage meter should not silently fall back to Claude.
     appStore.agentBackends = [makeBackend("codex_native", "codex")];
     appStore.defaultAgentBackendId = "anthropic";
     appStore.selectedModelProvider = {};
@@ -169,7 +164,6 @@ describe("UsageIndicator", () => {
       expect.objectContaining({
         backend: expect.objectContaining({ id: "codex", kind: "codex_native" }),
         mode: "active",
-        usageInsightsEnabled: false,
       }),
     );
   });
@@ -177,12 +171,16 @@ describe("UsageIndicator", () => {
   it("uses the configured default backend when the session has no saved provider", async () => {
     appStore.agentBackends = [makeBackend("anthropic", "anthropic")];
     const container = await render();
-    const button = container.querySelector("button");
-    expect(button).not.toBeNull();
-    expect(button?.className).toContain("disabled");
+    expect(container.querySelector("button")).toBeNull();
+    expect(pollerMock.useSessionUsagePoller).toHaveBeenCalledWith(
+      expect.objectContaining({
+        backend: expect.objectContaining({ id: "anthropic", kind: "anthropic" }),
+        mode: "active",
+      }),
+    );
   });
 
-  it("does not gate a default Codex backend behind Claude Code Usage", async () => {
+  it("renders a default Codex backend as active", async () => {
     appStore.agentBackends = [
       makeBackend("anthropic", "anthropic"),
       makeBackend("codex_native", "codex"),
@@ -199,12 +197,11 @@ describe("UsageIndicator", () => {
       expect.objectContaining({
         backend: expect.objectContaining({ id: "codex", kind: "codex_native" }),
         mode: "active",
-        usageInsightsEnabled: false,
       }),
     );
   });
 
-  it("does not gate a default OpenRouter backend behind Claude Code Usage", async () => {
+  it("renders a default OpenRouter backend as active", async () => {
     const openrouter = {
       ...makeBackend("custom_openai", "openrouter"),
       label: "OpenRouter",
@@ -235,33 +232,36 @@ describe("UsageIndicator", () => {
           base_url: "https://openrouter.ai/api/v1",
         }),
         mode: "active",
-        usageInsightsEnabled: false,
       }),
     );
   });
 
-  it("renders disabled state for Claude family when flag is off", async () => {
+  it("renders the active Claude meter when a Claude usage snapshot lands", async () => {
     const anthropic = makeBackend("anthropic", "anthropic");
     appStore.agentBackends = [anthropic];
     appStore.selectedModelProvider = { s1: "anthropic" };
-    appStore.usageInsightsEnabled = false;
+    appStore.sessionUsage = {
+      s1: makeSnapshot({
+        provider_kind: "anthropic",
+        source_label: "Claude Code",
+        buckets: [
+          {
+            key: "session_5h",
+            label: "Session (5h)",
+            utilization: 0.42,
+            primary_text: "42%",
+            secondary_text: null,
+            is_bounded: true,
+            exhausted: false,
+          },
+        ],
+      }),
+    };
     const container = await render();
     const button = container.querySelector("button");
     expect(button).not.toBeNull();
-    expect(button?.className).toContain("disabled");
-    expect(button?.textContent).toContain("—");
-  });
-
-  it("disabled-state click navigates to Experimental section", async () => {
-    appStore.agentBackends = [makeBackend("anthropic", "anthropic")];
-    appStore.selectedModelProvider = { s1: "anthropic" };
-    const container = await render();
-    const button = container.querySelector("button")!;
-    await act(async () => button.click());
-    expect(appStore.openSettings).toHaveBeenCalledWith(
-      "experimental",
-      "claude-code-usage",
-    );
+    expect(button?.className).not.toContain("disabled");
+    expect(button?.textContent).toContain("42%");
   });
 
   it("renders nothing for Codex Native without a snapshot yet", async () => {

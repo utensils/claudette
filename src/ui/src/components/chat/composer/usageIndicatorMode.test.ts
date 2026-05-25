@@ -38,36 +38,30 @@ function makeBackend(
 
 describe("resolveIndicatorMode", () => {
   it("hides when no backend is loaded", () => {
-    expect(resolveIndicatorMode(null, true)).toBe("hidden");
-    expect(resolveIndicatorMode(undefined, false)).toBe("hidden");
+    expect(resolveIndicatorMode(null)).toBe("hidden");
+    expect(resolveIndicatorMode(undefined)).toBe("hidden");
   });
 
-  it("Claude-family kinds: disabled when flag off, active when on", () => {
-    // Only kinds whose auth source IS Anthropic OAuth. Codex
-    // Subscription is intentionally NOT here even though its default
-    // harness is `claude_code` — its auth lives in the Codex CLI
-    // ecosystem, not Anthropic's, so the Anthropic Usage API has
-    // nothing to say about it.
+  it("Claude-family kinds: active by default", () => {
+    // These read the official Claude Code `/usage` screen through
+    // ptywright. Codex Subscription is intentionally NOT here even
+    // though its default harness is `claude_code` — its auth lives in
+    // the Codex CLI ecosystem.
     const claudeKinds: AgentBackendKind[] = [
       "anthropic",
       "custom_anthropic",
     ];
     for (const kind of claudeKinds) {
       const backend = makeBackend(kind);
-      expect(resolveIndicatorMode(backend, false)).toBe("disabled");
-      expect(resolveIndicatorMode(backend, true)).toBe("active");
+      expect(resolveIndicatorMode(backend)).toBe("active");
     }
   });
 
-  it("Codex Subscription: always active, ignores experimental flag", () => {
-    // Codex Subscription uses Codex CLI auth (not Anthropic OAuth),
-    // so the experimental Claude Code Usage gate has no business
-    // applying to it. Both flag states render the live local-aggregate
-    // meter. Regression for the user-reported bug where the indicator
-    // showed "Claude Code Usage off" while on Codex / GPT-5.5.
+  it("Codex Subscription is active from its own usage source", () => {
+    // Codex Subscription uses Codex CLI auth, so it renders the live
+    // local-aggregate / Codex meter rather than Claude Code quotas.
     const backend = makeBackend("codex_subscription");
-    expect(resolveIndicatorMode(backend, false)).toBe("active");
-    expect(resolveIndicatorMode(backend, true)).toBe("active");
+    expect(resolveIndicatorMode(backend)).toBe("active");
   });
 
   it("non-Claude kinds with default harness: always active", () => {
@@ -82,36 +76,30 @@ describe("resolveIndicatorMode", () => {
     ];
     for (const kind of alwaysActive) {
       const backend = makeBackend(kind);
-      expect(resolveIndicatorMode(backend, false)).toBe("active");
-      expect(resolveIndicatorMode(backend, true)).toBe("active");
+      expect(resolveIndicatorMode(backend)).toBe("active");
     }
   });
 
   it("harness override doesn't change the gating decision", () => {
     // Ollama pinned back to the Claude CLI gateway still uses local-
-    // aggregate data (Claudette's own per-turn token counts) — no OAuth
-    // credential is at stake, so the experimental flag doesn't apply.
+    // aggregate data (Claudette's own per-turn token counts).
     const backend = makeBackend("ollama", "claude_code");
-    expect(resolveIndicatorMode(backend, false)).toBe("active");
-    expect(resolveIndicatorMode(backend, true)).toBe("active");
+    expect(resolveIndicatorMode(backend)).toBe("active");
   });
 
   it("OpenAI / OpenRouter on default harness: always active", () => {
     // OpenAI / Custom OpenAI default to `claude_code` for gateway
     // translation, but the meter still runs on local-aggregate data
-    // (no OAuth Usage API call). Experimental flag must not gate it.
+    // (not Claude Code subscription quotas).
     const openai = makeBackend("openai_api");
-    expect(resolveIndicatorMode(openai, false)).toBe("active");
-    expect(resolveIndicatorMode(openai, true)).toBe("active");
+    expect(resolveIndicatorMode(openai)).toBe("active");
 
     const openrouter = makeBackend("custom_openai");
-    expect(resolveIndicatorMode(openrouter, false)).toBe("active");
-    expect(resolveIndicatorMode(openrouter, true)).toBe("active");
+    expect(resolveIndicatorMode(openrouter)).toBe("active");
   });
 
-  it("Codex Native ignores the experimental flag", () => {
+  it("Codex Native is active", () => {
     const backend = makeBackend("codex_native");
-    expect(resolveIndicatorMode(backend, false)).toBe("active");
-    expect(resolveIndicatorMode(backend, true)).toBe("active");
+    expect(resolveIndicatorMode(backend)).toBe("active");
   });
 });

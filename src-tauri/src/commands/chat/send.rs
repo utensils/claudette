@@ -955,7 +955,11 @@ fn should_expand_file_mentions_for_session(kind: AgentHarnessKind) -> bool {
 }
 
 #[cfg(feature = "ptywright-claude")]
-fn normalize_ptywright_file_mentions(content: &str, mentioned_files: &[String]) -> String {
+fn normalize_ptywright_file_mentions(
+    content: &str,
+    mentioned_files: &[String],
+    worktree_path: &str,
+) -> String {
     if mentioned_files.is_empty() || !content.contains('@') {
         return content.to_string();
     }
@@ -982,7 +986,7 @@ fn normalize_ptywright_file_mentions(content: &str, mentioned_files: &[String]) 
             .unwrap_or(content.len());
         let token = &content[token_start..token_end];
         let path_len = token
-            .trim_end_matches(|c| matches!(c, ')' | ',' | '.' | ';' | ':' | '!' | '?'))
+            .trim_end_matches([')', ',', '.', ';', ':', '!', '?'])
             .len();
         let path = &token[..path_len];
         let suffix = &token[path_len..];
@@ -996,8 +1000,11 @@ fn normalize_ptywright_file_mentions(content: &str, mentioned_files: &[String]) 
         out.push_str(&content[cursor..at]);
         if should_qualify {
             out.push('@');
-            out.push_str("./");
-            out.push_str(comparable);
+            out.push_str(
+                &std::path::Path::new(worktree_path)
+                    .join(comparable)
+                    .to_string_lossy(),
+            );
             out.push_str(suffix);
         } else {
             out.push_str(&content[at..token_end]);
@@ -1159,7 +1166,11 @@ pub async fn steer_queued_chat_message(
     } else {
         #[cfg(feature = "ptywright-claude")]
         if ps.kind() == AgentHarnessKind::PtywrightClaude {
-            normalize_ptywright_file_mentions(&content, mentioned_files.as_deref().unwrap_or(&[]))
+            normalize_ptywright_file_mentions(
+                &content,
+                mentioned_files.as_deref().unwrap_or(&[]),
+                &worktree_path,
+            )
         } else {
             content.clone()
         }
@@ -1841,7 +1852,11 @@ pub async fn send_chat_message(
     } else {
         #[cfg(feature = "ptywright-claude")]
         if backend_runtime.harness == AgentBackendRuntimeHarness::PtywrightClaude {
-            normalize_ptywright_file_mentions(&content, mentioned_files.as_deref().unwrap_or(&[]))
+            normalize_ptywright_file_mentions(
+                &content,
+                mentioned_files.as_deref().unwrap_or(&[]),
+                &worktree_path,
+            )
         } else {
             content.clone()
         }
@@ -4225,11 +4240,16 @@ mod tests {
             normalize_ptywright_file_mentions(
                 "edit @README.md and @packaging/aur/README.md, not user@example.com",
                 &mentioned_files,
+                "/tmp/worktree",
             ),
-            "edit @./README.md and @./packaging/aur/README.md, not user@example.com"
+            "edit @/tmp/worktree/README.md and @/tmp/worktree/packaging/aur/README.md, not user@example.com"
         );
         assert_eq!(
-            normalize_ptywright_file_mentions("edit @./README.md", &mentioned_files),
+            normalize_ptywright_file_mentions(
+                "edit @./README.md",
+                &mentioned_files,
+                "/tmp/worktree"
+            ),
             "edit @./README.md"
         );
     }

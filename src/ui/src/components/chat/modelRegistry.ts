@@ -411,9 +411,9 @@ export interface ModelRegistryOptions {
    */
   piSdkAvailable?: boolean;
   /**
-   * False when the host binary was built without the experimental
-   * `ptywright-claude` cargo feature. Defaults to `true` for fixture
-   * parity; callers in the live app pass the host flag.
+   * False when the host binary was built without the `ptywright-claude`
+   * cargo feature. Defaults to `true` for fixture parity; callers in
+   * the live app pass the host flag.
    */
   ptywrightClaudeAvailable?: boolean;
 }

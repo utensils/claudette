@@ -55,7 +55,6 @@ export function useChatPanelStore() {
     activeSessionId ? s.chatPagination[activeSessionId] : undefined,
   );
   const openPluginSettings = useAppStore((s) => s.openPluginSettings);
-  const usageInsightsEnabled = useAppStore((s) => s.usageInsightsEnabled);
   const openSettings = useAppStore((s) => s.openSettings);
   const appVersion = useAppStore((s) => s.appVersion);
   const keybindings = useAppStore((s) => s.keybindings);
@@ -282,7 +281,6 @@ export function useChatPanelStore() {
     steerQueuedTooltip,
     toolDisplayMode,
     updateQueuedMessage,
-    usageInsightsEnabled,
     workspaceEnvironmentError,
     workspaceEnvironmentPreparing,
     ws,

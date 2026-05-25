@@ -19,7 +19,6 @@ import type { WorkspaceOrderModeByRepo } from "./utils/workspaceOrdering";
 import { useCiAutoFixSession } from "./hooks/useCiAutoFixSession";
 import { useMcpStatus } from "./hooks/useMcpStatus";
 import { useChatSessionCreatedEvent } from "./hooks/useChatSessionCreatedEvent";
-import { useUsageInsightsPoller } from "./hooks/useUsageInsightsPoller";
 import {
   hydratePersistedViewState,
   useViewTogglePersistence,
@@ -72,7 +71,6 @@ function App() {
   const setFontFamilyMono = useAppStore((s) => s.setFontFamilyMono);
   const setSystemFonts = useAppStore((s) => s.setSystemFonts);
   const setDetectedApps = useAppStore((s) => s.setDetectedApps);
-  const setUsageInsightsEnabled = useAppStore((s) => s.setUsageInsightsEnabled);
   const setProjectViewIssuesPrsEnabled = useAppStore(
     (s) => s.setProjectViewIssuesPrsEnabled,
   );
@@ -134,7 +132,6 @@ function App() {
   // Listen for MCP supervisor status events from the Rust backend.
   useMcpStatus();
   useChatSessionCreatedEvent();
-  useUsageInsightsPoller();
   useCiAutoFixSession();
 
   useEffect(() => {
@@ -383,9 +380,6 @@ function App() {
       .then(setSystemFonts)
       .catch((err) => console.error("Failed to list system fonts:", err));
 
-    getAppSetting("usage_insights_enabled")
-      .then((val) => { if (val === "true") setUsageInsightsEnabled(true); })
-      .catch(() => {});
     getAppSetting("project_view_issues_prs_enabled")
       .then((val) => { if (val === "true") setProjectViewIssuesPrsEnabled(true); })
       .catch(() => {});
@@ -962,7 +956,7 @@ function App() {
       unlistenMissingCli.then((fn) => fn());
       unlistenMissingWorktree.then((fn) => fn());
     };
-  }, [setRepositories, setWorkspaces, setWorktreeBaseDir, setDefaultTerminalAppId, setWorkspaceAppsMenuShown, setDefaultBranches, setTerminalFontSize, setLastMessages, setRemoteConnections, setDiscoveredServers, setLocalServerRunning, setLocalServerConnectionString, setCurrentThemeId, setThemeMode, setThemeDark, setThemeLight, setUiFontSize, setFontFamilySans, setFontFamilyMono, setSystemFonts, setDetectedApps, setUsageInsightsEnabled, setProjectViewIssuesPrsEnabled, setClaudetteTerminalEnabled, setShowSidebarRunningCommands, setToolDisplayMode, setExtendedToolCallOutput, setAlternativeBackendsAvailable, setPiSdkAvailable, setPtywrightClaudeAvailable, setAlternativeBackendsEnabled, setCodexEnabled, setAgentBackends, setDefaultAgentBackendId, setClaudeAuthMethod, setEditorGitGutterBase, setEditorMinimapEnabled, setRevealActiveFileInTree, setEditorWordWrap, setEditorLineNumbersEnabled, setEditorFontZoom, setDisable1mContext, setAppVersion, setVoiceToggleHotkey, setVoiceHoldHotkey, setKeybindings, setManualWorkspaceOrderByRepo, hydrateWorkspaceScmLinks]);
+  }, [setRepositories, setWorkspaces, setWorktreeBaseDir, setDefaultTerminalAppId, setWorkspaceAppsMenuShown, setDefaultBranches, setTerminalFontSize, setLastMessages, setRemoteConnections, setDiscoveredServers, setLocalServerRunning, setLocalServerConnectionString, setCurrentThemeId, setThemeMode, setThemeDark, setThemeLight, setUiFontSize, setFontFamilySans, setFontFamilyMono, setSystemFonts, setDetectedApps, setProjectViewIssuesPrsEnabled, setClaudetteTerminalEnabled, setShowSidebarRunningCommands, setToolDisplayMode, setExtendedToolCallOutput, setAlternativeBackendsAvailable, setPiSdkAvailable, setPtywrightClaudeAvailable, setAlternativeBackendsEnabled, setCodexEnabled, setAgentBackends, setDefaultAgentBackendId, setClaudeAuthMethod, setEditorGitGutterBase, setEditorMinimapEnabled, setRevealActiveFileInTree, setEditorWordWrap, setEditorLineNumbersEnabled, setEditorFontZoom, setDisable1mContext, setAppVersion, setVoiceToggleHotkey, setVoiceHoldHotkey, setKeybindings, setManualWorkspaceOrderByRepo, hydrateWorkspaceScmLinks]);
 
   // Live freshness for LM Studio's `loaded_context_length`.
   //

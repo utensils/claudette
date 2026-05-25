@@ -41,9 +41,6 @@ const GitSettings = lazy(() =>
 const RepoSettings = lazy(() =>
   import("./sections/RepoSettings").then((m) => ({ default: m.RepoSettings })),
 );
-const ExperimentalSettings = lazy(() =>
-  import("./sections/ExperimentalSettings").then((m) => ({ default: m.ExperimentalSettings })),
-);
 const UsageSettings = lazy(() =>
   import("./sections/UsageSettings").then((m) => ({ default: m.UsageSettings })),
 );
@@ -105,7 +102,6 @@ function SectionContent({ section }: { section: string | null }) {
   if (section === "plugins") return <PluginsSettings />;
   if (section === "claude-code-plugins") return <ClaudeCodePluginsSettings />;
   if (section === "community") return <CommunitySettings />;
-  if (section === "experimental") return <ExperimentalSettings />;
   if (section.startsWith("repo:"))
     return <RepoSettings repoId={section.slice(5)} />;
   return <GeneralSettings />;

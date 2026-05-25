@@ -1,15 +1,14 @@
 //! Multi-provider usage telemetry.
 //!
-//! The composer's battery indicator + popover used to be hard-wired to
-//! Anthropic's OAuth Usage API (subscription bucket utilization). With
-//! Codex Native, OpenAI-compatible (incl. OpenRouter) and Pi/local
-//! backends now first-class, the indicator surfaces provider-appropriate
-//! data per session and the Anthropic source becomes one of several.
+//! The composer's battery indicator + popover surfaces provider-appropriate
+//! data per session. Claude-family sessions read the official Claude Code
+//! `/usage` screen via ptywright; Codex, OpenAI-compatible (incl. OpenRouter),
+//! and Pi/local backends use their provider-specific or local aggregate data.
 //!
 //! Source dispatch happens in [`commands::usage`](crate) on the Tauri side
 //! (it needs `AppState`/`Database`). This module owns:
 //! - the unified wire shape [`UsageSnapshot`] / [`UsageBucket`],
-//! - per-source fetchers (`anthropic_oauth`, `local_aggregate`,
+//! - per-source fetchers (`ptywright_claude`, `local_aggregate`,
 //!   `codex_account`, `openrouter`) that each return a `UsageSnapshot`,
 //! - the [`pricing`] table used by the OpenAI/OpenRouter cost path.
 
@@ -18,6 +17,7 @@ pub mod codex_account;
 pub mod local_aggregate;
 pub mod openrouter;
 pub mod pricing;
+pub mod ptywright_claude;
 
 use serde::{Deserialize, Serialize};
 
@@ -30,9 +30,7 @@ use crate::agent_backend::AgentBackendKind;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UsageSnapshot {
     /// Provider this snapshot represents. The frontend uses this to pick
-    /// styling / footnotes and to detect whether the indicator should
-    /// be rendered in its disabled state (Anthropic family with the
-    /// experimental flag off — see `kind` field on the stub variant).
+    /// styling / footnotes.
     pub provider_kind: AgentBackendKind,
     /// Short label shown in the popover header. Examples: `"Max"`,
     /// `"Codex Plus"`, `"OpenRouter credits"`, `"Local"`.
@@ -47,9 +45,8 @@ pub struct UsageSnapshot {
     /// uses it to age out stale snapshots when switching sessions
     /// rapidly.
     pub fetched_at_ms: i64,
-    /// True when this snapshot is the "experimental gate is off" stub
-    /// for an Anthropic-family backend. The frontend renders the
-    /// indicator in disabled (greyed) mode and `buckets` is empty.
+    /// Legacy compatibility bit from the old experimental usage gate.
+    /// New snapshots always leave this false.
     #[serde(default)]
     pub experimental_disabled: bool,
 }
@@ -84,33 +81,14 @@ pub struct UsageBucket {
     pub exhausted: bool,
 }
 
-impl UsageSnapshot {
-    /// Stub used when the active session is on an Anthropic-family backend
-    /// but the user has not opted in to the experimental Anthropic OAuth
-    /// Usage API. The frontend reads `experimental_disabled` and renders
-    /// the indicator greyed out with a click-to-open-settings affordance.
-    pub fn experimental_stub(provider_kind: AgentBackendKind, fetched_at_ms: i64) -> Self {
-        Self {
-            provider_kind,
-            source_label: String::from("Claude Code Usage off"),
-            buckets: Vec::new(),
-            note: Some(String::from(
-                "Enable Claude Code Usage in Settings → Experimental to surface subscription limits.",
-            )),
-            fetched_at_ms,
-            experimental_disabled: true,
-        }
-    }
-}
-
 // -- Backwards-compat re-exports ----------------------------------------
 //
-// The legacy ClaudeCodeUsage shape from `anthropic_oauth` is still
-// consumed by `useUsageInsightsPoller` (global 5-min poller that runs
-// regardless of the active session). Re-export the types it uses at the
-// module root so existing callers can keep `claudette::usage::{...}`
-// imports unchanged through the refactor.
+// The legacy ClaudeCodeUsage shape is still the frontend contract for the
+// Settings > Usage panel. Re-export the types so callers can keep
+// `claudette::usage::{...}` imports unchanged while the data source moves
+// from Anthropic OAuth to ptywright's Claude Code adapter.
 pub use anthropic_oauth::{
     ClaudeCodeUsage, CredentialFile, ExtraUsage, OAuthCredentials, TokenRefreshResponse,
-    UsageCacheEntry, UsageData, UsageLimit, get_usage, warm_user_agent_cache_sync,
+    UsageCacheEntry, UsageData, UsageLimit, warm_user_agent_cache_sync,
 };
+pub use ptywright_claude::get_usage;

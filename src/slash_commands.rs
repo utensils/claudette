@@ -110,7 +110,7 @@ pub fn native_command_registry() -> Vec<SlashCommand> {
         source: "builtin".to_string(),
         aliases: vec!["configure".to_string()],
         argument_hint: Some(
-            "[general|models|usage|appearance|notifications|git|plugins|experimental]".to_string(),
+            "[general|models|usage|appearance|notifications|git|plugins]".to_string(),
         ),
         kind: Some(NativeKind::SettingsRoute),
     });

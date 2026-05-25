@@ -1,9 +1,9 @@
 ---
 title: ptywright Claude Runtime
-description: Experimental Claude Code runtime that drives the interactive Claude TUI through ptywright instead of using claude -p.
+description: Claude Code runtime that drives the interactive Claude TUI through ptywright instead of using claude -p.
 ---
 
-The ptywright Claude runtime is an experimental, compile-time feature for the built-in **Claude Code** provider. It runs the real interactive `claude` TUI in a hidden PTY and drives it with ptywright's `claude-code` Lua plugin instead of spawning the non-interactive `claude -p` / Agent SDK path.
+The ptywright Claude runtime is a compile-time runtime option for the built-in **Claude Code** provider. It runs the real interactive `claude` TUI in a hidden PTY and drives it with ptywright's `claude-code` Lua plugin instead of spawning the non-interactive `claude -p` / Agent SDK path.
 
 This exists because Anthropic's published Claude Code docs and Help Center describe a June 15, 2026 billing split: Agent SDK and `claude -p` usage move to a separate monthly Agent SDK credit, while interactive Claude Code stays on normal subscription usage. Claudette's ptywright runtime is the migration path for keeping Claude Code subscription auth while avoiding the print-mode execution surface.
 

@@ -18,7 +18,6 @@ use crate::boot_probation::BootProbationState;
 use crate::commands::agent_backends::BackendGateway;
 use crate::commands::apps::DetectedApp;
 use crate::remote::DiscoveredServer;
-use crate::usage::UsageCacheEntry;
 #[cfg(feature = "voice")]
 use crate::voice::VoiceProviderRegistry;
 use claudette::agent::codex_app_server::CodexRateLimitSnapshot;
@@ -600,8 +599,6 @@ pub struct AppState {
     /// off then on (the previous tray's DBus objects release asynchronously
     /// on the GLib main loop, which can race with our re-registration).
     pub next_tray_seq: AtomicU64,
-    /// Cached Claude Code OAuth token and usage data.
-    pub usage_cache: RwLock<Option<UsageCacheEntry>>,
     /// Latest Codex `account/rateLimits/read` snapshot, kept fresh by
     /// a subscriber task spawned alongside each Codex app-server
     /// session in `commands::chat::send`. Read by `commands::usage`'s
@@ -762,7 +759,6 @@ impl AppState {
             backend_gateway: BackendGateway::new(),
             tray_handle: Mutex::new(None),
             next_tray_seq: AtomicU64::new(1),
-            usage_cache: RwLock::new(None),
             codex_rate_limits: RwLock::new(codex_rate_limits),
             plugins: RwLock::new(Arc::new(plugins)),
             #[cfg(feature = "voice")]

@@ -30,8 +30,7 @@ export interface ClaudeCodeUsage {
 //
 // Mirrors `claudette::usage::{UsageSnapshot, UsageBucket}` on the Rust side.
 // One snapshot per chat session, with the data source chosen by backend kind:
-//  - Anthropic family (with experimental flag on) → OAuth subscription buckets
-//  - Anthropic family (flag off)                 → empty stub, `experimental_disabled = true`
+//  - Anthropic family                            → Claude Code /usage buckets via ptywright
 //  - Codex Native / OpenAI / OpenRouter / Pi / Ollama / LM Studio → local-aggregate
 //    of `chat_messages` rows, plus provider-specific extras (Codex plan label,
 //    OpenRouter credit balance).
@@ -70,8 +69,6 @@ export interface UsageSnapshot {
   buckets: UsageBucket[];
   note: string | null;
   fetched_at_ms: number;
-  /** True when the indicator should render in disabled (greyed) mode
-   *  because the active backend is Claude-family but the user hasn't
-   *  enabled the experimental Claude Code Usage flag. */
+  /** Legacy compatibility bit for snapshots from older app versions. */
   experimental_disabled: boolean;
 }

@@ -5,7 +5,6 @@ import { useAppStore } from "../../../stores/useAppStore";
 import { useSessionUsagePoller } from "../../../hooks/useSessionUsagePoller";
 import type { UsageBucket } from "../../../types/usage";
 import { resolveSessionBackend } from "../resolveSessionBackend";
-import { CLAUDE_CODE_USAGE_FOCUS } from "../../settings/focusKeys";
 import { resolveIndicatorMode } from "./usageIndicatorMode";
 import { UsagePopover } from "./UsagePopover";
 import styles from "./UsageIndicator.module.css";
@@ -43,21 +42,17 @@ function pickIndicatorBucket(buckets: UsageBucket[]): UsageBucket | null {
  *
  * Rendered for every chat session — the per-backend
  * [`resolveIndicatorMode`](./usageIndicatorMode.ts) decides whether
- * the meter is live, greyed-out-pending-opt-in (Claude family), or
- * hidden entirely (unknown backend kind). Click opens the popover
- * for live indicators, or jumps to Settings → Experimental for the
- * disabled variant.
+ * the meter is live or hidden entirely (unknown backend kind). Click
+ * opens the usage popover.
  */
 export function UsageIndicator({ workspaceId, sessionId }: UsageIndicatorProps) {
   const { t } = useTranslation("settings");
 
-  const usageInsightsEnabled = useAppStore((s) => s.usageInsightsEnabled);
   const agentBackends = useAppStore((s) => s.agentBackends);
   const defaultAgentBackendId = useAppStore((s) => s.defaultAgentBackendId);
   const selectedModel = useAppStore((s) => s.selectedModel);
   const selectedModelProvider = useAppStore((s) => s.selectedModelProvider);
   const sessionUsage = useAppStore((s) => s.sessionUsage);
-  const openSettings = useAppStore((s) => s.openSettings);
 
   const backend = useMemo(() => {
     if (!sessionId) return null;
@@ -76,7 +71,7 @@ export function UsageIndicator({ workspaceId, sessionId }: UsageIndicatorProps) 
     return { ...backend, default_model: model };
   }, [backend, selectedModel, sessionId]);
 
-  const mode = resolveIndicatorMode(usageBackend, usageInsightsEnabled);
+  const mode = resolveIndicatorMode(usageBackend);
   const snapshot = sessionId ? sessionUsage[sessionId] : null;
 
   // Drive the per-session poll on the active session. The hook
@@ -87,7 +82,6 @@ export function UsageIndicator({ workspaceId, sessionId }: UsageIndicatorProps) 
     sessionId,
     backend: usageBackend,
     mode,
-    usageInsightsEnabled,
   });
 
   const triggerRef = useRef<HTMLButtonElement>(null);
@@ -103,29 +97,6 @@ export function UsageIndicator({ workspaceId, sessionId }: UsageIndicatorProps) 
   }, [mode]);
 
   if (mode === "hidden") return null;
-
-  if (mode === "disabled") {
-    const label = t("usage_indicator_disabled_tooltip", {
-      defaultValue: "Claude Code Usage is off — click to enable",
-    });
-    return (
-      <div className={styles.wrapper}>
-        <button
-          ref={triggerRef}
-          type="button"
-          className={`${styles.indicator} ${styles.disabled}`}
-          title={label}
-          aria-label={label}
-          onClick={() => openSettings("experimental", CLAUDE_CODE_USAGE_FOCUS)}
-        >
-          <div className={styles.bar}>
-            <div className={styles.barFill} />
-          </div>
-          <span className={styles.readout}>—</span>
-        </button>
-      </div>
-    );
-  }
 
   // Active. Wait for the first snapshot before painting — the poller
   // resolves it within a single tick, so the gap is invisible.

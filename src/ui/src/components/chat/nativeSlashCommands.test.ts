@@ -19,7 +19,6 @@ import {
 function makeCtx(overrides: Partial<NativeCommandContext> = {}): NativeCommandContext {
   return {
     repoId: "repo-1",
-    usageInsightsEnabled: true,
     openPluginSettings: vi.fn<(intent: Partial<PluginSettingsIntent>) => void>(),
     repository: { name: "claudette", path: "/tmp/repos/claudette" },
     workspace: { branch: "feat/review-cmds", worktreePath: "/tmp/wt/review-cmds" },
@@ -539,13 +538,6 @@ describe("config native handler", () => {
     }
   });
 
-  it("redirects /config usage to experimental when Usage Insights is disabled", async () => {
-    const ctx = makeCtx({ usageInsightsEnabled: false });
-    const handler = resolveNativeHandler("config")!;
-    await handler.execute(ctx, "usage");
-    expect(ctx.openSettings).toHaveBeenCalledWith("experimental");
-  });
-
   it("is case-insensitive for section names", async () => {
     const ctx = makeCtx();
     const handler = resolveNativeHandler("config")!;
@@ -570,20 +562,13 @@ describe("config native handler", () => {
 });
 
 describe("usage native handler", () => {
-  it("resolves /usage and opens the usage settings section when the gate is on", async () => {
+  it("resolves /usage and opens the usage settings section", async () => {
     const ctx = makeCtx();
     const handler = resolveNativeHandler("usage")!;
     const result = await handler.execute(ctx, "");
     expect(result).toEqual({ kind: "handled", canonicalName: "usage" });
     expect(ctx.openSettings).toHaveBeenCalledWith("usage");
     expect(ctx.openUsageSettingsExternal).not.toHaveBeenCalled();
-  });
-
-  it("routes /usage to Experimental when Usage Insights is disabled", async () => {
-    const ctx = makeCtx({ usageInsightsEnabled: false });
-    const handler = resolveNativeHandler("usage")!;
-    await handler.execute(ctx, "");
-    expect(ctx.openSettings).toHaveBeenCalledWith("experimental");
   });
 });
 
@@ -661,21 +646,13 @@ describe("login native handler", () => {
 });
 
 describe("extra-usage native handler", () => {
-  it("reuses both the in-app and external usage paths when the gate is on", async () => {
+  it("reuses both the in-app and external usage paths", async () => {
     const ctx = makeCtx();
     const handler = resolveNativeHandler("extra-usage")!;
     const result = await handler.execute(ctx, "");
     expect(result).toEqual({ kind: "handled", canonicalName: "extra-usage" });
     expect(ctx.openSettings).toHaveBeenCalledWith("usage");
     expect(ctx.openUsageSettingsExternal).toHaveBeenCalledTimes(1);
-  });
-
-  it("routes /extra-usage to Experimental and does NOT launch claude.ai when gated off", async () => {
-    const ctx = makeCtx({ usageInsightsEnabled: false });
-    const handler = resolveNativeHandler("extra-usage")!;
-    await handler.execute(ctx, "");
-    expect(ctx.openSettings).toHaveBeenCalledWith("experimental");
-    expect(ctx.openUsageSettingsExternal).not.toHaveBeenCalled();
   });
 });
 
@@ -1019,6 +996,7 @@ describe("/model handler", () => {
     useAppStore.setState({
       claudeAuthMethod: "oauth_token",
       alternativeBackendsEnabled: true,
+      piSdkAvailable: true,
       agentBackends: [
         {
           id: "pi",

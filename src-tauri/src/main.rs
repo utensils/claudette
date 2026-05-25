@@ -21,7 +21,6 @@ mod state;
 mod subprocess_cleanup;
 mod tail_backoff;
 mod tray;
-mod usage;
 #[cfg(feature = "voice")]
 mod voice;
 mod webview2_check;
@@ -814,10 +813,6 @@ fn main() {
             // Start debug eval TCP server (dev builds only).
             #[cfg(debug_assertions)]
             commands::debug::start_debug_server(app.handle().clone());
-
-            // Pre-warm the Claude Code User-Agent cache on a std thread
-            // (tokio runtime may not be available during setup).
-            std::thread::spawn(usage::warm_user_agent_cache_sync);
 
             // Pre-warm the login-shell PATH cache. On Unix, `shell_path()`
             // spawns `$SHELL -l -c 'echo $PATH'` with a 5-second timeout —

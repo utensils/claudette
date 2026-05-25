@@ -1,8 +1,10 @@
+use std::collections::{BTreeSet, hash_map::DefaultHasher};
+use std::hash::{Hash, Hasher};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use serde_json::json;
+use serde_json::{Value, json};
 use tokio::sync::{broadcast, mpsc};
 
 use crate::env::WorkspaceEnv;
@@ -95,7 +97,12 @@ impl PtywrightClaudeSession {
         .await
         .map_err(|e| format!("Failed to initialize ptywright Claude harness: {e}"))??;
 
-        let (pid, handle) = handle;
+        let (pid, mut handle) = handle;
+        if params.is_resume {
+            validate_resume_start(&mut handle).inspect_err(|_| {
+                let _ = handle.session().terminate(Duration::from_secs(2));
+            })?;
+        }
         let invocation_line = format!(
             "{} # interactive via ptywright",
             format_redacted_invocation(claude_path.as_os_str(), &claude_args)
@@ -393,6 +400,31 @@ fn run_ptywright_turn(
     }
 }
 
+fn validate_resume_start(handle: &mut ptywright::ExtensionHandle) -> Result<(), String> {
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while Instant::now() < deadline {
+        let state = handle
+            .try_state()
+            .map_err(|e| format!("Failed to inspect ptywright Claude resume state: {e}"))?;
+        let screen = handle.session().snapshot().plain_text;
+        if answer_looks_like_claude_error(&screen) {
+            return Err(format!(
+                "ptywright Claude resume failed: {}",
+                extract_visible_answer(&screen, &state.evidence)
+            ));
+        }
+        if matches!(
+            state.state.as_str(),
+            "ready" | "waiting_for_user_input" | "completed_turn"
+        ) && has_visible_input_prompt(&screen)
+        {
+            return Ok(());
+        }
+        std::thread::sleep(POLL_INTERVAL);
+    }
+    Ok(())
+}
+
 fn wait_for_turn_state(
     handle: &mut ptywright::ExtensionHandle,
     cancel: &ptywright::CancellationToken,
@@ -514,6 +546,13 @@ fn prepare_for_prompt(handle: &mut ptywright::ExtensionHandle) -> Result<(), Str
         let state = handle
             .try_state()
             .map_err(|e| format!("Failed to inspect ptywright Claude state: {e}"))?;
+        let screen = handle.session().snapshot().plain_text;
+        if answer_looks_like_claude_error(&screen) {
+            return Err(format!(
+                "ptywright Claude reported an error: {}",
+                extract_visible_answer(&screen, &state.evidence)
+            ));
+        }
         if state.state != last_log_state || last_log_at.elapsed() >= Duration::from_secs(2) {
             tracing::debug!(
                 target: "claudette::agent",
@@ -988,6 +1027,7 @@ fn is_ghost_prompt_line(line: &str) -> bool {
 fn answer_looks_like_claude_error(answer: &str) -> bool {
     let lower = answer.to_ascii_lowercase();
     lower.contains("your organization has disabled claude subscription access")
+        || lower.contains("no conversation found with session id")
         || lower.contains("invalid api key")
         || lower.contains("authentication failed")
         || lower.contains("unauthorized")
@@ -1042,6 +1082,13 @@ fn is_prompt_line(line: &str) -> bool {
     line.starts_with("❯ ") || line.starts_with("❯\u{00a0}") || line.starts_with("> ")
 }
 
+fn has_visible_input_prompt(screen: &str) -> bool {
+    screen.lines().any(|line| {
+        let trimmed = line.trim();
+        trimmed == "❯" || trimmed == ">" || is_prompt_line(trimmed)
+    })
+}
+
 fn is_prompt_trailing_chrome(line: &str) -> bool {
     let trimmed = line.trim();
     trimmed.is_empty()
@@ -1073,14 +1120,16 @@ fn debug_tail(text: &str, max_chars: usize) -> String {
 #[derive(Default)]
 struct PtywrightToolActivityEmitter {
     active: Option<EmittedPtywrightTool>,
+    seen_keys: BTreeSet<String>,
     next_index: usize,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 struct VisiblePtywrightTool {
     key: String,
     name: String,
     summary: String,
+    input: Value,
 }
 
 struct EmittedPtywrightTool {
@@ -1102,6 +1151,10 @@ impl PtywrightToolActivityEmitter {
         let visible = visible_ptywright_tool(screen);
         match (self.active.as_ref(), visible) {
             (Some(active), Some(visible)) if active.key == visible.key => {}
+            (Some(_), Some(visible)) if self.seen_keys.contains(&visible.key) => {
+                self.finish_active(broadcast_tx, turn_tx, "completed");
+            }
+            (None, Some(visible)) if self.seen_keys.contains(&visible.key) => {}
             (Some(_), Some(visible)) => {
                 self.finish_active(broadcast_tx, turn_tx, "replaced");
                 self.start_tool(visible, sequence, broadcast_tx, turn_tx);
@@ -1122,10 +1175,8 @@ impl PtywrightToolActivityEmitter {
         let index = self.next_index;
         self.next_index += 1;
         let id = format!("ptywright-tool-{sequence}-{index}");
-        let input = json!({
-            "summary": visible.summary,
-            "source": "ptywright-screen"
-        });
+        let input = visible.input.clone();
+        self.seen_keys.insert(visible.key.clone());
         tracing::debug!(
             target: "claudette::agent",
             tool_use_id = %id,
@@ -1205,6 +1256,10 @@ impl PtywrightToolActivityEmitter {
 
 fn visible_ptywright_tool(screen: &str) -> Option<VisiblePtywrightTool> {
     let lines = screen.lines().collect::<Vec<_>>();
+    if let Some(tool) = visible_ptywright_edit(&lines) {
+        return Some(tool);
+    }
+
     for (index, line) in lines.iter().enumerate().rev() {
         let trimmed = line.trim();
         if let Some(name) = trimmed
@@ -1215,10 +1270,12 @@ fn visible_ptywright_tool(screen: &str) -> Option<VisiblePtywrightTool> {
         {
             let summary = next_tool_summary(&lines, index + 1).unwrap_or_else(|| name.to_string());
             let summary = clean_tool_summary(&summary);
+            let input = tool_input(name, &summary, &[]);
             return Some(VisiblePtywrightTool {
                 key: format!("running:{name}:{summary}"),
                 name: name.to_string(),
                 summary,
+                input,
             });
         }
 
@@ -1230,13 +1287,235 @@ fn visible_ptywright_tool(screen: &str) -> Option<VisiblePtywrightTool> {
         }
         let summary = clean_tool_summary(rest);
         let name = infer_tool_name_from_progress(rest);
+        let paths = tool_callout_paths(&lines, index + 1);
+        let input = tool_input(&name, &summary, &paths);
+        let key_detail = if paths.is_empty() {
+            summary.clone()
+        } else {
+            paths.join(",")
+        };
         return Some(VisiblePtywrightTool {
-            key: format!("progress:{summary}"),
+            key: format!("progress:{name}:{key_detail}"),
             name,
             summary,
+            input,
         });
     }
     None
+}
+
+#[derive(Clone, Debug)]
+struct VisibleDiffLine {
+    sign: char,
+    line_number: Option<usize>,
+    content: String,
+}
+
+fn visible_ptywright_edit(lines: &[&str]) -> Option<VisiblePtywrightTool> {
+    let mut groups: Vec<(usize, Vec<VisibleDiffLine>)> = Vec::new();
+    let mut current_start = 0;
+    let mut current = Vec::new();
+
+    for (index, line) in lines.iter().enumerate() {
+        if let Some(diff_line) = parse_visible_diff_line(line) {
+            if current.is_empty() {
+                current_start = index;
+            }
+            current.push(diff_line);
+        } else if !current.is_empty() {
+            groups.push((current_start, std::mem::take(&mut current)));
+        }
+    }
+    if !current.is_empty() {
+        groups.push((current_start, current));
+    }
+
+    let (start, group) = groups
+        .into_iter()
+        .rev()
+        .find(|(_, group)| visible_diff_group_has_edit(group))?;
+    let path = latest_tool_callout_path_before(lines, start).unwrap_or_else(|| "unknown".into());
+    let patch = synthetic_patch_for_visible_diff(&path, &group);
+    let summary = path.clone();
+    Some(VisiblePtywrightTool {
+        key: format!("edit:{path}:{}", stable_key_suffix(&patch)),
+        name: "Edit".to_string(),
+        summary,
+        input: json!({
+            "file_path": path,
+            "patch": patch,
+            "source": "ptywright-screen"
+        }),
+    })
+}
+
+fn parse_visible_diff_line(line: &str) -> Option<VisibleDiffLine> {
+    let trimmed = line.trim_start();
+    let mut digit_end = 0;
+    for (index, ch) in trimmed.char_indices() {
+        if ch.is_ascii_digit() {
+            digit_end = index + ch.len_utf8();
+        } else {
+            break;
+        }
+    }
+
+    let line_number = if digit_end > 0 {
+        trimmed[..digit_end].parse::<usize>().ok()
+    } else {
+        None
+    };
+    let rest = if digit_end > 0 {
+        trimmed[digit_end..].trim_start()
+    } else {
+        trimmed
+    };
+    if rest.starts_with("+++") || rest.starts_with("---") {
+        return None;
+    }
+    let sign = rest.chars().next()?;
+    if sign != '+' && sign != '-' {
+        return None;
+    }
+    let content = rest[sign.len_utf8()..].trim_start().to_string();
+    if line_number.is_none() && looks_like_file_list_entry(&content) {
+        return None;
+    }
+    Some(VisibleDiffLine {
+        sign,
+        line_number,
+        content,
+    })
+}
+
+fn visible_diff_group_has_edit(group: &[VisibleDiffLine]) -> bool {
+    group.iter().any(|line| line.line_number.is_some())
+        && group
+            .iter()
+            .any(|line| line.sign == '+' || line.sign == '-')
+}
+
+fn looks_like_file_list_entry(content: &str) -> bool {
+    let trimmed = content.trim();
+    !trimmed.is_empty()
+        && !trimmed.contains(' ')
+        && (trimmed.contains('/') || trimmed.contains('.'))
+}
+
+fn synthetic_patch_for_visible_diff(path: &str, group: &[VisibleDiffLine]) -> String {
+    let old_start = group
+        .iter()
+        .find(|line| line.sign == '-')
+        .and_then(|line| line.line_number)
+        .or_else(|| group.iter().find_map(|line| line.line_number))
+        .unwrap_or(1);
+    let new_start = group
+        .iter()
+        .find(|line| line.sign == '+')
+        .and_then(|line| line.line_number)
+        .unwrap_or(old_start);
+    let mut lines = vec![
+        format!("diff --git a/{path} b/{path}"),
+        format!("--- a/{path}"),
+        format!("+++ b/{path}"),
+        format!("@@ -{old_start} +{new_start} @@"),
+    ];
+    lines.extend(
+        group
+            .iter()
+            .map(|line| format!("{}{}", line.sign, line.content)),
+    );
+    lines.join("\n")
+}
+
+fn stable_key_suffix(value: &str) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    value.hash(&mut hasher);
+    hasher.finish()
+}
+
+fn tool_input(name: &str, summary: &str, paths: &[String]) -> Value {
+    let path = paths
+        .first()
+        .cloned()
+        .or_else(|| path_from_tool_summary(summary));
+    match name {
+        "Read" | "Write" | "Edit" => {
+            if let Some(path) = path {
+                json!({
+                    "file_path": path,
+                    "summary": summary,
+                    "source": "ptywright-screen"
+                })
+            } else {
+                json!({
+                    "summary": summary,
+                    "source": "ptywright-screen"
+                })
+            }
+        }
+        "Grep" | "LS" | "Bash" => json!({
+            "command": summary,
+            "summary": summary,
+            "source": "ptywright-screen"
+        }),
+        _ => json!({
+            "summary": summary,
+            "source": "ptywright-screen"
+        }),
+    }
+}
+
+fn path_from_tool_summary(summary: &str) -> Option<String> {
+    summary
+        .split_whitespace()
+        .rev()
+        .find_map(clean_path_candidate)
+}
+
+fn tool_callout_paths(lines: &[&str], start: usize) -> Vec<String> {
+    let mut paths = Vec::new();
+    for line in lines.iter().skip(start).take(12) {
+        let trimmed = line.trim();
+        if trimmed.starts_with('⏺')
+            || trimmed.starts_with('●')
+            || trimmed.starts_with('✻')
+            || is_prompt_line(trimmed)
+            || is_horizontal_rule(trimmed)
+        {
+            break;
+        }
+        if let Some(path) = tool_callout_path(trimmed) {
+            paths.push(path);
+        }
+    }
+    paths
+}
+
+fn latest_tool_callout_path_before(lines: &[&str], before: usize) -> Option<String> {
+    lines[..before.min(lines.len())]
+        .iter()
+        .rev()
+        .find_map(|line| tool_callout_path(line.trim()))
+}
+
+fn tool_callout_path(trimmed: &str) -> Option<String> {
+    let rest = trimmed.strip_prefix('⎿')?.trim();
+    clean_path_candidate(rest)
+}
+
+fn clean_path_candidate(candidate: &str) -> Option<String> {
+    let path = candidate
+        .trim()
+        .trim_matches(|c| matches!(c, '`' | '\'' | '"' | ',' | ';' | ':' | ')' | '('));
+    if path.is_empty() || path.len() > 512 || path.contains('\n') {
+        return None;
+    }
+    if path.contains('/') || path.contains('.') || path.starts_with('~') {
+        Some(path.to_string())
+    } else {
+        None
+    }
 }
 
 fn clean_tool_summary(summary: &str) -> String {
@@ -1486,6 +1765,11 @@ Esc to interrupt";
                 key: "running:Edit:Updating src/lib.rs".to_string(),
                 name: "Edit".to_string(),
                 summary: "Updating src/lib.rs".to_string(),
+                input: json!({
+                    "file_path": "src/lib.rs",
+                    "summary": "Updating src/lib.rs",
+                    "source": "ptywright-screen"
+                }),
             })
         );
     }
@@ -1502,11 +1786,61 @@ Esc to interrupt";
         assert_eq!(
             visible_ptywright_tool(screen),
             Some(VisiblePtywrightTool {
-                key: "progress:Reading 3 files…".to_string(),
+                key: "progress:Read:Reading 3 files…".to_string(),
                 name: "Read".to_string(),
                 summary: "Reading 3 files…".to_string(),
+                input: json!({
+                    "summary": "Reading 3 files…",
+                    "source": "ptywright-screen"
+                }),
             })
         );
+    }
+
+    #[test]
+    fn visible_tool_activity_parses_read_file_path_from_callout() {
+        let screen = "\
+ README.md
+
+⏺ Reading 1 file… (ctrl+o to expand)
+  ⎿  README.md
+
+────────────────────────────────────────────────────────────────────────────────";
+
+        assert_eq!(
+            visible_ptywright_tool(screen),
+            Some(VisiblePtywrightTool {
+                key: "progress:Read:README.md".to_string(),
+                name: "Read".to_string(),
+                summary: "Reading 1 file…".to_string(),
+                input: json!({
+                    "file_path": "README.md",
+                    "summary": "Reading 1 file…",
+                    "source": "ptywright-screen"
+                }),
+            })
+        );
+    }
+
+    #[test]
+    fn visible_tool_activity_parses_edit_diff_from_visible_hunk() {
+        let screen = "\
+⏺ Reading 1 file… (ctrl+o to expand)
+  ⎿  README.md
+
+  32 -All four paths are supported.
+  32 +All four install paths are supported.
+
+✻ Worked for 2s";
+
+        let tool = visible_ptywright_tool(screen).expect("visible edit");
+        assert_eq!(tool.name, "Edit");
+        assert_eq!(tool.summary, "README.md");
+        assert_eq!(tool.input["file_path"], "README.md");
+        let patch = tool.input["patch"].as_str().expect("patch");
+        assert!(patch.contains("diff --git a/README.md b/README.md"));
+        assert!(patch.contains("-All four paths are supported."));
+        assert!(patch.contains("+All four install paths are supported."));
     }
 
     #[test]
@@ -1534,6 +1868,13 @@ Esc to interrupt";
     fn claude_access_banner_is_treated_as_error() {
         assert!(answer_looks_like_claude_error(
             "Your organization has disabled Claude subscription access for Claude Code"
+        ));
+    }
+
+    #[test]
+    fn claude_missing_conversation_banner_is_treated_as_error() {
+        assert!(answer_looks_like_claude_error(
+            "No conversation found with session ID: de60e996-0fd3-41fc-940b-d404f7890869"
         ));
     }
 

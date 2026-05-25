@@ -90,12 +90,17 @@ export function UsagePopover({
       </div>
 
       {snapshot.buckets.length > 0 ? (
-        <ul className={styles.bucketList}>
-          {snapshot.buckets.map((b) => bucketRow(b, b.key === activeBucketKey))}
-        </ul>
-      ) : null}
-
-      {snapshot.note && <div className={styles.footnote}>{snapshot.note}</div>}
+        <>
+          <ul className={styles.bucketList}>
+            {snapshot.buckets.map((b) => bucketRow(b, b.key === activeBucketKey))}
+          </ul>
+          {snapshot.note && <div className={styles.footnote}>{snapshot.note}</div>}
+        </>
+      ) : (
+        <div className={styles.emptyState}>
+          {snapshot.note ?? "Loading usage data..."}
+        </div>
+      )}
     </div>
   );
 }

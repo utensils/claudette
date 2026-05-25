@@ -67,9 +67,7 @@
   background: color-mix(in srgb, var(--status-stopped) 25%, transparent);
 }
 
-/* Disabled state — Claude-family session with the experimental
-   Claude Code Usage flag off. Same battery silhouette as the live
-   meter, no fill, dimmed colors. Click navigates to Settings. */
+/* Legacy disabled state kept for stale snapshots from older builds. */
 .disabled {
   color: var(--text-dim);
   opacity: 0.55;

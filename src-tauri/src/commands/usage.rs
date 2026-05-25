@@ -2,22 +2,20 @@ use tauri::State;
 
 use crate::commands::agent_backends::load_backend_secret;
 use crate::state::AppState;
-use crate::usage::{self, ClaudeCodeUsage};
 use claudette::agent::{CodexAppServerOptions, CodexAppServerSession};
 use claudette::agent_backend::{AgentBackendConfig, AgentBackendKind};
 use claudette::db::Database;
 use claudette::usage::{
-    UsageSnapshot, anthropic_oauth, codex_account, local_aggregate, openrouter,
+    ClaudeCodeUsage, UsageSnapshot, codex_account, local_aggregate, openrouter, ptywright_claude,
 };
 
 #[tauri::command]
-pub async fn get_claude_code_usage(state: State<'_, AppState>) -> Result<ClaudeCodeUsage, String> {
-    usage::get_usage(&state.usage_cache).await
+pub async fn get_claude_code_usage(_state: State<'_, AppState>) -> Result<ClaudeCodeUsage, String> {
+    ptywright_claude::get_usage().await
 }
 
 /// Per-session usage snapshot. Dispatches to the right source based on
-/// the backend's kind and whether the user has opted in to the
-/// experimental Anthropic OAuth Usage API.
+/// the backend's kind.
 ///
 /// The frontend passes the active backend config (kind, base_url, id,
 /// default_model) rather than letting Rust look it up — the active
@@ -32,25 +30,19 @@ pub async fn get_session_usage(
     workspace_id: String,
     chat_session_id: String,
     backend: AgentBackendConfig,
-    usage_insights_enabled: bool,
 ) -> Result<UsageSnapshot, String> {
     let now_ms = chrono::Utc::now().timestamp_millis();
 
-    // Anthropic-family backends (subscription OAuth lives behind the
-    // experimental gate). When the gate is off, return the disabled-state
-    // stub so the frontend renders the indicator in greyed mode without
-    // leaking any per-session token data the user hasn't asked for.
+    // Anthropic-family backends read usage from the official Claude Code
+    // `/usage` screen through ptywright.
     //
     // OpenAI / Custom OpenAI / Ollama / LM Studio also default to the
     // `claude_code` harness for gateway translation, but they go to the
     // local-aggregate branch below — the meter shows tokens recorded
-    // by Claudette, not Anthropic OAuth quotas, so no gate applies.
+    // by Claudette, not Claude Code subscription quotas.
     if is_claude_family(&backend.kind) {
-        if !usage_insights_enabled {
-            return Ok(UsageSnapshot::experimental_stub(backend.kind, now_ms));
-        }
-        return match anthropic_oauth::get_usage(&state.usage_cache).await {
-            Ok(usage) => Ok(anthropic_oauth::snapshot_from_usage(
+        return match ptywright_claude::get_usage().await {
+            Ok(usage) => Ok(ptywright_claude::snapshot_from_usage(
                 &usage,
                 backend.kind,
                 now_ms,
@@ -164,10 +156,9 @@ fn pi_model_is_openrouter(model: Option<&str>) -> bool {
 
 /// Mirror of the TS-side `CLAUDE_FAMILY_KINDS` in
 /// `src/ui/src/components/chat/composer/usageIndicatorMode.ts`. Membership
-/// is "auth source is Anthropic Pro/Max OAuth". Codex Subscription is NOT
-/// here — its auth is Codex-side and the Anthropic Usage API can never
-/// speak for it, even though its default harness happens to be the Claude
-/// CLI gateway.
+/// is "usage source is the official Claude Code app". Codex Subscription is
+/// NOT here — its auth and quotas live on the Codex side, even though its
+/// default harness happens to be the Claude CLI gateway.
 fn is_claude_family(kind: &AgentBackendKind) -> bool {
     matches!(
         kind,

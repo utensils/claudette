@@ -99,6 +99,15 @@
   letter-spacing: 0.02em;
 }
 
+.emptyState {
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+  line-height: 1.4;
+}
+
 .footnote {
   font-size: 10.5px;
   line-height: 1.4;

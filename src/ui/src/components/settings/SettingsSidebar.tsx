@@ -7,7 +7,6 @@ import {
   Clock,
   FileCode,
   GitBranch,
-  FlaskConical,
   BarChart3,
   Puzzle,
   Bookmark,
@@ -31,6 +30,7 @@ export function getAppSections() {
     { id: "general", icon: SlidersHorizontal },
     { id: "apps", icon: AppWindow },
     { id: "models", icon: Cpu },
+    { id: "usage", icon: BarChart3 },
     { id: "appearance", icon: Palette },
     { id: "notifications", icon: Bell },
     { id: "automation", icon: Clock },
@@ -55,12 +55,12 @@ export function SettingsSidebar() {
   const setSettingsSection = useAppStore((s) => s.setSettingsSection);
   const closeSettings = useAppStore((s) => s.closeSettings);
   const repositories = useAppStore((s) => s.repositories);
-  const usageInsightsEnabled = useAppStore((s) => s.usageInsightsEnabled);
 
   const sectionLabel = (id: string) => {
     if (id === "general") return t("settings:nav_general");
     if (id === "apps") return t("settings:nav_apps");
     if (id === "models") return t("settings:nav_models");
+    if (id === "usage") return t("settings:nav_usage");
     if (id === "appearance") return t("settings:nav_appearance");
     if (id === "notifications") return t("settings:nav_notifications");
     if (id === "automation") return t("settings:nav_automation");
@@ -102,29 +102,6 @@ export function SettingsSidebar() {
           {sectionLabel(s.id)}
         </button>
       ))}
-
-      {usageInsightsEnabled && (
-        <button
-          className={
-            settingsSection === "usage" ? styles.navItemActive : styles.navItem
-          }
-          onClick={() => setSettingsSection("usage")}
-        >
-          <BarChart3 size={14} />
-          {t("settings:nav_usage")}
-        </button>
-      )}
-
-      <div className={styles.groupLabel}>{t("settings:group_more")}</div>
-      <button
-        className={
-          settingsSection === "experimental" ? styles.navItemActive : styles.navItem
-        }
-        onClick={() => setSettingsSection("experimental")}
-      >
-        <FlaskConical size={14} />
-        {t("settings:nav_experimental")}
-      </button>
 
       <div className={styles.groupLabel}>{t("settings:group_repositories")}</div>
       {repositories.map((repo) => {

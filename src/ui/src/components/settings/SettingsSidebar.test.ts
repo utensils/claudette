@@ -23,10 +23,10 @@ describe("getAppSections", () => {
     );
   });
 
-  it("keeps Usage out of the always-visible app sections", () => {
+  it("shows Usage as an always-visible app section", () => {
     expect(
       getAppSections().map((section) => section.id),
-    ).not.toContain("usage");
+    ).toContain("usage");
   });
 
   it("always shows the Help section", () => {

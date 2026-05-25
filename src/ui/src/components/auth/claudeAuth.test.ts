@@ -170,7 +170,7 @@ describe("isClaudeAuthError", () => {
 
   it("does not route ENV_AUTH usage-scope errors to interactive login", () => {
     expect(
-      isClaudeAuthError("ENV_AUTH: Usage Insights requires standard OAuth login."),
+      isClaudeAuthError("ENV_AUTH: Claude Code usage requires standard OAuth login."),
     ).toBe(false);
   });
 
@@ -202,7 +202,7 @@ describe("classifyAuthError", () => {
 
   it("returns null for ENV_AUTH usage-scope errors", () => {
     expect(
-      classifyAuthError("ENV_AUTH: Usage Insights requires standard OAuth login."),
+      classifyAuthError("ENV_AUTH: Claude Code usage requires standard OAuth login."),
     ).toBeNull();
   });
 

@@ -62,9 +62,6 @@ export interface SettingsSlice {
   projectViewIssuesPrsEnabled: boolean;
   setProjectViewIssuesPrsEnabled: (enabled: boolean) => void;
 
-  // Experimental
-  usageInsightsEnabled: boolean;
-  setUsageInsightsEnabled: (enabled: boolean) => void;
   disable1mContext: boolean;
   setDisable1mContext: (v: boolean) => void;
   alternativeBackendsAvailable: boolean;
@@ -76,9 +73,9 @@ export interface SettingsSlice {
   /// Codex Native alt-backend support without Pi).
   piSdkAvailable: boolean;
   setPiSdkAvailable: (available: boolean) => void;
-  /// Whether the experimental ptywright Claude harness was compiled
-  /// into this binary. The UI uses this to hide the ptywright runtime
-  /// option in normal builds.
+  /// Whether the ptywright Claude harness was compiled into this
+  /// binary. The UI uses this to hide the ptywright runtime option in
+  /// builds that do not include that harness.
   ptywrightClaudeAvailable: boolean;
   setPtywrightClaudeAvailable: (available: boolean) => void;
   alternativeBackendsEnabled: boolean;
@@ -190,8 +187,6 @@ export const createSettingsSlice: StateCreator<
   projectViewIssuesPrsEnabled: false,
   setProjectViewIssuesPrsEnabled: (enabled) =>
     set({ projectViewIssuesPrsEnabled: enabled }),
-  usageInsightsEnabled: false,
-  setUsageInsightsEnabled: (enabled) => set({ usageInsightsEnabled: enabled }),
   disable1mContext: false,
   setDisable1mContext: (v) => set({ disable1mContext: v }),
   alternativeBackendsAvailable: false,

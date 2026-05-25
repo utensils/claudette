@@ -110,7 +110,6 @@ export function ChatPanel() {
     steerQueuedTooltip,
     toolDisplayMode,
     updateQueuedMessage,
-    usageInsightsEnabled,
     workspaceEnvironmentError,
     workspaceEnvironmentPreparing,
     ws,
@@ -621,7 +620,6 @@ export function ChatPanel() {
         const result = await nativeHandler.execute(
           {
             repoId: repo?.remote_connection_id ? null : repo?.id ?? null,
-            usageInsightsEnabled,
             openPluginSettings,
             repository: repo ? { name: repo.name, path: repo.path } : null,
             workspace: ws

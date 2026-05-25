@@ -15,10 +15,9 @@ import type {
 import type { AppState } from "../useAppStore";
 
 export interface SystemSlice {
-  // Claude Code Usage (legacy Anthropic OAuth poller — global per-account
-  // payload from `get_claude_code_usage`). Kept for the existing
-  // `useUsageInsightsPoller` so the settings page can keep surfacing the
-  // raw API shape even when the indicator is rendering a `UsageSnapshot`.
+  // Claude Code Usage (global per-account payload from `get_claude_code_usage`).
+  // The settings page uses this legacy-shaped object while the composer
+  // indicator renders a per-session `UsageSnapshot`.
   claudeCodeUsage: ClaudeCodeUsage | null;
   setClaudeCodeUsage: (usage: ClaudeCodeUsage | null) => void;
 

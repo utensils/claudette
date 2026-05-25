@@ -10,7 +10,7 @@ By default Claudette spawns the official `claude` CLI authenticated against Anth
 - **[OpenAI](/claudette/features/providers/openai-codex/#openai-api)** — `gpt-*` models via the OpenAI API gateway.
 - **[Codex](/claudette/features/providers/openai-codex/#codex)** — ChatGPT subscription-backed Codex through the native `codex app-server` harness.
 - **[Pi](/claudette/features/providers/pi/)** — models/providers discovered from Pi's SDK, executed through Claudette's bundled Pi sidecar with Claudette permission mediation.
-- **[ptywright Claude](/claudette/features/providers/ptywright-claude/)** — experimental feature-flagged runtime for the Anthropic card that drives interactive Claude Code in a hidden PTY instead of `claude -p`.
+- **[ptywright Claude](/claudette/features/providers/ptywright-claude/)** — compile-time runtime option for the Anthropic card that drives interactive Claude Code in a hidden PTY instead of `claude -p`.
 
 On startup Claudette quietly checks for local providers. If it finds the Codex CLI, an Ollama daemon on `localhost:11434`, an LM Studio server on `localhost:1234`, or Pi models reachable through the bundled Pi SDK sidecar, that provider is auto-enabled and its model list is refreshed. Turning a local provider off in Settings records an opt-out, so Claudette will not re-enable it on the next launch. OpenAI API stays manual because it requires an API key and a remote account. Pi's startup probe is heavier than the localhost probes (it cold-starts the Bun sidecar), but it's what keeps the chat-header model picker populated with Pi's discovered models without forcing the user to open Settings.
 
@@ -51,7 +51,7 @@ Claudette splits providers into two architectural categories:
 - **OpenAI-Responses translation** (OpenAI / legacy Codex / CustomOpenAi): full Anthropic ↔ OpenAI `/v1/responses` translation in both directions, since these backends don't speak Anthropic.
 - **Anthropic pass-through** (LM Studio): forward the Anthropic body verbatim to upstream `/v1/messages`, stream 2xx responses through unchanged, intercept non-2xx to fix LM Studio's HTTP 500 mis-classification of context-overflow errors. Wire format is already correct; we only translate status codes on the error path.
 
-**Native and sidecar harnesses** (`CodexNative`, `PiSdk`, experimental `PtywrightClaude`) — Claudette speaks to a purpose-built subprocess or hidden interactive PTY instead of the standard print-mode Claude CLI path. Codex uses `codex app-server --listen stdio://`; Pi uses Claudette's bundled Bun sidecar embedding `@earendil-works/pi-coding-agent`; ptywright drives the real interactive `claude` TUI through a Rust PTY library and Lua classifier.
+**Native and sidecar harnesses** (`CodexNative`, `PiSdk`, `PtywrightClaude`) — Claudette speaks to a purpose-built subprocess or hidden interactive PTY instead of the standard print-mode Claude CLI path. Codex uses `codex app-server --listen stdio://`; Pi uses Claudette's bundled Bun sidecar embedding `@earendil-works/pi-coding-agent`; ptywright drives the real interactive `claude` TUI through a Rust PTY library and Lua classifier.
 
 ### Runtime override per backend
 
@@ -60,7 +60,7 @@ Some kinds support more than one harness. **Settings > Models** shows a **Runtim
 - **Ollama, LM Studio** — default to the **Pi** harness (more capable agent loop than proxying the Claude CLI through `ANTHROPIC_BASE_URL`). **Claude CLI** stays available as a fallback for users who prefer the original wire-format-passthrough behavior or hit a Pi limitation.
 - **OpenAI API, Custom OpenAI** — default stays on **Claude CLI** (gateway translation). **Pi** is opt-in.
 - **Codex Native** — default stays on the **Codex app-server**. **Pi** is opt-in (Pi's own OpenAI provider, requiring `pi auth` to be configured).
-- **Anthropic** — default stays on **Claude CLI**. Experimental builds compiled with `ptywright-claude` also show **ptywright Claude**, which runs interactive Claude Code in a hidden PTY rather than `claude -p`.
+- **Anthropic** — default stays on **Claude CLI**. Builds compiled with `ptywright-claude` also show **ptywright Claude**, which runs interactive Claude Code in a hidden PTY rather than `claude -p`.
 - **Custom Anthropic, Codex Subscription** — locked to **Claude CLI**. Pi is **never** offered for Claude-subscription / Anthropic-OAuth flows; the resolver also enforces this at chat-send time.
 
 The override persists as a `runtime_harness` field on the backend config (`AgentBackendConfig::effective_harness` in `src/agent_backend.rs`). Picking the default value clears the override so future default-policy changes pick the user back up.

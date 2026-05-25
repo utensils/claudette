@@ -1560,8 +1560,8 @@ pub struct HostEnvFlags {
     /// `false`, even if `alternative_backends_compiled` is `true` (a
     /// build can ship Codex Native alt-backend support without Pi).
     pub pi_sdk_compiled: bool,
-    /// Reports whether the experimental ptywright Claude harness was
-    /// compiled into this binary.
+    /// Reports whether the ptywright Claude harness was compiled into
+    /// this binary.
     pub ptywright_claude_compiled: bool,
 }
 

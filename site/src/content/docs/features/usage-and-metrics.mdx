@@ -5,8 +5,8 @@ description: Track Claude Code consumption against your plan and inspect Claudet
 
 Claudette surfaces three related but distinct views:
 
-1. **Composer usage meter** — small battery indicator next to the mic button in every chat composer. Always visible for Codex / OpenAI / OpenRouter / Pi / Ollama / LM Studio sessions (driven by Claudette's per-turn token records). For Claude-family sessions, the meter is greyed out until you opt in to the **Claude Code Usage** experimental toggle, at which point it surfaces real Anthropic subscription quotas.
-2. **Claude Code subscription panel** — the deeper **Settings > Usage** view, gated by the same toggle. Shows session / weekly limits and resets.
+1. **Composer usage meter** — small battery indicator next to the mic button in every chat composer. Always visible for Claude Code, Codex / OpenAI / OpenRouter / Pi / Ollama / LM Studio sessions. Claude-family sessions read the official Claude Code `/usage` screen through ptywright; other providers use Claudette's per-turn token records plus provider-specific extras where available.
+2. **Claude Code subscription panel** — the deeper **Settings > Usage** view. Shows session / weekly limits and resets from Claude Code.
 3. **Claudette metrics** — local activity (workspaces, sessions, commits, slash commands). Computed from Claudette's database; never sent off-machine.
 
 ## Composer usage meter
@@ -15,7 +15,7 @@ The composer indicator picks a data source per backend:
 
 | Backend kind | Data source | Always-on? |
 |---|---|---|
-| Anthropic / Custom Anthropic | Anthropic OAuth Usage API (subscription quotas) | Off by default — gated by the **Claude Code Usage** toggle |
+| Anthropic / Custom Anthropic | Official Claude Code `/usage` screen via ptywright (subscription quotas) | Yes |
 | Codex Native / Codex Subscription | Live Codex `account/rateLimits/*` quotas (Session 5h + Weekly) when available; falls back to local-aggregate tokens with a plain `Codex` label until the first rate-limits push lands | Yes |
 | OpenAI API / Custom OpenAI / OpenRouter | Local-aggregate tokens + OpenRouter `/credits` balance when the active endpoint is OpenRouter | Yes |
 | Ollama / LM Studio / Pi | Local-aggregate tokens; Pi OpenRouter models also show OpenRouter `/credits` balance | Yes |
@@ -26,13 +26,11 @@ Pi sessions record token usage and provider-reported cost at the end of each tur
 
 ## Claude Code subscription panel
 
-The **Settings > Usage** panel shows your subscription type, rate-limit tier, and current consumption against your plan. Open it from the sidebar footer or via the `/usage` slash command.
-
-This panel is gated by the **Claude Code Usage** experimental toggle (off by default). When the toggle is off, Claudette never reads your Claude Code OAuth tokens for usage data — they stay strictly in the keychain / `.credentials.json` for the `claude` CLI's own use. Enable it in **Settings > Experimental** if you want the panel. Requires a Pro or Max plan with standard login (env-var auth tokens like `CLAUDE_CODE_OAUTH_TOKEN` lack the OAuth scopes the API needs).
+The **Settings > Usage** panel shows current consumption against your Claude Code plan. Open it from the Settings sidebar or via the `/usage` slash command.
 
 Claude Code sign-in itself is separate and always available in **Settings > Models**. Usage credential failures reuse that same sign-in flow.
 
-The data comes from the same usage API your Claude Code CLI hits. Claudette caches the result for 5 minutes to avoid hammering the endpoint, and backs off for 2 minutes if a fetch fails (e.g. a rate limit). To force a refresh, close and reopen the panel.
+The data comes from the official interactive Claude Code app's `/usage` screen, read through ptywright. Claudette keeps a short in-process cache to avoid spawning Claude Code repeatedly while the composer meter and Usage panel refresh.
 
 To dive into the full Anthropic-hosted dashboard:
 
@@ -86,7 +84,7 @@ Archiving a workspace doesn't drop its activity from the metrics. Closed-out wor
 
 | Source | Data | Trigger |
 |---|---|---|
-| Anthropic usage API | Subscription, tier, token totals | Opening the Usage panel; cached 5 min |
+| Claude Code `/usage` via ptywright | Subscription quota buckets and reset times rendered by the official Claude Code app | Composer meter or Usage panel refresh |
 | OpenRouter credits API | Total, used, and remaining credits for OpenRouter-backed sessions | Composer meter refresh; 5-min cadence while active |
 | Local SQLite | Everything else | On view; never network |
 
