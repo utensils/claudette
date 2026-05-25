@@ -1,7 +1,6 @@
-use std::collections::{BTreeSet, hash_map::DefaultHasher};
+use std::collections::BTreeSet;
 use std::env;
 use std::fs;
-use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -785,7 +784,11 @@ fn submit_prompt_once(
             last_log_at = Instant::now();
         }
 
-        if editable_prompt && last_submit_nudge_at.elapsed() >= SUBMIT_NUDGE_INTERVAL {
+        let extension_reports_input_prompt =
+            state.state == "waiting_for_user_input" && grew >= PASTE_REACTION_BYTES;
+        if (editable_prompt || extension_reports_input_prompt)
+            && last_submit_nudge_at.elapsed() >= SUBMIT_NUDGE_INTERVAL
+        {
             tracing::debug!(
                 target: "claudette::agent",
                 ptywright_state = %state.state,
@@ -1006,14 +1009,29 @@ fn claude_project_slug(path: &Path) -> String {
 
 fn assistant_text_from_jsonl_transcript(path: &Path) -> Option<String> {
     let content = fs::read_to_string(path).ok()?;
-    content
-        .lines()
-        .rev()
-        .find_map(assistant_text_from_jsonl_line)
+    let mut texts = Vec::new();
+    for line in content.lines().rev() {
+        let Ok(value) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        if value.get("type").and_then(Value::as_str) == Some("user") {
+            break;
+        }
+        if let Some(text) = assistant_text_from_jsonl_value(&value) {
+            texts.push(text);
+        }
+    }
+    texts.reverse();
+    (!texts.is_empty()).then(|| texts.join("\n\n"))
 }
 
+#[cfg(test)]
 fn assistant_text_from_jsonl_line(line: &str) -> Option<String> {
     let value: Value = serde_json::from_str(line).ok()?;
+    assistant_text_from_jsonl_value(&value)
+}
+
+fn assistant_text_from_jsonl_value(value: &Value) -> Option<String> {
     if value.get("type")?.as_str()? != "assistant" {
         return None;
     }
@@ -1354,13 +1372,11 @@ impl PtywrightToolActivityEmitter {
     fn observe_state(
         &mut self,
         state: &ptywright::ExtensionStateSnapshot,
-        screen: &str,
+        _screen: &str,
         broadcast_tx: &broadcast::Sender<AgentEvent>,
         turn_tx: &mpsc::Sender<AgentEvent>,
     ) {
-        let visible = metadata_visible_tools(state)
-            .or_else(|| visible_ptywright_tool(screen).map(|tool| vec![tool]))
-            .unwrap_or_default();
+        let visible = metadata_visible_tools(state).unwrap_or_default();
         let visible_keys = visible
             .iter()
             .map(|tool| tool.key.clone())
@@ -1564,9 +1580,9 @@ impl PtywrightAssistantTextEmitter {
         broadcast_tx: &broadcast::Sender<AgentEvent>,
         turn_tx: &mpsc::Sender<AgentEvent>,
     ) {
-        if text.len() <= self.emitted.len() || !text.starts_with(&self.emitted) {
+        let Some(delta) = streaming_text_delta(&self.emitted, text) else {
             return;
-        }
+        };
         if !self.started {
             self.started = true;
             send_event(
@@ -1587,7 +1603,6 @@ impl PtywrightAssistantTextEmitter {
                 }),
             );
         }
-        let delta = text[self.emitted.len()..].to_string();
         self.emitted.push_str(&delta);
         send_event(
             broadcast_tx,
@@ -1602,56 +1617,42 @@ impl PtywrightAssistantTextEmitter {
     }
 }
 
-fn visible_ptywright_tool(screen: &str) -> Option<VisiblePtywrightTool> {
-    let lines = screen.lines().collect::<Vec<_>>();
-    if let Some(tool) = visible_ptywright_edit(&lines) {
-        return Some(tool);
+fn streaming_text_delta(emitted: &str, next: &str) -> Option<String> {
+    if next.is_empty() || next == emitted {
+        return None;
+    }
+    if let Some(delta) = next.strip_prefix(emitted) {
+        return (!delta.is_empty()).then(|| delta.to_string());
+    }
+    if let Some(index) = next.find(emitted) {
+        let start = index + emitted.len();
+        let delta = &next[start..];
+        return (!delta.is_empty()).then(|| delta.to_string());
     }
 
-    for (index, line) in lines.iter().enumerate().rev() {
-        let trimmed = line.trim();
-        if let Some(name) = trimmed
-            .strip_prefix("● Running tool:")
-            .or_else(|| trimmed.strip_prefix("⏺ Running tool:"))
-            .map(str::trim)
-            .filter(|name| !name.is_empty())
-        {
-            let summary = next_tool_summary(&lines, index + 1).unwrap_or_else(|| name.to_string());
-            let summary = clean_tool_summary(&summary);
-            let input = tool_input(name, &summary, &[])?;
-            return Some(VisiblePtywrightTool {
-                key: format!("running:{name}:{summary}"),
-                name: name.to_string(),
-                summary,
-                status: "running".to_string(),
-                input,
-            });
-        }
-
-        let Some(rest) = trimmed.strip_prefix("⏺").map(str::trim) else {
-            continue;
-        };
-        if !(rest.contains("(ctrl+o to expand)") || rest.ends_with('…')) {
-            continue;
-        }
-        let summary = clean_tool_summary(rest);
-        let name = infer_tool_name_from_progress(rest);
-        let paths = tool_callout_paths(&lines, index + 1);
-        let input = tool_input(&name, &summary, &paths)?;
-        let key_detail = if paths.is_empty() {
-            summary.clone()
-        } else {
-            paths.join(",")
-        };
-        return Some(VisiblePtywrightTool {
-            key: format!("progress:{name}:{key_detail}"),
-            name,
-            summary,
-            status: "running".to_string(),
-            input,
-        });
+    let max_overlap = emitted.chars().count().min(next.chars().count());
+    if let Some(overlap) = (1..=max_overlap).rev().find(|&len| {
+        let emitted_suffix = emitted
+            .chars()
+            .skip(emitted.chars().count().saturating_sub(len))
+            .collect::<String>();
+        let next_prefix = next.chars().take(len).collect::<String>();
+        emitted_suffix == next_prefix
+    }) {
+        let delta = next
+            .char_indices()
+            .nth(overlap)
+            .map(|(index, _)| &next[index..])
+            .unwrap_or("");
+        return (!delta.is_empty()).then(|| delta.to_string());
     }
-    None
+
+    let separator = if emitted.ends_with('\n') || next.starts_with('\n') {
+        ""
+    } else {
+        "\n"
+    };
+    Some(format!("{separator}{next}"))
 }
 
 fn metadata_visible_tools(
@@ -1701,136 +1702,6 @@ fn metadata_visible_tools(
     (!parsed.is_empty()).then_some(parsed)
 }
 
-#[derive(Clone, Debug)]
-struct VisibleDiffLine {
-    sign: char,
-    line_number: Option<usize>,
-    content: String,
-}
-
-fn visible_ptywright_edit(lines: &[&str]) -> Option<VisiblePtywrightTool> {
-    let mut groups: Vec<(usize, Vec<VisibleDiffLine>)> = Vec::new();
-    let mut current_start = 0;
-    let mut current = Vec::new();
-
-    for (index, line) in lines.iter().enumerate() {
-        if let Some(diff_line) = parse_visible_diff_line(line) {
-            if current.is_empty() {
-                current_start = index;
-            }
-            current.push(diff_line);
-        } else if !current.is_empty() {
-            groups.push((current_start, std::mem::take(&mut current)));
-        }
-    }
-    if !current.is_empty() {
-        groups.push((current_start, current));
-    }
-
-    let (start, group) = groups
-        .into_iter()
-        .rev()
-        .find(|(_, group)| visible_diff_group_has_edit(group))?;
-    let path = latest_tool_callout_path_before(lines, start).unwrap_or_else(|| "unknown".into());
-    let patch = synthetic_patch_for_visible_diff(&path, &group);
-    let summary = path.clone();
-    Some(VisiblePtywrightTool {
-        key: format!("edit:{path}:{}", stable_key_suffix(&patch)),
-        name: "Edit".to_string(),
-        summary,
-        status: "completed".to_string(),
-        input: json!({
-            "file_path": path,
-            "patch": patch
-        }),
-    })
-}
-
-fn parse_visible_diff_line(line: &str) -> Option<VisibleDiffLine> {
-    let trimmed = line.trim_start();
-    let mut digit_end = 0;
-    for (index, ch) in trimmed.char_indices() {
-        if ch.is_ascii_digit() {
-            digit_end = index + ch.len_utf8();
-        } else {
-            break;
-        }
-    }
-
-    let line_number = if digit_end > 0 {
-        trimmed[..digit_end].parse::<usize>().ok()
-    } else {
-        None
-    };
-    let rest = if digit_end > 0 {
-        trimmed[digit_end..].trim_start()
-    } else {
-        trimmed
-    };
-    if rest.starts_with("+++") || rest.starts_with("---") {
-        return None;
-    }
-    let sign = rest.chars().next()?;
-    if sign != '+' && sign != '-' {
-        return None;
-    }
-    let content = rest[sign.len_utf8()..].trim_start().to_string();
-    if line_number.is_none() && looks_like_file_list_entry(&content) {
-        return None;
-    }
-    Some(VisibleDiffLine {
-        sign,
-        line_number,
-        content,
-    })
-}
-
-fn visible_diff_group_has_edit(group: &[VisibleDiffLine]) -> bool {
-    group.iter().any(|line| line.line_number.is_some())
-        && group
-            .iter()
-            .any(|line| line.sign == '+' || line.sign == '-')
-}
-
-fn looks_like_file_list_entry(content: &str) -> bool {
-    let trimmed = content.trim();
-    !trimmed.is_empty()
-        && !trimmed.contains(' ')
-        && (trimmed.contains('/') || trimmed.contains('.'))
-}
-
-fn synthetic_patch_for_visible_diff(path: &str, group: &[VisibleDiffLine]) -> String {
-    let old_start = group
-        .iter()
-        .find(|line| line.sign == '-')
-        .and_then(|line| line.line_number)
-        .or_else(|| group.iter().find_map(|line| line.line_number))
-        .unwrap_or(1);
-    let new_start = group
-        .iter()
-        .find(|line| line.sign == '+')
-        .and_then(|line| line.line_number)
-        .unwrap_or(old_start);
-    let mut lines = vec![
-        format!("diff --git a/{path} b/{path}"),
-        format!("--- a/{path}"),
-        format!("+++ b/{path}"),
-        format!("@@ -{old_start} +{new_start} @@"),
-    ];
-    lines.extend(
-        group
-            .iter()
-            .map(|line| format!("{}{}", line.sign, line.content)),
-    );
-    lines.join("\n")
-}
-
-fn stable_key_suffix(value: &str) -> u64 {
-    let mut hasher = DefaultHasher::new();
-    value.hash(&mut hasher);
-    hasher.finish()
-}
-
 fn tool_input(name: &str, summary: &str, paths: &[String]) -> Option<Value> {
     let path = paths
         .first()
@@ -1854,37 +1725,6 @@ fn path_from_tool_summary(summary: &str) -> Option<String> {
         .find_map(clean_path_candidate)
 }
 
-fn tool_callout_paths(lines: &[&str], start: usize) -> Vec<String> {
-    let mut paths = Vec::new();
-    for line in lines.iter().skip(start).take(12) {
-        let trimmed = line.trim();
-        if trimmed.starts_with('⏺')
-            || trimmed.starts_with('●')
-            || trimmed.starts_with('✻')
-            || is_prompt_line(trimmed)
-            || is_horizontal_rule(trimmed)
-        {
-            break;
-        }
-        if let Some(path) = tool_callout_path(trimmed) {
-            paths.push(path);
-        }
-    }
-    paths
-}
-
-fn latest_tool_callout_path_before(lines: &[&str], before: usize) -> Option<String> {
-    lines[..before.min(lines.len())]
-        .iter()
-        .rev()
-        .find_map(|line| tool_callout_path(line.trim()))
-}
-
-fn tool_callout_path(trimmed: &str) -> Option<String> {
-    let rest = trimmed.strip_prefix('⎿')?.trim();
-    clean_path_candidate(rest)
-}
-
 fn clean_path_candidate(candidate: &str) -> Option<String> {
     let path = candidate
         .trim()
@@ -1900,59 +1740,6 @@ fn clean_path_candidate(candidate: &str) -> Option<String> {
     } else {
         None
     }
-}
-
-fn clean_tool_summary(summary: &str) -> String {
-    summary
-        .replace("(ctrl+o to expand)", "")
-        .replace("(ctrl+O to expand)", "")
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
-        .trim()
-        .to_string()
-}
-
-fn next_tool_summary(lines: &[&str], start: usize) -> Option<String> {
-    for line in lines.iter().skip(start) {
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-        if is_tool_summary_chrome(trimmed) {
-            continue;
-        }
-        return Some(trimmed.to_string());
-    }
-    None
-}
-
-fn is_tool_summary_chrome(line: &str) -> bool {
-    line == "Esc to interrupt"
-        || is_horizontal_rule(line)
-        || is_prompt_line(line)
-        || line.contains("⏵⏵")
-        || line.contains(" @ ")
-        || line.contains("· /")
-}
-
-fn infer_tool_name_from_progress(progress: &str) -> String {
-    let first = progress
-        .split(|c: char| c.is_whitespace() || c == '(' || c == ':')
-        .next()
-        .unwrap_or("Tool")
-        .trim_matches(|c: char| !c.is_alphanumeric() && c != '-' && c != '_');
-    match first {
-        "Reading" | "Read" => "Read",
-        "Searching" | "Search" | "Grep" => "Grep",
-        "Listing" | "List" => "LS",
-        "Running" | "Bash" => "Bash",
-        "Writing" | "Write" => "Write",
-        "Updating" | "Editing" | "Edit" => "Edit",
-        "" => "Tool",
-        other => other,
-    }
-    .to_string()
 }
 
 fn send_event(
@@ -2161,122 +1948,6 @@ clean line
     }
 
     #[test]
-    fn visible_tool_activity_parses_running_tool_row() {
-        let screen = "\
-Claude Code
-
-● Running tool: Edit
-  Updating src/lib.rs
-
-Esc to interrupt";
-
-        assert_eq!(
-            visible_ptywright_tool(screen),
-            Some(VisiblePtywrightTool {
-                key: "running:Edit:Updating src/lib.rs".to_string(),
-                name: "Edit".to_string(),
-                summary: "Updating src/lib.rs".to_string(),
-                status: "running".to_string(),
-                input: json!({
-                    "file_path": "src/lib.rs"
-                }),
-            })
-        );
-    }
-
-    #[test]
-    fn visible_tool_activity_parses_collapsible_progress_row() {
-        let screen = "\
-❯ explore
-
-⏺ Reading 3 files… (ctrl+o to expand)
-
-────────────────────────────────────────────────────────────────────────────────";
-
-        assert!(visible_ptywright_tool(screen).is_none());
-    }
-
-    #[test]
-    fn visible_tool_activity_parses_read_file_path_from_callout() {
-        let screen = "\
- README.md
-
-⏺ Reading 1 file… (ctrl+o to expand)
-  ⎿  README.md
-
-────────────────────────────────────────────────────────────────────────────────";
-
-        assert_eq!(
-            visible_ptywright_tool(screen),
-            Some(VisiblePtywrightTool {
-                key: "progress:Read:README.md".to_string(),
-                name: "Read".to_string(),
-                summary: "Reading 1 file…".to_string(),
-                status: "running".to_string(),
-                input: json!({
-                    "file_path": "README.md"
-                }),
-            })
-        );
-    }
-
-    #[test]
-    fn visible_tool_activity_ignores_pathless_read_chrome_callouts() {
-        let screen = "\
-⏺ Reading 1 file… (ctrl+o to expand)
-  ⎿  Tip: Use /theme to change the color theme
-  ⎿  $ ls website/content
-
-────────────────────────────────────────────────────────────────────────────────";
-
-        assert!(visible_ptywright_tool(screen).is_none());
-    }
-
-    #[test]
-    fn visible_tool_activity_uses_standard_grep_input_shape() {
-        let screen = "\
-❯ are the docs up to date?
-
-⏺ Searching for 1 pattern, reading 2 files… (ctrl+o to expand)
-
-────────────────────────────────────────────────────────────────────────────────";
-
-        assert_eq!(
-            visible_ptywright_tool(screen),
-            Some(VisiblePtywrightTool {
-                key: "progress:Grep:Searching for 1 pattern, reading 2 files…".to_string(),
-                name: "Grep".to_string(),
-                summary: "Searching for 1 pattern, reading 2 files…".to_string(),
-                status: "running".to_string(),
-                input: json!({
-                    "pattern": "Searching for 1 pattern, reading 2 files…"
-                }),
-            })
-        );
-    }
-
-    #[test]
-    fn visible_tool_activity_parses_edit_diff_from_visible_hunk() {
-        let screen = "\
-⏺ Reading 1 file… (ctrl+o to expand)
-  ⎿  README.md
-
-  32 -All four paths are supported.
-  32 +All four install paths are supported.
-
-✻ Worked for 2s";
-
-        let tool = visible_ptywright_tool(screen).expect("visible edit");
-        assert_eq!(tool.name, "Edit");
-        assert_eq!(tool.summary, "README.md");
-        assert_eq!(tool.input["file_path"], "README.md");
-        let patch = tool.input["patch"].as_str().expect("patch");
-        assert!(patch.contains("diff --git a/README.md b/README.md"));
-        assert!(patch.contains("-All four paths are supported."));
-        assert!(patch.contains("+All four install paths are supported."));
-    }
-
-    #[test]
     fn ptywright_metadata_surfaces_visible_tool_calls() {
         let mut state = ptywright::ExtensionStateSnapshot::new("thinking", 17);
         state.metadata = Some(json!({
@@ -2345,24 +2016,43 @@ Esc to interrupt";
     }
 
     #[test]
-    fn tool_summary_strips_terminal_expand_hint() {
+    fn assistant_text_from_jsonl_transcript_joins_latest_turn_assistant_text() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("session.jsonl");
+        fs::write(
+            &path,
+            [
+                r#"{"type":"user","message":{"role":"user","content":"previous"}}"#,
+                r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Old answer"}]}}"#,
+                r#"{"type":"user","message":{"role":"user","content":"current"}}"#,
+                r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"First paragraph."}]}}"#,
+                r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Second paragraph."}]}}"#,
+            ]
+            .join("\n"),
+        )
+        .expect("write transcript");
+
         assert_eq!(
-            clean_tool_summary("Reading 1 file… (ctrl+o to expand)"),
-            "Reading 1 file…"
+            assistant_text_from_jsonl_transcript(&path),
+            Some("First paragraph.\n\nSecond paragraph.".to_string())
         );
     }
 
     #[test]
-    fn visible_tool_activity_ignores_answer_bullets() {
-        let screen = "\
-❯ explain
-
-⏺ This is normal assistant prose.
-
-✻ Worked for 2s
-❯\u{00a0}";
-
-        assert!(visible_ptywright_tool(screen).is_none());
+    fn streaming_text_delta_appends_overlapping_reflowed_text() {
+        assert_eq!(
+            streaming_text_delta("alpha beta", "beta gamma"),
+            Some(" gamma".to_string())
+        );
+        assert_eq!(
+            streaming_text_delta("alpha ●", "● omega"),
+            Some(" omega".to_string())
+        );
+        assert_eq!(
+            streaming_text_delta("alpha", "alpha beta"),
+            Some(" beta".to_string())
+        );
+        assert_eq!(streaming_text_delta("alpha", "alpha"), None);
     }
 
     #[test]

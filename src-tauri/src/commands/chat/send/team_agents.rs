@@ -43,12 +43,19 @@ impl TeamAgentInputTracker {
             event:
                 InnerStreamEvent::ContentBlockStart {
                     index,
-                    content_block: Some(StartContentBlock::ToolUse { id, name, .. }),
+                    content_block:
+                        Some(StartContentBlock::ToolUse {
+                            id, name, input, ..
+                        }),
                 },
         }) = event
             && name == "Agent"
         {
-            self.inputs.insert(*index, (id.clone(), String::new()));
+            let input_json = input
+                .as_ref()
+                .map(serde_json::Value::to_string)
+                .unwrap_or_default();
+            self.inputs.insert(*index, (id.clone(), input_json));
             return;
         }
 
@@ -320,6 +327,17 @@ mod tests {
         assert!(
             build_claudette_dispatch_for_team_agent(
                 r#"{"team_name":"team","name":"worker","prompt":"   "}"#,
+            )
+            .unwrap()
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn team_agent_dispatch_ignores_ptywright_progress_agent_metadata() {
+        assert!(
+            build_claudette_dispatch_for_team_agent(
+                r#"{"description":"Explore agents","prompt":"Explore agents","count":2}"#,
             )
             .unwrap()
             .is_none()

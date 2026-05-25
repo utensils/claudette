@@ -529,6 +529,23 @@ export function useAgentStream() {
                         toolName: inner.content_block.name,
                       },
                     );
+                    const toolInput =
+                      inner.content_block.input &&
+                      typeof inner.content_block.input === "object" &&
+                      !Array.isArray(inner.content_block.input)
+                        ? (inner.content_block.input as Record<string, unknown>)
+                        : null;
+                    const agentDescription =
+                      inner.content_block.name === "Agent" &&
+                      typeof toolInput?.description === "string" &&
+                      toolInput.description.trim()
+                        ? toolInput.description.trim()
+                        : null;
+                    const agentToolUseCount =
+                      inner.content_block.name === "Agent" &&
+                      typeof toolInput?.count === "number"
+                        ? toolInput.count
+                        : null;
                     addToolActivity(sessionId, {
                       toolUseId: inner.content_block.id,
                       toolName: inner.content_block.name,
@@ -539,6 +556,10 @@ export function useAgentStream() {
                         ? extractToolSummary(inner.content_block.name, inputJson)
                         : "",
                       startedAt: new Date().toISOString(),
+                      agentDescription,
+                      agentStatus:
+                        inner.content_block.name === "Agent" ? "running" : null,
+                      agentToolUseCount,
                       assistantMessageOrdinal:
                         (turnMessageCountRef.current[sessionId] || 0) +
                         ((useAppStore.getState().streamingContent[sessionId] || "")
