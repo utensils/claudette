@@ -65,6 +65,42 @@ pub fn shell_env_is_cached() -> bool {
     SHELL_ENV.read().map(|g| g.is_some()).unwrap_or(false)
 }
 
+/// Parse a NUL-delimited `env`-style dump (`KEY=VALUE\0KEY=VALUE\0...`).
+///
+/// Splits each chunk on the FIRST `=`. Malformed entries (no `=`,
+/// empty key, non-UTF-8) are dropped without panicking — a single
+/// bad entry must not destroy the rest of the capture.
+///
+/// Returns a `BTreeMap` rather than a `HashMap` so iteration order is
+/// stable across runs, which makes diagnostic logs and Settings UI
+/// rendering deterministic.
+pub fn parse_env_dump(bytes: &[u8]) -> BTreeMap<String, String> {
+    let mut out = BTreeMap::new();
+    for chunk in bytes.split(|b| *b == 0) {
+        if chunk.is_empty() {
+            continue;
+        }
+        let Some(eq_idx) = chunk.iter().position(|b| *b == b'=') else {
+            continue;
+        };
+        if eq_idx == 0 {
+            // Empty key — skip.
+            continue;
+        }
+        let (key_bytes, rest) = chunk.split_at(eq_idx);
+        // `rest` starts with `=` — strip it.
+        let value_bytes = &rest[1..];
+        let Ok(key) = std::str::from_utf8(key_bytes) else {
+            continue;
+        };
+        let Ok(value) = std::str::from_utf8(value_bytes) else {
+            continue;
+        };
+        out.insert(key.to_string(), value.to_string());
+    }
+    out
+}
+
 /// Cached login-shell PATH, resolved once per process lifetime.
 static SHELL_PATH: OnceLock<Option<OsString>> = OnceLock::new();
 
@@ -613,6 +649,92 @@ mod tests {
     fn shell_path_is_cached_is_true_after_prewarm() {
         prewarm_shell_path();
         assert!(shell_path_is_cached());
+    }
+
+    // ---- parse_env_dump tests -----------------------------------------------
+
+    #[test]
+    fn parse_env_dump_handles_simple_kv() {
+        let dump = b"FOO=bar\0BAZ=qux\0";
+        let parsed = parse_env_dump(dump);
+        assert_eq!(
+            parsed.get("FOO").map(String::as_str),
+            Some("bar"),
+            "FOO should be bar"
+        );
+        assert_eq!(
+            parsed.get("BAZ").map(String::as_str),
+            Some("qux"),
+            "BAZ should be qux"
+        );
+        assert_eq!(parsed.len(), 2, "should have exactly 2 entries");
+    }
+
+    #[test]
+    fn parse_env_dump_preserves_embedded_equals_in_value() {
+        let dump = b"DATABASE_URL=postgres://u:p@h/db?option=1\0";
+        let parsed = parse_env_dump(dump);
+        assert_eq!(
+            parsed.get("DATABASE_URL").map(String::as_str),
+            Some("postgres://u:p@h/db?option=1"),
+            "embedded = in value must be preserved",
+        );
+    }
+
+    #[test]
+    fn parse_env_dump_preserves_multiline_values() {
+        let dump = b"GREETING=hello\nworld\0NEXT=ok\0";
+        let parsed = parse_env_dump(dump);
+        assert_eq!(
+            parsed.get("GREETING").map(String::as_str),
+            Some("hello\nworld"),
+            "newline embedded in value must be preserved",
+        );
+        assert_eq!(
+            parsed.get("NEXT").map(String::as_str),
+            Some("ok"),
+            "NEXT should be ok",
+        );
+    }
+
+    #[test]
+    fn parse_env_dump_skips_malformed_entries() {
+        let dump = b"GOOD=yes\0NO_EQUALS\0=empty_name\0\0BAD\0FINAL=ok\0";
+        let parsed = parse_env_dump(dump);
+        assert_eq!(
+            parsed.get("GOOD").map(String::as_str),
+            Some("yes"),
+            "GOOD should be present",
+        );
+        assert_eq!(
+            parsed.get("FINAL").map(String::as_str),
+            Some("ok"),
+            "FINAL should be present",
+        );
+        assert_eq!(parsed.len(), 2, "only 2 valid entries should be parsed");
+    }
+
+    #[test]
+    fn parse_env_dump_empty_input_returns_empty() {
+        assert!(
+            parse_env_dump(b"").is_empty(),
+            "empty input must return empty map"
+        );
+    }
+
+    #[test]
+    fn parse_env_dump_handles_non_utf8_gracefully() {
+        let dump = b"BAD=\xFF\xFE\0OK=fine\0";
+        let parsed = parse_env_dump(dump);
+        assert!(
+            !parsed.contains_key("BAD"),
+            "non-UTF-8 value entry must be dropped",
+        );
+        assert_eq!(
+            parsed.get("OK").map(String::as_str),
+            Some("fine"),
+            "valid entry after bad one must be preserved",
+        );
     }
 
     // ---- ShellEnv type and LAUNCH_ENV baseline tests ----------------------
