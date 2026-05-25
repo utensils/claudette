@@ -275,6 +275,14 @@ pub fn install_shell_env_for_test(env: ShellEnv) {
     }
 }
 
+/// Crate-wide mutex for tests that mutate the process-global `SHELL_ENV`
+/// static. Hold this lock for the duration of any test that calls
+/// `install_shell_env_for_test` or `invalidate_shell_env` to prevent
+/// parallel test threads from seeing each other's mutations.
+#[cfg(test)]
+#[doc(hidden)]
+pub static SHELL_ENV_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// Probe `$SHELL` for the full env. Returns `None` if `$SHELL` is
 /// unset, not absolute, or the probe fails.
 pub fn probe_shell_env() -> Option<BTreeMap<String, String>> {
@@ -921,8 +929,10 @@ mod tests {
 
     #[test]
     fn shell_env_returns_none_before_set() {
-        // SHELL_ENV is process-global and nothing in this test suite writes
-        // to it, so the None contract holds for the duration of the test run.
+        // SHELL_ENV is process-global. Acquire the test lock to ensure no
+        // other test has set it before we assert the None contract.
+        let _guard = SHELL_ENV_TEST_LOCK.lock().unwrap();
+        invalidate_shell_env();
         assert!(
             shell_env().is_none(),
             "shell_env() must return None until the probe has run",
@@ -1331,6 +1341,7 @@ mod tests {
 
     #[test]
     fn invalidate_shell_env_clears_cache() {
+        let _guard = SHELL_ENV_TEST_LOCK.lock().unwrap();
         use std::collections::BTreeMap;
         let mut vars = BTreeMap::new();
         vars.insert("FOO".into(), "bar".into());
@@ -1352,6 +1363,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn prewarm_with_shim_populates_cache_with_diff() {
+        let _guard = SHELL_ENV_TEST_LOCK.lock().unwrap();
         use std::os::unix::fs::PermissionsExt;
         let tmp = tempfile::tempdir().unwrap();
         let shim = tmp.path().join("rcshell");
@@ -1399,6 +1411,7 @@ mod tests {
 
     #[test]
     fn shell_path_reads_from_shell_env_when_present() {
+        let _guard = SHELL_ENV_TEST_LOCK.lock().unwrap();
         use std::collections::BTreeMap;
         let mut vars = BTreeMap::new();
         vars.insert("PATH".into(), "/from-shell".into());
@@ -1417,6 +1430,7 @@ mod tests {
 
     #[test]
     fn enriched_env_contains_shell_env_vars() {
+        let _guard = SHELL_ENV_TEST_LOCK.lock().unwrap();
         use std::collections::BTreeMap;
         let mut vars = BTreeMap::new();
         vars.insert("CUSTOM".into(), "user-set".into());

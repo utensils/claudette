@@ -338,6 +338,7 @@ pub fn precedence_of(name: &str) -> i32 {
         "env-shadowenv" => 60,
         "env-nix-devshell" => 40,
         "env-dotenv" => 20,
+        "shell-env" => 0,
         _ => 10,
     }
 }
@@ -373,6 +374,13 @@ pub async fn resolve_for_workspace_with_progress(
     progress: Option<&dyn EnvProgressSink>,
 ) -> ResolvedEnv {
     let mut names = backend.env_provider_names();
+    // Inject shell-env as a synthetic precedence-0 source whenever the
+    // global probe has produced a cached value. It is NOT a plugin and
+    // does NOT go through the backend abstraction — it is handled inline
+    // in the loop below before any backend.is_plugin_disabled check.
+    if crate::env::shell_env_is_cached() {
+        names.push("shell-env".to_string());
+    }
     // Sort: primary by precedence (ascending, so higher overwrites on
     // merge); secondary by name so unknown providers with tied
     // precedence collide deterministically instead of by HashMap
@@ -387,6 +395,48 @@ pub async fn resolve_for_workspace_with_progress(
     let mut sources = Vec::with_capacity(names.len());
 
     for name in names {
+        // Handle shell-env before the plugin disabled/unavailable checks
+        // because it is a synthetic source, not a backend plugin.
+        if name == "shell-env" {
+            // Honor the per-repo (and global) disabled set.
+            // `backend.is_plugin_disabled` is intentionally NOT called
+            // here — shell-env is not a registered plugin.
+            if disabled.contains(&name) {
+                sources.push(ResolvedSource {
+                    plugin_name: name,
+                    detected: false,
+                    vars_contributed: 0,
+                    cached: false,
+                    evaluated_at: SystemTime::now(),
+                    error: Some("disabled".to_string()),
+                });
+                continue;
+            }
+            if let Some(env) = crate::env::shell_env() {
+                for (k, v) in &env.vars {
+                    merged.insert(k.clone(), Some(v.clone()));
+                }
+                sources.push(ResolvedSource {
+                    plugin_name: "shell-env".to_string(),
+                    detected: true,
+                    vars_contributed: env.vars.len(),
+                    cached: true,
+                    evaluated_at: env.captured_at,
+                    error: None,
+                });
+            } else {
+                sources.push(ResolvedSource {
+                    plugin_name: "shell-env".to_string(),
+                    detected: false,
+                    vars_contributed: 0,
+                    cached: false,
+                    evaluated_at: SystemTime::now(),
+                    error: Some("probe not yet run".to_string()),
+                });
+            }
+            continue;
+        }
+
         // "Disabled" means either:
         //   - the user toggled it off per-repo (Environment panel), or
         //   - the plugin is globally disabled in the Plugins settings
@@ -1433,6 +1483,123 @@ mod tests {
         assert!(
             err.contains("re-consent") || err.contains("Reconsent") || err.contains("reconsent"),
             "expected reconsent error, got: {err}"
+        );
+    }
+
+    #[allow(clippy::await_holding_lock)]
+    #[tokio::test]
+    async fn shell_env_appears_as_lowest_precedence_source() {
+        let _guard = crate::env::SHELL_ENV_TEST_LOCK.lock().unwrap();
+        crate::env::invalidate_shell_env();
+        let tmp = tempfile::tempdir().unwrap();
+        let mut vars = std::collections::BTreeMap::new();
+        vars.insert("FROM_SHELL".into(), "yes".into());
+        crate::env::install_shell_env_for_test(crate::env::ShellEnv {
+            vars,
+            captured_at: std::time::SystemTime::UNIX_EPOCH,
+        });
+
+        let backend = MockBackend::new();
+        let cache = EnvCache::new();
+        let resolved = resolve_for_workspace(
+            &backend,
+            &cache,
+            tmp.path(),
+            &ws_info(),
+            &Default::default(),
+        )
+        .await;
+
+        crate::env::invalidate_shell_env();
+
+        assert_eq!(
+            resolved.vars.get("FROM_SHELL").and_then(|v| v.as_deref()),
+            Some("yes"),
+            "shell-env vars must merge into the resolved set",
+        );
+        assert!(
+            resolved
+                .sources
+                .iter()
+                .any(|s| s.plugin_name == "shell-env"),
+            "shell-env must appear as a source",
+        );
+    }
+
+    #[allow(clippy::await_holding_lock)]
+    #[tokio::test]
+    async fn direnv_overrides_shell_env_on_key_collision() {
+        let _guard = crate::env::SHELL_ENV_TEST_LOCK.lock().unwrap();
+        crate::env::invalidate_shell_env();
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join(".envrc"), "x").unwrap();
+
+        let mut shell_vars = std::collections::BTreeMap::new();
+        shell_vars.insert("FOO".into(), "from-shell".into());
+        crate::env::install_shell_env_for_test(crate::env::ShellEnv {
+            vars: shell_vars,
+            captured_at: std::time::SystemTime::UNIX_EPOCH,
+        });
+
+        let backend = MockBackend::new()
+            .with_plugin("env-direnv")
+            .detects("env-direnv", true)
+            .exports(
+                "env-direnv",
+                export_of(
+                    &[("FOO", Some("from-direnv"))],
+                    vec![tmp.path().join(".envrc")],
+                ),
+            );
+        let cache = EnvCache::new();
+        let resolved = resolve_for_workspace(
+            &backend,
+            &cache,
+            tmp.path(),
+            &ws_info(),
+            &Default::default(),
+        )
+        .await;
+
+        crate::env::invalidate_shell_env();
+
+        assert_eq!(
+            resolved.vars.get("FOO").and_then(|v| v.as_deref()),
+            Some("from-direnv"),
+            "env-direnv (precedence 100) must override shell-env (precedence 0)",
+        );
+    }
+
+    #[allow(clippy::await_holding_lock)]
+    #[tokio::test]
+    async fn shell_env_can_be_disabled() {
+        let _guard = crate::env::SHELL_ENV_TEST_LOCK.lock().unwrap();
+        crate::env::invalidate_shell_env();
+        let mut vars = std::collections::BTreeMap::new();
+        vars.insert("LEAKED".into(), "no".into());
+        crate::env::install_shell_env_for_test(crate::env::ShellEnv {
+            vars,
+            captured_at: std::time::SystemTime::UNIX_EPOCH,
+        });
+
+        let backend = MockBackend::new();
+        let cache = EnvCache::new();
+        let mut disabled = std::collections::HashSet::new();
+        disabled.insert("shell-env".to_string());
+        let resolved = resolve_for_workspace(
+            &backend,
+            &cache,
+            std::path::Path::new("/tmp"),
+            &ws_info(),
+            &disabled,
+        )
+        .await;
+
+        crate::env::invalidate_shell_env();
+
+        assert!(
+            !resolved.vars.contains_key("LEAKED"),
+            "disabled shell-env must not contribute vars",
         );
     }
 
