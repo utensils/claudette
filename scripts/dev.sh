@@ -615,7 +615,9 @@ if [[ "${CLAUDETTE_DEV_NO_EXTRA_RUST_WATCH:-0}" != "1" ]]; then
     [[ -d "$folder" ]] && existing_watch_folders+=("$folder")
   done
   if (( ${#existing_watch_folders[@]} )); then
-    watch_args=(--additional-watch-folders "${existing_watch_folders[@]}")
+    for folder in "${existing_watch_folders[@]}"; do
+      watch_args+=(--additional-watch-folders "$folder")
+    done
     echo "▸ Extra Rust watch: ${existing_watch_folders[*]}"
   fi
 fi
