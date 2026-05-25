@@ -101,6 +101,77 @@ pub fn parse_env_dump(bytes: &[u8]) -> BTreeMap<String, String> {
     out
 }
 
+/// Env-var names that are always denied regardless of user config.
+///
+/// Two groups:
+/// 1. Injection vectors — `LD_PRELOAD`, `DYLD_*`, `LD_LIBRARY_PATH`.
+///    Forwarding these into child processes is a classic privilege-
+///    escalation path and surprises users who didn't realize their
+///    shell init exported them.
+/// 2. Shell-presentation noise — `PS1`, `PROMPT_COMMAND`, `OLDPWD`,
+///    `PWD`, `SHLVL`, `_`, `STARSHIP_*` (matched as a prefix below).
+///    These have no meaning in a non-interactive subprocess and
+///    pollute the captured set.
+const BUILT_IN_DENY: &[&str] = &[
+    "LD_PRELOAD",
+    "LD_LIBRARY_PATH",
+    "DYLD_INSERT_LIBRARIES",
+    "DYLD_LIBRARY_PATH",
+    "DYLD_FALLBACK_LIBRARY_PATH",
+    "DYLD_FRAMEWORK_PATH",
+    "DYLD_FALLBACK_FRAMEWORK_PATH",
+    "TMPDIR",
+    "_",
+    "PS1",
+    "PS2",
+    "RPROMPT",
+    "PROMPT",
+    "PROMPT_COMMAND",
+    "OLDPWD",
+    "PWD",
+    "SHLVL",
+];
+
+/// Prefixes that are always denied. Separate from `BUILT_IN_DENY` so
+/// each entry stays cheap to check; we union the two in the matcher.
+const BUILT_IN_DENY_PREFIXES: &[&str] = &["STARSHIP_"];
+
+fn name_matches_built_in_deny(name: &str) -> bool {
+    if BUILT_IN_DENY.contains(&name) {
+        return true;
+    }
+    BUILT_IN_DENY_PREFIXES.iter().any(|p| name.starts_with(p))
+}
+
+/// Apply the built-in and user-supplied denylist to a captured env
+/// map. Returns `(kept, dropped_names)`. Invalid user globs are
+/// silently ignored (logged elsewhere) so a malformed Settings entry
+/// can't break env capture.
+pub fn apply_denylist(
+    vars: &BTreeMap<String, String>,
+    user_patterns: &[String],
+) -> (BTreeMap<String, String>, Vec<String>) {
+    let user_globs: Vec<glob::Pattern> = user_patterns
+        .iter()
+        .filter_map(|p| glob::Pattern::new(p).ok())
+        .collect();
+
+    let mut kept = BTreeMap::new();
+    let mut dropped = Vec::new();
+    for (name, value) in vars {
+        if name_matches_built_in_deny(name) {
+            dropped.push(name.clone());
+            continue;
+        }
+        if user_globs.iter().any(|g| g.matches(name)) {
+            dropped.push(name.clone());
+            continue;
+        }
+        kept.insert(name.clone(), value.clone());
+    }
+    (kept, dropped)
+}
+
 /// Cached login-shell PATH, resolved once per process lifetime.
 static SHELL_PATH: OnceLock<Option<OsString>> = OnceLock::new();
 
@@ -947,5 +1018,122 @@ mod tests {
             std::env::var("SystemRoot").expect("SystemRoot must be defined in a Windows test env");
         let out = expand_env_vars_windows(r"前%SystemRoot%後");
         assert_eq!(out, format!("前{system_root}後"));
+    }
+
+    // ---- apply_denylist tests -----------------------------------------------
+
+    #[test]
+    fn denylist_drops_hardcoded_injection_vectors() {
+        use std::collections::BTreeMap;
+        let mut vars = BTreeMap::new();
+        vars.insert("LD_PRELOAD".into(), "/evil.so".into());
+        vars.insert("DYLD_INSERT_LIBRARIES".into(), "/evil.dylib".into());
+        vars.insert("LD_LIBRARY_PATH".into(), "/etc/evil".into());
+        vars.insert("KEEP_ME".into(), "yes".into());
+        let (kept, dropped) = apply_denylist(&vars, &[]);
+        assert!(
+            !kept.contains_key("LD_PRELOAD"),
+            "LD_PRELOAD must be denied"
+        );
+        assert!(
+            !kept.contains_key("DYLD_INSERT_LIBRARIES"),
+            "DYLD_INSERT_LIBRARIES must be denied"
+        );
+        assert!(
+            !kept.contains_key("LD_LIBRARY_PATH"),
+            "LD_LIBRARY_PATH must be denied"
+        );
+        assert!(kept.contains_key("KEEP_ME"), "non-denied vars must survive");
+        assert!(
+            dropped.contains(&"LD_PRELOAD".to_string()),
+            "drop list includes LD_PRELOAD"
+        );
+        assert!(
+            dropped.contains(&"DYLD_INSERT_LIBRARIES".to_string()),
+            "drop list includes DYLD_INSERT_LIBRARIES"
+        );
+    }
+
+    #[test]
+    fn denylist_drops_shell_presentation_vars() {
+        use std::collections::BTreeMap;
+        let mut vars = BTreeMap::new();
+        vars.insert("PS1".into(), "$ ".into());
+        vars.insert("PROMPT_COMMAND".into(), "history -a".into());
+        vars.insert("OLDPWD".into(), "/tmp".into());
+        vars.insert("STARSHIP_SHELL".into(), "zsh".into());
+        vars.insert("USER_VAR".into(), "ok".into());
+        let (kept, _) = apply_denylist(&vars, &[]);
+        assert!(!kept.contains_key("PS1"), "PS1 must be denied");
+        assert!(
+            !kept.contains_key("PROMPT_COMMAND"),
+            "PROMPT_COMMAND must be denied"
+        );
+        assert!(!kept.contains_key("OLDPWD"), "OLDPWD must be denied");
+        assert!(
+            !kept.contains_key("STARSHIP_SHELL"),
+            "STARSHIP_* prefix must be denied"
+        );
+        assert!(
+            kept.contains_key("USER_VAR"),
+            "non-denied vars must survive"
+        );
+    }
+
+    #[test]
+    fn user_glob_denies_matching_names() {
+        use std::collections::BTreeMap;
+        let mut vars = BTreeMap::new();
+        vars.insert("AWS_ACCESS_KEY_ID".into(), "secret".into());
+        vars.insert("AWS_SECRET_KEY".into(), "secret".into());
+        vars.insert("STRIPE_API_KEY".into(), "secret".into());
+        vars.insert("PUBLIC_VAR".into(), "ok".into());
+        let patterns = vec!["AWS_*".to_string(), "STRIPE_*".to_string()];
+        let (kept, dropped) = apply_denylist(&vars, &patterns);
+        assert!(
+            !kept.contains_key("AWS_ACCESS_KEY_ID"),
+            "user glob must deny AWS_ACCESS_KEY_ID"
+        );
+        assert!(
+            !kept.contains_key("AWS_SECRET_KEY"),
+            "user glob must deny AWS_SECRET_KEY"
+        );
+        assert!(
+            !kept.contains_key("STRIPE_API_KEY"),
+            "user glob must deny STRIPE_API_KEY"
+        );
+        assert!(
+            kept.contains_key("PUBLIC_VAR"),
+            "unmatched names must survive"
+        );
+        assert_eq!(dropped.len(), 3, "3 user-glob drops, 0 built-in drops");
+    }
+
+    #[test]
+    fn user_glob_is_case_sensitive() {
+        use std::collections::BTreeMap;
+        let mut vars = BTreeMap::new();
+        vars.insert("AWS_KEY".into(), "secret".into());
+        vars.insert("aws_key".into(), "ok-on-posix".into());
+        let patterns = vec!["AWS_*".to_string()];
+        let (kept, _) = apply_denylist(&vars, &patterns);
+        assert!(!kept.contains_key("AWS_KEY"), "uppercase match denied");
+        assert!(
+            kept.contains_key("aws_key"),
+            "POSIX env names are case-sensitive — lowercase must survive",
+        );
+    }
+
+    #[test]
+    fn user_glob_invalid_pattern_is_ignored_not_panicked() {
+        use std::collections::BTreeMap;
+        let mut vars = BTreeMap::new();
+        vars.insert("KEEP".into(), "yes".into());
+        let patterns = vec!["[bad".to_string(), "OTHER_*".to_string()];
+        let (kept, _) = apply_denylist(&vars, &patterns);
+        assert!(
+            kept.contains_key("KEEP"),
+            "invalid glob is silently skipped"
+        );
     }
 }

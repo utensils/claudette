@@ -56,6 +56,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json", "registry"] }
 tracing-appender = "0.2"
 chrono = "0.4"
+glob = "0.3"
 
 [target.'cfg(windows)'.dependencies]
 # Read fresh PATH from HKCU + HKLM Environment registry keys so we pick up

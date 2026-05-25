@@ -857,6 +857,7 @@ dependencies = [
  "dirs",
  "flate2",
  "futures",
+ "glob",
  "interprocess",
  "libc",
  "minisign-verify",
