@@ -67,7 +67,12 @@ pub async fn get_usage() -> Result<ClaudeCodeUsage, String> {
 
 fn fetch_usage_sync() -> Result<ClaudeCodeUsage, String> {
     let claude_path = resolve_claude_path_blocking();
-    let cwd = dirs::home_dir().unwrap_or_else(std::env::temp_dir);
+    let cwd = dirs::home_dir()
+        .unwrap_or_else(std::env::temp_dir)
+        .join(".claudette")
+        .join("usage-probe");
+    std::fs::create_dir_all(&cwd)
+        .map_err(|e| format!("Failed to create Claude Code usage probe directory: {e}"))?;
     let mut target = ptywright::Target::new(claude_path.to_string_lossy().into_owned()).cwd(cwd);
     target = target
         .env(
@@ -101,22 +106,90 @@ fn fetch_usage_sync() -> Result<ClaudeCodeUsage, String> {
 fn fetch_usage_from_handle(
     handle: &mut ptywright::ExtensionHandle,
 ) -> Result<ClaudeCodeUsage, String> {
-    let (state, _) = handle
-        .turn(
-            "send_prompt",
-            json!({ "prompt": "/usage" }),
-            Some("wait_turn_matcher"),
-            json!({}),
-            USAGE_TIMEOUT,
-        )
-        .map_err(|e| {
-            let screen = handle.session().snapshot().plain_text;
-            format!(
-                "Failed to read Claude Code usage via ptywright: {e}; screen tail: {}",
-                debug_tail(&screen, 600)
+    for attempt in 0..3 {
+        clear_startup_barriers(handle)?;
+        let (state, _) = handle
+            .turn(
+                "slash_command",
+                json!({ "command": "usage" }),
+                Some("wait_turn_matcher"),
+                json!({}),
+                USAGE_TIMEOUT,
             )
-        })?;
+            .map_err(|e| {
+                let screen = handle.session().snapshot().plain_text;
+                format!(
+                    "Failed to read Claude Code usage via ptywright: {e}; screen tail: {}",
+                    debug_tail(&screen, 600)
+                )
+            })?;
 
+        if matches!(state.state.as_str(), "waiting_for_trust" | "starting") && attempt < 2 {
+            handle_startup_barrier(handle, &state)?;
+            continue;
+        }
+
+        return usage_from_state(handle, state);
+    }
+
+    Err("Claude Code usage screen did not become available".to_string())
+}
+
+fn clear_startup_barriers(handle: &mut ptywright::ExtensionHandle) -> Result<(), String> {
+    for _ in 0..3 {
+        let state = handle
+            .wait("wait_turn_matcher", json!({}), Duration::from_secs(10))
+            .map(|(state, _)| state)
+            .unwrap_or_else(|_| handle.state());
+        if !handle_startup_barrier(handle, &state)? {
+            return Ok(());
+        }
+    }
+    Ok(())
+}
+
+fn handle_startup_barrier(
+    handle: &mut ptywright::ExtensionHandle,
+    state: &ptywright::ExtensionStateSnapshot,
+) -> Result<bool, String> {
+    match state.state.as_str() {
+        "waiting_for_trust" => {
+            let dialog_id = state
+                .metadata
+                .as_ref()
+                .and_then(|metadata| metadata.get("dialog_id"))
+                .and_then(Value::as_str)
+                .ok_or_else(|| "Claude Code trust dialog did not include dialog_id".to_string())?;
+            tracing::debug!(
+                target: "claudette::usage",
+                dialog_id,
+                "approving Claude Code usage probe trust dialog"
+            );
+            handle
+                .send("approve_trust", json!({ "dialog_id": dialog_id }))
+                .map_err(|e| {
+                    format!("Failed to approve Claude Code usage probe trust dialog: {e}")
+                })?;
+            Ok(true)
+        }
+        "starting" if state.evidence.contains("welcome") => {
+            tracing::debug!(
+                target: "claudette::usage",
+                "dismissing Claude Code usage probe welcome screen"
+            );
+            handle
+                .send("dismiss_welcome", json!({}))
+                .map_err(|e| format!("Failed to dismiss Claude Code usage welcome screen: {e}"))?;
+            Ok(true)
+        }
+        _ => Ok(false),
+    }
+}
+
+fn usage_from_state(
+    handle: &ptywright::ExtensionHandle,
+    state: ptywright::ExtensionStateSnapshot,
+) -> Result<ClaudeCodeUsage, String> {
     match state.state.as_str() {
         "completed_turn" | "usage_screen" | "waiting_for_user_input" => {}
         "waiting_for_login" => {

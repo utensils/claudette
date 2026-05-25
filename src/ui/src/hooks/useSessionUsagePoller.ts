@@ -123,9 +123,19 @@ export function useSessionUsagePoller({
           if (cancelled) return;
           setSessionUsage(sessionId, snapshot);
           lastFetchAt = Date.now();
-        } catch {
-          // Settings UI surfaces auth/error states for the gated path;
-          // the indicator stays empty until the next poll cycle.
+        } catch (err) {
+          if (cancelled) return;
+          const message = err instanceof Error ? err.message : String(err);
+          setSessionUsage(sessionId, {
+            provider_kind: backend.kind,
+            source_label: backend.label,
+            buckets: [],
+            note: message
+              ? `Unable to load usage: ${message}`
+              : "Unable to load usage.",
+            fetched_at_ms: Date.now(),
+            experimental_disabled: false,
+          });
         } finally {
           inFlight = null;
         }
