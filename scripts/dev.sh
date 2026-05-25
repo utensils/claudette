@@ -327,9 +327,10 @@ started="$(date +%s)"
 # quotes, backslashes, or newlines don't break the discovery file. `python3`
 # is already an explicit prerequisite of the debug eval helper, so making
 # the devshell depend on it too is consistent.
-python3 -c '
+write_discovery_file() {
+  python3 -c '
 import json, sys
-out, pid, debug_port, vite_port, started, cwd, branch = sys.argv[1:8]
+out, pid, debug_port, vite_port, started, cwd, branch, data_dir = sys.argv[1:9]
 with open(out, "w") as f:
     json.dump({
         "pid": int(pid),
@@ -337,9 +338,13 @@ with open(out, "w") as f:
         "vite_port": int(vite_port),
         "cwd": cwd,
         "branch": branch,
+        "claudette_data_dir": data_dir or None,
         "started_at": int(started),
     }, f)
-' "$discovery_file" "$$" "$debug_port" "$vite_port" "$started" "$cwd" "$branch"
+' "$discovery_file" "$$" "$debug_port" "$vite_port" "$started" "$cwd" "$branch" "${CLAUDETTE_DATA_DIR:-}"
+}
+
+write_discovery_file
 
 sandbox_root=""
 
@@ -563,6 +568,8 @@ if (( clone_session )); then
   echo "[dev.sh] Note: cloned workspace .git files still point at the real repo's worktree admin dir; dev-app git writes will land in the real repo." >&2
   echo "[dev.sh] Note: claudette.db was rsync'd raw — quit the release app first if you need a guaranteed-consistent DB snapshot." >&2
 fi
+
+write_discovery_file
 
 cleanup() {
   rm -f "$discovery_file"

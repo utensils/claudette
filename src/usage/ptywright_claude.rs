@@ -20,6 +20,8 @@ const COMPLETED_TURN_STABLE_MS: u64 = 300;
 const STARTUP_READY_TIMEOUT: Duration = Duration::from_secs(5);
 const STARTUP_POLL_INTERVAL: Duration = Duration::from_millis(150);
 const USAGE_TIMEOUT: Duration = Duration::from_secs(45);
+const USAGE_DATA_READY_TIMEOUT: Duration = Duration::from_secs(12);
+const USAGE_DATA_POLL_INTERVAL: Duration = Duration::from_millis(250);
 const USAGE_CACHE_TTL_MS: u64 = 30_000;
 
 #[derive(Clone)]
@@ -60,10 +62,12 @@ pub async fn get_usage() -> Result<ClaudeCodeUsage, String> {
     let usage = tokio::task::spawn_blocking(fetch_usage_sync)
         .await
         .map_err(|e| format!("Failed to join ptywright usage task: {e}"))??;
-    *guard = Some(CachedUsage {
-        usage: usage.clone(),
-        fetched_at: usage.fetched_at,
-    });
+    if usage_has_limit_buckets(&usage) {
+        *guard = Some(CachedUsage {
+            usage: usage.clone(),
+            fetched_at: usage.fetched_at,
+        });
+    }
     Ok(usage)
 }
 
@@ -113,7 +117,7 @@ fn fetch_usage_from_handle(
         let (state, _) = handle
             .turn(
                 "slash_command",
-                json!({ "command": "usage", "dismiss_welcome": true }),
+                json!({ "command": "usage" }),
                 Some("wait_turn_matcher"),
                 json!({}),
                 USAGE_TIMEOUT,
@@ -131,7 +135,7 @@ fn fetch_usage_from_handle(
             continue;
         }
 
-        return usage_from_state(handle, state);
+        return wait_for_usage_data(handle, state);
     }
 
     Err("Claude Code usage screen did not become available".to_string())
@@ -139,15 +143,9 @@ fn fetch_usage_from_handle(
 
 fn clear_startup_barriers(handle: &mut ptywright::ExtensionHandle) -> Result<(), String> {
     let deadline = Instant::now() + STARTUP_READY_TIMEOUT;
-    let mut barriers_cleared = 0;
-
-    loop {
+    while Instant::now() < deadline {
         let state = handle.state();
         if handle_startup_barrier(handle, &state)? {
-            barriers_cleared += 1;
-            if barriers_cleared >= 4 {
-                return Ok(());
-            }
             std::thread::sleep(STARTUP_POLL_INTERVAL);
             continue;
         }
@@ -158,6 +156,16 @@ fn clear_startup_barriers(handle: &mut ptywright::ExtensionHandle) -> Result<(),
 
         std::thread::sleep(STARTUP_POLL_INTERVAL);
     }
+
+    let state = handle.state();
+    tracing::debug!(
+        target: "claudette::usage",
+        ptywright_state = %state.state,
+        evidence = %state.evidence,
+        metadata_keys = ?metadata_keys(state.metadata.as_ref()),
+        "Claude Code usage probe startup barrier wait expired"
+    );
+    Ok(())
 }
 
 fn handle_startup_barrier(
@@ -200,8 +208,8 @@ fn handle_startup_barrier(
 
 fn usage_from_state(
     handle: &ptywright::ExtensionHandle,
-    state: ptywright::ExtensionStateSnapshot,
-) -> Result<ClaudeCodeUsage, String> {
+    state: &ptywright::ExtensionStateSnapshot,
+) -> Result<Option<ClaudeCodeUsage>, String> {
     match state.state.as_str() {
         "completed_turn" | "usage_screen" | "waiting_for_user_input" => {}
         "waiting_for_login" => {
@@ -226,24 +234,70 @@ fn usage_from_state(
         }
     }
 
-    let usage = state
+    let Some(usage) = state
         .metadata
         .as_ref()
         .and_then(|metadata| metadata.get("usage"))
-        .ok_or_else(|| {
-            let screen = handle.session().snapshot().plain_text;
-            format!(
-                "Claude Code usage screen did not expose structured usage metadata (state={}, evidence={}); screen tail: {}",
-                state.state,
-                state.evidence,
-                debug_tail(&screen, 600)
-            )
-        })?;
+    else {
+        let screen = handle.session().snapshot().plain_text;
+        tracing::debug!(
+            target: "claudette::usage",
+            ptywright_state = %state.state,
+            evidence = %state.evidence,
+            metadata_keys = ?metadata_keys(state.metadata.as_ref()),
+            screen_tail = %debug_tail(&screen, 600),
+            "Claude Code usage screen did not expose structured usage metadata yet"
+        );
+        return Ok(None);
+    };
 
-    usage_from_metadata(usage)
+    let parsed = usage_from_metadata(usage);
+    if !usage_has_limit_buckets(&parsed) {
+        tracing::debug!(
+            target: "claudette::usage",
+            ptywright_state = %state.state,
+            evidence = %state.evidence,
+            metadata_keys = ?metadata_keys(state.metadata.as_ref()),
+            usage_keys = ?metadata_keys(Some(usage)),
+            "Claude Code usage metadata is present but limit buckets are not ready yet"
+        );
+        return Ok(None);
+    }
+
+    Ok(Some(parsed))
 }
 
-fn usage_from_metadata(value: &Value) -> Result<ClaudeCodeUsage, String> {
+fn wait_for_usage_data(
+    handle: &ptywright::ExtensionHandle,
+    initial_state: ptywright::ExtensionStateSnapshot,
+) -> Result<ClaudeCodeUsage, String> {
+    let deadline = Instant::now() + USAGE_DATA_READY_TIMEOUT;
+    let mut state = initial_state;
+
+    loop {
+        if let Some(usage) = usage_from_state(handle, &state)? {
+            return Ok(usage);
+        }
+
+        if Instant::now() >= deadline {
+            let screen = handle.session().snapshot().plain_text;
+            tracing::warn!(
+                target: "claudette::usage",
+                ptywright_state = %state.state,
+                evidence = %state.evidence,
+                metadata_keys = ?metadata_keys(state.metadata.as_ref()),
+                screen_tail = %debug_tail(&screen, 600),
+                "Claude Code usage screen did not publish limit buckets before timeout"
+            );
+            return Ok(empty_usage());
+        }
+
+        std::thread::sleep(USAGE_DATA_POLL_INTERVAL);
+        state = handle.state();
+    }
+}
+
+fn usage_from_metadata(value: &Value) -> ClaudeCodeUsage {
     let limits = value.get("limits").and_then(Value::as_object);
     let usage = UsageData {
         five_hour: limits
@@ -263,21 +317,29 @@ fn usage_from_metadata(value: &Value) -> Result<ClaudeCodeUsage, String> {
             .map(extra_usage_from_value),
     };
 
-    if usage.five_hour.is_none()
-        && usage.seven_day.is_none()
-        && usage.seven_day_sonnet.is_none()
-        && usage.seven_day_opus.is_none()
-        && usage.extra_usage.is_none()
-    {
-        return Err("Claude Code usage metadata did not include any limit buckets".into());
-    }
-
-    Ok(ClaudeCodeUsage {
+    ClaudeCodeUsage {
         subscription_type: Some("Claude Code".to_string()),
         rate_limit_tier: None,
         usage,
         fetched_at: now_millis(),
-    })
+    }
+}
+
+fn empty_usage() -> ClaudeCodeUsage {
+    ClaudeCodeUsage {
+        subscription_type: Some("Claude Code".to_string()),
+        rate_limit_tier: None,
+        usage: UsageData::default(),
+        fetched_at: now_millis(),
+    }
+}
+
+fn usage_has_limit_buckets(usage: &ClaudeCodeUsage) -> bool {
+    usage.usage.five_hour.is_some()
+        || usage.usage.seven_day.is_some()
+        || usage.usage.seven_day_sonnet.is_some()
+        || usage.usage.seven_day_opus.is_some()
+        || usage.usage.extra_usage.is_some()
 }
 
 fn limit_from_value(value: &Value) -> Option<UsageLimit> {
@@ -456,12 +518,21 @@ mod tests {
             }
         });
 
-        let usage = usage_from_metadata(&metadata).unwrap();
+        let usage = usage_from_metadata(&metadata);
         assert_eq!(usage.usage.five_hour.unwrap().utilization, 2.0);
         assert_eq!(usage.usage.seven_day.unwrap().utilization, 98.0);
         assert_eq!(usage.usage.seven_day_sonnet.unwrap().utilization, 9.0);
         assert_eq!(usage.usage.seven_day_opus.unwrap().utilization, 4.0);
         assert!(!usage.usage.extra_usage.unwrap().is_enabled);
+    }
+
+    #[test]
+    fn partial_usage_metadata_does_not_error() {
+        let usage = usage_from_metadata(&json!({ "cost_usd": 0.0 }));
+
+        assert!(!usage_has_limit_buckets(&usage));
+        assert!(usage.usage.five_hour.is_none());
+        assert!(usage.usage.seven_day.is_none());
     }
 
     #[test]
