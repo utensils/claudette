@@ -722,9 +722,9 @@ impl PluginRegistry {
         install_operation_timeout_interrupt(&lua, operation_timeout);
 
         // Run script load + function call + result conversion under a
-        // single timeout. Luau's interrupt deadline covers non-yielding
-        // pure-Lua loops, while the Tokio timeout still covers async host
-        // calls that are waiting outside the VM.
+        // single timeout. The Lua hook covers non-yielding pure-Lua
+        // loops, while the Tokio timeout still covers async host calls
+        // that are waiting outside the VM.
         let required_clis = plugin.manifest.required_clis.clone();
         let plugin_name_owned = plugin_name.to_string();
         let operation_owned = operation.to_string();
@@ -828,13 +828,17 @@ fn parse_timeout_value(value: serde_json::Value) -> Option<f64> {
 
 fn install_operation_timeout_interrupt(lua: &mlua::Lua, operation_timeout: Duration) {
     let deadline = Instant::now() + operation_timeout;
-    lua.set_interrupt(move |_| {
-        if Instant::now() >= deadline {
-            Err(mlua::Error::external(LuaOperationTimeout))
-        } else {
-            Ok(VmState::Continue)
-        }
-    });
+    lua.set_hook(
+        mlua::HookTriggers::new().every_nth_instruction(10_000),
+        move |_lua, _debug| {
+            if Instant::now() >= deadline {
+                Err(mlua::Error::external(LuaOperationTimeout))
+            } else {
+                Ok(VmState::Continue)
+            }
+        },
+    )
+    .expect("install Lua operation timeout hook");
 }
 
 fn is_lua_operation_timeout(error: &mlua::Error) -> bool {
