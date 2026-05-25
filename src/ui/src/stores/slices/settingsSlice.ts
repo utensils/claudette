@@ -3,6 +3,13 @@ import { DEFAULT_THEME_ID, DEFAULT_LIGHT_THEME_ID } from "../../styles/themes";
 import type { ClaudeFlagDef } from "../../services/claudeFlags";
 import type { AppState } from "../useAppStore";
 import type { AgentBackendConfig } from "../../services/tauri";
+import {
+  listShellEnv,
+  reloadShellEnv,
+  setShellEnvDenylist,
+  setShellEnvDisabled,
+  type ShellEnvSnapshot,
+} from "../../services/env";
 
 export type ToolDisplayMode = "grouped" | "inline";
 
@@ -135,6 +142,13 @@ export interface SettingsSlice {
   /// are fetched per-mount and live in the section component, not here.
   claudeFlagDefs: ClaudeFlagDef[] | null;
   setClaudeFlagDefs: (defs: ClaudeFlagDef[] | null) => void;
+
+  // Shell environment inheritance (issue #990)
+  shellEnv: ShellEnvSnapshot | null;
+  refreshShellEnv: () => Promise<void>;
+  setShellEnvDenylist: (patterns: string[]) => Promise<void>;
+  setShellEnvDisabled: (disabled: boolean) => Promise<void>;
+  reloadShellEnv: () => Promise<void>;
 }
 
 export const createSettingsSlice: StateCreator<
@@ -142,7 +156,7 @@ export const createSettingsSlice: StateCreator<
   [],
   [],
   SettingsSlice
-> = (set) => ({
+> = (set, get) => ({
   worktreeBaseDir: "",
   setWorktreeBaseDir: (dir) => set({ worktreeBaseDir: dir }),
   defaultTerminalAppId: null,
@@ -269,4 +283,26 @@ export const createSettingsSlice: StateCreator<
 
   claudeFlagDefs: null,
   setClaudeFlagDefs: (defs) => set({ claudeFlagDefs: defs }),
+
+  shellEnv: null,
+  refreshShellEnv: async () => {
+    try {
+      const snap = await listShellEnv();
+      set({ shellEnv: snap });
+    } catch (e) {
+      console.error("refreshShellEnv failed", e);
+    }
+  },
+  setShellEnvDenylist: async (patterns: string[]) => {
+    await setShellEnvDenylist(patterns);
+    await get().refreshShellEnv();
+  },
+  setShellEnvDisabled: async (disabled: boolean) => {
+    await setShellEnvDisabled(disabled);
+    await get().refreshShellEnv();
+  },
+  reloadShellEnv: async () => {
+    await reloadShellEnv();
+    await get().refreshShellEnv();
+  },
 });

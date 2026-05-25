@@ -88,3 +88,39 @@ export function envTargetFromRepo(repoId: string): EnvTarget {
 export function envTargetFromWorkspace(workspaceId: string): EnvTarget {
   return { kind: "workspace", workspace_id: workspaceId };
 }
+
+// ---------------------------------------------------------------------------
+// Shell environment inheritance (issue #990)
+// ---------------------------------------------------------------------------
+
+export type ShellEnvVarSnapshot = {
+  name: string;
+  value: string;
+  denied: boolean;
+};
+
+export type ShellEnvSnapshot = {
+  captured_at_ms: number;
+  forwarded: ShellEnvVarSnapshot[];
+  denied_built_in: string[];
+  denied_user: string[];
+  disabled: boolean;
+  source_files: string[];
+  error: string | null;
+};
+
+export function listShellEnv(): Promise<ShellEnvSnapshot> {
+  return invoke<ShellEnvSnapshot>("list_shell_env");
+}
+
+export function setShellEnvDenylist(patterns: string[]): Promise<void> {
+  return invoke<void>("set_shell_env_denylist", { patterns });
+}
+
+export function setShellEnvDisabled(disabled: boolean): Promise<void> {
+  return invoke<void>("set_shell_env_disabled", { disabled });
+}
+
+export function reloadShellEnv(): Promise<void> {
+  return invoke<void>("reload_shell_env");
+}
