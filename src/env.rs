@@ -12,9 +12,58 @@
 //! variables injected into every subprocess.
 
 use crate::process::CommandWindowExt as _;
+use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::path::Path;
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock, RwLock};
+use std::time::SystemTime;
+
+/// Snapshot of `std::env::vars_os()` captured before any other env
+/// mutation. Used to diff the shell-probe output and forward only
+/// vars the user's shell init *added* on top of the launchd baseline.
+static LAUNCH_ENV: OnceLock<BTreeMap<String, String>> = OnceLock::new();
+
+/// The captured shell environment. Held inside an `RwLock` (not a
+/// `OnceLock`) because the watcher must be able to invalidate it on
+/// rc-file mtime change. Each reader gets an `Arc` clone so they can
+/// release the lock immediately and the writer never blocks on long
+/// downstream work.
+static SHELL_ENV: RwLock<Option<Arc<ShellEnv>>> = RwLock::new(None);
+
+/// Captured set of env vars from the user's interactive shell init
+/// (after diff vs `LAUNCH_ENV` and after denylist filtering).
+#[derive(Debug, Clone)]
+pub struct ShellEnv {
+    pub vars: BTreeMap<String, String>,
+    pub captured_at: SystemTime,
+}
+
+/// Record the baseline env at app start. Idempotent — second call is
+/// a no-op (the OnceLock keeps the first value). Returns `true` when
+/// this call populated the slot, `false` otherwise.
+pub fn set_launch_env_snapshot(snapshot: BTreeMap<String, String>) -> bool {
+    LAUNCH_ENV.set(snapshot).is_ok()
+}
+
+/// Read the baseline snapshot. `None` only when `main()` hasn't run
+/// `set_launch_env_snapshot` yet (or in unit-test contexts that didn't
+/// seed one).
+pub fn launch_env_snapshot() -> Option<&'static BTreeMap<String, String>> {
+    LAUNCH_ENV.get()
+}
+
+/// Public accessor for the captured shell environment. Returns `None`
+/// until the probe has run successfully at least once.
+pub fn shell_env() -> Option<Arc<ShellEnv>> {
+    SHELL_ENV.read().ok().and_then(|guard| guard.clone())
+}
+
+/// True iff the probe has produced a value at least once. Mirrors
+/// `shell_path_is_cached` and is the predicate async callers use to
+/// avoid triggering the 5s probe on a Tokio worker.
+pub fn shell_env_is_cached() -> bool {
+    SHELL_ENV.read().map(|g| g.is_some()).unwrap_or(false)
+}
 
 /// Cached login-shell PATH, resolved once per process lifetime.
 static SHELL_PATH: OnceLock<Option<OsString>> = OnceLock::new();
@@ -564,6 +613,35 @@ mod tests {
     fn shell_path_is_cached_is_true_after_prewarm() {
         prewarm_shell_path();
         assert!(shell_path_is_cached());
+    }
+
+    // ---- ShellEnv type and LAUNCH_ENV baseline tests ----------------------
+
+    #[test]
+    fn shell_env_returns_none_before_set() {
+        let _: Option<std::sync::Arc<crate::env::ShellEnv>> = crate::env::shell_env();
+    }
+
+    #[test]
+    fn shell_env_type_carries_vars_and_timestamp() {
+        use std::collections::BTreeMap;
+        let mut vars = BTreeMap::new();
+        vars.insert("FOO".into(), "bar".into());
+        let s = crate::env::ShellEnv {
+            vars,
+            captured_at: std::time::SystemTime::UNIX_EPOCH,
+        };
+        assert_eq!(s.vars.get("FOO").map(String::as_str), Some("bar"));
+    }
+
+    #[test]
+    fn set_launch_env_snapshot_records_baseline() {
+        use std::collections::BTreeMap;
+        let mut baseline = BTreeMap::new();
+        baseline.insert("PRE_EXISTING".into(), "yes".into());
+        let _ = crate::env::set_launch_env_snapshot(baseline);
+        let snap = crate::env::launch_env_snapshot();
+        assert!(snap.is_some(), "snapshot must be set by the first caller");
     }
 
     // ---- Platform-agnostic expansion tests --------------------------------
