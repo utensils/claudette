@@ -247,6 +247,7 @@ describe("ModelSettings", () => {
     appStore.alternativeBackendsAvailable = true;
     appStore.codexEnabled = true;
     appStore.agentBackends = [];
+    appStore.ptywrightClaudeAvailable = false;
     appStore.settingsFocus = null;
     appStore.claudeAuthFailure = null;
     for (const value of Object.values(appStore)) {
@@ -319,6 +320,25 @@ describe("ModelSettings", () => {
     expect(container.textContent).toContain("models_backends_title");
     expect(container.textContent).toContain("auth_setting_label");
     expect(container.textContent).toContain("auth_status_signed_in");
+  });
+
+  it("shows the Claude Code runtime selector when ptywright Claude is compiled in", async () => {
+    appStore.ptywrightClaudeAvailable = true;
+
+    const container = await renderModelSettings();
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    const runtime = container.querySelector<HTMLSelectElement>(
+      'select[aria-label="models_backend_runtime_label"]',
+    );
+    expect(runtime).not.toBeNull();
+    expect(Array.from(runtime!.options).map((option) => option.value)).toEqual([
+      "claude_code",
+      "ptywright_claude",
+    ]);
   });
 
   it("shows default plan mode for Claude-compatible defaults", async () => {

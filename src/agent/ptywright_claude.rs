@@ -17,10 +17,8 @@ const COMPLETED_TURN_STABLE_MS: u64 = 300;
 const TURN_TIMEOUT: Duration = Duration::from_secs(60 * 30);
 const STARTUP_READY_TIMEOUT: Duration = Duration::from_secs(20);
 const PASTE_ACK_TIMEOUT: Duration = Duration::from_secs(10);
-const THINKING_STUCK_TIMEOUT: Duration = Duration::from_secs(60);
 const PASTE_REACTION_BYTES: usize = 256;
 const POLL_INTERVAL: Duration = Duration::from_millis(50);
-const GROWTH_SAMPLE_INTERVAL: Duration = Duration::from_secs(1);
 
 type SharedHandle = Arc<Mutex<ptywright::ExtensionHandle>>;
 type SharedCancel = Arc<Mutex<Option<ptywright::CancellationToken>>>;
@@ -97,6 +95,12 @@ impl PtywrightClaudeSession {
             "{} # interactive via ptywright",
             format_redacted_invocation(claude_path.as_os_str(), &claude_args)
         );
+        tracing::debug!(
+            target: "claudette::agent",
+            pid,
+            invocation = %invocation_line,
+            "ptywright Claude session started"
+        );
         let (event_tx, _) = broadcast::channel(2048);
 
         Ok(Self {
@@ -164,6 +168,12 @@ impl PtywrightClaudeSession {
 
         tokio::task::spawn_blocking(move || {
             let started = Instant::now();
+            tracing::debug!(
+                target: "claudette::agent",
+                pid,
+                prompt_len = prompt.len(),
+                "ptywright Claude turn started"
+            );
             let result = run_ptywright_turn(&handle, &prompt, &cancel);
 
             if let Ok(mut guard) = current_cancel.lock() {
@@ -172,6 +182,13 @@ impl PtywrightClaudeSession {
 
             match result {
                 Ok(text) => {
+                    tracing::debug!(
+                        target: "claudette::agent",
+                        pid,
+                        duration_ms = started.elapsed().as_millis(),
+                        response_len = text.len(),
+                        "ptywright Claude turn succeeded"
+                    );
                     let assistant = AgentEvent::Stream(StreamEvent::Assistant {
                         message: AssistantMessage {
                             content: vec![ContentBlock::Text { text: text.clone() }],
@@ -189,6 +206,13 @@ impl PtywrightClaudeSession {
                     send_event(&broadcast_tx, &event_tx, result);
                 }
                 Err(error) => {
+                    tracing::warn!(
+                        target: "claudette::agent",
+                        pid,
+                        duration_ms = started.elapsed().as_millis(),
+                        error = %error,
+                        "ptywright Claude turn failed"
+                    );
                     let assistant = AgentEvent::Stream(StreamEvent::Assistant {
                         message: AssistantMessage {
                             content: vec![ContentBlock::Text {
@@ -302,9 +326,27 @@ fn run_ptywright_turn(
     let mut guard = handle
         .lock()
         .map_err(|_| "ptywright handle lock poisoned".to_string())?;
+    tracing::debug!(
+        target: "claudette::agent",
+        prompt_len = prompt.len(),
+        "ptywright Claude preparing prompt"
+    );
     prepare_for_prompt(&mut guard)?;
+    tracing::debug!(
+        target: "claudette::agent",
+        prompt_len = prompt.len(),
+        "ptywright Claude submitting prompt"
+    );
     submit_prompt(&mut guard, prompt)?;
     let state = wait_for_turn_state(&mut guard, cancel)?;
+    tracing::debug!(
+        target: "claudette::agent",
+        ptywright_state = %state.state,
+        evidence = %state.evidence,
+        sequence = state.sequence,
+        metadata_keys = ?metadata_keys(state.metadata.as_ref()),
+        "ptywright Claude terminal state observed"
+    );
 
     match state.state.as_str() {
         "completed_turn" => {
@@ -339,51 +381,45 @@ fn wait_for_turn_state(
 ) -> Result<ptywright::ExtensionStateSnapshot, String> {
     let deadline = Instant::now() + TURN_TIMEOUT;
     let mut last_state: Option<ptywright::ExtensionStateSnapshot> = None;
-    let mut growth_baseline = handle.session().transcript().len();
-    let mut last_meaningful_growth_at = Instant::now();
-    let mut last_growth_sample_at = Instant::now();
+    let mut last_log_state = String::new();
+    let mut last_log_at = Instant::now() - Duration::from_secs(60);
     while Instant::now() < deadline {
         if cancel.is_cancelled() {
             return Err("ptywright Claude turn failed: wait cancelled".to_string());
         }
-        let mut state = handle
+        let state = handle
             .try_state()
             .map_err(|e| format!("Failed to inspect ptywright Claude turn state: {e}"))?;
-        tracing::trace!(
-            target: "claudette::agent",
-            ptywright_state = %state.state,
-            evidence = %state.evidence,
-            "ptywright Claude turn poll"
-        );
         let screen = handle.session().snapshot().plain_text;
+        let transcript_len = handle.session().transcript().len();
+        if state.state != last_log_state || last_log_at.elapsed() >= Duration::from_secs(5) {
+            tracing::debug!(
+                target: "claudette::agent",
+                ptywright_state = %state.state,
+                evidence = %state.evidence,
+                sequence = state.sequence,
+                transcript_len,
+                metadata_keys = ?metadata_keys(state.metadata.as_ref()),
+                screen_tail = %debug_tail(&screen, 800),
+                "ptywright Claude turn poll"
+            );
+            last_log_state = state.state.clone();
+            last_log_at = Instant::now();
+        } else {
+            tracing::trace!(
+                target: "claudette::agent",
+                ptywright_state = %state.state,
+                evidence = %state.evidence,
+                sequence = state.sequence,
+                transcript_len,
+                "ptywright Claude turn poll"
+            );
+        }
         if answer_looks_like_claude_error(&screen) {
             return Err(format!(
                 "ptywright Claude reported an error: {}",
                 extract_visible_answer(&screen, &state.evidence)
             ));
-        }
-        if state.state == "thinking" && screen.lines().any(|line| is_completion_marker(line.trim()))
-        {
-            state.state = "completed_turn".to_string();
-            if state.evidence.is_empty() {
-                state.evidence = "completion marker observed in screen".to_string();
-            }
-            return Ok(state);
-        }
-        if state.state == "thinking" && last_growth_sample_at.elapsed() >= GROWTH_SAMPLE_INTERVAL {
-            last_growth_sample_at = Instant::now();
-            let transcript_len = handle.session().transcript().len();
-            if transcript_len.saturating_sub(growth_baseline) >= PASTE_REACTION_BYTES {
-                growth_baseline = transcript_len;
-                last_meaningful_growth_at = Instant::now();
-            } else if last_meaningful_growth_at.elapsed() >= THINKING_STUCK_TIMEOUT {
-                let _ = handle.send("cancel", json!({}));
-                let _ = handle.session().terminate(Duration::from_secs(2));
-                return Err(format!(
-                    "ptywright Claude turn got stuck: no meaningful PTY output for {}s while classifier reported `thinking`",
-                    THINKING_STUCK_TIMEOUT.as_secs()
-                ));
-            }
         }
         match state.state.as_str() {
             "completed_turn"
@@ -413,13 +449,32 @@ fn wait_for_turn_state(
 
 fn prepare_for_prompt(handle: &mut ptywright::ExtensionHandle) -> Result<(), String> {
     let deadline = Instant::now() + STARTUP_READY_TIMEOUT;
+    let mut last_log_state = String::new();
+    let mut last_log_at = Instant::now() - Duration::from_secs(60);
     while Instant::now() < deadline {
         let state = handle
             .try_state()
             .map_err(|e| format!("Failed to inspect ptywright Claude state: {e}"))?;
+        if state.state != last_log_state || last_log_at.elapsed() >= Duration::from_secs(2) {
+            tracing::debug!(
+                target: "claudette::agent",
+                ptywright_state = %state.state,
+                evidence = %state.evidence,
+                sequence = state.sequence,
+                metadata_keys = ?metadata_keys(state.metadata.as_ref()),
+                "ptywright Claude prepare poll"
+            );
+            last_log_state = state.state.clone();
+            last_log_at = Instant::now();
+        }
         match state.state.as_str() {
             "ready" | "waiting_for_user_input" | "completed_turn" => return Ok(()),
             "waiting_for_trust" => {
+                tracing::debug!(
+                    target: "claudette::agent",
+                    evidence = %state.evidence,
+                    "ptywright Claude auto-approving workspace trust prompt"
+                );
                 handle
                     .send("approve_trust", json!({}))
                     .map_err(|e| format!("Failed to approve Claude workspace trust: {e}"))?;
@@ -446,12 +501,24 @@ fn prepare_for_prompt(handle: &mut ptywright::ExtensionHandle) -> Result<(), Str
 fn submit_prompt(handle: &mut ptywright::ExtensionHandle, prompt: &str) -> Result<(), String> {
     let first = submit_prompt_once(handle, prompt)?;
     if first {
+        tracing::debug!(
+            target: "claudette::agent",
+            "ptywright Claude prompt accepted on first attempt"
+        );
         return Ok(());
     }
 
+    tracing::debug!(
+        target: "claudette::agent",
+        "ptywright Claude first prompt submit did not acknowledge; dismissing welcome and retrying"
+    );
     let _ = handle.send("dismiss_welcome", json!({}));
     let second = submit_prompt_once(handle, prompt)?;
     if second {
+        tracing::debug!(
+            target: "claudette::agent",
+            "ptywright Claude prompt accepted on second attempt"
+        );
         return Ok(());
     }
 
@@ -464,6 +531,12 @@ fn submit_prompt_once(
     prompt: &str,
 ) -> Result<bool, String> {
     let baseline = handle.session().transcript().len();
+    tracing::debug!(
+        target: "claudette::agent",
+        baseline_transcript_len = baseline,
+        prompt_len = prompt.len(),
+        "ptywright Claude prompt send intent"
+    );
     handle
         .send("send_prompt", json!({ "prompt": prompt }))
         .map_err(|e| format!("Failed to submit ptywright Claude prompt: {e}"))?;
@@ -477,6 +550,7 @@ fn submit_prompt_once(
         .take(40)
         .collect::<String>();
     let deadline = Instant::now() + PASTE_ACK_TIMEOUT;
+    let mut last_log_at = Instant::now() - Duration::from_secs(60);
     while Instant::now() < deadline {
         let transcript = handle.session().transcript();
         let transcript_len = transcript.len();
@@ -493,16 +567,46 @@ fn submit_prompt_once(
             evidence = %state.evidence,
             "ptywright Claude prompt acknowledgement poll"
         );
+        if last_log_at.elapsed() >= Duration::from_secs(1) {
+            tracing::debug!(
+                target: "claudette::agent",
+                ptywright_state = %state.state,
+                evidence = %state.evidence,
+                transcript_len,
+                grew,
+                anchored,
+                screen_tail = %debug_tail(&handle.session().snapshot().plain_text, 500),
+                "ptywright Claude prompt acknowledgement poll"
+            );
+            last_log_at = Instant::now();
+        }
 
         if matches!(state.state.as_str(), "completed_turn" | "error")
             || (grew >= PASTE_REACTION_BYTES && (anchored || state.state.as_str() == "thinking"))
         {
+            tracing::debug!(
+                target: "claudette::agent",
+                ptywright_state = %state.state,
+                evidence = %state.evidence,
+                transcript_len,
+                grew,
+                anchored,
+                "ptywright Claude prompt acknowledged"
+            );
             return Ok(true);
         }
 
         std::thread::sleep(POLL_INTERVAL);
     }
 
+    tracing::warn!(
+        target: "claudette::agent",
+        prompt_len = prompt.len(),
+        baseline_transcript_len = baseline,
+        transcript_len = handle.session().transcript().len(),
+        screen_tail = %debug_tail(&handle.session().snapshot().plain_text, 800),
+        "ptywright Claude prompt acknowledgement timed out"
+    );
     Ok(false)
 }
 
@@ -511,14 +615,45 @@ fn extract_turn_answer(
     state: &ptywright::ExtensionStateSnapshot,
     prompt: &str,
 ) -> String {
+    if let Some(text) = state
+        .metadata
+        .as_ref()
+        .and_then(|metadata| metadata.get("turn"))
+        .and_then(|turn| turn.get("text"))
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+    {
+        tracing::debug!(
+            target: "claudette::agent",
+            response_len = text.len(),
+            "ptywright Claude extracted structured turn text"
+        );
+        return text.to_string();
+    }
+
     if let Some((turn_start, turn_end)) = transcript_bounds(handle, state)
         && let Some(slice) = handle.session().transcript_slice(turn_start, turn_end)
         && let Some(answer) = clean_transcript_answer(&slice, prompt)
     {
+        tracing::debug!(
+            target: "claudette::agent",
+            turn_start,
+            turn_end,
+            response_len = answer.len(),
+            "ptywright Claude extracted transcript turn text"
+        );
         return answer;
     }
 
     let screen = handle.session().snapshot().plain_text;
+    tracing::debug!(
+        target: "claudette::agent",
+        ptywright_state = %state.state,
+        evidence = %state.evidence,
+        screen_len = screen.len(),
+        "ptywright Claude falling back to visible screen text"
+    );
     extract_visible_answer(&screen, state.evidence.as_str())
 }
 
@@ -696,6 +831,19 @@ fn extract_visible_answer(screen: &str, evidence: &str) -> String {
         return format!("ptywright Claude turn completed: {evidence}");
     }
     trimmed.to_string()
+}
+
+fn metadata_keys(metadata: Option<&serde_json::Value>) -> Vec<String> {
+    metadata
+        .and_then(serde_json::Value::as_object)
+        .map(|object| object.keys().cloned().collect())
+        .unwrap_or_default()
+}
+
+fn debug_tail(text: &str, max_chars: usize) -> String {
+    let mut chars = text.chars().rev().take(max_chars).collect::<Vec<_>>();
+    chars.reverse();
+    chars.into_iter().collect()
 }
 
 fn send_event(

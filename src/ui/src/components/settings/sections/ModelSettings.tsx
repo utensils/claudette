@@ -659,6 +659,8 @@ function BackendSettingsPanel({
   onBackends: (backends: AgentBackendConfig[]) => void;
 }) {
   const { t } = useTranslation("settings");
+  const [anthropicRuntimeError, setAnthropicRuntimeError] = useState<string | null>(null);
+  const ptywrightClaudeAvailable = useAppStore((s) => s.ptywrightClaudeAvailable);
   return (
     <div>
       <div className={styles.settingRow}>
@@ -669,7 +671,34 @@ function BackendSettingsPanel({
           </div>
         </div>
       </div>
-      {anthropicBackend && <ClaudeCodeAuthSetting />}
+      {anthropicBackend && (
+        <>
+          <ClaudeCodeAuthSetting />
+          {ptywrightClaudeAvailable && (
+            <div className={styles.settingRow}>
+              <div className={styles.settingInfo}>
+                <div className={styles.backendForm}>
+                  <RuntimeSelector
+                    backend={anthropicBackend}
+                    onSaved={(saved) => {
+                      setAnthropicRuntimeError(null);
+                      onBackends(saved);
+                    }}
+                    onError={(err) =>
+                      setAnthropicRuntimeError(formatBackendError(err, anthropicBackend))
+                    }
+                  />
+                  {anthropicRuntimeError && (
+                    <div className={styles.backendError} role="alert">
+                      {anthropicRuntimeError}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+        </>
+      )}
       {backends.filter((b) => b.id !== "anthropic").map((backend) => (
         <BackendCard
           key={backend.id}

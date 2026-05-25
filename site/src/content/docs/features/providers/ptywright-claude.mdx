@@ -9,7 +9,7 @@ This exists because Anthropic's published Claude Code docs and Help Center descr
 
 ## Availability
 
-This runtime only appears in builds compiled with the `ptywright-claude` Cargo feature.
+This runtime only appears in builds compiled with the `ptywright-claude` Cargo feature. The repository's dev launcher enables that feature by default; custom `cargo tauri` commands must pass it explicitly.
 
 When enabled:
 
@@ -26,7 +26,7 @@ Implemented in the first integration pass:
 - Local path dependency on `../ptywright`.
 - Feature-gated `PtywrightClaude` harness in the Rust backend runtime matrix.
 - Runtime selector support in Settings.
-- Hidden PTY spawn of interactive `claude` at 60x200, with classifier-stable Claude Code environment variables.
+- Hidden PTY spawn of interactive `claude` with classifier-stable Claude Code environment variables.
 - Prompt submission through ptywright's built-in `claude-code` plugin.
 - Basic completed-turn detection and synthetic assistant/result events back into Claudette.
 - Cancel and mid-turn steer wiring through ptywright intents.

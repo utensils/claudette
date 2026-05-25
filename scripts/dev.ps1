@@ -26,7 +26,7 @@
 # Env overrides (same names as dev.sh):
 #   $env:VITE_PORT_BASE             start port for Vite probe (default 14253)
 #   $env:CLAUDETTE_DEBUG_PORT_BASE  start port for debug probe (default 19432)
-#   $env:CARGO_TAURI_FEATURES       features (default devtools,server,voice,alternative-backends — matches scripts/dev.sh)
+#   $env:CARGO_TAURI_FEATURES       features (default devtools,server,voice,alternative-backends,ptywright-claude — matches scripts/dev.sh)
 #
 # Flags:
 #   --new                Run as a fresh user — points CLAUDETTE_HOME,
@@ -104,7 +104,7 @@ Env vars (each consulted at process start):
                        First debug-eval port to probe.      Default 19432
   `$env:CARGO_TAURI_FEATURES
                        Features to forward to ``cargo run``.
-                       Default: devtools,server,voice,alternative-backends
+                       Default: devtools,server,voice,alternative-backends,ptywright-claude
                        (matches scripts/dev.sh / Nix devshell exactly so a
                        single muscle memory works on every host). On
                        aarch64-pc-windows-msvc the dev script appends
@@ -512,7 +512,7 @@ Register-EngineEvent -SourceIdentifier PowerShell.Exiting -Action $cleanupAction
 #     hot-reload AND the eval server, so we keep Vite + dev URL.
 #
 # Feature parity with scripts/dev.sh: both default to
-# `devtools,server,voice,alternative-backends`. On aarch64-pc-windows-msvc
+# `devtools,server,voice,alternative-backends,ptywright-claude`. On aarch64-pc-windows-msvc
 # the `voice` feature pulls in `candle-*` → `gemm-f16`, whose ARMv8.2
 # inline asm (`fmla v0.8h, ..., fmul v0.8h, ...`) needs the `fullfp16`
 # target feature that the stock baseline doesn't enable. Compile fails
@@ -522,7 +522,13 @@ Register-EngineEvent -SourceIdentifier PowerShell.Exiting -Action $cleanupAction
 # extra knobs and still get voice. x86_64 hosts and pre-set RUSTFLAGS
 # pass through unchanged.
 $features = if ($env:CARGO_TAURI_FEATURES) { $env:CARGO_TAURI_FEATURES }
-            else { 'devtools,server,voice,alternative-backends' }
+            else { 'devtools,server,voice,alternative-backends,ptywright-claude' }
+if (",$features," -notlike "*,alternative-backends,*") {
+    $features = if ($features) { "$features,alternative-backends" } else { "alternative-backends" }
+}
+if (",$features," -notlike "*,ptywright-claude,*") {
+    $features = if ($features) { "$features,ptywright-claude" } else { "ptywright-claude" }
+}
 
 # Auto-enable fullfp16 on aarch64-pc-windows-msvc when `voice` is in the
 # feature set: gemm-f16's ARMv8.2 inline asm requires it, and the stock
