@@ -570,6 +570,7 @@ fn prepare_for_prompt(handle: &mut ptywright::ExtensionHandle) -> Result<(), Str
     let deadline = Instant::now() + STARTUP_READY_TIMEOUT;
     let mut last_log_state = String::new();
     let mut last_log_at = Instant::now() - Duration::from_secs(60);
+    let mut last_trust_approval_at = Instant::now() - Duration::from_secs(60);
     while Instant::now() < deadline {
         let state = handle
             .try_state()
@@ -596,6 +597,10 @@ fn prepare_for_prompt(handle: &mut ptywright::ExtensionHandle) -> Result<(), Str
         match state.state.as_str() {
             "ready" | "waiting_for_user_input" | "completed_turn" => return Ok(()),
             "waiting_for_trust" => {
+                if last_trust_approval_at.elapsed() < Duration::from_millis(500) {
+                    std::thread::sleep(POLL_INTERVAL);
+                    continue;
+                }
                 tracing::debug!(
                     target: "claudette::agent",
                     evidence = %state.evidence,
@@ -604,6 +609,8 @@ fn prepare_for_prompt(handle: &mut ptywright::ExtensionHandle) -> Result<(), Str
                 handle
                     .send("approve_trust", json!({}))
                     .map_err(|e| format!("Failed to approve Claude workspace trust: {e}"))?;
+                last_trust_approval_at = Instant::now();
+                std::thread::sleep(Duration::from_millis(200));
             }
             "waiting_for_login" => {
                 return Err(

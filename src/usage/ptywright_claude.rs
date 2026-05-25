@@ -224,7 +224,7 @@ fn usage_from_state(
             ));
         }
         other => {
-            tracing::debug!(
+            tracing::trace!(
                 target: "claudette::usage",
                 ptywright_state = other,
                 evidence = %state.evidence,
@@ -240,7 +240,7 @@ fn usage_from_state(
         .and_then(|metadata| metadata.get("usage"))
     else {
         let screen = handle.session().snapshot().plain_text;
-        tracing::debug!(
+        tracing::trace!(
             target: "claudette::usage",
             ptywright_state = %state.state,
             evidence = %state.evidence,
@@ -268,15 +268,29 @@ fn usage_from_state(
 }
 
 fn wait_for_usage_data(
-    handle: &ptywright::ExtensionHandle,
+    handle: &mut ptywright::ExtensionHandle,
     initial_state: ptywright::ExtensionStateSnapshot,
 ) -> Result<ClaudeCodeUsage, String> {
     let deadline = Instant::now() + USAGE_DATA_READY_TIMEOUT;
     let mut state = initial_state;
+    let mut tried_usage_tab = false;
 
     loop {
         if let Some(usage) = usage_from_state(handle, &state)? {
             return Ok(usage);
+        }
+
+        if !tried_usage_tab && usage_stats_screen_visible(&handle.session().snapshot().plain_text) {
+            tried_usage_tab = true;
+            tracing::debug!(
+                target: "claudette::usage",
+                ptywright_state = %state.state,
+                evidence = %state.evidence,
+                "Claude Code usage probe landed on stats tab; moving to usage limits tab"
+            );
+            handle
+                .send("key", json!({ "key": "left" }))
+                .map_err(|e| format!("Failed to navigate Claude Code usage screen: {e}"))?;
         }
 
         if Instant::now() >= deadline {
@@ -295,6 +309,13 @@ fn wait_for_usage_data(
         std::thread::sleep(USAGE_DATA_POLL_INTERVAL);
         state = handle.state();
     }
+}
+
+fn usage_stats_screen_visible(screen: &str) -> bool {
+    let lower = screen.to_ascii_lowercase();
+    lower.contains("skills                  % of usage")
+        || lower.contains("subagents               % of usage")
+        || (lower.contains("d to day") && lower.contains("w to week"))
 }
 
 fn usage_from_metadata(value: &Value) -> ClaudeCodeUsage {
@@ -533,6 +554,28 @@ mod tests {
         assert!(!usage_has_limit_buckets(&usage));
         assert!(usage.usage.five_hour.is_none());
         assert!(usage.usage.seven_day.is_none());
+    }
+
+    #[test]
+    fn detects_usage_stats_tab_without_limit_buckets() {
+        let screen = r#"
+Skills                  % of usage
+/copilot                        1%
+/codex                          1%
+
+Subagents               % of usage
+general-purpose                 7%
+Explore                         1%
+
+d to day · w to week
+
+Esc to cancel
+"#;
+
+        assert!(usage_stats_screen_visible(screen));
+        assert!(!usage_stats_screen_visible(
+            "Current session\n████████ 24% used\nResets 12:40pm"
+        ));
     }
 
     #[test]
