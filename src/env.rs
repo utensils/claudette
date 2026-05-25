@@ -282,6 +282,52 @@ pub fn probe_shell_env() -> Option<BTreeMap<String, String>> {
     probe_shell_env_with_shell(std::path::Path::new(&shell))
 }
 
+/// Run the full probe → diff → denylist → cache pipeline once.
+/// Public for testability. Production code calls
+/// [`prewarm_shell_env`] which resolves `$SHELL` and the baseline
+/// from process state.
+pub fn run_probe_pipeline(
+    shell: &std::path::Path,
+    baseline: &BTreeMap<String, String>,
+    user_deny: &[String],
+) -> Option<Arc<ShellEnv>> {
+    let raw = probe_shell_env_with_shell(shell)?;
+    let added = diff_against_baseline(&raw, baseline);
+    let (kept, dropped) = apply_denylist(&added, user_deny);
+    tracing::info!(
+        target: "claudette::env",
+        n_vars = kept.len(),
+        n_denied = dropped.len(),
+        "shell_env probe captured",
+    );
+    let env = Arc::new(ShellEnv {
+        vars: kept,
+        captured_at: SystemTime::now(),
+    });
+    if let Ok(mut guard) = SHELL_ENV.write() {
+        *guard = Some(Arc::clone(&env));
+    }
+    Some(env)
+}
+
+/// Prewarm the shell-env cache on a `std::thread::spawn`. Idempotent:
+/// if the cache is already populated, returns immediately. `user_deny`
+/// is the user-configured deny patterns from Settings; pass an empty
+/// `Vec` to use only the built-in denylist.
+pub fn prewarm_shell_env(user_deny: Vec<String>) {
+    if shell_env_is_cached() {
+        return;
+    }
+    let shell = match std::env::var("SHELL") {
+        Ok(s) => s,
+        Err(_) => return,
+    };
+    let baseline = LAUNCH_ENV.get().cloned().unwrap_or_default();
+    std::thread::spawn(move || {
+        let _ = run_probe_pipeline(std::path::Path::new(&shell), &baseline, &user_deny);
+    });
+}
+
 /// Cached login-shell PATH, resolved once per process lifetime.
 static SHELL_PATH: OnceLock<Option<OsString>> = OnceLock::new();
 
@@ -1348,5 +1394,53 @@ mod tests {
             shell_env().is_none(),
             "invalidate_shell_env must clear the cache",
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn prewarm_with_shim_populates_cache_with_diff() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = tempfile::tempdir().unwrap();
+        let shim = tmp.path().join("rcshell");
+        std::fs::write(
+            &shim,
+            "#!/bin/sh\nprintf 'JWT_CLIENT_ID=abc\\0HOME=/Users/k\\0LD_PRELOAD=/evil\\0'\n",
+        )
+        .unwrap();
+        let mut perm = std::fs::metadata(&shim).unwrap().permissions();
+        perm.set_mode(0o755);
+        std::fs::set_permissions(&shim, perm).unwrap();
+
+        // Baseline has HOME (matches shell value, so dropped) but not
+        // JWT_CLIENT_ID (forwarded) and not LD_PRELOAD (forwarded by diff,
+        // then dropped by built-in deny).
+        let mut baseline = std::collections::BTreeMap::new();
+        baseline.insert("HOME".into(), "/Users/k".into());
+
+        invalidate_shell_env();
+        let captured = run_probe_pipeline(shim.as_path(), &baseline, &[]);
+        assert!(captured.is_some(), "pipeline must succeed against shim");
+        let env = captured.unwrap();
+        assert_eq!(
+            env.vars.get("JWT_CLIENT_ID").map(String::as_str),
+            Some("abc"),
+            "user-added var must be forwarded through the pipeline",
+        );
+        assert!(
+            !env.vars.contains_key("HOME"),
+            "baseline-equal HOME must be filtered out by diff",
+        );
+        assert!(
+            !env.vars.contains_key("LD_PRELOAD"),
+            "built-in denylist must drop LD_PRELOAD even after diff",
+        );
+        // Pipeline also populates the cache as a side effect.
+        let from_cache = shell_env().expect("pipeline must write into SHELL_ENV cache");
+        assert_eq!(
+            from_cache.vars.get("JWT_CLIENT_ID").map(String::as_str),
+            Some("abc"),
+            "cache must contain the same vars as the returned Arc",
+        );
+        invalidate_shell_env();
     }
 }
