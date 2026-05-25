@@ -14,6 +14,8 @@ Control god files. Do not make already-large files the default destination for n
 
 When touching a god file, keep the diff surgical or extract cohesive behavior first. New code should reduce or isolate complexity, not add another unrelated responsibility.
 
+For subprocess spawns (agent, MCP, setup scripts), use `crate::env::enriched_env().apply(&mut cmd)` to forward the user's captured shell environment. The capture happens at app launch via `prewarm_shell_env` in `src/env.rs` and merges into the env-provider dispatcher at precedence 0 (direnv / mise / dotenv / nix-devshell layer on top). `enriched_path()` is kept as a backwards-compat accessor returning just PATH — new code should prefer `enriched_env()` to inherit the full set.
+
 Use the repo's tools. Rust CI expects `cargo fmt --all --check`, `cargo clippy -p claudette -p claudette-server -p claudette-cli --all-targets --all-features` with `RUSTFLAGS=-Dwarnings`, and `cargo test --all-features`. Frontend CI expects `cd src/ui && bun install --frozen-lockfile`, `bunx tsc --noEmit`, `bun run lint:css`, `bun run build`, and `bun run test`.
 
 Always run `cd src/ui && bunx tsc -b` after TypeScript changes. Vitest uses esbuild and does not type-check the project.

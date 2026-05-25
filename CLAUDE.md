@@ -190,6 +190,7 @@ A single sandboxed Lua runtime (`src/plugin_runtime/`) serves multiple plugin ki
 - **State** lives in the Zustand store (`useAppStore`) — UI state in React, agent sessions in Rust-side `AppState`
 - **Streaming data** (agent events, PTY output) flows via Tauri events, consumed by React hooks
 - **Colors and styling** use CSS custom properties defined in `styles/theme.css` — all colors must be `var(--token-name)` references; raw hex/rgba literals anywhere outside `theme.css` fail `bun run lint:css` (CI-blocking). Allowed exceptions: `rgba(var(--*-rgb), <alpha>)` for alpha layering, `getPropertyValue(...) || "#..."` safety fallbacks in `theme.ts`, and `accentPreview` swatches in CommandPalette that mirror existing theme hex values.
+- **Shell environment inheritance:** `src/env.rs` captures the user's interactive shell env (`.zshrc` / `.bashrc` / `.zprofile` / etc.) at app launch via `prewarm_shell_env`. Spawn sites should call `crate::env::enriched_env().apply(&mut cmd)` for the full captured env. `enriched_path()` remains as a backwards-compat accessor returning just PATH. Per-workspace env-providers (direnv, mise, dotenv, nix-devshell) layer on top via the existing dispatcher — shell-env sits at precedence 0 so direnv et al. continue to win on key collision. See `docs/superpowers/specs/2026-05-25-shell-env-inheritance-design.md` for the full design.
 
 ### God files — keep diffs surgical
 
