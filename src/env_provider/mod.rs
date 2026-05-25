@@ -634,8 +634,11 @@ mod tests {
         ProviderExport { env, watched }
     }
 
+    #[allow(clippy::await_holding_lock)]
     #[tokio::test]
     async fn resolve_empty_no_plugins() {
+        let _guard = crate::env::SHELL_ENV_TEST_LOCK.lock().unwrap();
+        crate::env::invalidate_shell_env();
         let backend = MockBackend::new();
         let cache = EnvCache::new();
         let resolved = resolve_for_workspace(
@@ -650,8 +653,11 @@ mod tests {
         assert!(resolved.sources.is_empty());
     }
 
+    #[allow(clippy::await_holding_lock)]
     #[tokio::test]
     async fn resolve_single_plugin_detects_and_exports() {
+        let _guard = crate::env::SHELL_ENV_TEST_LOCK.lock().unwrap();
+        crate::env::invalidate_shell_env();
         let tmp = tempfile::tempdir().unwrap();
         std::fs::write(tmp.path().join(".envrc"), "x").unwrap();
 
@@ -680,8 +686,11 @@ mod tests {
         assert!(!resolved.sources[0].cached);
     }
 
+    #[allow(clippy::await_holding_lock)]
     #[tokio::test]
     async fn resolve_plugin_detects_false_skips_export() {
+        let _guard = crate::env::SHELL_ENV_TEST_LOCK.lock().unwrap();
+        crate::env::invalidate_shell_env();
         let backend = MockBackend::new()
             .with_plugin("env-direnv")
             .detects("env-direnv", false);
@@ -701,8 +710,11 @@ mod tests {
         assert_eq!(exports, 0, "export must not run when detect=false");
     }
 
+    #[allow(clippy::await_holding_lock)]
     #[tokio::test]
     async fn precedence_direnv_overrides_mise() {
+        let _guard = crate::env::SHELL_ENV_TEST_LOCK.lock().unwrap();
+        crate::env::invalidate_shell_env();
         let tmp = tempfile::tempdir().unwrap();
         std::fs::write(tmp.path().join(".envrc"), "x").unwrap();
         std::fs::write(tmp.path().join("mise.toml"), "x").unwrap();
@@ -743,8 +755,11 @@ mod tests {
         );
     }
 
+    #[allow(clippy::await_holding_lock)]
     #[tokio::test]
     async fn null_value_unsets_key() {
+        let _guard = crate::env::SHELL_ENV_TEST_LOCK.lock().unwrap();
+        crate::env::invalidate_shell_env();
         let tmp = tempfile::tempdir().unwrap();
         std::fs::write(tmp.path().join("mise.toml"), "x").unwrap();
         std::fs::write(tmp.path().join(".envrc"), "x").unwrap();
@@ -781,8 +796,11 @@ mod tests {
         assert_eq!(resolved.vars.get("UNWANTED"), Some(&None));
     }
 
+    #[allow(clippy::await_holding_lock)]
     #[tokio::test]
     async fn cache_hit_skips_detect_and_export() {
+        let _guard = crate::env::SHELL_ENV_TEST_LOCK.lock().unwrap();
+        crate::env::invalidate_shell_env();
         let tmp = tempfile::tempdir().unwrap();
         let envrc = tmp.path().join(".envrc");
         std::fs::write(&envrc, "x").unwrap();
@@ -824,8 +842,11 @@ mod tests {
         assert_eq!(exports, 1, "cache hit must skip export");
     }
 
+    #[allow(clippy::await_holding_lock)]
     #[tokio::test]
     async fn cache_miss_on_mtime_change() {
+        let _guard = crate::env::SHELL_ENV_TEST_LOCK.lock().unwrap();
+        crate::env::invalidate_shell_env();
         let tmp = tempfile::tempdir().unwrap();
         let envrc = tmp.path().join(".envrc");
         std::fs::write(&envrc, "x").unwrap();
@@ -864,8 +885,11 @@ mod tests {
         assert_eq!(exports, 2, "mtime change must re-export");
     }
 
+    #[allow(clippy::await_holding_lock)]
     #[tokio::test]
     async fn detect_error_captured_in_source() {
+        let _guard = crate::env::SHELL_ENV_TEST_LOCK.lock().unwrap();
+        crate::env::invalidate_shell_env();
         let backend = MockBackend::new().with_plugin("env-direnv");
         // detect_results has no entry → backend returns Ok(false) by
         // default. We want to cover the Err branch.
@@ -886,8 +910,11 @@ mod tests {
         assert!(resolved.vars.is_empty());
     }
 
+    #[allow(clippy::await_holding_lock)]
     #[tokio::test]
     async fn export_error_does_not_fail_resolve() {
+        let _guard = crate::env::SHELL_ENV_TEST_LOCK.lock().unwrap();
+        crate::env::invalidate_shell_env();
         let backend = MockBackend::new()
             .with_plugin("env-direnv")
             .detects("env-direnv", true)
@@ -982,8 +1009,11 @@ mod tests {
         assert_ne!(fresh_env.source_signature(), rerun_env.source_signature());
     }
 
+    #[allow(clippy::await_holding_lock)]
     #[tokio::test]
     async fn disabled_provider_is_skipped_and_cache_invalidated() {
+        let _guard = crate::env::SHELL_ENV_TEST_LOCK.lock().unwrap();
+        crate::env::invalidate_shell_env();
         let tmp = tempfile::tempdir().unwrap();
         let envrc = tmp.path().join(".envrc");
         std::fs::write(&envrc, "x").unwrap();
@@ -1020,8 +1050,11 @@ mod tests {
         );
     }
 
+    #[allow(clippy::await_holding_lock)]
     #[tokio::test]
     async fn precedence_tie_break_is_deterministic_by_name() {
+        let _guard = crate::env::SHELL_ENV_TEST_LOCK.lock().unwrap();
+        crate::env::invalidate_shell_env();
         // Two unknown providers share precedence 10. Without a secondary
         // sort key the merge order would follow HashMap iteration, so
         // which "FOO" wins depends on hash state. With the name tiebreak,
@@ -1051,8 +1084,11 @@ mod tests {
         );
     }
 
+    #[allow(clippy::await_holding_lock)]
     #[tokio::test]
     async fn detect_false_invalidates_stale_cache() {
+        let _guard = crate::env::SHELL_ENV_TEST_LOCK.lock().unwrap();
+        crate::env::invalidate_shell_env();
         let tmp = tempfile::tempdir().unwrap();
         let envrc = tmp.path().join(".envrc");
         std::fs::write(&envrc, "x").unwrap();
@@ -1086,8 +1122,11 @@ mod tests {
         );
     }
 
+    #[allow(clippy::await_holding_lock)]
     #[tokio::test]
     async fn globally_disabled_skips_even_with_warm_cache() {
+        let _guard = crate::env::SHELL_ENV_TEST_LOCK.lock().unwrap();
+        crate::env::invalidate_shell_env();
         // Regression for the Codex finding: even when a plugin had a
         // previously-cached export, flipping it off globally must stop
         // its vars from reaching the merged env on the next resolve.
@@ -1266,8 +1305,11 @@ mod tests {
         assert!(s.is_char_boundary(s.len()));
     }
 
+    #[allow(clippy::await_holding_lock)]
     #[tokio::test]
     async fn unavailable_provider_is_skipped_silently() {
+        let _guard = crate::env::SHELL_ENV_TEST_LOCK.lock().unwrap();
+        crate::env::invalidate_shell_env();
         // Regression for issue #718: an env-provider whose required CLI
         // is not on PATH must skip with `error: "unavailable"` rather
         // than letting `CliNotFound` bubble up as a noisy toast.
@@ -1296,8 +1338,11 @@ mod tests {
         assert!(!resolved.sources[0].detected);
     }
 
+    #[allow(clippy::await_holding_lock)]
     #[tokio::test]
     async fn unavailable_provider_evicts_stale_cache() {
+        let _guard = crate::env::SHELL_ENV_TEST_LOCK.lock().unwrap();
+        crate::env::invalidate_shell_env();
         // If the user had the CLI installed last session and we cached
         // an export, then uninstalled it, the next resolve must drop
         // that cache entry instead of leaking stale env vars.
@@ -1332,8 +1377,11 @@ mod tests {
         );
     }
 
+    #[allow(clippy::await_holding_lock)]
     #[tokio::test]
     async fn resolve_with_registry_treats_missing_cli_as_unavailable() {
+        let _guard = crate::env::SHELL_ENV_TEST_LOCK.lock().unwrap();
+        crate::env::invalidate_shell_env();
         // End-to-end through the real PluginRegistry: a manifest that
         // requires a CLI which is guaranteed-not-on-PATH should resolve
         // to `error: "unavailable"`, not `error: "detect: CLI tool ...
@@ -1394,8 +1442,11 @@ mod tests {
         assert!(!source.detected);
     }
 
+    #[allow(clippy::await_holding_lock)]
     #[tokio::test]
     async fn unavailable_does_not_swallow_pending_reconsent() {
+        let _guard = crate::env::SHELL_ENV_TEST_LOCK.lock().unwrap();
+        crate::env::invalidate_shell_env();
         // Codex peer review: a community env-provider whose live
         // manifest grew an unapproved CLI requirement which is ALSO
         // not on PATH must still surface re-consent, not silently
@@ -1603,8 +1654,11 @@ mod tests {
         );
     }
 
+    #[allow(clippy::await_holding_lock)]
     #[tokio::test]
     async fn resolve_with_registry_treats_globally_disabled_as_disabled() {
+        let _guard = crate::env::SHELL_ENV_TEST_LOCK.lock().unwrap();
+        crate::env::invalidate_shell_env();
         // Regression guard for the UAT finding: globally-disabled plugins
         // used to surface as `detect` errors with "Plugin '...' is
         // disabled" in the UI. Now they merge into the dispatcher's
@@ -1682,8 +1736,11 @@ mod tests {
         }
     }
 
+    #[allow(clippy::await_holding_lock)]
     #[tokio::test]
     async fn progress_sink_fires_for_each_invoked_plugin() {
+        let _guard = crate::env::SHELL_ENV_TEST_LOCK.lock().unwrap();
+        crate::env::invalidate_shell_env();
         let tmp = tempfile::tempdir().unwrap();
         std::fs::write(tmp.path().join(".envrc"), "x").unwrap();
 
@@ -1719,8 +1776,11 @@ mod tests {
         assert_eq!(events[1].2, Some(true));
     }
 
+    #[allow(clippy::await_holding_lock)]
     #[tokio::test]
     async fn progress_sink_skipped_on_cache_hit() {
+        let _guard = crate::env::SHELL_ENV_TEST_LOCK.lock().unwrap();
+        crate::env::invalidate_shell_env();
         let tmp = tempfile::tempdir().unwrap();
         let envrc = tmp.path().join(".envrc");
         std::fs::write(&envrc, "x").unwrap();
@@ -1763,8 +1823,11 @@ mod tests {
         );
     }
 
+    #[allow(clippy::await_holding_lock)]
     #[tokio::test]
     async fn progress_sink_reports_error_when_export_fails() {
+        let _guard = crate::env::SHELL_ENV_TEST_LOCK.lock().unwrap();
+        crate::env::invalidate_shell_env();
         let tmp = tempfile::tempdir().unwrap();
         std::fs::write(tmp.path().join(".envrc"), "x").unwrap();
 
