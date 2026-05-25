@@ -23,7 +23,6 @@ import { PluginSettingInput } from "../PluginSettingInput";
 import { classifyPostActionError } from "../../modals/EnvTrustModal";
 import { summarizeError } from "../../modals/envTrustFormat";
 import styles from "../Settings.module.css";
-import { ShellEnvCard } from "./ShellEnvCard";
 
 interface EnvPanelProps {
   target: EnvTarget;
@@ -631,7 +630,6 @@ export function EnvPanel({ target }: EnvPanelProps) {
 
   return (
     <>
-      <ShellEnvCard />
       <div className={styles.settingDescription}>
         Tools whose env is merged into every subprocess Claudette spawns
         for this {target.kind === "repo" ? "repository" : "workspace"}.
