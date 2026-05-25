@@ -24,6 +24,7 @@ use super::{AgentSettings, PersistentSessionStart};
 const COMPLETED_TURN_STABLE_MS: u64 = 300;
 const TURN_TIMEOUT: Duration = Duration::from_secs(60 * 30);
 const STARTUP_READY_TIMEOUT: Duration = Duration::from_secs(20);
+const CANCEL_SETTLE_TIMEOUT: Duration = Duration::from_secs(5);
 const PASTE_ACK_TIMEOUT: Duration = Duration::from_secs(10);
 const PASTE_REACTION_BYTES: usize = 256;
 const POLL_INTERVAL: Duration = Duration::from_millis(50);
@@ -308,15 +309,8 @@ impl PtywrightClaudeSession {
             let mut guard = handle
                 .lock()
                 .map_err(|_| "ptywright handle lock poisoned".to_string())?;
-            let cancel_result = guard
-                .send("cancel", json!({}))
-                .map_err(|e| format!("Failed to cancel ptywright Claude turn: {e}"));
-            let terminate_result = guard
-                .session()
-                .terminate(Duration::from_secs(2))
-                .map_err(|e| format!("Failed to terminate ptywright Claude session: {e}"));
-            cancel_result?;
-            terminate_result?;
+            cancel_ptywright_turn(&mut guard)
+                .map_err(|e| format!("Failed to cancel ptywright Claude turn: {e}"))?;
             Ok::<_, String>(())
         })
         .await
@@ -596,6 +590,15 @@ fn prepare_for_prompt(handle: &mut ptywright::ExtensionHandle) -> Result<(), Str
         }
         match state.state.as_str() {
             "ready" | "waiting_for_user_input" | "completed_turn" => return Ok(()),
+            "cancelling" => {
+                tracing::debug!(
+                    target: "claudette::agent",
+                    evidence = %state.evidence,
+                    "ptywright Claude settling stale cancel before prompt"
+                );
+                settle_ptywright_cancel(handle);
+                std::thread::sleep(POLL_INTERVAL);
+            }
             "waiting_for_trust" => {
                 if last_trust_approval_at.elapsed() < Duration::from_millis(500) {
                     std::thread::sleep(POLL_INTERVAL);
@@ -631,6 +634,40 @@ fn prepare_for_prompt(handle: &mut ptywright::ExtensionHandle) -> Result<(), Str
     Err("Timed out waiting for Claude's interactive input prompt".to_string())
 }
 
+fn cancel_ptywright_turn(handle: &mut ptywright::ExtensionHandle) -> Result<(), String> {
+    handle
+        .send("cancel", json!({}))
+        .map_err(|e| format!("send cancel failed: {e}"))?;
+    settle_ptywright_cancel(handle);
+    Ok(())
+}
+
+fn settle_ptywright_cancel(handle: &mut ptywright::ExtensionHandle) {
+    match handle.wait(
+        "wait_cancel_settled_matcher",
+        json!({}),
+        CANCEL_SETTLE_TIMEOUT,
+    ) {
+        Ok((state, _)) => {
+            tracing::debug!(
+                target: "claudette::agent",
+                ptywright_state = %state.state,
+                evidence = %state.evidence,
+                sequence = state.sequence,
+                "ptywright Claude cancel settled"
+            );
+        }
+        Err(error) => {
+            tracing::debug!(
+                target: "claudette::agent",
+                error = %error,
+                "ptywright Claude cancel settle wait did not complete"
+            );
+        }
+    }
+    handle.set_last_intent(None);
+}
+
 fn submit_prompt(handle: &mut ptywright::ExtensionHandle, prompt: &str) -> Result<(), String> {
     let first = submit_prompt_once(handle, prompt)?;
     if first {
@@ -655,7 +692,7 @@ fn submit_prompt(handle: &mut ptywright::ExtensionHandle, prompt: &str) -> Resul
         return Ok(());
     }
 
-    let _ = handle.send("cancel", json!({}));
+    let _ = cancel_ptywright_turn(handle);
     Err("Claude did not accept the ptywright prompt paste; interactive runtime cancelled the half-submitted turn".to_string())
 }
 
