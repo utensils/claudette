@@ -172,6 +172,80 @@ pub fn apply_denylist(
     (kept, dropped)
 }
 
+/// Probe a specific shell binary for its full env dump. Public for
+/// testability — callers usually go through [`probe_shell_env`] which
+/// resolves `$SHELL` automatically.
+///
+/// Spawns `<shell> -l -i -c '<emit-script>'` with a 5-second timeout,
+/// stdin closed, no console window. Returns `None` on timeout,
+/// non-zero exit, missing/relative shell path, or parse failure.
+///
+/// Fish has no `env -0`, so we build the NUL-delimited stream by
+/// hand using `set -nx` (lists exported var names) and `$$var`
+/// indirection.
+pub fn probe_shell_env_with_shell(shell: &std::path::Path) -> Option<BTreeMap<String, String>> {
+    if !shell.is_absolute() {
+        return None;
+    }
+
+    let shell_name = shell.file_name().and_then(|n| n.to_str()).unwrap_or("");
+    let is_fish = shell_name == "fish";
+
+    let emit_script = if is_fish {
+        r#"for var in (set -nx); printf '%s=%s\0' $var (string join0 -- $$var); end"#
+    } else {
+        "env -0"
+    };
+
+    let mut child = std::process::Command::new(shell)
+        .no_console_window()
+        .args(["-l", "-i", "-c", emit_script])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .ok()?;
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(s)) => break Some(s),
+            Ok(None) => {
+                if std::time::Instant::now() >= deadline {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    break None;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            Err(_) => break None,
+        }
+    }?;
+
+    if !status.success() {
+        return None;
+    }
+
+    let mut buf = Vec::new();
+    if let Some(mut out) = child.stdout.take() {
+        use std::io::Read;
+        let _ = out.read_to_end(&mut buf);
+    }
+    let parsed = parse_env_dump(&buf);
+    if parsed.is_empty() {
+        None
+    } else {
+        Some(parsed)
+    }
+}
+
+/// Probe `$SHELL` for the full env. Returns `None` if `$SHELL` is
+/// unset, not absolute, or the probe fails.
+pub fn probe_shell_env() -> Option<BTreeMap<String, String>> {
+    let shell = std::env::var("SHELL").ok()?;
+    probe_shell_env_with_shell(std::path::Path::new(&shell))
+}
+
 /// Cached login-shell PATH, resolved once per process lifetime.
 static SHELL_PATH: OnceLock<Option<OsString>> = OnceLock::new();
 
@@ -1135,5 +1209,54 @@ mod tests {
             kept.contains_key("KEEP"),
             "invalid glob is silently skipped"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn probe_via_shim_shell_captures_exported_vars() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = tempfile::tempdir().unwrap();
+        let shim = tmp.path().join("fakeshell");
+        std::fs::write(
+            &shim,
+            "#!/bin/sh\nprintf 'FROM_SHIM=hello\\0PATH=/from-shim\\0'\n",
+        )
+        .unwrap();
+        let mut perm = std::fs::metadata(&shim).unwrap().permissions();
+        perm.set_mode(0o755);
+        std::fs::set_permissions(&shim, perm).unwrap();
+
+        let probed = probe_shell_env_with_shell(shim.as_path());
+        let env = probed.expect("probe should succeed with shim shell");
+        assert_eq!(
+            env.get("FROM_SHIM").map(String::as_str),
+            Some("hello"),
+            "probe must capture exported var from shim",
+        );
+        assert_eq!(
+            env.get("PATH").map(String::as_str),
+            Some("/from-shim"),
+            "probe must capture PATH from shim",
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn probe_returns_none_when_shell_exits_nonzero() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = tempfile::tempdir().unwrap();
+        let shim = tmp.path().join("badshell");
+        std::fs::write(&shim, "#!/bin/sh\nexit 7\n").unwrap();
+        let mut perm = std::fs::metadata(&shim).unwrap().permissions();
+        perm.set_mode(0o755);
+        std::fs::set_permissions(&shim, perm).unwrap();
+        let probed = probe_shell_env_with_shell(shim.as_path());
+        assert!(probed.is_none(), "non-zero shell exit must yield None");
+    }
+
+    #[test]
+    fn probe_returns_none_when_shell_path_relative() {
+        let probed = probe_shell_env_with_shell(std::path::Path::new("zsh"));
+        assert!(probed.is_none(), "relative shell path must be rejected");
     }
 }
