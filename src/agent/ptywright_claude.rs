@@ -51,6 +51,10 @@ pub struct PtywrightClaudeSession {
 }
 
 impl PtywrightClaudeSession {
+    pub fn can_resume_session(working_dir: &Path, session_id: &str) -> bool {
+        claude_jsonl_transcript_path(working_dir, session_id).is_some_and(|path| path.is_file())
+    }
+
     pub async fn start(params: PersistentSessionStart<'_>) -> Result<Self, String> {
         if !params.allowed_tools.is_empty() {
             tracing::debug!(
@@ -1123,6 +1127,7 @@ fn is_chrome_line(line: &str) -> bool {
     is_horizontal_rule(line)
         || is_spinner_line(line)
         || is_in_flight_search_line(line)
+        || is_tool_status_line(line)
         || is_completion_marker(line)
 }
 
@@ -1169,6 +1174,17 @@ fn is_in_flight_search_line(line: &str) -> bool {
     (line.starts_with("Searching") || line.starts_with("Reading") || line.starts_with("Listing"))
         && line.contains('…')
         && line.ends_with("(ctrl+o to expand)")
+}
+
+fn is_tool_status_line(line: &str) -> bool {
+    line.starts_with('⎿')
+        || line == "(No output)"
+        || line.starts_with("Allowed by auto mode classifier")
+        || line.contains("⎿  Allowed by auto mode classifier")
+        || line.contains("⎿  (No output)")
+        || line.contains("Allowed by auto mode classifier ")
+        || line == "Recalling"
+        || (line.starts_with("Recalling ") && line.contains(" memory") && line.ends_with('…'))
 }
 
 fn is_completion_marker(line: &str) -> bool {
@@ -1784,6 +1800,27 @@ The answer.
         assert_eq!(
             clean_transcript_answer(transcript, "summarize").as_deref(),
             Some("Searched for 1 pattern (ctrl+o to expand)\nThe answer.")
+        );
+    }
+
+    #[test]
+    fn transcript_answer_filters_tool_status_chrome() {
+        let transcript = "\
+❯ continue
+Recalling
+Recalling 1 memory…
+⎿  (No output)
+⎿  Allowed by auto mode classifier Bash(git -C /tmp/project log main..branch --oneline)
+⎿  (No output)
+The branch is identical to main — no commits ahead.
+Could you remind me what we were working on?
+✻ Done for 28s";
+
+        assert_eq!(
+            clean_transcript_answer(transcript, "continue").as_deref(),
+            Some(
+                "The branch is identical to main — no commits ahead.\nCould you remind me what we were working on?"
+            )
         );
     }
 

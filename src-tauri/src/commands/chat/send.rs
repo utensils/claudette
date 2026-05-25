@@ -511,6 +511,41 @@ fn should_resume_persistent_session(
     !saved_session_id.trim().is_empty() && (has_persisted_claude_session || saved_turn_count > 1)
 }
 
+fn should_resume_persistent_session_for_runtime(
+    harness: AgentBackendRuntimeHarness,
+    worktree_path: &str,
+    saved_session_id: &str,
+    saved_turn_count: u32,
+    has_persisted_claude_session: bool,
+) -> bool {
+    let should_resume = should_resume_persistent_session(
+        saved_session_id,
+        saved_turn_count,
+        has_persisted_claude_session,
+    );
+    if !should_resume {
+        return false;
+    }
+
+    #[cfg(feature = "ptywright-claude")]
+    if harness == AgentBackendRuntimeHarness::PtywrightClaude
+        && !PtywrightClaudeSession::can_resume_session(
+            std::path::Path::new(worktree_path),
+            saved_session_id,
+        )
+    {
+        tracing::warn!(
+            target: "claudette::chat",
+            saved_session_id,
+            worktree_path,
+            "skipping ptywright Claude resume because Claude JSONL transcript is missing"
+        );
+        return false;
+    }
+
+    true
+}
+
 /// Resolve the session id to launch claude with, given whether we intend to
 /// resume the saved session or start fresh. When `is_resume` is false we MUST
 /// generate a fresh UUID — passing `--session-id <existing-saved-sid>` to
@@ -2364,7 +2399,9 @@ pub async fn send_chat_message(
                     respawn_settings.hook_bridge = Some(build_agent_hook_bridge(bridge)?);
                 }
 
-                let is_resume = should_resume_persistent_session(
+                let is_resume = should_resume_persistent_session_for_runtime(
+                    respawn_settings.backend_runtime.harness,
+                    &worktree_path,
                     &saved_session_id,
                     saved_turn_count,
                     has_persisted_claude_session,
@@ -2489,7 +2526,9 @@ pub async fn send_chat_message(
     } else {
         // No persistent session — start one. Use --resume if we have a saved
         // session from the DB (app restart), fresh ID if brand new.
-        let is_resume = should_resume_persistent_session(
+        let is_resume = should_resume_persistent_session_for_runtime(
+            agent_settings.backend_runtime.harness,
+            &worktree_path,
             &saved_session_id,
             saved_turn_count,
             has_persisted_claude_session,
@@ -3601,7 +3640,7 @@ mod tests {
         route_control_request_session_state, should_drop_persistent_after_turn_result,
         should_expand_file_mentions_for_runtime, should_expand_file_mentions_for_session,
         should_reenable_remote_control_after_turn_result, should_resume_persistent_session,
-        should_run_auto_naming,
+        should_resume_persistent_session_for_runtime, should_run_auto_naming,
     };
     use crate::state::{
         AgentSessionState, AttentionKind, ClaudeRemoteControlLifecycle, ClaudeRemoteControlStatus,
@@ -3867,6 +3906,27 @@ mod tests {
         assert!(!should_resume_persistent_session("fresh-uuid", 1, false));
         assert!(should_resume_persistent_session("fresh-uuid", 2, false));
         assert!(!should_resume_persistent_session("", 9, true));
+    }
+
+    #[cfg(feature = "ptywright-claude")]
+    #[test]
+    fn ptywright_resume_requires_materialized_claude_transcript() {
+        let missing_session_id = format!("missing-{}", uuid::Uuid::new_v4());
+
+        assert!(!should_resume_persistent_session_for_runtime(
+            AgentBackendRuntimeHarness::PtywrightClaude,
+            "/tmp/claudette-missing-worktree",
+            &missing_session_id,
+            2,
+            true,
+        ));
+        assert!(should_resume_persistent_session_for_runtime(
+            AgentBackendRuntimeHarness::ClaudeCode,
+            "/tmp/claudette-missing-worktree",
+            &missing_session_id,
+            2,
+            true,
+        ));
     }
 
     #[test]
