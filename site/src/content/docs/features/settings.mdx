@@ -191,3 +191,14 @@ Claudette sets the following `CLAUDETTE_*` environment variables in every subpro
 | `CLAUDETTE_BRANCH_NAME` | Workspace branch name | `sean/fix-auth-bug` |
 
 These are useful in [setup scripts](/claudette/features/per-repo-settings/#setup-script), [archive scripts](/claudette/features/per-repo-settings/#archive-script), [notification commands](#notification-command), and any tools you run in the [integrated terminal](/claudette/features/integrated-terminal/).
+
+### Shell environment
+
+The **Shell environment** card shows env vars Claudette captured from your interactive shell init (`.zshrc`, `.bashrc`, `.zprofile`, etc.). See [Shell environment](/claudette/features/shell-environment/) for the full feature page.
+
+| Setting | Description | Default |
+|---------|-------------|---------|
+| Reload | Re-probes `$SHELL` immediately, picking up any rc-file changes. | — |
+| Show / Hide (per row) | Toggle reveal of a captured variable's value. Values are masked by default. | Masked |
+| Additional deny patterns | Newline-separated glob list. Names matching any pattern are not forwarded to subprocesses. | empty |
+| Disable shell-env entirely | Stops forwarding any captured shell vars. Per-project env-providers (direnv, mise, etc.) continue to work. | Off |
