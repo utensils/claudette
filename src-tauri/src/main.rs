@@ -250,6 +250,16 @@ fn release_tag_for(version: &str) -> String {
 }
 
 fn main() {
+    // Snapshot the launchd-provided env BEFORE any other code can
+    // mutate it. Used by claudette::env::shell_env's diff logic to
+    // forward only vars the user's shell init *added* on top of
+    // launchd's baseline. Subsequent code in main() and setup hooks
+    // freely mutates env without affecting this snapshot.
+    {
+        let snapshot: std::collections::BTreeMap<String, String> = std::env::vars().collect();
+        claudette::env::set_launch_env_snapshot(snapshot);
+    }
+
     // Install the rustls crypto provider before any TLS usage. Both
     // aws-lc-rs and ring are active (tauri-plugin-updater pulls in ring),
     // so rustls cannot auto-detect — we must pick one explicitly.
@@ -792,13 +802,27 @@ fn main() {
             // (tokio runtime may not be available during setup).
             std::thread::spawn(usage::warm_user_agent_cache_sync);
 
-            // Pre-warm the login-shell PATH cache. On Unix, `shell_path()`
-            // spawns `$SHELL -l -c 'echo $PATH'` with a 5-second timeout —
-            // fine to pay once at startup on a std thread, but lethal if
-            // it ever runs inline on a Tokio worker (stalls every async
-            // handler that touches `enriched_path` until the probe
-            // returns). On Windows this is a no-op.
-            std::thread::spawn(claudette::env::prewarm_shell_path);
+            // Pre-warm the shell-env cache. On Unix, this spawns
+            // `$SHELL -lc 'env'` with a 5-second timeout — fine to pay
+            // once at startup on a std thread, but lethal if it ever runs
+            // inline on a Tokio worker. On Windows this is a no-op.
+            // Read user-supplied shell-env deny patterns from app_settings
+            // so the very first probe already filters per the user's policy.
+            let user_deny: Vec<String> = match claudette::db::Database::open(&db_path) {
+                Ok(db) => db
+                    .get_app_setting("shell_env:denylist")
+                    .ok()
+                    .flatten()
+                    .map(|s| {
+                        s.lines()
+                            .map(str::to_string)
+                            .filter(|l| !l.is_empty())
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+                Err(_) => Vec::new(),
+            };
+            std::thread::spawn(move || claudette::env::prewarm_shell_env(user_deny));
 
             // Set up the system tray icon (respects tray_enabled setting).
             if let Err(e) = tray::setup_tray(app.handle()) {
