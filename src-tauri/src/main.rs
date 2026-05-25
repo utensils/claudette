@@ -512,7 +512,7 @@ fn main() {
         }
     }
 
-    let app_state = state::AppState::new(db_path, worktree_base_dir, plugins);
+    let app_state = state::AppState::new(db_path.clone(), worktree_base_dir, plugins);
 
     let remote_manager = remote::RemoteConnectionManager::new();
     let mcp_supervisor = std::sync::Arc::new(claudette::mcp_supervisor::McpSupervisor::new());
