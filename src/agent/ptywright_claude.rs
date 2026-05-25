@@ -339,7 +339,7 @@ fn run_ptywright_turn(
         "ptywright Claude submitting prompt"
     );
     submit_prompt(&mut guard, prompt)?;
-    let state = wait_for_turn_state(&mut guard, cancel)?;
+    let state = wait_for_turn_state(&mut guard, cancel, prompt)?;
     tracing::debug!(
         target: "claudette::agent",
         ptywright_state = %state.state,
@@ -379,6 +379,7 @@ fn run_ptywright_turn(
 fn wait_for_turn_state(
     handle: &mut ptywright::ExtensionHandle,
     cancel: &ptywright::CancellationToken,
+    prompt: &str,
 ) -> Result<ptywright::ExtensionStateSnapshot, String> {
     let deadline = Instant::now() + TURN_TIMEOUT;
     let mut last_state: Option<ptywright::ExtensionStateSnapshot> = None;
@@ -423,8 +424,21 @@ fn wait_for_turn_state(
             ));
         }
         match state.state.as_str() {
-            "completed_turn"
-            | "error"
+            "completed_turn" => {
+                if current_turn_has_answer(handle, &state, prompt) {
+                    return Ok(state);
+                }
+                tracing::debug!(
+                    target: "claudette::agent",
+                    ptywright_state = %state.state,
+                    evidence = %state.evidence,
+                    sequence = state.sequence,
+                    "ptywright Claude ignored stale completed_turn without current turn answer"
+                );
+                last_state = Some(state);
+                std::thread::sleep(POLL_INTERVAL);
+            }
+            "error"
             | "waiting_for_permission"
             | "waiting_for_enter_plan_mode"
             | "waiting_for_plan_approval"
@@ -563,9 +577,8 @@ fn submit_prompt_once(
             .map_err(|e| format!("Failed to inspect ptywright Claude submit state: {e}"))?;
         let anchored = !prompt_anchor.is_empty() && transcript.contains(&prompt_anchor);
         let editable_prompt = prompt_still_editable(&screen, &prompt_anchor);
-        let submitted = grew >= PASTE_REACTION_BYTES
-            && !editable_prompt
-            && (anchored || state.state.as_str() == "thinking");
+        let submitted =
+            prompt_submission_observed(grew, anchored, state.state.as_str(), editable_prompt);
         tracing::trace!(
             target: "claudette::agent",
             ptywright_state = %state.state,
@@ -604,7 +617,7 @@ fn submit_prompt_once(
             last_submit_nudge_at = Instant::now();
         }
 
-        if matches!(state.state.as_str(), "completed_turn" | "error") || submitted {
+        if state.state == "error" || submitted {
             tracing::debug!(
                 target: "claudette::agent",
                 ptywright_state = %state.state,
@@ -637,35 +650,41 @@ fn extract_turn_answer(
     state: &ptywright::ExtensionStateSnapshot,
     prompt: &str,
 ) -> String {
-    if let Some(text) = state
-        .metadata
-        .as_ref()
-        .and_then(|metadata| metadata.get("turn"))
-        .and_then(|turn| turn.get("text"))
-        .and_then(serde_json::Value::as_str)
-        .map(str::trim)
-        .filter(|text| !text.is_empty())
-    {
+    if let Some((turn_start, turn_end)) = transcript_bounds(handle, state) {
+        if let Some(slice) = handle.session().transcript_slice(turn_start, turn_end) {
+            if let Some(answer) = clean_transcript_answer(&slice, prompt) {
+                tracing::debug!(
+                    target: "claudette::agent",
+                    turn_start,
+                    turn_end,
+                    response_len = answer.len(),
+                    "ptywright Claude extracted transcript turn text"
+                );
+                return answer;
+            }
+            tracing::debug!(
+                target: "claudette::agent",
+                turn_start,
+                turn_end,
+                "ptywright Claude transcript slice had no current-turn answer"
+            );
+        } else if let Some(text) = structured_turn_text(state) {
+            tracing::debug!(
+                target: "claudette::agent",
+                turn_start,
+                turn_end,
+                response_len = text.len(),
+                "ptywright Claude extracted structured turn text after transcript eviction"
+            );
+            return text.to_string();
+        }
+    } else if let Some(text) = structured_turn_text(state) {
         tracing::debug!(
             target: "claudette::agent",
             response_len = text.len(),
             "ptywright Claude extracted structured turn text"
         );
         return text.to_string();
-    }
-
-    if let Some((turn_start, turn_end)) = transcript_bounds(handle, state)
-        && let Some(slice) = handle.session().transcript_slice(turn_start, turn_end)
-        && let Some(answer) = clean_transcript_answer(&slice, prompt)
-    {
-        tracing::debug!(
-            target: "claudette::agent",
-            turn_start,
-            turn_end,
-            response_len = answer.len(),
-            "ptywright Claude extracted transcript turn text"
-        );
-        return answer;
     }
 
     let screen = handle.session().snapshot().plain_text;
@@ -677,6 +696,32 @@ fn extract_turn_answer(
         "ptywright Claude falling back to visible screen text"
     );
     extract_visible_answer(&screen, state.evidence.as_str())
+}
+
+fn current_turn_has_answer(
+    handle: &ptywright::ExtensionHandle,
+    state: &ptywright::ExtensionStateSnapshot,
+    prompt: &str,
+) -> bool {
+    let Some((turn_start, turn_end)) = transcript_bounds(handle, state) else {
+        return structured_turn_text(state).is_some();
+    };
+
+    match handle.session().transcript_slice(turn_start, turn_end) {
+        Some(slice) => clean_transcript_answer(&slice, prompt).is_some(),
+        None => structured_turn_text(state).is_some(),
+    }
+}
+
+fn structured_turn_text(state: &ptywright::ExtensionStateSnapshot) -> Option<&str> {
+    state
+        .metadata
+        .as_ref()
+        .and_then(|metadata| metadata.get("turn"))
+        .and_then(|turn| turn.get("text"))
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
 }
 
 fn transcript_bounds(
@@ -853,6 +898,17 @@ fn extract_visible_answer(screen: &str, evidence: &str) -> String {
         return format!("ptywright Claude turn completed: {evidence}");
     }
     trimmed.to_string()
+}
+
+fn prompt_submission_observed(
+    grew: usize,
+    anchored: bool,
+    ptywright_state: &str,
+    editable_prompt: bool,
+) -> bool {
+    grew >= PASTE_REACTION_BYTES
+        && !editable_prompt
+        && (anchored || ptywright_state == "thinking" || ptywright_state == "completed_turn")
 }
 
 fn prompt_still_editable(screen: &str, prompt_anchor: &str) -> bool {
@@ -1055,6 +1111,36 @@ clean line
                                        2 claude.ai connectors need auth · /mcp";
 
         assert!(!prompt_still_editable(screen, "ping"));
+    }
+
+    #[test]
+    fn prompt_submission_ack_rejects_stale_completed_turn_when_prompt_still_editable() {
+        assert!(!prompt_submission_observed(
+            PASTE_REACTION_BYTES + 1,
+            true,
+            "completed_turn",
+            true,
+        ));
+    }
+
+    #[test]
+    fn prompt_submission_ack_accepts_completed_turn_after_prompt_leaves_input() {
+        assert!(prompt_submission_observed(
+            PASTE_REACTION_BYTES + 1,
+            true,
+            "completed_turn",
+            false,
+        ));
+    }
+
+    #[test]
+    fn prompt_submission_ack_accepts_thinking_after_prompt_leaves_input() {
+        assert!(prompt_submission_observed(
+            PASTE_REACTION_BYTES + 1,
+            false,
+            "thinking",
+            false,
+        ));
     }
 
     #[test]
