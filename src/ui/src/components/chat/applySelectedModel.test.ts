@@ -149,6 +149,23 @@ describe("applySelectedModel", () => {
 
       expect(serviceMocks.resetAgentSession).not.toHaveBeenCalled();
     });
+
+    it("does NOT prepare migration between Claude CLI and ptywright Claude", async () => {
+      appStore.agentBackends = [
+        backend("anthropic-pty", "anthropic", [
+          { id: "sonnet", label: "Sonnet" },
+        ], {
+          runtime_harness: "ptywright_claude",
+        }),
+      ];
+      appStore.selectedModel["sess-1"] = "sonnet";
+      appStore.selectedModelProvider["sess-1"] = "anthropic";
+
+      await applySelectedModel("sess-1", "sonnet", "anthropic-pty");
+
+      expect(serviceMocks.prepareCrossHarnessMigration).not.toHaveBeenCalled();
+      expect(serviceMocks.resetAgentSession).not.toHaveBeenCalled();
+    });
   });
 
   describe("cross-harness model swap", () => {

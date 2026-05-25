@@ -69,7 +69,8 @@ impl PtywrightClaudeSession {
         let claude_program = claude_path.to_string_lossy().into_owned();
         let working_dir = params.working_dir.to_path_buf();
         let settings = params.settings.clone();
-        let claude_args = build_ptywright_claude_args(&settings);
+        let claude_args =
+            build_ptywright_claude_args(params.session_id, params.is_resume, &settings);
         let target_args = claude_args.clone();
         let workspace_env = params.workspace_env.cloned();
 
@@ -297,8 +298,19 @@ impl PtywrightClaudeSession {
     }
 }
 
-fn build_ptywright_claude_args(settings: &AgentSettings) -> Vec<String> {
+fn build_ptywright_claude_args(
+    session_id: &str,
+    is_resume: bool,
+    settings: &AgentSettings,
+) -> Vec<String> {
     let mut args = Vec::new();
+    if is_resume {
+        args.push("--resume".to_string());
+        args.push(session_id.to_string());
+    } else {
+        args.push("--session-id".to_string());
+        args.push(session_id.to_string());
+    }
     if let Some(model) = settings.model.as_ref() {
         args.push("--model".to_string());
         args.push(model.clone());
@@ -1483,6 +1495,19 @@ Esc to interrupt";
             ..AgentSettings::default()
         };
 
-        assert_eq!(build_ptywright_claude_args(&settings), ["--model", "opus"]);
+        assert_eq!(
+            build_ptywright_claude_args("session-1", true, &settings),
+            ["--resume", "session-1", "--model", "opus"]
+        );
+    }
+
+    #[test]
+    fn ptywright_args_seed_new_session_id() {
+        let settings = AgentSettings::default();
+
+        assert_eq!(
+            build_ptywright_claude_args("session-1", false, &settings),
+            ["--session-id", "session-1"]
+        );
     }
 }

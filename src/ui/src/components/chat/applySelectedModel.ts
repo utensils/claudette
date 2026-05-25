@@ -1,4 +1,5 @@
 import {
+  type AgentBackendRuntimeHarness,
   prepareCrossHarnessMigration,
   resetAgentSession,
   setAppSetting,
@@ -20,6 +21,26 @@ import {
   reasoningVariantForModel,
 } from "./reasoningControls";
 
+const CLAUDE_CODE_SESSION_COMPATIBLE_HARNESSES = new Set<
+  AgentBackendRuntimeHarness
+>(["claude_code", "ptywright_claude"]);
+
+function areSessionCompatibleHarnesses(
+  prevHarness: string | undefined,
+  nextHarness: string | undefined,
+): boolean {
+  if (!prevHarness || !nextHarness) return false;
+  if (prevHarness === nextHarness) return true;
+  return (
+    CLAUDE_CODE_SESSION_COMPATIBLE_HARNESSES.has(
+      prevHarness as AgentBackendRuntimeHarness,
+    ) &&
+    CLAUDE_CODE_SESSION_COMPATIBLE_HARNESSES.has(
+      nextHarness as AgentBackendRuntimeHarness,
+    )
+  );
+}
+
 /**
  * Apply a model change for a chat session.
  *
@@ -30,8 +51,9 @@ import {
  *
  * Session-handling rule, by swap kind:
  *
- * - **Same harness** (e.g. Sonnet 4.6 <-> Opus 4.7 on the Anthropic Claude
- *   Code path, or two Pi-routed Ollama models): preserve
+ * - **Same or session-compatible harness** (e.g. Sonnet 4.6 <-> Opus 4.7 on
+ *   the Anthropic Claude Code path, Claude CLI <-> ptywright Claude, or two
+ *   Pi-routed Ollama models): preserve
  *   `chat_sessions.session_id` so the next turn resumes the prior
  *   transcript via `claude --resume` (Claude CLI) or its harness-native
  *   analogue. The Rust drift-detection in `src-tauri/src/commands/chat/
@@ -115,7 +137,7 @@ export async function applySelectedModel(
     if (!nextHarness) return false;
     if (!prevModel) return false;
     if (!prevHarness) return true;
-    return prevHarness !== nextHarness;
+    return !areSessionCompatibleHarnesses(prevHarness, nextHarness);
   })();
 
   store.setSelectedModel(sessionId, model, nextProvider);

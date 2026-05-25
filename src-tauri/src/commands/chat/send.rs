@@ -8,9 +8,9 @@ use claudette::agent::background::{
     AgentBackgroundTaskEventKind, parse_background_task_binding, parse_task_notification,
 };
 use claudette::agent::{
-    self, AgentEvent, AgentSession, AgentSettings, ClaudeCodeHarness, CodexAppServerOptions,
-    CodexAppServerSession, CodexPermissionLevel, ControlRequestInner, FileAttachment,
-    InnerStreamEvent, PersistentSessionStart, StartContentBlock, StreamEvent,
+    self, AgentEvent, AgentHarnessKind, AgentSession, AgentSettings, ClaudeCodeHarness,
+    CodexAppServerOptions, CodexAppServerSession, CodexPermissionLevel, ControlRequestInner,
+    FileAttachment, InnerStreamEvent, PersistentSessionStart, StartContentBlock, StreamEvent,
     is_codex_approval_tool_name, normalize_codex_reasoning_effort,
 };
 #[cfg(feature = "pi-sdk")]
@@ -934,6 +934,26 @@ pub(super) fn ensure_harness_accepts_attachments(
     Ok(())
 }
 
+fn should_expand_file_mentions_for_runtime(harness: AgentBackendRuntimeHarness) -> bool {
+    #[cfg(feature = "ptywright-claude")]
+    if harness == AgentBackendRuntimeHarness::PtywrightClaude {
+        return false;
+    }
+    #[cfg(not(feature = "ptywright-claude"))]
+    let _ = harness;
+    true
+}
+
+fn should_expand_file_mentions_for_session(kind: AgentHarnessKind) -> bool {
+    #[cfg(feature = "ptywright-claude")]
+    if kind == AgentHarnessKind::PtywrightClaude {
+        return false;
+    }
+    #[cfg(not(feature = "ptywright-claude"))]
+    let _ = kind;
+    true
+}
+
 /// True when this turn should be intercepted as a native compaction
 /// instead of a normal user turn. The Codex app-server and Pi SDK
 /// harnesses both need the intercept — each exposes a `start_compact()`
@@ -1066,12 +1086,16 @@ pub async fn steer_queued_chat_message(
     .ok_or("Failed to create pre-steer checkpoint")?;
     let pre_steer_checkpoint_id = pre_steer_checkpoint.id.clone();
 
-    let prompt = claudette::file_expand::expand_file_mentions(
-        std::path::Path::new(&worktree_path),
-        &content,
-        mentioned_files.as_deref().unwrap_or(&[]),
-    )
-    .await;
+    let prompt = if should_expand_file_mentions_for_session(ps.kind()) {
+        claudette::file_expand::expand_file_mentions(
+            std::path::Path::new(&worktree_path),
+            &content,
+            mentioned_files.as_deref().unwrap_or(&[]),
+        )
+        .await
+    } else {
+        content.clone()
+    };
 
     if let Err(e) = persist_user_send(&db, &prepared_user_send) {
         cleanup_failed_steer_persistence(
@@ -1732,13 +1756,21 @@ pub async fn send_chat_message(
     }
     let session = agents.get_mut(&chat_session_id).ok_or("Session lost")?;
 
-    // Expand @-file mentions into inline file content for the agent prompt.
-    let expanded_user_content = claudette::file_expand::expand_file_mentions(
-        std::path::Path::new(&worktree_path),
-        &content,
-        mentioned_files.as_deref().unwrap_or(&[]),
-    )
-    .await;
+    // Claude CLI JSON mode and the non-terminal harnesses need Claudette
+    // to inline @-file references. The ptywright harness drives Claude's
+    // interactive prompt, where literal @paths are the native file context
+    // surface and multiline inlined bodies get collapsed as paste blocks.
+    let expanded_user_content = if should_expand_file_mentions_for_runtime(backend_runtime.harness)
+    {
+        claudette::file_expand::expand_file_mentions(
+            std::path::Path::new(&worktree_path),
+            &content,
+            mentioned_files.as_deref().unwrap_or(&[]),
+        )
+        .await
+    } else {
+        content.clone()
+    };
 
     // Cross-harness migration: if `prepare_cross_harness_migration` queued
     // a prelude on this session, prepend the prior-conversation transcript
@@ -3454,7 +3486,8 @@ mod tests {
         remote_control_requested_or_active, remote_control_requested_or_active_for_turn,
         remote_control_should_defer_drift_teardown_for_turn,
         remote_control_should_restore_for_turn, remote_control_title, resolve_spawn_session_id,
-        route_control_request_session_state, should_reenable_remote_control_after_turn_result,
+        route_control_request_session_state, should_expand_file_mentions_for_runtime,
+        should_expand_file_mentions_for_session, should_reenable_remote_control_after_turn_result,
         should_resume_persistent_session, should_run_auto_naming,
     };
     use crate::state::{
@@ -4069,6 +4102,27 @@ mod tests {
         assert_eq!(err, ptywright_attachment_unsupported_message());
         assert!(err.contains("Claude CLI"));
         assert!(err.contains("Settings → Models → Runtime"));
+    }
+
+    #[cfg(feature = "ptywright-claude")]
+    #[test]
+    fn ptywright_harness_preserves_literal_file_mentions() {
+        assert!(!should_expand_file_mentions_for_runtime(
+            AgentBackendRuntimeHarness::PtywrightClaude
+        ));
+        assert!(!should_expand_file_mentions_for_session(
+            claudette::agent::AgentHarnessKind::PtywrightClaude
+        ));
+    }
+
+    #[test]
+    fn claude_code_harness_expands_file_mentions() {
+        assert!(should_expand_file_mentions_for_runtime(
+            AgentBackendRuntimeHarness::ClaudeCode
+        ));
+        assert!(should_expand_file_mentions_for_session(
+            claudette::agent::AgentHarnessKind::ClaudeCode
+        ));
     }
 
     #[test]
