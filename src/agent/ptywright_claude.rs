@@ -16,7 +16,7 @@ use super::args::{build_settings_json, format_redacted_invocation};
 use super::binary::resolve_claude_path;
 use super::process::{AgentEvent, TurnHandle};
 use super::types::{
-    AssistantMessage, ContentBlock, FileAttachment, InnerStreamEvent, StartContentBlock,
+    AssistantMessage, ContentBlock, Delta, FileAttachment, InnerStreamEvent, StartContentBlock,
     StreamEvent, UserContentBlock, UserEventMessage, UserMessageContent,
 };
 use super::{AgentSettings, PersistentSessionStart};
@@ -367,22 +367,24 @@ fn run_ptywright_turn(
     working_dir: &Path,
     claude_session_id: &str,
 ) -> Result<String, String> {
-    let mut guard = handle
-        .lock()
-        .map_err(|_| "ptywright handle lock poisoned".to_string())?;
-    tracing::debug!(
-        target: "claudette::agent",
-        prompt_len = prompt.len(),
-        "ptywright Claude preparing prompt"
-    );
-    prepare_for_prompt(&mut guard)?;
-    tracing::debug!(
-        target: "claudette::agent",
-        prompt_len = prompt.len(),
-        "ptywright Claude submitting prompt"
-    );
-    submit_prompt(&mut guard, prompt)?;
-    let state = wait_for_turn_state(&mut guard, cancel, prompt, broadcast_tx, turn_tx)?;
+    {
+        let mut guard = handle
+            .lock()
+            .map_err(|_| "ptywright handle lock poisoned".to_string())?;
+        tracing::debug!(
+            target: "claudette::agent",
+            prompt_len = prompt.len(),
+            "ptywright Claude preparing prompt"
+        );
+        prepare_for_prompt(&mut guard)?;
+        tracing::debug!(
+            target: "claudette::agent",
+            prompt_len = prompt.len(),
+            "ptywright Claude submitting prompt"
+        );
+        submit_prompt(&mut guard, prompt)?;
+    }
+    let state = wait_for_turn_state(handle, cancel, prompt, broadcast_tx, turn_tx)?;
     tracing::debug!(
         target: "claudette::agent",
         ptywright_state = %state.state,
@@ -394,6 +396,9 @@ fn run_ptywright_turn(
 
     match state.state.as_str() {
         "completed_turn" => {
+            let guard = handle
+                .lock()
+                .map_err(|_| "ptywright handle lock poisoned".to_string())?;
             let answer =
                 extract_turn_answer(&guard, &state, prompt, working_dir, claude_session_id);
             if answer_looks_like_claude_error(&answer) {
@@ -416,13 +421,18 @@ fn run_ptywright_turn(
             "ptywright Claude reported an error: {}",
             state.evidence
         )),
-        _ => Ok(extract_turn_answer(
-            &guard,
-            &state,
-            prompt,
-            working_dir,
-            claude_session_id,
-        )),
+        _ => {
+            let guard = handle
+                .lock()
+                .map_err(|_| "ptywright handle lock poisoned".to_string())?;
+            Ok(extract_turn_answer(
+                &guard,
+                &state,
+                prompt,
+                working_dir,
+                claude_session_id,
+            ))
+        }
     }
 }
 
@@ -452,7 +462,7 @@ fn validate_resume_start(handle: &mut ptywright::ExtensionHandle) -> Result<(), 
 }
 
 fn wait_for_turn_state(
-    handle: &mut ptywright::ExtensionHandle,
+    handle: &SharedHandle,
     cancel: &ptywright::CancellationToken,
     prompt: &str,
     broadcast_tx: &broadcast::Sender<AgentEvent>,
@@ -465,15 +475,30 @@ fn wait_for_turn_state(
     let mut last_ignored_completed_sequence = None;
     let mut last_ignored_completed_log_at = Instant::now() - Duration::from_secs(60);
     let mut tool_activity = PtywrightToolActivityEmitter::default();
+    let mut assistant_text = PtywrightAssistantTextEmitter::default();
     while Instant::now() < deadline {
         if cancel.is_cancelled() {
             return Err("ptywright Claude turn failed: wait cancelled".to_string());
         }
-        let state = handle
-            .try_state()
-            .map_err(|e| format!("Failed to inspect ptywright Claude turn state: {e}"))?;
-        let screen = handle.session().snapshot().plain_text;
-        let transcript_len = handle.session().transcript().len();
+        let (state, screen, transcript_len, current_turn_answer, prompt_editable) = {
+            let guard = handle
+                .lock()
+                .map_err(|_| "ptywright handle lock poisoned".to_string())?;
+            let state = guard
+                .try_state()
+                .map_err(|e| format!("Failed to inspect ptywright Claude turn state: {e}"))?;
+            let screen = guard.session().snapshot().plain_text;
+            let transcript_len = guard.session().transcript().len();
+            let current_turn_answer = current_turn_has_answer(&guard, &state, prompt);
+            let prompt_editable = current_prompt_still_editable(&guard, prompt);
+            (
+                state,
+                screen,
+                transcript_len,
+                current_turn_answer,
+                prompt_editable,
+            )
+        };
         if state.state != last_log_state || last_log_at.elapsed() >= Duration::from_secs(5) {
             tracing::debug!(
                 target: "claudette::agent",
@@ -498,17 +523,20 @@ fn wait_for_turn_state(
             );
         }
         if answer_looks_like_claude_error(&screen) {
-            tool_activity.finish_active(broadcast_tx, turn_tx, "error");
+            tool_activity.finish_all(broadcast_tx, turn_tx, "error");
+            assistant_text.finish(broadcast_tx, turn_tx);
             return Err(format!(
                 "ptywright Claude reported an error: {}",
                 extract_visible_answer(&screen, &state.evidence)
             ));
         }
-        tool_activity.observe_screen(&screen, state.sequence, broadcast_tx, turn_tx);
+        assistant_text.observe_state(&state, broadcast_tx, turn_tx);
+        tool_activity.observe_state(&state, &screen, broadcast_tx, turn_tx);
         match state.state.as_str() {
             "completed_turn" => {
-                if current_turn_has_answer(handle, &state, prompt) {
-                    tool_activity.finish_active(broadcast_tx, turn_tx, "completed");
+                if current_turn_answer {
+                    tool_activity.finish_all(broadcast_tx, turn_tx, "completed");
+                    assistant_text.finish(broadcast_tx, turn_tx);
                     return Ok(state);
                 }
                 if last_ignored_completed_sequence != Some(state.sequence)
@@ -520,7 +548,7 @@ fn wait_for_turn_state(
                         evidence = %state.evidence,
                         sequence = state.sequence,
                         has_structured_turn = structured_turn_text(&state).is_some(),
-                        prompt_editable = current_prompt_still_editable(handle, prompt),
+                        prompt_editable,
                         "ptywright Claude ignored stale completed_turn without current turn answer"
                     );
                     last_ignored_completed_sequence = Some(state.sequence);
@@ -545,7 +573,8 @@ fn wait_for_turn_state(
             | "waiting_for_model_select"
             | "waiting_for_external_editor"
             | "waiting_for_login" => {
-                tool_activity.finish_active(broadcast_tx, turn_tx, "interrupted");
+                tool_activity.finish_all(broadcast_tx, turn_tx, "interrupted");
+                assistant_text.finish(broadcast_tx, turn_tx);
                 return Ok(state);
             }
             _ => {
@@ -926,6 +955,17 @@ fn structured_turn_text(state: &ptywright::ExtensionStateSnapshot) -> Option<&st
         .filter(|text| !text.is_empty())
 }
 
+fn structured_partial_turn_text(state: &ptywright::ExtensionStateSnapshot) -> Option<&str> {
+    state
+        .metadata
+        .as_ref()
+        .and_then(|metadata| metadata.get("turn"))
+        .and_then(|turn| turn.get("partial_text"))
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+}
+
 fn latest_claude_jsonl_assistant_text(working_dir: &Path, session_id: &str) -> Option<String> {
     let transcript_path = claude_jsonl_transcript_path(working_dir, session_id)?;
     if !transcript_path.is_file() {
@@ -1288,10 +1328,9 @@ fn debug_tail(text: &str, max_chars: usize) -> String {
     chars.into_iter().collect()
 }
 
-#[derive(Default)]
 struct PtywrightToolActivityEmitter {
-    active: Option<EmittedPtywrightTool>,
-    seen_keys: BTreeSet<String>,
+    active: std::collections::BTreeMap<String, EmittedPtywrightTool>,
+    completed_keys: BTreeSet<String>,
     next_index: usize,
 }
 
@@ -1300,11 +1339,11 @@ struct VisiblePtywrightTool {
     key: String,
     name: String,
     summary: String,
+    status: String,
     input: Value,
 }
 
 struct EmittedPtywrightTool {
-    key: String,
     id: String,
     index: usize,
     name: String,
@@ -1312,27 +1351,52 @@ struct EmittedPtywrightTool {
 }
 
 impl PtywrightToolActivityEmitter {
-    fn observe_screen(
+    fn observe_state(
         &mut self,
+        state: &ptywright::ExtensionStateSnapshot,
         screen: &str,
-        sequence: u64,
         broadcast_tx: &broadcast::Sender<AgentEvent>,
         turn_tx: &mpsc::Sender<AgentEvent>,
     ) {
-        let visible = visible_ptywright_tool(screen);
-        match (self.active.as_ref(), visible) {
-            (Some(active), Some(visible)) if active.key == visible.key => {}
-            (Some(_), Some(visible)) if self.seen_keys.contains(&visible.key) => {
-                self.finish_active(broadcast_tx, turn_tx, "completed");
+        let visible = metadata_visible_tools(state)
+            .or_else(|| visible_ptywright_tool(screen).map(|tool| vec![tool]))
+            .unwrap_or_default();
+        let visible_keys = visible
+            .iter()
+            .map(|tool| tool.key.clone())
+            .collect::<BTreeSet<_>>();
+
+        let mut finished = Vec::new();
+        for key in self.active.keys() {
+            let visible_tool = visible.iter().find(|tool| &tool.key == key);
+            if visible_tool.is_none_or(|tool| tool.status != "running") {
+                finished.push(key.clone());
             }
-            (None, Some(visible)) if self.seen_keys.contains(&visible.key) => {}
-            (Some(_), Some(visible)) => {
-                self.finish_active(broadcast_tx, turn_tx, "replaced");
-                self.start_tool(visible, sequence, broadcast_tx, turn_tx);
+        }
+        for key in finished {
+            self.finish_key(&key, broadcast_tx, turn_tx, "completed");
+        }
+
+        for tool in visible {
+            if self.active.contains_key(&tool.key) || self.completed_keys.contains(&tool.key) {
+                continue;
             }
-            (None, Some(visible)) => self.start_tool(visible, sequence, broadcast_tx, turn_tx),
-            (Some(_), None) => self.finish_active(broadcast_tx, turn_tx, "completed"),
-            (None, None) => {}
+            let key = tool.key.clone();
+            let status = tool.status.clone();
+            self.start_tool(tool, state.sequence, broadcast_tx, turn_tx);
+            if status != "running" {
+                self.finish_key(&key, broadcast_tx, turn_tx, "completed");
+            }
+        }
+
+        for key in self
+            .active
+            .keys()
+            .filter(|key| !visible_keys.contains(*key))
+            .cloned()
+            .collect::<Vec<_>>()
+        {
+            self.finish_key(&key, broadcast_tx, turn_tx, "completed");
         }
     }
 
@@ -1347,7 +1411,7 @@ impl PtywrightToolActivityEmitter {
         self.next_index += 1;
         let id = format!("ptywright-tool-{sequence}-{index}");
         let input = visible.input.clone();
-        self.seen_keys.insert(visible.key.clone());
+        self.completed_keys.insert(visible.key.clone());
         tracing::debug!(
             target: "claudette::agent",
             tool_use_id = %id,
@@ -1369,22 +1433,25 @@ impl PtywrightToolActivityEmitter {
                 },
             }),
         );
-        self.active = Some(EmittedPtywrightTool {
-            key: visible.key,
-            id,
-            index,
-            name: visible.name,
-            summary: visible.summary,
-        });
+        self.active.insert(
+            visible.key.clone(),
+            EmittedPtywrightTool {
+                id,
+                index,
+                name: visible.name,
+                summary: visible.summary,
+            },
+        );
     }
 
-    fn finish_active(
+    fn finish_key(
         &mut self,
+        key: &str,
         broadcast_tx: &broadcast::Sender<AgentEvent>,
         turn_tx: &mpsc::Sender<AgentEvent>,
         status: &str,
     ) {
-        let Some(active) = self.active.take() else {
+        let Some(active) = self.active.remove(key) else {
             return;
         };
         send_event(
@@ -1423,6 +1490,116 @@ impl PtywrightToolActivityEmitter {
             "ptywright Claude completed visible tool activity"
         );
     }
+
+    fn finish_all(
+        &mut self,
+        broadcast_tx: &broadcast::Sender<AgentEvent>,
+        turn_tx: &mpsc::Sender<AgentEvent>,
+        status: &str,
+    ) {
+        for key in self.active.keys().cloned().collect::<Vec<_>>() {
+            self.finish_key(&key, broadcast_tx, turn_tx, status);
+        }
+    }
+}
+
+impl Default for PtywrightToolActivityEmitter {
+    fn default() -> Self {
+        Self {
+            active: std::collections::BTreeMap::new(),
+            completed_keys: BTreeSet::new(),
+            next_index: 1,
+        }
+    }
+}
+
+#[derive(Default)]
+struct PtywrightAssistantTextEmitter {
+    started: bool,
+    emitted: String,
+}
+
+impl PtywrightAssistantTextEmitter {
+    fn observe_state(
+        &mut self,
+        state: &ptywright::ExtensionStateSnapshot,
+        broadcast_tx: &broadcast::Sender<AgentEvent>,
+        turn_tx: &mpsc::Sender<AgentEvent>,
+    ) {
+        let Some(text) =
+            structured_partial_turn_text(state).or_else(|| structured_turn_text(state))
+        else {
+            return;
+        };
+        self.emit_to(text, broadcast_tx, turn_tx);
+    }
+
+    fn finish(
+        &mut self,
+        broadcast_tx: &broadcast::Sender<AgentEvent>,
+        turn_tx: &mpsc::Sender<AgentEvent>,
+    ) {
+        if self.emitted.is_empty() {
+            return;
+        }
+        send_event(
+            broadcast_tx,
+            turn_tx,
+            AgentEvent::Stream(StreamEvent::Stream {
+                event: InnerStreamEvent::ContentBlockStop { index: 0 },
+            }),
+        );
+        send_event(
+            broadcast_tx,
+            turn_tx,
+            AgentEvent::Stream(StreamEvent::Stream {
+                event: InnerStreamEvent::MessageStop {},
+            }),
+        );
+    }
+
+    fn emit_to(
+        &mut self,
+        text: &str,
+        broadcast_tx: &broadcast::Sender<AgentEvent>,
+        turn_tx: &mpsc::Sender<AgentEvent>,
+    ) {
+        if text.len() <= self.emitted.len() || !text.starts_with(&self.emitted) {
+            return;
+        }
+        if !self.started {
+            self.started = true;
+            send_event(
+                broadcast_tx,
+                turn_tx,
+                AgentEvent::Stream(StreamEvent::Stream {
+                    event: InnerStreamEvent::MessageStart {},
+                }),
+            );
+            send_event(
+                broadcast_tx,
+                turn_tx,
+                AgentEvent::Stream(StreamEvent::Stream {
+                    event: InnerStreamEvent::ContentBlockStart {
+                        index: 0,
+                        content_block: Some(StartContentBlock::Text {}),
+                    },
+                }),
+            );
+        }
+        let delta = text[self.emitted.len()..].to_string();
+        self.emitted.push_str(&delta);
+        send_event(
+            broadcast_tx,
+            turn_tx,
+            AgentEvent::Stream(StreamEvent::Stream {
+                event: InnerStreamEvent::ContentBlockDelta {
+                    index: 0,
+                    delta: Delta::Text { text: delta },
+                },
+            }),
+        );
+    }
 }
 
 fn visible_ptywright_tool(screen: &str) -> Option<VisiblePtywrightTool> {
@@ -1446,6 +1623,7 @@ fn visible_ptywright_tool(screen: &str) -> Option<VisiblePtywrightTool> {
                 key: format!("running:{name}:{summary}"),
                 name: name.to_string(),
                 summary,
+                status: "running".to_string(),
                 input,
             });
         }
@@ -1469,10 +1647,58 @@ fn visible_ptywright_tool(screen: &str) -> Option<VisiblePtywrightTool> {
             key: format!("progress:{name}:{key_detail}"),
             name,
             summary,
+            status: "running".to_string(),
             input,
         });
     }
     None
+}
+
+fn metadata_visible_tools(
+    state: &ptywright::ExtensionStateSnapshot,
+) -> Option<Vec<VisiblePtywrightTool>> {
+    let tools = state
+        .metadata
+        .as_ref()
+        .and_then(|metadata| metadata.get("tools"))
+        .and_then(Value::as_array)?;
+    let parsed = tools
+        .iter()
+        .filter_map(|tool| {
+            let name = tool.get("name")?.as_str()?.trim();
+            if name.is_empty() {
+                return None;
+            }
+            let summary = tool
+                .get("summary")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|summary| !summary.is_empty())
+                .unwrap_or(name);
+            let key = tool
+                .get("key")
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned)
+                .unwrap_or_else(|| format!("{name}:{summary}"));
+            let status = tool
+                .get("status")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|status| !status.is_empty())
+                .unwrap_or("completed");
+            let input = tool.get("input").cloned().unwrap_or_else(|| {
+                tool_input(name, summary, &[]).unwrap_or_else(|| json!({ "description": summary }))
+            });
+            Some(VisiblePtywrightTool {
+                key: format!("metadata:{key}"),
+                name: name.to_string(),
+                summary: summary.to_string(),
+                status: status.to_string(),
+                input,
+            })
+        })
+        .collect::<Vec<_>>();
+    (!parsed.is_empty()).then_some(parsed)
 }
 
 #[derive(Clone, Debug)]
@@ -1512,6 +1738,7 @@ fn visible_ptywright_edit(lines: &[&str]) -> Option<VisiblePtywrightTool> {
         key: format!("edit:{path}:{}", stable_key_suffix(&patch)),
         name: "Edit".to_string(),
         summary,
+        status: "completed".to_string(),
         input: json!({
             "file_path": path,
             "patch": patch
@@ -1943,6 +2170,7 @@ Esc to interrupt";
                 key: "running:Edit:Updating src/lib.rs".to_string(),
                 name: "Edit".to_string(),
                 summary: "Updating src/lib.rs".to_string(),
+                status: "running".to_string(),
                 input: json!({
                     "file_path": "src/lib.rs"
                 }),
@@ -1978,6 +2206,7 @@ Esc to interrupt";
                 key: "progress:Read:README.md".to_string(),
                 name: "Read".to_string(),
                 summary: "Reading 1 file…".to_string(),
+                status: "running".to_string(),
                 input: json!({
                     "file_path": "README.md"
                 }),
@@ -2012,6 +2241,7 @@ Esc to interrupt";
                 key: "progress:Grep:Searching for 1 pattern, reading 2 files…".to_string(),
                 name: "Grep".to_string(),
                 summary: "Searching for 1 pattern, reading 2 files…".to_string(),
+                status: "running".to_string(),
                 input: json!({
                     "pattern": "Searching for 1 pattern, reading 2 files…"
                 }),
@@ -2038,6 +2268,64 @@ Esc to interrupt";
         assert!(patch.contains("diff --git a/README.md b/README.md"));
         assert!(patch.contains("-All four paths are supported."));
         assert!(patch.contains("+All four install paths are supported."));
+    }
+
+    #[test]
+    fn ptywright_metadata_surfaces_visible_tool_calls() {
+        let mut state = ptywright::ExtensionStateSnapshot::new("thinking", 17);
+        state.metadata = Some(json!({
+            "tools": [
+                {
+                    "key": "Read:README.md",
+                    "name": "Read",
+                    "summary": "README.md",
+                    "status": "completed",
+                    "input": { "file_path": "README.md" }
+                },
+                {
+                    "key": "Bash:git status",
+                    "name": "Bash",
+                    "summary": "$ git status",
+                    "status": "running",
+                    "input": { "command": "git status" }
+                }
+            ]
+        }));
+
+        assert_eq!(
+            metadata_visible_tools(&state),
+            Some(vec![
+                VisiblePtywrightTool {
+                    key: "metadata:Read:README.md".to_string(),
+                    name: "Read".to_string(),
+                    summary: "README.md".to_string(),
+                    status: "completed".to_string(),
+                    input: json!({ "file_path": "README.md" }),
+                },
+                VisiblePtywrightTool {
+                    key: "metadata:Bash:git status".to_string(),
+                    name: "Bash".to_string(),
+                    summary: "$ git status".to_string(),
+                    status: "running".to_string(),
+                    input: json!({ "command": "git status" }),
+                }
+            ])
+        );
+    }
+
+    #[test]
+    fn ptywright_partial_turn_text_reads_structured_metadata() {
+        let mut state = ptywright::ExtensionStateSnapshot::new("thinking", 23);
+        state.metadata = Some(json!({
+            "turn": {
+                "partial_text": "**Heading**\n\nLive paragraph."
+            }
+        }));
+
+        assert_eq!(
+            structured_partial_turn_text(&state),
+            Some("**Heading**\n\nLive paragraph.")
+        );
     }
 
     #[test]
