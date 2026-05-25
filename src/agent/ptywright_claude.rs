@@ -1,5 +1,8 @@
 use std::collections::{BTreeSet, hash_map::DefaultHasher};
+use std::env;
+use std::fs;
 use std::hash::{Hash, Hasher};
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -42,6 +45,8 @@ pub struct PtywrightClaudeSession {
     current_cancel: SharedCancel,
     invocation_line: String,
     invocation_emitted: AtomicBool,
+    working_dir: PathBuf,
+    claude_session_id: String,
 }
 
 impl PtywrightClaudeSession {
@@ -70,6 +75,8 @@ impl PtywrightClaudeSession {
         let claude_path = resolve_claude_path().await;
         let claude_program = claude_path.to_string_lossy().into_owned();
         let working_dir = params.working_dir.to_path_buf();
+        let session_working_dir = working_dir.clone();
+        let claude_session_id = params.session_id.to_string();
         let settings = params.settings.clone();
         let claude_args =
             build_ptywright_claude_args(params.session_id, params.is_resume, &settings);
@@ -122,6 +129,8 @@ impl PtywrightClaudeSession {
             current_cancel: Arc::new(Mutex::new(None)),
             invocation_line,
             invocation_emitted: AtomicBool::new(false),
+            working_dir: session_working_dir,
+            claude_session_id,
         })
     }
 
@@ -169,6 +178,8 @@ impl PtywrightClaudeSession {
         let current_cancel = Arc::clone(&self.current_cancel);
         let prompt = prompt.to_string();
         let pid = self.pid;
+        let working_dir = self.working_dir.clone();
+        let claude_session_id = self.claude_session_id.clone();
         let cancel = ptywright::CancellationToken::new();
 
         {
@@ -186,7 +197,15 @@ impl PtywrightClaudeSession {
                 prompt_len = prompt.len(),
                 "ptywright Claude turn started"
             );
-            let result = run_ptywright_turn(&handle, &prompt, &cancel, &broadcast_tx, &event_tx);
+            let result = run_ptywright_turn(
+                &handle,
+                &prompt,
+                &cancel,
+                &broadcast_tx,
+                &event_tx,
+                &working_dir,
+                &claude_session_id,
+            );
 
             if let Ok(mut guard) = current_cancel.lock() {
                 guard.take();
@@ -347,6 +366,8 @@ fn run_ptywright_turn(
     cancel: &ptywright::CancellationToken,
     broadcast_tx: &broadcast::Sender<AgentEvent>,
     turn_tx: &mpsc::Sender<AgentEvent>,
+    working_dir: &Path,
+    claude_session_id: &str,
 ) -> Result<String, String> {
     let mut guard = handle
         .lock()
@@ -375,7 +396,8 @@ fn run_ptywright_turn(
 
     match state.state.as_str() {
         "completed_turn" => {
-            let answer = extract_turn_answer(&guard, &state, prompt);
+            let answer =
+                extract_turn_answer(&guard, &state, prompt, working_dir, claude_session_id);
             if answer_looks_like_claude_error(&answer) {
                 Err(format!("ptywright Claude reported an error: {answer}"))
             } else {
@@ -396,7 +418,13 @@ fn run_ptywright_turn(
             "ptywright Claude reported an error: {}",
             state.evidence
         )),
-        _ => Ok(extract_turn_answer(&guard, &state, prompt)),
+        _ => Ok(extract_turn_answer(
+            &guard,
+            &state,
+            prompt,
+            working_dir,
+            claude_session_id,
+        )),
     }
 }
 
@@ -725,7 +753,18 @@ fn extract_turn_answer(
     handle: &ptywright::ExtensionHandle,
     state: &ptywright::ExtensionStateSnapshot,
     prompt: &str,
+    working_dir: &Path,
+    claude_session_id: &str,
 ) -> String {
+    if let Some(answer) = latest_claude_jsonl_assistant_text(working_dir, claude_session_id) {
+        tracing::debug!(
+            target: "claudette::agent",
+            response_len = answer.len(),
+            "ptywright Claude extracted assistant text from Claude JSONL transcript"
+        );
+        return answer;
+    }
+
     if let Some((turn_start, turn_end)) = transcript_bounds(handle, state) {
         if let Some(slice) = handle.session().transcript_slice(turn_start, turn_end) {
             if let Some(answer) = clean_transcript_answer(&slice, prompt) {
@@ -837,6 +876,78 @@ fn structured_turn_text(state: &ptywright::ExtensionStateSnapshot) -> Option<&st
         .and_then(serde_json::Value::as_str)
         .map(str::trim)
         .filter(|text| !text.is_empty())
+}
+
+fn latest_claude_jsonl_assistant_text(working_dir: &Path, session_id: &str) -> Option<String> {
+    let transcript_path = claude_jsonl_transcript_path(working_dir, session_id)?;
+    if !transcript_path.is_file() {
+        return None;
+    }
+    for attempt in 0..5 {
+        if let Some(text) = assistant_text_from_jsonl_transcript(&transcript_path) {
+            return Some(text);
+        }
+        if attempt < 4 {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
+    None
+}
+
+fn claude_jsonl_transcript_path(working_dir: &Path, session_id: &str) -> Option<PathBuf> {
+    let projects_dir = claude_projects_dir()?;
+    Some(
+        projects_dir
+            .join(claude_project_slug(working_dir))
+            .join(format!("{session_id}.jsonl")),
+    )
+}
+
+fn claude_projects_dir() -> Option<PathBuf> {
+    if let Some(config_dir) = env::var_os("CLAUDE_CONFIG_DIR")
+        && !config_dir.is_empty()
+    {
+        return Some(PathBuf::from(config_dir).join("projects"));
+    }
+    dirs::home_dir().map(|home| home.join(".claude").join("projects"))
+}
+
+fn claude_project_slug(path: &Path) -> String {
+    path.to_string_lossy().replace(['/', '\\', '.'], "-")
+}
+
+fn assistant_text_from_jsonl_transcript(path: &Path) -> Option<String> {
+    let content = fs::read_to_string(path).ok()?;
+    content
+        .lines()
+        .rev()
+        .find_map(assistant_text_from_jsonl_line)
+}
+
+fn assistant_text_from_jsonl_line(line: &str) -> Option<String> {
+    let value: Value = serde_json::from_str(line).ok()?;
+    if value.get("type")?.as_str()? != "assistant" {
+        return None;
+    }
+    let message = value.get("message")?;
+    if message.get("role")?.as_str()? != "assistant" {
+        return None;
+    }
+    let content = message.get("content")?.as_array()?;
+    let text_blocks = content
+        .iter()
+        .filter_map(|block| {
+            if block.get("type")?.as_str()? == "text" {
+                Some(block.get("text")?.as_str()?.trim())
+            } else {
+                None
+            }
+        })
+        .filter(|text| !text.is_empty())
+        .map(ToOwned::to_owned)
+        .collect::<Vec<_>>();
+
+    (!text_blocks.is_empty()).then(|| text_blocks.join("\n\n"))
 }
 
 fn current_prompt_still_editable(handle: &ptywright::ExtensionHandle, prompt: &str) -> bool {
@@ -1270,7 +1381,7 @@ fn visible_ptywright_tool(screen: &str) -> Option<VisiblePtywrightTool> {
         {
             let summary = next_tool_summary(&lines, index + 1).unwrap_or_else(|| name.to_string());
             let summary = clean_tool_summary(&summary);
-            let input = tool_input(name, &summary, &[]);
+            let input = tool_input(name, &summary, &[])?;
             return Some(VisiblePtywrightTool {
                 key: format!("running:{name}:{summary}"),
                 name: name.to_string(),
@@ -1288,7 +1399,7 @@ fn visible_ptywright_tool(screen: &str) -> Option<VisiblePtywrightTool> {
         let summary = clean_tool_summary(rest);
         let name = infer_tool_name_from_progress(rest);
         let paths = tool_callout_paths(&lines, index + 1);
-        let input = tool_input(&name, &summary, &paths);
+        let input = tool_input(&name, &summary, &paths)?;
         let key_detail = if paths.is_empty() {
             summary.clone()
         } else {
@@ -1343,8 +1454,7 @@ fn visible_ptywright_edit(lines: &[&str]) -> Option<VisiblePtywrightTool> {
         summary,
         input: json!({
             "file_path": path,
-            "patch": patch,
-            "source": "ptywright-screen"
+            "patch": patch
         }),
     })
 }
@@ -1434,35 +1544,19 @@ fn stable_key_suffix(value: &str) -> u64 {
     hasher.finish()
 }
 
-fn tool_input(name: &str, summary: &str, paths: &[String]) -> Value {
+fn tool_input(name: &str, summary: &str, paths: &[String]) -> Option<Value> {
     let path = paths
         .first()
         .cloned()
         .or_else(|| path_from_tool_summary(summary));
     match name {
-        "Read" | "Write" | "Edit" => {
-            if let Some(path) = path {
-                json!({
-                    "file_path": path,
-                    "summary": summary,
-                    "source": "ptywright-screen"
-                })
-            } else {
-                json!({
-                    "summary": summary,
-                    "source": "ptywright-screen"
-                })
-            }
-        }
-        "Grep" | "LS" | "Bash" => json!({
-            "command": summary,
-            "summary": summary,
-            "source": "ptywright-screen"
-        }),
-        _ => json!({
-            "summary": summary,
-            "source": "ptywright-screen"
-        }),
+        "Read" | "Write" | "Edit" => path.map(|path| json!({ "file_path": path })),
+        "Grep" => Some(json!({ "pattern": summary })),
+        "LS" => Some(json!({ "path": path.unwrap_or_else(|| ".".to_string()) })),
+        "Bash" => Some(json!({
+            "command": summary.strip_prefix("$ ").unwrap_or(summary)
+        })),
+        _ => Some(json!({ "description": summary })),
     }
 }
 
@@ -1509,6 +1603,9 @@ fn clean_path_candidate(candidate: &str) -> Option<String> {
         .trim()
         .trim_matches(|c| matches!(c, '`' | '\'' | '"' | ',' | ';' | ':' | ')' | '('));
     if path.is_empty() || path.len() > 512 || path.contains('\n') {
+        return None;
+    }
+    if path.starts_with("$ ") || path.starts_with("Tip:") || path.starts_with("tip:") {
         return None;
     }
     if path.contains('/') || path.contains('.') || path.starts_with('~') {
@@ -1766,9 +1863,7 @@ Esc to interrupt";
                 name: "Edit".to_string(),
                 summary: "Updating src/lib.rs".to_string(),
                 input: json!({
-                    "file_path": "src/lib.rs",
-                    "summary": "Updating src/lib.rs",
-                    "source": "ptywright-screen"
+                    "file_path": "src/lib.rs"
                 }),
             })
         );
@@ -1783,18 +1878,7 @@ Esc to interrupt";
 
 ────────────────────────────────────────────────────────────────────────────────";
 
-        assert_eq!(
-            visible_ptywright_tool(screen),
-            Some(VisiblePtywrightTool {
-                key: "progress:Read:Reading 3 files…".to_string(),
-                name: "Read".to_string(),
-                summary: "Reading 3 files…".to_string(),
-                input: json!({
-                    "summary": "Reading 3 files…",
-                    "source": "ptywright-screen"
-                }),
-            })
-        );
+        assert!(visible_ptywright_tool(screen).is_none());
     }
 
     #[test]
@@ -1814,9 +1898,41 @@ Esc to interrupt";
                 name: "Read".to_string(),
                 summary: "Reading 1 file…".to_string(),
                 input: json!({
-                    "file_path": "README.md",
-                    "summary": "Reading 1 file…",
-                    "source": "ptywright-screen"
+                    "file_path": "README.md"
+                }),
+            })
+        );
+    }
+
+    #[test]
+    fn visible_tool_activity_ignores_pathless_read_chrome_callouts() {
+        let screen = "\
+⏺ Reading 1 file… (ctrl+o to expand)
+  ⎿  Tip: Use /theme to change the color theme
+  ⎿  $ ls website/content
+
+────────────────────────────────────────────────────────────────────────────────";
+
+        assert!(visible_ptywright_tool(screen).is_none());
+    }
+
+    #[test]
+    fn visible_tool_activity_uses_standard_grep_input_shape() {
+        let screen = "\
+❯ are the docs up to date?
+
+⏺ Searching for 1 pattern, reading 2 files… (ctrl+o to expand)
+
+────────────────────────────────────────────────────────────────────────────────";
+
+        assert_eq!(
+            visible_ptywright_tool(screen),
+            Some(VisiblePtywrightTool {
+                key: "progress:Grep:Searching for 1 pattern, reading 2 files…".to_string(),
+                name: "Grep".to_string(),
+                summary: "Searching for 1 pattern, reading 2 files…".to_string(),
+                input: json!({
+                    "pattern": "Searching for 1 pattern, reading 2 files…"
                 }),
             })
         );
@@ -1841,6 +1957,16 @@ Esc to interrupt";
         assert!(patch.contains("diff --git a/README.md b/README.md"));
         assert!(patch.contains("-All four paths are supported."));
         assert!(patch.contains("+All four install paths are supported."));
+    }
+
+    #[test]
+    fn assistant_text_from_jsonl_preserves_markdown_newlines() {
+        let line = r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"thinking","thinking":"hidden"},{"type":"text","text":"**Heading**\n\nFirst paragraph.\n\n- One\n- Two"}]}}"#;
+
+        assert_eq!(
+            assistant_text_from_jsonl_line(line),
+            Some("**Heading**\n\nFirst paragraph.\n\n- One\n- Two".to_string())
+        );
     }
 
     #[test]
