@@ -954,6 +954,69 @@ fn should_expand_file_mentions_for_session(kind: AgentHarnessKind) -> bool {
     true
 }
 
+#[cfg(feature = "ptywright-claude")]
+fn normalize_ptywright_file_mentions(content: &str, mentioned_files: &[String]) -> String {
+    if mentioned_files.is_empty() || !content.contains('@') {
+        return content.to_string();
+    }
+
+    let mut out = String::with_capacity(content.len());
+    let mut cursor = 0;
+    while let Some(relative_at) = content[cursor..].find('@') {
+        let at = cursor + relative_at;
+        if at > 0
+            && content[..at]
+                .chars()
+                .next_back()
+                .is_some_and(|c| !c.is_whitespace())
+        {
+            out.push_str(&content[cursor..=at]);
+            cursor = at + 1;
+            continue;
+        }
+
+        let token_start = at + 1;
+        let token_end = content[token_start..]
+            .char_indices()
+            .find_map(|(offset, c)| c.is_whitespace().then_some(token_start + offset))
+            .unwrap_or(content.len());
+        let token = &content[token_start..token_end];
+        let path_len = token
+            .trim_end_matches(|c| matches!(c, ')' | ',' | '.' | ';' | ':' | '!' | '?'))
+            .len();
+        let path = &token[..path_len];
+        let suffix = &token[path_len..];
+        let comparable = path.strip_prefix("./").unwrap_or(path);
+        let should_qualify = !path.starts_with("./")
+            && !path.starts_with('/')
+            && mentioned_files
+                .iter()
+                .any(|candidate| candidate == comparable);
+
+        out.push_str(&content[cursor..at]);
+        if should_qualify {
+            out.push('@');
+            out.push_str("./");
+            out.push_str(comparable);
+            out.push_str(suffix);
+        } else {
+            out.push_str(&content[at..token_end]);
+        }
+        cursor = token_end;
+    }
+    out.push_str(&content[cursor..]);
+    out
+}
+
+fn should_drop_persistent_after_turn_result(kind: AgentHarnessKind, subtype: &str) -> bool {
+    #[cfg(feature = "ptywright-claude")]
+    if kind == AgentHarnessKind::PtywrightClaude && subtype != "success" {
+        return true;
+    }
+    let _ = (kind, subtype);
+    false
+}
+
 /// True when this turn should be intercepted as a native compaction
 /// instead of a normal user turn. The Codex app-server and Pi SDK
 /// harnesses both need the intercept — each exposes a `start_compact()`
@@ -1094,6 +1157,13 @@ pub async fn steer_queued_chat_message(
         )
         .await
     } else {
+        #[cfg(feature = "ptywright-claude")]
+        if ps.kind() == AgentHarnessKind::PtywrightClaude {
+            normalize_ptywright_file_mentions(&content, mentioned_files.as_deref().unwrap_or(&[]))
+        } else {
+            content.clone()
+        }
+        #[cfg(not(feature = "ptywright-claude"))]
         content.clone()
     };
 
@@ -1769,6 +1839,13 @@ pub async fn send_chat_message(
         )
         .await
     } else {
+        #[cfg(feature = "ptywright-claude")]
+        if backend_runtime.harness == AgentBackendRuntimeHarness::PtywrightClaude {
+            normalize_ptywright_file_mentions(&content, mentioned_files.as_deref().unwrap_or(&[]))
+        } else {
+            content.clone()
+        }
+        #[cfg(not(feature = "ptywright-claude"))]
         content.clone()
     };
 
@@ -3181,13 +3258,28 @@ pub async fn send_chat_message(
             // for the next turn — only active_pid is cleared, not persistent_session.
             if let AgentEvent::Stream(StreamEvent::Result { subtype, .. }) = &event {
                 let app_state = app.state::<AppState>();
+                let mut stale_ptywright_pid = None;
                 let (session_id_for_capture, needs_attention) = {
                     let mut agents = app_state.agents.write().await;
                     if let Some(session) = agents.get_mut(&chat_session_id_for_stream)
                         && session.active_pid == Some(spawned_pid)
-                        && session.persistent_session.is_some()
+                        && let Some(ps) = session.persistent_session.as_ref()
                     {
+                        let should_drop_session =
+                            should_drop_persistent_after_turn_result(ps.kind(), subtype);
                         session.active_pid = None;
+                        if should_drop_session {
+                            tracing::warn!(
+                                target: "claudette::chat",
+                                chat_session_id = %chat_session_id_for_stream,
+                                pid = spawned_pid,
+                                result_subtype = %subtype,
+                                "dropping failed ptywright persistent session after turn result"
+                            );
+                            session.persistent_session = None;
+                            session.mcp_bridge = None;
+                            stale_ptywright_pid = Some(spawned_pid);
+                        }
                     }
                     let sid = agents
                         .get(&chat_session_id_for_stream)
@@ -3198,6 +3290,9 @@ pub async fn send_chat_message(
                         .is_some_and(|s| s.needs_attention);
                     (sid, attn)
                 };
+                if let Some(pid) = stale_ptywright_pid {
+                    let _ = agent::stop_agent_graceful(pid).await;
+                }
                 // Rebuild tray so it reflects the idle state. Without this,
                 // the tray stays stuck on "Running" because the persistent
                 // process doesn't exit (only ProcessExited triggered rebuild).
@@ -3478,6 +3573,8 @@ pub async fn send_chat_message(
 
 #[cfg(test)]
 mod tests {
+    #[cfg(feature = "ptywright-claude")]
+    use super::normalize_ptywright_file_mentions;
     use super::{
         ControlRequestSessionRoute, auth_failure_message_from_assistant_text,
         auth_failure_message_from_stderr, ensure_harness_accepts_attachments,
@@ -3486,9 +3583,10 @@ mod tests {
         remote_control_requested_or_active, remote_control_requested_or_active_for_turn,
         remote_control_should_defer_drift_teardown_for_turn,
         remote_control_should_restore_for_turn, remote_control_title, resolve_spawn_session_id,
-        route_control_request_session_state, should_expand_file_mentions_for_runtime,
-        should_expand_file_mentions_for_session, should_reenable_remote_control_after_turn_result,
-        should_resume_persistent_session, should_run_auto_naming,
+        route_control_request_session_state, should_drop_persistent_after_turn_result,
+        should_expand_file_mentions_for_runtime, should_expand_file_mentions_for_session,
+        should_reenable_remote_control_after_turn_result, should_resume_persistent_session,
+        should_run_auto_naming,
     };
     use crate::state::{
         AgentSessionState, AttentionKind, ClaudeRemoteControlLifecycle, ClaudeRemoteControlStatus,
@@ -4115,6 +4213,27 @@ mod tests {
         ));
     }
 
+    #[cfg(feature = "ptywright-claude")]
+    #[test]
+    fn ptywright_file_mentions_are_qualified_for_native_picker() {
+        let mentioned_files = vec![
+            "README.md".to_string(),
+            "packaging/aur/README.md".to_string(),
+        ];
+
+        assert_eq!(
+            normalize_ptywright_file_mentions(
+                "edit @README.md and @packaging/aur/README.md, not user@example.com",
+                &mentioned_files,
+            ),
+            "edit @./README.md and @./packaging/aur/README.md, not user@example.com"
+        );
+        assert_eq!(
+            normalize_ptywright_file_mentions("edit @./README.md", &mentioned_files),
+            "edit @./README.md"
+        );
+    }
+
     #[test]
     fn claude_code_harness_expands_file_mentions() {
         assert!(should_expand_file_mentions_for_runtime(
@@ -4122,6 +4241,27 @@ mod tests {
         ));
         assert!(should_expand_file_mentions_for_session(
             claudette::agent::AgentHarnessKind::ClaudeCode
+        ));
+    }
+
+    #[cfg(feature = "ptywright-claude")]
+    #[test]
+    fn ptywright_error_result_drops_persistent_session() {
+        assert!(should_drop_persistent_after_turn_result(
+            claudette::agent::AgentHarnessKind::PtywrightClaude,
+            "error"
+        ));
+        assert!(!should_drop_persistent_after_turn_result(
+            claudette::agent::AgentHarnessKind::PtywrightClaude,
+            "success"
+        ));
+    }
+
+    #[test]
+    fn claude_code_error_result_keeps_persistent_session() {
+        assert!(!should_drop_persistent_after_turn_result(
+            claudette::agent::AgentHarnessKind::ClaudeCode,
+            "error"
         ));
     }
 

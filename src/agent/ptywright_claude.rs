@@ -705,6 +705,16 @@ fn extract_turn_answer(
                 turn_end,
                 "ptywright Claude transcript slice had no current-turn answer"
             );
+            if let Some(answer) = clean_transcript_answer_from_start(handle, turn_start, prompt) {
+                tracing::debug!(
+                    target: "claudette::agent",
+                    turn_start,
+                    transcript_len = handle.session().transcript().len(),
+                    response_len = answer.len(),
+                    "ptywright Claude extracted expanded transcript turn text"
+                );
+                return answer;
+            }
             if let Some(text) = current_structured_turn_text(handle, state, prompt) {
                 tracing::debug!(
                     target: "claudette::agent",
@@ -753,6 +763,12 @@ fn current_turn_has_answer(
     if let Some((turn_start, turn_end)) = transcript_bounds(handle, state)
         && let Some(slice) = handle.session().transcript_slice(turn_start, turn_end)
         && clean_transcript_answer(&slice, prompt).is_some()
+    {
+        return true;
+    }
+
+    if let Some((turn_start, _)) = transcript_bounds(handle, state)
+        && clean_transcript_answer_from_start(handle, turn_start, prompt).is_some()
     {
         return true;
     }
@@ -822,6 +838,19 @@ fn transcript_bounds(
     })?;
 
     (end > start).then_some((start, end))
+}
+
+fn clean_transcript_answer_from_start(
+    handle: &ptywright::ExtensionHandle,
+    turn_start: u64,
+    prompt: &str,
+) -> Option<String> {
+    let end = u64::try_from(handle.session().transcript().len()).ok()?;
+    if end <= turn_start {
+        return None;
+    }
+    let slice = handle.session().transcript_slice(turn_start, end)?;
+    clean_transcript_answer(&slice, prompt)
 }
 
 fn clean_transcript_answer(transcript: &str, prompt: &str) -> Option<String> {
@@ -1185,6 +1214,7 @@ fn visible_ptywright_tool(screen: &str) -> Option<VisiblePtywrightTool> {
             .filter(|name| !name.is_empty())
         {
             let summary = next_tool_summary(&lines, index + 1).unwrap_or_else(|| name.to_string());
+            let summary = clean_tool_summary(&summary);
             return Some(VisiblePtywrightTool {
                 key: format!("running:{name}:{summary}"),
                 name: name.to_string(),
@@ -1198,7 +1228,7 @@ fn visible_ptywright_tool(screen: &str) -> Option<VisiblePtywrightTool> {
         if !(rest.contains("(ctrl+o to expand)") || rest.ends_with('…')) {
             continue;
         }
-        let summary = rest.to_string();
+        let summary = clean_tool_summary(rest);
         let name = infer_tool_name_from_progress(rest);
         return Some(VisiblePtywrightTool {
             key: format!("progress:{summary}"),
@@ -1207,6 +1237,17 @@ fn visible_ptywright_tool(screen: &str) -> Option<VisiblePtywrightTool> {
         });
     }
     None
+}
+
+fn clean_tool_summary(summary: &str) -> String {
+    summary
+        .replace("(ctrl+o to expand)", "")
+        .replace("(ctrl+O to expand)", "")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .trim()
+        .to_string()
 }
 
 fn next_tool_summary(lines: &[&str], start: usize) -> Option<String> {
@@ -1461,10 +1502,18 @@ Esc to interrupt";
         assert_eq!(
             visible_ptywright_tool(screen),
             Some(VisiblePtywrightTool {
-                key: "progress:Reading 3 files… (ctrl+o to expand)".to_string(),
+                key: "progress:Reading 3 files…".to_string(),
                 name: "Read".to_string(),
-                summary: "Reading 3 files… (ctrl+o to expand)".to_string(),
+                summary: "Reading 3 files…".to_string(),
             })
+        );
+    }
+
+    #[test]
+    fn tool_summary_strips_terminal_expand_hint() {
+        assert_eq!(
+            clean_tool_summary("Reading 1 file… (ctrl+o to expand)"),
+            "Reading 1 file…"
         );
     }
 
