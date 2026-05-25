@@ -169,12 +169,18 @@ pub(crate) async fn create_workspace_inner(
     // worktree and either error or sit waiting for the user to allow
     // them manually, defeating the whole point of a setup script.
     //
-    // Tradeoff: the script runs with the system PATH (plus
-    // `enriched_path()`) instead of the env-provider-merged
-    // environment. Setup scripts in the wild assume this — they expect
-    // to be the thing that *installs* tool versions, not to consume
-    // them. The agent and terminal still get the merged env after
-    // resolve runs.
+    // Tradeoff: the script does not see the env-provider-merged
+    // environment (direnv / mise / dotenv / nix-devshell) — that resolves
+    // afterwards. Setup scripts in the wild assume this — they expect to
+    // be the thing that *installs* / *primes* those, not to consume them.
+    // The agent and terminal still get the merged env after resolve runs.
+    //
+    // It DOES, however, see the user's shell profile: the script runs
+    // through `$SHELL -l -i -c` (see `build_script_command`), so vars
+    // exported in `.zprofile` / `.zshrc` are available — matching the
+    // interactive terminal. Without that, a Dock-launched app's
+    // profile-less launchd env left setup unable to read user-exported
+    // secrets the terminal could see.
     //
     // The WS server (`src-server/handler.rs`) has always run setup
     // with `resolved_env = None` (no plugin registry server-side), so

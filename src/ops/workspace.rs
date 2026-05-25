@@ -315,21 +315,63 @@ async fn create_inner(
     })
 }
 
-/// Build the platform-default shell invocation Claudette uses to run
-/// user setup / archive scripts.
+/// The user's shell (`$SHELL`) when it is set to an absolute path, else
+/// `None`. Used to decide whether a setup / archive script can be run
+/// through the user's own shell (sourcing their profile) or must fall back
+/// to a profile-less POSIX `sh`.
+#[cfg(not(windows))]
+fn user_shell() -> Option<std::ffi::OsString> {
+    let shell = std::env::var_os("SHELL")?;
+    std::path::Path::new(&shell).is_absolute().then_some(shell)
+}
+
+/// Decide the Unix program + argument flags used to run a setup / archive
+/// script. With a real `$SHELL`, invoke it login + interactive
+/// (`-l -i -c`) so it sources the user's profile — `.zprofile`/`.zlogin`
+/// via `-l` and `.zshrc` via `-i` — matching what the integrated terminal
+/// exposes. `None` falls back to a profile-less POSIX `sh -c`.
 ///
-/// POSIX hosts get `sh -c <script>`; Windows gets `cmd.exe /S /C <script>`
-/// so a stock install (no Git Bash on PATH) can still execute scripts —
-/// this matches the shape `commands/settings.rs::build_notification_command`
-/// already uses for user-supplied notification commands. Common spawn
-/// configuration (cwd, enriched PATH, piped stdio, Unix process group for
-/// timeout-driven SIGKILL of the entire subtree) is applied here so the
+/// Split out as a pure function so the flag selection is unit-testable
+/// without spawning a shell or mutating the process-global `$SHELL`.
+#[cfg(not(windows))]
+fn unix_script_invocation(
+    user_shell: Option<std::ffi::OsString>,
+) -> (std::ffi::OsString, &'static [&'static str]) {
+    match user_shell {
+        Some(shell) => (shell, &["-l", "-i", "-c"]),
+        None => (std::ffi::OsString::from("sh"), &["-c"]),
+    }
+}
+
+/// Build the shell invocation Claudette uses to run user setup / archive
+/// scripts.
+///
+/// On Unix the script runs through the user's own shell with login +
+/// interactive flags (`$SHELL -l -i -c <script>`) so it sources their
+/// profile (`.zprofile`/`.zlogin` + `.zshrc`). This matches the
+/// environment the integrated terminal exposes: a Dock-launched macOS app
+/// inherits a profile-less launchd env, so without this a setup script
+/// can't see vars the user exports in their shell rc (e.g. `$JWT_CLIENT_ID`
+/// in `.zshrc`) even though the terminal — which runs an interactive shell
+/// — can. When `$SHELL` is unset or relative we fall back to POSIX
+/// `sh -c <script>`. Note the script interpreter becomes the user's shell;
+/// scripts relying on strict POSIX/bash syntax should account for that.
+///
+/// Windows gets `cmd.exe /S /C <script>` so a stock install (no Git Bash on
+/// PATH) can still execute scripts — this matches the shape
+/// `commands/settings.rs::build_notification_command` already uses for
+/// user-supplied notification commands.
+///
+/// Common spawn configuration (cwd, enriched PATH, null stdin so an
+/// interactive shell can't block on input, piped stdio, Unix process group
+/// for timeout-driven SIGKILL of the entire subtree) is applied here so the
 /// two callers — setup and archive — stay byte-identical.
 fn build_script_command(script: &str, worktree_path: &Path) -> TokioCommand {
     #[cfg(not(windows))]
     let mut cmd = {
-        let mut c = crate::process::command("sh");
-        c.arg("-c").arg(script);
+        let (program, flags) = unix_script_invocation(user_shell());
+        let mut c = crate::process::command(&program);
+        c.args(flags).arg(script);
         c
     };
     #[cfg(windows)]
@@ -343,6 +385,9 @@ fn build_script_command(script: &str, worktree_path: &Path) -> TokioCommand {
     };
     cmd.current_dir(worktree_path)
         .env("PATH", enriched_path())
+        // Null stdin: with `-i` an interactive shell would otherwise try to
+        // read from whatever stdin the app inherited and could block.
+        .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
     // Process group on Unix so a timeout SIGKILL hits every grandchild
@@ -1759,18 +1804,19 @@ mod tests {
     }
 
     /// `build_script_command` must produce a Command that actually runs
-    /// the user-supplied script on the host's default shell — `sh -c` on
-    /// Unix and `cmd.exe /S /C` on Windows. Before the cross-platform
-    /// gating was added, every Windows host without Git Bash on PATH
-    /// failed setup-script execution with an opaque ENOENT.
+    /// the user-supplied script on the host's shell — `$SHELL -l -i -c`
+    /// (or `sh -c` when `$SHELL` is unset) on Unix and `cmd.exe /S /C` on
+    /// Windows. Before the cross-platform gating was added, every Windows
+    /// host without Git Bash on PATH failed setup-script execution with an
+    /// opaque ENOENT.
     ///
     /// We assert the contract end-to-end: spawn the helper with a
-    /// trivial `echo` (recognised by both shells), run the command,
+    /// trivial `echo` (recognised by every shell), run the command,
     /// and read the stdout the script actually produced.
     #[tokio::test]
     async fn build_script_command_executes_on_host_shell() {
         let cwd = tempfile::tempdir().unwrap();
-        // `echo hello` is a builtin on both `cmd.exe` and POSIX shells,
+        // `echo hello` is a builtin on `cmd.exe` and every POSIX shell,
         // so the test is independent of any external binary on PATH.
         let mut cmd = build_script_command("echo hello", cwd.path());
         let output = cmd.output().await.expect("spawn host shell");
@@ -1781,13 +1827,37 @@ mod tests {
             String::from_utf8_lossy(&output.stderr),
         );
         let stdout = String::from_utf8_lossy(&output.stdout);
-        // Trim because Windows `cmd.exe /C echo hello` emits "hello\r\n"
-        // and POSIX `sh -c 'echo hello'` emits "hello\n".
+        // Take the last non-empty line: a login + interactive `$SHELL`
+        // may print a profile banner before our `echo` output (same
+        // reason `login_shell_path_probe` reads the last line). Windows
+        // `cmd.exe /C echo hello` emits "hello\r\n"; POSIX shells emit
+        // "hello\n" — `.trim()` normalises both.
+        let last_line = stdout.lines().rfind(|l| !l.trim().is_empty());
         assert_eq!(
-            stdout.trim(),
-            "hello",
+            last_line.map(str::trim),
+            Some("hello"),
             "expected `echo hello` stdout, got {stdout:?}",
         );
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn unix_script_invocation_uses_login_interactive_shell() {
+        let shell = std::ffi::OsString::from("/bin/zsh");
+        let (program, flags) = unix_script_invocation(Some(shell.clone()));
+        assert_eq!(program, shell);
+        // `-l` sources the login profile (.zprofile/.zlogin), `-i` the
+        // interactive rc (.zshrc) where users commonly export secrets —
+        // both are needed to match the integrated terminal's env.
+        assert_eq!(flags, &["-l", "-i", "-c"]);
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn unix_script_invocation_falls_back_to_posix_sh() {
+        let (program, flags) = unix_script_invocation(None);
+        assert_eq!(program, std::ffi::OsString::from("sh"));
+        assert_eq!(flags, &["-c"]);
     }
 
     /// `kill_script_subtree` must terminate a hung script's full

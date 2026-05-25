@@ -26,7 +26,13 @@ python -m venv .venv && source .venv/bin/activate && pip install -r requirements
 mix deps.get && mix ecto.setup
 ```
 
-The script runs in the workspace's worktree directory using your platform's default shell — `sh -c` on macOS and Linux, `cmd.exe /S /C` on Windows — so write the script in whichever syntax matches your host. [Workspace environment variables](/claudette/features/settings/#environment-variables) like `$CLAUDETTE_WORKSPACE_NAME` and `$CLAUDETTE_ROOT_PATH` are available in setup scripts (use `%CLAUDETTE_WORKSPACE_NAME%` etc. in `cmd.exe`).
+The script runs in the workspace's worktree directory through your shell. On macOS and Linux it runs as a **login + interactive shell** (`$SHELL -l -i -c`, falling back to `sh -c` when `$SHELL` is unset), so it sources your profile (`.zprofile`/`.zlogin` and `.zshrc`, or the bash equivalents) — environment variables you export there (API keys, tokens, `$JWT_CLIENT_ID`, etc.) are visible to the setup script, matching what the integrated terminal sees. This matters most for a Dock-launched app, which otherwise inherits a profile-less environment. Windows runs `cmd.exe /S /C`. Because the script runs under your actual shell, write it in that shell's syntax.
+
+[Workspace environment variables](/claudette/features/settings/#environment-variables) like `$CLAUDETTE_WORKSPACE_NAME` and `$CLAUDETTE_ROOT_PATH` are available in setup scripts (use `%CLAUDETTE_WORKSPACE_NAME%` etc. in `cmd.exe`).
+
+:::note
+The setup script runs **before** the env-provider stack (direnv, mise, dotenv, Nix devshell) resolves — that ordering lets a setup script *prime* those providers (`direnv allow`, `mise install`, generating a `.env`). As a result, variables contributed by those providers are **not** yet available inside the setup script, even though the terminal and agent get them afterward. Your shell profile, however, *is* sourced (see above).
+:::
 
 By default, Claudette shows a confirmation modal with the script contents before running it. Tick **Skip confirmation when running setup scripts** in the repo settings (or **Always run setup scripts for this repo** in the modal) to opt into auto-run for that repository.
 
@@ -47,7 +53,7 @@ git stash push -u -m "claudette archive"
 docker compose down
 ```
 
-The script runs in the workspace's worktree directory through the same platform shell as the setup script (`sh -c` on macOS/Linux, `cmd.exe /S /C` on Windows) and has access to the same workspace environment variables. The worktree is still on disk while the script runs, so any commands that need to read workspace files will work as expected.
+The script runs in the workspace's worktree directory through the same shell as the setup script (a login + interactive `$SHELL -l -i -c` on macOS/Linux — so your profile is sourced — falling back to `sh -c`; `cmd.exe /S /C` on Windows) and has access to the same workspace environment variables. The worktree is still on disk while the script runs, so any commands that need to read workspace files will work as expected.
 
 By default, Claudette prompts before archiving when an archive script is configured — the modal shows the script contents and lets you choose **Run & Archive** or **Archive without running**. Tick **Skip confirmation when running archive scripts** in repo settings (or **Always run archive scripts for this repo** in the modal) to skip the prompt for that repository.
 
