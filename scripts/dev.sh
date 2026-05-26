@@ -606,8 +606,18 @@ if [[ "$(uname -s)" == "Darwin" ]]; then
 fi
 watch_args=()
 if [[ "${CLAUDETTE_DEV_NO_EXTRA_RUST_WATCH:-0}" != "1" ]]; then
-  watch_folders=(
-    "$repo_root/src"
+  watch_folders=()
+  # Watch the Rust library crate without also watching Vite's package/cache
+  # directories under src/ui. Tauri accepts files as watch paths, so top-level
+  # src/*.rs edits still trigger Rust hot reload.
+  while IFS= read -r path; do
+    name="$(basename "$path")"
+    case "$name" in
+      ui|ui-mobile) continue ;;
+    esac
+    watch_folders+=("$path")
+  done < <(find "$repo_root/src" -maxdepth 1 -mindepth 1 | sort)
+  watch_folders+=(
     "$repo_root/src-tauri/src"
     "$repo_root/src-cli/src"
     "$repo_root/src-server/src"
@@ -619,7 +629,7 @@ if [[ "${CLAUDETTE_DEV_NO_EXTRA_RUST_WATCH:-0}" != "1" ]]; then
   fi
   existing_watch_folders=()
   for folder in "${watch_folders[@]}"; do
-    [[ -d "$folder" ]] && existing_watch_folders+=("$folder")
+    [[ -e "$folder" ]] && existing_watch_folders+=("$folder")
   done
   if (( ${#existing_watch_folders[@]} )); then
     for folder in "${existing_watch_folders[@]}"; do

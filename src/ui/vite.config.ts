@@ -22,6 +22,7 @@ const port = Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_VITE_PORT
 
 // https://vite.dev/config/
 export default defineConfig({
+  cacheDir: '../../target/vite-cache/ui',
   plugins: [react()],
   server: {
     port,

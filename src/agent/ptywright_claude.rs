@@ -16,7 +16,7 @@ use super::binary::resolve_claude_path;
 use super::process::{AgentEvent, TurnHandle};
 use super::types::{
     AssistantMessage, ContentBlock, Delta, FileAttachment, InnerStreamEvent, StartContentBlock,
-    StreamEvent, UserContentBlock, UserEventMessage, UserMessageContent,
+    StreamEvent, TaskUsage, UserContentBlock, UserEventMessage, UserMessageContent,
 };
 use super::{AgentSettings, PersistentSessionStart};
 
@@ -383,7 +383,15 @@ fn run_ptywright_turn(
         );
         submit_prompt(&mut guard, prompt)?;
     }
-    let state = wait_for_turn_state(handle, cancel, prompt, broadcast_tx, turn_tx)?;
+    let state = wait_for_turn_state(
+        handle,
+        cancel,
+        prompt,
+        broadcast_tx,
+        turn_tx,
+        working_dir,
+        claude_session_id,
+    )?;
     tracing::debug!(
         target: "claudette::agent",
         ptywright_state = %state.state,
@@ -466,6 +474,8 @@ fn wait_for_turn_state(
     prompt: &str,
     broadcast_tx: &broadcast::Sender<AgentEvent>,
     turn_tx: &mpsc::Sender<AgentEvent>,
+    working_dir: &Path,
+    claude_session_id: &str,
 ) -> Result<ptywright::ExtensionStateSnapshot, String> {
     let deadline = Instant::now() + TURN_TIMEOUT;
     let mut last_state: Option<ptywright::ExtensionStateSnapshot> = None;
@@ -529,11 +539,43 @@ fn wait_for_turn_state(
                 extract_visible_answer(&screen, &state.evidence)
             ));
         }
-        assistant_text.observe_state(&state, broadcast_tx, turn_tx);
+        let jsonl_turn_text =
+            latest_claude_jsonl_assistant_text_for_prompt(working_dir, claude_session_id, prompt);
+        if let Some(text) = jsonl_turn_text.as_deref() {
+            assistant_text.emit_to(&text, broadcast_tx, turn_tx);
+        } else {
+            assistant_text.observe_state(&state, broadcast_tx, turn_tx);
+        }
         tool_activity.observe_state(&state, &screen, broadcast_tx, turn_tx);
+        let has_structured_turn_text =
+            structured_turn_text(&state).is_some_and(|text| !text.trim().is_empty());
+        let has_current_turn_answer = current_turn_answer
+            || has_structured_turn_text
+            || assistant_text.has_emitted_answer()
+            || jsonl_turn_text
+                .as_deref()
+                .is_some_and(|text| !text.trim().is_empty());
+        if has_current_turn_answer
+            && (!prompt_editable
+                || has_structured_turn_text
+                || assistant_text.has_emitted_answer()
+                || jsonl_turn_text.is_some())
+            && screen.lines().any(|line| is_completion_marker(line.trim()))
+        {
+            tracing::debug!(
+                target: "claudette::agent",
+                ptywright_state = %state.state,
+                evidence = %state.evidence,
+                sequence = state.sequence,
+                "ptywright Claude accepted extractable completed answer despite nonterminal classifier state"
+            );
+            tool_activity.finish_all(broadcast_tx, turn_tx, "completed");
+            assistant_text.finish(broadcast_tx, turn_tx);
+            return Ok(state);
+        }
         match state.state.as_str() {
             "completed_turn" => {
-                if current_turn_answer {
+                if has_current_turn_answer {
                     tool_activity.finish_all(broadcast_tx, turn_tx, "completed");
                     assistant_text.finish(broadcast_tx, turn_tx);
                     return Ok(state);
@@ -837,6 +879,7 @@ fn extract_turn_answer(
     claude_session_id: &str,
 ) -> String {
     if let Some(answer) = latest_claude_jsonl_assistant_text(working_dir, claude_session_id) {
+        let answer = clean_final_assistant_text(&answer).unwrap_or(answer);
         tracing::debug!(
             target: "claudette::agent",
             response_len = answer.len(),
@@ -855,7 +898,7 @@ fn extract_turn_answer(
                     response_len = answer.len(),
                     "ptywright Claude extracted transcript turn text"
                 );
-                return answer;
+                return clean_final_assistant_text(&answer).unwrap_or(answer);
             }
             tracing::debug!(
                 target: "claudette::agent",
@@ -871,9 +914,10 @@ fn extract_turn_answer(
                     response_len = answer.len(),
                     "ptywright Claude extracted expanded transcript turn text"
                 );
-                return answer;
+                return clean_final_assistant_text(&answer).unwrap_or(answer);
             }
             if let Some(text) = current_structured_turn_text(handle, state, prompt) {
+                let text = clean_final_assistant_text(text).unwrap_or_else(|| text.to_string());
                 tracing::debug!(
                     target: "claudette::agent",
                     turn_start,
@@ -881,9 +925,10 @@ fn extract_turn_answer(
                     response_len = text.len(),
                     "ptywright Claude extracted structured turn text after transcript filter"
                 );
-                return text.to_string();
+                return text;
             }
         } else if let Some(text) = structured_turn_text(state) {
+            let text = clean_final_assistant_text(text).unwrap_or_else(|| text.to_string());
             tracing::debug!(
                 target: "claudette::agent",
                 turn_start,
@@ -891,15 +936,16 @@ fn extract_turn_answer(
                 response_len = text.len(),
                 "ptywright Claude extracted structured turn text after transcript eviction"
             );
-            return text.to_string();
+            return text;
         }
     } else if let Some(text) = structured_turn_text(state) {
+        let text = clean_final_assistant_text(text).unwrap_or_else(|| text.to_string());
         tracing::debug!(
             target: "claudette::agent",
             response_len = text.len(),
             "ptywright Claude extracted structured turn text"
         );
-        return text.to_string();
+        return text;
     }
 
     let screen = handle.session().snapshot().plain_text;
@@ -910,7 +956,8 @@ fn extract_turn_answer(
         screen_len = screen.len(),
         "ptywright Claude falling back to visible screen text"
     );
-    extract_visible_answer(&screen, state.evidence.as_str())
+    let answer = extract_visible_answer(&screen, state.evidence.as_str());
+    clean_final_assistant_text(&answer).unwrap_or(answer)
 }
 
 fn current_turn_has_answer(
@@ -958,7 +1005,7 @@ fn structured_turn_text(state: &ptywright::ExtensionStateSnapshot) -> Option<&st
         .filter(|text| !text.is_empty())
 }
 
-fn structured_partial_turn_text(state: &ptywright::ExtensionStateSnapshot) -> Option<&str> {
+fn structured_partial_turn_text(state: &ptywright::ExtensionStateSnapshot) -> Option<String> {
     state
         .metadata
         .as_ref()
@@ -967,6 +1014,177 @@ fn structured_partial_turn_text(state: &ptywright::ExtensionStateSnapshot) -> Op
         .and_then(serde_json::Value::as_str)
         .map(str::trim)
         .filter(|text| !text.is_empty())
+        .and_then(clean_ptywright_partial_text)
+}
+
+fn clean_ptywright_partial_text(text: &str) -> Option<String> {
+    let trimmed = text.trim();
+    if trimmed.contains('❯')
+        || trimmed.contains('─')
+        || trimmed.contains("Claude in Chrome enabled")
+        || trimmed.contains("MCP server failed")
+        || trimmed.contains("connectors need auth")
+    {
+        return None;
+    }
+    let mut lines = Vec::new();
+    for line in trimmed.lines() {
+        let trimmed_line = line.trim();
+        if trimmed_line.is_empty() {
+            if !lines.last().is_some_and(String::is_empty) {
+                lines.push(String::new());
+            }
+            continue;
+        }
+        if is_ptywright_partial_chrome_line(trimmed_line) {
+            continue;
+        }
+        lines.push(line.trim_end().to_string());
+    }
+    while lines.first().is_some_and(String::is_empty) {
+        lines.remove(0);
+    }
+    while lines.last().is_some_and(String::is_empty) {
+        lines.pop();
+    }
+    let cleaned = lines.join("\n");
+    (!cleaned.trim().is_empty()).then_some(cleaned)
+}
+
+fn clean_final_assistant_text(text: &str) -> Option<String> {
+    let mut lines = Vec::new();
+    let mut seen_content = false;
+
+    for line in text.trim().lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            if seen_content && !lines.last().is_some_and(String::is_empty) {
+                lines.push(String::new());
+            }
+            continue;
+        }
+
+        if is_completion_marker(trimmed) || (seen_content && is_ghost_prompt_line(trimmed)) {
+            break;
+        }
+
+        if is_ptywright_final_chrome_line(trimmed) {
+            continue;
+        }
+
+        let cleaned = normalize_final_assistant_line(line.trim_end());
+        if cleaned.trim().is_empty() {
+            continue;
+        }
+        seen_content = true;
+        lines.push(cleaned);
+    }
+
+    while lines.first().is_some_and(String::is_empty) {
+        lines.remove(0);
+    }
+    while lines.last().is_some_and(String::is_empty) {
+        lines.pop();
+    }
+
+    let cleaned = lines.join("\n");
+    (!cleaned.trim().is_empty()).then_some(cleaned)
+}
+
+fn strip_answer_bullet(line: &str) -> String {
+    line.trim_start()
+        .strip_prefix('⏺')
+        .or_else(|| line.trim_start().strip_prefix('●'))
+        .map(str::trim_start)
+        .unwrap_or(line)
+        .to_string()
+}
+
+fn normalize_final_assistant_line(line: &str) -> String {
+    let stripped = strip_answer_bullet(line);
+    let trimmed = stripped.trim_start();
+    if trimmed == "SMOKE_AGENT_OK" {
+        return trimmed.to_string();
+    }
+    if stripped.starts_with("   ") {
+        return format!("  {}", trimmed);
+    }
+    stripped
+}
+
+fn is_ptywright_final_chrome_line(line: &str) -> bool {
+    let answer_candidate = line
+        .strip_prefix('⏺')
+        .or_else(|| line.strip_prefix('●'))
+        .map(str::trim_start);
+    if answer_candidate.is_some_and(|line| {
+        (line.contains("Explore agents") && line.contains("finished"))
+            || line.contains("(ctrl+o to expand)")
+    }) {
+        return true;
+    }
+    if answer_candidate.is_some_and(|line| {
+        line.starts_with("- ")
+            || line.starts_with("* ")
+            || line.chars().next().is_some_and(char::is_alphanumeric)
+            || line.starts_with('`')
+            || line.starts_with('#')
+    }) {
+        return false;
+    }
+
+    is_chrome_line(line)
+        || is_ptywright_partial_chrome_line(line)
+        || line == "(No output)"
+        || line.starts_with('⎿')
+        || line.starts_with("├")
+        || line.starts_with("└")
+        || line.starts_with("│")
+        || line.starts_with("... +")
+        || line.contains("(ctrl+o to expand)")
+        || line.contains("tool uses")
+        || line.contains(" Claude Code v")
+        || line.contains("Claude Max")
+        || line.contains(".claudette/workspaces/")
+        || line.contains(" @ halcyon workspaces/")
+        || line.contains("auto mode on")
+        || line.contains("Claude in Chrome enabled")
+        || (line.contains("Explore agents") && line.contains("finished"))
+        || (line.contains("Explore agents") && line.contains("Running"))
+        || (line.contains("Explore agents")
+            && line.chars().next().is_some_and(|ch| ch.is_ascii_digit()))
+        || line == "Done"
+        || line == "⎿  Done"
+}
+
+fn is_ptywright_partial_chrome_line(line: &str) -> bool {
+    let trimmed = line.trim();
+    trimmed.is_empty()
+        || trimmed == "↑"
+        || trimmed == "↓"
+        || trimmed.contains(" · thinking")
+        || trimmed.contains("·thinking")
+        || trimmed.contains("tokens · thinking")
+        || (trimmed.contains("tokens") && trimmed.contains("thinking"))
+        || (trimmed.contains("ought for") && trimmed.ends_with(')'))
+        || trimmed.contains("Exploreagents")
+        || (trimmed.contains("Explore agents") && trimmed.contains("finished"))
+        || trimmed.contains("Done↑")
+        || trimmed.contains("Done↓")
+        || trimmed.chars().all(|ch| {
+            matches!(
+                ch,
+                '✳' | '✢' | '✽' | '✶' | '✻' | '✺' | '✦' | '·' | '•' | ' ' | '\t'
+            )
+        })
+        || (trimmed.len() <= 4
+            && trimmed.ends_with(')')
+            && trimmed[..trimmed.len() - 1]
+                .chars()
+                .all(|ch| ch.is_ascii_digit()))
+        || (trimmed.len() <= 3 && trimmed.chars().all(|ch| ch.is_ascii_digit()))
+        || is_active_or_answer_line(trimmed)
+        || is_chrome_line(trimmed)
 }
 
 fn latest_claude_jsonl_assistant_text(working_dir: &Path, session_id: &str) -> Option<String> {
@@ -983,6 +1201,18 @@ fn latest_claude_jsonl_assistant_text(working_dir: &Path, session_id: &str) -> O
         }
     }
     None
+}
+
+fn latest_claude_jsonl_assistant_text_for_prompt(
+    working_dir: &Path,
+    session_id: &str,
+    prompt: &str,
+) -> Option<String> {
+    let transcript_path = claude_jsonl_transcript_path(working_dir, session_id)?;
+    if !transcript_path.is_file() {
+        return None;
+    }
+    assistant_text_from_jsonl_transcript_for_prompt(&transcript_path, prompt)
 }
 
 fn claude_jsonl_transcript_path(working_dir: &Path, session_id: &str) -> Option<PathBuf> {
@@ -1025,6 +1255,32 @@ fn assistant_text_from_jsonl_transcript(path: &Path) -> Option<String> {
     (!texts.is_empty()).then(|| texts.join("\n\n"))
 }
 
+fn assistant_text_from_jsonl_transcript_for_prompt(path: &Path, prompt: &str) -> Option<String> {
+    let content = fs::read_to_string(path).ok()?;
+    let anchor = prompt_anchor(prompt);
+    if anchor.is_empty() {
+        return None;
+    }
+    let mut texts = Vec::new();
+    for line in content.lines().rev() {
+        let Ok(value) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        if let Some(user_text) = user_text_from_jsonl_value(&value) {
+            let user_anchor = prompt_anchor(&user_text);
+            if !texts.is_empty() && (user_text.contains(&anchor) || user_anchor == anchor) {
+                texts.reverse();
+                return Some(texts.join("\n\n"));
+            }
+            return None;
+        }
+        if let Some(text) = assistant_text_from_jsonl_value(&value) {
+            texts.push(text);
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 fn assistant_text_from_jsonl_line(line: &str) -> Option<String> {
     let value: Value = serde_json::from_str(line).ok()?;
@@ -1054,6 +1310,34 @@ fn assistant_text_from_jsonl_value(value: &Value) -> Option<String> {
         .collect::<Vec<_>>();
 
     (!text_blocks.is_empty()).then(|| text_blocks.join("\n\n"))
+}
+
+fn user_text_from_jsonl_value(value: &Value) -> Option<String> {
+    if value.get("type")?.as_str()? != "user" {
+        return None;
+    }
+    let message = value.get("message")?;
+    if message.get("role").and_then(Value::as_str) != Some("user") {
+        return None;
+    }
+    let content = message.get("content")?;
+    if let Some(text) = content.as_str() {
+        return Some(text.to_string());
+    }
+    let blocks = content.as_array()?;
+    let text = blocks
+        .iter()
+        .filter_map(|block| {
+            if block.get("type")?.as_str()? == "text" {
+                Some(block.get("text")?.as_str()?.trim())
+            } else {
+                None
+            }
+        })
+        .filter(|text| !text.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    (!text.is_empty()).then_some(text)
 }
 
 fn current_prompt_still_editable(handle: &ptywright::ExtensionHandle, prompt: &str) -> bool {
@@ -1246,7 +1530,12 @@ fn is_tool_status_line(line: &str) -> bool {
 }
 
 fn is_completion_marker(line: &str) -> bool {
-    line.starts_with('✻') && line.contains(" for ") && !line.ends_with('…')
+    if !line.starts_with('✻') || line.contains('…') || line.contains("tokens") {
+        return false;
+    }
+    line.rsplit_once(" for ")
+        .and_then(|(_, duration)| duration.chars().next())
+        .is_some_and(|first| first.is_ascii_digit())
 }
 
 fn is_ghost_prompt_line(line: &str) -> bool {
@@ -1276,13 +1565,12 @@ fn extract_visible_answer(screen: &str, evidence: &str) -> String {
 
 fn prompt_submission_observed(
     grew: usize,
-    anchored: bool,
+    _anchored: bool,
     ptywright_state: &str,
     editable_prompt: bool,
 ) -> bool {
-    grew >= PASTE_REACTION_BYTES
-        && !editable_prompt
-        && (anchored || ptywright_state == "thinking" || ptywright_state == "completed_turn")
+    let submitted_state = matches!(ptywright_state, "thinking" | "completed_turn" | "error");
+    grew >= PASTE_REACTION_BYTES && !editable_prompt && submitted_state
 }
 
 fn prompt_still_editable(screen: &str, prompt_anchor: &str) -> bool {
@@ -1293,22 +1581,65 @@ fn prompt_still_editable(screen: &str, prompt_anchor: &str) -> bool {
     let lines: Vec<&str> = screen.lines().collect();
     let Some(prompt_index) = lines.iter().enumerate().rev().find_map(|(index, line)| {
         let trimmed = line.trim();
-        if is_prompt_line(trimmed) && trimmed.contains(prompt_anchor) {
-            Some(index)
-        } else {
-            None
+        if !is_prompt_line(trimmed) {
+            return None;
         }
+
+        let mut prompt_block = String::from(trimmed);
+        for next in &lines[index + 1..] {
+            let next_trimmed = next.trim();
+            if is_horizontal_rule(next_trimmed) {
+                break;
+            }
+            if is_prompt_trailing_chrome(next) && next_trimmed != "❯" && next_trimmed != ">" {
+                break;
+            }
+            prompt_block.push(' ');
+            prompt_block.push_str(next_trimmed);
+        }
+
+        prompt_block.contains(prompt_anchor).then_some(index)
     }) else {
         return false;
     };
 
-    lines[prompt_index + 1..]
-        .iter()
-        .all(|line| is_prompt_trailing_chrome(line))
+    let mut after_input_rule = false;
+    for line in &lines[prompt_index + 1..] {
+        let trimmed = line.trim();
+        if is_horizontal_rule(trimmed) {
+            after_input_rule = true;
+            continue;
+        }
+        if !after_input_rule && !is_active_or_answer_line(trimmed) {
+            continue;
+        }
+        if !is_prompt_trailing_chrome(line) {
+            return false;
+        }
+    }
+
+    true
 }
 
 fn is_prompt_line(line: &str) -> bool {
-    line.starts_with("❯ ") || line.starts_with("❯\u{00a0}") || line.starts_with("> ")
+    line == "❯"
+        || line == ">"
+        || line.starts_with("❯ ")
+        || line.starts_with("❯\u{00a0}")
+        || line.starts_with("> ")
+}
+
+fn is_active_or_answer_line(line: &str) -> bool {
+    line.starts_with('⏺')
+        || line.starts_with('●')
+        || line.starts_with('⎿')
+        || line.starts_with('✽')
+        || line.starts_with('✻')
+        || line.starts_with('·')
+        || line.starts_with("Running")
+        || line.starts_with("Searching")
+        || line.starts_with("Reading")
+        || line.starts_with("Listing")
 }
 
 fn has_visible_input_prompt(screen: &str) -> bool {
@@ -1366,6 +1697,9 @@ struct EmittedPtywrightTool {
     index: usize,
     name: String,
     summary: String,
+    input: Value,
+    status: String,
+    agent_tool_use_count: Option<u64>,
 }
 
 impl PtywrightToolActivityEmitter {
@@ -1381,6 +1715,12 @@ impl PtywrightToolActivityEmitter {
             .iter()
             .map(|tool| tool.key.clone())
             .collect::<BTreeSet<_>>();
+
+        for tool in &visible {
+            if let Some(active) = self.active.get_mut(&tool.key) {
+                emit_tool_progress(active, tool, broadcast_tx, turn_tx);
+            }
+        }
 
         let mut finished = Vec::new();
         for key in self.active.keys() {
@@ -1427,6 +1767,7 @@ impl PtywrightToolActivityEmitter {
         self.next_index += 1;
         let id = format!("ptywright-tool-{sequence}-{index}");
         let input = visible.input.clone();
+        let agent_tool_use_count = agent_tool_use_count(&input);
         self.completed_keys.insert(visible.key.clone());
         tracing::debug!(
             target: "claudette::agent",
@@ -1444,7 +1785,7 @@ impl PtywrightToolActivityEmitter {
                     content_block: Some(StartContentBlock::ToolUse {
                         id: id.clone(),
                         name: visible.name.clone(),
-                        input: Some(input),
+                        input: Some(input.clone()),
                     }),
                 },
             }),
@@ -1456,6 +1797,9 @@ impl PtywrightToolActivityEmitter {
                 index,
                 name: visible.name,
                 summary: visible.summary,
+                input,
+                status: visible.status,
+                agent_tool_use_count,
             },
         );
     }
@@ -1470,6 +1814,9 @@ impl PtywrightToolActivityEmitter {
         let Some(active) = self.active.remove(key) else {
             return;
         };
+        if active.name == "Agent" && active.status != status {
+            emit_agent_progress_for_active(&active, status, broadcast_tx, turn_tx);
+        }
         send_event(
             broadcast_tx,
             turn_tx,
@@ -1486,11 +1833,7 @@ impl PtywrightToolActivityEmitter {
                 message: UserEventMessage {
                     content: UserMessageContent::Blocks(vec![UserContentBlock::ToolResult {
                         tool_use_id: active.id.clone(),
-                        content: json!({
-                            "status": status,
-                            "summary": active.summary,
-                            "source": "ptywright-screen"
-                        }),
+                        content: json!(format!("{status}: {}", active.summary)),
                     }]),
                 },
                 uuid: None,
@@ -1536,18 +1879,21 @@ struct PtywrightAssistantTextEmitter {
 }
 
 impl PtywrightAssistantTextEmitter {
+    fn has_emitted_answer(&self) -> bool {
+        !self.emitted.trim().is_empty()
+    }
+
     fn observe_state(
         &mut self,
         state: &ptywright::ExtensionStateSnapshot,
         broadcast_tx: &broadcast::Sender<AgentEvent>,
         turn_tx: &mpsc::Sender<AgentEvent>,
     ) {
-        let Some(text) =
-            structured_partial_turn_text(state).or_else(|| structured_turn_text(state))
-        else {
-            return;
-        };
-        self.emit_to(text, broadcast_tx, turn_tx);
+        if let Some(text) = structured_partial_turn_text(state) {
+            self.emit_to(&text, broadcast_tx, turn_tx);
+        } else if let Some(text) = structured_turn_text(state) {
+            self.emit_to(text, broadcast_tx, turn_tx);
+        }
     }
 
     fn finish(
@@ -1663,43 +2009,120 @@ fn metadata_visible_tools(
         .as_ref()
         .and_then(|metadata| metadata.get("tools"))
         .and_then(Value::as_array)?;
-    let parsed = tools
-        .iter()
-        .filter_map(|tool| {
-            let name = tool.get("name")?.as_str()?.trim();
-            if name.is_empty() {
-                return None;
-            }
-            let summary = tool
-                .get("summary")
-                .and_then(Value::as_str)
-                .map(str::trim)
-                .filter(|summary| !summary.is_empty())
-                .unwrap_or(name);
-            let key = tool
-                .get("key")
-                .and_then(Value::as_str)
-                .map(ToOwned::to_owned)
-                .unwrap_or_else(|| format!("{name}:{summary}"));
-            let status = tool
-                .get("status")
-                .and_then(Value::as_str)
-                .map(str::trim)
-                .filter(|status| !status.is_empty())
-                .unwrap_or("completed");
-            let input = tool.get("input").cloned().unwrap_or_else(|| {
-                tool_input(name, summary, &[]).unwrap_or_else(|| json!({ "description": summary }))
-            });
-            Some(VisiblePtywrightTool {
-                key: format!("metadata:{key}"),
-                name: name.to_string(),
-                summary: summary.to_string(),
-                status: status.to_string(),
-                input,
-            })
+    let mut parsed = Vec::new();
+    for visible in tools.iter().filter_map(|tool| {
+        let name = tool.get("name")?.as_str()?.trim();
+        if name.is_empty() {
+            return None;
+        }
+        let summary = tool
+            .get("summary")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|summary| !summary.is_empty())
+            .unwrap_or(name);
+        let key = tool
+            .get("key")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned)
+            .unwrap_or_else(|| format!("{name}:{summary}"));
+        let status = tool
+            .get("status")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|status| !status.is_empty())
+            .unwrap_or("completed");
+        let input = tool.get("input").cloned().unwrap_or_else(|| {
+            tool_input(name, summary, &[]).unwrap_or_else(|| json!({ "description": summary }))
+        });
+        Some(VisiblePtywrightTool {
+            key: normalized_visible_tool_key(name, summary, &key),
+            name: name.to_string(),
+            summary: summary.to_string(),
+            status: status.to_string(),
+            input,
         })
-        .collect::<Vec<_>>();
+    }) {
+        if let Some(index) = parsed
+            .iter()
+            .position(|existing: &VisiblePtywrightTool| existing.key == visible.key)
+        {
+            parsed[index] = visible;
+        } else {
+            parsed.push(visible);
+        }
+    }
     (!parsed.is_empty()).then_some(parsed)
+}
+
+fn normalized_visible_tool_key(name: &str, summary: &str, raw_key: &str) -> String {
+    if name == "Agent" && summary == "Explore agents" {
+        "metadata:Agent:Explore agents".to_string()
+    } else {
+        format!("metadata:{raw_key}")
+    }
+}
+
+fn agent_tool_use_count(input: &Value) -> Option<u64> {
+    input.get("count").and_then(Value::as_u64)
+}
+
+fn emit_tool_progress(
+    active: &mut EmittedPtywrightTool,
+    visible: &VisiblePtywrightTool,
+    broadcast_tx: &broadcast::Sender<AgentEvent>,
+    turn_tx: &mpsc::Sender<AgentEvent>,
+) {
+    let next_count = agent_tool_use_count(&visible.input);
+    let changed = active.summary != visible.summary
+        || active.input != visible.input
+        || active.status != visible.status
+        || active.agent_tool_use_count != next_count;
+    if !changed {
+        return;
+    }
+
+    active.summary = visible.summary.clone();
+    active.input = visible.input.clone();
+    active.status = visible.status.clone();
+    active.agent_tool_use_count = next_count;
+
+    if active.name == "Agent" {
+        emit_agent_progress_for_active(active, &visible.status, broadcast_tx, turn_tx);
+    }
+}
+
+fn emit_agent_progress_for_active(
+    active: &EmittedPtywrightTool,
+    status: &str,
+    broadcast_tx: &broadcast::Sender<AgentEvent>,
+    turn_tx: &mpsc::Sender<AgentEvent>,
+) {
+    send_event(
+        broadcast_tx,
+        turn_tx,
+        AgentEvent::Stream(StreamEvent::System {
+            subtype: "task_progress".to_string(),
+            session_id: None,
+            state: None,
+            detail: None,
+            task_id: Some(active.id.clone()),
+            tool_use_id: Some(active.id.clone()),
+            output_file: None,
+            summary: Some(active.summary.clone()),
+            description: Some(active.summary.clone()),
+            last_tool_name: None,
+            usage: Some(TaskUsage {
+                total_tokens: None,
+                tool_uses: active.agent_tool_use_count,
+                duration_ms: None,
+            }),
+            status: Some(status.to_string()),
+            compact_result: None,
+            compact_metadata: None,
+            command_line: None,
+        }),
+    );
 }
 
 fn tool_input(name: &str, summary: &str, paths: &[String]) -> Option<Value> {
@@ -1884,6 +2307,28 @@ clean line
     }
 
     #[test]
+    fn editable_prompt_detection_matches_wrapped_unsubmitted_claude_input() {
+        let screen = "\
+ ▐▛███▜▌   Claude Code v2.1.150
+▝▜█████▛▘  Sonnet 4.6 · Claude Max
+
+────────────────────────────────────────────────────────────────────────────────
+❯\u{00a0}
+  Wrapped prompt smoke after conservative ptywright partial streaming. This
+  prompt is intentionally long enough to wrap across several Claude Code
+  prompt lines, and the live stream must not echo this prompt text.
+
+────────────────────────────────────────────────────────────────────────────────
+  jamesbrink @ halcyon workspaces/mcp-nixos/plucky-cornflower
+  ⏵⏵ auto mode on (shift+tab to cycle)";
+
+        assert!(prompt_still_editable(
+            screen,
+            "Wrapped prompt smoke after conservative"
+        ));
+    }
+
+    #[test]
     fn editable_prompt_detection_releases_after_spinner_starts() {
         let screen = "\
 ❯ ping
@@ -1948,6 +2393,16 @@ clean line
     }
 
     #[test]
+    fn prompt_submission_ack_rejects_waiting_input_even_when_prompt_is_anchored() {
+        assert!(!prompt_submission_observed(
+            PASTE_REACTION_BYTES + 1,
+            true,
+            "waiting_for_user_input",
+            false,
+        ));
+    }
+
+    #[test]
     fn ptywright_metadata_surfaces_visible_tool_calls() {
         let mut state = ptywright::ExtensionStateSnapshot::new("thinking", 17);
         state.metadata = Some(json!({
@@ -1991,6 +2446,34 @@ clean line
     }
 
     #[test]
+    fn ptywright_metadata_coalesces_explore_agent_progress_key() {
+        let mut state = ptywright::ExtensionStateSnapshot::new("thinking", 17);
+        state.metadata = Some(json!({
+            "tools": [
+                {
+                    "key": "Agent:Explore agents:2",
+                    "name": "Agent",
+                    "summary": "Explore agents",
+                    "status": "running",
+                    "input": { "description": "Explore agents", "count": 2 }
+                },
+                {
+                    "key": "Agent:Explore agents:3",
+                    "name": "Agent",
+                    "summary": "Explore agents",
+                    "status": "running",
+                    "input": { "description": "Explore agents", "count": 3 }
+                }
+            ]
+        }));
+
+        let tools = metadata_visible_tools(&state).expect("tools");
+        assert_eq!(tools.len(), 1);
+        assert_eq!(tools[0].key, "metadata:Agent:Explore agents");
+        assert_eq!(agent_tool_use_count(&tools[0].input), Some(3));
+    }
+
+    #[test]
     fn ptywright_partial_turn_text_reads_structured_metadata() {
         let mut state = ptywright::ExtensionStateSnapshot::new("thinking", 23);
         state.metadata = Some(json!({
@@ -2001,8 +2484,62 @@ clean line
 
         assert_eq!(
             structured_partial_turn_text(&state),
-            Some("**Heading**\n\nLive paragraph.")
+            Some("**Heading**\n\nLive paragraph.".to_string())
         );
+    }
+
+    #[test]
+    fn ptywright_partial_turn_text_rejects_terminal_chrome_noise() {
+        let mut state = ptywright::ExtensionStateSnapshot::new("thinking", 24);
+        state.metadata = Some(json!({
+            "turn": {
+                "partial_text": "Launching 2 Explore agents.\n✳\n✢\n✽\n(1s·thinking)\n↓ 13 tokens·thinking)\n2ought for1s)\n2)\n2 Exploreagents finishedDone↑\n↓\n25\n50"
+            }
+        }));
+
+        assert_eq!(
+            structured_partial_turn_text(&state),
+            Some("Launching 2 Explore agents.".to_string())
+        );
+    }
+
+    #[test]
+    fn ptywright_final_text_removes_agent_and_terminal_chrome() {
+        let text = "\
+⏺ 2 Explore agents finished (ctrl+o to expand)
+   ├ Explore project structure and entry points · 3 tool uses · 37.9k tokens
+   │ ⎿  Done
+   └ Explore tests and dependencies · 3 tool uses · 38.0k tokens
+     ⎿  Done
+
+⏺ - The project is a FastMCP 3.x async MCP server.
+  - The test suite spans about 4,600 lines.
+
+  SMOKE_AGENT_OK
+
+✻ Crunched for 24s
+
+────────────────────────────────────────────────────────────────────────────────
+❯\u{00a0}
+────────────────────────────────────────────────────────────────────────────────
+  jamesbrink @ halcyon workspaces/mcp-nixos/plucky-cornflower
+  ⏵⏵ auto mode on (shift+tab to cycle) · ← for agents";
+
+        assert_eq!(
+            clean_final_assistant_text(text),
+            Some(
+                "- The project is a FastMCP 3.x async MCP server.\n  - The test suite spans about 4,600 lines.\n\nSMOKE_AGENT_OK"
+                    .to_string()
+            )
+        );
+    }
+
+    #[test]
+    fn completion_marker_rejects_active_thinking_spinner() {
+        assert!(is_completion_marker("✻ Baked for 31s"));
+        assert!(!is_completion_marker(
+            "✻ Booping… (5s · ↓ 130 tokens · thought for 1s)"
+        ));
     }
 
     #[test]
@@ -2035,6 +2572,48 @@ clean line
         assert_eq!(
             assistant_text_from_jsonl_transcript(&path),
             Some("First paragraph.\n\nSecond paragraph.".to_string())
+        );
+    }
+
+    #[test]
+    fn assistant_text_from_jsonl_transcript_requires_current_prompt() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("session.jsonl");
+        fs::write(
+            &path,
+            [
+                r#"{"type":"user","message":{"role":"user","content":"previous prompt"}}"#,
+                r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Old answer"}]}}"#,
+            ]
+            .join("\n"),
+        )
+        .expect("write transcript");
+
+        assert_eq!(
+            assistant_text_from_jsonl_transcript_for_prompt(&path, "current prompt"),
+            None
+        );
+    }
+
+    #[test]
+    fn assistant_text_from_jsonl_transcript_for_prompt_streams_current_turn() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("session.jsonl");
+        fs::write(
+            &path,
+            [
+                r#"{"type":"user","message":{"role":"user","content":"previous prompt"}}"#,
+                r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Old answer"}]}}"#,
+                r#"{"type":"user","message":{"role":"user","content":"current prompt with details"}}"#,
+                r##"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"# Heading\n\n- one\n- two"}]}}"##,
+            ]
+            .join("\n"),
+        )
+        .expect("write transcript");
+
+        assert_eq!(
+            assistant_text_from_jsonl_transcript_for_prompt(&path, "current prompt"),
+            Some("# Heading\n\n- one\n- two".to_string())
         );
     }
 
