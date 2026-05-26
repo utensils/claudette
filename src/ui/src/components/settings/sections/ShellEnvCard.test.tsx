@@ -10,6 +10,7 @@ vi.mock("../../../services/env", () => ({
   listShellEnv: vi.fn().mockResolvedValue({
     captured_at_ms: 0,
     forwarded: [],
+    inherited: [],
     denied_built_in: [],
     denied_user: [],
     disabled: false,
@@ -62,6 +63,7 @@ describe("ShellEnvCard", () => {
           { name: "JWT_CLIENT_ID", value: "abc123", denied: false },
           { name: "GOPATH", value: "/Users/k/go", denied: false },
         ],
+        inherited: [],
         denied_built_in: ["LD_PRELOAD", "DYLD_INSERT_LIBRARIES"],
         denied_user: [],
         disabled: false,
@@ -122,6 +124,7 @@ describe("ShellEnvCard", () => {
       shellEnv: {
         captured_at_ms: 0,
         forwarded: [],
+        inherited: [],
         denied_built_in: [],
         denied_user: [],
         disabled: false,
@@ -133,5 +136,28 @@ describe("ShellEnvCard", () => {
     expect(container.textContent).toContain(
       "Shell environment probe has not completed",
     );
+  });
+
+  it("renders inherited vars in a separate section", async () => {
+    useAppStore.setState({
+      refreshShellEnv: vi.fn().mockResolvedValue(undefined),
+      reloadShellEnv: vi.fn().mockResolvedValue(undefined),
+      setShellEnvDenylist: vi.fn().mockResolvedValue(undefined),
+      setShellEnvDisabled: vi.fn().mockResolvedValue(undefined),
+      shellEnv: {
+        captured_at_ms: Date.now(),
+        forwarded: [{ name: "JWT_CLIENT_ID", value: "abc", denied: false }],
+        inherited: [{ name: "HOME", value: "/Users/k", denied: false }],
+        denied_built_in: [],
+        denied_user: [],
+        disabled: false,
+        source_files: ["/Users/k/.zshrc"],
+        error: null,
+      },
+    });
+    const container = await renderCard();
+    expect(container.textContent).toContain("JWT_CLIENT_ID");
+    expect(container.textContent).toContain("HOME");
+    expect(container.textContent).toMatch(/1 variables inherited/i);
   });
 });

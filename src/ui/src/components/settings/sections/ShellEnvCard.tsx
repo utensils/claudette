@@ -50,6 +50,10 @@ export function ShellEnvCard() {
         </p>
       ) : null}
       <h4>{shellEnv?.forwarded.length ?? 0} variables forwarded</h4>
+      <p className={styles.cardSubtitle}>
+        Vars that shell-init adds on top of the launch baseline. The shell-env
+        tier applies these to every subprocess Claudette spawns.
+      </p>
       <ul className={styles.varList}>
         {shellEnv?.forwarded.map((v) => (
           <li key={v.name} className={styles.varRow}>
@@ -69,6 +73,39 @@ export function ShellEnvCard() {
           </li>
         ))}
       </ul>
+      {shellEnv?.inherited && shellEnv.inherited.length > 0 ? (
+        <>
+          <h4>{shellEnv.inherited.length} variables inherited from parent process</h4>
+          <p className={styles.cardSubtitle}>
+            These vars are already in Claudette&apos;s process environment
+            (inherited from the parent shell at launch). Subprocesses get them
+            via normal env inheritance — the shell-env tier doesn&apos;t need to
+            re-add them.
+          </p>
+          <ul className={styles.varList}>
+            {shellEnv.inherited.map((v) => (
+              <li key={v.name} className={styles.varRow}>
+                <span className={styles.varName}>{v.name}</span>
+                <span className={styles.varValue}>
+                  {revealed[`inh:${v.name}`] ? v.value : "●●●●●●●●●●"}
+                </span>
+                <button
+                  type="button"
+                  className={styles.iconButton}
+                  onClick={() =>
+                    setRevealed((r) => ({
+                      ...r,
+                      [`inh:${v.name}`]: !r[`inh:${v.name}`],
+                    }))
+                  }
+                >
+                  {revealed[`inh:${v.name}`] ? "hide" : "show"}
+                </button>
+              </li>
+            ))}
+          </ul>
+        </>
+      ) : null}
       {shellEnv?.denied_built_in && shellEnv.denied_built_in.length > 0 ? (
         <details>
           <summary>{shellEnv.denied_built_in.length} built-in denied</summary>

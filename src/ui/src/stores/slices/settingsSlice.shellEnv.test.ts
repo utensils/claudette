@@ -12,6 +12,7 @@ describe("settingsSlice — shell env slice", () => {
     vi.spyOn(envService, "listShellEnv").mockResolvedValue({
       captured_at_ms: 1_700_000_000_000,
       forwarded: [{ name: "JWT_CLIENT_ID", value: "abc", denied: false }],
+      inherited: [],
       denied_built_in: ["LD_PRELOAD"],
       denied_user: [],
       disabled: false,
@@ -31,6 +32,7 @@ describe("settingsSlice — shell env slice", () => {
     const listSpy = vi.spyOn(envService, "listShellEnv").mockResolvedValue({
       captured_at_ms: 0,
       forwarded: [],
+      inherited: [],
       denied_built_in: [],
       denied_user: ["AWS_*"],
       disabled: false,

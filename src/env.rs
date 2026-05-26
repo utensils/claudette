@@ -34,7 +34,15 @@ static SHELL_ENV: RwLock<Option<Arc<ShellEnv>>> = RwLock::new(None);
 /// (after diff vs `LAUNCH_ENV` and after denylist filtering).
 #[derive(Debug, Clone)]
 pub struct ShellEnv {
+    /// Vars the shell-env tier adds to subprocess spawns.
+    /// Keys missing from `LAUNCH_ENV` or with different values.
     pub vars: BTreeMap<String, String>,
+    /// Vars present in both `LAUNCH_ENV` and the probe with identical
+    /// values. Already in process env via normal inheritance — the
+    /// shell-env tier does not re-add them, but the Settings UI shows
+    /// them so developers running from a terminal can see the full
+    /// captured set, not just the empty diff.
+    pub inherited: BTreeMap<String, String>,
     pub captured_at: SystemTime,
 }
 
@@ -239,23 +247,48 @@ pub fn probe_shell_env_with_shell(shell: &std::path::Path) -> Option<BTreeMap<St
     }
 }
 
+/// Partition a shell-probe result into two buckets relative to the
+/// baseline env:
+///
+/// - `added`: keys missing from the baseline OR present with a different
+///   value. These are what the shell-env tier forwards to subprocess spawns.
+/// - `inherited`: keys present in BOTH shell and baseline with identical
+///   values. Already in the process env via normal inheritance; the
+///   shell-env tier does not need to re-add them. Shown in the Settings UI
+///   so developers launching from a terminal can see the full captured set.
+///
+/// Keys in `baseline` but absent from `shell` are ignored — shell init
+/// didn't override or carry them forward.
+pub fn partition_against_baseline(
+    shell: &BTreeMap<String, String>,
+    baseline: &BTreeMap<String, String>,
+) -> (BTreeMap<String, String>, BTreeMap<String, String>) {
+    let mut added = BTreeMap::new();
+    let mut inherited = BTreeMap::new();
+    for (k, v) in shell {
+        match baseline.get(k) {
+            Some(bv) if bv == v => {
+                inherited.insert(k.clone(), v.clone());
+            }
+            _ => {
+                added.insert(k.clone(), v.clone());
+            }
+        }
+    }
+    (added, inherited)
+}
+
 /// Compute the set of env vars the user's shell init *added* on top
 /// of the launchd / baseline env. A key is included when it is
 /// missing from the baseline, or present with a different value.
+///
+/// Backwards-compat shim over [`partition_against_baseline`]. Kept so
+/// external callers continue to compile unchanged.
 pub fn diff_against_baseline(
     shell: &BTreeMap<String, String>,
     baseline: &BTreeMap<String, String>,
 ) -> BTreeMap<String, String> {
-    let mut out = BTreeMap::new();
-    for (k, v) in shell {
-        match baseline.get(k) {
-            Some(bv) if bv == v => continue,
-            _ => {
-                out.insert(k.clone(), v.clone());
-            }
-        }
-    }
-    out
+    partition_against_baseline(shell, baseline).0
 }
 
 /// Invalidate the cached shell env. Next call to `shell_env()` returns
@@ -300,16 +333,19 @@ pub fn run_probe_pipeline(
     user_deny: &[String],
 ) -> Option<Arc<ShellEnv>> {
     let raw = probe_shell_env_with_shell(shell)?;
-    let added = diff_against_baseline(&raw, baseline);
-    let (kept, dropped) = apply_denylist(&added, user_deny);
+    let (added, inherited_raw) = partition_against_baseline(&raw, baseline);
+    let (kept_added, dropped_added) = apply_denylist(&added, user_deny);
+    let (kept_inherited, _) = apply_denylist(&inherited_raw, user_deny);
     tracing::info!(
         target: "claudette::env",
-        n_vars = kept.len(),
-        n_denied = dropped.len(),
+        n_vars = kept_added.len(),
+        n_inherited = kept_inherited.len(),
+        n_denied = dropped_added.len(),
         "shell_env probe captured",
     );
     let env = Arc::new(ShellEnv {
-        vars: kept,
+        vars: kept_added,
+        inherited: kept_inherited,
         captured_at: SystemTime::now(),
     });
     if let Ok(mut guard) = SHELL_ENV.write() {
@@ -946,6 +982,7 @@ mod tests {
         vars.insert("FOO".into(), "bar".into());
         let s = ShellEnv {
             vars,
+            inherited: std::collections::BTreeMap::new(),
             captured_at: std::time::SystemTime::UNIX_EPOCH,
         };
         assert_eq!(s.vars.get("FOO").map(String::as_str), Some("bar"));
@@ -1347,6 +1384,7 @@ mod tests {
         vars.insert("FOO".into(), "bar".into());
         install_shell_env_for_test(ShellEnv {
             vars,
+            inherited: BTreeMap::new(),
             captured_at: std::time::SystemTime::UNIX_EPOCH,
         });
         assert!(
@@ -1406,6 +1444,11 @@ mod tests {
             Some("abc"),
             "cache must contain the same vars as the returned Arc",
         );
+        // HOME matched the baseline value — it must appear in inherited, not vars.
+        assert!(
+            env.inherited.contains_key("HOME"),
+            "baseline-equal HOME goes in inherited",
+        );
         invalidate_shell_env();
     }
 
@@ -1417,6 +1460,7 @@ mod tests {
         vars.insert("PATH".into(), "/from-shell".into());
         install_shell_env_for_test(ShellEnv {
             vars,
+            inherited: BTreeMap::new(),
             captured_at: std::time::SystemTime::UNIX_EPOCH,
         });
         let p = shell_path().expect("shell_path must read from shell_env");
@@ -1436,6 +1480,7 @@ mod tests {
         vars.insert("CUSTOM".into(), "user-set".into());
         install_shell_env_for_test(ShellEnv {
             vars,
+            inherited: BTreeMap::new(),
             captured_at: std::time::SystemTime::UNIX_EPOCH,
         });
         let resolved = enriched_env();
@@ -1445,5 +1490,54 @@ mod tests {
             "enriched_env must include shell-env vars in ResolvedEnv.vars",
         );
         invalidate_shell_env();
+    }
+
+    #[test]
+    fn partition_separates_added_from_inherited() {
+        use std::collections::BTreeMap;
+        let mut baseline = BTreeMap::new();
+        baseline.insert("HOME".into(), "/Users/k".into());
+        baseline.insert("PATH".into(), "/usr/bin:/bin".into());
+        let mut shell = BTreeMap::new();
+        shell.insert("HOME".into(), "/Users/k".into()); // inherited (same value)
+        shell.insert("PATH".into(), "/Users/k/.local/bin:/usr/bin:/bin".into()); // added (changed)
+        shell.insert("JWT_CLIENT_ID".into(), "abc".into()); // added (new key)
+        let (added, inherited) = partition_against_baseline(&shell, &baseline);
+        assert_eq!(added.len(), 2, "PATH (changed) + JWT (new) are added");
+        assert!(added.contains_key("PATH"));
+        assert!(added.contains_key("JWT_CLIENT_ID"));
+        assert_eq!(inherited.len(), 1, "HOME (identical) is inherited");
+        assert!(inherited.contains_key("HOME"));
+    }
+
+    #[test]
+    fn partition_baseline_only_key_is_ignored() {
+        use std::collections::BTreeMap;
+        let mut baseline = BTreeMap::new();
+        baseline.insert("BASELINE_ONLY".into(), "val".into());
+        let shell = BTreeMap::new(); // shell doesn't have BASELINE_ONLY
+        let (added, inherited) = partition_against_baseline(&shell, &baseline);
+        assert!(
+            added.is_empty(),
+            "baseline-only key must not appear in added"
+        );
+        assert!(
+            inherited.is_empty(),
+            "baseline-only key must not appear in inherited"
+        );
+    }
+
+    #[test]
+    fn diff_against_baseline_is_shim_for_added() {
+        use std::collections::BTreeMap;
+        let mut baseline = BTreeMap::new();
+        baseline.insert("HOME".into(), "/Users/k".into());
+        let mut shell = BTreeMap::new();
+        shell.insert("HOME".into(), "/Users/k".into());
+        shell.insert("ADDED".into(), "yes".into());
+        let added = diff_against_baseline(&shell, &baseline);
+        assert_eq!(added.len(), 1);
+        assert!(added.contains_key("ADDED"));
+        assert!(!added.contains_key("HOME"), "HOME is unchanged, not added");
     }
 }

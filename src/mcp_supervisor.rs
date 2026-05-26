@@ -1324,6 +1324,7 @@ mod tests {
         vars.insert("JWT_CLIENT_ID".into(), "test-abc".into());
         crate::env::install_shell_env_for_test(crate::env::ShellEnv {
             vars,
+            inherited: std::collections::BTreeMap::new(),
             captured_at: std::time::SystemTime::UNIX_EPOCH,
         });
 

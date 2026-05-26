@@ -1297,6 +1297,12 @@ pub struct ShellEnvVarSnapshot {
 pub struct ShellEnvSnapshot {
     pub captured_at_ms: u128,
     pub forwarded: Vec<ShellEnvVarSnapshot>,
+    /// Vars present in both the launch baseline and the shell probe with
+    /// identical values. Already in process env via normal inheritance;
+    /// the shell-env tier does not re-add them. Shown in the Settings UI
+    /// so developers launching from a terminal understand the full
+    /// captured set rather than just the (potentially empty) diff.
+    pub inherited: Vec<ShellEnvVarSnapshot>,
     pub denied_built_in: Vec<String>,
     pub denied_user: Vec<String>,
     pub disabled: bool,
@@ -1322,6 +1328,7 @@ pub async fn list_shell_env(state: State<'_, AppState>) -> Result<ShellEnvSnapsh
         return Ok(ShellEnvSnapshot {
             captured_at_ms: 0,
             forwarded: Vec::new(),
+            inherited: Vec::new(),
             denied_built_in: Vec::new(),
             denied_user: Vec::new(),
             disabled,
@@ -1346,9 +1353,20 @@ pub async fn list_shell_env(state: State<'_, AppState>) -> Result<ShellEnvSnapsh
         })
         .collect();
 
+    let inherited = env
+        .inherited
+        .iter()
+        .map(|(k, v)| ShellEnvVarSnapshot {
+            name: k.clone(),
+            value: v.clone(),
+            denied: false,
+        })
+        .collect();
+
     Ok(ShellEnvSnapshot {
         captured_at_ms,
         forwarded,
+        inherited,
         denied_built_in: Vec::new(),
         denied_user: Vec::new(),
         disabled,

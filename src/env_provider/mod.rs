@@ -1547,6 +1547,7 @@ mod tests {
         vars.insert("FROM_SHELL".into(), "yes".into());
         crate::env::install_shell_env_for_test(crate::env::ShellEnv {
             vars,
+            inherited: std::collections::BTreeMap::new(),
             captured_at: std::time::SystemTime::UNIX_EPOCH,
         });
 
@@ -1589,6 +1590,7 @@ mod tests {
         shell_vars.insert("FOO".into(), "from-shell".into());
         crate::env::install_shell_env_for_test(crate::env::ShellEnv {
             vars: shell_vars,
+            inherited: std::collections::BTreeMap::new(),
             captured_at: std::time::SystemTime::UNIX_EPOCH,
         });
 
@@ -1630,6 +1632,7 @@ mod tests {
         vars.insert("LEAKED".into(), "no".into());
         crate::env::install_shell_env_for_test(crate::env::ShellEnv {
             vars,
+            inherited: std::collections::BTreeMap::new(),
             captured_at: std::time::SystemTime::UNIX_EPOCH,
         });
 

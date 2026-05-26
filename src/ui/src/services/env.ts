@@ -102,6 +102,11 @@ export type ShellEnvVarSnapshot = {
 export type ShellEnvSnapshot = {
   captured_at_ms: number;
   forwarded: ShellEnvVarSnapshot[];
+  /** Vars present in both the launch baseline and the shell probe with
+   * identical values. Already in process env via normal inheritance.
+   * The shell-env tier does not re-add them; shown in UI so dev-script
+   * launches don't look like a broken (zero vars forwarded) capture. */
+  inherited: ShellEnvVarSnapshot[];
   denied_built_in: string[];
   denied_user: string[];
   disabled: boolean;
